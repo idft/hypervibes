@@ -1,0 +1,23 @@
+[package]
+name = "vibetrading"
+version = "0.3.0"
+edition = "2024"
+rust-version = "1.96"
+
+[dependencies]
+anyhow = "1"
+dotenvy = "0.15"
+log = "0.4"
+alloy = { version = "2.0.5", default-features = false, features = ["signer-local"] }
+chrono = { version = "0.4", features = ["serde"] }
+reqwest = { version = "0.13", default-features = false, features = ["json", "rustls"] }
+rust_decimal = { version = "1", features = ["serde"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sqlx = { version = "0.8", features = ["runtime-tokio-rustls", "postgres", "chrono", "json", "rust_decimal", "migrate"] }
+tokio = { version = "1", features = ["full"] }
+
+nautilus-common = { git = "https://github.com/nautechsystems/nautilus_trader.git", branch = "develop" }
+nautilus-hyperliquid = { git = "https://github.com/nautechsystems/nautilus_trader.git", branch = "develop" }
+nautilus-live = { git = "https://github.com/nautechsystems/nautilus_trader.git", branch = "develop" }
+nautilus-model = { git = "https://github.com/nautechsystems/nautilus_trader.git", branch = "develop", features = ["high-precision"] }
