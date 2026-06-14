@@ -1,0 +1,4 @@
+.env
+target/
+.opencode/plans/*.md
+node_modules
