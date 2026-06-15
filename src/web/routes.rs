@@ -10,6 +10,7 @@ use axum::{
 };
 use chrono::Utc;
 use serde::Serialize;
+use tracing::{error, warn};
 
 use crate::{
     agents::{
@@ -18,10 +19,12 @@ use crate::{
         model::{AgentRegistryRow, CreateAgentForm, slugify_agent_key},
         store::{delete_agent as delete_agent_in_store, get_agent, insert_agent, list_agents},
     },
+    hyperliquid::queries::{list_account_sync_state, list_account_transactions},
     web::{
         AppState,
         templates::{
-            AgentsNewPageTemplate, AgentsPageTemplate, AgentsShowPageTemplate, SummaryCard,
+            AgentsNewPageTemplate, AgentsPageTemplate, AgentsShowPageTemplate,
+            ServerErrorPageTemplate, SummaryCard,
         },
     },
 };
@@ -100,7 +103,50 @@ async fn agents_show(
 ) -> Result<Response, AppError> {
     match get_agent(&state.db_pool, &agent_key).await? {
         Some(agent) => {
-            let template = AgentsShowPageTemplate { agent };
+            let transactions = match list_account_transactions(
+                &state.db_pool,
+                &agent.wallet_address,
+                &agent.environment,
+                100,
+            )
+            .await
+            {
+                Ok(rows) => rows,
+                Err(error) => {
+                    warn!(
+                        agent_key = %agent.agent_key,
+                        wallet_address = %agent.wallet_address,
+                        environment = %agent.environment,
+                        error = ?error,
+                        "failed to list account transactions for agent page"
+                    );
+                    Vec::new()
+                }
+            };
+            let sync_state = match list_account_sync_state(
+                &state.db_pool,
+                &agent.wallet_address,
+                &agent.environment,
+            )
+            .await
+            {
+                Ok(rows) => rows,
+                Err(error) => {
+                    warn!(
+                        agent_key = %agent.agent_key,
+                        wallet_address = %agent.wallet_address,
+                        environment = %agent.environment,
+                        error = ?error,
+                        "failed to list account sync state for agent page"
+                    );
+                    Vec::new()
+                }
+            };
+            let template = AgentsShowPageTemplate {
+                agent,
+                transactions,
+                sync_state,
+            };
             Ok(Html(template.render()?).into_response())
         }
         None => Ok((StatusCode::NOT_FOUND, "agent not found").into_response()),
@@ -158,6 +204,7 @@ async fn create_agent(
         display_name: form.display_name.trim().to_string(),
         prompt: String::new(),
         wallet_address,
+        environment: "live".to_string(),
         api_key: generate_api_key(),
         api_key_last_used_at: None,
         hyperliquid_private_key_ciphertext: ciphertext,
@@ -195,8 +242,8 @@ fn unique_violation_message(error: &anyhow::Error) -> Option<String> {
         let constraint = db_err.constraint().unwrap_or("unknown");
         if constraint.contains("agent_key") {
             Some("An agent with this agent key already exists.".to_string())
-        } else if constraint.contains("wallet_address") {
-            Some("An agent with this wallet address already exists.".to_string())
+        } else if constraint.contains("wallet") {
+            Some("An agent with this wallet address and environment already exists.".to_string())
         } else if constraint.contains("api_key") {
             Some("An agent with this API key already exists.".to_string())
         } else {
@@ -221,11 +268,23 @@ where
 
 impl IntoResponse for AppError {
     fn into_response(self) -> Response {
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("internal server error: {}", self.0),
-        )
-            .into_response()
+        error!(error = ?self.0, "request failed");
+
+        let template = ServerErrorPageTemplate {
+            message: format!("Internal server error: {}", self.0),
+        };
+
+        match template.render() {
+            Ok(body) => (StatusCode::INTERNAL_SERVER_ERROR, Html(body)).into_response(),
+            Err(render_error) => {
+                error!(error = ?render_error, "failed to render server error page");
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    format!("internal server error: {}", self.0),
+                )
+                    .into_response()
+            }
+        }
     }
 }
 

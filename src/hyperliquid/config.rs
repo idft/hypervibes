@@ -13,15 +13,15 @@ pub enum HyperliquidEnvironment {
 impl HyperliquidEnvironment {
     pub fn as_journal_str(self) -> &'static str {
         match self {
-            Self::Mainnet => "mainnet",
-            Self::Testnet => "testnet",
+            Self::Mainnet => "live",
+            Self::Testnet => "sandbox",
         }
     }
 
     pub fn as_nt_environment(self) -> nautilus_hyperliquid::common::enums::HyperliquidEnvironment {
         match self {
             Self::Mainnet => nautilus_hyperliquid::common::enums::HyperliquidEnvironment::Mainnet,
-            Self::Testnet => nautilus_hyperliquid::common::enums::HyperliquidEnvironment::Testnet,
+            Self::Testnet => nautilus_hyperliquid::common::enums::HyperliquidEnvironment::Mainnet,
         }
     }
 }
@@ -39,6 +39,15 @@ impl FromStr for HyperliquidEnvironment {
 }
 
 #[derive(Debug, Clone)]
+pub struct AccountSyncConfig {
+    pub account_address: String,
+    pub environment: HyperliquidEnvironment,
+    pub history_start_ms: u64,
+    pub overlap_ms: u64,
+}
+
+#[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct AppConfig {
     pub database_url: String,
     pub environment: HyperliquidEnvironment,
@@ -48,12 +57,25 @@ pub struct AppConfig {
 }
 
 impl AppConfig {
+    #[allow(dead_code)]
+    pub fn to_account_sync_config(&self) -> AccountSyncConfig {
+        AccountSyncConfig {
+            account_address: self.account_address.clone(),
+            environment: self.environment,
+            history_start_ms: self.history_start_ms,
+            overlap_ms: 300_000,
+        }
+    }
+}
+
+impl AppConfig {
+    #[allow(dead_code)]
     pub fn from_env() -> Result<Self> {
         let private_key =
             env::var("HYPERLIQUID_PK").context("missing HYPERLIQUID_PK environment variable")?;
         let database_url = database_url_from_env()?;
         let environment = env::var("HYPERLIQUID_ENVIRONMENT")
-            .unwrap_or_else(|_| "mainnet".to_string())
+            .unwrap_or_else(|_| "live".to_string())
             .parse()?;
         let history_start_ms = env::var("HYPERLIQUID_HISTORY_START_MS")
             .ok()
@@ -82,10 +104,12 @@ impl AppConfig {
     }
 }
 
+#[allow(dead_code)]
 fn database_url_from_env() -> Result<String> {
     crate::config::database_url_from_env()
 }
 
+#[allow(dead_code)]
 pub fn derive_account_address(private_key: &str) -> Result<String> {
     let signer = PrivateKeySigner::from_str(private_key)
         .context("failed to parse HYPERLIQUID_PK as an Ethereum private key")?;
@@ -94,7 +118,51 @@ pub fn derive_account_address(private_key: &str) -> Result<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::derive_account_address;
+    use std::str::FromStr;
+
+    use super::{HyperliquidEnvironment, derive_account_address};
+
+    #[test]
+    fn environment_parsing_accepts_live_and_mainnet() {
+        assert_eq!(
+            HyperliquidEnvironment::from_str("live").unwrap(),
+            HyperliquidEnvironment::Mainnet
+        );
+        assert_eq!(
+            HyperliquidEnvironment::from_str("mainnet").unwrap(),
+            HyperliquidEnvironment::Mainnet
+        );
+    }
+
+    #[test]
+    fn environment_parsing_accepts_sandbox_and_testnet() {
+        assert_eq!(
+            HyperliquidEnvironment::from_str("sandbox").unwrap(),
+            HyperliquidEnvironment::Testnet
+        );
+        assert_eq!(
+            HyperliquidEnvironment::from_str("testnet").unwrap(),
+            HyperliquidEnvironment::Testnet
+        );
+        assert_eq!(
+            HyperliquidEnvironment::from_str("paper").unwrap(),
+            HyperliquidEnvironment::Testnet
+        );
+    }
+
+    #[test]
+    fn environment_journal_str_uses_live_and_sandbox() {
+        assert_eq!(HyperliquidEnvironment::Mainnet.as_journal_str(), "live");
+        assert_eq!(HyperliquidEnvironment::Testnet.as_journal_str(), "sandbox");
+    }
+
+    #[test]
+    fn sandbox_uses_mainnet_market_data_environment() {
+        assert_eq!(
+            HyperliquidEnvironment::Testnet.as_nt_environment(),
+            nautilus_hyperliquid::common::enums::HyperliquidEnvironment::Mainnet
+        );
+    }
 
     #[test]
     fn derives_eth_address_from_private_key() {

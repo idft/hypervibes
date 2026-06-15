@@ -7,6 +7,7 @@ use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use rand::RngCore;
 
 const KEY_LEN: usize = 32;
+#[allow(dead_code)]
 const NONCE_LEN: usize = 12;
 
 /// Master encryption key used to protect agent Hyperliquid private keys.
@@ -18,6 +19,7 @@ pub struct EncryptionKey {
 
 impl EncryptionKey {
     /// Parse a 32-byte (64 hex character) master key.
+    #[allow(dead_code)]
     pub fn from_hex(key_id: impl Into<String>, hex_str: &str) -> Result<Self> {
         let bytes =
             hex::decode(hex_str.trim()).context("failed to decode agents encryption key as hex")?;
@@ -65,6 +67,7 @@ pub fn encrypt(key: &EncryptionKey, plaintext: &str) -> Result<Vec<u8>> {
 }
 
 /// Decrypt a ciphertext blob produced by [`encrypt`] back into a private key string.
+#[allow(dead_code)]
 pub fn decrypt(key: &EncryptionKey, ciphertext: &[u8]) -> Result<String> {
     ensure!(
         ciphertext.len() >= NONCE_LEN + 16,

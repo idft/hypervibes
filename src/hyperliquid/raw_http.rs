@@ -5,7 +5,6 @@ use serde_json::{Value, json};
 use crate::hyperliquid::config::HyperliquidEnvironment;
 
 const MAINNET_INFO_URL: &str = "https://api.hyperliquid.xyz/info";
-const TESTNET_INFO_URL: &str = "https://api.hyperliquid-testnet.xyz/info";
 
 #[derive(Debug, Clone)]
 pub struct RawHttpConfig {
@@ -41,7 +40,8 @@ impl RawHyperliquidHttpClient {
         if let Some(end_time) = end_time {
             body["endTime"] = json!(end_time);
         }
-        self.post(body).await
+        let response: Value = self.post_value(body).await?;
+        parse_user_fills_response(response)
     }
 
     pub async fn user_funding(
@@ -116,7 +116,7 @@ impl RawHyperliquidHttpClient {
     fn base_info_url(&self) -> &'static str {
         match self.config.environment {
             HyperliquidEnvironment::Mainnet => MAINNET_INFO_URL,
-            HyperliquidEnvironment::Testnet => TESTNET_INFO_URL,
+            HyperliquidEnvironment::Testnet => MAINNET_INFO_URL,
         }
     }
 }
@@ -259,6 +259,79 @@ fn parse_user_funding_response(response: Value) -> Result<Vec<RawUserFunding>> {
             position_size,
             hash,
             payload: entry,
+        });
+    }
+
+    Ok(results)
+}
+
+fn parse_user_fills_response(response: Value) -> Result<Vec<RawUserFill>> {
+    let entries = response
+        .as_array()
+        .cloned()
+        .with_context(|| "userFillsByTime response was not an array")?;
+
+    let mut results = Vec::with_capacity(entries.len());
+    for entry in entries {
+        let object = entry
+            .as_object()
+            .with_context(|| "userFillsByTime entry was not an object")?;
+
+        let coin = object
+            .get("coin")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned)
+            .context("userFillsByTime entry missing coin")?;
+        let px = object
+            .get("px")
+            .and_then(value_as_string)
+            .context("userFillsByTime entry missing px")?;
+        let sz = object
+            .get("sz")
+            .and_then(value_as_string)
+            .context("userFillsByTime entry missing sz")?;
+        let side = object
+            .get("side")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned)
+            .context("userFillsByTime entry missing side")?;
+        let time = object
+            .get("time")
+            .and_then(Value::as_u64)
+            .context("userFillsByTime entry missing time")?;
+        let dir = object
+            .get("dir")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned)
+            .context("userFillsByTime entry missing dir")?;
+        let hash = object
+            .get("hash")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned)
+            .context("userFillsByTime entry missing hash")?;
+        let oid = object
+            .get("oid")
+            .cloned()
+            .context("userFillsByTime entry missing oid")?;
+
+        results.push(RawUserFill {
+            coin,
+            px,
+            sz,
+            side,
+            time,
+            start_position: object.get("startPosition").and_then(value_as_string),
+            dir,
+            closed_pnl: object.get("closedPnl").and_then(value_as_string),
+            hash,
+            oid,
+            tid: object.get("tid").cloned(),
+            crossed: object.get("crossed").and_then(Value::as_bool),
+            fee: object.get("fee").and_then(value_as_string),
+            fee_token: object.get("feeToken").and_then(value_as_string),
+            builder_fee: object.get("builderFee").and_then(value_as_string),
+            tx_hash: object.get("txHash").and_then(value_as_string),
+            extra: entry,
         });
     }
 

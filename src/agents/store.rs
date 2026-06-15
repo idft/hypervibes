@@ -13,6 +13,7 @@ pub async fn list_agents(pool: &DbPool) -> Result<Vec<AgentListRow>> {
                 agent_key,
                 enabled,
                 wallet_address,
+                environment,
                 api_key,
                 api_key_last_used_at
            FROM agents.registry
@@ -33,6 +34,7 @@ pub async fn get_agent(pool: &DbPool, agent_key: &str) -> Result<Option<AgentDet
                 enabled,
                 prompt,
                 wallet_address,
+                environment,
                 api_key,
                 api_key_last_used_at,
                 created_at,
@@ -60,11 +62,12 @@ pub async fn insert_agent(pool: &DbPool, row: &AgentRegistryRow) -> Result<()> {
             display_name,
             prompt,
             wallet_address,
+            environment,
             api_key,
             api_key_last_used_at,
             hyperliquid_private_key_ciphertext,
             hyperliquid_private_key_key_id
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)",
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)",
     )
     .bind(&row.agent_key)
     .bind(row.created_at)
@@ -73,6 +76,7 @@ pub async fn insert_agent(pool: &DbPool, row: &AgentRegistryRow) -> Result<()> {
     .bind(&row.display_name)
     .bind(&row.prompt)
     .bind(&row.wallet_address)
+    .bind(&row.environment)
     .bind(&row.api_key)
     .bind(row.api_key_last_used_at)
     .bind(&row.hyperliquid_private_key_ciphertext)
@@ -138,6 +142,7 @@ mod tests {
             display_name: format!("Test {}", key),
             prompt: "Test prompt".to_string(),
             wallet_address: wallet,
+            environment: "live".to_string(),
             api_key: format!("vta_{}", key),
             api_key_last_used_at: None,
             hyperliquid_private_key_ciphertext: ciphertext,

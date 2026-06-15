@@ -24,6 +24,8 @@ sqlx = { version = "0.8", features = ["runtime-tokio-rustls", "postgres", "chron
 tokio = { version = "1", features = ["full"] }
 tower = { version = "0.5", features = ["util"] }
 tower-http = { version = "0.6", features = ["fs", "trace"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 
 nautilus-common = { git = "https://github.com/nautechsystems/nautilus_trader.git", branch = "develop" }
 nautilus-hyperliquid = { git = "https://github.com/nautechsystems/nautilus_trader.git", branch = "develop" }

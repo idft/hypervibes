@@ -10,7 +10,7 @@ CREATE TABLE IF NOT EXISTS hyperliquid.sync_state (
     status TEXT NOT NULL,
     metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
     PRIMARY KEY (account_address, environment, stream_name),
-    CHECK (environment IN ('mainnet', 'testnet'))
+    CHECK (environment IN ('live', 'sandbox'))
 );
 
 CREATE TABLE IF NOT EXISTS hyperliquid.instruments (
@@ -67,7 +67,7 @@ CREATE TABLE IF NOT EXISTS hyperliquid.trade_fills (
     inserted_at TIMESTAMPTZ NOT NULL,
     PRIMARY KEY (hash, trade_id),
     FOREIGN KEY (instrument_id) REFERENCES hyperliquid.instruments(instrument_id),
-    CHECK (environment IN ('mainnet', 'testnet'))
+    CHECK (environment IN ('live', 'sandbox'))
 );
 
 CREATE INDEX IF NOT EXISTS trade_fills_account_event_time_idx ON hyperliquid.trade_fills(account_address, environment, event_time DESC);
@@ -96,7 +96,7 @@ CREATE TABLE IF NOT EXISTS hyperliquid.funding_events (
     inserted_at TIMESTAMPTZ NOT NULL,
     PRIMARY KEY (account_address, environment, instrument_id, event_time),
     FOREIGN KEY (instrument_id) REFERENCES hyperliquid.instruments(instrument_id),
-    CHECK (environment IN ('mainnet', 'testnet'))
+    CHECK (environment IN ('live', 'sandbox'))
 );
 
 CREATE INDEX IF NOT EXISTS funding_events_account_event_time_idx ON hyperliquid.funding_events(account_address, environment, event_time DESC);
@@ -127,7 +127,7 @@ CREATE TABLE IF NOT EXISTS hyperliquid.ledger_events (
     ingest_source TEXT NOT NULL,
     inserted_at TIMESTAMPTZ NOT NULL,
     FOREIGN KEY (instrument_id) REFERENCES hyperliquid.instruments(instrument_id),
-    CHECK (environment IN ('mainnet', 'testnet'))
+    CHECK (environment IN ('live', 'sandbox'))
 );
 
 CREATE INDEX IF NOT EXISTS ledger_events_account_event_time_idx ON hyperliquid.ledger_events(account_address, environment, event_time DESC);
@@ -157,7 +157,7 @@ CREATE TABLE IF NOT EXISTS hyperliquid.historical_orders (
     inserted_at TIMESTAMPTZ NOT NULL,
     PRIMARY KEY (account_address, environment, order_id),
     FOREIGN KEY (instrument_id) REFERENCES hyperliquid.instruments(instrument_id),
-    CHECK (environment IN ('mainnet', 'testnet'))
+    CHECK (environment IN ('live', 'sandbox'))
 );
 
 CREATE INDEX IF NOT EXISTS historical_orders_account_event_time_idx ON hyperliquid.historical_orders(account_address, environment, event_time DESC);

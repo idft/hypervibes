@@ -3,11 +3,13 @@ use serde::Deserialize;
 
 /// Row shape returned by the registry list query.
 #[derive(Debug, Clone, sqlx::FromRow)]
+#[allow(dead_code)]
 pub struct AgentListRow {
     pub display_name: String,
     pub agent_key: String,
     pub enabled: bool,
     pub wallet_address: String,
+    pub environment: String,
     pub api_key: String,
     pub api_key_last_used_at: Option<DateTime<Utc>>,
 }
@@ -20,6 +22,7 @@ pub struct AgentDetailRow {
     pub enabled: bool,
     pub prompt: String,
     pub wallet_address: String,
+    pub environment: String,
     pub api_key: String,
     pub api_key_last_used_at: Option<DateTime<Utc>>,
     pub created_at: DateTime<Utc>,
@@ -36,6 +39,7 @@ pub struct AgentRegistryRow {
     pub display_name: String,
     pub prompt: String,
     pub wallet_address: String,
+    pub environment: String,
     pub api_key: String,
     pub api_key_last_used_at: Option<DateTime<Utc>>,
     pub hyperliquid_private_key_ciphertext: Vec<u8>,
