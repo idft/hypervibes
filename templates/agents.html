@@ -1,0 +1,117 @@
+{% extends "base.html" %}
+
+{% block title %}Vibetrading Agents{% endblock %}
+
+{% block sidebar_extra %}
+<div class="mt-10 hidden lg:block">
+    <div class="text-xs font-medium uppercase tracking-[0.2em] text-zinc-600">Status</div>
+    <div class="mt-3 rounded-2xl border border-zinc-800 bg-zinc-950/80 p-4">
+        <div class="text-sm text-zinc-200">Web server online</div>
+        <div class="mt-2 text-xs leading-5 text-zinc-500">
+            Agent runtime wiring will attach here once the registry and supervisor are implemented.
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block content %}
+<div class="mx-auto max-w-[1400px]">
+    <header class="flex flex-col gap-4 border-b border-zinc-800 pb-6 lg:flex-row lg:items-start lg:justify-between">
+        <div>
+            <h1 class="text-3xl font-semibold tracking-tight text-white">Agents</h1>
+            <p class="mt-2 max-w-2xl text-sm leading-6 text-zinc-400">
+                Hermes profiles, execution accounts, and operator-facing registry controls.
+            </p>
+        </div>
+        <div class="flex items-center gap-3">
+            <a href="/agents/new" class="rounded-full bg-zinc-100 px-4 py-2 text-sm font-medium text-zinc-950 hover:bg-white">
+                Create agent
+            </a>
+        </div>
+    </header>
+
+    <section class="mt-6 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+        {% for card in summary_cards %}
+        <div class="rounded-2xl border border-zinc-800 bg-[#0d0d10] p-5 shadow-[inset_0_1px_0_rgba(255,255,255,0.02)]">
+            <div class="text-sm text-zinc-400">{{ card.label }}</div>
+            <div class="mt-3 text-4xl font-semibold tracking-tight text-white">{{ card.value }}</div>
+            <div class="mt-3 text-sm text-zinc-500">{{ card.detail }}</div>
+        </div>
+        {% endfor %}
+    </section>
+
+    <section class="mt-6 grid gap-6 xl:grid-cols-[minmax(0,2fr)_minmax(320px,1fr)]">
+        <div class="rounded-2xl border border-zinc-800 bg-[#0d0d10]">
+            <div class="flex items-center justify-between border-b border-zinc-800 px-5 py-4">
+                <div>
+                    <h2 class="text-lg font-medium text-white">Registered agents</h2>
+                    <p class="mt-1 text-sm text-zinc-500">Agents persisted in the registry database.</p>
+                </div>
+            </div>
+            <div class="overflow-x-auto">
+                <table class="min-w-full divide-y divide-zinc-800 text-sm">
+                    <thead class="bg-zinc-950/60 text-left text-xs uppercase tracking-[0.16em] text-zinc-500">
+                        <tr>
+                            <th class="px-5 py-3 font-medium">Agent</th>
+                            <th class="px-5 py-3 font-medium">Status</th>
+                            <th class="px-5 py-3 font-medium">Wallet address</th>
+                            <th class="px-5 py-3 font-medium">API key</th>
+                        </tr>
+                    </thead>
+                    <tbody class="divide-y divide-zinc-800">
+                        {% for agent in agents %}
+                        <tr class="cursor-pointer hover:bg-zinc-900/50" onclick="window.location.href='/agents/{{ agent.agent_key }}'">
+                            <td class="px-5 py-4 align-top">
+                                <div class="font-medium text-white">{{ agent.display_name }}</div>
+                                <div class="mt-1 text-xs text-zinc-500">{{ agent.agent_key }}</div>
+                            </td>
+                            <td class="px-5 py-4 align-top">
+                                {% if agent.enabled %}
+                                <span class="inline-flex rounded-full border border-emerald-900/60 bg-emerald-950/30 px-2.5 py-1 text-xs text-emerald-300">Enabled</span>
+                                {% else %}
+                                <span class="inline-flex rounded-full border border-zinc-700 px-2.5 py-1 text-xs text-zinc-300">Disabled</span>
+                                {% endif %}
+                            </td>
+                            <td class="px-5 py-4 align-top font-mono text-xs text-zinc-300">{{ agent.wallet_address }}</td>
+                            <td class="px-5 py-4 align-top text-zinc-300">
+                                {% if let Some(last_used) = agent.api_key_last_used_at %}
+                                <span title="{{ last_used }}">Used</span>
+                                {% else %}
+                                Never used
+                                {% endif %}
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <div class="space-y-6">
+            <section class="rounded-2xl border border-zinc-800 bg-[#0d0d10] p-5">
+                <h2 class="text-lg font-medium text-white">Runtime direction</h2>
+                <ul class="mt-4 space-y-3 text-sm leading-6 text-zinc-400">
+                    <li>One binary hosts the web server and future per-agent supervised tasks.</li>
+                    <li>The agents registry is now the source of truth for the UI.</li>
+                    <li>Hyperliquid reconciliation and order submission will attach to agent-owned runtimes later.</li>
+                </ul>
+            </section>
+
+            <section class="rounded-2xl border border-zinc-800 bg-[#0d0d10] p-5">
+                <h2 class="text-lg font-medium text-white">Next UI milestones</h2>
+                <div class="mt-4 space-y-4 text-sm text-zinc-400">
+                    <div class="rounded-xl border border-zinc-800 bg-zinc-950/70 p-4">
+                        Edit agent flows
+                    </div>
+                    <div class="rounded-xl border border-zinc-800 bg-zinc-950/70 p-4">
+                        Agent detail views
+                    </div>
+                    <div class="rounded-xl border border-zinc-800 bg-zinc-950/70 p-4">
+                        Per-agent runtime and reconciliation status panels
+                    </div>
+                </div>
+            </section>
+        </div>
+    </section>
+</div>
+{% endblock %}

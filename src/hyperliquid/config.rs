@@ -49,8 +49,8 @@ pub struct AppConfig {
 
 impl AppConfig {
     pub fn from_env() -> Result<Self> {
-        let private_key = env::var("HYPERLIQUID_PK")
-            .context("missing HYPERLIQUID_PK environment variable")?;
+        let private_key =
+            env::var("HYPERLIQUID_PK").context("missing HYPERLIQUID_PK environment variable")?;
         let database_url = database_url_from_env()?;
         let environment = env::var("HYPERLIQUID_ENVIRONMENT")
             .unwrap_or_else(|_| "mainnet".to_string())
@@ -63,7 +63,12 @@ impl AppConfig {
             .unwrap_or(0);
         let poll_once = env::var("HYPERLIQUID_POLL_ONCE")
             .ok()
-            .map(|value| matches!(value.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes"))
+            .map(|value| {
+                matches!(
+                    value.trim().to_ascii_lowercase().as_str(),
+                    "1" | "true" | "yes"
+                )
+            })
             .unwrap_or(true);
         let account_address = derive_account_address(&private_key)?;
 
@@ -78,26 +83,7 @@ impl AppConfig {
 }
 
 fn database_url_from_env() -> Result<String> {
-    if let Ok(database_url) = env::var("DATABASE_URL") {
-        if !database_url.trim().is_empty() {
-            return Ok(database_url);
-        }
-    }
-
-    let host = env::var("POSTGRES_HOST").unwrap_or_else(|_| "localhost".to_string());
-    let port = env::var("POSTGRES_PORT").unwrap_or_else(|_| "5432".to_string());
-    let user = env::var("POSTGRES_USER").unwrap_or_else(|_| "vibetrading".to_string());
-    let password = env::var("POSTGRES_PASSWORD").unwrap_or_else(|_| "vibetrading".to_string());
-    let database = env::var("POSTGRES_DB").unwrap_or_else(|_| "vibetrading".to_string());
-
-    if host.trim().is_empty() || port.trim().is_empty() || user.trim().is_empty() || database.trim().is_empty() {
-        bail!("postgres environment variables are incomplete")
-    }
-
-    Ok(format!(
-        "postgres://{}:{}@{}:{}/{}",
-        user, password, host, port, database
-    ))
+    crate::config::database_url_from_env()
 }
 
 pub fn derive_account_address(private_key: &str) -> Result<String> {

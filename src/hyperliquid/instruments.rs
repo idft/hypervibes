@@ -2,7 +2,10 @@ use anyhow::Result;
 use chrono::Utc;
 use nautilus_hyperliquid::http::{client::HyperliquidHttpClient, parse::HyperliquidInstrumentDef};
 
-use crate::hyperliquid::{config::HyperliquidEnvironment, normalize::{InstrumentRow, MarketType}};
+use crate::hyperliquid::{
+    config::HyperliquidEnvironment,
+    normalize::{InstrumentRow, MarketType},
+};
 
 pub async fn load_instruments(environment: HyperliquidEnvironment) -> Result<Vec<InstrumentRow>> {
     let client = HyperliquidHttpClient::new(environment.as_nt_environment(), 60, None)?;
@@ -47,25 +50,27 @@ mod tests {
 
     #[test]
     fn maps_perp_definition_to_journal_row() {
-        let row = map_instrument_def(nautilus_hyperliquid::http::parse::HyperliquidInstrumentDef {
-            symbol: "BTC-USD-PERP".into(),
-            raw_symbol: "BTC".into(),
-            base: "BTC".into(),
-            quote: "USD".into(),
-            settlement: Some("USDC".into()),
-            market_type: nautilus_hyperliquid::http::parse::HyperliquidMarketType::Perp,
-            asset_index: 0,
-            price_decimals: 1,
-            size_decimals: 5,
-            tick_size: Decimal::new(1, 1),
-            lot_size: Decimal::new(1, 5),
-            max_leverage: None,
-            only_isolated: false,
-            is_hip3: false,
-            active: true,
-            outcome: None,
-            raw_data: "{}".to_string(),
-        });
+        let row = map_instrument_def(
+            nautilus_hyperliquid::http::parse::HyperliquidInstrumentDef {
+                symbol: "BTC-USD-PERP".into(),
+                raw_symbol: "BTC".into(),
+                base: "BTC".into(),
+                quote: "USD".into(),
+                settlement: Some("USDC".into()),
+                market_type: nautilus_hyperliquid::http::parse::HyperliquidMarketType::Perp,
+                asset_index: 0,
+                price_decimals: 1,
+                size_decimals: 5,
+                tick_size: Decimal::new(1, 1),
+                lot_size: Decimal::new(1, 5),
+                max_leverage: None,
+                only_isolated: false,
+                is_hip3: false,
+                active: true,
+                outcome: None,
+                raw_data: "{}".to_string(),
+            },
+        );
 
         assert_eq!(row.instrument_id, "BTC-USD-PERP.HYPERLIQUID");
         assert_eq!(row.raw_symbol, "BTC");

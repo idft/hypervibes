@@ -1,0 +1,55 @@
+{% extends "base.html" %}
+
+{% block title %}Create agent · Vibetrading{% endblock %}
+
+{% block content %}
+<div class="mx-auto max-w-3xl">
+    <header class="border-b border-zinc-800 pb-6">
+        <h1 class="text-3xl font-semibold tracking-tight text-white">Create agent</h1>
+        <p class="mt-2 text-sm leading-6 text-zinc-400">
+            Add an agent to the registry. The wallet address and app API key are generated automatically.
+        </p>
+    </header>
+
+    {% if !errors.is_empty() %}
+    <div class="mt-6 rounded-2xl border border-red-900/60 bg-red-950/20 p-4">
+        <div class="text-sm font-medium text-red-200">Please fix the following errors:</div>
+        <ul class="mt-2 list-inside list-disc space-y-1 text-sm text-red-300">
+            {% for error in errors %}
+            <li>{{ error }}</li>
+            {% endfor %}
+        </ul>
+    </div>
+    {% endif %}
+
+    <form method="post" action="/agents" class="mt-6 space-y-6">
+        <div>
+            <label for="display_name" class="block text-sm font-medium text-zinc-300">Display name</label>
+            <input type="text" id="display_name" name="display_name" value="{{ form.display_name }}" required
+                placeholder="BTC Momentum"
+                class="mt-2 block w-full rounded-xl border border-zinc-800 bg-zinc-950 px-3 py-2 text-sm text-white placeholder-zinc-600 focus:border-zinc-600 focus:outline-none">
+            <p class="mt-1 text-xs text-zinc-500">
+                The agent key is derived from this name (e.g. "BTC Momentum" becomes <code class="text-zinc-400">btc-momentum</code>).
+            </p>
+        </div>
+
+        <div>
+            <label for="hyperliquid_private_key" class="block text-sm font-medium text-zinc-300">Hyperliquid private key</label>
+            <input type="password" id="hyperliquid_private_key" name="hyperliquid_private_key" required
+                class="mt-2 block w-full rounded-xl border border-zinc-800 bg-zinc-950 px-3 py-2 text-sm text-white placeholder-zinc-600 focus:border-zinc-600 focus:outline-none">
+            <p class="mt-1 text-xs text-zinc-500">The wallet address is derived from this key and the key is encrypted before storage.</p>
+        </div>
+
+        <div class="flex items-center gap-3">
+            <input type="checkbox" id="enabled" name="enabled" checked
+                class="h-4 w-4 rounded border-zinc-700 bg-zinc-950 text-zinc-100 focus:ring-zinc-600">
+            <label for="enabled" class="text-sm text-zinc-300">Enabled</label>
+        </div>
+
+        <div class="flex items-center gap-3 border-t border-zinc-800 pt-6">
+            <button type="submit" class="rounded-full bg-zinc-100 px-5 py-2 text-sm font-medium text-zinc-950 hover:bg-white">Create agent</button>
+            <a href="/agents" class="rounded-full border border-zinc-800 px-5 py-2 text-sm font-medium text-zinc-300 hover:border-zinc-700 hover:text-white">Cancel</a>
+        </div>
+    </form>
+</div>
+{% endblock %}

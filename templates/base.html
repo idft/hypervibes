@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>{% block title %}Vibetrading{% endblock %}</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/htmx.org@1.9.12"></script>
+    <link rel="stylesheet" href="/static/app.css">
+</head>
+<body class="bg-[#0a0a0b] text-zinc-100 antialiased">
+    <div class="min-h-screen lg:flex">
+        <aside class="w-full border-b border-zinc-800 bg-[#09090b] px-4 py-5 lg:min-h-screen lg:w-72 lg:border-b-0 lg:border-r lg:px-5">
+            {% include "navbar.html" %}
+
+            {% block sidebar_extra %}{% endblock %}
+        </aside>
+
+        <main class="flex-1 px-4 py-6 sm:px-6 lg:px-8">
+            {% block content %}{% endblock %}
+        </main>
+    </div>
+
+    {% block scripts %}{% endblock %}
+</body>
+</html>

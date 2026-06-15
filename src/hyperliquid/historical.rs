@@ -1,7 +1,7 @@
-use anyhow::Result;
 use crate::hyperliquid::raw_http::{
     RawHistoricalOrder, RawHyperliquidHttpClient, RawLedgerUpdate, RawUserFill, RawUserFunding,
 };
+use anyhow::Result;
 
 pub async fn fetch_historical_batch(
     client: &RawHyperliquidHttpClient,
@@ -15,7 +15,9 @@ pub async fn fetch_historical_batch(
 )> {
     let fills = client.user_fills_by_time(start_time, end_time).await?;
     let funding = client.user_funding(start_time, end_time).await?;
-    let ledger = client.non_user_funding_updates(start_time, end_time).await?;
+    let ledger = client
+        .non_user_funding_updates(start_time, end_time)
+        .await?;
     let orders = client.historical_orders().await?;
     Ok((fills, funding, ledger, orders))
 }

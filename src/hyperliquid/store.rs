@@ -9,9 +9,15 @@ use crate::{
         config::AppConfig,
         historical::fetch_historical_batch,
         instruments::load_instruments,
-        normalize::{FundingEventRow, HistoricalOrderRow, InstrumentLookup, LedgerEventRow, TradeFillRow, ms_to_datetime, parse_decimal},
+        normalize::{
+            FundingEventRow, HistoricalOrderRow, InstrumentLookup, LedgerEventRow, TradeFillRow,
+            ms_to_datetime, parse_decimal,
+        },
         polling::PollingSchedule,
-        raw_http::{RawHistoricalOrder, RawHttpConfig, RawHyperliquidHttpClient, RawLedgerUpdate, RawUserFill, RawUserFunding},
+        raw_http::{
+            RawHistoricalOrder, RawHttpConfig, RawHyperliquidHttpClient, RawLedgerUpdate,
+            RawUserFill, RawUserFunding,
+        },
         sync_state::{SyncStateRow, SyncStatus, SyncStream},
     },
 };
@@ -52,7 +58,6 @@ impl HyperliquidJournalStore {
     }
 }
 
-
 async fn sync_once(
     pool: &DbPool,
     config: &AppConfig,
@@ -85,13 +90,24 @@ async fn sync_once(
         SyncStream::Ledger,
         SyncStream::HistoricalOrders,
     ] {
-        update_sync_state(pool, config, stream, None, None, SyncStatus::Healthy, json!({})).await?;
+        update_sync_state(
+            pool,
+            config,
+            stream,
+            None,
+            None,
+            SyncStatus::Healthy,
+            json!({}),
+        )
+        .await?;
     }
 
     Ok(())
 }
 
-fn build_lookup(instruments: &[crate::hyperliquid::normalize::InstrumentRow]) -> HashMap<String, (String, String, String)> {
+fn build_lookup(
+    instruments: &[crate::hyperliquid::normalize::InstrumentRow],
+) -> HashMap<String, (String, String, String)> {
     let mut lookup = HashMap::with_capacity(instruments.len());
     for instrument in instruments {
         lookup.insert(
@@ -155,8 +171,15 @@ fn normalize_fill(
         size,
         trade_value: Some(price * size),
         order_id: Some(fill.oid.to_string()),
-        trade_id: fill.tid.unwrap_or(Value::String(fill.hash.clone())).to_string(),
-        start_position: fill.start_position.as_deref().map(parse_decimal).transpose()?,
+        trade_id: fill
+            .tid
+            .unwrap_or(Value::String(fill.hash.clone()))
+            .to_string(),
+        start_position: fill
+            .start_position
+            .as_deref()
+            .map(parse_decimal)
+            .transpose()?,
         fee: fill.fee.as_deref().map(parse_decimal).transpose()?,
         fee_token: fill.fee_token,
         builder_fee: fill.builder_fee.as_deref().map(parse_decimal).transpose()?,
@@ -198,8 +221,16 @@ fn normalize_funding(
         fee_usdc: None,
         realized_pnl_usdc: Some(parse_decimal(&funding.usdc)?),
         usdc: parse_decimal(&funding.usdc)?,
-        position_size: funding.position_size.as_deref().map(parse_decimal).transpose()?,
-        funding_rate: funding.funding_rate.as_deref().map(parse_decimal).transpose()?,
+        position_size: funding
+            .position_size
+            .as_deref()
+            .map(parse_decimal)
+            .transpose()?,
+        funding_rate: funding
+            .funding_rate
+            .as_deref()
+            .map(parse_decimal)
+            .transpose()?,
         hash: funding.hash,
         payload: funding.payload,
         ingest_source: "http".to_string(),
@@ -284,14 +315,45 @@ fn normalize_order(
         asset: resolved.base_asset.map(ToOwned::to_owned),
         symbol: resolved.symbol.map(ToOwned::to_owned),
         order_status: order.status,
-        side: order.order.get("side").and_then(Value::as_str).map(ToOwned::to_owned),
-        order_type: order.order.get("orderType").and_then(Value::as_str).map(ToOwned::to_owned),
-        price: order.order.get("limitPx").and_then(Value::as_str).map(parse_decimal).transpose()?,
-        size: order.order.get("sz").and_then(Value::as_str).map(parse_decimal).transpose()?,
-        filled_size: order.order.get("filledSz").and_then(Value::as_str).map(parse_decimal).transpose()?,
+        side: order
+            .order
+            .get("side")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned),
+        order_type: order
+            .order
+            .get("orderType")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned),
+        price: order
+            .order
+            .get("limitPx")
+            .and_then(Value::as_str)
+            .map(parse_decimal)
+            .transpose()?,
+        size: order
+            .order
+            .get("sz")
+            .and_then(Value::as_str)
+            .map(parse_decimal)
+            .transpose()?,
+        filled_size: order
+            .order
+            .get("filledSz")
+            .and_then(Value::as_str)
+            .map(parse_decimal)
+            .transpose()?,
         reduce_only: order.order.get("reduceOnly").and_then(Value::as_bool),
-        time_in_force: order.order.get("tif").and_then(Value::as_str).map(ToOwned::to_owned),
-        client_order_id: order.order.get("cloid").and_then(Value::as_str).map(ToOwned::to_owned),
+        time_in_force: order
+            .order
+            .get("tif")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned),
+        client_order_id: order
+            .order
+            .get("cloid")
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned),
         status_timestamp: order.status_timestamp.map(ms_to_datetime),
         payload,
         ingest_source: "http".to_string(),
@@ -352,7 +414,10 @@ async fn update_sync_state(
     Ok(())
 }
 
-async fn upsert_instruments(pool: &DbPool, instruments: &[crate::hyperliquid::normalize::InstrumentRow]) -> Result<()> {
+async fn upsert_instruments(
+    pool: &DbPool,
+    instruments: &[crate::hyperliquid::normalize::InstrumentRow],
+) -> Result<()> {
     for instrument in instruments {
         sqlx::query(
             "INSERT INTO hyperliquid.instruments (instrument_id, symbol, raw_symbol, market_type, base_asset, quote_asset, settlement_asset, asset_index, price_decimals, size_decimals, tick_size, lot_size, is_hip3, active, created_at, updated_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16) ON CONFLICT (instrument_id) DO UPDATE SET symbol = EXCLUDED.symbol, raw_symbol = EXCLUDED.raw_symbol, market_type = EXCLUDED.market_type, base_asset = EXCLUDED.base_asset, quote_asset = EXCLUDED.quote_asset, settlement_asset = EXCLUDED.settlement_asset, asset_index = EXCLUDED.asset_index, price_decimals = EXCLUDED.price_decimals, size_decimals = EXCLUDED.size_decimals, tick_size = EXCLUDED.tick_size, lot_size = EXCLUDED.lot_size, is_hip3 = EXCLUDED.is_hip3, active = EXCLUDED.active, updated_at = EXCLUDED.updated_at",

@@ -1,0 +1,168 @@
+{% extends "base.html" %}
+
+{% block title %}{{ agent.display_name }} · Vibetrading{% endblock %}
+
+{% block content %}
+<div class="mx-auto max-w-[1400px]">
+    <header class="flex flex-col gap-4 border-b border-zinc-800 pb-6 lg:flex-row lg:items-start lg:justify-between">
+        <div>
+            <div class="flex items-center gap-3">
+                <a href="/agents" class="text-sm text-zinc-500 hover:text-zinc-300">Agents</a>
+                <span class="text-zinc-600">/</span>
+                <span class="text-sm text-zinc-400">{{ agent.agent_key }}</span>
+            </div>
+            <h1 class="mt-3 text-3xl font-semibold tracking-tight text-white">{{ agent.display_name }}</h1>
+            <p class="mt-2 max-w-2xl text-sm leading-6 text-zinc-400">
+                Agent details, credentials, and registry metadata.
+            </p>
+        </div>
+        <div class="flex items-center gap-3">
+            {% if agent.enabled %}
+            <span class="inline-flex rounded-full border border-emerald-900/60 bg-emerald-950/30 px-3 py-1.5 text-sm text-emerald-300">Enabled</span>
+            {% else %}
+            <span class="inline-flex rounded-full border border-zinc-700 px-3 py-1.5 text-sm text-zinc-300">Disabled</span>
+            {% endif %}
+            <a href="/agents" class="rounded-full border border-zinc-800 px-4 py-2 text-sm font-medium text-zinc-300 hover:border-zinc-700 hover:text-white">Back</a>
+            <button type="button" id="delete-agent-btn" class="rounded-full border border-red-900/60 bg-red-950/30 px-4 py-2 text-sm font-medium text-red-300 hover:border-red-800 hover:bg-red-950/50">
+                Delete agent
+            </button>
+        </div>
+    </header>
+
+    <section class="mt-6 grid gap-6 xl:grid-cols-[minmax(0,2fr)_minmax(320px,1fr)]">
+        <div class="space-y-6">
+            <section class="rounded-2xl border border-zinc-800 bg-[#0d0d10] p-6">
+                <h2 class="text-lg font-medium text-white">Identity</h2>
+                <dl class="mt-4 grid gap-4 sm:grid-cols-2">
+                    <div>
+                        <dt class="text-xs uppercase tracking-[0.16em] text-zinc-500">Agent key</dt>
+                        <dd class="mt-1 font-mono text-sm text-zinc-300">{{ agent.agent_key }}</dd>
+                    </div>
+                    <div>
+                        <dt class="text-xs uppercase tracking-[0.16em] text-zinc-500">Display name</dt>
+                        <dd class="mt-1 text-sm text-zinc-300">{{ agent.display_name }}</dd>
+                    </div>
+                    <div>
+                        <dt class="text-xs uppercase tracking-[0.16em] text-zinc-500">Wallet address</dt>
+                        <dd class="mt-1 break-all font-mono text-xs text-zinc-300">{{ agent.wallet_address }}</dd>
+                    </div>
+                    <div>
+                        <dt class="text-xs uppercase tracking-[0.16em] text-zinc-500">API key</dt>
+                        <dd class="mt-1 break-all font-mono text-xs text-zinc-300">{{ agent.api_key }}</dd>
+                    </div>
+                </dl>
+            </section>
+
+            <section class="rounded-2xl border border-zinc-800 bg-[#0d0d10] p-6">
+                <h2 class="text-lg font-medium text-white">Prompt</h2>
+                <div class="mt-4 rounded-xl border border-zinc-800 bg-zinc-950/70 p-4">
+                    {% if agent.prompt.is_empty() %}
+                    <p class="text-sm italic text-zinc-500">No prompt configured.</p>
+                    {% else %}
+                    <p class="whitespace-pre-wrap text-sm leading-6 text-zinc-300">{{ agent.prompt }}</p>
+                    {% endif %}
+                </div>
+            </section>
+        </div>
+
+        <div class="space-y-6">
+            <section class="rounded-2xl border border-zinc-800 bg-[#0d0d10] p-6">
+                <h2 class="text-lg font-medium text-white">Status</h2>
+                <div class="mt-4 space-y-3 text-sm">
+                    <div class="flex items-center justify-between">
+                        <span class="text-zinc-400">Runtime state</span>
+                        <span class="text-zinc-500">Not started</span>
+                    </div>
+                    <div class="flex items-center justify-between">
+                        <span class="text-zinc-400">Registry state</span>
+                        {% if agent.enabled %}
+                        <span class="text-emerald-300">Enabled</span>
+                        {% else %}
+                        <span class="text-zinc-300">Disabled</span>
+                        {% endif %}
+                    </div>
+                    <div class="flex items-center justify-between">
+                        <span class="text-zinc-400">API key last used</span>
+                        {% if let Some(last_used) = agent.api_key_last_used_at %}
+                        <span class="font-mono text-xs text-zinc-300" title="{{ last_used }}">{{ last_used.format("%Y-%m-%d %H:%M UTC") }}</span>
+                        {% else %}
+                        <span class="text-zinc-500">Never</span>
+                        {% endif %}
+                    </div>
+                </div>
+            </section>
+
+            <section class="rounded-2xl border border-zinc-800 bg-[#0d0d10] p-6">
+                <h2 class="text-lg font-medium text-white">Registry metadata</h2>
+                <div class="mt-4 space-y-3 text-sm">
+                    <div class="flex items-center justify-between">
+                        <span class="text-zinc-400">Created</span>
+                        <span class="font-mono text-xs text-zinc-300">{{ agent.created_at.format("%Y-%m-%d %H:%M UTC") }}</span>
+                    </div>
+                    <div class="flex items-center justify-between">
+                        <span class="text-zinc-400">Updated</span>
+                        <span class="font-mono text-xs text-zinc-300">{{ agent.updated_at.format("%Y-%m-%d %H:%M UTC") }}</span>
+                    </div>
+                </div>
+            </section>
+        </div>
+    </section>
+</div>
+
+<!-- Delete confirmation modal -->
+<div id="delete-modal" class="fixed inset-0 z-50 hidden items-center justify-center bg-black/70 backdrop-blur-sm px-4" aria-modal="true" role="dialog">
+    <div class="w-full max-w-md rounded-2xl border border-zinc-800 bg-[#0d0d10] p-6 shadow-2xl">
+        <h3 class="text-lg font-semibold text-white">Delete agent</h3>
+        <p class="mt-2 text-sm leading-6 text-zinc-400">
+            Are you sure you want to delete <span class="font-medium text-zinc-200">{{ agent.display_name }}</span>? This will remove the agent from the registry and cannot be undone.
+        </p>
+        <div class="mt-6 flex flex-col-reverse gap-3 sm:flex-row sm:justify-end">
+            <button type="button" id="cancel-delete-btn" class="w-full rounded-full border border-zinc-800 px-4 py-2 text-sm font-medium text-zinc-300 hover:border-zinc-700 hover:text-white sm:w-auto">
+                Cancel
+            </button>
+            <form action="/agents/{{ agent.agent_key }}/delete" method="post" class="w-full sm:w-auto">
+                <button type="submit" class="w-full rounded-full bg-red-600 px-4 py-2 text-sm font-medium text-white hover:bg-red-500 sm:w-auto">
+                    Delete agent
+                </button>
+            </form>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+    (function () {
+        const modal = document.getElementById('delete-modal');
+        const openBtn = document.getElementById('delete-agent-btn');
+        const cancelBtn = document.getElementById('cancel-delete-btn');
+
+        function openModal() {
+            modal.classList.remove('hidden');
+            modal.classList.add('flex');
+        }
+
+        function closeModal() {
+            modal.classList.add('hidden');
+            modal.classList.remove('flex');
+        }
+
+        openBtn.addEventListener('click', openModal);
+        cancelBtn.addEventListener('click', closeModal);
+
+        // Close when clicking the backdrop.
+        modal.addEventListener('click', function (event) {
+            if (event.target === modal) {
+                closeModal();
+            }
+        });
+
+        // Close on Escape key.
+        document.addEventListener('keydown', function (event) {
+            if (event.key === 'Escape' && modal.classList.contains('flex')) {
+                closeModal();
+            }
+        });
+    })();
+</script>
+{% endblock %}

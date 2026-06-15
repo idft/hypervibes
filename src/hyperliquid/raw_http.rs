@@ -103,7 +103,9 @@ impl RawHyperliquidHttpClient {
             .await
             .with_context(|| "failed to call Hyperliquid /info")?
             .error_for_status()
-            .with_context(|| format!("Hyperliquid /info returned an error status for payload {payload}"))?;
+            .with_context(|| {
+                format!("Hyperliquid /info returned an error status for payload {payload}")
+            })?;
 
         response
             .json()
@@ -194,7 +196,6 @@ pub struct RawHistoricalOrder {
     pub extra: Value,
 }
 
-
 fn parse_user_funding_response(response: Value) -> Result<Vec<RawUserFunding>> {
     let entries = response
         .as_array()
@@ -221,7 +222,11 @@ fn parse_user_funding_response(response: Value) -> Result<Vec<RawUserFunding>> {
         let usdc = object
             .get("usdc")
             .and_then(value_as_string)
-            .or_else(|| delta.and_then(|delta| delta.get("usdc")).and_then(value_as_string))
+            .or_else(|| {
+                delta
+                    .and_then(|delta| delta.get("usdc"))
+                    .and_then(value_as_string)
+            })
             .context("userFunding entry missing usdc")?;
         let funding_rate = object
             .get("fundingRate")
@@ -231,14 +236,16 @@ fn parse_user_funding_response(response: Value) -> Result<Vec<RawUserFunding>> {
                     .and_then(|delta| delta.get("fundingRate"))
                     .and_then(value_as_string)
             });
-        let position_size = object
-            .get("szi")
-            .and_then(value_as_string)
-            .or_else(|| delta.and_then(|delta| delta.get("szi")).and_then(value_as_string));
-        let hash = object
-            .get("hash")
-            .and_then(value_as_string)
-            .or_else(|| delta.and_then(|delta| delta.get("hash")).and_then(value_as_string));
+        let position_size = object.get("szi").and_then(value_as_string).or_else(|| {
+            delta
+                .and_then(|delta| delta.get("szi"))
+                .and_then(value_as_string)
+        });
+        let hash = object.get("hash").and_then(value_as_string).or_else(|| {
+            delta
+                .and_then(|delta| delta.get("hash"))
+                .and_then(value_as_string)
+        });
         let time = object
             .get("time")
             .and_then(Value::as_u64)
@@ -270,10 +277,7 @@ fn parse_user_non_funding_ledger_updates_response(response: Value) -> Result<Vec
             .as_object()
             .with_context(|| "userNonFundingLedgerUpdates entry was not an object")?;
 
-        let delta = object
-            .get("delta")
-            .cloned()
-            .unwrap_or(Value::Null);
+        let delta = object.get("delta").cloned().unwrap_or(Value::Null);
         let delta_object = delta.as_object();
         let ledger_type = object
             .get("type")
@@ -301,34 +305,47 @@ fn parse_user_non_funding_ledger_updates_response(response: Value) -> Result<Vec
                 .and_then(Value::as_str)
                 .map(ToOwned::to_owned)
                 .context("ledger entry missing hash")?,
-            usdc: object
-                .get("usdc")
-                .and_then(value_as_string)
-                .or_else(|| delta_object.and_then(|delta| delta.get("usdc")).and_then(value_as_string)),
-            token: object
-                .get("token")
-                .and_then(value_as_string)
-                .or_else(|| delta_object.and_then(|delta| delta.get("token")).and_then(value_as_string)),
-            amount: object
-                .get("amount")
-                .and_then(value_as_string)
-                .or_else(|| delta_object.and_then(|delta| delta.get("amount")).and_then(value_as_string)),
-            fee: object
-                .get("fee")
-                .and_then(value_as_string)
-                .or_else(|| delta_object.and_then(|delta| delta.get("fee")).and_then(value_as_string)),
+            usdc: object.get("usdc").and_then(value_as_string).or_else(|| {
+                delta_object
+                    .and_then(|delta| delta.get("usdc"))
+                    .and_then(value_as_string)
+            }),
+            token: object.get("token").and_then(value_as_string).or_else(|| {
+                delta_object
+                    .and_then(|delta| delta.get("token"))
+                    .and_then(value_as_string)
+            }),
+            amount: object.get("amount").and_then(value_as_string).or_else(|| {
+                delta_object
+                    .and_then(|delta| delta.get("amount"))
+                    .and_then(value_as_string)
+            }),
+            fee: object.get("fee").and_then(value_as_string).or_else(|| {
+                delta_object
+                    .and_then(|delta| delta.get("fee"))
+                    .and_then(value_as_string)
+            }),
             source_user: object
                 .get("sourceUser")
                 .and_then(value_as_string)
-                .or_else(|| delta_object.and_then(|delta| delta.get("sourceUser")).and_then(value_as_string)),
+                .or_else(|| {
+                    delta_object
+                        .and_then(|delta| delta.get("sourceUser"))
+                        .and_then(value_as_string)
+                }),
             destination_user: object
                 .get("destinationUser")
                 .and_then(value_as_string)
-                .or_else(|| delta_object.and_then(|delta| delta.get("destinationUser")).and_then(value_as_string)),
-            tx_hash: object
-                .get("txHash")
-                .and_then(value_as_string)
-                .or_else(|| delta_object.and_then(|delta| delta.get("txHash")).and_then(value_as_string)),
+                .or_else(|| {
+                    delta_object
+                        .and_then(|delta| delta.get("destinationUser"))
+                        .and_then(value_as_string)
+                }),
+            tx_hash: object.get("txHash").and_then(value_as_string).or_else(|| {
+                delta_object
+                    .and_then(|delta| delta.get("txHash"))
+                    .and_then(value_as_string)
+            }),
             delta,
             ledger_type,
             payload: entry,

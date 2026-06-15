@@ -1,8 +1,5 @@
 # Agents Module
 
-WARNING: THIS IS A WORK IN PROGRESS AND IS IDEAS ONLY.
-NOTHING IN THIS FILE SHOULD BE IMPLEMENTED YET.
-
 Related docs:
 
 - `README.md` for top-level V2 direction
@@ -24,6 +21,23 @@ This module should be the system-of-record for:
 - which shared skills and profile-level configuration each agent runs with
 
 This module should sit between the memory subsystem and the Hyperliquid subsystem.
+
+## Phase 1 Implementation Note
+
+The current Phase 1 implementation follows
+`.opencode/plans/agents-implementation-plan.md` and intentionally uses a
+simplified single-table registry (`agents.registry`) with:
+
+- no instrument bindings or per-agent instrument restrictions
+- no environment field; everything is implicitly `live`
+- no Hermes profile column or Hermes bindings table
+- no secret refs table
+- a boolean `enabled` flag in place of a lifecycle enum
+- one app API key stored directly on the registry row
+- the Hyperliquid private key encrypted at the application layer before storage
+
+The broader schema ideas below describe future directions rather than the
+running Phase 1 data model.
 
 ## Why This Module Exists
 
