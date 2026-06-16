@@ -33,7 +33,8 @@ use crate::{
         templates::{
             AccountBalancePartialTemplate, AccountBalanceView, AgentListEntry,
             AgentsNewPageTemplate, AgentsPageTemplate, AgentsShowPageTemplate,
-            ServerErrorPageTemplate, SummaryCard, TransactionView,
+            OpenOrdersPartialTemplate, OpenOrdersView, OpenPositionsPartialTemplate,
+            OpenPositionsView, ServerErrorPageTemplate, SummaryCard, TransactionView,
         },
     },
 };
@@ -49,6 +50,14 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route(
             "/agents/{agent_key}/account_balance/stream",
             get(account_balance_stream),
+        )
+        .route(
+            "/agents/{agent_key}/open_positions/stream",
+            get(open_positions_stream),
+        )
+        .route(
+            "/agents/{agent_key}/open_orders/stream",
+            get(open_orders_stream),
         )
         .route("/api/agents/{agent_key}/live", get(agent_live))
         .with_state(state)
@@ -89,7 +98,10 @@ async fn agents_index(State(state): State<Arc<AppState>>) -> Result<Html<String>
                         ..Default::default()
                     });
             let account_balance = AccountBalanceView::from_live_state(snapshot);
-            AgentListEntry { row, account_balance }
+            AgentListEntry {
+                row,
+                account_balance,
+            }
         })
         .collect();
 
@@ -153,9 +165,9 @@ async fn agent_live(
         agent_key: agent.agent_key.clone(),
         account_address: agent.wallet_address.clone(),
         environment: agent.environment.clone(),
-        connected: snapshot
-            .as_ref()
-            .is_some_and(|s| s.status == crate::hyperliquid::live_state::LiveConnectionStatus::Connected),
+        connected: snapshot.as_ref().is_some_and(|s| {
+            s.status == crate::hyperliquid::live_state::LiveConnectionStatus::Connected
+        }),
         state: snapshot,
     };
     Ok(Json(body).into_response())
@@ -175,10 +187,7 @@ async fn agents_show(
             )
             .await
             {
-                Ok(rows) => rows
-                    .into_iter()
-                    .map(TransactionView::from_row)
-                    .collect(),
+                Ok(rows) => rows.into_iter().map(TransactionView::from_row).collect(),
                 Err(error) => {
                     warn!(
                         agent_key = %agent.agent_key,
@@ -210,23 +219,34 @@ async fn agents_show(
                 }
             };
             let account_key = AccountKey::new(&agent.wallet_address, &agent.environment);
-            let account_balance_snapshot =
-                state.live_accounts.get(&account_key).unwrap_or_else(|| AccountLiveState {
-                    account_address: account_key.account_address.clone(),
-                    environment: account_key.environment.clone(),
-                    status: LiveConnectionStatus::Starting,
-                    ..Default::default()
-                });
-            let account_balance_view = AccountBalanceView::from_live_state(account_balance_snapshot);
-            let account_balance_html = AccountBalancePartialTemplate::render_view(
-                account_balance_view,
-            )
-            .map_err(anyhow::Error::from)?;
+            let live_snapshot =
+                state
+                    .live_accounts
+                    .get(&account_key)
+                    .unwrap_or_else(|| AccountLiveState {
+                        account_address: account_key.account_address.clone(),
+                        environment: account_key.environment.clone(),
+                        status: LiveConnectionStatus::Starting,
+                        ..Default::default()
+                    });
+            let account_balance_view = AccountBalanceView::from_live_state(live_snapshot.clone());
+            let account_balance_html =
+                AccountBalancePartialTemplate::render_view(account_balance_view)
+                    .map_err(anyhow::Error::from)?;
+            let open_positions_view = OpenPositionsView::from_live_state(live_snapshot.clone());
+            let open_positions_html =
+                OpenPositionsPartialTemplate::render_view(open_positions_view)
+                    .map_err(anyhow::Error::from)?;
+            let open_orders_view = OpenOrdersView::from_live_state(live_snapshot.clone());
+            let open_orders_html = OpenOrdersPartialTemplate::render_view(open_orders_view)
+                .map_err(anyhow::Error::from)?;
             let template = AgentsShowPageTemplate {
                 agent,
                 transactions,
                 sync_state,
                 account_balance_html,
+                open_positions_html,
+                open_orders_html,
             };
             Ok(Html(template.render()?).into_response())
         }
@@ -270,12 +290,14 @@ async fn account_balance_stream(
     // SSE connection opened. If no snapshot exists yet, fall back to a
     // `Starting`-status placeholder so the UI can still render the
     // connection status / "Loading…" caption.
-    let initial_snapshot = live_accounts.get(&account_key).unwrap_or_else(|| AccountLiveState {
-        account_address: account_key.account_address.clone(),
-        environment: account_key.environment.clone(),
-        status: LiveConnectionStatus::Starting,
-        ..Default::default()
-    });
+    let initial_snapshot = live_accounts
+        .get(&account_key)
+        .unwrap_or_else(|| AccountLiveState {
+            account_address: account_key.account_address.clone(),
+            environment: account_key.environment.clone(),
+            status: LiveConnectionStatus::Starting,
+            ..Default::default()
+        });
     let initial_event = render_account_balance_event(&initial_snapshot)?;
 
     let account_key_filter = account_key.clone();
@@ -315,8 +337,8 @@ async fn account_balance_stream(
         });
 
     let stream = tokio_stream::iter([Ok::<Event, Infallible>(initial_event)]).chain(notifications);
-    let sse = Sse::new(stream)
-        .keep_alive(KeepAlive::new().interval(std::time::Duration::from_secs(15)));
+    let sse =
+        Sse::new(stream).keep_alive(KeepAlive::new().interval(std::time::Duration::from_secs(15)));
     Ok(sse.into_response())
 }
 
@@ -324,6 +346,152 @@ fn render_account_balance_event(state: &AccountLiveState) -> Result<Event, AppEr
     let view = AccountBalanceView::from_live_state(state.clone());
     let html = AccountBalancePartialTemplate::render_view(view)?;
     Ok(Event::default().event("balance").data(html))
+}
+
+/// Stream open-positions updates for `agent_key` as Server-Sent Events.
+///
+/// Each event is named `positions`; the `data` field is the freshly
+/// rendered `open_positions.html` partial. The stream begins with the
+/// current snapshot (or a `Loading` placeholder if no live state has been
+/// produced yet) and then emits a new event on every
+/// [`LiveAccountStore`] mutation for the matching account.
+async fn open_positions_stream(
+    State(state): State<Arc<AppState>>,
+    Path(agent_key): Path<String>,
+) -> Result<Response, AppError> {
+    let agent = match get_agent(&state.db_pool, &agent_key).await? {
+        Some(agent) => agent,
+        None => return Ok((StatusCode::NOT_FOUND, "agent not found").into_response()),
+    };
+
+    let account_key = AccountKey::new(&agent.wallet_address, &agent.environment);
+    let live_accounts = Arc::clone(&state.live_accounts);
+
+    let initial_snapshot = live_accounts
+        .get(&account_key)
+        .unwrap_or_else(|| AccountLiveState {
+            account_address: account_key.account_address.clone(),
+            environment: account_key.environment.clone(),
+            status: LiveConnectionStatus::Starting,
+            ..Default::default()
+        });
+    let initial_event = render_open_positions_event(&initial_snapshot)?;
+
+    let account_key_filter = account_key.clone();
+    let live_accounts_filter = Arc::clone(&live_accounts);
+    let notifications = BroadcastStream::new(live_accounts.subscribe())
+        .filter_map(move |item| {
+            let account_key = account_key_filter.clone();
+            async move {
+                match item {
+                    Ok(key) if key == account_key => Some(key),
+                    Ok(_) => None,
+                    Err(tokio_stream::wrappers::errors::BroadcastStreamRecvError::Lagged(_)) => {
+                        Some(account_key.clone())
+                    }
+                }
+            }
+        })
+        .filter_map(move |_key| {
+            let live_accounts = Arc::clone(&live_accounts_filter);
+            let key = account_key.clone();
+            async move {
+                match live_accounts.get(&key) {
+                    Some(snapshot) => match render_open_positions_event(&snapshot) {
+                        Ok(event) => Some(Ok::<Event, Infallible>(event)),
+                        Err(e) => {
+                            warn!(error = ?e, "failed to render open positions SSE event");
+                            None
+                        }
+                    },
+                    None => None,
+                }
+            }
+        });
+
+    let stream = tokio_stream::iter([Ok::<Event, Infallible>(initial_event)]).chain(notifications);
+    let sse =
+        Sse::new(stream).keep_alive(KeepAlive::new().interval(std::time::Duration::from_secs(15)));
+    Ok(sse.into_response())
+}
+
+fn render_open_positions_event(state: &AccountLiveState) -> Result<Event, AppError> {
+    let view = OpenPositionsView::from_live_state(state.clone());
+    let html = OpenPositionsPartialTemplate::render_view(view)?;
+    Ok(Event::default().event("positions").data(html))
+}
+
+/// Stream open-orders updates for `agent_key` as Server-Sent Events.
+///
+/// Each event is named `orders`; the `data` field is the freshly rendered
+/// `open_orders.html` partial. The stream begins with the current snapshot
+/// (or a `Loading` placeholder if no live state has been produced yet) and
+/// then emits a new event on every [`LiveAccountStore`] mutation for the
+/// matching account.
+async fn open_orders_stream(
+    State(state): State<Arc<AppState>>,
+    Path(agent_key): Path<String>,
+) -> Result<Response, AppError> {
+    let agent = match get_agent(&state.db_pool, &agent_key).await? {
+        Some(agent) => agent,
+        None => return Ok((StatusCode::NOT_FOUND, "agent not found").into_response()),
+    };
+
+    let account_key = AccountKey::new(&agent.wallet_address, &agent.environment);
+    let live_accounts = Arc::clone(&state.live_accounts);
+
+    let initial_snapshot = live_accounts
+        .get(&account_key)
+        .unwrap_or_else(|| AccountLiveState {
+            account_address: account_key.account_address.clone(),
+            environment: account_key.environment.clone(),
+            status: LiveConnectionStatus::Starting,
+            ..Default::default()
+        });
+    let initial_event = render_open_orders_event(&initial_snapshot)?;
+
+    let account_key_filter = account_key.clone();
+    let live_accounts_filter = Arc::clone(&live_accounts);
+    let notifications = BroadcastStream::new(live_accounts.subscribe())
+        .filter_map(move |item| {
+            let account_key = account_key_filter.clone();
+            async move {
+                match item {
+                    Ok(key) if key == account_key => Some(key),
+                    Ok(_) => None,
+                    Err(tokio_stream::wrappers::errors::BroadcastStreamRecvError::Lagged(_)) => {
+                        Some(account_key.clone())
+                    }
+                }
+            }
+        })
+        .filter_map(move |_key| {
+            let live_accounts = Arc::clone(&live_accounts_filter);
+            let key = account_key.clone();
+            async move {
+                match live_accounts.get(&key) {
+                    Some(snapshot) => match render_open_orders_event(&snapshot) {
+                        Ok(event) => Some(Ok::<Event, Infallible>(event)),
+                        Err(e) => {
+                            warn!(error = ?e, "failed to render open orders SSE event");
+                            None
+                        }
+                    },
+                    None => None,
+                }
+            }
+        });
+
+    let stream = tokio_stream::iter([Ok::<Event, Infallible>(initial_event)]).chain(notifications);
+    let sse =
+        Sse::new(stream).keep_alive(KeepAlive::new().interval(std::time::Duration::from_secs(15)));
+    Ok(sse.into_response())
+}
+
+fn render_open_orders_event(state: &AccountLiveState) -> Result<Event, AppError> {
+    let view = OpenOrdersView::from_live_state(state.clone());
+    let html = OpenOrdersPartialTemplate::render_view(view)?;
+    Ok(Event::default().event("orders").data(html))
 }
 
 async fn create_agent(
@@ -574,7 +742,10 @@ mod tests {
             .await
             .unwrap();
         let body: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
-        assert_eq!(body["agent_key"], serde_json::Value::from(agent_key.clone()));
+        assert_eq!(
+            body["agent_key"],
+            serde_json::Value::from(agent_key.clone())
+        );
         assert_eq!(
             body["account_address"],
             serde_json::Value::from(wallet_address.clone())
@@ -607,7 +778,10 @@ mod tests {
             .unwrap();
         let body: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
         assert_eq!(body["connected"], serde_json::Value::from(true));
-        assert_eq!(body["state"]["status"], serde_json::Value::from("connected"));
+        assert_eq!(
+            body["state"]["status"],
+            serde_json::Value::from("connected")
+        );
     }
 
     #[tokio::test]
@@ -695,7 +869,10 @@ mod tests {
             Err(_) => panic!("timed out reading SSE body"),
         };
         let text = String::from_utf8_lossy(&bytes);
-        assert!(text.contains("event: balance"), "missing event line in {text}");
+        assert!(
+            text.contains("event: balance"),
+            "missing event line in {text}"
+        );
         assert!(text.contains("Loading"), "expected placeholder in {text}");
     }
 
@@ -927,5 +1104,282 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn open_positions_stream_returns_404_for_unknown_agent() {
+        let Some(state) = test_state().await else {
+            eprintln!("DATABASE_URL not set; skipping route test");
+            return;
+        };
+
+        let app = router(state);
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/agents/does-not-exist-12345/open_positions/stream")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn open_positions_stream_emits_initial_loading_placeholder() {
+        let Some(state) = test_state().await else {
+            eprintln!("DATABASE_URL not set; skipping route test");
+            return;
+        };
+
+        let (agent_key, _wallet_address) = match insert_test_agent(&state).await {
+            Some(pair) => pair,
+            None => return,
+        };
+
+        let app = router(state);
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/agents/{}/open_positions/stream", agent_key))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response
+                .headers()
+                .get("content-type")
+                .and_then(|v| v.to_str().ok()),
+            Some("text/event-stream")
+        );
+
+        let body = response.into_body();
+        let bytes = match tokio::time::timeout(
+            std::time::Duration::from_millis(250),
+            axum::body::to_bytes(body, 16 * 1024),
+        )
+        .await
+        {
+            Ok(Ok(bytes)) => bytes,
+            Ok(Err(e)) => panic!("failed to read SSE body: {e}"),
+            Err(_) => panic!("timed out reading SSE body"),
+        };
+        let text = String::from_utf8_lossy(&bytes);
+        assert!(
+            text.contains("event: positions"),
+            "missing event line in {text}"
+        );
+        assert!(text.contains("Loading"), "expected placeholder in {text}");
+    }
+
+    #[tokio::test]
+    async fn open_positions_stream_emits_initial_rows_when_state_present() {
+        let Some(state) = test_state().await else {
+            eprintln!("DATABASE_URL not set; skipping route test");
+            return;
+        };
+
+        let (agent_key, wallet_address) = match insert_test_agent(&state).await {
+            Some(pair) => pair,
+            None => return,
+        };
+
+        let key = AccountKey::new(&wallet_address, "live");
+        state.live_accounts.replace(
+            key.clone(),
+            AccountLiveState {
+                account_address: key.account_address.clone(),
+                environment: key.environment.clone(),
+                status: LiveConnectionStatus::Connected,
+                updated_at: Some(Utc::now()),
+                open_positions: vec![crate::hyperliquid::live_state::LivePosition {
+                    coin: "BTC".to_string(),
+                    szi: Some(rust_decimal::Decimal::new(1, 0)),
+                    entry_px: Some(rust_decimal::Decimal::new(30000, 0)),
+                    liquidation_px: Some(rust_decimal::Decimal::new(25000, 0)),
+                    margin_used: Some(rust_decimal::Decimal::new(6000, 0)),
+                    position_value: Some(rust_decimal::Decimal::new(30000, 0)),
+                    unrealized_pnl: Some(rust_decimal::Decimal::new(1500, 0)),
+                    return_on_equity: Some(rust_decimal::Decimal::new(25, 2)),
+                    leverage_type: Some("cross".to_string()),
+                    leverage_value: Some(5),
+                    max_leverage: Some(50),
+                }],
+                ..Default::default()
+            },
+        );
+
+        let app = router(state);
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/agents/{}/open_positions/stream", agent_key))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let body = response.into_body();
+        let bytes = match tokio::time::timeout(
+            std::time::Duration::from_millis(250),
+            axum::body::to_bytes(body, 16 * 1024),
+        )
+        .await
+        {
+            Ok(Ok(bytes)) => bytes,
+            Ok(Err(e)) => panic!("failed to read SSE body: {e}"),
+            Err(_) => panic!("timed out reading SSE body"),
+        };
+        let text = String::from_utf8_lossy(&bytes);
+        assert!(text.contains("event: positions"));
+        assert!(text.contains("BTC"));
+        assert!(text.contains("long"));
+        assert!(text.contains("+25.00%"));
+    }
+
+    #[tokio::test]
+    async fn open_orders_stream_returns_404_for_unknown_agent() {
+        let Some(state) = test_state().await else {
+            eprintln!("DATABASE_URL not set; skipping route test");
+            return;
+        };
+
+        let app = router(state);
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/agents/does-not-exist-12345/open_orders/stream")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn open_orders_stream_emits_initial_loading_placeholder() {
+        let Some(state) = test_state().await else {
+            eprintln!("DATABASE_URL not set; skipping route test");
+            return;
+        };
+
+        let (agent_key, _wallet_address) = match insert_test_agent(&state).await {
+            Some(pair) => pair,
+            None => return,
+        };
+
+        let app = router(state);
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/agents/{}/open_orders/stream", agent_key))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response
+                .headers()
+                .get("content-type")
+                .and_then(|v| v.to_str().ok()),
+            Some("text/event-stream")
+        );
+
+        let body = response.into_body();
+        let bytes = match tokio::time::timeout(
+            std::time::Duration::from_millis(250),
+            axum::body::to_bytes(body, 16 * 1024),
+        )
+        .await
+        {
+            Ok(Ok(bytes)) => bytes,
+            Ok(Err(e)) => panic!("failed to read SSE body: {e}"),
+            Err(_) => panic!("timed out reading SSE body"),
+        };
+        let text = String::from_utf8_lossy(&bytes);
+        assert!(
+            text.contains("event: orders"),
+            "missing event line in {text}"
+        );
+        assert!(text.contains("Loading"), "expected placeholder in {text}");
+    }
+
+    #[tokio::test]
+    async fn open_orders_stream_emits_initial_rows_when_state_present() {
+        let Some(state) = test_state().await else {
+            eprintln!("DATABASE_URL not set; skipping route test");
+            return;
+        };
+
+        let (agent_key, wallet_address) = match insert_test_agent(&state).await {
+            Some(pair) => pair,
+            None => return,
+        };
+
+        let key = AccountKey::new(&wallet_address, "live");
+        state.live_accounts.replace(
+            key.clone(),
+            AccountLiveState {
+                account_address: key.account_address.clone(),
+                environment: key.environment.clone(),
+                status: LiveConnectionStatus::Connected,
+                updated_at: Some(Utc::now()),
+                open_orders: vec![crate::hyperliquid::live_state::LiveOpenOrder {
+                    coin: "ETH".to_string(),
+                    side: Some("buy".to_string()),
+                    limit_px: Some(rust_decimal::Decimal::new(1900, 0)),
+                    sz: Some(rust_decimal::Decimal::new(1, 0)),
+                    orig_sz: Some(rust_decimal::Decimal::new(1, 0)),
+                    oid: Some("123".to_string()),
+                    timestamp: Some(chrono::Utc::now().timestamp_millis() as u64),
+                    cloid: None,
+                    order_type: Some("limit".to_string()),
+                    tif: Some("Gtc".to_string()),
+                    reduce_only: Some(false),
+                    is_trigger: Some(false),
+                    trigger_px: None,
+                    trigger_condition: None,
+                    is_position_tpsl: Some(false),
+                }],
+                ..Default::default()
+            },
+        );
+
+        let app = router(state);
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/agents/{}/open_orders/stream", agent_key))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let body = response.into_body();
+        let bytes = match tokio::time::timeout(
+            std::time::Duration::from_millis(250),
+            axum::body::to_bytes(body, 16 * 1024),
+        )
+        .await
+        {
+            Ok(Ok(bytes)) => bytes,
+            Ok(Err(e)) => panic!("failed to read SSE body: {e}"),
+            Err(_) => panic!("timed out reading SSE body"),
+        };
+        let text = String::from_utf8_lossy(&bytes);
+        assert!(text.contains("event: orders"));
+        assert!(text.contains("ETH"));
+        assert!(text.contains("buy"));
     }
 }

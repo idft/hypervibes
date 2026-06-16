@@ -43,7 +43,7 @@ use crate::{
             trade_fill_row_from_hypersdk_fill,
         },
         live_state::{AccountKey, AccountLiveState, LiveAccountStore, LiveConnectionStatus},
-        raw_http::{RawHyperliquidHttpClient, RawHttpConfig},
+        raw_http::{RawHttpConfig, RawHyperliquidHttpClient},
     },
 };
 
@@ -281,7 +281,8 @@ async fn handle_message(
             }
         }
         htypes::Incoming::UserEvents(event) => {
-            if let Some(row) = user_funding_to_ledger(config, lookup, &event, &account_key.account_address)
+            if let Some(row) =
+                user_funding_to_ledger(config, lookup, &event, &account_key.account_address)
                 && persist_journal
             {
                 upsert_funding_event(pool, row).await?;
@@ -474,10 +475,7 @@ mod tests {
         assert_eq!(new_state.open_orders.len(), 1);
         assert!(new_state.connected_at.is_some());
         assert_eq!(
-            new_state
-                .margin
-                .as_ref()
-                .and_then(|m| m.account_value),
+            new_state.margin.as_ref().and_then(|m| m.account_value),
             Some(rust_decimal::Decimal::new(42, 0))
         );
     }

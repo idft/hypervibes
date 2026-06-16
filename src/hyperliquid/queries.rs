@@ -3,10 +3,7 @@ use chrono::{DateTime, Utc};
 use rust_decimal::Decimal;
 use serde_json::Value;
 
-use crate::{
-    db::DbPool,
-    hyperliquid::sync_state::SyncStateRow,
-};
+use crate::{db::DbPool, hyperliquid::sync_state::SyncStateRow};
 
 /// A single USDC balance-impacting event from the account timeline.
 #[derive(Debug, Clone, sqlx::FromRow)]

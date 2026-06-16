@@ -210,12 +210,14 @@ impl LiveAccountStore {
     {
         let updated = {
             let mut guard = self.inner.write().expect("live account store poisoned");
-            let state = guard.entry(key.clone()).or_insert_with(|| AccountLiveState {
-                account_address: key.account_address.clone(),
-                environment: key.environment.clone(),
-                status: LiveConnectionStatus::Starting,
-                ..Default::default()
-            });
+            let state = guard
+                .entry(key.clone())
+                .or_insert_with(|| AccountLiveState {
+                    account_address: key.account_address.clone(),
+                    environment: key.environment.clone(),
+                    status: LiveConnectionStatus::Starting,
+                    ..Default::default()
+                });
             mutate(state);
             state.clone()
         };
@@ -227,12 +229,14 @@ impl LiveAccountStore {
     pub fn set_status(&self, key: &AccountKey, status: LiveConnectionStatus) -> AccountLiveState {
         let updated = {
             let mut guard = self.inner.write().expect("live account store poisoned");
-            let state = guard.entry(key.clone()).or_insert_with(|| AccountLiveState {
-                account_address: key.account_address.clone(),
-                environment: key.environment.clone(),
-                status,
-                ..Default::default()
-            });
+            let state = guard
+                .entry(key.clone())
+                .or_insert_with(|| AccountLiveState {
+                    account_address: key.account_address.clone(),
+                    environment: key.environment.clone(),
+                    status,
+                    ..Default::default()
+                });
             state.status = status;
             if matches!(status, LiveConnectionStatus::Connected) {
                 if state.connected_at.is_none() {
@@ -251,11 +255,13 @@ impl LiveAccountStore {
     pub fn record_error(&self, key: &AccountKey, message: impl Into<String>) {
         {
             let mut guard = self.inner.write().expect("live account store poisoned");
-            let state = guard.entry(key.clone()).or_insert_with(|| AccountLiveState {
-                account_address: key.account_address.clone(),
-                environment: key.environment.clone(),
-                ..Default::default()
-            });
+            let state = guard
+                .entry(key.clone())
+                .or_insert_with(|| AccountLiveState {
+                    account_address: key.account_address.clone(),
+                    environment: key.environment.clone(),
+                    ..Default::default()
+                });
             state.last_error = Some(message.into());
             state.updated_at = Some(Utc::now());
         }

@@ -1,0 +1,68 @@
+<div id="open-positions-content">
+    {% if !view.has_any_state %}
+    <p class="text-sm italic text-zinc-500">Loading…</p>
+    {% else if view.positions.is_empty() %}
+    <div class="rounded-xl border border-zinc-800 bg-zinc-950/70 p-6 text-center">
+        <p class="text-sm text-zinc-400">No open positions.</p>
+        <p class="mt-1 text-xs text-zinc-500">When this account holds a perp position it will appear here.</p>
+    </div>
+    {% else %}
+    <div class="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+        <div class="rounded-xl border border-zinc-800 bg-zinc-950/70 p-4">
+            <div class="text-xs uppercase tracking-[0.16em] text-zinc-500">Open positions</div>
+            <div class="mt-2 font-mono text-2xl font-semibold tabular-nums text-white">{{ view.summary.position_count }}</div>
+        </div>
+        <div class="rounded-xl border border-zinc-800 bg-zinc-950/70 p-4">
+            <div class="text-xs uppercase tracking-[0.16em] text-zinc-500">Total uPnL</div>
+            <div class="mt-2 font-mono text-2xl font-semibold tabular-nums {{ view.summary.total_u_pnl.color_class }}">{{ view.summary.total_u_pnl.value }}</div>
+        </div>
+        <div class="rounded-xl border border-zinc-800 bg-zinc-950/70 p-4">
+            <div class="text-xs uppercase tracking-[0.16em] text-zinc-500">Total notional</div>
+            <div class="mt-2 font-mono text-2xl font-semibold tabular-nums text-zinc-200">{{ view.summary.total_notional }}</div>
+        </div>
+        <div class="rounded-xl border border-zinc-800 bg-zinc-950/70 p-4">
+            <div class="text-xs uppercase tracking-[0.16em] text-zinc-500">Total margin used</div>
+            <div class="mt-2 font-mono text-2xl font-semibold tabular-nums text-zinc-200">{{ view.summary.total_margin_used }}</div>
+        </div>
+    </div>
+
+    <div class="mt-4 overflow-x-auto">
+        <table class="min-w-full divide-y divide-zinc-800 text-sm">
+            <thead class="bg-zinc-950/60 text-left text-xs uppercase tracking-[0.16em] text-zinc-500">
+                <tr>
+                    <th class="px-4 py-3 font-medium">Coin</th>
+                    <th class="px-4 py-3 font-medium">Side</th>
+                    <th class="px-4 py-3 text-right font-medium">Size</th>
+                    <th class="px-4 py-3 text-right font-medium">Entry</th>
+                    <th class="px-4 py-3 text-right font-medium">Mark / NTL</th>
+                    <th class="px-4 py-3 text-right font-medium">uPnL</th>
+                    <th class="px-4 py-3 text-right font-medium">Liq</th>
+                    <th class="px-4 py-3 text-right font-medium">Margin</th>
+                    <th class="px-4 py-3 text-right font-medium">ROE</th>
+                </tr>
+            </thead>
+            <tbody class="divide-y divide-zinc-800">
+                {% for pos in view.positions %}
+                <tr class="hover:bg-zinc-900/50">
+                    <td class="px-4 py-3 align-top font-medium text-zinc-100">{{ pos.coin }}</td>
+                    <td class="px-4 py-3 align-top">
+                        {% if pos.side == "long" %}
+                        <span class="inline-flex rounded-full border border-emerald-900/60 bg-emerald-950/30 px-2 py-0.5 text-xs font-medium text-emerald-300">long</span>
+                        {% else %}
+                        <span class="inline-flex rounded-full border border-red-900/60 bg-red-950/30 px-2 py-0.5 text-xs font-medium text-red-300">short</span>
+                        {% endif %}
+                    </td>
+                    <td class="px-4 py-3 text-right align-top font-mono text-xs tabular-nums text-zinc-300">{{ pos.size }}</td>
+                    <td class="px-4 py-3 text-right align-top font-mono text-xs tabular-nums {{ pos.entry_px.color_class }}">{{ pos.entry_px.value }}</td>
+                    <td class="px-4 py-3 text-right align-top font-mono text-xs tabular-nums text-zinc-300">{{ pos.mark_px_or_value }}</td>
+                    <td class="px-4 py-3 text-right align-top font-mono text-xs tabular-nums {{ pos.unrealized_pnl.color_class }}">{{ pos.unrealized_pnl.value }}</td>
+                    <td class="px-4 py-3 text-right align-top font-mono text-xs tabular-nums {{ pos.liquidation_px.color_class }}">{{ pos.liquidation_px.value }}</td>
+                    <td class="px-4 py-3 text-right align-top font-mono text-xs tabular-nums {{ pos.margin_used.color_class }}">{{ pos.margin_used.value }}</td>
+                    <td class="px-4 py-3 text-right align-top font-mono text-xs tabular-nums {{ pos.roe_color_class }}">{{ pos.return_on_equity }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% endif %}
+</div>

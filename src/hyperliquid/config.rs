@@ -34,7 +34,9 @@ impl FromStr for HyperliquidEnvironment {
     fn from_str(value: &str) -> Result<Self, Self::Err> {
         match value.trim().to_ascii_lowercase().as_str() {
             "mainnet" | "live" => Ok(Self::Mainnet),
-            other => bail!("unsupported HYPERLIQUID_ENVIRONMENT '{other}' (only mainnet is supported)"),
+            other => {
+                bail!("unsupported HYPERLIQUID_ENVIRONMENT '{other}' (only mainnet is supported)")
+            }
         }
     }
 }

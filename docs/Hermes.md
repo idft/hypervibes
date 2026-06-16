@@ -68,8 +68,95 @@ The plugin declares these in `plugin.yaml` under `requires_env`:
 | `VIBETRADING_API_KEY` | Per-agent API key from `agents.registry.api_key`. Authenticates the agent to the backend. |
 | `HYPERLIQUID_ENVIRONMENT` | `mainnet` or `testnet` |
 | `HYPERLIQUID_ADDRESS` | The agent's Hyperliquid wallet / account address. Used for direct Hyperliquid reads. |
+| `HERMES_BASE_URL` | Base URL of the Hermes agent's HTTP API (e.g., `http://localhost:9119`). Used by the plugin for profile management. |
+| `HERMES_API_KEY` | Optional bearer token for the Hermes API when the daemon runs in gated auth mode. |
 
 Hermes will prompt for missing variables during install and save them to `.env`.
+
+## Hermes HTTP API (Profile Management)
+
+The Hermes agent runs a FastAPI HTTP daemon that exposes a full OpenAPI spec:
+
+- Spec: `GET {HERMES_BASE_URL}/openapi.json`
+- Interactive docs: `GET {HERMES_BASE_URL}/docs`
+
+For V2, the App's provisioning pipeline will use this API to
+**automatically manage each agent's Hermes profile** — creating the profile
+on first registration, configuring its soul/model/description from the
+agent registry, and activating it — so that spinning up a new agent in
+our App end-to-end does not require any manual clicks in the Hermes
+dashboard.
+
+### Profile endpoints
+
+| Method | Endpoint | Purpose |
+|--------|----------|---------|
+| `GET` | `/api/profiles` | List all installed profiles |
+| `POST` | `/api/profiles` | Create a new profile |
+| `GET` | `/api/profiles/active` | Get the currently active profile |
+| `POST` | `/api/profiles/active` | Set the active profile (`{"name": "..."}`) |
+| `GET` | `/api/profiles/{name}` | Implicit via the routes below |
+| `PATCH` | `/api/profiles/{name}` | Rename a profile (`{"new_name": "..."}`) |
+| `DELETE` | `/api/profiles/{name}` | Delete a profile |
+| `GET` | `/api/profiles/{name}/soul` | Read the profile's soul / persona text |
+| `PUT` | `/api/profiles/{name}/soul` | Replace the profile's soul (`{"content": "..."}`) |
+| `PUT` | `/api/profiles/{name}/description` | Set the profile description (`{"description": "..."}`) |
+| `PUT` | `/api/profiles/{name}/model` | Set provider + model (`{"provider": "...", "model": "..."}`) |
+| `POST` | `/api/profiles/{name}/describe-auto` | Auto-generate a description via the auxiliary LLM (`{"overwrite": false}`) |
+| `GET` | `/api/profiles/{name}/setup-command` | Get the CLI setup command for the profile |
+| `POST` | `/api/profiles/{name}/open-terminal` | Open a terminal session for the profile |
+| `GET` | `/api/profiles/sessions` | List sessions, filterable by profile |
+
+A smaller set of profile routes also exists under the Kanban plugin for the
+board's assignee picker (e.g. `GET /api/plugins/kanban/profiles`); the
+plugin should treat those as read-only.
+
+### Request body schemas
+
+- **`ProfileCreate`** (`POST /api/profiles`) — only `name` is required:
+  - `name`: string *(required)*
+  - `clone_from_default`: bool (default `false`)
+  - `clone_all`: bool (default `false`)
+  - `no_skills`: bool (default `false`)
+  - `description`: string | null
+  - `clone_from`: string | null *(clone from another named profile)*
+  - `provider`: string | null
+  - `model`: string | null
+- **`ProfileActiveUpdate`** — `{ "name": "..." }`
+- **`ProfileRename`** — `{ "new_name": "..." }`
+- **`ProfileSoulUpdate`** — `{ "content": "..." }`
+- **`ProfileDescriptionUpdate`** — `{ "description": "..." }` (default `""` to clear)
+- **`ProfileModelUpdate`** — `{ "provider": "...", "model": "..." }`
+- **`ProfileDescribeAuto`** — `{ "overwrite": false }`
+
+### Automatic profile management flow
+
+When a new agent is registered in our App, the **App's provisioning
+pipeline** should call the Hermes API in this order so the Hermes profile
+exists, is configured, and is the active one before the agent ever runs a
+turn:
+
+1. `GET /api/profiles` — check whether a profile for this agent already
+   exists (matched by name against `agents.hermes_bindings.hermes_profile`).
+2. `POST /api/profiles` with `ProfileCreate` if missing — typically
+   `clone_from_default=true` so it inherits a working baseline.
+3. `PUT /api/profiles/{name}/soul` with the agent's persona text sourced
+   from the registry (so each agent has a distinct, auditable soul).
+4. `PUT /api/profiles/{name}/model` with the provider/model assigned to
+   the agent.
+5. `PUT /api/profiles/{name}/description` with a short human-readable
+   description (or `POST /api/profiles/{name}/describe-auto` to let the
+   auxiliary LLM draft one).
+6. `POST /api/profiles/active` with `{"name": "..."}` so subsequent
+   Hermes runs use this profile.
+
+Idempotency: every step above should be safe to re-run on a profile that
+already exists / is already configured. The plugin should treat a 200
+response with the same shape as a no-op success.
+
+Auth: when the Hermes daemon is in gated auth mode, requests must include
+`Authorization: Bearer {HERMES_API_KEY}` (or equivalent cookie). The exact
+header is TBD — see Open Questions.
 
 ## Tools
 
@@ -248,6 +335,23 @@ The plugin will call these backend endpoints once they exist:
 All agent-facing endpoints authenticate via the `VIBETRADING_API_KEY` header
 and resolve the `agent_key` internally.
 
+## Hermes Profile Management Contracts
+
+The plugin (or the App's provisioning pipeline) will call these Hermes
+endpoints to keep the agent's Hermes profile in sync with the registry.
+See the **Hermes HTTP API (Profile Management)** section above for the
+full surface; the minimum set the V2 App will exercise is:
+
+| Endpoint | When |
+|----------|------|
+| `GET /api/profiles` | On agent boot, to check existence |
+| `POST /api/profiles` | On first registration, to create the profile |
+| `PUT /api/profiles/{name}/soul` | On registration, to seed persona |
+| `PUT /api/profiles/{name}/model` | On registration and on any model reassignment |
+| `PUT /api/profiles/{name}/description` | On registration, to attach a human description |
+| `POST /api/profiles/active` | On agent boot, to ensure the right profile is active |
+| `DELETE /api/profiles/{name}` | On agent de-registration |
+
 ## Instrument Handling
 
 For v1, instrument handling is intentionally simple:
@@ -275,6 +379,14 @@ Not required for v1.
 6. Should the plugin provide slash commands like `/vibetrading status` or `/vibetrading balance`?
 7. How should the model discover which timeframes and instruments are valid?
 8. Should `fetch_candles` validate the requested interval, or let the Hyperliquid SDK error bubble up?
+9. What auth scheme does a gated Hermes daemon require for `/api/profiles/*`?
+   (`Authorization: Bearer`? session cookie? short-lived WS-style ticket?)
+10. Should the App's provisioning pipeline call the Hermes API directly, or
+    should the plugin expose a one-shot `ensure_profile` tool that the App
+    invokes over its plugin IPC?
+11. Where does the agent's soul text live canonically — the Vibetrading
+    registry, or a file the plugin reads at boot? Today the doc assumes
+    the registry, but the Hermes dashboard edits it on disk.
 
 ## Summary
 
@@ -286,4 +398,5 @@ The Hermes plugin for Vibetrading V2 should:
 - read and write memory through the Vibetrading backend (contracts defined, implementation deferred)
 - submit orders through the Vibetrading execution gateway with links to source memory
 - bundle a `trading-workflow` skill that teaches the agent the decision loop
-- require `VIBETRADING_BASE_URL`, `VIBETRADING_API_KEY`, `HYPERLIQUID_ENVIRONMENT`, and `HYPERLIQUID_ADDRESS`
+- require `VIBETRADING_BASE_URL`, `VIBETRADING_API_KEY`, `HYPERLIQUID_ENVIRONMENT`,
+  `HYPERLIQUID_ADDRESS`, `HERMES_BASE_URL`, and (optionally) `HERMES_API_KEY`

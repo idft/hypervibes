@@ -8,9 +8,7 @@ use crate::{
     db::DbPool,
     hyperliquid::{
         config::AccountSyncConfig,
-        historical::{
-            fetch_funding_window, fetch_ledger_window, fetch_user_fills_window,
-        },
+        historical::{fetch_funding_window, fetch_ledger_window, fetch_user_fills_window},
         normalize::{
             FundingEventRow, HistoricalOrderRow, InstrumentRow, LedgerEventRow, TradeFillRow,
             ms_to_datetime, parse_decimal,
@@ -46,9 +44,7 @@ pub struct SyncSummary {
 impl SyncSummary {
     #[allow(dead_code)]
     pub fn is_healthy(&self) -> bool {
-        self.streams
-            .iter()
-            .all(|s| s.status == SyncStatus::Healthy)
+        self.streams.iter().all(|s| s.status == SyncStatus::Healthy)
     }
 }
 
@@ -108,7 +104,16 @@ async fn reconcile_stream(
     lookup: &InstrumentLookupMap,
     stream: SyncStream,
 ) -> Result<StreamSyncResult> {
-    update_sync_state(pool, config, stream, None, None, SyncStatus::Running, json!({})).await?;
+    update_sync_state(
+        pool,
+        config,
+        stream,
+        None,
+        None,
+        SyncStatus::Running,
+        json!({}),
+    )
+    .await?;
 
     let state = load_sync_state(pool, config, stream).await?;
     let now_ms = Utc::now().timestamp_millis() as u64;
@@ -145,10 +150,7 @@ async fn reconcile_stream(
                     let time = ms_to_datetime(funding.time);
                     let keep_current = last_time.map(|t| time > t).unwrap_or(true);
                     if keep_current {
-                        let key = funding
-                            .hash
-                            .clone()
-                            .unwrap_or_else(|| time.to_rfc3339());
+                        let key = funding.hash.clone().unwrap_or_else(|| time.to_rfc3339());
                         (Some(time), Some(key))
                     } else {
                         (last_time, _last_key)

@@ -2,3 +2,4 @@
 target/
 .opencode/plans/*.md
 node_modules
+HANDOFF.md

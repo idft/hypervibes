@@ -49,14 +49,8 @@ fn router(state: Arc<AppState>) -> Router {
         .nest_service("/static", ServeDir::new("static"))
         .layer(
             TraceLayer::new_for_http()
-                .make_span_with(
-                    tower_http::trace::DefaultMakeSpan::new().level(Level::INFO),
-                )
-                .on_response(
-                    tower_http::trace::DefaultOnResponse::new().level(Level::INFO),
-                )
-                .on_failure(
-                    tower_http::trace::DefaultOnFailure::new().level(Level::ERROR),
-                ),
+                .make_span_with(tower_http::trace::DefaultMakeSpan::new().level(Level::INFO))
+                .on_response(tower_http::trace::DefaultOnResponse::new().level(Level::INFO))
+                .on_failure(tower_http::trace::DefaultOnFailure::new().level(Level::ERROR)),
         )
 }

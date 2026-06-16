@@ -15,12 +15,9 @@ use crate::hyperliquid::{
     account_sync::InstrumentLookupMap,
     config::AccountSyncConfig,
     live_state::{
-        AccountKey, AccountLiveState, LiveMarginState, LiveOpenOrder, LivePosition,
-        LiveSpotBalance,
+        AccountKey, AccountLiveState, LiveMarginState, LiveOpenOrder, LivePosition, LiveSpotBalance,
     },
-    normalize::{
-        FundingEventRow, LedgerEventRow, TradeFillRow, parse_decimal,
-    },
+    normalize::{FundingEventRow, LedgerEventRow, TradeFillRow, parse_decimal},
     raw_http::RawLedgerUpdate,
 };
 
@@ -51,7 +48,10 @@ pub fn live_state_from_clearinghouse(
             updated_at: Some(Utc::now()),
         }),
         spot_balances: Vec::new(),
-        open_positions: asset_positions.iter().map(live_position_from_asset).collect(),
+        open_positions: asset_positions
+            .iter()
+            .map(live_position_from_asset)
+            .collect(),
         open_orders: Vec::new(),
     }
 }
@@ -307,8 +307,8 @@ mod tests {
     use super::*;
     use hypersdk::hypercore::types::{
         AssetPosition, BasicOrder, ClearinghouseState, CumulativeFunding, Fill, FillDirection,
-        Leverage, LeverageType, MarginSummary, OpenOrder, OrderType, PositionData,
-        PositionType, Side, SpotState, TimeInForce, UserBalance,
+        Leverage, LeverageType, MarginSummary, OpenOrder, OrderType, PositionData, PositionType,
+        Side, SpotState, TimeInForce, UserBalance,
     };
     use rust_decimal::Decimal;
     use std::collections::HashMap;
@@ -415,8 +415,7 @@ mod tests {
 
         let mut unknown = funding.clone();
         unknown.coin = "UNKNOWN".to_string();
-        let row = funding_event_row_from_hypersdk_funding(&config, &lookup, &unknown)
-            .expect("ok");
+        let row = funding_event_row_from_hypersdk_funding(&config, &lookup, &unknown).expect("ok");
         assert!(row.is_none());
     }
 

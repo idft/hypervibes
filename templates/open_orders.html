@@ -1,0 +1,65 @@
+<div id="open-orders-content">
+    {% if !view.has_any_state %}
+    <p class="text-sm italic text-zinc-500">Loading…</p>
+    {% else if view.orders.is_empty() %}
+    <div class="rounded-xl border border-zinc-800 bg-zinc-950/70 p-6 text-center">
+        <p class="text-sm text-zinc-400">No open orders.</p>
+        <p class="mt-1 text-xs text-zinc-500">Resting orders for this account will appear here as they are placed.</p>
+    </div>
+    {% else %}
+    <div class="overflow-x-auto">
+        <table class="min-w-full divide-y divide-zinc-800 text-sm">
+            <thead class="bg-zinc-950/60 text-left text-xs uppercase tracking-[0.16em] text-zinc-500">
+                <tr>
+                    <th class="px-4 py-3 font-medium">Age</th>
+                    <th class="px-4 py-3 font-medium">Coin</th>
+                    <th class="px-4 py-3 font-medium">Side</th>
+                    <th class="px-4 py-3 font-medium">Type</th>
+                    <th class="px-4 py-3 text-right font-medium">Size</th>
+                    <th class="px-4 py-3 text-right font-medium">Original</th>
+                    <th class="px-4 py-3 text-right font-medium">Price</th>
+                    <th class="px-4 py-3 font-medium">TIF</th>
+                    <th class="px-4 py-3 text-right font-medium">Trigger</th>
+                    <th class="px-4 py-3 font-medium">Flags</th>
+                </tr>
+            </thead>
+            <tbody class="divide-y divide-zinc-800">
+                {% for order in view.orders %}
+                <tr class="hover:bg-zinc-900/50">
+                    <td class="px-4 py-3 align-top font-mono text-xs tabular-nums text-zinc-300">{{ order.age }}</td>
+                    <td class="px-4 py-3 align-top font-medium text-zinc-100">{{ order.coin }}</td>
+                    <td class="px-4 py-3 align-top">
+                        {% if order.side == "buy" %}
+                        <span class="inline-flex rounded-full border border-emerald-900/60 bg-emerald-950/30 px-2 py-0.5 text-xs font-medium text-emerald-300">buy</span>
+                        {% else if order.side == "sell" %}
+                        <span class="inline-flex rounded-full border border-red-900/60 bg-red-950/30 px-2 py-0.5 text-xs font-medium text-red-300">sell</span>
+                        {% else %}
+                        <span class="inline-flex rounded-full border border-zinc-700 bg-zinc-800/60 px-2 py-0.5 text-xs font-medium text-zinc-400">{{ order.side }}</span>
+                        {% endif %}
+                    </td>
+                    <td class="px-4 py-3 align-top text-zinc-300">{{ order.order_type }}</td>
+                    <td class="px-4 py-3 text-right align-top font-mono text-xs tabular-nums text-zinc-300">{{ order.size }}</td>
+                    <td class="px-4 py-3 text-right align-top font-mono text-xs tabular-nums text-zinc-300">{{ order.orig_size }}</td>
+                    <td class="px-4 py-3 text-right align-top font-mono text-xs tabular-nums {{ order.price.color_class }}">{{ order.price.value }}</td>
+                    <td class="px-4 py-3 align-top text-zinc-300">{{ order.tif }}</td>
+                    <td class="px-4 py-3 text-right align-top font-mono text-xs tabular-nums {{ order.trigger_px.color_class }}">{{ order.trigger_px.value }}</td>
+                    <td class="px-4 py-3 align-top">
+                        <div class="flex flex-wrap gap-1">
+                            {% if order.is_trigger %}
+                            <span class="inline-flex rounded-full border border-sky-900/60 bg-sky-950/30 px-2 py-0.5 text-xs font-medium text-sky-300">trigger</span>
+                            {% endif %}
+                            {% if order.is_position_tpsl %}
+                            <span class="inline-flex rounded-full border border-amber-900/60 bg-amber-950/30 px-2 py-0.5 text-xs font-medium text-amber-300">TP/SL</span>
+                            {% endif %}
+                            {% if order.reduce_only %}
+                            <span class="inline-flex rounded-full border border-violet-900/60 bg-violet-950/30 px-2 py-0.5 text-xs font-medium text-violet-300">reduce-only</span>
+                            {% endif %}
+                        </div>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% endif %}
+</div>

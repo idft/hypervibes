@@ -19,9 +19,7 @@ use crate::{
 /// already venue-agnostic): also call `client.spot()`, `client.outcomes()`,
 /// and iterate `client.perp_dexes()` + `client.perps_from(dex)`, mapping each
 /// into `InstrumentRow` with the appropriate `MarketType`/`is_hip3`.
-pub async fn load_instruments(
-    environment: HyperliquidEnvironment,
-) -> Result<Vec<InstrumentRow>> {
+pub async fn load_instruments(environment: HyperliquidEnvironment) -> Result<Vec<InstrumentRow>> {
     let client = match environment {
         HyperliquidEnvironment::Mainnet => hypercore::mainnet(),
     };
