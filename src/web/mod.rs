@@ -1,3 +1,4 @@
+mod api;
 mod routes;
 mod templates;
 
@@ -45,12 +46,11 @@ pub async fn serve(
 }
 
 fn router(state: Arc<AppState>) -> Router {
-    routes::router(state)
-        .nest_service("/static", ServeDir::new("static"))
-        .layer(
-            TraceLayer::new_for_http()
-                .make_span_with(tower_http::trace::DefaultMakeSpan::new().level(Level::INFO))
-                .on_response(tower_http::trace::DefaultOnResponse::new().level(Level::INFO))
-                .on_failure(tower_http::trace::DefaultOnFailure::new().level(Level::ERROR)),
-        )
+    let app = api::merge(routes::router(Arc::clone(&state)), Arc::clone(&state));
+    app.nest_service("/static", ServeDir::new("static")).layer(
+        TraceLayer::new_for_http()
+            .make_span_with(tower_http::trace::DefaultMakeSpan::new().level(Level::INFO))
+            .on_response(tower_http::trace::DefaultOnResponse::new().level(Level::INFO))
+            .on_failure(tower_http::trace::DefaultOnFailure::new().level(Level::ERROR)),
+    )
 }

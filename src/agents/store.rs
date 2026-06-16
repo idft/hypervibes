@@ -101,6 +101,39 @@ pub async fn delete_agent(pool: &DbPool, agent_key: &str) -> Result<bool> {
     Ok(result.rows_affected() > 0)
 }
 
+/// Resolve an `agent_key` from the API key presented in the
+/// `Authorization: Bearer <api_key>` header.
+///
+/// Returns `Ok(None)` when the key does not match any row. Used by the
+/// API-key authentication extractor to scope incoming requests to a single
+/// agent.
+pub async fn resolve_agent_key_by_api_key(pool: &DbPool, api_key: &str) -> Result<Option<String>> {
+    let row: Option<(String,)> =
+        query_as("SELECT agent_key FROM agents.registry WHERE api_key = $1")
+            .bind(api_key)
+            .fetch_optional(pool)
+            .await
+            .context("failed to resolve agent_key by api_key")?;
+
+    Ok(row.map(|(k,)| k))
+}
+
+/// Best-effort update of `api_key_last_used_at` for an authenticated agent.
+///
+/// Called by the API-key auth extractor on every successful authentication
+/// so the operator UI can show when each key was last used. Errors are
+/// surfaced to the caller so they can be logged, but authentication must
+/// not fail when this update fails.
+pub async fn touch_api_key_last_used(pool: &DbPool, api_key: &str) -> Result<()> {
+    sqlx::query("UPDATE agents.registry SET api_key_last_used_at = now() WHERE api_key = $1")
+        .bind(api_key)
+        .execute(pool)
+        .await
+        .context("failed to touch api_key_last_used_at")?;
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -216,5 +249,62 @@ mod tests {
             "expected unique violation on agent_key, got {:?}",
             db_err
         );
+    }
+
+    #[tokio::test]
+    async fn resolve_agent_key_by_api_key_round_trip() {
+        let Some(database_url) = db_url() else {
+            eprintln!("DATABASE_URL not set; skipping integration test");
+            return;
+        };
+
+        let pool = connect(&database_url).await.expect("connect to database");
+        migrate(&pool).await.expect("run migrations");
+
+        let key = format!("apikey-rt-{}", Utc::now().timestamp_millis());
+        let row = sample_agent(&key);
+        insert_agent(&pool, &row).await.expect("insert agent");
+
+        let resolved = resolve_agent_key_by_api_key(&pool, &row.api_key)
+            .await
+            .expect("resolve");
+        assert_eq!(resolved.as_deref(), Some(key.as_str()));
+
+        // Unknown key returns None.
+        let missing = resolve_agent_key_by_api_key(&pool, "vta_does-not-exist")
+            .await
+            .expect("resolve missing");
+        assert!(missing.is_none());
+    }
+
+    #[tokio::test]
+    async fn touch_api_key_last_used_sets_timestamp() {
+        let Some(database_url) = db_url() else {
+            eprintln!("DATABASE_URL not set; skipping integration test");
+            return;
+        };
+
+        let pool = connect(&database_url).await.expect("connect to database");
+        migrate(&pool).await.expect("run migrations");
+
+        let key = format!("apikey-touch-{}", Utc::now().timestamp_millis());
+        let row = sample_agent(&key);
+        insert_agent(&pool, &row).await.expect("insert agent");
+
+        let before = get_agent(&pool, &key)
+            .await
+            .expect("fetch")
+            .expect("present");
+        assert!(before.api_key_last_used_at.is_none());
+
+        touch_api_key_last_used(&pool, &row.api_key)
+            .await
+            .expect("touch");
+
+        let after = get_agent(&pool, &key)
+            .await
+            .expect("fetch")
+            .expect("present");
+        assert!(after.api_key_last_used_at.is_some());
     }
 }

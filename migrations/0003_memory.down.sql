@@ -1,0 +1,2 @@
+DROP TABLE IF EXISTS memory.records;
+DROP SCHEMA IF EXISTS memory;

@@ -2,6 +2,7 @@ mod agents;
 mod config;
 mod db;
 mod hyperliquid;
+mod memory;
 mod web;
 
 #[cfg(test)]
