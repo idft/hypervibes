@@ -9,23 +9,26 @@ use tokio::sync::watch;
 use tower_http::{services::ServeDir, trace::TraceLayer};
 use tracing::Level;
 
-use crate::{agents::crypto::EncryptionKey, db::DbPool};
+use crate::{agents::crypto::EncryptionKey, db::DbPool, hyperliquid::live_state::LiveAccountStore};
 
 #[derive(Clone)]
 pub struct AppState {
     pub db_pool: DbPool,
     pub encryption_key: EncryptionKey,
+    pub live_accounts: Arc<LiveAccountStore>,
 }
 
 pub async fn serve(
     bind_addr: &str,
     db_pool: DbPool,
     encryption_key: EncryptionKey,
+    live_accounts: Arc<LiveAccountStore>,
     shutdown_tx: watch::Sender<bool>,
 ) -> Result<()> {
     let state = Arc::new(AppState {
         db_pool,
         encryption_key,
+        live_accounts,
     });
     let app = router(state);
     let listener = tokio::net::TcpListener::bind(bind_addr)

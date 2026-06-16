@@ -542,7 +542,7 @@ fn normalize_order(
     })
 }
 
-async fn upsert_trade_fill(pool: &DbPool, row: TradeFillRow) -> Result<()> {
+pub async fn upsert_trade_fill(pool: &DbPool, row: TradeFillRow) -> Result<()> {
     sqlx::query(
         "INSERT INTO hyperliquid.trade_fills (hash, account_address, environment, event_time, event_type, source_stream, instrument_id, asset, symbol, fee_usdc, realized_pnl_usdc, fill_time, direction, side, price, size, trade_value, order_id, trade_id, start_position, fee, fee_token, builder_fee, crossed, tx_hash, payload, ingest_source, inserted_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28) ON CONFLICT (hash, trade_id) DO UPDATE SET event_time = EXCLUDED.event_time, event_type = EXCLUDED.event_type, source_stream = EXCLUDED.source_stream, instrument_id = EXCLUDED.instrument_id, asset = EXCLUDED.asset, symbol = EXCLUDED.symbol, fee_usdc = EXCLUDED.fee_usdc, realized_pnl_usdc = EXCLUDED.realized_pnl_usdc, fill_time = EXCLUDED.fill_time, direction = EXCLUDED.direction, side = EXCLUDED.side, price = EXCLUDED.price, size = EXCLUDED.size, trade_value = EXCLUDED.trade_value, order_id = EXCLUDED.order_id, start_position = EXCLUDED.start_position, fee = EXCLUDED.fee, fee_token = EXCLUDED.fee_token, builder_fee = EXCLUDED.builder_fee, crossed = EXCLUDED.crossed, tx_hash = EXCLUDED.tx_hash, payload = EXCLUDED.payload, ingest_source = EXCLUDED.ingest_source",
     )
@@ -579,7 +579,7 @@ async fn upsert_trade_fill(pool: &DbPool, row: TradeFillRow) -> Result<()> {
     Ok(())
 }
 
-async fn upsert_funding_event(pool: &DbPool, row: FundingEventRow) -> Result<()> {
+pub async fn upsert_funding_event(pool: &DbPool, row: FundingEventRow) -> Result<()> {
     sqlx::query(
         "INSERT INTO hyperliquid.funding_events (account_address, environment, instrument_id, event_time, event_type, source_stream, asset, symbol, fee_usdc, realized_pnl_usdc, usdc, position_size, funding_rate, hash, payload, ingest_source, inserted_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17) ON CONFLICT (account_address, environment, instrument_id, event_time) DO UPDATE SET event_type = EXCLUDED.event_type, source_stream = EXCLUDED.source_stream, asset = EXCLUDED.asset, symbol = EXCLUDED.symbol, fee_usdc = EXCLUDED.fee_usdc, realized_pnl_usdc = EXCLUDED.realized_pnl_usdc, usdc = EXCLUDED.usdc, position_size = EXCLUDED.position_size, funding_rate = EXCLUDED.funding_rate, hash = EXCLUDED.hash, payload = EXCLUDED.payload, ingest_source = EXCLUDED.ingest_source",
     )
@@ -605,7 +605,7 @@ async fn upsert_funding_event(pool: &DbPool, row: FundingEventRow) -> Result<()>
     Ok(())
 }
 
-async fn upsert_ledger_event(pool: &DbPool, row: LedgerEventRow) -> Result<()> {
+pub async fn upsert_ledger_event(pool: &DbPool, row: LedgerEventRow) -> Result<()> {
     sqlx::query(
         "INSERT INTO hyperliquid.ledger_events (hash, account_address, environment, event_time, event_type, source_stream, instrument_id, asset, symbol, fee_usdc, realized_pnl_usdc, ledger_type, usdc, token, amount, fee, source_user, destination_user, tx_hash, details, payload, ingest_source, inserted_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23) ON CONFLICT (hash) DO UPDATE SET event_time = EXCLUDED.event_time, event_type = EXCLUDED.event_type, source_stream = EXCLUDED.source_stream, instrument_id = EXCLUDED.instrument_id, asset = EXCLUDED.asset, symbol = EXCLUDED.symbol, fee_usdc = EXCLUDED.fee_usdc, realized_pnl_usdc = EXCLUDED.realized_pnl_usdc, ledger_type = EXCLUDED.ledger_type, usdc = EXCLUDED.usdc, token = EXCLUDED.token, amount = EXCLUDED.amount, fee = EXCLUDED.fee, source_user = EXCLUDED.source_user, destination_user = EXCLUDED.destination_user, tx_hash = EXCLUDED.tx_hash, details = EXCLUDED.details, payload = EXCLUDED.payload, ingest_source = EXCLUDED.ingest_source",
     )
@@ -677,7 +677,7 @@ pub async fn sync_historical_orders_once(
     Ok(count)
 }
 
-async fn upsert_historical_order(pool: &DbPool, row: HistoricalOrderRow) -> Result<()> {
+pub async fn upsert_historical_order(pool: &DbPool, row: HistoricalOrderRow) -> Result<()> {
     sqlx::query(
         "INSERT INTO hyperliquid.historical_orders (account_address, environment, order_id, event_time, source_stream, instrument_id, asset, symbol, order_status, side, order_type, price, size, filled_size, reduce_only, time_in_force, client_order_id, status_timestamp, payload, ingest_source, inserted_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21) ON CONFLICT (account_address, environment, order_id) DO UPDATE SET event_time = EXCLUDED.event_time, source_stream = EXCLUDED.source_stream, instrument_id = EXCLUDED.instrument_id, asset = EXCLUDED.asset, symbol = EXCLUDED.symbol, order_status = EXCLUDED.order_status, side = EXCLUDED.side, order_type = EXCLUDED.order_type, price = EXCLUDED.price, size = EXCLUDED.size, filled_size = EXCLUDED.filled_size, reduce_only = EXCLUDED.reduce_only, time_in_force = EXCLUDED.time_in_force, client_order_id = EXCLUDED.client_order_id, status_timestamp = EXCLUDED.status_timestamp, payload = EXCLUDED.payload, ingest_source = EXCLUDED.ingest_source",
     )

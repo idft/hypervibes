@@ -1,15 +1,20 @@
-use std::sync::Arc;
+use std::{convert::Infallible, sync::Arc};
 
 use askama::Template;
 use axum::{
     Form, Json, Router,
     extract::{Path, State},
     http::StatusCode,
-    response::{Html, IntoResponse, Redirect, Response},
+    response::{
+        Html, IntoResponse, Redirect, Response,
+        sse::{Event, KeepAlive, Sse},
+    },
     routing::{get, post},
 };
 use chrono::Utc;
+use futures::StreamExt;
 use serde::Serialize;
+use tokio_stream::wrappers::BroadcastStream;
 use tracing::{error, warn};
 
 use crate::{
@@ -19,10 +24,14 @@ use crate::{
         model::{AgentRegistryRow, CreateAgentForm, slugify_agent_key},
         store::{delete_agent as delete_agent_in_store, get_agent, insert_agent, list_agents},
     },
-    hyperliquid::queries::{list_account_sync_state, list_account_transactions},
+    hyperliquid::{
+        live_state::{AccountKey, AccountLiveState, LiveConnectionStatus},
+        queries::{list_account_sync_state, list_account_transactions},
+    },
     web::{
         AppState,
         templates::{
+            AccountBalancePartialTemplate, AccountBalanceView, AgentListEntry,
             AgentsNewPageTemplate, AgentsPageTemplate, AgentsShowPageTemplate,
             ServerErrorPageTemplate, SummaryCard, TransactionView,
         },
@@ -37,6 +46,11 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/agents/new", get(agents_new))
         .route("/agents/{agent_key}", get(agents_show))
         .route("/agents/{agent_key}/delete", post(delete_agent))
+        .route(
+            "/agents/{agent_key}/account_balance/stream",
+            get(account_balance_stream),
+        )
+        .route("/api/agents/{agent_key}/live", get(agent_live))
         .with_state(state)
 }
 
@@ -60,6 +74,25 @@ async fn agents_index(State(state): State<Arc<AppState>>) -> Result<Html<String>
     let active = agents.iter().filter(|a| a.enabled).count();
     let disabled = agents.len() - active;
 
+    let entries: Vec<AgentListEntry> = agents
+        .into_iter()
+        .map(|row| {
+            let account_key = AccountKey::new(&row.wallet_address, &row.environment);
+            let snapshot =
+                state
+                    .live_accounts
+                    .get(&account_key)
+                    .unwrap_or_else(|| AccountLiveState {
+                        account_address: account_key.account_address.clone(),
+                        environment: account_key.environment.clone(),
+                        status: LiveConnectionStatus::Starting,
+                        ..Default::default()
+                    });
+            let account_balance = AccountBalanceView::from_live_state(snapshot);
+            AgentListEntry { row, account_balance }
+        })
+        .collect();
+
     let template = AgentsPageTemplate {
         summary_cards: vec![
             SummaryCard {
@@ -74,16 +107,16 @@ async fn agents_index(State(state): State<Arc<AppState>>) -> Result<Html<String>
             },
             SummaryCard {
                 label: "Registered agents",
-                value: agents.len().to_string(),
+                value: entries.len().to_string(),
                 detail: "Total agents in the registry",
             },
             SummaryCard {
                 label: "API keys",
-                value: agents.len().to_string(),
+                value: entries.len().to_string(),
                 detail: "One app credential per agent",
             },
         ],
-        agents,
+        agents: entries,
     };
 
     Ok(Html(template.render()?))
@@ -95,6 +128,37 @@ async fn agents_new() -> Result<Html<String>, AppError> {
         errors: Vec::new(),
     };
     Ok(Html(template.render()?))
+}
+
+#[derive(Debug, Serialize)]
+struct LiveAgentSnapshot {
+    agent_key: String,
+    account_address: String,
+    environment: String,
+    connected: bool,
+    state: Option<AccountLiveState>,
+}
+
+async fn agent_live(
+    State(state): State<Arc<AppState>>,
+    Path(agent_key): Path<String>,
+) -> Result<Response, AppError> {
+    let agent = match get_agent(&state.db_pool, &agent_key).await? {
+        Some(agent) => agent,
+        None => return Ok((StatusCode::NOT_FOUND, "agent not found").into_response()),
+    };
+    let key = AccountKey::new(&agent.wallet_address, &agent.environment);
+    let snapshot = state.live_accounts.get(&key);
+    let body = LiveAgentSnapshot {
+        agent_key: agent.agent_key.clone(),
+        account_address: agent.wallet_address.clone(),
+        environment: agent.environment.clone(),
+        connected: snapshot
+            .as_ref()
+            .is_some_and(|s| s.status == crate::hyperliquid::live_state::LiveConnectionStatus::Connected),
+        state: snapshot,
+    };
+    Ok(Json(body).into_response())
 }
 
 async fn agents_show(
@@ -145,10 +209,24 @@ async fn agents_show(
                     Vec::new()
                 }
             };
+            let account_key = AccountKey::new(&agent.wallet_address, &agent.environment);
+            let account_balance_snapshot =
+                state.live_accounts.get(&account_key).unwrap_or_else(|| AccountLiveState {
+                    account_address: account_key.account_address.clone(),
+                    environment: account_key.environment.clone(),
+                    status: LiveConnectionStatus::Starting,
+                    ..Default::default()
+                });
+            let account_balance_view = AccountBalanceView::from_live_state(account_balance_snapshot);
+            let account_balance_html = AccountBalancePartialTemplate::render_view(
+                account_balance_view,
+            )
+            .map_err(anyhow::Error::from)?;
             let template = AgentsShowPageTemplate {
                 agent,
                 transactions,
                 sync_state,
+                account_balance_html,
             };
             Ok(Html(template.render()?).into_response())
         }
@@ -166,6 +244,86 @@ async fn delete_agent(
     } else {
         Ok((StatusCode::NOT_FOUND, "agent not found").into_response())
     }
+}
+
+/// Stream account-balance updates for `agent_key` as Server-Sent Events.
+///
+/// The client should connect with `text/event-stream` semantics; each event
+/// is named `balance` and its `data` field is the freshly rendered
+/// `account_balance.html` partial. The stream begins with the current state
+/// (if any) and then emits a new event whenever the in-memory
+/// [`LiveAccountStore`] is mutated for the matching account.
+async fn account_balance_stream(
+    State(state): State<Arc<AppState>>,
+    Path(agent_key): Path<String>,
+) -> Result<Response, AppError> {
+    let agent = match get_agent(&state.db_pool, &agent_key).await? {
+        Some(agent) => agent,
+        None => return Ok((StatusCode::NOT_FOUND, "agent not found").into_response()),
+    };
+
+    let account_key = AccountKey::new(&agent.wallet_address, &agent.environment);
+    let live_accounts = Arc::clone(&state.live_accounts);
+
+    // Emit a snapshot up-front so the UI never sits on the initial-render
+    // placeholder if the orchestrator already produced a value before the
+    // SSE connection opened. If no snapshot exists yet, fall back to a
+    // `Starting`-status placeholder so the UI can still render the
+    // connection status / "Loading…" caption.
+    let initial_snapshot = live_accounts.get(&account_key).unwrap_or_else(|| AccountLiveState {
+        account_address: account_key.account_address.clone(),
+        environment: account_key.environment.clone(),
+        status: LiveConnectionStatus::Starting,
+        ..Default::default()
+    });
+    let initial_event = render_account_balance_event(&initial_snapshot)?;
+
+    let account_key_filter = account_key.clone();
+    let live_accounts_filter = Arc::clone(&live_accounts);
+    let notifications = BroadcastStream::new(live_accounts.subscribe())
+        .filter_map(move |item| {
+            let account_key = account_key_filter.clone();
+            async move {
+                match item {
+                    Ok(key) if key == account_key => Some(key),
+                    Ok(_) => None,
+                    Err(tokio_stream::wrappers::errors::BroadcastStreamRecvError::Lagged(_)) => {
+                        // Slow consumers can drop intermediate
+                        // notifications; treat a lagged notification as a
+                        // request to re-emit the current state so the UI
+                        // catches up.
+                        Some(account_key.clone())
+                    }
+                }
+            }
+        })
+        .filter_map(move |_key| {
+            let live_accounts = Arc::clone(&live_accounts_filter);
+            let key = account_key.clone();
+            async move {
+                match live_accounts.get(&key) {
+                    Some(snapshot) => match render_account_balance_event(&snapshot) {
+                        Ok(event) => Some(Ok::<Event, Infallible>(event)),
+                        Err(e) => {
+                            warn!(error = ?e, "failed to render account balance SSE event");
+                            None
+                        }
+                    },
+                    None => None,
+                }
+            }
+        });
+
+    let stream = tokio_stream::iter([Ok::<Event, Infallible>(initial_event)]).chain(notifications);
+    let sse = Sse::new(stream)
+        .keep_alive(KeepAlive::new().interval(std::time::Duration::from_secs(15)));
+    Ok(sse.into_response())
+}
+
+fn render_account_balance_event(state: &AccountLiveState) -> Result<Event, AppError> {
+    let view = AccountBalanceView::from_live_state(state.clone());
+    let html = AccountBalancePartialTemplate::render_view(view)?;
+    Ok(Event::default().event("balance").data(html))
 }
 
 async fn create_agent(
@@ -320,6 +478,7 @@ mod tests {
                     22, 23, 24, 25, 26, 27, 28, 29, 30, 31,
                 ],
             ),
+            live_accounts: Arc::new(crate::hyperliquid::live_state::LiveAccountStore::new()),
         }))
     }
 
@@ -366,6 +525,324 @@ mod tests {
             .unwrap();
 
         assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    }
+
+    #[tokio::test]
+    async fn get_live_route_returns_empty_state_for_known_agent() {
+        let Some(state) = test_state().await else {
+            eprintln!("DATABASE_URL not set; skipping route test");
+            return;
+        };
+
+        // Insert a fresh agent directly so we can look it up by agent_key.
+        let timestamp = chrono::Utc::now().timestamp_millis();
+        let display_name = format!("LiveRouteTest{}", timestamp);
+        let agent_key = slugify_agent_key(&display_name);
+        let private_key = random_private_key();
+        let wallet_address = derive_wallet_address(&private_key).expect("derives");
+        let now = Utc::now();
+        let row = crate::agents::model::AgentRegistryRow {
+            agent_key: agent_key.clone(),
+            created_at: now,
+            updated_at: now,
+            enabled: true,
+            display_name: display_name.clone(),
+            prompt: String::new(),
+            wallet_address: wallet_address.clone(),
+            environment: "live".to_string(),
+            api_key: format!("test-key-{timestamp}"),
+            api_key_last_used_at: None,
+            hyperliquid_private_key_ciphertext: Vec::new(),
+            hyperliquid_private_key_key_id: "test".to_string(),
+        };
+        insert_agent(&state.db_pool, &row)
+            .await
+            .expect("inserts agent");
+
+        let app = router(state.clone());
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/api/agents/{}/live", agent_key))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body_bytes = axum::body::to_bytes(response.into_body(), 1024 * 1024)
+            .await
+            .unwrap();
+        let body: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
+        assert_eq!(body["agent_key"], serde_json::Value::from(agent_key.clone()));
+        assert_eq!(
+            body["account_address"],
+            serde_json::Value::from(wallet_address.clone())
+        );
+        assert_eq!(body["environment"], serde_json::Value::from("live"));
+        assert_eq!(body["connected"], serde_json::Value::from(false));
+        assert!(body["state"].is_null());
+
+        // Now seed a live state for that account and confirm the route
+        // returns the populated snapshot.
+        let key = AccountKey::new(&wallet_address, "live");
+        state.live_accounts.set_status(
+            &key,
+            crate::hyperliquid::live_state::LiveConnectionStatus::Connected,
+        );
+
+        let app = router(state.clone());
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/api/agents/{}/live", agent_key))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body_bytes = axum::body::to_bytes(response.into_body(), 1024 * 1024)
+            .await
+            .unwrap();
+        let body: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
+        assert_eq!(body["connected"], serde_json::Value::from(true));
+        assert_eq!(body["state"]["status"], serde_json::Value::from("connected"));
+    }
+
+    #[tokio::test]
+    async fn get_live_route_returns_404_for_unknown_agent() {
+        let Some(state) = test_state().await else {
+            eprintln!("DATABASE_URL not set; skipping route test");
+            return;
+        };
+
+        let app = router(state);
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/api/agents/does-not-exist-12345/live")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn account_balance_stream_returns_404_for_unknown_agent() {
+        let Some(state) = test_state().await else {
+            eprintln!("DATABASE_URL not set; skipping route test");
+            return;
+        };
+
+        let app = router(state);
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/agents/does-not-exist-12345/account_balance/stream")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn account_balance_stream_emits_initial_loading_placeholder() {
+        let Some(state) = test_state().await else {
+            eprintln!("DATABASE_URL not set; skipping route test");
+            return;
+        };
+
+        let (agent_key, _wallet_address) = match insert_test_agent(&state).await {
+            Some(pair) => pair,
+            None => return,
+        };
+
+        let app = router(state);
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/agents/{}/account_balance/stream", agent_key))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response
+                .headers()
+                .get("content-type")
+                .and_then(|v| v.to_str().ok()),
+            Some("text/event-stream")
+        );
+
+        // Read just the first few bytes of the body so we capture the
+        // initial event without waiting for the keep-alive timer.
+        let body = response.into_body();
+        let bytes = match tokio::time::timeout(
+            std::time::Duration::from_millis(250),
+            axum::body::to_bytes(body, 16 * 1024),
+        )
+        .await
+        {
+            Ok(Ok(bytes)) => bytes,
+            Ok(Err(e)) => panic!("failed to read SSE body: {e}"),
+            Err(_) => panic!("timed out reading SSE body"),
+        };
+        let text = String::from_utf8_lossy(&bytes);
+        assert!(text.contains("event: balance"), "missing event line in {text}");
+        assert!(text.contains("Loading"), "expected placeholder in {text}");
+    }
+
+    #[tokio::test]
+    async fn account_balance_stream_emits_initial_value_when_state_present() {
+        let Some(state) = test_state().await else {
+            eprintln!("DATABASE_URL not set; skipping route test");
+            return;
+        };
+
+        let (agent_key, wallet_address) = match insert_test_agent(&state).await {
+            Some(pair) => pair,
+            None => return,
+        };
+
+        let key = AccountKey::new(&wallet_address, "live");
+        state.live_accounts.replace(
+            key.clone(),
+            AccountLiveState {
+                account_address: key.account_address.clone(),
+                environment: key.environment.clone(),
+                status: LiveConnectionStatus::Connected,
+                margin: Some(crate::hyperliquid::live_state::LiveMarginState {
+                    account_value: Some(rust_decimal::Decimal::new(123_4567, 4)),
+                    ..Default::default()
+                }),
+                updated_at: Some(Utc::now()),
+                ..Default::default()
+            },
+        );
+
+        let app = router(state);
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/agents/{}/account_balance/stream", agent_key))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let body = response.into_body();
+        let bytes = match tokio::time::timeout(
+            std::time::Duration::from_millis(250),
+            axum::body::to_bytes(body, 16 * 1024),
+        )
+        .await
+        {
+            Ok(Ok(bytes)) => bytes,
+            Ok(Err(e)) => panic!("failed to read SSE body: {e}"),
+            Err(_) => panic!("timed out reading SSE body"),
+        };
+        let text = String::from_utf8_lossy(&bytes);
+        assert!(text.contains("event: balance"));
+        assert!(text.contains("123.4567"));
+        assert!(text.contains("USDC"));
+    }
+
+    #[tokio::test]
+    async fn account_balance_stream_emits_updates_when_state_changes() {
+        let Some(state) = test_state().await else {
+            eprintln!("DATABASE_URL not set; skipping route test");
+            return;
+        };
+
+        let (agent_key, wallet_address) = match insert_test_agent(&state).await {
+            Some(pair) => pair,
+            None => return,
+        };
+
+        let key = AccountKey::new(&wallet_address, "live");
+
+        let app = router(state.clone());
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/agents/{}/account_balance/stream", agent_key))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        // Update the live store; the SSE consumer should observe the
+        // notification and emit a new event.
+        state.live_accounts.replace(
+            key.clone(),
+            AccountLiveState {
+                account_address: key.account_address.clone(),
+                environment: key.environment.clone(),
+                status: LiveConnectionStatus::Connected,
+                margin: Some(crate::hyperliquid::live_state::LiveMarginState {
+                    account_value: Some(rust_decimal::Decimal::new(99_0000, 4)),
+                    ..Default::default()
+                }),
+                updated_at: Some(Utc::now()),
+                ..Default::default()
+            },
+        );
+
+        let body = response.into_body();
+        let bytes = match tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            axum::body::to_bytes(body, 64 * 1024),
+        )
+        .await
+        {
+            Ok(Ok(bytes)) => bytes,
+            Ok(Err(e)) => panic!("failed to read SSE body: {e}"),
+            Err(_) => panic!("timed out reading SSE body"),
+        };
+        let text = String::from_utf8_lossy(&bytes);
+        assert!(text.contains("event: balance"));
+        assert!(text.contains("99.0000"));
+    }
+
+    async fn insert_test_agent(state: &Arc<AppState>) -> Option<(String, String)> {
+        let timestamp = chrono::Utc::now().timestamp_millis();
+        let display_name = format!("BalanceStreamTest{}", timestamp);
+        let agent_key = slugify_agent_key(&display_name);
+        let private_key = random_private_key();
+        let wallet_address = match derive_wallet_address(&private_key) {
+            Ok(addr) => addr,
+            Err(_) => return None,
+        };
+        let now = Utc::now();
+        let row = crate::agents::model::AgentRegistryRow {
+            agent_key: agent_key.clone(),
+            created_at: now,
+            updated_at: now,
+            enabled: true,
+            display_name,
+            prompt: String::new(),
+            wallet_address: wallet_address.clone(),
+            environment: "live".to_string(),
+            api_key: format!("balance-stream-test-{timestamp}"),
+            api_key_last_used_at: None,
+            hyperliquid_private_key_ciphertext: Vec::new(),
+            hyperliquid_private_key_key_id: "test".to_string(),
+        };
+        if insert_agent(&state.db_pool, &row).await.is_err() {
+            return None;
+        }
+        Some((agent_key, wallet_address))
     }
 
     fn random_private_key() -> String {

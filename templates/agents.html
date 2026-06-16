@@ -43,28 +43,37 @@
                             <th class="px-5 py-3 font-medium">Status</th>
                             <th class="px-5 py-3 font-medium">Wallet address</th>
                             <th class="px-5 py-3 font-medium">API key</th>
+                            <th class="px-5 py-3 text-right font-medium">Account balance</th>
                         </tr>
                     </thead>
                     <tbody class="divide-y divide-zinc-800">
-                        {% for agent in agents %}
-                        <tr class="cursor-pointer hover:bg-zinc-900/50" onclick="window.location.href='/agents/{{ agent.agent_key }}'">
+                        {% for entry in agents %}
+                        <tr class="cursor-pointer hover:bg-zinc-900/50" onclick="window.location.href='/agents/{{ entry.row.agent_key }}'">
                             <td class="px-5 py-4 align-top">
-                                <div class="font-medium text-white">{{ agent.display_name }}</div>
-                                <div class="mt-1 text-xs text-zinc-500">{{ agent.agent_key }}</div>
+                                <div class="font-medium text-white">{{ entry.row.display_name }}</div>
+                                <div class="mt-1 text-xs text-zinc-500">{{ entry.row.agent_key }}</div>
                             </td>
                             <td class="px-5 py-4 align-top">
-                                {% if agent.enabled %}
+                                {% if entry.row.enabled %}
                                 <span class="inline-flex rounded-full border border-emerald-900/60 bg-emerald-950/30 px-2.5 py-1 text-xs text-emerald-300">Enabled</span>
                                 {% else %}
                                 <span class="inline-flex rounded-full border border-zinc-700 px-2.5 py-1 text-xs text-zinc-300">Disabled</span>
                                 {% endif %}
                             </td>
-                            <td class="px-5 py-4 align-top font-mono text-xs text-zinc-300">{{ agent.wallet_address }}</td>
+                            <td class="px-5 py-4 align-top font-mono text-xs text-zinc-300">{{ entry.row.wallet_address }}</td>
                             <td class="px-5 py-4 align-top text-zinc-300">
-                                {% if let Some(last_used) = agent.api_key_last_used_at %}
+                                {% if let Some(last_used) = entry.row.api_key_last_used_at %}
                                 <span title="{{ last_used }}">Used</span>
                                 {% else %}
                                 Never used
+                                {% endif %}
+                            </td>
+                            <td class="px-5 py-4 align-top text-right">
+                                {% if let Some(formatted) = entry.account_balance.formatted_total() %}
+                                <div class="font-mono text-sm font-semibold tabular-nums text-emerald-400">{{ formatted }}</div>
+                                <div class="mt-0.5 text-[10px] uppercase tracking-[0.16em] text-zinc-500">{{ entry.account_balance.status_label() }} · USDC</div>
+                                {% else %}
+                                <span class="text-xs italic text-zinc-500">Loading…</span>
                                 {% endif %}
                             </td>
                         </tr>

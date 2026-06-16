@@ -35,7 +35,8 @@
 
     <section class="mt-6 space-y-6">
         <section class="rounded-2xl border border-zinc-800 bg-[#0d0d10] p-6">
-            <dl class="grid gap-4 sm:grid-cols-2">
+            <div hx-sse="connect:/agents/{{ agent.agent_key }}/account_balance/stream swap:balance">{{account_balance_html|safe}}</div>
+            <dl class="mt-6 grid gap-4 border-t border-zinc-800 pt-6 sm:grid-cols-2">
                 <div>
                     <dt class="text-xs uppercase tracking-[0.16em] text-zinc-500">Wallet address</dt>
                     <dd class="mt-1 break-all font-mono text-xs text-zinc-300">{{ agent.wallet_address }}</dd>

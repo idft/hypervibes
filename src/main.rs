@@ -4,11 +4,15 @@ mod db;
 mod hyperliquid;
 mod web;
 
+use std::sync::Arc;
+
 use anyhow::Result;
 use config::AppConfig;
 use db::{connect, migrate};
 use tokio::sync::watch;
 use tracing_subscriber::{EnvFilter, fmt};
+
+use crate::hyperliquid::live_state::LiveAccountStore;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -29,9 +33,11 @@ async fn main() -> Result<()> {
     migrate(&pool).await?;
 
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
+    let live_accounts = Arc::new(LiveAccountStore::new());
 
     println!("Starting agent orchestrator");
-    let orchestrator = agents::AgentOrchestrator::new(pool.clone(), shutdown_rx);
+    let orchestrator =
+        agents::AgentOrchestrator::new(pool.clone(), shutdown_rx, Arc::clone(&live_accounts));
     let mut orchestrator_handle = tokio::spawn(async move {
         if let Err(e) = orchestrator.run().await {
             eprintln!("orchestrator exited with error: {e}");
@@ -44,7 +50,13 @@ async fn main() -> Result<()> {
         config.agents_encryption_key,
     );
 
-    let server_future = web::serve(&config.bind_addr, pool, encryption_key, shutdown_tx);
+    let server_future = web::serve(
+        &config.bind_addr,
+        pool,
+        encryption_key,
+        Arc::clone(&live_accounts),
+        shutdown_tx,
+    );
     tokio::pin!(server_future);
 
     tokio::select! {

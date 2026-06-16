@@ -7,11 +7,15 @@ use tracing::{error, info, warn};
 use crate::{
     db::DbPool,
     hyperliquid::{
-        account_sync::{InstrumentLookupMap, build_instrument_lookup, sync_account_once, sync_historical_orders_once},
+        account_sync::{
+            InstrumentLookupMap, build_instrument_lookup, sync_account_once,
+            sync_historical_orders_once,
+        },
         config::{AccountSyncConfig, HyperliquidEnvironment},
         instruments::load_instruments,
+        live_state::LiveAccountStore,
+        live_ws::{LiveWsOptions, run_account_live_ws},
         normalize::InstrumentRow,
-        polling::PollingSchedule,
         raw_http::{RawHttpConfig, RawHyperliquidHttpClient},
     },
 };
@@ -41,15 +45,21 @@ pub struct AgentOrchestrator {
     shutdown_rx: watch::Receiver<bool>,
     tasks: HashMap<String, AgentTaskHandle>,
     lookup: Arc<InstrumentLookupMap>,
+    live_accounts: Arc<LiveAccountStore>,
 }
 
 impl AgentOrchestrator {
-    pub fn new(pool: DbPool, shutdown_rx: watch::Receiver<bool>) -> Self {
+    pub fn new(
+        pool: DbPool,
+        shutdown_rx: watch::Receiver<bool>,
+        live_accounts: Arc<LiveAccountStore>,
+    ) -> Self {
         Self {
             pool,
             shutdown_rx,
             tasks: HashMap::new(),
             lookup: Arc::new(HashMap::new()),
+            live_accounts,
         }
     }
 
@@ -122,6 +132,7 @@ impl AgentOrchestrator {
                     agent,
                     self.shutdown_rx.clone(),
                     Arc::clone(&self.lookup),
+                    Arc::clone(&self.live_accounts),
                 );
                 self.tasks.insert(key, handle);
             }
@@ -140,13 +151,14 @@ fn spawn_agent_task(
     agent: EnabledAgent,
     shutdown_rx: watch::Receiver<bool>,
     lookup: Arc<InstrumentLookupMap>,
+    live_accounts: Arc<LiveAccountStore>,
 ) -> (String, AgentTaskHandle) {
     let wallet_address = agent.wallet_address.clone();
     let environment = agent.environment.clone();
     let agent_key = agent.agent_key.clone();
 
     let task = tokio::spawn(async move {
-        run_agent_task(pool, agent, shutdown_rx, lookup).await;
+        run_agent_task(pool, agent, shutdown_rx, lookup, live_accounts).await;
     });
 
     (
@@ -162,10 +174,10 @@ fn spawn_agent_task(
 async fn run_agent_task(
     pool: DbPool,
     agent: EnabledAgent,
-    mut shutdown_rx: watch::Receiver<bool>,
+    shutdown_rx: watch::Receiver<bool>,
     lookup: Arc<InstrumentLookupMap>,
+    live_accounts: Arc<LiveAccountStore>,
 ) {
-    let schedule = PollingSchedule::default();
     let environment = match agent.environment.parse::<HyperliquidEnvironment>() {
         Ok(env) => env,
         Err(e) => {
@@ -184,92 +196,81 @@ async fn run_agent_task(
         overlap_ms: DEFAULT_OVERLAP_MS,
     };
 
-    let raw_http = RawHyperliquidHttpClient::new(RawHttpConfig {
+    let raw_http = Arc::new(RawHyperliquidHttpClient::new(RawHttpConfig {
         environment,
         account_address: agent.wallet_address.clone(),
-    });
-
-    let mut historical_orders_accumulator = Duration::from_secs(0);
+    }));
 
     info!(
         agent_key = %agent.agent_key,
         wallet_address = %agent.wallet_address,
         environment = %config.environment.as_journal_str(),
-        "agent sync loop started"
+        "agent live loop starting (startup HTTP sync + WebSocket)"
     );
 
-    loop {
-        if *shutdown_rx.borrow() {
-            break;
-        }
+    // Set the initial visible state for the API.
+    live_accounts.set_status(
+        &crate::hyperliquid::live_state::AccountKey::new(
+            config.account_address.clone(),
+            config.environment.as_journal_str(),
+        ),
+        crate::hyperliquid::live_state::LiveConnectionStatus::StartupSyncing,
+    );
 
-        match sync_account_once(&pool, &config, &raw_http, &lookup).await {
-            Ok(summary) => {
-                for stream in summary.streams {
-                    if let Some(error) = &stream.error {
-                        warn!(
-                            agent_key = %agent.agent_key,
-                            wallet_address = %config.account_address,
-                            environment = %summary.environment,
-                            stream = %stream.stream.as_str(),
-                            error = %error,
-                            "agent account stream sync failed"
-                        );
-                    }
-                    info!(
-                        agent_key = %agent.agent_key,
-                        wallet_address = %config.account_address,
-                        environment = %summary.environment,
-                        stream = %stream.stream.as_str(),
-                        status = %stream.status.as_str(),
-                        fetched = stream.count,
-                        last_event_time = ?stream.last_event_time,
-                        "agent account stream sync completed"
-                    );
-                }
-            }
-            Err(e) => {
-                error!(
-                    agent_key = %agent.agent_key,
-                    wallet_address = %config.account_address,
-                    environment = %config.environment.as_journal_str(),
-                    error = ?e,
-                    "agent account sync failed"
-                );
-            }
-        }
-
-        // Sync historical orders on a slower cadence.
-        historical_orders_accumulator += schedule.fills;
-        if historical_orders_accumulator >= schedule.historical_orders {
-            historical_orders_accumulator = Duration::from_secs(0);
-            if let Err(e) =
-                sync_historical_orders_once(&pool, &config, &raw_http, &lookup).await
-            {
-                error!(
-                    agent_key = %agent.agent_key,
-                    wallet_address = %config.account_address,
-                    environment = %config.environment.as_journal_str(),
-                    error = ?e,
-                    "agent historical orders sync failed"
-                );
-            } else {
-                info!(
-                    agent_key = %agent.agent_key,
-                    wallet_address = %config.account_address,
-                    environment = %config.environment.as_journal_str(),
-                    "agent historical orders sync completed"
-                );
-            }
-        }
-
-        tokio::select! {
-            _ = tokio::time::sleep(schedule.fills) => {}
-            _ = shutdown_rx.changed() => break,
-        }
+    if *shutdown_rx.borrow() {
+        live_accounts.set_status(
+            &crate::hyperliquid::live_state::AccountKey::new(
+                config.account_address.clone(),
+                config.environment.as_journal_str(),
+            ),
+            crate::hyperliquid::live_state::LiveConnectionStatus::Stopped,
+        );
+        return;
     }
 
-    info!(agent_key = %agent.agent_key, "agent sync loop stopped");
+    if let Err(e) = sync_account_once(&pool, &config, &raw_http, &lookup).await {
+        error!(
+            agent_key = %agent.agent_key,
+            wallet_address = %config.account_address,
+            environment = %config.environment.as_journal_str(),
+            error = ?e,
+            "startup account sync failed"
+        );
+    }
+
+    if let Err(e) = sync_historical_orders_once(&pool, &config, &raw_http, &lookup).await {
+        error!(
+            agent_key = %agent.agent_key,
+            wallet_address = %config.account_address,
+            environment = %config.environment.as_journal_str(),
+            error = ?e,
+            "startup historical orders sync failed"
+        );
+    }
+
+    // Run the WebSocket loop until shutdown. The `run_account_live_ws`
+    // implementation handles reconnect catch-up internally.
+    if let Err(e) = run_account_live_ws(
+        pool.clone(),
+        config.clone(),
+        Arc::clone(&lookup),
+        Arc::clone(&raw_http),
+        Arc::clone(&live_accounts),
+        shutdown_rx.clone(),
+        LiveWsOptions::default(),
+    )
+    .await
+    {
+        error!(
+            agent_key = %agent.agent_key,
+            wallet_address = %config.account_address,
+            environment = %config.environment.as_journal_str(),
+            error = ?e,
+            "live WebSocket loop exited with error"
+        );
+    }
+
+    info!(agent_key = %agent.agent_key, "agent live loop stopped");
 }
 
 async fn load_instruments_with_retry(
