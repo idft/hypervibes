@@ -1,4 +1,5 @@
 use askama::Template;
+use rust_decimal::Decimal;
 
 use crate::{
     agents::model::{AgentDetailRow, AgentListRow, CreateAgentForm},
@@ -10,6 +11,76 @@ pub struct SummaryCard {
     pub label: &'static str,
     pub value: String,
     pub detail: &'static str,
+}
+
+#[derive(Debug, Clone)]
+pub struct MoneyCell {
+    pub value: String,
+    pub color_class: &'static str,
+}
+
+pub fn format_money_text(amount: Option<Decimal>) -> String {
+    match amount {
+        None => "-".to_string(),
+        Some(value) => {
+            let formatted = format!("{:.4}", value.abs());
+            if value.is_sign_negative() {
+                format!("({formatted})")
+            } else {
+                formatted
+            }
+        }
+    }
+}
+
+pub fn format_money_cell(amount: Option<Decimal>) -> MoneyCell {
+    match amount {
+        None => dash_cell(),
+        Some(value) if value.is_zero() => dash_cell(),
+        Some(value) => {
+            let formatted = format!("{:.4}", value.abs());
+            if value.is_sign_negative() {
+                MoneyCell {
+                    value: format!("({formatted})"),
+                    color_class: "text-red-400",
+                }
+            } else {
+                MoneyCell {
+                    value: formatted,
+                    color_class: "text-emerald-400",
+                }
+            }
+        }
+    }
+}
+
+fn dash_cell() -> MoneyCell {
+    MoneyCell {
+        value: "-".to_string(),
+        color_class: "text-zinc-500",
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct TransactionView {
+    pub row: AccountTransactionRow,
+    pub fee_usdc: String,
+    pub realized_pnl_usdc: MoneyCell,
+    pub usdc_delta: MoneyCell,
+}
+
+impl TransactionView {
+    pub fn from_row(row: AccountTransactionRow) -> Self {
+        let fee_usdc = format_money_text(row.fee_usdc);
+        let realized_pnl_usdc = format_money_cell(row.realized_pnl_usdc);
+        let usdc_delta = format_money_cell(row.usdc_delta);
+        Self {
+            row,
+            fee_usdc,
+            realized_pnl_usdc,
+            usdc_delta,
+        }
+    }
 }
 
 #[derive(Template)]
@@ -30,7 +101,7 @@ pub struct AgentsNewPageTemplate {
 #[template(path = "agents_show.html")]
 pub struct AgentsShowPageTemplate {
     pub agent: AgentDetailRow,
-    pub transactions: Vec<AccountTransactionRow>,
+    pub transactions: Vec<TransactionView>,
     pub sync_state: Vec<SyncStateRow>,
 }
 

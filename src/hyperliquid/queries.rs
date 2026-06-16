@@ -21,6 +21,7 @@ pub struct AccountTransactionRow {
     pub asset: Option<String>,
     pub fee_usdc: Option<Decimal>,
     pub realized_pnl_usdc: Option<Decimal>,
+    pub usdc_delta: Option<Decimal>,
     pub payload: Value,
 }
 
@@ -41,6 +42,7 @@ pub async fn list_account_transactions(
                 asset,
                 fee_usdc,
                 realized_pnl_usdc,
+                usdc_delta,
                 payload
            FROM hyperliquid.account_timeline
           WHERE account_address = $1

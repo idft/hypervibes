@@ -2,26 +2,13 @@
 
 {% block title %}Vibetrading Agents{% endblock %}
 
-{% block sidebar_extra %}
-<div class="mt-10 hidden lg:block">
-    <div class="text-xs font-medium uppercase tracking-[0.2em] text-zinc-600">Status</div>
-    <div class="mt-3 rounded-2xl border border-zinc-800 bg-zinc-950/80 p-4">
-        <div class="text-sm text-zinc-200">Web server online</div>
-        <div class="mt-2 text-xs leading-5 text-zinc-500">
-            Agent runtime wiring will attach here once the registry and supervisor are implemented.
-        </div>
-    </div>
-</div>
-{% endblock %}
+{% block sidebar_extra %}{% endblock %}
 
 {% block content %}
 <div class="mx-auto max-w-[1400px]">
     <header class="flex flex-col gap-4 border-b border-zinc-800 pb-6 lg:flex-row lg:items-start lg:justify-between">
         <div>
             <h1 class="text-3xl font-semibold tracking-tight text-white">Agents</h1>
-            <p class="mt-2 max-w-2xl text-sm leading-6 text-zinc-400">
-                Hermes profiles, execution accounts, and operator-facing registry controls.
-            </p>
         </div>
         <div class="flex items-center gap-3">
             <a href="/agents/new" class="rounded-full bg-zinc-100 px-4 py-2 text-sm font-medium text-zinc-950 hover:bg-white">
@@ -40,7 +27,7 @@
         {% endfor %}
     </section>
 
-    <section class="mt-6 grid gap-6 xl:grid-cols-[minmax(0,2fr)_minmax(320px,1fr)]">
+    <section class="mt-6">
         <div class="rounded-2xl border border-zinc-800 bg-[#0d0d10]">
             <div class="flex items-center justify-between border-b border-zinc-800 px-5 py-4">
                 <div>
@@ -85,32 +72,6 @@
                     </tbody>
                 </table>
             </div>
-        </div>
-
-        <div class="space-y-6">
-            <section class="rounded-2xl border border-zinc-800 bg-[#0d0d10] p-5">
-                <h2 class="text-lg font-medium text-white">Runtime direction</h2>
-                <ul class="mt-4 space-y-3 text-sm leading-6 text-zinc-400">
-                    <li>One binary hosts the web server and future per-agent supervised tasks.</li>
-                    <li>The agents registry is now the source of truth for the UI.</li>
-                    <li>Hyperliquid reconciliation and order submission will attach to agent-owned runtimes later.</li>
-                </ul>
-            </section>
-
-            <section class="rounded-2xl border border-zinc-800 bg-[#0d0d10] p-5">
-                <h2 class="text-lg font-medium text-white">Next UI milestones</h2>
-                <div class="mt-4 space-y-4 text-sm text-zinc-400">
-                    <div class="rounded-xl border border-zinc-800 bg-zinc-950/70 p-4">
-                        Edit agent flows
-                    </div>
-                    <div class="rounded-xl border border-zinc-800 bg-zinc-950/70 p-4">
-                        Agent detail views
-                    </div>
-                    <div class="rounded-xl border border-zinc-800 bg-zinc-950/70 p-4">
-                        Per-agent runtime and reconciliation status panels
-                    </div>
-                </div>
-            </section>
         </div>
     </section>
 </div>

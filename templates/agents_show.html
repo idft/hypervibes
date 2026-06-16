@@ -11,10 +11,14 @@
                 <span class="text-zinc-600">/</span>
                 <span class="text-sm text-zinc-400">{{ agent.agent_key }}</span>
             </div>
-            <h1 class="mt-3 text-3xl font-semibold tracking-tight text-white">{{ agent.display_name }}</h1>
-            <p class="mt-2 max-w-2xl text-sm leading-6 text-zinc-400">
-                Agent details, credentials, Hyperliquid sync status, and USDC transaction history.
-            </p>
+            <div class="mt-3 flex items-center gap-3">
+                <h1 class="text-3xl font-semibold tracking-tight text-white">{{ agent.display_name }}</h1>
+                {% if agent.environment == "live" %}
+                <span class="inline-flex rounded-full border border-emerald-900/60 bg-emerald-950/30 px-2.5 py-1 text-xs font-medium text-emerald-300">live</span>
+                {% else if agent.environment == "sandbox" %}
+                <span class="inline-flex rounded-full border border-sky-900/60 bg-sky-950/30 px-2.5 py-1 text-xs font-medium text-sky-300">sandbox</span>
+                {% endif %}
+            </div>
         </div>
         <div class="flex items-center gap-3">
             {% if agent.enabled %}
@@ -29,173 +33,78 @@
         </div>
     </header>
 
-    <section class="mt-6 grid gap-6 xl:grid-cols-[minmax(0,2fr)_minmax(320px,1fr)]">
-        <div class="space-y-6">
-            <section class="rounded-2xl border border-zinc-800 bg-[#0d0d10] p-6">
-                <h2 class="text-lg font-medium text-white">Identity</h2>
-                <dl class="mt-4 grid gap-4 sm:grid-cols-2">
-                    <div>
-                        <dt class="text-xs uppercase tracking-[0.16em] text-zinc-500">Agent key</dt>
-                        <dd class="mt-1 font-mono text-sm text-zinc-300">{{ agent.agent_key }}</dd>
-                    </div>
-                    <div>
-                        <dt class="text-xs uppercase tracking-[0.16em] text-zinc-500">Display name</dt>
-                        <dd class="mt-1 text-sm text-zinc-300">{{ agent.display_name }}</dd>
-                    </div>
-                    <div>
-                        <dt class="text-xs uppercase tracking-[0.16em] text-zinc-500">Wallet address</dt>
-                        <dd class="mt-1 break-all font-mono text-xs text-zinc-300">{{ agent.wallet_address }}</dd>
-                    </div>
-                    <div>
-                        <dt class="text-xs uppercase tracking-[0.16em] text-zinc-500">Environment</dt>
-                        <dd class="mt-1 text-sm text-zinc-300">{{ agent.environment }}</dd>
-                    </div>
-                    <div>
-                        <dt class="text-xs uppercase tracking-[0.16em] text-zinc-500">API key</dt>
-                        <dd class="mt-1 break-all font-mono text-xs text-zinc-300">{{ agent.api_key }}</dd>
-                    </div>
-                </dl>
-            </section>
+    <section class="mt-6 space-y-6">
+        <section class="rounded-2xl border border-zinc-800 bg-[#0d0d10] p-6">
+            <dl class="grid gap-4 sm:grid-cols-2">
+                <div>
+                    <dt class="text-xs uppercase tracking-[0.16em] text-zinc-500">Wallet address</dt>
+                    <dd class="mt-1 break-all font-mono text-xs text-zinc-300">{{ agent.wallet_address }}</dd>
+                </div>
+                <div>
+                    <dt class="text-xs uppercase tracking-[0.16em] text-zinc-500">API key</dt>
+                    <dd class="mt-1 break-all font-mono text-xs text-zinc-300">{{ agent.api_key }}</dd>
+                </div>
+            </dl>
+        </section>
 
-            <section class="rounded-2xl border border-zinc-800 bg-[#0d0d10] p-6">
-                <h2 class="text-lg font-medium text-white">Prompt</h2>
-                <div class="mt-4 rounded-xl border border-zinc-800 bg-zinc-950/70 p-4">
-                    {% if agent.prompt.is_empty() %}
-                    <p class="text-sm italic text-zinc-500">No prompt configured.</p>
-                    {% else %}
-                    <p class="whitespace-pre-wrap text-sm leading-6 text-zinc-300">{{ agent.prompt }}</p>
-                    {% endif %}
-                </div>
-            </section>
-
-            <section class="rounded-2xl border border-zinc-800 bg-[#0d0d10] p-6">
-                <div class="flex items-center justify-between">
-                    <h2 class="text-lg font-medium text-white">Hyperliquid transactions</h2>
-                    <span class="text-xs text-zinc-500">USDC balance-impacting events</span>
-                </div>
-                {% if transactions.is_empty() %}
-                <div class="mt-4 rounded-xl border border-zinc-800 bg-zinc-950/70 p-6 text-center">
-                    <p class="text-sm text-zinc-400">No transactions have synced yet.</p>
-                    <p class="mt-1 text-xs text-zinc-500">Enable the agent and wait for the orchestrator to reconcile the account history.</p>
-                </div>
+        <section class="rounded-2xl border border-zinc-800 bg-[#0d0d10] p-6">
+            <h2 class="text-lg font-medium text-white">Prompt</h2>
+            <div class="mt-4 rounded-xl border border-zinc-800 bg-zinc-950/70 p-4">
+                {% if agent.prompt.is_empty() %}
+                <p class="text-sm italic text-zinc-500">No prompt configured.</p>
                 {% else %}
-                <div class="mt-4 overflow-x-auto">
-                    <table class="min-w-full divide-y divide-zinc-800 text-sm">
-                        <thead class="bg-zinc-950/60 text-left text-xs uppercase tracking-[0.16em] text-zinc-500">
-                            <tr>
-                                <th class="px-4 py-3 font-medium">Time</th>
-                                <th class="px-4 py-3 font-medium">Type</th>
-                                <th class="px-4 py-3 font-medium">Symbol/Asset</th>
-                                <th class="px-4 py-3 font-medium">Fee USDC</th>
-                                <th class="px-4 py-3 font-medium">Realized PnL USDC</th>
-                                <th class="px-4 py-3 font-medium">Source</th>
-                            </tr>
-                        </thead>
-                        <tbody class="divide-y divide-zinc-800">
-                            {% for tx in transactions %}
-                            <tr class="hover:bg-zinc-900/50">
-                                <td class="px-4 py-3 align-top font-mono text-xs text-zinc-300">{{ tx.event_time.format("%Y-%m-%d %H:%M UTC") }}</td>
-                                <td class="px-4 py-3 align-top">
-                                    <span class="inline-flex rounded border border-zinc-700 px-1.5 py-0.5 text-xs text-zinc-300">{{ tx.event_category }}</span>
-                                    <div class="mt-1 text-xs text-zinc-500">{{ tx.event_type }}</div>
-                                </td>
-                                <td class="px-4 py-3 align-top text-zinc-300">
-                                    {% if let Some(symbol) = tx.symbol %}
-                                    <span class="font-medium">{{ symbol }}</span>
-                                    {% endif %}
-                                    {% if let Some(asset) = tx.asset %}
-                                    <div class="text-xs text-zinc-500">{{ asset }}</div>
-                                    {% endif %}
-                                </td>
-                                <td class="px-4 py-3 align-top font-mono text-xs text-zinc-300">{% if let Some(fee) = tx.fee_usdc %}{{ fee }}{% else %}-{% endif %}</td>
-                                <td class="px-4 py-3 align-top font-mono text-xs text-zinc-300">{% if let Some(pnl) = tx.realized_pnl_usdc %}{{ pnl }}{% else %}-{% endif %}</td>
-                                <td class="px-4 py-3 align-top text-xs text-zinc-500">{{ tx.source_stream }}</td>
-                            </tr>
-                            {% endfor %}
-                        </tbody>
-                    </table>
-                </div>
+                <p class="whitespace-pre-wrap text-sm leading-6 text-zinc-300">{{ agent.prompt }}</p>
                 {% endif %}
-            </section>
-        </div>
+            </div>
+        </section>
 
-        <div class="space-y-6">
-            <section class="rounded-2xl border border-zinc-800 bg-[#0d0d10] p-6">
-                <h2 class="text-lg font-medium text-white">Status</h2>
-                <div class="mt-4 space-y-3 text-sm">
-                    <div class="flex items-center justify-between">
-                        <span class="text-zinc-400">Runtime state</span>
-                        {% if agent.enabled %}
-                        <span class="text-emerald-300">Scheduled</span>
-                        {% else %}
-                        <span class="text-zinc-500">Not scheduled</span>
-                        {% endif %}
-                    </div>
-                    <div class="flex items-center justify-between">
-                        <span class="text-zinc-400">Registry state</span>
-                        {% if agent.enabled %}
-                        <span class="text-emerald-300">Enabled</span>
-                        {% else %}
-                        <span class="text-zinc-300">Disabled</span>
-                        {% endif %}
-                    </div>
-                    <div class="flex items-center justify-between">
-                        <span class="text-zinc-400">API key last used</span>
-                        {% if let Some(last_used) = agent.api_key_last_used_at %}
-                        <span class="font-mono text-xs text-zinc-300" title="{{ last_used }}">{{ last_used.format("%Y-%m-%d %H:%M UTC") }}</span>
-                        {% else %}
-                        <span class="text-zinc-500">Never</span>
-                        {% endif %}
-                    </div>
-                </div>
-            </section>
-
-            <section class="rounded-2xl border border-zinc-800 bg-[#0d0d10] p-6">
-                <h2 class="text-lg font-medium text-white">Sync status</h2>
-                {% if sync_state.is_empty() %}
-                <p class="mt-4 text-sm text-zinc-500">No sync state found. The orchestrator has not run for this account yet.</p>
-                {% else %}
-                <div class="mt-4 space-y-3">
-                    {% for state in sync_state %}
-                    <div class="rounded-xl border border-zinc-800 bg-zinc-950/70 p-4">
-                        <div class="flex items-center justify-between">
-                            <span class="text-sm font-medium text-zinc-300">{{ state.stream_name }}</span>
-                            {% if state.status == SyncStatus::Healthy %}
-                            <span class="inline-flex rounded-full border border-emerald-900/60 bg-emerald-950/30 px-2 py-0.5 text-xs text-emerald-300">Healthy</span>
-                            {% else if state.status == SyncStatus::Failed %}
-                            <span class="inline-flex rounded-full border border-red-900/60 bg-red-950/30 px-2 py-0.5 text-xs text-red-300">Failed</span>
-                            {% else if state.status == SyncStatus::Running %}
-                            <span class="inline-flex rounded-full border border-amber-900/60 bg-amber-950/30 px-2 py-0.5 text-xs text-amber-300">Running</span>
-                            {% else %}
-                            <span class="inline-flex rounded-full border border-zinc-700 px-2 py-0.5 text-xs text-zinc-300">Pending</span>
-                            {% endif %}
-                        </div>
-                        {% if let Some(last_time) = state.last_event_time %}
-                        <div class="mt-2 text-xs text-zinc-500">Last event: {{ last_time.format("%Y-%m-%d %H:%M UTC") }}</div>
-                        {% endif %}
-                        {% if let Some(last_synced) = state.last_synced_at %}
-                        <div class="mt-1 text-xs text-zinc-500">Last synced: {{ last_synced.format("%Y-%m-%d %H:%M UTC") }}</div>
-                        {% endif %}
-                    </div>
-                    {% endfor %}
-                </div>
-                {% endif %}
-            </section>
-
-            <section class="rounded-2xl border border-zinc-800 bg-[#0d0d10] p-6">
-                <h2 class="text-lg font-medium text-white">Registry metadata</h2>
-                <div class="mt-4 space-y-3 text-sm">
-                    <div class="flex items-center justify-between">
-                        <span class="text-zinc-400">Created</span>
-                        <span class="font-mono text-xs text-zinc-300">{{ agent.created_at.format("%Y-%m-%d %H:%M UTC") }}</span>
-                    </div>
-                    <div class="flex items-center justify-between">
-                        <span class="text-zinc-400">Updated</span>
-                        <span class="font-mono text-xs text-zinc-300">{{ agent.updated_at.format("%Y-%m-%d %H:%M UTC") }}</span>
-                    </div>
-                </div>
-            </section>
-        </div>
+        <section class="rounded-2xl border border-zinc-800 bg-[#0d0d10] p-6">
+            <div class="flex items-center justify-between">
+                <h2 class="text-lg font-medium text-white">Transactions</h2>
+            </div>
+            {% if transactions.is_empty() %}
+            <div class="mt-4 rounded-xl border border-zinc-800 bg-zinc-950/70 p-6 text-center">
+                <p class="text-sm text-zinc-400">No transactions have synced yet.</p>
+                <p class="mt-1 text-xs text-zinc-500">Enable the agent and wait for the orchestrator to reconcile the account history.</p>
+            </div>
+            {% else %}
+            <div class="mt-4 overflow-x-auto">
+                <table class="min-w-full divide-y divide-zinc-800 text-sm">
+                    <thead class="bg-zinc-950/60 text-left text-xs uppercase tracking-[0.16em] text-zinc-500">
+                        <tr>
+                            <th class="px-4 py-3 font-medium">Time</th>
+                            <th class="px-4 py-3 font-medium">Type</th>
+                            <th class="px-4 py-3 font-medium">Symbol/Asset</th>
+                            <th class="px-4 py-3 text-right font-medium">Fee USDC</th>
+                            <th class="px-4 py-3 text-right font-medium">Realized PnL USDC</th>
+                            <th class="px-4 py-3 text-right font-medium">USDC delta</th>
+                        </tr>
+                    </thead>
+                    <tbody class="divide-y divide-zinc-800">
+                        {% for tx in transactions %}
+                        <tr class="hover:bg-zinc-900/50">
+                            <td class="px-4 py-3 align-top font-mono text-xs text-zinc-300">{{ tx.row.event_time.format("%Y-%m-%d %H:%M UTC") }}</td>
+                            <td class="px-4 py-3 align-top">
+                                <span class="inline-flex rounded border border-zinc-700 px-1.5 py-0.5 text-xs text-zinc-300">{{ tx.row.event_category }}</span>
+                            </td>
+                            <td class="px-4 py-3 align-top text-zinc-300">
+                                {% if let Some(symbol) = tx.row.symbol %}
+                                <span class="font-medium">{{ symbol }}</span>
+                                {% endif %}
+                                {% if let Some(asset) = tx.row.asset %}
+                                <div class="text-xs text-zinc-500">{{ asset }}</div>
+                                {% endif %}
+                            </td>
+                            <td class="px-4 py-3 text-right align-top font-mono text-xs tabular-nums text-zinc-300">{{ tx.fee_usdc }}</td>
+                            <td class="px-4 py-3 text-right align-top font-mono text-xs tabular-nums {{ tx.realized_pnl_usdc.color_class }}">{{ tx.realized_pnl_usdc.value }}</td>
+                            <td class="px-4 py-3 text-right align-top font-mono text-xs tabular-nums {{ tx.usdc_delta.color_class }}">{{ tx.usdc_delta.value }}</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            {% endif %}
+        </section>
     </section>
 </div>
 

@@ -24,7 +24,7 @@ use crate::{
         AppState,
         templates::{
             AgentsNewPageTemplate, AgentsPageTemplate, AgentsShowPageTemplate,
-            ServerErrorPageTemplate, SummaryCard,
+            ServerErrorPageTemplate, SummaryCard, TransactionView,
         },
     },
 };
@@ -111,7 +111,10 @@ async fn agents_show(
             )
             .await
             {
-                Ok(rows) => rows,
+                Ok(rows) => rows
+                    .into_iter()
+                    .map(TransactionView::from_row)
+                    .collect(),
                 Err(error) => {
                     warn!(
                         agent_key = %agent.agent_key,
