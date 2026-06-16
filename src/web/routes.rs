@@ -47,18 +47,7 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/agents/new", get(agents_new))
         .route("/agents/{agent_key}", get(agents_show))
         .route("/agents/{agent_key}/delete", post(delete_agent))
-        .route(
-            "/agents/{agent_key}/account_balance/stream",
-            get(account_balance_stream),
-        )
-        .route(
-            "/agents/{agent_key}/open_positions/stream",
-            get(open_positions_stream),
-        )
-        .route(
-            "/agents/{agent_key}/open_orders/stream",
-            get(open_orders_stream),
-        )
+        .route("/agents/{agent_key}/live/stream", get(agent_live_stream))
         .route("/api/agents/{agent_key}/live", get(agent_live))
         .with_state(state)
 }
@@ -266,14 +255,22 @@ async fn delete_agent(
     }
 }
 
-/// Stream account-balance updates for `agent_key` as Server-Sent Events.
+/// Stream all live account views for `agent_key` over a single Server-Sent
+/// Events connection.
 ///
-/// The client should connect with `text/event-stream` semantics; each event
-/// is named `balance` and its `data` field is the freshly rendered
-/// `account_balance.html` partial. The stream begins with the current state
-/// (if any) and then emits a new event whenever the in-memory
-/// [`LiveAccountStore`] is mutated for the matching account.
-async fn account_balance_stream(
+/// Using one connection (rather than one per card) keeps the agent detail
+/// page well under the browser's per-host HTTP/1.1 connection limit, which
+/// previously starved ordinary navigation requests when three separate SSE
+/// streams were held open simultaneously.
+///
+/// Each account mutation emits three named events on this single stream:
+/// `balance`, `positions`, and `orders`. The `data` field of each is the
+/// freshly rendered partial for that section, which the HTMX SSE extension
+/// routes to the matching `sse-swap="..."` element. The stream begins with
+/// an initial snapshot of all three (or `Starting`/`Loading` placeholders if
+/// no live state exists yet) and then re-emits all three on every
+/// [`LiveAccountStore`] mutation for the matching account.
+async fn agent_live_stream(
     State(state): State<Arc<AppState>>,
     Path(agent_key): Path<String>,
 ) -> Result<Response, AppError> {
@@ -298,7 +295,7 @@ async fn account_balance_stream(
             status: LiveConnectionStatus::Starting,
             ..Default::default()
         });
-    let initial_event = render_account_balance_event(&initial_snapshot)?;
+    let initial_events = render_live_events(&initial_snapshot)?;
 
     let account_key_filter = account_key.clone();
     let live_accounts_filter = Arc::clone(&live_accounts);
@@ -319,27 +316,42 @@ async fn account_balance_stream(
                 }
             }
         })
-        .filter_map(move |_key| {
+        .flat_map(move |_key| {
             let live_accounts = Arc::clone(&live_accounts_filter);
             let key = account_key.clone();
-            async move {
-                match live_accounts.get(&key) {
-                    Some(snapshot) => match render_account_balance_event(&snapshot) {
-                        Ok(event) => Some(Ok::<Event, Infallible>(event)),
-                        Err(e) => {
-                            warn!(error = ?e, "failed to render account balance SSE event");
-                            None
-                        }
-                    },
-                    None => None,
-                }
-            }
+            let events = match live_accounts.get(&key) {
+                Some(snapshot) => match render_live_events(&snapshot) {
+                    Ok(events) => events,
+                    Err(e) => {
+                        warn!(error = ?e, "failed to render live SSE events");
+                        Vec::new()
+                    }
+                },
+                None => Vec::new(),
+            };
+            tokio_stream::iter(events.into_iter().map(Ok::<Event, Infallible>))
         });
 
-    let stream = tokio_stream::iter([Ok::<Event, Infallible>(initial_event)]).chain(notifications);
+    let stream = tokio_stream::iter(
+        initial_events
+            .into_iter()
+            .map(Ok::<Event, Infallible>)
+            .collect::<Vec<_>>(),
+    )
+    .chain(notifications);
     let sse =
         Sse::new(stream).keep_alive(KeepAlive::new().interval(std::time::Duration::from_secs(15)));
     Ok(sse.into_response())
+}
+
+/// Render the `balance`, `positions`, and `orders` SSE events for a single
+/// live-state snapshot.
+fn render_live_events(state: &AccountLiveState) -> Result<Vec<Event>, AppError> {
+    Ok(vec![
+        render_account_balance_event(state)?,
+        render_open_positions_event(state)?,
+        render_open_orders_event(state)?,
+    ])
 }
 
 fn render_account_balance_event(state: &AccountLiveState) -> Result<Event, AppError> {
@@ -348,144 +360,10 @@ fn render_account_balance_event(state: &AccountLiveState) -> Result<Event, AppEr
     Ok(Event::default().event("balance").data(html))
 }
 
-/// Stream open-positions updates for `agent_key` as Server-Sent Events.
-///
-/// Each event is named `positions`; the `data` field is the freshly
-/// rendered `open_positions.html` partial. The stream begins with the
-/// current snapshot (or a `Loading` placeholder if no live state has been
-/// produced yet) and then emits a new event on every
-/// [`LiveAccountStore`] mutation for the matching account.
-async fn open_positions_stream(
-    State(state): State<Arc<AppState>>,
-    Path(agent_key): Path<String>,
-) -> Result<Response, AppError> {
-    let agent = match get_agent(&state.db_pool, &agent_key).await? {
-        Some(agent) => agent,
-        None => return Ok((StatusCode::NOT_FOUND, "agent not found").into_response()),
-    };
-
-    let account_key = AccountKey::new(&agent.wallet_address, &agent.environment);
-    let live_accounts = Arc::clone(&state.live_accounts);
-
-    let initial_snapshot = live_accounts
-        .get(&account_key)
-        .unwrap_or_else(|| AccountLiveState {
-            account_address: account_key.account_address.clone(),
-            environment: account_key.environment.clone(),
-            status: LiveConnectionStatus::Starting,
-            ..Default::default()
-        });
-    let initial_event = render_open_positions_event(&initial_snapshot)?;
-
-    let account_key_filter = account_key.clone();
-    let live_accounts_filter = Arc::clone(&live_accounts);
-    let notifications = BroadcastStream::new(live_accounts.subscribe())
-        .filter_map(move |item| {
-            let account_key = account_key_filter.clone();
-            async move {
-                match item {
-                    Ok(key) if key == account_key => Some(key),
-                    Ok(_) => None,
-                    Err(tokio_stream::wrappers::errors::BroadcastStreamRecvError::Lagged(_)) => {
-                        Some(account_key.clone())
-                    }
-                }
-            }
-        })
-        .filter_map(move |_key| {
-            let live_accounts = Arc::clone(&live_accounts_filter);
-            let key = account_key.clone();
-            async move {
-                match live_accounts.get(&key) {
-                    Some(snapshot) => match render_open_positions_event(&snapshot) {
-                        Ok(event) => Some(Ok::<Event, Infallible>(event)),
-                        Err(e) => {
-                            warn!(error = ?e, "failed to render open positions SSE event");
-                            None
-                        }
-                    },
-                    None => None,
-                }
-            }
-        });
-
-    let stream = tokio_stream::iter([Ok::<Event, Infallible>(initial_event)]).chain(notifications);
-    let sse =
-        Sse::new(stream).keep_alive(KeepAlive::new().interval(std::time::Duration::from_secs(15)));
-    Ok(sse.into_response())
-}
-
 fn render_open_positions_event(state: &AccountLiveState) -> Result<Event, AppError> {
     let view = OpenPositionsView::from_live_state(state.clone());
     let html = OpenPositionsPartialTemplate::render_view(view)?;
     Ok(Event::default().event("positions").data(html))
-}
-
-/// Stream open-orders updates for `agent_key` as Server-Sent Events.
-///
-/// Each event is named `orders`; the `data` field is the freshly rendered
-/// `open_orders.html` partial. The stream begins with the current snapshot
-/// (or a `Loading` placeholder if no live state has been produced yet) and
-/// then emits a new event on every [`LiveAccountStore`] mutation for the
-/// matching account.
-async fn open_orders_stream(
-    State(state): State<Arc<AppState>>,
-    Path(agent_key): Path<String>,
-) -> Result<Response, AppError> {
-    let agent = match get_agent(&state.db_pool, &agent_key).await? {
-        Some(agent) => agent,
-        None => return Ok((StatusCode::NOT_FOUND, "agent not found").into_response()),
-    };
-
-    let account_key = AccountKey::new(&agent.wallet_address, &agent.environment);
-    let live_accounts = Arc::clone(&state.live_accounts);
-
-    let initial_snapshot = live_accounts
-        .get(&account_key)
-        .unwrap_or_else(|| AccountLiveState {
-            account_address: account_key.account_address.clone(),
-            environment: account_key.environment.clone(),
-            status: LiveConnectionStatus::Starting,
-            ..Default::default()
-        });
-    let initial_event = render_open_orders_event(&initial_snapshot)?;
-
-    let account_key_filter = account_key.clone();
-    let live_accounts_filter = Arc::clone(&live_accounts);
-    let notifications = BroadcastStream::new(live_accounts.subscribe())
-        .filter_map(move |item| {
-            let account_key = account_key_filter.clone();
-            async move {
-                match item {
-                    Ok(key) if key == account_key => Some(key),
-                    Ok(_) => None,
-                    Err(tokio_stream::wrappers::errors::BroadcastStreamRecvError::Lagged(_)) => {
-                        Some(account_key.clone())
-                    }
-                }
-            }
-        })
-        .filter_map(move |_key| {
-            let live_accounts = Arc::clone(&live_accounts_filter);
-            let key = account_key.clone();
-            async move {
-                match live_accounts.get(&key) {
-                    Some(snapshot) => match render_open_orders_event(&snapshot) {
-                        Ok(event) => Some(Ok::<Event, Infallible>(event)),
-                        Err(e) => {
-                            warn!(error = ?e, "failed to render open orders SSE event");
-                            None
-                        }
-                    },
-                    None => None,
-                }
-            }
-        });
-
-    let stream = tokio_stream::iter([Ok::<Event, Infallible>(initial_event)]).chain(notifications);
-    let sse =
-        Sse::new(stream).keep_alive(KeepAlive::new().interval(std::time::Duration::from_secs(15)));
-    Ok(sse.into_response())
 }
 
 fn render_open_orders_event(state: &AccountLiveState) -> Result<Event, AppError> {
@@ -815,7 +693,7 @@ mod tests {
         let response = app
             .oneshot(
                 Request::builder()
-                    .uri("/agents/does-not-exist-12345/account_balance/stream")
+                    .uri("/agents/does-not-exist-12345/live/stream")
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -840,7 +718,7 @@ mod tests {
         let response = app
             .oneshot(
                 Request::builder()
-                    .uri(format!("/agents/{}/account_balance/stream", agent_key))
+                    .uri(format!("/agents/{}/live/stream", agent_key))
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -908,7 +786,7 @@ mod tests {
         let response = app
             .oneshot(
                 Request::builder()
-                    .uri(format!("/agents/{}/account_balance/stream", agent_key))
+                    .uri(format!("/agents/{}/live/stream", agent_key))
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -951,7 +829,7 @@ mod tests {
         let response = app
             .oneshot(
                 Request::builder()
-                    .uri(format!("/agents/{}/account_balance/stream", agent_key))
+                    .uri(format!("/agents/{}/live/stream", agent_key))
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -1117,7 +995,7 @@ mod tests {
         let response = app
             .oneshot(
                 Request::builder()
-                    .uri("/agents/does-not-exist-12345/open_positions/stream")
+                    .uri("/agents/does-not-exist-12345/live/stream")
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -1142,7 +1020,7 @@ mod tests {
         let response = app
             .oneshot(
                 Request::builder()
-                    .uri(format!("/agents/{}/open_positions/stream", agent_key))
+                    .uri(format!("/agents/{}/live/stream", agent_key))
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -1217,7 +1095,7 @@ mod tests {
         let response = app
             .oneshot(
                 Request::builder()
-                    .uri(format!("/agents/{}/open_positions/stream", agent_key))
+                    .uri(format!("/agents/{}/live/stream", agent_key))
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -1254,7 +1132,7 @@ mod tests {
         let response = app
             .oneshot(
                 Request::builder()
-                    .uri("/agents/does-not-exist-12345/open_orders/stream")
+                    .uri("/agents/does-not-exist-12345/live/stream")
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -1279,7 +1157,7 @@ mod tests {
         let response = app
             .oneshot(
                 Request::builder()
-                    .uri(format!("/agents/{}/open_orders/stream", agent_key))
+                    .uri(format!("/agents/{}/live/stream", agent_key))
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -1358,7 +1236,7 @@ mod tests {
         let response = app
             .oneshot(
                 Request::builder()
-                    .uri(format!("/agents/{}/open_orders/stream", agent_key))
+                    .uri(format!("/agents/{}/live/stream", agent_key))
                     .body(Body::empty())
                     .unwrap(),
             )

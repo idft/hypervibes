@@ -33,9 +33,9 @@
         </div>
     </header>
 
-    <section class="mt-2 space-y-2">
+    <section class="mt-2 space-y-2" hx-ext="sse" sse-connect="/agents/{{ agent.agent_key }}/live/stream">
         <section class="rounded-2xl border border-zinc-800 bg-[#0d0d10] p-6">
-            <div hx-sse="connect:/agents/{{ agent.agent_key }}/account_balance/stream swap:balance">{{account_balance_html|safe}}</div>
+            <div sse-swap="balance">{{account_balance_html|safe}}</div>
             <dl class="mt-6 grid gap-4 border-t border-zinc-800 pt-6 sm:grid-cols-2">
                 <div>
                     <dt class="text-xs uppercase tracking-[0.16em] text-zinc-500">Wallet address</dt>
@@ -50,12 +50,12 @@
 
         <section class="rounded-2xl border border-zinc-800 bg-[#0d0d10] p-6">
             <h2 class="text-lg font-medium text-white">Open positions</h2>
-            <div class="mt-4" hx-sse="connect:/agents/{{ agent.agent_key }}/open_positions/stream swap:positions">{{ open_positions_html|safe }}</div>
+            <div class="mt-4" sse-swap="positions">{{ open_positions_html|safe }}</div>
         </section>
 
         <section class="rounded-2xl border border-zinc-800 bg-[#0d0d10] p-6">
             <h2 class="text-lg font-medium text-white">Open orders</h2>
-            <div class="mt-4" hx-sse="connect:/agents/{{ agent.agent_key }}/open_orders/stream swap:orders">{{ open_orders_html|safe }}</div>
+            <div class="mt-4" sse-swap="orders">{{ open_orders_html|safe }}</div>
         </section>
 
         <section class="rounded-2xl border border-zinc-800 bg-[#0d0d10] p-6">
