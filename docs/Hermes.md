@@ -330,6 +330,7 @@ The plugin will call these backend endpoints once they exist:
 |----------|---------|
 | `GET /api/v1/memory/records` | `read_memory` |
 | `POST /api/v1/memory/records` | `write_memory` |
+| `GET /api/v1/account` | `get_account_state` |
 | `POST /api/v1/orders` | `place_order` |
 
 All agent-facing endpoints authenticate via the `VIBETRADING_API_KEY` header

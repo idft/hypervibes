@@ -52,7 +52,6 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/agents/{agent_key}", get(agents_show))
         .route("/agents/{agent_key}/delete", post(delete_agent))
         .route("/agents/{agent_key}/live/stream", get(agent_live_stream))
-        .route("/api/agents/{agent_key}/live", get(agent_live))
         .with_state(state)
 }
 
@@ -133,37 +132,6 @@ async fn agents_new() -> Result<Html<String>, AppError> {
         errors: Vec::new(),
     };
     Ok(Html(template.render()?))
-}
-
-#[derive(Debug, Serialize)]
-struct LiveAgentSnapshot {
-    agent_key: String,
-    account_address: String,
-    environment: String,
-    connected: bool,
-    state: Option<AccountLiveState>,
-}
-
-async fn agent_live(
-    State(state): State<Arc<AppState>>,
-    Path(agent_key): Path<String>,
-) -> Result<Response, AppError> {
-    let agent = match get_agent(&state.db_pool, &agent_key).await? {
-        Some(agent) => agent,
-        None => return Ok((StatusCode::NOT_FOUND, "agent not found").into_response()),
-    };
-    let key = AccountKey::new(&agent.wallet_address, &agent.environment);
-    let snapshot = state.live_accounts.get(&key);
-    let body = LiveAgentSnapshot {
-        agent_key: agent.agent_key.clone(),
-        account_address: agent.wallet_address.clone(),
-        environment: agent.environment.clone(),
-        connected: snapshot.as_ref().is_some_and(|s| {
-            s.status == crate::hyperliquid::live_state::LiveConnectionStatus::Connected
-        }),
-        state: snapshot,
-    };
-    Ok(Json(body).into_response())
 }
 
 async fn agents_show(
@@ -653,109 +621,6 @@ mod tests {
             .unwrap();
 
         assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
-    }
-
-    #[tokio::test]
-    async fn get_live_route_returns_empty_state_for_known_agent() {
-        let state = test_state().await;
-
-        // Insert a fresh agent directly so we can look it up by agent_key.
-        let timestamp = chrono::Utc::now().timestamp_millis();
-        let display_name = format!("LiveRouteTest{}", timestamp);
-        let agent_key = slugify_agent_key(&display_name);
-        let private_key = random_private_key();
-        let wallet_address = derive_wallet_address(&private_key).expect("derives");
-        let now = Utc::now();
-        let row = crate::agents::model::AgentRegistryRow {
-            agent_key: agent_key.clone(),
-            created_at: now,
-            updated_at: now,
-            enabled: true,
-            display_name: display_name.clone(),
-            prompt: String::new(),
-            wallet_address: wallet_address.clone(),
-            environment: "live".to_string(),
-            api_key: format!("test-key-{timestamp}"),
-            api_key_last_used_at: None,
-            hyperliquid_private_key_ciphertext: Vec::new(),
-            hyperliquid_private_key_key_id: "test".to_string(),
-        };
-        insert_agent(&state.db_pool, &row)
-            .await
-            .expect("inserts agent");
-
-        let app = router(state.clone());
-        let response = app
-            .oneshot(
-                Request::builder()
-                    .uri(format!("/api/agents/{}/live", agent_key))
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(response.status(), StatusCode::OK);
-        let body_bytes = axum::body::to_bytes(response.into_body(), 1024 * 1024)
-            .await
-            .unwrap();
-        let body: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
-        assert_eq!(
-            body["agent_key"],
-            serde_json::Value::from(agent_key.clone())
-        );
-        assert_eq!(
-            body["account_address"],
-            serde_json::Value::from(wallet_address.clone())
-        );
-        assert_eq!(body["environment"], serde_json::Value::from("live"));
-        assert_eq!(body["connected"], serde_json::Value::from(false));
-        assert!(body["state"].is_null());
-
-        // Now seed a live state for that account and confirm the route
-        // returns the populated snapshot.
-        let key = AccountKey::new(&wallet_address, "live");
-        state.live_accounts.set_status(
-            &key,
-            crate::hyperliquid::live_state::LiveConnectionStatus::Connected,
-        );
-
-        let app = router(state.clone());
-        let response = app
-            .oneshot(
-                Request::builder()
-                    .uri(format!("/api/agents/{}/live", agent_key))
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(response.status(), StatusCode::OK);
-        let body_bytes = axum::body::to_bytes(response.into_body(), 1024 * 1024)
-            .await
-            .unwrap();
-        let body: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
-        assert_eq!(body["connected"], serde_json::Value::from(true));
-        assert_eq!(
-            body["state"]["status"],
-            serde_json::Value::from("connected")
-        );
-    }
-
-    #[tokio::test]
-    async fn get_live_route_returns_404_for_unknown_agent() {
-        let state = test_state().await;
-
-        let app = router(state);
-        let response = app
-            .oneshot(
-                Request::builder()
-                    .uri("/api/agents/does-not-exist-12345/live")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(response.status(), StatusCode::NOT_FOUND);
     }
 
     #[tokio::test]

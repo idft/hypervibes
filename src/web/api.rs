@@ -12,7 +12,8 @@ use tracing::error;
 use uuid::Uuid;
 
 use crate::{
-    agents::AuthenticatedAgent,
+    agents::{AuthenticatedAgent, store::get_agent},
+    hyperliquid::live_state::{AccountKey, AccountLiveState, LiveConnectionStatus},
     memory::{CreateMemory, MemoryListFilter, MemoryRecord, store as memory_store},
     web::AppState,
 };
@@ -23,6 +24,7 @@ pub fn router(state: Arc<AppState>) -> Router {
     Router::new()
         .route("/memories", post(create_memory).get(list_memories))
         .route("/memories/{id}", get(get_memory_by_id))
+        .route("/account", get(get_account))
         .with_state(state)
 }
 
@@ -142,6 +144,45 @@ async fn get_memory_by_id(
     }
 }
 
+/// `GET /api/v1/account`
+///
+/// Snapshot of the calling agent's Hyperliquid live account state. The
+/// operator UI uses the SSE stream at `/agents/{agent_key}/live/stream`
+/// instead; this is the agent-facing JSON poll.
+async fn get_account(
+    State(state): State<Arc<AppState>>,
+    agent: AuthenticatedAgent,
+) -> Result<Response, ApiError> {
+    let row = get_agent(&state.db_pool, &agent.agent_key)
+        .await
+        .map_err(ApiError::Internal)?
+        .ok_or(ApiError::NotFound("agent not found"))?;
+    let key = AccountKey::new(&row.wallet_address, &row.environment);
+    let snapshot = state.live_accounts.get(&key);
+    let body = LiveAgentSnapshot {
+        agent_key: row.agent_key.clone(),
+        account_address: row.wallet_address.clone(),
+        environment: row.environment.clone(),
+        connected: snapshot
+            .as_ref()
+            .is_some_and(|s| s.status == LiveConnectionStatus::Connected),
+        state: snapshot,
+    };
+    Ok(Json(body).into_response())
+}
+
+/// Snapshot of the calling agent's live account state. Returned to the
+/// agent as JSON; the operator UI's SSE stream emits the rendered view
+/// types from `src/web/templates.rs` directly.
+#[derive(Debug, serde::Serialize)]
+struct LiveAgentSnapshot {
+    agent_key: String,
+    account_address: String,
+    environment: String,
+    connected: bool,
+    state: Option<AccountLiveState>,
+}
+
 /// Response shape returned to agents. Today it mirrors [`MemoryRecord`]
 /// 1:1, but keeping a dedicated type lets us evolve the wire format
 /// without breaking the DB row struct.
@@ -192,6 +233,7 @@ mod tests {
             store::{get_agent, insert_agent},
         },
         db::{connect, migrate},
+        hyperliquid::live_state::{AccountKey, LiveConnectionStatus},
         web::{AppState, api},
     };
 
@@ -641,5 +683,105 @@ mod tests {
             .unwrap();
         let response = app(Arc::clone(&state)).oneshot(request).await.unwrap();
         assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn get_account_returns_200_with_null_state_when_orchestrator_has_no_snapshot() {
+        let Some(state) = test_state().await else {
+            eprintln!("DATABASE_URL not set; skipping route test");
+            return;
+        };
+
+        let (agent_key, api_key) = seed_agent(&state, "acct-empty").await;
+
+        let request = Request::builder()
+            .uri("/account")
+            .header("authorization", format!("Bearer {api_key}"))
+            .body(Body::empty())
+            .unwrap();
+        let response = app(Arc::clone(&state)).oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body_bytes = axum::body::to_bytes(response.into_body(), 64 * 1024)
+            .await
+            .unwrap();
+        let body: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
+        assert_eq!(body["agent_key"], serde_json::Value::from(agent_key));
+        assert_eq!(body["connected"], serde_json::Value::from(false));
+        assert!(body["state"].is_null());
+    }
+
+    #[tokio::test]
+    async fn get_account_returns_connected_true_after_live_state_seeded() {
+        let Some(state) = test_state().await else {
+            eprintln!("DATABASE_URL not set; skipping route test");
+            return;
+        };
+
+        let (agent_key, api_key) = seed_agent(&state, "acct-live").await;
+        let row = get_agent(&state.db_pool, &agent_key)
+            .await
+            .unwrap()
+            .expect("present");
+        let key = AccountKey::new(&row.wallet_address, &row.environment);
+        state.live_accounts.set_status(&key, LiveConnectionStatus::Connected);
+
+        let request = Request::builder()
+            .uri("/account")
+            .header("authorization", format!("Bearer {api_key}"))
+            .body(Body::empty())
+            .unwrap();
+        let response = app(Arc::clone(&state)).oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body_bytes = axum::body::to_bytes(response.into_body(), 64 * 1024)
+            .await
+            .unwrap();
+        let body: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
+        assert_eq!(body["agent_key"], serde_json::Value::from(agent_key));
+        assert_eq!(
+            body["account_address"],
+            serde_json::Value::from(row.wallet_address)
+        );
+        assert_eq!(body["environment"], serde_json::Value::from(row.environment));
+        assert_eq!(body["connected"], serde_json::Value::from(true));
+        assert_eq!(
+            body["state"]["status"],
+            serde_json::Value::from("connected")
+        );
+    }
+
+    #[tokio::test]
+    async fn get_account_without_auth_returns_401_json() {
+        let Some(state) = test_state().await else {
+            eprintln!("DATABASE_URL not set; skipping route test");
+            return;
+        };
+
+        let request = Request::builder()
+            .uri("/account")
+            .body(Body::empty())
+            .unwrap();
+        let response = app(state).oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        let body_bytes = axum::body::to_bytes(response.into_body(), 16 * 1024)
+            .await
+            .unwrap();
+        let body: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
+        assert!(body["error"].is_string());
+    }
+
+    #[tokio::test]
+    async fn get_account_with_invalid_bearer_returns_401_json() {
+        let Some(state) = test_state().await else {
+            eprintln!("DATABASE_URL not set; skipping route test");
+            return;
+        };
+
+        let request = Request::builder()
+            .uri("/account")
+            .header("authorization", "Bearer vta_does-not-exist")
+            .body(Body::empty())
+            .unwrap();
+        let response = app(state).oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
     }
 }
