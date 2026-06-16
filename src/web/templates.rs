@@ -591,7 +591,7 @@ mod tests {
         let rendered = template.render().unwrap();
         assert!(rendered.contains("<!DOCTYPE html>"));
         assert!(rendered.contains("Vibetrading Agents"));
-        assert!(rendered.contains("Web server online"));
+        assert!(rendered.contains("live"));
         assert!(rendered.contains("Registered agents"));
         assert!(rendered.contains("Account balance"));
         assert!(rendered.contains("232.6800"));

@@ -253,13 +253,7 @@ mod tests {
 
     #[tokio::test]
     async fn resolve_agent_key_by_api_key_round_trip() {
-        let Some(database_url) = db_url() else {
-            eprintln!("DATABASE_URL not set; skipping integration test");
-            return;
-        };
-
-        let pool = connect(&database_url).await.expect("connect to database");
-        migrate(&pool).await.expect("run migrations");
+        let pool = test_db::pool().await;
 
         let key = format!("apikey-rt-{}", Utc::now().timestamp_millis());
         let row = sample_agent(&key);
@@ -279,13 +273,7 @@ mod tests {
 
     #[tokio::test]
     async fn touch_api_key_last_used_sets_timestamp() {
-        let Some(database_url) = db_url() else {
-            eprintln!("DATABASE_URL not set; skipping integration test");
-            return;
-        };
-
-        let pool = connect(&database_url).await.expect("connect to database");
-        migrate(&pool).await.expect("run migrations");
+        let pool = test_db::pool().await;
 
         let key = format!("apikey-touch-{}", Utc::now().timestamp_millis());
         let row = sample_agent(&key);

@@ -3,7 +3,7 @@ use std::time::Duration;
 use anyhow::Result;
 
 use crate::{
-    db::{DbPool, connect, migrate},
+    db::{connect, migrate},
     hyperliquid::{
         account_sync::{build_instrument_lookup, sync_account_once, sync_historical_orders_once},
         config::AppConfig,
