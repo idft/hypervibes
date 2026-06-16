@@ -1,8 +1,5 @@
 # Hyperliquid Module
 
-WARNING: THIS IS A WORK IN PROGRESS AND IS IDEAS ONLY.
-NOTHING IN THIS FILE SHOULD BE IMPLEMENTED YET.
-
 Related docs:
 
 - `README.md` for top-level V2 direction
@@ -214,11 +211,16 @@ This module should own the canonical bridge between:
 - submitted order intent
 - exchange-confirmed activity
 
-That means the Hyperliquid subsystem should own execution-intent and submitted-order records.
+That means the Hyperliquid subsystem owns the local order journal.
 
 This should not be thought of as a transparent reverse proxy for the entire Hyperliquid API.
 
 It should be thought of as an internal `execution gateway`.
+
+The authoritative, concrete build target for this gateway is
+`.opencode/plans/order-submission-system.md`. The sections below describe
+the agreed design direction; the plan file has the exact schema, module
+layout, and step order.
 
 ### Preferred Direction
 
@@ -226,22 +228,38 @@ Preferred direction:
 
 - agents submit private trading actions through an internal Hyperliquid execution gateway
 - the app authenticates the caller via the agent API key and resolves `agent_key` before execution logic runs
-- the gateway first records execution intent and links to `agent_key` and memory record IDs
-- the gateway then forwards the request to Hyperliquid
-- later exchange events reconcile back to those local records
+- the gateway records a local order row (status `pending_submission`) before any exchange call
+- the gateway then forwards the request to Hyperliquid over the signed HTTP `/exchange` client
+- later exchange events (HTTP response, live WebSocket order updates, and journal polling) reconcile back to those local records
 
-This gateway can live inside the same application binary.
+This gateway lives inside the same application binary.
 
 It does not need to be a separate deployable service.
+
+### Submission Transport: HTTP Only
+
+Order placement and cancellation go over the `hypersdk` **signed HTTP**
+client (`client.place(...)`, `client.cancel(...)`).
+
+They do **not** go over the WebSocket. The `hypersdk` 0.2.x WebSocket
+client only supports `subscribe` / `unsubscribe`; it exposes no `post`
+action method. The WebSocket remains a read-only live feed.
+
+Signing uses the agent's Hyperliquid private key, which the app decrypts
+on demand from `agents.registry.hyperliquid_private_key_ciphertext` and
+loads into an `alloy` `PrivateKeySigner`. Agents never see the key.
 
 ### What The Gateway Should Cover
 
 The gateway should primarily own private write actions such as:
 
-- place order
-- cancel order
-- modify order
-- batch order actions
+- place order (limit, market)
+- place reduce-only take-profit and stop-loss trigger orders
+- cancel order(s)
+- cancel-all (optionally scoped to one symbol)
+- batch place and batch cancel
+
+Modify is not in the first version. It can be added later.
 
 It does not need to mirror every public Hyperliquid read endpoint.
 
@@ -255,33 +273,98 @@ Historical reads should mostly come from:
 Benefits:
 
 - preserves a reliable local audit trail before the exchange call happens
-- links order intent directly to `agent_key` and memory records
+- links each order to `agent_key` and (later) memory records
 - avoids giving every agent raw execution credentials by default
 - allows later policy enforcement such as account, instrument, or size restrictions
 - gives a clean place to enforce idempotency and retry behavior
 
-### Not Just Success Or Failure
+### Client Order IDs (`cloid`)
 
-The gateway should not model submission as a simple binary outcome.
+The gateway **always generates a client order id (`cloid`) for every
+order** before submission.
 
-Important states may include:
+- `cloid` is a 128-bit value the app generates and stores locally.
+- `oid` is the exchange-assigned order id (`u64`) returned once the order rests or fills.
 
-- `pending_submission`
-- `submitted`
-- `rejected_locally`
-- `rejected_by_exchange`
-- `unknown_pending_reconcile`
+The `cloid` lets the app correlate its local row to the exchange order
+even before an `oid` is known, and survives network timeouts. Agents
+cancel using the `oid` returned from "list open orders"; the gateway can
+internally cancel by either `oid` or `cloid`.
 
-This matters because network failures or timeouts may leave the system unsure whether Hyperliquid accepted the order.
+### Order Lifecycle and Status Tracking
 
-Final truth should come from:
+Order submission is not a binary success/failure. The full lifecycle is
+captured so the system can always reconstruct what happened.
 
-- exchange responses plus later exchange-confirmed history
-- later reconciliation against exchange history
+Latest status lives on the `hyperliquid.orders` row. Status values:
+
+- `pending_submission` — local row written, not yet sent
+- `submitted` — sent, awaiting a definitive result
+- `resting` — accepted and resting on the book (has an `oid`)
+- `partially_filled`
+- `filled`
+- `canceled`
+- `rejected` — rejected by the exchange
+- `error` — local/transport error before a known exchange outcome
+- `unknown` — timed out; must be reconciled against exchange history
+
+Every status transition is also appended to an immutable
+`hyperliquid.order_events` child table, so the entire lifecycle
+(submitted → accepted/resting → partial fill → filled → canceled, etc.)
+is preserved, not just the latest state.
+
+Status transitions come from three sources, all writing `order_events`:
+
+1. the synchronous HTTP response to `place` / `cancel` (`source = http_response`)
+2. the live WebSocket `OrderUpdates` subscription (`source = ws_order_update`) — already subscribed by `live_ws`; this feature wires the previously-ignored handler into order tracking
+3. the order reconciliation worker (`source = reconcile`), using `open_orders`, `historicalOrders`, and `trade_fills`
+
+`order_events` is idempotent: dedup on `(order_id, status, status_timestamp, source)`.
+
+### Take-Profit and Stop-Loss Orders
+
+TP/SL are modeled as **reduce-only trigger orders**:
+
+- take-profit = a take-profit limit trigger (`TpSl::Tp`, `is_market = false`)
+- stop-loss = a stop-market trigger (`TpSl::Sl`, `is_market = true`)
+
+Multiple TP and multiple SL orders may be placed for one position. The
+gateway groups an entry order and its TP/SL legs under a local
+`group_id` so they can be associated and managed together.
+
+Hyperliquid does **not** automatically cancel orphaned reduce-only
+trigger orders when a position is closed by other means. Auto-cancelling
+the leftover legs of a `group_id` once its position is flat is the
+responsibility of the order reconciliation worker, not the exchange.
+
+### Single Orders Table (revised direction)
+
+Earlier drafts of this doc proposed two tables (`execution_intents` and
+`submitted_orders`). The agreed direction is simpler:
+
+- one `hyperliquid.orders` table records every submitted order (including
+  ones later cancelled), with the latest status, the rounded vs requested
+  price/size, `cloid`, `exchange_oid`, `group_id`, and request/response payloads
+- one append-only `hyperliquid.order_events` table records the lifecycle
+
+`memory_record_ids` is carried on `hyperliquid.orders` as a JSON column so
+order→memory linkage can be added later without a migration.
+
+### Price and Size Rounding
+
+Hyperliquid requires `limit_px` and `sz` to be aligned to each
+instrument's tick and lot size before signing. `hypersdk`'s `place` does
+not auto-round.
+
+The gateway rounds price and size server-side using
+`price_decimals` / `size_decimals` from `hyperliquid.instruments` before
+signing, in a conservative direction. Both the requested and rounded
+values are stored on the order row. Unknown symbols are rejected.
 
 ### Why This Module Should Own It
 
-If orders are submitted directly to Hyperliquid without a canonical local intent record, the system loses part of the audit chain.
+If orders are submitted directly to Hyperliquid without a canonical local
+order record, the system loses part of the audit chain.
 
 The system then cannot reliably distinguish between:
 
@@ -290,11 +373,12 @@ The system then cannot reliably distinguish between:
 - a trade was submitted but not filled
 - a trade filled differently than intended
 
-Because of that, execution intent and order submission should live here rather than in the memory schema.
+Because of that, order submission lives here rather than in the memory schema.
 
 ### Fallback Direction
 
-If an agent is ever allowed to call Hyperliquid directly, it must also write the matching execution-intent record.
+If an agent is ever allowed to call Hyperliquid directly, it must also
+write the matching local order record.
 
 That is possible, but it is less safe than the gateway pattern.
 
@@ -408,16 +492,29 @@ Phase 1 views:
 
 See `.opencode/plans/hyperliquid-account-history-journal.md` for the authoritative phase-1 column lists, identifier semantics (`hash` vs `tx_hash`, `fee` vs `fee_usdc`), the instrument-resolution null policy, the `environment` CHECK constraint, and the `raw_http` module spec.
 
+Execution gateway tables (added by the order submission feature):
+
+- `hyperliquid.orders` — one row per submitted order, latest status
+- `hyperliquid.order_events` — append-only order lifecycle transitions
+
+See `.opencode/plans/order-submission-system.md` for the authoritative
+column lists and module layout for these two tables. They supersede the
+older `execution_intents` / `submitted_orders` two-table idea described
+further down in this document.
+
 Future extension tables, not required for the first implementation:
 
 - `hyperliquid.accounts`
 - `hyperliquid.activity_events`
-- `hyperliquid.execution_intents`
-- `hyperliquid.submitted_orders`
 - `hyperliquid.sync_runs`
 - `hyperliquid.ws_sessions`
 - `hyperliquid.reconcile_runs`
 - `hyperliquid.reconcile_issues`
+
+Note: the older `hyperliquid.execution_intents` and
+`hyperliquid.submitted_orders` table ideas (described later in this
+document) are superseded by the single `hyperliquid.orders` +
+`hyperliquid.order_events` design above.
 
 ### Derived Tables or Views
 
@@ -488,12 +585,14 @@ Suggested fields:
 
 ### `hyperliquid.execution_intents`
 
+> SUPERSEDED: the `execution_intents` + `submitted_orders` two-table model
+> described in this and the next subsection is no longer the plan. It is
+> replaced by a single `hyperliquid.orders` table plus an append-only
+> `hyperliquid.order_events` table. See the "Execution Intent and Order
+> Submission" section above and `.opencode/plans/order-submission-system.md`.
+> These subsections are kept only for historical context.
+
 Purpose:
-
-- canonical local record of what the agent intended to submit before exchange confirmation
-- bridge between analysis memory and exchange activity
-
-Suggested fields:
 
 - `id`
 - `created_at`
@@ -1115,12 +1214,12 @@ For `hyperliquid.reconcile_issues`:
 
 ### Example Order Lifecycle
 
-1. Agent decides to trade and references one or more memory records.
-2. Execution gateway writes `hyperliquid.execution_intents`.
-3. Gateway submits the request and writes `hyperliquid.submitted_orders`.
-4. Historical or recent-window polling later produces exchange-confirmed events.
-5. Normalization writes typed rows like `trade_fills`, `funding_events`, and `ledger_events`.
-6. Reconciliation links the final exchange truth back to the original local intent.
+1. Agent decides to trade and (optionally) references one or more memory records.
+2. The execution gateway rounds price/size, generates a `cloid`, and writes a `hyperliquid.orders` row with status `pending_submission`.
+3. The gateway submits the signed order over HTTP and records the response: it updates the `orders` row status (`resting` / `filled` / `rejected` / `error`) and appends a `hyperliquid.order_events` row (`source = http_response`).
+4. Live WebSocket `OrderUpdates` stream further transitions (partial fill, fill, cancel) into `order_events` (`source = ws_order_update`) and update the `orders` latest status.
+5. Historical or recent-window polling later produces exchange-confirmed events; normalization writes typed rows like `trade_fills`, `funding_events`, and `ledger_events`.
+6. The order reconciliation worker links the final exchange truth back to the local `orders` row (`source = reconcile`), resolves `unknown` orders, and cancels orphaned reduce-only TP/SL legs once their position is flat.
 
 ## Idempotency and Event Identity
 
