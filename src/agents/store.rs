@@ -118,6 +118,25 @@ pub async fn resolve_agent_key_by_api_key(pool: &DbPool, api_key: &str) -> Resul
     Ok(row.map(|(k,)| k))
 }
 
+/// Load the encrypted Hyperliquid private key + the key id used to
+/// encrypt it. Used by the order submission gateway to build a
+/// [`PrivateKeySigner`] for signing.
+pub async fn get_agent_private_key_ciphertext(
+    pool: &DbPool,
+    agent_key: &str,
+) -> Result<Option<(Vec<u8>, String)>> {
+    let row: Option<(Vec<u8>, String)> = query_as(
+        "SELECT hyperliquid_private_key_ciphertext, hyperliquid_private_key_key_id
+           FROM agents.registry
+          WHERE agent_key = $1",
+    )
+    .bind(agent_key)
+    .fetch_optional(pool)
+    .await
+    .context("failed to load agent private key ciphertext")?;
+    Ok(row)
+}
+
 /// Best-effort update of `api_key_last_used_at` for an authenticated agent.
 ///
 /// Called by the API-key auth extractor on every successful authentication

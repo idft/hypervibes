@@ -8,8 +8,7 @@ static SERVER: OnceLock<Arc<PgliteServer>> = OnceLock::new();
 fn server() -> &'static Arc<PgliteServer> {
     SERVER.get_or_init(|| {
         Arc::new(
-            PgliteServer::temporary_tcp()
-                .expect("failed to start embedded pglite test server"),
+            PgliteServer::temporary_tcp().expect("failed to start embedded pglite test server"),
         )
     })
 }

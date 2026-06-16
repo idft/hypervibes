@@ -222,6 +222,35 @@ The authoritative, concrete build target for this gateway is
 the agreed design direction; the plan file has the exact schema, module
 layout, and step order.
 
+The implementation is now complete in `src/hyperliquid/orders/`:
+
+- `rounding.rs` — price/size rounding (conservative direction).
+- `model.rs` — request/response DTOs + validation.
+- `store.rs` — DB access for `hyperliquid.orders` and
+  `hyperliquid.order_events`. All agent-facing queries are scoped by
+  `agent_key`; the WebSocket path uses account-scoped lookups.
+- `gateway.rs` — orchestration: validates the request, looks up the
+  instrument, rounds, inserts pending rows, calls the exchange
+  (always HTTP, never WebSocket), maps the response back to each
+  leg. `ExchangeClient` is a trait so the orchestration is
+  unit-tested offline with a fake.
+- `reconcile.rs` — periodic reconciler: pulls live `open_orders`
+  and positions, merges observed exchange status into the local
+  row, resolves `pending_submission` orders that have vanished
+  from the exchange, and auto-cancels orphaned reduce-only TP/SL
+  legs whose underlying position is flat.
+
+The default market-order slippage is `DEFAULT_MARKET_SLIPPAGE_BPS = 50`
+(0.5%) and is applied symmetrically to the mid price: buys widen UP,
+sells widen DOWN. The widened price is then rounded to the
+instrument's `price_decimals` in the conservative direction (buy → down,
+sell → up).
+
+Submission always uses `OrderGrouping::Na`; the entry and any
+attached TP/SL legs go in the same `BatchOrder`. Auto-cancel of
+orphaned reduce-only legs is the reconciler's job, not the
+exchange's.
+
 ### Preferred Direction
 
 Preferred direction:

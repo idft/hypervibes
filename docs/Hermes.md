@@ -244,26 +244,110 @@ Notes:
 Submits an order through the Vibetrading execution gateway, **not** directly
 to Hyperliquid.
 
-Inputs:
+Endpoint: `POST /api/v1/orders` (see the wire contract below).
 
-- `instrument`
-- `side` — `buy` or `sell`
-- `size`
-- `order_type` — `market`, `limit`, etc.
-- `price` — for limit orders
-- `time_in_force`
-- `reduce_only`
-- `memory_record_ids` — references to the memory records that justified the decision
+Inputs (per `PlaceOrderInput`):
 
-Output:
+- `symbol` (e.g. `"BTC"`)
+- `side` — `"buy"` or `"sell"`
+- `order_type` — `"limit"` or `"market"`
+- `size` (decimal string, e.g. `"0.1"`)
+- `price` (decimal string) — required for `limit`, ignored for `market`
+- `time_in_force` — `"gtc"` (default for limit), `"ioc"`, `"alo"`
+- `reduce_only` (boolean, default `false`)
+- `take_profits` — list of `{trigger_price, limit_price?, size?}`; TP legs are
+  always reduce-only and on the opposite side of the entry.
+- `stop_losses` — list of `{trigger_price, limit_price?, size?}`; SL legs are
+  always stop-market and reduce-only on the opposite side.
+- `memory_record_ids` — list of memory record IDs to link the order to.
 
-- JSON with intent/submission status and tracking IDs
+Output (`PlaceOrdersResponse`):
+
+```json
+{
+  "results": [
+    {
+      "id": "uuid",
+      "cloid": "0x...",
+      "symbol": "BTC",
+      "side": "buy",
+      "order_kind": "limit",
+      "status": "resting",
+      "exchange_oid": "12345",
+      "group_id": "uuid|null",
+      "error": null
+    }
+  ]
+}
+```
 
 Notes:
 
-- The backend gateway records execution intent before forwarding to Hyperliquid.
-- Linking the order to source memory is a core idea; pass `memory_record_ids` when available.
-- Execution gateway is not implemented yet; this is a stub contract.
+- The backend gateway records every leg as its own row in
+  `hyperliquid.orders` before forwarding to Hyperliquid.
+- The HTTP response status is `201 Created` on success.
+- A failed individual leg has `status: "error"` or `"rejected"` and a
+  non-null `error`; other legs may still succeed.
+- Linking the order to source memory is a core idea; pass
+  `memory_record_ids` when available.
+
+### `cancel_order`
+
+Cancels one or more orders by exchange `oid`.
+
+Endpoint: `POST /api/v1/orders/cancel`
+
+Inputs:
+
+```json
+{
+  "orders": [
+    { "symbol": "BTC", "oid": 12345 }
+  ]
+}
+```
+
+Output: a JSON array of per-input outcomes, each with `symbol`, `oid`,
+`status` (`"submitted"`/`"canceled"`/`"rejected"`/`"not_found"`/`"error"`),
+optional `error` string, and `order_id` of the local row when known.
+
+### `cancel_all`
+
+Cancels every resting order for the calling agent. Optionally restrict
+to one symbol.
+
+Endpoint: `POST /api/v1/orders/cancel-all?symbol=BTC`
+
+Output:
+
+```json
+{
+  "considered": 3,
+  "outcomes": [ ... ]
+}
+```
+
+### `list_orders`
+
+Lists the agent's orders, newest first. Scoped by `agent_key` server-side.
+
+Endpoint: `GET /api/v1/orders?status=open&symbol=BTC`
+
+- `status` — `open` (alias for `submitted|resting|partially_filled`),
+  `pending`, or any exact status name. Omit for all.
+- `symbol` — optional symbol filter.
+
+Output: JSON array of order rows.
+
+Use this to find the `exchange_oid` you need for `cancel_order` (it
+appears as the `exchange_oid` field on each row).
+
+### `get_order`
+
+Fetches a single order by id. Optional `?include=events` appends the
+lifecycle events from `hyperliquid.order_events`.
+
+Endpoint: `GET /api/v1/orders/{id}?include=events`
 
 ### `get_account_status`
 
@@ -332,9 +416,181 @@ The plugin will call these backend endpoints once they exist:
 | `POST /api/v1/memory/records` | `write_memory` |
 | `GET /api/v1/account` | `get_account_state` |
 | `POST /api/v1/orders` | `place_order` |
+| `GET /api/v1/orders` | `list_orders` |
+| `GET /api/v1/orders/{id}?include=events` | `get_order` (lifecycle) |
+| `POST /api/v1/orders/cancel` | `cancel_order` |
+| `POST /api/v1/orders/cancel-all` | `cancel_all` |
 
-All agent-facing endpoints authenticate via the `VIBETRADING_API_KEY` header
-and resolve the `agent_key` internally.
+All agent-facing endpoints authenticate via the `Authorization: Bearer
+{VIBETRADING_API_KEY}` header and resolve the `agent_key` internally.
+
+## Implementing a trading skill (Python)
+
+A Hermes skill that trades should call the Vibetrading execution
+gateway rather than Hyperliquid directly. This section shows the
+canonical pattern using `requests` (or `httpx`, with the same shape).
+
+### Required environment
+
+| Var | Purpose |
+|-----|---------|
+| `VIBETRADING_BASE_URL` | e.g. `https://vibetrading.example.com` |
+| `VIBETRADING_API_KEY` | the agent's API key (issued by the operator) |
+
+### Minimal client module
+
+```python
+# vibetrading_client.py
+import os, json
+from typing import Any
+import requests
+
+BASE = os.environ["VIBETRADING_BASE_URL"].rstrip("/")
+KEY = os.environ["VIBETRADING_API_KEY"]
+
+def _headers() -> dict[str, str]:
+    return {
+        "Authorization": f"Bearer {KEY}",
+        "Content-Type": "application/json",
+    }
+
+def place_orders(orders: list[dict]) -> list[dict]:
+    """POST /api/v1/orders. Returns the per-leg results list."""
+    r = requests.post(f"{BASE}/api/v1/orders",
+                      headers=_headers(),
+                      data=json.dumps({"orders": orders}),
+                      timeout=10)
+    if r.status_code == 401:
+        raise PermissionError("invalid VIBETRADING_API_KEY")
+    if r.status_code == 422:
+        raise ValueError(r.json().get("error", "validation failed"))
+    r.raise_for_status()
+    return r.json()["results"]
+
+def list_orders(status: str | None = None,
+                symbol: str | None = None) -> list[dict]:
+    """GET /api/v1/orders."""
+    params: dict[str, Any] = {}
+    if status: params["status"] = status
+    if symbol: params["symbol"] = symbol
+    r = requests.get(f"{BASE}/api/v1/orders",
+                     headers=_headers(), params=params, timeout=10)
+    r.raise_for_status()
+    return r.json()
+
+def cancel_orders(orders: list[dict]) -> list[dict]:
+    """POST /api/v1/orders/cancel."""
+    r = requests.post(f"{BASE}/api/v1/orders/cancel",
+                      headers=_headers(),
+                      data=json.dumps({"orders": orders}),
+                      timeout=10)
+    r.raise_for_status()
+    return r.json()
+
+def cancel_all(symbol: str | None = None) -> dict:
+    """POST /api/v1/orders/cancel-all."""
+    params: dict[str, Any] = {}
+    if symbol: params["symbol"] = symbol
+    r = requests.post(f"{BASE}/api/v1/orders/cancel-all",
+                      headers=_headers(), params=params, timeout=10)
+    r.raise_for_status()
+    return r.json()
+```
+
+### Example payloads
+
+Plain limit buy:
+
+```python
+results = place_orders([{
+    "symbol": "BTC",
+    "side": "buy",
+    "order_type": "limit",
+    "size": "0.1",
+    "price": "50000",
+    "time_in_force": "gtc",
+}])
+```
+
+Market order:
+
+```python
+results = place_orders([{
+    "symbol": "ETH",
+    "side": "buy",
+    "order_type": "market",
+    "size": "0.5",
+}])
+```
+
+Limit entry with one take-profit and one stop-loss:
+
+```python
+results = place_orders([{
+    "symbol": "BTC",
+    "side": "buy",
+    "order_type": "limit",
+    "size": "0.1",
+    "price": "50000",
+    "time_in_force": "gtc",
+    "take_profits": [{
+        "trigger_price": "55000",
+        "limit_price": "55100",   # if omitted, treated as market-on-trigger
+    }],
+    "stop_losses": [{
+        "trigger_price": "48000",
+        # size omitted -> inherits the entry size
+    }],
+}])
+# `results` has three entries: the entry, the TP, the SL. All three
+# share the same `group_id`.
+```
+
+Batch of two independent orders:
+
+```python
+results = place_orders([
+    {"symbol": "BTC", "side": "buy",  "order_type": "limit", "size": "0.1", "price": "50000"},
+    {"symbol": "ETH", "side": "sell", "order_type": "limit", "size": "1.0", "price": "3500"},
+])
+```
+
+Cancel by `oid` (look up the `oid` from `list_orders` first):
+
+```python
+open_orders = list_orders(status="open", symbol="BTC")
+to_cancel = [{"symbol": o["symbol"], "oid": int(o["exchange_oid"])}
+             for o in open_orders if o["exchange_oid"]]
+outcomes = cancel_orders(to_cancel)
+```
+
+### Error handling
+
+- `201 Created` on a successful `place_orders` call. Per-leg errors
+  appear in each result's `error` field — the request itself does not
+  fail unless the request body is invalid.
+- `422 Unprocessable Entity` on a bad body (empty orders, bad side,
+  limit without price, etc.) — surface the `error` string to the model
+  so it can fix and retry.
+- `401 Unauthorized` on a bad or missing API key.
+- `5xx` for transient server errors — retry with backoff.
+
+### Where this fits in the `trading-workflow` skill
+
+After `analyze_market` and `read_memory` and once the model decides
+to trade:
+
+1. Optionally call `write_memory` first to record the thesis.
+2. Call `place_orders` with the new memory record id in
+   `memory_record_ids` so the order is linked to its justification.
+3. On a non-`resting`/`filled` status, optionally call `cancel_orders`
+   by `exchange_oid` to flatten the position.
+4. Call `write_memory` again with the post-trade outcome (entry price,
+   status, group id).
+
+Always prefer `cancel_orders` to manual retries when a leg is
+rejected; the gateway records the per-leg error in `order_events` and
+is idempotent.
 
 ## Hermes Profile Management Contracts
 
@@ -375,7 +631,7 @@ Not required for v1.
 1. How will the plugin be installed into Hermes from this repo? (manual copy, git tap, future API, etc.)
 2. Which exact Hyperliquid Python SDK package and version should `requirements.txt` pin?
 3. Which TA libraries belong in the plugin? (`pandas`, `numpy`, `ta-lib`, lightweight pure-Python alternatives?)
-4. What is the exact `place_order` payload shape and response contract?
+4. What is the exact `place_order` payload shape and response contract? *(Answered: see the `place_order` section above and the Python skill section.)*
 5. Should `get_account_status` cache results, or call Hyperliquid fresh every time?
 6. Should the plugin provide slash commands like `/vibetrading status` or `/vibetrading balance`?
 7. How should the model discover which timeframes and instruments are valid?

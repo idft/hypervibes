@@ -283,7 +283,12 @@ impl SparklineView {
     ///   small vertical padding, inverted for SVG (y grows downward).
     ///   The change cell is `last - first` formatted via
     ///   [`format_money_cell`].
-    pub fn from_series(label: &'static str, points: &[BalancePoint], width: u32, height: u32) -> Self {
+    pub fn from_series(
+        label: &'static str,
+        points: &[BalancePoint],
+        width: u32,
+        height: u32,
+    ) -> Self {
         if points.is_empty() {
             return Self {
                 label,
@@ -845,7 +850,6 @@ mod tests {
         assert!(html.contains("Total balance"));
         assert!(html.contains("232.6800"));
         assert!(html.contains("USDC"));
-
     }
 
     #[test]
@@ -1249,7 +1253,10 @@ mod tests {
     }
 
     fn bp(at: DateTime<Utc>, balance: Decimal) -> BalancePoint {
-        BalancePoint { bucket: at, balance }
+        BalancePoint {
+            bucket: at,
+            balance,
+        }
     }
 
     #[test]

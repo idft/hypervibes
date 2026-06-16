@@ -38,10 +38,18 @@ async fn main() -> Result<()> {
 
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
     let live_accounts = Arc::new(LiveAccountStore::new());
+    let encryption_key = agents::crypto::EncryptionKey::new(
+        config.agents_encryption_key_id.clone(),
+        config.agents_encryption_key,
+    );
 
     println!("Starting agent orchestrator");
-    let orchestrator =
-        agents::AgentOrchestrator::new(pool.clone(), shutdown_rx, Arc::clone(&live_accounts));
+    let orchestrator = agents::AgentOrchestrator::new(
+        pool.clone(),
+        shutdown_rx,
+        Arc::clone(&live_accounts),
+        encryption_key.clone(),
+    );
     let mut orchestrator_handle = tokio::spawn(async move {
         if let Err(e) = orchestrator.run().await {
             eprintln!("orchestrator exited with error: {e}");
@@ -49,10 +57,6 @@ async fn main() -> Result<()> {
     });
 
     println!("Listening on http://{}", config.bind_addr);
-    let encryption_key = agents::crypto::EncryptionKey::new(
-        config.agents_encryption_key_id.clone(),
-        config.agents_encryption_key,
-    );
 
     let server_future = web::serve(
         &config.bind_addr,

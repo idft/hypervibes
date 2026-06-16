@@ -5,6 +5,10 @@ use tokio::{sync::watch, task::JoinHandle};
 use tracing::{error, info, warn};
 
 use crate::{
+    agents::{
+        crypto::{EncryptionKey, decrypt},
+        store::get_agent_private_key_ciphertext,
+    },
     db::DbPool,
     hyperliquid::{
         account_sync::{
@@ -15,12 +19,17 @@ use crate::{
         instruments::{load_instruments, upsert_instruments},
         live_state::LiveAccountStore,
         live_ws::{LiveWsOptions, run_account_live_ws},
+        orders::{
+            gateway::HyperliquidExchange,
+            reconcile::{RealExchangeReader, run_reconcile_loop},
+        },
         raw_http::{RawHttpConfig, RawHyperliquidHttpClient},
     },
 };
 
 const REGISTRY_REFRESH_INTERVAL: Duration = Duration::from_secs(30);
 const INSTRUMENT_LOAD_RETRY_INTERVAL: Duration = Duration::from_secs(30);
+const ORDER_RECONCILE_INTERVAL: Duration = Duration::from_secs(30);
 const DEFAULT_OVERLAP_MS: u64 = 300_000;
 
 #[derive(Debug, Clone)]
@@ -45,6 +54,7 @@ pub struct AgentOrchestrator {
     tasks: HashMap<String, AgentTaskHandle>,
     lookup: Arc<InstrumentLookupMap>,
     live_accounts: Arc<LiveAccountStore>,
+    encryption_key: EncryptionKey,
 }
 
 impl AgentOrchestrator {
@@ -52,6 +62,7 @@ impl AgentOrchestrator {
         pool: DbPool,
         shutdown_rx: watch::Receiver<bool>,
         live_accounts: Arc<LiveAccountStore>,
+        encryption_key: EncryptionKey,
     ) -> Self {
         Self {
             pool,
@@ -59,6 +70,7 @@ impl AgentOrchestrator {
             tasks: HashMap::new(),
             lookup: Arc::new(HashMap::new()),
             live_accounts,
+            encryption_key,
         }
     }
 
@@ -132,6 +144,7 @@ impl AgentOrchestrator {
                     self.shutdown_rx.clone(),
                     Arc::clone(&self.lookup),
                     Arc::clone(&self.live_accounts),
+                    self.encryption_key.clone(),
                 );
                 self.tasks.insert(key, handle);
             }
@@ -151,13 +164,22 @@ fn spawn_agent_task(
     shutdown_rx: watch::Receiver<bool>,
     lookup: Arc<InstrumentLookupMap>,
     live_accounts: Arc<LiveAccountStore>,
+    encryption_key: EncryptionKey,
 ) -> (String, AgentTaskHandle) {
     let wallet_address = agent.wallet_address.clone();
     let environment = agent.environment.clone();
     let agent_key = agent.agent_key.clone();
 
     let task = tokio::spawn(async move {
-        run_agent_task(pool, agent, shutdown_rx, lookup, live_accounts).await;
+        run_agent_task(
+            pool,
+            agent,
+            shutdown_rx,
+            lookup,
+            live_accounts,
+            encryption_key,
+        )
+        .await;
     });
 
     (
@@ -176,6 +198,7 @@ async fn run_agent_task(
     shutdown_rx: watch::Receiver<bool>,
     lookup: Arc<InstrumentLookupMap>,
     live_accounts: Arc<LiveAccountStore>,
+    encryption_key: EncryptionKey,
 ) {
     let environment = match agent.environment.parse::<HyperliquidEnvironment>() {
         Ok(env) => env,
@@ -199,6 +222,28 @@ async fn run_agent_task(
         environment,
         account_address: agent.wallet_address.clone(),
     }));
+
+    let reconcile_handle = match build_order_reconcile_clients(&pool, &agent, &encryption_key).await
+    {
+        Ok((reader, exchange)) => Some(tokio::spawn(run_reconcile_loop(
+            pool.clone(),
+            reader,
+            exchange,
+            agent.wallet_address.clone(),
+            environment.as_journal_str().to_string(),
+            shutdown_rx.clone(),
+            ORDER_RECONCILE_INTERVAL,
+        ))),
+        Err(e) => {
+            error!(
+                agent_key = %agent.agent_key,
+                wallet_address = %agent.wallet_address,
+                error = ?e,
+                "order reconcile loop disabled for agent"
+            );
+            None
+        }
+    };
 
     info!(
         agent_key = %agent.agent_key,
@@ -269,7 +314,49 @@ async fn run_agent_task(
         );
     }
 
+    if let Some(handle) = reconcile_handle {
+        handle.abort();
+    }
+
     info!(agent_key = %agent.agent_key, "agent live loop stopped");
+}
+
+async fn build_order_reconcile_clients(
+    pool: &DbPool,
+    agent: &EnabledAgent,
+    encryption_key: &EncryptionKey,
+) -> Result<(
+    Arc<dyn crate::hyperliquid::orders::reconcile::ExchangeReader>,
+    Arc<dyn crate::hyperliquid::orders::gateway::ExchangeClient>,
+)> {
+    let (ciphertext, key_id) = get_agent_private_key_ciphertext(pool, &agent.agent_key)
+        .await?
+        .with_context(|| format!("agent '{}' not found", agent.agent_key))?;
+
+    if encryption_key.key_id != key_id {
+        anyhow::bail!(
+            "agent private key was encrypted with key_id '{key_id}' but server is using '{}'",
+            encryption_key.key_id
+        );
+    }
+
+    let private_key = decrypt(encryption_key, &ciphertext).with_context(|| {
+        format!(
+            "failed to decrypt private key for agent '{}'",
+            agent.agent_key
+        )
+    })?;
+    let signer: hypersdk::hypercore::PrivateKeySigner = private_key
+        .parse()
+        .with_context(|| format!("invalid private key for agent '{}'", agent.agent_key))?;
+
+    Ok((
+        Arc::new(RealExchangeReader::new(hypersdk::hypercore::mainnet())),
+        Arc::new(HyperliquidExchange::new(
+            signer,
+            hypersdk::hypercore::mainnet(),
+        )),
+    ))
 }
 
 async fn load_instruments_with_retry(

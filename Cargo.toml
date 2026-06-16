@@ -34,3 +34,4 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 [dev-dependencies]
 pglite-oxide = "0.5"
 http-body-util = "0.1"
+rust_decimal_macros = "1"

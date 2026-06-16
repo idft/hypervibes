@@ -6,6 +6,7 @@ pub mod live_convert;
 pub mod live_state;
 pub mod live_ws;
 pub mod normalize;
+pub mod orders;
 pub mod polling;
 pub mod queries;
 pub mod raw_http;

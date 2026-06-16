@@ -274,7 +274,10 @@ mod tests {
     #[tokio::test]
     async fn running_balance_accumulates_in_event_time_order() {
         let pool = test_db::pool().await;
-        let suffix = format!("rb-{}", chrono::Utc::now().timestamp_nanos_opt().unwrap_or(0));
+        let suffix = format!(
+            "rb-{}",
+            chrono::Utc::now().timestamp_nanos_opt().unwrap_or(0)
+        );
         let account = format!("0x{suffix}");
         let _ = seed_instrument(&pool, &suffix).await;
 
@@ -283,9 +286,30 @@ mod tests {
         let t0 = Utc::now() - Duration::hours(3);
         let t1 = Utc::now() - Duration::hours(2);
         let t2 = Utc::now() - Duration::hours(1);
-        seed_ledger_event(&pool, &format!("{suffix}-0"), &account, t0, Decimal::new(100, 0)).await;
-        seed_ledger_event(&pool, &format!("{suffix}-1"), &account, t1, Decimal::new(-25, 0)).await;
-        seed_ledger_event(&pool, &format!("{suffix}-2"), &account, t2, Decimal::new(75, 1)).await;
+        seed_ledger_event(
+            &pool,
+            &format!("{suffix}-0"),
+            &account,
+            t0,
+            Decimal::new(100, 0),
+        )
+        .await;
+        seed_ledger_event(
+            &pool,
+            &format!("{suffix}-1"),
+            &account,
+            t1,
+            Decimal::new(-25, 0),
+        )
+        .await;
+        seed_ledger_event(
+            &pool,
+            &format!("{suffix}-2"),
+            &account,
+            t2,
+            Decimal::new(75, 1),
+        )
+        .await;
 
         // Pass a high limit so all three rows are returned.
         let rows = list_account_transactions(&pool, &account, "live", 100)
@@ -338,26 +362,14 @@ mod tests {
             .enumerate()
         {
             let ts = base + Duration::hours(i as i64 * 2);
-            seed_ledger_event(
-                &pool,
-                &format!("{suffix}-win-{i}"),
-                &account,
-                ts,
-                delta,
-            )
-            .await;
+            seed_ledger_event(&pool, &format!("{suffix}-win-{i}"), &account, ts, delta).await;
         }
 
         let since = truncate_to_micros(Utc::now() - Duration::hours(24));
-        let series = fetch_balance_series(
-            &pool,
-            &account,
-            "live",
-            since,
-            BalanceSeriesBucket::Hour,
-        )
-        .await
-        .expect("fetch hourly series");
+        let series =
+            fetch_balance_series(&pool, &account, "live", since, BalanceSeriesBucket::Hour)
+                .await
+                .expect("fetch hourly series");
 
         // First point is the anchor at the `since` boundary.
         assert_eq!(series.len(), 4);

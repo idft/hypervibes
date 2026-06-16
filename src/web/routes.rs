@@ -529,10 +529,7 @@ mod tests {
     use http_body_util::BodyExt as _;
     use tower::util::ServiceExt;
 
-    use crate::{
-        agents::crypto::EncryptionKey,
-        test_db,
-    };
+    use crate::{agents::crypto::EncryptionKey, test_db};
 
     async fn test_state() -> Arc<AppState> {
         let pool = test_db::pool().await;
@@ -557,8 +554,7 @@ mod tests {
     async fn read_sse_chunk(body: Body, timeout_ms: u64) -> String {
         let mut body = body;
         let mut buf = Vec::<u8>::new();
-        let deadline = tokio::time::Instant::now()
-            + tokio::time::Duration::from_millis(timeout_ms);
+        let deadline = tokio::time::Instant::now() + tokio::time::Duration::from_millis(timeout_ms);
 
         loop {
             let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
