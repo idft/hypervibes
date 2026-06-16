@@ -12,10 +12,9 @@ use crate::{
             sync_historical_orders_once,
         },
         config::{AccountSyncConfig, HyperliquidEnvironment},
-        instruments::load_instruments,
+        instruments::{load_instruments, upsert_instruments},
         live_state::LiveAccountStore,
         live_ws::{LiveWsOptions, run_account_live_ws},
-        normalize::InstrumentRow,
         raw_http::{RawHttpConfig, RawHyperliquidHttpClient},
     },
 };
@@ -300,38 +299,6 @@ async fn load_instruments_with_retry(
             }
         }
     }
-}
-
-async fn upsert_instruments(pool: &DbPool, instruments: &[InstrumentRow]) -> Result<()> {
-    for instrument in instruments {
-        sqlx::query(
-            "INSERT INTO hyperliquid.instruments (instrument_id, symbol, raw_symbol, market_type, base_asset, quote_asset, settlement_asset, asset_index, price_decimals, size_decimals, tick_size, lot_size, is_hip3, active, created_at, updated_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16) ON CONFLICT (instrument_id) DO UPDATE SET symbol = EXCLUDED.symbol, raw_symbol = EXCLUDED.raw_symbol, market_type = EXCLUDED.market_type, base_asset = EXCLUDED.base_asset, quote_asset = EXCLUDED.quote_asset, settlement_asset = EXCLUDED.settlement_asset, asset_index = EXCLUDED.asset_index, price_decimals = EXCLUDED.price_decimals, size_decimals = EXCLUDED.size_decimals, tick_size = EXCLUDED.tick_size, lot_size = EXCLUDED.lot_size, is_hip3 = EXCLUDED.is_hip3, active = EXCLUDED.active, updated_at = EXCLUDED.updated_at",
-        )
-        .bind(&instrument.instrument_id)
-        .bind(&instrument.symbol)
-        .bind(&instrument.raw_symbol)
-        .bind(match instrument.market_type {
-            crate::hyperliquid::normalize::MarketType::Perp => "perp",
-            crate::hyperliquid::normalize::MarketType::Spot => "spot",
-            crate::hyperliquid::normalize::MarketType::Outcome => "outcome",
-        })
-        .bind(&instrument.base_asset)
-        .bind(&instrument.quote_asset)
-        .bind(&instrument.settlement_asset)
-        .bind(instrument.asset_index)
-        .bind(instrument.price_decimals)
-        .bind(instrument.size_decimals)
-        .bind(instrument.tick_size)
-        .bind(instrument.lot_size)
-        .bind(instrument.is_hip3)
-        .bind(instrument.active)
-        .bind(instrument.created_at)
-        .bind(instrument.updated_at)
-        .execute(pool)
-        .await?;
-    }
-
-    Ok(())
 }
 
 async fn load_enabled_agents(pool: &DbPool) -> Result<Vec<EnabledAgent>> {

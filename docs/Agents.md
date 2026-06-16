@@ -64,7 +64,7 @@ Current design assumptions:
 - each agent represents a `Profile` in a Hermes agent instance
 - all agents have the same installed skill surface for interacting with this app
 - one agent may trade multiple instruments
-- initial testing will likely still use one primary instrument such as `BTC-USD-PERP.HYPERLIQUID`
+- initial testing will likely still use one primary instrument such as `BTC`
 - agent registry should support multiple agents from the start
 - the agent should know its account address, but should not directly hold the Hyperliquid private key
 
@@ -84,7 +84,7 @@ Not:
 
 An agent may still have a narrow allowed instrument set.
 
-For early testing, that set may contain only one market such as `BTC-USD-PERP.HYPERLIQUID`.
+For early testing, that set may contain only one market such as `BTC`.
 
 But the registry should treat the account as the stronger ownership boundary.
 
@@ -212,7 +212,7 @@ Current direction has shifted:
 
 - one agent per Hyperliquid account
 - that agent may trade multiple instruments
-- for early testing, the allowed set may still contain only one instrument such as `BTC-USD-PERP.HYPERLIQUID`
+- for early testing, the allowed set may still contain only one instrument such as `BTC`
 
 This is a better abstraction because the execution account is the stronger ownership boundary than a single instrument.
 

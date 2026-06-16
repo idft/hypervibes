@@ -34,7 +34,7 @@ The current design direction is:
 - one execution account per agent
 - startup reconciliation before live operation begins
 - app-owned execution gateway for future order submission
-- NautilusTrader reused as a Hyperliquid library, not as the primary runtime kernel
+- `hypersdk` reused as the sole Hyperliquid library
 - historical bootstrap plus periodic polling as the primary correctness path
 
 This should be treated as a distinct subsystem alongside:
@@ -42,34 +42,29 @@ This should be treated as a distinct subsystem alongside:
 - the `memory` subsystem
 - the web UI
 
-## NautilusTrader Usage Direction
+## `hypersdk` Integration Direction
 
-The current direction is **not** to build this subsystem around NT strategies, actors, or a full NT `LiveNode` runtime.
+The current direction is to use the `hypersdk` Rust crate as the sole Hyperliquid SDK.
 
-Instead, the Hyperliquid subsystem should:
+The Hyperliquid subsystem should:
 
-- use NautilusTrader's Hyperliquid adapter as a venue library only
+- use `hypersdk` for instrument loading, live account state, the live WebSocket, and (later) signing/order submission
 - keep execution and journaling logic owned by the app itself
-- avoid coupling the journal to NT Redis cache as a primary source of truth
+- own a thin raw HTTP `/info` client for the account-history endpoints `hypersdk` does not expose (`userFillsByTime`, `userFunding`, `nonUserFundingLedgerUpdates`, `historicalOrders`)
 
-This matters because the long-term execution model is app/agent driven, not NT strategy driven.
+This matters because the long-term execution model is app/agent driven.
 
-### Verified NT capability boundary (important)
+### `hypersdk` surface used today
 
-The NT `develop` Hyperliquid adapter source was reviewed directly. The following is what NT actually provides versus what the journal needs:
-
-- **Instrument normalization: fully supported.** `request_instruments()` returns normalized definitions (`symbol`, `raw_symbol`, `base`, `quote`, `settlement`, `market_type`, `asset_index`, `price_decimals`, `size_decimals`, `tick_size`, `lot_size`, `is_hip3`, `active`). The journal uses NT for this.
-- **Order submission + EIP-712 signing: supported and tested.** Reserved for the future execution gateway, not used by the journal.
-- **Account-history `/info` endpoints: not callable through NT.** `userFillsByTime`, `userFunding`, `nonUserFundingUpdates`, and `historicalOrders` exist only as request-type enum strings; there are no typed params or constructors, and the raw request helper takes a typed request. They cannot be reached without forking NT.
-- **WebSocket funding/ledger: dropped.** The handler ignores funding events and does not normalize `UserFundings` / `UserNonFundingLedgerUpdates`. The WS client emits NT domain types (`FillReport`, `OrderStatusReport`), not raw exchange JSON.
+- Instruments: `hypercore::mainnet().perps()` (perp markets on the default DEX) is loaded at startup and mapped into `hyperliquid.instruments`.
+- Live WebSocket: `hypercore::mainnet_ws()` driven by `hyperliquid::live_ws`, converted through `live_convert` into the app's domain types and journal rows.
+- Signing/order submission: reserved for the future execution gateway.
 
 ### Resulting v1 decision
 
-- NT is used in the journal for **instrument sync only**.
+- `hypersdk` is used in the journal for **instrument sync only** today.
 - All account history is fetched through an **app-owned raw HTTP `/info` client** (`raw_http`). The `/info` endpoints are public and require no signing.
-- The websocket is **deferred** out of journal v1. HTTP polling is the canonical correctness path.
-- Keep `nautilus_*` imports confined to the instrument-sync module so NT types do not leak into the journal.
-- NT is tracked on `branch = "develop"`; this is an accepted moving-target risk.
+- HTTP polling is the canonical correctness path; the live WebSocket is a fast-path for live fills/order updates.
 
 ## Scope
 
@@ -194,7 +189,7 @@ Endpoints for V1:
 Notes:
 
 - `/info` is a public, unauthenticated `POST`; the history endpoints require no signing
-- the calls may reuse `nautilus_network::http::HttpClient` (rate-limit aware) or `reqwest`
+- the calls use `reqwest` (or `hypersdk`'s client)
 - `userFillsByTime` has retention limits
 - the time-range endpoints support windowed pagination
 - the module relies on continuous polling plus overlap-safe repair rather than deep API recovery
@@ -456,10 +451,9 @@ Suggested fields:
 
 - `instrument_id`
 
-The `instrument_id` should be the NautilusTrader instrument identifier (e.g. `BTC-USD-PERP.HYPERLIQUID`).
+The `instrument_id` is the Hyperliquid coin name (e.g. `BTC`).
 
-- `symbol`
-- `raw_symbol`
+- `name`
 - `market_type`
 - `base_asset`
 - `quote_asset`
@@ -467,13 +461,12 @@ The `instrument_id` should be the NautilusTrader instrument identifier (e.g. `BT
 - `asset_index`
 - `price_decimals`
 - `size_decimals`
-- `tick_size`
 - `lot_size`
+- `max_leverage`
+- `is_hip3`
 - `active`
 - `created_at`
 - `updated_at`
-
-This should stay intentionally smaller than NT's generic instrument schema.
 
 ### `hyperliquid.sync_state`
 

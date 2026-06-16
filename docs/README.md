@@ -18,7 +18,7 @@ The current V2 direction is:
 - a dedicated `hyperliquid` schema for account activity and reconciliation
 - a web UI plus internal APIs
 - supervised internal background tasks for sync, polling, and analysis work
-- NautilusTrader reused as a Hyperliquid library, not as the primary app runtime
+- `hypersdk` reused as the sole Hyperliquid library, not as the primary app runtime
 
 This app should provide:
 
@@ -47,7 +47,7 @@ This app should provide:
 
 ## Most minimal possible system
 
-* NautilusTrader as a low-level Hyperliquid library only
+* `hypersdk` as the sole Hyperliquid library
 * API / Webserver
 * Postgres in a container
 * Hermes in a container
@@ -101,8 +101,8 @@ Current direction:
 * Historical and ongoing HTTP `/info` polling for canonical account-history sync
 * Websocket live fill feed deferred to a later step (polling is the v1 correctness path)
 * Durable local account activity journal for fills, funding, fees, deposits, withdrawals, transfers, and historical orders
-* Instrument reference sync for symbol normalization (via NautilusTrader)
-* Uses NautilusTrader as a Hyperliquid venue SDK (instrument sync now; signing/order submission later), not NT strategies or `LiveNode`; account-history endpoints NT does not expose are fetched via an app-owned raw HTTP `/info` client
+* Instrument reference sync for symbol normalization (via `hypersdk`)
+* Uses `hypersdk` as the sole Hyperliquid venue SDK (instrument sync now; signing/order submission later); account-history endpoints `hypersdk` does not expose are fetched via an app-owned raw HTTP `/info` client
 * Agent event webhook fanout can be added later
 
 ## Hermes Agent integration

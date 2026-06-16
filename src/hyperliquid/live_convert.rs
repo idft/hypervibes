@@ -312,7 +312,6 @@ mod tests {
     };
     use rust_decimal::Decimal;
     use std::collections::HashMap;
-    use std::str::FromStr;
 
     fn d(s: &str) -> Decimal {
         s.parse().expect("decimal")
@@ -556,9 +555,8 @@ mod tests {
         assert_eq!(tif_to_str(&TimeInForce::Ioc), "Ioc");
         assert_eq!(tif_to_str(&TimeInForce::Alo), "Alo");
 
-        let k = AccountKey::new("0xaddr", "sandbox");
+        let k = AccountKey::new("0xaddr", "live");
         assert_eq!(k.account_address, "0xaddr");
-        assert_eq!(k.environment, "sandbox");
-        let _ = crate::hyperliquid::config::HyperliquidEnvironment::from_str("sandbox").unwrap();
+        assert_eq!(k.environment, "live");
     }
 }

@@ -30,7 +30,7 @@ The system currently seems to want:
 - an internal execution gateway for private Hyperliquid order flow
 - strong Hyperliquid integration
 - app-driven execution, not NT strategies
-- NautilusTrader reused as a Hyperliquid library, not assumed as the primary runtime kernel
+- Hyperliquid integration via the `hypersdk` Rust crate
 
 The main unresolved implementation choice is language and framework.
 
@@ -89,30 +89,23 @@ Suggested stack:
 
 This may be the cleaner default if starting fresh with a Rust service architecture.
 
-## NautilusTrader Usage Direction
+## Hyperliquid Integration (`hypersdk`)
 
 Current direction:
 
-- use NautilusTrader as a Hyperliquid venue library only, for instrument normalization and (later) order submission + signing
-- do not plan around NT strategies or actors
-- do not make NT `LiveNode` the primary application runtime in the first versions
-- keep execution app-owned through an internal execution gateway
+- use the `hypersdk` Rust crate as the sole Hyperliquid SDK
+- `hypersdk` covers instrument loading, live account state, the live WebSocket, and signing/order submission
+- the app owns the account-history `/info` HTTP client for fills, funding, ledger, and historical orders
+- execution is app-driven through an internal execution gateway
 
-Verified capability boundary (reviewed against NT `develop` source):
-
-- instrument normalization is fully supported and is what the journal uses NT for
-- order submission and EIP-712 signing are supported and tested, reserved for the future execution gateway
-- the account-history `/info` endpoints (`userFillsByTime`, `userFunding`, `nonUserFundingUpdates`, `historicalOrders`) are not callable through NT, so the journal owns a small raw HTTP `/info` client
-- the NT websocket does not normalize funding/ledger and emits NT domain types, so it is not a journal correctness source; the websocket is deferred out of journal v1
-
-This means the app should own:
+The app owns:
 
 - account-history journaling via an app-owned raw HTTP `/info` client
 - execution intent tracking (later)
-- order submission workflow (later, using NT signing/submission)
+- order submission workflow (later, using `hypersdk` signing/submission)
 - reconciliation logic
 
-NT remains helpful as a lower-level building block, not as the main orchestration layer.
+`hypersdk` is the integration surface; the app remains the orchestration layer.
 
 ## Rust UI Direction
 
@@ -278,10 +271,10 @@ This does not rule Rust out, but it should be treated as a real tradeoff.
 
 Refined direction:
 
-- prefer using NautilusTrader's maintained Hyperliquid adapter as the Rust integration surface
-- prefer NT low-level clients over building a fresh exchange client from scratch
-- avoid coupling the whole app to NT runtime concepts unless that later proves necessary
-- decision (verified against NT source): keep NT as a venue SDK; use it for instrument sync now and order submission/signing later; own a small raw HTTP `/info` client for account-history endpoints NT does not expose
+- prefer using the `hypersdk` Rust crate as the sole Hyperliquid integration surface
+- prefer `hypersdk` clients over building a fresh exchange client from scratch
+- avoid coupling the whole app to other runtime concepts unless that later proves necessary
+- decision: use `hypersdk` for instruments, live account state, the live WebSocket, and signing/order submission; own a small raw HTTP `/info` client for the account-history endpoints it does not expose
 
 ## Practical Rust Tradeoffs
 
@@ -353,7 +346,7 @@ The bigger question is whether the Hyperliquid integration risk is acceptable in
 2. Between `actix-web` and `axum`, which model feels more natural for the expected web UI and internal API?
 3. Should the web app and workers be separate binaries, or one binary with different runtime modes?
 4. How much internal admin tooling is needed early on?
-5. ~~Which Rust Hyperliquid SDK is mature enough to trust for private trading actions?~~ Resolved: use NautilusTrader as the venue SDK (instrument sync now, signing/order submission later); own a thin raw HTTP `/info` client for the account-history endpoints NT does not expose.
+5. ~~Which Rust Hyperliquid SDK is mature enough to trust for private trading actions?~~ Resolved: use `hypersdk` as the venue SDK (instruments, live state, WS, signing/order submission); own a thin raw HTTP `/info` client for the account-history endpoints it does not expose.
 
 ## Summary
 

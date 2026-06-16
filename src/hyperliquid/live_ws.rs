@@ -2,7 +2,7 @@
 //!
 //! This module:
 //!
-//! - creates a mainnet or testnet `hypersdk` WebSocket based on the agent's
+//! - creates a mainnet `hypersdk` WebSocket based on the agent's
 //!   [`HyperliquidEnvironment`];
 //! - subscribes to the account-state and transaction channels needed for the
 //!   orchestrator's live view;
@@ -187,7 +187,6 @@ pub async fn run_account_live_ws(
 fn open_connection(environment: HyperliquidEnvironment) -> hws::Connection {
     match environment {
         HyperliquidEnvironment::Mainnet => hypercore::mainnet_ws(),
-        HyperliquidEnvironment::Testnet => hypercore::testnet_ws(),
     }
 }
 
@@ -430,12 +429,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn open_connection_routes_to_mainnet_and_testnet() {
+    async fn open_connection_routes_to_mainnet() {
         // The constructors don't open a connection until first polled; we
         // just need to make sure the routing function returns something for
-        // each environment.
+        // the supported environment.
         let _ = open_connection(HyperliquidEnvironment::Mainnet);
-        let _ = open_connection(HyperliquidEnvironment::Testnet);
     }
 
     #[test]

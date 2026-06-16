@@ -10,13 +10,13 @@ CREATE TABLE IF NOT EXISTS hyperliquid.sync_state (
     status TEXT NOT NULL,
     metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
     PRIMARY KEY (account_address, environment, stream_name),
-    CHECK (environment IN ('live', 'sandbox'))
+    -- testnet/sandbox intentionally unsupported for now; widen this set to re-add.
+    CHECK (environment IN ('live'))
 );
 
 CREATE TABLE IF NOT EXISTS hyperliquid.instruments (
     instrument_id TEXT PRIMARY KEY,
-    symbol TEXT NOT NULL,
-    raw_symbol TEXT NOT NULL,
+    name TEXT NOT NULL,
     market_type TEXT NOT NULL,
     base_asset TEXT NOT NULL,
     quote_asset TEXT NOT NULL,
@@ -24,16 +24,15 @@ CREATE TABLE IF NOT EXISTS hyperliquid.instruments (
     asset_index INTEGER,
     price_decimals INTEGER NOT NULL,
     size_decimals INTEGER NOT NULL,
-    tick_size NUMERIC(38, 18) NOT NULL,
     lot_size NUMERIC(38, 18) NOT NULL,
+    max_leverage INTEGER,
     is_hip3 BOOLEAN NOT NULL DEFAULT FALSE,
     active BOOLEAN NOT NULL,
     created_at TIMESTAMPTZ NOT NULL,
     updated_at TIMESTAMPTZ NOT NULL
 );
 
-CREATE UNIQUE INDEX IF NOT EXISTS instruments_symbol_idx ON hyperliquid.instruments(symbol);
-CREATE UNIQUE INDEX IF NOT EXISTS instruments_raw_symbol_idx ON hyperliquid.instruments(raw_symbol);
+CREATE UNIQUE INDEX IF NOT EXISTS instruments_name_idx ON hyperliquid.instruments(name);
 CREATE INDEX IF NOT EXISTS instruments_market_type_idx ON hyperliquid.instruments(market_type);
 
 CREATE TABLE IF NOT EXISTS hyperliquid.trade_fills (
@@ -67,7 +66,7 @@ CREATE TABLE IF NOT EXISTS hyperliquid.trade_fills (
     inserted_at TIMESTAMPTZ NOT NULL,
     PRIMARY KEY (hash, trade_id),
     FOREIGN KEY (instrument_id) REFERENCES hyperliquid.instruments(instrument_id),
-    CHECK (environment IN ('live', 'sandbox'))
+    CHECK (environment IN ('live'))
 );
 
 CREATE INDEX IF NOT EXISTS trade_fills_account_event_time_idx ON hyperliquid.trade_fills(account_address, environment, event_time DESC);
@@ -96,7 +95,7 @@ CREATE TABLE IF NOT EXISTS hyperliquid.funding_events (
     inserted_at TIMESTAMPTZ NOT NULL,
     PRIMARY KEY (account_address, environment, instrument_id, event_time),
     FOREIGN KEY (instrument_id) REFERENCES hyperliquid.instruments(instrument_id),
-    CHECK (environment IN ('live', 'sandbox'))
+    CHECK (environment IN ('live'))
 );
 
 CREATE INDEX IF NOT EXISTS funding_events_account_event_time_idx ON hyperliquid.funding_events(account_address, environment, event_time DESC);
@@ -127,7 +126,7 @@ CREATE TABLE IF NOT EXISTS hyperliquid.ledger_events (
     ingest_source TEXT NOT NULL,
     inserted_at TIMESTAMPTZ NOT NULL,
     FOREIGN KEY (instrument_id) REFERENCES hyperliquid.instruments(instrument_id),
-    CHECK (environment IN ('live', 'sandbox'))
+    CHECK (environment IN ('live'))
 );
 
 CREATE INDEX IF NOT EXISTS ledger_events_account_event_time_idx ON hyperliquid.ledger_events(account_address, environment, event_time DESC);
@@ -157,7 +156,7 @@ CREATE TABLE IF NOT EXISTS hyperliquid.historical_orders (
     inserted_at TIMESTAMPTZ NOT NULL,
     PRIMARY KEY (account_address, environment, order_id),
     FOREIGN KEY (instrument_id) REFERENCES hyperliquid.instruments(instrument_id),
-    CHECK (environment IN ('live', 'sandbox'))
+    CHECK (environment IN ('live'))
 );
 
 CREATE INDEX IF NOT EXISTS historical_orders_account_event_time_idx ON hyperliquid.historical_orders(account_address, environment, event_time DESC);

@@ -13,9 +13,11 @@ pub enum MarketType {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct InstrumentRow {
+    /// Hyperliquid `coin` identifier and the journal join key.
+    /// Perps: "BTC". (Future) spot: "PURR/USDC" / "@1"; HIP-3: "xyz:XYZ100".
     pub instrument_id: String,
-    pub symbol: String,
-    pub raw_symbol: String,
+    /// Human/display name. Equal to `instrument_id` for now.
+    pub name: String,
     pub market_type: MarketType,
     pub base_asset: String,
     pub quote_asset: String,
@@ -23,8 +25,9 @@ pub struct InstrumentRow {
     pub asset_index: Option<i32>,
     pub price_decimals: i32,
     pub size_decimals: i32,
-    pub tick_size: Decimal,
     pub lot_size: Decimal,
+    /// Max leverage; `None` for markets without leverage (spot/outcome).
+    pub max_leverage: Option<i32>,
     pub is_hip3: bool,
     pub active: bool,
     pub created_at: DateTime<Utc>,

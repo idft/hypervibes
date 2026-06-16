@@ -116,7 +116,6 @@ impl RawHyperliquidHttpClient {
     fn base_info_url(&self) -> &'static str {
         match self.config.environment {
             HyperliquidEnvironment::Mainnet => MAINNET_INFO_URL,
-            HyperliquidEnvironment::Testnet => MAINNET_INFO_URL,
         }
     }
 }

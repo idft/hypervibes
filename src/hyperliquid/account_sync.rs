@@ -286,10 +286,10 @@ fn build_lookup(instruments: &[InstrumentRow]) -> InstrumentLookupMap {
     let mut lookup = HashMap::with_capacity(instruments.len());
     for instrument in instruments {
         lookup.insert(
-            instrument.raw_symbol.clone(),
+            instrument.instrument_id.clone(),
             (
                 instrument.instrument_id.clone(),
-                instrument.symbol.clone(),
+                instrument.name.clone(),
                 instrument.base_asset.clone(),
             ),
         );

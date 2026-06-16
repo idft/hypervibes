@@ -3,25 +3,27 @@ use std::{env, str::FromStr};
 use alloy::signers::local::PrivateKeySigner;
 use anyhow::{Context, Result, bail};
 
+/// Hyperliquid network environment.
+///
+/// Only `Mainnet` is supported today. Testnet support was intentionally
+/// removed (see plan: remove-nautilustrader-hypersdk-instruments.md). To
+/// re-add testnet later:
+///   1. Add a `Testnet` variant here.
+///   2. Add `"testnet"`/`"sandbox"` parse aliases in `FromStr`.
+///   3. Return a distinct journal string (e.g. `"sandbox"`) in `as_journal_str`
+///      and widen the DB CHECK constraints in migration 0001 accordingly.
+///   4. Branch on the variant in `raw_http.rs`, `live_ws.rs`, and
+///      `instruments.rs` to select the testnet client/URL.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum HyperliquidEnvironment {
     Mainnet,
-    Testnet,
 }
 
 impl HyperliquidEnvironment {
     pub fn as_journal_str(self) -> &'static str {
         match self {
             Self::Mainnet => "live",
-            Self::Testnet => "sandbox",
-        }
-    }
-
-    pub fn as_nt_environment(self) -> nautilus_hyperliquid::common::enums::HyperliquidEnvironment {
-        match self {
-            Self::Mainnet => nautilus_hyperliquid::common::enums::HyperliquidEnvironment::Mainnet,
-            Self::Testnet => nautilus_hyperliquid::common::enums::HyperliquidEnvironment::Mainnet,
         }
     }
 }
@@ -32,8 +34,7 @@ impl FromStr for HyperliquidEnvironment {
     fn from_str(value: &str) -> Result<Self, Self::Err> {
         match value.trim().to_ascii_lowercase().as_str() {
             "mainnet" | "live" => Ok(Self::Mainnet),
-            "testnet" | "sandbox" | "paper" => Ok(Self::Testnet),
-            other => bail!("unsupported HYPERLIQUID_ENVIRONMENT '{other}'"),
+            other => bail!("unsupported HYPERLIQUID_ENVIRONMENT '{other}' (only mainnet is supported)"),
         }
     }
 }
@@ -135,33 +136,15 @@ mod tests {
     }
 
     #[test]
-    fn environment_parsing_accepts_sandbox_and_testnet() {
-        assert_eq!(
-            HyperliquidEnvironment::from_str("sandbox").unwrap(),
-            HyperliquidEnvironment::Testnet
-        );
-        assert_eq!(
-            HyperliquidEnvironment::from_str("testnet").unwrap(),
-            HyperliquidEnvironment::Testnet
-        );
-        assert_eq!(
-            HyperliquidEnvironment::from_str("paper").unwrap(),
-            HyperliquidEnvironment::Testnet
-        );
+    fn environment_parsing_rejects_testnet() {
+        assert!(HyperliquidEnvironment::from_str("sandbox").is_err());
+        assert!(HyperliquidEnvironment::from_str("testnet").is_err());
+        assert!(HyperliquidEnvironment::from_str("paper").is_err());
     }
 
     #[test]
-    fn environment_journal_str_uses_live_and_sandbox() {
+    fn environment_journal_str_uses_live() {
         assert_eq!(HyperliquidEnvironment::Mainnet.as_journal_str(), "live");
-        assert_eq!(HyperliquidEnvironment::Testnet.as_journal_str(), "sandbox");
-    }
-
-    #[test]
-    fn sandbox_uses_mainnet_market_data_environment() {
-        assert_eq!(
-            HyperliquidEnvironment::Testnet.as_nt_environment(),
-            nautilus_hyperliquid::common::enums::HyperliquidEnvironment::Mainnet
-        );
     }
 
     #[test]
