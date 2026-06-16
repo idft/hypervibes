@@ -1,0 +1,15 @@
+{% for s in sparklines %}
+<div>
+    <div class="text-xs uppercase tracking-[0.16em] text-zinc-500">{{ s.label }}</div>
+    <div class="mt-1 flex items-center gap-3">
+        <span class="font-mono text-2xl font-semibold tabular-nums {{ s.change.color_class }}">{{ s.change.value }}</span>
+        {% if s.is_empty %}
+        <span class="text-xs italic text-zinc-600">—</span>
+        {% else %}
+        <svg class="h-8 min-w-0 flex-1 {{ s.change.color_class }}" viewBox="0 0 {{ s.width }} {{ s.height }}" preserveAspectRatio="none" role="img" aria-label="Cumulative net USDC flow over the {{ s.label }} window">
+            <polyline points="{{ s.polyline }}" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></polyline>
+        </svg>
+        {% endif %}
+    </div>
+</div>
+{% endfor %}

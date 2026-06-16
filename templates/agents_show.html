@@ -35,7 +35,10 @@
 
     <section class="mt-2 space-y-2" hx-ext="sse" sse-connect="/agents/{{ agent.agent_key }}/live/stream">
         <section class="rounded-2xl border border-zinc-800 bg-[#0d0d10] p-6">
-            <div sse-swap="balance">{{account_balance_html|safe}}</div>
+            <div class="grid grid-cols-1 gap-6 sm:grid-cols-3">
+                <div sse-swap="balance">{{account_balance_html|safe}}</div>
+                {{ sparklines_html|safe }}
+            </div>
             <dl class="mt-6 grid gap-4 border-t border-zinc-800 pt-6 sm:grid-cols-2">
                 <div>
                     <dt class="text-xs uppercase tracking-[0.16em] text-zinc-500">Wallet address</dt>
@@ -89,6 +92,7 @@
                             <th class="px-4 py-3 text-right font-medium">Fee USDC</th>
                             <th class="px-4 py-3 text-right font-medium">Realized PnL USDC</th>
                             <th class="px-4 py-3 text-right font-medium">USDC delta</th>
+                            <th class="px-4 py-3 text-right font-medium">Balance</th>
                         </tr>
                     </thead>
                     <tbody class="divide-y divide-zinc-800">
@@ -109,6 +113,7 @@
                             <td class="px-4 py-3 text-right align-top font-mono text-xs tabular-nums text-zinc-300">{{ tx.fee_usdc }}</td>
                             <td class="px-4 py-3 text-right align-top font-mono text-xs tabular-nums {{ tx.realized_pnl_usdc.color_class }}">{{ tx.realized_pnl_usdc.value }}</td>
                             <td class="px-4 py-3 text-right align-top font-mono text-xs tabular-nums {{ tx.usdc_delta.color_class }}">{{ tx.usdc_delta.value }}</td>
+                            <td class="px-4 py-3 text-right align-top font-mono text-xs tabular-nums {{ tx.running_balance.color_class }}">{{ tx.running_balance.value }}</td>
                         </tr>
                         {% endfor %}
                     </tbody>

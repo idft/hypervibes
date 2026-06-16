@@ -8,7 +8,7 @@ use crate::{
     agents::model::{AgentDetailRow, AgentListRow, CreateAgentForm},
     hyperliquid::{
         live_state::{AccountLiveState, LiveConnectionStatus, LiveOpenOrder, LivePosition},
-        queries::AccountTransactionRow,
+        queries::{AccountTransactionRow, BalancePoint},
         sync_state::SyncStateRow,
     },
 };
@@ -61,6 +61,29 @@ pub fn format_money_cell(amount: Option<Decimal>) -> MoneyCell {
     }
 }
 
+/// Like [`format_money_cell`] but prefixes positive values with `+`.
+/// Used for sparkline change amounts where the sign is part of the display.
+pub fn format_signed_money_cell(amount: Option<Decimal>) -> MoneyCell {
+    match amount {
+        None => dash_cell(),
+        Some(value) if value.is_zero() => dash_cell(),
+        Some(value) => {
+            let formatted = format!("{:.4}", value.abs());
+            if value.is_sign_negative() {
+                MoneyCell {
+                    value: format!("({formatted})"),
+                    color_class: "text-red-400",
+                }
+            } else {
+                MoneyCell {
+                    value: format!("+{formatted}"),
+                    color_class: "text-emerald-400",
+                }
+            }
+        }
+    }
+}
+
 fn dash_cell() -> MoneyCell {
     MoneyCell {
         value: "-".to_string(),
@@ -74,6 +97,7 @@ pub struct TransactionView {
     pub fee_usdc: String,
     pub realized_pnl_usdc: MoneyCell,
     pub usdc_delta: MoneyCell,
+    pub running_balance: MoneyCell,
 }
 
 impl TransactionView {
@@ -81,11 +105,13 @@ impl TransactionView {
         let fee_usdc = format_money_text(row.fee_usdc);
         let realized_pnl_usdc = format_money_cell(row.realized_pnl_usdc);
         let usdc_delta = format_money_cell(row.usdc_delta);
+        let running_balance = format_money_cell(row.running_balance);
         Self {
             row,
             fee_usdc,
             realized_pnl_usdc,
             usdc_delta,
+            running_balance,
         }
     }
 }
@@ -124,6 +150,7 @@ pub struct AgentsShowPageTemplate {
     pub account_balance_html: String,
     pub open_positions_html: String,
     pub open_orders_html: String,
+    pub sparklines_html: String,
 }
 
 #[derive(Template)]
@@ -225,6 +252,145 @@ pub struct AccountBalancePartialTemplate {
 impl AccountBalancePartialTemplate {
     pub fn render_view(view: AccountBalanceView) -> Result<String, askama::Error> {
         Self { view }.render()
+    }
+}
+
+/// View-model for a single server-rendered sparkline. The actual SVG is
+/// computed by [`SparklineView::from_series`] and stored as a
+/// pre-formatted `<polyline points="...">` attribute string so the
+/// template can drop it straight into the markup.
+#[derive(Debug, Clone)]
+#[allow(dead_code)]
+pub struct SparklineView {
+    pub label: &'static str,
+    pub polyline: String,
+    pub last_value: String,
+    pub change: MoneyCell,
+    pub is_empty: bool,
+    pub width: u32,
+    pub height: u32,
+}
+
+impl SparklineView {
+    /// Build a sparkline from a balance series. Pure function: no DB,
+    /// no I/O, easy to unit test.
+    ///
+    /// * `points.len() < 2` → empty sparkline (`is_empty = true`); if
+    ///   exactly one point is supplied its value is shown as
+    ///   `last_value` and the change cell is a dash.
+    /// * Otherwise the x-axis maps evenly across `0..width` and the
+    ///   y-axis is normalized against `min..max` of the balances with a
+    ///   small vertical padding, inverted for SVG (y grows downward).
+    ///   The change cell is `last - first` formatted via
+    ///   [`format_money_cell`].
+    pub fn from_series(label: &'static str, points: &[BalancePoint], width: u32, height: u32) -> Self {
+        if points.is_empty() {
+            return Self {
+                label,
+                polyline: String::new(),
+                last_value: "-".to_string(),
+                change: dash_cell(),
+                is_empty: true,
+                width,
+                height,
+            };
+        }
+
+        if points.len() == 1 {
+            return Self {
+                label,
+                polyline: String::new(),
+                last_value: format_money_text(Some(points[0].balance)),
+                change: dash_cell(),
+                is_empty: true,
+                width,
+                height,
+            };
+        }
+
+        let first = points.first().expect("non-empty").balance;
+        let last = points.last().expect("non-empty").balance;
+        let change = format_signed_money_cell(Some(last - first));
+        let last_value = format_money_text(Some(last));
+
+        let mut min = first;
+        let mut max = first;
+        for p in points {
+            if p.balance < min {
+                min = p.balance;
+            }
+            if p.balance > max {
+                max = p.balance;
+            }
+        }
+        // Always leave a small vertical gutter so flat lines don't sit
+        // exactly on the edge of the viewBox.
+        let span = (max - min).abs();
+        let pad = if span.is_zero() {
+            Decimal::ONE
+        } else {
+            span * Decimal::new(1, 1)
+        };
+        let y_min = min - pad;
+        let y_max = max + pad;
+        let y_range = (y_max - y_min).abs();
+
+        let count = points.len();
+        // Map index 0..count-1 evenly across 0..width. Guard against
+        // a single-point series, which we already short-circuited above.
+        let denom = (count - 1) as i64;
+        let x_for = |i: usize| -> f64 {
+            if denom == 0 {
+                width as f64 / 2.0
+            } else {
+                (i as f64 / denom as f64) * (width as f64)
+            }
+        };
+        let y_for = |balance: Decimal| -> f64 {
+            let normalized = if y_range.is_zero() {
+                0.5
+            } else {
+                ((balance - y_min) / y_range)
+                    .to_string()
+                    .parse::<f64>()
+                    .unwrap_or(0.5)
+            };
+            // Invert (SVG y grows downward) and leave a 1px gutter.
+            let clamped = normalized.clamp(0.0, 1.0);
+            (1.0 - clamped) * (height as f64 - 1.0) + 0.5
+        };
+
+        let mut buf = String::new();
+        for (i, p) in points.iter().enumerate() {
+            if i > 0 {
+                buf.push(' ');
+            }
+            let x = x_for(i);
+            let y = y_for(p.balance);
+            buf.push_str(&format!("{x:.2},{y:.2}"));
+        }
+
+        Self {
+            label,
+            polyline: buf,
+            last_value,
+            change,
+            is_empty: false,
+            width,
+            height,
+        }
+    }
+}
+
+#[derive(Template)]
+#[template(path = "balance_sparklines.html")]
+pub struct BalanceSparklinesPartialTemplate {
+    pub sparklines: Vec<SparklineView>,
+}
+
+impl BalanceSparklinesPartialTemplate {
+    pub fn render_view(sparklines: Vec<SparklineView>) -> Result<String, askama::Error> {
+        Self { sparklines }.render()
     }
 }
 
@@ -635,6 +801,11 @@ mod tests {
             ..Default::default()
         });
         let open_orders_html = OpenOrdersPartialTemplate::render_view(orders_view).unwrap();
+        let sparklines = vec![
+            SparklineView::from_series("24h", &[], 240, 48),
+            SparklineView::from_series("30d", &[], 240, 48),
+        ];
+        let sparklines_html = BalanceSparklinesPartialTemplate::render_view(sparklines).unwrap();
         let template = AgentsShowPageTemplate {
             agent: sample_agent_detail_row(),
             transactions: vec![],
@@ -642,6 +813,7 @@ mod tests {
             account_balance_html,
             open_positions_html,
             open_orders_html,
+            sparklines_html,
         };
         let rendered = template.render().unwrap();
         assert!(rendered.contains("<!DOCTYPE html>"));
@@ -663,7 +835,6 @@ mod tests {
         let html = AccountBalancePartialTemplate::render_view(view).unwrap();
         assert!(html.contains("Total balance"));
         assert!(html.contains("Loading"));
-        assert!(html.contains("starting"));
         assert!(!html.contains("USDC"));
     }
 
@@ -674,8 +845,7 @@ mod tests {
         assert!(html.contains("Total balance"));
         assert!(html.contains("232.6800"));
         assert!(html.contains("USDC"));
-        assert!(html.contains("live"));
-        assert!(html.contains("Updated"));
+
     }
 
     #[test]
@@ -1076,5 +1246,68 @@ mod tests {
             format_signed_percent(rust_decimal::Decimal::new(0, 0), 2),
             "+0.00%"
         );
+    }
+
+    fn bp(at: DateTime<Utc>, balance: Decimal) -> BalancePoint {
+        BalancePoint { bucket: at, balance }
+    }
+
+    #[test]
+    fn sparkline_from_series_empty_when_no_points() {
+        let view = SparklineView::from_series("24h", &[], 240, 48);
+        assert!(view.is_empty);
+        assert_eq!(view.label, "24h");
+        assert_eq!(view.last_value, "-");
+        assert!(view.polyline.is_empty());
+        assert_eq!(view.change.value, "-");
+        assert_eq!(view.change.color_class, "text-zinc-500");
+    }
+
+    #[test]
+    fn sparkline_from_series_empty_when_single_point() {
+        let now = Utc::now();
+        let view = SparklineView::from_series("24h", &[bp(now, Decimal::new(100, 0))], 240, 48);
+        assert!(view.is_empty);
+        assert_eq!(view.last_value, "100.0000");
+        assert!(view.polyline.is_empty());
+        // Change is undefined for a single point: dash cell.
+        assert_eq!(view.change.value, "-");
+    }
+
+    #[test]
+    fn sparkline_from_series_builds_polyline_and_change() {
+        let now = Utc::now();
+        let points = vec![
+            bp(now - chrono::Duration::hours(3), Decimal::new(100, 0)),
+            bp(now - chrono::Duration::hours(2), Decimal::new(150, 0)),
+            bp(now - chrono::Duration::hours(1), Decimal::new(120, 0)),
+        ];
+        let view = SparklineView::from_series("24h", &points, 240, 48);
+        assert!(!view.is_empty);
+        assert_eq!(view.last_value, "120.0000");
+        // last - first = 120 - 100 = 20 → emerald, + prefix.
+        assert_eq!(view.change.value, "+20.0000");
+        assert_eq!(view.change.color_class, "text-emerald-400");
+
+        // Polyline: one "x,y" pair per point, space-separated.
+        let coords: Vec<&str> = view.polyline.split_whitespace().collect();
+        assert_eq!(coords.len(), 3);
+        for c in &coords {
+            assert!(c.contains(','));
+        }
+    }
+
+    #[test]
+    fn sparkline_from_series_change_sign_and_color() {
+        let now = Utc::now();
+        // First larger than last: change should render in red, parens.
+        let points = vec![
+            bp(now - chrono::Duration::hours(2), Decimal::new(200, 0)),
+            bp(now - chrono::Duration::hours(1), Decimal::new(50, 0)),
+        ];
+        let view = SparklineView::from_series("30d", &points, 240, 48);
+        assert_eq!(view.change.value, "(150.0000)");
+        assert_eq!(view.change.color_class, "text-red-400");
+        assert_eq!(view.last_value, "50.0000");
     }
 }

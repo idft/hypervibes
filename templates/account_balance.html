@@ -10,16 +10,4 @@
             {% endif %}
         </div>
     </div>
-    <div class="flex flex-col items-start gap-0.5 text-xs text-zinc-500 sm:items-end">
-        <span>
-            <span class="uppercase tracking-[0.16em] text-zinc-600">Status</span>
-            <span class="ml-1 text-zinc-400">{{ view.status_label() }}</span>
-        </span>
-        {% if let Some(ts) = view.updated_at %}
-        <span>
-            <span class="uppercase tracking-[0.16em] text-zinc-600">Updated</span>
-            <span class="ml-1 font-mono text-zinc-400">{{ ts.format("%H:%M:%S UTC") }}</span>
-        </span>
-        {% endif %}
-    </div>
 </div>
