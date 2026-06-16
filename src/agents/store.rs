@@ -111,12 +111,8 @@ mod tests {
             crypto::{EncryptionKey, encrypt},
             keys::derive_wallet_address,
         },
-        db::{connect, migrate},
+        test_db,
     };
-
-    fn db_url() -> Option<String> {
-        std::env::var("DATABASE_URL").ok()
-    }
 
     fn sample_agent(key: &str) -> AgentRegistryRow {
         sample_agent_with_private_key(key, &deterministic_private_key(key))
@@ -165,13 +161,7 @@ mod tests {
 
     #[tokio::test]
     async fn list_agents_returns_inserted_rows() {
-        let Some(database_url) = db_url() else {
-            eprintln!("DATABASE_URL not set; skipping integration test");
-            return;
-        };
-
-        let pool = connect(&database_url).await.expect("connect to database");
-        migrate(&pool).await.expect("run migrations");
+        let pool = test_db::pool().await;
 
         let key = format!("list-test-{}", Utc::now().timestamp_millis());
         let row = sample_agent(&key);
@@ -183,13 +173,7 @@ mod tests {
 
     #[tokio::test]
     async fn delete_agent_removes_row() {
-        let Some(database_url) = db_url() else {
-            eprintln!("DATABASE_URL not set; skipping integration test");
-            return;
-        };
-
-        let pool = connect(&database_url).await.expect("connect to database");
-        migrate(&pool).await.expect("run migrations");
+        let pool = test_db::pool().await;
 
         let key = format!("delete-test-{}", Utc::now().timestamp_millis());
         let row = sample_agent(&key);
@@ -209,13 +193,7 @@ mod tests {
 
     #[tokio::test]
     async fn duplicate_agent_key_is_rejected() {
-        let Some(database_url) = db_url() else {
-            eprintln!("DATABASE_URL not set; skipping integration test");
-            return;
-        };
-
-        let pool = connect(&database_url).await.expect("connect to database");
-        migrate(&pool).await.expect("run migrations");
+        let pool = test_db::pool().await;
 
         let key = format!("dup-test-{}", Utc::now().timestamp_millis());
         let row = sample_agent(&key);

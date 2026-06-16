@@ -4,6 +4,9 @@ mod db;
 mod hyperliquid;
 mod web;
 
+#[cfg(test)]
+mod test_db;
+
 use std::sync::Arc;
 
 use anyhow::Result;

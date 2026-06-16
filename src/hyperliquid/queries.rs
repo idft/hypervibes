@@ -89,21 +89,11 @@ pub async fn list_account_sync_state(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::db::{connect, migrate};
-
-    fn db_url() -> Option<String> {
-        std::env::var("DATABASE_URL").ok()
-    }
+    use crate::test_db;
 
     #[tokio::test]
     async fn list_account_sync_state_returns_rows_for_account() {
-        let Some(database_url) = db_url() else {
-            eprintln!("DATABASE_URL not set; skipping integration test");
-            return;
-        };
-
-        let pool = connect(&database_url).await.expect("connect to database");
-        migrate(&pool).await.expect("run migrations");
+        let pool = test_db::pool().await;
 
         let account = format!("0xqueries{}", chrono::Utc::now().timestamp_millis());
         sqlx::query(

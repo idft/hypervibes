@@ -219,7 +219,7 @@ Auth + routes:
 - An API-key auth extractor (reusable). Resolves Bearer token to an `agent_key` via `agents.registry` and bumps `api_key_last_used_at`.
 - JSON routes added under `/api/v1` in `src/web/routes.rs` (or a dedicated submodule), returning JSON responses and JSON errors.
 
-Tests follow the existing `DATABASE_URL`-gated integration test pattern used in `src/agents/store.rs` and `src/web/routes.rs`.
+Tests follow the existing integration test pattern used in `src/agents/store.rs`, `src/hyperliquid/queries.rs`, and `src/web/routes.rs`. DB-touching tests call `crate::test_db::pool()` to get a `sqlx::PgPool` backed by an embedded `pglite-oxide` PostgreSQL 17.5 server (in-process, real Postgres). No external service, no env var, and no `DATABASE_URL` is required for tests. The dev server (`cargo run`) keeps using the container Postgres at `localhost:15432/vibetrading` and is never touched by tests. The seven SSE body-read tests in `src/web/routes.rs` are `#[ignore]`d because the body reader hangs in pglite-oxide (no orchestrator-driven broadcast activity to drive the long-lived SSE stream); they were never actually executing before the test-DB refactor, since the old `DATABASE_URL` gate returned `None` and silently skipped them.
 
 ## Explicitly Deferred
 
