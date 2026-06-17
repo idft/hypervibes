@@ -58,6 +58,93 @@ hermes-plugin/vibetrading/
 See the Hermes plugin guide for the full contract:
 https://hermes-agent.nousresearch.com/docs/guides/build-a-hermes-plugin
 
+## Container Image
+
+The `hermes-gateway` service in `podman-compose.yaml` is built from a custom
+image defined in `containers/hermes-agent/Dockerfile`. The custom image uses
+`nousresearch/hermes-agent:v2026.6.5` as a base and layers on top:
+
+- the `bun` runtime (copied from `oven/bun:1.3.14`),
+- system utilities (`jq`, `git`); TA-Lib ships as a manylinux pre-compiled
+  wheel on PyPI (version 0.6.8), so no system C library is needed,
+- the Vibetrading plugin's Python dependencies, installed with `uv` into
+  Hermes's existing `/opt/hermes/.venv`,
+- a patch to `/opt/hermes/cli-config.yaml.example` so a fresh named volume
+  seeds `$HERMES_HOME/config.yaml` with `vibetrading` already in
+  `plugins.enabled`. The patch is YAML-aware and does not clobber existing
+  upstream defaults. Once the user has run the container once, the seeded
+  config.yaml persists in the `hermes_data` volume and the build-time patch
+  no longer applies.
+
+### Build and start
+
+```bash
+podman compose up --build hermes-gateway
+```
+
+This builds the custom image (or rebuilds it if the Dockerfile or plugin
+source changed) and starts the `vibetrading-hermes` container in the host
+network. The container name is `vibetrading-hermes` (set in
+`podman-compose.yaml`) so it can coexist with another `hermes` container
+already running on the host — all `podman exec` examples below use that
+name. The plugin source is bind-mounted from `hermes-plugin/vibetrading/`
+into `/opt/data/plugins/vibetrading` so edits on the host are
+picked up on container restart without rebuilding the image. Hermes's home
+directory (`/opt/data`) lives in a named volume `hermes_data` so it
+survives container recreations.
+
+### Disabling or re-enabling the plugin
+
+The plugin is enabled on first boot by the build-time patch above. To turn
+it off later (and back on) without rebuilding the image, use the Hermes CLI
+inside the running container:
+
+```bash
+podman exec vibetrading-hermes hermes plugins disable vibetrading
+podman exec vibetrading-hermes hermes plugins enable vibetrading
+```
+
+The change is written to `$HERMES_HOME/config.yaml` in the
+`hermes_data` volume and persists across restarts.
+
+### Container env vars
+
+`podman-compose.yaml` exposes the following variables on the container.
+All have defaults that can be overridden in `.env`:
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `HERMES_DASHBOARD_PORT` | `19119` | Host port for the Hermes web dashboard. Upstream default is `9119`; the custom image ships shifted to `19119` to avoid colliding with another Hermes agent already bound to `9119` on the host. |
+| `API_SERVER_ENABLED` | `true` | Enables the Hermes gateway HTTP API. The API server is required for the Vibetrading backend to manage Hermes profiles automatically. |
+| `HERMES_API_SERVER_PORT` (`API_SERVER_PORT` in container) | `18642` | Host port for the Hermes gateway HTTP API (the one `hermes gateway run` exposes; the plugin calls it for profile management). Upstream default is `8642`; shifted to `18642` for the same reason. |
+| `HERMES_API_SERVER_HOST` (`API_SERVER_HOST` in container) | `0.0.0.0` | Bind address for the gateway HTTP API. Set to `0.0.0.0` because `network_mode: host` would otherwise leave it on `127.0.0.1`, which the local backend (also on the host) cannot reach. |
+| `HERMES_API_SERVER_KEY` (`API_SERVER_KEY` in container) | *(from `.env`)* | Bearer token for the gateway HTTP API. **Required** — the server refuses to start without it. Generate with `openssl rand -hex 32` and set the same value in the backend as `HERMES_API_KEY`. |
+| `VIBETRADING_BASE_URL` | `http://localhost:3003` | Base URL of the Vibetrading backend that the plugin's HTTP tools call. |
+
+Per-profile secrets — `VIBETRADING_API_KEY`, `HYPERLIQUID_ENVIRONMENT`,
+`HYPERLIQUID_ADDRESS`, and any other agent-scoped values — are **not** set
+on the container. They are managed through Hermes profile configuration
+(see the **Hermes HTTP API (Profile Management)** section below and
+`docs/Agents.md`).
+
+### Verifying the build
+
+After the first build and start, the following should all succeed:
+
+```bash
+podman exec vibetrading-hermes bun --version
+podman exec vibetrading-hermes uv --version
+podman exec vibetrading-hermes /opt/hermes/.venv/bin/python -c "import pandas, hyperliquid, talib"
+podman exec vibetrading-hermes hermes plugins list | grep vibetrading
+```
+
+If the API server is enabled, you can also verify it responds on the
+configured port once `HERMES_API_SERVER_KEY` is set:
+
+```bash
+podman exec vibetrading-hermes ss -tln | grep 18642
+```
+
 ## Environment Variables
 
 The plugin declares these in `plugin.yaml` under `requires_env`:
@@ -68,8 +155,8 @@ The plugin declares these in `plugin.yaml` under `requires_env`:
 | `VIBETRADING_API_KEY` | Per-agent API key from `agents.registry.api_key`. Authenticates the agent to the backend. |
 | `HYPERLIQUID_ENVIRONMENT` | `mainnet` or `testnet` |
 | `HYPERLIQUID_ADDRESS` | The agent's Hyperliquid wallet / account address. Used for direct Hyperliquid reads. |
-| `HERMES_BASE_URL` | Base URL of the Hermes agent's HTTP API (e.g., `http://localhost:9119`). Used by the plugin for profile management. |
-| `HERMES_API_KEY` | Optional bearer token for the Hermes API when the daemon runs in gated auth mode. |
+| `HERMES_BASE_URL` | Base URL of the Hermes agent's HTTP API. Matches `HERMES_API_SERVER_PORT` (exposed as `API_SERVER_PORT` in the container); default for this project is `http://localhost:18642` (upstream default would be `8642`). Used by the plugin for profile management. |
+| `HERMES_API_KEY` | Bearer token for the Hermes API. Must match the container's `API_SERVER_KEY` (set via `HERMES_API_SERVER_KEY` in `.env`) when the API server is enabled. |
 
 Hermes will prompt for missing variables during install and save them to `.env`.
 

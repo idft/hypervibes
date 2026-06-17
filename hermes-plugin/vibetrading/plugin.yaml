@@ -1,0 +1,5 @@
+name: vibetrading
+version: 0.1.0
+description: Vibetrading V2 plugin for Hyperliquid trading through the local backend
+requires_env:
+  - VIBETRADING_BASE_URL

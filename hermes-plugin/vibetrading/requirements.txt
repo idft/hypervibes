@@ -1,0 +1,8 @@
+hyperliquid-python-sdk
+requests
+httpx
+pandas
+numpy
+ta-lib==0.6.8
+pydantic
+python-dotenv
