@@ -38,6 +38,17 @@ services:
       - HERMES_DASHBOARD_PORT=${HERMES_DASHBOARD_PORT:-19119}
       - HERMES_DASHBOARD_SESSION_TOKEN=${HERMES_DASHBOARD_SESSION_TOKEN}
       - VIBETRADING_BASE_URL=${VIBETRADING_BASE_URL:-http://localhost:3003}
+      # LLM provider API keys are read by Hermes from the container environment.
+      # Uncomment the one matching the provider configured for the active profile.
+      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY:-}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - GOOGLE_API_KEY=${GOOGLE_API_KEY:-}
+      - GEMINI_API_KEY=${GEMINI_API_KEY:-}
+      - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY:-}
+      - XAI_API_KEY=${XAI_API_KEY:-}
+      - OPENCODE_GO_API_KEY=${OPENCODE_GO_API_KEY:-}
+      - OLLAMA_API_KEY=${OLLAMA_API_KEY:-}
     command: ["gateway", "run"]
 
 volumes:

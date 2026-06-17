@@ -118,6 +118,26 @@ All have defaults that can be overridden in `.env`:
 | `HERMES_DASHBOARD_SESSION_TOKEN` | *(random if omitted)* | Optional fixed session token for the dashboard's loopback/insecure auth. When set, both the container and the backend use the same value. If omitted, the dashboard generates a random token on startup and the backend scrapes it from the served `index.html`. |
 | `VIBETRADING_BASE_URL` | `http://localhost:3003` | Base URL of the Vibetrading backend that the plugin's HTTP tools call. |
 
+LLM provider API keys are also passed through from `.env` to the container
+environment. Hermes reads the matching key for the provider configured on
+the active profile. `podman-compose.yaml` currently forwards the following
+variables; uncomment the one that matches your provider in `.env`:
+
+- `OPENROUTER_API_KEY`
+- `OPENAI_API_KEY`
+- `ANTHROPIC_API_KEY`
+- `GOOGLE_API_KEY`
+- `GEMINI_API_KEY`
+- `DEEPSEEK_API_KEY`
+- `XAI_API_KEY`
+- `OPENCODE_GO_API_KEY`
+- `OLLAMA_API_KEY`
+
+Provider keys are **global to the Hermes daemon** — every profile on this
+container uses the same key for a given provider. If you need per-agent
+provider isolation, run separate Hermes containers or use Hermes credential
+pools.
+
 Per-profile secrets — `VIBETRADING_API_KEY`, `HYPERLIQUID_ENVIRONMENT`,
 `HYPERLIQUID_ADDRESS`, and any other agent-scoped values — are **not** set
 on the container. They are managed through Hermes profile configuration
