@@ -29,8 +29,12 @@ The current Phase 1 implementation follows
 simplified single-table registry (`agents.registry`) with:
 
 - no instrument bindings or per-agent instrument restrictions
-- no environment field; everything is implicitly `live`
-- no Hermes profile column or Hermes bindings table
+- an `environment` field (`live` or `sandbox`) on every row
+- a `soul TEXT NOT NULL DEFAULT ''` column that stores the agent's
+  persona text and is synced to the agent's Hermes profile as
+  `SOUL.md` when the Hermes client is configured
+- no separate Hermes bindings table — the registry row's `agent_key`
+  is the Hermes profile name
 - no secret refs table
 - a boolean `enabled` flag in place of a lifecycle enum
 - one app API key stored directly on the registry row
@@ -38,6 +42,18 @@ simplified single-table registry (`agents.registry`) with:
 
 The broader schema ideas below describe future directions rather than the
 running Phase 1 data model.
+
+### Agent == Hermes Profile
+
+The Phase 1 registry intentionally flattens the registry/Hermes mapping
+into a single row. `agents.registry.agent_key` doubles as the Hermes
+profile name: when an agent is created, the backend creates a Hermes
+profile of the same name (cloned from the Hermes default), and when an
+agent is deleted, the backend deletes the Hermes profile. See
+`docs/Hermes.md` for the auto-provisioning flow, the `/hermes`
+operator page, and the exact Hermes dashboard `/api/profiles/*` calls
+used. Agent creation and deletion succeed even when Hermes is
+unreachable; failures are logged at WARN.
 
 ## Why This Module Exists
 

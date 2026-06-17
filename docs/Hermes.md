@@ -115,10 +115,7 @@ All have defaults that can be overridden in `.env`:
 | Variable | Default | Purpose |
 |----------|---------|---------|
 | `HERMES_DASHBOARD_PORT` | `19119` | Host port for the Hermes web dashboard. Upstream default is `9119`; the custom image ships shifted to `19119` to avoid colliding with another Hermes agent already bound to `9119` on the host. |
-| `API_SERVER_ENABLED` | `true` | Enables the Hermes gateway HTTP API. The API server is required for the Vibetrading backend to manage Hermes profiles automatically. |
-| `HERMES_API_SERVER_PORT` (`API_SERVER_PORT` in container) | `18642` | Host port for the Hermes gateway HTTP API (the one `hermes gateway run` exposes; the plugin calls it for profile management). Upstream default is `8642`; shifted to `18642` for the same reason. |
-| `HERMES_API_SERVER_HOST` (`API_SERVER_HOST` in container) | `0.0.0.0` | Bind address for the gateway HTTP API. Set to `0.0.0.0` because `network_mode: host` would otherwise leave it on `127.0.0.1`, which the local backend (also on the host) cannot reach. |
-| `HERMES_API_SERVER_KEY` (`API_SERVER_KEY` in container) | *(from `.env`)* | Bearer token for the gateway HTTP API. **Required** — the server refuses to start without it. Generate with `openssl rand -hex 32` and set the same value in the backend as `HERMES_API_KEY`. |
+| `HERMES_DASHBOARD_SESSION_TOKEN` | *(random if omitted)* | Optional fixed session token for the dashboard's loopback/insecure auth. When set, both the container and the backend use the same value. If omitted, the dashboard generates a random token on startup and the backend scrapes it from the served `index.html`. |
 | `VIBETRADING_BASE_URL` | `http://localhost:3003` | Base URL of the Vibetrading backend that the plugin's HTTP tools call. |
 
 Per-profile secrets — `VIBETRADING_API_KEY`, `HYPERLIQUID_ENVIRONMENT`,
@@ -138,11 +135,10 @@ podman exec vibetrading-hermes /opt/hermes/.venv/bin/python -c "import pandas, h
 podman exec vibetrading-hermes hermes plugins list | grep vibetrading
 ```
 
-If the API server is enabled, you can also verify it responds on the
-configured port once `HERMES_API_SERVER_KEY` is set:
+After the first build and start, verify that the dashboard web UI is listening on the configured port:
 
 ```bash
-podman exec vibetrading-hermes ss -tln | grep 18642
+podman exec vibetrading-hermes ss -tln | grep ${HERMES_DASHBOARD_PORT:-19119}
 ```
 
 ## Environment Variables
@@ -155,24 +151,24 @@ The plugin declares these in `plugin.yaml` under `requires_env`:
 | `VIBETRADING_API_KEY` | Per-agent API key from `agents.registry.api_key`. Authenticates the agent to the backend. |
 | `HYPERLIQUID_ENVIRONMENT` | `mainnet` or `testnet` |
 | `HYPERLIQUID_ADDRESS` | The agent's Hyperliquid wallet / account address. Used for direct Hyperliquid reads. |
-| `HERMES_BASE_URL` | Base URL of the Hermes agent's HTTP API. Matches `HERMES_API_SERVER_PORT` (exposed as `API_SERVER_PORT` in the container); default for this project is `http://localhost:18642` (upstream default would be `8642`). Used by the plugin for profile management. |
-| `HERMES_API_KEY` | Bearer token for the Hermes API. Must match the container's `API_SERVER_KEY` (set via `HERMES_API_SERVER_KEY` in `.env`) when the API server is enabled. |
 
 Hermes will prompt for missing variables during install and save them to `.env`.
 
-## Hermes HTTP API (Profile Management)
+## Hermes Web UI / Dashboard API (Profile Management)
 
-The Hermes agent runs a FastAPI HTTP daemon that exposes a full OpenAPI spec:
+Profile management is handled by the **Hermes web dashboard**, not by
+per-profile API servers. The dashboard is a FastAPI-backed SPA served on
+`HERMES_DASHBOARD_PORT` (default `19119`). It exposes the same `/api/profiles/*`
+surface for both the web UI and programmatic callers.
 
-- Spec: `GET {HERMES_BASE_URL}/openapi.json`
-- Interactive docs: `GET {HERMES_BASE_URL}/docs`
-
-For V2, the App's provisioning pipeline will use this API to
+For V2, the App's provisioning pipeline calls these dashboard endpoints to
 **automatically manage each agent's Hermes profile** — creating the profile
 on first registration, configuring its soul/model/description from the
 agent registry, and activating it — so that spinning up a new agent in
 our App end-to-end does not require any manual clicks in the Hermes
 dashboard.
+
+The public liveness endpoint is `GET /api/status`.
 
 ### Profile endpoints
 
@@ -241,9 +237,15 @@ Idempotency: every step above should be safe to re-run on a profile that
 already exists / is already configured. The plugin should treat a 200
 response with the same shape as a no-op success.
 
-Auth: when the Hermes daemon is in gated auth mode, requests must include
-`Authorization: Bearer {HERMES_API_KEY}` (or equivalent cookie). The exact
-header is TBD — see Open Questions.
+Auth: in loopback / `--insecure` mode, the dashboard injects an ephemeral
+`__HERMES_SESSION_TOKEN__` into the served SPA. Programmatic callers must
+send it back in the `X-Hermes-Session-Token` header (legacy `Authorization: Bearer`
+is also accepted). The easiest way for the backend to stay authenticated is
+to set the same `HERMES_DASHBOARD_SESSION_TOKEN` on both the container and
+the backend; if that variable is omitted, the backend scrapes the token
+from `GET /` once on first use. In gated / OAuth mode the token is not
+injected; callers must authenticate through the dashboard's OAuth gate, which
+is outside the scope of the backend integration.
 
 ## Tools
 
@@ -695,6 +697,53 @@ full surface; the minimum set the V2 App will exercise is:
 | `PUT /api/profiles/{name}/description` | On registration, to attach a human description |
 | `POST /api/profiles/active` | On agent boot, to ensure the right profile is active |
 | `DELETE /api/profiles/{name}` | On agent de-registration |
+
+### Backend-managed profile lifecycle (implemented)
+
+The Vibetrading backend now automatically manages the Hermes profile for
+every agent in `agents.registry`. Operator creation of an agent via the
+web UI is sufficient — there is no separate Hermes dashboard step.
+
+**Mapping**: `agent_key == hermes profile name`. The agent registry row
+is the single source of truth for an agent's identity, and the Hermes
+profile is its runtime counterpart.
+
+**On agent create** (the operator form `POST /agents`):
+
+1. The new row is inserted into `agents.registry` as before.
+2. If a Hermes client is configured (see `HERMES_DASHBOARD_*` env vars
+   below), the backend calls `POST /api/profiles` on the Hermes dashboard
+   with `{"name": <agent_key>, "clone_from_default": true}`.
+3. On success, the backend calls `PUT /api/profiles/{name}/soul` with
+   the contents of the registry row's `soul` column. This is the
+   operator-entered persona text from the new agent form.
+4. The backend intentionally does **not** call `POST /api/profiles/active`.
+   Creating an agent must not silently change the currently active
+   Hermes profile; activation is an operator decision, made from the
+   Hermes dashboard or via a future explicit endpoint.
+
+**On agent delete** (`POST /agents/{agent_key}/delete`):
+
+1. The row is deleted from `agents.registry` first.
+2. If a Hermes client is configured, the backend calls
+   `DELETE /api/profiles/{agent_key}` as a best-effort cleanup.
+3. Profile-delete failures are logged at WARN and do not roll back the
+   registry delete; the agent is gone from Vibetrading either way.
+
+**Resilience**: every Hermes call is wrapped in a `tracing::warn!` on
+failure. The agent create/delete still succeeds when Hermes is
+unreachable, unconfigured, or returns an error. A future operator
+reconciliation job can re-attempt profile create/delete for any drift.
+
+**Configuration**: the Hermes client targets the dashboard web UI and is
+optional. When `HERMES_DASHBOARD_HOST` and `HERMES_DASHBOARD_PORT` are
+reachable they are used. `HERMES_DASHBOARD_SESSION_TOKEN` is sent as the
+`X-Hermes-Session-Token` header; when omitted, the backend reads the token
+from the dashboard's served `index.html`. If the Hermes client fails to
+construct (e.g. malformed session token), the server logs a warning at
+startup and disables Hermes integration for that run; the rest of the
+server works normally. The `/hermes` operator page renders the
+"not configured" state in that case.
 
 ## Instrument Handling
 

@@ -73,6 +73,17 @@
         </section>
 
         <section class="rounded-2xl border border-zinc-800 bg-[#0d0d10] p-6">
+            <h2 class="text-lg font-medium text-white">Soul</h2>
+            <div class="mt-4 rounded-xl border border-zinc-800 bg-zinc-950/70 p-4">
+                {% if agent.soul.is_empty() %}
+                <p class="text-sm italic text-zinc-500">No soul configured. The Hermes profile for this agent has no SOUL.md set.</p>
+                {% else %}
+                <p class="whitespace-pre-wrap text-sm leading-6 text-zinc-300">{{ agent.soul }}</p>
+                {% endif %}
+            </div>
+        </section>
+
+        <section class="rounded-2xl border border-zinc-800 bg-[#0d0d10] p-6">
             <div class="flex items-center justify-between">
                 <h2 class="text-lg font-medium text-white">Transactions</h2>
             </div>

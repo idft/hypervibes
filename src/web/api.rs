@@ -591,6 +591,7 @@ mod tests {
                 ],
             ),
             live_accounts: Arc::new(crate::hyperliquid::live_state::LiveAccountStore::new()),
+            hermes: None,
         }))
     }
 
@@ -614,6 +615,7 @@ mod tests {
             enabled: true,
             display_name,
             prompt: String::new(),
+            soul: String::new(),
             wallet_address,
             environment: "live".to_string(),
             api_key: api_key.clone(),

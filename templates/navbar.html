@@ -15,9 +15,16 @@
 </div>
 
 <nav class="mt-6 space-y-1 text-sm">
+    {% if current_path.starts_with("/agents") %}
     <a class="flex items-center rounded-xl bg-zinc-800/80 px-3 py-2 font-medium text-white" href="/agents">Agents</a>
-    <span class="flex items-center rounded-xl px-3 py-2 text-zinc-500">Activity</span>
-    <span class="flex items-center rounded-xl px-3 py-2 text-zinc-500">Memory</span>
-    <span class="flex items-center rounded-xl px-3 py-2 text-zinc-500">Hyperliquid</span>
+    {% else %}
+    <a class="flex items-center rounded-xl px-3 py-2 text-zinc-300 hover:bg-zinc-800/80 hover:text-white" href="/agents">Agents</a>
+    {% endif %}
+    {% if current_path.starts_with("/hermes") %}
+    <a class="flex items-center rounded-xl bg-zinc-800/80 px-3 py-2 font-medium text-white" href="/hermes">Hermes</a>
+    {% else %}
+    <a class="flex items-center rounded-xl px-3 py-2 text-zinc-300 hover:bg-zinc-800/80 hover:text-white" href="/hermes">Hermes</a>
+    {% endif %}
+    <span class="flex items-center rounded-xl px-3 py-2 text-zinc-500">Documentation</span>
     <span class="flex items-center rounded-xl px-3 py-2 text-zinc-500">Settings</span>
 </nav>

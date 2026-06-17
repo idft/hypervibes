@@ -14,13 +14,6 @@ use crate::{
 };
 
 #[derive(Debug, Clone)]
-pub struct SummaryCard {
-    pub label: &'static str,
-    pub value: String,
-    pub detail: &'static str,
-}
-
-#[derive(Debug, Clone)]
 pub struct MoneyCell {
     pub value: String,
     pub color_class: &'static str,
@@ -129,8 +122,8 @@ pub struct AgentListEntry {
 #[derive(Template)]
 #[template(path = "agents.html")]
 pub struct AgentsPageTemplate {
-    pub summary_cards: Vec<SummaryCard>,
     pub agents: Vec<AgentListEntry>,
+    pub current_path: String,
 }
 
 #[derive(Template)]
@@ -138,6 +131,7 @@ pub struct AgentsPageTemplate {
 pub struct AgentsNewPageTemplate {
     pub form: CreateAgentForm,
     pub errors: Vec<String>,
+    pub current_path: String,
 }
 
 #[derive(Template)]
@@ -151,12 +145,26 @@ pub struct AgentsShowPageTemplate {
     pub open_positions_html: String,
     pub open_orders_html: String,
     pub sparklines_html: String,
+    pub current_path: String,
 }
 
 #[derive(Template)]
 #[template(path = "server_error.html")]
 pub struct ServerErrorPageTemplate {
     pub message: String,
+    pub current_path: String,
+}
+
+#[derive(Template)]
+#[template(path = "hermes.html")]
+pub struct HermesPageTemplate {
+    pub reachable: bool,
+    pub version: Option<String>,
+    pub active_profile: Option<String>,
+    pub profiles: Vec<String>,
+    pub error: Option<String>,
+    pub base_url: Option<String>,
+    pub current_path: String,
 }
 
 /// View-model for the live account balance card shown on the agent detail
@@ -724,6 +732,7 @@ mod tests {
             agent_key: "test-agent".to_string(),
             enabled: true,
             prompt: "Beep boop.".to_string(),
+            soul: "I am a test agent.".to_string(),
             wallet_address: "0x1234567890abcdef".to_string(),
             environment: "live".to_string(),
             api_key: "vt_test_key".to_string(),
@@ -756,14 +765,15 @@ mod tests {
             },
         };
         let template = AgentsPageTemplate {
-            summary_cards: vec![],
             agents: vec![entry],
+            current_path: "/agents".to_string(),
         };
         let rendered = template.render().unwrap();
         assert!(rendered.contains("<!DOCTYPE html>"));
         assert!(rendered.contains("Vibetrading Agents"));
         assert!(rendered.contains("live"));
-        assert!(rendered.contains("Registered agents"));
+        assert!(!rendered.contains("Registered agents"));
+        assert!(!rendered.contains("Agents persisted in the registry database."));
         assert!(rendered.contains("Account balance"));
         assert!(rendered.contains("232.6800"));
     }
@@ -781,8 +791,8 @@ mod tests {
             },
         };
         let template = AgentsPageTemplate {
-            summary_cards: vec![],
             agents: vec![entry],
+            current_path: "/agents".to_string(),
         };
         let rendered = template.render().unwrap();
         assert!(rendered.contains("Loading"));
@@ -819,6 +829,7 @@ mod tests {
             open_positions_html,
             open_orders_html,
             sparklines_html,
+            current_path: "/agents/test-agent".to_string(),
         };
         let rendered = template.render().unwrap();
         assert!(rendered.contains("<!DOCTYPE html>"));
@@ -928,6 +939,7 @@ mod tests {
         let template = AgentsNewPageTemplate {
             form: CreateAgentForm::default(),
             errors: vec![],
+            current_path: "/agents/new".to_string(),
         };
         let rendered = template.render().unwrap();
         assert!(rendered.contains("<!DOCTYPE html>"));
@@ -939,6 +951,7 @@ mod tests {
     fn server_error_page_renders_base_layout() {
         let template = ServerErrorPageTemplate {
             message: "Internal server error: boom".to_string(),
+            current_path: String::new(),
         };
         let rendered = template.render().unwrap();
         assert!(rendered.contains("<!DOCTYPE html>"));

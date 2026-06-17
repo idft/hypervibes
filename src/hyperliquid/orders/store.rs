@@ -478,6 +478,7 @@ mod tests {
             enabled: true,
             display_name: format!("OrderTest {suffix}"),
             prompt: String::new(),
+            soul: String::new(),
             wallet_address: wallet,
             environment: "live".to_string(),
             api_key: format!("vta_ord-{suffix}-{ts}"),

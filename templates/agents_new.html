@@ -34,6 +34,13 @@
         </div>
 
         <div>
+            <label for="soul" class="block text-sm font-medium text-zinc-300">Soul / persona</label>
+            <textarea id="soul" name="soul" rows="6"
+                class="mt-2 block w-full rounded-xl border border-zinc-800 bg-zinc-950 px-3 py-2 text-sm text-white placeholder-zinc-600 focus:border-zinc-600 focus:outline-none">{{ form.soul }}</textarea>
+            <p class="mt-1 text-xs text-zinc-500">This text becomes the profile's SOUL.md in Hermes.</p>
+        </div>
+
+        <div>
             <label for="hyperliquid_private_key" class="block text-sm font-medium text-zinc-300">Hyperliquid private key</label>
             <input type="password" id="hyperliquid_private_key" name="hyperliquid_private_key" required
                 class="mt-2 block w-full rounded-xl border border-zinc-800 bg-zinc-950 px-3 py-2 text-sm text-white placeholder-zinc-600 focus:border-zinc-600 focus:outline-none">

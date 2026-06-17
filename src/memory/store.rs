@@ -179,6 +179,7 @@ mod tests {
             enabled: true,
             display_name: format!("Test {}", key),
             prompt: String::new(),
+            soul: String::new(),
             wallet_address: wallet,
             environment: "live".to_string(),
             api_key: format!("vta_{}", key),

@@ -7,6 +7,7 @@ CREATE TABLE IF NOT EXISTS agents.registry (
     enabled BOOLEAN NOT NULL DEFAULT true,
     display_name TEXT NOT NULL,
     prompt TEXT NOT NULL DEFAULT '',
+    soul TEXT NOT NULL DEFAULT '',
     wallet_address TEXT NOT NULL,
     environment TEXT NOT NULL DEFAULT 'live',
     api_key TEXT NOT NULL UNIQUE,

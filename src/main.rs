@@ -1,6 +1,7 @@
 mod agents;
 mod config;
 mod db;
+mod hermes;
 mod hyperliquid;
 mod memory;
 mod web;
@@ -13,7 +14,9 @@ use std::sync::Arc;
 use anyhow::Result;
 use config::AppConfig;
 use db::{connect, migrate};
+use hermes::HermesClient;
 use tokio::sync::watch;
+use tracing::{info, warn};
 use tracing_subscriber::{EnvFilter, fmt};
 
 use crate::hyperliquid::live_state::LiveAccountStore;
@@ -43,6 +46,20 @@ async fn main() -> Result<()> {
         config.agents_encryption_key,
     );
 
+    let hermes = match HermesClient::new(
+        config.hermes_dashboard_url.clone(),
+        config.hermes_dashboard_session_token.clone(),
+    ) {
+        Ok(client) => {
+            info!("Hermes client configured");
+            Some(client)
+        }
+        Err(e) => {
+            warn!(error = ?e, "Hermes client disabled");
+            None
+        }
+    };
+
     println!("Starting agent orchestrator");
     let orchestrator = agents::AgentOrchestrator::new(
         pool.clone(),
@@ -63,6 +80,7 @@ async fn main() -> Result<()> {
         pool,
         encryption_key,
         Arc::clone(&live_accounts),
+        hermes,
         shutdown_tx,
     );
     tokio::pin!(server_future);

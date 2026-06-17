@@ -33,6 +33,7 @@ pub async fn get_agent(pool: &DbPool, agent_key: &str) -> Result<Option<AgentDet
                 agent_key,
                 enabled,
                 prompt,
+                soul,
                 wallet_address,
                 environment,
                 api_key,
@@ -61,13 +62,14 @@ pub async fn insert_agent(pool: &DbPool, row: &AgentRegistryRow) -> Result<()> {
             enabled,
             display_name,
             prompt,
+            soul,
             wallet_address,
             environment,
             api_key,
             api_key_last_used_at,
             hyperliquid_private_key_ciphertext,
             hyperliquid_private_key_key_id
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)",
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)",
     )
     .bind(&row.agent_key)
     .bind(row.created_at)
@@ -75,6 +77,7 @@ pub async fn insert_agent(pool: &DbPool, row: &AgentRegistryRow) -> Result<()> {
     .bind(row.enabled)
     .bind(&row.display_name)
     .bind(&row.prompt)
+    .bind(&row.soul)
     .bind(&row.wallet_address)
     .bind(&row.environment)
     .bind(&row.api_key)
@@ -189,6 +192,7 @@ mod tests {
             enabled: true,
             display_name: format!("Test {}", key),
             prompt: "Test prompt".to_string(),
+            soul: "Test soul".to_string(),
             wallet_address: wallet,
             environment: "live".to_string(),
             api_key: format!("vta_{}", key),

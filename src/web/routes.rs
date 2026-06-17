@@ -24,6 +24,7 @@ use crate::{
         model::{AgentRegistryRow, CreateAgentForm, slugify_agent_key},
         store::{delete_agent as delete_agent_in_store, get_agent, insert_agent, list_agents},
     },
+    hermes::HermesHealth,
     hyperliquid::{
         live_state::{AccountKey, AccountLiveState, LiveConnectionStatus},
         queries::{
@@ -36,9 +37,9 @@ use crate::{
         templates::{
             AccountBalancePartialTemplate, AccountBalanceView, AgentListEntry,
             AgentsNewPageTemplate, AgentsPageTemplate, AgentsShowPageTemplate,
-            BalanceSparklinesPartialTemplate, OpenOrdersPartialTemplate, OpenOrdersView,
-            OpenPositionsPartialTemplate, OpenPositionsView, ServerErrorPageTemplate,
-            SparklineView, SummaryCard, TransactionView,
+            BalanceSparklinesPartialTemplate, HermesPageTemplate, OpenOrdersPartialTemplate,
+            OpenOrdersView, OpenPositionsPartialTemplate, OpenPositionsView,
+            ServerErrorPageTemplate, SparklineView, TransactionView,
         },
     },
 };
@@ -52,6 +53,7 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/agents/{agent_key}", get(agents_show))
         .route("/agents/{agent_key}/delete", post(delete_agent))
         .route("/agents/{agent_key}/live/stream", get(agent_live_stream))
+        .route("/hermes", get(hermes_page))
         .with_state(state)
 }
 
@@ -71,9 +73,6 @@ async fn healthz(State(state): State<Arc<AppState>>) -> impl IntoResponse {
 
 async fn agents_index(State(state): State<Arc<AppState>>) -> Result<Html<String>, AppError> {
     let agents = list_agents(&state.db_pool).await?;
-
-    let active = agents.iter().filter(|a| a.enabled).count();
-    let disabled = agents.len() - active;
 
     let entries: Vec<AgentListEntry> = agents
         .into_iter()
@@ -98,29 +97,8 @@ async fn agents_index(State(state): State<Arc<AppState>>) -> Result<Html<String>
         .collect();
 
     let template = AgentsPageTemplate {
-        summary_cards: vec![
-            SummaryCard {
-                label: "Active agents",
-                value: active.to_string(),
-                detail: "Enabled for runtime supervision",
-            },
-            SummaryCard {
-                label: "Disabled agents",
-                value: disabled.to_string(),
-                detail: "Retained but not scheduled",
-            },
-            SummaryCard {
-                label: "Registered agents",
-                value: entries.len().to_string(),
-                detail: "Total agents in the registry",
-            },
-            SummaryCard {
-                label: "API keys",
-                value: entries.len().to_string(),
-                detail: "One app credential per agent",
-            },
-        ],
         agents: entries,
+        current_path: "/agents".to_string(),
     };
 
     Ok(Html(template.render()?))
@@ -130,6 +108,7 @@ async fn agents_new() -> Result<Html<String>, AppError> {
     let template = AgentsNewPageTemplate {
         form: CreateAgentForm::default(),
         errors: Vec::new(),
+        current_path: "/agents/new".to_string(),
     };
     Ok(Html(template.render()?))
 }
@@ -262,6 +241,7 @@ async fn agents_show(
                 open_positions_html,
                 open_orders_html,
                 sparklines_html,
+                current_path: format!("/agents/{}", agent_key),
             };
             Ok(Html(template.render()?).into_response())
         }
@@ -275,6 +255,11 @@ async fn delete_agent(
 ) -> Result<Response, AppError> {
     let deleted = delete_agent_in_store(&state.db_pool, &agent_key).await?;
     if deleted {
+        if let Some(hermes) = &state.hermes {
+            if let Err(e) = hermes.delete_profile(&agent_key).await {
+                warn!(error = ?e, agent_key = %agent_key, "failed to delete Hermes profile");
+            }
+        }
         Ok(Redirect::to("/agents").into_response())
     } else {
         Ok((StatusCode::NOT_FOUND, "agent not found").into_response())
@@ -430,12 +415,13 @@ async fn create_agent(
     let agent_key = slugify_agent_key(&form.display_name);
 
     let row = AgentRegistryRow {
-        agent_key,
+        agent_key: agent_key.clone(),
         created_at: now,
         updated_at: now,
         enabled: form.enabled(),
         display_name: form.display_name.trim().to_string(),
         prompt: String::new(),
+        soul: form.soul.trim().to_string(),
         wallet_address,
         environment: "live".to_string(),
         api_key: generate_api_key(),
@@ -454,11 +440,24 @@ async fn create_agent(
         return Ok(render_new_form(form, errors));
     }
 
+    if let Some(hermes) = &state.hermes {
+        let key = &row.agent_key;
+        if let Err(e) = hermes.create_profile(key).await {
+            warn!(error = ?e, agent_key = %key, "failed to create Hermes profile");
+        } else if let Err(e) = hermes.set_profile_soul(key, &row.soul).await {
+            warn!(error = ?e, agent_key = %key, "failed to set Hermes profile soul");
+        }
+    }
+
     Ok(Redirect::to("/agents").into_response())
 }
 
 fn render_new_form(form: CreateAgentForm, errors: Vec<String>) -> Response {
-    let template = AgentsNewPageTemplate { form, errors };
+    let template = AgentsNewPageTemplate {
+        form,
+        errors,
+        current_path: "/agents/new".to_string(),
+    };
     match template.render() {
         Ok(body) => (StatusCode::UNPROCESSABLE_ENTITY, Html(body)).into_response(),
         Err(e) => (
@@ -505,6 +504,7 @@ impl IntoResponse for AppError {
 
         let template = ServerErrorPageTemplate {
             message: format!("Internal server error: {}", self.0),
+            current_path: String::new(),
         };
 
         match template.render() {
@@ -519,6 +519,49 @@ impl IntoResponse for AppError {
             }
         }
     }
+}
+
+async fn hermes_page(State(state): State<Arc<AppState>>) -> Result<Html<String>, AppError> {
+    let mut template = HermesPageTemplate {
+        reachable: false,
+        version: None,
+        active_profile: None,
+        profiles: Vec::new(),
+        error: None,
+        base_url: None,
+        current_path: "/hermes".to_string(),
+    };
+
+    if let Some(hermes) = &state.hermes {
+        let health = hermes.health().await.unwrap_or(HermesHealth {
+            reachable: false,
+            version: None,
+        });
+        template.reachable = health.reachable;
+        template.version = health.version;
+        template.base_url = Some(hermes.base_url().to_string());
+        match hermes.list_profiles().await {
+            Ok(profiles) => {
+                template.profiles = profiles.into_iter().map(|p| p.name).collect();
+            }
+            Err(e) => {
+                template.error = Some(format!("Failed to list profiles: {e}"));
+            }
+        }
+        if template.reachable {
+            match hermes.get_active_profile().await {
+                Ok(Some(p)) => template.active_profile = Some(p.name),
+                Ok(None) => {}
+                Err(e) => {
+                    template.error = Some(format!("Failed to get active profile: {e}"));
+                }
+            }
+        }
+    } else {
+        template.error = Some("Hermes is not configured".to_string());
+    }
+
+    Ok(Html(template.render()?))
 }
 
 #[cfg(test)]
@@ -543,6 +586,7 @@ mod tests {
                 ],
             ),
             live_accounts: Arc::new(crate::hyperliquid::live_state::LiveAccountStore::new()),
+            hermes: None,
         })
     }
 
@@ -578,6 +622,32 @@ mod tests {
         }
 
         String::from_utf8_lossy(&buf).into_owned()
+    }
+
+    #[tokio::test]
+    async fn hermes_page_renders_not_configured_state() {
+        let state = test_state().await;
+
+        let app = router(state);
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/hermes")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = response.into_body();
+        let bytes = http_body_util::BodyExt::collect(body)
+            .await
+            .unwrap()
+            .to_bytes();
+        let text = String::from_utf8_lossy(&bytes).into_owned();
+        assert!(text.contains("Hermes"));
+        assert!(text.contains("Hermes is not configured"));
     }
 
     #[tokio::test]
@@ -784,6 +854,7 @@ mod tests {
             enabled: true,
             display_name,
             prompt: String::new(),
+            soul: String::new(),
             wallet_address: wallet_address.clone(),
             environment: "live".to_string(),
             api_key: format!("balance-stream-test-{timestamp}"),
@@ -800,6 +871,41 @@ mod tests {
     fn random_private_key() -> String {
         use rand::Rng;
         format!("0x{}", hex::encode(rand::thread_rng().r#gen::<[u8; 32]>()))
+    }
+
+    #[tokio::test]
+    async fn post_agents_with_soul_persists_soul_text() {
+        let state = test_state().await;
+        let pool = state.db_pool.clone();
+
+        let app = router(state);
+        let timestamp = chrono::Utc::now().timestamp_millis();
+        let display_name = format!("SoulTest{}", timestamp);
+        let agent_key = slugify_agent_key(&display_name);
+        let private_key = random_private_key();
+        let body = format!(
+            "display_name={}&hyperliquid_private_key={}&soul=I+am+a+trader.",
+            display_name, private_key
+        );
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/agents")
+                    .header("content-type", "application/x-www-form-urlencoded")
+                    .body(Body::from(body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::SEE_OTHER);
+
+        let stored = get_agent(&pool, &agent_key)
+            .await
+            .expect("get agent")
+            .expect("agent present");
+        assert_eq!(stored.soul, "I am a trader.");
     }
 
     #[tokio::test]

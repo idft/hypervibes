@@ -8,6 +8,8 @@ pub struct AppConfig {
     pub bind_addr: String,
     pub agents_encryption_key: [u8; 32],
     pub agents_encryption_key_id: String,
+    pub hermes_dashboard_url: String,
+    pub hermes_dashboard_session_token: Option<String>,
 }
 
 impl AppConfig {
@@ -17,6 +19,8 @@ impl AppConfig {
             bind_addr: bind_addr_from_env(),
             agents_encryption_key: agents_encryption_key_from_env()?,
             agents_encryption_key_id: agents_encryption_key_id_from_env()?,
+            hermes_dashboard_url: hermes_dashboard_url_from_env(),
+            hermes_dashboard_session_token: hermes_dashboard_session_token_from_env(),
         })
     }
 }
@@ -84,4 +88,17 @@ fn agents_encryption_key_from_env() -> Result<[u8; 32]> {
 fn agents_encryption_key_id_from_env() -> Result<String> {
     env::var("AGENTS_ENCRYPTION_KEY_ID")
         .context("missing AGENTS_ENCRYPTION_KEY_ID environment variable")
+}
+
+fn hermes_dashboard_url_from_env() -> String {
+    let host = env::var("HERMES_DASHBOARD_HOST").unwrap_or_else(|_| "127.0.0.1".to_string());
+    let port = env::var("HERMES_DASHBOARD_PORT").unwrap_or_else(|_| "19119".to_string());
+    format!("http://{host}:{port}")
+}
+
+fn hermes_dashboard_session_token_from_env() -> Option<String> {
+    env::var("HERMES_DASHBOARD_SESSION_TOKEN")
+        .ok()
+        .map(|k| k.trim().to_string())
+        .filter(|k| !k.is_empty())
 }
