@@ -84,6 +84,72 @@ fn dash_cell() -> MoneyCell {
     }
 }
 
+/// A number rendered as individual digit spans so the frontend can run a
+/// roll animation when the value changes.
+///
+/// * `raw` is the numeric string used to decide animation direction.
+/// * `value` is the full human-readable text shown to the user.
+/// * `chars` are the characters that should actually roll; `prefix` and
+///   `suffix` are rendered as static spans so symbols such as parentheses
+///   around a negative PnL never animate or take on the flash color.
+#[derive(Debug, Clone)]
+pub struct AnimatedNumber {
+    pub value: String,
+    pub raw: String,
+    pub chars: Vec<char>,
+    pub color_class: &'static str,
+    pub prefix: String,
+    pub suffix: String,
+}
+
+impl AnimatedNumber {
+    pub fn from_decimal(value: Decimal, color_class: &'static str) -> Self {
+        let formatted = format!("{:.4}", value);
+        Self {
+            raw: value.to_string(),
+            value: formatted.clone(),
+            chars: formatted.chars().collect(),
+            color_class,
+            prefix: String::new(),
+            suffix: String::new(),
+        }
+    }
+
+    pub fn for_pnl(raw_value: Decimal) -> Self {
+        if raw_value.is_zero() {
+            Self {
+                value: "-".to_string(),
+                raw: raw_value.to_string(),
+                chars: vec!['-'],
+                color_class: "text-zinc-500",
+                prefix: String::new(),
+                suffix: String::new(),
+            }
+        } else {
+            let abs = raw_value.abs();
+            let formatted = format!("{:.4}", abs);
+            let (value, color_class, prefix, suffix) = if raw_value.is_sign_negative() {
+                (
+                    format!("({formatted})"),
+                    "text-red-400",
+                    "(".to_string(),
+                    ")".to_string(),
+                )
+            } else {
+                (formatted.clone(), "text-emerald-400", String::new(), String::new())
+            };
+            Self {
+                raw: raw_value.to_string(),
+                value,
+                chars: formatted.chars().collect(),
+                color_class,
+                prefix,
+                suffix,
+            }
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct TransactionView {
     pub row: AccountTransactionRow,
@@ -229,25 +295,13 @@ impl AccountBalanceView {
         }
     }
 
-    /// Format the total balance as a fixed-precision USDC string.
+    /// The animated total balance value.
     ///
     /// Returns `None` when the value is not yet known; the template uses
     /// this to render a `Loading…` placeholder.
-    pub fn formatted_total(&self) -> Option<String> {
-        self.total_balance.map(format_usdc_balance)
-    }
-
-    /// Raw decimal string for the `data-balance-value` attribute used by
-    /// the roll animation on the frontend.
-    pub fn raw_total(&self) -> Option<String> {
-        self.total_balance.map(|v| v.to_string())
-    }
-
-    /// Individual characters of the formatted balance, for per-digit
-    /// roll animation in the template.
-    pub fn formatted_chars(&self) -> Option<Vec<char>> {
+    pub fn total(&self) -> Option<AnimatedNumber> {
         self.total_balance
-            .map(|v| format_usdc_balance(v).chars().collect())
+            .map(|v| AnimatedNumber::from_decimal(v, "text-zinc-100"))
     }
 
     /// Short human-readable status label, suitable for a small caption.
@@ -263,10 +317,6 @@ impl AccountBalanceView {
             LiveConnectionStatus::Stopped => "stopped",
         }
     }
-}
-
-fn format_usdc_balance(value: Decimal) -> String {
-    format!("{:.4}", value)
 }
 
 #[derive(Template)]
@@ -446,7 +496,7 @@ pub struct OpenPositionView {
 #[allow(dead_code)]
 pub struct OpenPositionsSummary {
     pub position_count: usize,
-    pub total_u_pnl: MoneyCell,
+    pub total_u_pnl: AnimatedNumber,
     pub total_notional: String,
     pub total_margin_used: String,
 }
@@ -502,7 +552,7 @@ impl OpenPositionsView {
 
         let summary = OpenPositionsSummary {
             position_count: positions.len(),
-            total_u_pnl: money_cell_for_pnl(total_u_pnl),
+            total_u_pnl: AnimatedNumber::for_pnl(total_u_pnl),
             total_notional: format_money_text(Some(total_notional)),
             total_margin_used: format_money_text(Some(total_margin)),
         };

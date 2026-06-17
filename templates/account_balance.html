@@ -2,8 +2,8 @@
     <div>
         <div class="text-xs uppercase tracking-[0.16em] text-zinc-500">Total balance</div>
         <div class="mt-1 flex items-baseline gap-2">
-            {% if let Some(formatted) = view.formatted_total() %}
-            <span class="font-mono text-2xl font-semibold tabular-nums text-zinc-100 balance-roll inline-block overflow-hidden align-bottom" data-balance-value="{{ view.raw_total().unwrap() }}">{% for ch in view.formatted_chars().unwrap() %}<span class="balance-digit inline-block" data-digit="{{ ch }}">{{ ch }}</span>{% endfor %}</span>
+            {% if let Some(total) = view.total() %}
+            <span class="font-mono text-2xl font-semibold tabular-nums number-roll inline-block overflow-hidden align-bottom {{ total.color_class }}" data-animate-key="account-balance" data-raw-value="{{ total.raw }}">{% if !total.prefix.is_empty() %}<span class="inline-block">{{ total.prefix }}</span>{% endif %}{% for ch in total.chars %}<span class="number-digit inline-block" data-digit="{{ ch }}">{{ ch }}</span>{% endfor %}{% if !total.suffix.is_empty() %}<span class="inline-block">{{ total.suffix }}</span>{% endif %}</span>
             <span class="text-xs text-zinc-500">USDC</span>
             {% else %}
             <span class="text-base italic text-zinc-500">Loading…</span>

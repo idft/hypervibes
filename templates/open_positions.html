@@ -14,7 +14,7 @@
         </div>
         <div class="rounded-xl border border-zinc-800 bg-zinc-950/70 p-4">
             <div class="text-xs uppercase tracking-[0.16em] text-zinc-500">Total uPnL</div>
-            <div class="mt-2 font-mono text-2xl font-semibold tabular-nums {{ view.summary.total_u_pnl.color_class }}">{{ view.summary.total_u_pnl.value }}</div>
+            <div class="mt-2 font-mono text-2xl font-semibold tabular-nums number-roll inline-block overflow-hidden align-bottom {{ view.summary.total_u_pnl.color_class }}" data-animate-key="total-upnl" data-raw-value="{{ view.summary.total_u_pnl.raw }}">{% if !view.summary.total_u_pnl.prefix.is_empty() %}<span class="inline-block">{{ view.summary.total_u_pnl.prefix }}</span>{% endif %}{% for ch in view.summary.total_u_pnl.chars %}<span class="number-digit inline-block" data-digit="{{ ch }}">{{ ch }}</span>{% endfor %}{% if !view.summary.total_u_pnl.suffix.is_empty() %}<span class="inline-block">{{ view.summary.total_u_pnl.suffix }}</span>{% endif %}</div>
         </div>
         <div class="rounded-xl border border-zinc-800 bg-zinc-950/70 p-4">
             <div class="text-xs uppercase tracking-[0.16em] text-zinc-500">Total notional</div>

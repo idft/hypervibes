@@ -1,5 +1,5 @@
 import * as htmx from "htmx.org";
-(window as any).htmx = htmx;
+(window as unknown as { htmx: typeof htmx }).htmx = htmx;
 import "htmx-ext-sse";
 
 import { render } from "timeago.js";
@@ -11,7 +11,12 @@ function renderTimeago(root: ParentNode = document) {
   }
 }
 
-let prevFormatted: string | null = null;
+interface NumberState {
+  raw: string;
+  formatted: string;
+}
+
+const previousValues = new Map<string, NumberState>();
 
 const rollUpKeyframes: Keyframe[] = [
   { transform: "translateY(-0.4em)", opacity: "0", color: "#4ade80" },
@@ -31,21 +36,33 @@ const rollTiming: KeyframeAnimationOptions = {
   fill: "forwards",
 };
 
-function animateBalanceRoll(container: HTMLElement) {
-  const digits = container.querySelectorAll<HTMLElement>(".balance-digit");
+function readFormattedDigits(container: HTMLElement): string {
+  const digits = container.querySelectorAll<HTMLElement>(".number-digit");
+  return Array.from(digits, (d) => d.getAttribute("data-digit") ?? "").join("");
+}
+
+function animateNumberRoll(container: HTMLElement) {
+  const key = container.getAttribute("data-animate-key");
+  if (!key) return;
+
+  const digits = container.querySelectorAll<HTMLElement>(".number-digit");
   if (digits.length === 0) return;
 
-  const current = Array.from(digits, (d) => d.getAttribute("data-digit") ?? "").join("");
+  const rawValue = container.getAttribute("data-raw-value") ?? "";
+  const formattedValue = readFormattedDigits(container);
 
-  if (prevFormatted != null && prevFormatted !== current) {
-    const rawPrev = parseFloat(prevFormatted);
-    const rawNext = parseFloat(current);
+  const prev = previousValues.get(key);
+
+  if (prev && prev.formatted !== formattedValue) {
+    const rawPrev = parseFloat(prev.raw);
+    const rawNext = parseFloat(rawValue);
     const up = !isNaN(rawPrev) && !isNaN(rawNext) && rawNext > rawPrev;
     const keyframes = up ? rollUpKeyframes : rollDownKeyframes;
 
     let firstChanged = -1;
     for (let i = 0; i < digits.length; i++) {
-      if (i < prevFormatted.length && prevFormatted[i] !== current[i]) {
+      const digit = digits[i].getAttribute("data-digit") ?? "";
+      if (i >= prev.formatted.length || prev.formatted[i] !== digit) {
         firstChanged = i;
         break;
       }
@@ -60,26 +77,27 @@ function animateBalanceRoll(container: HTMLElement) {
     }
   }
 
-  prevFormatted = current;
+  previousValues.set(key, { raw: rawValue, formatted: formattedValue });
+}
+
+function seedNumberRoll(container: HTMLElement) {
+  const key = container.getAttribute("data-animate-key");
+  if (!key) return;
+  const rawValue = container.getAttribute("data-raw-value") ?? "";
+  const formattedValue = readFormattedDigits(container);
+  previousValues.set(key, { raw: rawValue, formatted: formattedValue });
 }
 
 function init() {
   renderTimeago();
 
-  const initial = document.querySelector(".balance-roll") as HTMLElement | null;
-  if (initial) {
-    const digits = initial.querySelectorAll<HTMLElement>(".balance-digit");
-    if (digits.length > 0) {
-      prevFormatted = Array.from(digits, (d) => d.getAttribute("data-digit") ?? "").join("");
-    }
-  }
+  document.querySelectorAll<HTMLElement>(".number-roll").forEach(seedNumberRoll);
 
   document.addEventListener("htmx:sseMessage", (e: Event) => {
     const detail = (e as CustomEvent).detail;
-    if (detail?.type === "balance") {
+    if (detail?.type === "balance" || detail?.type === "positions") {
       setTimeout(() => {
-        const roll = document.querySelector(".balance-roll") as HTMLElement | null;
-        if (roll) animateBalanceRoll(roll);
+        document.querySelectorAll<HTMLElement>(".number-roll").forEach(animateNumberRoll);
       }, 50);
     }
   });
@@ -95,7 +113,7 @@ function init() {
           continue;
         }
         if (node.matches("time.timeago")) {
-          render([node]);
+          render([node as HTMLElement]);
         }
         renderTimeago(node);
       }

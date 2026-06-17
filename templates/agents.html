@@ -53,8 +53,8 @@
                                 {% endif %}
                             </td>
                             <td class="px-5 py-4 align-top text-right">
-                                {% if let Some(formatted) = entry.account_balance.formatted_total() %}
-                                <div class="font-mono text-sm font-semibold tabular-nums text-emerald-400">{{ formatted }}</div>
+                                {% if let Some(total) = entry.account_balance.total() %}
+                                <div class="font-mono text-sm font-semibold tabular-nums text-emerald-400">{{ total.value }}</div>
                                 <div class="mt-0.5 text-[10px] uppercase tracking-[0.16em] text-zinc-500">{{ entry.account_balance.status_label() }} · USDC</div>
                                 {% else %}
                                 <span class="text-xs italic text-zinc-500">Loading…</span>
