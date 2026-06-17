@@ -5,6 +5,7 @@ This is a framework for allowing AI Agents (such as Hermes) to trade crypto on H
 See `docs/` for project documentation.  Keep documentation up to date when making code changes.
 
 The server (`cargo run`) may be running in another tmux page, for reading logs and restarting the server
+(Make sure it is in the same directory as this project, and not another very-similar project!)
 
 ## Stack
 
