@@ -46,8 +46,8 @@
                             </td>
                             <td class="px-5 py-4 align-top font-mono text-xs text-zinc-300">{{ entry.row.wallet_address }}</td>
                             <td class="px-5 py-4 align-top text-zinc-300">
-                                {% if let Some(last_used) = entry.row.api_key_last_used_at %}
-                                <span title="{{ last_used }}">Used</span>
+                                {% if let Some(iso) = entry.api_key_last_used_iso %}
+                                <time class="timeago" title="{{ iso }}" datetime="{{ iso }}">{{ iso }}</time>
                                 {% else %}
                                 Never used
                                 {% endif %}

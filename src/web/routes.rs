@@ -89,9 +89,13 @@ async fn agents_index(State(state): State<Arc<AppState>>) -> Result<Html<String>
                         ..Default::default()
                     });
             let account_balance = AccountBalanceView::from_live_state(snapshot);
+            let api_key_last_used_iso = row.api_key_last_used_at.map(|t| {
+                t.to_rfc3339_opts(chrono::SecondsFormat::AutoSi, true)
+            });
             AgentListEntry {
                 row,
                 account_balance,
+                api_key_last_used_iso,
             }
         })
         .collect();

@@ -117,6 +117,11 @@ impl TransactionView {
 pub struct AgentListEntry {
     pub row: AgentListRow,
     pub account_balance: AccountBalanceView,
+    /// API key `last_used_at` formatted as an ISO 8601 / RFC 3339 string
+    /// with a `Z` suffix, suitable for the `datetime` attribute of a
+    /// `<time>` element consumed by timeago.js. `None` mirrors
+    /// `row.api_key_last_used_at`.
+    pub api_key_last_used_iso: Option<String>,
 }
 
 #[derive(Template)]
@@ -763,6 +768,7 @@ mod tests {
                 status: crate::hyperliquid::live_state::LiveConnectionStatus::Connected,
                 updated_at: Some(Utc::now()),
             },
+            api_key_last_used_iso: None,
         };
         let template = AgentsPageTemplate {
             agents: vec![entry],
@@ -789,6 +795,7 @@ mod tests {
                 status: crate::hyperliquid::live_state::LiveConnectionStatus::Starting,
                 updated_at: None,
             },
+            api_key_last_used_iso: None,
         };
         let template = AgentsPageTemplate {
             agents: vec![entry],
