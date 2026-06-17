@@ -3,7 +3,7 @@
         <div class="text-xs uppercase tracking-[0.16em] text-zinc-500">Total balance</div>
         <div class="mt-1 flex items-baseline gap-2">
             {% if let Some(formatted) = view.formatted_total() %}
-            <span class="font-mono text-2xl font-semibold tabular-nums text-emerald-400">{{ formatted }}</span>
+            <span class="font-mono text-2xl font-semibold tabular-nums text-zinc-100 balance-roll inline-block overflow-hidden align-bottom" data-balance-value="{{ view.raw_total().unwrap() }}">{% for ch in view.formatted_chars().unwrap() %}<span class="balance-digit inline-block" data-digit="{{ ch }}">{{ ch }}</span>{% endfor %}</span>
             <span class="text-xs text-zinc-500">USDC</span>
             {% else %}
             <span class="text-base italic text-zinc-500">Loading…</span>

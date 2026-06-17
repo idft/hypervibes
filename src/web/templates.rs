@@ -237,6 +237,19 @@ impl AccountBalanceView {
         self.total_balance.map(format_usdc_balance)
     }
 
+    /// Raw decimal string for the `data-balance-value` attribute used by
+    /// the roll animation on the frontend.
+    pub fn raw_total(&self) -> Option<String> {
+        self.total_balance.map(|v| v.to_string())
+    }
+
+    /// Individual characters of the formatted balance, for per-digit
+    /// roll animation in the template.
+    pub fn formatted_chars(&self) -> Option<Vec<char>> {
+        self.total_balance
+            .map(|v| format_usdc_balance(v).chars().collect())
+    }
+
     /// Short human-readable status label, suitable for a small caption.
     pub fn status_label(&self) -> &'static str {
         match self.status {

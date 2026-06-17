@@ -23,7 +23,7 @@ Frontend assets are managed with `pnpm` and built via `esbuild` and Tailwind CSS
 - Built output: `static/dist/app.js`, `static/dist/app.css` (gitignored)
 - `build.rs` runs `pnpm install --frozen-lockfile` and `pnpm build` automatically during `cargo build`/`cargo run` when sources or templates change.
 
-You need `pnpm` installed. To build assets manually: `pnpm build`.
+Don't manually build the front-end assets.
 
 ## Testing
 
