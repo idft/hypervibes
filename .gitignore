@@ -2,6 +2,7 @@
 target/
 .opencode/plans/*.md
 node_modules
+static/dist
 HANDOFF.md
 __pycache__/
 *.py[cod]
