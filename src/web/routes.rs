@@ -89,9 +89,9 @@ async fn agents_index(State(state): State<Arc<AppState>>) -> Result<Html<String>
                         ..Default::default()
                     });
             let account_balance = AccountBalanceView::from_live_state(snapshot);
-            let api_key_last_used_iso = row.api_key_last_used_at.map(|t| {
-                t.to_rfc3339_opts(chrono::SecondsFormat::AutoSi, true)
-            });
+            let api_key_last_used_iso = row
+                .api_key_last_used_at
+                .map(|t| t.to_rfc3339_opts(chrono::SecondsFormat::AutoSi, true));
             AgentListEntry {
                 row,
                 account_balance,
@@ -175,7 +175,7 @@ async fn agents_show(
                     });
             let account_balance_view = AccountBalanceView::from_live_state(live_snapshot.clone());
             let account_balance_html =
-                AccountBalancePartialTemplate::render_view(account_balance_view)
+                AccountBalancePartialTemplate::render_view(account_balance_view.clone())
                     .map_err(anyhow::Error::from)?;
             let open_positions_view = OpenPositionsView::from_live_state(live_snapshot.clone());
             let open_positions_html =

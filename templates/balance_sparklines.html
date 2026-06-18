@@ -1,5 +1,5 @@
 {% for s in sparklines %}
-<div>
+<div class="p-1">
     <div class="text-xs uppercase tracking-[0.16em] text-zinc-500">{{ s.label }}</div>
     <div class="mt-1 flex items-center gap-3">
         <span class="font-mono text-2xl font-semibold tabular-nums {{ s.change.color_class }}">{{ s.change.value }}</span>

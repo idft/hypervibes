@@ -7,34 +7,15 @@
         <p class="mt-1 text-xs text-zinc-500">When this account holds a perp position it will appear here.</p>
     </div>
     {% else %}
-    <div class="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-        <div class="rounded-xl border border-zinc-800 bg-zinc-950/70 p-4">
-            <div class="text-xs uppercase tracking-[0.16em] text-zinc-500">Open positions</div>
-            <div class="mt-2 font-mono text-2xl font-semibold tabular-nums text-white">{{ view.summary.position_count }}</div>
-        </div>
-        <div class="rounded-xl border border-zinc-800 bg-zinc-950/70 p-4">
-            <div class="text-xs uppercase tracking-[0.16em] text-zinc-500">Total uPnL</div>
-            <div class="mt-2 font-mono text-2xl font-semibold tabular-nums number-roll inline-block overflow-hidden align-bottom {{ view.summary.total_u_pnl.color_class }}" data-animate-key="total-upnl" data-raw-value="{{ view.summary.total_u_pnl.raw }}">{% if !view.summary.total_u_pnl.prefix.is_empty() %}<span class="inline-block">{{ view.summary.total_u_pnl.prefix }}</span>{% endif %}{% for ch in view.summary.total_u_pnl.chars %}<span class="number-digit inline-block" data-digit="{{ ch }}">{{ ch }}</span>{% endfor %}{% if !view.summary.total_u_pnl.suffix.is_empty() %}<span class="inline-block">{{ view.summary.total_u_pnl.suffix }}</span>{% endif %}</div>
-        </div>
-        <div class="rounded-xl border border-zinc-800 bg-zinc-950/70 p-4">
-            <div class="text-xs uppercase tracking-[0.16em] text-zinc-500">Total notional</div>
-            <div class="mt-2 font-mono text-2xl font-semibold tabular-nums text-zinc-200">{{ view.summary.total_notional }}</div>
-        </div>
-        <div class="rounded-xl border border-zinc-800 bg-zinc-950/70 p-4">
-            <div class="text-xs uppercase tracking-[0.16em] text-zinc-500">Total margin used</div>
-            <div class="mt-2 font-mono text-2xl font-semibold tabular-nums text-zinc-200">{{ view.summary.total_margin_used }}</div>
-        </div>
-    </div>
-
-    <div class="mt-4 overflow-x-auto">
+    <div class="overflow-x-auto">
         <table class="min-w-full divide-y divide-zinc-800 text-sm">
             <thead class="bg-zinc-950/60 text-left text-xs uppercase tracking-[0.16em] text-zinc-500">
                 <tr>
-                    <th class="px-4 py-3 font-medium">Coin</th>
-                    <th class="px-4 py-3 font-medium">Side</th>
+                    <th class="px-4 py-3 font-medium"></th>
+                    <th class="px-4 py-3 font-medium"></th>
                     <th class="px-4 py-3 text-right font-medium">Size</th>
                     <th class="px-4 py-3 text-right font-medium">Entry</th>
-                    <th class="px-4 py-3 text-right font-medium">Mark / NTL</th>
+                    <th class="px-4 py-3 text-right font-medium">Notional</th>
                     <th class="px-4 py-3 text-right font-medium">uPnL</th>
                     <th class="px-4 py-3 text-right font-medium">Liq</th>
                     <th class="px-4 py-3 text-right font-medium">Margin</th>

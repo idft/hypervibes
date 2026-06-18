@@ -35,8 +35,8 @@
 
     <section class="mt-2 space-y-2" hx-ext="sse" sse-connect="/agents/{{ agent.agent_key }}/live/stream">
         <section class="rounded-2xl border border-zinc-800 bg-[#0d0d10] p-6">
-            <div class="grid grid-cols-1 gap-6 sm:grid-cols-3">
-                <div sse-swap="balance">{{account_balance_html|safe}}</div>
+            <div class="grid grid-cols-1 gap-6 sm:grid-cols-4">
+                <div class="contents" sse-swap="balance">{{account_balance_html|safe}}</div>
                 {{ sparklines_html|safe }}
             </div>
             <dl class="mt-6 grid gap-4 border-t border-zinc-800 pt-6 sm:grid-cols-2">

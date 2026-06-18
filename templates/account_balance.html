@@ -1,6 +1,6 @@
-<div id="account-balance-content" class="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
-    <div>
-        <div class="text-xs uppercase tracking-[0.16em] text-zinc-500">Total balance</div>
+<div id="account-balance-content" class="contents">
+    <div class="p-1">
+        <div class="text-xs uppercase tracking-[0.16em] text-zinc-500">Balance</div>
         <div class="mt-1 flex items-baseline gap-2">
             {% if let Some(total) = view.total() %}
             <span class="font-mono text-2xl font-semibold tabular-nums number-roll inline-block overflow-hidden align-bottom {{ total.color_class }}" data-animate-key="account-balance" data-raw-value="{{ total.raw }}">{% if !total.prefix.is_empty() %}<span class="inline-block">{{ total.prefix }}</span>{% endif %}{% for ch in total.chars %}<span class="number-digit inline-block" data-digit="{{ ch }}">{{ ch }}</span>{% endfor %}{% if !total.suffix.is_empty() %}<span class="inline-block">{{ total.suffix }}</span>{% endif %}</span>
@@ -9,5 +9,9 @@
             <span class="text-base italic text-zinc-500">Loading…</span>
             {% endif %}
         </div>
+    </div>
+    <div class="p-1">
+        <div class="text-xs uppercase tracking-[0.16em] text-zinc-500">Unrealized</div>
+        <div class="mt-1 font-mono text-2xl font-semibold tabular-nums number-roll inline-block overflow-hidden align-bottom {{ view.total_u_pnl.color_class }}" data-animate-key="total-upnl" data-raw-value="{{ view.total_u_pnl.raw }}">{% if !view.total_u_pnl.prefix.is_empty() %}<span class="inline-block">{{ view.total_u_pnl.prefix }}</span>{% endif %}{% for ch in view.total_u_pnl.chars %}<span class="number-digit inline-block" data-digit="{{ ch }}">{{ ch }}</span>{% endfor %}{% if !view.total_u_pnl.suffix.is_empty() %}<span class="inline-block">{{ view.total_u_pnl.suffix }}</span>{% endif %}</div>
     </div>
 </div>

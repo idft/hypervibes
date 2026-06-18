@@ -24,6 +24,7 @@ Frontend assets are managed with `pnpm` and built via `esbuild` and Tailwind CSS
 - `build.rs` runs `pnpm install --frozen-lockfile` and `pnpm build` automatically during `cargo build`/`cargo run` when sources or templates change.
 
 Don't manually build the front-end assets.
+Web server defaults to running on port 3003
 
 ## Testing
 

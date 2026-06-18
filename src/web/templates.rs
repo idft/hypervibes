@@ -19,11 +19,46 @@ pub struct MoneyCell {
     pub color_class: &'static str,
 }
 
+fn format_decimal_with_commas(value: Decimal, decimals: usize) -> String {
+    let formatted = format!("{:.precision$}", value, precision = decimals);
+    add_thousands_separators(&formatted)
+}
+
+fn add_thousands_separators(value: &str) -> String {
+    let (sign, unsigned) = if let Some(stripped) = value.strip_prefix('-') {
+        ("-", stripped)
+    } else if let Some(stripped) = value.strip_prefix('+') {
+        ("+", stripped)
+    } else {
+        ("", value)
+    };
+
+    let (integer, fractional) = unsigned.split_once('.').unwrap_or((unsigned, ""));
+    let mut grouped_reversed = String::with_capacity(integer.len() + integer.len() / 3);
+    for (index, ch) in integer.chars().rev().enumerate() {
+        if index > 0 && index % 3 == 0 {
+            grouped_reversed.push(',');
+        }
+        grouped_reversed.push(ch);
+    }
+    let grouped_integer: String = grouped_reversed.chars().rev().collect();
+
+    if fractional.is_empty() {
+        format!("{sign}{grouped_integer}")
+    } else {
+        format!("{sign}{grouped_integer}.{fractional}")
+    }
+}
+
 pub fn format_money_text(amount: Option<Decimal>) -> String {
+    format_money_text_with_decimals(amount, 4)
+}
+
+pub fn format_money_text_with_decimals(amount: Option<Decimal>, decimals: usize) -> String {
     match amount {
         None => "-".to_string(),
         Some(value) => {
-            let formatted = format!("{:.4}", value.abs());
+            let formatted = format_decimal_with_commas(value.abs(), decimals);
             if value.is_sign_negative() {
                 format!("({formatted})")
             } else {
@@ -34,11 +69,15 @@ pub fn format_money_text(amount: Option<Decimal>) -> String {
 }
 
 pub fn format_money_cell(amount: Option<Decimal>) -> MoneyCell {
+    format_money_cell_with_decimals(amount, 4)
+}
+
+pub fn format_money_cell_with_decimals(amount: Option<Decimal>, decimals: usize) -> MoneyCell {
     match amount {
         None => dash_cell(),
         Some(value) if value.is_zero() => dash_cell(),
         Some(value) => {
-            let formatted = format!("{:.4}", value.abs());
+            let formatted = format_decimal_with_commas(value.abs(), decimals);
             if value.is_sign_negative() {
                 MoneyCell {
                     value: format!("({formatted})"),
@@ -57,11 +96,18 @@ pub fn format_money_cell(amount: Option<Decimal>) -> MoneyCell {
 /// Like [`format_money_cell`] but prefixes positive values with `+`.
 /// Used for sparkline change amounts where the sign is part of the display.
 pub fn format_signed_money_cell(amount: Option<Decimal>) -> MoneyCell {
+    format_signed_money_cell_with_decimals(amount, 4)
+}
+
+pub fn format_signed_money_cell_with_decimals(
+    amount: Option<Decimal>,
+    decimals: usize,
+) -> MoneyCell {
     match amount {
         None => dash_cell(),
         Some(value) if value.is_zero() => dash_cell(),
         Some(value) => {
-            let formatted = format!("{:.4}", value.abs());
+            let formatted = format_decimal_with_commas(value.abs(), decimals);
             if value.is_sign_negative() {
                 MoneyCell {
                     value: format!("({formatted})"),
@@ -81,6 +127,28 @@ fn dash_cell() -> MoneyCell {
     MoneyCell {
         value: "-".to_string(),
         color_class: "text-zinc-500",
+    }
+}
+
+fn format_neutral_money_cell(amount: Option<Decimal>) -> MoneyCell {
+    format_neutral_money_cell_with_decimals(amount, 4)
+}
+
+fn format_neutral_money_cell_with_decimals(amount: Option<Decimal>, decimals: usize) -> MoneyCell {
+    match amount {
+        None => dash_cell(),
+        Some(value) if value.is_zero() => dash_cell(),
+        Some(value) => {
+            let formatted = format_decimal_with_commas(value.abs(), decimals);
+            MoneyCell {
+                value: if value.is_sign_negative() {
+                    format!("({formatted})")
+                } else {
+                    formatted
+                },
+                color_class: "text-zinc-300",
+            }
+        }
     }
 }
 
@@ -104,7 +172,7 @@ pub struct AnimatedNumber {
 
 impl AnimatedNumber {
     pub fn from_decimal(value: Decimal, color_class: &'static str) -> Self {
-        let formatted = format!("{:.4}", value);
+        let formatted = format_decimal_with_commas(value, 4);
         Self {
             raw: value.to_string(),
             value: formatted.clone(),
@@ -127,7 +195,7 @@ impl AnimatedNumber {
             }
         } else {
             let abs = raw_value.abs();
-            let formatted = format!("{:.4}", abs);
+            let formatted = format_decimal_with_commas(abs, 4);
             let (value, color_class, prefix, suffix) = if raw_value.is_sign_negative() {
                 (
                     format!("({formatted})"),
@@ -136,7 +204,12 @@ impl AnimatedNumber {
                     ")".to_string(),
                 )
             } else {
-                (formatted.clone(), "text-emerald-400", String::new(), String::new())
+                (
+                    formatted.clone(),
+                    "text-emerald-400",
+                    String::new(),
+                    String::new(),
+                )
             };
             Self {
                 raw: raw_value.to_string(),
@@ -243,7 +316,7 @@ pub struct HermesPageTemplate {
 /// both the initial render (when the page is first loaded) and the
 /// live-updating SSE swaps (when the orchestrator pushes a new value).
 ///
-/// The value shown mirrors the "Total balance" in the Hyperliquid UI:
+/// The value shown mirrors the "Balance" shown in the Hyperliquid UI:
 /// the perps `crossMarginSummary.accountValue` plus the spot USDC that is
 /// *available* to use. Adding only the available spot (not the spot
 /// total) avoids double-counting the USDC that has been transferred to
@@ -256,6 +329,7 @@ pub struct AccountBalanceView {
     pub account_address: String,
     pub environment: String,
     pub total_balance: Option<Decimal>,
+    pub total_u_pnl: AnimatedNumber,
     pub status: LiveConnectionStatus,
     pub updated_at: Option<DateTime<Utc>>,
 }
@@ -285,11 +359,17 @@ impl AccountBalanceView {
             (None, Some(spot_available)) => Some(spot_available),
             (None, None) => spot_usdc_total,
         };
+        let total_u_pnl = state
+            .open_positions
+            .iter()
+            .filter_map(|position| position.unrealized_pnl)
+            .fold(Decimal::ZERO, |acc, value| acc + value);
 
         Self {
             account_address: state.account_address,
             environment: state.environment,
             total_balance,
+            total_u_pnl: AnimatedNumber::for_pnl(total_u_pnl),
             status: state.status,
             updated_at: state.updated_at,
         }
@@ -588,11 +668,11 @@ fn position_view(pos: &LivePosition) -> OpenPositionView {
         coin: pos.coin.clone(),
         side,
         size: format_size(abs_szi),
-        entry_px: format_money_cell(pos.entry_px),
-        mark_px_or_value: format_money_text(pos.position_value),
+        entry_px: format_neutral_money_cell_with_decimals(pos.entry_px, 0),
+        mark_px_or_value: format_money_text_with_decimals(pos.position_value, 0),
         unrealized_pnl: money_cell_for_pnl(pos.unrealized_pnl.unwrap_or_default()),
-        liquidation_px: format_money_cell(pos.liquidation_px),
-        margin_used: format_money_cell(pos.margin_used),
+        liquidation_px: format_neutral_money_cell_with_decimals(pos.liquidation_px, 0),
+        margin_used: format_neutral_money_cell_with_decimals(pos.margin_used, 0),
         return_on_equity: roe,
         roe_color_class,
     }
@@ -603,7 +683,7 @@ fn money_cell_for_pnl(value: Decimal) -> MoneyCell {
         dash_cell()
     } else {
         let abs = value.abs();
-        let formatted = format!("{:.4}", abs);
+        let formatted = format_decimal_with_commas(abs, 4);
         if value.is_sign_negative() {
             MoneyCell {
                 value: format!("({formatted})"),
@@ -619,17 +699,17 @@ fn money_cell_for_pnl(value: Decimal) -> MoneyCell {
 }
 
 fn format_size(value: Decimal) -> String {
-    format!("{:.4}", value)
+    format_decimal_with_commas(value, 4)
 }
 
 fn format_signed_percent(value: Decimal, decimals: usize) -> String {
     let abs = value.abs();
     let formatted = match decimals {
-        0 => format!("{:.0}", abs),
-        1 => format!("{:.1}", abs),
-        2 => format!("{:.2}", abs),
-        3 => format!("{:.3}", abs),
-        _ => format!("{:.4}", abs),
+        0 => format_decimal_with_commas(abs, 0),
+        1 => format_decimal_with_commas(abs, 1),
+        2 => format_decimal_with_commas(abs, 2),
+        3 => format_decimal_with_commas(abs, 3),
+        _ => format_decimal_with_commas(abs, 4),
     };
     if value.is_sign_negative() {
         format!("-{formatted}%")
@@ -728,7 +808,7 @@ fn order_view(order: &LiveOpenOrder) -> OpenOrderView {
         order_type,
         size,
         orig_size,
-        price: format_money_cell(order.limit_px),
+        price: format_neutral_money_cell_with_decimals(order.limit_px, 0),
         tif,
         reduce_only,
         trigger_px: format_money_cell(order.trigger_px),
@@ -815,6 +895,7 @@ mod tests {
             account_address: "0x1234567890abcdef".to_string(),
             environment: "live".to_string(),
             total_balance: Some(rust_decimal::Decimal::new(232_6800, 4)),
+            total_u_pnl: AnimatedNumber::for_pnl(rust_decimal::Decimal::new(12_3400, 4)),
             status: crate::hyperliquid::live_state::LiveConnectionStatus::Connected,
             updated_at: Some(Utc::now()),
         }
@@ -828,6 +909,7 @@ mod tests {
                 account_address: "0x1234567890abcdef".to_string(),
                 environment: "live".to_string(),
                 total_balance: Some(rust_decimal::Decimal::new(232_6800, 4)),
+                total_u_pnl: AnimatedNumber::for_pnl(rust_decimal::Decimal::ZERO),
                 status: crate::hyperliquid::live_state::LiveConnectionStatus::Connected,
                 updated_at: Some(Utc::now()),
             },
@@ -855,6 +937,7 @@ mod tests {
                 account_address: "0x1234567890abcdef".to_string(),
                 environment: "live".to_string(),
                 total_balance: None,
+                total_u_pnl: AnimatedNumber::for_pnl(rust_decimal::Decimal::ZERO),
                 status: crate::hyperliquid::live_state::LiveConnectionStatus::Starting,
                 updated_at: None,
             },
@@ -906,7 +989,8 @@ mod tests {
         assert!(rendered.contains("Test Agent · Vibetrading"));
         assert!(rendered.contains("delete-modal"));
         assert!(rendered.contains("Delete agent"));
-        assert!(rendered.contains("Total balance"));
+        assert!(rendered.contains("Balance"));
+        assert!(rendered.contains("Unrealized"));
     }
 
     #[test]
@@ -915,11 +999,12 @@ mod tests {
             account_address: "0xabc".to_string(),
             environment: "live".to_string(),
             total_balance: None,
+            total_u_pnl: AnimatedNumber::for_pnl(rust_decimal::Decimal::ZERO),
             status: crate::hyperliquid::live_state::LiveConnectionStatus::Starting,
             updated_at: None,
         };
         let html = AccountBalancePartialTemplate::render_view(view).unwrap();
-        assert!(html.contains("Total balance"));
+        assert!(html.contains("Balance"));
         assert!(html.contains("Loading"));
         assert!(!html.contains("USDC"));
     }
@@ -928,7 +1013,8 @@ mod tests {
     fn account_balance_partial_renders_value_with_status() {
         let view = sample_account_balance_view();
         let html = AccountBalancePartialTemplate::render_view(view).unwrap();
-        assert!(html.contains("Total balance"));
+        assert!(html.contains("Balance"));
+        assert!(html.contains("Unrealized"));
         assert!(html.contains("232.6800"));
         assert!(html.contains("USDC"));
     }
@@ -960,6 +1046,7 @@ mod tests {
             view.total_balance,
             Some(rust_decimal::Decimal::new(232_6800, 4))
         );
+        assert_eq!(view.total_u_pnl.value, "-");
     }
 
     #[test]
@@ -980,6 +1067,28 @@ mod tests {
         assert_eq!(
             view.total_balance,
             Some(rust_decimal::Decimal::new(1000, 0))
+        );
+        assert_eq!(view.total_u_pnl.value, "-");
+    }
+
+    #[test]
+    fn animated_number_formats_with_thousands_separators() {
+        let number =
+            AnimatedNumber::from_decimal(rust_decimal::Decimal::new(1234567, 0), "text-zinc-100");
+        assert_eq!(number.value, "1,234,567.0000");
+        assert_eq!(number.chars.iter().collect::<String>(), "1,234,567.0000");
+    }
+
+    #[test]
+    fn money_formatters_support_custom_decimal_places() {
+        assert_eq!(
+            format_money_text_with_decimals(Some(rust_decimal::Decimal::new(1234567, 0)), 0),
+            "1,234,567"
+        );
+        assert_eq!(
+            format_neutral_money_cell_with_decimals(Some(rust_decimal::Decimal::new(31000, 0)), 0)
+                .value,
+            "31,000"
         );
     }
 
@@ -1002,6 +1111,31 @@ mod tests {
         let view = AccountBalanceView::from_live_state(state);
         // No margin snapshot yet -> use spot USDC available.
         assert_eq!(view.total_balance, Some(rust_decimal::Decimal::new(450, 0)));
+        assert_eq!(view.total_u_pnl.value, "-");
+    }
+
+    #[test]
+    fn balance_view_sums_total_upnl_from_open_positions() {
+        use crate::hyperliquid::live_state::{AccountLiveState, LivePosition};
+        let state = AccountLiveState {
+            account_address: "0xtest".to_string(),
+            environment: "live".to_string(),
+            status: LiveConnectionStatus::Connected,
+            open_positions: vec![
+                LivePosition {
+                    unrealized_pnl: Some(rust_decimal::Decimal::new(125, 0)),
+                    ..Default::default()
+                },
+                LivePosition {
+                    unrealized_pnl: Some(rust_decimal::Decimal::new(-25, 0)),
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        };
+        let view = AccountBalanceView::from_live_state(state);
+        assert_eq!(view.total_u_pnl.value, "100.0000");
+        assert_eq!(view.total_u_pnl.color_class, "text-emerald-400");
     }
 
     #[test]
@@ -1084,9 +1218,19 @@ mod tests {
         assert_eq!(view.summary.total_u_pnl.value, "(50.0000)");
         assert_eq!(view.summary.total_u_pnl.color_class, "text-red-400");
         // Notional: 30000 + 6000 = 36000
-        assert_eq!(view.summary.total_notional, "36000.0000");
+        assert_eq!(view.summary.total_notional, "36,000.0000");
         // Margin: 600 + 200 = 800
         assert_eq!(view.summary.total_margin_used, "800.0000");
+        assert_eq!(view.positions[0].entry_px.value, "2,000");
+        assert_eq!(view.positions[0].mark_px_or_value, "6,000");
+        assert_eq!(view.positions[0].entry_px.color_class, "text-zinc-300");
+        assert_eq!(
+            view.positions[0].liquidation_px.color_class,
+            "text-zinc-300"
+        );
+        assert_eq!(view.positions[0].liquidation_px.value, "2,500");
+        assert_eq!(view.positions[0].margin_used.color_class, "text-zinc-300");
+        assert_eq!(view.positions[0].margin_used.value, "200");
     }
 
     #[test]
@@ -1189,6 +1333,10 @@ mod tests {
         };
         let view = OpenPositionsView::from_live_state(state);
         let html = OpenPositionsPartialTemplate::render_view(view).unwrap();
+        assert!(html.contains("Notional"));
+        assert!(!html.contains(">Coin<"));
+        assert!(!html.contains(">Side<"));
+        assert!(!html.contains("Mark / NTL"));
         assert!(html.contains("BTC"));
         assert!(html.contains("ETH"));
         assert!(html.contains("long"));
@@ -1197,10 +1345,11 @@ mod tests {
         assert!(html.contains("-25.00%"));
         assert!(html.contains("1.0000"));
         assert!(html.contains("2.0000"));
-        assert!(html.contains("30000.0000"));
+        assert!(html.contains("30,000"));
+        assert!(html.contains("4,000"));
         assert!(html.contains("(100.0000)"));
-        assert!(html.contains("25000.0000"));
-        assert!(html.contains("6000.0000"));
+        assert!(html.contains("25,000"));
+        assert!(html.contains("6,000"));
     }
 
     #[test]
@@ -1281,10 +1430,14 @@ mod tests {
             ..Default::default()
         };
         let view = OpenOrdersView::from_live_state(state);
+        assert_eq!(view.orders[0].price.color_class, "text-zinc-300");
+        assert_eq!(view.orders[0].price.value, "31,000");
         let html = OpenOrdersPartialTemplate::render_view(view).unwrap();
         assert!(html.contains("BTC"));
         assert!(html.contains("sell"));
         assert!(html.contains("take_profit_market"));
+        assert!(html.contains("31,000"));
+        assert!(html.contains("32,000.0000"));
         assert!(html.contains("trigger"));
         assert!(html.contains("TP/SL"));
         assert!(html.contains("reduce-only"));
