@@ -30,9 +30,12 @@ simplified single-table registry (`agents.registry`) with:
 
 - no instrument bindings or per-agent instrument restrictions
 - an `environment` field (`live` or `sandbox`) on every row
+- two operator-managed prompt columns:
+  - `analysis_prompt TEXT NOT NULL DEFAULT ''`
+  - `trading_prompt TEXT NOT NULL DEFAULT ''`
 - a `soul TEXT NOT NULL DEFAULT ''` column that stores the agent's
-  persona text and is synced to the agent's Hermes profile as
-  `SOUL.md` when the Hermes client is configured
+   persona text and is synced to the agent's Hermes profile as
+   `SOUL.md` when the Hermes client is configured
 - no separate Hermes bindings table — the registry row's `agent_key`
   is the Hermes profile name
 - no secret refs table
@@ -54,6 +57,19 @@ agent is deleted, the backend deletes the Hermes profile. See
 operator page, and the exact Hermes dashboard `/api/profiles/*` calls
 used. Agent creation and deletion succeed even when Hermes is
 unreachable; failures are logged at WARN.
+
+### Prompt Split
+
+The Phase 1 operator workflow now separates the long-lived profile soul from
+the runtime job prompts:
+
+- `analysis_prompt` is injected into the Hermes analysis cron job context
+- `trading_prompt` is injected into the Hermes trading cron job context
+- `soul` remains the persona text synced into the Hermes profile's `SOUL.md`
+
+There is intentionally no shared `prompt` column anymore. Different cron jobs
+can now carry different operator instructions while keeping one shared Hermes
+profile identity per agent.
 
 ## Why This Module Exists
 

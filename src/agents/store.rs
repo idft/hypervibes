@@ -32,7 +32,8 @@ pub async fn get_agent(pool: &DbPool, agent_key: &str) -> Result<Option<AgentDet
         "SELECT display_name,
                 agent_key,
                 enabled,
-                prompt,
+                analysis_prompt,
+                trading_prompt,
                 soul,
                 wallet_address,
                 environment,
@@ -61,7 +62,8 @@ pub async fn insert_agent(pool: &DbPool, row: &AgentRegistryRow) -> Result<()> {
             updated_at,
             enabled,
             display_name,
-            prompt,
+            analysis_prompt,
+            trading_prompt,
             soul,
             wallet_address,
             environment,
@@ -69,14 +71,15 @@ pub async fn insert_agent(pool: &DbPool, row: &AgentRegistryRow) -> Result<()> {
             api_key_last_used_at,
             hyperliquid_private_key_ciphertext,
             hyperliquid_private_key_key_id
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)",
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)",
     )
     .bind(&row.agent_key)
     .bind(row.created_at)
     .bind(row.updated_at)
     .bind(row.enabled)
     .bind(&row.display_name)
-    .bind(&row.prompt)
+    .bind(&row.analysis_prompt)
+    .bind(&row.trading_prompt)
     .bind(&row.soul)
     .bind(&row.wallet_address)
     .bind(&row.environment)
@@ -100,6 +103,33 @@ pub async fn delete_agent(pool: &DbPool, agent_key: &str) -> Result<bool> {
         .execute(pool)
         .await
         .context("failed to delete agent")?;
+
+    Ok(result.rows_affected() > 0)
+}
+
+/// Update the operator-managed prompts and soul for one agent.
+pub async fn update_agent_prompts(
+    pool: &DbPool,
+    agent_key: &str,
+    analysis_prompt: &str,
+    trading_prompt: &str,
+    soul: &str,
+) -> Result<bool> {
+    let result = sqlx::query(
+        "UPDATE agents.registry
+            SET analysis_prompt = $2,
+                trading_prompt = $3,
+                soul = $4,
+                updated_at = now()
+          WHERE agent_key = $1",
+    )
+    .bind(agent_key)
+    .bind(analysis_prompt)
+    .bind(trading_prompt)
+    .bind(soul)
+    .execute(pool)
+    .await
+    .context("failed to update agent prompts")?;
 
     Ok(result.rows_affected() > 0)
 }
@@ -191,7 +221,8 @@ mod tests {
             updated_at: now,
             enabled: true,
             display_name: format!("Test {}", key),
-            prompt: "Test prompt".to_string(),
+            analysis_prompt: "Test analysis prompt".to_string(),
+            trading_prompt: "Test trading prompt".to_string(),
             soul: "Test soul".to_string(),
             wallet_address: wallet,
             environment: "live".to_string(),
@@ -317,5 +348,44 @@ mod tests {
             .expect("fetch")
             .expect("present");
         assert!(after.api_key_last_used_at.is_some());
+    }
+
+    #[tokio::test]
+    async fn update_agent_prompts_updates_fields_and_timestamp() {
+        let pool = test_db::pool().await;
+
+        let key = format!("prompt-update-{}", Utc::now().timestamp_millis());
+        let row = sample_agent(&key);
+        insert_agent(&pool, &row).await.expect("insert agent");
+
+        let updated = update_agent_prompts(
+            &pool,
+            &key,
+            "New analysis prompt",
+            "New trading prompt",
+            "New soul",
+        )
+        .await
+        .expect("update agent prompts");
+        assert!(updated);
+
+        let agent = get_agent(&pool, &key)
+            .await
+            .expect("fetch")
+            .expect("present");
+        assert_eq!(agent.analysis_prompt, "New analysis prompt");
+        assert_eq!(agent.trading_prompt, "New trading prompt");
+        assert_eq!(agent.soul, "New soul");
+        assert!(agent.updated_at >= row.updated_at);
+    }
+
+    #[tokio::test]
+    async fn update_agent_prompts_returns_false_for_missing_agent() {
+        let pool = test_db::pool().await;
+
+        let updated = update_agent_prompts(&pool, "does-not-exist", "a", "b", "c")
+            .await
+            .expect("update missing agent");
+        assert!(!updated);
     }
 }

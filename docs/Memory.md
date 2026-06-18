@@ -97,6 +97,65 @@ Field roles:
 - **`content`** — the main analysis, written as markdown, rendered in the UI and fed back to the agent on roll-up.
 - **`metadata`** — optional machine-usable structured bits the agent chooses to attach (confidence, levels, targets, referenced memory IDs, etc.). Never required.
 
+## Analysis Memory Metadata Contract
+
+The Hermes `analysis-loop` skill now uses a semi-structured `metadata`
+contract for `memory_type="analysis"` records. The backend still stores
+`metadata` as free-form JSONB, but the reserved top-level keys below are the
+stable handoff that the `trading-loop` skill can depend on.
+
+Recommended shape:
+
+```json
+{
+  "schema_version": 1,
+  "analysis_kind": "trade_setup",
+  "symbol": "BTC",
+  "timeframe": "15m",
+  "generated_at": "2026-06-17T12:15:00Z",
+  "valid_for_seconds": 1200,
+  "bias": "bullish",
+  "confidence": 0.74,
+  "entry_setups": [
+    {
+      "id": "long_pullback_1",
+      "side": "buy",
+      "order_type": "limit",
+      "entry_zone": { "low": "67020", "high": "67110" },
+      "size_fraction": "0.33",
+      "confidence": 0.72,
+      "reason": "Retest of reclaimed intraday support"
+    }
+  ],
+  "take_profit_levels": [
+    { "price": "67480", "size_fraction": "0.5" }
+  ],
+  "stop_loss_levels": [
+    { "price": "66880", "kind": "hard_stop" }
+  ],
+  "invalidation": {
+    "type": "price_below",
+    "level": "66880"
+  },
+  "do_not_trade_if": [
+    "already_in_position_same_direction",
+    "setup_age_minutes_gt_20"
+  ],
+  "source_memory_ids": [],
+  "extensions": {}
+}
+```
+
+Rules:
+
+- Keep the reserved top-level fields above stable enough for the trading loop
+  to consume.
+- Put arbitrary strategy-specific additions only under `metadata.extensions`.
+- Do not allow random top-level key drift if the field is part of the planned
+  analysis-to-trading contract.
+- `summary` stays a concise one-liner for UI listing.
+- `content` stays the human-readable markdown narrative.
+
 Nullability:
 
 - `symbol` is **required**. Every V1 memory is at least about one instrument. Agent-wide/macro memories not tied to an instrument are deferred.

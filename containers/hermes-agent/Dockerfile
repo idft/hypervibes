@@ -14,11 +14,6 @@ RUN apt-get update && \
 # registry path so podman does not issue an unqualified-search warning.
 COPY --from=docker.io/oven/bun:1.3.14 /usr/local/bin/bun /usr/local/bin/bun
 
-# Install the Vibetrading plugin's Python dependencies into the Hermes venv.
-COPY hermes-plugin/vibetrading/requirements.txt /tmp/vibetrading-requirements.txt
-RUN uv pip install --python /opt/hermes/.venv/bin/python -r /tmp/vibetrading-requirements.txt && \
-    chown -R hermes:hermes /opt/hermes/.venv
-
 # Patch the upstream config seed so the vibetrading plugin is enabled on first boot.
 # This is YAML-aware and does not clobber existing example defaults.
 RUN /opt/hermes/.venv/bin/python - <<'PY'
@@ -37,4 +32,10 @@ PY
 # resolves to /opt/data in this container.
 # In development this path is bind-mounted over from the repo.
 COPY hermes-plugin/vibetrading /opt/data/plugins/vibetrading
-RUN chown -R hermes:hermes /opt/data/plugins/vibetrading
+RUN uv venv /opt/data/plugins/vibetrading/.venv && \
+    uv pip install --python /opt/data/plugins/vibetrading/.venv/bin/python \
+        -r /opt/data/plugins/vibetrading/requirements.txt && \
+    chown -R hermes:hermes /opt/data/plugins/vibetrading
+
+COPY containers/hermes-agent/bootstrap-vibetrading-plugin.sh /usr/local/bin/bootstrap-vibetrading-plugin
+RUN chmod +x /usr/local/bin/bootstrap-vibetrading-plugin

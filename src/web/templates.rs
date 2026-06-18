@@ -56,7 +56,9 @@ fn format_timestamp_utc(value: DateTime<Utc>) -> String {
 }
 
 fn format_optional_timestamp_utc(value: Option<DateTime<Utc>>) -> String {
-    value.map(format_timestamp_utc).unwrap_or_else(|| "-".to_string())
+    value
+        .map(format_timestamp_utc)
+        .unwrap_or_else(|| "-".to_string())
 }
 
 pub fn format_money_text(amount: Option<Decimal>) -> String {
@@ -301,18 +303,22 @@ pub struct SyncStateView {
 impl SyncStateView {
     pub fn from_row(row: SyncStateRow) -> Self {
         let (status_text, status_class) = match row.status {
-            crate::hyperliquid::sync_state::SyncStatus::Healthy => {
-                ("healthy".to_string(), "border-emerald-900/60 bg-emerald-950/30 text-emerald-300")
-            }
-            crate::hyperliquid::sync_state::SyncStatus::Running => {
-                ("running".to_string(), "border-sky-900/60 bg-sky-950/30 text-sky-300")
-            }
-            crate::hyperliquid::sync_state::SyncStatus::Pending => {
-                ("pending".to_string(), "border-amber-900/60 bg-amber-950/30 text-amber-300")
-            }
-            crate::hyperliquid::sync_state::SyncStatus::Failed => {
-                ("failed".to_string(), "border-red-900/60 bg-red-950/30 text-red-300")
-            }
+            crate::hyperliquid::sync_state::SyncStatus::Healthy => (
+                "healthy".to_string(),
+                "border-emerald-900/60 bg-emerald-950/30 text-emerald-300",
+            ),
+            crate::hyperliquid::sync_state::SyncStatus::Running => (
+                "running".to_string(),
+                "border-sky-900/60 bg-sky-950/30 text-sky-300",
+            ),
+            crate::hyperliquid::sync_state::SyncStatus::Pending => (
+                "pending".to_string(),
+                "border-amber-900/60 bg-amber-950/30 text-amber-300",
+            ),
+            crate::hyperliquid::sync_state::SyncStatus::Failed => (
+                "failed".to_string(),
+                "border-red-900/60 bg-red-950/30 text-red-300",
+            ),
         };
 
         Self {
@@ -1041,7 +1047,8 @@ mod tests {
             display_name: "Test Agent".to_string(),
             agent_key: "test-agent".to_string(),
             enabled: true,
-            prompt: "Beep boop.".to_string(),
+            analysis_prompt: "Beep boop analysis.".to_string(),
+            trading_prompt: "Beep boop trading.".to_string(),
             soul: "I am a test agent.".to_string(),
             wallet_address: "0x1234567890abcdef".to_string(),
             environment: "live".to_string(),
@@ -1136,7 +1143,8 @@ mod tests {
             SparklineView::from_series("30d", &[], 240, 48),
         ];
         let sparklines_html = BalanceSparklinesPartialTemplate::render_view(sparklines).unwrap();
-        let mut template = AgentsShowPageTemplate::new(sample_agent_detail_row(), AgentShowTab::Positions);
+        let mut template =
+            AgentsShowPageTemplate::new(sample_agent_detail_row(), AgentShowTab::Positions);
         template.account_balance_html = account_balance_html;
         template.open_positions_html = open_positions_html;
         template.open_orders_html = open_orders_html;
@@ -1167,7 +1175,8 @@ mod tests {
 
     #[test]
     fn settings_tab_renders_sync_status_table() {
-        let mut template = AgentsShowPageTemplate::new(sample_agent_detail_row(), AgentShowTab::Settings);
+        let mut template =
+            AgentsShowPageTemplate::new(sample_agent_detail_row(), AgentShowTab::Settings);
         template.sync_state = vec![SyncStateView::from_row(SyncStateRow::new(
             "0x1234567890abcdef".to_string(),
             "live".to_string(),

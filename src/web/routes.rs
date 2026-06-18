@@ -13,6 +13,7 @@ use axum::{
 };
 use chrono::Utc;
 use futures::StreamExt;
+use serde::Deserialize;
 use serde::Serialize;
 use tokio_stream::wrappers::BroadcastStream;
 use tracing::{error, warn};
@@ -22,26 +23,29 @@ use crate::{
         crypto::{encrypt, generate_api_key},
         keys::derive_wallet_address,
         model::{AgentRegistryRow, CreateAgentForm, slugify_agent_key},
-        store::{delete_agent as delete_agent_in_store, get_agent, insert_agent, list_agents},
+        store::{
+            delete_agent as delete_agent_in_store, get_agent, insert_agent, list_agents,
+            update_agent_prompts,
+        },
     },
     hermes::HermesHealth,
     hyperliquid::{
         live_state::{AccountKey, AccountLiveState, LiveConnectionStatus},
         queries::{
             BalanceSeriesBucket, fetch_balance_series, list_account_sync_state,
-            list_account_transactions, list_all_account_transactions,
+            list_all_account_transactions,
         },
     },
     memory::list_agent_memories,
     web::{
         AppState,
         templates::{
-            AccountBalancePartialTemplate, AccountBalanceView, AgentListEntry,
-            AgentShowTab, AgentsNewPageTemplate, AgentsPageTemplate, AgentsShowPageTemplate,
-            BalanceSparklinesPartialTemplate, HermesPageTemplate, OpenOrdersPartialTemplate,
-            OpenOrdersView, OpenPositionsPartialTemplate, OpenPositionsView,
-            ServerErrorPageTemplate, SparklineView, SyncStateView, TransactionView,
-            MemoryView,
+            AccountBalancePartialTemplate, AccountBalanceView, AgentListEntry, AgentShowTab,
+            AgentsNewPageTemplate, AgentsPageTemplate, AgentsShowPageTemplate,
+            BalanceSparklinesPartialTemplate, HermesPageTemplate, MemoryView,
+            OpenOrdersPartialTemplate, OpenOrdersView, OpenPositionsPartialTemplate,
+            OpenPositionsView, ServerErrorPageTemplate, SparklineView, SyncStateView,
+            TransactionView,
         },
     },
 };
@@ -54,9 +58,15 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/agents/new", get(agents_new))
         .route("/agents/{agent_key}", get(agents_show))
         .route("/agents/{agent_key}/chat", get(agents_show_chat))
-        .route("/agents/{agent_key}/transactions", get(agents_show_transactions))
+        .route(
+            "/agents/{agent_key}/transactions",
+            get(agents_show_transactions),
+        )
         .route("/agents/{agent_key}/memories", get(agents_show_memories))
-        .route("/agents/{agent_key}/prompts", get(agents_show_prompts))
+        .route(
+            "/agents/{agent_key}/prompts",
+            get(agents_show_prompts).post(agents_update_prompts),
+        )
         .route("/agents/{agent_key}/settings", get(agents_show_settings))
         .route("/agents/{agent_key}/delete", post(delete_agent))
         .route("/agents/{agent_key}/live/stream", get(agent_live_stream))
@@ -157,6 +167,43 @@ async fn agents_show_prompts(
     Path(agent_key): Path<String>,
 ) -> Result<Response, AppError> {
     render_agent_show_page(&state, &agent_key, AgentShowTab::Prompts).await
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct UpdateAgentPromptsForm {
+    #[serde(default)]
+    analysis_prompt: String,
+    #[serde(default)]
+    trading_prompt: String,
+    #[serde(default)]
+    soul: String,
+}
+
+async fn agents_update_prompts(
+    State(state): State<Arc<AppState>>,
+    Path(agent_key): Path<String>,
+    Form(form): Form<UpdateAgentPromptsForm>,
+) -> Result<Response, AppError> {
+    let updated = update_agent_prompts(
+        &state.db_pool,
+        &agent_key,
+        form.analysis_prompt.trim(),
+        form.trading_prompt.trim(),
+        form.soul.trim(),
+    )
+    .await?;
+
+    if !updated {
+        return Ok((StatusCode::NOT_FOUND, "agent not found").into_response());
+    }
+
+    if let Some(hermes) = &state.hermes
+        && let Err(e) = hermes.set_profile_soul(&agent_key, form.soul.trim()).await
+    {
+        warn!(error = ?e, agent_key = %agent_key, "failed to set Hermes profile soul");
+    }
+
+    Ok(Redirect::to(&format!("/agents/{agent_key}/prompts")).into_response())
 }
 
 async fn agents_show_settings(
@@ -269,8 +316,8 @@ async fn populate_positions_tab(
         .map_err(anyhow::Error::from)?;
 
     let open_orders_view = OpenOrdersView::from_live_state(live_snapshot.clone());
-    template.open_orders_html = OpenOrdersPartialTemplate::render_view(open_orders_view)
-        .map_err(anyhow::Error::from)?;
+    template.open_orders_html =
+        OpenOrdersPartialTemplate::render_view(open_orders_view).map_err(anyhow::Error::from)?;
 
     let now = Utc::now();
     let since_24h = now - chrono::Duration::hours(24);
@@ -321,8 +368,8 @@ async fn populate_positions_tab(
         SparklineView::from_series("24 hours", &series_24h, 240, 48),
         SparklineView::from_series("30 days", &series_30d, 240, 48),
     ];
-    template.sparklines_html = BalanceSparklinesPartialTemplate::render_view(sparklines)
-        .map_err(anyhow::Error::from)?;
+    template.sparklines_html =
+        BalanceSparklinesPartialTemplate::render_view(sparklines).map_err(anyhow::Error::from)?;
 
     Ok(())
 }
@@ -498,7 +545,8 @@ async fn create_agent(
         updated_at: now,
         enabled: form.enabled(),
         display_name: form.display_name.trim().to_string(),
-        prompt: String::new(),
+        analysis_prompt: String::new(),
+        trading_prompt: String::new(),
         soul: form.soul.trim().to_string(),
         wallet_address,
         environment: "live".to_string(),
@@ -974,12 +1022,13 @@ mod tests {
     }
 
     async fn insert_test_agent(state: &Arc<AppState>) -> Option<(String, String)> {
-        insert_test_agent_with_text(state, String::new(), String::new()).await
+        insert_test_agent_with_text(state, String::new(), String::new(), String::new()).await
     }
 
     async fn insert_test_agent_with_text(
         state: &Arc<AppState>,
-        prompt: String,
+        analysis_prompt: String,
+        trading_prompt: String,
         soul: String,
     ) -> Option<(String, String)> {
         let timestamp = chrono::Utc::now().timestamp_millis();
@@ -997,7 +1046,8 @@ mod tests {
             updated_at: now,
             enabled: true,
             display_name,
-            prompt,
+            analysis_prompt,
+            trading_prompt,
             soul,
             wallet_address: wallet_address.clone(),
             environment: "live".to_string(),
@@ -1181,7 +1231,13 @@ mod tests {
     async fn agent_memories_route_renders_saved_memories() {
         let state = test_state().await;
         let (agent_key, _wallet_address) = insert_test_agent(&state).await.expect("insert agent");
-        seed_memory(&state, &agent_key, "Remember the breakout", "BTC reclaimed support.").await;
+        seed_memory(
+            &state,
+            &agent_key,
+            "Remember the breakout",
+            "BTC reclaimed support.",
+        )
+        .await;
 
         let response = router(state)
             .oneshot(
@@ -1205,6 +1261,7 @@ mod tests {
         let state = test_state().await;
         let (agent_key, _wallet_address) = insert_test_agent_with_text(
             &state,
+            "Wait for analysis confirmation first.".to_string(),
             "Trade breakouts only after confirmation.".to_string(),
             "Calm and deliberate.".to_string(),
         )
@@ -1223,8 +1280,53 @@ mod tests {
 
         assert_eq!(response.status(), StatusCode::OK);
         let text = response_text(response).await;
+        assert!(text.contains("Wait for analysis confirmation first."));
         assert!(text.contains("Trade breakouts only after confirmation."));
         assert!(text.contains("Calm and deliberate."));
+    }
+
+    #[tokio::test]
+    async fn post_agent_prompts_updates_analysis_trading_prompt_and_soul() {
+        let state = test_state().await;
+        let pool = state.db_pool.clone();
+        let (agent_key, _wallet_address) = insert_test_agent(&state).await.expect("insert agent");
+
+        let body = "analysis_prompt=Analyze+momentum+with+market+structure.&trading_prompt=Only+place+limit+orders+near+support.&soul=Patient+and+systematic.";
+        let response = router(state)
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/agents/{agent_key}/prompts"))
+                    .header("content-type", "application/x-www-form-urlencoded")
+                    .body(Body::from(body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::SEE_OTHER);
+        let expected_location = format!("/agents/{agent_key}/prompts");
+        assert_eq!(
+            response
+                .headers()
+                .get("location")
+                .and_then(|value| value.to_str().ok()),
+            Some(expected_location.as_str())
+        );
+
+        let stored = get_agent(&pool, &agent_key)
+            .await
+            .expect("get agent")
+            .expect("agent present");
+        assert_eq!(
+            stored.analysis_prompt,
+            "Analyze momentum with market structure."
+        );
+        assert_eq!(
+            stored.trading_prompt,
+            "Only place limit orders near support."
+        );
+        assert_eq!(stored.soul, "Patient and systematic.");
     }
 
     #[tokio::test]

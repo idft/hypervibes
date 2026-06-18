@@ -39,6 +39,7 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/memories", post(create_memory).get(list_memories))
         .route("/memories/{id}", get(get_memory_by_id))
         .route("/account", get(get_account))
+        .route("/job-context", get(get_job_context))
         .route(
             "/orders",
             post(place_orders_handler).get(list_orders_handler),
@@ -178,9 +179,29 @@ async fn get_account(
         .await
         .map_err(ApiError::Internal)?
         .ok_or(ApiError::NotFound("agent not found"))?;
+    let body = live_agent_snapshot(&state, &row);
+    Ok(Json(body).into_response())
+}
+
+/// Snapshot of the calling agent's live account state. Returned to the
+/// agent as JSON; the operator UI's SSE stream emits the rendered view
+/// types from `src/web/templates.rs` directly.
+#[derive(Debug, Clone, serde::Serialize)]
+struct LiveAgentSnapshot {
+    agent_key: String,
+    account_address: String,
+    environment: String,
+    connected: bool,
+    state: Option<AccountLiveState>,
+}
+
+fn live_agent_snapshot(
+    state: &AppState,
+    row: &crate::agents::model::AgentDetailRow,
+) -> LiveAgentSnapshot {
     let key = AccountKey::new(&row.wallet_address, &row.environment);
     let snapshot = state.live_accounts.get(&key);
-    let body = LiveAgentSnapshot {
+    LiveAgentSnapshot {
         agent_key: row.agent_key.clone(),
         account_address: row.wallet_address.clone(),
         environment: row.environment.clone(),
@@ -188,20 +209,76 @@ async fn get_account(
             .as_ref()
             .is_some_and(|s| s.status == LiveConnectionStatus::Connected),
         state: snapshot,
-    };
-    Ok(Json(body).into_response())
+    }
 }
 
-/// Snapshot of the calling agent's live account state. Returned to the
-/// agent as JSON; the operator UI's SSE stream emits the rendered view
-/// types from `src/web/templates.rs` directly.
+#[derive(Debug, serde::Deserialize)]
+struct JobContextQuery {
+    job_kind: String,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum JobKind {
+    Analysis,
+    Trading,
+}
+
+impl JobKind {
+    fn parse(value: &str) -> Result<Self, ApiError> {
+        match value {
+            "analysis" => Ok(Self::Analysis),
+            "trading" => Ok(Self::Trading),
+            other => Err(ApiError::Validation(format!(
+                "invalid job_kind '{other}', expected analysis or trading"
+            ))),
+        }
+    }
+
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Analysis => "analysis",
+            Self::Trading => "trading",
+        }
+    }
+}
+
 #[derive(Debug, serde::Serialize)]
-struct LiveAgentSnapshot {
+struct JobContextResponse {
     agent_key: String,
-    account_address: String,
+    job_kind: String,
+    display_name: String,
     environment: String,
-    connected: bool,
-    state: Option<AccountLiveState>,
+    prompt: String,
+    account: Option<LiveAgentSnapshot>,
+}
+
+async fn get_job_context(
+    State(state): State<Arc<AppState>>,
+    agent: AuthenticatedAgent,
+    Query(query): Query<JobContextQuery>,
+) -> Result<Response, ApiError> {
+    let row = get_agent(&state.db_pool, &agent.agent_key)
+        .await
+        .map_err(ApiError::Internal)?
+        .ok_or(ApiError::NotFound("agent not found"))?;
+    let job_kind = JobKind::parse(query.job_kind.trim())?;
+    let (prompt, account) = match job_kind {
+        JobKind::Analysis => (row.analysis_prompt.clone(), None),
+        JobKind::Trading => (
+            row.trading_prompt.clone(),
+            Some(live_agent_snapshot(&state, &row)),
+        ),
+    };
+
+    Ok(Json(JobContextResponse {
+        agent_key: row.agent_key.clone(),
+        job_kind: job_kind.as_str().to_string(),
+        display_name: row.display_name.clone(),
+        environment: row.environment.clone(),
+        prompt,
+        account,
+    })
+    .into_response())
 }
 
 /// Response shape returned to agents. Today it mirrors [`MemoryRecord`]
@@ -568,20 +645,14 @@ mod tests {
             model::AgentRegistryRow,
             store::{get_agent, insert_agent},
         },
-        db::{connect, migrate},
         hyperliquid::live_state::{AccountKey, LiveConnectionStatus},
+        test_db,
         web::{AppState, api},
     };
 
-    fn db_url() -> Option<String> {
-        std::env::var("DATABASE_URL").ok()
-    }
-
-    async fn test_state() -> Option<Arc<AppState>> {
-        let database_url = db_url()?;
-        let pool = connect(&database_url).await.ok()?;
-        migrate(&pool).await.ok()?;
-        Some(Arc::new(AppState {
+    async fn test_state() -> Arc<AppState> {
+        let pool = test_db::pool().await;
+        Arc::new(AppState {
             db_pool: pool,
             encryption_key: EncryptionKey::new(
                 "test",
@@ -592,7 +663,7 @@ mod tests {
             ),
             live_accounts: Arc::new(crate::hyperliquid::live_state::LiveAccountStore::new()),
             hermes: None,
-        }))
+        })
     }
 
     fn random_private_key() -> String {
@@ -601,6 +672,15 @@ mod tests {
     }
 
     async fn seed_agent(state: &Arc<AppState>, suffix: &str) -> (String, String) {
+        seed_agent_with_prompts(state, suffix, "", "").await
+    }
+
+    async fn seed_agent_with_prompts(
+        state: &Arc<AppState>,
+        suffix: &str,
+        analysis_prompt: &str,
+        trading_prompt: &str,
+    ) -> (String, String) {
         let timestamp = Utc::now().timestamp_millis();
         let display_name = format!("MemApiTest{}{}", suffix, timestamp);
         let agent_key = crate::agents::model::slugify_agent_key(&display_name);
@@ -614,7 +694,8 @@ mod tests {
             updated_at: now,
             enabled: true,
             display_name,
-            prompt: String::new(),
+            analysis_prompt: analysis_prompt.to_string(),
+            trading_prompt: trading_prompt.to_string(),
             soul: String::new(),
             wallet_address,
             environment: "live".to_string(),
@@ -643,10 +724,7 @@ mod tests {
 
     #[tokio::test]
     async fn post_memories_creates_record() {
-        let Some(state) = test_state().await else {
-            eprintln!("DATABASE_URL not set; skipping route test");
-            return;
-        };
+        let state = test_state().await;
 
         let (_agent_key, api_key) = seed_agent(&state, "create").await;
 
@@ -694,10 +772,7 @@ mod tests {
 
     #[tokio::test]
     async fn post_memories_without_auth_returns_401_json() {
-        let Some(state) = test_state().await else {
-            eprintln!("DATABASE_URL not set; skipping route test");
-            return;
-        };
+        let state = test_state().await;
 
         let body = serde_json::json!({
             "symbol": "BTC",
@@ -724,10 +799,7 @@ mod tests {
 
     #[tokio::test]
     async fn post_memories_with_invalid_bearer_returns_401_json() {
-        let Some(state) = test_state().await else {
-            eprintln!("DATABASE_URL not set; skipping route test");
-            return;
-        };
+        let state = test_state().await;
 
         let body = serde_json::json!({
             "symbol": "BTC",
@@ -752,10 +824,7 @@ mod tests {
 
     #[tokio::test]
     async fn post_memories_empty_field_returns_422_json() {
-        let Some(state) = test_state().await else {
-            eprintln!("DATABASE_URL not set; skipping route test");
-            return;
-        };
+        let state = test_state().await;
 
         let (_agent_key, api_key) = seed_agent(&state, "val").await;
 
@@ -787,10 +856,7 @@ mod tests {
 
     #[tokio::test]
     async fn post_memories_non_object_metadata_returns_422() {
-        let Some(state) = test_state().await else {
-            eprintln!("DATABASE_URL not set; skipping route test");
-            return;
-        };
+        let state = test_state().await;
 
         let (_agent_key, api_key) = seed_agent(&state, "meta").await;
 
@@ -818,10 +884,7 @@ mod tests {
 
     #[tokio::test]
     async fn auth_touches_api_key_last_used_at() {
-        let Some(state) = test_state().await else {
-            eprintln!("DATABASE_URL not set; skipping route test");
-            return;
-        };
+        let state = test_state().await;
 
         let (agent_key, api_key) = seed_agent(&state, "touch").await;
 
@@ -854,10 +917,7 @@ mod tests {
 
     #[tokio::test]
     async fn list_memories_filters_and_orders_desc() {
-        let Some(state) = test_state().await else {
-            eprintln!("DATABASE_URL not set; skipping route test");
-            return;
-        };
+        let state = test_state().await;
 
         let (_agent_key, api_key) = seed_agent(&state, "list").await;
 
@@ -956,10 +1016,7 @@ mod tests {
 
     #[tokio::test]
     async fn get_memory_by_id_returns_200_or_404() {
-        let Some(state) = test_state().await else {
-            eprintln!("DATABASE_URL not set; skipping route test");
-            return;
-        };
+        let state = test_state().await;
 
         let (_agent_key, api_key) = seed_agent(&state, "get").await;
         let (_other_key, other_api_key) = seed_agent(&state, "get-other").await;
@@ -1025,10 +1082,7 @@ mod tests {
 
     #[tokio::test]
     async fn get_account_returns_200_with_null_state_when_orchestrator_has_no_snapshot() {
-        let Some(state) = test_state().await else {
-            eprintln!("DATABASE_URL not set; skipping route test");
-            return;
-        };
+        let state = test_state().await;
 
         let (agent_key, api_key) = seed_agent(&state, "acct-empty").await;
 
@@ -1050,10 +1104,7 @@ mod tests {
 
     #[tokio::test]
     async fn get_account_returns_connected_true_after_live_state_seeded() {
-        let Some(state) = test_state().await else {
-            eprintln!("DATABASE_URL not set; skipping route test");
-            return;
-        };
+        let state = test_state().await;
 
         let (agent_key, api_key) = seed_agent(&state, "acct-live").await;
         let row = get_agent(&state.db_pool, &agent_key)
@@ -1094,10 +1145,7 @@ mod tests {
 
     #[tokio::test]
     async fn get_account_without_auth_returns_401_json() {
-        let Some(state) = test_state().await else {
-            eprintln!("DATABASE_URL not set; skipping route test");
-            return;
-        };
+        let state = test_state().await;
 
         let request = Request::builder()
             .uri("/account")
@@ -1114,10 +1162,7 @@ mod tests {
 
     #[tokio::test]
     async fn get_account_with_invalid_bearer_returns_401_json() {
-        let Some(state) = test_state().await else {
-            eprintln!("DATABASE_URL not set; skipping route test");
-            return;
-        };
+        let state = test_state().await;
 
         let request = Request::builder()
             .uri("/account")
@@ -1128,14 +1173,144 @@ mod tests {
         assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
     }
 
+    #[tokio::test]
+    async fn get_job_context_analysis_returns_prompt_without_account() {
+        let state = test_state().await;
+
+        let (agent_key, api_key) = seed_agent_with_prompts(
+            &state,
+            "job-analysis",
+            "Focus on 15m structure and volatility.",
+            "Trade only confirmed setups.",
+        )
+        .await;
+
+        let request = Request::builder()
+            .uri("/job-context?job_kind=analysis")
+            .header("authorization", format!("Bearer {api_key}"))
+            .body(Body::empty())
+            .unwrap();
+        let response = app(Arc::clone(&state)).oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let body_bytes = axum::body::to_bytes(response.into_body(), 64 * 1024)
+            .await
+            .unwrap();
+        let body: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
+        assert_eq!(body["agent_key"], agent_key);
+        assert_eq!(body["job_kind"], "analysis");
+        assert_eq!(body["prompt"], "Focus on 15m structure and volatility.");
+        assert!(body["account"].is_null());
+    }
+
+    #[tokio::test]
+    async fn get_job_context_trading_returns_prompt_and_account() {
+        let state = test_state().await;
+
+        let (agent_key, api_key) = seed_agent_with_prompts(
+            &state,
+            "job-trading",
+            "Analyze first.",
+            "Manage risk tightly and protect open positions.",
+        )
+        .await;
+        let row = get_agent(&state.db_pool, &agent_key)
+            .await
+            .unwrap()
+            .expect("present");
+        let key = AccountKey::new(&row.wallet_address, &row.environment);
+        state
+            .live_accounts
+            .set_status(&key, LiveConnectionStatus::Connected);
+
+        let request = Request::builder()
+            .uri("/job-context?job_kind=trading")
+            .header("authorization", format!("Bearer {api_key}"))
+            .body(Body::empty())
+            .unwrap();
+        let response = app(Arc::clone(&state)).oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let body_bytes = axum::body::to_bytes(response.into_body(), 64 * 1024)
+            .await
+            .unwrap();
+        let body: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
+        assert_eq!(body["agent_key"], agent_key);
+        assert_eq!(body["job_kind"], "trading");
+        assert_eq!(
+            body["prompt"],
+            "Manage risk tightly and protect open positions."
+        );
+        assert_eq!(body["account"]["agent_key"], body["agent_key"]);
+        assert_eq!(body["account"]["environment"], "live");
+        assert_eq!(body["account"]["connected"], true);
+        assert_eq!(body["account"]["state"]["status"], "connected");
+    }
+
+    #[tokio::test]
+    async fn get_job_context_unknown_kind_returns_422_json() {
+        let state = test_state().await;
+
+        let (_agent_key, api_key) = seed_agent(&state, "job-bad-kind").await;
+
+        let request = Request::builder()
+            .uri("/job-context?job_kind=bogus")
+            .header("authorization", format!("Bearer {api_key}"))
+            .body(Body::empty())
+            .unwrap();
+        let response = app(state).oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+
+        let body_bytes = axum::body::to_bytes(response.into_body(), 16 * 1024)
+            .await
+            .unwrap();
+        let body: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
+        assert!(body["error"].as_str().unwrap().contains("job_kind"));
+    }
+
+    #[tokio::test]
+    async fn get_job_context_without_auth_returns_401_json() {
+        let state = test_state().await;
+
+        let request = Request::builder()
+            .uri("/job-context?job_kind=analysis")
+            .body(Body::empty())
+            .unwrap();
+        let response = app(state).oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn get_job_context_is_scoped_to_calling_agent() {
+        let state = test_state().await;
+
+        let (agent_a_key, agent_a_api_key) =
+            seed_agent_with_prompts(&state, "job-scope-a", "A analysis", "A trading").await;
+        let (_agent_b_key, agent_b_api_key) =
+            seed_agent_with_prompts(&state, "job-scope-b", "B analysis", "B trading").await;
+
+        let request = Request::builder()
+            .uri("/job-context?job_kind=analysis")
+            .header("authorization", format!("Bearer {agent_b_api_key}"))
+            .body(Body::empty())
+            .unwrap();
+        let response = app(Arc::clone(&state)).oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let body_bytes = axum::body::to_bytes(response.into_body(), 16 * 1024)
+            .await
+            .unwrap();
+        let body: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
+        assert_ne!(agent_a_api_key, agent_b_api_key);
+        assert_ne!(body["agent_key"], agent_a_key);
+        assert_eq!(body["prompt"], "B analysis");
+    }
+
     // ---- orders endpoint tests -----------------------------------------
 
     #[tokio::test]
     async fn post_orders_without_auth_returns_401_json() {
-        let Some(state) = test_state().await else {
-            eprintln!("DATABASE_URL not set; skipping route test");
-            return;
-        };
+        let state = test_state().await;
 
         let body = serde_json::json!({
             "orders": [{
@@ -1165,10 +1340,7 @@ mod tests {
 
     #[tokio::test]
     async fn post_orders_validation_error_returns_422() {
-        let Some(state) = test_state().await else {
-            eprintln!("DATABASE_URL not set; skipping route test");
-            return;
-        };
+        let state = test_state().await;
 
         let (_agent_key, api_key) = seed_agent(&state, "ord-val").await;
 
@@ -1206,10 +1378,7 @@ mod tests {
 
     #[tokio::test]
     async fn post_orders_empty_list_returns_422() {
-        let Some(state) = test_state().await else {
-            eprintln!("DATABASE_URL not set; skipping route test");
-            return;
-        };
+        let state = test_state().await;
 
         let (_agent_key, api_key) = seed_agent(&state, "ord-empty").await;
 
@@ -1231,10 +1400,7 @@ mod tests {
 
     #[tokio::test]
     async fn get_order_by_id_returns_404_for_other_agent() {
-        let Some(state) = test_state().await else {
-            eprintln!("DATABASE_URL not set; skipping route test");
-            return;
-        };
+        let state = test_state().await;
 
         let (owner_key, owner_api) = seed_agent(&state, "ord-own").await;
         let (_other_key, other_api) = seed_agent(&state, "ord-other").await;
@@ -1295,10 +1461,7 @@ mod tests {
 
     #[tokio::test]
     async fn list_orders_returns_only_callers_orders() {
-        let Some(state) = test_state().await else {
-            eprintln!("DATABASE_URL not set; skipping route test");
-            return;
-        };
+        let state = test_state().await;
 
         let (a_key, a_api) = seed_agent(&state, "lst-a").await;
         let (_b_key, _b_api) = seed_agent(&state, "lst-b").await;

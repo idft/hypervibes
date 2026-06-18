@@ -1,64 +1,9 @@
-from . import tools
+from pathlib import Path
 
 
 def register(ctx):
-    ctx.register_tool(
-        name="fetch_candles",
-        toolset="vibetrading",
-        schema=tools.FETCH_CANDLES_SCHEMA,
-        handler=tools.fetch_candles,
-    )
-    ctx.register_tool(
-        name="analyze_market",
-        toolset="vibetrading",
-        schema=tools.ANALYZE_MARKET_SCHEMA,
-        handler=tools.analyze_market,
-    )
-    ctx.register_tool(
-        name="read_memory",
-        toolset="vibetrading",
-        schema=tools.READ_MEMORY_SCHEMA,
-        handler=tools.read_memory,
-    )
-    ctx.register_tool(
-        name="write_memory",
-        toolset="vibetrading",
-        schema=tools.WRITE_MEMORY_SCHEMA,
-        handler=tools.write_memory,
-    )
-    ctx.register_tool(
-        name="place_order",
-        toolset="vibetrading",
-        schema=tools.PLACE_ORDER_SCHEMA,
-        handler=tools.place_order,
-    )
-    ctx.register_tool(
-        name="cancel_order",
-        toolset="vibetrading",
-        schema=tools.CANCEL_ORDER_SCHEMA,
-        handler=tools.cancel_order,
-    )
-    ctx.register_tool(
-        name="cancel_all",
-        toolset="vibetrading",
-        schema=tools.CANCEL_ALL_SCHEMA,
-        handler=tools.cancel_all,
-    )
-    ctx.register_tool(
-        name="list_orders",
-        toolset="vibetrading",
-        schema=tools.LIST_ORDERS_SCHEMA,
-        handler=tools.list_orders,
-    )
-    ctx.register_tool(
-        name="get_order",
-        toolset="vibetrading",
-        schema=tools.GET_ORDER_SCHEMA,
-        handler=tools.get_order,
-    )
-    ctx.register_tool(
-        name="get_account_status",
-        toolset="vibetrading",
-        schema=tools.GET_ACCOUNT_STATUS_SCHEMA,
-        handler=tools.get_account_status,
-    )
+    skills_dir = Path(__file__).parent / "skills"
+    for child in sorted(skills_dir.iterdir()):
+        skill_md = child / "SKILL.md"
+        if child.is_dir() and skill_md.exists():
+            ctx.register_skill(child.name, skill_md)

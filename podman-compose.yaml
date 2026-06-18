@@ -49,7 +49,7 @@ services:
       - XAI_API_KEY=${XAI_API_KEY:-}
       - OPENCODE_GO_API_KEY=${OPENCODE_GO_API_KEY:-}
       - OLLAMA_API_KEY=${OLLAMA_API_KEY:-}
-    command: ["gateway", "run"]
+    command: ["/bin/sh", "-lc", "/usr/local/bin/bootstrap-vibetrading-plugin && exec gateway run"]
 
 volumes:
   postgres_data:
