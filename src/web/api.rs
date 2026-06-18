@@ -663,6 +663,7 @@ mod tests {
             ),
             live_accounts: Arc::new(crate::hyperliquid::live_state::LiveAccountStore::new()),
             hermes: None,
+            hermes_dashboard_link_url: "http://127.0.0.1:19119".to_string(),
         })
     }
 

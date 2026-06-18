@@ -21,6 +21,7 @@ pub struct AppState {
     pub encryption_key: EncryptionKey,
     pub live_accounts: Arc<LiveAccountStore>,
     pub hermes: Option<HermesClient>,
+    pub hermes_dashboard_link_url: String,
 }
 
 pub async fn serve(
@@ -29,6 +30,7 @@ pub async fn serve(
     encryption_key: EncryptionKey,
     live_accounts: Arc<LiveAccountStore>,
     hermes: Option<HermesClient>,
+    hermes_dashboard_link_url: String,
     shutdown_tx: watch::Sender<bool>,
 ) -> Result<()> {
     let state = Arc::new(AppState {
@@ -36,6 +38,7 @@ pub async fn serve(
         encryption_key,
         live_accounts,
         hermes,
+        hermes_dashboard_link_url,
     });
     let app = router(state);
     let listener = tokio::net::TcpListener::bind(bind_addr)

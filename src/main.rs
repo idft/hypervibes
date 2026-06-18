@@ -81,6 +81,7 @@ async fn main() -> Result<()> {
         encryption_key,
         Arc::clone(&live_accounts),
         hermes,
+        config.hermes_dashboard_link_url.clone(),
         shutdown_tx,
     );
     tokio::pin!(server_future);

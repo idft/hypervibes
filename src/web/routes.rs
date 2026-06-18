@@ -654,7 +654,7 @@ async fn hermes_page(State(state): State<Arc<AppState>>) -> Result<Html<String>,
         active_profile: None,
         profiles: Vec::new(),
         error: None,
-        base_url: None,
+        dashboard_url: None,
         current_path: "/hermes".to_string(),
     };
 
@@ -665,7 +665,7 @@ async fn hermes_page(State(state): State<Arc<AppState>>) -> Result<Html<String>,
         });
         template.reachable = health.reachable;
         template.version = health.version;
-        template.base_url = Some(hermes.base_url().to_string());
+        template.dashboard_url = Some(state.hermes_dashboard_link_url.clone());
         match hermes.list_profiles().await {
             Ok(profiles) => {
                 template.profiles = profiles.into_iter().map(|p| p.name).collect();
@@ -714,6 +714,7 @@ mod tests {
             ),
             live_accounts: Arc::new(crate::hyperliquid::live_state::LiveAccountStore::new()),
             hermes: None,
+            hermes_dashboard_link_url: "http://127.0.0.1:19119".to_string(),
         })
     }
 

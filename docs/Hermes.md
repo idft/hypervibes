@@ -151,6 +151,11 @@ API. The important behavior in this phase is:
 
 Hermes failures are logged at WARN and are non-fatal to the operator action.
 
+The `/hermes` operator page surfaces a direct dashboard link that opens in a
+new tab. By default it uses the backend's configured Hermes dashboard URL; set
+`APP_PUBLIC_URL` when operators browse the Vibetrading UI from another machine
+so the link uses the browser-visible host instead of loopback.
+
 ## Job Context API
 
 Hermes cron jobs now read per-job runtime context from the backend:

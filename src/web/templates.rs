@@ -475,7 +475,7 @@ pub struct HermesPageTemplate {
     pub active_profile: Option<String>,
     pub profiles: Vec<String>,
     pub error: Option<String>,
-    pub base_url: Option<String>,
+    pub dashboard_url: Option<String>,
     pub current_path: String,
 }
 

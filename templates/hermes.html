@@ -24,7 +24,14 @@
             <dl class="mt-4 grid gap-4 sm:grid-cols-2">
                 <div>
                     <dt class="text-xs uppercase tracking-[0.16em] text-zinc-500">Dashboard URL</dt>
-                    <dd class="mt-1 break-all font-mono text-xs text-zinc-300">{% match base_url %}{% when Some with (url) %}{{ url }}{% when None %}-{% endmatch %}</dd>
+                    <dd class="mt-1 break-all font-mono text-xs text-zinc-300">
+                        {% match dashboard_url %}
+                        {% when Some with (url) %}
+                        <a class="text-sky-300 underline decoration-sky-700/70 underline-offset-2 transition hover:text-sky-200" href="{{ url }}" target="_blank" rel="noopener noreferrer">{{ url }}</a>
+                        {% when None %}
+                        -
+                        {% endmatch %}
+                    </dd>
                 </div>
                 <div>
                     <dt class="text-xs uppercase tracking-[0.16em] text-zinc-500">Version</dt>

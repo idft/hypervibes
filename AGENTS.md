@@ -2,7 +2,9 @@
 
 This is a framework for allowing AI Agents (such as Hermes) to trade crypto on Hyperliquid exchange.
 
-See `docs/` for project documentation.  Keep documentation up to date when making code changes.
+See `docs/` for project documentation.
+Keep documentation up to date when making signifigant code changes or archetecutre decisions.
+You do not need to update the docs for UI changes.
 
 The server (`cargo run`) may be running in another tmux page, for reading logs and restarting the server
 (Make sure it is in the same directory as this project, and not another very-similar project!)
