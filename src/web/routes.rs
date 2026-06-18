@@ -552,6 +552,8 @@ async fn create_agent(
         environment: "live".to_string(),
         api_key: generate_api_key(),
         api_key_last_used_at: None,
+        analysis_context_last_used_at: None,
+        trading_context_last_used_at: None,
         hyperliquid_private_key_ciphertext: ciphertext,
         hyperliquid_private_key_key_id: state.encryption_key.key_id.clone(),
     };
@@ -809,6 +811,26 @@ mod tests {
         .expect("insert sync state");
     }
 
+    async fn set_job_context_timestamps(
+        state: &Arc<AppState>,
+        agent_key: &str,
+        analysis_context_last_used_at: Option<chrono::DateTime<Utc>>,
+        trading_context_last_used_at: Option<chrono::DateTime<Utc>>,
+    ) {
+        sqlx::query(
+            "UPDATE agents.registry
+                SET analysis_context_last_used_at = $2,
+                    trading_context_last_used_at = $3
+              WHERE agent_key = $1",
+        )
+        .bind(agent_key)
+        .bind(analysis_context_last_used_at)
+        .bind(trading_context_last_used_at)
+        .execute(&state.db_pool)
+        .await
+        .expect("update job context timestamps");
+    }
+
     #[tokio::test]
     async fn hermes_page_renders_not_configured_state() {
         let state = test_state().await;
@@ -1054,6 +1076,8 @@ mod tests {
             environment: "live".to_string(),
             api_key: format!("balance-stream-test-{timestamp}"),
             api_key_last_used_at: None,
+            analysis_context_last_used_at: None,
+            trading_context_last_used_at: None,
             hyperliquid_private_key_ciphertext: Vec::new(),
             hyperliquid_private_key_key_id: "test".to_string(),
         };
@@ -1182,7 +1206,7 @@ mod tests {
     #[tokio::test]
     async fn agent_chat_route_renders_placeholder() {
         let state = test_state().await;
-        let (agent_key, wallet_address) = insert_test_agent(&state).await.expect("insert agent");
+        let (agent_key, _wallet_address) = insert_test_agent(&state).await.expect("insert agent");
 
         let response = router(state)
             .oneshot(
@@ -1197,6 +1221,157 @@ mod tests {
         assert_eq!(response.status(), StatusCode::OK);
         let text = response_text(response).await;
         assert!(text.contains("Chat UI coming next."));
+    }
+
+    #[tokio::test]
+    async fn agent_detail_renders_setup_alert_when_both_checkins_missing() {
+        let state = test_state().await;
+        let (agent_key, _wallet_address) = insert_test_agent(&state).await.expect("insert agent");
+
+        let response = router(Arc::clone(&state))
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/agents/{agent_key}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let text = response_text(response).await;
+        assert!(text.contains("Hermes cron setup required"));
+        assert!(text.contains("Analysis loop has not checked in."));
+        assert!(text.contains("Trading loop has not checked in."));
+        assert!(text.contains(&format!("Hermes profile: {agent_key}")));
+    }
+
+    #[tokio::test]
+    async fn agent_detail_renders_only_analysis_missing_when_trading_checked_in_recently() {
+        let state = test_state().await;
+        let (agent_key, _wallet_address) = insert_test_agent(&state).await.expect("insert agent");
+        set_job_context_timestamps(&state, &agent_key, None, Some(Utc::now())).await;
+
+        let response = router(Arc::clone(&state))
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/agents/{agent_key}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let text = response_text(response).await;
+        assert!(text.contains("Hermes cron setup required"));
+        assert!(text.contains("Analysis loop has not checked in."));
+        assert!(!text.contains("Trading loop has not checked in."));
+    }
+
+    #[tokio::test]
+    async fn agent_detail_renders_only_trading_missing_when_analysis_checked_in_recently() {
+        let state = test_state().await;
+        let (agent_key, _wallet_address) = insert_test_agent(&state).await.expect("insert agent");
+        set_job_context_timestamps(&state, &agent_key, Some(Utc::now()), None).await;
+
+        let response = router(Arc::clone(&state))
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/agents/{agent_key}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let text = response_text(response).await;
+        assert!(text.contains("Hermes cron setup required"));
+        assert!(!text.contains("Analysis loop has not checked in."));
+        assert!(text.contains("Trading loop has not checked in."));
+    }
+
+    #[tokio::test]
+    async fn agent_detail_renders_stale_warning_for_analysis_checkin() {
+        let state = test_state().await;
+        let (agent_key, _wallet_address) = insert_test_agent(&state).await.expect("insert agent");
+        set_job_context_timestamps(
+            &state,
+            &agent_key,
+            Some(Utc::now() - chrono::Duration::minutes(31)),
+            Some(Utc::now()),
+        )
+        .await;
+
+        let response = router(Arc::clone(&state))
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/agents/{agent_key}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let text = response_text(response).await;
+        assert!(text.contains("Hermes cron check-in is stale"));
+        assert!(text.contains("Analysis loop: last checked in"));
+        assert!(text.contains("expected within 30 minutes."));
+        assert!(!text.contains("Trading loop: last checked in"));
+    }
+
+    #[tokio::test]
+    async fn agent_detail_renders_stale_warning_for_trading_checkin() {
+        let state = test_state().await;
+        let (agent_key, _wallet_address) = insert_test_agent(&state).await.expect("insert agent");
+        set_job_context_timestamps(
+            &state,
+            &agent_key,
+            Some(Utc::now()),
+            Some(Utc::now() - chrono::Duration::minutes(4)),
+        )
+        .await;
+
+        let response = router(Arc::clone(&state))
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/agents/{agent_key}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let text = response_text(response).await;
+        assert!(text.contains("Hermes cron check-in is stale"));
+        assert!(!text.contains("Analysis loop: last checked in"));
+        assert!(text.contains("Trading loop: last checked in"));
+        assert!(text.contains("expected within 3 minutes."));
+    }
+
+    #[tokio::test]
+    async fn agent_detail_hides_cron_alerts_when_both_checkins_are_recent() {
+        let state = test_state().await;
+        let (agent_key, _wallet_address) = insert_test_agent(&state).await.expect("insert agent");
+        set_job_context_timestamps(&state, &agent_key, Some(Utc::now()), Some(Utc::now())).await;
+
+        let response = router(Arc::clone(&state))
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/agents/{agent_key}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let text = response_text(response).await;
+        assert!(!text.contains("Hermes cron setup required"));
+        assert!(!text.contains("Hermes cron check-in is stale"));
     }
 
     #[tokio::test]

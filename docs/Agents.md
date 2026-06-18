@@ -35,13 +35,19 @@ simplified single-table registry (`agents.registry`) with:
   - `trading_prompt TEXT NOT NULL DEFAULT ''`
 - a `soul TEXT NOT NULL DEFAULT ''` column that stores the agent's
    persona text and is synced to the agent's Hermes profile as
-   `SOUL.md` when the Hermes client is configured
+    `SOUL.md` when the Hermes client is configured
 - no separate Hermes bindings table — the registry row's `agent_key`
   is the Hermes profile name
 - no secret refs table
 - a boolean `enabled` flag in place of a lifecycle enum
 - one app API key stored directly on the registry row
+- two runtime health timestamps for Hermes job-context check-ins:
+  - `analysis_context_last_used_at TIMESTAMPTZ`
+  - `trading_context_last_used_at TIMESTAMPTZ`
 - the Hyperliquid private key encrypted at the application layer before storage
+
+Those check-in timestamps are runtime health signals, not operator-managed
+configuration.
 
 The broader schema ideas below describe future directions rather than the
 running Phase 1 data model.

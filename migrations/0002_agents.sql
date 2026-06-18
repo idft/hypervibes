@@ -13,6 +13,8 @@ CREATE TABLE IF NOT EXISTS agents.registry (
     environment TEXT NOT NULL DEFAULT 'live',
     api_key TEXT NOT NULL UNIQUE,
     api_key_last_used_at TIMESTAMPTZ,
+    analysis_context_last_used_at TIMESTAMPTZ,
+    trading_context_last_used_at TIMESTAMPTZ,
     hyperliquid_private_key_ciphertext BYTEA NOT NULL,
     hyperliquid_private_key_key_id TEXT NOT NULL,
     CONSTRAINT registry_wallet_environment_unique UNIQUE (wallet_address, environment),

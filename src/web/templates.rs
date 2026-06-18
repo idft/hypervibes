@@ -61,6 +61,25 @@ fn format_optional_timestamp_utc(value: Option<DateTime<Utc>>) -> String {
         .unwrap_or_else(|| "-".to_string())
 }
 
+const ANALYSIS_CONTEXT_STALE_AFTER_MINUTES: i64 = 30;
+const TRADING_CONTEXT_STALE_AFTER_MINUTES: i64 = 3;
+
+fn is_stale_checkin(
+    value: Option<DateTime<Utc>>,
+    now: DateTime<Utc>,
+    stale_after_minutes: i64,
+) -> bool {
+    value.is_some_and(|timestamp| {
+        now.signed_duration_since(timestamp) > chrono::Duration::minutes(stale_after_minutes)
+    })
+}
+
+fn build_cron_setup_prompt(agent_key: &str) -> String {
+    format!(
+        "Create the Vibetrading cron jobs for this Hermes profile.\n\nHermes profile: {agent_key}\n\nCreate an analysis cron job:\n- name: vibetrading-analysis\n- schedule: every 15m\n- skill: vibetrading:analysis-loop\n- prompt: Run the Vibetrading analysis loop for this profile. Use Vibetrading job context before reasoning.\n\nCreate a trading cron job:\n- name: vibetrading-trading\n- schedule: every 1m\n- skill: vibetrading:trading-loop\n- prompt: Run the Vibetrading trading loop for this profile. Use Vibetrading job context before reasoning.\n\nDo not create duplicate jobs if jobs with these names already exist.\n\nExample profile-scoped commands:\nhermes -p {agent_key} cron create ..."
+    )
+}
+
 pub fn format_money_text(amount: Option<Decimal>) -> String {
     format_money_text_with_decimals(amount, 4)
 }
@@ -412,6 +431,17 @@ pub struct AgentsShowPageTemplate {
     pub open_orders_html: String,
     pub sparklines_html: String,
     pub api_key_last_used_text: String,
+    pub analysis_context_last_used_text: String,
+    pub trading_context_last_used_text: String,
+    pub analysis_context_never_checked_in: bool,
+    pub trading_context_never_checked_in: bool,
+    pub analysis_context_stale: bool,
+    pub trading_context_stale: bool,
+    pub show_cron_setup_alert: bool,
+    pub show_cron_stale_warning: bool,
+    pub analysis_context_stale_after_minutes: i64,
+    pub trading_context_stale_after_minutes: i64,
+    pub cron_setup_prompt: String,
     pub created_at_text: String,
     pub updated_at_text: String,
     pub current_path: String,
@@ -420,6 +450,19 @@ pub struct AgentsShowPageTemplate {
 impl AgentsShowPageTemplate {
     pub fn new(agent: AgentDetailRow, active_tab: AgentShowTab) -> Self {
         let agent_key = agent.agent_key.clone();
+        let now = Utc::now();
+        let analysis_context_never_checked_in = agent.analysis_context_last_used_at.is_none();
+        let trading_context_never_checked_in = agent.trading_context_last_used_at.is_none();
+        let analysis_context_stale = is_stale_checkin(
+            agent.analysis_context_last_used_at,
+            now,
+            ANALYSIS_CONTEXT_STALE_AFTER_MINUTES,
+        );
+        let trading_context_stale = is_stale_checkin(
+            agent.trading_context_last_used_at,
+            now,
+            TRADING_CONTEXT_STALE_AFTER_MINUTES,
+        );
         let tabs = [
             ("Positions", AgentShowTab::Positions),
             ("Transactions", AgentShowTab::Transactions),
@@ -438,6 +481,22 @@ impl AgentsShowPageTemplate {
 
         Self {
             api_key_last_used_text: format_optional_timestamp_utc(agent.api_key_last_used_at),
+            analysis_context_last_used_text: format_optional_timestamp_utc(
+                agent.analysis_context_last_used_at,
+            ),
+            trading_context_last_used_text: format_optional_timestamp_utc(
+                agent.trading_context_last_used_at,
+            ),
+            analysis_context_never_checked_in,
+            trading_context_never_checked_in,
+            analysis_context_stale,
+            trading_context_stale,
+            show_cron_setup_alert: analysis_context_never_checked_in
+                || trading_context_never_checked_in,
+            show_cron_stale_warning: analysis_context_stale || trading_context_stale,
+            analysis_context_stale_after_minutes: ANALYSIS_CONTEXT_STALE_AFTER_MINUTES,
+            trading_context_stale_after_minutes: TRADING_CONTEXT_STALE_AFTER_MINUTES,
+            cron_setup_prompt: build_cron_setup_prompt(&agent_key),
             created_at_text: format_timestamp_utc(agent.created_at),
             updated_at_text: format_timestamp_utc(agent.updated_at),
             current_path: active_tab.path(&agent_key),
@@ -1054,6 +1113,8 @@ mod tests {
             environment: "live".to_string(),
             api_key: "vt_test_key".to_string(),
             api_key_last_used_at: None,
+            analysis_context_last_used_at: None,
+            trading_context_last_used_at: None,
             created_at: now,
             updated_at: now,
         }

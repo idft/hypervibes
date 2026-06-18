@@ -194,6 +194,18 @@ Behavior:
 
 - `job_kind=analysis` returns `analysis_prompt` and `account: null`
 - `job_kind=trading` returns `trading_prompt` and the full current account snapshot
+- each successful `job-context` call also updates a per-loop check-in timestamp in
+  `agents.registry`
+
+The operator UI uses those timestamps as a runtime health signal only:
+
+- `analysis_context_last_used_at` tracks the analysis loop check-in
+- `trading_context_last_used_at` tracks the trading loop check-in
+- a setup alert means that loop has never checked in, not definite proof that a
+  Hermes cron job is absent
+- a stale warning means that loop has checked in before but has not checked in
+  recently
+- stale thresholds are 30 minutes for analysis and 3 minutes for trading
 
 ## Skills
 
@@ -226,6 +238,9 @@ Hermes cron owns scheduling in this phase.
 
 Vibetrading does not create, edit, pause, resume, or track Hermes cron jobs
 yet.
+
+Cron setup remains manual or procedural inside Hermes. Vibetrading only observes
+whether the Hermes-owned loops have checked in through the `job-context` API.
 
 Example analysis cron:
 

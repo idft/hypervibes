@@ -13,7 +13,13 @@ use uuid::Uuid;
 
 use crate::{
     agents::crypto as agent_crypto,
-    agents::{AuthenticatedAgent, store::get_agent, store::get_agent_private_key_ciphertext},
+    agents::{
+        AuthenticatedAgent,
+        store::{
+            JobContextKind, get_agent, get_agent_private_key_ciphertext,
+            touch_job_context_last_used,
+        },
+    },
     hyperliquid::{
         live_state::{AccountKey, AccountLiveState, LiveConnectionStatus},
         orders::{
@@ -240,6 +246,13 @@ impl JobKind {
             Self::Trading => "trading",
         }
     }
+
+    fn context_kind(self) -> JobContextKind {
+        match self {
+            Self::Analysis => JobContextKind::Analysis,
+            Self::Trading => JobContextKind::Trading,
+        }
+    }
 }
 
 #[derive(Debug, serde::Serialize)]
@@ -257,11 +270,14 @@ async fn get_job_context(
     agent: AuthenticatedAgent,
     Query(query): Query<JobContextQuery>,
 ) -> Result<Response, ApiError> {
+    let job_kind = JobKind::parse(query.job_kind.trim())?;
     let row = get_agent(&state.db_pool, &agent.agent_key)
         .await
         .map_err(ApiError::Internal)?
         .ok_or(ApiError::NotFound("agent not found"))?;
-    let job_kind = JobKind::parse(query.job_kind.trim())?;
+    touch_job_context_last_used(&state.db_pool, &agent.agent_key, job_kind.context_kind())
+        .await
+        .map_err(ApiError::Internal)?;
     let (prompt, account) = match job_kind {
         JobKind::Analysis => (row.analysis_prompt.clone(), None),
         JobKind::Trading => (
@@ -702,6 +718,8 @@ mod tests {
             environment: "live".to_string(),
             api_key: api_key.clone(),
             api_key_last_used_at: None,
+            analysis_context_last_used_at: None,
+            trading_context_last_used_at: None,
             hyperliquid_private_key_ciphertext: Vec::new(),
             hyperliquid_private_key_key_id: "test".to_string(),
         };
@@ -1152,7 +1170,7 @@ mod tests {
             .uri("/account")
             .body(Body::empty())
             .unwrap();
-        let response = app(state).oneshot(request).await.unwrap();
+        let response = app(Arc::clone(&state)).oneshot(request).await.unwrap();
         assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
         let body_bytes = axum::body::to_bytes(response.into_body(), 16 * 1024)
             .await
@@ -1170,7 +1188,7 @@ mod tests {
             .header("authorization", "Bearer vta_does-not-exist")
             .body(Body::empty())
             .unwrap();
-        let response = app(state).oneshot(request).await.unwrap();
+        let response = app(Arc::clone(&state)).oneshot(request).await.unwrap();
         assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
     }
 
@@ -1202,6 +1220,13 @@ mod tests {
         assert_eq!(body["job_kind"], "analysis");
         assert_eq!(body["prompt"], "Focus on 15m structure and volatility.");
         assert!(body["account"].is_null());
+
+        let stored = get_agent(&state.db_pool, &agent_key)
+            .await
+            .unwrap()
+            .expect("present");
+        assert!(stored.analysis_context_last_used_at.is_some());
+        assert!(stored.trading_context_last_used_at.is_none());
     }
 
     #[tokio::test]
@@ -1246,6 +1271,13 @@ mod tests {
         assert_eq!(body["account"]["environment"], "live");
         assert_eq!(body["account"]["connected"], true);
         assert_eq!(body["account"]["state"]["status"], "connected");
+
+        let stored = get_agent(&state.db_pool, &agent_key)
+            .await
+            .unwrap()
+            .expect("present");
+        assert!(stored.analysis_context_last_used_at.is_none());
+        assert!(stored.trading_context_last_used_at.is_some());
     }
 
     #[tokio::test]
@@ -1259,7 +1291,7 @@ mod tests {
             .header("authorization", format!("Bearer {api_key}"))
             .body(Body::empty())
             .unwrap();
-        let response = app(state).oneshot(request).await.unwrap();
+        let response = app(Arc::clone(&state)).oneshot(request).await.unwrap();
         assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
 
         let body_bytes = axum::body::to_bytes(response.into_body(), 16 * 1024)
@@ -1267,6 +1299,13 @@ mod tests {
             .unwrap();
         let body: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
         assert!(body["error"].as_str().unwrap().contains("job_kind"));
+
+        let stored = get_agent(&state.db_pool, &_agent_key)
+            .await
+            .unwrap()
+            .expect("present");
+        assert!(stored.analysis_context_last_used_at.is_none());
+        assert!(stored.trading_context_last_used_at.is_none());
     }
 
     #[tokio::test]
@@ -1279,6 +1318,27 @@ mod tests {
             .unwrap();
         let response = app(state).oneshot(request).await.unwrap();
         assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn get_job_context_without_auth_does_not_touch_checkins() {
+        let state = test_state().await;
+
+        let (agent_key, _api_key) = seed_agent(&state, "job-no-auth-touch").await;
+
+        let request = Request::builder()
+            .uri("/job-context?job_kind=analysis")
+            .body(Body::empty())
+            .unwrap();
+        let response = app(Arc::clone(&state)).oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+
+        let stored = get_agent(&state.db_pool, &agent_key)
+            .await
+            .unwrap()
+            .expect("present");
+        assert!(stored.analysis_context_last_used_at.is_none());
+        assert!(stored.trading_context_last_used_at.is_none());
     }
 
     #[tokio::test]

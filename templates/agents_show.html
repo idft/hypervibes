@@ -49,6 +49,44 @@
         </div>
     </nav>
 
+    {% if show_cron_setup_alert %}
+    <section class="mt-2 rounded-2xl border border-amber-900/60 bg-amber-950/30 p-6">
+        <div class="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+            <div>
+                <h2 class="text-lg font-medium text-amber-200">Hermes cron setup required</h2>
+                <p class="mt-2 max-w-3xl text-sm leading-6 text-amber-100/80">One or more Vibetrading cron loops have never checked in through the job-context API. The Hermes profile and skills may exist, but the scheduled loops still need to be created or run.</p>
+                <ul class="mt-4 space-y-2 text-sm text-amber-100/90">
+                    {% if analysis_context_never_checked_in %}
+                    <li>Analysis loop has not checked in.</li>
+                    {% endif %}
+                    {% if trading_context_never_checked_in %}
+                    <li>Trading loop has not checked in.</li>
+                    {% endif %}
+                </ul>
+            </div>
+            <div class="w-full max-w-2xl">
+                <label for="cron_setup_prompt" class="text-xs uppercase tracking-[0.16em] text-amber-200/80">Hermes setup prompt</label>
+                <textarea id="cron_setup_prompt" readonly rows="16" class="mt-2 w-full rounded-xl border border-amber-900/60 bg-[#0d0d10] px-4 py-3 font-mono text-xs leading-6 text-amber-100/90 outline-none">{{ cron_setup_prompt }}</textarea>
+            </div>
+        </div>
+    </section>
+    {% endif %}
+
+    {% if show_cron_stale_warning %}
+    <section class="mt-2 rounded-2xl border border-red-900/60 bg-red-950/30 p-6">
+        <h2 class="text-lg font-medium text-red-200">Hermes cron check-in is stale</h2>
+        <p class="mt-2 max-w-3xl text-sm leading-6 text-red-100/80">One or more Vibetrading cron loops have checked in before but have not checked in recently. The job may be paused, failing, using a bad API key, missing required environment variables, or the Hermes gateway may not be running.</p>
+        <ul class="mt-4 space-y-2 text-sm text-red-100/90">
+            {% if analysis_context_stale %}
+            <li>Analysis loop: last checked in {{ analysis_context_last_used_text }}, expected within {{ analysis_context_stale_after_minutes }} minutes.</li>
+            {% endif %}
+            {% if trading_context_stale %}
+            <li>Trading loop: last checked in {{ trading_context_last_used_text }}, expected within {{ trading_context_stale_after_minutes }} minutes.</li>
+            {% endif %}
+        </ul>
+    </section>
+    {% endif %}
+
     {% if show_positions_tab %}
     <section class="mt-2 space-y-2" hx-ext="sse" sse-connect="/agents/{{ agent.agent_key }}/live/stream">
         <section class="rounded-2xl border border-zinc-800 bg-[#0d0d10] p-6">

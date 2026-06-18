@@ -27,6 +27,8 @@ pub struct AgentDetailRow {
     pub environment: String,
     pub api_key: String,
     pub api_key_last_used_at: Option<DateTime<Utc>>,
+    pub analysis_context_last_used_at: Option<DateTime<Utc>>,
+    pub trading_context_last_used_at: Option<DateTime<Utc>>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -46,6 +48,8 @@ pub struct AgentRegistryRow {
     pub environment: String,
     pub api_key: String,
     pub api_key_last_used_at: Option<DateTime<Utc>>,
+    pub analysis_context_last_used_at: Option<DateTime<Utc>>,
+    pub trading_context_last_used_at: Option<DateTime<Utc>>,
     pub hyperliquid_private_key_ciphertext: Vec<u8>,
     pub hyperliquid_private_key_key_id: String,
 }

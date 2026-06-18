@@ -484,6 +484,8 @@ mod tests {
             environment: "live".to_string(),
             api_key: format!("vta_ord-{suffix}-{ts}"),
             api_key_last_used_at: None,
+            analysis_context_last_used_at: None,
+            trading_context_last_used_at: None,
             hyperliquid_private_key_ciphertext: ciphertext,
             hyperliquid_private_key_key_id: "test".to_string(),
         }
