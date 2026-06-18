@@ -109,6 +109,22 @@ pub async fn list_memories(
     Ok(rows)
 }
 
+/// List all memories for the given agent, newest first.
+pub async fn list_agent_memories(pool: &DbPool, agent_key: &str) -> Result<Vec<MemoryRecord>> {
+    let rows = sqlx::query_as::<_, MemoryRecord>(
+        "SELECT id, created_at, agent_key, symbol, timeframe, memory_type, summary, content, metadata
+           FROM memory.records
+          WHERE agent_key = $1
+          ORDER BY created_at DESC",
+    )
+    .bind(agent_key)
+    .fetch_all(pool)
+    .await
+    .context("failed to list agent memory records")?;
+
+    Ok(rows)
+}
+
 /// Fetch a single memory by id, scoped to the caller's `agent_key`.
 ///
 /// Returning `None` covers both "not found" and "not owned" — the caller

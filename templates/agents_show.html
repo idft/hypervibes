@@ -33,22 +33,29 @@
         </div>
     </header>
 
+    <nav class="mt-2 overflow-x-auto" aria-label="Agent sections">
+        <div class="grid min-w-[48rem] grid-cols-6 gap-1 rounded-2xl border border-zinc-800 bg-[#0d0d10] p-1 sm:min-w-full">
+            {% for tab in tabs %}
+            {% if tab.active %}
+            <a href="{{ tab.href }}" aria-current="page" class="inline-flex w-full items-center justify-center whitespace-nowrap rounded-xl bg-zinc-800 px-4 py-2 text-sm font-medium text-white">
+                {{ tab.label }}
+            </a>
+            {% else %}
+            <a href="{{ tab.href }}" class="inline-flex w-full items-center justify-center whitespace-nowrap rounded-xl px-4 py-2 text-sm font-medium text-zinc-400 hover:bg-zinc-900 hover:text-white">
+                {{ tab.label }}
+            </a>
+            {% endif %}
+            {% endfor %}
+        </div>
+    </nav>
+
+    {% if show_positions_tab %}
     <section class="mt-2 space-y-2" hx-ext="sse" sse-connect="/agents/{{ agent.agent_key }}/live/stream">
         <section class="rounded-2xl border border-zinc-800 bg-[#0d0d10] p-6">
             <div class="grid grid-cols-1 gap-6 sm:grid-cols-4">
                 <div class="contents" sse-swap="balance">{{account_balance_html|safe}}</div>
                 {{ sparklines_html|safe }}
             </div>
-            <dl class="mt-6 grid gap-4 border-t border-zinc-800 pt-6 sm:grid-cols-2">
-                <div>
-                    <dt class="text-xs uppercase tracking-[0.16em] text-zinc-500">Wallet address</dt>
-                    <dd class="mt-1 break-all font-mono text-xs text-zinc-300">{{ agent.wallet_address }}</dd>
-                </div>
-                <div>
-                    <dt class="text-xs uppercase tracking-[0.16em] text-zinc-500">API key</dt>
-                    <dd class="mt-1 break-all font-mono text-xs text-zinc-300">{{ agent.api_key }}</dd>
-                </div>
-            </dl>
         </section>
 
         <section class="rounded-2xl border border-zinc-800 bg-[#0d0d10] p-6">
@@ -60,32 +67,28 @@
             <h2 class="text-lg font-medium text-white">Open orders</h2>
             <div class="mt-4" sse-swap="orders">{{ open_orders_html|safe }}</div>
         </section>
-
+    </section>
+    {% else if show_chat_tab %}
+    <section class="mt-2 space-y-2">
         <section class="rounded-2xl border border-zinc-800 bg-[#0d0d10] p-6">
-            <h2 class="text-lg font-medium text-white">Prompt</h2>
-            <div class="mt-4 rounded-xl border border-zinc-800 bg-zinc-950/70 p-4">
-                {% if agent.prompt.is_empty() %}
-                <p class="text-sm italic text-zinc-500">No prompt configured.</p>
-                {% else %}
-                <p class="whitespace-pre-wrap text-sm leading-6 text-zinc-300">{{ agent.prompt }}</p>
-                {% endif %}
+            <h2 class="text-lg font-medium text-white">Chat</h2>
+            <div class="mt-4 rounded-xl border border-zinc-800 bg-zinc-950/70 p-6 text-center">
+                <p class="text-sm text-zinc-300">Chat UI coming next.</p>
+                <p class="mt-1 text-xs text-zinc-500">This route is wired so we can build the operator chat surface in a follow-up pass.</p>
             </div>
         </section>
-
+    </section>
+    {% else if show_transactions_tab %}
+    <section class="mt-2 space-y-2">
         <section class="rounded-2xl border border-zinc-800 bg-[#0d0d10] p-6">
-            <h2 class="text-lg font-medium text-white">Soul</h2>
-            <div class="mt-4 rounded-xl border border-zinc-800 bg-zinc-950/70 p-4">
-                {% if agent.soul.is_empty() %}
-                <p class="text-sm italic text-zinc-500">No soul configured. The Hermes profile for this agent has no SOUL.md set.</p>
-                {% else %}
-                <p class="whitespace-pre-wrap text-sm leading-6 text-zinc-300">{{ agent.soul }}</p>
-                {% endif %}
-            </div>
-        </section>
-
-        <section class="rounded-2xl border border-zinc-800 bg-[#0d0d10] p-6">
-            <div class="flex items-center justify-between">
-                <h2 class="text-lg font-medium text-white">Transactions</h2>
+            <div class="flex items-center justify-between gap-4">
+                <div>
+                    <h2 class="text-lg font-medium text-white">Transactions</h2>
+                    <p class="mt-1 text-sm text-zinc-400">Full Hyperliquid account timeline for this agent.</p>
+                </div>
+                <a href="/agents/{{ agent.agent_key }}" class="rounded-full border border-zinc-800 px-3 py-1.5 text-sm font-medium text-zinc-300 hover:border-zinc-700 hover:text-white">
+                    Back to positions
+                </a>
             </div>
             {% if transactions.is_empty() %}
             <div class="mt-4 rounded-xl border border-zinc-800 bg-zinc-950/70 p-6 text-center">
@@ -133,6 +136,151 @@
             {% endif %}
         </section>
     </section>
+    {% else if show_memories_tab %}
+    <section class="mt-2 space-y-2">
+        <section class="rounded-2xl border border-zinc-800 bg-[#0d0d10] p-6">
+            <h2 class="text-lg font-medium text-white">Memories</h2>
+            <p class="mt-1 text-sm text-zinc-400">All stored memories for this agent, newest first.</p>
+            {% if memories.is_empty() %}
+            <div class="mt-4 rounded-xl border border-zinc-800 bg-zinc-950/70 p-6 text-center">
+                <p class="text-sm text-zinc-400">No memories have been written yet.</p>
+                <p class="mt-1 text-xs text-zinc-500">This list will populate as the agent writes analysis records through the memory API.</p>
+            </div>
+            {% else %}
+            <div class="mt-4 space-y-4">
+                {% for memory in memories %}
+                <article class="rounded-xl border border-zinc-800 bg-zinc-950/70 p-5">
+                    <div class="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                        <div>
+                            <h3 class="text-base font-medium text-white">{{ memory.summary }}</h3>
+                            <div class="mt-2 flex flex-wrap gap-2 text-xs">
+                                <span class="inline-flex rounded-full border border-zinc-700 px-2 py-0.5 text-zinc-300">{{ memory.symbol }}</span>
+                                <span class="inline-flex rounded-full border border-zinc-700 px-2 py-0.5 text-zinc-300">{{ memory.timeframe }}</span>
+                                <span class="inline-flex rounded-full border border-zinc-700 px-2 py-0.5 text-zinc-300">{{ memory.memory_type }}</span>
+                            </div>
+                        </div>
+                        <p class="font-mono text-xs text-zinc-500">{{ memory.created_at_text }}</p>
+                    </div>
+                    <div class="mt-4 rounded-xl border border-zinc-800 bg-[#0d0d10] p-4">
+                        <p class="whitespace-pre-wrap text-sm leading-6 text-zinc-300">{{ memory.content }}</p>
+                    </div>
+                    {% if let Some(metadata_text) = memory.metadata_text %}
+                    <div class="mt-4">
+                        <div class="text-xs uppercase tracking-[0.16em] text-zinc-500">Metadata</div>
+                        <pre class="mt-2 overflow-x-auto rounded-xl border border-zinc-800 bg-[#0d0d10] p-4 text-xs leading-6 text-zinc-300">{{ metadata_text }}</pre>
+                    </div>
+                    {% endif %}
+                </article>
+                {% endfor %}
+            </div>
+            {% endif %}
+        </section>
+    </section>
+    {% else if show_prompts_tab %}
+    <section class="mt-2 space-y-2">
+        <section class="rounded-2xl border border-zinc-800 bg-[#0d0d10] p-6">
+            <h2 class="text-lg font-medium text-white">Prompt</h2>
+            <div class="mt-4 rounded-xl border border-zinc-800 bg-zinc-950/70 p-4">
+                {% if agent.prompt.is_empty() %}
+                <p class="text-sm italic text-zinc-500">No prompt configured.</p>
+                {% else %}
+                <p class="whitespace-pre-wrap text-sm leading-6 text-zinc-300">{{ agent.prompt }}</p>
+                {% endif %}
+            </div>
+        </section>
+
+        <section class="rounded-2xl border border-zinc-800 bg-[#0d0d10] p-6">
+            <h2 class="text-lg font-medium text-white">Soul</h2>
+            <div class="mt-4 rounded-xl border border-zinc-800 bg-zinc-950/70 p-4">
+                {% if agent.soul.is_empty() %}
+                <p class="text-sm italic text-zinc-500">No soul configured. The Hermes profile for this agent has no SOUL.md set.</p>
+                {% else %}
+                <p class="whitespace-pre-wrap text-sm leading-6 text-zinc-300">{{ agent.soul }}</p>
+                {% endif %}
+            </div>
+        </section>
+    </section>
+    {% else if show_settings_tab %}
+    <section class="mt-2 space-y-2">
+        <section class="rounded-2xl border border-zinc-800 bg-[#0d0d10] p-6">
+            <h2 class="text-lg font-medium text-white">Settings</h2>
+            <dl class="mt-4 grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+                <div>
+                    <dt class="text-xs uppercase tracking-[0.16em] text-zinc-500">Agent key</dt>
+                    <dd class="mt-1 text-sm text-zinc-300">{{ agent.agent_key }}</dd>
+                </div>
+                <div>
+                    <dt class="text-xs uppercase tracking-[0.16em] text-zinc-500">Display name</dt>
+                    <dd class="mt-1 text-sm text-zinc-300">{{ agent.display_name }}</dd>
+                </div>
+                <div>
+                    <dt class="text-xs uppercase tracking-[0.16em] text-zinc-500">Status</dt>
+                    <dd class="mt-1 text-sm text-zinc-300">{% if agent.enabled %}Enabled{% else %}Disabled{% endif %}</dd>
+                </div>
+                <div>
+                    <dt class="text-xs uppercase tracking-[0.16em] text-zinc-500">Environment</dt>
+                    <dd class="mt-1 text-sm text-zinc-300">{{ agent.environment }}</dd>
+                </div>
+                <div>
+                    <dt class="text-xs uppercase tracking-[0.16em] text-zinc-500">Wallet address</dt>
+                    <dd class="mt-1 break-all font-mono text-xs text-zinc-300">{{ agent.wallet_address }}</dd>
+                </div>
+                <div>
+                    <dt class="text-xs uppercase tracking-[0.16em] text-zinc-500">API key</dt>
+                    <dd class="mt-1 break-all font-mono text-xs text-zinc-300">{{ agent.api_key }}</dd>
+                </div>
+                <div>
+                    <dt class="text-xs uppercase tracking-[0.16em] text-zinc-500">API key last used</dt>
+                    <dd class="mt-1 text-sm text-zinc-300">{{ api_key_last_used_text }}</dd>
+                </div>
+                <div>
+                    <dt class="text-xs uppercase tracking-[0.16em] text-zinc-500">Created</dt>
+                    <dd class="mt-1 text-sm text-zinc-300">{{ created_at_text }}</dd>
+                </div>
+                <div>
+                    <dt class="text-xs uppercase tracking-[0.16em] text-zinc-500">Updated</dt>
+                    <dd class="mt-1 text-sm text-zinc-300">{{ updated_at_text }}</dd>
+                </div>
+            </dl>
+        </section>
+
+        <section class="rounded-2xl border border-zinc-800 bg-[#0d0d10] p-6">
+            <h2 class="text-lg font-medium text-white">Sync status</h2>
+            {% if sync_state.is_empty() %}
+            <div class="mt-4 rounded-xl border border-zinc-800 bg-zinc-950/70 p-6 text-center">
+                <p class="text-sm text-zinc-400">No sync state rows have been recorded yet.</p>
+            </div>
+            {% else %}
+            <div class="mt-4 overflow-x-auto">
+                <table class="min-w-full divide-y divide-zinc-800 text-sm">
+                    <thead class="bg-zinc-950/60 text-left text-xs uppercase tracking-[0.16em] text-zinc-500">
+                        <tr>
+                            <th class="px-4 py-3 font-medium">Stream</th>
+                            <th class="px-4 py-3 font-medium">Status</th>
+                            <th class="px-4 py-3 font-medium">Last event time</th>
+                            <th class="px-4 py-3 font-medium">Last event key</th>
+                            <th class="px-4 py-3 font-medium">Last synced</th>
+                        </tr>
+                    </thead>
+                    <tbody class="divide-y divide-zinc-800">
+                        {% for row in sync_state %}
+                        <tr class="hover:bg-zinc-900/50">
+                            <td class="px-4 py-3 align-top font-mono text-xs text-zinc-300">{{ row.stream_name }}</td>
+                            <td class="px-4 py-3 align-top">
+                                <span class="inline-flex rounded-full border px-2 py-0.5 text-xs font-medium {{ row.status_class }}">{{ row.status_text }}</span>
+                            </td>
+                            <td class="px-4 py-3 align-top font-mono text-xs text-zinc-300">{{ row.last_event_time_text }}</td>
+                            <td class="px-4 py-3 align-top font-mono text-xs text-zinc-300">{{ row.last_event_key_text }}</td>
+                            <td class="px-4 py-3 align-top font-mono text-xs text-zinc-300">{{ row.last_synced_at_text }}</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            {% endif %}
+        </section>
+    </section>
+    {% endif %}
 </div>
 
 <!-- Delete confirmation modal -->

@@ -29,17 +29,19 @@ use crate::{
         live_state::{AccountKey, AccountLiveState, LiveConnectionStatus},
         queries::{
             BalanceSeriesBucket, fetch_balance_series, list_account_sync_state,
-            list_account_transactions,
+            list_account_transactions, list_all_account_transactions,
         },
     },
+    memory::list_agent_memories,
     web::{
         AppState,
         templates::{
             AccountBalancePartialTemplate, AccountBalanceView, AgentListEntry,
-            AgentsNewPageTemplate, AgentsPageTemplate, AgentsShowPageTemplate,
+            AgentShowTab, AgentsNewPageTemplate, AgentsPageTemplate, AgentsShowPageTemplate,
             BalanceSparklinesPartialTemplate, HermesPageTemplate, OpenOrdersPartialTemplate,
             OpenOrdersView, OpenPositionsPartialTemplate, OpenPositionsView,
-            ServerErrorPageTemplate, SparklineView, TransactionView,
+            ServerErrorPageTemplate, SparklineView, SyncStateView, TransactionView,
+            MemoryView,
         },
     },
 };
@@ -51,6 +53,11 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/agents", get(agents_index).post(create_agent))
         .route("/agents/new", get(agents_new))
         .route("/agents/{agent_key}", get(agents_show))
+        .route("/agents/{agent_key}/chat", get(agents_show_chat))
+        .route("/agents/{agent_key}/transactions", get(agents_show_transactions))
+        .route("/agents/{agent_key}/memories", get(agents_show_memories))
+        .route("/agents/{agent_key}/prompts", get(agents_show_prompts))
+        .route("/agents/{agent_key}/settings", get(agents_show_settings))
         .route("/agents/{agent_key}/delete", post(delete_agent))
         .route("/agents/{agent_key}/live/stream", get(agent_live_stream))
         .route("/hermes", get(hermes_page))
@@ -121,13 +128,65 @@ async fn agents_show(
     State(state): State<Arc<AppState>>,
     Path(agent_key): Path<String>,
 ) -> Result<Response, AppError> {
-    match get_agent(&state.db_pool, &agent_key).await? {
-        Some(agent) => {
-            let transactions = match list_account_transactions(
+    render_agent_show_page(&state, &agent_key, AgentShowTab::Positions).await
+}
+
+async fn agents_show_transactions(
+    State(state): State<Arc<AppState>>,
+    Path(agent_key): Path<String>,
+) -> Result<Response, AppError> {
+    render_agent_show_page(&state, &agent_key, AgentShowTab::Transactions).await
+}
+
+async fn agents_show_chat(
+    State(state): State<Arc<AppState>>,
+    Path(agent_key): Path<String>,
+) -> Result<Response, AppError> {
+    render_agent_show_page(&state, &agent_key, AgentShowTab::Chat).await
+}
+
+async fn agents_show_memories(
+    State(state): State<Arc<AppState>>,
+    Path(agent_key): Path<String>,
+) -> Result<Response, AppError> {
+    render_agent_show_page(&state, &agent_key, AgentShowTab::Memories).await
+}
+
+async fn agents_show_prompts(
+    State(state): State<Arc<AppState>>,
+    Path(agent_key): Path<String>,
+) -> Result<Response, AppError> {
+    render_agent_show_page(&state, &agent_key, AgentShowTab::Prompts).await
+}
+
+async fn agents_show_settings(
+    State(state): State<Arc<AppState>>,
+    Path(agent_key): Path<String>,
+) -> Result<Response, AppError> {
+    render_agent_show_page(&state, &agent_key, AgentShowTab::Settings).await
+}
+
+async fn render_agent_show_page(
+    state: &Arc<AppState>,
+    agent_key: &str,
+    active_tab: AgentShowTab,
+) -> Result<Response, AppError> {
+    let Some(agent) = get_agent(&state.db_pool, agent_key).await? else {
+        return Ok((StatusCode::NOT_FOUND, "agent not found").into_response());
+    };
+
+    let mut template = AgentsShowPageTemplate::new(agent.clone(), active_tab);
+
+    match active_tab {
+        AgentShowTab::Positions => {
+            populate_positions_tab(state, &agent, &mut template).await?;
+        }
+        AgentShowTab::Chat => {}
+        AgentShowTab::Transactions => {
+            template.transactions = match list_all_account_transactions(
                 &state.db_pool,
                 &agent.wallet_address,
                 &agent.environment,
-                100,
             )
             .await
             {
@@ -138,119 +197,134 @@ async fn agents_show(
                         wallet_address = %agent.wallet_address,
                         environment = %agent.environment,
                         error = ?error,
-                        "failed to list account transactions for agent page"
+                        "failed to list full account transactions for agent page"
                     );
                     Vec::new()
                 }
             };
-            let sync_state = match list_account_sync_state(
-                &state.db_pool,
-                &agent.wallet_address,
-                &agent.environment,
-            )
-            .await
-            {
-                Ok(rows) => rows,
-                Err(error) => {
-                    warn!(
-                        agent_key = %agent.agent_key,
-                        wallet_address = %agent.wallet_address,
-                        environment = %agent.environment,
-                        error = ?error,
-                        "failed to list account sync state for agent page"
-                    );
-                    Vec::new()
-                }
-            };
-            let account_key = AccountKey::new(&agent.wallet_address, &agent.environment);
-            let live_snapshot =
-                state
-                    .live_accounts
-                    .get(&account_key)
-                    .unwrap_or_else(|| AccountLiveState {
-                        account_address: account_key.account_address.clone(),
-                        environment: account_key.environment.clone(),
-                        status: LiveConnectionStatus::Starting,
-                        ..Default::default()
-                    });
-            let account_balance_view = AccountBalanceView::from_live_state(live_snapshot.clone());
-            let account_balance_html =
-                AccountBalancePartialTemplate::render_view(account_balance_view.clone())
-                    .map_err(anyhow::Error::from)?;
-            let open_positions_view = OpenPositionsView::from_live_state(live_snapshot.clone());
-            let open_positions_html =
-                OpenPositionsPartialTemplate::render_view(open_positions_view)
-                    .map_err(anyhow::Error::from)?;
-            let open_orders_view = OpenOrdersView::from_live_state(live_snapshot.clone());
-            let open_orders_html = OpenOrdersPartialTemplate::render_view(open_orders_view)
-                .map_err(anyhow::Error::from)?;
-
-            let now = Utc::now();
-            let since_24h = now - chrono::Duration::hours(24);
-            let since_30d = now - chrono::Duration::days(30);
-            let series_24h = match fetch_balance_series(
-                &state.db_pool,
-                &agent.wallet_address,
-                &agent.environment,
-                since_24h,
-                BalanceSeriesBucket::Hour,
-            )
-            .await
-            {
-                Ok(points) => points,
-                Err(error) => {
-                    warn!(
-                        agent_key = %agent.agent_key,
-                        wallet_address = %agent.wallet_address,
-                        environment = %agent.environment,
-                        error = ?error,
-                        "failed to fetch 24h balance series for agent page"
-                    );
-                    Vec::new()
-                }
-            };
-            let series_30d = match fetch_balance_series(
-                &state.db_pool,
-                &agent.wallet_address,
-                &agent.environment,
-                since_30d,
-                BalanceSeriesBucket::Day,
-            )
-            .await
-            {
-                Ok(points) => points,
-                Err(error) => {
-                    warn!(
-                        agent_key = %agent.agent_key,
-                        wallet_address = %agent.wallet_address,
-                        environment = %agent.environment,
-                        error = ?error,
-                        "failed to fetch 30d balance series for agent page"
-                    );
-                    Vec::new()
-                }
-            };
-            let sparklines = vec![
-                SparklineView::from_series("24 hours", &series_24h, 240, 48),
-                SparklineView::from_series("30 days", &series_30d, 240, 48),
-            ];
-            let sparklines_html = BalanceSparklinesPartialTemplate::render_view(sparklines)
-                .map_err(anyhow::Error::from)?;
-
-            let template = AgentsShowPageTemplate {
-                agent,
-                transactions,
-                sync_state,
-                account_balance_html,
-                open_positions_html,
-                open_orders_html,
-                sparklines_html,
-                current_path: format!("/agents/{}", agent_key),
-            };
-            Ok(Html(template.render()?).into_response())
         }
-        None => Ok((StatusCode::NOT_FOUND, "agent not found").into_response()),
+        AgentShowTab::Memories => {
+            template.memories = match list_agent_memories(&state.db_pool, &agent.agent_key).await {
+                Ok(rows) => rows.into_iter().map(MemoryView::from_record).collect(),
+                Err(error) => {
+                    warn!(
+                        agent_key = %agent.agent_key,
+                        error = ?error,
+                        "failed to list agent memories for operator page"
+                    );
+                    Vec::new()
+                }
+            };
+        }
+        AgentShowTab::Prompts => {}
+        AgentShowTab::Settings => {
+            template.sync_state = match list_account_sync_state(
+                &state.db_pool,
+                &agent.wallet_address,
+                &agent.environment,
+            )
+            .await
+            {
+                Ok(rows) => rows.into_iter().map(SyncStateView::from_row).collect(),
+                Err(error) => {
+                    warn!(
+                        agent_key = %agent.agent_key,
+                        wallet_address = %agent.wallet_address,
+                        environment = %agent.environment,
+                        error = ?error,
+                        "failed to list account sync state for agent settings page"
+                    );
+                    Vec::new()
+                }
+            };
+        }
     }
+
+    Ok(Html(template.render()?).into_response())
+}
+
+async fn populate_positions_tab(
+    state: &Arc<AppState>,
+    agent: &crate::agents::model::AgentDetailRow,
+    template: &mut AgentsShowPageTemplate,
+) -> Result<(), AppError> {
+    let account_key = AccountKey::new(&agent.wallet_address, &agent.environment);
+    let live_snapshot = state
+        .live_accounts
+        .get(&account_key)
+        .unwrap_or_else(|| AccountLiveState {
+            account_address: account_key.account_address.clone(),
+            environment: account_key.environment.clone(),
+            status: LiveConnectionStatus::Starting,
+            ..Default::default()
+        });
+
+    let account_balance_view = AccountBalanceView::from_live_state(live_snapshot.clone());
+    template.account_balance_html =
+        AccountBalancePartialTemplate::render_view(account_balance_view.clone())
+            .map_err(anyhow::Error::from)?;
+
+    let open_positions_view = OpenPositionsView::from_live_state(live_snapshot.clone());
+    template.open_positions_html = OpenPositionsPartialTemplate::render_view(open_positions_view)
+        .map_err(anyhow::Error::from)?;
+
+    let open_orders_view = OpenOrdersView::from_live_state(live_snapshot.clone());
+    template.open_orders_html = OpenOrdersPartialTemplate::render_view(open_orders_view)
+        .map_err(anyhow::Error::from)?;
+
+    let now = Utc::now();
+    let since_24h = now - chrono::Duration::hours(24);
+    let since_30d = now - chrono::Duration::days(30);
+    let series_24h = match fetch_balance_series(
+        &state.db_pool,
+        &agent.wallet_address,
+        &agent.environment,
+        since_24h,
+        BalanceSeriesBucket::Hour,
+    )
+    .await
+    {
+        Ok(points) => points,
+        Err(error) => {
+            warn!(
+                agent_key = %agent.agent_key,
+                wallet_address = %agent.wallet_address,
+                environment = %agent.environment,
+                error = ?error,
+                "failed to fetch 24h balance series for agent page"
+            );
+            Vec::new()
+        }
+    };
+    let series_30d = match fetch_balance_series(
+        &state.db_pool,
+        &agent.wallet_address,
+        &agent.environment,
+        since_30d,
+        BalanceSeriesBucket::Day,
+    )
+    .await
+    {
+        Ok(points) => points,
+        Err(error) => {
+            warn!(
+                agent_key = %agent.agent_key,
+                wallet_address = %agent.wallet_address,
+                environment = %agent.environment,
+                error = ?error,
+                "failed to fetch 30d balance series for agent page"
+            );
+            Vec::new()
+        }
+    };
+    let sparklines = vec![
+        SparklineView::from_series("24 hours", &series_24h, 240, 48),
+        SparklineView::from_series("30 days", &series_30d, 240, 48),
+    ];
+    template.sparklines_html = BalanceSparklinesPartialTemplate::render_view(sparklines)
+        .map_err(anyhow::Error::from)?;
+
+    Ok(())
 }
 
 async fn delete_agent(
@@ -574,9 +648,10 @@ mod tests {
     use axum::body::Body;
     use axum::http::{Request, StatusCode};
     use http_body_util::BodyExt as _;
+    use rust_decimal::Decimal;
     use tower::util::ServiceExt;
 
-    use crate::{agents::crypto::EncryptionKey, test_db};
+    use crate::{agents::crypto::EncryptionKey, memory::CreateMemory, test_db};
 
     async fn test_state() -> Arc<AppState> {
         let pool = test_db::pool().await;
@@ -626,6 +701,63 @@ mod tests {
         }
 
         String::from_utf8_lossy(&buf).into_owned()
+    }
+
+    async fn response_text(response: Response) -> String {
+        let bytes = response.into_body().collect().await.unwrap().to_bytes();
+        String::from_utf8_lossy(&bytes).into_owned()
+    }
+
+    async fn seed_ledger_event(
+        state: &Arc<AppState>,
+        wallet_address: &str,
+        hash: &str,
+        event_time: chrono::DateTime<Utc>,
+        usdc: Decimal,
+    ) {
+        sqlx::query(
+            "INSERT INTO hyperliquid.ledger_events
+                (hash, account_address, environment, event_time, event_type,
+                 source_stream, ledger_type, usdc, ingest_source, inserted_at)
+             VALUES ($1, $2, 'live', $3, 'ledger', 'test', 'deposit', $4, 'test', NOW())",
+        )
+        .bind(hash)
+        .bind(wallet_address)
+        .bind(event_time)
+        .bind(usdc)
+        .execute(&state.db_pool)
+        .await
+        .expect("insert ledger event");
+    }
+
+    async fn seed_memory(state: &Arc<AppState>, agent_key: &str, summary: &str, content: &str) {
+        crate::memory::insert_memory(
+            &state.db_pool,
+            agent_key,
+            &CreateMemory {
+                symbol: "BTC".to_string(),
+                timeframe: Some("1h".to_string()),
+                memory_type: "plan".to_string(),
+                summary: summary.to_string(),
+                content: content.to_string(),
+                metadata: Some(serde_json::json!({ "confidence": 0.8 })),
+            },
+        )
+        .await
+        .expect("insert memory");
+    }
+
+    async fn seed_sync_state(state: &Arc<AppState>, wallet_address: &str) {
+        sqlx::query(
+            "INSERT INTO hyperliquid.sync_state
+                (account_address, environment, stream_name, status, metadata, last_event_key, last_synced_at)
+             VALUES ($1, 'live', 'fills', $2, '{}'::jsonb, 'abc123', NOW())",
+        )
+        .bind(wallet_address)
+        .bind(crate::hyperliquid::sync_state::SyncStatus::Healthy.as_str())
+        .execute(&state.db_pool)
+        .await
+        .expect("insert sync state");
     }
 
     #[tokio::test]
@@ -842,6 +974,14 @@ mod tests {
     }
 
     async fn insert_test_agent(state: &Arc<AppState>) -> Option<(String, String)> {
+        insert_test_agent_with_text(state, String::new(), String::new()).await
+    }
+
+    async fn insert_test_agent_with_text(
+        state: &Arc<AppState>,
+        prompt: String,
+        soul: String,
+    ) -> Option<(String, String)> {
         let timestamp = chrono::Utc::now().timestamp_millis();
         let display_name = format!("BalanceStreamTest{}", timestamp);
         let agent_key = slugify_agent_key(&display_name);
@@ -857,8 +997,8 @@ mod tests {
             updated_at: now,
             enabled: true,
             display_name,
-            prompt: String::new(),
-            soul: String::new(),
+            prompt,
+            soul,
             wallet_address: wallet_address.clone(),
             environment: "live".to_string(),
             api_key: format!("balance-stream-test-{timestamp}"),
@@ -985,6 +1125,145 @@ mod tests {
             )
             .await
             .unwrap();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn agent_chat_route_renders_placeholder() {
+        let state = test_state().await;
+        let (agent_key, wallet_address) = insert_test_agent(&state).await.expect("insert agent");
+
+        let response = router(state)
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/agents/{agent_key}/chat"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let text = response_text(response).await;
+        assert!(text.contains("Chat UI coming next."));
+    }
+
+    #[tokio::test]
+    async fn agent_transactions_route_renders_full_timeline() {
+        let state = test_state().await;
+        let (agent_key, wallet_address) = insert_test_agent(&state).await.expect("insert agent");
+        seed_ledger_event(
+            &state,
+            &wallet_address,
+            &format!("tx-route-{}", Utc::now().timestamp_nanos_opt().unwrap_or(0)),
+            Utc::now(),
+            Decimal::new(42, 0),
+        )
+        .await;
+
+        let response = router(state)
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/agents/{agent_key}/transactions"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let text = response_text(response).await;
+        assert!(text.contains("Full Hyperliquid account timeline"));
+        assert!(text.contains("42.0000"));
+    }
+
+    #[tokio::test]
+    async fn agent_memories_route_renders_saved_memories() {
+        let state = test_state().await;
+        let (agent_key, _wallet_address) = insert_test_agent(&state).await.expect("insert agent");
+        seed_memory(&state, &agent_key, "Remember the breakout", "BTC reclaimed support.").await;
+
+        let response = router(state)
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/agents/{agent_key}/memories"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let text = response_text(response).await;
+        assert!(text.contains("Memories"));
+        assert!(text.contains("Remember the breakout"));
+        assert!(text.contains("BTC reclaimed support."));
+    }
+
+    #[tokio::test]
+    async fn agent_prompts_route_renders_prompt_and_soul() {
+        let state = test_state().await;
+        let (agent_key, _wallet_address) = insert_test_agent_with_text(
+            &state,
+            "Trade breakouts only after confirmation.".to_string(),
+            "Calm and deliberate.".to_string(),
+        )
+        .await
+        .expect("insert agent");
+
+        let response = router(state)
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/agents/{agent_key}/prompts"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let text = response_text(response).await;
+        assert!(text.contains("Trade breakouts only after confirmation."));
+        assert!(text.contains("Calm and deliberate."));
+    }
+
+    #[tokio::test]
+    async fn agent_settings_route_renders_sync_state() {
+        let state = test_state().await;
+        let (agent_key, wallet_address) = insert_test_agent(&state).await.expect("insert agent");
+        seed_sync_state(&state, &wallet_address).await;
+
+        let response = router(state)
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/agents/{agent_key}/settings"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let text = response_text(response).await;
+        assert!(text.contains("Sync status"));
+        assert!(text.contains("fills"));
+        assert!(text.contains("abc123"));
+    }
+
+    #[tokio::test]
+    async fn unknown_agent_subroute_returns_404() {
+        let state = test_state().await;
+
+        let response = router(state)
+            .oneshot(
+                Request::builder()
+                    .uri("/agents/does-not-exist-12345/settings")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
         assert_eq!(response.status(), StatusCode::NOT_FOUND);
     }
 

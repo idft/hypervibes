@@ -11,6 +11,7 @@ use crate::{
         queries::{AccountTransactionRow, BalancePoint},
         sync_state::SyncStateRow,
     },
+    memory::MemoryRecord,
 };
 
 #[derive(Debug, Clone)]
@@ -48,6 +49,14 @@ fn add_thousands_separators(value: &str) -> String {
     } else {
         format!("{sign}{grouped_integer}.{fractional}")
     }
+}
+
+fn format_timestamp_utc(value: DateTime<Utc>) -> String {
+    value.format("%Y-%m-%d %H:%M UTC").to_string()
+}
+
+fn format_optional_timestamp_utc(value: Option<DateTime<Utc>>) -> String {
+    value.map(format_timestamp_utc).unwrap_or_else(|| "-".to_string())
 }
 
 pub fn format_money_text(amount: Option<Decimal>) -> String {
@@ -248,6 +257,105 @@ impl TransactionView {
     }
 }
 
+#[derive(Debug, Clone)]
+pub struct MemoryView {
+    pub created_at_text: String,
+    pub symbol: String,
+    pub timeframe: String,
+    pub memory_type: String,
+    pub summary: String,
+    pub content: String,
+    pub metadata_text: Option<String>,
+}
+
+impl MemoryView {
+    pub fn from_record(row: MemoryRecord) -> Self {
+        let metadata_text = if row.metadata.as_object().is_some_and(|obj| !obj.is_empty()) {
+            serde_json::to_string_pretty(&row.metadata).ok()
+        } else {
+            None
+        };
+
+        Self {
+            created_at_text: format_timestamp_utc(row.created_at),
+            symbol: row.symbol,
+            timeframe: row.timeframe.unwrap_or_else(|| "general".to_string()),
+            memory_type: row.memory_type,
+            summary: row.summary,
+            content: row.content,
+            metadata_text,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct SyncStateView {
+    pub stream_name: String,
+    pub status_text: String,
+    pub status_class: &'static str,
+    pub last_event_time_text: String,
+    pub last_event_key_text: String,
+    pub last_synced_at_text: String,
+}
+
+impl SyncStateView {
+    pub fn from_row(row: SyncStateRow) -> Self {
+        let (status_text, status_class) = match row.status {
+            crate::hyperliquid::sync_state::SyncStatus::Healthy => {
+                ("healthy".to_string(), "border-emerald-900/60 bg-emerald-950/30 text-emerald-300")
+            }
+            crate::hyperliquid::sync_state::SyncStatus::Running => {
+                ("running".to_string(), "border-sky-900/60 bg-sky-950/30 text-sky-300")
+            }
+            crate::hyperliquid::sync_state::SyncStatus::Pending => {
+                ("pending".to_string(), "border-amber-900/60 bg-amber-950/30 text-amber-300")
+            }
+            crate::hyperliquid::sync_state::SyncStatus::Failed => {
+                ("failed".to_string(), "border-red-900/60 bg-red-950/30 text-red-300")
+            }
+        };
+
+        Self {
+            stream_name: row.stream_name,
+            status_text,
+            status_class,
+            last_event_time_text: format_optional_timestamp_utc(row.last_event_time),
+            last_event_key_text: row.last_event_key.unwrap_or_else(|| "-".to_string()),
+            last_synced_at_text: format_optional_timestamp_utc(row.last_synced_at),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AgentShowTab {
+    Positions,
+    Chat,
+    Transactions,
+    Memories,
+    Prompts,
+    Settings,
+}
+
+impl AgentShowTab {
+    fn path(self, agent_key: &str) -> String {
+        match self {
+            Self::Positions => format!("/agents/{agent_key}"),
+            Self::Chat => format!("/agents/{agent_key}/chat"),
+            Self::Transactions => format!("/agents/{agent_key}/transactions"),
+            Self::Memories => format!("/agents/{agent_key}/memories"),
+            Self::Prompts => format!("/agents/{agent_key}/prompts"),
+            Self::Settings => format!("/agents/{agent_key}/settings"),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct AgentShowTabLink {
+    pub label: &'static str,
+    pub href: String,
+    pub active: bool,
+}
+
 /// Row entry shown on the agents index page. Combines the durable
 /// [`AgentListRow`] with the in-memory live account-balance view so the
 /// page can render the current Hyperliquid total balance in a single
@@ -283,13 +391,67 @@ pub struct AgentsNewPageTemplate {
 #[allow(dead_code)]
 pub struct AgentsShowPageTemplate {
     pub agent: AgentDetailRow,
+    pub tabs: Vec<AgentShowTabLink>,
+    pub show_positions_tab: bool,
+    pub show_chat_tab: bool,
+    pub show_transactions_tab: bool,
+    pub show_memories_tab: bool,
+    pub show_prompts_tab: bool,
+    pub show_settings_tab: bool,
     pub transactions: Vec<TransactionView>,
-    pub sync_state: Vec<SyncStateRow>,
+    pub memories: Vec<MemoryView>,
+    pub sync_state: Vec<SyncStateView>,
     pub account_balance_html: String,
     pub open_positions_html: String,
     pub open_orders_html: String,
     pub sparklines_html: String,
+    pub api_key_last_used_text: String,
+    pub created_at_text: String,
+    pub updated_at_text: String,
     pub current_path: String,
+}
+
+impl AgentsShowPageTemplate {
+    pub fn new(agent: AgentDetailRow, active_tab: AgentShowTab) -> Self {
+        let agent_key = agent.agent_key.clone();
+        let tabs = [
+            ("Positions", AgentShowTab::Positions),
+            ("Transactions", AgentShowTab::Transactions),
+            ("Memories", AgentShowTab::Memories),
+            ("Prompts", AgentShowTab::Prompts),
+            ("Chat", AgentShowTab::Chat),
+            ("Settings", AgentShowTab::Settings),
+        ]
+        .into_iter()
+        .map(|(label, tab)| AgentShowTabLink {
+            label,
+            href: tab.path(&agent_key),
+            active: tab == active_tab,
+        })
+        .collect();
+
+        Self {
+            api_key_last_used_text: format_optional_timestamp_utc(agent.api_key_last_used_at),
+            created_at_text: format_timestamp_utc(agent.created_at),
+            updated_at_text: format_timestamp_utc(agent.updated_at),
+            current_path: active_tab.path(&agent_key),
+            tabs,
+            show_positions_tab: active_tab == AgentShowTab::Positions,
+            show_chat_tab: active_tab == AgentShowTab::Chat,
+            show_transactions_tab: active_tab == AgentShowTab::Transactions,
+            show_memories_tab: active_tab == AgentShowTab::Memories,
+            show_prompts_tab: active_tab == AgentShowTab::Prompts,
+            show_settings_tab: active_tab == AgentShowTab::Settings,
+            agent,
+            transactions: Vec::new(),
+            memories: Vec::new(),
+            sync_state: Vec::new(),
+            account_balance_html: String::new(),
+            open_positions_html: String::new(),
+            open_orders_html: String::new(),
+            sparklines_html: String::new(),
+        }
+    }
 }
 
 #[derive(Template)]
@@ -974,23 +1136,48 @@ mod tests {
             SparklineView::from_series("30d", &[], 240, 48),
         ];
         let sparklines_html = BalanceSparklinesPartialTemplate::render_view(sparklines).unwrap();
-        let template = AgentsShowPageTemplate {
-            agent: sample_agent_detail_row(),
-            transactions: vec![],
-            sync_state: vec![],
-            account_balance_html,
-            open_positions_html,
-            open_orders_html,
-            sparklines_html,
-            current_path: "/agents/test-agent".to_string(),
-        };
+        let mut template = AgentsShowPageTemplate::new(sample_agent_detail_row(), AgentShowTab::Positions);
+        template.account_balance_html = account_balance_html;
+        template.open_positions_html = open_positions_html;
+        template.open_orders_html = open_orders_html;
+        template.sparklines_html = sparklines_html;
         let rendered = template.render().unwrap();
         assert!(rendered.contains("<!DOCTYPE html>"));
         assert!(rendered.contains("Test Agent · Vibetrading"));
         assert!(rendered.contains("delete-modal"));
         assert!(rendered.contains("Delete agent"));
+        assert!(rendered.contains("Agent sections"));
+        assert!(rendered.contains("aria-current=\"page\""));
+        assert!(rendered.contains("Chat"));
+        assert!(rendered.contains("Transactions"));
+        assert!(rendered.contains("Memories"));
+        assert!(rendered.contains("Prompts"));
+        assert!(rendered.contains("Settings"));
         assert!(rendered.contains("Balance"));
         assert!(rendered.contains("Unrealized"));
+    }
+
+    #[test]
+    fn chat_tab_renders_placeholder() {
+        let template = AgentsShowPageTemplate::new(sample_agent_detail_row(), AgentShowTab::Chat);
+        let rendered = template.render().unwrap();
+        assert!(rendered.contains("Chat"));
+        assert!(rendered.contains("Chat UI coming next."));
+    }
+
+    #[test]
+    fn settings_tab_renders_sync_status_table() {
+        let mut template = AgentsShowPageTemplate::new(sample_agent_detail_row(), AgentShowTab::Settings);
+        template.sync_state = vec![SyncStateView::from_row(SyncStateRow::new(
+            "0x1234567890abcdef".to_string(),
+            "live".to_string(),
+            crate::hyperliquid::sync_state::SyncStream::Fills,
+        ))];
+
+        let rendered = template.render().unwrap();
+        assert!(rendered.contains("Settings"));
+        assert!(rendered.contains("Sync status"));
+        assert!(rendered.contains("fills"));
     }
 
     #[test]

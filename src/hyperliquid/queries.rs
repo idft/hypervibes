@@ -85,6 +85,58 @@ pub async fn list_account_transactions(
     Ok(rows)
 }
 
+/// Return all USDC balance-impacting events for an account, newest first,
+/// with the same running-balance calculation as [`list_account_transactions`].
+pub async fn list_all_account_transactions(
+    pool: &DbPool,
+    account_address: &str,
+    environment: &str,
+) -> Result<Vec<AccountTransactionRow>> {
+    let rows = sqlx::query_as::<_, AccountTransactionRow>(
+        "WITH ordered AS (
+             SELECT event_id,
+                    event_time,
+                    event_category,
+                    event_type,
+                    source_stream,
+                    symbol,
+                    asset,
+                    fee_usdc,
+                    realized_pnl_usdc,
+                    usdc_delta,
+                    payload,
+                    SUM(COALESCE(usdc_delta, 0))
+                      OVER (ORDER BY event_time, event_id
+                            ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)
+                      AS running_balance
+               FROM hyperliquid.account_timeline
+              WHERE account_address = $1
+                AND environment = $2
+         )
+         SELECT event_id,
+                event_time,
+                event_category,
+                event_type,
+                source_stream,
+                symbol,
+                asset,
+                fee_usdc,
+                realized_pnl_usdc,
+                usdc_delta,
+                payload,
+                running_balance
+           FROM ordered
+          ORDER BY event_time DESC, event_id DESC",
+    )
+    .bind(account_address)
+    .bind(environment)
+    .fetch_all(pool)
+    .await
+    .context("failed to list all account transactions")?;
+
+    Ok(rows)
+}
+
 /// A single point on a balance-history series. `bucket` is the truncated
 /// time-bucket boundary and `balance` is the cumulative net USDC flow
 /// closing value for that bucket.
