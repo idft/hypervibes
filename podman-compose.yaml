@@ -19,40 +19,6 @@ services:
       timeout: 5s
       retries: 5
 
-  hermes-gateway:
-    build:
-      context: .
-      dockerfile: containers/hermes-agent/Dockerfile
-      args:
-        HERMES_TAG: v2026.6.5
-    container_name: vibetrading-hermes
-    restart: unless-stopped
-    network_mode: host
-    volumes:
-      - hermes_data:/opt/data
-      - ./hermes-plugin/vibetrading:/opt/data/plugins/vibetrading:Z
-    environment:
-      - HERMES_DASHBOARD=1
-      - HERMES_DASHBOARD_TUI=1
-      - HERMES_DASHBOARD_INSECURE=1
-      - HERMES_DASHBOARD_PORT=${HERMES_DASHBOARD_PORT:-19119}
-      - HERMES_DASHBOARD_SESSION_TOKEN=${HERMES_DASHBOARD_SESSION_TOKEN}
-      - VIBETRADING_BASE_URL=${VIBETRADING_BASE_URL:-http://localhost:3003}
-      # LLM provider API keys are read by Hermes from the container environment.
-      # Uncomment the one matching the provider configured for the active profile.
-      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY:-}
-      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
-      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
-      - GOOGLE_API_KEY=${GOOGLE_API_KEY:-}
-      - GEMINI_API_KEY=${GEMINI_API_KEY:-}
-      - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY:-}
-      - XAI_API_KEY=${XAI_API_KEY:-}
-      - OPENCODE_GO_API_KEY=${OPENCODE_GO_API_KEY:-}
-      - OLLAMA_API_KEY=${OLLAMA_API_KEY:-}
-    command: ["/bin/sh", "-lc", "/usr/local/bin/bootstrap-vibetrading-plugin && exec gateway run"]
-
 volumes:
   postgres_data:
-    driver: local
-  hermes_data:
     driver: local

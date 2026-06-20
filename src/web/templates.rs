@@ -76,7 +76,7 @@ fn is_stale_checkin(
 
 fn build_cron_setup_prompt(agent_key: &str) -> String {
     format!(
-        "Create the Vibetrading cron jobs for this Hermes profile.\n\nHermes profile: {agent_key}\n\nCreate an analysis cron job:\n- name: vibetrading-analysis\n- schedule: every 15m\n- skill: vibetrading:analysis-loop\n- prompt: Run the Vibetrading analysis loop for this profile. Use Vibetrading job context before reasoning.\n\nCreate a trading cron job:\n- name: vibetrading-trading\n- schedule: every 1m\n- skill: vibetrading:trading-loop\n- prompt: Run the Vibetrading trading loop for this profile. Use Vibetrading job context before reasoning.\n\nDo not create duplicate jobs if jobs with these names already exist.\n\nExample profile-scoped commands:\nhermes -p {agent_key} cron create ..."
+        "Create the Vibetrading cron jobs for this Hermes profile.\n\nHermes profile: {agent_key}\n\nCreate an analysis cron job:\n- name: vibetrading-analysis\n- schedule: every 15m\n- skill: analysis-loop\n- enabled toolsets: terminal\n- prompt: Run the Vibetrading analysis loop for this profile. Use Vibetrading job context before reasoning.\n\nCreate a trading cron job:\n- name: vibetrading-trading\n- schedule: every 1m\n- skill: trading-loop\n- enabled toolsets: terminal\n- prompt: Run the Vibetrading trading loop for this profile. Use Vibetrading job context before reasoning.\n\nDo not create duplicate jobs if jobs with these names already exist.\n\nExample profile-scoped commands:\nhermes -p {agent_key} cron create ..."
     )
 }
 

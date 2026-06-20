@@ -1,4 +1,4 @@
-# Hermes Agent Plugin
+# Hermes Profile Distribution
 
 Related docs:
 
@@ -9,125 +9,70 @@ Related docs:
 
 ## Current Direction
 
-The Hermes integration is now a native plugin that bundles:
+Vibetrading no longer assumes that the backend manages a bundled Hermes runtime.
 
-- Hermes skills
-- Python helper modules
-- Python scripts invoked by Hermes cron pre-run hooks or by the model inside a run
+The primary integration path is now:
+
+- users run their own Hermes instance
+- users install the Vibetrading profile distribution into Hermes
+- one Vibetrading backend agent maps to one Hermes profile
+- the same distribution is installed once per backend agent using `--name <agent_key>`
+- Hermes owns runs and cron execution
+- Vibetrading owns HTTP APIs for job context, memories, account state, order execution, and loop check-ins
 
 This phase does not use MCP.
 
-This phase does not register custom trading tools with Hermes.
+This phase does not require Hermes plugin discovery.
 
-The near-term control surface is:
-
-- Hermes-owned cron scheduling
-- Vibetrading-owned HTTP APIs for job context, memories, account state, and order execution
-- a shared Hermes profile per agent, keyed by `agents.registry.agent_key`
-
-## Plugin Location
+## Distribution Location
 
 ```text
-hermes-plugin/vibetrading/
+hermes-profile/vibetrading/
 ```
 
-The plugin ships in this repo so the backend and Hermes-side skill bundle stay
-versioned together.
+The distribution ships in this repo for local testing before it is split into a dedicated repository.
 
 ## Runtime Layout
 
 ```text
-hermes-plugin/vibetrading/
-├── __init__.py
-├── plugin.yaml
+hermes-profile/vibetrading/
+├── distribution.yaml
+├── README.md
+├── SOUL.md
+├── config.yaml
 ├── requirements.txt
-├── py/
-│   ├── client.py
-│   ├── job_context.py
-│   ├── memories.py
-│   ├── orders.py
-│   ├── account.py
-│   ├── hyperliquid_data.py
-│   └── analysis.py
+├── .env.EXAMPLE
+├── bin/
+├── cron/
+├── skills/
 ├── scripts/
-│   ├── fetch_job_context.py
-│   ├── fetch_ohlcv.py
-│   ├── analyze_ohlcv.py
-│   ├── read_memories.py
-│   ├── write_memory.py
-│   ├── list_orders.py
-│   ├── place_orders.py
-│   ├── cancel_orders.py
-│   └── cancel_all.py
-└── skills/
-    ├── analysis-loop/
-    │   └── SKILL.md
-    └── trading-loop/
-        └── SKILL.md
+└── vibetrading/
 ```
 
-`__init__.py` registers bundled skills from `skills/*/SKILL.md`.
+The Python helpers and scripts resolve imports relative to the installed profile root, so they do not assume `~/.hermes`, `/opt/data`, or a repo checkout path.
 
-## Container Image
+## Install Workflow
 
-The `hermes-gateway` service in `podman-compose.yaml` builds from
-`containers/hermes-agent/Dockerfile`, which layers the Vibetrading plugin onto
-`nousresearch/hermes-agent:v2026.6.5`.
-
-Important invariant:
-
-- Hermes's own install is treated as immutable.
-- Vibetrading dependencies do not get installed into `/opt/hermes/.venv`.
-- The plugin owns its own venv at `/opt/data/plugins/vibetrading/.venv`.
-
-### Plugin venv bootstrap
-
-The image creates `/opt/data/plugins/vibetrading/.venv` at build time with
-`uv`. Because development bind-mounts `./hermes-plugin/vibetrading` over the
-baked directory, startup also runs an idempotent bootstrap script:
-
-```text
-/usr/local/bin/bootstrap-vibetrading-plugin
-```
-
-That script:
-
-- creates the plugin venv if missing
-- installs `requirements.txt` into that venv
-- re-installs when `requirements.txt` is newer than the last install stamp
-
-This avoids rebuilding the container for every Python dependency change during
-development.
-
-### Build and start
+Install the distribution into the operator's Hermes instance once per backend agent:
 
 ```bash
-podman compose up --build hermes-gateway
+hermes profile install /path/to/vibetrading-v2/hermes-profile/vibetrading --name <agent_key> --alias
 ```
 
-The container name is `vibetrading-hermes`. The plugin source is bind-mounted
-from `hermes-plugin/vibetrading/` into `/opt/data/plugins/vibetrading`.
-
-### Verification
-
-After startup, these checks should succeed:
+Then, in the installed profile directory:
 
 ```bash
-podman exec vibetrading-hermes bun --version
-podman exec vibetrading-hermes uv --version
-podman exec vibetrading-hermes /opt/data/plugins/vibetrading/.venv/bin/python -c "import pandas, hyperliquid, talib"
-podman exec vibetrading-hermes hermes plugins list | grep vibetrading
+cp .env.EXAMPLE .env
+./bin/bootstrap
+./bin/vibetrading-analysis
+./bin/vibetrading-trading
 ```
 
-To confirm the dashboard is listening:
-
-```bash
-podman exec vibetrading-hermes ss -tln | grep ${HERMES_DASHBOARD_PORT:-19119}
-```
+Environment variables live in the installed profile's `.env` file.
 
 ## Environment Variables
 
-The plugin currently depends on these environment variables:
+The distribution currently depends on these environment variables:
 
 | Variable | Purpose |
 |----------|---------|
@@ -136,25 +81,20 @@ The plugin currently depends on these environment variables:
 | `HYPERLIQUID_ENVIRONMENT` | `mainnet` or `testnet` for direct market-data reads |
 | `HYPERLIQUID_ADDRESS` | Agent account address for direct exchange reads |
 
-Provider API keys remain global to the Hermes daemon and are still passed
-through from `podman-compose.yaml`.
+Provider API keys remain Hermes-side concerns and should not be hardcoded into the Vibetrading distribution.
 
-## Hermes Profile Management
+## Hermes Profile Ownership
 
-The backend provisions and manages Hermes profiles through the Hermes dashboard
-API. The important behavior in this phase is:
+The backend agent row is not the source of truth for Hermes profile lifecycle.
 
-- creating an agent attempts to create a same-named Hermes profile
-- deleting an agent attempts to delete that same Hermes profile
-- updating `agents.registry.soul` from the operator prompts page attempts to
-  sync the Hermes profile's `SOUL.md`
+Current ownership model:
 
-Hermes failures are logged at WARN and are non-fatal to the operator action.
+- the operator installs the profile distribution into their own Hermes instance
+- the Hermes profile name should match `agents.registry.agent_key`
+- one backend agent maps to one Hermes profile
+- the backend may display setup guidance, but it should not manage Hermes profile creation, deletion, or cron state as the primary workflow
 
-The `/hermes` operator page surfaces a direct dashboard link that opens in a
-new tab. By default it uses the backend's configured Hermes dashboard URL; set
-`APP_PUBLIC_URL` when operators browse the Vibetrading UI from another machine
-so the link uses the browser-visible host instead of loopback.
+Backend-side Hermes API code still exists in this repo for now, but manual profile distribution install is the intended path during this migration.
 
 ## Job Context API
 
@@ -209,10 +149,10 @@ The operator UI uses those timestamps as a runtime health signal only:
 
 ## Skills
 
-Two cron-facing skills are registered by the plugin:
+Two cron-facing skills are shipped in the distribution:
 
-- `vibetrading:analysis-loop`
-- `vibetrading:trading-loop`
+- `analysis-loop`
+- `trading-loop`
 
 ### `analysis-loop`
 
@@ -236,35 +176,22 @@ analysis-to-trading handoff.
 
 Hermes cron owns scheduling in this phase.
 
-Vibetrading does not create, edit, pause, resume, or track Hermes cron jobs
-yet.
+The distribution includes cron definitions under `hermes-profile/vibetrading/cron/`, and operators should review and enable them in Hermes.
 
-Cron setup remains manual or procedural inside Hermes. Vibetrading only observes
-whether the Hermes-owned loops have checked in through the `job-context` API.
+Vibetrading does not create, edit, pause, resume, or inspect Hermes cron jobs directly. The backend only observes loop health through `/api/v1/job-context` check-ins.
 
-Example analysis cron:
+The cron files now follow the exported Hermes shape observed in production testing:
 
-```bash
-hermes cron create "every 15m" \
-  "Run the Vibetrading analysis loop for this profile." \
-  --skill vibetrading:analysis-loop \
-  --script "/bin/sh -lc '/opt/data/plugins/vibetrading/.venv/bin/python /opt/data/plugins/vibetrading/scripts/fetch_job_context.py --job-kind analysis'" \
-  --name "vibetrading-analysis"
-```
+- `name`
+- `schedule`
+- `prompt`
+- `skills`
+- `enabled_toolsets`
 
-Example trading cron:
+Current Vibetrading cron templates enable the `terminal` toolset and attach exactly one installed skill per job:
 
-```bash
-hermes cron create "every 1m" \
-  "Run the Vibetrading trading loop for this profile." \
-  --skill vibetrading:trading-loop \
-  --script "/bin/sh -lc '/opt/data/plugins/vibetrading/.venv/bin/python /opt/data/plugins/vibetrading/scripts/fetch_job_context.py --job-kind trading'" \
-  --name "vibetrading-trading"
-```
-
-If the installed Hermes version requires scripts to live under a dedicated
-Hermes scripts directory, copy or symlink the Vibetrading script there and keep
-the command path explicit.
+- `analysis-loop`
+- `trading-loop`
 
 ### Model split
 
@@ -278,10 +205,10 @@ the current workaround is separate profiles or separate Hermes containers.
 
 ## Script Execution Contract
 
-All bundled helper scripts should be invoked explicitly through the plugin venv:
+All bundled helper scripts should be invoked explicitly through the profile-local venv from the installed Hermes profile directory:
 
 ```text
-/opt/data/plugins/vibetrading/.venv/bin/python <script>
+.venv/bin/python <script>
 ```
 
 Scripts print JSON to stdout and errors to stderr. Non-zero exits indicate

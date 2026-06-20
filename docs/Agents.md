@@ -34,8 +34,8 @@ simplified single-table registry (`agents.registry`) with:
   - `analysis_prompt TEXT NOT NULL DEFAULT ''`
   - `trading_prompt TEXT NOT NULL DEFAULT ''`
 - a `soul TEXT NOT NULL DEFAULT ''` column that stores the agent's
-   persona text and is synced to the agent's Hermes profile as
-    `SOUL.md` when the Hermes client is configured
+   persona text for the matching Hermes profile's `SOUL.md` in the
+   profile-distribution workflow
 - no separate Hermes bindings table — the registry row's `agent_key`
   is the Hermes profile name
 - no secret refs table
@@ -55,14 +55,12 @@ running Phase 1 data model.
 ### Agent == Hermes Profile
 
 The Phase 1 registry intentionally flattens the registry/Hermes mapping
-into a single row. `agents.registry.agent_key` doubles as the Hermes
-profile name: when an agent is created, the backend creates a Hermes
-profile of the same name (cloned from the Hermes default), and when an
-agent is deleted, the backend deletes the Hermes profile. See
-`docs/Hermes.md` for the auto-provisioning flow, the `/hermes`
-operator page, and the exact Hermes dashboard `/api/profiles/*` calls
-used. Agent creation and deletion succeed even when Hermes is
-unreachable; failures are logged at WARN.
+into a single row. `agents.registry.agent_key` doubles as the intended
+Hermes profile name, but the operator installs that profile from the
+Vibetrading distribution into their own Hermes instance. The backend
+agent row represents agent identity and API auth; it is not the source
+of truth for Hermes profile lifecycle. See `docs/Hermes.md` for the
+distribution install workflow and profile ownership model.
 
 ### Prompt Split
 
@@ -71,7 +69,7 @@ the runtime job prompts:
 
 - `analysis_prompt` is injected into the Hermes analysis cron job context
 - `trading_prompt` is injected into the Hermes trading cron job context
-- `soul` remains the persona text synced into the Hermes profile's `SOUL.md`
+- `soul` remains the persona text intended for the Hermes profile's `SOUL.md`
 
 There is intentionally no shared `prompt` column anymore. Different cron jobs
 can now carry different operator instructions while keeping one shared Hermes
