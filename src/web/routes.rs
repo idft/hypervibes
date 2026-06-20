@@ -3,7 +3,7 @@ use std::{convert::Infallible, sync::Arc};
 use askama::Template;
 use axum::{
     Form, Json, Router,
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::StatusCode,
     response::{
         Html, IntoResponse, Redirect, Response,
@@ -36,16 +36,16 @@ use crate::{
             list_all_account_transactions,
         },
     },
-    memory::list_agent_memories,
+    memory::{get_memory as get_memory_record, list_agent_memories},
     web::{
         AppState,
         templates::{
-            AccountBalancePartialTemplate, AccountBalanceView, AgentListEntry, AgentShowTab,
-            AgentsNewPageTemplate, AgentsPageTemplate, AgentsShowPageTemplate,
-            BalanceSparklinesPartialTemplate, HermesPageTemplate, MemoryView,
-            OpenOrdersPartialTemplate, OpenOrdersView, OpenPositionsPartialTemplate,
-            OpenPositionsView, ServerErrorPageTemplate, SparklineView, SyncStateView,
-            TransactionView,
+            AccountBalancePartialTemplate, AccountBalanceView, AgentListEntry,
+            AgentMemoryDetailPartialTemplate, AgentShowTab, AgentsNewPageTemplate,
+            AgentsPageTemplate, AgentsShowPageTemplate, BalanceSparklinesPartialTemplate,
+            HermesPageTemplate, MemoryView, OpenOrdersPartialTemplate, OpenOrdersView,
+            OpenPositionsPartialTemplate, OpenPositionsView, ServerErrorPageTemplate,
+            SparklineView, SyncStateView, TransactionView,
         },
     },
 };
@@ -57,12 +57,15 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/agents", get(agents_index).post(create_agent))
         .route("/agents/new", get(agents_new))
         .route("/agents/{agent_key}", get(agents_show))
-        .route("/agents/{agent_key}/chat", get(agents_show_chat))
         .route(
             "/agents/{agent_key}/transactions",
             get(agents_show_transactions),
         )
         .route("/agents/{agent_key}/memories", get(agents_show_memories))
+        .route(
+            "/agents/{agent_key}/memories/{memory_id}",
+            get(agents_show_memory_detail),
+        )
         .route(
             "/agents/{agent_key}/prompts",
             get(agents_show_prompts).post(agents_update_prompts),
@@ -138,35 +141,51 @@ async fn agents_show(
     State(state): State<Arc<AppState>>,
     Path(agent_key): Path<String>,
 ) -> Result<Response, AppError> {
-    render_agent_show_page(&state, &agent_key, AgentShowTab::Positions).await
+    render_agent_show_page(&state, &agent_key, AgentShowTab::Positions, None).await
 }
 
 async fn agents_show_transactions(
     State(state): State<Arc<AppState>>,
     Path(agent_key): Path<String>,
 ) -> Result<Response, AppError> {
-    render_agent_show_page(&state, &agent_key, AgentShowTab::Transactions).await
+    render_agent_show_page(&state, &agent_key, AgentShowTab::Transactions, None).await
 }
 
-async fn agents_show_chat(
-    State(state): State<Arc<AppState>>,
-    Path(agent_key): Path<String>,
-) -> Result<Response, AppError> {
-    render_agent_show_page(&state, &agent_key, AgentShowTab::Chat).await
+#[derive(Debug, Default, Deserialize)]
+struct AgentMemoriesQuery {
+    #[serde(default)]
+    date: String,
 }
 
 async fn agents_show_memories(
     State(state): State<Arc<AppState>>,
     Path(agent_key): Path<String>,
+    Query(query): Query<AgentMemoriesQuery>,
 ) -> Result<Response, AppError> {
-    render_agent_show_page(&state, &agent_key, AgentShowTab::Memories).await
+    render_agent_show_page(&state, &agent_key, AgentShowTab::Memories, Some(query)).await
+}
+
+async fn agents_show_memory_detail(
+    State(state): State<Arc<AppState>>,
+    Path((agent_key, memory_id)): Path<(String, uuid::Uuid)>,
+) -> Result<Response, AppError> {
+    let Some(agent) = get_agent(&state.db_pool, &agent_key).await? else {
+        return Ok((StatusCode::NOT_FOUND, "agent not found").into_response());
+    };
+
+    let Some(memory) = get_memory_record(&state.db_pool, &agent.agent_key, memory_id).await? else {
+        return Ok((StatusCode::NOT_FOUND, "memory not found").into_response());
+    };
+
+    let html = AgentMemoryDetailPartialTemplate::render_view(MemoryView::from_record(memory))?;
+    Ok(Html(html).into_response())
 }
 
 async fn agents_show_prompts(
     State(state): State<Arc<AppState>>,
     Path(agent_key): Path<String>,
 ) -> Result<Response, AppError> {
-    render_agent_show_page(&state, &agent_key, AgentShowTab::Prompts).await
+    render_agent_show_page(&state, &agent_key, AgentShowTab::Prompts, None).await
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -210,13 +229,14 @@ async fn agents_show_settings(
     State(state): State<Arc<AppState>>,
     Path(agent_key): Path<String>,
 ) -> Result<Response, AppError> {
-    render_agent_show_page(&state, &agent_key, AgentShowTab::Settings).await
+    render_agent_show_page(&state, &agent_key, AgentShowTab::Settings, None).await
 }
 
 async fn render_agent_show_page(
     state: &Arc<AppState>,
     agent_key: &str,
     active_tab: AgentShowTab,
+    memories_query: Option<AgentMemoriesQuery>,
 ) -> Result<Response, AppError> {
     let Some(agent) = get_agent(&state.db_pool, agent_key).await? else {
         return Ok((StatusCode::NOT_FOUND, "agent not found").into_response());
@@ -228,7 +248,6 @@ async fn render_agent_show_page(
         AgentShowTab::Positions => {
             populate_positions_tab(state, &agent, &mut template).await?;
         }
-        AgentShowTab::Chat => {}
         AgentShowTab::Transactions => {
             template.transactions = match list_all_account_transactions(
                 &state.db_pool,
@@ -251,17 +270,25 @@ async fn render_agent_show_page(
             };
         }
         AgentShowTab::Memories => {
-            template.memories = match list_agent_memories(&state.db_pool, &agent.agent_key).await {
-                Ok(rows) => rows.into_iter().map(MemoryView::from_record).collect(),
+            let memory_query = memories_query.unwrap_or_default();
+            let (filter_date_value, selected_date_text, filter_error_text, since, until) =
+                parse_memory_date_filter(&memory_query.date);
+
+            match list_agent_memories(&state.db_pool, &agent.agent_key, since, until).await {
+                Ok(rows) => template.set_memories(
+                    rows,
+                    filter_date_value,
+                    selected_date_text,
+                    filter_error_text,
+                ),
                 Err(error) => {
                     warn!(
                         agent_key = %agent.agent_key,
                         error = ?error,
                         "failed to list agent memories for operator page"
                     );
-                    Vec::new()
                 }
-            };
+            }
         }
         AgentShowTab::Prompts => {}
         AgentShowTab::Settings => {
@@ -288,6 +315,72 @@ async fn render_agent_show_page(
     }
 
     Ok(Html(template.render()?).into_response())
+}
+
+fn parse_memory_date_filter(
+    raw: &str,
+) -> (
+    String,
+    Option<String>,
+    Option<String>,
+    Option<chrono::DateTime<Utc>>,
+    Option<chrono::DateTime<Utc>>,
+) {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return (String::new(), None, None, None, None);
+    }
+
+    let Ok(date) = chrono::NaiveDate::parse_from_str(trimmed, "%Y-%m-%d") else {
+        return (
+            trimmed.to_string(),
+            None,
+            Some("Use YYYY-MM-DD to filter memories by UTC date.".to_string()),
+            None,
+            None,
+        );
+    };
+
+    let Some(start_of_day) = date.and_hms_opt(0, 0, 0) else {
+        return (
+            trimmed.to_string(),
+            None,
+            Some("That date could not be parsed.".to_string()),
+            None,
+            None,
+        );
+    };
+    let Some(next_day) = date.succ_opt() else {
+        return (
+            trimmed.to_string(),
+            None,
+            Some("That date is out of range.".to_string()),
+            None,
+            None,
+        );
+    };
+    let Some(end_of_day) = next_day.and_hms_opt(0, 0, 0) else {
+        return (
+            trimmed.to_string(),
+            None,
+            Some("That date is out of range.".to_string()),
+            None,
+            None,
+        );
+    };
+
+    (
+        trimmed.to_string(),
+        Some(date.format("%A, %B %-d, %Y").to_string()),
+        None,
+        Some(chrono::DateTime::<Utc>::from_naive_utc_and_offset(
+            start_of_day,
+            Utc,
+        )),
+        Some(chrono::DateTime::<Utc>::from_naive_utc_and_offset(
+            end_of_day, Utc,
+        )),
+    )
 }
 
 async fn populate_positions_tab(
@@ -781,7 +874,12 @@ mod tests {
         .expect("insert ledger event");
     }
 
-    async fn seed_memory(state: &Arc<AppState>, agent_key: &str, summary: &str, content: &str) {
+    async fn seed_memory(
+        state: &Arc<AppState>,
+        agent_key: &str,
+        summary: &str,
+        content: &str,
+    ) -> crate::memory::MemoryRecord {
         crate::memory::insert_memory(
             &state.db_pool,
             agent_key,
@@ -795,7 +893,7 @@ mod tests {
             },
         )
         .await
-        .expect("insert memory");
+        .expect("insert memory")
     }
 
     async fn seed_sync_state(state: &Arc<AppState>, wallet_address: &str) {
@@ -1204,7 +1302,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn agent_chat_route_renders_placeholder() {
+    async fn agent_chat_route_is_not_registered() {
         let state = test_state().await;
         let (agent_key, _wallet_address) = insert_test_agent(&state).await.expect("insert agent");
 
@@ -1218,9 +1316,7 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(response.status(), StatusCode::OK);
-        let text = response_text(response).await;
-        assert!(text.contains("Chat UI coming next."));
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
     }
 
     #[tokio::test]
@@ -1407,11 +1503,11 @@ mod tests {
     async fn agent_memories_route_renders_saved_memories() {
         let state = test_state().await;
         let (agent_key, _wallet_address) = insert_test_agent(&state).await.expect("insert agent");
-        seed_memory(
+        let memory = seed_memory(
             &state,
             &agent_key,
             "Remember the breakout",
-            "BTC reclaimed support.",
+            "### Plan\n\nBTC reclaimed support.",
         )
         .await;
 
@@ -1428,8 +1524,40 @@ mod tests {
         assert_eq!(response.status(), StatusCode::OK);
         let text = response_text(response).await;
         assert!(text.contains("Memories"));
+        assert!(text.contains("Timeline"));
         assert!(text.contains("Remember the breakout"));
+        assert!(text.contains("<h3>Plan</h3>"));
         assert!(text.contains("BTC reclaimed support."));
+        assert!(text.contains(&format!("/agents/{agent_key}/memories/{}", memory.id)));
+    }
+
+    #[tokio::test]
+    async fn agent_memory_detail_route_renders_partial() {
+        let state = test_state().await;
+        let (agent_key, _wallet_address) = insert_test_agent(&state).await.expect("insert agent");
+        let memory = seed_memory(
+            &state,
+            &agent_key,
+            "Remember the breakout",
+            "### Plan\n\nBTC reclaimed support.",
+        )
+        .await;
+
+        let response = router(state)
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/agents/{agent_key}/memories/{}", memory.id))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let text = response_text(response).await;
+        assert!(text.contains("id=\"memory-detail\""));
+        assert!(text.contains("Remember the breakout"));
+        assert!(text.contains("<h3>Plan</h3>"));
     }
 
     #[tokio::test]

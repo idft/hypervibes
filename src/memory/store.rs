@@ -1,4 +1,5 @@
 use anyhow::{Context, Result};
+use chrono::{DateTime, Utc};
 use sqlx::QueryBuilder;
 use uuid::Uuid;
 
@@ -110,17 +111,32 @@ pub async fn list_memories(
 }
 
 /// List all memories for the given agent, newest first.
-pub async fn list_agent_memories(pool: &DbPool, agent_key: &str) -> Result<Vec<MemoryRecord>> {
-    let rows = sqlx::query_as::<_, MemoryRecord>(
-        "SELECT id, created_at, agent_key, symbol, timeframe, memory_type, summary, content, metadata
-           FROM memory.records
-          WHERE agent_key = $1
-          ORDER BY created_at DESC",
-    )
-    .bind(agent_key)
-    .fetch_all(pool)
-    .await
-    .context("failed to list agent memory records")?;
+pub async fn list_agent_memories(
+    pool: &DbPool,
+    agent_key: &str,
+    since: Option<DateTime<Utc>>,
+    until: Option<DateTime<Utc>>,
+) -> Result<Vec<MemoryRecord>> {
+    let mut qb: QueryBuilder<sqlx::Postgres> = QueryBuilder::new(
+        "SELECT id, created_at, agent_key, symbol, timeframe, memory_type, summary, content, metadata \
+         FROM memory.records WHERE agent_key = ",
+    );
+    qb.push_bind(agent_key.to_string());
+
+    if let Some(since) = since {
+        qb.push(" AND created_at >= ").push_bind(since);
+    }
+    if let Some(until) = until {
+        qb.push(" AND created_at < ").push_bind(until);
+    }
+
+    qb.push(" ORDER BY created_at DESC");
+
+    let rows = qb
+        .build_query_as::<MemoryRecord>()
+        .fetch_all(pool)
+        .await
+        .context("failed to list agent memory records")?;
 
     Ok(rows)
 }

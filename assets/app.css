@@ -5,3 +5,145 @@ body {
   font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
 }
 
+.memory-timeline-scroll {
+  cursor: grab;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(113, 113, 122, 0.9) rgba(24, 24, 27, 0.9);
+}
+
+.memory-timeline-scroll[data-dragging="true"] {
+  cursor: grabbing;
+}
+
+.memory-timeline-scroll::-webkit-scrollbar {
+  height: 12px;
+}
+
+.memory-timeline-scroll::-webkit-scrollbar-track {
+  border-radius: 9999px;
+  background: rgba(24, 24, 27, 0.9);
+}
+
+.memory-timeline-scroll::-webkit-scrollbar-thumb {
+  border: 3px solid rgba(24, 24, 27, 0.9);
+  border-radius: 9999px;
+  background: linear-gradient(90deg, rgba(82, 82, 91, 0.95), rgba(113, 113, 122, 0.95));
+}
+
+.memory-timeline-scroll::-webkit-scrollbar-thumb:hover {
+  background: linear-gradient(90deg, rgba(113, 113, 122, 0.98), rgba(161, 161, 170, 0.98));
+}
+
+.memory-markdown {
+  line-height: 1.7;
+}
+
+.memory-timeline-card p {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  overflow: hidden;
+}
+
+.memory-timeline-card[aria-pressed="true"] {
+  border-color: rgba(161, 161, 170, 1);
+  background: rgba(24, 24, 27, 0.98);
+  box-shadow: inset 0 0 0 1px rgba(212, 212, 216, 0.12);
+}
+
+.memory-timeline-scroll[data-dragging="true"] .memory-timeline-card {
+  user-select: none;
+}
+
+.memory-timeline-card[aria-pressed="true"] p {
+  color: rgba(250, 250, 250, 1);
+}
+
+.memory-markdown > :first-child {
+  margin-top: 0;
+}
+
+.memory-markdown > :last-child {
+  margin-bottom: 0;
+}
+
+.memory-markdown h1,
+.memory-markdown h2,
+.memory-markdown h3,
+.memory-markdown h4 {
+  margin: 1.25rem 0 0.75rem;
+  color: #fff;
+  font-weight: 600;
+  line-height: 1.35;
+}
+
+.memory-markdown h1 {
+  font-size: 1.25rem;
+}
+
+.memory-markdown h2 {
+  font-size: 1.125rem;
+}
+
+.memory-markdown h3,
+.memory-markdown h4 {
+  font-size: 1rem;
+}
+
+.memory-markdown p,
+.memory-markdown ul,
+.memory-markdown ol,
+.memory-markdown pre,
+.memory-markdown blockquote,
+.memory-markdown table {
+  margin: 0.75rem 0;
+}
+
+.memory-markdown ul,
+.memory-markdown ol {
+  padding-left: 1.25rem;
+}
+
+.memory-markdown li + li {
+  margin-top: 0.35rem;
+}
+
+.memory-markdown strong {
+  color: #fff;
+  font-weight: 600;
+}
+
+.memory-markdown code {
+  border: 1px solid rgba(63, 63, 70, 1);
+  border-radius: 0.375rem;
+  background: rgba(24, 24, 27, 0.9);
+  padding: 0.1rem 0.35rem;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+  font-size: 0.9em;
+}
+
+.memory-markdown pre {
+  overflow-x: auto;
+  border: 1px solid rgba(63, 63, 70, 1);
+  border-radius: 0.75rem;
+  background: rgba(9, 9, 11, 0.95);
+  padding: 1rem;
+}
+
+.memory-markdown pre code {
+  border: 0;
+  background: transparent;
+  padding: 0;
+}
+
+.memory-markdown blockquote {
+  border-left: 3px solid rgba(82, 82, 91, 1);
+  padding-left: 1rem;
+  color: rgba(212, 212, 216, 1);
+}
+
+.memory-markdown a {
+  color: rgba(191, 219, 254, 1);
+  text-decoration: underline;
+  text-underline-offset: 0.18em;
+}

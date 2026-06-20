@@ -88,8 +88,171 @@ function seedNumberRoll(container: HTMLElement) {
   previousValues.set(key, { raw: rawValue, formatted: formattedValue });
 }
 
+function setActiveMemoryTimelineItem(activeItem: HTMLElement) {
+  document
+    .querySelectorAll<HTMLElement>("[data-memory-timeline-item]")
+    .forEach((item) => {
+      item.setAttribute("aria-pressed", item === activeItem ? "true" : "false");
+    });
+}
+
+function loadMemoryTimelineItem(item: HTMLElement) {
+  const url = item.getAttribute("hx-get");
+  const target = item.getAttribute("hx-target");
+  if (!url || !target) {
+    return;
+  }
+
+  const targetElement = document.querySelector(target);
+  if (!(targetElement instanceof HTMLElement)) {
+    return;
+  }
+
+  setActiveMemoryTimelineItem(item);
+  item.setAttribute("aria-busy", "true");
+
+  void fetch(url, {
+    headers: {
+      "HX-Request": "true",
+    },
+  })
+    .then(async (response) => {
+      if (!response.ok) {
+        throw new Error(`Failed to load memory detail: ${response.status}`);
+      }
+      const html = await response.text();
+      targetElement.outerHTML = html;
+    })
+    .catch((error) => {
+      console.error(error);
+    })
+    .finally(() => {
+      item.removeAttribute("aria-busy");
+    });
+}
+
+function initMemoryTimelineDragScroll() {
+  document
+    .querySelectorAll<HTMLElement>(".memory-timeline-scroll")
+    .forEach((container) => {
+      if (container.dataset.dragScrollBound === "true") {
+        return;
+      }
+      container.dataset.dragScrollBound = "true";
+
+      let mouseDown = false;
+      let startX = 0;
+      let startScrollLeft = 0;
+      let dragged = false;
+      let pressedItem: HTMLElement | null = null;
+      let suppressClickFor: HTMLElement | null = null;
+      let cleanupListeners: (() => void) | null = null;
+
+      const stopDragging = () => {
+        mouseDown = false;
+        pressedItem = null;
+        cleanupListeners?.();
+        cleanupListeners = null;
+        container.dataset.dragging = "false";
+      };
+
+      container.addEventListener("mousedown", (event: MouseEvent) => {
+        if (event.button !== 0) {
+          return;
+        }
+
+        mouseDown = true;
+        startX = event.clientX;
+        startScrollLeft = container.scrollLeft;
+        dragged = false;
+        pressedItem = (event.target as Element | null)?.closest<HTMLElement>(
+          "[data-memory-timeline-item]",
+        ) ?? null;
+        container.dataset.dragging = "false";
+
+        const handleMouseMove = (moveEvent: MouseEvent) => {
+          if (!mouseDown) {
+            return;
+          }
+
+          const deltaX = moveEvent.clientX - startX;
+          if (!dragged && Math.abs(deltaX) > 6) {
+            dragged = true;
+            container.dataset.dragging = "true";
+          }
+          if (!dragged) {
+            return;
+          }
+
+          moveEvent.preventDefault();
+          container.scrollLeft = startScrollLeft - deltaX;
+        };
+
+        const handleMouseUp = () => {
+          if (!mouseDown) {
+            return;
+          }
+
+          if (!dragged && pressedItem) {
+            suppressClickFor = pressedItem;
+            loadMemoryTimelineItem(pressedItem);
+            window.setTimeout(() => {
+              suppressClickFor = null;
+            }, 0);
+          }
+          stopDragging();
+        };
+
+        const handleWindowBlur = () => {
+          stopDragging();
+        };
+
+        window.addEventListener("mousemove", handleMouseMove, { passive: false });
+        window.addEventListener("mouseup", handleMouseUp);
+        window.addEventListener("blur", handleWindowBlur);
+        cleanupListeners = () => {
+          window.removeEventListener("mousemove", handleMouseMove);
+          window.removeEventListener("mouseup", handleMouseUp);
+          window.removeEventListener("blur", handleWindowBlur);
+        };
+      });
+
+      container.addEventListener(
+        "click",
+        (event) => {
+          const item = (event.target as Element | null)?.closest<HTMLElement>(
+            "[data-memory-timeline-item]",
+          );
+          if (!item) {
+            return;
+          }
+
+          if (suppressClickFor === item) {
+            event.preventDefault();
+            event.stopPropagation();
+            suppressClickFor = null;
+            return;
+          }
+
+          if (dragged) {
+            event.preventDefault();
+            event.stopPropagation();
+            dragged = false;
+            return;
+          }
+
+          event.preventDefault();
+          event.stopPropagation();
+          loadMemoryTimelineItem(item);
+        },
+        true,
+      );
+    });
+}
+
 function init() {
   renderTimeago();
+  initMemoryTimelineDragScroll();
 
   document.querySelectorAll<HTMLElement>(".number-roll").forEach(seedNumberRoll);
 
@@ -99,6 +262,18 @@ function init() {
       setTimeout(() => {
         document.querySelectorAll<HTMLElement>(".number-roll").forEach(animateNumberRoll);
       }, 50);
+    }
+  });
+
+  document.addEventListener("htmx:afterRequest", (e: Event) => {
+    const detail = (e as CustomEvent).detail;
+    if (!detail?.successful) {
+      return;
+    }
+
+    const elt = detail.elt;
+    if (elt instanceof HTMLElement && elt.matches("[data-memory-timeline-item]")) {
+      setActiveMemoryTimelineItem(elt);
     }
   });
 
@@ -116,6 +291,14 @@ function init() {
           render([node as HTMLElement]);
         }
         renderTimeago(node);
+        if (node instanceof HTMLElement) {
+          if (node.matches(".memory-timeline-scroll")) {
+            initMemoryTimelineDragScroll();
+          }
+          if (node.querySelector(".memory-timeline-scroll")) {
+            initMemoryTimelineDragScroll();
+          }
+        }
       }
     }
   });

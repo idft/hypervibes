@@ -5,6 +5,7 @@ edition = "2024"
 rust-version = "1.96"
 
 [dependencies]
+ammonia = "4"
 anyhow = "1"
 askama = "0.12"
 axum = "0.8"
@@ -17,6 +18,7 @@ chrono = { version = "0.4", features = ["serde"] }
 futures = { version = "0.3", default-features = false, features = ["std"] }
 hex = "0.4"
 hypersdk = "0.2"
+pulldown-cmark = "0.13"
 rand = "0.8"
 reqwest = { version = "0.13", default-features = false, features = ["json", "rustls"] }
 rust_decimal = { version = "1", features = ["serde"] }

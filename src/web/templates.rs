@@ -1,7 +1,9 @@
 use std::time::Duration;
 
+use ammonia::Builder as HtmlSanitizer;
 use askama::Template;
 use chrono::{DateTime, Utc};
+use pulldown_cmark::{Options as MarkdownOptions, Parser as MarkdownParser, html};
 use rust_decimal::Decimal;
 
 use crate::{
@@ -53,6 +55,14 @@ fn add_thousands_separators(value: &str) -> String {
 
 fn format_timestamp_utc(value: DateTime<Utc>) -> String {
     value.format("%Y-%m-%d %H:%M UTC").to_string()
+}
+
+fn format_date_utc(value: DateTime<Utc>) -> String {
+    value.format("%Y-%m-%d").to_string()
+}
+
+fn format_time_utc(value: DateTime<Utc>) -> String {
+    value.format("%H:%M UTC").to_string()
 }
 
 fn format_optional_timestamp_utc(value: Option<DateTime<Utc>>) -> String {
@@ -280,33 +290,94 @@ impl TransactionView {
 
 #[derive(Debug, Clone)]
 pub struct MemoryView {
+    pub memory_id: String,
+    pub short_id: String,
     pub created_at_text: String,
     pub symbol: String,
     pub timeframe: String,
     pub memory_type: String,
     pub summary: String,
-    pub content: String,
+    pub content_html: String,
+    pub metadata_key_count: usize,
     pub metadata_text: Option<String>,
 }
 
 impl MemoryView {
     pub fn from_record(row: MemoryRecord) -> Self {
+        let metadata_key_count = row.metadata.as_object().map_or(0, |obj| obj.len());
         let metadata_text = if row.metadata.as_object().is_some_and(|obj| !obj.is_empty()) {
             serde_json::to_string_pretty(&row.metadata).ok()
         } else {
             None
         };
+        let short_id: String = row.id.to_string().chars().take(8).collect();
 
         Self {
+            memory_id: row.id.to_string(),
+            short_id,
             created_at_text: format_timestamp_utc(row.created_at),
             symbol: row.symbol,
             timeframe: row.timeframe.unwrap_or_else(|| "general".to_string()),
             memory_type: row.memory_type,
             summary: row.summary,
-            content: row.content,
+            content_html: render_memory_markdown_html(&row.content),
+            metadata_key_count,
             metadata_text,
         }
     }
+}
+
+#[derive(Debug, Clone)]
+pub struct MemoryTimelineItem {
+    pub memory_id: String,
+    pub detail_url: String,
+    pub created_at_date_text: String,
+    pub created_at_time_text: String,
+    pub symbol: String,
+    pub timeframe: String,
+    pub memory_type: String,
+    pub summary: String,
+    pub selected: bool,
+}
+
+fn render_memory_markdown_html(content: &str) -> String {
+    let mut options = MarkdownOptions::empty();
+    options.insert(MarkdownOptions::ENABLE_TABLES);
+    options.insert(MarkdownOptions::ENABLE_STRIKETHROUGH);
+    options.insert(MarkdownOptions::ENABLE_TASKLISTS);
+    options.insert(MarkdownOptions::ENABLE_FOOTNOTES);
+
+    let parser = MarkdownParser::new_ext(content, options);
+    let mut rendered = String::new();
+    html::push_html(&mut rendered, parser);
+
+    HtmlSanitizer::default().clean(&rendered).to_string()
+}
+
+fn build_memory_timeline(
+    agent_key: &str,
+    rows: &[MemoryRecord],
+    selected_memory_id: Option<&str>,
+) -> Vec<MemoryTimelineItem> {
+    rows.iter()
+        .map(|row| {
+            let memory_id = row.id.to_string();
+            MemoryTimelineItem {
+                detail_url: format!("/agents/{agent_key}/memories/{memory_id}"),
+                memory_id: memory_id.clone(),
+                created_at_date_text: format_date_utc(row.created_at),
+                created_at_time_text: format_time_utc(row.created_at),
+                symbol: row.symbol.clone(),
+                timeframe: row
+                    .timeframe
+                    .clone()
+                    .unwrap_or_else(|| "general".to_string()),
+                memory_type: row.memory_type.clone(),
+                summary: row.summary.clone(),
+                selected: selected_memory_id == Some(memory_id.as_str()),
+            }
+        })
+        .collect()
 }
 
 #[derive(Debug, Clone)]
@@ -354,7 +425,6 @@ impl SyncStateView {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AgentShowTab {
     Positions,
-    Chat,
     Transactions,
     Memories,
     Prompts,
@@ -365,7 +435,6 @@ impl AgentShowTab {
     fn path(self, agent_key: &str) -> String {
         match self {
             Self::Positions => format!("/agents/{agent_key}"),
-            Self::Chat => format!("/agents/{agent_key}/chat"),
             Self::Transactions => format!("/agents/{agent_key}/transactions"),
             Self::Memories => format!("/agents/{agent_key}/memories"),
             Self::Prompts => format!("/agents/{agent_key}/prompts"),
@@ -418,13 +487,18 @@ pub struct AgentsShowPageTemplate {
     pub agent: AgentDetailRow,
     pub tabs: Vec<AgentShowTabLink>,
     pub show_positions_tab: bool,
-    pub show_chat_tab: bool,
     pub show_transactions_tab: bool,
     pub show_memories_tab: bool,
     pub show_prompts_tab: bool,
     pub show_settings_tab: bool,
     pub transactions: Vec<TransactionView>,
-    pub memories: Vec<MemoryView>,
+    pub memory_timeline: Vec<MemoryTimelineItem>,
+    pub memory_filter_date_value: String,
+    pub memory_filter_error_text: Option<String>,
+    pub selected_memory_date_text: Option<String>,
+    pub selected_memory_html: String,
+    pub has_memory_date_filter: bool,
+    pub memory_count: usize,
     pub sync_state: Vec<SyncStateView>,
     pub account_balance_html: String,
     pub open_positions_html: String,
@@ -468,7 +542,6 @@ impl AgentsShowPageTemplate {
             ("Transactions", AgentShowTab::Transactions),
             ("Memories", AgentShowTab::Memories),
             ("Prompts", AgentShowTab::Prompts),
-            ("Chat", AgentShowTab::Chat),
             ("Settings", AgentShowTab::Settings),
         ]
         .into_iter()
@@ -502,20 +575,62 @@ impl AgentsShowPageTemplate {
             current_path: active_tab.path(&agent_key),
             tabs,
             show_positions_tab: active_tab == AgentShowTab::Positions,
-            show_chat_tab: active_tab == AgentShowTab::Chat,
             show_transactions_tab: active_tab == AgentShowTab::Transactions,
             show_memories_tab: active_tab == AgentShowTab::Memories,
             show_prompts_tab: active_tab == AgentShowTab::Prompts,
             show_settings_tab: active_tab == AgentShowTab::Settings,
             agent,
             transactions: Vec::new(),
-            memories: Vec::new(),
+            memory_timeline: Vec::new(),
+            memory_filter_date_value: String::new(),
+            memory_filter_error_text: None,
+            selected_memory_date_text: None,
+            selected_memory_html: String::new(),
+            has_memory_date_filter: false,
+            memory_count: 0,
             sync_state: Vec::new(),
             account_balance_html: String::new(),
             open_positions_html: String::new(),
             open_orders_html: String::new(),
             sparklines_html: String::new(),
         }
+    }
+
+    pub fn set_memories(
+        &mut self,
+        rows: Vec<MemoryRecord>,
+        filter_date_value: String,
+        selected_date_text: Option<String>,
+        filter_error_text: Option<String>,
+    ) {
+        let selected_memory = rows.first().cloned().map(MemoryView::from_record);
+        let selected_memory_id = selected_memory
+            .as_ref()
+            .map(|memory| memory.memory_id.as_str());
+        self.memory_count = rows.len();
+        self.memory_timeline =
+            build_memory_timeline(&self.agent.agent_key, &rows, selected_memory_id);
+        self.memory_filter_date_value = filter_date_value;
+        self.selected_memory_date_text = selected_date_text;
+        self.memory_filter_error_text = filter_error_text;
+        self.selected_memory_html = selected_memory
+            .map(AgentMemoryDetailPartialTemplate::render_view)
+            .transpose()
+            .unwrap_or_default()
+            .unwrap_or_default();
+        self.has_memory_date_filter = !self.memory_filter_date_value.is_empty();
+    }
+}
+
+#[derive(Template)]
+#[template(path = "agent_memory_detail.html")]
+pub struct AgentMemoryDetailPartialTemplate {
+    pub memory: MemoryView,
+}
+
+impl AgentMemoryDetailPartialTemplate {
+    pub fn render_view(memory: MemoryView) -> Result<String, askama::Error> {
+        Self { memory }.render()
     }
 }
 
@@ -1087,6 +1202,7 @@ impl OpenOrdersPartialTemplate {
 mod tests {
     use super::*;
     use chrono::Utc;
+    use uuid::Uuid;
 
     fn sample_agent_list_row() -> AgentListRow {
         AgentListRow {
@@ -1128,6 +1244,29 @@ mod tests {
             total_u_pnl: AnimatedNumber::for_pnl(rust_decimal::Decimal::new(12_3400, 4)),
             status: crate::hyperliquid::live_state::LiveConnectionStatus::Connected,
             updated_at: Some(Utc::now()),
+        }
+    }
+
+    fn sample_memory_record(
+        symbol: &str,
+        timeframe: Option<&str>,
+        memory_type: &str,
+        summary: &str,
+        content: &str,
+    ) -> MemoryRecord {
+        MemoryRecord {
+            id: Uuid::from_u128(content.len() as u128 + summary.len() as u128),
+            created_at: Utc::now(),
+            agent_key: "test-agent".to_string(),
+            symbol: symbol.to_string(),
+            timeframe: timeframe.map(str::to_string),
+            memory_type: memory_type.to_string(),
+            summary: summary.to_string(),
+            content: content.to_string(),
+            metadata: serde_json::json!({
+                "confidence": "high",
+                "source": "test",
+            }),
         }
     }
 
@@ -1217,7 +1356,6 @@ mod tests {
         assert!(rendered.contains("Delete agent"));
         assert!(rendered.contains("Agent sections"));
         assert!(rendered.contains("aria-current=\"page\""));
-        assert!(rendered.contains("Chat"));
         assert!(rendered.contains("Transactions"));
         assert!(rendered.contains("Memories"));
         assert!(rendered.contains("Prompts"));
@@ -1227,11 +1365,39 @@ mod tests {
     }
 
     #[test]
-    fn chat_tab_renders_placeholder() {
-        let template = AgentsShowPageTemplate::new(sample_agent_detail_row(), AgentShowTab::Chat);
+    fn memories_tab_renders_timeline_date_filter_and_markdown_content() {
+        let mut template =
+            AgentsShowPageTemplate::new(sample_agent_detail_row(), AgentShowTab::Memories);
+        template.set_memories(
+            vec![
+                sample_memory_record(
+                    "BTC",
+                    Some("15m"),
+                    "analysis",
+                    "Momentum remains constructive",
+                    "### Readout\n\n- Wait for a pullback before adding risk.\n- Use patient entries and avoid chasing.",
+                ),
+                sample_memory_record(
+                    "ETH",
+                    None,
+                    "trade_management",
+                    "Tighten invalidation",
+                    "Trail the stop closer if funding flips and spot momentum weakens.",
+                ),
+            ],
+            "2026-06-20".to_string(),
+            Some("Saturday, June 20, 2026".to_string()),
+            None,
+        );
+
         let rendered = template.render().unwrap();
-        assert!(rendered.contains("Chat"));
-        assert!(rendered.contains("Chat UI coming next."));
+        assert!(rendered.contains("Timeline"));
+        assert!(rendered.contains("Showing Saturday, June 20, 2026"));
+        assert!(rendered.contains("name=\"date\""));
+        assert!(rendered.contains("Momentum remains constructive"));
+        assert!(rendered.contains("<h3>Readout</h3>"));
+        assert!(rendered.contains("<li>Wait for a pullback before adding risk.</li>"));
+        assert!(rendered.contains("metadata keys"));
     }
 
     #[test]

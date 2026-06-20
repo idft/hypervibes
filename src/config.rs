@@ -119,7 +119,10 @@ fn app_public_url_from_env() -> Result<Option<String>> {
     }
 }
 
-fn hermes_dashboard_link_url(hermes_dashboard_url: &str, app_public_url: Option<&str>) -> Result<String> {
+fn hermes_dashboard_link_url(
+    hermes_dashboard_url: &str,
+    app_public_url: Option<&str>,
+) -> Result<String> {
     let Some(app_public_url) = app_public_url else {
         return Ok(hermes_dashboard_url.to_string());
     };
