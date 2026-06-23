@@ -1,0 +1,9 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "references": {
+    "vibetrading-profile": {
+      "path": "../vibetrading-profile",
+      "description": "Use for the Hermes agent profile distribution repo."
+    }
+  }
+}
