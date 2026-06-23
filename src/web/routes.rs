@@ -23,6 +23,7 @@ use crate::{
         crypto::{encrypt, generate_api_key},
         keys::derive_wallet_address,
         model::{AgentRegistryRow, CreateAgentForm, slugify_agent_key},
+        prompts::{DEFAULT_ANALYSIS_STRATEGY_PROMPT, DEFAULT_TRADING_STRATEGY_PROMPT},
         store::{
             delete_agent as delete_agent_in_store, get_agent, insert_agent, list_agents,
             update_agent_prompts,
@@ -624,8 +625,8 @@ async fn create_agent(
         updated_at: now,
         enabled: form.enabled(),
         display_name: form.display_name.trim().to_string(),
-        analysis_prompt: String::new(),
-        trading_prompt: String::new(),
+        analysis_prompt: DEFAULT_ANALYSIS_STRATEGY_PROMPT.to_string(),
+        trading_prompt: DEFAULT_TRADING_STRATEGY_PROMPT.to_string(),
         wallet_address,
         environment: "live".to_string(),
         api_key: generate_api_key(),
@@ -770,7 +771,14 @@ mod tests {
     use rust_decimal::Decimal;
     use tower::util::ServiceExt;
 
-    use crate::{agents::crypto::EncryptionKey, memory::CreateMemory, test_db};
+    use crate::{
+        agents::{
+            crypto::EncryptionKey,
+            prompts::{DEFAULT_ANALYSIS_STRATEGY_PROMPT, DEFAULT_TRADING_STRATEGY_PROMPT},
+        },
+        memory::CreateMemory,
+        test_db,
+    };
 
     async fn test_state() -> Arc<AppState> {
         let pool = test_db::pool().await;
@@ -1165,7 +1173,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn post_agents_creates_agent_without_prompts() {
+    async fn post_agents_creates_agent_with_default_strategy_prompts() {
         let state = test_state().await;
         let pool = state.db_pool.clone();
 
@@ -1204,8 +1212,8 @@ mod tests {
             .await
             .expect("get agent")
             .expect("agent present");
-        assert!(stored.analysis_prompt.is_empty());
-        assert!(stored.trading_prompt.is_empty());
+        assert_eq!(stored.analysis_prompt, DEFAULT_ANALYSIS_STRATEGY_PROMPT);
+        assert_eq!(stored.trading_prompt, DEFAULT_TRADING_STRATEGY_PROMPT);
     }
 
     #[tokio::test]

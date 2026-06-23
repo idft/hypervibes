@@ -3,6 +3,7 @@ pub mod crypto;
 pub mod keys;
 pub mod model;
 pub mod orchestrator;
+pub mod prompts;
 pub mod store;
 
 pub use auth::AuthenticatedAgent;

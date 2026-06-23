@@ -7,7 +7,10 @@ use pulldown_cmark::{Options as MarkdownOptions, Parser as MarkdownParser, html}
 use rust_decimal::Decimal;
 
 use crate::{
-    agents::model::{AgentDetailRow, AgentListRow, CreateAgentForm},
+    agents::{
+        model::{AgentDetailRow, AgentListRow, CreateAgentForm},
+        prompts::{DEFAULT_ANALYSIS_STRATEGY_PROMPT, DEFAULT_TRADING_STRATEGY_PROMPT},
+    },
     hyperliquid::{
         live_state::{AccountLiveState, LiveConnectionStatus, LiveOpenOrder, LivePosition},
         queries::{AccountTransactionRow, BalancePoint},
@@ -516,6 +519,8 @@ pub struct AgentsShowPageTemplate {
     pub analysis_context_stale_after_minutes: i64,
     pub trading_context_stale_after_minutes: i64,
     pub cron_setup_prompt: String,
+    pub default_analysis_strategy_prompt: &'static str,
+    pub default_trading_strategy_prompt: &'static str,
     pub created_at_text: String,
     pub updated_at_text: String,
     pub current_path: String,
@@ -570,6 +575,8 @@ impl AgentsShowPageTemplate {
             analysis_context_stale_after_minutes: ANALYSIS_CONTEXT_STALE_AFTER_MINUTES,
             trading_context_stale_after_minutes: TRADING_CONTEXT_STALE_AFTER_MINUTES,
             cron_setup_prompt: build_cron_setup_prompt(&agent_key),
+            default_analysis_strategy_prompt: DEFAULT_ANALYSIS_STRATEGY_PROMPT,
+            default_trading_strategy_prompt: DEFAULT_TRADING_STRATEGY_PROMPT,
             created_at_text: format_timestamp_utc(agent.created_at),
             updated_at_text: format_timestamp_utc(agent.updated_at),
             current_path: active_tab.path(&agent_key),
@@ -1413,6 +1420,21 @@ mod tests {
         assert!(rendered.contains("Settings"));
         assert!(rendered.contains("Sync status"));
         assert!(rendered.contains("fills"));
+    }
+
+    #[test]
+    fn prompts_tab_renders_strategy_copy_and_reset_defaults_ui() {
+        let template =
+            AgentsShowPageTemplate::new(sample_agent_detail_row(), AgentShowTab::Prompts);
+
+        let rendered = template.render().unwrap();
+        assert!(rendered.contains("Strategy Prompts"));
+        assert!(rendered.contains("Analysis Strategy Prompt"));
+        assert!(rendered.contains("Trading Strategy Prompt"));
+        assert!(rendered.contains("Reset to defaults"));
+        assert!(rendered.contains("default-analysis-strategy-prompt-value"));
+        assert!(rendered.contains("Default analysis validity"));
+        assert!(rendered.contains("Time-in-force"));
     }
 
     #[test]

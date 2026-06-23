@@ -135,6 +135,11 @@ Behavior:
 - each successful `job-context` call also updates a per-loop check-in timestamp in
   `agents`
 
+New backend agents receive default strategy prompts at creation time. Those
+defaults live in `src/agents/prompts.rs` and are ordinary stored prompt text,
+not hard-coded strategy logic. Existing agents are not overwritten during
+deploys or startup.
+
 The operator UI uses those timestamps as a runtime health signal only:
 
 - `analysis_context_last_used_at` tracks the analysis loop check-in
@@ -169,6 +174,11 @@ Two cron-facing skills are shipped in the distribution:
 
 See `docs/Memory.md` for the reserved analysis metadata contract used as the
 analysis-to-trading handoff.
+
+The skills are workflow contracts: they enforce job-context usage, memory
+handoff, account inspection, and gateway-only execution. Operator prompts from
+the backend configure strategy choices, but they do not override those safety
+rules.
 
 ## Cron Ownership
 

@@ -33,6 +33,8 @@ simplified single-table registry (`agents`) with:
 - two operator-managed prompt columns:
   - `analysis_prompt TEXT NOT NULL DEFAULT ''`
   - `trading_prompt TEXT NOT NULL DEFAULT ''`
+- newly created agents are initialized with backend default strategy prompt text
+  from `src/agents/prompts.rs`; existing rows are not backfilled automatically
 - no separate Hermes bindings table — the registry row's `agent_key`
    is the Hermes profile name
 - no secret refs table
@@ -69,6 +71,13 @@ The Phase 1 operator workflow separates the runtime job prompts by cron loop:
 There is intentionally no shared `prompt` column anymore. Different cron jobs
 can now carry different operator instructions while keeping one shared Hermes
 profile identity per agent.
+
+These prompts configure strategy policy, such as assets, timeframes,
+confidence thresholds, target exposure, laddering, time-in-force preference,
+and stale-order handling. Durable workflow and safety rules remain in the
+Hermes profile skills. The prompts UI can load the current backend defaults
+into the form for review, but it only persists changes through the normal save
+flow.
 
 ## Why This Module Exists
 
