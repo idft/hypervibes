@@ -22,7 +22,7 @@ pub async fn list_agents(pool: &DbPool) -> Result<Vec<AgentListRow>> {
                 environment,
                 api_key,
                 api_key_last_used_at
-           FROM agents.registry
+           FROM agents
           ORDER BY created_at DESC",
     )
     .fetch_all(pool)
@@ -40,7 +40,6 @@ pub async fn get_agent(pool: &DbPool, agent_key: &str) -> Result<Option<AgentDet
                 enabled,
                 analysis_prompt,
                 trading_prompt,
-                soul,
                 wallet_address,
                 environment,
                 api_key,
@@ -49,7 +48,7 @@ pub async fn get_agent(pool: &DbPool, agent_key: &str) -> Result<Option<AgentDet
                 trading_context_last_used_at,
                 created_at,
                 updated_at
-           FROM agents.registry
+           FROM agents
           WHERE agent_key = $1",
     )
     .bind(agent_key)
@@ -64,7 +63,7 @@ pub async fn get_agent(pool: &DbPool, agent_key: &str) -> Result<Option<AgentDet
 /// private key and deriving the wallet address before this call.
 pub async fn insert_agent(pool: &DbPool, row: &AgentRegistryRow) -> Result<()> {
     sqlx::query(
-        "INSERT INTO agents.registry (
+        "INSERT INTO agents (
             agent_key,
             created_at,
             updated_at,
@@ -72,7 +71,6 @@ pub async fn insert_agent(pool: &DbPool, row: &AgentRegistryRow) -> Result<()> {
             display_name,
             analysis_prompt,
             trading_prompt,
-            soul,
             wallet_address,
             environment,
             api_key,
@@ -81,7 +79,7 @@ pub async fn insert_agent(pool: &DbPool, row: &AgentRegistryRow) -> Result<()> {
             trading_context_last_used_at,
             hyperliquid_private_key_ciphertext,
             hyperliquid_private_key_key_id
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)",
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)",
     )
     .bind(&row.agent_key)
     .bind(row.created_at)
@@ -90,7 +88,6 @@ pub async fn insert_agent(pool: &DbPool, row: &AgentRegistryRow) -> Result<()> {
     .bind(&row.display_name)
     .bind(&row.analysis_prompt)
     .bind(&row.trading_prompt)
-    .bind(&row.soul)
     .bind(&row.wallet_address)
     .bind(&row.environment)
     .bind(&row.api_key)
@@ -110,7 +107,7 @@ pub async fn insert_agent(pool: &DbPool, row: &AgentRegistryRow) -> Result<()> {
 ///
 /// Returns `true` if a row was deleted, `false` if the agent did not exist.
 pub async fn delete_agent(pool: &DbPool, agent_key: &str) -> Result<bool> {
-    let result = sqlx::query("DELETE FROM agents.registry WHERE agent_key = $1")
+    let result = sqlx::query("DELETE FROM agents WHERE agent_key = $1")
         .bind(agent_key)
         .execute(pool)
         .await
@@ -119,26 +116,23 @@ pub async fn delete_agent(pool: &DbPool, agent_key: &str) -> Result<bool> {
     Ok(result.rows_affected() > 0)
 }
 
-/// Update the operator-managed prompts and soul for one agent.
+/// Update the operator-managed prompts for one agent.
 pub async fn update_agent_prompts(
     pool: &DbPool,
     agent_key: &str,
     analysis_prompt: &str,
     trading_prompt: &str,
-    soul: &str,
 ) -> Result<bool> {
     let result = sqlx::query(
-        "UPDATE agents.registry
+        "UPDATE agents
             SET analysis_prompt = $2,
                 trading_prompt = $3,
-                soul = $4,
                 updated_at = now()
           WHERE agent_key = $1",
     )
     .bind(agent_key)
     .bind(analysis_prompt)
     .bind(trading_prompt)
-    .bind(soul)
     .execute(pool)
     .await
     .context("failed to update agent prompts")?;
@@ -153,12 +147,11 @@ pub async fn update_agent_prompts(
 /// API-key authentication extractor to scope incoming requests to a single
 /// agent.
 pub async fn resolve_agent_key_by_api_key(pool: &DbPool, api_key: &str) -> Result<Option<String>> {
-    let row: Option<(String,)> =
-        query_as("SELECT agent_key FROM agents.registry WHERE api_key = $1")
-            .bind(api_key)
-            .fetch_optional(pool)
-            .await
-            .context("failed to resolve agent_key by api_key")?;
+    let row: Option<(String,)> = query_as("SELECT agent_key FROM agents WHERE api_key = $1")
+        .bind(api_key)
+        .fetch_optional(pool)
+        .await
+        .context("failed to resolve agent_key by api_key")?;
 
     Ok(row.map(|(k,)| k))
 }
@@ -172,7 +165,7 @@ pub async fn get_agent_private_key_ciphertext(
 ) -> Result<Option<(Vec<u8>, String)>> {
     let row: Option<(Vec<u8>, String)> = query_as(
         "SELECT hyperliquid_private_key_ciphertext, hyperliquid_private_key_key_id
-           FROM agents.registry
+           FROM agents
           WHERE agent_key = $1",
     )
     .bind(agent_key)
@@ -189,7 +182,7 @@ pub async fn get_agent_private_key_ciphertext(
 /// surfaced to the caller so they can be logged, but authentication must
 /// not fail when this update fails.
 pub async fn touch_api_key_last_used(pool: &DbPool, api_key: &str) -> Result<()> {
-    sqlx::query("UPDATE agents.registry SET api_key_last_used_at = now() WHERE api_key = $1")
+    sqlx::query("UPDATE agents SET api_key_last_used_at = now() WHERE api_key = $1")
         .bind(api_key)
         .execute(pool)
         .await
@@ -205,10 +198,10 @@ pub async fn touch_job_context_last_used(
 ) -> Result<()> {
     let query = match kind {
         JobContextKind::Analysis => {
-            "UPDATE agents.registry SET analysis_context_last_used_at = now() WHERE agent_key = $1"
+            "UPDATE agents SET analysis_context_last_used_at = now() WHERE agent_key = $1"
         }
         JobContextKind::Trading => {
-            "UPDATE agents.registry SET trading_context_last_used_at = now() WHERE agent_key = $1"
+            "UPDATE agents SET trading_context_last_used_at = now() WHERE agent_key = $1"
         }
     };
 
@@ -258,7 +251,6 @@ mod tests {
             display_name: format!("Test {}", key),
             analysis_prompt: "Test analysis prompt".to_string(),
             trading_prompt: "Test trading prompt".to_string(),
-            soul: "Test soul".to_string(),
             wallet_address: wallet,
             environment: "live".to_string(),
             api_key: format!("vta_{}", key),
@@ -336,7 +328,7 @@ mod tests {
             .and_then(|e| e.as_database_error())
             .map(|e| e.constraint().map(|c| c.to_string()));
         assert!(
-            matches!(db_err, Some(Some(ref c)) if c.contains("agent_key") || c.contains("registry_pkey")),
+            matches!(db_err, Some(Some(ref c)) if c.contains("agent_key") || c.contains("agents_pkey")),
             "expected unique violation on agent_key, got {:?}",
             db_err
         );
@@ -451,15 +443,10 @@ mod tests {
         let row = sample_agent(&key);
         insert_agent(&pool, &row).await.expect("insert agent");
 
-        let updated = update_agent_prompts(
-            &pool,
-            &key,
-            "New analysis prompt",
-            "New trading prompt",
-            "New soul",
-        )
-        .await
-        .expect("update agent prompts");
+        let updated =
+            update_agent_prompts(&pool, &key, "New analysis prompt", "New trading prompt")
+                .await
+                .expect("update agent prompts");
         assert!(updated);
 
         let agent = get_agent(&pool, &key)
@@ -468,7 +455,6 @@ mod tests {
             .expect("present");
         assert_eq!(agent.analysis_prompt, "New analysis prompt");
         assert_eq!(agent.trading_prompt, "New trading prompt");
-        assert_eq!(agent.soul, "New soul");
         assert!(agent.updated_at >= row.updated_at);
     }
 
@@ -476,7 +462,7 @@ mod tests {
     async fn update_agent_prompts_returns_false_for_missing_agent() {
         let pool = test_db::pool().await;
 
-        let updated = update_agent_prompts(&pool, "does-not-exist", "a", "b", "c")
+        let updated = update_agent_prompts(&pool, "does-not-exist", "a", "b")
             .await
             .expect("update missing agent");
         assert!(!updated);

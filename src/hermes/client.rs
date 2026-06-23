@@ -1,14 +1,10 @@
 use std::sync::Arc;
 
 use anyhow::{Context, Result, anyhow};
-use reqwest::Method;
 use reqwest::header::{HeaderMap, HeaderValue};
-use serde::Serialize;
 use tokio::sync::RwLock;
 
-use super::model::{
-    ActiveProfile, CreateProfileRequest, ProfileList, SetSoulRequest, StatusResponse,
-};
+use super::model::{ActiveProfile, ProfileList, StatusResponse};
 
 pub const HERMES_SESSION_HEADER: &str = "X-Hermes-Session-Token";
 
@@ -198,62 +194,6 @@ impl HermesClient {
             .await
             .map_err(|e| anyhow!("failed to decode active profile response: {e}"))?;
         Ok(Some(body))
-    }
-
-    pub async fn create_profile(&self, name: &str) -> Result<()> {
-        let url = self.url("/api/profiles");
-        let body = CreateProfileRequest {
-            name,
-            clone_from_default: true,
-        };
-        self.send_json(Method::POST, &url, &body).await
-    }
-
-    pub async fn set_profile_soul(&self, name: &str, content: &str) -> Result<()> {
-        let url = self.url(&format!("/api/profiles/{name}/soul"));
-        let body = SetSoulRequest { content };
-        self.send_json(Method::PUT, &url, &body).await
-    }
-
-    pub async fn delete_profile(&self, name: &str) -> Result<()> {
-        let url = self.url(&format!("/api/profiles/{name}"));
-        let response = self
-            .client
-            .delete(&url)
-            .headers(self.auth_headers().await?)
-            .send()
-            .await
-            .map_err(|e| anyhow!("failed to DELETE {url}: {e}"))?;
-
-        if !response.status().is_success() {
-            return Err(anyhow!(
-                "DELETE {url} returned status {}",
-                response.status()
-            ));
-        }
-
-        Ok(())
-    }
-
-    async fn send_json<T: Serialize>(&self, method: Method, url: &str, body: &T) -> Result<()> {
-        let method_str = method.to_string();
-        let response = self
-            .client
-            .request(method, url)
-            .headers(self.auth_headers().await?)
-            .json(body)
-            .send()
-            .await
-            .map_err(|e| anyhow!("failed to {method_str} {url}: {e}"))?;
-
-        if !response.status().is_success() {
-            return Err(anyhow!(
-                "{method_str} {url} returned status {}",
-                response.status()
-            ));
-        }
-
-        Ok(())
     }
 }
 

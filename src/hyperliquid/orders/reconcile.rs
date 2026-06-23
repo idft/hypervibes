@@ -562,7 +562,6 @@ mod tests {
             display_name: format!("RecTest {suffix}"),
             analysis_prompt: String::new(),
             trading_prompt: String::new(),
-            soul: String::new(),
             wallet_address: wallet,
             environment: "live".to_string(),
             api_key: format!("vta_rec-{suffix}-{ts}"),

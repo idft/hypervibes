@@ -83,7 +83,7 @@ It uses a single table for V1: `memory.records`.
 | ------------- | ----------------------------------------------------------------- | ------------------------------------------------ |
 | `id`          | `UUID PRIMARY KEY`                                                | server-generated                                 |
 | `created_at`  | `TIMESTAMPTZ NOT NULL DEFAULT now()`                              | the memory timestamp; primary sort key           |
-| `agent_key`   | `TEXT NOT NULL REFERENCES agents.registry(agent_key) ON DELETE CASCADE` | ownership boundary                         |
+| `agent_key`   | `TEXT NOT NULL REFERENCES agents(agent_key) ON DELETE CASCADE` | ownership boundary                         |
 | `symbol`      | `TEXT NOT NULL`                                                   | free text, agent decides (e.g. `BTC`)            |
 | `timeframe`   | `TEXT` (nullable)                                                 | free text (`1m`/`15m`/`1h`/`1d`); NULL = general |
 | `memory_type` | `TEXT NOT NULL`                                                   | free text (e.g. `observation`/`plan`/`reflection`) |
@@ -175,7 +175,7 @@ Add `migrations/0003_memory.sql` (and `migrations/0003_memory.down.sql`) followi
 1. `CREATE SCHEMA IF NOT EXISTS memory;`
 2. `CREATE TABLE IF NOT EXISTS memory.records (...)` with the columns above.
 3. The two indexes above.
-4. Foreign key `agent_key -> agents.registry(agent_key) ON DELETE CASCADE`.
+4. Foreign key `agent_key -> agents(agent_key) ON DELETE CASCADE`.
 
 The `.down.sql` drops the table and the schema.
 
@@ -187,10 +187,10 @@ All routes are under `/api/v1/memories`.
 
 ### Authentication
 
-- Header: `Authorization: Bearer <api_key>` (the `vta_...` key from `agents.registry.api_key`).
+- Header: `Authorization: Bearer <api_key>` (the `vta_...` key from `agents.api_key`).
 - The request is rejected with `401` if the header is missing or the key is unknown.
 - On success, the resolved `agent_key` is used to scope all reads and writes.
-- `agents.registry.api_key_last_used_at` is updated on a successful authenticated request.
+- `agents.api_key_last_used_at` is updated on a successful authenticated request.
 
 This auth layer is net-new (the app currently has only operator-facing HTML routes). It should be built as a reusable extractor so the future Hyperliquid execution gateway can use it too.
 
@@ -275,7 +275,7 @@ Mirror the existing `src/agents/` module structure:
 
 Auth + routes:
 
-- An API-key auth extractor (reusable). Resolves Bearer token to an `agent_key` via `agents.registry` and bumps `api_key_last_used_at`.
+- An API-key auth extractor (reusable). Resolves Bearer token to an `agent_key` via `agents` and bumps `api_key_last_used_at`.
 - JSON routes added under `/api/v1` in `src/web/routes.rs` (or a dedicated submodule), returning JSON responses and JSON errors.
 
 Tests follow the existing integration test pattern used in `src/agents/store.rs`, `src/hyperliquid/queries.rs`, and `src/web/routes.rs`. DB-touching tests call `crate::test_db::pool()` to get a `sqlx::PgPool` backed by an embedded `pglite-oxide` PostgreSQL 17.5 server (in-process, real Postgres). No external service, no env var, and no `DATABASE_URL` is required for tests. The dev server (`cargo run`) keeps using the container Postgres at `localhost:15432/vibetrading` and is never touched by tests. The seven SSE body-read tests in `src/web/routes.rs` are `#[ignore]`d because the body reader hangs in pglite-oxide (no orchestrator-driven broadcast activity to drive the long-lived SSE stream); they were never actually executing before the test-DB refactor, since the old `DATABASE_URL` gate returned `None` and silently skipped them.

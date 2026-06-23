@@ -713,7 +713,6 @@ mod tests {
             display_name,
             analysis_prompt: analysis_prompt.to_string(),
             trading_prompt: trading_prompt.to_string(),
-            soul: String::new(),
             wallet_address,
             environment: "live".to_string(),
             api_key: api_key.clone(),

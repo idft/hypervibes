@@ -188,9 +188,9 @@ Design guidance:
 
 Examples of acceptable cross-schema relationships:
 
-- `memory.* -> agents.registry(agent_key)`
+- `memory.* -> agents(agent_key)`
 - `agents.execution_accounts.account_address + environment -> hyperliquid activity journal` if a dedicated Hyperliquid accounts registry is introduced later
-- `hyperliquid.execution_intents.agent_key -> agents.registry(agent_key)`
+- `hyperliquid.execution_intents.agent_key -> agents(agent_key)`
 
 ## Runtime Process Model
 

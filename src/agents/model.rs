@@ -22,7 +22,6 @@ pub struct AgentDetailRow {
     pub enabled: bool,
     pub analysis_prompt: String,
     pub trading_prompt: String,
-    pub soul: String,
     pub wallet_address: String,
     pub environment: String,
     pub api_key: String,
@@ -43,7 +42,6 @@ pub struct AgentRegistryRow {
     pub display_name: String,
     pub analysis_prompt: String,
     pub trading_prompt: String,
-    pub soul: String,
     pub wallet_address: String,
     pub environment: String,
     pub api_key: String,
@@ -58,8 +56,6 @@ pub struct AgentRegistryRow {
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct CreateAgentForm {
     pub display_name: String,
-    #[serde(default)]
-    pub soul: String,
     pub hyperliquid_private_key: String,
     /// HTML checkboxes only send a value when checked, so this is optional.
     pub enabled: Option<String>,

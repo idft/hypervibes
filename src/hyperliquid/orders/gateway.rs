@@ -1068,7 +1068,6 @@ mod tests {
             display_name: format!("GW Test {suffix}"),
             analysis_prompt: String::new(),
             trading_prompt: String::new(),
-            soul: String::new(),
             wallet_address: wallet,
             environment: "live".to_string(),
             api_key: format!("vta_gw-{suffix}-{ts}"),

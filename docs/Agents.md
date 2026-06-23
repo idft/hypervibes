@@ -26,18 +26,15 @@ This module should sit between the memory subsystem and the Hyperliquid subsyste
 
 The current Phase 1 implementation follows
 `.opencode/plans/agents-implementation-plan.md` and intentionally uses a
-simplified single-table registry (`agents.registry`) with:
+simplified single-table registry (`agents`) with:
 
 - no instrument bindings or per-agent instrument restrictions
 - an `environment` field (`live` or `sandbox`) on every row
 - two operator-managed prompt columns:
   - `analysis_prompt TEXT NOT NULL DEFAULT ''`
   - `trading_prompt TEXT NOT NULL DEFAULT ''`
-- a `soul TEXT NOT NULL DEFAULT ''` column that stores the agent's
-   persona text for the matching Hermes profile's `SOUL.md` in the
-   profile-distribution workflow
 - no separate Hermes bindings table — the registry row's `agent_key`
-  is the Hermes profile name
+   is the Hermes profile name
 - no secret refs table
 - a boolean `enabled` flag in place of a lifecycle enum
 - one app API key stored directly on the registry row
@@ -55,7 +52,7 @@ running Phase 1 data model.
 ### Agent == Hermes Profile
 
 The Phase 1 registry intentionally flattens the registry/Hermes mapping
-into a single row. `agents.registry.agent_key` doubles as the intended
+into a single row. `agents.agent_key` doubles as the intended
 Hermes profile name, but the operator installs that profile from the
 Vibetrading distribution into their own Hermes instance. The backend
 agent row represents agent identity and API auth; it is not the source
@@ -64,12 +61,10 @@ distribution install workflow and profile ownership model.
 
 ### Prompt Split
 
-The Phase 1 operator workflow now separates the long-lived profile soul from
-the runtime job prompts:
+The Phase 1 operator workflow separates the runtime job prompts by cron loop:
 
 - `analysis_prompt` is injected into the Hermes analysis cron job context
 - `trading_prompt` is injected into the Hermes trading cron job context
-- `soul` remains the persona text intended for the Hermes profile's `SOUL.md`
 
 There is intentionally no shared `prompt` column anymore. Different cron jobs
 can now carry different operator instructions while keeping one shared Hermes
@@ -390,28 +385,28 @@ Recommended ownership:
 
 ## Proposed Schema Direction
 
-Recommended schema name:
+Recommended schema placement:
 
-- `agents`
+- `public`
 
 ### Core Tables
 
-- `agents.registry`
-- `agents.hermes_bindings`
-- `agents.instrument_bindings`
-- `agents.execution_accounts`
-- `agents.api_keys`
-- `agents.secret_refs`
+- `agents`
+- `agent_hermes_bindings`
+- `agent_instrument_bindings`
+- `agent_execution_accounts`
+- `agent_api_keys`
+- `agent_secret_refs`
 
 Optional later tables:
 
-- `agents.skill_assignments`
-- `agents.webhook_registrations`
-- `agents.prompt_profiles`
+- `agent_skill_assignments`
+- `agent_webhook_registrations`
+- `agent_prompt_profiles`
 
 ## Core Table Ideas
 
-### `agents.registry`
+### `agents`
 
 Purpose:
 
@@ -430,7 +425,7 @@ Suggested fields:
 - `account_address TEXT`
 - `metadata JSONB NOT NULL DEFAULT '{}'::jsonb`
 
-### `agents.hermes_bindings`
+### `agent_hermes_bindings`
 
 Purpose:
 
@@ -447,7 +442,7 @@ Suggested fields:
 - `config JSONB NOT NULL DEFAULT '{}'::jsonb`
 - `metadata JSONB NOT NULL DEFAULT '{}'::jsonb`
 
-### `agents.instrument_bindings`
+### `agent_instrument_bindings`
 
 Purpose:
 
@@ -464,7 +459,7 @@ Suggested fields:
 
 This should line up later with the instrument reference table in the Hyperliquid subsystem.
 
-### `agents.execution_accounts`
+### `agent_execution_accounts`
 
 Purpose:
 
@@ -480,7 +475,7 @@ Suggested fields:
 
 Current direction is one primary execution account per agent. The natural account identity is `account_address` + `environment`; a dedicated UUID `account_id` is intentionally not introduced in phase 1.
 
-### `agents.api_keys`
+### `agent_api_keys`
 
 Purpose:
 
@@ -504,7 +499,7 @@ Recommended direction:
 - resolve incoming requests directly from that stored key
 - allow the UI to display the exact key whenever needed
 
-### `agents.secret_refs`
+### `agent_secret_refs`
 
 Purpose:
 
@@ -552,7 +547,7 @@ Suggested common columns:
 - `updated_at TIMESTAMPTZ NOT NULL` where rows can change over time
 - `metadata JSONB NOT NULL DEFAULT '{}'::jsonb`
 
-### 1. `agents.registry`
+### 1. `agents`
 
 Suggested columns:
 
@@ -572,7 +567,7 @@ Suggested constraints:
 - `UNIQUE (environment, hermes_profile)`
 - `CHECK (status IN ('active', 'disabled', 'archived'))`
 
-### 2. `agents.hermes_bindings`
+### 2. `agent_hermes_bindings`
 
 Suggested columns:
 
@@ -587,9 +582,9 @@ Suggested columns:
 
 Suggested constraints:
 
-- `FOREIGN KEY (agent_key) REFERENCES agents.registry(agent_key)`
+- `FOREIGN KEY (agent_key) REFERENCES agents(agent_key)`
 
-### 3. `agents.instrument_bindings`
+### 3. `agent_instrument_bindings`
 
 Suggested columns:
 
@@ -603,7 +598,7 @@ Suggested columns:
 
 Suggested constraints:
 
-- `FOREIGN KEY (agent_key) REFERENCES agents.registry(agent_key)`
+- `FOREIGN KEY (agent_key) REFERENCES agents(agent_key)`
 - `UNIQUE (agent_key, instrument_key)`
 
 Notes:
@@ -612,7 +607,7 @@ Notes:
 - early testing can still use only one row per agent
 - `instrument_key` should line up later with `hyperliquid.instruments` ownership
 
-### 4. `agents.execution_accounts`
+### 4. `agent_execution_accounts`
 
 Suggested columns:
 
@@ -625,12 +620,12 @@ Suggested columns:
 
 Suggested constraints:
 
-- `FOREIGN KEY (agent_key) REFERENCES agents.registry(agent_key)`
+- `FOREIGN KEY (agent_key) REFERENCES agents(agent_key)`
 - `UNIQUE (agent_key, account_address, environment)`
 
 Current direction is one primary execution account per agent. Phase 1 keeps the natural account identity (`account_address` + `environment`) and does not reference a `hyperliquid.accounts` UUID table.
 
-### 5. `agents.api_keys`
+### 5. `agent_api_keys`
 
 Suggested columns:
 
@@ -645,7 +640,7 @@ Suggested columns:
 
 Suggested constraints:
 
-- `FOREIGN KEY (agent_key) REFERENCES agents.registry(agent_key)`
+- `FOREIGN KEY (agent_key) REFERENCES agents(agent_key)`
 - `UNIQUE (agent_key)`
 - `UNIQUE (api_key)`
 - `CHECK (status IN ('active', 'revoked', 'archived'))`
@@ -656,7 +651,7 @@ Recommended behavior:
 - re-display the exact key in the UI directly
 - enforce exactly one API key per agent
 
-### 6. `agents.secret_refs`
+### 6. `agent_secret_refs`
 
 Suggested columns:
 
@@ -671,50 +666,50 @@ Suggested columns:
 
 Suggested constraints:
 
-- `FOREIGN KEY (agent_key) REFERENCES agents.registry(agent_key)`
+- `FOREIGN KEY (agent_key) REFERENCES agents(agent_key)`
 
 This table should represent secrets used by the app or execution gateway, not by the agent itself.
 
 ### Suggested Initial Indexes
 
-For `agents.registry`:
+For `agents`:
 
 - `(environment, status)`
 - `(environment, hermes_profile)` unique
 
-For `agents.hermes_bindings`:
+For `agent_hermes_bindings`:
 
 - primary key `(agent_key)`
 
-For `agents.instrument_bindings`:
+For `agent_instrument_bindings`:
 
 - `(agent_key, instrument_key)` unique
 - `(agent_key, is_primary)`
 - `(symbol)`
 
-For `agents.execution_accounts`:
+For `agent_execution_accounts`:
 
 - `(agent_key)`
 - `(account_address, environment)`
 
-For `agents.api_keys`:
+For `agent_api_keys`:
 
 - `(api_key)` unique
 - `(agent_key)` unique
 - `(status)`
 - `(last_used_at DESC)`
 
-For `agents.secret_refs`:
+For `agent_secret_refs`:
 
 - `(agent_key, secret_kind)`
 
 ### Example Runtime Resolution
 
 1. Hermes profile calls the app with an agent API key.
-2. The app resolves the key against `agents.api_keys`.
-3. The app loads `agents.registry` for the resolved `agent_key`.
-4. The app loads `agents.execution_accounts` to resolve the execution account.
-5. The app loads `agents.instrument_bindings` to enforce allowed instruments.
+2. The app resolves the key against `agent_api_keys`.
+3. The app loads `agents` for the resolved `agent_key`.
+4. The app loads `agent_execution_accounts` to resolve the execution account.
+5. The app loads `agent_instrument_bindings` to enforce allowed instruments.
 6. The app routes the request to memory APIs or the Hyperliquid execution gateway.
 
 ## Cross-Subsystem Role

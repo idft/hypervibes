@@ -1,6 +1,4 @@
-CREATE SCHEMA IF NOT EXISTS agents;
-
-CREATE TABLE IF NOT EXISTS agents.registry (
+CREATE TABLE IF NOT EXISTS agents (
     agent_key TEXT PRIMARY KEY,
     created_at TIMESTAMPTZ NOT NULL,
     updated_at TIMESTAMPTZ NOT NULL,
@@ -8,7 +6,6 @@ CREATE TABLE IF NOT EXISTS agents.registry (
     display_name TEXT NOT NULL,
     analysis_prompt TEXT NOT NULL DEFAULT '',
     trading_prompt TEXT NOT NULL DEFAULT '',
-    soul TEXT NOT NULL DEFAULT '',
     wallet_address TEXT NOT NULL,
     environment TEXT NOT NULL DEFAULT 'live',
     api_key TEXT NOT NULL UNIQUE,
@@ -21,6 +18,6 @@ CREATE TABLE IF NOT EXISTS agents.registry (
     CHECK (environment IN ('live', 'sandbox'))
 );
 
-CREATE UNIQUE INDEX IF NOT EXISTS registry_agent_key_idx ON agents.registry (agent_key);
-CREATE UNIQUE INDEX IF NOT EXISTS registry_wallet_address_idx ON agents.registry (wallet_address);
-CREATE UNIQUE INDEX IF NOT EXISTS registry_api_key_idx ON agents.registry (api_key);
+CREATE UNIQUE INDEX IF NOT EXISTS agents_agent_key_idx ON agents (agent_key);
+CREATE UNIQUE INDEX IF NOT EXISTS agents_wallet_address_idx ON agents (wallet_address);
+CREATE UNIQUE INDEX IF NOT EXISTS agents_api_key_idx ON agents (api_key);

@@ -90,11 +90,9 @@ The backend agent row is not the source of truth for Hermes profile lifecycle.
 Current ownership model:
 
 - the operator installs the profile distribution into their own Hermes instance
-- the Hermes profile name should match `agents.registry.agent_key`
+- the Hermes profile name should match `agents.agent_key`
 - one backend agent maps to one Hermes profile
 - the backend may display setup guidance, but it should not manage Hermes profile creation, deletion, or cron state as the primary workflow
-
-Backend-side Hermes API code still exists in this repo for now, but manual profile distribution install is the intended path during this migration.
 
 ## Job Context API
 
@@ -135,7 +133,7 @@ Behavior:
 - `job_kind=analysis` returns `analysis_prompt` and `account: null`
 - `job_kind=trading` returns `trading_prompt` and the full current account snapshot
 - each successful `job-context` call also updates a per-loop check-in timestamp in
-  `agents.registry`
+  `agents`
 
 The operator UI uses those timestamps as a runtime health signal only:
 

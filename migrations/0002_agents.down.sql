@@ -1,2 +1,1 @@
-DROP TABLE IF EXISTS agents.registry;
-DROP SCHEMA IF EXISTS agents;
+DROP TABLE IF EXISTS agents;

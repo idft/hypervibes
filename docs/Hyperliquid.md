@@ -275,7 +275,7 @@ client only supports `subscribe` / `unsubscribe`; it exposes no `post`
 action method. The WebSocket remains a read-only live feed.
 
 Signing uses the agent's Hyperliquid private key, which the app decrypts
-on demand from `agents.registry.hyperliquid_private_key_ciphertext` and
+on demand from `agents.hyperliquid_private_key_ciphertext` and
 loads into an `alloy` `PrivateKeySigner`. Agents never see the key.
 
 ### What The Gateway Should Cover
@@ -967,7 +967,7 @@ Suggested columns:
 
 Suggested constraints:
 
-- if the agents subsystem is present, `FOREIGN KEY (agent_key) REFERENCES agents.registry(agent_key)`
+- if the agents subsystem is present, `FOREIGN KEY (agent_key) REFERENCES agents(agent_key)`
 
 - `FOREIGN KEY (instrument_id) REFERENCES hyperliquid.instruments(id)`
 - `UNIQUE (account_address, environment, client_order_id)` where `client_order_id` is not null

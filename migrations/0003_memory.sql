@@ -3,7 +3,7 @@ CREATE SCHEMA IF NOT EXISTS memory;
 CREATE TABLE IF NOT EXISTS memory.records (
     id UUID PRIMARY KEY,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-    agent_key TEXT NOT NULL REFERENCES agents.registry(agent_key) ON DELETE CASCADE,
+    agent_key TEXT NOT NULL REFERENCES agents(agent_key) ON DELETE CASCADE,
     symbol TEXT NOT NULL,
     timeframe TEXT,
     memory_type TEXT NOT NULL,

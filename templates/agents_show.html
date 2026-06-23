@@ -232,7 +232,7 @@
             <div class="flex items-start justify-between gap-4">
                 <div>
                     <h2 class="text-lg font-medium text-white">Prompts</h2>
-                    <p class="mt-1 text-sm text-zinc-400">Operator-managed instructions for the analysis and trading cron loops, plus the Hermes soul text.</p>
+                    <p class="mt-1 text-sm text-zinc-400">Operator-managed instructions for the analysis and trading cron loops.</p>
                 </div>
             </div>
             <form action="/agents/{{ agent.agent_key }}/prompts" method="post" class="mt-6 space-y-5">
@@ -243,11 +243,6 @@
                 <div>
                     <label for="trading_prompt" class="text-xs uppercase tracking-[0.16em] text-zinc-500">Trading Prompt</label>
                     <textarea id="trading_prompt" name="trading_prompt" rows="8" class="mt-2 w-full rounded-xl border border-zinc-800 bg-zinc-950/70 px-4 py-3 text-sm leading-6 text-zinc-200 outline-none placeholder:text-zinc-600 focus:border-zinc-700">{{ agent.trading_prompt }}</textarea>
-                </div>
-                <div>
-                    <label for="soul" class="text-xs uppercase tracking-[0.16em] text-zinc-500">Soul</label>
-                    <textarea id="soul" name="soul" rows="8" class="mt-2 w-full rounded-xl border border-zinc-800 bg-zinc-950/70 px-4 py-3 text-sm leading-6 text-zinc-200 outline-none placeholder:text-zinc-600 focus:border-zinc-700">{{ agent.soul }}</textarea>
-                    <p class="mt-2 text-xs text-zinc-500">Saving also attempts to sync this soul to the matching Hermes profile.</p>
                 </div>
                 <div class="flex justify-end">
                     <button type="submit" class="rounded-full bg-white px-4 py-2 text-sm font-medium text-black hover:bg-zinc-200">Save prompts</button>
@@ -277,16 +272,6 @@
             </div>
         </section>
 
-        <section class="rounded-2xl border border-zinc-800 bg-[#0d0d10] p-6">
-            <h2 class="text-lg font-medium text-white">Soul</h2>
-            <div class="mt-4 rounded-xl border border-zinc-800 bg-zinc-950/70 p-4">
-                {% if agent.soul.is_empty() %}
-                <p class="text-sm italic text-zinc-500">No soul configured. The Hermes profile for this agent has no SOUL.md set.</p>
-                {% else %}
-                <p class="whitespace-pre-wrap text-sm leading-6 text-zinc-300">{{ agent.soul }}</p>
-                {% endif %}
-            </div>
-        </section>
     </section>
     {% else if show_settings_tab %}
     <section class="mt-2 space-y-2">

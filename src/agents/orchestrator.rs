@@ -390,7 +390,7 @@ async fn load_instruments_with_retry(
 
 async fn load_enabled_agents(pool: &DbPool) -> Result<Vec<EnabledAgent>> {
     let rows = sqlx::query_as::<_, EnabledAgentRow>(
-        "SELECT agent_key, wallet_address, environment FROM agents.registry WHERE enabled = true",
+        "SELECT agent_key, wallet_address, environment FROM agents WHERE enabled = true",
     )
     .fetch_all(pool)
     .await

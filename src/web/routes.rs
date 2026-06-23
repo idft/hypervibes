@@ -194,8 +194,6 @@ struct UpdateAgentPromptsForm {
     analysis_prompt: String,
     #[serde(default)]
     trading_prompt: String,
-    #[serde(default)]
-    soul: String,
 }
 
 async fn agents_update_prompts(
@@ -208,18 +206,11 @@ async fn agents_update_prompts(
         &agent_key,
         form.analysis_prompt.trim(),
         form.trading_prompt.trim(),
-        form.soul.trim(),
     )
     .await?;
 
     if !updated {
         return Ok((StatusCode::NOT_FOUND, "agent not found").into_response());
-    }
-
-    if let Some(hermes) = &state.hermes
-        && let Err(e) = hermes.set_profile_soul(&agent_key, form.soul.trim()).await
-    {
-        warn!(error = ?e, agent_key = %agent_key, "failed to set Hermes profile soul");
     }
 
     Ok(Redirect::to(&format!("/agents/{agent_key}/prompts")).into_response())
@@ -473,11 +464,6 @@ async fn delete_agent(
 ) -> Result<Response, AppError> {
     let deleted = delete_agent_in_store(&state.db_pool, &agent_key).await?;
     if deleted {
-        if let Some(hermes) = &state.hermes {
-            if let Err(e) = hermes.delete_profile(&agent_key).await {
-                warn!(error = ?e, agent_key = %agent_key, "failed to delete Hermes profile");
-            }
-        }
         Ok(Redirect::to("/agents").into_response())
     } else {
         Ok((StatusCode::NOT_FOUND, "agent not found").into_response())
@@ -640,7 +626,6 @@ async fn create_agent(
         display_name: form.display_name.trim().to_string(),
         analysis_prompt: String::new(),
         trading_prompt: String::new(),
-        soul: form.soul.trim().to_string(),
         wallet_address,
         environment: "live".to_string(),
         api_key: generate_api_key(),
@@ -661,16 +646,7 @@ async fn create_agent(
         return Ok(render_new_form(form, errors));
     }
 
-    if let Some(hermes) = &state.hermes {
-        let key = &row.agent_key;
-        if let Err(e) = hermes.create_profile(key).await {
-            warn!(error = ?e, agent_key = %key, "failed to create Hermes profile");
-        } else if let Err(e) = hermes.set_profile_soul(key, &row.soul).await {
-            warn!(error = ?e, agent_key = %key, "failed to set Hermes profile soul");
-        }
-    }
-
-    Ok(Redirect::to("/agents").into_response())
+    Ok(Redirect::to(&format!("/agents/{agent_key}")).into_response())
 }
 
 fn render_new_form(form: CreateAgentForm, errors: Vec<String>) -> Response {
@@ -693,7 +669,7 @@ fn unique_violation_message(error: &anyhow::Error) -> Option<String> {
     let db_err = error.downcast_ref::<sqlx::Error>()?.as_database_error()?;
     if db_err.is_unique_violation() {
         let constraint = db_err.constraint().unwrap_or("unknown");
-        if constraint.contains("agent_key") {
+        if constraint.contains("agent_key") || constraint.contains("agents_pkey") {
             Some("An agent with this agent key already exists.".to_string())
         } else if constraint.contains("wallet") {
             Some("An agent with this wallet address and environment already exists.".to_string())
@@ -916,7 +892,7 @@ mod tests {
         trading_context_last_used_at: Option<chrono::DateTime<Utc>>,
     ) {
         sqlx::query(
-            "UPDATE agents.registry
+            "UPDATE agents
                 SET analysis_context_last_used_at = $2,
                     trading_context_last_used_at = $3
               WHERE agent_key = $1",
@@ -1143,14 +1119,13 @@ mod tests {
     }
 
     async fn insert_test_agent(state: &Arc<AppState>) -> Option<(String, String)> {
-        insert_test_agent_with_text(state, String::new(), String::new(), String::new()).await
+        insert_test_agent_with_text(state, String::new(), String::new()).await
     }
 
     async fn insert_test_agent_with_text(
         state: &Arc<AppState>,
         analysis_prompt: String,
         trading_prompt: String,
-        soul: String,
     ) -> Option<(String, String)> {
         let timestamp = chrono::Utc::now().timestamp_millis();
         let display_name = format!("BalanceStreamTest{}", timestamp);
@@ -1169,7 +1144,6 @@ mod tests {
             display_name,
             analysis_prompt,
             trading_prompt,
-            soul,
             wallet_address: wallet_address.clone(),
             environment: "live".to_string(),
             api_key: format!("balance-stream-test-{timestamp}"),
@@ -1191,7 +1165,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn post_agents_with_soul_persists_soul_text() {
+    async fn post_agents_creates_agent_without_prompts() {
         let state = test_state().await;
         let pool = state.db_pool.clone();
 
@@ -1201,7 +1175,7 @@ mod tests {
         let agent_key = slugify_agent_key(&display_name);
         let private_key = random_private_key();
         let body = format!(
-            "display_name={}&hyperliquid_private_key={}&soul=I+am+a+trader.",
+            "display_name={}&hyperliquid_private_key={}",
             display_name, private_key
         );
 
@@ -1217,12 +1191,21 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::SEE_OTHER);
+        let expected_location = format!("/agents/{agent_key}");
+        assert_eq!(
+            response
+                .headers()
+                .get("location")
+                .and_then(|value| value.to_str().ok()),
+            Some(expected_location.as_str())
+        );
 
         let stored = get_agent(&pool, &agent_key)
             .await
             .expect("get agent")
             .expect("agent present");
-        assert_eq!(stored.soul, "I am a trader.");
+        assert!(stored.analysis_prompt.is_empty());
+        assert!(stored.trading_prompt.is_empty());
     }
 
     #[tokio::test]
@@ -1561,13 +1544,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn agent_prompts_route_renders_prompt_and_soul() {
+    async fn agent_prompts_route_renders_prompt_fields() {
         let state = test_state().await;
         let (agent_key, _wallet_address) = insert_test_agent_with_text(
             &state,
             "Wait for analysis confirmation first.".to_string(),
             "Trade breakouts only after confirmation.".to_string(),
-            "Calm and deliberate.".to_string(),
         )
         .await
         .expect("insert agent");
@@ -1586,16 +1568,15 @@ mod tests {
         let text = response_text(response).await;
         assert!(text.contains("Wait for analysis confirmation first."));
         assert!(text.contains("Trade breakouts only after confirmation."));
-        assert!(text.contains("Calm and deliberate."));
     }
 
     #[tokio::test]
-    async fn post_agent_prompts_updates_analysis_trading_prompt_and_soul() {
+    async fn post_agent_prompts_updates_analysis_and_trading_prompt() {
         let state = test_state().await;
         let pool = state.db_pool.clone();
         let (agent_key, _wallet_address) = insert_test_agent(&state).await.expect("insert agent");
 
-        let body = "analysis_prompt=Analyze+momentum+with+market+structure.&trading_prompt=Only+place+limit+orders+near+support.&soul=Patient+and+systematic.";
+        let body = "analysis_prompt=Analyze+momentum+with+market+structure.&trading_prompt=Only+place+limit+orders+near+support.";
         let response = router(state)
             .oneshot(
                 Request::builder()
@@ -1630,7 +1611,6 @@ mod tests {
             stored.trading_prompt,
             "Only place limit orders near support."
         );
-        assert_eq!(stored.soul, "Patient and systematic.");
     }
 
     #[tokio::test]

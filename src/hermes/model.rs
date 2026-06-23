@@ -1,4 +1,4 @@
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct StatusResponse {
@@ -22,17 +22,6 @@ pub struct ActiveProfile {
     /// fallback.
     #[serde(alias = "active")]
     pub name: String,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct CreateProfileRequest<'a> {
-    pub name: &'a str,
-    pub clone_from_default: bool,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct SetSoulRequest<'a> {
-    pub content: &'a str,
 }
 
 #[cfg(test)]
@@ -74,25 +63,5 @@ mod tests {
         let json = r#"{"version":"0.8.0"}"#;
         let parsed: StatusResponse = serde_json::from_str(json).unwrap();
         assert_eq!(parsed.version, "0.8.0");
-    }
-
-    #[test]
-    fn create_profile_request_serializes() {
-        let req = CreateProfileRequest {
-            name: "new-agent",
-            clone_from_default: true,
-        };
-        let json = serde_json::to_string(&req).unwrap();
-        assert!(json.contains("\"name\":\"new-agent\""));
-        assert!(json.contains("\"clone_from_default\":true"));
-    }
-
-    #[test]
-    fn set_soul_request_serializes() {
-        let req = SetSoulRequest {
-            content: "beep boop",
-        };
-        let json = serde_json::to_string(&req).unwrap();
-        assert!(json.contains("\"content\":\"beep boop\""));
     }
 }

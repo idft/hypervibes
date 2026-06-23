@@ -1224,7 +1224,6 @@ mod tests {
             enabled: true,
             analysis_prompt: "Beep boop analysis.".to_string(),
             trading_prompt: "Beep boop trading.".to_string(),
-            soul: "I am a test agent.".to_string(),
             wallet_address: "0x1234567890abcdef".to_string(),
             environment: "live".to_string(),
             api_key: "vt_test_key".to_string(),
