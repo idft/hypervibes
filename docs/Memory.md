@@ -35,7 +35,7 @@ Example:
 - the `1h` loop reads recent `15m` memories for `BTC`, then writes a `1h` memory
 - the `15m` loop reads recent lower-timeframe memories, then writes a `15m` memory
 
-Each loop reads **one specific timeframe** at a time. The system does not need a "give me all timeframes mixed together" query.
+Each analysis loop reads **one specific timeframe** at a time. Separately, execution contexts can use `GET /api/v1/memories/latest` to fetch the current valid memory per timeframe for a symbol and `memory_type`.
 
 ## Design Principles
 
@@ -156,6 +156,77 @@ Rules:
 - `summary` stays a concise one-liner for UI listing.
 - `content` stays the human-readable markdown narrative.
 
+### Proposed Future Improvement: Multi-Model Analysis
+
+This section is an **initial draft plan**, not current implemented behavior.
+
+In the future, the same symbol and timeframe may have multiple
+`memory_type="analysis"` memories produced by different LLM models in parallel.
+One producer will be the execution-driving "primary" analysis, while other
+models act as shadow or benchmark analysts so their performance can be compared
+later.
+
+The current recommendation is to keep all of these records as
+`memory_type="analysis"` and identify the producer in `metadata`, rather than
+splitting models into different memory types.
+
+Proposed metadata addition:
+
+```json
+{
+  "schema_version": 1,
+  "analysis_kind": "trade_setup",
+  "symbol": "BTC",
+  "timeframe": "15m",
+  "generated_at": "2026-06-22T18:15:00Z",
+  "valid_for_seconds": 1200,
+  "producer": {
+    "role": "primary",
+    "model": "claude-sonnet-4",
+    "provider": "anthropic",
+    "job_id": "vibetrading-analysis-primary",
+    "run_id": "run_2026_06_22_181500"
+  },
+  "bias": "bullish",
+  "confidence": 0.74,
+  "entry_setups": []
+}
+```
+
+Planned semantics:
+
+- Keep `memory_type="analysis"` for all analysis producers.
+- Use `metadata.producer.role` to distinguish `primary`, `shadow`,
+  `benchmark`, or other future roles.
+- Do not infer the execution-driving memory from the model name alone.
+- Keep model provenance inside metadata until a dedicated provenance table is
+  justified.
+
+Planned execution behavior:
+
+- The trading loop should eventually read only the `primary` analysis producer
+  by default.
+- Shadow or benchmark analyses should still be stored so they can be evaluated
+  later against price action and actual trade outcomes.
+- Trade execution or reflection memories should be able to reference the source
+  analysis memory by `id`, and optionally a specific `entry_setup.id`, so model
+  performance can be compared after the fact.
+
+Planned API direction:
+
+- The current `GET /api/v1/memories/latest?symbol=BTC&memory_type=analysis`
+  endpoint is intentionally simple and does not yet distinguish producers.
+- If and when multiple producers are added, a future filter such as
+  `producer_role=primary` is the likely extension point.
+- Grouping for execution should remain "latest valid per timeframe after
+  filtering to the selected producer role."
+- Grouping for evaluation may later need to distinguish by timeframe plus
+  producer identity.
+
+This is intentionally deferred until there is more than one real analysis
+producer in the system. The immediate implementation goal remains: one latest
+valid analysis memory per timeframe for the current agent.
+
 Nullability:
 
 - `symbol` is **required**. Every V1 memory is at least about one instrument. Agent-wide/macro memories not tied to an instrument are deferred.
@@ -244,6 +315,37 @@ Retrieval semantics:
 
 Note on omitting `timeframe`: because every cascading roll-up reads exactly one named timeframe, omitting `timeframe` is free to mean "the general, non-timeframed memories." There is intentionally **no** "all timeframes mixed" query in V1. A caller that genuinely needs multiple timeframes makes one call per timeframe. This is a deliberate tradeoff.
 
+#### `GET /api/v1/memories/latest`
+
+Fetch the latest currently valid memory per non-null timeframe for execution contexts such as the Hermes trading loop.
+
+Required query parameters:
+
+- `symbol` — exact match
+- `memory_type` — exact match
+
+Results:
+
+- are scoped to the authenticated agent's `agent_key`
+- only consider rows with a non-null `timeframe`
+- return at most one row per timeframe
+- return the newest non-stale row for each timeframe
+- are ordered newest-first
+- return an empty array if no current rows are valid
+
+Response shape matches `GET /api/v1/memories`, with one extra field:
+
+- `expires_at` — RFC 3339 timestamp when the memory becomes stale, or `null` if the row has no expiration
+
+Stale analysis rules:
+
+- if `metadata.stale_after` is present and parses as RFC 3339, it is used directly
+- else if `metadata.valid_for_seconds` is a positive number, `expires_at = created_at + valid_for_seconds`
+- else `memory_type="analysis"` falls back to timeframe defaults: `15m => 20m`, `1h => 90m`, `1d => 36h`, unknown analysis timeframe => `20m`
+- non-analysis rows with no explicit staleness metadata currently have no implicit expiration
+
+This endpoint exists alongside `GET /api/v1/memories`; it does not change the existing omitted-`timeframe` behavior there.
+
 #### `GET /api/v1/memories/{id}`
 
 Fetch a single memory by `id`, scoped to the caller's `agent_key`.
@@ -293,7 +395,7 @@ The following ideas were part of the earlier, more ambitious memory design. They
 - **Validity windows / expiry** (`valid_until`) — explicit staleness hints. For V1, relevance is inferred from `created_at` + `timeframe`.
 - **Semantic / embedding search** (`pgvector`). Not part of this system; retrieval is structured and time-based only.
 - **Nullable `symbol`** for agent-wide / macro memories not tied to any instrument.
-- **Cross-timeframe single-call fetch** — one request returning multiple timeframes at once.
+- **General cross-timeframe history fetches** — beyond the limited latest-per-timeframe view exposed by `GET /api/v1/memories/latest`.
 - **Execution-intent linking** — connecting memories to submitted orders. That belongs to the Hyperliquid execution gateway subsystem and references `agent_key` separately.
 
 These can be layered on later without breaking the V1 model, because the core table is append-only and `metadata` absorbs structured growth until a field justifies its own column.
@@ -302,6 +404,6 @@ These can be layered on later without breaking the V1 model, because the core ta
 
 V1 of the memory system is a single append-only table, `memory.records`, owned per `agent_key`, scoped by `symbol` and optional `timeframe`, carrying a `summary`, a markdown `content` body, and optional `metadata`.
 
-Agents save and retrieve memories through a small JSON API authenticated by API key (no `agent_id` in the path). Retrieval is time-ordered and supports the cascading roll-up pattern where each timeframe reads the one below it.
+Agents save and retrieve memories through a small JSON API authenticated by API key (no `agent_id` in the path). Retrieval is time-ordered, supports the cascading roll-up pattern where each timeframe reads the one below it, and now includes a latest-valid-per-timeframe endpoint for execution loops.
 
 Everything more advanced — lineage, active state, evaluations, expiry, search — is deliberately deferred until the simple version proves the feedback loop.

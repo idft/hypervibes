@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{collections::HashSet, sync::Arc};
 
 use axum::{
     Json, Router,
@@ -7,6 +7,7 @@ use axum::{
     response::{IntoResponse, Response},
     routing::{get, post},
 };
+use chrono::{DateTime, Duration, Utc};
 use serde_json::json;
 use tracing::error;
 use uuid::Uuid;
@@ -43,6 +44,7 @@ use crate::{
 pub fn router(state: Arc<AppState>) -> Router {
     Router::new()
         .route("/memories", post(create_memory).get(list_memories))
+        .route("/memories/latest", get(list_latest_memories))
         .route("/memories/{id}", get(get_memory_by_id))
         .route("/account", get(get_account))
         .route("/job-context", get(get_job_context))
@@ -152,6 +154,78 @@ async fn list_memories(
 
     let bodies: Vec<MemoryRecordResponse> =
         rows.into_iter().map(MemoryRecordResponse::from).collect();
+    Ok(Json(bodies).into_response())
+}
+
+#[derive(Debug, Default, serde::Deserialize)]
+struct LatestMemoryQuery {
+    symbol: Option<String>,
+    memory_type: Option<String>,
+}
+
+impl LatestMemoryQuery {
+    fn validate(self) -> Result<(String, String), ApiError> {
+        let mut errors = Vec::new();
+
+        let symbol = self
+            .symbol
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty())
+            .or_else(|| {
+                errors.push("symbol is required.".to_string());
+                None
+            });
+
+        let memory_type = self
+            .memory_type
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty())
+            .or_else(|| {
+                errors.push("memory_type is required.".to_string());
+                None
+            });
+
+        match (symbol, memory_type) {
+            (Some(symbol), Some(memory_type)) => Ok((symbol, memory_type)),
+            _ => Err(ApiError::Validation(errors.join(" "))),
+        }
+    }
+}
+
+/// `GET /api/v1/memories/latest`
+async fn list_latest_memories(
+    State(state): State<Arc<AppState>>,
+    agent: AuthenticatedAgent,
+    Query(query): Query<LatestMemoryQuery>,
+) -> Result<Response, ApiError> {
+    let (symbol, memory_type) = query.validate()?;
+    let rows = memory_store::list_latest_memory_candidates(
+        &state.db_pool,
+        &agent.agent_key,
+        &symbol,
+        &memory_type,
+    )
+    .await
+    .map_err(ApiError::Internal)?;
+
+    let now = Utc::now();
+    let mut seen_timeframes = HashSet::new();
+    let mut bodies = Vec::new();
+
+    for row in rows {
+        let Some(timeframe) = row.timeframe.clone() else {
+            continue;
+        };
+        let expires_at = latest_memory_expires_at(&row);
+        if expires_at.is_some_and(|value| value <= now) {
+            continue;
+        }
+        if !seen_timeframes.insert(timeframe) {
+            continue;
+        }
+        bodies.push(LatestMemoryResponse::from_record(row, expires_at));
+    }
+
     Ok(Json(bodies).into_response())
 }
 
@@ -326,6 +400,96 @@ impl From<MemoryRecord> for MemoryRecordResponse {
             content: r.content,
             metadata: r.metadata,
         }
+    }
+}
+
+#[derive(Debug, serde::Serialize)]
+struct LatestMemoryResponse {
+    id: Uuid,
+    created_at: DateTime<Utc>,
+    agent_key: String,
+    symbol: String,
+    timeframe: Option<String>,
+    memory_type: String,
+    summary: String,
+    content: String,
+    metadata: serde_json::Value,
+    expires_at: Option<DateTime<Utc>>,
+}
+
+impl LatestMemoryResponse {
+    fn from_record(record: MemoryRecord, expires_at: Option<DateTime<Utc>>) -> Self {
+        Self {
+            id: record.id,
+            created_at: record.created_at,
+            agent_key: record.agent_key,
+            symbol: record.symbol,
+            timeframe: record.timeframe,
+            memory_type: record.memory_type,
+            summary: record.summary,
+            content: record.content,
+            metadata: record.metadata,
+            expires_at,
+        }
+    }
+}
+
+fn latest_memory_expires_at(row: &MemoryRecord) -> Option<DateTime<Utc>> {
+    stale_after(&row.metadata)
+        .or_else(|| {
+            valid_for_seconds(&row.metadata)
+                .map(|seconds| row.created_at + Duration::seconds(seconds))
+        })
+        .or_else(|| {
+            if row.memory_type == "analysis" {
+                Some(
+                    row.created_at
+                        + analysis_default_valid_for(row.timeframe.as_deref().unwrap_or("")),
+                )
+            } else {
+                None
+            }
+        })
+}
+
+fn valid_for_seconds(metadata: &serde_json::Value) -> Option<i64> {
+    metadata
+        .get("valid_for_seconds")
+        .and_then(|value| match value {
+            serde_json::Value::Number(number) => number
+                .as_i64()
+                .filter(|seconds| *seconds > 0)
+                .or_else(|| {
+                    number
+                        .as_u64()
+                        .and_then(|seconds| i64::try_from(seconds).ok())
+                        .filter(|seconds| *seconds > 0)
+                })
+                .or_else(|| {
+                    let seconds = number.as_f64()?;
+                    if !seconds.is_finite() || seconds < 1.0 || seconds > i64::MAX as f64 {
+                        return None;
+                    }
+                    Some(seconds.floor() as i64)
+                }),
+            _ => None,
+        })
+}
+
+fn stale_after(metadata: &serde_json::Value) -> Option<DateTime<Utc>> {
+    metadata
+        .get("stale_after")
+        .and_then(|value| value.as_str())
+        .and_then(|value| DateTime::parse_from_rfc3339(value).ok())
+        .map(|value| value.with_timezone(&Utc))
+}
+
+fn analysis_default_valid_for(timeframe: &str) -> Duration {
+    match timeframe {
+        "15m" => Duration::minutes(20),
+        "1h" => Duration::minutes(90),
+        "1d" => Duration::hours(36),
+        _ => Duration::minutes(20),
     }
 }
 
@@ -651,8 +815,10 @@ mod tests {
     use axum::Router;
     use axum::body::Body;
     use axum::http::{Request, StatusCode};
-    use chrono::Utc;
+    use chrono::{Duration, Utc};
+    use serde_json::json;
     use tower::util::ServiceExt;
+    use uuid::Uuid;
 
     use crate::{
         agents::{
@@ -738,6 +904,57 @@ mod tests {
             Some(("content-type", "application/json".to_string())),
             Body::from(body),
         )
+    }
+
+    async fn insert_memory_at(
+        state: &Arc<AppState>,
+        agent_key: &str,
+        created_at: chrono::DateTime<Utc>,
+        symbol: &str,
+        timeframe: Option<&str>,
+        memory_type: &str,
+        summary: &str,
+        metadata: serde_json::Value,
+    ) -> Uuid {
+        let id = Uuid::new_v4();
+        sqlx::query(
+            "INSERT INTO memory.records (
+                id, created_at, agent_key, symbol, timeframe, memory_type, summary, content, metadata
+             ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
+        )
+        .bind(id)
+        .bind(created_at)
+        .bind(agent_key)
+        .bind(symbol)
+        .bind(timeframe)
+        .bind(memory_type)
+        .bind(summary)
+        .bind(format!("body for {summary}"))
+        .bind(metadata)
+        .execute(&state.db_pool)
+        .await
+        .expect("insert memory record");
+        id
+    }
+
+    async fn latest_memories_response(
+        state: &Arc<AppState>,
+        api_key: &str,
+        uri: &str,
+    ) -> (StatusCode, serde_json::Value) {
+        let request = Request::builder()
+            .method("GET")
+            .uri(uri)
+            .header("authorization", format!("Bearer {api_key}"))
+            .body(Body::empty())
+            .unwrap();
+        let response = app(Arc::clone(state)).oneshot(request).await.unwrap();
+        let status = response.status();
+        let body_bytes = axum::body::to_bytes(response.into_body(), 64 * 1024)
+            .await
+            .unwrap();
+        let body = serde_json::from_slice(&body_bytes).unwrap();
+        (status, body)
     }
 
     #[tokio::test]
@@ -1030,6 +1247,286 @@ mod tests {
             .unwrap();
         let rows: Vec<serde_json::Value> = serde_json::from_slice(&body_bytes).unwrap();
         assert!(rows.is_empty());
+    }
+
+    #[tokio::test]
+    async fn latest_memories_returns_latest_valid_per_timeframe() {
+        let state = test_state().await;
+        let (agent_key, api_key) = seed_agent(&state, "latest-per-tf").await;
+        let now = Utc::now();
+
+        insert_memory_at(
+            &state,
+            &agent_key,
+            now - Duration::minutes(12),
+            "BTC",
+            Some("15m"),
+            "analysis",
+            "15m-old",
+            json!({}),
+        )
+        .await;
+        insert_memory_at(
+            &state,
+            &agent_key,
+            now - Duration::minutes(5),
+            "BTC",
+            Some("15m"),
+            "analysis",
+            "15m-new",
+            json!({}),
+        )
+        .await;
+        insert_memory_at(
+            &state,
+            &agent_key,
+            now - Duration::minutes(30),
+            "BTC",
+            Some("1h"),
+            "analysis",
+            "1h-new",
+            json!({}),
+        )
+        .await;
+        insert_memory_at(
+            &state,
+            &agent_key,
+            now - Duration::hours(4),
+            "BTC",
+            Some("1d"),
+            "analysis",
+            "1d-new",
+            json!({}),
+        )
+        .await;
+
+        let (status, body) = latest_memories_response(
+            &state,
+            &api_key,
+            "/memories/latest?symbol=BTC&memory_type=analysis",
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+
+        let rows = body.as_array().expect("array response");
+        assert_eq!(rows.len(), 3);
+        let summaries: Vec<&str> = rows
+            .iter()
+            .map(|row| row["summary"].as_str().unwrap())
+            .collect();
+        assert_eq!(summaries, vec!["15m-new", "1h-new", "1d-new"]);
+        assert!(rows.iter().all(|row| row["expires_at"].is_string()));
+    }
+
+    #[tokio::test]
+    async fn latest_memories_excludes_stale_analysis() {
+        let state = test_state().await;
+        let (agent_key, api_key) = seed_agent(&state, "latest-stale").await;
+        let now = Utc::now();
+
+        insert_memory_at(
+            &state,
+            &agent_key,
+            now - Duration::minutes(1),
+            "BTC",
+            Some("15m"),
+            "analysis",
+            "stale",
+            json!({ "stale_after": (now - Duration::seconds(1)).to_rfc3339() }),
+        )
+        .await;
+
+        let (status, body) = latest_memories_response(
+            &state,
+            &api_key,
+            "/memories/latest?symbol=BTC&memory_type=analysis",
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body, json!([]));
+    }
+
+    #[tokio::test]
+    async fn latest_memories_uses_analysis_timeframe_defaults() {
+        let state = test_state().await;
+        let (agent_key, api_key) = seed_agent(&state, "latest-defaults").await;
+        let now = Utc::now();
+
+        insert_memory_at(
+            &state,
+            &agent_key,
+            now - Duration::hours(37),
+            "BTC",
+            Some("1d"),
+            "analysis",
+            "expired-by-default",
+            json!({}),
+        )
+        .await;
+
+        let (status, body) = latest_memories_response(
+            &state,
+            &api_key,
+            "/memories/latest?symbol=BTC&memory_type=analysis",
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body, json!([]));
+    }
+
+    #[tokio::test]
+    async fn latest_memories_filters_by_memory_type() {
+        let state = test_state().await;
+        let (agent_key, api_key) = seed_agent(&state, "latest-type").await;
+        let now = Utc::now();
+
+        insert_memory_at(
+            &state,
+            &agent_key,
+            now - Duration::minutes(4),
+            "BTC",
+            Some("15m"),
+            "analysis",
+            "analysis-row",
+            json!({}),
+        )
+        .await;
+        insert_memory_at(
+            &state,
+            &agent_key,
+            now - Duration::minutes(1),
+            "BTC",
+            Some("15m"),
+            "reflection",
+            "reflection-row",
+            json!({}),
+        )
+        .await;
+
+        let (status, body) = latest_memories_response(
+            &state,
+            &api_key,
+            "/memories/latest?symbol=BTC&memory_type=analysis",
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+
+        let rows = body.as_array().expect("array response");
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0]["summary"], "analysis-row");
+        assert_eq!(rows[0]["memory_type"], "analysis");
+    }
+
+    #[tokio::test]
+    async fn latest_memories_excludes_null_timeframe() {
+        let state = test_state().await;
+        let (agent_key, api_key) = seed_agent(&state, "latest-null-tf").await;
+
+        insert_memory_at(
+            &state,
+            &agent_key,
+            Utc::now(),
+            "BTC",
+            None,
+            "analysis",
+            "general",
+            json!({}),
+        )
+        .await;
+
+        let (status, body) = latest_memories_response(
+            &state,
+            &api_key,
+            "/memories/latest?symbol=BTC&memory_type=analysis",
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body, json!([]));
+    }
+
+    #[tokio::test]
+    async fn latest_memories_requires_symbol_and_memory_type() {
+        let state = test_state().await;
+        let (_agent_key, api_key) = seed_agent(&state, "latest-validate").await;
+
+        let (status, body) = latest_memories_response(&state, &api_key, "/memories/latest").await;
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+        assert!(
+            body["error"]
+                .as_str()
+                .unwrap()
+                .contains("symbol is required")
+        );
+        assert!(
+            body["error"]
+                .as_str()
+                .unwrap()
+                .contains("memory_type is required")
+        );
+
+        let (status, body) = latest_memories_response(
+            &state,
+            &api_key,
+            "/memories/latest?symbol=%20%20&memory_type=%20%20",
+        )
+        .await;
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+        assert!(
+            body["error"]
+                .as_str()
+                .unwrap()
+                .contains("symbol is required")
+        );
+        assert!(
+            body["error"]
+                .as_str()
+                .unwrap()
+                .contains("memory_type is required")
+        );
+    }
+
+    #[tokio::test]
+    async fn latest_memories_is_scoped_to_authenticated_agent() {
+        let state = test_state().await;
+        let (agent_a_key, agent_a_api_key) = seed_agent(&state, "latest-scope-a").await;
+        let (agent_b_key, _agent_b_api_key) = seed_agent(&state, "latest-scope-b").await;
+        let now = Utc::now();
+
+        insert_memory_at(
+            &state,
+            &agent_a_key,
+            now - Duration::minutes(2),
+            "BTC",
+            Some("15m"),
+            "analysis",
+            "agent-a",
+            json!({}),
+        )
+        .await;
+        insert_memory_at(
+            &state,
+            &agent_b_key,
+            now - Duration::minutes(1),
+            "BTC",
+            Some("15m"),
+            "analysis",
+            "agent-b",
+            json!({}),
+        )
+        .await;
+
+        let (status, body) = latest_memories_response(
+            &state,
+            &agent_a_api_key,
+            "/memories/latest?symbol=BTC&memory_type=analysis",
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+
+        let rows = body.as_array().expect("array response");
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0]["summary"], "agent-a");
+        assert_eq!(rows[0]["agent_key"], agent_a_key);
     }
 
     #[tokio::test]

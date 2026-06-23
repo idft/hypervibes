@@ -10,6 +10,7 @@ use crate::{
 
 const DEFAULT_LIMIT: i64 = 50;
 const MAX_LIMIT: i64 = 200;
+const LATEST_CANDIDATE_LIMIT: i64 = 200;
 
 fn clamp_limit(limit: Option<i64>) -> i64 {
     let raw = limit.unwrap_or(DEFAULT_LIMIT);
@@ -137,6 +138,34 @@ pub async fn list_agent_memories(
         .fetch_all(pool)
         .await
         .context("failed to list agent memory records")?;
+
+    Ok(rows)
+}
+
+/// List newest-first candidates for the latest-per-timeframe endpoint.
+pub async fn list_latest_memory_candidates(
+    pool: &DbPool,
+    agent_key: &str,
+    symbol: &str,
+    memory_type: &str,
+) -> Result<Vec<MemoryRecord>> {
+    let rows = sqlx::query_as::<_, MemoryRecord>(
+        "SELECT id, created_at, agent_key, symbol, timeframe, memory_type, summary, content, metadata
+           FROM memory.records
+          WHERE agent_key = $1
+            AND symbol = $2
+            AND memory_type = $3
+            AND timeframe IS NOT NULL
+          ORDER BY created_at DESC
+          LIMIT $4",
+    )
+    .bind(agent_key)
+    .bind(symbol)
+    .bind(memory_type)
+    .bind(LATEST_CANDIDATE_LIMIT)
+    .fetch_all(pool)
+    .await
+    .context("failed to list latest memory candidates")?;
 
     Ok(rows)
 }
