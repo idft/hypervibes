@@ -239,39 +239,22 @@
                     <label for="analysis_prompt" class="text-xs uppercase tracking-[0.16em] text-zinc-500">Analysis Strategy Prompt</label>
                     <p class="mt-1 text-xs text-zinc-500">Configure assets, timeframes, strategy lens, confidence thresholds, validity, and blockers.</p>
                     <textarea id="analysis_prompt" name="analysis_prompt" rows="8" placeholder="Assets, timeframes, analysis methods, confidence thresholds, validity, and trade blockers." class="mt-2 w-full rounded-xl border border-zinc-800 bg-zinc-950/70 px-4 py-3 text-sm leading-6 text-zinc-200 outline-none placeholder:text-zinc-600 focus:border-zinc-700">{{ agent.analysis_prompt }}</textarea>
+                    <div class="mt-3 flex justify-end">
+                        <button type="button" id="reset-analysis-prompt-btn" class="rounded-full border border-zinc-800 px-4 py-2 text-sm font-medium text-zinc-300 hover:border-zinc-700 hover:text-white">Reset to default</button>
+                    </div>
                 </div>
                 <div>
                     <label for="trading_prompt" class="text-xs uppercase tracking-[0.16em] text-zinc-500">Trading Strategy Prompt</label>
                     <p class="mt-1 text-xs text-zinc-500">Configure exposure, laddering, time-in-force preference, stale-order policy, and scaling rules.</p>
                     <textarea id="trading_prompt" name="trading_prompt" rows="8" placeholder="Sizing, laddering, time-in-force preference, max orders, stale-order policy, and scaling rules." class="mt-2 w-full rounded-xl border border-zinc-800 bg-zinc-950/70 px-4 py-3 text-sm leading-6 text-zinc-200 outline-none placeholder:text-zinc-600 focus:border-zinc-700">{{ agent.trading_prompt }}</textarea>
+                    <div class="mt-3 flex justify-end">
+                        <button type="button" id="reset-trading-prompt-btn" class="rounded-full border border-zinc-800 px-4 py-2 text-sm font-medium text-zinc-300 hover:border-zinc-700 hover:text-white">Reset to default</button>
+                    </div>
                 </div>
                 <div class="flex flex-col-reverse gap-3 sm:flex-row sm:justify-end">
-                    <button type="button" id="reset-prompts-btn" class="rounded-full border border-zinc-800 px-4 py-2 text-sm font-medium text-zinc-300 hover:border-zinc-700 hover:text-white">Reset to defaults</button>
-                    <button type="submit" class="rounded-full bg-white px-4 py-2 text-sm font-medium text-black hover:bg-zinc-200">Save prompts</button>
+                    <button type="submit" id="save-prompts-btn" disabled class="hidden rounded-full bg-white px-4 py-2 text-sm font-medium text-black hover:bg-zinc-200 disabled:cursor-not-allowed disabled:bg-zinc-700 disabled:text-zinc-300">Save prompts</button>
                 </div>
             </form>
-        </section>
-
-        <section class="rounded-2xl border border-zinc-800 bg-[#0d0d10] p-6">
-            <h2 class="text-lg font-medium text-white">Analysis Strategy Prompt</h2>
-            <div class="mt-4 rounded-xl border border-zinc-800 bg-zinc-950/70 p-4">
-                {% if agent.analysis_prompt.is_empty() %}
-                <p class="text-sm italic text-zinc-500">No analysis prompt configured.</p>
-                {% else %}
-                <p class="whitespace-pre-wrap text-sm leading-6 text-zinc-300">{{ agent.analysis_prompt }}</p>
-                {% endif %}
-            </div>
-        </section>
-
-        <section class="rounded-2xl border border-zinc-800 bg-[#0d0d10] p-6">
-            <h2 class="text-lg font-medium text-white">Trading Strategy Prompt</h2>
-            <div class="mt-4 rounded-xl border border-zinc-800 bg-zinc-950/70 p-4">
-                {% if agent.trading_prompt.is_empty() %}
-                <p class="text-sm italic text-zinc-500">No trading prompt configured.</p>
-                {% else %}
-                <p class="whitespace-pre-wrap text-sm leading-6 text-zinc-300">{{ agent.trading_prompt }}</p>
-                {% endif %}
-            </div>
         </section>
 
     </section>
@@ -361,24 +344,6 @@
 {% if show_prompts_tab %}
 <textarea id="default-analysis-strategy-prompt-value" class="hidden" aria-hidden="true" tabindex="-1">{{ default_analysis_strategy_prompt }}</textarea>
 <textarea id="default-trading-strategy-prompt-value" class="hidden" aria-hidden="true" tabindex="-1">{{ default_trading_strategy_prompt }}</textarea>
-
-<!-- Reset prompts confirmation modal -->
-<div id="reset-prompts-modal" class="fixed inset-0 z-50 hidden items-center justify-center bg-black/70 backdrop-blur-sm px-4" aria-modal="true" role="dialog">
-    <div class="w-full max-w-md rounded-2xl border border-zinc-800 bg-[#0d0d10] p-6 shadow-2xl">
-        <h3 class="text-lg font-semibold text-white">Reset strategy prompts</h3>
-        <p class="mt-2 text-sm leading-6 text-zinc-400">
-            Replace both strategy prompt fields in this form with the current backend defaults? This will not save changes until you click <span class="font-medium text-zinc-200">Save prompts</span>.
-        </p>
-        <div class="mt-6 flex flex-col-reverse gap-3 sm:flex-row sm:justify-end">
-            <button type="button" id="cancel-reset-prompts-btn" class="w-full rounded-full border border-zinc-800 px-4 py-2 text-sm font-medium text-zinc-300 hover:border-zinc-700 hover:text-white sm:w-auto">
-                Cancel
-            </button>
-            <button type="button" id="confirm-reset-prompts-btn" class="w-full rounded-full bg-white px-4 py-2 text-sm font-medium text-black hover:bg-zinc-200 sm:w-auto">
-                Load defaults
-            </button>
-        </div>
-    </div>
-</div>
 {% endif %}
 
 <!-- Delete confirmation modal -->
@@ -405,6 +370,44 @@
 {% block scripts %}
 <script>
     (function () {
+        const analysisTextarea = document.getElementById('analysis_prompt');
+        const tradingTextarea = document.getElementById('trading_prompt');
+        const resetAnalysisBtn = document.getElementById('reset-analysis-prompt-btn');
+        const resetTradingBtn = document.getElementById('reset-trading-prompt-btn');
+        const saveBtn = document.getElementById('save-prompts-btn');
+        const analysisDefault = document.getElementById('default-analysis-strategy-prompt-value');
+        const tradingDefault = document.getElementById('default-trading-strategy-prompt-value');
+        const originalAnalysis = analysisTextarea ? analysisTextarea.value : null;
+        const originalTrading = tradingTextarea ? tradingTextarea.value : null;
+
+        if (!analysisTextarea || !tradingTextarea || !resetAnalysisBtn || !resetTradingBtn || !saveBtn || !analysisDefault || !tradingDefault) {
+            return;
+        }
+
+        function updateSaveState() {
+            const isDirty = analysisTextarea.value !== originalAnalysis || tradingTextarea.value !== originalTrading;
+
+            saveBtn.disabled = !isDirty;
+            saveBtn.classList.toggle('hidden', !isDirty);
+        }
+
+        resetAnalysisBtn.addEventListener('click', function () {
+            analysisTextarea.value = analysisDefault.value;
+            updateSaveState();
+        });
+
+        resetTradingBtn.addEventListener('click', function () {
+            tradingTextarea.value = tradingDefault.value;
+            updateSaveState();
+        });
+
+        analysisTextarea.addEventListener('input', updateSaveState);
+        tradingTextarea.addEventListener('input', updateSaveState);
+
+        updateSaveState();
+    })();
+
+    (function () {
         const modal = document.getElementById('delete-modal');
         const openBtn = document.getElementById('delete-agent-btn');
         const cancelBtn = document.getElementById('cancel-delete-btn');
@@ -430,51 +433,6 @@
         });
 
         // Close on Escape key.
-        document.addEventListener('keydown', function (event) {
-            if (event.key === 'Escape' && modal.classList.contains('flex')) {
-                closeModal();
-            }
-        });
-    })();
-
-    (function () {
-        const modal = document.getElementById('reset-prompts-modal');
-        const openBtn = document.getElementById('reset-prompts-btn');
-        const cancelBtn = document.getElementById('cancel-reset-prompts-btn');
-        const confirmBtn = document.getElementById('confirm-reset-prompts-btn');
-        const analysisTextarea = document.getElementById('analysis_prompt');
-        const tradingTextarea = document.getElementById('trading_prompt');
-        const analysisDefault = document.getElementById('default-analysis-strategy-prompt-value');
-        const tradingDefault = document.getElementById('default-trading-strategy-prompt-value');
-
-        if (!modal || !openBtn || !cancelBtn || !confirmBtn || !analysisTextarea || !tradingTextarea || !analysisDefault || !tradingDefault) {
-            return;
-        }
-
-        function openModal() {
-            modal.classList.remove('hidden');
-            modal.classList.add('flex');
-        }
-
-        function closeModal() {
-            modal.classList.add('hidden');
-            modal.classList.remove('flex');
-        }
-
-        openBtn.addEventListener('click', openModal);
-        cancelBtn.addEventListener('click', closeModal);
-        confirmBtn.addEventListener('click', function () {
-            analysisTextarea.value = analysisDefault.value;
-            tradingTextarea.value = tradingDefault.value;
-            closeModal();
-        });
-
-        modal.addEventListener('click', function (event) {
-            if (event.target === modal) {
-                closeModal();
-            }
-        });
-
         document.addEventListener('keydown', function (event) {
             if (event.key === 'Escape' && modal.classList.contains('flex')) {
                 closeModal();

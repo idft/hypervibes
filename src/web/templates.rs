@@ -1426,7 +1426,9 @@ mod tests {
         assert!(rendered.contains("Strategy Prompts"));
         assert!(rendered.contains("Analysis Strategy Prompt"));
         assert!(rendered.contains("Trading Strategy Prompt"));
-        assert!(rendered.contains("Reset to defaults"));
+        assert!(rendered.contains("reset-analysis-prompt-btn"));
+        assert!(rendered.contains("reset-trading-prompt-btn"));
+        assert!(rendered.contains("save-prompts-btn"));
         assert!(rendered.contains("default-analysis-strategy-prompt-value"));
         assert!(rendered.contains("Default analysis validity"));
         assert!(rendered.contains("Time-in-force"));
