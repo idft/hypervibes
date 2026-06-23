@@ -11,6 +11,67 @@ function renderTimeago(root: ParentNode = document) {
   }
 }
 
+type LocalDateTimeFormat = "date" | "time" | "datetime";
+
+function formatLocalDateTime(date: Date, format: LocalDateTimeFormat): string {
+  try {
+    switch (format) {
+      case "date":
+        return new Intl.DateTimeFormat(undefined, {
+          year: "numeric",
+          month: "short",
+          day: "numeric",
+        }).format(date);
+      case "time":
+        return new Intl.DateTimeFormat(undefined, {
+          hour: "numeric",
+          minute: "2-digit",
+        }).format(date);
+      default:
+        return new Intl.DateTimeFormat(undefined, {
+          year: "numeric",
+          month: "short",
+          day: "numeric",
+          hour: "numeric",
+          minute: "2-digit",
+        }).format(date);
+    }
+  } catch {
+    switch (format) {
+      case "date":
+        return date.toLocaleDateString();
+      case "time":
+        return date.toLocaleTimeString();
+      default:
+        return date.toLocaleString();
+    }
+  }
+}
+
+function renderLocalDateTimeNode(node: Element) {
+  const datetime = node.getAttribute("datetime");
+  if (!datetime) {
+    return;
+  }
+
+  const date = new Date(datetime);
+  if (Number.isNaN(date.getTime())) {
+    return;
+  }
+
+  const format =
+    (node.getAttribute("data-local-format") as LocalDateTimeFormat | null) ??
+    "datetime";
+  node.textContent = formatLocalDateTime(date, format);
+}
+
+function renderLocalDateTimes(root: ParentNode = document) {
+  const nodes = root.querySelectorAll("time.local-datetime");
+  nodes.forEach((node) => {
+    renderLocalDateTimeNode(node);
+  });
+}
+
 interface NumberState {
   raw: string;
   formatted: string;
@@ -252,6 +313,7 @@ function initMemoryTimelineDragScroll() {
 
 function init() {
   renderTimeago();
+  renderLocalDateTimes();
   initMemoryTimelineDragScroll();
 
   document.querySelectorAll<HTMLElement>(".number-roll").forEach(seedNumberRoll);
@@ -290,7 +352,11 @@ function init() {
         if (node.matches("time.timeago")) {
           render([node as HTMLElement]);
         }
+        if (node.matches("time.local-datetime")) {
+          renderLocalDateTimeNode(node);
+        }
         renderTimeago(node);
+        renderLocalDateTimes(node);
         if (node instanceof HTMLElement) {
           if (node.matches(".memory-timeline-scroll")) {
             initMemoryTimelineDragScroll();

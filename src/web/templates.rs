@@ -60,12 +60,8 @@ fn format_timestamp_utc(value: DateTime<Utc>) -> String {
     value.format("%Y-%m-%d %H:%M UTC").to_string()
 }
 
-fn format_date_utc(value: DateTime<Utc>) -> String {
-    value.format("%Y-%m-%d").to_string()
-}
-
-fn format_time_utc(value: DateTime<Utc>) -> String {
-    value.format("%H:%M UTC").to_string()
+fn format_timestamp_iso(value: DateTime<Utc>) -> String {
+    value.to_rfc3339_opts(chrono::SecondsFormat::AutoSi, true)
 }
 
 fn format_optional_timestamp_utc(value: Option<DateTime<Utc>>) -> String {
@@ -294,8 +290,8 @@ impl TransactionView {
 #[derive(Debug, Clone)]
 pub struct MemoryView {
     pub memory_id: String,
-    pub short_id: String,
-    pub created_at_text: String,
+    pub created_at_iso: String,
+    pub created_at_fallback_text: String,
     pub symbol: String,
     pub timeframe: String,
     pub memory_type: String,
@@ -313,12 +309,11 @@ impl MemoryView {
         } else {
             None
         };
-        let short_id: String = row.id.to_string().chars().take(8).collect();
 
         Self {
             memory_id: row.id.to_string(),
-            short_id,
-            created_at_text: format_timestamp_utc(row.created_at),
+            created_at_iso: format_timestamp_iso(row.created_at),
+            created_at_fallback_text: format_timestamp_utc(row.created_at),
             symbol: row.symbol,
             timeframe: row.timeframe.unwrap_or_else(|| "general".to_string()),
             memory_type: row.memory_type,
@@ -334,8 +329,8 @@ impl MemoryView {
 pub struct MemoryTimelineItem {
     pub memory_id: String,
     pub detail_url: String,
-    pub created_at_date_text: String,
-    pub created_at_time_text: String,
+    pub created_at_iso: String,
+    pub created_at_fallback_text: String,
     pub symbol: String,
     pub timeframe: String,
     pub memory_type: String,
@@ -368,8 +363,8 @@ fn build_memory_timeline(
             MemoryTimelineItem {
                 detail_url: format!("/agents/{agent_key}/memories/{memory_id}"),
                 memory_id: memory_id.clone(),
-                created_at_date_text: format_date_utc(row.created_at),
-                created_at_time_text: format_time_utc(row.created_at),
+                created_at_iso: format_timestamp_iso(row.created_at),
+                created_at_fallback_text: format_timestamp_utc(row.created_at),
                 symbol: row.symbol.clone(),
                 timeframe: row
                     .timeframe
