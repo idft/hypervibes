@@ -25,9 +25,14 @@ Frontend assets are managed with `pnpm` and built via `esbuild` and Tailwind CSS
 - Built output: `static/dist/app.js`, `static/dist/app.css` (gitignored)
 - `build.rs` runs `pnpm install --frozen-lockfile` and `pnpm build` automatically during `cargo build`/`cargo run` when sources or templates change.
 
-Don't manually build the front-end assets.
-Web server defaults to running on port 3003
+* Don't manually build the front-end assets.
+* Don't test web UI changes with browser-mcp.  The user will test.
+* Web server defaults to running on port 3003
 
 ## Testing
 
 Run `cargo test` from the repo root. No `podman compose`, no Docker, no external Postgres is required: DB-touching tests use an embedded `pglite-oxide` PostgreSQL server that starts in-process via `src/test_db.rs`. The dev server's container Postgres at `localhost:15432` is never touched by tests.
+
+## Hermes Agent Profile Distribution
+
+The Hermes Agent profile distribution is Located in `../vibetrading-profile`.  This is a  hermes profile that can be installed by any user of Hermes Agent
