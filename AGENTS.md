@@ -35,4 +35,4 @@ Run `cargo test` from the repo root. No `podman compose`, no Docker, no external
 
 ## Hermes Agent Profile Distribution
 
-The Hermes Agent profile distribution is Located in `../vibetrading-profile`.  This is a  hermes profile that can be installed by any user of Hermes Agent
+The Hermes Agent profile distribution is Located in `../vibetrading-hermes-profile`.  This is a  hermes profile that can be installed by any user of Hermes Agent
