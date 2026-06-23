@@ -18,7 +18,7 @@ The primary integration path is now:
 - one Vibetrading backend agent maps to one Hermes profile
 - the same distribution is installed once per backend agent using `--name <agent_key>`
 - Hermes owns runs and cron execution
-- Vibetrading owns HTTP APIs for job context, memories, account state, order execution, and loop check-ins
+- Vibetrading owns HTTP APIs for job context, memories, account data, order execution, and loop check-ins
 
 This phase does not use MCP.
 
@@ -122,8 +122,25 @@ Response shape:
     "agent_key": "btc-momentum",
     "account_address": "0x...",
     "environment": "live",
-    "connected": true,
-    "state": { "status": "connected" }
+    "account_data": {
+      "available": true,
+      "as_of": "2026-06-23T20:08:18.610556Z",
+      "stale": false
+    },
+    "balance": {
+      "exchange": "hyperliquid",
+      "model": "unified_cross_margin",
+      "total_equity_usd": "222.922072",
+      "available_to_trade_usd": "222.922072",
+      "available_to_withdraw_usd": "222.922072",
+      "margin_used_usd": "0.0",
+      "unrealized_pnl_usd": "0.0",
+      "collateral_balances": [
+        { "asset": "USDC", "total": "222.922072", "available": "222.922072" }
+      ]
+    },
+    "open_positions": [],
+    "open_orders": []
   }
 }
 ```
@@ -131,9 +148,17 @@ Response shape:
 Behavior:
 
 - `job_kind=analysis` returns `analysis_prompt` and `account: null`
-- `job_kind=trading` returns `trading_prompt` and the full current account snapshot
+- `job_kind=trading` returns `trading_prompt` plus a freshness-gated account contract containing balance, full open positions, and full open orders
 - each successful `job-context` call also updates a per-loop check-in timestamp in
   `agents`
+
+Trading agents must treat account availability as a hard safety gate:
+
+- if `account.account_data.available != true`, do not place new opening orders
+- if `account.balance == null`, do not place new opening orders
+- use `account.balance.available_to_trade_usd` for collateral sizing
+- use `account.open_positions` and `account.open_orders` for exposure and order management
+- raw `account.state`, raw `margin`, and raw `spot_balances` are intentionally not part of the agent-facing API contract
 
 New backend agents receive default strategy prompts at creation time. Those
 defaults live in `src/agents/prompts.rs` and are ordinary stored prompt text,
@@ -169,7 +194,7 @@ Two cron-facing skills are shipped in the distribution:
 - intended cadence: every 1 minute
 - intended model: cheaper / execution-oriented
 - responsibility: consume recent analysis memory, inspect the injected account
-  snapshot, and manage orders/positions through the backend only
+  data, balance, open positions, and open orders, and manage orders/positions through the backend only
 - must never sign Hyperliquid orders directly
 
 See `docs/Memory.md` for the reserved analysis metadata contract used as the

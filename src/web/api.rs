@@ -8,6 +8,7 @@ use axum::{
     routing::{get, post},
 };
 use chrono::{DateTime, Duration, Utc};
+use rust_decimal::Decimal;
 use serde_json::json;
 use tracing::error;
 use uuid::Uuid;
@@ -22,7 +23,7 @@ use crate::{
         },
     },
     hyperliquid::{
-        live_state::{AccountKey, AccountLiveState, LiveConnectionStatus},
+        live_state::{AccountKey, AccountLiveState, LiveOpenOrder, LivePosition},
         orders::{
             gateway::{
                 CancelAllSummary, CancelOutcome, GatewayError, HyperliquidExchange, cancel_all,
@@ -271,9 +272,40 @@ struct LiveAgentSnapshot {
     agent_key: String,
     account_address: String,
     environment: String,
-    connected: bool,
-    state: Option<AccountLiveState>,
+    account_data: AccountDataStatus,
+    balance: Option<AccountBalance>,
+    open_positions: Vec<LivePosition>,
+    open_orders: Vec<LiveOpenOrder>,
 }
+
+#[derive(Debug, Clone, serde::Serialize)]
+struct AccountDataStatus {
+    available: bool,
+    as_of: Option<DateTime<Utc>>,
+    stale: bool,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+struct AccountBalance {
+    exchange: &'static str,
+    model: &'static str,
+    total_equity_usd: Decimal,
+    available_to_trade_usd: Decimal,
+    available_to_withdraw_usd: Decimal,
+    margin_used_usd: Decimal,
+    unrealized_pnl_usd: Decimal,
+    collateral_balances: Vec<CollateralBalance>,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+struct CollateralBalance {
+    asset: String,
+    total: Decimal,
+    available: Decimal,
+}
+
+const ACCOUNT_DATA_MAX_AGE: Duration = Duration::minutes(2);
+const COLLATERAL_ASSETS: &[&str] = &["USDC", "USDE", "USDT0", "USDH"];
 
 fn live_agent_snapshot(
     state: &AppState,
@@ -281,14 +313,113 @@ fn live_agent_snapshot(
 ) -> LiveAgentSnapshot {
     let key = AccountKey::new(&row.wallet_address, &row.environment);
     let snapshot = state.live_accounts.get(&key);
+    let Some(snapshot) = snapshot else {
+        return unavailable_live_agent_snapshot(row);
+    };
+    let Some(updated_at) = snapshot.updated_at else {
+        return unavailable_live_agent_snapshot(row);
+    };
+    if Utc::now() - updated_at > ACCOUNT_DATA_MAX_AGE {
+        return unavailable_live_agent_snapshot(row);
+    }
+
     LiveAgentSnapshot {
         agent_key: row.agent_key.clone(),
         account_address: row.wallet_address.clone(),
         environment: row.environment.clone(),
-        connected: snapshot
-            .as_ref()
-            .is_some_and(|s| s.status == LiveConnectionStatus::Connected),
-        state: snapshot,
+        account_data: AccountDataStatus {
+            available: true,
+            as_of: Some(updated_at),
+            stale: false,
+        },
+        balance: Some(account_balance_from_live_state(&snapshot)),
+        open_positions: snapshot.open_positions.clone(),
+        open_orders: snapshot.open_orders.clone(),
+    }
+}
+
+fn unavailable_live_agent_snapshot(
+    row: &crate::agents::model::AgentDetailRow,
+) -> LiveAgentSnapshot {
+    LiveAgentSnapshot {
+        agent_key: row.agent_key.clone(),
+        account_address: row.wallet_address.clone(),
+        environment: row.environment.clone(),
+        account_data: AccountDataStatus {
+            available: false,
+            as_of: None,
+            stale: true,
+        },
+        balance: None,
+        open_positions: Vec::new(),
+        open_orders: Vec::new(),
+    }
+}
+
+fn account_balance_from_live_state(state: &AccountLiveState) -> AccountBalance {
+    let mut collateral_balances = Vec::new();
+
+    for asset in COLLATERAL_ASSETS {
+        let total = state
+            .spot_balances
+            .iter()
+            .filter(|balance| balance.coin == *asset)
+            .filter_map(|balance| balance.total)
+            .sum();
+        let available = state
+            .spot_balances
+            .iter()
+            .filter(|balance| balance.coin == *asset)
+            .filter_map(|balance| balance.available)
+            .sum();
+        if total > Decimal::ZERO || available > Decimal::ZERO {
+            collateral_balances.push(CollateralBalance {
+                asset: (*asset).to_string(),
+                total,
+                available,
+            });
+        }
+    }
+
+    let collateral_total: Decimal = collateral_balances
+        .iter()
+        .map(|balance| balance.total)
+        .sum();
+    let collateral_available: Decimal = collateral_balances
+        .iter()
+        .map(|balance| balance.available)
+        .sum();
+    let margin_withdrawable = state
+        .margin
+        .as_ref()
+        .and_then(|margin| margin.withdrawable)
+        .unwrap_or(Decimal::ZERO);
+    let margin_account_value = state
+        .margin
+        .as_ref()
+        .and_then(|margin| margin.account_value)
+        .unwrap_or(Decimal::ZERO);
+    let margin_used_usd = state
+        .margin
+        .as_ref()
+        .and_then(|margin| margin.total_margin_used)
+        .unwrap_or(Decimal::ZERO);
+    let unrealized_pnl_usd: Decimal = state
+        .open_positions
+        .iter()
+        .filter_map(|position| position.unrealized_pnl)
+        .sum();
+    let available_to_trade_usd = collateral_available.max(margin_withdrawable);
+
+    AccountBalance {
+        exchange: "hyperliquid",
+        model: "unified_cross_margin",
+        total_equity_usd: collateral_total.max(margin_account_value),
+        available_to_trade_usd,
+        available_to_withdraw_usd: available_to_trade_usd,
+        margin_used_usd,
+        unrealized_pnl_usd,
+        collateral_balances,
     }
 }
 
@@ -816,6 +947,7 @@ mod tests {
     use axum::body::Body;
     use axum::http::{Request, StatusCode};
     use chrono::{Duration, Utc};
+    use rust_decimal_macros::dec;
     use serde_json::json;
     use tower::util::ServiceExt;
     use uuid::Uuid;
@@ -827,7 +959,10 @@ mod tests {
             model::AgentRegistryRow,
             store::{get_agent, insert_agent},
         },
-        hyperliquid::live_state::{AccountKey, LiveConnectionStatus},
+        hyperliquid::live_state::{
+            AccountKey, AccountLiveState, LiveMarginState, LiveOpenOrder, LivePosition,
+            LiveSpotBalance,
+        },
         test_db,
         web::{AppState, api},
     };
@@ -944,6 +1079,25 @@ mod tests {
     ) -> (StatusCode, serde_json::Value) {
         let request = Request::builder()
             .method("GET")
+            .uri(uri)
+            .header("authorization", format!("Bearer {api_key}"))
+            .body(Body::empty())
+            .unwrap();
+        let response = app(Arc::clone(state)).oneshot(request).await.unwrap();
+        let status = response.status();
+        let body_bytes = axum::body::to_bytes(response.into_body(), 64 * 1024)
+            .await
+            .unwrap();
+        let body = serde_json::from_slice(&body_bytes).unwrap();
+        (status, body)
+    }
+
+    async fn get_json_response(
+        state: &Arc<AppState>,
+        api_key: &str,
+        uri: &str,
+    ) -> (StatusCode, serde_json::Value) {
+        let request = Request::builder()
             .uri(uri)
             .header("authorization", format!("Bearer {api_key}"))
             .body(Body::empty())
@@ -1596,7 +1750,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn get_account_returns_200_with_null_state_when_orchestrator_has_no_snapshot() {
+    async fn get_account_returns_200_with_unavailable_data_when_orchestrator_has_no_snapshot() {
         let state = test_state().await;
 
         let (agent_key, api_key) = seed_agent(&state, "acct-empty").await;
@@ -1613,12 +1767,18 @@ mod tests {
             .unwrap();
         let body: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
         assert_eq!(body["agent_key"], serde_json::Value::from(agent_key));
-        assert_eq!(body["connected"], serde_json::Value::from(false));
-        assert!(body["state"].is_null());
+        assert_eq!(body["account_data"]["available"], false);
+        assert_eq!(body["account_data"]["stale"], true);
+        assert!(body["account_data"]["as_of"].is_null());
+        assert!(body["balance"].is_null());
+        assert_eq!(body["open_positions"], json!([]));
+        assert_eq!(body["open_orders"], json!([]));
+        assert!(body.get("connected").is_none());
+        assert!(body.get("state").is_none());
     }
 
     #[tokio::test]
-    async fn get_account_returns_connected_true_after_live_state_seeded() {
+    async fn get_account_returns_fresh_account_contract_after_live_state_seeded() {
         let state = test_state().await;
 
         let (agent_key, api_key) = seed_agent(&state, "acct-live").await;
@@ -1627,9 +1787,21 @@ mod tests {
             .unwrap()
             .expect("present");
         let key = AccountKey::new(&row.wallet_address, &row.environment);
-        state
-            .live_accounts
-            .set_status(&key, LiveConnectionStatus::Connected);
+        state.live_accounts.replace(
+            key,
+            AccountLiveState {
+                account_address: row.wallet_address.clone(),
+                environment: row.environment.clone(),
+                updated_at: Some(Utc::now()),
+                margin: Some(LiveMarginState {
+                    account_value: Some(dec!(100)),
+                    withdrawable: Some(dec!(75)),
+                    total_margin_used: Some(dec!(25)),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            },
+        );
 
         let request = Request::builder()
             .uri("/account")
@@ -1651,11 +1823,16 @@ mod tests {
             body["environment"],
             serde_json::Value::from(row.environment)
         );
-        assert_eq!(body["connected"], serde_json::Value::from(true));
-        assert_eq!(
-            body["state"]["status"],
-            serde_json::Value::from("connected")
-        );
+        assert_eq!(body["account_data"]["available"], true);
+        assert_eq!(body["account_data"]["stale"], false);
+        assert!(body["account_data"]["as_of"].is_string());
+        assert_eq!(body["balance"]["exchange"], "hyperliquid");
+        assert_eq!(body["balance"]["model"], "unified_cross_margin");
+        assert_eq!(body["balance"]["available_to_trade_usd"], "75");
+        assert_eq!(body["open_positions"], json!([]));
+        assert_eq!(body["open_orders"], json!([]));
+        assert!(body.get("connected").is_none());
+        assert!(body.get("state").is_none());
     }
 
     #[tokio::test]
@@ -1741,9 +1918,15 @@ mod tests {
             .unwrap()
             .expect("present");
         let key = AccountKey::new(&row.wallet_address, &row.environment);
-        state
-            .live_accounts
-            .set_status(&key, LiveConnectionStatus::Connected);
+        state.live_accounts.replace(
+            key,
+            AccountLiveState {
+                account_address: row.wallet_address.clone(),
+                environment: row.environment.clone(),
+                updated_at: Some(Utc::now()),
+                ..Default::default()
+            },
+        );
 
         let request = Request::builder()
             .uri("/job-context?job_kind=trading")
@@ -1765,8 +1948,12 @@ mod tests {
         );
         assert_eq!(body["account"]["agent_key"], body["agent_key"]);
         assert_eq!(body["account"]["environment"], "live");
-        assert_eq!(body["account"]["connected"], true);
-        assert_eq!(body["account"]["state"]["status"], "connected");
+        assert!(body["account"].get("state").is_none());
+        assert!(body["account"].get("connected").is_none());
+        assert_eq!(body["account"]["account_data"]["available"], true);
+        assert_eq!(body["account"]["balance"]["model"], "unified_cross_margin");
+        assert!(body["account"]["open_positions"].is_array());
+        assert!(body["account"]["open_orders"].is_array());
 
         let stored = get_agent(&state.db_pool, &agent_key)
             .await
@@ -1774,6 +1961,197 @@ mod tests {
             .expect("present");
         assert!(stored.analysis_context_last_used_at.is_none());
         assert!(stored.trading_context_last_used_at.is_some());
+    }
+
+    #[tokio::test]
+    async fn get_job_context_trading_uses_spot_collateral_when_margin_account_value_is_zero() {
+        let state = test_state().await;
+        let (agent_key, api_key) = seed_agent(&state, "job-spot-collateral").await;
+        let row = get_agent(&state.db_pool, &agent_key)
+            .await
+            .unwrap()
+            .expect("present");
+        let key = AccountKey::new(&row.wallet_address, &row.environment);
+        state.live_accounts.replace(
+            key,
+            AccountLiveState {
+                account_address: row.wallet_address.clone(),
+                environment: row.environment.clone(),
+                updated_at: Some(Utc::now()),
+                margin: Some(LiveMarginState {
+                    account_value: Some(dec!(0)),
+                    withdrawable: Some(dec!(0)),
+                    total_margin_used: Some(dec!(0)),
+                    ..Default::default()
+                }),
+                spot_balances: vec![
+                    LiveSpotBalance {
+                        coin: "USDC".to_string(),
+                        total: Some(dec!(222.922072)),
+                        available: Some(dec!(222.922072)),
+                        ..Default::default()
+                    },
+                    LiveSpotBalance {
+                        coin: "USDE".to_string(),
+                        total: Some(dec!(0)),
+                        available: Some(dec!(0)),
+                        ..Default::default()
+                    },
+                    LiveSpotBalance {
+                        coin: "USDT0".to_string(),
+                        total: Some(dec!(0)),
+                        available: Some(dec!(0)),
+                        ..Default::default()
+                    },
+                    LiveSpotBalance {
+                        coin: "USDH".to_string(),
+                        total: Some(dec!(0)),
+                        available: Some(dec!(0)),
+                        ..Default::default()
+                    },
+                ],
+                ..Default::default()
+            },
+        );
+
+        let (status, body) =
+            get_json_response(&state, &api_key, "/job-context?job_kind=trading").await;
+        assert_eq!(status, StatusCode::OK);
+        let account = &body["account"];
+        assert_eq!(account["account_data"]["available"], true);
+        assert_eq!(account["account_data"]["stale"], false);
+        assert_eq!(account["balance"]["model"], "unified_cross_margin");
+        assert_eq!(account["balance"]["available_to_trade_usd"], "222.922072");
+        assert_eq!(account["balance"]["total_equity_usd"], "222.922072");
+        assert_eq!(
+            account["balance"]["collateral_balances"]
+                .as_array()
+                .unwrap()
+                .len(),
+            1
+        );
+        assert_eq!(
+            account["balance"]["collateral_balances"][0],
+            json!({ "asset": "USDC", "total": "222.922072", "available": "222.922072" })
+        );
+        assert!(account.get("state").is_none());
+        assert!(account.get("margin").is_none());
+        assert!(account.get("spot_balances").is_none());
+    }
+
+    #[tokio::test]
+    async fn get_job_context_trading_returns_unavailable_contract_for_stale_snapshot() {
+        let state = test_state().await;
+        let (agent_key, api_key) = seed_agent(&state, "job-stale-account").await;
+        let row = get_agent(&state.db_pool, &agent_key)
+            .await
+            .unwrap()
+            .expect("present");
+        let key = AccountKey::new(&row.wallet_address, &row.environment);
+        state.live_accounts.replace(
+            key,
+            AccountLiveState {
+                account_address: row.wallet_address.clone(),
+                environment: row.environment.clone(),
+                updated_at: Some(Utc::now() - super::ACCOUNT_DATA_MAX_AGE - Duration::seconds(1)),
+                margin: Some(LiveMarginState {
+                    account_value: Some(dec!(100)),
+                    withdrawable: Some(dec!(100)),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            },
+        );
+
+        let (status, body) =
+            get_json_response(&state, &api_key, "/job-context?job_kind=trading").await;
+        assert_eq!(status, StatusCode::OK);
+        let account = &body["account"];
+        assert_eq!(account["account_data"]["available"], false);
+        assert_eq!(account["account_data"]["stale"], true);
+        assert!(account["account_data"]["as_of"].is_null());
+        assert!(account["balance"].is_null());
+        assert_eq!(account["open_positions"], json!([]));
+        assert_eq!(account["open_orders"], json!([]));
+    }
+
+    #[tokio::test]
+    async fn get_job_context_trading_preserves_full_open_positions_and_orders() {
+        let state = test_state().await;
+        let (agent_key, api_key) = seed_agent(&state, "job-pos-orders").await;
+        let row = get_agent(&state.db_pool, &agent_key)
+            .await
+            .unwrap()
+            .expect("present");
+        let key = AccountKey::new(&row.wallet_address, &row.environment);
+        state.live_accounts.replace(
+            key,
+            AccountLiveState {
+                account_address: row.wallet_address.clone(),
+                environment: row.environment.clone(),
+                updated_at: Some(Utc::now()),
+                open_positions: vec![LivePosition {
+                    coin: "BTC".to_string(),
+                    szi: Some(dec!(0.25)),
+                    entry_px: Some(dec!(65000)),
+                    unrealized_pnl: Some(dec!(12.5)),
+                    liquidation_px: Some(dec!(50000)),
+                    margin_used: Some(dec!(250)),
+                    position_value: Some(dec!(16250)),
+                    leverage_type: Some("cross".to_string()),
+                    leverage_value: Some(3),
+                    ..Default::default()
+                }],
+                open_orders: vec![LiveOpenOrder {
+                    coin: "BTC".to_string(),
+                    side: Some("A".to_string()),
+                    limit_px: Some(dec!(70000)),
+                    sz: Some(dec!(0.1)),
+                    orig_sz: Some(dec!(0.1)),
+                    oid: Some("12345".to_string()),
+                    cloid: Some("0xabc".to_string()),
+                    order_type: Some("Limit".to_string()),
+                    tif: Some("Gtc".to_string()),
+                    reduce_only: Some(true),
+                    is_trigger: Some(true),
+                    trigger_px: Some(dec!(69000)),
+                    trigger_condition: Some("Price above".to_string()),
+                    is_position_tpsl: Some(true),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            },
+        );
+
+        let (status, body) =
+            get_json_response(&state, &api_key, "/job-context?job_kind=trading").await;
+        assert_eq!(status, StatusCode::OK);
+        let position = &body["account"]["open_positions"][0];
+        assert_eq!(position["coin"], "BTC");
+        assert_eq!(position["szi"], "0.25");
+        assert_eq!(position["entry_px"], "65000");
+        assert_eq!(position["unrealized_pnl"], "12.5");
+        assert_eq!(position["liquidation_px"], "50000");
+        assert_eq!(position["margin_used"], "250");
+        assert_eq!(position["position_value"], "16250");
+        assert_eq!(position["leverage_type"], "cross");
+        assert_eq!(position["leverage_value"], 3);
+
+        let order = &body["account"]["open_orders"][0];
+        assert_eq!(order["coin"], "BTC");
+        assert_eq!(order["side"], "A");
+        assert_eq!(order["limit_px"], "70000");
+        assert_eq!(order["sz"], "0.1");
+        assert_eq!(order["orig_sz"], "0.1");
+        assert_eq!(order["oid"], "12345");
+        assert_eq!(order["cloid"], "0xabc");
+        assert_eq!(order["order_type"], "Limit");
+        assert_eq!(order["tif"], "Gtc");
+        assert_eq!(order["reduce_only"], true);
+        assert_eq!(order["is_trigger"], true);
+        assert_eq!(order["trigger_px"], "69000");
+        assert_eq!(order["trigger_condition"], "Price above");
+        assert_eq!(order["is_position_tpsl"], true);
     }
 
     #[tokio::test]
