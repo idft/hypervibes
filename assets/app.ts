@@ -150,11 +150,69 @@ function seedNumberRoll(container: HTMLElement) {
 }
 
 function setActiveMemoryTimelineItem(activeItem: HTMLElement) {
-  document
+  const root = activeItem.closest<HTMLElement>("[data-agent-memories]");
+  if (root) {
+    root.dataset.selectedMemoryId = activeItem.dataset.memoryId ?? "";
+  }
+
+  const scope = root ?? document;
+  scope
     .querySelectorAll<HTMLElement>("[data-memory-timeline-item]")
     .forEach((item) => {
       item.setAttribute("aria-pressed", item === activeItem ? "true" : "false");
     });
+}
+
+function restoreSelectedMemoryTimelineItem(root: ParentNode = document) {
+  const memoryRoots =
+    root instanceof Element && root.matches("[data-agent-memories]")
+      ? [root as HTMLElement]
+      : Array.from(root.querySelectorAll<HTMLElement>("[data-agent-memories]"));
+
+  memoryRoots.forEach((memoryRoot) => {
+    const detail = memoryRoot.querySelector<HTMLElement>("#memory-detail[data-memory-detail-id]");
+    const selectedMemoryId = detail?.dataset.memoryDetailId ?? memoryRoot.dataset.selectedMemoryId;
+    if (!selectedMemoryId) {
+      return;
+    }
+
+    memoryRoot.dataset.selectedMemoryId = selectedMemoryId;
+
+    let matched = false;
+    memoryRoot
+      .querySelectorAll<HTMLElement>("[data-memory-timeline-item]")
+      .forEach((item) => {
+        const selected = item.dataset.memoryId === selectedMemoryId;
+        matched ||= selected;
+        item.setAttribute(
+          "aria-pressed",
+          selected ? "true" : "false",
+        );
+      });
+    console.debug("memory timeline restore selection", {
+      selectedMemoryId,
+      matched,
+    });
+  });
+}
+
+function seedSelectedMemoryTimelineItems(root: ParentNode = document) {
+  const memoryRoots =
+    root instanceof Element && root.matches("[data-agent-memories]")
+      ? [root as HTMLElement]
+      : Array.from(root.querySelectorAll<HTMLElement>("[data-agent-memories]"));
+
+  memoryRoots.forEach((memoryRoot) => {
+    if (memoryRoot.dataset.selectedMemoryId) {
+      return;
+    }
+    const selectedItem = memoryRoot.querySelector<HTMLElement>(
+      '[data-memory-timeline-item][aria-pressed="true"]',
+    );
+    if (selectedItem?.dataset.memoryId) {
+      memoryRoot.dataset.selectedMemoryId = selectedItem.dataset.memoryId;
+    }
+  });
 }
 
 function loadMemoryTimelineItem(item: HTMLElement) {
@@ -315,16 +373,48 @@ function init() {
   renderTimeago();
   renderLocalDateTimes();
   initMemoryTimelineDragScroll();
+  seedSelectedMemoryTimelineItems();
+  restoreSelectedMemoryTimelineItem();
 
   document.querySelectorAll<HTMLElement>(".number-roll").forEach(seedNumberRoll);
 
   document.addEventListener("htmx:sseMessage", (e: Event) => {
     const detail = (e as CustomEvent).detail;
+    console.debug("htmx SSE message", detail?.type ?? detail?.event?.type ?? detail?.elt);
     if (detail?.type === "balance" || detail?.type === "positions") {
       setTimeout(() => {
         document.querySelectorAll<HTMLElement>(".number-roll").forEach(animateNumberRoll);
       }, 50);
     }
+    const target = detail?.elt;
+    if (target instanceof Element && target.matches('[sse-swap="memories-timeline"]')) {
+      restoreSelectedMemoryTimelineItem(target.closest("[data-agent-memories]") ?? document);
+    }
+  });
+
+  document.addEventListener("htmx:afterSwap", (e: Event) => {
+    const detail = (e as CustomEvent).detail;
+    const target = detail?.target;
+    if (!(target instanceof Element)) {
+      return;
+    }
+    if (
+      target.matches('[sse-swap="memories-timeline"]') ||
+      target.querySelector('[sse-swap="memories-timeline"]')
+    ) {
+      seedSelectedMemoryTimelineItems();
+      restoreSelectedMemoryTimelineItem();
+    }
+  });
+
+  document.addEventListener("htmx:sseOpen", (e: Event) => {
+    const detail = (e as CustomEvent).detail;
+    console.debug("htmx SSE open", detail?.elt);
+  });
+
+  document.addEventListener("htmx:sseError", (e: Event) => {
+    const detail = (e as CustomEvent).detail;
+    console.debug("htmx SSE error", detail?.error ?? detail?.source ?? detail);
   });
 
   document.addEventListener("htmx:afterRequest", (e: Event) => {
@@ -357,6 +447,8 @@ function init() {
         }
         renderTimeago(node);
         renderLocalDateTimes(node);
+        seedSelectedMemoryTimelineItems(node);
+        restoreSelectedMemoryTimelineItem(node);
         if (node instanceof HTMLElement) {
           if (node.matches(".memory-timeline-scroll")) {
             initMemoryTimelineDragScroll();

@@ -378,6 +378,13 @@ fn build_memory_timeline(
         .collect()
 }
 
+pub fn build_memory_timeline_for_sse(
+    agent_key: &str,
+    rows: &[MemoryRecord],
+) -> Vec<MemoryTimelineItem> {
+    build_memory_timeline(agent_key, rows, None)
+}
+
 #[derive(Debug, Clone)]
 pub struct SyncStateView {
     pub stream_name: String,
@@ -495,6 +502,7 @@ pub struct AgentsShowPageTemplate {
     pub memory_filter_error_text: Option<String>,
     pub selected_memory_date_text: Option<String>,
     pub selected_memory_html: String,
+    pub memory_timeline_html: String,
     pub has_memory_date_filter: bool,
     pub memory_count: usize,
     pub sync_state: Vec<SyncStateView>,
@@ -588,6 +596,7 @@ impl AgentsShowPageTemplate {
             memory_filter_error_text: None,
             selected_memory_date_text: None,
             selected_memory_html: String::new(),
+            memory_timeline_html: String::new(),
             has_memory_date_filter: false,
             memory_count: 0,
             sync_state: Vec::new(),
@@ -621,6 +630,35 @@ impl AgentsShowPageTemplate {
             .unwrap_or_default()
             .unwrap_or_default();
         self.has_memory_date_filter = !self.memory_filter_date_value.is_empty();
+        self.memory_timeline_html = AgentMemoryTimelinePartialTemplate::render_view(
+            self.memory_timeline.clone(),
+            self.memory_count,
+            self.selected_memory_date_text.clone(),
+        )
+        .unwrap_or_default();
+    }
+}
+
+#[derive(Template)]
+#[template(path = "agent_memory_timeline.html")]
+pub struct AgentMemoryTimelinePartialTemplate {
+    pub memory_timeline: Vec<MemoryTimelineItem>,
+    pub memory_count: usize,
+    pub selected_memory_date_text: Option<String>,
+}
+
+impl AgentMemoryTimelinePartialTemplate {
+    pub fn render_view(
+        memory_timeline: Vec<MemoryTimelineItem>,
+        memory_count: usize,
+        selected_memory_date_text: Option<String>,
+    ) -> Result<String, askama::Error> {
+        Self {
+            memory_timeline,
+            memory_count,
+            selected_memory_date_text,
+        }
+        .render()
     }
 }
 

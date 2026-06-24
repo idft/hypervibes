@@ -10,7 +10,7 @@ use axum::{
 use chrono::{DateTime, Duration, Utc};
 use rust_decimal::Decimal;
 use serde_json::json;
-use tracing::error;
+use tracing::{error, info};
 use uuid::Uuid;
 
 use crate::{
@@ -37,7 +37,7 @@ use crate::{
         },
     },
     memory::{CreateMemory, MemoryListFilter, MemoryRecord, store as memory_store},
-    web::AppState,
+    web::{AppState, ui_events::UiEvent},
 };
 
 /// Build the `/api/v1` sub-router. Merged into the main router in
@@ -127,6 +127,15 @@ async fn create_memory(
     let record = memory_store::insert_memory(&state.db_pool, &agent.agent_key, &input)
         .await
         .map_err(ApiError::Internal)?;
+    state.ui_events.publish(UiEvent::MemoryCreated {
+        agent_key: record.agent_key.clone(),
+        memory_id: record.id,
+    });
+    info!(
+        agent_key = %record.agent_key,
+        memory_id = %record.id,
+        "published memory created UI event"
+    );
 
     Ok((
         StatusCode::CREATED,
@@ -964,7 +973,10 @@ mod tests {
             LiveSpotBalance,
         },
         test_db,
-        web::{AppState, api},
+        web::{
+            AppState, api,
+            ui_events::{UiEvent, UiEventHub},
+        },
     };
 
     async fn test_state() -> Arc<AppState> {
@@ -979,6 +991,7 @@ mod tests {
                 ],
             ),
             live_accounts: Arc::new(crate::hyperliquid::live_state::LiveAccountStore::new()),
+            ui_events: Arc::new(UiEventHub::new()),
             hermes: None,
             hermes_dashboard_link_url: "http://127.0.0.1:19119".to_string(),
         })
@@ -1114,8 +1127,9 @@ mod tests {
     #[tokio::test]
     async fn post_memories_creates_record() {
         let state = test_state().await;
+        let mut ui_events = state.ui_events.subscribe();
 
-        let (_agent_key, api_key) = seed_agent(&state, "create").await;
+        let (agent_key, api_key) = seed_agent(&state, "create").await;
 
         let body = serde_json::json!({
             "symbol": "BTC",
@@ -1157,6 +1171,15 @@ mod tests {
         assert_eq!(body["summary"], "buy pullback");
         assert_eq!(body["metadata"]["confidence"], 0.72);
         assert!(body["id"].is_string());
+
+        let event = ui_events.recv().await.expect("memory UI event");
+        assert_eq!(
+            event,
+            UiEvent::MemoryCreated {
+                agent_key,
+                memory_id: Uuid::parse_str(body["id"].as_str().unwrap()).unwrap(),
+            }
+        );
     }
 
     #[tokio::test]

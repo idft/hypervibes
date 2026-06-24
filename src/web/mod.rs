@@ -1,6 +1,7 @@
 mod api;
 mod routes;
 mod templates;
+pub(crate) mod ui_events;
 
 use std::sync::Arc;
 
@@ -15,11 +16,14 @@ use crate::{
     hyperliquid::live_state::LiveAccountStore,
 };
 
+use self::ui_events::UiEventHub;
+
 #[derive(Clone)]
 pub struct AppState {
     pub db_pool: DbPool,
     pub encryption_key: EncryptionKey,
     pub live_accounts: Arc<LiveAccountStore>,
+    pub ui_events: Arc<UiEventHub>,
     pub hermes: Option<HermesClient>,
     pub hermes_dashboard_link_url: String,
 }
@@ -37,6 +41,7 @@ pub async fn serve(
         db_pool,
         encryption_key,
         live_accounts,
+        ui_events: Arc::new(UiEventHub::new()),
         hermes,
         hermes_dashboard_link_url,
     });

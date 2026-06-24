@@ -42,12 +42,14 @@ use crate::{
         AppState,
         templates::{
             AccountBalancePartialTemplate, AccountBalanceView, AgentListEntry,
-            AgentMemoryDetailPartialTemplate, AgentShowTab, AgentsNewPageTemplate,
-            AgentsPageTemplate, AgentsShowPageTemplate, BalanceSparklinesPartialTemplate,
-            HermesPageTemplate, MemoryView, OpenOrdersPartialTemplate, OpenOrdersView,
-            OpenPositionsPartialTemplate, OpenPositionsView, ServerErrorPageTemplate,
-            SparklineView, SyncStateView, TransactionView,
+            AgentMemoryDetailPartialTemplate, AgentMemoryTimelinePartialTemplate, AgentShowTab,
+            AgentsNewPageTemplate, AgentsPageTemplate, AgentsShowPageTemplate,
+            BalanceSparklinesPartialTemplate, HermesPageTemplate, MemoryView,
+            OpenOrdersPartialTemplate, OpenOrdersView, OpenPositionsPartialTemplate,
+            OpenPositionsView, ServerErrorPageTemplate, SparklineView, SyncStateView,
+            TransactionView,
         },
+        ui_events::UiEvent,
     },
 };
 
@@ -63,6 +65,10 @@ pub fn router(state: Arc<AppState>) -> Router {
             get(agents_show_transactions),
         )
         .route("/agents/{agent_key}/memories", get(agents_show_memories))
+        .route(
+            "/agents/{agent_key}/memories/stream",
+            get(agent_memories_stream),
+        )
         .route(
             "/agents/{agent_key}/memories/{memory_id}",
             get(agents_show_memory_detail),
@@ -173,6 +179,7 @@ async fn agents_show_memory_detail(
     let Some(agent) = get_agent(&state.db_pool, &agent_key).await? else {
         return Ok((StatusCode::NOT_FOUND, "agent not found").into_response());
     };
+    tracing::info!(agent_key = %agent.agent_key, "opened memories SSE stream");
 
     let Some(memory) = get_memory_record(&state.db_pool, &agent.agent_key, memory_id).await? else {
         return Ok((StatusCode::NOT_FOUND, "memory not found").into_response());
@@ -180,6 +187,75 @@ async fn agents_show_memory_detail(
 
     let html = AgentMemoryDetailPartialTemplate::render_view(MemoryView::from_record(memory))?;
     Ok(Html(html).into_response())
+}
+
+async fn agent_memories_stream(
+    State(state): State<Arc<AppState>>,
+    Path(agent_key): Path<String>,
+    Query(query): Query<AgentMemoriesQuery>,
+) -> Result<Response, AppError> {
+    let Some(agent) = get_agent(&state.db_pool, &agent_key).await? else {
+        return Ok((StatusCode::NOT_FOUND, "agent not found").into_response());
+    };
+
+    let (_, selected_date_text, _, since, until) = parse_memory_date_filter(&query.date);
+    let db_pool = state.db_pool.clone();
+    let agent_key = agent.agent_key.clone();
+    let agent_key_for_render = agent_key.clone();
+    let selected_date_text_filter = selected_date_text.clone();
+
+    let notifications = BroadcastStream::new(state.ui_events.subscribe())
+        .filter_map(move |item| {
+            let agent_key = agent_key.clone();
+            async move {
+                match item {
+                    Ok(UiEvent::MemoryCreated { agent_key: event_agent_key, memory_id })
+                        if event_agent_key == agent_key =>
+                    {
+                        tracing::info!(agent_key = %agent_key, memory_id = %memory_id, "memories SSE received memory event");
+                        Some(())
+                    }
+                    Ok(_) => None,
+                    Err(tokio_stream::wrappers::errors::BroadcastStreamRecvError::Lagged(_)) => {
+                        Some(())
+                    }
+                }
+            }
+        })
+        .filter_map(move |_| {
+            let db_pool = db_pool.clone();
+            let agent_key = agent_key_for_render.clone();
+            let selected_date_text = selected_date_text_filter.clone();
+            async move {
+                match render_memory_timeline_event(&db_pool, &agent_key, since, until, selected_date_text)
+                    .await
+                {
+                    Ok(event) => Some(Ok::<Event, Infallible>(event)),
+                    Err(e) => {
+                        warn!(agent_key = %agent_key, error = ?e, "failed to render memories SSE event");
+                        None
+                    }
+                }
+            }
+        });
+
+    let sse = Sse::new(notifications)
+        .keep_alive(KeepAlive::new().interval(std::time::Duration::from_secs(15)));
+    Ok(sse.into_response())
+}
+
+async fn render_memory_timeline_event(
+    pool: &crate::db::DbPool,
+    agent_key: &str,
+    since: Option<chrono::DateTime<Utc>>,
+    until: Option<chrono::DateTime<Utc>>,
+    selected_date_text: Option<String>,
+) -> Result<Event, AppError> {
+    let rows = list_agent_memories(pool, agent_key, since, until).await?;
+    let timeline = crate::web::templates::build_memory_timeline_for_sse(agent_key, &rows);
+    let html =
+        AgentMemoryTimelinePartialTemplate::render_view(timeline, rows.len(), selected_date_text)?;
+    Ok(Event::default().event("memories-timeline").data(html))
 }
 
 async fn agents_show_prompts(
@@ -778,6 +854,7 @@ mod tests {
         },
         memory::CreateMemory,
         test_db,
+        web::ui_events::UiEventHub,
     };
 
     async fn test_state() -> Arc<AppState> {
@@ -792,6 +869,7 @@ mod tests {
                 ],
             ),
             live_accounts: Arc::new(crate::hyperliquid::live_state::LiveAccountStore::new()),
+            ui_events: Arc::new(UiEventHub::new()),
             hermes: None,
             hermes_dashboard_link_url: "http://127.0.0.1:19119".to_string(),
         })
@@ -1549,6 +1627,32 @@ mod tests {
         assert!(text.contains("id=\"memory-detail\""));
         assert!(text.contains("Remember the breakout"));
         assert!(text.contains("<h3>Plan</h3>"));
+    }
+
+    #[tokio::test]
+    async fn memory_timeline_event_renders_refresh_without_selected_card() {
+        let state = test_state().await;
+        let (agent_key, _wallet_address) = insert_test_agent(&state).await.expect("insert agent");
+        seed_memory(
+            &state,
+            &agent_key,
+            "Remember the breakout",
+            "### Plan\n\nBTC reclaimed support.",
+        )
+        .await;
+
+        let event = render_memory_timeline_event(&state.db_pool, &agent_key, None, None, None)
+            .await
+            .expect("render event");
+        let text = format!("{event:?}");
+
+        assert!(text.contains("memories-timeline"));
+        assert!(text.contains("Remember the breakout"));
+        let rows = list_agent_memories(&state.db_pool, &agent_key, None, None)
+            .await
+            .expect("list memories");
+        let timeline = crate::web::templates::build_memory_timeline_for_sse(&agent_key, &rows);
+        assert!(timeline.iter().all(|item| !item.selected));
     }
 
     #[tokio::test]
