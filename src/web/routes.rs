@@ -37,14 +37,17 @@ use crate::{
             list_all_account_transactions,
         },
     },
-    memory::{get_memory as get_memory_record, list_agent_memories},
+    memory::{
+        get_latest_agent_memory_by_type, get_memory as get_memory_record, list_agent_memories,
+    },
     web::{
         AppState,
         templates::{
             AccountBalancePartialTemplate, AccountBalanceView, AgentListEntry,
             AgentMemoryDetailPartialTemplate, AgentMemoryTimelinePartialTemplate, AgentShowTab,
             AgentsNewPageTemplate, AgentsPageTemplate, AgentsShowPageTemplate,
-            BalanceSparklinesPartialTemplate, HermesPageTemplate, MemoryView,
+            BalanceSparklinesPartialTemplate, HermesPageTemplate,
+            LatestTradeExecutionSummaryPartialTemplate, MemoryView,
             OpenOrdersPartialTemplate, OpenOrdersView, OpenPositionsPartialTemplate,
             OpenPositionsView, ServerErrorPageTemplate, SparklineView, SyncStateView,
             TransactionView,
@@ -479,6 +482,17 @@ async fn populate_positions_tab(
     let open_orders_view = OpenOrdersView::from_live_state(live_snapshot.clone());
     template.open_orders_html =
         OpenOrdersPartialTemplate::render_view(open_orders_view).map_err(anyhow::Error::from)?;
+    template.latest_trade_execution_summary_html =
+        LatestTradeExecutionSummaryPartialTemplate::render_view(
+            get_latest_agent_memory_by_type(
+        &state.db_pool,
+        &agent.agent_key,
+        "trade_execution",
+    )
+    .await?
+    .map(|memory| memory.summary),
+        )
+        .map_err(anyhow::Error::from)?;
 
     let now = Utc::now();
     let since_24h = now - chrono::Duration::hours(24);
@@ -556,12 +570,12 @@ async fn delete_agent(
 /// streams were held open simultaneously.
 ///
 /// Each account mutation emits three named events on this single stream:
-/// `balance`, `positions`, and `orders`. The `data` field of each is the
+/// `balance`, `positions`, and `orders`. A companion memory-driven event,
+/// `latest-trade-execution-summary`, refreshes the Open Orders subheader when a
+/// new `trade_execution` memory arrives. The `data` field of each is the
 /// freshly rendered partial for that section, which the HTMX SSE extension
 /// routes to the matching `sse-swap="..."` element. The stream begins with
-/// an initial snapshot of all three (or `Starting`/`Loading` placeholders if
-/// no live state exists yet) and then re-emits all three on every
-/// [`LiveAccountStore`] mutation for the matching account.
+/// an initial snapshot and then re-emits updates for the matching account.
 async fn agent_live_stream(
     State(state): State<Arc<AppState>>,
     Path(agent_key): Path<String>,
@@ -587,7 +601,10 @@ async fn agent_live_stream(
             status: LiveConnectionStatus::Starting,
             ..Default::default()
         });
-    let initial_events = render_live_events(&initial_snapshot)?;
+    let mut initial_events = render_live_events(&initial_snapshot)?;
+    initial_events.push(
+        render_latest_trade_execution_summary_event(&state.db_pool, &agent.agent_key).await?,
+    );
 
     let account_key_filter = account_key.clone();
     let live_accounts_filter = Arc::clone(&live_accounts);
@@ -624,13 +641,57 @@ async fn agent_live_stream(
             tokio_stream::iter(events.into_iter().map(Ok::<Event, Infallible>))
         });
 
+    let summary_db_pool = state.db_pool.clone();
+    let summary_agent_key_filter = agent.agent_key.clone();
+    let summary_agent_key_render = agent.agent_key.clone();
+    let summary_notifications = BroadcastStream::new(state.ui_events.subscribe())
+        .filter_map(move |item| {
+            let agent_key = summary_agent_key_filter.clone();
+            async move {
+                match item {
+                    Ok(UiEvent::MemoryCreated {
+                        agent_key: event_agent_key,
+                        memory_id,
+                    }) if event_agent_key == agent_key => Some(Some(memory_id)),
+                    Ok(_) => None,
+                    Err(tokio_stream::wrappers::errors::BroadcastStreamRecvError::Lagged(_)) => {
+                        Some(None)
+                    }
+                }
+            }
+        })
+        .filter_map(move |memory_id| {
+            let db_pool = summary_db_pool.clone();
+            let agent_key = summary_agent_key_render.clone();
+            async move {
+                if let Some(memory_id) = memory_id {
+                    match get_memory_record(&db_pool, &agent_key, memory_id).await {
+                        Ok(Some(memory)) if memory.memory_type == "trade_execution" => {}
+                        Ok(Some(_)) | Ok(None) => return None,
+                        Err(error) => {
+                            warn!(agent_key = %agent_key, error = ?error, "failed to inspect memory event for live summary update");
+                            return None;
+                        }
+                    }
+                }
+
+                match render_latest_trade_execution_summary_event(&db_pool, &agent_key).await {
+                    Ok(event) => Some(Ok::<Event, Infallible>(event)),
+                    Err(error) => {
+                        warn!(agent_key = %agent_key, error = ?error, "failed to render latest trade execution summary SSE event");
+                        None
+                    }
+                }
+            }
+        });
+
     let stream = tokio_stream::iter(
         initial_events
             .into_iter()
             .map(Ok::<Event, Infallible>)
             .collect::<Vec<_>>(),
     )
-    .chain(notifications);
+    .chain(futures::stream::select(notifications, summary_notifications));
     let sse =
         Sse::new(stream).keep_alive(KeepAlive::new().interval(std::time::Duration::from_secs(15)));
     Ok(sse.into_response())
@@ -662,6 +723,19 @@ fn render_open_orders_event(state: &AccountLiveState) -> Result<Event, AppError>
     let view = OpenOrdersView::from_live_state(state.clone());
     let html = OpenOrdersPartialTemplate::render_view(view)?;
     Ok(Event::default().event("orders").data(html))
+}
+
+async fn render_latest_trade_execution_summary_event(
+    pool: &crate::db::DbPool,
+    agent_key: &str,
+) -> Result<Event, AppError> {
+    let summary = get_latest_agent_memory_by_type(pool, agent_key, "trade_execution")
+        .await?
+        .map(|memory| memory.summary);
+    let html = LatestTradeExecutionSummaryPartialTemplate::render_view(summary)?;
+    Ok(Event::default()
+        .event("latest-trade-execution-summary")
+        .data(html))
 }
 
 async fn create_agent(
@@ -942,13 +1016,23 @@ mod tests {
         summary: &str,
         content: &str,
     ) -> crate::memory::MemoryRecord {
+        seed_memory_with_type(state, agent_key, "plan", summary, content).await
+    }
+
+    async fn seed_memory_with_type(
+        state: &Arc<AppState>,
+        agent_key: &str,
+        memory_type: &str,
+        summary: &str,
+        content: &str,
+    ) -> crate::memory::MemoryRecord {
         crate::memory::insert_memory(
             &state.db_pool,
             agent_key,
             &CreateMemory {
                 symbol: "BTC".to_string(),
                 timeframe: Some("1h".to_string()),
-                memory_type: "plan".to_string(),
+                memory_type: memory_type.to_string(),
                 summary: summary.to_string(),
                 content: content.to_string(),
                 metadata: Some(serde_json::json!({ "confidence": 0.8 })),
@@ -1564,8 +1648,68 @@ mod tests {
 
         assert_eq!(response.status(), StatusCode::OK);
         let text = response_text(response).await;
-        assert!(text.contains("Full Hyperliquid account timeline"));
+        assert!(text.contains("Transactions"));
         assert!(text.contains("42.0000"));
+    }
+
+    #[tokio::test]
+    async fn agent_positions_route_renders_latest_trade_execution_summary_under_open_orders() {
+        let state = test_state().await;
+        let (agent_key, _wallet_address) = insert_test_agent(&state).await.expect("insert agent");
+        seed_memory_with_type(
+            &state,
+            &agent_key,
+            "trade_execution",
+            "Scaled out into strength",
+            "Took profit on the upper band.",
+        )
+        .await;
+        seed_memory_with_type(
+            &state,
+            &agent_key,
+            "plan",
+            "Older plan",
+            "Wait for reclaim.",
+        )
+        .await;
+
+        let response = router(state)
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/agents/{agent_key}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let text = response_text(response).await;
+        assert!(text.contains("Open orders"));
+        assert!(text.contains("Scaled out into strength"));
+        assert!(!text.contains("Older plan"));
+    }
+
+    #[tokio::test]
+    async fn latest_trade_execution_summary_event_renders_latest_summary() {
+        let state = test_state().await;
+        let (agent_key, _wallet_address) = insert_test_agent(&state).await.expect("insert agent");
+        seed_memory_with_type(
+            &state,
+            &agent_key,
+            "trade_execution",
+            "Scaled out into strength",
+            "Took profit on the upper band.",
+        )
+        .await;
+
+        let event = render_latest_trade_execution_summary_event(&state.db_pool, &agent_key)
+            .await
+            .expect("render latest trade execution summary event");
+        let text = format!("{event:?}");
+
+        assert!(text.contains("latest-trade-execution-summary"));
+        assert!(text.contains("Scaled out into strength"));
     }
 
     #[tokio::test]

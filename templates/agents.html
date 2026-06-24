@@ -24,9 +24,9 @@
                     <thead class="bg-zinc-950/60 text-left text-xs uppercase tracking-[0.16em] text-zinc-500">
                         <tr>
                             <th class="px-5 py-3 font-medium">Agent</th>
-                            <th class="px-5 py-3 font-medium">Status</th>
+                            <th class="px-5 py-3 font-medium"></th>
                             <th class="px-5 py-3 font-medium">Wallet address</th>
-                            <th class="px-5 py-3 font-medium">API key</th>
+                            <th class="px-5 py-3 font-medium">Last run</th>
                             <th class="px-5 py-3 text-right font-medium">Account balance</th>
                         </tr>
                     </thead>
@@ -35,7 +35,6 @@
                         <tr class="cursor-pointer hover:bg-zinc-900/50" onclick="window.location.href='/agents/{{ entry.row.agent_key }}'">
                             <td class="px-5 py-4 align-top">
                                 <div class="font-medium text-white">{{ entry.row.display_name }}</div>
-                                <div class="mt-1 text-xs text-zinc-500">{{ entry.row.agent_key }}</div>
                             </td>
                             <td class="px-5 py-4 align-top">
                                 {% if entry.row.enabled %}
@@ -55,7 +54,6 @@
                             <td class="px-5 py-4 align-top text-right">
                                 {% if let Some(total) = entry.account_balance.total() %}
                                 <div class="font-mono text-sm font-semibold tabular-nums text-emerald-400">{{ total.value }}</div>
-                                <div class="mt-0.5 text-[10px] uppercase tracking-[0.16em] text-zinc-500">{{ entry.account_balance.status_label() }} · USDC</div>
                                 {% else %}
                                 <span class="text-xs italic text-zinc-500">Loading…</span>
                                 {% endif %}

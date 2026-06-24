@@ -509,6 +509,7 @@ pub struct AgentsShowPageTemplate {
     pub account_balance_html: String,
     pub open_positions_html: String,
     pub open_orders_html: String,
+    pub latest_trade_execution_summary_html: String,
     pub sparklines_html: String,
     pub api_key_last_used_text: String,
     pub analysis_context_last_used_text: String,
@@ -603,6 +604,7 @@ impl AgentsShowPageTemplate {
             account_balance_html: String::new(),
             open_positions_html: String::new(),
             open_orders_html: String::new(),
+            latest_trade_execution_summary_html: String::new(),
             sparklines_html: String::new(),
         }
     }
@@ -1147,18 +1149,22 @@ impl OpenOrdersView {
             || state.margin.is_some()
             || !state.spot_balances.is_empty();
 
-        let mut indexed: Vec<(u64, &LiveOpenOrder)> = state
+        let mut indexed: Vec<(Option<rust_decimal::Decimal>, u64, &LiveOpenOrder)> = state
             .open_orders
             .iter()
-            .map(|o| (o.timestamp.unwrap_or(0), o))
+            .map(|o| (o.limit_px, o.timestamp.unwrap_or(0), o))
             .collect();
-        // Sort newest first; missing timestamps sort to the end (treated as
-        // the smallest possible value).
-        indexed.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.coin.cmp(&b.1.coin)));
+        // Sort highest price first; missing prices sort to the end. When prices
+        // match, newer orders come first, then coin for deterministic output.
+        indexed.sort_by(|a, b| {
+            b.0.cmp(&a.0)
+                .then_with(|| b.1.cmp(&a.1))
+                .then_with(|| a.2.coin.cmp(&b.2.coin))
+        });
 
         let orders: Vec<OpenOrderView> = indexed
             .into_iter()
-            .map(|(_, order)| order_view(order))
+            .map(|(_, _, order)| order_view(order))
             .collect();
 
         Self {
@@ -1235,6 +1241,18 @@ pub struct OpenOrdersPartialTemplate {
 impl OpenOrdersPartialTemplate {
     pub fn render_view(view: OpenOrdersView) -> Result<String, askama::Error> {
         Self { view }.render()
+    }
+}
+
+#[derive(Template)]
+#[template(path = "latest_trade_execution_summary.html")]
+pub struct LatestTradeExecutionSummaryPartialTemplate {
+    pub summary: Option<String>,
+}
+
+impl LatestTradeExecutionSummaryPartialTemplate {
+    pub fn render_view(summary: Option<String>) -> Result<String, askama::Error> {
+        Self { summary }.render()
     }
 }
 
@@ -1330,11 +1348,11 @@ mod tests {
         let rendered = template.render().unwrap();
         assert!(rendered.contains("<!DOCTYPE html>"));
         assert!(rendered.contains("Vibetrading Agents"));
-        assert!(rendered.contains("live"));
         assert!(!rendered.contains("Registered agents"));
         assert!(!rendered.contains("Agents persisted in the registry database."));
         assert!(rendered.contains("Account balance"));
         assert!(rendered.contains("232.6800"));
+        assert!(!rendered.contains("USDC"));
     }
 
     #[test]
@@ -1387,6 +1405,11 @@ mod tests {
         template.account_balance_html = account_balance_html;
         template.open_positions_html = open_positions_html;
         template.open_orders_html = open_orders_html;
+        template.latest_trade_execution_summary_html =
+            LatestTradeExecutionSummaryPartialTemplate::render_view(Some(
+                "Scaled out into strength".to_string(),
+            ))
+            .unwrap();
         template.sparklines_html = sparklines_html;
         let rendered = template.render().unwrap();
         assert!(rendered.contains("<!DOCTYPE html>"));
@@ -1394,6 +1417,8 @@ mod tests {
         assert!(rendered.contains("delete-modal"));
         assert!(rendered.contains("Delete agent"));
         assert!(rendered.contains("Agent sections"));
+        assert!(rendered.contains("data-agent-tabs"));
+        assert!(rendered.contains("hx-target=\"#agent-show-tab-content\""));
         assert!(rendered.contains("aria-current=\"page\""));
         assert!(rendered.contains("Transactions"));
         assert!(rendered.contains("Memories"));
@@ -1401,6 +1426,7 @@ mod tests {
         assert!(rendered.contains("Settings"));
         assert!(rendered.contains("Balance"));
         assert!(rendered.contains("Unrealized"));
+        assert!(rendered.contains("Scaled out into strength"));
     }
 
     #[test]
@@ -1832,7 +1858,7 @@ mod tests {
     }
 
     #[test]
-    fn open_orders_view_sorts_newest_first() {
+    fn open_orders_view_sorts_by_price_descending() {
         use crate::hyperliquid::live_state::{AccountLiveState, LiveOpenOrder};
         let state = AccountLiveState {
             account_address: "0xtest".to_string(),

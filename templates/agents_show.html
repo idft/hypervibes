@@ -26,22 +26,19 @@
             {% else %}
             <span class="inline-flex rounded-full border border-zinc-700 px-3 py-1.5 text-sm text-zinc-300">Disabled</span>
             {% endif %}
-            <a href="/agents" class="rounded-full border border-zinc-800 px-4 py-2 text-sm font-medium text-zinc-300 hover:border-zinc-700 hover:text-white">Back</a>
-            <button type="button" id="delete-agent-btn" class="rounded-full border border-red-900/60 bg-red-950/30 px-4 py-2 text-sm font-medium text-red-300 hover:border-red-800 hover:bg-red-950/50">
-                Delete agent
-            </button>
         </div>
     </header>
 
     <nav class="mt-2 overflow-x-auto" aria-label="Agent sections">
-        <div class="grid min-w-[48rem] grid-cols-6 gap-1 rounded-2xl border border-zinc-800 bg-[#0d0d10] p-1 sm:min-w-full">
+        <div data-agent-tabs class="relative flex min-w-[48rem] gap-1 rounded-2xl border border-zinc-800 bg-[#0d0d10] p-1 sm:min-w-full">
+            <div data-agent-tab-indicator aria-hidden="true" class="pointer-events-none absolute bottom-1 left-0 top-1 z-0 rounded-xl bg-zinc-800 opacity-0" style="transition: transform 200ms ease-out, width 200ms ease-out, opacity 200ms ease-out;"></div>
             {% for tab in tabs %}
             {% if tab.active %}
-            <a href="{{ tab.href }}" aria-current="page" class="inline-flex w-full items-center justify-center whitespace-nowrap rounded-xl bg-zinc-800 px-4 py-2 text-sm font-medium text-white">
+            <a href="{{ tab.href }}" data-agent-tab-link hx-get="{{ tab.href }}" hx-select="#agent-show-tab-content" hx-target="#agent-show-tab-content" hx-swap="outerHTML" hx-push-url="true" aria-current="page" class="relative z-10 inline-flex w-full items-center justify-center whitespace-nowrap rounded-xl px-4 py-2 text-sm font-medium text-white" style="flex: 1 1 0;">
                 {{ tab.label }}
             </a>
             {% else %}
-            <a href="{{ tab.href }}" class="inline-flex w-full items-center justify-center whitespace-nowrap rounded-xl px-4 py-2 text-sm font-medium text-zinc-400 hover:bg-zinc-900 hover:text-white">
+            <a href="{{ tab.href }}" data-agent-tab-link hx-get="{{ tab.href }}" hx-select="#agent-show-tab-content" hx-target="#agent-show-tab-content" hx-swap="outerHTML" hx-push-url="true" class="relative z-10 inline-flex w-full items-center justify-center whitespace-nowrap rounded-xl px-4 py-2 text-sm font-medium text-zinc-400 hover:text-white" style="flex: 1 1 0;">
                 {{ tab.label }}
             </a>
             {% endif %}
@@ -87,6 +84,7 @@
     </section>
     {% endif %}
 
+    <div id="agent-show-tab-content">
     {% if show_positions_tab %}
     <section class="mt-2 space-y-2" hx-ext="sse" sse-connect="/agents/{{ agent.agent_key }}/live/stream">
         <section class="rounded-2xl border border-zinc-800 bg-[#0d0d10] p-6">
@@ -103,20 +101,15 @@
 
         <section class="rounded-2xl border border-zinc-800 bg-[#0d0d10] p-6">
             <h2 class="text-lg font-medium text-white">Open orders</h2>
+            <div data-latest-trade-execution-summary sse-swap="latest-trade-execution-summary">{{ latest_trade_execution_summary_html|safe }}</div>
             <div class="mt-4" sse-swap="orders">{{ open_orders_html|safe }}</div>
         </section>
     </section>
     {% else if show_transactions_tab %}
     <section class="mt-2 space-y-2">
         <section class="rounded-2xl border border-zinc-800 bg-[#0d0d10] p-6">
-            <div class="flex items-center justify-between gap-4">
-                <div>
-                    <h2 class="text-lg font-medium text-white">Transactions</h2>
-                    <p class="mt-1 text-sm text-zinc-400">Full Hyperliquid account timeline for this agent.</p>
-                </div>
-                <a href="/agents/{{ agent.agent_key }}" class="rounded-full border border-zinc-800 px-3 py-1.5 text-sm font-medium text-zinc-300 hover:border-zinc-700 hover:text-white">
-                    Back to positions
-                </a>
+            <div>
+                <h2 class="text-lg font-medium text-white">Transactions</h2>
             </div>
             {% if transactions.is_empty() %}
             <div class="mt-4 rounded-xl border border-zinc-800 bg-zinc-950/70 p-6 text-center">
@@ -193,7 +186,7 @@
         </section>
     </section>
     {% else if show_prompts_tab %}
-    <section class="mt-2 space-y-2">
+    <section class="mt-2 space-y-2" data-agent-prompts>
         <section class="rounded-2xl border border-zinc-800 bg-[#0d0d10] p-6">
             <div class="flex items-start justify-between gap-4">
                 <div>
@@ -223,7 +216,8 @@
                 </div>
             </form>
         </section>
-
+        <textarea id="default-analysis-strategy-prompt-value" class="hidden" aria-hidden="true" tabindex="-1">{{ default_analysis_strategy_prompt }}</textarea>
+        <textarea id="default-trading-strategy-prompt-value" class="hidden" aria-hidden="true" tabindex="-1">{{ default_trading_strategy_prompt }}</textarea>
     </section>
     {% else if show_settings_tab %}
     <section class="mt-2 space-y-2">
@@ -304,14 +298,20 @@
             </div>
             {% endif %}
         </section>
+
+        <section class="rounded-2xl border border-red-900/60 bg-red-950/20 p-6">
+            <h2 class="text-lg font-medium text-white">Delete agent</h2>
+            <p class="mt-2 max-w-3xl text-sm leading-6 text-zinc-400">Remove this agent from the registry. This action cannot be undone.</p>
+            <div class="mt-6 flex justify-end">
+                <button type="button" id="delete-agent-btn" data-delete-agent-trigger class="rounded-full border border-red-900/60 bg-red-950/30 px-4 py-2 text-sm font-medium text-red-300 hover:border-red-800 hover:bg-red-950/50">
+                    Delete agent
+                </button>
+            </div>
+        </section>
     </section>
     {% endif %}
+    </div>
 </div>
-
-{% if show_prompts_tab %}
-<textarea id="default-analysis-strategy-prompt-value" class="hidden" aria-hidden="true" tabindex="-1">{{ default_analysis_strategy_prompt }}</textarea>
-<textarea id="default-trading-strategy-prompt-value" class="hidden" aria-hidden="true" tabindex="-1">{{ default_trading_strategy_prompt }}</textarea>
-{% endif %}
 
 <!-- Delete confirmation modal -->
 <div id="delete-modal" class="fixed inset-0 z-50 hidden items-center justify-center bg-black/70 backdrop-blur-sm px-4" aria-modal="true" role="dialog">
@@ -337,73 +337,288 @@
 {% block scripts %}
 <script>
     (function () {
-        const analysisTextarea = document.getElementById('analysis_prompt');
-        const tradingTextarea = document.getElementById('trading_prompt');
-        const resetAnalysisBtn = document.getElementById('reset-analysis-prompt-btn');
-        const resetTradingBtn = document.getElementById('reset-trading-prompt-btn');
-        const saveBtn = document.getElementById('save-prompts-btn');
-        const analysisDefault = document.getElementById('default-analysis-strategy-prompt-value');
-        const tradingDefault = document.getElementById('default-trading-strategy-prompt-value');
-        const originalAnalysis = analysisTextarea ? analysisTextarea.value : null;
-        const originalTrading = tradingTextarea ? tradingTextarea.value : null;
-
-        if (!analysisTextarea || !tradingTextarea || !resetAnalysisBtn || !resetTradingBtn || !saveBtn || !analysisDefault || !tradingDefault) {
-            return;
+        function normalizePathname(href) {
+            try {
+                return new URL(href, window.location.origin).pathname;
+            } catch (_) {
+                return href;
+            }
         }
 
-        function updateSaveState() {
-            const isDirty = analysisTextarea.value !== originalAnalysis || tradingTextarea.value !== originalTrading;
+        const AGENT_TAB_SLIDE_MS = 200;
 
-            saveBtn.disabled = !isDirty;
-            saveBtn.classList.toggle('hidden', !isDirty);
+        function applyAgentTabClasses(nav, activeLink) {
+            const links = nav.querySelectorAll('[data-agent-tab-link]');
+
+            links.forEach(function (link) {
+                const isActive = link === activeLink;
+                if (isActive) {
+                    link.setAttribute('aria-current', 'page');
+                    link.classList.add('text-white');
+                    link.classList.remove('text-zinc-400');
+                } else {
+                    link.removeAttribute('aria-current');
+                    link.classList.remove('text-white');
+                    link.classList.add('text-zinc-400');
+                }
+            });
         }
 
-        resetAnalysisBtn.addEventListener('click', function () {
-            analysisTextarea.value = analysisDefault.value;
+        function moveAgentTabIndicator(nav, activeLink) {
+            if (!nav) {
+                return;
+            }
+
+            const indicator = nav.querySelector('[data-agent-tab-indicator]');
+
+            if (!indicator || !activeLink) {
+                return;
+            }
+
+            indicator.style.width = activeLink.offsetWidth + 'px';
+            indicator.style.transform = 'translateX(' + activeLink.offsetLeft + 'px)';
+            indicator.classList.remove('opacity-0');
+        }
+
+        function setAgentTabActive(nav, activeLink, options) {
+            if (!nav || !activeLink) {
+                return;
+            }
+
+            const animate = !options || options.animate !== false;
+            const previousActive = nav.querySelector('[data-agent-tab-link][aria-current="page"]');
+
+            if (!animate || !previousActive || previousActive === activeLink) {
+                applyAgentTabClasses(nav, activeLink);
+                moveAgentTabIndicator(nav, activeLink);
+                return;
+            }
+
+            if (nav.dataset.agentTabTimerId) {
+                window.clearTimeout(Number(nav.dataset.agentTabTimerId));
+            }
+
+            moveAgentTabIndicator(nav, activeLink);
+
+            nav.dataset.agentTabTimerId = String(window.setTimeout(function () {
+                applyAgentTabClasses(nav, activeLink);
+                delete nav.dataset.agentTabTimerId;
+            }, AGENT_TAB_SLIDE_MS));
+        }
+
+        function syncAgentTabs() {
+            document.querySelectorAll('[data-agent-tabs]').forEach(function (nav) {
+                const links = Array.from(nav.querySelectorAll('[data-agent-tab-link]'));
+                const currentPath = window.location.pathname;
+                const activeLink = links.find(function (link) {
+                    return normalizePathname(link.getAttribute('href') || '') === currentPath;
+                }) || links.find(function (link) {
+                    return link.getAttribute('aria-current') === 'page';
+                }) || links[0] || null;
+
+                setAgentTabActive(nav, activeLink, { animate: false });
+
+                if (nav.dataset.agentTabsBound === 'true') {
+                    return;
+                }
+
+                nav.dataset.agentTabsBound = 'true';
+                nav.addEventListener('click', function (event) {
+                    const target = event.target.closest('[data-agent-tab-link]');
+                    if (!target) {
+                        return;
+                    }
+
+                    setAgentTabActive(nav, target);
+                });
+            });
+        }
+
+        function initPromptEditor() {
+            const container = document.querySelector('[data-agent-prompts]');
+            if (!container || container.dataset.agentPromptsBound === 'true') {
+                return;
+            }
+
+            const analysisTextarea = container.querySelector('#analysis_prompt');
+            const tradingTextarea = container.querySelector('#trading_prompt');
+            const resetAnalysisBtn = container.querySelector('#reset-analysis-prompt-btn');
+            const resetTradingBtn = container.querySelector('#reset-trading-prompt-btn');
+            const saveBtn = container.querySelector('#save-prompts-btn');
+            const analysisDefault = container.querySelector('#default-analysis-strategy-prompt-value');
+            const tradingDefault = container.querySelector('#default-trading-strategy-prompt-value');
+
+            if (!analysisTextarea || !tradingTextarea || !resetAnalysisBtn || !resetTradingBtn || !saveBtn || !analysisDefault || !tradingDefault) {
+                return;
+            }
+
+            container.dataset.agentPromptsBound = 'true';
+            const originalAnalysis = analysisTextarea.value;
+            const originalTrading = tradingTextarea.value;
+
+            function updateSaveState() {
+                const isDirty = analysisTextarea.value !== originalAnalysis || tradingTextarea.value !== originalTrading;
+                saveBtn.disabled = !isDirty;
+                saveBtn.classList.toggle('hidden', !isDirty);
+            }
+
+            resetAnalysisBtn.addEventListener('click', function () {
+                analysisTextarea.value = analysisDefault.value;
+                updateSaveState();
+            });
+
+            resetTradingBtn.addEventListener('click', function () {
+                tradingTextarea.value = tradingDefault.value;
+                updateSaveState();
+            });
+
+            analysisTextarea.addEventListener('input', updateSaveState);
+            tradingTextarea.addEventListener('input', updateSaveState);
             updateSaveState();
-        });
-
-        resetTradingBtn.addEventListener('click', function () {
-            tradingTextarea.value = tradingDefault.value;
-            updateSaveState();
-        });
-
-        analysisTextarea.addEventListener('input', updateSaveState);
-        tradingTextarea.addEventListener('input', updateSaveState);
-
-        updateSaveState();
-    })();
-
-    (function () {
-        const modal = document.getElementById('delete-modal');
-        const openBtn = document.getElementById('delete-agent-btn');
-        const cancelBtn = document.getElementById('cancel-delete-btn');
-
-        function openModal() {
-            modal.classList.remove('hidden');
-            modal.classList.add('flex');
         }
 
-        function closeModal() {
+        function closeDeleteModal() {
+            const modal = document.getElementById('delete-modal');
+            if (!modal) {
+                return;
+            }
+
             modal.classList.add('hidden');
             modal.classList.remove('flex');
         }
 
-        openBtn.addEventListener('click', openModal);
-        cancelBtn.addEventListener('click', closeModal);
+        function openDeleteModal() {
+            const modal = document.getElementById('delete-modal');
+            if (!modal) {
+                return;
+            }
 
-        // Close when clicking the backdrop.
-        modal.addEventListener('click', function (event) {
-            if (event.target === modal) {
-                closeModal();
+            modal.classList.remove('hidden');
+            modal.classList.add('flex');
+        }
+
+        function initDeleteModal() {
+            const modal = document.getElementById('delete-modal');
+            const cancelBtn = document.getElementById('cancel-delete-btn');
+
+            if (modal && modal.dataset.deleteModalBound !== 'true') {
+                modal.dataset.deleteModalBound = 'true';
+                modal.addEventListener('click', function (event) {
+                    if (event.target === modal) {
+                        closeDeleteModal();
+                    }
+                });
+
+                document.addEventListener('keydown', function (event) {
+                    if (event.key === 'Escape' && modal.classList.contains('flex')) {
+                        closeDeleteModal();
+                    }
+                });
+            }
+
+            if (cancelBtn && cancelBtn.dataset.deleteModalBound !== 'true') {
+                cancelBtn.dataset.deleteModalBound = 'true';
+                cancelBtn.addEventListener('click', closeDeleteModal);
+            }
+
+            document.querySelectorAll('[data-delete-agent-trigger]').forEach(function (button) {
+                if (button.dataset.deleteModalBound === 'true') {
+                    return;
+                }
+
+                button.dataset.deleteModalBound = 'true';
+                button.addEventListener('click', openDeleteModal);
+            });
+        }
+
+        function readLatestTradeExecutionSummaryValue(container) {
+            return container.innerHTML.trim();
+        }
+
+        function flashLatestTradeExecutionSummary(container) {
+            const target = container && container.firstElementChild instanceof HTMLElement ? container.firstElementChild : null;
+            if (!target || typeof target.animate !== 'function') {
+                return;
+            }
+
+            target.animate([
+                {
+                    color: 'rgb(251, 191, 36)'
+                },
+                {
+                    color: 'rgb(212, 212, 216)',
+                    offset: 0.7
+                },
+                {
+                    color: 'rgb(161, 161, 170)'
+                }
+            ], {
+                duration: 900,
+                easing: 'ease-out'
+            });
+        }
+
+        function seedLatestTradeExecutionSummary() {
+            document.querySelectorAll('[data-latest-trade-execution-summary]').forEach(function (container) {
+                container.dataset.latestTradeExecutionSummaryValue = readLatestTradeExecutionSummaryValue(container);
+                container.dataset.latestTradeExecutionSummarySeeded = 'true';
+            });
+        }
+
+        function initAgentShowPage() {
+            syncAgentTabs();
+            initPromptEditor();
+            initDeleteModal();
+            seedLatestTradeExecutionSummary();
+        }
+
+        if (document.readyState === 'loading') {
+            document.addEventListener('DOMContentLoaded', initAgentShowPage, { once: true });
+        } else {
+            initAgentShowPage();
+        }
+
+        document.addEventListener('htmx:sseMessage', function (event) {
+            const detail = event.detail;
+            const target = detail && detail.elt;
+            const eventType = detail && (detail.type || (detail.event && detail.event.type));
+            if (!(target instanceof HTMLElement) || eventType !== 'latest-trade-execution-summary') {
+                return;
+            }
+
+            if (!target.matches('[data-latest-trade-execution-summary]')) {
+                return;
+            }
+
+            const previousValue = target.dataset.latestTradeExecutionSummaryValue || readLatestTradeExecutionSummaryValue(target);
+            const wasSeeded = target.dataset.latestTradeExecutionSummarySeeded === 'true';
+
+            window.setTimeout(function () {
+                const nextValue = readLatestTradeExecutionSummaryValue(target);
+                target.dataset.latestTradeExecutionSummaryValue = nextValue;
+                target.dataset.latestTradeExecutionSummarySeeded = 'true';
+
+                if (wasSeeded && previousValue !== nextValue && nextValue) {
+                    flashLatestTradeExecutionSummary(target);
+                }
+            }, 50);
+        });
+
+        document.addEventListener('htmx:afterSwap', function (event) {
+            const detail = event.detail;
+            const target = detail && detail.target;
+            if (!(target instanceof Element)) {
+                return;
+            }
+
+            if (target.id === 'agent-show-tab-content' || target.querySelector('#agent-show-tab-content')) {
+                initAgentShowPage();
             }
         });
 
-        // Close on Escape key.
-        document.addEventListener('keydown', function (event) {
-            if (event.key === 'Escape' && modal.classList.contains('flex')) {
-                closeModal();
-            }
+        window.addEventListener('resize', syncAgentTabs);
+        window.addEventListener('popstate', function () {
+            window.setTimeout(syncAgentTabs, 0);
         });
     })();
 </script>

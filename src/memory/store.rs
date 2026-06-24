@@ -142,6 +142,29 @@ pub async fn list_agent_memories(
     Ok(rows)
 }
 
+/// Fetch the latest memory for an agent and memory type.
+pub async fn get_latest_agent_memory_by_type(
+    pool: &DbPool,
+    agent_key: &str,
+    memory_type: &str,
+) -> Result<Option<MemoryRecord>> {
+    let row = sqlx::query_as::<_, MemoryRecord>(
+        "SELECT id, created_at, agent_key, symbol, timeframe, memory_type, summary, content, metadata
+           FROM memory.records
+          WHERE agent_key = $1
+            AND memory_type = $2
+          ORDER BY created_at DESC
+          LIMIT 1",
+    )
+    .bind(agent_key)
+    .bind(memory_type)
+    .fetch_optional(pool)
+    .await
+    .context("failed to fetch latest agent memory by type")?;
+
+    Ok(row)
+}
+
 /// List newest-first candidates for the latest-per-timeframe endpoint.
 pub async fn list_latest_memory_candidates(
     pool: &DbPool,
