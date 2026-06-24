@@ -59,9 +59,8 @@ pub async fn insert_memory(
 ///
 /// Timeframe semantics (V1, see `docs/Memory.md`):
 /// - If `filter.timeframe` is `Some(_)`, filter `timeframe = $x`.
-/// - If `filter.timeframe` is `None`, filter `timeframe IS NULL` (returns the
-///   general/standing memories). There is intentionally no "all timeframes"
-///   mode in V1.
+/// - If `filter.timeframe` is `None`, no timeframe filter is applied;
+///   rows with any timeframe value (including `NULL`) are returned.
 pub async fn list_memories(
     pool: &DbPool,
     agent_key: &str,
@@ -84,8 +83,8 @@ pub async fn list_memories(
             qb.push(" AND timeframe = ").push_bind(value.clone());
         }
         None => {
-            // V1: omitted timeframe means "the general, non-timeframed memories".
-            qb.push(" AND timeframe IS NULL");
+            // Omitted timeframe means "any timeframe" (including NULL).
+            // Per-timeframe grouping is the job of /api/v1/memories/latest.
         }
     }
 
@@ -100,7 +99,7 @@ pub async fn list_memories(
         qb.push(" AND created_at < ").push_bind(until);
     }
 
-    qb.push(" ORDER BY created_at DESC LIMIT ").push_bind(limit);
+    qb.push(" ORDER BY timeframe NULLS LAST, created_at DESC LIMIT ").push_bind(limit);
 
     let rows = qb
         .build_query_as::<MemoryRecord>()
@@ -383,7 +382,7 @@ mod tests {
         assert!(rows.iter().all(|r| r.timeframe.as_deref() == Some("1h")));
         assert!(rows[0].created_at >= rows[1].created_at);
 
-        // Timeframe = None => only the NULL-timeframe row.
+        // Timeframe = None => every timeframe (including NULL) in DESC order.
         let rows = list_memories(
             &pool,
             &key,
@@ -396,8 +395,11 @@ mod tests {
         )
         .await
         .unwrap();
-        assert_eq!(rows.len(), 1);
-        assert!(rows[0].timeframe.is_none());
+        assert_eq!(rows.len(), 4);
+        assert!(
+            rows.iter().any(|r| r.timeframe.is_none()),
+            "NULL-timeframe row still in the set"
+        );
     }
 
     #[tokio::test]

@@ -289,7 +289,9 @@ Request body:
 - `metadata` is optional (defaults to `{}`).
 - `created_at` and `id` are server-generated.
 
-Returns `201` with the created record (including `id` and `created_at`).
+Returns `201` with the created record (including `id`, `created_at`, and
+`expires_at` — see `GET /api/v1/memories/latest` for the staleness
+rules).
 
 #### `GET /api/v1/memories`
 
@@ -298,22 +300,31 @@ List/roll-up the caller's own memories.
 Query parameters (all optional, combinable; each narrows the result):
 
 - `symbol` — exact match
-- `timeframe` — exact match; **if omitted, returns the general (NULL-timeframe) memories**
+- `timeframe` — exact match; **if omitted, no timeframe filter is applied (any value, including `NULL`)**
 - `memory_type` — exact match
 - `since` — only memories with `created_at >= since` (RFC 3339 timestamp)
 - `until` — only memories with `created_at < until` (RFC 3339 timestamp)
-- `limit` — max rows (default and cap to be chosen during implementation, e.g. default 50, cap 200)
+- `limit` — max rows (default 50, cap 200)
+- `include_expired` — `true`/`false` (default `false`). When `false`, rows whose `expires_at` is at or before "now" are filtered out, using the same staleness rules as `GET /api/v1/memories/latest`. Set to `true` from operator / debug tooling to inspect just-expired rows (e.g. while investigating a `[SILENT]` incident in the trading loop).
 
-Results are ordered by `created_at DESC`.
+Results are ordered by `created_at DESC` and include `expires_at`
+on every row (same staleness rules as `GET /api/v1/memories/latest`,
+`null` if the row has no implicit or explicit expiration).
 
 Retrieval semantics:
 
 - `?symbol=BTC&timeframe=1h&limit=24` — the daily loop reading the last 24 hourly memories.
 - `?symbol=BTC&timeframe=15m&limit=4` — "last 4 fifteens".
 - `?symbol=BTC&timeframe=1h&since=2026-06-15T00:00:00Z` — a time-window roll-up of hourly memories.
-- `?symbol=BTC` (no `timeframe`) — the general/standing memories for BTC (`timeframe IS NULL`).
+- `?symbol=BTC` (no `timeframe`) — every memory for BTC, any timeframe, in `created_at DESC` order. The operator's primary debug query.
+- `?symbol=BTC&memory_type=analysis` — every analysis memory for BTC, any timeframe, in `created_at DESC` order. This is the operator's primary debug query and was previously broken because the implicit `timeframe IS NULL` default filtered analysis memories out entirely.
 
-Note on omitting `timeframe`: because every cascading roll-up reads exactly one named timeframe, omitting `timeframe` is free to mean "the general, non-timeframed memories." There is intentionally **no** "all timeframes mixed" query in V1. A caller that genuinely needs multiple timeframes makes one call per timeframe. This is a deliberate tradeoff.
+Note on omitting `timeframe`: omitting it returns rows from every
+timeframe, including `NULL`. The list endpoint is unopinionated
+about timeframe; the per-timeframe "latest valid memory" grouping
+is the job of `GET /api/v1/memories/latest`. The cascading
+roll-up pattern (each timeframe reading the one below it) is still
+supported by passing an explicit `timeframe=...` to scope the read.
 
 #### `GET /api/v1/memories/latest`
 
@@ -338,15 +349,15 @@ Results:
 - are ordered newest-first by `created_at DESC`; ties are broken deterministically by `timeframe ASC`, then `id DESC`
 - return an empty array if no current rows are valid
 
-Response shape matches `GET /api/v1/memories`, with one extra field:
-
-- `expires_at` — RFC 3339 timestamp when the memory becomes stale, or `null` if the row has no expiration
-
-Stale analysis rules:
+Response shape matches `GET /api/v1/memories` exactly, including the
+`expires_at` field. Rows whose `expires_at` is at or before "now" are
+filtered out (so an expired analysis memory never reaches the
+trading loop), and the returned `expires_at` reflects the same
+staleness rules as `GET /api/v1/memories`:
 
 - if `metadata.stale_after` is present and parses as RFC 3339, it is used directly
 - else if `metadata.valid_for_seconds` is a positive number, `expires_at = created_at + valid_for_seconds`
-- else `memory_type="analysis"` falls back to timeframe defaults: `15m => 20m`, `1h => 90m`, `1d => 36h`, unknown analysis timeframe => `20m`
+- else `memory_type="analysis"` falls back to timeframe defaults: `15m => 30m`, `1h => 120m`, `1d => 48h`, unknown analysis timeframe => `30m`. These are intentionally **2x the schedule interval** so the trading loop has a one-cycle fallback if the next analysis is delayed (model latency, provider 429, missed cron tick). Newer analyses still supersede older ones, so the longer window adds tolerance, not stale signal.
 - non-analysis rows with no explicit staleness metadata currently have no implicit expiration
 
 This endpoint exists alongside `GET /api/v1/memories`; it does not change the existing omitted-`timeframe` behavior there.

@@ -165,8 +165,21 @@ async fn list_memories(
         .await
         .map_err(ApiError::Internal)?;
 
-    let bodies: Vec<MemoryRecordResponse> =
-        rows.into_iter().map(MemoryRecordResponse::from).collect();
+    // By default the list endpoint hides rows that the staleness rules
+    // consider expired (same `expires_at` rules as `/memories/latest`).
+    // Operators / debug tooling can opt in to expired rows via
+    // `?include_expired=true` so they can inspect what the just-expired
+    // analysis said during a `[SILENT]` incident.
+    let now = Utc::now();
+    let include_expired = filter.include_expired;
+    let bodies: Vec<MemoryRecordResponse> = rows
+        .into_iter()
+        .filter(|row| {
+            include_expired
+                || !memory_expires_at(row).is_some_and(|value| value <= now)
+        })
+        .map(MemoryRecordResponse::from)
+        .collect();
     Ok(Json(bodies).into_response())
 }
 
@@ -266,7 +279,7 @@ async fn list_latest_memories(
         let Some(timeframe) = row.timeframe.clone() else {
             continue;
         };
-        let expires_at = latest_memory_expires_at(&row);
+        let expires_at = memory_expires_at(&row);
         if expires_at.is_some_and(|value| value <= now) {
             continue;
         }
@@ -568,10 +581,21 @@ pub struct MemoryRecordResponse {
     pub summary: String,
     pub content: String,
     pub metadata: serde_json::Value,
+    /// RFC 3339 timestamp at which this memory becomes stale, or `null`
+    /// if the row has no explicit or implicit expiration (e.g. an
+    /// observation memory with no `valid_for_seconds` / `stale_after`).
+    ///
+    /// For `memory_type="analysis"` the same defaults documented for
+    /// `GET /api/v1/memories/latest` apply (`15m` => 30m, `1h` => 120m,
+    /// `1d` => 48h, unknown => 30m — all 2x the schedule interval so the
+    /// trading loop has a one-cycle fallback if the next analysis is
+    /// delayed).
+    pub expires_at: Option<DateTime<Utc>>,
 }
 
 impl From<MemoryRecord> for MemoryRecordResponse {
     fn from(r: MemoryRecord) -> Self {
+        let expires_at = memory_expires_at(&r);
         Self {
             id: r.id,
             created_at: r.created_at,
@@ -582,6 +606,7 @@ impl From<MemoryRecord> for MemoryRecordResponse {
             summary: r.summary,
             content: r.content,
             metadata: r.metadata,
+            expires_at,
         }
     }
 }
@@ -617,7 +642,7 @@ impl LatestMemoryResponse {
     }
 }
 
-fn latest_memory_expires_at(row: &MemoryRecord) -> Option<DateTime<Utc>> {
+fn memory_expires_at(row: &MemoryRecord) -> Option<DateTime<Utc>> {
     stale_after(&row.metadata)
         .or_else(|| {
             valid_for_seconds(&row.metadata)
@@ -667,12 +692,22 @@ fn stale_after(metadata: &serde_json::Value) -> Option<DateTime<Utc>> {
         .map(|value| value.with_timezone(&Utc))
 }
 
+/// Default validity for an analysis memory that has no explicit
+/// `valid_for_seconds` or `stale_after` in its metadata.
+///
+/// The values are intentionally **2x the schedule interval**: an analysis
+/// loop is expected to run on every schedule tick, but the next analysis
+/// may be delayed (model latency, provider 429s, a missed cron tick, etc).
+/// Keeping the memory valid for a full second cycle gives the trading
+/// loop a one-cycle fallback instead of going `[SILENT]` on the first
+/// delay. New analyses still supersede older ones, so the longer window
+/// adds tolerance, not stale signal.
 fn analysis_default_valid_for(timeframe: &str) -> Duration {
     match timeframe {
-        "15m" => Duration::minutes(20),
-        "1h" => Duration::minutes(90),
-        "1d" => Duration::hours(36),
-        _ => Duration::minutes(20),
+        "15m" => Duration::minutes(30),
+        "1h" => Duration::minutes(120),
+        "1d" => Duration::hours(48),
+        _ => Duration::minutes(30),
     }
 }
 
@@ -998,7 +1033,7 @@ mod tests {
     use axum::Router;
     use axum::body::Body;
     use axum::http::{Request, StatusCode};
-    use chrono::{Duration, Utc};
+    use chrono::{DateTime, Duration, Utc};
     use rust_decimal_macros::dec;
     use serde_json::json;
     use tower::util::ServiceExt;
@@ -1214,6 +1249,8 @@ mod tests {
         assert_eq!(body["summary"], "buy pullback");
         assert_eq!(body["metadata"]["confidence"], 0.72);
         assert!(body["id"].is_string());
+        // `plan` rows have no implicit expiration, so `expires_at` is null.
+        assert!(body["expires_at"].is_null());
 
         let event = ui_events.recv().await.expect("memory UI event");
         assert_eq!(
@@ -1222,6 +1259,98 @@ mod tests {
                 agent_key,
                 memory_id: Uuid::parse_str(body["id"].as_str().unwrap()).unwrap(),
             }
+        );
+    }
+
+    #[tokio::test]
+    async fn post_memories_response_includes_expires_at_from_valid_for_seconds() {
+        let state = test_state().await;
+        let (_agent_key, api_key) = seed_agent(&state, "create-exp").await;
+
+        let body = serde_json::json!({
+            "symbol": "BTC",
+            "timeframe": "15m",
+            "memory_type": "analysis",
+            "summary": "btc analysis",
+            "content": "body",
+            "metadata": { "valid_for_seconds": 600 }
+        });
+        let (headers, body) = json_body(&body);
+        let mut builder = Request::builder()
+            .method("POST")
+            .uri("/memories")
+            .header("authorization", format!("Bearer {api_key}"));
+        if let Some((k, v)) = headers {
+            builder = builder.header(k, v);
+        }
+        let response = app(Arc::clone(&state))
+            .oneshot(builder.body(body).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::CREATED);
+        let body_bytes = axum::body::to_bytes(response.into_body(), 64 * 1024)
+            .await
+            .unwrap();
+        let body: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
+        let expires_at = body["expires_at"]
+            .as_str()
+            .expect("expires_at should be present for analysis with valid_for_seconds");
+        let created_at: DateTime<Utc> = DateTime::parse_from_rfc3339(
+            body["created_at"].as_str().unwrap(),
+        )
+        .unwrap()
+        .with_timezone(&Utc);
+        let expires_at_parsed: DateTime<Utc> =
+            DateTime::parse_from_rfc3339(expires_at).unwrap().with_timezone(&Utc);
+        let delta = (expires_at_parsed - created_at).num_seconds();
+        assert_eq!(delta, 600, "expires_at must equal created_at + valid_for_seconds");
+    }
+
+    #[tokio::test]
+    async fn post_memories_response_uses_analysis_default_when_no_valid_for_seconds() {
+        let state = test_state().await;
+        let (_agent_key, api_key) = seed_agent(&state, "create-default-exp").await;
+
+        let body = serde_json::json!({
+            "symbol": "BTC",
+            "timeframe": "15m",
+            "memory_type": "analysis",
+            "summary": "btc analysis no meta",
+            "content": "body"
+        });
+        let (headers, body) = json_body(&body);
+        let mut builder = Request::builder()
+            .method("POST")
+            .uri("/memories")
+            .header("authorization", format!("Bearer {api_key}"));
+        if let Some((k, v)) = headers {
+            builder = builder.header(k, v);
+        }
+        let response = app(Arc::clone(&state))
+            .oneshot(builder.body(body).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::CREATED);
+        let body_bytes = axum::body::to_bytes(response.into_body(), 64 * 1024)
+            .await
+            .unwrap();
+        let body: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
+        // 15m analysis default is 30m (2x the 15m schedule interval), so
+        // expires_at = created_at + 30m.
+        let expires_at = body["expires_at"]
+            .as_str()
+            .expect("analysis with no valid_for_seconds still has a default expires_at");
+        let created_at: DateTime<Utc> = DateTime::parse_from_rfc3339(
+            body["created_at"].as_str().unwrap(),
+        )
+        .unwrap()
+        .with_timezone(&Utc);
+        let expires_at_parsed: DateTime<Utc> =
+            DateTime::parse_from_rfc3339(expires_at).unwrap().with_timezone(&Utc);
+        let delta = (expires_at_parsed - created_at).num_minutes();
+        assert_eq!(
+            delta, 30,
+            "15m analysis default validity is 30m (2x schedule interval)"
         );
     }
 
@@ -1439,7 +1568,7 @@ mod tests {
             .collect();
         assert_eq!(summaries, vec!["c", "b", "a"]);
 
-        // No timeframe => NULL-timeframe memories only.
+        // No timeframe => all timeframes (including NULL) in DESC order.
         let request = Request::builder()
             .uri("/memories?symbol=BTC")
             .header("authorization", format!("Bearer {api_key}"))
@@ -1450,9 +1579,14 @@ mod tests {
             .await
             .unwrap();
         let rows: Vec<serde_json::Value> = serde_json::from_slice(&body_bytes).unwrap();
-        assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0]["summary"], "general");
-        assert!(rows[0]["timeframe"].is_null());
+        assert_eq!(rows.len(), 4, "omitted timeframe returns all timeframes");
+        let summaries: Vec<&str> = rows
+            .iter()
+            .map(|r| r["summary"].as_str().unwrap())
+            .collect();
+        assert_eq!(summaries, vec!["c", "b", "a", "general"]);
+        let last = rows.last().expect("at least one row");
+        assert!(last["timeframe"].is_null(), "NULL-timeframe row still in the set");
 
         // Scope check: another agent must not see any of these rows.
         let (_other_key, other_api_key) = seed_agent(&state, "other").await;
@@ -1467,6 +1601,143 @@ mod tests {
             .unwrap();
         let rows: Vec<serde_json::Value> = serde_json::from_slice(&body_bytes).unwrap();
         assert!(rows.is_empty());
+    }
+
+    #[tokio::test]
+    async fn list_memories_hides_expired_by_default_and_include_expired_returns_them() {
+        let state = test_state().await;
+        let (agent_key, api_key) = seed_agent(&state, "list-expired").await;
+        let now = Utc::now();
+
+        // Fresh row: 5m old, well within the 30m default 15m analysis
+        // validity window. Must show up in both queries.
+        insert_memory_at(
+            &state,
+            &agent_key,
+            now - Duration::minutes(5),
+            "BTC",
+            Some("15m"),
+            "analysis",
+            "fresh",
+            json!({}),
+        )
+        .await;
+        // Expired row: 40m old, beyond the 30m default validity window.
+        // Must be hidden by default and visible only with include_expired.
+        insert_memory_at(
+            &state,
+            &agent_key,
+            now - Duration::minutes(40),
+            "BTC",
+            Some("15m"),
+            "analysis",
+            "expired",
+            json!({}),
+        )
+        .await;
+
+        // Default: expired row is hidden, only the fresh one is returned.
+        let (status, body) = get_json_response(
+            &state,
+            &api_key,
+            "/memories?symbol=BTC&memory_type=analysis",
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let rows = body.as_array().expect("array response");
+        assert_eq!(rows.len(), 1, "expired row hidden by default");
+        assert_eq!(rows[0]["summary"], "fresh");
+
+        // Explicit include_expired=false matches the default.
+        let (status, body) = get_json_response(
+            &state,
+            &api_key,
+            "/memories?symbol=BTC&memory_type=analysis&include_expired=false",
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let rows = body.as_array().expect("array response");
+        assert_eq!(rows.len(), 1, "include_expired=false matches default");
+        assert_eq!(rows[0]["summary"], "fresh");
+
+        // include_expired=true returns both rows, newest first.
+        let (status, body) = get_json_response(
+            &state,
+            &api_key,
+            "/memories?symbol=BTC&memory_type=analysis&include_expired=true",
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let rows = body.as_array().expect("array response");
+        assert_eq!(rows.len(), 2, "include_expired=true returns expired rows");
+        let summaries: Vec<&str> = rows
+            .iter()
+            .map(|r| r["summary"].as_str().unwrap())
+            .collect();
+        assert_eq!(summaries, vec!["fresh", "expired"]);
+    }
+
+    #[tokio::test]
+    async fn list_memories_include_expired_keeps_explicit_valid_for_seconds() {
+        let state = test_state().await;
+        let (_agent_key, api_key) = seed_agent(&state, "list-exp-explicit").await;
+        let now = Utc::now();
+
+        // Explicit valid_for_seconds=600 (10m) on a row that's 20m old.
+        // The default analysis validity window (30m) would consider it
+        // fresh, but the explicit valid_for_seconds wins, so it's expired.
+        let body = serde_json::json!({
+            "symbol": "BTC",
+            "timeframe": "15m",
+            "memory_type": "analysis",
+            "summary": "explicit-short",
+            "content": "body",
+            "metadata": { "valid_for_seconds": 600 }
+        });
+        let (headers, body) = json_body(&body);
+        let mut builder = Request::builder()
+            .method("POST")
+            .uri("/memories")
+            .header("authorization", format!("Bearer {api_key}"));
+        if let Some((k, v)) = headers {
+            builder = builder.header(k, v);
+        }
+        let response = app(Arc::clone(&state))
+            .oneshot(builder.body(body).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::CREATED);
+
+        // Backdate the row directly so the explicit 10m validity has lapsed.
+        sqlx::query("UPDATE memory.records SET created_at = $1")
+            .bind(now - Duration::minutes(20))
+            .execute(&state.db_pool)
+            .await
+            .unwrap();
+
+        // Default: hidden.
+        let (status, body) = get_json_response(
+            &state,
+            &api_key,
+            "/memories?symbol=BTC&memory_type=analysis",
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(
+            body.as_array().expect("array").len(),
+            0,
+            "explicit valid_for_seconds still hides expired row by default"
+        );
+
+        // include_expired=true: visible.
+        let (status, body) = get_json_response(
+            &state,
+            &api_key,
+            "/memories?symbol=BTC&memory_type=analysis&include_expired=true",
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body.as_array().expect("array").len(), 1);
     }
 
     #[tokio::test]
@@ -1640,10 +1911,12 @@ mod tests {
         let (agent_key, api_key) = seed_agent(&state, "latest-defaults").await;
         let now = Utc::now();
 
+        // 1d analysis default is 48h; insert 49h old to make sure it
+        // crosses the default staleness boundary.
         insert_memory_at(
             &state,
             &agent_key,
-            now - Duration::hours(37),
+            now - Duration::hours(49),
             "BTC",
             Some("1d"),
             "analysis",

@@ -398,6 +398,7 @@ function init() {
     if (!(target instanceof Element)) {
       return;
     }
+
     if (
       target.matches('[sse-swap="memories-timeline"]') ||
       target.querySelector('[sse-swap="memories-timeline"]')

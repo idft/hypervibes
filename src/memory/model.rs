@@ -74,4 +74,10 @@ pub struct MemoryListFilter {
     pub since: Option<DateTime<Utc>>,
     pub until: Option<DateTime<Utc>>,
     pub limit: Option<i64>,
+    /// If `true`, the list endpoint returns rows whose `expires_at` is at
+    /// or before "now" as well. Defaults to `false` so the trading loop
+    /// (and the default agent debug query) never sees stale analysis.
+    /// Set to `true` from operator tooling / debugging endpoints only.
+    #[serde(default)]
+    pub include_expired: bool,
 }
