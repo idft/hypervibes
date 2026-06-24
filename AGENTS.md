@@ -28,6 +28,8 @@ Frontend assets are managed with `pnpm` and built via `esbuild` and Tailwind CSS
 * Don't manually build the front-end assets.
 * Don't test web UI changes with browser-mcp.  The user will test.
 * Web server defaults to running on port 3003
+* Never start the dev webserver yourself.  The user will run it.
+* Never stop the running podman-compose
 
 ## Testing
 
@@ -36,3 +38,8 @@ Run `cargo test` from the repo root. No `podman compose`, no Docker, no external
 ## Hermes Agent Profile Distribution
 
 The Hermes Agent profile distribution is Located in `../vibetrading-hermes-profile`.  This is a  hermes profile that can be installed by any user of Hermes Agent
+
+## Coding agent Rules:
+
+* Don't guess. Consult the documentation or source code if you are unsure.
+* Never `git push` without permission
