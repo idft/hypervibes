@@ -324,13 +324,18 @@ Required query parameters:
 - `symbol` — exact match
 - `memory_type` — exact match
 
+Optional query parameters:
+
+- `limit` — positive integer; if omitted, preserve the current behavior and return every latest valid timeframe row the endpoint finds
+
 Results:
 
 - are scoped to the authenticated agent's `agent_key`
 - only consider rows with a non-null `timeframe`
 - return at most one row per timeframe
 - return the newest non-stale row for each timeframe
-- are ordered newest-first
+- if `limit` is provided, return at most `limit` rows after applying the latest-valid-per-timeframe grouping
+- are ordered newest-first by `created_at DESC`; ties are broken deterministically by `timeframe ASC`, then `id DESC`
 - return an empty array if no current rows are valid
 
 Response shape matches `GET /api/v1/memories`, with one extra field:
@@ -361,6 +366,7 @@ All errors use a simple JSON shape with an appropriate HTTP status:
 ```
 
 - `401` — missing/invalid API key
+- `400` — malformed query parameter (for example `limit=abc` or `limit=0` on `GET /api/v1/memories/latest`)
 - `404` — memory not found (or not owned by caller)
 - `422` — invalid request body / missing required field
 - `500` — unexpected server error

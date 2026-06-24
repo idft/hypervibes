@@ -179,8 +179,8 @@ pub async fn list_latest_memory_candidates(
             AND symbol = $2
             AND memory_type = $3
             AND timeframe IS NOT NULL
-          ORDER BY created_at DESC
-          LIMIT $4",
+          ORDER BY created_at DESC, timeframe ASC, id DESC
+           LIMIT $4",
     )
     .bind(agent_key)
     .bind(symbol)

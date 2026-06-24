@@ -69,6 +69,7 @@ pub fn merge(parent: Router, state: Arc<AppState>) -> Router {
 /// `{ "error": "..." }` so trading agents can parse it.
 #[derive(Debug)]
 pub enum ApiError {
+    BadRequest(String),
     NotFound(&'static str),
     Validation(String),
     BadUuid,
@@ -78,6 +79,7 @@ pub enum ApiError {
 impl ApiError {
     fn message(&self) -> String {
         match self {
+            ApiError::BadRequest(msg) => msg.clone(),
             ApiError::NotFound(msg) => (*msg).to_string(),
             ApiError::Validation(msg) => msg.clone(),
             ApiError::BadUuid => "invalid memory id".to_string(),
@@ -87,6 +89,7 @@ impl ApiError {
 
     fn status(&self) -> StatusCode {
         match self {
+            ApiError::BadRequest(_) => StatusCode::BAD_REQUEST,
             ApiError::NotFound(_) => StatusCode::NOT_FOUND,
             ApiError::Validation(_) => StatusCode::UNPROCESSABLE_ENTITY,
             ApiError::BadUuid => StatusCode::NOT_FOUND,
@@ -171,14 +174,26 @@ async fn list_memories(
 struct LatestMemoryQuery {
     symbol: Option<String>,
     memory_type: Option<String>,
+    limit: Option<String>,
+}
+
+#[derive(Debug)]
+struct LatestMemoryRequest {
+    symbol: String,
+    memory_type: String,
+    limit: Option<usize>,
 }
 
 impl LatestMemoryQuery {
-    fn validate(self) -> Result<(String, String), ApiError> {
+    fn validate(self) -> Result<LatestMemoryRequest, ApiError> {
+        let Self {
+            symbol,
+            memory_type,
+            limit,
+        } = self;
         let mut errors = Vec::new();
 
-        let symbol = self
-            .symbol
+        let symbol = symbol
             .map(|value| value.trim().to_string())
             .filter(|value| !value.is_empty())
             .or_else(|| {
@@ -186,8 +201,7 @@ impl LatestMemoryQuery {
                 None
             });
 
-        let memory_type = self
-            .memory_type
+        let memory_type = memory_type
             .map(|value| value.trim().to_string())
             .filter(|value| !value.is_empty())
             .or_else(|| {
@@ -196,10 +210,32 @@ impl LatestMemoryQuery {
             });
 
         match (symbol, memory_type) {
-            (Some(symbol), Some(memory_type)) => Ok((symbol, memory_type)),
+            (Some(symbol), Some(memory_type)) => Ok(LatestMemoryRequest {
+                symbol,
+                memory_type,
+                limit: parse_latest_memories_limit(limit.as_deref())?,
+            }),
             _ => Err(ApiError::Validation(errors.join(" "))),
         }
     }
+}
+
+fn parse_latest_memories_limit(limit: Option<&str>) -> Result<Option<usize>, ApiError> {
+    let Some(raw_limit) = limit.map(str::trim) else {
+        return Ok(None);
+    };
+
+    let value = raw_limit
+        .parse::<usize>()
+        .map_err(|_| ApiError::BadRequest("limit must be an integer >= 1".into()))?;
+
+    if value < 1 {
+        return Err(ApiError::BadRequest(
+            "limit must be an integer >= 1".into(),
+        ));
+    }
+
+    Ok(Some(value))
 }
 
 /// `GET /api/v1/memories/latest`
@@ -208,7 +244,11 @@ async fn list_latest_memories(
     agent: AuthenticatedAgent,
     Query(query): Query<LatestMemoryQuery>,
 ) -> Result<Response, ApiError> {
-    let (symbol, memory_type) = query.validate()?;
+    let LatestMemoryRequest {
+        symbol,
+        memory_type,
+        limit,
+    } = query.validate()?;
     let rows = memory_store::list_latest_memory_candidates(
         &state.db_pool,
         &agent.agent_key,
@@ -234,6 +274,9 @@ async fn list_latest_memories(
             continue;
         }
         bodies.push(LatestMemoryResponse::from_record(row, expires_at));
+        if limit.is_some_and(|value| bodies.len() >= value) {
+            break;
+        }
     }
 
     Ok(Json(bodies).into_response())
@@ -1496,6 +1539,74 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn latest_memories_applies_limit_after_grouping() {
+        let state = test_state().await;
+        let (agent_key, api_key) = seed_agent(&state, "latest-limit").await;
+        let now = Utc::now();
+
+        insert_memory_at(
+            &state,
+            &agent_key,
+            now - Duration::minutes(12),
+            "BTC",
+            Some("15m"),
+            "analysis",
+            "15m-old",
+            json!({}),
+        )
+        .await;
+        insert_memory_at(
+            &state,
+            &agent_key,
+            now - Duration::minutes(5),
+            "BTC",
+            Some("15m"),
+            "analysis",
+            "15m-new",
+            json!({}),
+        )
+        .await;
+        insert_memory_at(
+            &state,
+            &agent_key,
+            now - Duration::minutes(30),
+            "BTC",
+            Some("1h"),
+            "analysis",
+            "1h-new",
+            json!({}),
+        )
+        .await;
+        insert_memory_at(
+            &state,
+            &agent_key,
+            now - Duration::hours(4),
+            "BTC",
+            Some("1d"),
+            "analysis",
+            "1d-new",
+            json!({}),
+        )
+        .await;
+
+        let (status, body) = latest_memories_response(
+            &state,
+            &api_key,
+            "/memories/latest?symbol=BTC&memory_type=analysis&limit=2",
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+
+        let rows = body.as_array().expect("array response");
+        assert_eq!(rows.len(), 2);
+        let summaries: Vec<&str> = rows
+            .iter()
+            .map(|row| row["summary"].as_str().unwrap())
+            .collect();
+        assert_eq!(summaries, vec!["15m-new", "1h-new"]);
+    }
+
+    #[tokio::test]
     async fn latest_memories_excludes_stale_analysis() {
         let state = test_state().await;
         let (agent_key, api_key) = seed_agent(&state, "latest-stale").await;
@@ -1660,6 +1771,22 @@ mod tests {
                 .unwrap()
                 .contains("memory_type is required")
         );
+    }
+
+    #[tokio::test]
+    async fn latest_memories_rejects_invalid_limit() {
+        let state = test_state().await;
+        let (_agent_key, api_key) = seed_agent(&state, "latest-bad-limit").await;
+
+        for uri in [
+            "/memories/latest?symbol=BTC&memory_type=analysis&limit=0",
+            "/memories/latest?symbol=BTC&memory_type=analysis&limit=-1",
+            "/memories/latest?symbol=BTC&memory_type=analysis&limit=abc",
+        ] {
+            let (status, body) = latest_memories_response(&state, &api_key, uri).await;
+            assert_eq!(status, StatusCode::BAD_REQUEST);
+            assert_eq!(body["error"], "limit must be an integer >= 1");
+        }
     }
 
     #[tokio::test]
