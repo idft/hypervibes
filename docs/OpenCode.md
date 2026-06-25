@@ -1,36 +1,43 @@
-# OpenCode Agentic Runtime Plan
+# OpenCode Backend Plan
 
 Related docs:
 
+- `Backends.md` for the multi-backend execution model
 - `Agents.md` for the agent registry and account ownership model
-- `Hermes.md` for the current Hermes profile distribution model being replaced
+- `Hermes.md` for the existing Hermes backend and profile distribution model
 - `Memory.md` for analysis memory ownership and handoff semantics
 - `Hyperliquid.md` for execution gateway and account sync ownership
 
 ## Goal
 
-Replace Hermes as the agentic backend with an OpenCode server controlled by the
+Add OpenCode as a second agent execution backend alongside Hermes.
+
+OpenCode is not a Hermes replacement. It is the backend-owned, app-scheduled
+runtime option for agents that should be dispatched and observed by the
 Vibetrading backend.
 
 The intended ownership model is:
 
-- Vibetrading owns agent identity, scheduling, run state, memory, account state,
-  and order execution.
+- Vibetrading owns agent identity, scheduling for OpenCode agents, run state,
+  memory, account state, and order execution.
 - OpenCode owns LLM/tool execution inside a containerized runtime.
 - OpenCode sessions are invoked programmatically by the Vibetrading backend.
+- Hermes remains available for agents that should keep using Hermes profiles,
+  Hermes cron, persistent memory, and Hermes self-evaluation behavior.
 - Hyperliquid private keys remain backend-side and must not be exposed to
   OpenCode.
 
-This is a major architecture change and should be implemented in phases. This
-document captures the current plan, not a completed implementation.
+This is a major architecture addition and should be implemented in phases. This
+document captures the OpenCode backend plan, not a completed implementation.
 
 ## High-Level Architecture
 
-The target shape is:
+The target OpenCode path is:
 
 ```text
 Vibetrading backend
-  -> app-owned agentic scheduler
+  -> AgenticScheduler for OpenCode agents only
+  -> OpenCodeBackend adapter
   -> OpenCode HTTP API / Rust SDK
   -> OpenCode server container
   -> per-agent OpenCode project workspace
@@ -39,7 +46,7 @@ Vibetrading backend
 
 Runtime decisions so far:
 
-- run one OpenCode server container for all agents
+- run one OpenCode server container for all initial OpenCode agents
 - use one normal shared filesystem workspace volume
 - use one OpenCode project directory per Vibetrading agent
 - create a fresh OpenCode session for every scheduled run
@@ -52,6 +59,36 @@ Runtime decisions so far:
 OpenCode is not expected to be embedded in the Rust backend. OpenCode is a
 TypeScript/Bun application packaged as a standalone executable, so the practical
 integration is HTTP from Rust into a separately running server.
+
+## Backend Adapter Role
+
+OpenCode is represented in Vibetrading by the generic backend model described in
+`Backends.md`.
+
+At a high level:
+
+- each OpenCode container or deployment is one `agent_runtime` row with
+  `backend_kind = 'opencode'`
+- each OpenCode agent has `agents.runtime_id` pointing at that runtime row
+- `agents.backend_kind` is denormalized as `opencode` for fast filtering and UI
+  badges
+- OpenCode-specific per-agent settings live in `agents.runtime_config`
+- shared agent identity, memory, account state, and execution APIs remain
+  runtime-agnostic
+
+The `OpenCodeBackend` adapter is active: the `AgenticScheduler` walks OpenCode
+job schedules and dispatches due runs through this adapter.
+
+The adapter owns OpenCode-specific resolution such as:
+
+- which OpenCode project directory belongs to an agent
+- which command and OpenCode agent should be used for each `job_kind`
+- how to create a session
+- how to attach the session to the correct directory
+- how to record the underlying session reference in `agentic_runs.backend_run_ref`
+- how to report runtime metadata and health
+
+The adapter should hide these details from the generic agent registry schema.
 
 ## Runtime Profile Source
 
@@ -84,14 +121,14 @@ agent-runtime/opencode/
 ```
 
 Generated agent workspaces may contain project-local `.opencode/` directories if
-OpenCode requires that layout for command, agent, and skill discovery. The
-source of truth should still be `agent-runtime/opencode/`, not the repository
-root `.opencode/`.
+OpenCode requires that layout for command, agent, and skill discovery. The source
+of truth should still be `agent-runtime/opencode/`, not the repository root
+`.opencode/`.
 
 ## Agent Workspaces
 
-Each Vibetrading agent should get its own OpenCode project directory under a
-shared workspace volume.
+Each OpenCode-backed Vibetrading agent should get its own OpenCode project
+directory under a shared workspace volume.
 
 Proposed generated layout:
 
@@ -133,8 +170,10 @@ Git should not be initialized in agent workspaces as part of the initial plan.
 
 ## Scheduler Model
 
+OpenCode scheduling is owned by Vibetrading, unlike Hermes scheduling.
+
 The existing `AgentOrchestrator` is better understood as a Hyperliquid account
-sync and monitoring task. The OpenCode migration should introduce a separate
+sync and monitoring task. The OpenCode backend should introduce a separate
 agentic scheduler rather than mixing LLM run scheduling into the Hyperliquid
 sync loop.
 
@@ -149,20 +188,24 @@ HyperliquidAgentMonitor
     order reconciliation
 
 AgenticScheduler
-  per enabled agent schedule:
+  per enabled OpenCode agent schedule:
     due-time calculation
-    OpenCode session creation
+    OpenCodeBackend dispatch
     run status tracking
     timeout/failure handling
 ```
+
+The scheduler must only dispatch agents whose `backend_kind` is `opencode`.
+Hermes agents continue to be scheduled by the operator's Hermes cron and are
+observed through `/api/v1/job-context` check-ins.
 
 The current orchestrator may be renamed or moved later to better reflect its
 Hyperliquid-specific responsibilities.
 
 ## DB-Backed Job Schedules
 
-Agentic jobs should be DB-backed and configurable per agent. Do not hardcode only
-one analysis loop and one trading loop.
+OpenCode jobs should be DB-backed and configurable per agent. Do not hardcode
+only one analysis loop and one trading loop.
 
 Examples:
 
@@ -182,7 +225,7 @@ the whole agent.
 The job kind should derive the OpenCode command and OpenCode agent. These should
 not be schedule-configurable in the initial design.
 
-Initial mapping:
+Initial mapping inside the OpenCode adapter:
 
 ```text
 analysis -> command vibetrading-analysis, agent analysis
@@ -213,6 +256,8 @@ agentic_job_schedules
   updated_at
 ```
 
+This table is OpenCode-only at first. It does not need backend-specific columns.
+
 Recommended initial defaults:
 
 ```text
@@ -232,9 +277,10 @@ added per agent as configuration.
 
 ## Run Tracking
 
-Vibetrading should store canonical run lifecycle state in its own tables. Full
-transcripts, tool calls, token usage, and cost data should come from the
-OpenCode database plugin rather than being duplicated in Vibetrading run rows.
+Vibetrading should store canonical OpenCode run lifecycle state in its own
+tables. Full transcripts, tool calls, token usage, and cost data should come from
+the OpenCode database plugin rather than being duplicated in Vibetrading run
+rows.
 
 Proposed statuses:
 
@@ -257,10 +303,7 @@ agentic_runs
   job_key
   job_kind
   status
-  opencode_session_id
-  opencode_project_path
-  opencode_agent
-  opencode_command
+  backend_run_ref
   model_provider_id
   model_id
   scheduled_for
@@ -272,19 +315,27 @@ agentic_runs
   updated_at
 ```
 
-Even though `opencode_agent` and `opencode_command` are derived from `job_kind`,
-the resolved values should be copied into run rows for historical debugging.
+`backend_run_ref` stores the underlying OpenCode session reference or equivalent
+adapter-level identifier. The table intentionally avoids OpenCode-specific
+columns such as command, agent, project path, or session ID.
+
+The `job_kind -> command/agent` mapping lives inside the OpenCode adapter. If
+historical debugging later needs a resolved command snapshot, add it only after
+there is a concrete need.
 
 Do not copy large run context blobs into `agentic_runs` by default. Link runs to
-OpenCode plugin data with `opencode_session_id`.
+OpenCode plugin data with `backend_run_ref`.
 
 Skipped runs should be inserted, not merely logged. A skipped run represents a
 due schedule that did not start because another run for the same schedule was
 already active.
 
+This table is OpenCode-only at first. Whether Hermes activity should ever be
+folded into `agentic_runs` is deferred.
+
 ## Scheduling Semantics
 
-For each enabled schedule whose parent agent is enabled:
+For each enabled OpenCode schedule whose parent agent is enabled:
 
 ```text
 if now >= next_run_at:
@@ -294,7 +345,7 @@ if now >= next_run_at:
   else:
     insert queued run
     advance next_run_at
-    dispatch OpenCode run
+    dispatch through OpenCodeBackend
 ```
 
 Initial concurrency rule:
@@ -314,6 +365,14 @@ already in-progress OpenCode session in the initial design.
 
 ## Analysis And Trading Behavior
 
+OpenCode should be introduced conservatively.
+
+Recommended rollout order:
+
+1. Analysis jobs that can write memories.
+2. Trading jobs in dry-run or proposal mode.
+3. Real trading tools only after the OpenCode runtime has been observed in use.
+
 Analysis jobs:
 
 - may use Python
@@ -330,6 +389,22 @@ Trading jobs:
 
 The exact OpenCode skills, commands, and permissions are deferred to the runtime
 implementation phase.
+
+## Shared API Surface
+
+OpenCode agents should use the same Vibetrading API surface as Hermes agents.
+
+Shared invariants:
+
+- agents authenticate with agent-scoped API keys
+- agents only read and write their own memory
+- agents get account state through Vibetrading
+- agents place and cancel orders only through Vibetrading
+- Hyperliquid private keys never enter Hermes or OpenCode
+- runtime-specific details stay behind adapters or `agents.runtime_config`
+
+OpenCode should not receive privileged direct access to memory, account state, or
+execution paths that Hermes does not have.
 
 ## OpenCode Database Plugin
 
@@ -388,45 +463,63 @@ provider credentials. Avoid making every agent's Vibetrading API key globally
 available to all OpenCode sessions if possible. Prefer per-agent project config,
 run context, or scoped tool configuration.
 
-## Deprecated Hermes Concepts
+## Operator UX
 
-The Hermes `job-context` check-in timestamps become unnecessary once
-Vibetrading owns scheduling.
+OpenCode should appear as one available backend kind, not as the only runtime.
 
-The following agent columns should eventually be deprecated or removed from the
-OpenCode path:
+Operator-facing behavior:
 
-```text
-analysis_context_last_used_at
-trading_context_last_used_at
-analysis_prompt
-trading_prompt
-```
+- operators create or register an OpenCode runtime instance separately from
+  agents
+- creating an agent requires explicitly selecting a runtime; there is no silent
+  default
+- agents show a backend badge such as `Hermes` or `OpenCode`
+- OpenCode-backed agents show schedule and run history UI
+- Hermes-backed agents keep Hermes setup/check-in guidance
+- there is no runtime switcher in the initial design
 
-The prompt columns are replaced by `agentic_job_schedules.operator_prompt`, which
-allows separate instructions for multiple analysis or trading schedules.
+The UI should make scheduling ownership clear: OpenCode schedules are managed by
+Vibetrading, while Hermes schedules remain managed by Hermes cron.
 
-The check-in timestamp columns are replaced by `agentic_runs` and schedule status
-derived from run history.
+## Schema Direction
+
+The shared agent-side schema belongs in `Backends.md`, not this document.
+
+This document only owns OpenCode-side tables and integration concerns:
+
+- `agentic_job_schedules`
+- `agentic_runs`
+- `opencode` plugin schema
+- generated workspaces
+- OpenCode adapter behavior
+
+Agent-side changes such as `agent_runtime`, `agents.runtime_id`,
+`agents.backend_kind`, and `agents.runtime_config` are part of the generic
+backend model.
 
 ## Migration Direction
 
 Existing Hermes agent state does not need to be migrated into the OpenCode
-system. The OpenCode runtime can start fresh.
+system. The OpenCode runtime can start fresh, and Hermes agents can keep running
+unchanged.
 
 Suggested implementation phases:
 
-1. Spike OpenCode server directory-scoped project behavior.
-2. Add OpenCode container configuration for local development.
-3. Add `agentic_job_schedules` and `agentic_runs` tables.
-4. Vendor the OpenCode database plugin schema under the `opencode` schema.
-5. Add the OpenCode runtime profile source directory.
-6. Add per-agent workspace generation.
-7. Add a scheduler with a mock runtime.
-8. Wire the scheduler to OpenCode session and command execution.
-9. Enable analysis jobs first.
-10. Enable trading jobs in dry-run/proposal mode.
-11. Enable real trading tools last.
+1. Document the generic backend model in `Backends.md`.
+2. Spike OpenCode server directory-scoped project behavior.
+3. Add OpenCode container configuration for local development.
+4. Add `agent_runtime` and generic agent runtime fields when schema work begins.
+5. Add `agentic_job_schedules` and `agentic_runs` for OpenCode agents.
+6. Vendor the OpenCode database plugin schema under the `opencode` schema.
+7. Add the OpenCode runtime profile source directory.
+8. Add per-agent workspace generation.
+9. Add a scheduler with a mock OpenCode backend.
+10. Wire the scheduler to OpenCode session and command execution.
+11. Enable analysis jobs first.
+12. Enable trading jobs in dry-run/proposal mode.
+13. Enable real trading tools last.
+14. Add UI work for backend badges, per-backend setup guidance, mandatory
+    runtime picker on create, OpenCode schedules, and OpenCode run history.
 
 ## Deferred Investigation Items
 
@@ -449,3 +542,5 @@ These should be answered before implementation:
   path cleanly
 - what cleanup or retention strategy is needed for OpenCode internal data and
   plugin tables
+- whether OpenCode can safely receive per-agent Vibetrading API credentials at
+  run time without exposing all agents' credentials globally
