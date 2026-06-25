@@ -116,26 +116,44 @@ pub async fn delete_agent(pool: &DbPool, agent_key: &str) -> Result<bool> {
     Ok(result.rows_affected() > 0)
 }
 
-/// Update the operator-managed prompts for one agent.
-pub async fn update_agent_prompts(
+/// Update only the analysis strategy prompt for one agent.
+pub async fn update_agent_analysis_prompt(
     pool: &DbPool,
     agent_key: &str,
     analysis_prompt: &str,
-    trading_prompt: &str,
 ) -> Result<bool> {
     let result = sqlx::query(
         "UPDATE agents
             SET analysis_prompt = $2,
-                trading_prompt = $3,
                 updated_at = now()
           WHERE agent_key = $1",
     )
     .bind(agent_key)
     .bind(analysis_prompt)
+    .execute(pool)
+    .await
+    .context("failed to update agent analysis prompt")?;
+
+    Ok(result.rows_affected() > 0)
+}
+
+/// Update only the trading strategy prompt for one agent.
+pub async fn update_agent_trading_prompt(
+    pool: &DbPool,
+    agent_key: &str,
+    trading_prompt: &str,
+) -> Result<bool> {
+    let result = sqlx::query(
+        "UPDATE agents
+            SET trading_prompt = $2,
+                updated_at = now()
+          WHERE agent_key = $1",
+    )
+    .bind(agent_key)
     .bind(trading_prompt)
     .execute(pool)
     .await
-    .context("failed to update agent prompts")?;
+    .context("failed to update agent trading prompt")?;
 
     Ok(result.rows_affected() > 0)
 }
@@ -436,17 +454,18 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn update_agent_prompts_updates_fields_and_timestamp() {
+    async fn update_agent_analysis_prompt_updates_only_analysis_and_timestamp() {
         let pool = test_db::pool().await;
 
-        let key = format!("prompt-update-{}", Utc::now().timestamp_millis());
+        let key = format!("prompt-analysis-{}", Utc::now().timestamp_millis());
         let row = sample_agent(&key);
         insert_agent(&pool, &row).await.expect("insert agent");
 
-        let updated =
-            update_agent_prompts(&pool, &key, "New analysis prompt", "New trading prompt")
-                .await
-                .expect("update agent prompts");
+        let original_trading = row.trading_prompt.clone();
+
+        let updated = update_agent_analysis_prompt(&pool, &key, "New analysis prompt")
+            .await
+            .expect("update agent analysis prompt");
         assert!(updated);
 
         let agent = get_agent(&pool, &key)
@@ -454,17 +473,46 @@ mod tests {
             .expect("fetch")
             .expect("present");
         assert_eq!(agent.analysis_prompt, "New analysis prompt");
+        assert_eq!(agent.trading_prompt, original_trading);
+        assert!(agent.updated_at >= row.updated_at);
+    }
+
+    #[tokio::test]
+    async fn update_agent_trading_prompt_updates_only_trading_and_timestamp() {
+        let pool = test_db::pool().await;
+
+        let key = format!("prompt-trading-{}", Utc::now().timestamp_millis());
+        let row = sample_agent(&key);
+        insert_agent(&pool, &row).await.expect("insert agent");
+
+        let original_analysis = row.analysis_prompt.clone();
+
+        let updated = update_agent_trading_prompt(&pool, &key, "New trading prompt")
+            .await
+            .expect("update agent trading prompt");
+        assert!(updated);
+
+        let agent = get_agent(&pool, &key)
+            .await
+            .expect("fetch")
+            .expect("present");
+        assert_eq!(agent.analysis_prompt, original_analysis);
         assert_eq!(agent.trading_prompt, "New trading prompt");
         assert!(agent.updated_at >= row.updated_at);
     }
 
     #[tokio::test]
-    async fn update_agent_prompts_returns_false_for_missing_agent() {
+    async fn update_agent_prompts_return_false_for_missing_agent() {
         let pool = test_db::pool().await;
 
-        let updated = update_agent_prompts(&pool, "does-not-exist", "a", "b")
+        let analysis = update_agent_analysis_prompt(&pool, "does-not-exist", "a")
             .await
-            .expect("update missing agent");
-        assert!(!updated);
+            .expect("update missing agent analysis");
+        assert!(!analysis);
+
+        let trading = update_agent_trading_prompt(&pool, "does-not-exist", "b")
+            .await
+            .expect("update missing agent trading");
+        assert!(!trading);
     }
 }

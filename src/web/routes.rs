@@ -27,7 +27,7 @@ use crate::{
         prompts::{DEFAULT_ANALYSIS_STRATEGY_PROMPT, DEFAULT_TRADING_STRATEGY_PROMPT},
         store::{
             delete_agent as delete_agent_in_store, get_agent, insert_agent, list_agents,
-            update_agent_prompts,
+            update_agent_analysis_prompt, update_agent_trading_prompt,
         },
     },
     hermes::HermesHealth,
@@ -80,7 +80,15 @@ pub fn router(state: Arc<AppState>) -> Router {
         )
         .route(
             "/agents/{agent_key}/prompts",
-            get(agents_show_prompts).post(agents_update_prompts),
+            get(agents_show_prompts),
+        )
+        .route(
+            "/agents/{agent_key}/prompts/analysis",
+            post(agents_update_analysis_prompt),
+        )
+        .route(
+            "/agents/{agent_key}/prompts/trading",
+            post(agents_update_trading_prompt),
         )
         .route("/agents/{agent_key}/settings", get(agents_show_settings))
         .route("/agents/{agent_key}/delete", post(delete_agent))
@@ -292,23 +300,39 @@ async fn agents_show_prompts(
 }
 
 #[derive(Debug, Default, Deserialize)]
-struct UpdateAgentPromptsForm {
+struct UpdateAgentPromptForm {
     #[serde(default)]
-    analysis_prompt: String,
-    #[serde(default)]
-    trading_prompt: String,
+    prompt: String,
 }
 
-async fn agents_update_prompts(
+async fn agents_update_analysis_prompt(
     State(state): State<Arc<AppState>>,
     Path(agent_key): Path<String>,
-    Form(form): Form<UpdateAgentPromptsForm>,
+    Form(form): Form<UpdateAgentPromptForm>,
 ) -> Result<Response, AppError> {
-    let updated = update_agent_prompts(
+    let updated = update_agent_analysis_prompt(
         &state.db_pool,
         &agent_key,
-        form.analysis_prompt.trim(),
-        form.trading_prompt.trim(),
+        form.prompt.trim(),
+    )
+    .await?;
+
+    if !updated {
+        return Ok((StatusCode::NOT_FOUND, "agent not found").into_response());
+    }
+
+    Ok(Redirect::to(&format!("/agents/{agent_key}/prompts")).into_response())
+}
+
+async fn agents_update_trading_prompt(
+    State(state): State<Arc<AppState>>,
+    Path(agent_key): Path<String>,
+    Form(form): Form<UpdateAgentPromptForm>,
+) -> Result<Response, AppError> {
+    let updated = update_agent_trading_prompt(
+        &state.db_pool,
+        &agent_key,
+        form.prompt.trim(),
     )
     .await?;
 
@@ -2273,17 +2297,17 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn post_agent_prompts_updates_analysis_and_trading_prompt() {
+    async fn post_agent_analysis_prompt_updates_only_analysis() {
         let state = test_state().await;
         let pool = state.db_pool.clone();
         let (agent_key, _wallet_address) = insert_test_agent(&state).await.expect("insert agent");
 
-        let body = "analysis_prompt=Analyze+momentum+with+market+structure.&trading_prompt=Only+place+limit+orders+near+support.";
-        let response = router(state)
+        let body = "prompt=Analyze+momentum+with+market+structure.";
+        let response = router(state.clone())
             .oneshot(
                 Request::builder()
                     .method("POST")
-                    .uri(format!("/agents/{agent_key}/prompts"))
+                    .uri(format!("/agents/{agent_key}/prompts/analysis"))
                     .header("content-type", "application/x-www-form-urlencoded")
                     .body(Body::from(body))
                     .unwrap(),
@@ -2309,6 +2333,87 @@ mod tests {
             stored.analysis_prompt,
             "Analyze momentum with market structure."
         );
+
+        let body2 = "prompt=Original+trading+prompt.";
+        let _ = router(state)
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/agents/{agent_key}/prompts/trading"))
+                    .header("content-type", "application/x-www-form-urlencoded")
+                    .body(Body::from(body2))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        let stored = get_agent(&pool, &agent_key)
+            .await
+            .expect("get agent")
+            .expect("agent present");
+        assert_eq!(stored.trading_prompt, "Original trading prompt.");
+        assert_eq!(
+            stored.analysis_prompt,
+            "Analyze momentum with market structure."
+        );
+    }
+
+    #[tokio::test]
+    async fn post_agent_trading_prompt_updates_only_trading() {
+        let state = test_state().await;
+        let pool = state.db_pool.clone();
+        let (agent_key, _wallet_address) = insert_test_agent(&state).await.expect("insert agent");
+
+        let body = "prompt=Only+place+limit+orders+near+support.";
+        let response = router(state.clone())
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/agents/{agent_key}/prompts/trading"))
+                    .header("content-type", "application/x-www-form-urlencoded")
+                    .body(Body::from(body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::SEE_OTHER);
+        let expected_location = format!("/agents/{agent_key}/prompts");
+        assert_eq!(
+            response
+                .headers()
+                .get("location")
+                .and_then(|value| value.to_str().ok()),
+            Some(expected_location.as_str())
+        );
+
+        let stored = get_agent(&pool, &agent_key)
+            .await
+            .expect("get agent")
+            .expect("agent present");
+        assert_eq!(
+            stored.trading_prompt,
+            "Only place limit orders near support."
+        );
+
+        let body2 = "prompt=Original+analysis+prompt.";
+        let _ = router(state)
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/agents/{agent_key}/prompts/analysis"))
+                    .header("content-type", "application/x-www-form-urlencoded")
+                    .body(Body::from(body2))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        let stored = get_agent(&pool, &agent_key)
+            .await
+            .expect("get agent")
+            .expect("agent present");
+        assert_eq!(stored.analysis_prompt, "Original analysis prompt.");
         assert_eq!(
             stored.trading_prompt,
             "Only place limit orders near support."

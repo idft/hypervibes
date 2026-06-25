@@ -1585,9 +1585,12 @@ mod tests {
         assert!(rendered.contains("Strategy Prompts"));
         assert!(rendered.contains("Analysis Strategy Prompt"));
         assert!(rendered.contains("Trading Strategy Prompt"));
-        assert!(rendered.contains("reset-analysis-prompt-btn"));
-        assert!(rendered.contains("reset-trading-prompt-btn"));
-        assert!(rendered.contains("save-prompts-btn"));
+        assert!(rendered.contains("data-agent-prompt-form=\"analysis\""));
+        assert!(rendered.contains("data-agent-prompt-form=\"trading\""));
+        assert!(rendered.contains("data-agent-prompt-reset=\"analysis\""));
+        assert!(rendered.contains("data-agent-prompt-reset=\"trading\""));
+        assert!(rendered.contains("data-agent-prompt-save=\"analysis\""));
+        assert!(rendered.contains("data-agent-prompt-save=\"trading\""));
         assert!(rendered.contains("default-analysis-strategy-prompt-value"));
         assert!(rendered.contains("Default analysis validity"));
         assert!(rendered.contains("Time-in-force"));

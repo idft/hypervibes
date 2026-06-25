@@ -4,6 +4,11 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>{% block title %}Vibetrading{% endblock %}</title>
+    <link rel="icon" href="/static/favicon.ico" sizes="any">
+    <link rel="icon" type="image/png" sizes="32x32" href="/static/favicon-32x32.png">
+    <link rel="icon" type="image/png" sizes="16x16" href="/static/favicon-16x16.png">
+    <link rel="apple-touch-icon" href="/static/apple-touch-icon.png">
+    <link rel="manifest" href="/static/site.webmanifest">
     <link rel="stylesheet" href="/static/dist/app.css">
     <script src="/static/dist/app.js" type="module"></script>
 </head>
@@ -15,7 +20,7 @@
             {% block sidebar_extra %}{% endblock %}
         </aside>
 
-        <main class="flex-1 px-4 py-6 sm:px-6 lg:px-8">
+        <main class="min-w-0 flex-1 px-4 py-6 sm:px-6 lg:px-8">
             {% block content %}{% endblock %}
         </main>
     </div>
