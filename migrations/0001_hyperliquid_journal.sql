@@ -165,7 +165,7 @@ CREATE INDEX IF NOT EXISTS historical_orders_client_order_id_idx ON hyperliquid.
 
 CREATE OR REPLACE VIEW hyperliquid.account_timeline AS
 SELECT
-    hash AS event_id,
+    hash || ':' || trade_id AS event_id,
     account_address,
     environment,
     event_time,

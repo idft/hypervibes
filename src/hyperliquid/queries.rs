@@ -58,7 +58,7 @@ pub async fn list_account_transactions(
                FROM hyperliquid.account_timeline
               WHERE account_address = $1
                 AND environment = $2
-         )
+          )
          SELECT event_id,
                 event_time,
                 event_category,
@@ -112,7 +112,7 @@ pub async fn list_all_account_transactions(
                FROM hyperliquid.account_timeline
               WHERE account_address = $1
                 AND environment = $2
-         )
+          )
          SELECT event_id,
                 event_time,
                 event_category,
@@ -145,6 +145,13 @@ pub async fn list_all_account_transactions(
 pub struct BalancePoint {
     pub bucket: DateTime<Utc>,
     pub balance: Decimal,
+}
+
+#[derive(Debug, Clone, sqlx::FromRow)]
+struct BalancePointQueryRow {
+    pub bucket: DateTime<Utc>,
+    pub balance: Decimal,
+    pub sort_time: DateTime<Utc>,
 }
 
 /// Whitelisted bucket units for [`fetch_balance_series`]. Passing any
@@ -181,9 +188,10 @@ pub async fn fetch_balance_series(
     since: DateTime<Utc>,
     bucket_unit: BalanceSeriesBucket,
 ) -> Result<Vec<BalancePoint>> {
-    let rows = sqlx::query_as::<_, BalancePoint>(
+    let rows = sqlx::query_as::<_, BalancePointQueryRow>(
         "WITH ordered AS (
              SELECT event_time,
+                    event_id,
                     SUM(COALESCE(usdc_delta, 0))
                       OVER (ORDER BY event_time, event_id
                             ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)
@@ -193,24 +201,27 @@ pub async fn fetch_balance_series(
                 AND environment = $2
          ),
          anchor AS (
-             SELECT $3::timestamptz AS bucket, running_balance AS balance
+             SELECT $3::timestamptz AS bucket,
+                    running_balance AS balance,
+                    $3::timestamptz AS sort_time
                FROM ordered
               WHERE event_time < $3
-              ORDER BY event_time DESC
+              ORDER BY event_time DESC, event_id DESC
               LIMIT 1
          ),
          windowed AS (
              SELECT DISTINCT ON (date_trunc($4, event_time))
                     date_trunc($4, event_time) AS bucket,
-                    running_balance AS balance
-               FROM ordered
-              WHERE event_time >= $3
-              ORDER BY date_trunc($4, event_time), event_time DESC
+                    running_balance AS balance,
+                    event_time AS sort_time
+              FROM ordered
+             WHERE event_time >= $3
+             ORDER BY date_trunc($4, event_time), event_time DESC, event_id DESC
          )
-         SELECT bucket, balance FROM anchor
+         SELECT bucket, balance, sort_time FROM anchor
          UNION ALL
-         SELECT bucket, balance FROM windowed
-         ORDER BY bucket",
+         SELECT bucket, balance, sort_time FROM windowed
+         ORDER BY sort_time, bucket",
     )
     .bind(account_address)
     .bind(environment)
@@ -220,7 +231,13 @@ pub async fn fetch_balance_series(
     .await
     .context("failed to fetch balance series")?;
 
-    Ok(rows)
+    Ok(rows
+        .into_iter()
+        .map(|row| BalancePoint {
+            bucket: row.bucket,
+            balance: row.balance,
+        })
+        .collect())
 }
 
 /// Return sync_state rows for an account/environment.
@@ -299,7 +316,42 @@ mod tests {
         .bind(usdc)
         .execute(pool)
         .await
-        .expect("insert ledger event");
+            .expect("insert ledger event");
+    }
+
+    async fn seed_trade_fill(
+        pool: &DbPool,
+        hash: &str,
+        trade_id: &str,
+        account: &str,
+        instrument_id: &str,
+        event_time: DateTime<Utc>,
+        fee_usdc: Decimal,
+        realized_pnl_usdc: Decimal,
+    ) {
+        sqlx::query(
+            "INSERT INTO hyperliquid.trade_fills
+                (hash, account_address, environment, event_time, event_type,
+                 source_stream, instrument_id, asset, symbol, fee_usdc,
+                 realized_pnl_usdc, fill_time, direction, side, price, size,
+                 trade_value, order_id, trade_id, start_position, fee,
+                 fee_token, builder_fee, crossed, tx_hash, payload,
+                 ingest_source, inserted_at)
+             VALUES ($1, $3, 'live', $5, 'fill', 'test', $4, 'BTC', 'BTC',
+                     $6, $7, $5, 'Close Long', 'sell', 100, 1, 100,
+                     '1', $2, 0, $6, 'USDC', NULL, false, NULL, '{}',
+                     'test', NOW())",
+        )
+        .bind(hash)
+        .bind(trade_id)
+        .bind(account)
+        .bind(instrument_id)
+        .bind(event_time)
+        .bind(fee_usdc)
+        .bind(realized_pnl_usdc)
+        .execute(pool)
+        .await
+        .expect("insert trade fill");
     }
 
     #[tokio::test]
@@ -428,12 +480,6 @@ mod tests {
         assert_eq!(series[0].bucket, since);
         assert_eq!(series[0].balance, Decimal::new(50, 0));
 
-        // Subsequent points are ascending by bucket and represent the
-        // closing running balance for each hour bucket.
-        for w in series.windows(2) {
-            assert!(w[0].bucket <= w[1].bucket);
-        }
-
         // Last point equals the cumulative total across all seeded
         // events: 50 + 5 - 2 + 3 = 56.
         assert_eq!(
@@ -485,6 +531,160 @@ mod tests {
         assert_eq!(series_empty.len(), 1);
         assert_eq!(series_empty[0].bucket, future_since);
         assert_eq!(series_empty[0].balance, Decimal::new(56, 0));
+    }
+
+    #[tokio::test]
+    async fn fetch_balance_series_uses_event_id_to_close_same_timestamp_bucket() {
+        let pool = test_db::pool().await;
+        let suffix = format!(
+            "bs-tie-{}",
+            chrono::Utc::now().timestamp_nanos_opt().unwrap_or(0)
+        );
+        let account = format!("0x{suffix}");
+        let _ = seed_instrument(&pool, &suffix).await;
+
+        let anchor_time = Utc::now() - Duration::hours(3);
+        seed_ledger_event(
+            &pool,
+            &format!("{suffix}-anchor"),
+            &account,
+            anchor_time,
+            Decimal::new(100, 0),
+        )
+        .await;
+
+        let event_time = truncate_to_micros(Utc::now() - Duration::hours(1));
+        seed_ledger_event(
+            &pool,
+            &format!("{suffix}-a"),
+            &account,
+            event_time,
+            Decimal::new(5, 0),
+        )
+        .await;
+        seed_ledger_event(
+            &pool,
+            &format!("{suffix}-z"),
+            &account,
+            event_time,
+            Decimal::new(-25, 0),
+        )
+        .await;
+
+        let series = fetch_balance_series(
+            &pool,
+            &account,
+            "live",
+            truncate_to_micros(Utc::now() - Duration::hours(2)),
+            BalanceSeriesBucket::Hour,
+        )
+        .await
+        .expect("fetch hourly series");
+
+        assert_eq!(series.len(), 2);
+        assert_eq!(series[0].balance, Decimal::new(100, 0));
+        assert_eq!(series[1].balance, Decimal::new(80, 0));
+    }
+
+    #[tokio::test]
+    async fn fetch_balance_series_orders_mid_bucket_anchor_before_window_bucket_close() {
+        let pool = test_db::pool().await;
+        let suffix = format!(
+            "bs-order-{}",
+            chrono::Utc::now().timestamp_nanos_opt().unwrap_or(0)
+        );
+        let account = format!("0x{suffix}");
+        let _ = seed_instrument(&pool, &suffix).await;
+
+        let now = truncate_to_micros(Utc::now());
+        let since = now - Duration::hours(24);
+        let before_since = since - Duration::minutes(1);
+        let after_since_same_hour = since + Duration::minutes(10);
+
+        seed_ledger_event(
+            &pool,
+            &format!("{suffix}-anchor"),
+            &account,
+            before_since,
+            Decimal::new(100, 0),
+        )
+        .await;
+        seed_ledger_event(
+            &pool,
+            &format!("{suffix}-loss"),
+            &account,
+            after_since_same_hour,
+            Decimal::new(-25, 0),
+        )
+        .await;
+
+        let series = fetch_balance_series(&pool, &account, "live", since, BalanceSeriesBucket::Hour)
+            .await
+            .expect("fetch hourly series");
+
+        assert_eq!(series.len(), 2);
+        assert_eq!(series[0].bucket, since);
+        assert_eq!(series[0].balance, Decimal::new(100, 0));
+        assert_eq!(series[1].balance, Decimal::new(75, 0));
+    }
+
+    #[tokio::test]
+    async fn fetch_balance_series_counts_same_hash_fills_by_trade_id() {
+        let pool = test_db::pool().await;
+        let suffix = format!(
+            "bs-fill-hash-{}",
+            chrono::Utc::now().timestamp_nanos_opt().unwrap_or(0)
+        );
+        let account = format!("0x{suffix}");
+        let instrument_id = seed_instrument(&pool, &suffix).await;
+
+        let now = truncate_to_micros(Utc::now());
+        let since = now - Duration::hours(24);
+        seed_ledger_event(
+            &pool,
+            &format!("{suffix}-anchor"),
+            &account,
+            since - Duration::minutes(1),
+            Decimal::new(100, 0),
+        )
+        .await;
+
+        let fill_time = since + Duration::minutes(10);
+        seed_trade_fill(
+            &pool,
+            &format!("{suffix}-same-hash"),
+            "1",
+            &account,
+            &instrument_id,
+            fill_time,
+            Decimal::new(1, 0),
+            Decimal::new(-4, 0),
+        )
+        .await;
+        seed_trade_fill(
+            &pool,
+            &format!("{suffix}-same-hash"),
+            "2",
+            &account,
+            &instrument_id,
+            fill_time,
+            Decimal::new(2, 0),
+            Decimal::new(-8, 0),
+        )
+        .await;
+
+        let rows = list_account_transactions(&pool, &account, "live", 10)
+            .await
+            .expect("list transactions");
+        assert_eq!(rows[0].running_balance, Some(Decimal::new(85, 0)));
+
+        let series = fetch_balance_series(&pool, &account, "live", since, BalanceSeriesBucket::Hour)
+            .await
+            .expect("fetch hourly series");
+
+        assert_eq!(series.len(), 2);
+        assert_eq!(series[0].balance, Decimal::new(100, 0));
+        assert_eq!(series[1].balance, Decimal::new(85, 0));
     }
 
     /// PostgreSQL `timestamptz` only has microsecond precision, so any
