@@ -13,6 +13,7 @@ use axum::{
 };
 use chrono::Utc;
 use futures::StreamExt;
+use rust_decimal::Decimal;
 use serde::Deserialize;
 use serde::Serialize;
 use tokio_stream::wrappers::BroadcastStream;
@@ -33,29 +34,28 @@ use crate::{
     hyperliquid::{
         live_state::{AccountKey, AccountLiveState, LiveConnectionStatus},
         queries::{
-            BalanceSeriesBucket, fetch_balance_series, list_account_sync_state,
-            list_all_account_transactions,
+            AccountTransactionRow, BalanceSeriesBucket, fetch_balance_series,
+            list_account_sync_state, list_all_account_transactions,
         },
     },
     memory::{
         get_latest_agent_memory_by_type, get_memory as get_memory_record, list_agent_memories,
         memory_expires_at,
     },
-        web::{
-            AppState,
-            templates::{
-                AccountBalancePartialTemplate, AccountBalanceView, AgentListEntry,
-                AgentMemoryDetailPageTemplate, AgentMemoryDetailPartialTemplate,
-                AgentMemoryTimelinePartialTemplate, AgentShowTab, AgentsNewPageTemplate,
-                AgentsPageTemplate, AgentsShowPageTemplate, BalanceSparklinesPartialTemplate,
-                HermesPageTemplate, LatestAnalysisSummaryPartialTemplate,
-                LatestTradeExecutionSummaryPartialTemplate, MemoryView,
-                OpenOrdersPartialTemplate, OpenOrdersView, OpenPositionsPartialTemplate,
-                OpenPositionsView, ServerErrorPageTemplate, SparklineView, SyncStateView,
-                TransactionView,
-            },
-            ui_events::UiEvent,
+    web::{
+        AppState,
+        templates::{
+            AccountBalancePartialTemplate, AccountBalanceView, AgentListEntry,
+            AgentMemoryDetailPageTemplate, AgentMemoryDetailPartialTemplate,
+            AgentMemoryTimelinePartialTemplate, AgentShowTab, AgentsNewPageTemplate,
+            AgentsPageTemplate, AgentsShowPageTemplate, BalanceSparklinesPartialTemplate,
+            HermesPageTemplate, LatestAnalysisSummaryPartialTemplate,
+            LatestTradeExecutionSummaryPartialTemplate, MemoryView, OpenOrdersPartialTemplate,
+            OpenOrdersView, OpenPositionsPartialTemplate, OpenPositionsView,
+            ServerErrorPageTemplate, SparklineView, SyncStateView, TransactionView,
         },
+        ui_events::UiEvent,
+    },
 };
 
 pub fn router(state: Arc<AppState>) -> Router {
@@ -202,11 +202,8 @@ async fn agents_show_memory_detail(
     }
 
     let memory_detail_html = AgentMemoryDetailPartialTemplate::render_view(memory_view.clone())?;
-    let html = AgentMemoryDetailPageTemplate::render_view(
-        agent.clone(),
-        memory_view,
-        memory_detail_html,
-    )?;
+    let html =
+        AgentMemoryDetailPageTemplate::render_view(agent.clone(), memory_view, memory_detail_html)?;
     Ok(Html(html).into_response())
 }
 
@@ -353,7 +350,10 @@ async fn render_agent_show_page(
             )
             .await
             {
-                Ok(rows) => rows.into_iter().map(TransactionView::from_row).collect(),
+                Ok(mut rows) => {
+                    apply_live_cash_balance_anchor(state, &agent, &mut rows);
+                    rows.into_iter().map(TransactionView::from_row).collect()
+                }
                 Err(error) => {
                     warn!(
                         agent_key = %agent.agent_key,
@@ -412,6 +412,62 @@ async fn render_agent_show_page(
     }
 
     Ok(Html(template.render()?).into_response())
+}
+
+fn apply_live_cash_balance_anchor(
+    state: &Arc<AppState>,
+    agent: &crate::agents::model::AgentDetailRow,
+    rows: &mut [AccountTransactionRow],
+) {
+    let Some(latest_running_balance) = rows.first().and_then(|row| row.running_balance) else {
+        return;
+    };
+    let account_key = AccountKey::new(&agent.wallet_address, &agent.environment);
+    let Some(snapshot) = state.live_accounts.get(&account_key) else {
+        return;
+    };
+    let Some(live_cash_balance) = live_cash_balance(&snapshot) else {
+        return;
+    };
+
+    let adjustment = live_cash_balance - latest_running_balance;
+    for row in rows {
+        if let Some(running_balance) = row.running_balance {
+            row.running_balance = Some(running_balance + adjustment);
+        }
+    }
+}
+
+fn live_cash_balance(state: &AccountLiveState) -> Option<Decimal> {
+    let perps_account_value = state
+        .margin
+        .as_ref()
+        .and_then(|margin| margin.account_value)
+        .filter(|value| !value.is_sign_negative());
+    let unrealized_pnl = state
+        .open_positions
+        .iter()
+        .filter_map(|position| position.unrealized_pnl)
+        .fold(Decimal::ZERO, |acc, value| acc + value);
+    let perps_cash = perps_account_value.map(|value| value - unrealized_pnl);
+
+    let spot_usdc = state
+        .spot_balances
+        .iter()
+        .find(|balance| balance.coin.eq_ignore_ascii_case("USDC"));
+    let spot_usdc_available = spot_usdc
+        .and_then(|balance| balance.available)
+        .filter(|value| !value.is_sign_negative());
+    let spot_usdc_total = spot_usdc
+        .and_then(|balance| balance.total)
+        .filter(|value| !value.is_sign_negative());
+
+    match (perps_cash, spot_usdc_available) {
+        (Some(perps), Some(spot_available)) => Some(perps + spot_available),
+        (Some(perps), None) => Some(perps),
+        (None, Some(spot_available)) => Some(spot_available),
+        (None, None) => spot_usdc_total,
+    }
 }
 
 fn parse_memory_date_filter(
@@ -514,8 +570,12 @@ async fn populate_positions_tab(
             .await?;
     template.latest_trade_execution_summary_html =
         LatestTradeExecutionSummaryPartialTemplate::render_view(
-            latest_trade_execution.as_ref().map(|memory| memory.summary.clone()),
-            latest_trade_execution.as_ref().map(|memory| memory.created_at),
+            latest_trade_execution
+                .as_ref()
+                .map(|memory| memory.summary.clone()),
+            latest_trade_execution
+                .as_ref()
+                .map(|memory| memory.created_at),
         )
         .map_err(anyhow::Error::from)?;
 
@@ -524,14 +584,15 @@ async fn populate_positions_tab(
     let analysis_detail_url = latest_analysis
         .as_ref()
         .map(|memory| format!("/agents/{}/memories/{}", agent.agent_key, memory.id));
-    template.latest_analysis_summary_html =
-        LatestAnalysisSummaryPartialTemplate::render_view(
-            latest_analysis.as_ref().map(|memory| memory.summary.clone()),
-            analysis_detail_url,
-            latest_analysis.as_ref().map(|memory| memory.created_at),
-            latest_analysis.as_ref().and_then(memory_expires_at),
-        )
-        .map_err(anyhow::Error::from)?;
+    template.latest_analysis_summary_html = LatestAnalysisSummaryPartialTemplate::render_view(
+        latest_analysis
+            .as_ref()
+            .map(|memory| memory.summary.clone()),
+        analysis_detail_url,
+        latest_analysis.as_ref().map(|memory| memory.created_at),
+        latest_analysis.as_ref().and_then(memory_expires_at),
+    )
+    .map_err(anyhow::Error::from)?;
 
     let now = Utc::now();
     let since_24h = now - chrono::Duration::hours(24);
@@ -648,12 +709,10 @@ async fn agent_live_stream(
             ..Default::default()
         });
     let mut initial_events = render_live_events(&initial_snapshot)?;
-    initial_events.push(
-        render_latest_trade_execution_summary_event(&state.db_pool, &agent.agent_key).await?,
-    );
-    initial_events.push(
-        render_latest_analysis_summary_event(&state.db_pool, &agent.agent_key).await?,
-    );
+    initial_events
+        .push(render_latest_trade_execution_summary_event(&state.db_pool, &agent.agent_key).await?);
+    initial_events
+        .push(render_latest_analysis_summary_event(&state.db_pool, &agent.agent_key).await?);
 
     let account_key_filter = account_key.clone();
     let live_accounts_filter = Arc::clone(&live_accounts);
@@ -764,7 +823,10 @@ async fn agent_live_stream(
             .map(Ok::<Event, Infallible>)
             .collect::<Vec<_>>(),
     )
-    .chain(futures::stream::select(notifications, summary_notifications));
+    .chain(futures::stream::select(
+        notifications,
+        summary_notifications,
+    ));
     let sse =
         Sse::new(stream).keep_alive(KeepAlive::new().interval(std::time::Duration::from_secs(15)));
     Ok(sse.into_response())
@@ -823,14 +885,9 @@ async fn render_latest_analysis_summary_event(
     let created_at = latest.as_ref().map(|memory| memory.created_at);
     let expires_at = latest.as_ref().and_then(memory_expires_at);
     let html = LatestAnalysisSummaryPartialTemplate::render_view(
-        summary,
-        detail_url,
-        created_at,
-        expires_at,
+        summary, detail_url, created_at, expires_at,
     )?;
-    Ok(Event::default()
-        .event("latest-analysis-summary")
-        .data(html))
+    Ok(Event::default().event("latest-analysis-summary").data(html))
 }
 
 async fn create_agent(
@@ -1748,6 +1805,76 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn agent_transactions_route_anchors_running_balance_to_live_cash_balance() {
+        let state = test_state().await;
+        let (agent_key, wallet_address) = insert_test_agent(&state).await.expect("insert agent");
+        seed_ledger_event(
+            &state,
+            &wallet_address,
+            &format!(
+                "tx-anchor-{}",
+                Utc::now().timestamp_nanos_opt().unwrap_or(0)
+            ),
+            Utc::now(),
+            Decimal::new(42, 0),
+        )
+        .await;
+
+        let account_key = AccountKey::new(&wallet_address, "live");
+        state.live_accounts.replace(
+            account_key,
+            AccountLiveState {
+                account_address: wallet_address.clone(),
+                environment: "live".to_string(),
+                spot_balances: vec![crate::hyperliquid::live_state::LiveSpotBalance {
+                    coin: "USDC".to_string(),
+                    total: Some(Decimal::new(420017, 4)),
+                    available: Some(Decimal::new(420017, 4)),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            },
+        );
+
+        let response = router(state)
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/agents/{agent_key}/transactions"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let text = response_text(response).await;
+        assert!(text.contains("42.0000"));
+        assert!(text.contains("42.0017"));
+    }
+
+    #[test]
+    fn live_cash_balance_excludes_unrealized_pnl() {
+        let state = AccountLiveState {
+            margin: Some(crate::hyperliquid::live_state::LiveMarginState {
+                account_value: Some(Decimal::new(110, 0)),
+                ..Default::default()
+            }),
+            spot_balances: vec![crate::hyperliquid::live_state::LiveSpotBalance {
+                coin: "USDC".to_string(),
+                available: Some(Decimal::new(5, 0)),
+                ..Default::default()
+            }],
+            open_positions: vec![crate::hyperliquid::live_state::LivePosition {
+                unrealized_pnl: Some(Decimal::new(10, 0)),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+
+        assert_eq!(live_cash_balance(&state), Some(Decimal::new(105, 0)));
+    }
+
+    #[tokio::test]
     async fn agent_positions_route_renders_latest_trade_execution_summary_under_open_orders() {
         let state = test_state().await;
         let (agent_key, _wallet_address) = insert_test_agent(&state).await.expect("insert agent");
@@ -1939,11 +2066,20 @@ mod tests {
         let text = format!("{event:?}");
 
         assert!(text.contains("Stale breakout call"));
-        assert!(text.contains("text-amber-400"), "expired analysis should turn the timestamp amber");
-        assert!(text.contains("(expired"), "expired analysis should annotate the title");
+        assert!(
+            text.contains("text-amber-400"),
+            "expired analysis should turn the timestamp amber"
+        );
+        assert!(
+            text.contains("(expired"),
+            "expired analysis should annotate the title"
+        );
         // The inline warning triangle is the visual signal that the
         // analysis has aged past `valid_for_seconds` / `stale_after`.
-        assert!(text.contains("viewBox=\\\"0 0 20 20\\\""), "expired analysis should render a warning icon");
+        assert!(
+            text.contains("viewBox=\\\"0 0 20 20\\\""),
+            "expired analysis should render a warning icon"
+        );
     }
 
     #[tokio::test]
@@ -2070,7 +2206,10 @@ mod tests {
         let response = router(state)
             .oneshot(
                 Request::builder()
-                    .uri(format!("/agents/{agent_key}/memories/{}", uuid::Uuid::new_v4()))
+                    .uri(format!(
+                        "/agents/{agent_key}/memories/{}",
+                        uuid::Uuid::new_v4()
+                    ))
                     .body(Body::empty())
                     .unwrap(),
             )

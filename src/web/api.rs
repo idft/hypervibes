@@ -176,10 +176,7 @@ async fn list_memories(
     let include_expired = filter.include_expired;
     let bodies: Vec<MemoryRecordResponse> = rows
         .into_iter()
-        .filter(|row| {
-            include_expired
-                || !memory_expires_at(row).is_some_and(|value| value <= now)
-        })
+        .filter(|row| include_expired || !memory_expires_at(row).is_some_and(|value| value <= now))
         .map(MemoryRecordResponse::from)
         .collect();
     Ok(Json(bodies).into_response())
@@ -245,9 +242,7 @@ fn parse_latest_memories_limit(limit: Option<&str>) -> Result<Option<usize>, Api
         .map_err(|_| ApiError::BadRequest("limit must be an integer >= 1".into()))?;
 
     if value < 1 {
-        return Err(ApiError::BadRequest(
-            "limit must be an integer >= 1".into(),
-        ));
+        return Err(ApiError::BadRequest("limit must be an integer >= 1".into()));
     }
 
     Ok(Some(value))
@@ -1228,15 +1223,18 @@ mod tests {
         let expires_at = body["expires_at"]
             .as_str()
             .expect("expires_at should be present for analysis with valid_for_seconds");
-        let created_at: DateTime<Utc> = DateTime::parse_from_rfc3339(
-            body["created_at"].as_str().unwrap(),
-        )
-        .unwrap()
-        .with_timezone(&Utc);
-        let expires_at_parsed: DateTime<Utc> =
-            DateTime::parse_from_rfc3339(expires_at).unwrap().with_timezone(&Utc);
+        let created_at: DateTime<Utc> =
+            DateTime::parse_from_rfc3339(body["created_at"].as_str().unwrap())
+                .unwrap()
+                .with_timezone(&Utc);
+        let expires_at_parsed: DateTime<Utc> = DateTime::parse_from_rfc3339(expires_at)
+            .unwrap()
+            .with_timezone(&Utc);
         let delta = (expires_at_parsed - created_at).num_seconds();
-        assert_eq!(delta, 600, "expires_at must equal created_at + valid_for_seconds");
+        assert_eq!(
+            delta, 600,
+            "expires_at must equal created_at + valid_for_seconds"
+        );
     }
 
     #[tokio::test]
@@ -1273,13 +1271,13 @@ mod tests {
         let expires_at = body["expires_at"]
             .as_str()
             .expect("analysis with no valid_for_seconds still has a default expires_at");
-        let created_at: DateTime<Utc> = DateTime::parse_from_rfc3339(
-            body["created_at"].as_str().unwrap(),
-        )
-        .unwrap()
-        .with_timezone(&Utc);
-        let expires_at_parsed: DateTime<Utc> =
-            DateTime::parse_from_rfc3339(expires_at).unwrap().with_timezone(&Utc);
+        let created_at: DateTime<Utc> =
+            DateTime::parse_from_rfc3339(body["created_at"].as_str().unwrap())
+                .unwrap()
+                .with_timezone(&Utc);
+        let expires_at_parsed: DateTime<Utc> = DateTime::parse_from_rfc3339(expires_at)
+            .unwrap()
+            .with_timezone(&Utc);
         let delta = (expires_at_parsed - created_at).num_minutes();
         assert_eq!(
             delta, 30,
@@ -1519,7 +1517,10 @@ mod tests {
             .collect();
         assert_eq!(summaries, vec!["c", "b", "a", "general"]);
         let last = rows.last().expect("at least one row");
-        assert!(last["timeframe"].is_null(), "NULL-timeframe row still in the set");
+        assert!(
+            last["timeframe"].is_null(),
+            "NULL-timeframe row still in the set"
+        );
 
         // Scope check: another agent must not see any of these rows.
         let (_other_key, other_api_key) = seed_agent(&state, "other").await;

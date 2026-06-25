@@ -316,7 +316,7 @@ mod tests {
         .bind(usdc)
         .execute(pool)
         .await
-            .expect("insert ledger event");
+        .expect("insert ledger event");
     }
 
     async fn seed_trade_fill(
@@ -618,9 +618,10 @@ mod tests {
         )
         .await;
 
-        let series = fetch_balance_series(&pool, &account, "live", since, BalanceSeriesBucket::Hour)
-            .await
-            .expect("fetch hourly series");
+        let series =
+            fetch_balance_series(&pool, &account, "live", since, BalanceSeriesBucket::Hour)
+                .await
+                .expect("fetch hourly series");
 
         assert_eq!(series.len(), 2);
         assert_eq!(series[0].bucket, since);
@@ -678,9 +679,10 @@ mod tests {
             .expect("list transactions");
         assert_eq!(rows[0].running_balance, Some(Decimal::new(85, 0)));
 
-        let series = fetch_balance_series(&pool, &account, "live", since, BalanceSeriesBucket::Hour)
-            .await
-            .expect("fetch hourly series");
+        let series =
+            fetch_balance_series(&pool, &account, "live", since, BalanceSeriesBucket::Hour)
+                .await
+                .expect("fetch hourly series");
 
         assert_eq!(series.len(), 2);
         assert_eq!(series[0].balance, Decimal::new(100, 0));

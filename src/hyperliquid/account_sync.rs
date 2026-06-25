@@ -23,6 +23,8 @@ use crate::{
 
 pub type InstrumentLookupMap = HashMap<String, (String, String, String)>;
 
+const FUNDING_LOOKBACK_MS: u64 = 7 * 24 * 60 * 60 * 1_000;
+
 #[derive(Debug, Clone)]
 #[allow(dead_code)]
 pub struct StreamSyncResult {
@@ -117,7 +119,7 @@ async fn reconcile_stream(
 
     let state = load_sync_state(pool, config, stream).await?;
     let now_ms = Utc::now().timestamp_millis() as u64;
-    let start_time = compute_start_time(config, &state);
+    let start_time = compute_start_time(config, &state, stream);
     let end_time = now_ms;
 
     let (count, last_event_time, last_event_key) = match stream {
@@ -211,12 +213,21 @@ async fn reconcile_stream(
     })
 }
 
-fn compute_start_time(config: &AccountSyncConfig, state: &SyncStateRow) -> u64 {
+fn compute_start_time(config: &AccountSyncConfig, state: &SyncStateRow, stream: SyncStream) -> u64 {
+    let overlap_ms = match stream {
+        // Hyperliquid's userFunding endpoint can return sparse results for
+        // narrow cursor windows. Funding is hourly and idempotently upserted,
+        // so use a wider rolling lookback to repair missed rows naturally
+        // while staying comfortably below the endpoint's historical row caps.
+        SyncStream::Funding => FUNDING_LOOKBACK_MS,
+        _ => config.overlap_ms,
+    };
+
     let start = state
         .last_event_time
         .map(|t| {
             let ms = t.timestamp_millis() as u64;
-            ms.saturating_sub(config.overlap_ms)
+            ms.saturating_sub(overlap_ms)
         })
         .unwrap_or(config.history_start_ms);
     start.max(config.history_start_ms)
@@ -729,7 +740,10 @@ mod tests {
             overlap_ms: 60_000,
         };
         let state = SyncStateRow::new("0x0".to_string(), "live".to_string(), SyncStream::Fills);
-        assert_eq!(compute_start_time(&config, &state), 1_000_000);
+        assert_eq!(
+            compute_start_time(&config, &state, SyncStream::Fills),
+            1_000_000
+        );
     }
 
     #[test]
@@ -742,7 +756,10 @@ mod tests {
         };
         let mut state = SyncStateRow::new("0x0".to_string(), "live".to_string(), SyncStream::Fills);
         state.last_event_time = Some(Utc.timestamp_millis_opt(2_000_000).single().unwrap());
-        assert_eq!(compute_start_time(&config, &state), 1_940_000);
+        assert_eq!(
+            compute_start_time(&config, &state, SyncStream::Fills),
+            1_940_000
+        );
     }
 
     #[test]
@@ -755,6 +772,31 @@ mod tests {
         };
         let mut state = SyncStateRow::new("0x0".to_string(), "live".to_string(), SyncStream::Fills);
         state.last_event_time = Some(Utc.timestamp_millis_opt(1_050_000).single().unwrap());
-        assert_eq!(compute_start_time(&config, &state), 1_000_000);
+        assert_eq!(
+            compute_start_time(&config, &state, SyncStream::Fills),
+            1_000_000
+        );
+    }
+
+    #[test]
+    fn compute_start_time_uses_wide_funding_lookback() {
+        let config = AccountSyncConfig {
+            account_address: "0x0".to_string(),
+            environment: HyperliquidEnvironment::Mainnet,
+            history_start_ms: 1_000_000,
+            overlap_ms: 60_000,
+        };
+        let mut state =
+            SyncStateRow::new("0x0".to_string(), "live".to_string(), SyncStream::Funding);
+        state.last_event_time = Some(
+            Utc.timestamp_millis_opt((1_000_000 + FUNDING_LOOKBACK_MS + 60_000) as i64)
+                .single()
+                .unwrap(),
+        );
+
+        assert_eq!(
+            compute_start_time(&config, &state, SyncStream::Funding),
+            1_060_000
+        );
     }
 }

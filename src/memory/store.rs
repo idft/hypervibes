@@ -99,7 +99,8 @@ pub async fn list_memories(
         qb.push(" AND created_at < ").push_bind(until);
     }
 
-    qb.push(" ORDER BY timeframe NULLS LAST, created_at DESC LIMIT ").push_bind(limit);
+    qb.push(" ORDER BY timeframe NULLS LAST, created_at DESC LIMIT ")
+        .push_bind(limit);
 
     let rows = qb
         .build_query_as::<MemoryRecord>()
