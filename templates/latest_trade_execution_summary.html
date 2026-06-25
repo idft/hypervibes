@@ -1,3 +1,8 @@
 {% if let Some(summary) = summary %}
-<p class="mt-1 text-sm text-zinc-400">{{ summary }}</p>
+<div class="mt-1 flex items-center gap-2">
+    {% if !created_at_iso.is_empty() %}
+    <time class="timeago text-xs text-zinc-500" title="{{ created_at_fallback_text }}" datetime="{{ created_at_iso }}">{{ created_at_fallback_text }}</time>
+    {% endif %}
+    <p class="text-sm text-zinc-400">{{ summary }}</p>
+</div>
 {% endif %}

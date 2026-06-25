@@ -104,6 +104,11 @@
             <div data-latest-trade-execution-summary sse-swap="latest-trade-execution-summary">{{ latest_trade_execution_summary_html|safe }}</div>
             <div class="mt-4" sse-swap="orders">{{ open_orders_html|safe }}</div>
         </section>
+
+        <section class="rounded-2xl border border-zinc-800 bg-[#0d0d10] p-6">
+            <h2 class="text-lg font-medium text-white">Analysis</h2>
+            <div data-latest-analysis-summary sse-swap="latest-analysis-summary">{{ latest_analysis_summary_html|safe }}</div>
+        </section>
     </section>
     {% else if show_transactions_tab %}
     <section class="mt-2 space-y-2">

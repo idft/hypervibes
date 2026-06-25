@@ -1,0 +1,17 @@
+{% if let Some(summary) = summary %}
+<div class="mt-1 flex items-center gap-2">
+    {% if !created_at_iso.is_empty() %}
+    <time class="timeago text-xs {% if is_expired %}text-amber-400{% else %}text-zinc-500{% endif %}" title="{{ created_at_fallback_text }}{% if is_expired %} (expired at {{ expires_at_iso }}){% endif %}" datetime="{{ created_at_iso }}">{{ created_at_fallback_text }}</time>
+    {% if is_expired %}
+    <svg class="h-3.5 w-3.5 shrink-0 text-amber-400" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
+        <path fill-rule="evenodd" d="M8.485 2.495c.673-1.167 2.357-1.167 3.03 0l6.28 10.875c.673 1.167-.17 2.625-1.515 2.625H3.72c-1.345 0-2.188-1.458-1.515-2.625L8.485 2.495zM10 6a.75.75 0 01.75.75v3.5a.75.75 0 01-1.5 0v-3.5A.75.75 0 0110 6zm0 9a1 1 0 100-2 1 1 0 000 2z" clip-rule="evenodd" />
+    </svg>
+    {% endif %}
+    {% endif %}
+    {% if let Some(detail_url) = detail_url %}
+    <a href="{{ detail_url }}" class="text-sm text-zinc-400 hover:text-zinc-200 hover:underline">{{ summary }}</a>
+    {% else %}
+    <p class="text-sm text-zinc-400">{{ summary }}</p>
+    {% endif %}
+</div>
+{% endif %}

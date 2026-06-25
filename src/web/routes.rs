@@ -4,7 +4,7 @@ use askama::Template;
 use axum::{
     Form, Json, Router,
     extract::{Path, Query, State},
-    http::StatusCode,
+    http::{HeaderMap, StatusCode},
     response::{
         Html, IntoResponse, Redirect, Response,
         sse::{Event, KeepAlive, Sse},
@@ -39,21 +39,23 @@ use crate::{
     },
     memory::{
         get_latest_agent_memory_by_type, get_memory as get_memory_record, list_agent_memories,
+        memory_expires_at,
     },
-    web::{
-        AppState,
-        templates::{
-            AccountBalancePartialTemplate, AccountBalanceView, AgentListEntry,
-            AgentMemoryDetailPartialTemplate, AgentMemoryTimelinePartialTemplate, AgentShowTab,
-            AgentsNewPageTemplate, AgentsPageTemplate, AgentsShowPageTemplate,
-            BalanceSparklinesPartialTemplate, HermesPageTemplate,
-            LatestTradeExecutionSummaryPartialTemplate, MemoryView,
-            OpenOrdersPartialTemplate, OpenOrdersView, OpenPositionsPartialTemplate,
-            OpenPositionsView, ServerErrorPageTemplate, SparklineView, SyncStateView,
-            TransactionView,
+        web::{
+            AppState,
+            templates::{
+                AccountBalancePartialTemplate, AccountBalanceView, AgentListEntry,
+                AgentMemoryDetailPageTemplate, AgentMemoryDetailPartialTemplate,
+                AgentMemoryTimelinePartialTemplate, AgentShowTab, AgentsNewPageTemplate,
+                AgentsPageTemplate, AgentsShowPageTemplate, BalanceSparklinesPartialTemplate,
+                HermesPageTemplate, LatestAnalysisSummaryPartialTemplate,
+                LatestTradeExecutionSummaryPartialTemplate, MemoryView,
+                OpenOrdersPartialTemplate, OpenOrdersView, OpenPositionsPartialTemplate,
+                OpenPositionsView, ServerErrorPageTemplate, SparklineView, SyncStateView,
+                TransactionView,
+            },
+            ui_events::UiEvent,
         },
-        ui_events::UiEvent,
-    },
 };
 
 pub fn router(state: Arc<AppState>) -> Router {
@@ -178,6 +180,7 @@ async fn agents_show_memories(
 async fn agents_show_memory_detail(
     State(state): State<Arc<AppState>>,
     Path((agent_key, memory_id)): Path<(String, uuid::Uuid)>,
+    headers: HeaderMap,
 ) -> Result<Response, AppError> {
     let Some(agent) = get_agent(&state.db_pool, &agent_key).await? else {
         return Ok((StatusCode::NOT_FOUND, "agent not found").into_response());
@@ -188,8 +191,31 @@ async fn agents_show_memory_detail(
         return Ok((StatusCode::NOT_FOUND, "memory not found").into_response());
     };
 
-    let html = AgentMemoryDetailPartialTemplate::render_view(MemoryView::from_record(memory))?;
+    let memory_view = MemoryView::from_record(memory);
+
+    // HTMX in-place swap (from the Memories tab) only needs the bare partial.
+    // Direct browser navigation gets a full styled page so the user sees the
+    // agent context and a back link instead of unstyled HTML.
+    if is_htmx_request(&headers) {
+        let html = AgentMemoryDetailPartialTemplate::render_view(memory_view)?;
+        return Ok(Html(html).into_response());
+    }
+
+    let memory_detail_html = AgentMemoryDetailPartialTemplate::render_view(memory_view.clone())?;
+    let html = AgentMemoryDetailPageTemplate::render_view(
+        agent.clone(),
+        memory_view,
+        memory_detail_html,
+    )?;
     Ok(Html(html).into_response())
+}
+
+fn is_htmx_request(headers: &HeaderMap) -> bool {
+    headers
+        .get("HX-Request")
+        .and_then(|value| value.to_str().ok())
+        .map(|value| value.eq_ignore_ascii_case("true"))
+        .unwrap_or(false)
 }
 
 async fn agent_memories_stream(
@@ -482,15 +508,28 @@ async fn populate_positions_tab(
     let open_orders_view = OpenOrdersView::from_live_state(live_snapshot.clone());
     template.open_orders_html =
         OpenOrdersPartialTemplate::render_view(open_orders_view).map_err(anyhow::Error::from)?;
+
+    let latest_trade_execution =
+        get_latest_agent_memory_by_type(&state.db_pool, &agent.agent_key, "trade_execution")
+            .await?;
     template.latest_trade_execution_summary_html =
         LatestTradeExecutionSummaryPartialTemplate::render_view(
-            get_latest_agent_memory_by_type(
-        &state.db_pool,
-        &agent.agent_key,
-        "trade_execution",
-    )
-    .await?
-    .map(|memory| memory.summary),
+            latest_trade_execution.as_ref().map(|memory| memory.summary.clone()),
+            latest_trade_execution.as_ref().map(|memory| memory.created_at),
+        )
+        .map_err(anyhow::Error::from)?;
+
+    let latest_analysis =
+        get_latest_agent_memory_by_type(&state.db_pool, &agent.agent_key, "analysis").await?;
+    let analysis_detail_url = latest_analysis
+        .as_ref()
+        .map(|memory| format!("/agents/{}/memories/{}", agent.agent_key, memory.id));
+    template.latest_analysis_summary_html =
+        LatestAnalysisSummaryPartialTemplate::render_view(
+            latest_analysis.as_ref().map(|memory| memory.summary.clone()),
+            analysis_detail_url,
+            latest_analysis.as_ref().map(|memory| memory.created_at),
+            latest_analysis.as_ref().and_then(memory_expires_at),
         )
         .map_err(anyhow::Error::from)?;
 
@@ -570,12 +609,19 @@ async fn delete_agent(
 /// streams were held open simultaneously.
 ///
 /// Each account mutation emits three named events on this single stream:
-/// `balance`, `positions`, and `orders`. A companion memory-driven event,
-/// `latest-trade-execution-summary`, refreshes the Open Orders subheader when a
-/// new `trade_execution` memory arrives. The `data` field of each is the
-/// freshly rendered partial for that section, which the HTMX SSE extension
-/// routes to the matching `sse-swap="..."` element. The stream begins with
+/// `balance`, `positions`, and `orders`. Two companion memory-driven events,
+/// `latest-trade-execution-summary` and `latest-analysis-summary`, refresh
+/// the Open Orders subheader and the Analysis section when new
+/// `trade_execution` or `analysis` memories arrive. The `data` field of each
+/// is the freshly rendered partial for that section, which the HTMX SSE
+/// extension routes to the matching `sse-swap="..."` element. The stream begins with
 /// an initial snapshot and then re-emits updates for the matching account.
+#[derive(Debug)]
+enum MemoryNotification {
+    Some(uuid::Uuid),
+    Lagged,
+}
+
 async fn agent_live_stream(
     State(state): State<Arc<AppState>>,
     Path(agent_key): Path<String>,
@@ -604,6 +650,9 @@ async fn agent_live_stream(
     let mut initial_events = render_live_events(&initial_snapshot)?;
     initial_events.push(
         render_latest_trade_execution_summary_event(&state.db_pool, &agent.agent_key).await?,
+    );
+    initial_events.push(
+        render_latest_analysis_summary_event(&state.db_pool, &agent.agent_key).await?,
     );
 
     let account_key_filter = account_key.clone();
@@ -652,38 +701,62 @@ async fn agent_live_stream(
                     Ok(UiEvent::MemoryCreated {
                         agent_key: event_agent_key,
                         memory_id,
-                    }) if event_agent_key == agent_key => Some(Some(memory_id)),
+                    }) if event_agent_key == agent_key => Some(MemoryNotification::Some(memory_id)),
                     Ok(_) => None,
                     Err(tokio_stream::wrappers::errors::BroadcastStreamRecvError::Lagged(_)) => {
-                        Some(None)
+                        Some(MemoryNotification::Lagged)
                     }
                 }
             }
         })
-        .filter_map(move |memory_id| {
+        .then(move |notification| {
             let db_pool = summary_db_pool.clone();
             let agent_key = summary_agent_key_render.clone();
             async move {
-                if let Some(memory_id) = memory_id {
-                    match get_memory_record(&db_pool, &agent_key, memory_id).await {
-                        Ok(Some(memory)) if memory.memory_type == "trade_execution" => {}
-                        Ok(Some(_)) | Ok(None) => return None,
+                let (needs_trade_execution, needs_analysis) = match notification {
+                    MemoryNotification::Some(memory_id) => {
+                        match get_memory_record(&db_pool, &agent_key, memory_id).await {
+                            Ok(Some(memory)) => match memory.memory_type.as_str() {
+                                "trade_execution" => (true, false),
+                                "analysis" => (false, true),
+                                _ => (false, false),
+                            },
+                            Ok(None) => (false, false),
+                            Err(error) => {
+                                warn!(agent_key = %agent_key, error = ?error, "failed to inspect memory event for live summary update");
+                                (false, false)
+                            }
+                        }
+                    }
+                    MemoryNotification::Lagged => {
+                        // Lagged notification: we may have missed a memory
+                        // of either type, so re-render both summaries to
+                        // catch up.
+                        (true, true)
+                    }
+                };
+
+                let mut events = Vec::new();
+                if needs_trade_execution {
+                    match render_latest_trade_execution_summary_event(&db_pool, &agent_key).await {
+                        Ok(event) => events.push(Ok::<Event, Infallible>(event)),
                         Err(error) => {
-                            warn!(agent_key = %agent_key, error = ?error, "failed to inspect memory event for live summary update");
-                            return None;
+                            warn!(agent_key = %agent_key, error = ?error, "failed to render latest trade execution summary SSE event");
                         }
                     }
                 }
-
-                match render_latest_trade_execution_summary_event(&db_pool, &agent_key).await {
-                    Ok(event) => Some(Ok::<Event, Infallible>(event)),
-                    Err(error) => {
-                        warn!(agent_key = %agent_key, error = ?error, "failed to render latest trade execution summary SSE event");
-                        None
+                if needs_analysis {
+                    match render_latest_analysis_summary_event(&db_pool, &agent_key).await {
+                        Ok(event) => events.push(Ok::<Event, Infallible>(event)),
+                        Err(error) => {
+                            warn!(agent_key = %agent_key, error = ?error, "failed to render latest analysis summary SSE event");
+                        }
                     }
                 }
+                events
             }
-        });
+        })
+        .flat_map(|events| tokio_stream::iter(events));
 
     let stream = tokio_stream::iter(
         initial_events
@@ -729,12 +802,34 @@ async fn render_latest_trade_execution_summary_event(
     pool: &crate::db::DbPool,
     agent_key: &str,
 ) -> Result<Event, AppError> {
-    let summary = get_latest_agent_memory_by_type(pool, agent_key, "trade_execution")
-        .await?
-        .map(|memory| memory.summary);
-    let html = LatestTradeExecutionSummaryPartialTemplate::render_view(summary)?;
+    let latest = get_latest_agent_memory_by_type(pool, agent_key, "trade_execution").await?;
+    let summary = latest.as_ref().map(|memory| memory.summary.clone());
+    let created_at = latest.as_ref().map(|memory| memory.created_at);
+    let html = LatestTradeExecutionSummaryPartialTemplate::render_view(summary, created_at)?;
     Ok(Event::default()
         .event("latest-trade-execution-summary")
+        .data(html))
+}
+
+async fn render_latest_analysis_summary_event(
+    pool: &crate::db::DbPool,
+    agent_key: &str,
+) -> Result<Event, AppError> {
+    let latest = get_latest_agent_memory_by_type(pool, agent_key, "analysis").await?;
+    let detail_url = latest
+        .as_ref()
+        .map(|memory| format!("/agents/{agent_key}/memories/{}", memory.id));
+    let summary = latest.as_ref().map(|memory| memory.summary.clone());
+    let created_at = latest.as_ref().map(|memory| memory.created_at);
+    let expires_at = latest.as_ref().and_then(memory_expires_at);
+    let html = LatestAnalysisSummaryPartialTemplate::render_view(
+        summary,
+        detail_url,
+        created_at,
+        expires_at,
+    )?;
+    Ok(Event::default()
+        .event("latest-analysis-summary")
         .data(html))
 }
 
@@ -1710,6 +1805,160 @@ mod tests {
 
         assert!(text.contains("latest-trade-execution-summary"));
         assert!(text.contains("Scaled out into strength"));
+        assert!(text.contains("timeago"));
+        assert!(text.contains("datetime="));
+        // Trade execution summaries never carry the warning treatment —
+        // only the analysis section can turn amber.
+        assert!(!text.contains("text-amber-400"));
+    }
+
+    #[tokio::test]
+    async fn agent_positions_route_renders_latest_analysis_summary_under_open_orders() {
+        let state = test_state().await;
+        let (agent_key, _wallet_address) = insert_test_agent(&state).await.expect("insert agent");
+        let analysis = seed_memory_with_type(
+            &state,
+            &agent_key,
+            "analysis",
+            "BTC bullish continuation above 67k",
+            "## Thesis\nReclaimed intraday support.",
+        )
+        .await;
+        seed_memory_with_type(
+            &state,
+            &agent_key,
+            "plan",
+            "Older plan",
+            "Wait for reclaim.",
+        )
+        .await;
+
+        let response = router(state)
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/agents/{agent_key}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let text = response_text(response).await;
+        assert!(text.contains(">Analysis<"));
+        assert!(text.contains("BTC bullish continuation above 67k"));
+        assert!(!text.contains("Older plan"));
+        assert!(
+            text.contains(&format!("/agents/{agent_key}/memories/{}", analysis.id)),
+            "analysis summary should link to the memory detail page"
+        );
+    }
+
+    #[tokio::test]
+    async fn agent_positions_route_renders_empty_analysis_section_when_no_analysis_memory() {
+        let state = test_state().await;
+        let (agent_key, _wallet_address) = insert_test_agent(&state).await.expect("insert agent");
+
+        let response = router(state)
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/agents/{agent_key}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let text = response_text(response).await;
+        assert!(text.contains(">Analysis<"));
+        // Empty placeholder — no link to any memory.
+        assert!(!text.contains(&format!("/agents/{agent_key}/memories/")));
+    }
+
+    #[tokio::test]
+    async fn latest_analysis_summary_event_renders_latest_summary() {
+        let state = test_state().await;
+        let (agent_key, _wallet_address) = insert_test_agent(&state).await.expect("insert agent");
+        let analysis = seed_memory_with_type(
+            &state,
+            &agent_key,
+            "analysis",
+            "BTC bullish continuation above 67k",
+            "## Thesis\nReclaimed intraday support.",
+        )
+        .await;
+
+        let event = render_latest_analysis_summary_event(&state.db_pool, &agent_key)
+            .await
+            .expect("render latest analysis summary event");
+        let text = format!("{event:?}");
+
+        assert!(text.contains("latest-analysis-summary"));
+        assert!(text.contains("BTC bullish continuation above 67k"));
+        assert!(text.contains(&format!("/agents/{agent_key}/memories/{}", analysis.id)));
+        assert!(text.contains("timeago"));
+        assert!(text.contains("datetime="));
+        // Default analysis validity is 2x the schedule interval — the row
+        // we just inserted is brand new, so it should not be flagged as
+        // expired or carry a warning icon.
+        assert!(!text.contains("text-amber-400"));
+        assert!(!text.contains("(expired"));
+    }
+
+    #[tokio::test]
+    async fn latest_analysis_summary_event_marks_expired_memory_with_warning() {
+        let state = test_state().await;
+        let (agent_key, _wallet_address) = insert_test_agent(&state).await.expect("insert agent");
+        // `valid_for_seconds: 1` + no sleep on a slow CI machine still
+        // lands the row in the past by the time we read it back.
+        let _analysis = crate::memory::insert_memory(
+            &state.db_pool,
+            &agent_key,
+            &CreateMemory {
+                symbol: "BTC".to_string(),
+                timeframe: Some("1h".to_string()),
+                memory_type: "analysis".to_string(),
+                summary: "Stale breakout call".to_string(),
+                content: "## Thesis\nBid got pulled.".to_string(),
+                metadata: Some(serde_json::json!({ "valid_for_seconds": 1 })),
+            },
+        )
+        .await
+        .expect("insert memory");
+        // Make sure the row's created_at is comfortably in the past so
+        // `expires_at <= now` is unambiguous regardless of clock skew.
+        sqlx::query("UPDATE memory.records SET created_at = NOW() - INTERVAL '5 minutes'")
+            .execute(&state.db_pool)
+            .await
+            .expect("backdate memory");
+
+        let event = render_latest_analysis_summary_event(&state.db_pool, &agent_key)
+            .await
+            .expect("render latest analysis summary event");
+        let text = format!("{event:?}");
+
+        assert!(text.contains("Stale breakout call"));
+        assert!(text.contains("text-amber-400"), "expired analysis should turn the timestamp amber");
+        assert!(text.contains("(expired"), "expired analysis should annotate the title");
+        // The inline warning triangle is the visual signal that the
+        // analysis has aged past `valid_for_seconds` / `stale_after`.
+        assert!(text.contains("viewBox=\\\"0 0 20 20\\\""), "expired analysis should render a warning icon");
+    }
+
+    #[tokio::test]
+    async fn latest_analysis_summary_event_renders_empty_when_no_analysis_memory() {
+        let state = test_state().await;
+        let (agent_key, _wallet_address) = insert_test_agent(&state).await.expect("insert agent");
+
+        let event = render_latest_analysis_summary_event(&state.db_pool, &agent_key)
+            .await
+            .expect("render latest analysis summary event");
+        let text = format!("{event:?}");
+
+        assert!(text.contains("latest-analysis-summary"));
+        // Empty placeholder — no summary text leaks through.
+        assert!(!text.contains("Reclaimed intraday support"));
     }
 
     #[tokio::test]
@@ -1745,7 +1994,40 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn agent_memory_detail_route_renders_partial() {
+    async fn agent_memory_detail_route_renders_partial_for_htmx() {
+        let state = test_state().await;
+        let (agent_key, _wallet_address) = insert_test_agent(&state).await.expect("insert agent");
+        let memory = seed_memory(
+            &state,
+            &agent_key,
+            "Remember the breakout",
+            "### Plan\n\nBTC reclaimed support.",
+        )
+        .await;
+
+        let response = router(state)
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/agents/{agent_key}/memories/{}", memory.id))
+                    .header("HX-Request", "true")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let text = response_text(response).await;
+        assert!(text.contains("id=\"memory-detail\""));
+        assert!(text.contains("Remember the breakout"));
+        assert!(text.contains("<h3>Plan</h3>"));
+        // Bare partial — no base layout, no nav, no back link.
+        assert!(!text.contains("<!DOCTYPE html>"));
+        assert!(!text.contains("Back to"));
+    }
+
+    #[tokio::test]
+    async fn agent_memory_detail_route_renders_full_page_for_direct_navigation() {
         let state = test_state().await;
         let (agent_key, _wallet_address) = insert_test_agent(&state).await.expect("insert agent");
         let memory = seed_memory(
@@ -1768,9 +2050,34 @@ mod tests {
 
         assert_eq!(response.status(), StatusCode::OK);
         let text = response_text(response).await;
+        // Full styled page so direct navigation doesn't render unstyled HTML.
+        assert!(text.contains("<!DOCTYPE html>"));
+        assert!(text.contains("/static/dist/app.css"));
+        assert!(text.contains("Vibetrading"));
         assert!(text.contains("id=\"memory-detail\""));
         assert!(text.contains("Remember the breakout"));
         assert!(text.contains("<h3>Plan</h3>"));
+        // Back link to the agent.
+        assert!(text.contains("Back to"));
+        assert!(text.contains(&format!("href=\"/agents/{agent_key}\"")));
+    }
+
+    #[tokio::test]
+    async fn agent_memory_detail_route_returns_404_for_unknown_memory() {
+        let state = test_state().await;
+        let (agent_key, _wallet_address) = insert_test_agent(&state).await.expect("insert agent");
+
+        let response = router(state)
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/agents/{agent_key}/memories/{}", uuid::Uuid::new_v4()))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
     }
 
     #[tokio::test]

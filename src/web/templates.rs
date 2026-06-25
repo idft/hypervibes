@@ -510,6 +510,7 @@ pub struct AgentsShowPageTemplate {
     pub open_positions_html: String,
     pub open_orders_html: String,
     pub latest_trade_execution_summary_html: String,
+    pub latest_analysis_summary_html: String,
     pub sparklines_html: String,
     pub api_key_last_used_text: String,
     pub analysis_context_last_used_text: String,
@@ -605,6 +606,7 @@ impl AgentsShowPageTemplate {
             open_positions_html: String::new(),
             open_orders_html: String::new(),
             latest_trade_execution_summary_html: String::new(),
+            latest_analysis_summary_html: String::new(),
             sparklines_html: String::new(),
         }
     }
@@ -673,6 +675,32 @@ pub struct AgentMemoryDetailPartialTemplate {
 impl AgentMemoryDetailPartialTemplate {
     pub fn render_view(memory: MemoryView) -> Result<String, askama::Error> {
         Self { memory }.render()
+    }
+}
+
+#[derive(Template)]
+#[template(path = "agent_memory_detail_page.html")]
+pub struct AgentMemoryDetailPageTemplate {
+    pub agent: AgentDetailRow,
+    pub memory: MemoryView,
+    pub memory_detail_html: String,
+    pub current_path: String,
+}
+
+impl AgentMemoryDetailPageTemplate {
+    pub fn render_view(
+        agent: AgentDetailRow,
+        memory: MemoryView,
+        memory_detail_html: String,
+    ) -> Result<String, askama::Error> {
+        let current_path = format!("/agents/{}/memories/{}", agent.agent_key, memory.memory_id);
+        Self {
+            agent,
+            memory,
+            memory_detail_html,
+            current_path,
+        }
+        .render()
     }
 }
 
@@ -1248,11 +1276,77 @@ impl OpenOrdersPartialTemplate {
 #[template(path = "latest_trade_execution_summary.html")]
 pub struct LatestTradeExecutionSummaryPartialTemplate {
     pub summary: Option<String>,
+    /// `created_at` of the latest `trade_execution` memory formatted as
+    /// an ISO 8601 / RFC 3339 string with a `Z` suffix, suitable for the
+    /// `datetime` attribute of a `<time>` element consumed by
+    /// `timeago.js`. Empty when no memory exists yet.
+    pub created_at_iso: String,
+    /// `created_at` of the latest `trade_execution` memory formatted as
+    /// `YYYY-MM-DD HH:MM UTC`. Used as the timeago fallback so the
+    /// timestamp is meaningful even before client-side JS hydrates.
+    /// Empty when no memory exists yet.
+    pub created_at_fallback_text: String,
 }
 
 impl LatestTradeExecutionSummaryPartialTemplate {
-    pub fn render_view(summary: Option<String>) -> Result<String, askama::Error> {
-        Self { summary }.render()
+    pub fn render_view(
+        summary: Option<String>,
+        created_at: Option<DateTime<Utc>>,
+    ) -> Result<String, askama::Error> {
+        Self {
+            summary,
+            created_at_iso: created_at.map(format_timestamp_iso).unwrap_or_default(),
+            created_at_fallback_text: created_at.map(format_timestamp_utc).unwrap_or_default(),
+        }
+        .render()
+    }
+}
+
+#[derive(Template)]
+#[template(path = "latest_analysis_summary.html")]
+pub struct LatestAnalysisSummaryPartialTemplate {
+    pub summary: Option<String>,
+    pub detail_url: Option<String>,
+    /// `created_at` of the latest `analysis` memory formatted as an
+    /// ISO 8601 / RFC 3339 string with a `Z` suffix, suitable for the
+    /// `datetime` attribute of a `<time>` element consumed by
+    /// `timeago.js`. Empty when no memory exists yet.
+    pub created_at_iso: String,
+    /// `created_at` of the latest `analysis` memory formatted as
+    /// `YYYY-MM-DD HH:MM UTC`. Used as the timeago fallback so the
+    /// timestamp is meaningful even before client-side JS hydrates.
+    /// Empty when no memory exists yet.
+    pub created_at_fallback_text: String,
+    /// `expires_at` of the latest `analysis` memory (resolved from
+    /// `stale_after` / `valid_for_seconds` / per-timeframe defaults)
+    /// formatted as an ISO 8601 / RFC 3339 string, suitable for the
+    /// `title` attribute of a `<time>` element. Empty when the row has
+    /// no explicit or implicit expiration.
+    pub expires_at_iso: String,
+    /// `true` when `expires_at` is at or before the server's `now`. The
+    /// agent page uses this to highlight the timestamp and surface a
+    /// warning icon, since the trading loop will treat the analysis as
+    /// stale and the operator should investigate the gap.
+    pub is_expired: bool,
+}
+
+impl LatestAnalysisSummaryPartialTemplate {
+    pub fn render_view(
+        summary: Option<String>,
+        detail_url: Option<String>,
+        created_at: Option<DateTime<Utc>>,
+        expires_at: Option<DateTime<Utc>>,
+    ) -> Result<String, askama::Error> {
+        let is_expired = expires_at.is_some_and(|value| value <= Utc::now());
+        Self {
+            summary,
+            detail_url,
+            created_at_iso: created_at.map(format_timestamp_iso).unwrap_or_default(),
+            created_at_fallback_text: created_at.map(format_timestamp_utc).unwrap_or_default(),
+            expires_at_iso: expires_at.map(format_timestamp_iso).unwrap_or_default(),
+            is_expired,
+        }
+        .render()
     }
 }
 
@@ -1406,9 +1500,10 @@ mod tests {
         template.open_positions_html = open_positions_html;
         template.open_orders_html = open_orders_html;
         template.latest_trade_execution_summary_html =
-            LatestTradeExecutionSummaryPartialTemplate::render_view(Some(
-                "Scaled out into strength".to_string(),
-            ))
+            LatestTradeExecutionSummaryPartialTemplate::render_view(
+                Some("Scaled out into strength".to_string()),
+                Some(Utc::now()),
+            )
             .unwrap();
         template.sparklines_html = sparklines_html;
         let rendered = template.render().unwrap();
