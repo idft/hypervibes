@@ -529,6 +529,7 @@ struct JobContextResponse {
     display_name: String,
     environment: String,
     prompt: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
     account: Option<LiveAgentSnapshot>,
 }
 
@@ -2249,7 +2250,7 @@ mod tests {
         assert_eq!(body["agent_key"], agent_key);
         assert_eq!(body["job_kind"], "analysis");
         assert_eq!(body["prompt"], "Focus on 15m structure and volatility.");
-        assert!(body["account"].is_null());
+        assert!(body.get("account").is_none());
 
         let stored = get_agent(&state.db_pool, &agent_key)
             .await
