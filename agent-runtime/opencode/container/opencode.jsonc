@@ -1,0 +1,9 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+
+  // Container-global runtime config for the shared OpenCode service.
+  // Keep shared plugins here so generated agent workspaces stay minimal.
+  "plugin": [
+    "@aeondave/opencode-dotenv@latest"
+  ]
+}

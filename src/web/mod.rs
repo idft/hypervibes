@@ -13,7 +13,7 @@ use tracing::Level;
 
 use crate::{
     agents::crypto::EncryptionKey, db::DbPool, hermes::HermesClient,
-    hyperliquid::live_state::LiveAccountStore,
+    hyperliquid::live_state::LiveAccountStore, opencode::workspace::OpenCodeWorkspaceConfig,
 };
 
 use self::ui_events::UiEventHub;
@@ -26,6 +26,7 @@ pub struct AppState {
     pub ui_events: Arc<UiEventHub>,
     pub hermes: Option<HermesClient>,
     pub hermes_dashboard_link_url: String,
+    pub opencode_workspace_config: OpenCodeWorkspaceConfig,
 }
 
 pub async fn serve(
@@ -35,6 +36,7 @@ pub async fn serve(
     live_accounts: Arc<LiveAccountStore>,
     hermes: Option<HermesClient>,
     hermes_dashboard_link_url: String,
+    opencode_workspace_config: OpenCodeWorkspaceConfig,
     shutdown_tx: watch::Sender<bool>,
 ) -> Result<()> {
     let state = Arc::new(AppState {
@@ -44,6 +46,7 @@ pub async fn serve(
         ui_events: Arc::new(UiEventHub::new()),
         hermes,
         hermes_dashboard_link_url,
+        opencode_workspace_config,
     });
     let app = router(state);
     let listener = tokio::net::TcpListener::bind(bind_addr)

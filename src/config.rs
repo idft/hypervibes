@@ -1,4 +1,4 @@
-use std::env;
+use std::{env, path::PathBuf};
 
 use anyhow::{Context, Result, bail};
 use reqwest::Url;
@@ -12,6 +12,9 @@ pub struct AppConfig {
     pub hermes_dashboard_url: String,
     pub hermes_dashboard_link_url: String,
     pub hermes_dashboard_session_token: Option<String>,
+    pub opencode_workspaces_root: PathBuf,
+    pub opencode_container_workspaces_root: String,
+    pub vibetrading_agent_api_base_url: String,
 }
 
 impl AppConfig {
@@ -30,6 +33,9 @@ impl AppConfig {
                 app_public_url.as_deref(),
             )?,
             hermes_dashboard_session_token: hermes_dashboard_session_token_from_env(),
+            opencode_workspaces_root: opencode_workspaces_root_from_env()?,
+            opencode_container_workspaces_root: opencode_container_workspaces_root_from_env()?,
+            vibetrading_agent_api_base_url: vibetrading_agent_api_base_url_from_env()?,
         })
     }
 }
@@ -155,6 +161,47 @@ fn hermes_dashboard_session_token_from_env() -> Option<String> {
         .ok()
         .map(|k| k.trim().to_string())
         .filter(|k| !k.is_empty())
+}
+
+fn opencode_workspaces_root_from_env() -> Result<PathBuf> {
+    let raw = env::var("OPENCODE_WORKSPACES_ROOT").unwrap_or_else(|_| "workspaces".to_string());
+    let raw = raw.trim();
+    if raw.is_empty() {
+        bail!("OPENCODE_WORKSPACES_ROOT must not be empty");
+    }
+
+    let path = PathBuf::from(raw);
+    if path.is_absolute() {
+        Ok(path)
+    } else {
+        Ok(env::current_dir()
+            .context("failed to resolve current working directory for OPENCODE_WORKSPACES_ROOT")?
+            .join(path))
+    }
+}
+
+fn opencode_container_workspaces_root_from_env() -> Result<String> {
+    let root = env::var("OPENCODE_CONTAINER_WORKSPACES_ROOT")
+        .unwrap_or_else(|_| "/workspaces".to_string());
+    let root = root.trim();
+    if root.is_empty() {
+        bail!("OPENCODE_CONTAINER_WORKSPACES_ROOT must not be empty");
+    }
+    if !root.starts_with('/') {
+        bail!("OPENCODE_CONTAINER_WORKSPACES_ROOT must be an absolute path");
+    }
+    Ok(root.trim_end_matches('/').to_string())
+}
+
+fn vibetrading_agent_api_base_url_from_env() -> Result<String> {
+    let url = env::var("VIBETRADING_AGENT_API_BASE_URL")
+        .unwrap_or_else(|_| "http://host.containers.internal:3003".to_string());
+    let url = url.trim();
+    if url.is_empty() {
+        bail!("VIBETRADING_AGENT_API_BASE_URL must not be empty");
+    }
+    validate_absolute_url("VIBETRADING_AGENT_API_BASE_URL", url)?;
+    Ok(url.to_string())
 }
 
 #[cfg(test)]

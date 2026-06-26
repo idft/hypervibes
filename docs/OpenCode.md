@@ -35,8 +35,17 @@ Current implemented slice:
 - migrations seed one OpenCode runtime, `opencode-local`, pointing at
   `http://localhost:14096`
 - agents can now be linked to either Hermes or OpenCode runtimes in the UI
-- scheduling, session creation, run tracking, and workspace generation are not
-  implemented yet
+- creating an OpenCode agent now generates a per-agent workspace under
+  `workspaces/agents/<agent_key>` on the host and
+  `/workspaces/agents/<agent_key>` in the container
+- workspace metadata is stored in `agents.runtime_config` as:
+  - `workspace_host_path`
+  - `workspace_container_path`
+  - `profile_source`
+- generated workspaces include a non-secret `generated/agent.json` file and an
+  agent-scoped `.env` file loaded through the container-mounted
+  `agent-runtime/opencode/container/opencode.jsonc` config
+- scheduling, session creation, and run tracking are not implemented yet
 
 The rest of this document still captures the larger OpenCode backend plan.
 
@@ -170,8 +179,14 @@ Ownership rules:
 - The backend must preserve agent-authored paths when regenerating runtime
   files.
 
-The backend and OpenCode container should mount the workspace at the same path,
-preferably `/workspaces`, to avoid path translation bugs.
+The backend writes generated workspaces to `workspaces`, and the OpenCode
+container sees the same bind mount at `/workspaces`.
+
+The OpenCode container also bind-mounts
+`agent-runtime/opencode/container/opencode.jsonc` to
+`/opencode-data/opencode.jsonc`. Shared plugins, including the dotenv plugin,
+belong in that global container config rather than in generated workspace
+`opencode.json` files.
 
 Agent workspaces should be backed up. They are not intended to be disposable
 because analysis agents may write durable Python analysis scripts.

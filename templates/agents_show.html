@@ -359,6 +359,43 @@
             </dl>
         </section>
 
+        {% if agent.backend_kind == "opencode" %}
+        <section class="rounded-2xl border border-zinc-800 bg-[#0d0d10] p-6">
+            <div class="flex items-center justify-between gap-4">
+                <h2 class="text-lg font-medium text-white">OpenCode workspace</h2>
+                {% if let Some(_workspace) = opencode_workspace %}
+                <span class="rounded-full border border-emerald-900/60 bg-emerald-950/30 px-3 py-1 text-xs font-medium text-emerald-300">Generated</span>
+                {% else %}
+                <span class="rounded-full border border-amber-900/60 bg-amber-950/30 px-3 py-1 text-xs font-medium text-amber-300">Missing metadata</span>
+                {% endif %}
+            </div>
+            {% if let Some(workspace) = opencode_workspace %}
+            <dl class="mt-4 grid gap-4 sm:grid-cols-2">
+                <div>
+                    <dt class="text-xs uppercase tracking-[0.16em] text-zinc-500">Host workspace path</dt>
+                    <dd class="mt-1 break-all font-mono text-xs text-zinc-300">{{ workspace.workspace_host_path }}</dd>
+                </div>
+                <div>
+                    <dt class="text-xs uppercase tracking-[0.16em] text-zinc-500">Container workspace path</dt>
+                    <dd class="mt-1 break-all font-mono text-xs text-zinc-300">{{ workspace.workspace_container_path }}</dd>
+                </div>
+                <div>
+                    <dt class="text-xs uppercase tracking-[0.16em] text-zinc-500">Profile source</dt>
+                    <dd class="mt-1 break-all font-mono text-xs text-zinc-300">{{ workspace.profile_source }}</dd>
+                </div>
+                <div>
+                    <dt class="text-xs uppercase tracking-[0.16em] text-zinc-500">Workspace .env</dt>
+                    <dd class="mt-1 text-sm text-zinc-300">{% if workspace.env_exists %}Present{% else %}Missing{% endif %}</dd>
+                </div>
+            </dl>
+            {% else %}
+            <div class="mt-4 rounded-xl border border-amber-900/60 bg-amber-950/30 px-4 py-3 text-sm text-amber-200">
+                Workspace metadata is missing. This OpenCode agent has not generated a workspace yet.
+            </div>
+            {% endif %}
+        </section>
+        {% endif %}
+
         <section class="rounded-2xl border border-zinc-800 bg-[#0d0d10] p-6">
             <h2 class="text-lg font-medium text-white">Sync status</h2>
             {% if sync_state.is_empty() %}

@@ -407,6 +407,26 @@ pub async fn update_agent_trading_prompt(
     Ok(result.rows_affected() > 0)
 }
 
+pub async fn update_agent_runtime_config(
+    pool: &DbPool,
+    agent_key: &str,
+    runtime_config: serde_json::Value,
+) -> Result<bool> {
+    let result = sqlx::query(
+        "UPDATE agents
+            SET runtime_config = $2,
+                updated_at = now()
+          WHERE agent_key = $1",
+    )
+    .bind(agent_key)
+    .bind(runtime_config)
+    .execute(pool)
+    .await
+    .context("failed to update agent runtime config")?;
+
+    Ok(result.rows_affected() > 0)
+}
+
 /// Resolve an `agent_key` from the API key presented in the
 /// `Authorization: Bearer <api_key>` header.
 ///
@@ -683,6 +703,37 @@ mod tests {
             .expect("list enabled runtimes");
         assert!(runtimes.iter().all(|runtime| runtime.enabled));
         assert!(runtimes.iter().all(|runtime| runtime.id != id));
+    }
+
+    #[tokio::test]
+    async fn update_agent_runtime_config_persists_json() {
+        let pool = test_db::pool().await;
+        let key = format!("runtime-config-test-{}", Utc::now().timestamp_millis());
+        let row = sample_agent(&key);
+        insert_agent(&pool, &row).await.expect("insert agent");
+
+        let updated = update_agent_runtime_config(
+            &pool,
+            &key,
+            serde_json::json!({
+                "workspace_host_path": "workspaces/agents/runtime-config-test",
+                "workspace_container_path": "/workspaces/agents/runtime-config-test",
+                "profile_source": "agent-runtime/opencode"
+            }),
+        )
+        .await
+        .expect("update runtime config");
+
+        assert!(updated);
+
+        let stored = get_agent(&pool, &key)
+            .await
+            .expect("get agent")
+            .expect("agent present");
+        assert_eq!(
+            stored.runtime_config["workspace_container_path"],
+            serde_json::json!("/workspaces/agents/runtime-config-test")
+        );
     }
 
     #[tokio::test]

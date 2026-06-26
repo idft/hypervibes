@@ -48,6 +48,11 @@ simplified single-table registry (`agents`) with:
   - `analysis_context_last_used_at TIMESTAMPTZ`
   - `trading_context_last_used_at TIMESTAMPTZ`
 - the Hyperliquid private key encrypted at the application layer before storage
+- OpenCode-backed agent creation also generates a per-agent workspace and stores
+  non-secret workspace metadata in `runtime_config`; the agent-scoped
+  Vibetrading API key is written only to the generated workspace `.env` file,
+  which the OpenCode container loads via its bind-mounted global
+  `opencode.jsonc` config
 
 The supporting `agent_runtimes` table stores reusable Hermes/OpenCode runtime
 definitions. The initial migration seeds only one runtime:

@@ -24,15 +24,15 @@ use crate::{
         crypto::{encrypt, generate_api_key},
         keys::derive_wallet_address,
         model::{
-            AgentRegistryRow, AgentRuntimeRow, CreateAgentForm, CreateAgentRuntimeForm,
-            slugify_agent_key,
+            AgentRegistryRow, AgentRuntimeRow, BACKEND_KIND_OPENCODE, CreateAgentForm,
+            CreateAgentRuntimeForm, slugify_agent_key,
         },
         prompts::{DEFAULT_ANALYSIS_STRATEGY_PROMPT, DEFAULT_TRADING_STRATEGY_PROMPT},
         store::{
             delete_agent as delete_agent_in_store, get_agent, insert_agent, insert_agent_runtime,
             list_agent_instrument_options, list_agent_runtimes, list_agents,
             list_enabled_agent_runtimes, replace_agent_instruments, runtime_matches_backend,
-            update_agent_analysis_prompt, update_agent_trading_prompt,
+            update_agent_analysis_prompt, update_agent_runtime_config, update_agent_trading_prompt,
         },
     },
     hermes::HermesHealth,
@@ -47,6 +47,10 @@ use crate::{
         get_latest_agent_memory_by_type, get_memory as get_memory_record, list_agent_memories,
         memory_expires_at,
     },
+    opencode::workspace::{
+        OpenCodeWorkspaceAgent, OpenCodeWorkspaceRuntimeConfig, generate_agent_workspace,
+        runtime_config_for_generated_workspace,
+    },
     web::{
         AppState,
         templates::{
@@ -56,9 +60,9 @@ use crate::{
             AgentsPageTemplate, AgentsShowPageTemplate, BackendsNewPageTemplate,
             BackendsPageTemplate, BalanceSparklinesPartialTemplate, HermesPageTemplate,
             LatestAnalysisSummaryPartialTemplate, LatestTradeExecutionSummaryPartialTemplate,
-            MemoryView, OpenOrdersPartialTemplate, OpenOrdersView, OpenPositionsPartialTemplate,
-            OpenPositionsView, ServerErrorPageTemplate, SparklineView, SyncStateView,
-            TransactionView,
+            MemoryView, OpenCodeWorkspaceSettingsView, OpenOrdersPartialTemplate, OpenOrdersView,
+            OpenPositionsPartialTemplate, OpenPositionsView, ServerErrorPageTemplate,
+            SparklineView, SyncStateView, TransactionView,
         },
         ui_events::UiEvent,
     },
@@ -477,6 +481,19 @@ async fn render_agent_show_page(
         }
         AgentShowTab::Prompts => {}
         AgentShowTab::Settings => {
+            if agent.backend_kind == BACKEND_KIND_OPENCODE {
+                template.opencode_workspace = OpenCodeWorkspaceRuntimeConfig::from_value(
+                    &agent.runtime_config,
+                )
+                .map(|workspace| OpenCodeWorkspaceSettingsView {
+                    env_exists: std::path::Path::new(&workspace.workspace_host_path)
+                        .join(".env")
+                        .is_file(),
+                    workspace_host_path: workspace.workspace_host_path,
+                    workspace_container_path: workspace.workspace_container_path,
+                    profile_source: workspace.profile_source,
+                });
+            }
             template.sync_state = match list_account_sync_state(
                 &state.db_pool,
                 &agent.wallet_address,
@@ -1075,6 +1092,31 @@ async fn create_agent(
         return Ok(render_new_form(form, runtimes, errors));
     }
 
+    if row.backend_kind == BACKEND_KIND_OPENCODE {
+        let generated = generate_agent_workspace(
+            &state.opencode_workspace_config,
+            &OpenCodeWorkspaceAgent {
+                agent_key: row.agent_key.clone(),
+                display_name: row.display_name.clone(),
+                api_key: row.api_key.clone(),
+            },
+        )
+        .inspect_err(|error| {
+            error!(agent_key = %row.agent_key, error = ?error, "failed to generate OpenCode workspace");
+        })?;
+
+        let runtime_config = runtime_config_for_generated_workspace(&generated).into_value();
+        let updated = update_agent_runtime_config(&state.db_pool, &row.agent_key, runtime_config)
+            .await
+            .inspect_err(|error| {
+                error!(agent_key = %row.agent_key, error = ?error, "failed to persist OpenCode workspace metadata");
+            })?;
+
+        if !updated {
+            error!(agent_key = %row.agent_key, "agent disappeared before OpenCode workspace metadata update");
+        }
+    }
+
     Ok(Redirect::to(&format!("/agents/{agent_key}")).into_response())
 }
 
@@ -1251,6 +1293,13 @@ mod tests {
             ui_events: Arc::new(UiEventHub::new()),
             hermes: None,
             hermes_dashboard_link_url: "http://127.0.0.1:19119".to_string(),
+            opencode_workspace_config: crate::opencode::workspace::OpenCodeWorkspaceConfig {
+                source_root: std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                    .join(crate::opencode::workspace::PROFILE_SOURCE_RELATIVE_PATH),
+                host_workspaces_root: std::path::PathBuf::from("/tmp/opencode/vibetrading-routes"),
+                container_workspaces_root: "/workspaces".to_string(),
+                api_base_url: "http://host.containers.internal:3003".to_string(),
+            },
         })
     }
 
@@ -1833,6 +1882,67 @@ mod tests {
             .expect("agent present");
         assert_eq!(stored.analysis_prompt, DEFAULT_ANALYSIS_STRATEGY_PROMPT);
         assert_eq!(stored.trading_prompt, DEFAULT_TRADING_STRATEGY_PROMPT);
+        assert_eq!(
+            stored.runtime_config["workspace_container_path"],
+            serde_json::json!(format!("/workspaces/agents/{agent_key}"))
+        );
+        assert!(
+            std::path::Path::new(
+                stored.runtime_config["workspace_host_path"]
+                    .as_str()
+                    .expect("host path string")
+            )
+            .join(".env")
+            .exists()
+        );
+    }
+
+    #[tokio::test]
+    async fn post_agents_with_hermes_runtime_does_not_generate_opencode_workspace() {
+        let state = test_state().await;
+        let pool = state.db_pool.clone();
+        let runtime_id = format!("hermes-local-{}", chrono::Utc::now().timestamp_millis());
+        insert_agent_runtime(
+            &pool,
+            &CreateAgentRuntimeForm {
+                id: runtime_id.clone(),
+                name: "Hermes local".to_string(),
+                backend_kind: crate::agents::model::BACKEND_KIND_HERMES.to_string(),
+                base_url: "http://localhost:19119".to_string(),
+                enabled: Some("on".to_string()),
+            },
+        )
+        .await
+        .expect("insert hermes runtime");
+
+        let app = router(state);
+        let timestamp = chrono::Utc::now().timestamp_millis();
+        let display_name = format!("HermesOnly{}", timestamp);
+        let agent_key = slugify_agent_key(&display_name);
+        let private_key = random_private_key();
+        let body = format!(
+            "display_name={}&hyperliquid_private_key={}&backend_kind=hermes&runtime_id={}",
+            display_name, private_key, runtime_id
+        );
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/agents")
+                    .header("content-type", "application/x-www-form-urlencoded")
+                    .body(Body::from(body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::SEE_OTHER);
+
+        let stored = get_agent(&pool, &agent_key)
+            .await
+            .expect("get agent")
+            .expect("agent present");
+        assert_eq!(stored.runtime_config, serde_json::json!({}));
     }
 
     #[tokio::test]
@@ -2733,6 +2843,51 @@ mod tests {
         assert!(text.contains("Sync status"));
         assert!(text.contains("fills"));
         assert!(text.contains("abc123"));
+    }
+
+    #[tokio::test]
+    async fn opencode_agent_settings_route_renders_workspace_state() {
+        let state = test_state().await;
+        let app = router(Arc::clone(&state));
+        let timestamp = chrono::Utc::now().timestamp_millis();
+        let display_name = format!("OpenCodeSettings{}", timestamp);
+        let agent_key = slugify_agent_key(&display_name);
+        let private_key = random_private_key();
+        let body = format!(
+            "display_name={}&hyperliquid_private_key={}&backend_kind=opencode&runtime_id=opencode-local",
+            display_name, private_key
+        );
+
+        let create_response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/agents")
+                    .header("content-type", "application/x-www-form-urlencoded")
+                    .body(Body::from(body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(create_response.status(), StatusCode::SEE_OTHER);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/agents/{agent_key}/settings"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let text = response_text(response).await;
+        assert!(text.contains("OpenCode workspace"));
+        assert!(text.contains("Container workspace path"));
+        assert!(text.contains("Profile source"));
+        assert!(text.contains("Workspace .env"));
     }
 
     #[tokio::test]

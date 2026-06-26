@@ -1033,6 +1033,13 @@ mod tests {
             ui_events: Arc::new(UiEventHub::new()),
             hermes: None,
             hermes_dashboard_link_url: "http://127.0.0.1:19119".to_string(),
+            opencode_workspace_config: crate::opencode::workspace::OpenCodeWorkspaceConfig {
+                source_root: std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                    .join(crate::opencode::workspace::PROFILE_SOURCE_RELATIVE_PATH),
+                host_workspaces_root: std::path::PathBuf::from("/tmp/opencode/vibetrading-api"),
+                container_workspaces_root: "/workspaces".to_string(),
+                api_base_url: "http://host.containers.internal:3003".to_string(),
+            },
         })
     }
 

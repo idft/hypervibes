@@ -45,7 +45,8 @@ services:
       - "${OPENCODE_PORT:-14096}:14096"
     volumes:
       - opencode_data:/opencode-data
-      - workspaces:/workspaces
+      - ./workspaces:/workspaces
+      - ./agent-runtime/opencode/container/opencode.jsonc:/opencode-data/opencode.jsonc:ro
     healthcheck:
       test: ["CMD-SHELL", "exec 3<>/dev/tcp/127.0.0.1/14096"]
       interval: 10s
@@ -57,6 +58,4 @@ volumes:
   postgres_data:
     driver: local
   opencode_data:
-    driver: local
-  workspaces:
     driver: local

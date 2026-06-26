@@ -4,6 +4,7 @@ mod db;
 mod hermes;
 mod hyperliquid;
 mod memory;
+mod opencode;
 mod web;
 
 #[cfg(test)]
@@ -11,7 +12,7 @@ mod test_db;
 
 use std::sync::Arc;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use config::AppConfig;
 use db::{connect, migrate};
 use hermes::HermesClient;
@@ -60,6 +61,15 @@ async fn main() -> Result<()> {
         }
     };
 
+    let repo_root =
+        std::env::current_dir().context("failed to resolve current working directory")?;
+    let opencode_workspace_config = opencode::workspace::OpenCodeWorkspaceConfig {
+        source_root: repo_root.join(opencode::workspace::PROFILE_SOURCE_RELATIVE_PATH),
+        host_workspaces_root: config.opencode_workspaces_root.clone(),
+        container_workspaces_root: config.opencode_container_workspaces_root.clone(),
+        api_base_url: config.vibetrading_agent_api_base_url.clone(),
+    };
+
     println!("Starting agent orchestrator");
     let orchestrator = agents::AgentOrchestrator::new(
         pool.clone(),
@@ -82,6 +92,7 @@ async fn main() -> Result<()> {
         Arc::clone(&live_accounts),
         hermes,
         config.hermes_dashboard_link_url.clone(),
+        opencode_workspace_config,
         shutdown_tx,
     );
     tokio::pin!(server_future);

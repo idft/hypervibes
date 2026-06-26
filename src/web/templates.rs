@@ -528,6 +528,7 @@ pub struct AgentsShowPageTemplate {
     pub instrument_options: Vec<AgentInstrumentOptionRow>,
     pub instrument_options_loaded: bool,
     pub has_selected_instruments: bool,
+    pub opencode_workspace: Option<OpenCodeWorkspaceSettingsView>,
     pub account_balance_html: String,
     pub open_positions_html: String,
     pub open_orders_html: String,
@@ -629,6 +630,7 @@ impl AgentsShowPageTemplate {
             instrument_options: Vec::new(),
             instrument_options_loaded: false,
             has_selected_instruments: false,
+            opencode_workspace: None,
             account_balance_html: String::new(),
             open_positions_html: String::new(),
             open_orders_html: String::new(),
@@ -668,6 +670,14 @@ impl AgentsShowPageTemplate {
         )
         .unwrap_or_default();
     }
+}
+
+#[derive(Debug, Clone)]
+pub struct OpenCodeWorkspaceSettingsView {
+    pub workspace_host_path: String,
+    pub workspace_container_path: String,
+    pub profile_source: String,
+    pub env_exists: bool,
 }
 
 #[derive(Template)]

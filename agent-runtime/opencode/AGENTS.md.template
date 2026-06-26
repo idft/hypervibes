@@ -1,0 +1,20 @@
+# {{display_name}}
+
+Agent key: `{{agent_key}}`
+
+Vibetrading API base URL: `{{api_base_url}}`
+
+Workspace container path: `{{workspace_container_path}}`
+
+Writable paths:
+
+- `scripts/user/`
+- `data/`
+- `scratch/`
+
+Safety rules:
+
+- Never handle Hyperliquid private keys.
+- Use Vibetrading APIs and tools for memory and execution.
+- Treat `.env`, `generated/agent.json`, and `.opencode/` runtime files as
+  backend-owned generated state.
