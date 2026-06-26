@@ -19,6 +19,44 @@ services:
       timeout: 5s
       retries: 5
 
+  opencode:
+    image: ghcr.io/anomalyco/opencode:1.17.11
+    restart: unless-stopped
+    command: ["serve", "--hostname", "0.0.0.0", "--port", "14096"]
+    environment:
+      OPENCODE_SERVER_PASSWORD: ${OPENCODE_SERVER_PASSWORD:?OPENCODE_SERVER_PASSWORD must be set}
+      OPENCODE_SERVER_USERNAME: ${OPENCODE_SERVER_USERNAME:-opencode}
+      OPENCODE_CONFIG_DIR: /opencode-data
+      XDG_DATA_HOME: /opencode-data
+      OPENCODE_DISABLE_AUTOUPDATE: "true"
+      OPENCODE_DISABLE_PRUNE: "true"
+      # Provider credentials are passed through to OpenCode. Uncomment the
+      # ones your agents use in .env; unset values become empty strings.
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      GOOGLE_API_KEY: ${GOOGLE_API_KEY:-}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
+      XAI_API_KEY: ${XAI_API_KEY:-}
+      OPENCODE_GO_API_KEY: ${OPENCODE_GO_API_KEY:-}
+      OLLAMA_API_KEY: ${OLLAMA_API_KEY:-}
+    ports:
+      - "${OPENCODE_PORT:-14096}:14096"
+    volumes:
+      - opencode_data:/opencode-data
+      - workspaces:/workspaces
+    healthcheck:
+      test: ["CMD-SHELL", "exec 3<>/dev/tcp/127.0.0.1/14096"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
 volumes:
   postgres_data:
+    driver: local
+  opencode_data:
+    driver: local
+  workspaces:
     driver: local

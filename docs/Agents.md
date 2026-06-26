@@ -28,8 +28,12 @@ The current Phase 1 implementation follows
 `.opencode/plans/agents-implementation-plan.md` and intentionally uses a
 simplified single-table registry (`agents`) with:
 
-- no instrument bindings or per-agent instrument restrictions
+- a separate `agent_instruments` table for the selected Hyperliquid perp set per agent
 - an `environment` field (`live` or `sandbox`) on every row
+- a generic runtime/backend link on every row:
+  - `backend_kind TEXT NOT NULL`
+  - `runtime_id TEXT NOT NULL REFERENCES agent_runtimes(id)`
+  - `runtime_config JSONB NOT NULL DEFAULT '{}'::jsonb`
 - two operator-managed prompt columns:
   - `analysis_prompt TEXT NOT NULL DEFAULT ''`
   - `trading_prompt TEXT NOT NULL DEFAULT ''`
@@ -45,8 +49,26 @@ simplified single-table registry (`agents`) with:
   - `trading_context_last_used_at TIMESTAMPTZ`
 - the Hyperliquid private key encrypted at the application layer before storage
 
+The supporting `agent_runtimes` table stores reusable Hermes/OpenCode runtime
+definitions. The initial migration seeds only one runtime:
+
+- `opencode-local` -> `OpenCode local` -> `http://localhost:14096`
+
+Hermes runtimes are operator-created through the `/backends` UI when needed.
+
 Those check-in timestamps are runtime health signals, not operator-managed
 configuration.
+
+## Current Instrument Selection Behavior
+
+The current operator workflow exposes currency selection in the Agent Settings
+tab:
+
+- each agent can enable zero or more Hyperliquid perp `instrument_id` values
+- the same selected set applies to both analysis and trading
+- empty selection is allowed and means the agent should not analyze markets or place new trades
+- `/api/v1/job-context` returns the selected set as `selected_instruments`
+- `POST /api/v1/orders` rejects any order whose `symbol` is not currently selected for that agent
 
 The broader schema ideas below describe future directions rather than the
 running Phase 1 data model.
@@ -60,6 +82,10 @@ Vibetrading distribution into their own Hermes instance. The backend
 agent row represents agent identity and API auth; it is not the source
 of truth for Hermes profile lifecycle. See `docs/Hermes.md` for the
 distribution install workflow and profile ownership model.
+
+With the runtime/backend slice in place, Hermes-backed agents should also be
+linked to an operator-created Hermes runtime row when the database is restored
+or when new Hermes agents are created through the UI.
 
 ### Prompt Split
 

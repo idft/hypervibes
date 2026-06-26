@@ -4,7 +4,9 @@ use anyhow::{Context, Result, anyhow};
 use sqlx::query_as;
 
 use crate::{
-    agents::model::{AgentDetailRow, AgentListRow, AgentRegistryRow},
+    agents::model::{
+        AgentDetailRow, AgentListRow, AgentRegistryRow, AgentRuntimeRow, CreateAgentRuntimeForm,
+    },
     db::DbPool,
 };
 
@@ -24,14 +26,20 @@ pub struct AgentInstrumentOptionRow {
 pub async fn list_agents(pool: &DbPool) -> Result<Vec<AgentListRow>> {
     let rows = query_as::<_, AgentListRow>(
         "SELECT display_name,
-                agent_key,
-                enabled,
+                agents.agent_key,
+                agents.enabled,
                 wallet_address,
                 environment,
                 api_key,
-                api_key_last_used_at
+                api_key_last_used_at,
+                agents.backend_kind,
+                agents.runtime_id,
+                agent_runtimes.name AS runtime_name,
+                agent_runtimes.base_url AS runtime_base_url
            FROM agents
-          ORDER BY created_at DESC",
+           JOIN agent_runtimes
+             ON agent_runtimes.id = agents.runtime_id
+          ORDER BY agents.created_at DESC",
     )
     .fetch_all(pool)
     .await
@@ -40,24 +48,117 @@ pub async fn list_agents(pool: &DbPool) -> Result<Vec<AgentListRow>> {
     Ok(rows)
 }
 
+pub async fn list_agent_runtimes(pool: &DbPool) -> Result<Vec<AgentRuntimeRow>> {
+    let rows = query_as::<_, AgentRuntimeRow>(
+        "SELECT id,
+                created_at,
+                updated_at,
+                name,
+                backend_kind,
+                enabled,
+                base_url,
+                runtime_config
+           FROM agent_runtimes
+          ORDER BY backend_kind, name",
+    )
+    .fetch_all(pool)
+    .await
+    .context("failed to list agent runtimes")?;
+
+    Ok(rows)
+}
+
+pub async fn list_enabled_agent_runtimes(pool: &DbPool) -> Result<Vec<AgentRuntimeRow>> {
+    let rows = query_as::<_, AgentRuntimeRow>(
+        "SELECT id,
+                created_at,
+                updated_at,
+                name,
+                backend_kind,
+                enabled,
+                base_url,
+                runtime_config
+           FROM agent_runtimes
+          WHERE enabled = true
+          ORDER BY backend_kind, name",
+    )
+    .fetch_all(pool)
+    .await
+    .context("failed to list enabled agent runtimes")?;
+
+    Ok(rows)
+}
+
+pub async fn get_agent_runtime(pool: &DbPool, id: &str) -> Result<Option<AgentRuntimeRow>> {
+    let row = query_as::<_, AgentRuntimeRow>(
+        "SELECT id,
+                created_at,
+                updated_at,
+                name,
+                backend_kind,
+                enabled,
+                base_url,
+                runtime_config
+           FROM agent_runtimes
+          WHERE id = $1",
+    )
+    .bind(id)
+    .fetch_optional(pool)
+    .await
+    .context("failed to fetch agent runtime")?;
+
+    Ok(row)
+}
+
+pub async fn insert_agent_runtime(pool: &DbPool, form: &CreateAgentRuntimeForm) -> Result<()> {
+    let base_url = form.base_url.trim();
+    sqlx::query(
+        "INSERT INTO agent_runtimes (
+            id,
+            name,
+            backend_kind,
+            enabled,
+            base_url,
+            runtime_config
+        ) VALUES ($1, $2, $3, $4, $5, '{}'::jsonb)",
+    )
+    .bind(form.id.trim())
+    .bind(form.name.trim())
+    .bind(form.backend_kind.trim())
+    .bind(form.enabled())
+    .bind((!base_url.is_empty()).then_some(base_url))
+    .execute(pool)
+    .await
+    .context("failed to insert agent runtime")?;
+
+    Ok(())
+}
+
 /// Fetch a single agent by its unique agent key.
 pub async fn get_agent(pool: &DbPool, agent_key: &str) -> Result<Option<AgentDetailRow>> {
     let row = query_as::<_, AgentDetailRow>(
         "SELECT display_name,
-                agent_key,
-                enabled,
+                agents.agent_key,
+                agents.enabled,
                 analysis_prompt,
                 trading_prompt,
                 wallet_address,
                 environment,
                 api_key,
                 api_key_last_used_at,
+                agents.backend_kind,
+                agents.runtime_id,
+                agent_runtimes.name AS runtime_name,
+                agent_runtimes.base_url AS runtime_base_url,
+                agents.runtime_config,
                 analysis_context_last_used_at,
                 trading_context_last_used_at,
-                created_at,
-                updated_at
+                agents.created_at,
+                agents.updated_at
            FROM agents
-          WHERE agent_key = $1",
+           JOIN agent_runtimes
+             ON agent_runtimes.id = agents.runtime_id
+          WHERE agents.agent_key = $1",
     )
     .bind(agent_key)
     .fetch_optional(pool)
@@ -217,11 +318,14 @@ pub async fn insert_agent(pool: &DbPool, row: &AgentRegistryRow) -> Result<()> {
             environment,
             api_key,
             api_key_last_used_at,
+            backend_kind,
+            runtime_id,
+            runtime_config,
             analysis_context_last_used_at,
             trading_context_last_used_at,
             hyperliquid_private_key_ciphertext,
             hyperliquid_private_key_key_id
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)",
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)",
     )
     .bind(&row.agent_key)
     .bind(row.created_at)
@@ -234,6 +338,9 @@ pub async fn insert_agent(pool: &DbPool, row: &AgentRegistryRow) -> Result<()> {
     .bind(&row.environment)
     .bind(&row.api_key)
     .bind(row.api_key_last_used_at)
+    .bind(&row.backend_kind)
+    .bind(&row.runtime_id)
+    .bind(&row.runtime_config)
     .bind(row.analysis_context_last_used_at)
     .bind(row.trading_context_last_used_at)
     .bind(&row.hyperliquid_private_key_ciphertext)
@@ -374,6 +481,27 @@ pub async fn touch_job_context_last_used(
     Ok(())
 }
 
+pub async fn runtime_matches_backend(
+    pool: &DbPool,
+    runtime_id: &str,
+    backend_kind: &str,
+) -> Result<bool> {
+    let row: Option<(i32,)> = query_as(
+        "SELECT 1
+           FROM agent_runtimes
+          WHERE id = $1
+            AND enabled = true
+            AND backend_kind = $2",
+    )
+    .bind(runtime_id)
+    .bind(backend_kind)
+    .fetch_optional(pool)
+    .await
+    .context("failed to validate agent runtime/backend match")?;
+
+    Ok(row.is_some())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -452,6 +580,9 @@ mod tests {
             environment: "live".to_string(),
             api_key: format!("vta_{}", key),
             api_key_last_used_at: None,
+            backend_kind: crate::agents::model::BACKEND_KIND_OPENCODE.to_string(),
+            runtime_id: "opencode-local".to_string(),
+            runtime_config: serde_json::json!({}),
             analysis_context_last_used_at: None,
             trading_context_last_used_at: None,
             hyperliquid_private_key_ciphertext: ciphertext,
@@ -482,6 +613,76 @@ mod tests {
 
         let agents = list_agents(&pool).await.expect("list agents");
         assert!(agents.iter().any(|a| a.agent_key == key));
+    }
+
+    #[tokio::test]
+    async fn list_agent_runtimes_includes_seeded_opencode_runtime() {
+        let pool = test_db::pool().await;
+
+        let runtimes = list_agent_runtimes(&pool).await.expect("list runtimes");
+        let runtime = runtimes
+            .iter()
+            .find(|runtime| runtime.id == "opencode-local")
+            .expect("seeded runtime present");
+        assert_eq!(runtime.backend_kind, "opencode");
+        assert_eq!(runtime.base_url.as_deref(), Some("http://localhost:14096"));
+    }
+
+    #[tokio::test]
+    async fn insert_agent_runtime_and_runtime_match_round_trip() {
+        let pool = test_db::pool().await;
+        let id = format!("hermes-local-{}", Utc::now().timestamp_millis());
+        let form = CreateAgentRuntimeForm {
+            id: id.clone(),
+            name: format!("Hermes local {id}"),
+            backend_kind: crate::agents::model::BACKEND_KIND_HERMES.to_string(),
+            base_url: "http://localhost:19119".to_string(),
+            enabled: Some("on".to_string()),
+        };
+
+        insert_agent_runtime(&pool, &form)
+            .await
+            .expect("insert agent runtime");
+
+        let stored = get_agent_runtime(&pool, &id)
+            .await
+            .expect("get runtime")
+            .expect("runtime present");
+        assert_eq!(stored.name, form.name);
+        assert_eq!(stored.base_url.as_deref(), Some("http://localhost:19119"));
+        assert!(
+            runtime_matches_backend(&pool, &id, crate::agents::model::BACKEND_KIND_HERMES)
+                .await
+                .expect("match runtime")
+        );
+        assert!(
+            !runtime_matches_backend(&pool, &id, crate::agents::model::BACKEND_KIND_OPENCODE)
+                .await
+                .expect("mismatch runtime")
+        );
+    }
+
+    #[tokio::test]
+    async fn list_enabled_agent_runtimes_filters_disabled_rows() {
+        let pool = test_db::pool().await;
+        let id = format!("disabled-runtime-{}", Utc::now().timestamp_millis());
+        let form = CreateAgentRuntimeForm {
+            id: id.clone(),
+            name: format!("Disabled runtime {id}"),
+            backend_kind: crate::agents::model::BACKEND_KIND_HERMES.to_string(),
+            base_url: String::new(),
+            enabled: None,
+        };
+
+        insert_agent_runtime(&pool, &form)
+            .await
+            .expect("insert disabled runtime");
+
+        let runtimes = list_enabled_agent_runtimes(&pool)
+            .await
+            .expect("list enabled runtimes");
+        assert!(runtimes.iter().all(|runtime| runtime.enabled));
+        assert!(runtimes.iter().all(|runtime| runtime.id != id));
     }
 
     #[tokio::test]

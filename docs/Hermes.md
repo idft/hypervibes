@@ -118,6 +118,8 @@ Response shape:
   "display_name": "BTC Momentum",
   "environment": "live",
   "prompt": "Manage open risk conservatively.",
+  "selected_instruments": ["BTC", "ETH"],
+  "instructions": [],
   "account": {
     "agent_key": "btc-momentum",
     "account_address": "0x...",
@@ -147,6 +149,9 @@ Response shape:
 
 Behavior:
 
+- operators choose the allowed Hyperliquid perp set in the agent Settings tab
+- `selected_instruments` is always returned as the currently enabled Hyperliquid perp IDs for that agent
+- empty selection is valid and returns `selected_instruments: []` plus `instructions` telling the agent to do nothing until at least one currency is enabled
 - `job_kind=analysis` returns `analysis_prompt` and `account: null`
 - `job_kind=trading` returns `trading_prompt` plus a freshness-gated account contract containing balance, full open positions, and full open orders
 - each successful `job-context` call also updates a per-loop check-in timestamp in
@@ -156,9 +161,16 @@ Trading agents must treat account availability as a hard safety gate:
 
 - if `account.account_data.available != true`, do not place new opening orders
 - if `account.balance == null`, do not place new opening orders
+- if `selected_instruments` is empty or `instructions` says no currencies are enabled, do not analyze markets or place trades
 - use `account.balance.available_to_trade_usd` for collateral sizing
 - use `account.open_positions` and `account.open_orders` for exposure and order management
 - raw `account.state`, raw `margin`, and raw `spot_balances` are intentionally not part of the agent-facing API contract
+
+Order placement is also server-enforced against the same set:
+
+- `POST /api/v1/orders` is rejected when the agent has no selected currencies
+- `POST /api/v1/orders` is rejected when any submitted `symbol` is not in `selected_instruments`
+- cancel endpoints are intentionally not blocked by this restriction so risk-reducing cleanup still works
 
 New backend agents receive default strategy prompts at creation time. Those
 defaults live in `src/agents/prompts.rs` and are ordinary stored prompt text,

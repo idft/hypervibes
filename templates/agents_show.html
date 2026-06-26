@@ -13,6 +13,11 @@
             </div>
             <div class="mt-3 flex items-center gap-3">
                 <h1 class="text-3xl font-semibold tracking-tight text-white">{{ agent.display_name }}</h1>
+                {% if agent.backend_kind == "hermes" %}
+                <span class="inline-flex rounded-full border border-sky-900/60 bg-sky-950/30 px-2.5 py-1 text-xs font-medium text-sky-300">hermes</span>
+                {% else %}
+                <span class="inline-flex rounded-full border border-violet-900/60 bg-violet-950/30 px-2.5 py-1 text-xs font-medium text-violet-300">opencode</span>
+                {% endif %}
                 {% if agent.environment == "live" %}
                 <span class="inline-flex rounded-full border border-emerald-900/60 bg-emerald-950/30 px-2.5 py-1 text-xs font-medium text-emerald-300">live</span>
                 {% else if agent.environment == "sandbox" %}
@@ -309,6 +314,27 @@
                 <div>
                     <dt class="text-xs uppercase tracking-[0.16em] text-zinc-500">Environment</dt>
                     <dd class="mt-1 text-sm text-zinc-300">{{ agent.environment }}</dd>
+                </div>
+                <div>
+                    <dt class="text-xs uppercase tracking-[0.16em] text-zinc-500">Backend kind</dt>
+                    <dd class="mt-1 text-sm text-zinc-300">{{ agent.backend_kind }}</dd>
+                </div>
+                <div>
+                    <dt class="text-xs uppercase tracking-[0.16em] text-zinc-500">Runtime</dt>
+                    <dd class="mt-1 text-sm text-zinc-300">
+                        {{ agent.runtime_name }}
+                        <span class="text-zinc-500">({{ agent.runtime_id }})</span>
+                    </dd>
+                </div>
+                <div>
+                    <dt class="text-xs uppercase tracking-[0.16em] text-zinc-500">Runtime base URL</dt>
+                    <dd class="mt-1 break-all font-mono text-xs text-zinc-300">
+                        {% if let Some(runtime_base_url) = agent.runtime_base_url %}
+                        {{ runtime_base_url }}
+                        {% else %}
+                        <span class="text-zinc-500">-</span>
+                        {% endif %}
+                    </dd>
                 </div>
                 <div>
                     <dt class="text-xs uppercase tracking-[0.16em] text-zinc-500">Wallet address</dt>

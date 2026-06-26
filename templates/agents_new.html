@@ -40,8 +40,37 @@
             <p class="mt-1 text-xs text-zinc-500">The wallet address is derived from this key and the key is encrypted before storage.</p>
         </div>
 
+        <div class="grid gap-6 sm:grid-cols-2">
+            <div>
+                <label for="backend_kind" class="block text-sm font-medium text-zinc-300">Backend kind</label>
+                <select id="backend_kind" name="backend_kind" required
+                    class="mt-2 block w-full rounded-xl border border-zinc-800 bg-zinc-950 px-3 py-2 text-sm text-white focus:border-zinc-600 focus:outline-none">
+                    <option value="" {% if form.backend_kind.is_empty() %}selected{% endif %}>Select a backend</option>
+                    <option value="hermes" {% if form.backend_kind == "hermes" %}selected{% endif %}>Hermes</option>
+                    <option value="opencode" {% if form.backend_kind == "opencode" %}selected{% endif %}>OpenCode</option>
+                </select>
+            </div>
+
+            <div>
+                <label for="runtime_id" class="block text-sm font-medium text-zinc-300">Runtime</label>
+                <select id="runtime_id" name="runtime_id" required
+                    class="mt-2 block w-full rounded-xl border border-zinc-800 bg-zinc-950 px-3 py-2 text-sm text-white focus:border-zinc-600 focus:outline-none">
+                    <option value="" {% if form.runtime_id.is_empty() %}selected{% endif %}>Select a runtime</option>
+                    {% for runtime in runtimes %}
+                    <option value="{{ runtime.id }}" {% if form.runtime_id == runtime.id %}selected{% endif %}>
+                        {% if runtime.backend_kind == "hermes" %}
+                        Hermes - {{ runtime.name }} ({{ runtime.id }})
+                        {% else %}
+                        OpenCode - {{ runtime.name }} ({{ runtime.id }})
+                        {% endif %}
+                    </option>
+                    {% endfor %}
+                </select>
+            </div>
+        </div>
+
         <div class="flex items-center gap-3">
-            <input type="checkbox" id="enabled" name="enabled" checked
+            <input type="checkbox" id="enabled" name="enabled" {% if form.enabled.is_some() %}checked{% endif %}
                 class="h-4 w-4 rounded border-zinc-700 bg-zinc-950 text-zinc-100 focus:ring-zinc-600">
             <label for="enabled" class="text-sm text-zinc-300">Enabled</label>
         </div>

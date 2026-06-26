@@ -8,7 +8,9 @@ use rust_decimal::Decimal;
 
 use crate::{
     agents::{
-        model::{AgentDetailRow, AgentListRow, CreateAgentForm},
+        model::{
+            AgentDetailRow, AgentListRow, AgentRuntimeRow, CreateAgentForm, CreateAgentRuntimeForm,
+        },
         prompts::{DEFAULT_ANALYSIS_STRATEGY_PROMPT, DEFAULT_TRADING_STRATEGY_PROMPT},
         store::AgentInstrumentOptionRow,
     },
@@ -482,6 +484,22 @@ pub struct AgentsPageTemplate {
 #[template(path = "agents_new.html")]
 pub struct AgentsNewPageTemplate {
     pub form: CreateAgentForm,
+    pub runtimes: Vec<AgentRuntimeRow>,
+    pub errors: Vec<String>,
+    pub current_path: String,
+}
+
+#[derive(Template)]
+#[template(path = "backends.html")]
+pub struct BackendsPageTemplate {
+    pub runtimes: Vec<AgentRuntimeRow>,
+    pub current_path: String,
+}
+
+#[derive(Template)]
+#[template(path = "backends_new.html")]
+pub struct BackendsNewPageTemplate {
+    pub form: CreateAgentRuntimeForm,
     pub errors: Vec<String>,
     pub current_path: String,
 }
@@ -539,6 +557,7 @@ impl AgentsShowPageTemplate {
     pub fn new(agent: AgentDetailRow, active_tab: AgentShowTab) -> Self {
         let agent_key = agent.agent_key.clone();
         let now = Utc::now();
+        let uses_hermes_runtime = agent.backend_kind == crate::agents::model::BACKEND_KIND_HERMES;
         let analysis_context_never_checked_in = agent.analysis_context_last_used_at.is_none();
         let trading_context_never_checked_in = agent.trading_context_last_used_at.is_none();
         let analysis_context_stale = is_stale_checkin(
@@ -578,9 +597,10 @@ impl AgentsShowPageTemplate {
             trading_context_never_checked_in,
             analysis_context_stale,
             trading_context_stale,
-            show_cron_setup_alert: analysis_context_never_checked_in
-                || trading_context_never_checked_in,
-            show_cron_stale_warning: analysis_context_stale || trading_context_stale,
+            show_cron_setup_alert: uses_hermes_runtime
+                && (analysis_context_never_checked_in || trading_context_never_checked_in),
+            show_cron_stale_warning: uses_hermes_runtime
+                && (analysis_context_stale || trading_context_stale),
             analysis_context_stale_after_minutes: ANALYSIS_CONTEXT_STALE_AFTER_MINUTES,
             trading_context_stale_after_minutes: TRADING_CONTEXT_STALE_AFTER_MINUTES,
             cron_setup_prompt: build_cron_setup_prompt(&agent_key),
@@ -1372,6 +1392,10 @@ mod tests {
             environment: "live".to_string(),
             api_key: "vt_test_key".to_string(),
             api_key_last_used_at: None,
+            backend_kind: "hermes".to_string(),
+            runtime_id: "hermes-local".to_string(),
+            runtime_name: "Hermes local".to_string(),
+            runtime_base_url: Some("http://localhost:19119".to_string()),
         }
     }
 
@@ -1387,6 +1411,11 @@ mod tests {
             environment: "live".to_string(),
             api_key: "vt_test_key".to_string(),
             api_key_last_used_at: None,
+            backend_kind: "hermes".to_string(),
+            runtime_id: "hermes-local".to_string(),
+            runtime_name: "Hermes local".to_string(),
+            runtime_base_url: Some("http://localhost:19119".to_string()),
+            runtime_config: serde_json::json!({}),
             analysis_context_last_used_at: None,
             trading_context_last_used_at: None,
             created_at: now,
@@ -1402,6 +1431,20 @@ mod tests {
             total_u_pnl: AnimatedNumber::for_pnl(rust_decimal::Decimal::new(12_3400, 4)),
             status: crate::hyperliquid::live_state::LiveConnectionStatus::Connected,
             updated_at: Some(Utc::now()),
+        }
+    }
+
+    fn sample_runtime_row() -> AgentRuntimeRow {
+        let now = Utc::now();
+        AgentRuntimeRow {
+            id: "opencode-local".to_string(),
+            created_at: now,
+            updated_at: now,
+            name: "OpenCode local".to_string(),
+            backend_kind: "opencode".to_string(),
+            enabled: true,
+            base_url: Some("http://localhost:14096".to_string()),
+            runtime_config: serde_json::json!({}),
         }
     }
 
@@ -1454,6 +1497,8 @@ mod tests {
         assert!(rendered.contains("Account balance"));
         assert!(rendered.contains("232.6800"));
         assert!(!rendered.contains("USDC"));
+        assert!(rendered.contains("Hermes local"));
+        assert!(rendered.contains("hermes"));
     }
 
     #[test]
@@ -1752,6 +1797,7 @@ mod tests {
     fn agents_new_page_renders_base_layout_and_form() {
         let template = AgentsNewPageTemplate {
             form: CreateAgentForm::default(),
+            runtimes: vec![sample_runtime_row()],
             errors: vec![],
             current_path: "/agents/new".to_string(),
         };
@@ -1759,6 +1805,57 @@ mod tests {
         assert!(rendered.contains("<!DOCTYPE html>"));
         assert!(rendered.contains("Create agent · Vibetrading"));
         assert!(rendered.contains("display_name"));
+        assert!(rendered.contains("name=\"backend_kind\""));
+        assert!(rendered.contains("name=\"runtime_id\""));
+        assert!(rendered.contains("OpenCode local"));
+    }
+
+    #[test]
+    fn backends_page_renders_runtime_row() {
+        let template = BackendsPageTemplate {
+            runtimes: vec![sample_runtime_row()],
+            current_path: "/backends".to_string(),
+        };
+
+        let rendered = template.render().unwrap();
+        assert!(rendered.contains("Backends"));
+        assert!(rendered.contains("opencode-local"));
+        assert!(rendered.contains("OpenCode local"));
+        assert!(rendered.contains("http://localhost:14096"));
+    }
+
+    #[test]
+    fn backends_new_page_renders_create_form() {
+        let template = BackendsNewPageTemplate {
+            form: CreateAgentRuntimeForm {
+                backend_kind: "hermes".to_string(),
+                enabled: Some("on".to_string()),
+                ..Default::default()
+            },
+            errors: Vec::new(),
+            current_path: "/backends/new".to_string(),
+        };
+
+        let rendered = template.render().unwrap();
+        assert!(rendered.contains("Create backend"));
+        assert!(rendered.contains("name=\"id\""));
+        assert!(rendered.contains("name=\"backend_kind\""));
+        assert!(rendered.contains("name=\"base_url\""));
+    }
+
+    #[test]
+    fn opencode_agents_do_not_render_hermes_cron_alerts() {
+        let mut agent = sample_agent_detail_row();
+        agent.backend_kind = "opencode".to_string();
+        agent.runtime_name = "OpenCode local".to_string();
+        agent.runtime_id = "opencode-local".to_string();
+        agent.runtime_base_url = Some("http://localhost:14096".to_string());
+
+        let template = AgentsShowPageTemplate::new(agent, AgentShowTab::Positions);
+        let rendered = template.render().unwrap();
+
+        assert!(!rendered.contains("Hermes cron setup required"));
+        assert!(!rendered.contains("Hermes cron check-in is stale"));
     }
 
     #[test]

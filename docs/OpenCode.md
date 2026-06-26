@@ -27,8 +27,18 @@ The intended ownership model is:
 - Hyperliquid private keys remain backend-side and must not be exposed to
   OpenCode.
 
-This is a major architecture addition and should be implemented in phases. This
-document captures the OpenCode backend plan, not a completed implementation.
+This is a major architecture addition and should be implemented in phases.
+
+Current implemented slice:
+
+- `agent_runtimes` exists as the first generic backend runtime table
+- migrations seed one OpenCode runtime, `opencode-local`, pointing at
+  `http://localhost:14096`
+- agents can now be linked to either Hermes or OpenCode runtimes in the UI
+- scheduling, session creation, run tracking, and workspace generation are not
+  implemented yet
+
+The rest of this document still captures the larger OpenCode backend plan.
 
 ## High-Level Architecture
 
@@ -520,6 +530,318 @@ Suggested implementation phases:
 13. Enable real trading tools last.
 14. Add UI work for backend badges, per-backend setup guidance, mandatory
     runtime picker on create, OpenCode schedules, and OpenCode run history.
+
+## Implementation TODO
+
+This section expands the implementation phases above into a sequenced backlog
+of small, reviewable chunks. Each chunk should be small enough to ship behind
+a single review and is ordered to respect dependencies between doc, schema,
+and runtime work. Items in earlier phases unblock items in later phases but
+should not block each other within a phase where possible.
+
+### Phase 0: Documentation Foundation
+
+- **0.1 - Add `docs/Backends.md` with the generic backend model.** Create the
+  doc that this plan already references. Define the `agent_runtime` row
+  shape, the meaning of `agents.runtime_id`, `agents.backend_kind`, and
+  `agents.runtime_config`, and the shared invariants. This precedes any
+  schema work.
+- **0.2 - Update `docs/README.md` doc index.** Add `Backends.md` to the docs
+  list. Ship alongside 0.1.
+- **0.3 - Add this Implementation TODO section to `OpenCode.md`.** Capture
+  the concrete chunked plan inline. (This step.)
+
+### Phase 1: Spikes and Investigation
+
+These items are inputs to every later phase. They are intentionally small and
+exist to remove unknowns from the plan's "Deferred Investigation Items" list.
+
+- **1.1 - Spike the OpenCode HTTP API and directory-scoped sessions.** Stand
+  up an OpenCode server locally, exercise `POST /session` with the
+  `x-opencode-directory` header, then send a follow-up command call to see
+  whether the header is also required there. Record the result in
+  `OpenCode.md`.
+- **1.2 - Investigate the OpenCode database plugin schema.** Vendor the
+  plugin DDL into a scratch location, test whether unqualified table names
+  work under `search_path = opencode, public`, and document any required
+  patches.
+- **1.3 - Investigate permission handling for headless runs.** Verify how
+  OpenCode behaves when a permission resolves to `ask`, and document the
+  production permission configuration that prevents runs from blocking on
+  interactive approval.
+- **1.4 - Investigate per-agent Vibetrading API credential scoping for
+  OpenCode.** Determine the cleanest way to give each OpenCode session
+  access to its own agent's API key without making every agent's key
+  globally available inside the container. Update `Backends.md` with the
+  chosen shape.
+- **1.5 - Promote resolved items out of "Deferred Investigation Items".** As
+  1.1 through 1.4 are answered, move the answers into concrete decisions in
+  `OpenCode.md` and remove the resolved bullets from the deferred list.
+
+### Phase 2: Container and Local Dev
+
+- **2.1 - Add the `opencode` service to `podman-compose.yaml`.** Mount
+  `/workspaces` and `/opencode-data` volumes, expose the OpenCode HTTP port
+  on the internal network only, and read provider credentials from env. Do
+  not auto-start.
+- **2.2 - Add a custom OpenCode Dockerfile at `containers/opencode/Dockerfile`.**
+  Build on the upstream OpenCode image. Install Python, `uv`, the database
+  plugin, and a small `requirements.txt` for the in-workspace Python client.
+- **2.3 - Pin a shared workspace path.** Ensure the OpenCode container and
+  the backend container see `/workspaces` as the same absolute path so
+  generated files work without translation.
+- **2.4 - Configure OpenCode server auth.** Generate a server password, add
+  it to `.env.example`, and inject it into the container env. Verify that
+  anonymous calls to the API are rejected.
+
+### Phase 3: Generic Backend Schema
+
+- **3.1 - Migration: create the `agent_runtime` table.** Add a new migration
+  with one row per backend deployment. Columns: `id`, `backend_kind`,
+  `display_name`, `base_url`, `auth_secret_ref`, `metadata`, timestamps.
+  CHECK constraint for `backend_kind IN ('hermes', 'opencode')`.
+- **3.2 - Migration: add runtime columns to `agents`.** Add nullable
+  `runtime_id`, `backend_kind`, and JSONB `runtime_config` to the existing
+  `agents` table. Add a CHECK constraint for `backend_kind`.
+- **3.3 - Backfill: register one Hermes runtime and assign existing agents
+  to it.** Insert a single `agent_runtime` row representing the current
+  Hermes install and update every existing `agents` row to point at it with
+  `backend_kind = 'hermes'`.
+- **3.4 - Tests for runtime resolution helpers.** Add unit tests for
+  "resolve agent by api_key and load its runtime" and for the default
+  Hermes assignment.
+
+### Phase 4: Job Schedules and Runs Schema
+
+- **4.1 - Migration: create the `agentic_job_schedules` table.** Add the
+  schedule table per the plan. Include a CHECK constraint for `job_kind` and
+  a unique index on `(agent_key, job_key)`.
+- **4.2 - Migration: create the `agentic_runs` table.** Add the runs table
+  per the plan with a `status` CHECK constraint, a `backend_run_ref` text
+  column, and indexes on `(agent_key, job_key, started_at DESC)` and
+  `(status)`.
+- **4.3 - Add a small `agentic_runs` and `agentic_job_schedules` query
+  module.** Provide `insert_queued`, `mark_running`, `mark_succeeded`,
+  `mark_failed`, `insert_skipped`, and `find_active_for_schedule` helpers.
+  Keep this small and query-focused.
+
+### Phase 5: OpenCode Database Plugin Vendoring
+
+- **5.1 - Vendor the OpenCode database plugin DDL.** Copy the plugin SQL into
+  `migrations/vendor/opencode/` with its original license. Do not modify
+  it yet.
+- **5.2 - Qualify or patch the vendored DDL.** Either qualify every table
+  name with `opencode.` or set `search_path` per session, whichever passes
+  the spike in 1.2. Commit the patched SQL in place.
+- **5.3 - Migration: create the `opencode` schema and apply the plugin DDL.**
+  New migration that creates the schema and applies the patched plugin DDL
+  inside it. Include a downgrade.
+- **5.4 - Surface plugin logging failures as degraded observability.** Wrap
+  plugin calls in a `tracing` span and log a warning (not an error) when
+  the plugin write fails, so analysis and trading runs are not blocked.
+
+### Phase 6: Runtime Profile Source
+
+- **6.1 - Create the `agent-runtime/opencode/` directory skeleton.** Add the
+  empty directory layout per the plan with `.gitkeep` placeholders. No
+  content yet.
+- **6.2 - Add `agent-runtime/opencode/README.md`.** Explain the purpose of
+  this directory, how it relates to the repo-root `.opencode/`, and how it
+  gets baked into the custom OpenCode image.
+- **6.3 - Add `agent-runtime/opencode/SOUL.md` and `AGENTS.md.template`.**
+  Add the trading-agent OpenCode command context and a per-agent template
+  that gets rendered into each workspace.
+- **6.4 - Add command stubs.** Create `commands/vibetrading-analysis.md` and
+  `commands/vibetrading-trading.md` with placeholders describing what each
+  will do.
+- **6.5 - Add agent stubs.** Create `agents/analysis.md` and
+  `agents/trading.md` with placeholders.
+- **6.6 - Add the `vibetrading/py/` Python client skeleton.** Place a
+  `vibetrading_client.py` with a tiny `Client` class that holds the agent
+  API key. Real endpoints come later.
+- **6.7 - Add `requirements.txt` for the workspace Python environment.**
+  Pin the minimum dependencies the eventual client needs (e.g. `requests`).
+
+### Phase 7: Workspace Generation
+
+- **7.1 - Add a `workspaces_root` config value.** Add a new field to
+  `AppConfig` for the absolute path where per-agent OpenCode workspaces
+  live. Default to a sensible local-dev path.
+- **7.2 - Add `src/agent_runtime/opencode/workspace.rs` with directory
+  creation.** Create the per-agent workspace tree under
+  `/workspaces/agents/<agent_key>/` with the layout from the plan.
+  Idempotent: do not error if the tree already exists.
+- **7.3 - Render `opencode.json` and `AGENTS.md` from the profile source.**
+  Copy `opencode.json.template` and `AGENTS.md.template` into the
+  workspace, substituting `agent_key` and any other per-agent fields.
+  Track rendered values in `generated/agent.json`.
+- **7.4 - Place `.opencode/{commands,agents,skills}` from the profile
+  source.** Copy these subtrees from `agent-runtime/opencode/` into the
+  workspace's `.opencode/` directory on every regeneration.
+- **7.5 - Place `scripts/{generated,user}`, `vibetrading/`, `data/`,
+  `scratch/` skeletons.** Create the runnable directories and the
+  `vibetrading/py/` mirror from the profile source. The `scripts/user/`
+  directory is created but never deleted.
+- **7.6 - Add path-preservation rules.** Document and enforce that the
+  generator must not delete `scripts/user/` or any other explicitly-writable
+  path. Add a unit test that verifies a fake user-written script survives
+  a regeneration.
+- **7.7 - Wire workspace regeneration into agent create and update.** Call
+  the generator when an OpenCode agent is created and when its
+  `runtime_config` changes. Skip for Hermes agents.
+
+### Phase 8: Backend Adapter Abstraction
+
+- **8.1 - Define the `BackendKind` enum.** Add `BackendKind { Hermes,
+  OpenCode }` in the agents module with `as_str`, `FromStr`, and sqlx
+  `Type` derives.
+- **8.2 - Define the `AgentBackend` trait.** Declare the methods needed to
+  dispatch a run, record a backend run ref, and report runtime health.
+  Keep it small.
+- **8.3 - Define `DispatchRequest` and `DispatchResult` types.** Plain
+  structs. The result should carry a `backend_run_ref` plus a status enum.
+- **8.4 - Implement `HermesBackend`.** Wrap the existing `HermesClient` and
+  `AgentOrchestrator` paths. Since Hermes is externally scheduled, the
+  adapter is mostly read-only and reports health from the existing
+  `*_context_last_used_at` timestamps.
+- **8.5 - Implement `OpenCodeBackend` as a mock.** Stand-in adapter that
+  records `agentic_runs` rows and logs the would-be command and agent. It
+  must satisfy the trait but must not make any real HTTP calls yet.
+
+### Phase 9: Agentic Scheduler
+
+- **9.1 - Add `src/agentic_scheduler/mod.rs` and `scheduler.rs` skeleton.**
+  New module with `AgenticScheduler::new` and a `run` loop. Not yet wired
+  into `main.rs`.
+- **9.2 - Implement the due-time loop.** Walk enabled schedules for enabled
+  OpenCode agents and check `now >= next_run_at`.
+- **9.3 - Implement concurrency enforcement.** Before dispatch, check for
+  an active run on the same schedule; if present, insert a skipped run and
+  advance `next_run_at`.
+- **9.4 - Implement queued-run insertion and dispatch.** Insert a `queued`
+  row, advance `next_run_at` to `now + interval_seconds`, mark the run
+  `running`, then call the adapter. Move the actual `running` transition
+  inside the dispatch path.
+- **9.5 - Implement timeout and failure marking.** After dispatch, mark
+  the run `succeeded`, `failed`, or `aborted` based on the adapter result.
+  Record a short `error_summary` on failure.
+- **9.6 - Add unit tests for scheduling semantics.** Cover: due run
+  dispatches, active run is skipped, failed run is marked, disabled
+  schedule is skipped, disabled parent agent is skipped.
+- **9.7 - Wire `AgenticScheduler` into `main.rs`.** Start it next to the
+  existing `AgentOrchestrator`. Both should share the same shutdown signal.
+
+### Phase 10: Real OpenCode Backend
+
+- **10.1 - Add an OpenCode HTTP client.** Use `reqwest` to call the OpenCode
+  server. Place it in `src/agent_runtime/opencode/client.rs`. Support basic
+  auth via the configured password.
+- **10.2 - Implement real session creation.** Call `POST /session` with the
+  per-agent workspace path and the `x-opencode-directory` header. Capture
+  and return the session id.
+- **10.3 - Implement real command dispatch.** Send the resolved OpenCode
+  command (analysis or trading) along with the operator prompt, scoped to
+  the per-session directory.
+- **10.4 - Implement session status polling.** Poll the session until it
+  reaches a terminal state or the schedule's `timeout_seconds` elapses,
+  then mark the run accordingly.
+- **10.5 - Replace the mock `OpenCodeBackend` with the real one.** Remove
+  the mock from production paths; keep it behind a test helper for now.
+- **10.6 - Add health reporting.** Expose an `is_healthy` method that
+  returns true when the OpenCode server responds to a basic health
+  endpoint.
+
+### Phase 11: Analysis Jobs
+
+- **11.1 - Flesh out `commands/vibetrading-analysis.md`.** Describe the
+  analysis loop: read latest account state, read relevant memories,
+  optionally write a Python analysis script under `scripts/user/`, write a
+  structured memory.
+- **11.2 - Flesh out `agents/analysis.md`.** Describe the analysis agent's
+  permissions: may read everything, may write memories, may write Python
+  under `scripts/user/`, must not place or cancel orders.
+- **11.3 - Add the `vibetrading_client` Python wrapper.** Implement
+  `list_memories`, `get_memory`, and `write_memory` methods in
+  `vibetrading/py/vibetrading_client.py`. Use the agent API key from the
+  workspace's `generated/agent.json`.
+- **11.4 - Default `analysis-15m` schedule seed.** When an OpenCode agent
+  is created, insert a default `analysis-15m` schedule with the recommended
+  interval and timeout.
+- **11.5 - End-to-end test: analysis job writes a memory.** Run the
+  analysis command against a sandbox agent, verify a memory row appears in
+  Postgres, and verify the run row is `succeeded` with a
+  `backend_run_ref`.
+
+### Phase 12: Trading Jobs (Dry-Run)
+
+- **12.1 - Flesh out `commands/vibetrading-trading.md`.** Describe the
+  trading loop: read latest account state, read active memories, propose
+  orders through the Vibetrading tool, never sign directly.
+- **12.2 - Flesh out `agents/trading.md`.** Describe the trading agent's
+  permissions: may read account state and memories, may call the
+  `propose_order` tool, must not write Python scripts in the initial
+  design.
+- **12.3 - Add the `propose_order` Vibetrading tool.** A new
+  `POST /api/v1/order-proposals` endpoint that records the proposal in
+  Postgres but never signs or submits. Returns the stored proposal id.
+- **12.4 - Add a `propose_order` method to the Python client.** Wire the
+  trading command to the new endpoint.
+- **12.5 - Default `trading-1m` schedule seed.** Insert a default
+  `trading-1m` schedule with the recommended interval and timeout when an
+  OpenCode agent is created.
+- **12.6 - End-to-end test: trading job proposes orders only.** Run the
+  trading command in dry-run mode, verify a proposal row is created in
+  Postgres, and verify that no order is submitted to Hyperliquid.
+
+### Phase 13: Real Trading
+
+- **13.1 - Wire real `submit_order` and `cancel_order` tools.** Reuse the
+  existing `/api/v1/orders` and `/api/v1/orders/:id/cancel` endpoints;
+  ensure the OpenCode path uses the same auth and instrument-restriction
+  rules as the Hermes path.
+- **13.2 - Add a per-agent kill switch.** A boolean on the registry row,
+  default false, that, when set, blocks the `AgenticScheduler` from
+  dispatching new runs. Add a UI toggle.
+- **13.3 - Verify Hyperliquid private keys never reach OpenCode.** Add a
+  test that scans the OpenCode workspace files for any hex string that
+  parses as a private key. Add the same scan to CI for
+  `agent-runtime/opencode/` and the workspace generator output.
+- **13.4 - Document enabling real trading in production.** Update
+  `OpenCode.md` and `Backends.md` with the explicit acknowledgement that
+  real trading is now enabled, the kill switch procedure, and the rollback
+  path.
+
+### Phase 14: UI
+
+- **14.1 - Backend badge on `/agents` list.** Show `Hermes` or `OpenCode`
+  next to each agent as a small chip.
+- **14.2 - Mandatory runtime picker on `/agents/new`.** The create-agent
+  form must require selecting an existing `agent_runtime` row. Reject the
+  submit when no runtime is selected.
+- **14.3 - Per-backend setup instructions.** After a runtime is selected
+  on `/agents/new`, show a small help block describing the runtime's setup
+  expectations (Hermes profile install for Hermes, container env vars for
+  OpenCode).
+- **14.4 - Runtime registration page.** Add `/runtimes` and
+  `/runtimes/new` for creating `agent_runtime` rows.
+- **14.5 - OpenCode schedule management UI.** Add a "Schedules" tab to
+  the OpenCode agent detail page. List, enable, disable, and edit
+  `agentic_job_schedules` rows.
+- **14.6 - OpenCode run history UI.** Add a "Runs" tab to the OpenCode
+  agent detail page. Paginate `agentic_runs` rows with status, duration,
+  and a link to the OpenCode plugin session.
+- **14.7 - Backend filter on `/agents` list.** Allow operators to filter
+  the list by `backend_kind` so they can isolate Hermes or OpenCode
+  agents.
+
+### Cross-Cutting
+
+- **X.1 - Add a small "Rollout Stages" appendix to `OpenCode.md`.** Mirror
+  the phase structure of this TODO list so operators can see at a glance
+  where the implementation is. Keep it short.
+- **X.2 - Remove resolved items from "Deferred Investigation Items".**
+  Once 1.1 through 1.4 are answered, the deferred section should be empty
+  or contain only genuinely open questions.
 
 ## Deferred Investigation Items
 

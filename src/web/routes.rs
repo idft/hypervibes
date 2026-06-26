@@ -23,11 +23,15 @@ use crate::{
     agents::{
         crypto::{encrypt, generate_api_key},
         keys::derive_wallet_address,
-        model::{AgentRegistryRow, CreateAgentForm, slugify_agent_key},
+        model::{
+            AgentRegistryRow, AgentRuntimeRow, CreateAgentForm, CreateAgentRuntimeForm,
+            slugify_agent_key,
+        },
         prompts::{DEFAULT_ANALYSIS_STRATEGY_PROMPT, DEFAULT_TRADING_STRATEGY_PROMPT},
         store::{
-            delete_agent as delete_agent_in_store, get_agent, insert_agent,
-            list_agent_instrument_options, list_agents, replace_agent_instruments,
+            delete_agent as delete_agent_in_store, get_agent, insert_agent, insert_agent_runtime,
+            list_agent_instrument_options, list_agent_runtimes, list_agents,
+            list_enabled_agent_runtimes, replace_agent_instruments, runtime_matches_backend,
             update_agent_analysis_prompt, update_agent_trading_prompt,
         },
     },
@@ -49,11 +53,12 @@ use crate::{
             AccountBalancePartialTemplate, AccountBalanceView, AgentListEntry,
             AgentMemoryDetailPageTemplate, AgentMemoryDetailPartialTemplate,
             AgentMemoryTimelinePartialTemplate, AgentShowTab, AgentsNewPageTemplate,
-            AgentsPageTemplate, AgentsShowPageTemplate, BalanceSparklinesPartialTemplate,
-            HermesPageTemplate, LatestAnalysisSummaryPartialTemplate,
-            LatestTradeExecutionSummaryPartialTemplate, MemoryView, OpenOrdersPartialTemplate,
-            OpenOrdersView, OpenPositionsPartialTemplate, OpenPositionsView,
-            ServerErrorPageTemplate, SparklineView, SyncStateView, TransactionView,
+            AgentsPageTemplate, AgentsShowPageTemplate, BackendsNewPageTemplate,
+            BackendsPageTemplate, BalanceSparklinesPartialTemplate, HermesPageTemplate,
+            LatestAnalysisSummaryPartialTemplate, LatestTradeExecutionSummaryPartialTemplate,
+            MemoryView, OpenOrdersPartialTemplate, OpenOrdersView, OpenPositionsPartialTemplate,
+            OpenPositionsView, ServerErrorPageTemplate, SparklineView, SyncStateView,
+            TransactionView,
         },
         ui_events::UiEvent,
     },
@@ -65,6 +70,8 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/healthz", get(healthz))
         .route("/agents", get(agents_index).post(create_agent))
         .route("/agents/new", get(agents_new))
+        .route("/backends", get(backends_index).post(create_backend))
+        .route("/backends/new", get(backends_new))
         .route("/agents/{agent_key}", get(agents_show))
         .route(
             "/agents/{agent_key}/transactions",
@@ -150,13 +157,58 @@ async fn agents_index(State(state): State<Arc<AppState>>) -> Result<Html<String>
     Ok(Html(template.render()?))
 }
 
-async fn agents_new() -> Result<Html<String>, AppError> {
+async fn agents_new(State(state): State<Arc<AppState>>) -> Result<Html<String>, AppError> {
+    let runtimes = list_enabled_agent_runtimes(&state.db_pool).await?;
     let template = AgentsNewPageTemplate {
-        form: CreateAgentForm::default(),
+        form: CreateAgentForm {
+            enabled: Some("on".to_string()),
+            ..Default::default()
+        },
+        runtimes,
         errors: Vec::new(),
         current_path: "/agents/new".to_string(),
     };
     Ok(Html(template.render()?))
+}
+
+async fn backends_index(State(state): State<Arc<AppState>>) -> Result<Html<String>, AppError> {
+    let template = BackendsPageTemplate {
+        runtimes: list_agent_runtimes(&state.db_pool).await?,
+        current_path: "/backends".to_string(),
+    };
+    Ok(Html(template.render()?))
+}
+
+async fn backends_new() -> Result<Html<String>, AppError> {
+    let template = BackendsNewPageTemplate {
+        form: CreateAgentRuntimeForm {
+            backend_kind: crate::agents::model::BACKEND_KIND_HERMES.to_string(),
+            enabled: Some("on".to_string()),
+            ..Default::default()
+        },
+        errors: Vec::new(),
+        current_path: "/backends/new".to_string(),
+    };
+    Ok(Html(template.render()?))
+}
+
+async fn create_backend(
+    State(state): State<Arc<AppState>>,
+    Form(form): Form<CreateAgentRuntimeForm>,
+) -> Result<Response, AppError> {
+    if let Err(errors) = form.validate() {
+        return Ok(render_backend_form(form, errors));
+    }
+
+    if let Err(error) = insert_agent_runtime(&state.db_pool, &form).await {
+        let errors = match unique_violation_message(&error) {
+            Some(message) => vec![message],
+            None => return Err(AppError(error)),
+        };
+        return Ok(render_backend_form(form, errors));
+    }
+
+    Ok(Redirect::to("/backends").into_response())
 }
 
 async fn agents_show(
@@ -944,8 +996,10 @@ async fn create_agent(
     State(state): State<Arc<AppState>>,
     Form(form): Form<CreateAgentForm>,
 ) -> Result<Response, AppError> {
+    let runtimes = list_enabled_agent_runtimes(&state.db_pool).await?;
+
     if let Err(errors) = form.validate() {
-        return Ok(render_new_form(form, errors));
+        return Ok(render_new_form(form, runtimes, errors));
     }
 
     let wallet_address = match derive_wallet_address(&form.hyperliquid_private_key) {
@@ -953,6 +1007,7 @@ async fn create_agent(
         Err(e) => {
             return Ok(render_new_form(
                 form,
+                runtimes,
                 vec![format!("Hyperliquid private key is invalid: {e}")],
             ));
         }
@@ -963,10 +1018,28 @@ async fn create_agent(
         Err(e) => {
             return Ok(render_new_form(
                 form,
+                runtimes,
                 vec![format!("Failed to encrypt private key: {e}")],
             ));
         }
     };
+
+    if !runtime_matches_backend(
+        &state.db_pool,
+        form.runtime_id.trim(),
+        form.backend_kind.trim(),
+    )
+    .await?
+    {
+        return Ok(render_new_form(
+            form,
+            runtimes,
+            vec![
+                "Selected runtime must exist, be enabled, and match the selected backend kind."
+                    .to_string(),
+            ],
+        ));
+    }
 
     let now = Utc::now();
     let agent_key = slugify_agent_key(&form.display_name);
@@ -983,6 +1056,9 @@ async fn create_agent(
         environment: "live".to_string(),
         api_key: generate_api_key(),
         api_key_last_used_at: None,
+        backend_kind: form.backend_kind.trim().to_string(),
+        runtime_id: form.runtime_id.trim().to_string(),
+        runtime_config: serde_json::json!({}),
         analysis_context_last_used_at: None,
         trading_context_last_used_at: None,
         hyperliquid_private_key_ciphertext: ciphertext,
@@ -996,15 +1072,20 @@ async fn create_agent(
                 return Err(AppError(e));
             }
         };
-        return Ok(render_new_form(form, errors));
+        return Ok(render_new_form(form, runtimes, errors));
     }
 
     Ok(Redirect::to(&format!("/agents/{agent_key}")).into_response())
 }
 
-fn render_new_form(form: CreateAgentForm, errors: Vec<String>) -> Response {
+fn render_new_form(
+    form: CreateAgentForm,
+    runtimes: Vec<AgentRuntimeRow>,
+    errors: Vec<String>,
+) -> Response {
     let template = AgentsNewPageTemplate {
         form,
+        runtimes,
         errors,
         current_path: "/agents/new".to_string(),
     };
@@ -1018,12 +1099,32 @@ fn render_new_form(form: CreateAgentForm, errors: Vec<String>) -> Response {
     }
 }
 
+fn render_backend_form(form: CreateAgentRuntimeForm, errors: Vec<String>) -> Response {
+    let template = BackendsNewPageTemplate {
+        form,
+        errors,
+        current_path: "/backends/new".to_string(),
+    };
+    match template.render() {
+        Ok(body) => (StatusCode::UNPROCESSABLE_ENTITY, Html(body)).into_response(),
+        Err(error) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("template error: {error}"),
+        )
+            .into_response(),
+    }
+}
+
 fn unique_violation_message(error: &anyhow::Error) -> Option<String> {
     let db_err = error.downcast_ref::<sqlx::Error>()?.as_database_error()?;
     if db_err.is_unique_violation() {
         let constraint = db_err.constraint().unwrap_or("unknown");
         if constraint.contains("agent_key") || constraint.contains("agents_pkey") {
             Some("An agent with this agent key already exists.".to_string())
+        } else if constraint.contains("agent_runtimes_pkey") {
+            Some("A backend with this runtime ID already exists.".to_string())
+        } else if constraint.contains("agent_runtimes_name") {
+            Some("A backend with this name already exists.".to_string())
         } else if constraint.contains("wallet") {
             Some("An agent with this wallet address and environment already exists.".to_string())
         } else if constraint.contains("api_key") {
@@ -1126,8 +1227,9 @@ mod tests {
     use crate::{
         agents::{
             crypto::EncryptionKey,
+            model::CreateAgentRuntimeForm,
             prompts::{DEFAULT_ANALYSIS_STRATEGY_PROMPT, DEFAULT_TRADING_STRATEGY_PROMPT},
-            store::{list_agent_instrument_ids, replace_agent_instruments},
+            store::{insert_agent_runtime, list_agent_instrument_ids, replace_agent_instruments},
         },
         memory::CreateMemory,
         test_db,
@@ -1362,7 +1464,7 @@ mod tests {
         let state = test_state().await;
 
         let app = router(state);
-        let body = "display_name=Test Agent&hyperliquid_private_key=not-a-key";
+        let body = "display_name=Test Agent&hyperliquid_private_key=not-a-key&backend_kind=opencode&runtime_id=opencode-local";
         let response = app
             .oneshot(
                 Request::builder()
@@ -1376,6 +1478,97 @@ mod tests {
             .unwrap();
 
         assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    }
+
+    #[tokio::test]
+    async fn agents_new_page_renders_backend_and_runtime_controls() {
+        let state = test_state().await;
+
+        let response = router(state)
+            .oneshot(
+                Request::builder()
+                    .uri("/agents/new")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let text = response_text(response).await;
+        assert!(text.contains("name=\"backend_kind\""));
+        assert!(text.contains("name=\"runtime_id\""));
+        assert!(text.contains("OpenCode local"));
+    }
+
+    #[tokio::test]
+    async fn backends_new_page_renders_create_form() {
+        let state = test_state().await;
+
+        let response = router(state)
+            .oneshot(
+                Request::builder()
+                    .uri("/backends/new")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let text = response_text(response).await;
+        assert!(text.contains("Create backend"));
+        assert!(text.contains("name=\"id\""));
+        assert!(text.contains("name=\"base_url\""));
+    }
+
+    #[tokio::test]
+    async fn backends_index_renders_seeded_runtime() {
+        let state = test_state().await;
+
+        let response = router(state)
+            .oneshot(
+                Request::builder()
+                    .uri("/backends")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let text = response_text(response).await;
+        assert!(text.contains("OpenCode local"));
+        assert!(text.contains("opencode-local"));
+        assert!(text.contains("http://localhost:14096"));
+    }
+
+    #[tokio::test]
+    async fn post_agents_rejects_runtime_backend_mismatch() {
+        let state = test_state().await;
+
+        let app = router(state);
+        let private_key = random_private_key();
+        let body = format!(
+            "display_name=MismatchTest&hyperliquid_private_key={private_key}&backend_kind=hermes&runtime_id=opencode-local"
+        );
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/agents")
+                    .header("content-type", "application/x-www-form-urlencoded")
+                    .body(Body::from(body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+        let text = response_text(response).await;
+        assert!(text.contains(
+            "Selected runtime must exist, be enabled, and match the selected backend kind."
+        ));
     }
 
     #[tokio::test]
@@ -1530,11 +1723,34 @@ mod tests {
         insert_test_agent_with_text(state, String::new(), String::new()).await
     }
 
+    async fn ensure_test_runtime(state: &Arc<AppState>, id: &str, backend_kind: &str) {
+        let form = CreateAgentRuntimeForm {
+            id: id.to_string(),
+            name: format!("{backend_kind}-{id}"),
+            backend_kind: backend_kind.to_string(),
+            base_url: if backend_kind == crate::agents::model::BACKEND_KIND_HERMES {
+                "http://localhost:19119".to_string()
+            } else {
+                "http://localhost:14096".to_string()
+            },
+            enabled: Some("on".to_string()),
+        };
+
+        let _ = insert_agent_runtime(&state.db_pool, &form).await;
+    }
+
     async fn insert_test_agent_with_text(
         state: &Arc<AppState>,
         analysis_prompt: String,
         trading_prompt: String,
     ) -> Option<(String, String)> {
+        ensure_test_runtime(
+            state,
+            "hermes-local",
+            crate::agents::model::BACKEND_KIND_HERMES,
+        )
+        .await;
+
         let timestamp = chrono::Utc::now().timestamp_millis();
         let display_name = format!("BalanceStreamTest{}", timestamp);
         let agent_key = slugify_agent_key(&display_name);
@@ -1556,6 +1772,9 @@ mod tests {
             environment: "live".to_string(),
             api_key: format!("balance-stream-test-{timestamp}"),
             api_key_last_used_at: None,
+            backend_kind: crate::agents::model::BACKEND_KIND_HERMES.to_string(),
+            runtime_id: "hermes-local".to_string(),
+            runtime_config: serde_json::json!({}),
             analysis_context_last_used_at: None,
             trading_context_last_used_at: None,
             hyperliquid_private_key_ciphertext: Vec::new(),
@@ -1583,7 +1802,7 @@ mod tests {
         let agent_key = slugify_agent_key(&display_name);
         let private_key = random_private_key();
         let body = format!(
-            "display_name={}&hyperliquid_private_key={}",
+            "display_name={}&hyperliquid_private_key={}&backend_kind=opencode&runtime_id=opencode-local",
             display_name, private_key
         );
 
@@ -1626,7 +1845,7 @@ mod tests {
         let agent_key = slugify_agent_key(&display_name);
         let private_key = random_private_key();
         let body = format!(
-            "display_name={}&hyperliquid_private_key={}&enabled=on",
+            "display_name={}&hyperliquid_private_key={}&backend_kind=opencode&runtime_id=opencode-local&enabled=on",
             display_name, private_key
         );
 
