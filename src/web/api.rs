@@ -18,7 +18,7 @@ use crate::{
     agents::{
         AuthenticatedAgent,
         store::{
-            JobContextKind, get_agent, get_agent_private_key_ciphertext,
+            JobContextKind, get_agent, get_agent_private_key_ciphertext, list_agent_instrument_ids,
             touch_job_context_last_used,
         },
     },
@@ -529,6 +529,8 @@ struct JobContextResponse {
     display_name: String,
     environment: String,
     prompt: String,
+    selected_instruments: Vec<String>,
+    instructions: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     account: Option<LiveAgentSnapshot>,
 }
@@ -543,6 +545,9 @@ async fn get_job_context(
         .await
         .map_err(ApiError::Internal)?
         .ok_or(ApiError::NotFound("agent not found"))?;
+    let selected_instruments = list_agent_instrument_ids(&state.db_pool, &agent.agent_key)
+        .await
+        .map_err(ApiError::Internal)?;
     touch_job_context_last_used(&state.db_pool, &agent.agent_key, job_kind.context_kind())
         .await
         .map_err(ApiError::Internal)?;
@@ -560,6 +565,16 @@ async fn get_job_context(
         display_name: row.display_name.clone(),
         environment: row.environment.clone(),
         prompt,
+        instructions: if selected_instruments.is_empty() {
+            vec![
+                "No currencies are selected for this agent.".to_string(),
+                "Do not analyze markets or place trades until at least one currency is selected."
+                    .to_string(),
+            ]
+        } else {
+            Vec::new()
+        },
+        selected_instruments,
         account,
     })
     .into_response())
@@ -827,6 +842,23 @@ async fn place_orders_handler(
         .await
         .map_err(ApiError::Internal)?
         .ok_or(ApiError::NotFound("agent not found"))?;
+    let selected_instruments = list_agent_instrument_ids(&state.db_pool, &agent.agent_key)
+        .await
+        .map_err(ApiError::Internal)?;
+    if selected_instruments.is_empty() {
+        return Err(ApiError::Validation(
+            "no currencies are selected for this agent; order placement is disabled".into(),
+        ));
+    }
+    let selected_set: HashSet<String> = selected_instruments.into_iter().collect();
+    for (idx, order) in input.orders.iter().enumerate() {
+        if !selected_set.contains(&order.symbol) {
+            return Err(ApiError::Validation(format!(
+                "orders[{idx}]: symbol '{}' is not enabled for this agent",
+                order.symbol
+            )));
+        }
+    }
     let account_address = agent_row.wallet_address.clone();
     let environment = agent_row.environment.clone();
 
@@ -973,7 +1005,7 @@ mod tests {
             crypto::EncryptionKey,
             keys::derive_wallet_address,
             model::AgentRegistryRow,
-            store::{get_agent, insert_agent},
+            store::{get_agent, insert_agent, replace_agent_instruments},
         },
         hyperliquid::live_state::{
             AccountKey, AccountLiveState, LiveMarginState, LiveOpenOrder, LivePosition,
@@ -1047,6 +1079,49 @@ mod tests {
             .await
             .expect("insert agent");
         (agent_key, api_key)
+    }
+
+    async fn seed_instrument(state: &Arc<AppState>, instrument_id: &str, active: bool) {
+        let now = Utc::now();
+        sqlx::query(
+            "INSERT INTO hyperliquid.instruments (
+                instrument_id,
+                name,
+                market_type,
+                base_asset,
+                quote_asset,
+                settlement_asset,
+                asset_index,
+                price_decimals,
+                size_decimals,
+                lot_size,
+                max_leverage,
+                is_hip3,
+                active,
+                created_at,
+                updated_at
+            ) VALUES (
+                $1, $1, 'perp', $1, 'USD', 'USDC', 1, 2, 3, 0.001, 50, false, $2, $3, $3
+            )
+            ON CONFLICT (instrument_id) DO UPDATE
+                SET market_type = EXCLUDED.market_type,
+                    active = EXCLUDED.active,
+                    updated_at = EXCLUDED.updated_at",
+        )
+        .bind(instrument_id)
+        .bind(active)
+        .bind(now)
+        .execute(&state.db_pool)
+        .await
+        .expect("insert instrument");
+    }
+
+    async fn select_instruments(state: &Arc<AppState>, agent_key: &str, instrument_ids: &[&str]) {
+        let instrument_ids: Vec<String> =
+            instrument_ids.iter().map(|id| (*id).to_string()).collect();
+        replace_agent_instruments(&state.db_pool, agent_key, &instrument_ids)
+            .await
+            .expect("replace agent instruments");
     }
 
     fn app(state: Arc<AppState>) -> Router {
@@ -2250,6 +2325,14 @@ mod tests {
         assert_eq!(body["agent_key"], agent_key);
         assert_eq!(body["job_kind"], "analysis");
         assert_eq!(body["prompt"], "Focus on 15m structure and volatility.");
+        assert_eq!(body["selected_instruments"], json!([]));
+        assert_eq!(
+            body["instructions"],
+            json!([
+                "No currencies are selected for this agent.",
+                "Do not analyze markets or place trades until at least one currency is selected."
+            ])
+        );
         assert!(body.get("account").is_none());
 
         let stored = get_agent(&state.db_pool, &agent_key)
@@ -2271,6 +2354,8 @@ mod tests {
             "Manage risk tightly and protect open positions.",
         )
         .await;
+        seed_instrument(&state, "BTC", true).await;
+        select_instruments(&state, &agent_key, &["BTC"]).await;
         let row = get_agent(&state.db_pool, &agent_key)
             .await
             .unwrap()
@@ -2304,6 +2389,8 @@ mod tests {
             body["prompt"],
             "Manage risk tightly and protect open positions."
         );
+        assert_eq!(body["selected_instruments"], json!(["BTC"]));
+        assert_eq!(body["instructions"], json!([]));
         assert_eq!(body["account"]["agent_key"], body["agent_key"]);
         assert_eq!(body["account"]["environment"], "live");
         assert!(body["account"].get("state").is_none());
@@ -2599,6 +2686,24 @@ mod tests {
         assert_eq!(body["prompt"], "B analysis");
     }
 
+    #[tokio::test]
+    async fn get_job_context_empty_selection_returns_no_currency_instructions() {
+        let state = test_state().await;
+        let (_agent_key, api_key) = seed_agent(&state, "job-empty-selection").await;
+
+        let (status, body) =
+            get_json_response(&state, &api_key, "/job-context?job_kind=trading").await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["selected_instruments"], json!([]));
+        assert_eq!(
+            body["instructions"],
+            json!([
+                "No currencies are selected for this agent.",
+                "Do not analyze markets or place trades until at least one currency is selected."
+            ])
+        );
+    }
+
     // ---- orders endpoint tests -----------------------------------------
 
     #[tokio::test]
@@ -2689,6 +2794,118 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    }
+
+    #[tokio::test]
+    async fn post_orders_rejects_when_no_currencies_are_selected() {
+        let state = test_state().await;
+        let (_agent_key, api_key) = seed_agent(&state, "ord-no-currencies").await;
+
+        let body = serde_json::json!({
+            "orders": [{
+                "symbol": "BTC",
+                "side": "buy",
+                "order_type": "limit",
+                "size": "0.1",
+                "price": "50000"
+            }]
+        });
+        let (headers, body) = json_body(&body);
+        let mut builder = Request::builder()
+            .method("POST")
+            .uri("/orders")
+            .header("authorization", format!("Bearer {api_key}"));
+        if let Some((k, v)) = headers {
+            builder = builder.header(k, v);
+        }
+        let response = app(Arc::clone(&state))
+            .oneshot(builder.body(body).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+        let body_bytes = axum::body::to_bytes(response.into_body(), 16 * 1024)
+            .await
+            .unwrap();
+        let body: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
+        assert_eq!(
+            body["error"],
+            json!("no currencies are selected for this agent; order placement is disabled")
+        );
+    }
+
+    #[tokio::test]
+    async fn post_orders_rejects_symbol_not_selected_for_agent() {
+        let state = test_state().await;
+        let (agent_key, api_key) = seed_agent(&state, "ord-symbol-disabled").await;
+        seed_instrument(&state, "BTC", true).await;
+        select_instruments(&state, &agent_key, &["BTC"]).await;
+
+        let body = serde_json::json!({
+            "orders": [{
+                "symbol": "ETH",
+                "side": "buy",
+                "order_type": "limit",
+                "size": "0.1",
+                "price": "50000"
+            }]
+        });
+        let (headers, body) = json_body(&body);
+        let mut builder = Request::builder()
+            .method("POST")
+            .uri("/orders")
+            .header("authorization", format!("Bearer {api_key}"));
+        if let Some((k, v)) = headers {
+            builder = builder.header(k, v);
+        }
+        let response = app(Arc::clone(&state))
+            .oneshot(builder.body(body).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+        let body_bytes = axum::body::to_bytes(response.into_body(), 16 * 1024)
+            .await
+            .unwrap();
+        let body: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
+        assert_eq!(
+            body["error"],
+            json!("orders[0]: symbol 'ETH' is not enabled for this agent")
+        );
+    }
+
+    #[tokio::test]
+    async fn post_orders_selected_symbol_proceeds_past_selection_validation() {
+        let state = test_state().await;
+        let (agent_key, api_key) = seed_agent(&state, "ord-symbol-enabled").await;
+        seed_instrument(&state, "BTC", true).await;
+        select_instruments(&state, &agent_key, &["BTC"]).await;
+
+        let body = serde_json::json!({
+            "orders": [{
+                "symbol": "BTC",
+                "side": "buy",
+                "order_type": "limit",
+                "size": "0.1",
+                "price": "50000"
+            }]
+        });
+        let (headers, body) = json_body(&body);
+        let mut builder = Request::builder()
+            .method("POST")
+            .uri("/orders")
+            .header("authorization", format!("Bearer {api_key}"));
+        if let Some((k, v)) = headers {
+            builder = builder.header(k, v);
+        }
+        let response = app(Arc::clone(&state))
+            .oneshot(builder.body(body).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        let body_bytes = axum::body::to_bytes(response.into_body(), 16 * 1024)
+            .await
+            .unwrap();
+        let body: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
+        assert_eq!(body["error"], json!("internal server error"));
     }
 
     #[tokio::test]

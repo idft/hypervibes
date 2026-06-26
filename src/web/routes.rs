@@ -26,7 +26,8 @@ use crate::{
         model::{AgentRegistryRow, CreateAgentForm, slugify_agent_key},
         prompts::{DEFAULT_ANALYSIS_STRATEGY_PROMPT, DEFAULT_TRADING_STRATEGY_PROMPT},
         store::{
-            delete_agent as delete_agent_in_store, get_agent, insert_agent, list_agents,
+            delete_agent as delete_agent_in_store, get_agent, insert_agent,
+            list_agent_instrument_options, list_agents, replace_agent_instruments,
             update_agent_analysis_prompt, update_agent_trading_prompt,
         },
     },
@@ -78,10 +79,7 @@ pub fn router(state: Arc<AppState>) -> Router {
             "/agents/{agent_key}/memories/{memory_id}",
             get(agents_show_memory_detail),
         )
-        .route(
-            "/agents/{agent_key}/prompts",
-            get(agents_show_prompts),
-        )
+        .route("/agents/{agent_key}/prompts", get(agents_show_prompts))
         .route(
             "/agents/{agent_key}/prompts/analysis",
             post(agents_update_analysis_prompt),
@@ -91,6 +89,10 @@ pub fn router(state: Arc<AppState>) -> Router {
             post(agents_update_trading_prompt),
         )
         .route("/agents/{agent_key}/settings", get(agents_show_settings))
+        .route(
+            "/agents/{agent_key}/settings/instruments",
+            post(agents_update_instruments),
+        )
         .route("/agents/{agent_key}/delete", post(delete_agent))
         .route("/agents/{agent_key}/live/stream", get(agent_live_stream))
         .route("/hermes", get(hermes_page))
@@ -310,12 +312,8 @@ async fn agents_update_analysis_prompt(
     Path(agent_key): Path<String>,
     Form(form): Form<UpdateAgentPromptForm>,
 ) -> Result<Response, AppError> {
-    let updated = update_agent_analysis_prompt(
-        &state.db_pool,
-        &agent_key,
-        form.prompt.trim(),
-    )
-    .await?;
+    let updated =
+        update_agent_analysis_prompt(&state.db_pool, &agent_key, form.prompt.trim()).await?;
 
     if !updated {
         return Ok((StatusCode::NOT_FOUND, "agent not found").into_response());
@@ -329,12 +327,8 @@ async fn agents_update_trading_prompt(
     Path(agent_key): Path<String>,
     Form(form): Form<UpdateAgentPromptForm>,
 ) -> Result<Response, AppError> {
-    let updated = update_agent_trading_prompt(
-        &state.db_pool,
-        &agent_key,
-        form.prompt.trim(),
-    )
-    .await?;
+    let updated =
+        update_agent_trading_prompt(&state.db_pool, &agent_key, form.prompt.trim()).await?;
 
     if !updated {
         return Ok((StatusCode::NOT_FOUND, "agent not found").into_response());
@@ -348,6 +342,24 @@ async fn agents_show_settings(
     Path(agent_key): Path<String>,
 ) -> Result<Response, AppError> {
     render_agent_show_page(&state, &agent_key, AgentShowTab::Settings, None).await
+}
+
+async fn agents_update_instruments(
+    State(state): State<Arc<AppState>>,
+    Path(agent_key): Path<String>,
+    Form(form_pairs): Form<Vec<(String, String)>>,
+) -> Result<Response, AppError> {
+    let instrument_ids: Vec<String> = form_pairs
+        .into_iter()
+        .filter_map(|(key, value)| (key == "instrument_id").then_some(value))
+        .collect();
+    let updated = replace_agent_instruments(&state.db_pool, &agent_key, &instrument_ids).await?;
+
+    if !updated {
+        return Ok((StatusCode::NOT_FOUND, "agent not found").into_response());
+    }
+
+    Ok(Redirect::to(&format!("/agents/{agent_key}/settings")).into_response())
 }
 
 async fn render_agent_show_page(
@@ -432,6 +444,20 @@ async fn render_agent_show_page(
                     Vec::new()
                 }
             };
+            match list_agent_instrument_options(&state.db_pool, &agent.agent_key).await {
+                Ok(rows) => {
+                    template.instrument_options_loaded = true;
+                    template.has_selected_instruments = rows.iter().any(|row| row.selected);
+                    template.instrument_options = rows;
+                }
+                Err(error) => {
+                    warn!(
+                        agent_key = %agent.agent_key,
+                        error = ?error,
+                        "failed to list agent instrument options for settings page"
+                    );
+                }
+            }
         }
     }
 
@@ -1101,6 +1127,7 @@ mod tests {
         agents::{
             crypto::EncryptionKey,
             prompts::{DEFAULT_ANALYSIS_STRATEGY_PROMPT, DEFAULT_TRADING_STRATEGY_PROMPT},
+            store::{list_agent_instrument_ids, replace_agent_instruments},
         },
         memory::CreateMemory,
         test_db,
@@ -1229,6 +1256,41 @@ mod tests {
         .execute(&state.db_pool)
         .await
         .expect("insert sync state");
+    }
+
+    async fn seed_instrument(state: &Arc<AppState>, instrument_id: &str, active: bool) {
+        let now = Utc::now();
+        sqlx::query(
+            "INSERT INTO hyperliquid.instruments (
+                instrument_id,
+                name,
+                market_type,
+                base_asset,
+                quote_asset,
+                settlement_asset,
+                asset_index,
+                price_decimals,
+                size_decimals,
+                lot_size,
+                max_leverage,
+                is_hip3,
+                active,
+                created_at,
+                updated_at
+            ) VALUES (
+                $1, $1, 'perp', $1, 'USD', 'USDC', 1, 2, 3, 0.001, 50, false, $2, $3, $3
+            )
+            ON CONFLICT (instrument_id) DO UPDATE
+                SET market_type = EXCLUDED.market_type,
+                    active = EXCLUDED.active,
+                    updated_at = EXCLUDED.updated_at",
+        )
+        .bind(instrument_id)
+        .bind(active)
+        .bind(now)
+        .execute(&state.db_pool)
+        .await
+        .expect("insert instrument");
     }
 
     async fn set_job_context_timestamps(
@@ -2425,6 +2487,11 @@ mod tests {
         let state = test_state().await;
         let (agent_key, wallet_address) = insert_test_agent(&state).await.expect("insert agent");
         seed_sync_state(&state, &wallet_address).await;
+        seed_instrument(&state, "BTC", true).await;
+        seed_instrument(&state, "ETH", true).await;
+        replace_agent_instruments(&state.db_pool, &agent_key, &["BTC".to_string()])
+            .await
+            .expect("seed selected instruments");
 
         let response = router(state)
             .oneshot(
@@ -2438,9 +2505,81 @@ mod tests {
 
         assert_eq!(response.status(), StatusCode::OK);
         let text = response_text(response).await;
+        assert!(text.contains("Currencies"));
+        assert!(text.contains("Select the Hyperliquid perps this agent should analyze and trade."));
+        assert!(text.contains("name=\"instrument_id\""));
+        assert!(text.contains("value=\"BTC\""));
+        assert!(text.contains("value=\"ETH\""));
+        assert!(text.contains("value=\"BTC\" checked"));
         assert!(text.contains("Sync status"));
         assert!(text.contains("fills"));
         assert!(text.contains("abc123"));
+    }
+
+    #[tokio::test]
+    async fn post_agent_instruments_updates_selection_and_redirects() {
+        let state = test_state().await;
+        let pool = state.db_pool.clone();
+        let (agent_key, _wallet_address) = insert_test_agent(&state).await.expect("insert agent");
+        seed_instrument(&state, "BTC", true).await;
+        seed_instrument(&state, "ETH", true).await;
+
+        let response = router(state)
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/agents/{agent_key}/settings/instruments"))
+                    .header("content-type", "application/x-www-form-urlencoded")
+                    .body(Body::from("instrument_id=BTC&instrument_id=ETH"))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::SEE_OTHER);
+        let expected_location = format!("/agents/{agent_key}/settings");
+        assert_eq!(
+            response
+                .headers()
+                .get("location")
+                .and_then(|value| value.to_str().ok()),
+            Some(expected_location.as_str())
+        );
+
+        let selected = list_agent_instrument_ids(&pool, &agent_key)
+            .await
+            .expect("list selected instruments");
+        assert_eq!(selected, vec!["BTC".to_string(), "ETH".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn post_agent_instruments_without_values_clears_selection_and_redirects() {
+        let state = test_state().await;
+        let pool = state.db_pool.clone();
+        let (agent_key, _wallet_address) = insert_test_agent(&state).await.expect("insert agent");
+        seed_instrument(&state, "BTC", true).await;
+        replace_agent_instruments(&pool, &agent_key, &["BTC".to_string()])
+            .await
+            .expect("seed selected instruments");
+
+        let response = router(state)
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/agents/{agent_key}/settings/instruments"))
+                    .header("content-type", "application/x-www-form-urlencoded")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::SEE_OTHER);
+
+        let selected = list_agent_instrument_ids(&pool, &agent_key)
+            .await
+            .expect("list selected instruments");
+        assert!(selected.is_empty());
     }
 
     #[tokio::test]

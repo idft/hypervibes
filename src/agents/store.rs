@@ -1,4 +1,6 @@
-use anyhow::{Context, Result};
+use std::collections::BTreeSet;
+
+use anyhow::{Context, Result, anyhow};
 use sqlx::query_as;
 
 use crate::{
@@ -10,6 +12,12 @@ use crate::{
 pub enum JobContextKind {
     Analysis,
     Trading,
+}
+
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub struct AgentInstrumentOptionRow {
+    pub instrument_id: String,
+    pub selected: bool,
 }
 
 /// List all agents ordered by creation time, newest first.
@@ -57,6 +65,140 @@ pub async fn get_agent(pool: &DbPool, agent_key: &str) -> Result<Option<AgentDet
     .context("failed to fetch agent")?;
 
     Ok(row)
+}
+
+pub async fn list_agent_instrument_ids(pool: &DbPool, agent_key: &str) -> Result<Vec<String>> {
+    let rows: Vec<(String,)> = query_as(
+        "SELECT instruments.instrument_id
+           FROM agent_instruments
+           JOIN hyperliquid.instruments AS instruments
+             ON instruments.instrument_id = agent_instruments.instrument_id
+          WHERE agent_instruments.agent_key = $1
+            AND instruments.market_type = 'perp'
+            AND instruments.active = true
+          ORDER BY instruments.instrument_id",
+    )
+    .bind(agent_key)
+    .fetch_all(pool)
+    .await
+    .context("failed to list agent instrument ids")?;
+
+    Ok(rows
+        .into_iter()
+        .map(|(instrument_id,)| instrument_id)
+        .collect())
+}
+
+pub async fn list_agent_instrument_options(
+    pool: &DbPool,
+    agent_key: &str,
+) -> Result<Vec<AgentInstrumentOptionRow>> {
+    let rows = query_as::<_, AgentInstrumentOptionRow>(
+        "SELECT instruments.instrument_id,
+                (agent_instruments.instrument_id IS NOT NULL) AS selected
+           FROM hyperliquid.instruments AS instruments
+           LEFT JOIN agent_instruments
+             ON agent_instruments.agent_key = $1
+            AND agent_instruments.instrument_id = instruments.instrument_id
+          WHERE instruments.market_type = 'perp'
+            AND instruments.active = true
+          ORDER BY instruments.instrument_id",
+    )
+    .bind(agent_key)
+    .fetch_all(pool)
+    .await
+    .context("failed to list agent instrument options")?;
+
+    Ok(rows)
+}
+
+pub async fn replace_agent_instruments(
+    pool: &DbPool,
+    agent_key: &str,
+    instrument_ids: &[String],
+) -> Result<bool> {
+    let unique_ids: Vec<String> = instrument_ids
+        .iter()
+        .map(|instrument_id| instrument_id.trim())
+        .filter(|instrument_id| !instrument_id.is_empty())
+        .map(ToOwned::to_owned)
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect();
+
+    let mut tx = pool
+        .begin()
+        .await
+        .context("failed to begin agent instrument replacement transaction")?;
+
+    let agent_exists: Option<(i32,)> = query_as("SELECT 1 FROM agents WHERE agent_key = $1")
+        .bind(agent_key)
+        .fetch_optional(&mut *tx)
+        .await
+        .context("failed to validate agent existence before replacing instruments")?;
+    if agent_exists.is_none() {
+        return Ok(false);
+    }
+
+    if !unique_ids.is_empty() {
+        let valid_rows: Vec<(String,)> = query_as(
+            "SELECT instrument_id
+               FROM hyperliquid.instruments
+              WHERE instrument_id = ANY($1)
+                AND market_type = 'perp'
+                AND active = true",
+        )
+        .bind(&unique_ids)
+        .fetch_all(&mut *tx)
+        .await
+        .context("failed to validate selected instrument ids")?;
+
+        let valid_ids: BTreeSet<String> = valid_rows
+            .into_iter()
+            .map(|(instrument_id,)| instrument_id)
+            .collect();
+        if valid_ids.len() != unique_ids.len() {
+            let invalid_ids: Vec<String> = unique_ids
+                .iter()
+                .filter(|instrument_id| !valid_ids.contains(*instrument_id))
+                .cloned()
+                .collect();
+            return Err(anyhow!(
+                "invalid or inactive instrument ids: {}",
+                invalid_ids.join(", ")
+            ));
+        }
+    }
+
+    sqlx::query("DELETE FROM agent_instruments WHERE agent_key = $1")
+        .bind(agent_key)
+        .execute(&mut *tx)
+        .await
+        .context("failed to clear existing agent instruments")?;
+
+    for instrument_id in &unique_ids {
+        sqlx::query(
+            "INSERT INTO agent_instruments (agent_key, instrument_id)
+             VALUES ($1, $2)",
+        )
+        .bind(agent_key)
+        .bind(instrument_id)
+        .execute(&mut *tx)
+        .await
+        .with_context(|| format!("failed to insert agent instrument '{instrument_id}'"))?;
+    }
+
+    sqlx::query("UPDATE agents SET updated_at = now() WHERE agent_key = $1")
+        .bind(agent_key)
+        .execute(&mut *tx)
+        .await
+        .context("failed to update agent timestamp after replacing instruments")?;
+
+    tx.commit()
+        .await
+        .context("failed to commit agent instrument replacement transaction")?;
+
+    Ok(true)
 }
 
 /// Insert a full registry row. The caller is responsible for encrypting the
@@ -247,6 +389,43 @@ mod tests {
 
     fn sample_agent(key: &str) -> AgentRegistryRow {
         sample_agent_with_private_key(key, &deterministic_private_key(key))
+    }
+
+    async fn seed_instrument(pool: &DbPool, instrument_id: &str, market_type: &str, active: bool) {
+        let now = Utc::now();
+        sqlx::query(
+            "INSERT INTO hyperliquid.instruments (
+                instrument_id,
+                name,
+                market_type,
+                base_asset,
+                quote_asset,
+                settlement_asset,
+                asset_index,
+                price_decimals,
+                size_decimals,
+                lot_size,
+                max_leverage,
+                is_hip3,
+                active,
+                created_at,
+                updated_at
+            ) VALUES (
+                $1, $1, $2, $1, 'USD', 'USDC', 1, 2, 3, 0.001, 50, false, $3, $4, $4
+            )
+            ON CONFLICT (instrument_id) DO UPDATE
+                SET name = EXCLUDED.name,
+                    market_type = EXCLUDED.market_type,
+                    active = EXCLUDED.active,
+                    updated_at = EXCLUDED.updated_at",
+        )
+        .bind(instrument_id)
+        .bind(market_type)
+        .bind(active)
+        .bind(now)
+        .execute(pool)
+        .await
+        .expect("insert instrument");
     }
 
     fn sample_agent_with_private_key(key: &str, private_key: &str) -> AgentRegistryRow {
@@ -514,5 +693,129 @@ mod tests {
             .await
             .expect("update missing agent trading");
         assert!(!trading);
+    }
+
+    #[tokio::test]
+    async fn replace_agent_instruments_round_trips_selected_ids() {
+        let pool = test_db::pool().await;
+        let key = format!(
+            "agent-instruments-roundtrip-{}",
+            Utc::now().timestamp_millis()
+        );
+        insert_agent(&pool, &sample_agent(&key))
+            .await
+            .expect("insert agent");
+        seed_instrument(&pool, "BTC", "perp", true).await;
+        seed_instrument(&pool, "ETH", "perp", true).await;
+        seed_instrument(&pool, "SOL", "perp", true).await;
+
+        let updated = replace_agent_instruments(
+            &pool,
+            &key,
+            &[
+                "BTC".to_string(),
+                "ETH".to_string(),
+                "BTC".to_string(),
+                "  ETH  ".to_string(),
+            ],
+        )
+        .await
+        .expect("replace instruments");
+        assert!(updated);
+
+        let selected = list_agent_instrument_ids(&pool, &key)
+            .await
+            .expect("list selected instruments");
+        assert_eq!(selected, vec!["BTC".to_string(), "ETH".to_string()]);
+
+        let options = list_agent_instrument_options(&pool, &key)
+            .await
+            .expect("list instrument options");
+        assert_eq!(options.len(), 3);
+        assert_eq!(options[0].instrument_id, "BTC");
+        assert!(options[0].selected);
+        assert_eq!(options[1].instrument_id, "ETH");
+        assert!(options[1].selected);
+        assert_eq!(options[2].instrument_id, "SOL");
+        assert!(!options[2].selected);
+    }
+
+    #[tokio::test]
+    async fn replace_agent_instruments_allows_empty_selection() {
+        let pool = test_db::pool().await;
+        let key = format!("agent-instruments-empty-{}", Utc::now().timestamp_millis());
+        insert_agent(&pool, &sample_agent(&key))
+            .await
+            .expect("insert agent");
+        seed_instrument(&pool, "BTC", "perp", true).await;
+
+        replace_agent_instruments(&pool, &key, &["BTC".to_string()])
+            .await
+            .expect("seed selection");
+        replace_agent_instruments(&pool, &key, &[])
+            .await
+            .expect("clear selection");
+
+        let selected = list_agent_instrument_ids(&pool, &key)
+            .await
+            .expect("list selected instruments");
+        assert!(selected.is_empty());
+    }
+
+    #[tokio::test]
+    async fn deleting_agent_cascades_agent_instruments() {
+        let pool = test_db::pool().await;
+        let key = format!(
+            "agent-instruments-cascade-{}",
+            Utc::now().timestamp_millis()
+        );
+        insert_agent(&pool, &sample_agent(&key))
+            .await
+            .expect("insert agent");
+        seed_instrument(&pool, "BTC", "perp", true).await;
+
+        replace_agent_instruments(&pool, &key, &["BTC".to_string()])
+            .await
+            .expect("replace instruments");
+        delete_agent(&pool, &key).await.expect("delete agent");
+
+        let count: (i64,) = query_as("SELECT COUNT(*) FROM agent_instruments WHERE agent_key = $1")
+            .bind(&key)
+            .fetch_one(&pool)
+            .await
+            .expect("count agent instruments");
+        assert_eq!(count.0, 0);
+    }
+
+    #[tokio::test]
+    async fn replace_agent_instruments_rejects_invalid_or_inactive_ids() {
+        let pool = test_db::pool().await;
+        let key = format!(
+            "agent-instruments-invalid-{}",
+            Utc::now().timestamp_millis()
+        );
+        insert_agent(&pool, &sample_agent(&key))
+            .await
+            .expect("insert agent");
+        seed_instrument(&pool, "BTC", "perp", true).await;
+        seed_instrument(&pool, "ETH", "perp", false).await;
+        seed_instrument(&pool, "SOL", "spot", true).await;
+
+        let err = replace_agent_instruments(
+            &pool,
+            &key,
+            &["BTC".to_string(), "ETH".to_string(), "SOL".to_string()],
+        )
+        .await
+        .expect_err("invalid selection should fail");
+        assert!(
+            err.to_string().contains("ETH") && err.to_string().contains("SOL"),
+            "unexpected error: {err:#}"
+        );
+
+        let selected = list_agent_instrument_ids(&pool, &key)
+            .await
+            .expect("list selected instruments");
+        assert!(selected.is_empty());
     }
 }

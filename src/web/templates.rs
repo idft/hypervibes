@@ -10,6 +10,7 @@ use crate::{
     agents::{
         model::{AgentDetailRow, AgentListRow, CreateAgentForm},
         prompts::{DEFAULT_ANALYSIS_STRATEGY_PROMPT, DEFAULT_TRADING_STRATEGY_PROMPT},
+        store::AgentInstrumentOptionRow,
     },
     hyperliquid::{
         live_state::{AccountLiveState, LiveConnectionStatus, LiveOpenOrder, LivePosition},
@@ -506,6 +507,9 @@ pub struct AgentsShowPageTemplate {
     pub has_memory_date_filter: bool,
     pub memory_count: usize,
     pub sync_state: Vec<SyncStateView>,
+    pub instrument_options: Vec<AgentInstrumentOptionRow>,
+    pub instrument_options_loaded: bool,
+    pub has_selected_instruments: bool,
     pub account_balance_html: String,
     pub open_positions_html: String,
     pub open_orders_html: String,
@@ -602,6 +606,9 @@ impl AgentsShowPageTemplate {
             has_memory_date_filter: false,
             memory_count: 0,
             sync_state: Vec::new(),
+            instrument_options: Vec::new(),
+            instrument_options_loaded: false,
+            has_selected_instruments: false,
             account_balance_html: String::new(),
             open_positions_html: String::new(),
             open_orders_html: String::new(),
