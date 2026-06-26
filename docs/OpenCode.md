@@ -465,18 +465,68 @@ Postgres, including:
 - cost estimates
 - session errors
 
-The plugin schema should live under an `opencode` Postgres schema.
+### Chosen Package
 
-The plugin SQL should be vendored into this repository's migrations or migration
-support files rather than requiring operators to fetch schema files manually at
-runtime.
+- Package: `opencode-database-plugin@1.0.12` (pinned in
+  `agent-runtime/opencode/container/opencode.jsonc`)
+- Upstream repository: https://github.com/aemr3/opencode-database-plugin
+- License: Apache-2.0
+- Vendored SQL: `migrations/vendor/opencode-database-plugin/schema.sql`
+  (Apache-2.0 license kept alongside as `LICENSE`)
 
-If the plugin SQL uses unqualified table names, test whether setting the
-Postgres `search_path` to `opencode,public` is sufficient. If not, patch or fork
-the schema/plugin as needed.
+The database plugin is registered alongside the shared dotenv plugin in
+the container-global `opencode.jsonc` so generated per-agent workspaces
+do not need to declare it.
 
-Plugin logging failure should not stop a trading or analysis run, but the system
-should surface degraded observability.
+### Schema And Configuration
+
+All plugin-owned objects live under a dedicated `opencode` Postgres
+schema. The plugin's SQL is unqualified, so the Postgres connection used
+by OpenCode must set `search_path=opencode,public`. This is configured
+once in `podman-compose.yaml` via the `OPENCODE_DATABASE_URL` query
+parameter:
+
+```yaml
+OPENCODE_DATABASE_URL: postgres://${POSTGRES_USER:-vibetrading}:${POSTGRES_PASSWORD:-vibetrading}@postgres:5432/${POSTGRES_DB:-vibetrading}?search_path=opencode,public
+OPENCODE_DB_QUERY_TIMEOUT: ${OPENCODE_DB_QUERY_TIMEOUT:-10000}
+```
+
+The compose hostname is `postgres` so the OpenCode process reaches the
+dev Postgres service inside the compose network; do not switch this to
+`localhost`. `OPENCODE_DB_QUERY_TIMEOUT` is exposed for operators in
+`.env.example` and defaults to `10000` ms.
+
+The `opencode` schema and all plugin tables, indexes, triggers, the
+`update_updated_at_column()` function, and the `conversation_view` view
+are created by migration `0007_opencode_database_plugin.sql`. The
+upstream DDL is vendored at
+`migrations/vendor/opencode-database-plugin/schema.sql` for reproducible
+migrations and license-tracking.
+
+### Plugin Tables
+
+The plugin creates these tables under the `opencode` schema:
+
+- `sessions`
+- `messages`
+- `message_parts`
+- `tool_executions`
+- `session_errors`
+- `commands`
+- `compactions`
+
+It also creates:
+
+- `conversation_view` (view)
+- `update_updated_at_column()` (function used by the per-table
+  `updated_at` triggers)
+
+### Failure Handling
+
+Plugin logging failure should not stop a trading or analysis run, but the
+system should surface degraded observability. Wrap plugin write calls in
+a `tracing` span and log a warning (not an error) when a write fails so
+the agent loop is never blocked by the database plugin.
 
 ## Configuration And Deployment
 
@@ -609,10 +659,13 @@ exist to remove unknowns from the plan's "Deferred Investigation Items" list.
   and `POST /session/{id}/command` calls do not need to repeat it and cannot
   override it. See the "OpenCode HTTP API Notes" section below for the full
   verified request/response shape.
-- **1.2 - Investigate the OpenCode database plugin schema.** Vendor the
-  plugin DDL into a scratch location, test whether unqualified table names
-  work under `search_path = opencode, public`, and document any required
-  patches.
+- **1.2 - Investigate the OpenCode database plugin schema.** ✅ Done as
+  part of the OpenCode Database Plugin Foundation plan. The plugin's
+  DDL was vendored at `migrations/vendor/opencode-database-plugin/`,
+  and migration `0007_opencode_database_plugin.sql` applies it under
+  the `opencode` schema by setting `search_path = opencode, public` in
+  the migration. No patching of the upstream SQL is required. See
+  "OpenCode Database Plugin" above for the resolved decision.
 - **1.3 - Investigate permission handling for headless runs.** Verify how
   OpenCode behaves when a permission resolves to `ask`, and document the
   production permission configuration that prevents runs from blocking on
@@ -677,15 +730,21 @@ exist to remove unknowns from the plan's "Deferred Investigation Items" list.
 
 ### Phase 5: OpenCode Database Plugin Vendoring
 
-- **5.1 - Vendor the OpenCode database plugin DDL.** Copy the plugin SQL into
-  `migrations/vendor/opencode/` with its original license. Do not modify
-  it yet.
-- **5.2 - Qualify or patch the vendored DDL.** Either qualify every table
-  name with `opencode.` or set `search_path` per session, whichever passes
-  the spike in 1.2. Commit the patched SQL in place.
+- **5.1 - Vendor the OpenCode database plugin DDL.** ✅ Superseded by the
+  OpenCode Database Plugin Foundation plan. The upstream DDL is vendored
+  unchanged at `migrations/vendor/opencode-database-plugin/schema.sql`
+  (commit `53fea73`, package `opencode-database-plugin@1.0.12`) alongside
+  the upstream Apache-2.0 license.
+- **5.2 - Qualify or patch the vendored DDL.** ✅ Superseded by the OpenCode
+  Database Plugin Foundation plan. No patching of the upstream SQL was
+  needed. Setting `search_path = opencode, public` in
+  `0007_opencode_database_plugin.sql` causes the plugin's unqualified
+  `CREATE TABLE` / `CREATE INDEX` / trigger / function / view statements
+  to be created under the `opencode` schema without modification.
 - **5.3 - Migration: create the `opencode` schema and apply the plugin DDL.**
-  New migration that creates the schema and applies the patched plugin DDL
-  inside it. Include a downgrade.
+  ✅ Done as `migrations/0007_opencode_database_plugin.sql` with a
+  dedicated-schema downgrade at
+  `migrations/0007_opencode_database_plugin.down.sql`.
 - **5.4 - Surface plugin logging failures as degraded observability.** Wrap
   plugin calls in a `tracing` span and log a warning (not an error) when
   the plugin write fails, so analysis and trading runs are not blocked.
@@ -1075,8 +1134,14 @@ These should be answered before implementation:
 - how headless OpenCode behaves when a permission resolves to `ask`
 - how to configure production permissions so runs never require interactive
   approval
-- whether OpenCode's database plugin can operate cleanly in the `opencode`
-  Postgres schema
+- ~~whether OpenCode's database plugin can operate cleanly in the `opencode`
+  Postgres schema~~
+  Resolved by the OpenCode Database Plugin Foundation plan: the plugin's
+  SQL is unqualified, and `OPENCODE_DATABASE_URL` is configured with
+  `search_path=opencode,public` so the plugin's tables, indexes,
+  triggers, function, and view are created and queried under the
+  `opencode` schema without modifying the upstream DDL. See "OpenCode
+  Database Plugin" above.
 - where OpenCode stores its internal data in the container and how to force that
   path cleanly
 - what cleanup or retention strategy is needed for OpenCode internal data and

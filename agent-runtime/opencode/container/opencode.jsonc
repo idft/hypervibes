@@ -4,6 +4,7 @@
   // Container-global runtime config for the shared OpenCode service.
   // Keep shared plugins here so generated agent workspaces stay minimal.
   "plugin": [
-    "@aeondave/opencode-dotenv@latest"
+    "@aeondave/opencode-dotenv@latest",
+    "opencode-database-plugin@1.0.12"
   ]
 }

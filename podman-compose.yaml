@@ -46,6 +46,12 @@ services:
       XAI_API_KEY: ${XAI_API_KEY:-}
       OPENCODE_GO_API_KEY: ${OPENCODE_GO_API_KEY:-}
       OLLAMA_API_KEY: ${OLLAMA_API_KEY:-}
+      # OpenCode database plugin. The plugin's SQL is unqualified, so the
+      # Postgres connection must set `search_path=opencode,public`. The
+      # compose hostname `postgres` resolves to the dev Postgres service
+      # inside the compose network; do not switch this to localhost.
+      OPENCODE_DATABASE_URL: postgres://${POSTGRES_USER:-vibetrading}:${POSTGRES_PASSWORD:-vibetrading}@postgres:5432/${POSTGRES_DB:-vibetrading}?search_path=opencode,public
+      OPENCODE_DB_QUERY_TIMEOUT: ${OPENCODE_DB_QUERY_TIMEOUT:-10000}
     ports:
       - "${OPENCODE_PORT:-14096}:14096"
     volumes:
