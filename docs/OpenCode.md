@@ -42,9 +42,15 @@ Current implemented slice:
   - `workspace_host_path`
   - `workspace_container_path`
   - `profile_source`
-- generated workspaces include a non-secret `generated/agent.json` file and an
-  agent-scoped `.env` file loaded through the container-mounted
-  `agent-runtime/opencode/container/opencode.jsonc` config
+- generated workspaces include a non-secret `generated/agent.json` file, an
+  agent-scoped `.env` file (consumed by the `vibetrading` MCP server inside
+  the container), and a project-level `opencode.json` registering the local
+  `vibetrading` MCP server
+- the custom OpenCode container image installs the `vibetrading` MCP server at
+  `/opt/vibetrading/mcp/` and includes its Python dependencies
+- OpenCode agents interact with the Vibetrading backend exclusively through
+  the `vibetrading` MCP server; there is no workspace-local Python API
+  client anymore
 - scheduling, session creation, and run tracking are not implemented yet
 
 The rest of this document still captures the larger OpenCode backend plan.
@@ -118,7 +124,7 @@ configuration.
 The OpenCode runtime assets should live in a separate distribution-like source
 directory, similar in purpose to the current Hermes profile distribution.
 
-Proposed source layout:
+Source layout:
 
 ```text
 agent-runtime/opencode/
@@ -134,10 +140,20 @@ agent-runtime/opencode/
 │   └── trading.md
 ├── skills/
 ├── scripts/
-├── vibetrading/
-│   └── py/
-└── requirements.txt
+├── mcp/
+│   ├── README.md
+│   ├── requirements.txt
+│   ├── server.py
+│   └── test_server.py
+└── container/
+    └── opencode.jsonc
 ```
+
+The MCP server source under `mcp/` is the single source of truth for the
+Vibetrading MCP server. It is baked into the custom OpenCode image at
+`/opt/vibetrading/mcp/` by `containers/opencode/Dockerfile`. Generated
+workspaces no longer contain a Python API client; the `vibetrading` MCP
+server is the only Vibetrading API integration path.
 
 Generated agent workspaces may contain project-local `.opencode/` directories if
 OpenCode requires that layout for command, agent, and skill discovery. The source
@@ -149,7 +165,7 @@ of truth should still be `agent-runtime/opencode/`, not the repository root
 Each OpenCode-backed Vibetrading agent should get its own OpenCode project
 directory under a shared workspace volume.
 
-Proposed generated layout:
+Generated layout:
 
 ```text
 /workspaces/agents/<agent_key>/
@@ -164,17 +180,22 @@ Proposed generated layout:
 ├── scripts/
 │   ├── generated/
 │   └── user/
-├── vibetrading/
-│   └── py/
 ├── data/
 └── scratch/
 ```
+
+The generated `opencode.json` registers the `vibetrading` MCP server as a
+local stdio process. Each workspace runs its own MCP process; the process
+reads that workspace's `.env` to authenticate against the Vibetrading
+backend with the agent's bearer token.
 
 Ownership rules:
 
 - Vibetrading may create and update generated files.
 - OpenCode agents may write only to explicitly writable paths.
-- The analysis agent may write Python scripts under `scripts/user/`.
+- The analysis agent may write Python scripts under `scripts/user/`. Those
+  scripts are for analysis computation only and must not be used to call
+  Vibetrading APIs.
 - The trading agent should not write Python scripts in the initial design.
 - The backend must preserve agent-authored paths when regenerating runtime
   files.
@@ -459,17 +480,25 @@ should surface degraded observability.
 
 ## Configuration And Deployment
 
-OpenCode should run in a custom container image based on the upstream OpenCode
-image.
+OpenCode runs in a custom container image built from
+`containers/opencode/Dockerfile`. The base image is the upstream
+`ghcr.io/anomalyco/opencode:1.17.11` (pinned to match the version the
+compose file used to consume directly).
 
-The image should include:
+The custom image installs:
 
-- OpenCode
-- Python
-- `uv`
-- common Python analysis dependencies as needed
-- Vibetrading Python client/runtime scripts
-- OpenCode database plugin
+- the `uv` binary, copied from `docker.io/astral/uv:0.10-alpine`
+- Python 3 (the upstream image is Alpine-based and ships neither Python
+  nor pip)
+- the Vibetrading MCP server source at `/opt/vibetrading/mcp/`
+- a Python virtualenv at `/opt/vibetrading/mcp/.venv/`, created with
+  `uv venv`, with the MCP server dependencies from
+  `agent-runtime/opencode/mcp/requirements.txt` installed via `uv pip`
+
+The `vibetrading` MCP server is launched per agent workspace via the
+project-level `opencode.json` that the backend writes for each generated
+workspace. The launch command resolves to the venv's Python interpreter
+so the image does not depend on `PATH` or shell startup files.
 
 Runtime volumes:
 
@@ -483,10 +512,10 @@ variables when possible.
 
 OpenCode server auth should be enabled, even on the internal container network.
 
-Agent-scoped Vibetrading API credentials should be treated differently from
-provider credentials. Avoid making every agent's Vibetrading API key globally
-available to all OpenCode sessions if possible. Prefer per-agent project config,
-run context, or scoped tool configuration.
+Agent-scoped Vibetrading API credentials are isolated per workspace. Each
+MCP server process reads only its own workspace `.env`, and the bearer
+token never leaves that process. There is no shared, globally authenticated
+MCP daemon.
 
 ## Operator UX
 
@@ -571,11 +600,15 @@ should not block each other within a phase where possible.
 These items are inputs to every later phase. They are intentionally small and
 exist to remove unknowns from the plan's "Deferred Investigation Items" list.
 
-- **1.1 - Spike the OpenCode HTTP API and directory-scoped sessions.** Stand
-  up an OpenCode server locally, exercise `POST /session` with the
-  `x-opencode-directory` header, then send a follow-up command call to see
-  whether the header is also required there. Record the result in
-  `OpenCode.md`.
+- **1.1 - Spike the OpenCode HTTP API and directory-scoped sessions.** ✅ Done.
+  Spiked against the local `opencode-local` runtime (OpenCode `1.17.11`) using
+  the `/workspaces/agents/btc-2` workspace. Key finding: there is **no
+  `x-opencode-directory` header**. The directory is a **`?directory=` query
+  parameter** on essentially every project-scoped route, and it is **permanently
+  bound to the session** at creation time. Follow-up `POST /session/{id}/message`
+  and `POST /session/{id}/command` calls do not need to repeat it and cannot
+  override it. See the "OpenCode HTTP API Notes" section below for the full
+  verified request/response shape.
 - **1.2 - Investigate the OpenCode database plugin schema.** Vendor the
   plugin DDL into a scratch location, test whether unqualified table names
   work under `search_path = opencode, public`, and document any required
@@ -600,8 +633,10 @@ exist to remove unknowns from the plan's "Deferred Investigation Items" list.
   on the internal network only, and read provider credentials from env. Do
   not auto-start.
 - **2.2 - Add a custom OpenCode Dockerfile at `containers/opencode/Dockerfile`.**
-  Build on the upstream OpenCode image. Install Python, `uv`, the database
-  plugin, and a small `requirements.txt` for the in-workspace Python client.
+  Build on the upstream OpenCode image. Install the Vibetrading MCP server
+  source under `/opt/vibetrading/mcp/` and a Python virtualenv with its
+  dependencies. The database plugin and the in-workspace Python client are
+  no longer in scope for this container.
 - **2.3 - Pin a shared workspace path.** Ensure the OpenCode container and
   the backend container see `/workspaces` as the same absolute path so
   generated files work without translation.
@@ -671,11 +706,14 @@ exist to remove unknowns from the plan's "Deferred Investigation Items" list.
   will do.
 - **6.5 - Add agent stubs.** Create `agents/analysis.md` and
   `agents/trading.md` with placeholders.
-- **6.6 - Add the `vibetrading/py/` Python client skeleton.** Place a
-  `vibetrading_client.py` with a tiny `Client` class that holds the agent
-  API key. Real endpoints come later.
-- **6.7 - Add `requirements.txt` for the workspace Python environment.**
-  Pin the minimum dependencies the eventual client needs (e.g. `requests`).
+- **6.6 - ~~Add the `vibetrading/py/` Python client skeleton.~~** Removed by
+  the MCP runtime plan. The Python client has been replaced by the
+  `vibetrading` MCP server under `agent-runtime/opencode/mcp/`. Generated
+  workspaces no longer contain a workspace-local Python client.
+- **6.7 - ~~Add `requirements.txt` for the workspace Python environment.~~**
+  Removed by the MCP runtime plan. The MCP server has its own
+  `mcp/requirements.txt`, installed at image build time into a fixed
+  virtualenv at `/opt/vibetrading/mcp/.venv/`.
 
 ### Phase 7: Workspace Generation
 
@@ -693,10 +731,10 @@ exist to remove unknowns from the plan's "Deferred Investigation Items" list.
 - **7.4 - Place `.opencode/{commands,agents,skills}` from the profile
   source.** Copy these subtrees from `agent-runtime/opencode/` into the
   workspace's `.opencode/` directory on every regeneration.
-- **7.5 - Place `scripts/{generated,user}`, `vibetrading/`, `data/`,
-  `scratch/` skeletons.** Create the runnable directories and the
-  `vibetrading/py/` mirror from the profile source. The `scripts/user/`
-  directory is created but never deleted.
+- **7.5 - Place `scripts/{generated,user}`, `data/`, `scratch/` skeletons.**
+  Create the runnable directories from the profile source. The
+  `vibetrading/py/` Python client mirror was removed by the MCP runtime
+  plan. The `scripts/user/` directory is created but never deleted.
 - **7.6 - Add path-preservation rules.** Document and enforce that the
   generator must not delete `scripts/user/` or any other explicitly-writable
   path. Add a unit test that verifies a fake user-written script survives
@@ -751,12 +789,18 @@ exist to remove unknowns from the plan's "Deferred Investigation Items" list.
 - **10.1 - Add an OpenCode HTTP client.** Use `reqwest` to call the OpenCode
   server. Place it in `src/agent_runtime/opencode/client.rs`. Support basic
   auth via the configured password.
-- **10.2 - Implement real session creation.** Call `POST /session` with the
-  per-agent workspace path and the `x-opencode-directory` header. Capture
-  and return the session id.
+- **10.2 - Implement real session creation.** Call `POST /session?directory={workspace_container_path}`
+  with the per-agent workspace path as the `?directory=` query parameter. The
+  server stores the directory on the session and returns a `Session` object
+  whose `directory` and `path` fields reflect the binding. Capture and return
+  the session id.
 - **10.3 - Implement real command dispatch.** Send the resolved OpenCode
-  command (analysis or trading) along with the operator prompt, scoped to
-  the per-session directory.
+  command (analysis or trading) along with the operator prompt via
+  `POST /session/{id}/command` or `POST /session/{id}/message`. **Do not
+  repeat the `?directory=` query parameter** on these calls — the session is
+  already permanently bound to the workspace, and passing a different
+  directory is silently ignored. The directory binding cannot be changed for
+  an existing session; to switch directories, create a new session.
 - **10.4 - Implement session status polling.** Poll the session until it
   reaches a terminal state or the schedule's `timeout_seconds` elapses,
   then mark the run accordingly.
@@ -775,10 +819,10 @@ exist to remove unknowns from the plan's "Deferred Investigation Items" list.
 - **11.2 - Flesh out `agents/analysis.md`.** Describe the analysis agent's
   permissions: may read everything, may write memories, may write Python
   under `scripts/user/`, must not place or cancel orders.
-- **11.3 - Add the `vibetrading_client` Python wrapper.** Implement
-  `list_memories`, `get_memory`, and `write_memory` methods in
-  `vibetrading/py/vibetrading_client.py`. Use the agent API key from the
-  workspace's `generated/agent.json`.
+- **11.3 - ~~Add the `vibetrading_client` Python wrapper.~~** Removed by
+  the MCP runtime plan. Analysis agents now use the `vibetrading` MCP
+  tools (`list_memories`, `get_latest_analysis`, `write_memory`, etc.)
+  instead of a workspace-local Python client.
 - **11.4 - Default `analysis-15m` schedule seed.** When an OpenCode agent
   is created, insert a default `analysis-15m` schedule with the recommended
   interval and timeout.
@@ -858,17 +902,175 @@ exist to remove unknowns from the plan's "Deferred Investigation Items" list.
   Once 1.1 through 1.4 are answered, the deferred section should be empty
   or contain only genuinely open questions.
 
+## OpenCode HTTP API Notes
+
+Concrete facts verified by running requests against the local OpenCode
+`1.17.11` server (`opencode-local` runtime, `http://localhost:14096`) against
+the generated `/workspaces/agents/btc-2` workspace. These are the
+contract that the `OpenCodeBackend` adapter in `src/agent_runtime/opencode/`
+must implement; the deferred items below reference back to them.
+
+### Directory is a query parameter, not a header
+
+There is **no `x-opencode-directory` header** in the OpenCode `1.17.11` HTTP
+API. The per-request project directory is a `?directory=<abs-path>` query
+parameter. It appears as an optional parameter on essentially every
+project-scoped route, including:
+
+- `POST /session` — bind a new session to the directory
+- `GET /session` — list sessions (filter by directory)
+- `POST /session/{id}/message` — send a message
+- `POST /session/{id}/message/{messageID}` — fetch a message
+- `GET /session/{id}/message` — list messages
+- `POST /session/{id}/command` — run a slash command
+- `POST /session/{id}/prompt_async` — fire-and-forget message
+- `GET /agent`, `GET /command`, `GET /config`, `GET /provider`,
+  `GET /file`, `GET /find`, `GET /path`, `GET /project/current`, etc.
+
+Most discovery and project introspection calls only need the `?directory=`
+parameter when the project is not yet known. Once a session is created, the
+directory is permanently bound and follow-up calls do not need to repeat it.
+
+A sibling `?workspace=<name>` parameter scopes the call to a named workspace
+inside a worktree, but Vibetrading uses one workspace per agent, so the
+adapter only needs `?directory=`.
+
+### Session directory binding is permanent
+
+`POST /session?directory=/workspaces/agents/btc-2` returns:
+
+```json
+{
+  "id": "ses_0fa0a4ad4ffeJ8MjoTfupnehRM",
+  "directory": "/workspaces/agents/btc-2",
+  "path": "workspaces/agents/btc-2",
+  "projectID": "global",
+  "title": "btc-2 directory test",
+  ...
+}
+```
+
+The returned session object carries the `directory` and `path` fields. All
+subsequent `/message`, `/command`, and `/prompt_async` calls on that session
+id are automatically scoped to that directory, **whether or not the caller
+passes `?directory=`**. The adapter does not need to remember or re-send the
+directory; it just stores the session id as `agentic_runs.backend_run_ref`.
+
+The binding is one-way: there is no API to change the directory of an
+existing session. Passing a different `?directory=` value on a follow-up
+message call is silently ignored. To run against a different workspace, the
+adapter must create a new session.
+
+### Verified request/response shape
+
+```text
+# Create a session scoped to a workspace
+POST /session?directory=/workspaces/agents/btc-2
+Content-Type: application/json
+{
+  "title": "btc-2 directory test"
+}
+
+→ 200 OK
+{
+  "id": "ses_…",
+  "directory": "/workspaces/agents/btc-2",
+  "path": "workspaces/agents/btc-2",
+  "projectID": "global",
+  ...
+}
+
+# Send a message (no ?directory= required; cwd stays bound)
+POST /session/ses_…/message
+Content-Type: application/json
+{
+  "model": { "providerID": "openrouter", "modelID": "google/gemini-2.5-flash" },
+  "parts": [{ "type": "text", "text": "What is your cwd?" }]
+}
+
+→ 200 OK
+{
+  "info": {
+    "role": "assistant",
+    "agent": "build",
+    "path": { "cwd": "/workspaces/agents/btc-2", "root": "/" },
+    "finish": "stop",
+    ...
+  },
+  "parts": [{ "type": "text", "text": "/workspaces/agents/btc-2" }, ...]
+}
+
+# Run a slash command (vibetrading-analysis, vibetrading-trading, etc.)
+POST /session/ses_…/command
+Content-Type: application/json
+{ "command": "vibetrading-analysis", "arguments": "…" }
+
+→ 200 OK
+{ "info": { "agent": "build", "path": { "cwd": "/workspaces/agents/btc-2", "root": "/" }, "finish": "stop" }, "parts": [...] }
+```
+
+`/session/{id}/prompt_async` takes the same body as `/message` and returns
+`204 No Content` immediately, which is the right shape for the
+`AgenticScheduler` dispatch path when the adapter is not the one polling for
+completion. If the adapter wants the synchronous response, use `/message`.
+
+### Discovery endpoints the adapter can use
+
+- `GET /global/health` → `{ "healthy": true, "version": "1.17.11" }` for
+  the `is_healthy` check in 10.6. Does not need auth on most builds but
+  passes Basic auth when set.
+- `GET /provider?directory={path}` → list connected providers, their
+  models, and the `default` model map. The adapter should pick the
+  per-schedule `model_provider_id` / `model_id` from
+  `agentic_job_schedules`, not from these defaults.
+- `GET /agent?directory={path}` → list available OpenCode agents
+  (`build`, `analysis`, `trading`, `plan`, ...). The adapter picks
+  `analysis` or `trading` based on the resolved `job_kind`.
+- `GET /command?directory={path}` → list available slash commands
+  (`/init`, `/review`, `/vibetrading-analysis`, `/vibetrading-trading`,
+  ...). The adapter picks `vibetrading-analysis` or
+  `vibetrading-trading` based on `job_kind`.
+- `GET /session/{id}/message` → full transcript with parts; useful for the
+  post-run database plugin mirror and for surfacing run output to the UI.
+
+### Auth and CORS
+
+The server uses HTTP Basic auth with `OPENCODE_SERVER_USERNAME` (default
+`opencode`) and `OPENCODE_SERVER_PASSWORD`. The adapter must send an
+`Authorization: Basic …` header on every request. The `opencode` CLI itself
+is a valid Basic-auth client and can be used for manual testing:
+
+```sh
+AUTH=$(printf 'opencode:%s' "$OPENCODE_SERVER_PASSWORD" | base64 -w0)
+curl -H "Authorization: Basic $AUTH" \
+     "http://localhost:14096/global/health"
+```
+
+CORS is opt-in via `--cors` on the opencode server; the Vibetrading backend
+talks server-to-server so CORS is not needed for the adapter.
+
 ## Deferred Investigation Items
 
 These should be answered before implementation:
 
-- whether `opencode-sdk-rs` supports setting `x-opencode-directory` per request
-- whether raw HTTP is needed for directory-scoped session creation or command
-  execution
-- whether `POST /session` binds the session permanently to the requested
-  project directory
-- whether follow-up session message and command calls also require the directory
-  header
+- ~~whether `opencode-sdk-rs` supports setting `x-opencode-directory` per request~~
+  Resolved by spike 1.1: there is no such header in OpenCode `1.17.11`; the
+  directory is a `?directory=` query parameter, and the `opencode-sdk-rs`
+  client does not currently expose it. The adapter uses raw `reqwest`
+  requests. See "OpenCode HTTP API Notes" above.
+- ~~whether raw HTTP is needed for directory-scoped session creation or command
+  execution~~
+  Resolved by spike 1.1: yes, raw HTTP is the right path for the adapter in
+  the initial design. See "OpenCode HTTP API Notes" above.
+- ~~whether `POST /session` binds the session permanently to the requested
+  project directory~~
+  Resolved by spike 1.1: yes, the binding is permanent. See "OpenCode HTTP
+  API Notes" above.
+- ~~whether follow-up session message and command calls also require the directory
+  header~~
+  Resolved by spike 1.1: no `?directory=` (and no header) is needed on
+  follow-up calls, and the value would be ignored anyway. See "OpenCode HTTP
+  API Notes" above.
 - whether project-level OpenCode config reloads after generated files change
 - how headless OpenCode behaves when a permission resolves to `ask`
 - how to configure production permissions so runs never require interactive
@@ -881,3 +1083,82 @@ These should be answered before implementation:
   plugin tables
 - whether OpenCode can safely receive per-agent Vibetrading API credentials at
   run time without exposing all agents' credentials globally
+
+## OpenCode MCP Investigation (Vibetrading MCP Runtime)
+
+The Vibetrading backend no longer ships a workspace-local Python API client.
+OpenCode agents interact with the Vibetrading backend exclusively through the
+`vibetrading` MCP server.
+
+The following questions were investigated against the upstream OpenCode MCP
+docs (`opencode.ai/docs/mcp-servers/`) and validated for the image version
+`ghcr.io/anomalyco/opencode:1.17.11` used in `podman-compose.yaml`.
+
+### Config file extension
+
+OpenCode accepts both `opencode.json` and `opencode.jsonc` at the project
+level. The MCP config syntax is identical between them. Generated Vibetrading
+workspaces continue to use `opencode.json` (no comments needed) for simpler
+machine generation.
+
+### Local MCP server config shape
+
+A project-local stdio MCP server is registered under `mcp` with a unique name:
+
+```jsonc
+{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "vibetrading": {
+      "type": "local",
+      "command": ["python", "/opt/vibetrading/mcp/server.py"],
+      "cwd": ".",
+      "enabled": true
+    }
+  }
+}
+```
+
+Supported `local` options:
+
+| Field         | Type    | Required | Notes                                                       |
+|---------------|---------|----------|-------------------------------------------------------------|
+| `type`        | String  | yes      | Must be `"local"`.                                          |
+| `command`     | Array   | yes      | Command and arguments; the first entry is the executable.   |
+| `cwd`         | String  | no       | Working directory. Relative paths resolve from workspace.   |
+| `environment` | Object  | no       | Env vars explicitly passed to the MCP server process.      |
+| `enabled`     | Boolean | no       | Defaults to `true`; can disable without removing config.    |
+| `timeout`     | Number  | no       | Tool-fetch timeout in ms. Default is 5000.                  |
+
+### Per-workspace process lifecycle
+
+Project-level MCP entries launch a separate stdio MCP process per
+project/session, not one global server-wide daemon. Each generated Vibetrading
+agent workspace therefore gets its own authenticated MCP process, isolated by
+its workspace `.env`.
+
+### Environment inheritance
+
+The OpenCode server process is the parent of every MCP process. The MCP
+process inherits the parent process's environment unless a config `environment`
+override replaces specific values. The dotenv plugin
+(`@aeondave/opencode-dotenv`) loads the workspace `.env` into the OpenCode
+server's process environment; whether those variables are passed through to
+the spawned MCP child process is not documented as a guarantee.
+
+To remove that uncertainty, the Vibetrading MCP server loads the workspace
+`.env` itself from its current working directory (the workspace), which is set
+explicitly by the `cwd` config field. This keeps auth credentials scoped to the
+workspace regardless of any parent-process inheritance quirks.
+
+### Conclusion
+
+The expected preferred result from the plan is satisfied:
+
+- Project-local config launches a separate MCP process for each agent
+  workspace.
+- The MCP server loads `.env` from the workspace via its own `cwd`.
+
+The custom OpenCode image is required only to ship the MCP server source at a
+fixed path (`/opt/vibetrading/mcp/`) and to install the MCP Python
+dependencies in the container.

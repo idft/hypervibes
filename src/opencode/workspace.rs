@@ -72,7 +72,6 @@ pub fn generate_agent_workspace(
         &workspace_host_path.join("generated"),
         &workspace_host_path.join("scripts/generated"),
         &workspace_host_path.join("scripts/user"),
-        &workspace_host_path.join("vibetrading/py"),
         &workspace_host_path.join("data"),
         &workspace_host_path.join("scratch"),
     ] {
@@ -114,21 +113,6 @@ pub fn generate_agent_workspace(
         &config.source_root.join("scripts/generated"),
         &workspace_host_path.join("scripts/generated"),
     )?;
-    copy_tree(
-        &config.source_root.join("vibetrading/py"),
-        &workspace_host_path.join("vibetrading/py"),
-    )?;
-
-    fs::copy(
-        config.source_root.join("requirements.txt"),
-        workspace_host_path.join("requirements.txt"),
-    )
-    .with_context(|| {
-        format!(
-            "failed to copy {}",
-            config.source_root.join("requirements.txt").display()
-        )
-    })?;
 
     fs::write(
         workspace_host_path.join(".env"),
@@ -343,6 +327,67 @@ mod tests {
         ] {
             assert!(path.exists(), "missing {}", path.display());
         }
+
+        // The workspace-local Python API client has been removed in favor
+        // of the `vibetrading` MCP server, which is installed by the custom
+        // OpenCode image at a fixed path.
+        assert!(
+            !generated.workspace_host_path.join("vibetrading").exists(),
+            "vibetrading/ should not be generated into workspaces"
+        );
+        assert!(
+            !generated.workspace_host_path.join("requirements.txt").exists(),
+            "root requirements.txt should not be generated into workspaces"
+        );
+    }
+
+    #[test]
+    fn generated_opencode_json_registers_vibetrading_mcp_server() {
+        let temp = TempDir::new("opencode-mcp-config");
+        let generated = generate_agent_workspace(&sample_config(&temp.path), &sample_agent())
+            .expect("generate workspace");
+        let raw = fs::read_to_string(generated.workspace_host_path.join("opencode.json"))
+            .expect("read opencode.json");
+        let parsed: Value = serde_json::from_str(&raw).expect("parse opencode.json");
+
+        let mcp = parsed
+            .get("mcp")
+            .and_then(Value::as_object)
+            .expect("mcp object");
+        let server = mcp
+            .get("vibetrading")
+            .and_then(Value::as_object)
+            .expect("vibetrading mcp entry");
+        assert_eq!(server.get("type").and_then(Value::as_str), Some("local"));
+        assert_eq!(server.get("enabled").and_then(Value::as_bool), Some(true));
+
+        let command = server
+            .get("command")
+            .and_then(Value::as_array)
+            .expect("command array");
+        let command_strs: Vec<&str> = command
+            .iter()
+            .filter_map(Value::as_str)
+            .collect();
+        assert!(
+            command_strs
+                .iter()
+                .any(|part| part.contains("vibetrading/mcp/.venv/bin/python")),
+            "command should use the MCP venv python; got {command_strs:?}"
+        );
+        assert!(
+            command_strs
+                .iter()
+                .any(|part| part.ends_with("vibetrading/mcp/server.py")),
+            "command should launch the MCP server script; got {command_strs:?}"
+        );
+
+        assert_eq!(server.get("cwd").and_then(Value::as_str), Some("."));
+
+        // The tool schema is server-defined, but the config itself must
+        // never embed a credential.
+        assert!(!raw.contains("VIBETRADING_API_KEY"));
+        assert!(!raw.contains("vta_"));
     }
 
     #[test]
@@ -458,7 +503,6 @@ mod tests {
         fs::create_dir_all(source_root.join("skills")).expect("create skills");
         fs::create_dir_all(source_root.join("scripts/generated"))
             .expect("create scripts/generated");
-        fs::create_dir_all(source_root.join("vibetrading/py")).expect("create vibetrading/py");
         fs::write(
             source_root.join("opencode.json.template"),
             "{\"plugin\": [\"x\"]}\n",
@@ -475,8 +519,6 @@ mod tests {
         )
         .expect("write command");
         fs::write(source_root.join("agents/analysis.md"), "test\n").expect("write agent");
-        fs::write(source_root.join("requirements.txt"), "requests\n").expect("write requirements");
-        fs::write(source_root.join("vibetrading/py/client.py"), "# test\n").expect("write client");
 
         let error = generate_agent_workspace(
             &OpenCodeWorkspaceConfig {
@@ -502,5 +544,6 @@ mod tests {
 
         assert!(rendered.contains("https://opencode.ai/config.json"));
         assert!(!rendered.contains("@aeondave/opencode-dotenv@latest"));
+        assert!(rendered.contains("vibetrading"));
     }
 }

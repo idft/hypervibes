@@ -20,7 +20,12 @@ services:
       retries: 5
 
   opencode:
-    image: ghcr.io/anomalyco/opencode:1.17.11
+    build:
+      context: .
+      dockerfile: containers/opencode/Dockerfile
+      args:
+        OPENCODE_TAG: 1.17.11
+    image: vibetrading-opencode:local
     restart: unless-stopped
     command: ["serve", "--hostname", "0.0.0.0", "--port", "14096"]
     environment:

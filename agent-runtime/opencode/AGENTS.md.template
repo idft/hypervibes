@@ -12,9 +12,19 @@ Writable paths:
 - `data/`
 - `scratch/`
 
+Backend access:
+
+- Use the `vibetrading` MCP tools for job context, account state, memories,
+  and orders.
+- Do not call Vibetrading HTTP endpoints directly.
+- Do not write or run Python scripts whose purpose is to call Vibetrading
+  APIs.
+- Never read, print, or modify `.env`.
+
 Safety rules:
 
 - Never handle Hyperliquid private keys.
-- Use Vibetrading APIs and tools for memory and execution.
+- Real order submission, if enabled, must go through the `vibetrading` MCP
+  trading tools only.
 - Treat `.env`, `generated/agent.json`, and `.opencode/` runtime files as
   backend-owned generated state.

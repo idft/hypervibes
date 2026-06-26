@@ -1,2 +1,3 @@
+mcp
+httpx
 python-dotenv
-requests
