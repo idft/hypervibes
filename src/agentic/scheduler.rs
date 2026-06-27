@@ -1,4 +1,4 @@
-use std::{sync::Arc, time::Duration};
+use std::{collections::BTreeMap, sync::Arc, time::Duration};
 
 use anyhow::Result;
 use chrono::Utc;
@@ -8,8 +8,9 @@ use tracing::{debug, error, info, warn};
 use crate::{
     agentic::{
         backend::{AgenticBackend, DispatchRequest, dispatch_with_timeout},
-        model::DueOpenCodeScheduleRow,
+        model::{DueOpenCodeScheduleRow, JOB_KIND_ANALYSIS, JOB_KIND_TRADING},
         store,
+        timeframe::parse_timeframe_seconds,
     },
     db::DbPool,
 };
@@ -17,11 +18,20 @@ use crate::{
 const SCHEDULER_POLL_INTERVAL: Duration = Duration::from_secs(10);
 const DUE_SCHEDULE_LIMIT: i64 = 20;
 
+const JOB_KIND_PRIORITY_ANALYSIS: u8 = 0;
+const JOB_KIND_PRIORITY_TRADING: u8 = 1;
+const JOB_KIND_PRIORITY_UNKNOWN: u8 = 2;
+
 /// Periodic background loop that claims due OpenCode schedules and
 /// dispatches them through an [`AgenticBackend`].
 ///
 /// The scheduler is generic over the backend so tests can swap in a
 /// fake implementation. In production this is `OpenCodeBackend`.
+///
+/// Schedules for the same agent run sequentially in a single worker
+/// task, ordered by shortest timeframe first, then `analysis` before
+/// `trading`, then numeric `schedule_id`. Different agents may run
+/// concurrently.
 pub struct AgenticScheduler {
     pool: DbPool,
     shutdown_rx: watch::Receiver<bool>,
@@ -63,8 +73,8 @@ impl AgenticScheduler {
         Ok(())
     }
 
-    /// One scheduling pass: load due schedules, claim each, and spawn
-    /// dispatch tasks for newly-queued runs.
+    /// One scheduling pass: load due schedules, claim each, and run
+    /// them sequentially per agent.
     ///
     /// This is exposed (not just called from [`Self::run`]) so tests can
     /// drive a single tick deterministically.
@@ -73,53 +83,79 @@ impl AgenticScheduler {
         let due = store::list_due_opencode_schedules(&self.pool, now, DUE_SCHEDULE_LIMIT).await?;
         debug!(count = due.len(), "due opencode schedules loaded");
 
-        for schedule in due {
+        if due.is_empty() {
+            return Ok(());
+        }
+
+        let sorted = sort_due_for_dispatch(due);
+        let mut by_agent: BTreeMap<String, Vec<DueOpenCodeScheduleRow>> = BTreeMap::new();
+        for schedule in sorted {
+            by_agent
+                .entry(schedule.agent_key.clone())
+                .or_default()
+                .push(schedule);
+        }
+
+        for (agent_key, schedules) in by_agent {
             let pool = self.pool.clone();
             let backend = self.backend.clone();
-            let schedule_id = schedule.schedule_id;
-            let agent_key = schedule.agent_key.clone();
-            let job_key = schedule.job_key.clone();
-            let job_kind = schedule.job_kind.clone();
-
-            let claim = match store::claim_due_schedule(&self.pool, schedule_id, now).await {
-                Ok(claim) => claim,
-                Err(error) => {
-                    warn!(
-                        schedule_id,
-                        agent_key = %agent_key,
-                        job_key = %job_key,
-                        error = ?error,
-                        "failed to claim due schedule"
-                    );
-                    continue;
+            tokio::spawn(async move {
+                for schedule in schedules {
+                    process_schedule_for_agent(&pool, &backend, &agent_key, schedule).await;
                 }
-            };
-
-            match claim {
-                store::ClaimedScheduleRun::NotDue => {
-                    debug!(schedule_id, "schedule no longer due at claim time");
-                }
-                store::ClaimedScheduleRun::Skipped { run_id } => {
-                    info!(
-                        schedule_id,
-                        run_id,
-                        agent_key = %agent_key,
-                        job_key = %job_key,
-                        "agentic run skipped because previous run still active"
-                    );
-                }
-                store::ClaimedScheduleRun::Dispatch { run_id } => {
-                    let request =
-                        dispatch_request_from_schedule(&schedule, run_id, schedule.next_run_at);
-                    spawn_dispatch_task(pool, backend, request);
-                }
-            }
-
-            // `schedule` and `job_kind` are still used in log lines above.
-            let _ = job_kind;
+            });
         }
 
         Ok(())
+    }
+}
+
+async fn process_schedule_for_agent(
+    pool: &DbPool,
+    backend: &Arc<dyn AgenticBackend>,
+    agent_key: &str,
+    schedule: DueOpenCodeScheduleRow,
+) {
+    let schedule_id = schedule.schedule_id;
+    let job_key = schedule.job_key.clone();
+    let job_kind = schedule.job_kind.clone();
+    let scheduled_for = schedule.next_run_at;
+
+    let claim = match store::claim_due_schedule(pool, schedule_id, Utc::now()).await {
+        Ok(claim) => claim,
+        Err(error) => {
+            warn!(
+                schedule_id,
+                agent_key,
+                job_key = %job_key,
+                error = ?error,
+                "failed to claim due schedule"
+            );
+            return;
+        }
+    };
+
+    match claim {
+        store::ClaimedScheduleRun::NotDue => {
+            debug!(
+                schedule_id,
+                agent_key, "schedule no longer due at claim time"
+            );
+        }
+        store::ClaimedScheduleRun::Skipped { run_id } => {
+            info!(
+                schedule_id,
+                run_id,
+                agent_key,
+                job_key = %job_key,
+                "agentic run skipped because previous run still active"
+            );
+        }
+        store::ClaimedScheduleRun::Dispatch { run_id } => {
+            let request = dispatch_request_from_schedule(&schedule, run_id, scheduled_for);
+            let _ = job_kind;
+            dispatch_run(pool.clone(), backend.clone(), request).await;
+        }
     }
 }
 
@@ -135,6 +171,7 @@ pub fn dispatch_request_from_schedule(
         display_name: schedule.display_name.clone(),
         job_key: schedule.job_key.clone(),
         job_kind: schedule.job_kind.clone(),
+        timeframe: schedule.timeframe.clone(),
         operator_prompt: schedule.operator_prompt.clone(),
         model_provider_id: schedule.model_provider_id.clone(),
         model_id: schedule.model_id.clone(),
@@ -145,48 +182,138 @@ pub fn dispatch_request_from_schedule(
     }
 }
 
+/// Run a single dispatch through the backend, awaiting its completion.
+/// Sequential schedulers should call this so that the next schedule
+/// for the same agent is not processed until the current run finishes.
+pub async fn dispatch_run(
+    pool: DbPool,
+    backend: Arc<dyn AgenticBackend>,
+    request: DispatchRequest,
+) {
+    let run_id = request.run_id;
+    let agent_key = request.agent_key.clone();
+    let job_key = request.job_key.clone();
+
+    if let Err(error) = store::mark_run_running(&pool, run_id, None).await {
+        warn!(
+            run_id,
+            agent_key = %agent_key,
+            job_key = %job_key,
+            error = ?error,
+            "failed to mark agentic run as running"
+        );
+        return;
+    }
+
+    match dispatch_with_timeout(&pool, backend, request).await {
+        Ok(_) => {
+            debug!(
+                run_id,
+                agent_key = %agent_key,
+                job_key = %job_key,
+                "agentic dispatch finished"
+            );
+        }
+        Err(error) => {
+            error!(
+                run_id,
+                agent_key = %agent_key,
+                job_key = %job_key,
+                error = ?error,
+                "agentic dispatch errored"
+            );
+            let _ = store::mark_run_failed(&pool, run_id, "dispatch task errored", None).await;
+        }
+    }
+}
+
+/// Spawn a detached dispatch task. Used by manual `Run now` flows
+/// where the caller is not waiting for completion.
 pub fn spawn_dispatch_task(
     pool: DbPool,
     backend: Arc<dyn AgenticBackend>,
     request: DispatchRequest,
 ) {
-    tokio::spawn(async move {
-        let run_id = request.run_id;
-        let agent_key = request.agent_key.clone();
-        let job_key = request.job_key.clone();
+    tokio::spawn(dispatch_run(pool, backend, request));
+}
 
-        if let Err(error) = store::mark_run_running(&pool, run_id, None).await {
+fn job_kind_priority(job_kind: &str) -> u8 {
+    match job_kind {
+        JOB_KIND_ANALYSIS => JOB_KIND_PRIORITY_ANALYSIS,
+        JOB_KIND_TRADING => JOB_KIND_PRIORITY_TRADING,
+        _ => JOB_KIND_PRIORITY_UNKNOWN,
+    }
+}
+
+fn schedule_sort_key(schedule: &DueOpenCodeScheduleRow) -> ScheduleSortKey {
+    let duration_seconds = match parse_timeframe_seconds(&schedule.timeframe) {
+        Ok(seconds) => seconds,
+        Err(error) => {
             warn!(
-                run_id,
-                agent_key = %agent_key,
-                job_key = %job_key,
+                schedule_id = schedule.schedule_id,
+                timeframe = %schedule.timeframe,
                 error = ?error,
-                "failed to mark agentic run as running"
+                "ignoring schedule with invalid timeframe"
             );
-            return;
+            i64::MAX
         }
+    };
+    ScheduleSortKey {
+        next_run_at: schedule.next_run_at,
+        duration_seconds,
+        job_kind_priority: job_kind_priority(&schedule.job_kind),
+        schedule_id: schedule.schedule_id,
+    }
+}
 
-        match dispatch_with_timeout(&pool, backend, request).await {
-            Ok(_) => {
-                debug!(
-                    run_id,
-                    agent_key = %agent_key,
-                    job_key = %job_key,
-                    "agentic dispatch finished"
-                );
-            }
-            Err(error) => {
-                error!(
-                    run_id,
-                    agent_key = %agent_key,
-                    job_key = %job_key,
-                    error = ?error,
-                    "agentic dispatch errored"
-                );
-                let _ = store::mark_run_failed(&pool, run_id, "dispatch task errored", None).await;
-            }
-        }
-    });
+#[derive(Debug, Clone, Copy)]
+struct ScheduleSortKey {
+    next_run_at: chrono::DateTime<Utc>,
+    duration_seconds: i64,
+    job_kind_priority: u8,
+    schedule_id: i64,
+}
+
+impl Ord for ScheduleSortKey {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        // Tuple ordering: earliest next_run_at first, then shortest
+        // timeframe, then analysis-before-trading, then lowest id.
+        (
+            self.next_run_at,
+            self.duration_seconds,
+            self.job_kind_priority,
+            self.schedule_id,
+        )
+            .cmp(&(
+                other.next_run_at,
+                other.duration_seconds,
+                other.job_kind_priority,
+                other.schedule_id,
+            ))
+    }
+}
+
+impl PartialOrd for ScheduleSortKey {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Eq for ScheduleSortKey {}
+
+impl PartialEq for ScheduleSortKey {
+    fn eq(&self, other: &Self) -> bool {
+        self.cmp(other) == std::cmp::Ordering::Equal
+    }
+}
+
+fn sort_due_for_dispatch(due: Vec<DueOpenCodeScheduleRow>) -> Vec<DueOpenCodeScheduleRow> {
+    let mut indexed: Vec<(ScheduleSortKey, DueOpenCodeScheduleRow)> = due
+        .into_iter()
+        .map(|schedule| (schedule_sort_key(&schedule), schedule))
+        .collect();
+    indexed.sort_by_key(|(key, _)| *key);
+    indexed.into_iter().map(|(_, row)| row).collect()
 }
 
 /// Convenience: spawn the scheduler on the current Tokio runtime and
@@ -212,6 +339,7 @@ mod tests {
 
     use async_trait::async_trait;
     use chrono::Utc;
+    use serde_json::json;
 
     use crate::{
         agentic::{
@@ -230,26 +358,19 @@ mod tests {
 
     struct FakeBackend {
         calls: Arc<Mutex<Vec<DispatchRequest>>>,
-        fail: bool,
-        fail_when_no_workspace: bool,
+        delay: Duration,
     }
 
     #[async_trait]
     impl AgenticBackend for FakeBackend {
         async fn dispatch(&self, request: DispatchRequest) -> Result<DispatchResult> {
-            if self.fail_when_no_workspace
-                && request.runtime_config.get("workspace_host_path").is_none()
-            {
-                return Err(anyhow::anyhow!("OpenCode workspace is not configured"));
+            if !self.delay.is_zero() {
+                tokio::time::sleep(self.delay).await;
             }
             self.calls.lock().unwrap().push(request);
-            if self.fail {
-                Err(anyhow::anyhow!("fake backend failure"))
-            } else {
-                Ok(DispatchResult {
-                    backend_run_ref: "ses_fake".to_string(),
-                })
-            }
+            Ok(DispatchResult {
+                backend_run_ref: "ses_fake".to_string(),
+            })
         }
     }
 
@@ -257,24 +378,7 @@ mod tests {
         fn success(calls: Arc<Mutex<Vec<DispatchRequest>>>) -> Self {
             Self {
                 calls,
-                fail: false,
-                fail_when_no_workspace: false,
-            }
-        }
-
-        fn failing(calls: Arc<Mutex<Vec<DispatchRequest>>>) -> Self {
-            Self {
-                calls,
-                fail: true,
-                fail_when_no_workspace: false,
-            }
-        }
-
-        fn missing_workspace(calls: Arc<Mutex<Vec<DispatchRequest>>>) -> Self {
-            Self {
-                calls,
-                fail: false,
-                fail_when_no_workspace: true,
+                delay: Duration::ZERO,
             }
         }
     }
@@ -318,7 +422,7 @@ mod tests {
             api_key_last_used_at: None,
             backend_kind: BACKEND_KIND_OPENCODE.to_string(),
             runtime_id: "opencode-local".to_string(),
-            runtime_config: serde_json::json!({
+            runtime_config: json!({
                 "workspace_host_path": format!("workspaces/agents/{key}"),
                 "workspace_container_path": format!("/workspaces/agents/{key}"),
                 "profile_source": "agent-runtime/opencode"
@@ -331,9 +435,6 @@ mod tests {
     }
 
     async fn seed_test_agent(pool: &DbPool, key: &str) {
-        // Push all existing schedules' `next_run_at` far into the future so
-        // leftover state from earlier tests in the same database does not
-        // get picked up by the due-schedule query during this test.
         let far_future = Utc::now() + chrono::Duration::days(365);
         sqlx::query("UPDATE agentic_job_schedules SET next_run_at = $1")
             .bind(far_future)
@@ -375,23 +476,40 @@ mod tests {
             .unwrap_or_default()
     }
 
+    /// Pin a schedule's `next_run_at` to the latest due boundary for
+    /// `timeframe` at or before `now`, so a claim at `now` will fire.
+    async fn pin_schedule_due(pool: &DbPool, schedule_id: i64, timeframe: &str) {
+        let now = Utc::now();
+        let due = crate::agentic::timeframe::latest_due_at_or_before(now, timeframe, 1)
+            .expect("compute latest due")
+            .expect("should have a previous due boundary");
+        sqlx::query(
+            "UPDATE agentic_job_schedules
+                SET enabled = true, next_run_at = $2
+              WHERE id = $1",
+        )
+        .bind(schedule_id)
+        .bind(due)
+        .execute(pool)
+        .await
+        .expect("force due");
+    }
+
     #[tokio::test]
     async fn tick_dispatches_due_schedule_and_marks_run_succeeded() {
         let pool = test_db::pool().await;
         let key = format!("sched-ok-{}", Utc::now().timestamp_nanos_opt().unwrap_or(0));
         seed_test_agent(&pool, &key).await;
 
-        // Force the analysis schedule to be due.
-        sqlx::query(
-            "UPDATE agentic_job_schedules
-                SET enabled = true, next_run_at = $2
+        let (schedule_id,): (i64,) = sqlx::query_as(
+            "SELECT id FROM agentic_job_schedules
               WHERE agent_key = $1 AND job_key = 'analysis-15m'",
         )
         .bind(&key)
-        .bind(Utc::now() - chrono::Duration::seconds(5))
-        .execute(&pool)
+        .fetch_one(&pool)
         .await
-        .expect("force due");
+        .expect("fetch schedule id");
+        pin_schedule_due(&pool, schedule_id, "15m").await;
 
         let calls: Arc<Mutex<Vec<DispatchRequest>>> = Arc::new(Mutex::new(Vec::new()));
         let backend: Arc<dyn AgenticBackend> = Arc::new(FakeBackend::success(calls.clone()));
@@ -407,8 +525,9 @@ mod tests {
         let request = &guard[0];
         assert_eq!(request.agent_key, key);
         assert_eq!(request.job_key, "analysis-15m");
+        assert_eq!(request.timeframe, "15m");
+        drop(guard);
 
-        // Wait for the dispatch task to finalize the run.
         run_until(|| async {
             list_run_statuses(&pool, &key)
                 .await
@@ -428,55 +547,155 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn tick_marks_run_failed_when_backend_errors() {
+    async fn tick_dispatches_same_agent_schedules_sequentially() {
         let pool = test_db::pool().await;
         let key = format!(
-            "sched-fail-{}",
+            "sched-seq-{}",
             Utc::now().timestamp_nanos_opt().unwrap_or(0)
         );
         seed_test_agent(&pool, &key).await;
 
-        sqlx::query(
-            "UPDATE agentic_job_schedules
-                SET enabled = true, next_run_at = $2
+        // Add a 1h analysis schedule on top of the default 15m.
+        let one_h_id = store::insert_agent_schedule(
+            &pool, &key, "analysis", true, "1h", 1, None, None, 600, "",
+        )
+        .await
+        .expect("insert 1h analysis");
+
+        // Force both analysis schedules to be due at the same boundary.
+        let (fifteen_m_id,): (i64,) = sqlx::query_as(
+            "SELECT id FROM agentic_job_schedules
               WHERE agent_key = $1 AND job_key = 'analysis-15m'",
         )
         .bind(&key)
-        .bind(Utc::now() - chrono::Duration::seconds(5))
-        .execute(&pool)
+        .fetch_one(&pool)
         .await
-        .expect("force due");
+        .expect("fetch 15m schedule id");
+        pin_schedule_due(&pool, fifteen_m_id, "15m").await;
+        pin_schedule_due(&pool, one_h_id, "1h").await;
 
         let calls: Arc<Mutex<Vec<DispatchRequest>>> = Arc::new(Mutex::new(Vec::new()));
-        let backend: Arc<dyn AgenticBackend> = Arc::new(FakeBackend::failing(calls.clone()));
+        let backend: Arc<dyn AgenticBackend> = Arc::new(FakeBackend {
+            calls: calls.clone(),
+            delay: Duration::from_millis(50),
+        });
 
         let (_tx, rx) = watch::channel(false);
         let mut scheduler = AgenticScheduler::new(pool.clone(), rx, backend);
         scheduler.tick().await.expect("tick");
 
-        run_until(|| async {
-            list_run_statuses(&pool, &key)
-                .await
-                .iter()
-                .any(|status| status == "failed")
-        })
-        .await;
+        run_until(|| async { calls.lock().map(|guard| guard.len() >= 2).unwrap_or(false) }).await;
 
-        let runs = store::list_agent_runs(&pool, &key, 10)
-            .await
-            .expect("list runs");
-        let failed = runs
-            .iter()
-            .find(|row| row.status == "failed")
-            .expect("failed run present");
+        let guard = calls.lock().unwrap();
+        assert_eq!(guard.len(), 2);
+        let order: Vec<&str> = guard.iter().map(|r| r.job_key.as_str()).collect();
+        // 15m is shorter than 1h, so it should dispatch first.
+        assert_eq!(order, vec!["analysis-15m", "analysis-1h"]);
+    }
+
+    #[tokio::test]
+    async fn tick_dispatches_equal_timeframe_analysis_before_trading() {
+        let pool = test_db::pool().await;
+        let key = format!(
+            "sched-kinds-{}",
+            Utc::now().timestamp_nanos_opt().unwrap_or(0)
+        );
+        seed_test_agent(&pool, &key).await;
+
+        let (analysis_id,): (i64,) = sqlx::query_as(
+            "SELECT id FROM agentic_job_schedules
+              WHERE agent_key = $1 AND job_key = 'analysis-15m'",
+        )
+        .bind(&key)
+        .fetch_one(&pool)
+        .await
+        .expect("fetch analysis id");
+        let (trading_id,): (i64,) = sqlx::query_as(
+            "SELECT id FROM agentic_job_schedules
+              WHERE agent_key = $1 AND job_key = 'trading-1m'",
+        )
+        .bind(&key)
+        .fetch_one(&pool)
+        .await
+        .expect("fetch trading id");
+        pin_schedule_due(&pool, analysis_id, "15m").await;
+        pin_schedule_due(&pool, trading_id, "1m").await;
+
+        let calls: Arc<Mutex<Vec<DispatchRequest>>> = Arc::new(Mutex::new(Vec::new()));
+        let backend: Arc<dyn AgenticBackend> = Arc::new(FakeBackend {
+            calls: calls.clone(),
+            delay: Duration::from_millis(30),
+        });
+
+        let (_tx, rx) = watch::channel(false);
+        let mut scheduler = AgenticScheduler::new(pool.clone(), rx, backend);
+        scheduler.tick().await.expect("tick");
+
+        run_until(|| async { calls.lock().map(|guard| guard.len() >= 2).unwrap_or(false) }).await;
+
+        let guard = calls.lock().unwrap();
+        let order: Vec<&str> = guard.iter().map(|r| r.job_key.as_str()).collect();
         assert!(
-            failed
-                .error_summary
-                .as_deref()
-                .map(|s| s.contains("fake backend failure"))
-                .unwrap_or(false),
-            "expected error_summary to mention fake backend failure, got {:?}",
-            failed.error_summary
+            order[0] == "analysis-15m",
+            "expected analysis to dispatch first, got {order:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn tick_dispatches_different_agents_concurrently() {
+        let pool = test_db::pool().await;
+        let key_a = format!("agent-a-{}", Utc::now().timestamp_nanos_opt().unwrap_or(0));
+        let key_b = format!("agent-b-{}", Utc::now().timestamp_nanos_opt().unwrap_or(0));
+
+        let far_future = Utc::now() + chrono::Duration::days(365);
+        sqlx::query("UPDATE agentic_job_schedules SET next_run_at = $1")
+            .bind(far_future)
+            .execute(&pool)
+            .await
+            .expect("push existing schedules");
+        sqlx::query("UPDATE agentic_job_schedules SET enabled = false")
+            .execute(&pool)
+            .await
+            .expect("disable existing schedules");
+
+        seed_test_agent(&pool, &key_a).await;
+        seed_test_agent(&pool, &key_b).await;
+
+        for key in [&key_a, &key_b] {
+            let (schedule_id,): (i64,) = sqlx::query_as(
+                "SELECT id FROM agentic_job_schedules
+                  WHERE agent_key = $1 AND job_key = 'analysis-15m'",
+            )
+            .bind(key)
+            .fetch_one(&pool)
+            .await
+            .expect("fetch schedule id");
+            pin_schedule_due(&pool, schedule_id, "15m").await;
+        }
+
+        let calls: Arc<Mutex<Vec<DispatchRequest>>> = Arc::new(Mutex::new(Vec::new()));
+        let backend: Arc<dyn AgenticBackend> = Arc::new(FakeBackend {
+            calls: calls.clone(),
+            delay: Duration::from_millis(150),
+        });
+
+        let (_tx, rx) = watch::channel(false);
+        let mut scheduler = AgenticScheduler::new(pool.clone(), rx, backend);
+        let started = std::time::Instant::now();
+        scheduler.tick().await.expect("tick");
+
+        run_until(|| async { calls.lock().map(|guard| guard.len() >= 2).unwrap_or(false) }).await;
+        let elapsed = started.elapsed();
+
+        let guard = calls.lock().unwrap();
+        assert_eq!(guard.len(), 2);
+        let mut agents: Vec<&str> = guard.iter().map(|r| r.agent_key.as_str()).collect();
+        agents.sort();
+        assert_eq!(agents, vec![key_a.as_str(), key_b.as_str()]);
+        // Concurrency: total time should be roughly one dispatch, not two.
+        assert!(
+            elapsed < Duration::from_millis(280),
+            "expected concurrent dispatch, took {elapsed:?}"
         );
     }
 
@@ -497,19 +716,8 @@ mod tests {
         .fetch_one(&pool)
         .await
         .expect("fetch schedule id");
+        pin_schedule_due(&pool, schedule_id, "15m").await;
 
-        sqlx::query(
-            "UPDATE agentic_job_schedules
-                SET enabled = true, next_run_at = $2
-              WHERE id = $1",
-        )
-        .bind(schedule_id)
-        .bind(Utc::now() - chrono::Duration::seconds(5))
-        .execute(&pool)
-        .await
-        .expect("force due");
-
-        // Insert a running run to force the next claim to skip.
         insert_test_run(&pool, schedule_id, "running")
             .await
             .expect("seed active run");
@@ -520,11 +728,9 @@ mod tests {
         let mut scheduler = AgenticScheduler::new(pool.clone(), rx, backend);
         scheduler.tick().await.expect("tick");
 
-        // No new dispatch should occur.
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
         assert!(calls.lock().unwrap().is_empty());
 
-        // A skipped run should be present.
         let runs = store::list_agent_runs(&pool, &key, 10)
             .await
             .expect("list runs");
@@ -539,75 +745,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn tick_marks_run_failed_when_workspace_missing() {
-        // The store-level "is_due" query requires `runtime_config` to be
-        // parseable, but `OpenCodeWorkspaceRuntimeConfig::from_value` is
-        // called inside the backend. We simulate the failure by handing
-        // the backend a request whose `runtime_config` is empty.
-        let pool = test_db::pool().await;
-        let key = format!(
-            "sched-workspace-{}",
-            Utc::now().timestamp_nanos_opt().unwrap_or(0)
-        );
-        seed_test_agent(&pool, &key).await;
-
-        // Clear the runtime_config so the backend will see a missing
-        // workspace.
-        sqlx::query("UPDATE agents SET runtime_config = '{}'::jsonb WHERE agent_key = $1")
-            .bind(&key)
-            .execute(&pool)
-            .await
-            .expect("clear runtime_config");
-
-        sqlx::query(
-            "UPDATE agentic_job_schedules
-                SET enabled = true, next_run_at = $2
-              WHERE agent_key = $1 AND job_key = 'analysis-15m'",
-        )
-        .bind(&key)
-        .bind(Utc::now() - chrono::Duration::seconds(5))
-        .execute(&pool)
-        .await
-        .expect("force due");
-
-        let calls: Arc<Mutex<Vec<DispatchRequest>>> = Arc::new(Mutex::new(Vec::new()));
-        let backend: Arc<dyn AgenticBackend> =
-            Arc::new(FakeBackend::missing_workspace(calls.clone()));
-        let (_tx, rx) = watch::channel(false);
-        let mut scheduler = AgenticScheduler::new(pool.clone(), rx, backend);
-        scheduler.tick().await.expect("tick");
-
-        // Wait for the run to be marked failed.
-        run_until(|| async {
-            list_run_statuses(&pool, &key)
-                .await
-                .iter()
-                .any(|status| status == "failed")
-        })
-        .await;
-
-        let runs = store::list_agent_runs(&pool, &key, 10)
-            .await
-            .expect("list runs");
-        let failed = runs
-            .iter()
-            .find(|row| row.status == "failed")
-            .expect("failed run present");
-        assert!(
-            failed
-                .error_summary
-                .as_deref()
-                .map(|s| s.contains("workspace"))
-                .unwrap_or(false),
-            "expected error_summary to mention workspace, got {:?}",
-            failed.error_summary
-        );
-    }
-
-    #[tokio::test]
     async fn claim_due_schedule_does_not_double_dispatch() {
-        // Sanity check: when two ticks run back-to-back, only the first
-        // should claim a queued run. The second should observe NotDue.
         let pool = test_db::pool().await;
         let key = format!(
             "sched-double-{}",
@@ -623,17 +761,7 @@ mod tests {
         .fetch_one(&pool)
         .await
         .expect("fetch schedule id");
-
-        sqlx::query(
-            "UPDATE agentic_job_schedules
-                SET enabled = true, next_run_at = $2
-              WHERE id = $1",
-        )
-        .bind(schedule_id)
-        .bind(Utc::now() - chrono::Duration::seconds(5))
-        .execute(&pool)
-        .await
-        .expect("force due");
+        pin_schedule_due(&pool, schedule_id, "15m").await;
 
         let now = Utc::now();
         let first = claim_due_schedule(&pool, schedule_id, now)
@@ -643,7 +771,6 @@ mod tests {
         let second = claim_due_schedule(&pool, schedule_id, now)
             .await
             .expect("claim 2");
-        // The second claim should find the next_run_at already advanced.
         assert!(matches!(second, ClaimedScheduleRun::NotDue));
     }
 

@@ -466,7 +466,7 @@
                             <th class="px-4 py-3 font-medium">Job key</th>
                             <th class="px-4 py-3 font-medium">Kind</th>
                             <th class="px-4 py-3 font-medium">Status</th>
-                            <th class="px-4 py-3 font-medium">Interval</th>
+                            <th class="px-4 py-3 font-medium">Timeframe</th>
                             <th class="px-4 py-3 font-medium">Timeout</th>
                             <th class="px-4 py-3 font-medium">Next run</th>
                             <th class="px-4 py-3 font-medium">Model</th>
@@ -482,7 +482,7 @@
                             <td class="px-4 py-3 align-top">
                                 <span class="inline-flex rounded-full border px-2 py-0.5 text-xs font-medium {{ row.enabled_class }}">{{ row.enabled_label }}</span>
                             </td>
-                            <td class="px-4 py-3 align-top font-mono text-xs tabular-nums text-zinc-300">{{ row.interval_text }}</td>
+                            <td class="px-4 py-3 align-top font-mono text-xs tabular-nums text-zinc-300">{{ row.timeframe_text }}</td>
                             <td class="px-4 py-3 align-top font-mono text-xs tabular-nums text-zinc-300">{{ row.timeout_text }}</td>
                             <td class="px-4 py-3 align-top font-mono text-xs text-zinc-300">{{ row.next_run_text }}</td>
                             <td class="px-4 py-3 align-top font-mono text-xs text-zinc-300">{{ row.model_text }}</td>
@@ -532,7 +532,6 @@
                             <th class="px-4 py-3 font-medium">Finished</th>
                             <th class="px-4 py-3 font-medium">Duration</th>
                             <th class="px-4 py-3 font-medium">Backend ref</th>
-                            <th class="px-4 py-3 font-medium">Error</th>
                         </tr>
                     </thead>
                     <tbody class="divide-y divide-zinc-800">
@@ -551,13 +550,6 @@
                                 <span class="text-zinc-500">—</span>
                                 {% else %}
                                 {{ run.backend_run_ref }}
-                                {% endif %}
-                            </td>
-                            <td class="px-4 py-3 align-top text-xs text-zinc-300">
-                                {% if run.error_summary.is_empty() %}
-                                <span class="text-zinc-500">—</span>
-                                {% else %}
-                                {{ run.error_summary }}
                                 {% endif %}
                             </td>
                         </tr>

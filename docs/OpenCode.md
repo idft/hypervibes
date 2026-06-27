@@ -256,16 +256,26 @@ HyperliquidAgentMonitor
 
 AgenticScheduler
   every 10s:
-    list_due_opencode_schedules()
-    claim_due_schedule(schedule_id) -> Dispatch | Skipped | NotDue
-      Dispatch: spawn OpenCodeBackend::dispatch
-      Skipped: insert agentic_runs row with status='skipped'
+    list_due_opencode_schedules() -> due rows whose next_run_at <= now
+    group due rows by agent_key
+    for each agent (in parallel across agents, sequentially within):
+      sort by timeframe duration ASC, job_kind priority ASC, id ASC
+      claim_due_schedule(schedule_id) -> Dispatch | Skipped | NotDue
+        Dispatch: await OpenCodeBackend::dispatch completion
+        Skipped: insert agentic_runs row with status='skipped'
+        NotDue: stale-after-downtime; re-anchor to next boundary
     mark_run_running / mark_run_succeeded / mark_run_failed
 ```
 
 The scheduler only dispatches agents whose `backend_kind` is `opencode`.
 Hermes agents continue to be scheduled by the operator's Hermes cron and are
 observed through `/api/v1/job-context` check-ins.
+
+Schedules are candle-aligned via `agentic::timeframe::next_due_after`:
+the next due instant is always the next UTC boundary for the
+schedule's `timeframe` plus a 1 second `trigger_delay_seconds` slack.
+After downtime, stale schedules are not replayed — the next claim
+re-anchors to the next future boundary and waits.
 
 Disabling an agent or schedule prevents new runs. It does not abort an
 already in-progress OpenCode session in this initial design. In-flight
@@ -320,7 +330,8 @@ CREATE TABLE agentic_job_schedules (
     job_key TEXT NOT NULL,
     job_kind TEXT NOT NULL,             -- CHECK ('analysis', 'trading')
     enabled BOOLEAN NOT NULL DEFAULT true,
-    interval_seconds INTEGER NOT NULL,  -- CHECK (> 0)
+    timeframe TEXT NOT NULL,            -- e.g. '1m', '15m', '1h', '4h', '1d'
+    trigger_delay_seconds INTEGER NOT NULL DEFAULT 1,
     next_run_at TIMESTAMPTZ NOT NULL,
     model_provider_id TEXT,
     model_id TEXT,
@@ -328,12 +339,16 @@ CREATE TABLE agentic_job_schedules (
     operator_prompt TEXT NOT NULL DEFAULT '',
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-    UNIQUE (agent_key, job_key)
+    UNIQUE (agent_key, job_kind, timeframe)
 );
 ```
 
-This table is OpenCode-only at first. It does not need backend-specific
-columns. `(agent_key, job_key)` is the natural unique key.
+`job_key` is generated server-side as `"{job_kind}-{timeframe}"` (for
+example `analysis-15m`) and is no longer operator-entered. The numeric
+`agentic_job_schedules.id` remains the true identity. The natural
+unique key for schedules is `(agent_key, job_kind, timeframe)`, so a
+single agent cannot have two schedules that share both a job kind and
+a timeframe.
 
 Default schedules inserted when an OpenCode agent is created
 (`agentic::store::insert_default_opencode_schedules`):
@@ -342,19 +357,20 @@ Default schedules inserted when an OpenCode agent is created
 analysis-15m:
   job_kind: analysis
   enabled: true
-  interval: 900 seconds
+  timeframe: 15m
+  trigger_delay_seconds: 1
   timeout: 600 seconds
 
 trading-1m:
   job_kind: trading
   enabled: false
-  interval: 60 seconds
+  timeframe: 1m
+  trigger_delay_seconds: 1
   timeout: 45 seconds
 ```
-```
 
-Longer timeframe analysis jobs such as `analysis-1h` and `analysis-1d` can be
-added per agent as configuration.
+Other timeframes such as `1h`, `4h`, and `1d` can be added per agent as
+configuration.
 
 ## Run Tracking
 
@@ -383,6 +399,7 @@ CREATE TABLE agentic_runs (
     agent_key TEXT NOT NULL REFERENCES agents(agent_key) ON DELETE CASCADE,
     job_key TEXT NOT NULL,
     job_kind TEXT NOT NULL,             -- CHECK ('analysis', 'trading')
+    timeframe TEXT NOT NULL,
     status TEXT NOT NULL,               -- CHECK ('queued','running','succeeded','failed','aborted','skipped')
     backend_run_ref TEXT,
     model_provider_id TEXT,
@@ -420,6 +437,14 @@ or Hyperliquid private keys.
 Implemented in `agentic::store::claim_due_schedule` and
 `agentic::scheduler::AgenticScheduler::tick`.
 
+Schedules fire on UTC candle boundaries plus a `trigger_delay_seconds`
+of slack. The default delay is 1 second. The `timeframe` field is a
+free-form duration string like `1m`, `15m`, `1h`, `4h`, or `1d` — the
+scheduler uses `agentic::timeframe::next_due_after` to find the next
+aligned due instant for the schedule. The `agentic_runs.scheduled_for`
+column stores the candle boundary (not the delayed dispatch instant)
+so a run's scheduled timestamp is always round.
+
 For each enabled OpenCode schedule whose parent agent is enabled and
 runtime is enabled and has a non-null `base_url`:
 
@@ -428,26 +453,45 @@ if now >= next_run_at:
   claim_due_schedule(schedule_id):
     SELECT ... FOR UPDATE
     if disabled or next_run_at > now: rollback -> NotDue
-    if active (queued|running) run for this schedule:
+    if the schedule's next_run_at is older than the latest due
+       boundary at-or-before now: stale after downtime -> skip and
+       re-anchor to next future boundary
+    if active (queued|running) run for the same agent:
       insert agentic_runs with status='skipped',
         finished_at=now, error_summary='previous run still active'
     else:
-      insert agentic_runs with status='queued'
-    UPDATE agentic_job_schedules SET next_run_at = now + interval_seconds
-  if Dispatch { run_id }: spawn OpenCodeBackend::dispatch(run_id)
+      insert agentic_runs with status='queued', scheduled_for=boundary
+    UPDATE agentic_job_schedules
+      SET next_run_at = next_due_after(now, timeframe, delay)
+  if Dispatch { run_id }: dispatch run sequentially for this agent
   if Skipped: log and continue
   if NotDue: continue
 ```
 
-Concurrency rule: max one active run per schedule. If a scheduled run is
-still active when the next interval arrives, a `skipped` run row is
-inserted and the schedule advances to the next interval. Different
-schedules on the same agent may run concurrently.
+The scheduler groups due schedules by `agent_key` and dispatches each
+agent's schedules sequentially in this order:
 
-`next_run_at` is advanced to `now + interval_seconds` on every claim, not
-to `next_run_at + interval_seconds`. This is a simple first pass that
-does not try to catch up every missed interval; a missed run after a
-restart will simply wait one more interval before firing.
+1. shortest timeframe first
+2. `analysis` before `trading` for equal timeframes
+3. lowest `schedule_id` to break remaining ties
+
+Different agents may dispatch concurrently.
+
+Concurrency rule: max one active run per agent. If a scheduled run is
+still active when the next boundary arrives, a `skipped` run row is
+inserted; the schedule still advances to the next future boundary so
+it does not fall further behind.
+
+`next_run_at` is always set to the next candle boundary after `now`
+(plus the trigger delay), so the scheduler never drifts even if a
+claim lands late. After downtime, schedules that are now in the past
+are not replayed: the next claim re-anchors them to the next future
+boundary and waits.
+
+Manual `Run now` does not advance `agentic_job_schedules.next_run_at`
+at all — it simply inserts a queued run (or a skipped run if the
+agent already has an active run) and leaves the schedule cadence
+untouched.
 
 If OpenCode is unavailable or a run fails, the run is marked `failed`
 with a sanitized error summary. The agent and schedule are *not*
@@ -800,16 +844,23 @@ exist to remove unknowns from the plan's "Deferred Investigation Items" list.
 ### Phase 4: Job Schedules and Runs Schema
 
 - **4.1 - Migration: create the `agentic_job_schedules` table.** Add the
-  schedule table per the plan. Include a CHECK constraint for `job_kind` and
-  a unique index on `(agent_key, job_key)`.
+  schedule table per the plan. The current schema uses candle-aligned
+  `timeframe TEXT NOT NULL` plus a `trigger_delay_seconds` default of 1
+  instead of `interval_seconds`. The unique key is
+  `(agent_key, job_kind, timeframe)`, so a single agent cannot have
+  two schedules that share both a job kind and a timeframe.
 - **4.2 - Migration: create the `agentic_runs` table.** Add the runs table
   per the plan with a `status` CHECK constraint, a `backend_run_ref` text
-  column, and indexes on `(agent_key, job_key, started_at DESC)` and
-  `(status)`.
+  column, a denormalized `timeframe` column (so a run always carries
+  its schedule's timeframe even after the schedule changes or is
+  deleted), and indexes on `(schedule_id, status)`,
+  `(agent_key, started_at DESC)`, and `(status)`.
 - **4.3 - Add a small `agentic_runs` and `agentic_job_schedules` query
-  module.** Provide `insert_queued`, `mark_running`, `mark_succeeded`,
-  `mark_failed`, `insert_skipped`, and `find_active_for_schedule` helpers.
-  Keep this small and query-focused.
+  module.** Provide `insert_default_opencode_schedules`,
+  `insert_agent_schedule` (which generates `job_key` as
+  `"{job_kind}-{timeframe}"`), `claim_due_schedule`,
+  `insert_queued_run`, and the `mark_run_*` helpers. The schedule
+  insert path never accepts a user-supplied `job_key`.
 
 ### Phase 5: OpenCode Database Plugin Vendoring
 

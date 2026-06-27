@@ -15,7 +15,7 @@
     <header class="mt-4 border-b border-zinc-800 pb-6">
         <h1 class="text-3xl font-semibold tracking-tight text-white">Create job</h1>
         <p class="mt-2 text-sm leading-6 text-zinc-400">
-            Add a new OpenCode job for <span class="font-medium text-zinc-200">{{ agent.display_name }}</span>. New enabled jobs become eligible on the next scheduler poll.
+            Add a new OpenCode job for <span class="font-medium text-zinc-200">{{ agent.display_name }}</span>. The job key is generated from the kind and timeframe (e.g. <code class="font-mono text-xs text-zinc-300">analysis-1h</code>). New enabled jobs become eligible on the next scheduler poll.
         </p>
     </header>
 
@@ -31,30 +31,30 @@
     {% endif %}
 
     <form method="post" action="/agents/{{ agent.agent_key }}/jobs" class="mt-6 space-y-6">
-        <div class="grid gap-6 sm:grid-cols-2">
-            <div>
-                <label for="job_key" class="block text-sm font-medium text-zinc-300">Job key</label>
-                <input type="text" id="job_key" name="job_key" value="{{ form.job_key }}" required placeholder="analysis-1h"
-                    class="mt-2 block w-full rounded-xl border border-zinc-800 bg-zinc-950 px-3 py-2 text-sm text-white placeholder-zinc-600 focus:border-zinc-600 focus:outline-none">
-                <p class="mt-1 text-xs text-zinc-500">Use lowercase letters, digits, and hyphens.</p>
-            </div>
-
-            <div>
-                <label for="job_kind" class="block text-sm font-medium text-zinc-300">Job kind</label>
-                <select id="job_kind" name="job_kind" required
-                    class="mt-2 block w-full rounded-xl border border-zinc-800 bg-zinc-950 px-3 py-2 text-sm text-white focus:border-zinc-600 focus:outline-none">
-                    <option value="analysis" {% if form.job_kind == "analysis" %}selected{% endif %}>analysis</option>
-                    <option value="trading" {% if form.job_kind == "trading" %}selected{% endif %}>trading</option>
-                </select>
-                <p class="mt-1 text-xs text-zinc-500">Controls which OpenCode agent and slash command are dispatched.</p>
-            </div>
+        <div>
+            <label for="job_kind" class="block text-sm font-medium text-zinc-300">Job kind</label>
+            <select id="job_kind" name="job_kind" required
+                class="mt-2 block w-full rounded-xl border border-zinc-800 bg-zinc-950 px-3 py-2 text-sm text-white focus:border-zinc-600 focus:outline-none">
+                <option value="analysis" {% if form.job_kind == "analysis" %}selected{% endif %}>analysis</option>
+                <option value="trading" {% if form.job_kind == "trading" %}selected{% endif %}>trading</option>
+            </select>
+            <p class="mt-1 text-xs text-zinc-500">Controls which OpenCode agent and slash command are dispatched.</p>
         </div>
 
         <div class="grid gap-6 sm:grid-cols-2">
             <div>
-                <label for="interval_seconds" class="block text-sm font-medium text-zinc-300">Interval seconds</label>
-                <input type="number" id="interval_seconds" name="interval_seconds" value="{{ form.interval_seconds }}" min="1" step="1" required
-                    class="mt-2 block w-full rounded-xl border border-zinc-800 bg-zinc-950 px-3 py-2 text-sm text-white focus:border-zinc-600 focus:outline-none">
+                <label for="timeframe" class="block text-sm font-medium text-zinc-300">Timeframe</label>
+                <input type="text" id="timeframe" name="timeframe" value="{{ form.timeframe }}" required placeholder="15m" list="timeframe-options"
+                    class="mt-2 block w-full rounded-xl border border-zinc-800 bg-zinc-950 px-3 py-2 text-sm text-white placeholder-zinc-600 focus:border-zinc-600 focus:outline-none">
+                <datalist id="timeframe-options">
+                    <option value="1m"></option>
+                    <option value="5m"></option>
+                    <option value="15m"></option>
+                    <option value="1h"></option>
+                    <option value="4h"></option>
+                    <option value="1d"></option>
+                </datalist>
+                <p class="mt-1 text-xs text-zinc-500">Positive integer with unit <code class="font-mono">m</code>, <code class="font-mono">h</code>, or <code class="font-mono">d</code>. Runs fire on UTC candle boundaries plus a 1 second close delay.</p>
             </div>
 
             <div>

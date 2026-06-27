@@ -228,6 +228,16 @@ Responsibilities:
 
 - detect new candle boundaries
 - trigger `1m`, `15m`, `1h`, and `1d` jobs
+- the `AgenticScheduler` is now the implementation of the
+  OpenCode-side candle-aligned scheduler: it polls
+  `agentic_job_schedules` every 10 seconds, claims due schedules
+  (using `agentic::timeframe::next_due_after` to find the next UTC
+  boundary for each schedule's `timeframe`), and dispatches them
+  sequentially per agent while still allowing different agents to
+  run concurrently. `job_key` is generated server-side as
+  `"{job_kind}-{timeframe}"`, and the
+  `(agent_key, job_kind, timeframe)` triple is the schedule's natural
+  unique key.
 
 ### `analysis_worker`
 

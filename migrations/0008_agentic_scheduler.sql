@@ -10,7 +10,8 @@ CREATE TABLE IF NOT EXISTS agentic_job_schedules (
     job_key TEXT NOT NULL,
     job_kind TEXT NOT NULL,
     enabled BOOLEAN NOT NULL DEFAULT true,
-    interval_seconds INTEGER NOT NULL,
+    timeframe TEXT NOT NULL,
+    trigger_delay_seconds INTEGER NOT NULL DEFAULT 1,
     next_run_at TIMESTAMPTZ NOT NULL,
     model_provider_id TEXT,
     model_id TEXT,
@@ -18,9 +19,10 @@ CREATE TABLE IF NOT EXISTS agentic_job_schedules (
     operator_prompt TEXT NOT NULL DEFAULT '',
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-    UNIQUE (agent_key, job_key),
+    UNIQUE (agent_key, job_kind, timeframe),
     CHECK (job_kind IN ('analysis', 'trading')),
-    CHECK (interval_seconds > 0),
+    CHECK (length(trim(timeframe)) > 0),
+    CHECK (trigger_delay_seconds >= 0),
     CHECK (timeout_seconds > 0)
 );
 
@@ -30,6 +32,7 @@ CREATE TABLE IF NOT EXISTS agentic_runs (
     agent_key TEXT NOT NULL REFERENCES agents(agent_key) ON DELETE CASCADE,
     job_key TEXT NOT NULL,
     job_kind TEXT NOT NULL,
+    timeframe TEXT NOT NULL,
     status TEXT NOT NULL,
     backend_run_ref TEXT,
     model_provider_id TEXT,
@@ -43,6 +46,7 @@ CREATE TABLE IF NOT EXISTS agentic_runs (
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     CHECK (job_kind IN ('analysis', 'trading')),
     CHECK (status IN ('queued', 'running', 'succeeded', 'failed', 'aborted', 'skipped')),
+    CHECK (length(trim(timeframe)) > 0),
     CHECK (timeout_seconds > 0)
 );
 

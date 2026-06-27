@@ -510,9 +510,8 @@ pub struct BackendsNewPageTemplate {
 
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct CreateAgentScheduleFormValues {
-    pub job_key: String,
     pub job_kind: String,
-    pub interval_seconds: String,
+    pub timeframe: String,
     pub timeout_seconds: String,
     pub model_provider_id: String,
     pub model_id: String,
@@ -730,7 +729,7 @@ pub struct AgenticJobScheduleView {
     pub enabled: bool,
     pub enabled_label: &'static str,
     pub enabled_class: &'static str,
-    pub interval_text: String,
+    pub timeframe_text: String,
     pub timeout_text: String,
     pub next_run_text: String,
     pub model_text: String,
@@ -749,7 +748,7 @@ pub struct AgenticJobDetailView {
     pub enabled: bool,
     pub enabled_label: &'static str,
     pub enabled_class: &'static str,
-    pub interval_text: String,
+    pub timeframe_text: String,
     pub timeout_text: String,
     pub next_run_text: String,
     pub model_text: String,
@@ -887,6 +886,8 @@ impl AgenticJobScheduleView {
             ("Disabled", "border-zinc-700 bg-zinc-900/60 text-zinc-400")
         };
 
+        let timeframe_text = row.timeframe.clone();
+
         Self {
             id: row.id,
             job_key: row.job_key.clone(),
@@ -894,7 +895,7 @@ impl AgenticJobScheduleView {
             enabled: row.enabled,
             enabled_label,
             enabled_class,
-            interval_text: format_duration(row.interval_seconds),
+            timeframe_text,
             timeout_text: format_duration(row.timeout_seconds),
             next_run_text: format_timestamp_utc(row.next_run_at),
             model_text,
@@ -918,7 +919,7 @@ impl AgenticJobDetailView {
             enabled: row.enabled,
             enabled_label: summary.enabled_label,
             enabled_class: summary.enabled_class,
-            interval_text: summary.interval_text,
+            timeframe_text: summary.timeframe_text,
             timeout_text: summary.timeout_text,
             next_run_text: summary.next_run_text,
             model_text: summary.model_text,
@@ -2199,13 +2200,15 @@ mod tests {
         enabled: bool,
     ) -> crate::agentic::model::AgenticJobScheduleRow {
         let now = Utc::now();
+        let timeframe = if job_kind == "trading" { "1m" } else { "15m" };
         crate::agentic::model::AgenticJobScheduleRow {
             id,
             agent_key: "test-agent".to_string(),
             job_key: job_key.to_string(),
             job_kind: job_kind.to_string(),
             enabled,
-            interval_seconds: 900,
+            timeframe: timeframe.to_string(),
+            trigger_delay_seconds: 1,
             next_run_at: now,
             model_provider_id: Some("anthropic".to_string()),
             model_id: Some("claude-3-5-sonnet".to_string()),
@@ -2228,6 +2231,7 @@ mod tests {
             agent_key: "test-agent".to_string(),
             job_key: job_key.to_string(),
             job_kind: crate::agentic::model::JOB_KIND_ANALYSIS.to_string(),
+            timeframe: "15m".to_string(),
             status: status.to_string(),
             backend_run_ref: Some("ses_abc123".to_string()),
             model_provider_id: Some("anthropic".to_string()),
@@ -2304,7 +2308,12 @@ mod tests {
     #[test]
     fn job_detail_page_renders_job_metadata_and_runs() {
         let agent = sample_opencode_detail_row();
-        let job = AgenticJobDetailView::from_row(&sample_schedule_row(1, "analysis-15m", "analysis", true));
+        let job = AgenticJobDetailView::from_row(&sample_schedule_row(
+            1,
+            "analysis-15m",
+            "analysis",
+            true,
+        ));
         let runs = vec![
             AgenticRunView::from_row(&sample_run_row(1, "succeeded", "analysis-15m")),
             AgenticRunView::from_row(&sample_run_row(2, "failed", "analysis-15m")),

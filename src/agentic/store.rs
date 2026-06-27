@@ -3,10 +3,17 @@ use chrono::{DateTime, Utc};
 use sqlx::{PgPool, Postgres, Transaction, query_as};
 
 use crate::{
-    agentic::model::{
-        AgenticJobScheduleRow, AgenticRunRow, DueOpenCodeScheduleRow, JOB_KIND_ANALYSIS,
-        JOB_KIND_TRADING, RUN_STATUS_ABORTED, RUN_STATUS_FAILED, RUN_STATUS_QUEUED,
-        RUN_STATUS_RUNNING, RUN_STATUS_SKIPPED, RUN_STATUS_SUCCEEDED,
+    agentic::{
+        job_key::build_generated_job_key,
+        model::{
+            AgenticJobScheduleRow, AgenticRunRow, DueOpenCodeScheduleRow, JOB_KIND_ANALYSIS,
+            JOB_KIND_TRADING, RUN_STATUS_ABORTED, RUN_STATUS_FAILED, RUN_STATUS_QUEUED,
+            RUN_STATUS_RUNNING, RUN_STATUS_SKIPPED, RUN_STATUS_SUCCEEDED,
+        },
+        timeframe::{
+            DEFAULT_TRIGGER_DELAY_SECONDS, boundary_for_due_at, latest_due_at_or_before,
+            next_due_after, parse_timeframe_seconds,
+        },
     },
     db::DbPool,
 };
@@ -14,13 +21,60 @@ use crate::{
 const ERROR_SUMMARY_MAX_CHARS: usize = 500;
 const ACTIVE_STATUSES: [&str; 2] = [RUN_STATUS_QUEUED, RUN_STATUS_RUNNING];
 
+const DEFAULT_ANALYSIS_TIMEFRAME: &str = "15m";
+const DEFAULT_TRADING_TIMEFRAME: &str = "1m";
+const DEFAULT_ANALYSIS_TIMEOUT_SECONDS: i32 = 600;
+const DEFAULT_TRADING_TIMEOUT_SECONDS: i32 = 45;
+
+fn default_analysis_job_key() -> String {
+    build_generated_job_key(JOB_KIND_ANALYSIS, DEFAULT_ANALYSIS_TIMEFRAME)
+}
+
+fn default_trading_job_key() -> String {
+    build_generated_job_key(JOB_KIND_TRADING, DEFAULT_TRADING_TIMEFRAME)
+}
+
 /// Seed the canonical default schedules for a newly-created OpenCode agent.
 ///
-/// This is idempotent: existing `(agent_key, job_key)` rows are left
-/// untouched. New agents always get both `analysis-15m` (enabled) and
-/// `trading-1m` (disabled).
+/// This is idempotent: existing `(agent_key, job_kind, timeframe)` rows
+/// are left untouched. New agents always get both an `analysis-15m`
+/// schedule (enabled) and a `trading-1m` schedule (disabled).
 pub async fn insert_default_opencode_schedules(pool: &DbPool, agent_key: &str) -> Result<()> {
+    insert_default_opencode_schedule(
+        pool,
+        agent_key,
+        JOB_KIND_ANALYSIS,
+        DEFAULT_ANALYSIS_TIMEFRAME,
+        true,
+        DEFAULT_ANALYSIS_TIMEOUT_SECONDS,
+    )
+    .await?;
+
+    insert_default_opencode_schedule(
+        pool,
+        agent_key,
+        JOB_KIND_TRADING,
+        DEFAULT_TRADING_TIMEFRAME,
+        false,
+        DEFAULT_TRADING_TIMEOUT_SECONDS,
+    )
+    .await?;
+
+    Ok(())
+}
+
+async fn insert_default_opencode_schedule(
+    pool: &DbPool,
+    agent_key: &str,
+    job_kind: &str,
+    timeframe: &str,
+    enabled: bool,
+    timeout_seconds: i32,
+) -> Result<()> {
+    let job_key = build_generated_job_key(job_kind, timeframe);
     let now = Utc::now();
+    let next_run_at = next_due_after(now, timeframe, DEFAULT_TRIGGER_DELAY_SECONDS)
+        .with_context(|| format!("invalid default timeframe {timeframe:?}"))?;
 
     sqlx::query(
         "INSERT INTO agentic_job_schedules (
@@ -28,52 +82,27 @@ pub async fn insert_default_opencode_schedules(pool: &DbPool, agent_key: &str) -
             job_key,
             job_kind,
             enabled,
-            interval_seconds,
+            timeframe,
+            trigger_delay_seconds,
             next_run_at,
             timeout_seconds,
             operator_prompt
-         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-         ON CONFLICT (agent_key, job_key) DO NOTHING",
+         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+         ON CONFLICT (agent_key, job_kind, timeframe) DO NOTHING",
     )
     .bind(agent_key)
-    .bind("analysis-15m")
-    .bind(JOB_KIND_ANALYSIS)
-    .bind(true)
-    .bind(900_i32)
-    .bind(now)
-    .bind(600_i32)
+    .bind(&job_key)
+    .bind(job_kind)
+    .bind(enabled)
+    .bind(timeframe)
+    .bind(DEFAULT_TRIGGER_DELAY_SECONDS)
+    .bind(next_run_at)
+    .bind(timeout_seconds)
     .bind("")
     .execute(pool)
     .await
     .with_context(|| {
-        format!("failed to insert default analysis-15m schedule for agent {agent_key}")
-    })?;
-
-    sqlx::query(
-        "INSERT INTO agentic_job_schedules (
-            agent_key,
-            job_key,
-            job_kind,
-            enabled,
-            interval_seconds,
-            next_run_at,
-            timeout_seconds,
-            operator_prompt
-         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-         ON CONFLICT (agent_key, job_key) DO NOTHING",
-    )
-    .bind(agent_key)
-    .bind("trading-1m")
-    .bind(JOB_KIND_TRADING)
-    .bind(false)
-    .bind(60_i32)
-    .bind(now)
-    .bind(45_i32)
-    .bind("")
-    .execute(pool)
-    .await
-    .with_context(|| {
-        format!("failed to insert default trading-1m schedule for agent {agent_key}")
+        format!("failed to insert default {job_key} schedule for agent {agent_key}")
     })?;
 
     Ok(())
@@ -90,7 +119,8 @@ pub async fn list_agent_schedules(
                 job_key,
                 job_kind,
                 enabled,
-                interval_seconds,
+                timeframe,
+                trigger_delay_seconds,
                 next_run_at,
                 model_provider_id,
                 model_id,
@@ -100,7 +130,7 @@ pub async fn list_agent_schedules(
                 updated_at
            FROM agentic_job_schedules
           WHERE agent_key = $1
-          ORDER BY job_kind, job_key",
+          ORDER BY job_kind, timeframe, job_key",
     )
     .bind(agent_key)
     .fetch_all(pool)
@@ -122,7 +152,8 @@ pub async fn get_agent_schedule(
                 job_key,
                 job_kind,
                 enabled,
-                interval_seconds,
+                timeframe,
+                trigger_delay_seconds,
                 next_run_at,
                 model_provider_id,
                 model_id,
@@ -143,39 +174,56 @@ pub async fn get_agent_schedule(
     Ok(row)
 }
 
+/// Insert a new schedule. The `job_key` is generated from
+/// `job_kind` + `timeframe` and the schedule's first `next_run_at` is
+/// computed from the same timeframe and trigger delay.
 pub async fn insert_agent_schedule(
     pool: &DbPool,
     agent_key: &str,
-    job_key: &str,
     job_kind: &str,
     enabled: bool,
-    interval_seconds: i32,
-    next_run_at: DateTime<Utc>,
+    timeframe: &str,
+    trigger_delay_seconds: i32,
     model_provider_id: Option<&str>,
     model_id: Option<&str>,
     timeout_seconds: i32,
     operator_prompt: &str,
 ) -> Result<i64> {
+    parse_timeframe_seconds(timeframe)
+        .with_context(|| format!("invalid timeframe {timeframe:?}"))?;
+    if trigger_delay_seconds < 0 {
+        return Err(anyhow::anyhow!(
+            "trigger_delay_seconds must be non-negative"
+        ));
+    }
+
+    let job_key = build_generated_job_key(job_kind, timeframe);
+    let now = Utc::now();
+    let next_run_at = next_due_after(now, timeframe, trigger_delay_seconds)
+        .with_context(|| format!("failed to compute next_run_at for {timeframe:?}"))?;
+
     let row: (i64,) = query_as(
         "INSERT INTO agentic_job_schedules (
             agent_key,
             job_key,
             job_kind,
             enabled,
-            interval_seconds,
+            timeframe,
+            trigger_delay_seconds,
             next_run_at,
             model_provider_id,
             model_id,
             timeout_seconds,
             operator_prompt
-         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
          RETURNING id",
     )
     .bind(agent_key)
-    .bind(job_key)
+    .bind(&job_key)
     .bind(job_kind)
     .bind(enabled)
-    .bind(interval_seconds)
+    .bind(timeframe)
+    .bind(trigger_delay_seconds)
     .bind(next_run_at)
     .bind(model_provider_id)
     .bind(model_id)
@@ -200,6 +248,7 @@ pub async fn list_agent_runs(
                 agent_key,
                 job_key,
                 job_kind,
+                timeframe,
                 status,
                 backend_run_ref,
                 model_provider_id,
@@ -238,6 +287,7 @@ pub async fn list_schedule_runs(
                 agent_key,
                 job_key,
                 job_kind,
+                timeframe,
                 status,
                 backend_run_ref,
                 model_provider_id,
@@ -260,9 +310,7 @@ pub async fn list_schedule_runs(
     .bind(limit)
     .fetch_all(pool)
     .await
-    .with_context(|| {
-        format!("failed to list runs for schedule {schedule_id} agent {agent_key}")
-    })?;
+    .with_context(|| format!("failed to list runs for schedule {schedule_id} agent {agent_key}"))?;
 
     Ok(rows)
 }
@@ -310,7 +358,8 @@ pub async fn list_due_opencode_schedules(
                 agents.display_name,
                 schedules.job_key,
                 schedules.job_kind,
-                schedules.interval_seconds,
+                schedules.timeframe,
+                schedules.trigger_delay_seconds,
                 schedules.next_run_at,
                 schedules.model_provider_id,
                 schedules.model_id,
@@ -359,7 +408,8 @@ pub async fn get_opencode_schedule_for_dispatch(
                 agents.display_name,
                 schedules.job_key,
                 schedules.job_kind,
-                schedules.interval_seconds,
+                schedules.timeframe,
+                schedules.trigger_delay_seconds,
                 schedules.next_run_at,
                 schedules.model_provider_id,
                 schedules.model_id,
@@ -399,9 +449,9 @@ pub enum ClaimedScheduleRun {
     /// The schedule was due and is now claimed for dispatch. The run is
     /// in `queued` state with the returned id.
     Dispatch { run_id: i64 },
-    /// The schedule was due but a previous run was still active. A
-    /// `skipped` run row was inserted and returned; no backend dispatch
-    /// should happen.
+    /// The schedule was due but a previous run for the same agent was
+    /// still active. A `skipped` run row was inserted and returned; no
+    /// backend dispatch should happen.
     Skipped { run_id: i64 },
     /// The schedule was no longer due (concurrent claim, disabled,
     /// missing, etc.). No row was written.
@@ -411,8 +461,10 @@ pub enum ClaimedScheduleRun {
 /// Atomically advance the schedule, optionally inserting a `queued` or
 /// `skipped` `agentic_runs` row, and return the outcome.
 ///
-/// Uses `SELECT ... FOR UPDATE` on the schedule row to serialize claims
-/// across scheduler instances.
+/// The schedule fires on UTC candle boundaries (per its `timeframe`)
+/// plus a fixed `trigger_delay_seconds` of slack. When the schedule is
+/// overdue after downtime, the next future boundary is computed
+/// without replaying missed runs.
 pub async fn claim_due_schedule(
     pool: &DbPool,
     schedule_id: i64,
@@ -429,7 +481,8 @@ pub async fn claim_due_schedule(
                 job_key,
                 job_kind,
                 enabled,
-                interval_seconds,
+                timeframe,
+                trigger_delay_seconds,
                 next_run_at,
                 timeout_seconds
            FROM agentic_job_schedules
@@ -455,20 +508,50 @@ pub async fn claim_due_schedule(
         return Ok(ClaimedScheduleRun::NotDue);
     }
 
-    let scheduled_for = schedule.next_run_at;
-    let next_run_at = now + chrono::Duration::seconds(schedule.interval_seconds as i64);
+    let timeframe = schedule.timeframe.clone();
+    let trigger_delay_seconds = schedule.trigger_delay_seconds;
+
+    let latest_due = match latest_due_at_or_before(now, &timeframe, trigger_delay_seconds)
+        .with_context(|| {
+            format!(
+                "invalid timeframe {timeframe:?} on schedule {}",
+                schedule.id
+            )
+        })? {
+        Some(latest) => latest,
+        None => {
+            // We are not yet at the first valid due instant. Skip and
+            // re-anchor to the next future boundary.
+            advance_schedule(&mut tx, &schedule, now).await?;
+            tx.commit()
+                .await
+                .context("failed to commit early-skip claim")?;
+            return Ok(ClaimedScheduleRun::NotDue);
+        }
+    };
+
+    if schedule.next_run_at < latest_due {
+        // Schedule is stale after downtime. Skip and re-anchor.
+        advance_schedule(&mut tx, &schedule, now).await?;
+        tx.commit()
+            .await
+            .context("failed to commit stale-skip claim")?;
+        return Ok(ClaimedScheduleRun::NotDue);
+    }
+
+    let scheduled_for = boundary_for_due_at(schedule.next_run_at, trigger_delay_seconds);
 
     let active: Option<(i32,)> = query_as(
         "SELECT 1 FROM agentic_runs
-          WHERE schedule_id = $1
+          WHERE agent_key = $1
             AND status = ANY($2)
           LIMIT 1",
     )
-    .bind(schedule.id)
+    .bind(&schedule.agent_key)
     .bind(&ACTIVE_STATUSES)
     .fetch_optional(&mut *tx)
     .await
-    .context("failed to check for active run on schedule")?;
+    .context("failed to check for active run on agent")?;
 
     let outcome = if active.is_some() {
         let error_summary = "previous run still active";
@@ -478,6 +561,7 @@ pub async fn claim_due_schedule(
             &schedule.agent_key,
             &schedule.job_key,
             &schedule.job_kind,
+            &timeframe,
             RUN_STATUS_SKIPPED,
             None,
             None,
@@ -497,6 +581,7 @@ pub async fn claim_due_schedule(
             &schedule.agent_key,
             &schedule.job_key,
             &schedule.job_kind,
+            &timeframe,
             RUN_STATUS_QUEUED,
             None,
             None,
@@ -511,6 +596,27 @@ pub async fn claim_due_schedule(
         ClaimedScheduleRun::Dispatch { run_id }
     };
 
+    advance_schedule(&mut tx, &schedule, now).await?;
+
+    tx.commit()
+        .await
+        .context("failed to commit claim transaction")?;
+
+    Ok(outcome)
+}
+
+async fn advance_schedule(
+    tx: &mut Transaction<'_, Postgres>,
+    schedule: &ScheduleForUpdate,
+    now: DateTime<Utc>,
+) -> Result<()> {
+    let next_run_at = next_due_after(now, &schedule.timeframe, schedule.trigger_delay_seconds)
+        .with_context(|| {
+            format!(
+                "failed to compute next_run_at for timeframe {:?} on schedule {}",
+                schedule.timeframe, schedule.id
+            )
+        })?;
     sqlx::query(
         "UPDATE agentic_job_schedules
             SET next_run_at = $2,
@@ -519,15 +625,10 @@ pub async fn claim_due_schedule(
     )
     .bind(schedule.id)
     .bind(next_run_at)
-    .execute(&mut *tx)
+    .execute(&mut **tx)
     .await
     .context("failed to advance schedule next_run_at")?;
-
-    tx.commit()
-        .await
-        .context("failed to commit claim transaction")?;
-
-    Ok(outcome)
+    Ok(())
 }
 
 #[derive(Debug, Clone, sqlx::FromRow)]
@@ -537,7 +638,8 @@ struct ScheduleForUpdate {
     job_key: String,
     job_kind: String,
     enabled: bool,
-    interval_seconds: i32,
+    timeframe: String,
+    trigger_delay_seconds: i32,
     next_run_at: DateTime<Utc>,
     timeout_seconds: i32,
 }
@@ -549,6 +651,7 @@ async fn insert_run_in_tx(
     agent_key: &str,
     job_key: &str,
     job_kind: &str,
+    timeframe: &str,
     status: &str,
     backend_run_ref: Option<&str>,
     model_provider_id: Option<&str>,
@@ -566,6 +669,7 @@ async fn insert_run_in_tx(
             agent_key,
             job_key,
             job_kind,
+            timeframe,
             status,
             backend_run_ref,
             model_provider_id,
@@ -575,13 +679,14 @@ async fn insert_run_in_tx(
             finished_at,
             timeout_seconds,
             error_summary
-         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
          RETURNING id",
     )
     .bind(schedule_id)
     .bind(agent_key)
     .bind(job_key)
     .bind(job_kind)
+    .bind(timeframe)
     .bind(status)
     .bind(backend_run_ref)
     .bind(model_provider_id)
@@ -720,6 +825,7 @@ pub async fn get_run(pool: &DbPool, run_id: i64) -> Result<Option<AgenticRunRow>
                 agent_key,
                 job_key,
                 job_kind,
+                timeframe,
                 status,
                 backend_run_ref,
                 model_provider_id,
@@ -743,7 +849,10 @@ pub async fn get_run(pool: &DbPool, run_id: i64) -> Result<Option<AgenticRunRow>
 }
 
 /// Insert a brand-new `queued` run for a schedule. Used by manual
-/// `Run now` actions.
+/// `Run now` actions. Does not advance `agentic_job_schedules.next_run_at`.
+///
+/// If a previous run for the same agent is still active, inserts a
+/// `skipped` run row instead and does not dispatch.
 pub async fn insert_queued_run(
     pool: &DbPool,
     agent_key: &str,
@@ -760,7 +869,8 @@ pub async fn insert_queued_run(
                 job_key,
                 job_kind,
                 enabled,
-                interval_seconds,
+                timeframe,
+                trigger_delay_seconds,
                 next_run_at,
                 timeout_seconds
            FROM agentic_job_schedules
@@ -784,11 +894,11 @@ pub async fn insert_queued_run(
     let now = Utc::now();
     let active: Option<(i32,)> = query_as(
         "SELECT 1 FROM agentic_runs
-          WHERE schedule_id = $1
+          WHERE agent_key = $1
             AND status = ANY($2)
           LIMIT 1",
     )
-    .bind(schedule.id)
+    .bind(&schedule.agent_key)
     .bind(&ACTIVE_STATUSES)
     .fetch_optional(&mut *tx)
     .await
@@ -801,6 +911,7 @@ pub async fn insert_queued_run(
             &schedule.agent_key,
             &schedule.job_key,
             &schedule.job_kind,
+            &schedule.timeframe,
             RUN_STATUS_SKIPPED,
             None,
             None,
@@ -820,6 +931,7 @@ pub async fn insert_queued_run(
             &schedule.agent_key,
             &schedule.job_key,
             &schedule.job_kind,
+            &schedule.timeframe,
             RUN_STATUS_QUEUED,
             None,
             None,
@@ -836,19 +948,6 @@ pub async fn insert_queued_run(
             scheduled_for: now,
         }
     };
-
-    let next_run_at = now + chrono::Duration::seconds(schedule.interval_seconds as i64);
-    sqlx::query(
-        "UPDATE agentic_job_schedules
-            SET next_run_at = $2,
-                updated_at = now()
-          WHERE id = $1",
-    )
-    .bind(schedule.id)
-    .bind(next_run_at)
-    .execute(&mut *tx)
-    .await
-    .context("failed to advance schedule after manual run")?;
 
     tx.commit()
         .await
@@ -878,7 +977,8 @@ pub async fn insert_test_run(pool: &PgPool, schedule_id: i64, status: &str) -> R
                 job_key,
                 job_kind,
                 enabled,
-                interval_seconds,
+                timeframe,
+                trigger_delay_seconds,
                 next_run_at,
                 timeout_seconds
            FROM agentic_job_schedules
@@ -895,16 +995,18 @@ pub async fn insert_test_run(pool: &PgPool, schedule_id: i64, status: &str) -> R
             agent_key,
             job_key,
             job_kind,
+            timeframe,
             status,
             scheduled_for,
             timeout_seconds
-         ) VALUES ($1, $2, $3, $4, $5, $6, $7)
+         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
          RETURNING id",
     )
     .bind(schedule.id)
     .bind(&schedule.agent_key)
     .bind(&schedule.job_key)
     .bind(&schedule.job_kind)
+    .bind(&schedule.timeframe)
     .bind(status)
     .bind(Utc::now())
     .bind(schedule.timeout_seconds)
@@ -1034,21 +1136,26 @@ mod tests {
 
         let analysis = rows
             .iter()
-            .find(|row| row.job_key == "analysis-15m")
+            .find(|row| row.job_key == default_analysis_job_key())
             .expect("analysis schedule present");
         assert!(analysis.enabled);
         assert_eq!(analysis.job_kind, JOB_KIND_ANALYSIS);
-        assert_eq!(analysis.interval_seconds, 900);
-        assert_eq!(analysis.timeout_seconds, 600);
+        assert_eq!(analysis.timeframe, DEFAULT_ANALYSIS_TIMEFRAME);
+        assert_eq!(
+            analysis.trigger_delay_seconds,
+            DEFAULT_TRIGGER_DELAY_SECONDS
+        );
+        assert_eq!(analysis.timeout_seconds, DEFAULT_ANALYSIS_TIMEOUT_SECONDS);
 
         let trading = rows
             .iter()
-            .find(|row| row.job_key == "trading-1m")
+            .find(|row| row.job_key == default_trading_job_key())
             .expect("trading schedule present");
         assert!(!trading.enabled);
         assert_eq!(trading.job_kind, JOB_KIND_TRADING);
-        assert_eq!(trading.interval_seconds, 60);
-        assert_eq!(trading.timeout_seconds, 45);
+        assert_eq!(trading.timeframe, DEFAULT_TRADING_TIMEFRAME);
+        assert_eq!(trading.trigger_delay_seconds, DEFAULT_TRIGGER_DELAY_SECONDS);
+        assert_eq!(trading.timeout_seconds, DEFAULT_TRADING_TIMEOUT_SECONDS);
     }
 
     #[tokio::test]
@@ -1079,6 +1186,46 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn default_schedules_align_next_run_at_to_future_boundary() {
+        let pool = test_db::pool().await;
+        let key = format!(
+            "default-aligned-{}",
+            Utc::now().timestamp_nanos_opt().unwrap_or(0)
+        );
+        insert_agent(&pool, &sample_agent(&key))
+            .await
+            .expect("insert agent");
+
+        let now = Utc::now();
+        insert_default_opencode_schedules(&pool, &key)
+            .await
+            .expect("insert defaults");
+
+        let rows = list_agent_schedules(&pool, &key)
+            .await
+            .expect("list schedules");
+        let analysis = rows
+            .iter()
+            .find(|row| row.job_key == default_analysis_job_key())
+            .expect("analysis schedule present");
+        assert!(
+            analysis.next_run_at > now,
+            "expected future next_run_at, got {:?} <= {:?}",
+            analysis.next_run_at,
+            now
+        );
+        // The next due instant for a 15m schedule from any moment is a
+        // 15-minute UTC boundary + 1s.
+        let expected = next_due_after(
+            now,
+            DEFAULT_ANALYSIS_TIMEFRAME,
+            DEFAULT_TRIGGER_DELAY_SECONDS,
+        )
+        .expect("next due");
+        assert_eq!(analysis.next_run_at, expected);
+    }
+
+    #[tokio::test]
     async fn insert_agent_schedule_persists_custom_schedule() {
         let pool = test_db::pool().await;
         let key = format!(
@@ -1089,15 +1236,13 @@ mod tests {
             .await
             .expect("insert agent");
 
-        let next_run_at = Utc::now();
         let schedule_id = insert_agent_schedule(
             &pool,
             &key,
-            "analysis-1h",
             JOB_KIND_ANALYSIS,
             true,
-            3600,
-            next_run_at,
+            "1h",
+            1,
             Some("anthropic"),
             Some("claude-sonnet-4"),
             600,
@@ -1116,11 +1261,81 @@ mod tests {
         assert_eq!(row.job_key, "analysis-1h");
         assert_eq!(row.job_kind, JOB_KIND_ANALYSIS);
         assert!(row.enabled);
-        assert_eq!(row.interval_seconds, 3600);
+        assert_eq!(row.timeframe, "1h");
+        assert_eq!(row.trigger_delay_seconds, 1);
         assert_eq!(row.timeout_seconds, 600);
         assert_eq!(row.model_provider_id.as_deref(), Some("anthropic"));
         assert_eq!(row.model_id.as_deref(), Some("claude-sonnet-4"));
         assert_eq!(row.operator_prompt, "Check higher timeframe structure.");
+    }
+
+    #[tokio::test]
+    async fn insert_agent_schedule_rejects_invalid_timeframe() {
+        let pool = test_db::pool().await;
+        let key = format!(
+            "custom-bad-tf-{}",
+            Utc::now().timestamp_nanos_opt().unwrap_or(0)
+        );
+        insert_agent(&pool, &sample_agent(&key))
+            .await
+            .expect("insert agent");
+
+        let result = insert_agent_schedule(
+            &pool,
+            &key,
+            JOB_KIND_ANALYSIS,
+            true,
+            "15s",
+            1,
+            None,
+            None,
+            600,
+            "",
+        )
+        .await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn insert_agent_schedule_rejects_duplicate_job_kind_timeframe() {
+        let pool = test_db::pool().await;
+        let key = format!(
+            "custom-dup-{}",
+            Utc::now().timestamp_nanos_opt().unwrap_or(0)
+        );
+        insert_agent(&pool, &sample_agent(&key))
+            .await
+            .expect("insert agent");
+
+        insert_agent_schedule(
+            &pool,
+            &key,
+            JOB_KIND_ANALYSIS,
+            true,
+            "1h",
+            1,
+            None,
+            None,
+            600,
+            "",
+        )
+        .await
+        .expect("first insert");
+
+        let result = insert_agent_schedule(
+            &pool,
+            &key,
+            JOB_KIND_ANALYSIS,
+            true,
+            "1h",
+            1,
+            None,
+            None,
+            600,
+            "",
+        )
+        .await;
+        assert!(result.is_err());
     }
 
     #[tokio::test]
@@ -1134,20 +1349,20 @@ mod tests {
             .await
             .expect("defaults");
 
-        // Both schedules start enabled and due (next_run_at = now()).
-        // We disable analysis and bump trading into the future, then expect
-        // only the analysis schedule to appear.
-        query("UPDATE agentic_job_schedules SET enabled = false WHERE job_key = 'analysis-15m'")
+        query("UPDATE agentic_job_schedules SET enabled = false WHERE job_key = $1")
+            .bind(default_analysis_job_key())
             .execute(&pool)
             .await
             .expect("disable analysis");
         let future = Utc::now() + chrono::Duration::seconds(3600);
-        query("UPDATE agentic_job_schedules SET next_run_at = $1 WHERE job_key = 'trading-1m'")
+        query("UPDATE agentic_job_schedules SET next_run_at = $1 WHERE job_key = $2")
             .bind(future)
+            .bind(default_trading_job_key())
             .execute(&pool)
             .await
             .expect("push trading future");
-        query("UPDATE agentic_job_schedules SET enabled = true WHERE job_key = 'trading-1m'")
+        query("UPDATE agentic_job_schedules SET enabled = true WHERE job_key = $1")
+            .bind(default_trading_job_key())
             .execute(&pool)
             .await
             .expect("enable trading");
@@ -1157,29 +1372,28 @@ mod tests {
             .await
             .expect("list due");
 
-        // The result contains whatever the seeded opencode-local runtime
-        // plus possibly other agents in this test DB. We only assert that
-        // this specific agent contributes zero rows because both schedules
-        // are either disabled or in the future.
         assert!(
             due.iter().all(|row| row.agent_key != key),
             "expected no rows for disabled/future agent, got {due:?}"
         );
 
-        // Now make the analysis schedule due and enabled, and expect one row.
-        query("UPDATE agentic_job_schedules SET enabled = true, next_run_at = $1 WHERE job_key = 'analysis-15m'")
-            .bind(now - chrono::Duration::seconds(1))
-            .execute(&pool)
-            .await
-            .expect("re-enable analysis due");
+        query(
+            "UPDATE agentic_job_schedules SET enabled = true, next_run_at = $1 WHERE job_key = $2",
+        )
+        .bind(now - chrono::Duration::seconds(1))
+        .bind(default_analysis_job_key())
+        .execute(&pool)
+        .await
+        .expect("re-enable analysis due");
         let due = list_due_opencode_schedules(&pool, now, 20)
             .await
             .expect("list due again");
         let analysis_due = due
             .iter()
-            .find(|row| row.agent_key == key && row.job_key == "analysis-15m")
+            .find(|row| row.agent_key == key && row.job_key == default_analysis_job_key())
             .expect("analysis row should be due");
         assert!(analysis_due.runtime_base_url.contains("14096"));
+        assert_eq!(analysis_due.timeframe, DEFAULT_ANALYSIS_TIMEFRAME);
     }
 
     #[tokio::test]
@@ -1196,13 +1410,15 @@ mod tests {
             .await
             .expect("defaults");
 
-        // Push the analysis schedule into the past, but disable the agent.
         let past = Utc::now() - chrono::Duration::seconds(60);
-        query("UPDATE agentic_job_schedules SET enabled = true, next_run_at = $1 WHERE job_key = 'analysis-15m'")
-            .bind(past)
-            .execute(&pool)
-            .await
-            .expect("set analysis due");
+        query(
+            "UPDATE agentic_job_schedules SET enabled = true, next_run_at = $1 WHERE job_key = $2",
+        )
+        .bind(past)
+        .bind(default_analysis_job_key())
+        .execute(&pool)
+        .await
+        .expect("set analysis due");
         query("UPDATE agents SET enabled = false WHERE agent_key = $1")
             .bind(&key)
             .execute(&pool)
@@ -1220,15 +1436,23 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn claim_due_schedule_inserts_queued_run_and_advances_next_run_at() {
+    async fn claim_due_schedule_inserts_queued_run_and_aligns_next_run_at() {
         let pool = test_db::pool().await;
         let key = format!("claim-{}", Utc::now().timestamp_nanos_opt().unwrap_or(0));
         let schedule_id = seed_agent_and_schedule(&pool, &key, 0).await;
 
-        // Set the schedule to be due.
+        // Set the schedule to a previous 15m due boundary so it is
+        // due "now" no matter when the test actually runs.
         let now = Utc::now();
+        let due_boundary = latest_due_at_or_before(
+            now,
+            DEFAULT_ANALYSIS_TIMEFRAME,
+            DEFAULT_TRIGGER_DELAY_SECONDS,
+        )
+        .expect("compute latest due")
+        .expect("should have a previous due boundary");
         query("UPDATE agentic_job_schedules SET next_run_at = $1 WHERE id = $2")
-            .bind(now - chrono::Duration::seconds(5))
+            .bind(due_boundary)
             .bind(schedule_id)
             .execute(&pool)
             .await
@@ -1248,30 +1472,82 @@ mod tests {
             .expect("run present");
         assert_eq!(run.status, RUN_STATUS_QUEUED);
         assert_eq!(run.agent_key, key);
+        assert_eq!(run.timeframe, DEFAULT_ANALYSIS_TIMEFRAME);
+        assert_eq!(
+            run.scheduled_for,
+            boundary_for_due_at(due_boundary, DEFAULT_TRIGGER_DELAY_SECONDS)
+        );
 
-        // The next_run_at should have advanced by interval_seconds.
+        // The next_run_at should be aligned to the next 15m boundary
+        // after `now`, regardless of how late the claim was.
         let (next_run_at,): (DateTime<Utc>,) =
             query_as("SELECT next_run_at FROM agentic_job_schedules WHERE id = $1")
                 .bind(schedule_id)
                 .fetch_one(&pool)
                 .await
                 .expect("fetch next_run_at");
-        let expected = now + chrono::Duration::seconds(900);
-        // Allow a 2s slack for clock drift between now snapshots.
-        let delta = (next_run_at - expected).num_seconds().abs();
-        assert!(delta <= 2, "next_run_at delta too large: {delta}s");
+        let expected = next_due_after(
+            now,
+            DEFAULT_ANALYSIS_TIMEFRAME,
+            DEFAULT_TRIGGER_DELAY_SECONDS,
+        )
+        .expect("compute next due");
+        assert_eq!(next_run_at, expected);
     }
 
     #[tokio::test]
-    async fn claim_due_schedule_inserts_skipped_run_when_active_run_exists() {
+    async fn claim_due_schedule_advances_stale_schedule_without_dispatching() {
+        let pool = test_db::pool().await;
+        let key = format!("stale-{}", Utc::now().timestamp_nanos_opt().unwrap_or(0));
+        let schedule_id = seed_agent_and_schedule(&pool, &key, 0).await;
+
+        // Push next_run_at well into the past, simulating a long
+        // downtime.
+        let long_ago = Utc::now() - chrono::Duration::hours(2);
+        query("UPDATE agentic_job_schedules SET next_run_at = $1 WHERE id = $2")
+            .bind(long_ago)
+            .bind(schedule_id)
+            .execute(&pool)
+            .await
+            .expect("set stale");
+
+        let now = Utc::now();
+        let outcome = claim_due_schedule(&pool, schedule_id, now)
+            .await
+            .expect("claim");
+        assert!(matches!(outcome, ClaimedScheduleRun::NotDue));
+
+        let (next_run_at,): (DateTime<Utc>,) =
+            query_as("SELECT next_run_at FROM agentic_job_schedules WHERE id = $1")
+                .bind(schedule_id)
+                .fetch_one(&pool)
+                .await
+                .expect("fetch next_run_at");
+        let expected = next_due_after(
+            now,
+            DEFAULT_ANALYSIS_TIMEFRAME,
+            DEFAULT_TRIGGER_DELAY_SECONDS,
+        )
+        .expect("compute next due");
+        assert_eq!(next_run_at, expected);
+    }
+
+    #[tokio::test]
+    async fn claim_due_schedule_inserts_skipped_run_when_active_run_exists_for_same_agent() {
         let pool = test_db::pool().await;
         let key = format!("skip-{}", Utc::now().timestamp_nanos_opt().unwrap_or(0));
         let schedule_id = seed_agent_and_schedule(&pool, &key, 0).await;
 
-        // Set the schedule to be due, then insert a fake running run.
         let now = Utc::now();
+        let due_boundary = latest_due_at_or_before(
+            now,
+            DEFAULT_ANALYSIS_TIMEFRAME,
+            DEFAULT_TRIGGER_DELAY_SECONDS,
+        )
+        .expect("compute latest due")
+        .expect("should have a previous due boundary");
         query("UPDATE agentic_job_schedules SET next_run_at = $1 WHERE id = $2")
-            .bind(now - chrono::Duration::seconds(5))
+            .bind(due_boundary)
             .bind(schedule_id)
             .execute(&pool)
             .await
@@ -1298,6 +1574,7 @@ mod tests {
             Some("previous run still active")
         );
         assert!(run.finished_at.is_some());
+        assert_eq!(run.timeframe, DEFAULT_ANALYSIS_TIMEFRAME);
     }
 
     #[tokio::test]
@@ -1307,8 +1584,14 @@ mod tests {
         let schedule_id = seed_agent_and_schedule(&pool, &key, 0).await;
 
         let now = Utc::now();
+        let due = next_due_after(
+            now,
+            DEFAULT_ANALYSIS_TIMEFRAME,
+            DEFAULT_TRIGGER_DELAY_SECONDS,
+        )
+        .expect("compute next due");
         query("UPDATE agentic_job_schedules SET enabled = false, next_run_at = $1 WHERE id = $2")
-            .bind(now - chrono::Duration::seconds(5))
+            .bind(due)
             .bind(schedule_id)
             .execute(&pool)
             .await
@@ -1321,10 +1604,17 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn insert_queued_run_inserts_manual_dispatch_run_and_advances_next_run_at() {
+    async fn insert_queued_run_inserts_manual_dispatch_run_and_does_not_advance_schedule() {
         let pool = test_db::pool().await;
         let key = format!("manual-{}", Utc::now().timestamp_nanos_opt().unwrap_or(0));
         let schedule_id = seed_agent_and_schedule(&pool, &key, 0).await;
+
+        let (before_next_run_at,): (DateTime<Utc>,) =
+            query_as("SELECT next_run_at FROM agentic_job_schedules WHERE id = $1")
+                .bind(schedule_id)
+                .fetch_one(&pool)
+                .await
+                .expect("fetch before next_run_at");
 
         let before = Utc::now();
         let outcome = insert_queued_run(&pool, &key, schedule_id)
@@ -1346,18 +1636,22 @@ mod tests {
         assert_eq!(run.status, RUN_STATUS_QUEUED);
         assert!(run.scheduled_for >= before);
         assert!(run.scheduled_for <= after);
+        assert_eq!(run.timeframe, DEFAULT_ANALYSIS_TIMEFRAME);
         let delta = (run.scheduled_for - scheduled_for)
             .num_microseconds()
             .unwrap_or(i64::MAX);
         assert!(delta.abs() <= 1, "scheduled_for delta too large: {delta}us");
 
-        let (next_run_at,): (DateTime<Utc>,) =
+        let (after_next_run_at,): (DateTime<Utc>,) =
             query_as("SELECT next_run_at FROM agentic_job_schedules WHERE id = $1")
                 .bind(schedule_id)
                 .fetch_one(&pool)
                 .await
-                .expect("fetch next_run_at");
-        assert!(next_run_at >= scheduled_for + chrono::Duration::seconds(899));
+                .expect("fetch after next_run_at");
+        assert_eq!(
+            before_next_run_at, after_next_run_at,
+            "manual run must not mutate next_run_at"
+        );
     }
 
     #[tokio::test]

@@ -24,6 +24,7 @@ use crate::{
         model::{JOB_KIND_ANALYSIS, JOB_KIND_TRADING},
         scheduler::{dispatch_request_from_schedule, spawn_dispatch_task},
         store::QueuedScheduleRun,
+        timeframe::parse_timeframe_seconds,
     },
     agents::{
         crypto::{encrypt, generate_api_key},
@@ -59,9 +60,8 @@ use crate::{
     web::{
         AppState,
         templates::{
-            AccountBalancePartialTemplate, AccountBalanceView, AgentListEntry,
-            AgentJobDetailPageTemplate,
-            AgentMemoryDetailPageTemplate, AgentMemoryDetailPartialTemplate,
+            AccountBalancePartialTemplate, AccountBalanceView, AgentJobDetailPageTemplate,
+            AgentListEntry, AgentMemoryDetailPageTemplate, AgentMemoryDetailPartialTemplate,
             AgentMemoryTimelinePartialTemplate, AgentRunDetailPageTemplate,
             AgentScheduleNewPageTemplate, AgentShowTab, AgentsNewPageTemplate, AgentsPageTemplate,
             AgentsShowPageTemplate, BackendsNewPageTemplate, BackendsPageTemplate,
@@ -115,10 +115,7 @@ pub fn router(state: Arc<AppState>) -> Router {
             "/agents/{agent_key}/jobs",
             get(agents_show_jobs).post(agents_create_job),
         )
-        .route(
-            "/agents/{agent_key}/jobs/new",
-            get(agents_new_job),
-        )
+        .route("/agents/{agent_key}/jobs/new", get(agents_new_job))
         .route(
             "/agents/{agent_key}/jobs/{job_id}",
             get(agents_show_job_detail),
@@ -131,7 +128,10 @@ pub fn router(state: Arc<AppState>) -> Router {
             "/agents/{agent_key}/jobs/{job_id}/run",
             post(agents_run_job_now),
         )
-        .route("/agents/{agent_key}/runs/{run_id}", get(agents_show_run_detail))
+        .route(
+            "/agents/{agent_key}/runs/{run_id}",
+            get(agents_show_run_detail),
+        )
         .route("/agents/{agent_key}/delete", post(delete_agent))
         .route("/agents/{agent_key}/live/stream", get(agent_live_stream))
         .route("/hermes", get(hermes_page))
@@ -450,7 +450,8 @@ async fn agents_show_job_detail(
             .into_response());
     }
 
-    let Some(job) = crate::agentic::store::get_agent_schedule(&state.db_pool, &agent_key, job_id).await?
+    let Some(job) =
+        crate::agentic::store::get_agent_schedule(&state.db_pool, &agent_key, job_id).await?
     else {
         return Ok((StatusCode::NOT_FOUND, "job not found").into_response());
     };
@@ -536,11 +537,9 @@ async fn agents_show_run_detail(
 #[derive(Debug, Clone, Default, Deserialize)]
 struct CreateAgentScheduleForm {
     #[serde(default)]
-    job_key: String,
-    #[serde(default)]
     job_kind: String,
     #[serde(default)]
-    interval_seconds: String,
+    timeframe: String,
     #[serde(default)]
     timeout_seconds: String,
     #[serde(default)]
@@ -554,9 +553,9 @@ struct CreateAgentScheduleForm {
 
 #[derive(Debug)]
 struct ValidatedCreateAgentSchedule {
-    job_key: String,
     job_kind: String,
-    interval_seconds: i32,
+    timeframe: String,
+    trigger_delay_seconds: i32,
     timeout_seconds: i32,
     model_provider_id: Option<String>,
     model_id: Option<String>,
@@ -568,7 +567,7 @@ impl CreateAgentScheduleForm {
     fn defaults() -> Self {
         Self {
             job_kind: JOB_KIND_ANALYSIS.to_string(),
-            interval_seconds: "900".to_string(),
+            timeframe: "15m".to_string(),
             timeout_seconds: "600".to_string(),
             enabled: Some("on".to_string()),
             ..Self::default()
@@ -581,9 +580,8 @@ impl CreateAgentScheduleForm {
 
     fn as_template_values(&self) -> CreateAgentScheduleFormValues {
         CreateAgentScheduleFormValues {
-            job_key: self.job_key.clone(),
             job_kind: self.job_kind.clone(),
-            interval_seconds: self.interval_seconds.clone(),
+            timeframe: self.timeframe.clone(),
             timeout_seconds: self.timeout_seconds.clone(),
             model_provider_id: self.model_provider_id.clone(),
             model_id: self.model_id.clone(),
@@ -595,20 +593,19 @@ impl CreateAgentScheduleForm {
     fn validate(&self) -> Result<ValidatedCreateAgentSchedule, Vec<String>> {
         let mut errors = Vec::new();
 
-        let job_key = self.job_key.trim();
-        if job_key.is_empty() {
-            errors.push("Job key is required.".to_string());
-        } else if !is_valid_schedule_job_key(job_key) {
-            errors.push("Job key must use lowercase letters, digits, and hyphens.".to_string());
-        }
-
         let job_kind = self.job_kind.trim();
         if !matches!(job_kind, JOB_KIND_ANALYSIS | JOB_KIND_TRADING) {
             errors.push("Job kind must be analysis or trading.".to_string());
         }
 
-        let interval_seconds =
-            parse_positive_schedule_seconds(&self.interval_seconds, "Interval", &mut errors);
+        let timeframe = self.timeframe.trim().to_string();
+        if parse_timeframe_seconds(&timeframe).is_err() {
+            errors.push(
+                "Timeframe must be a positive integer with unit m, h, or d (e.g. 15m, 1h, 1d)."
+                    .to_string(),
+            );
+        }
+
         let timeout_seconds =
             parse_positive_schedule_seconds(&self.timeout_seconds, "Timeout", &mut errors);
 
@@ -623,9 +620,9 @@ impl CreateAgentScheduleForm {
 
         if errors.is_empty() {
             Ok(ValidatedCreateAgentSchedule {
-                job_key: job_key.to_string(),
                 job_kind: job_kind.to_string(),
-                interval_seconds: interval_seconds.expect("validated interval seconds"),
+                timeframe,
+                trigger_delay_seconds: 1,
                 timeout_seconds: timeout_seconds.expect("validated timeout seconds"),
                 model_provider_id,
                 model_id,
@@ -646,7 +643,10 @@ async fn agents_new_job(
         return Ok((StatusCode::NOT_FOUND, "agent not found").into_response());
     };
     if agent.backend_kind != BACKEND_KIND_OPENCODE {
-        return Ok((StatusCode::NOT_FOUND, "jobs are only available for OpenCode agents")
+        return Ok((
+            StatusCode::NOT_FOUND,
+            "jobs are only available for OpenCode agents",
+        )
             .into_response());
     }
 
@@ -667,7 +667,10 @@ async fn agents_create_job(
         return Ok((StatusCode::NOT_FOUND, "agent not found").into_response());
     };
     if agent.backend_kind != BACKEND_KIND_OPENCODE {
-        return Ok((StatusCode::NOT_FOUND, "jobs are only available for OpenCode agents")
+        return Ok((
+            StatusCode::NOT_FOUND,
+            "jobs are only available for OpenCode agents",
+        )
             .into_response());
     }
 
@@ -686,11 +689,10 @@ async fn agents_create_job(
     if let Err(error) = crate::agentic::store::insert_agent_schedule(
         &state.db_pool,
         &agent_key,
-        &validated.job_key,
         &validated.job_kind,
         validated.enabled,
-        validated.interval_seconds,
-        Utc::now(),
+        &validated.timeframe,
+        validated.trigger_delay_seconds,
         validated.model_provider_id.as_deref(),
         validated.model_id.as_deref(),
         validated.timeout_seconds,
@@ -727,7 +729,10 @@ async fn agents_toggle_job(
         return Ok((StatusCode::NOT_FOUND, "agent not found").into_response());
     };
     if agent.backend_kind != BACKEND_KIND_OPENCODE {
-        return Ok((StatusCode::NOT_FOUND, "jobs are only available for OpenCode agents")
+        return Ok((
+            StatusCode::NOT_FOUND,
+            "jobs are only available for OpenCode agents",
+        )
             .into_response());
     }
 
@@ -735,13 +740,9 @@ async fn agents_toggle_job(
     // enabled. Otherwise (only `enabled=off` was submitted), the new state
     // is disabled. This is the same shape used by the agent create form.
     let enable = matches!(form.enabled.as_deref(), Some("on"));
-    let updated = crate::agentic::store::set_schedule_enabled(
-        &state.db_pool,
-        &agent_key,
-        job_id,
-        enable,
-    )
-    .await?;
+    let updated =
+        crate::agentic::store::set_schedule_enabled(&state.db_pool, &agent_key, job_id, enable)
+            .await?;
 
     if !updated {
         return Ok((StatusCode::NOT_FOUND, "job not found").into_response());
@@ -758,7 +759,10 @@ async fn agents_run_job_now(
         return Ok((StatusCode::NOT_FOUND, "agent not found").into_response());
     };
     if agent.backend_kind != BACKEND_KIND_OPENCODE {
-        return Ok((StatusCode::NOT_FOUND, "jobs are only available for OpenCode agents")
+        return Ok((
+            StatusCode::NOT_FOUND,
+            "jobs are only available for OpenCode agents",
+        )
             .into_response());
     }
 
@@ -923,7 +927,10 @@ async fn render_agent_show_page(
         }
         AgentShowTab::Jobs => {
             if agent.backend_kind != BACKEND_KIND_OPENCODE {
-                return Ok((StatusCode::NOT_FOUND, "jobs are only available for OpenCode agents")
+                return Ok((
+                    StatusCode::NOT_FOUND,
+                    "jobs are only available for OpenCode agents",
+                )
                     .into_response());
             }
             match crate::agentic::store::list_agent_schedules(&state.db_pool, &agent.agent_key)
@@ -1662,7 +1669,7 @@ fn schedule_unique_violation_message(error: &anyhow::Error) -> Option<String> {
 
     let constraint = db_err.constraint().unwrap_or("unknown");
     if constraint.contains("agentic_job_schedules") || constraint.contains("job_key") {
-        Some("A job with this job key already exists for this agent.".to_string())
+        Some("A job with this kind and timeframe already exists for this agent.".to_string())
     } else {
         Some("This job conflicts with an existing row.".to_string())
     }
@@ -1687,26 +1694,6 @@ fn parse_positive_schedule_seconds(
             None
         }
     }
-}
-
-fn is_valid_schedule_job_key(job_key: &str) -> bool {
-    let mut chars = job_key.chars();
-    let Some(first) = chars.next() else {
-        return false;
-    };
-    if !first.is_ascii_lowercase() && !first.is_ascii_digit() {
-        return false;
-    }
-
-    let mut last = first;
-    for ch in chars {
-        if !ch.is_ascii_lowercase() && !ch.is_ascii_digit() && ch != '-' {
-            return false;
-        }
-        last = ch;
-    }
-
-    last.is_ascii_lowercase() || last.is_ascii_digit()
 }
 
 #[derive(Debug)]
@@ -3634,9 +3621,9 @@ mod tests {
         assert_eq!(response.status(), StatusCode::OK);
         let text = response_text(response).await;
         assert!(text.contains("Create job"));
-        assert!(text.contains("name=\"job_key\""));
+        assert!(!text.contains("name=\"job_key\""));
         assert!(text.contains("name=\"job_kind\""));
-        assert!(text.contains("name=\"interval_seconds\""));
+        assert!(text.contains("name=\"timeframe\""));
         assert!(text.contains("name=\"timeout_seconds\""));
     }
 
@@ -3655,7 +3642,7 @@ mod tests {
                     .uri(format!("/agents/{agent_key}/jobs"))
                     .header("content-type", "application/x-www-form-urlencoded")
                     .body(Body::from(
-                        "job_key=analysis-1h&job_kind=analysis&interval_seconds=3600&timeout_seconds=600&enabled=on&model_provider_id=anthropic&model_id=claude-sonnet-4&operator_prompt=Check+higher+timeframe+structure",
+                        "job_kind=analysis&timeframe=1h&timeout_seconds=600&enabled=on&model_provider_id=anthropic&model_id=claude-sonnet-4&operator_prompt=Check+higher+timeframe+structure",
                     ))
                     .unwrap(),
             )
@@ -3680,7 +3667,7 @@ mod tests {
             .expect("custom schedule present");
         assert_eq!(schedule.job_kind, JOB_KIND_ANALYSIS);
         assert!(schedule.enabled);
-        assert_eq!(schedule.interval_seconds, 3600);
+        assert_eq!(schedule.timeframe, "1h");
         assert_eq!(schedule.timeout_seconds, 600);
         assert_eq!(schedule.model_provider_id.as_deref(), Some("anthropic"));
         assert_eq!(schedule.model_id.as_deref(), Some("claude-sonnet-4"));
@@ -3688,7 +3675,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn post_job_with_duplicate_job_key_returns_validation_error() {
+    async fn post_job_with_duplicate_job_kind_timeframe_returns_validation_error() {
         let state = test_state().await;
         let (agent_key, _wallet_address) = insert_test_opencode_agent(&state)
             .await
@@ -3701,7 +3688,7 @@ mod tests {
                     .uri(format!("/agents/{agent_key}/jobs"))
                     .header("content-type", "application/x-www-form-urlencoded")
                     .body(Body::from(
-                        "job_key=analysis-15m&job_kind=analysis&interval_seconds=900&timeout_seconds=600&enabled=on",
+                        "job_kind=analysis&timeframe=15m&timeout_seconds=600&enabled=on",
                     ))
                     .unwrap(),
             )
@@ -3710,7 +3697,7 @@ mod tests {
 
         assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
         let text = response_text(response).await;
-        assert!(text.contains("A job with this job key already exists for this agent."));
+        assert!(text.contains("A job with this kind and timeframe already exists for this agent."));
     }
 
     #[tokio::test]

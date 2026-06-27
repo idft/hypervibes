@@ -31,6 +31,7 @@ pub struct DispatchRequest {
     pub display_name: String,
     pub job_key: String,
     pub job_kind: String,
+    pub timeframe: String,
     pub operator_prompt: String,
     pub model_provider_id: Option<String>,
     pub model_id: Option<String>,
@@ -167,6 +168,7 @@ fn build_command_arguments(request: &DispatchRequest) -> String {
     let mut body = String::new();
     body.push_str(&format!("Agent key: {}\n", request.agent_key));
     body.push_str(&format!("Job key: {}\n", request.job_key));
+    body.push_str(&format!("Timeframe: {}\n", request.timeframe));
     body.push_str(&format!("Scheduled for: {}\n", scheduled_for));
     body.push_str("\nOperator prompt:\n");
     body.push_str(operator);
@@ -292,6 +294,7 @@ mod tests {
             display_name: "BTC 2".to_string(),
             job_key: "analysis-15m".to_string(),
             job_kind: JOB_KIND_ANALYSIS.to_string(),
+            timeframe: "15m".to_string(),
             operator_prompt: String::new(),
             model_provider_id: None,
             model_id: None,
