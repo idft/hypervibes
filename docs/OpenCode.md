@@ -213,6 +213,10 @@ local stdio process. Each workspace runs its own MCP process; the process
 reads that workspace's `.env` to authenticate against the Vibetrading
 backend with the agent's bearer token.
 
+The generated `.opencode/agents/analysis.md` and `.opencode/agents/trading.md`
+templates set `steps: 100` so a runaway session is forced to summarize instead
+of iterating indefinitely.
+
 Ownership rules:
 
 - Vibetrading may create and update generated files.
@@ -504,10 +508,15 @@ automatically disabled.
 The first implementation does **not** poll `GET /session/{id}/status` to
 detect terminal completion. The OpenCode server returns 200 from
 `POST /session/{id}/command` once the command has been accepted, and the
-adapter treats that 200 as the success signal. The OpenCode database
+adapter treats that 200 as the dispatch success signal. The OpenCode database
 plugin records the actual final session state in the `opencode` schema
 (`opencode.sessions.status`), which is the canonical source of truth for
 "did the run actually succeed".
+
+The adapter persists the OpenCode session id to `agentic_runs.backend_run_ref`
+immediately after `POST /session` succeeds, before waiting on the command
+request. This keeps failed and timed-out runs linked to their OpenCode session
+records for debugging.
 
 If a future iteration needs in-process polling, the
 `OpenCodeClient::session_is_active` helper is already wired and can be
@@ -516,7 +525,10 @@ hooked into the dispatch task loop without changing the run-row shape.
 ## OpenCode Adapter Client
 
 The adapter talks to the local OpenCode server over HTTP using `reqwest`
-directly (see `src/opencode/client.rs`). The plan considered the
+directly (see `src/opencode/client.rs`). Metadata calls such as session create
+and status checks keep a short 15s timeout, while `POST /session/{id}/command`
+uses a longer 120s client timeout and still remains bounded by the job's outer
+schedule timeout in the dispatcher. The plan considered the
 `opencode-sdk` crate (crates.io, `opencode-sdk` 0.1.x) and rejected it for
 this slice for the following reasons:
 

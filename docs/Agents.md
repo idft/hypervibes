@@ -53,6 +53,9 @@ simplified single-table registry (`agents`) with:
   Vibetrading API key is written only to the generated workspace `.env` file,
   which the OpenCode container loads via its bind-mounted global
   `opencode.jsonc` config
+- generated OpenCode workspace agent definitions under `.opencode/agents/`
+  set `steps: 100` so analysis and trading runs eventually summarize instead of
+  looping indefinitely
 
 The supporting `agent_runtimes` table stores reusable Hermes/OpenCode runtime
 definitions. The initial migration seeds only one runtime:

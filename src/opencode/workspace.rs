@@ -426,6 +426,7 @@ mod tests {
 
         assert!(commands.contains("Vibetrading"));
         assert!(agent.contains("scripts/user/"));
+        assert!(agent.contains("steps: 100"));
     }
 
     #[test]

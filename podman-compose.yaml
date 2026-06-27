@@ -59,7 +59,7 @@ services:
       - ./workspaces:/workspaces
       - ./agent-runtime/container/opencode.jsonc:/opencode-data/opencode.jsonc:ro
     healthcheck:
-      test: ["CMD-SHELL", "exec 3<>/dev/tcp/127.0.0.1/14096"]
+      test: ["CMD", "python3", "-c", "import socket; s = socket.create_connection(('127.0.0.1', 14096), 5); s.close()"]
       interval: 10s
       timeout: 5s
       retries: 5

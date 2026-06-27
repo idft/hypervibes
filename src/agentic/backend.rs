@@ -11,6 +11,7 @@ use crate::{
         model::{JOB_KIND_ANALYSIS, JOB_KIND_TRADING},
         store,
     },
+    db::DbPool,
     opencode::{
         client::{OpenCodeClient, OpenCodeCommandRequest},
         workspace::OpenCodeWorkspaceRuntimeConfig,
@@ -62,12 +63,13 @@ pub trait AgenticBackend: Send + Sync {
 
 #[derive(Clone)]
 pub struct OpenCodeBackend {
+    pool: DbPool,
     client: Arc<OpenCodeClient>,
 }
 
 impl OpenCodeBackend {
-    pub fn new(client: Arc<OpenCodeClient>) -> Self {
-        Self { client }
+    pub fn new(pool: DbPool, client: Arc<OpenCodeClient>) -> Self {
+        Self { pool, client }
     }
 }
 
@@ -112,6 +114,15 @@ impl AgenticBackend for OpenCodeBackend {
             session_id = %session.id,
             "opencode session created"
         );
+
+        store::mark_run_running(&self.pool, request.run_id, Some(&session.id))
+            .await
+            .with_context(|| {
+                format!(
+                    "failed to persist OpenCode session {} for run {}",
+                    session.id, request.run_id
+                )
+            })?;
 
         let command_arguments = build_command_arguments(&request)?;
 

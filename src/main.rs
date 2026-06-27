@@ -79,7 +79,7 @@ async fn main() -> Result<()> {
         ))
         .context("failed to build OpenCode HTTP client")?;
     let opencode_backend: Arc<dyn agentic::backend::AgenticBackend> = Arc::new(
-        agentic::backend::OpenCodeBackend::new(Arc::new(opencode_client)),
+        agentic::backend::OpenCodeBackend::new(pool.clone(), Arc::new(opencode_client)),
     );
 
     println!("Starting Hyperliquid agent monitor");

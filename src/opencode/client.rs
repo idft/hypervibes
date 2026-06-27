@@ -10,7 +10,9 @@ const RESPONSE_SNIPPET_MAX_CHARS: usize = 200;
 pub struct OpenCodeClientConfig {
     pub username: String,
     pub password: Option<String>,
-    pub timeout: Duration,
+    pub create_session_timeout: Duration,
+    pub command_timeout: Duration,
+    pub status_timeout: Duration,
 }
 
 impl OpenCodeClientConfig {
@@ -18,7 +20,9 @@ impl OpenCodeClientConfig {
         Self {
             username,
             password,
-            timeout: Duration::from_secs(15),
+            create_session_timeout: Duration::from_secs(15),
+            command_timeout: Duration::from_secs(120),
+            status_timeout: Duration::from_secs(15),
         }
     }
 }
@@ -32,7 +36,6 @@ pub struct OpenCodeClient {
 impl OpenCodeClient {
     pub fn new(config: OpenCodeClientConfig) -> Result<Self> {
         let http = reqwest::Client::builder()
-            .timeout(config.timeout)
             .build()
             .context("failed to build OpenCode HTTP client")?;
         Ok(Self { http, config })
@@ -61,6 +64,7 @@ impl OpenCodeClient {
         let response = self
             .http
             .post(url)
+            .timeout(self.config.create_session_timeout)
             .apply_basic_auth(&self.config)
             .json(&body)
             .send()
@@ -85,6 +89,7 @@ impl OpenCodeClient {
         let response = self
             .http
             .post(url)
+            .timeout(self.config.command_timeout)
             .apply_basic_auth(&self.config)
             .json(&request)
             .send()
@@ -107,6 +112,7 @@ impl OpenCodeClient {
         let response = self
             .http
             .get(url)
+            .timeout(self.config.status_timeout)
             .apply_basic_auth(&self.config)
             .send()
             .await
@@ -260,6 +266,14 @@ mod tests {
         let client = OpenCodeClient::new(config).expect("client");
         let cloned = client.clone();
         assert!(cloned.config().password.is_none());
+    }
+
+    #[test]
+    fn client_uses_longer_timeout_for_run_command_than_metadata_calls() {
+        let config = OpenCodeClientConfig::new("opencode".to_string(), None);
+        assert_eq!(config.create_session_timeout, Duration::from_secs(15));
+        assert_eq!(config.command_timeout, Duration::from_secs(120));
+        assert_eq!(config.status_timeout, Duration::from_secs(15));
     }
 
     #[test]

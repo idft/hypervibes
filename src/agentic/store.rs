@@ -1762,6 +1762,33 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn mark_run_failed_preserves_existing_backend_ref_when_not_provided() {
+        let pool = test_db::pool().await;
+        let key = format!(
+            "run-fail-preserve-ref-{}",
+            Utc::now().timestamp_nanos_opt().unwrap_or(0)
+        );
+        let schedule_id = seed_agent_and_schedule(&pool, &key, 0).await;
+        let run_id = insert_test_run(&pool, schedule_id, RUN_STATUS_QUEUED)
+            .await
+            .expect("seed run");
+
+        mark_run_running(&pool, run_id, Some("ses_keep"))
+            .await
+            .expect("mark running");
+        mark_run_failed(&pool, run_id, "boom", None)
+            .await
+            .expect("mark failed");
+
+        let run = get_run(&pool, run_id)
+            .await
+            .expect("fetch run")
+            .expect("run present");
+        assert_eq!(run.status, RUN_STATUS_FAILED);
+        assert_eq!(run.backend_run_ref.as_deref(), Some("ses_keep"));
+    }
+
+    #[tokio::test]
     async fn mark_run_aborted_marks_status_finished_at() {
         let pool = test_db::pool().await;
         let key = format!(
