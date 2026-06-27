@@ -753,6 +753,8 @@ pub struct AgenticJobDetailView {
     pub next_run_text: String,
     pub model_text: String,
     pub operator_prompt_text: String,
+    pub prompt_preview_text: String,
+    pub prompt_preview_error: Option<String>,
     pub run_now_action: String,
     pub toggle_action: String,
     pub hidden_enabled_value: &'static str,
@@ -928,6 +930,8 @@ impl AgenticJobDetailView {
             } else {
                 row.operator_prompt.clone()
             },
+            prompt_preview_text: String::new(),
+            prompt_preview_error: None,
             run_now_action: summary.run_now_action,
             toggle_action: summary.toggle_action,
             hidden_enabled_value: summary.hidden_enabled_value,
@@ -1351,6 +1355,13 @@ pub struct HermesPageTemplate {
     pub profiles: Vec<String>,
     pub error: Option<String>,
     pub dashboard_url: Option<String>,
+    pub current_path: String,
+}
+
+#[derive(Template)]
+#[template(path = "settings.html")]
+pub struct SettingsPageTemplate {
+    pub system_prompt: String,
     pub current_path: String,
 }
 

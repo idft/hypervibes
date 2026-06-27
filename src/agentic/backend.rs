@@ -33,6 +33,12 @@ pub struct DispatchRequest {
     pub job_kind: String,
     pub timeframe: String,
     pub operator_prompt: String,
+    pub analysis_prompt: String,
+    pub trading_prompt: String,
+    pub system_prompt: String,
+    pub environment: String,
+    pub selected_instruments: Vec<String>,
+    pub account_snapshot: Option<crate::hyperliquid::live_state::LiveAgentSnapshot>,
     pub model_provider_id: Option<String>,
     pub model_id: Option<String>,
     pub timeout_seconds: i32,
@@ -107,7 +113,7 @@ impl AgenticBackend for OpenCodeBackend {
             "opencode session created"
         );
 
-        let command_arguments = build_command_arguments(&request);
+        let command_arguments = build_command_arguments(&request)?;
 
         let command_request = OpenCodeCommandRequest {
             command: command_name.to_string(),
@@ -153,26 +159,8 @@ fn resolve_opencode_job(job_kind: &str) -> Result<(&'static str, &'static str)> 
     }
 }
 
-fn build_command_arguments(request: &DispatchRequest) -> String {
-    let operator = if request.operator_prompt.trim().is_empty() {
-        "(none)"
-    } else {
-        request.operator_prompt.as_str()
-    };
-
-    let scheduled_for = request
-        .scheduled_for
-        .format("%Y-%m-%dT%H:%M:%SZ")
-        .to_string();
-
-    let mut body = String::new();
-    body.push_str(&format!("Agent key: {}\n", request.agent_key));
-    body.push_str(&format!("Job key: {}\n", request.job_key));
-    body.push_str(&format!("Timeframe: {}\n", request.timeframe));
-    body.push_str(&format!("Scheduled for: {}\n", scheduled_for));
-    body.push_str("\nOperator prompt:\n");
-    body.push_str(operator);
-    body
+fn build_command_arguments(request: &DispatchRequest) -> Result<String> {
+    crate::agentic::prompt::build_prompt(request)
 }
 
 fn build_command_model(model_provider_id: Option<&str>, model_id: Option<&str>) -> Option<String> {
@@ -296,6 +284,12 @@ mod tests {
             job_kind: JOB_KIND_ANALYSIS.to_string(),
             timeframe: "15m".to_string(),
             operator_prompt: String::new(),
+            analysis_prompt: "Analyze trends.".to_string(),
+            trading_prompt: "Trade breakouts.".to_string(),
+            system_prompt: "You are a crypto trading assistant.".to_string(),
+            environment: "live".to_string(),
+            selected_instruments: Vec::new(),
+            account_snapshot: None,
             model_provider_id: None,
             model_id: None,
             timeout_seconds: 10,
@@ -323,12 +317,13 @@ mod tests {
     }
 
     #[test]
-    fn command_arguments_exclude_secrets() {
+    fn command_arguments_contain_strategy_and_agent_details() {
         let request = make_request();
-        let args = build_command_arguments(&request);
+        let args = build_command_arguments(&request).expect("build args");
         assert!(args.contains("Agent key: btc-2"));
-        assert!(args.contains("Job key: analysis-15m"));
-        assert!(args.contains("Scheduled for:"));
+        assert!(args.contains("## Analysis strategy"));
+        assert!(args.contains("Analyze trends."));
+        assert!(args.contains("## Instructions"));
         assert!(args.contains("(none)"));
         // Ensure no api-key-like token is present
         assert!(!args.contains("VIBETRADING_API_KEY"));

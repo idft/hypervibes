@@ -26,5 +26,9 @@
     {% endif %}
     <span class="flex items-center rounded-xl px-3 py-2 text-zinc-500">Wallet</span>
     <span class="flex items-center rounded-xl px-3 py-2 text-zinc-500">Documentation</span>
-    <span class="flex items-center rounded-xl px-3 py-2 text-zinc-500">Settings</span>
+    {% if current_path.starts_with("/settings") %}
+    <a class="flex items-center rounded-xl bg-zinc-800/80 px-3 py-2 font-medium text-white" href="/settings">Settings</a>
+    {% else %}
+    <a class="flex items-center rounded-xl px-3 py-2 text-zinc-300 hover:bg-zinc-800/80 hover:text-white" href="/settings">Settings</a>
+    {% endif %}
 </nav>

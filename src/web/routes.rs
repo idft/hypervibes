@@ -43,7 +43,7 @@ use crate::{
     },
     hermes::HermesHealth,
     hyperliquid::{
-        live_state::{AccountKey, AccountLiveState, LiveConnectionStatus},
+        live_state::{AccountKey, AccountLiveState, LiveConnectionStatus, live_agent_snapshot_for_dispatch},
         queries::{
             AccountTransactionRow, BalanceSeriesBucket, fetch_balance_series,
             list_account_sync_state, list_all_account_transactions,
@@ -69,7 +69,7 @@ use crate::{
             LatestAnalysisSummaryPartialTemplate, LatestTradeExecutionSummaryPartialTemplate,
             MemoryView, OpenCodeWorkspaceSettingsView, OpenOrdersPartialTemplate, OpenOrdersView,
             OpenPositionsPartialTemplate, OpenPositionsView, ServerErrorPageTemplate,
-            SparklineView, SyncStateView, TransactionView,
+            SettingsPageTemplate, SparklineView, SyncStateView, TransactionView,
         },
         ui_events::UiEvent,
     },
@@ -135,6 +135,7 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/agents/{agent_key}/delete", post(delete_agent))
         .route("/agents/{agent_key}/live/stream", get(agent_live_stream))
         .route("/hermes", get(hermes_page))
+        .route("/settings", get(settings_index).post(settings_update))
         .with_state(state)
 }
 
@@ -483,13 +484,81 @@ async fn agents_show_job_detail(
         }
     };
 
+    let mut job_view = crate::web::templates::AgenticJobDetailView::from_row(&job);
+    match build_job_prompt_preview(&state,
+        &agent,
+        &job,
+    )
+    .await
+    {
+        Ok(text) => job_view.prompt_preview_text = text,
+        Err(error) => {
+            warn!(
+                agent_key = %agent.agent_key,
+                job_id,
+                error = ?error,
+                "failed to build prompt preview for job detail page"
+            );
+            job_view.prompt_preview_error = Some(format!("{error:#}"));
+        }
+    }
+
     let html = AgentJobDetailPageTemplate::render_view(
         agent.clone(),
-        crate::web::templates::AgenticJobDetailView::from_row(&job),
+        job_view,
         job_runs,
         job_runs_loaded,
     )?;
     Ok(Html(html).into_response())
+}
+
+async fn build_job_prompt_preview(
+    state: &Arc<AppState>,
+    agent: &crate::agents::model::AgentDetailRow,
+    job: &crate::agentic::model::AgenticJobScheduleRow,
+) -> anyhow::Result<String> {
+    use crate::agentic::backend::DispatchRequest;
+
+    let selected_instruments =
+        crate::agents::store::list_agent_instrument_ids(&state.db_pool, &agent.agent_key).await?;
+    let system_setting =
+        crate::settings::store::get_setting(&state.db_pool, "opencode_system_prompt").await?;
+    let system_prompt = system_setting.map(|s| s.value).unwrap_or_default();
+
+    let account_snapshot = if job.job_kind == crate::agentic::model::JOB_KIND_TRADING {
+        Some(live_agent_snapshot_for_dispatch(
+            &agent.wallet_address,
+            &agent.environment,
+            &state.live_accounts,
+        ))
+    } else {
+        None
+    };
+
+    let request = DispatchRequest {
+        run_id: 0,
+        schedule_id: job.id,
+        agent_key: agent.agent_key.clone(),
+        display_name: agent.display_name.clone(),
+        job_key: job.job_key.clone(),
+        job_kind: job.job_kind.clone(),
+        timeframe: job.timeframe.clone(),
+        operator_prompt: job.operator_prompt.clone(),
+        analysis_prompt: agent.analysis_prompt.clone(),
+        trading_prompt: agent.trading_prompt.clone(),
+        system_prompt,
+        environment: agent.environment.clone(),
+        selected_instruments,
+        account_snapshot,
+        model_provider_id: job.model_provider_id.clone(),
+        model_id: job.model_id.clone(),
+        timeout_seconds: job.timeout_seconds,
+        runtime_base_url: String::new(),
+        runtime_config: serde_json::json!({}),
+        scheduled_for: job.next_run_at,
+    };
+
+    crate::agentic::prompt::build_prompt(&request)
 }
 
 async fn agents_show_run_detail(
@@ -781,7 +850,34 @@ async fn agents_run_job_now(
             run_id,
             scheduled_for,
         } => {
-            let request = dispatch_request_from_schedule(&schedule, run_id, scheduled_for);
+            let agent = get_agent(&state.db_pool, &agent_key)
+                .await?
+                .ok_or_else(|| AppError(anyhow::anyhow!("agent not found")))?;
+            let selected_instruments =
+                crate::agents::store::list_agent_instrument_ids(&state.db_pool, &agent_key)
+                    .await?;
+    let system_setting =
+        crate::settings::store::get_setting(&state.db_pool, "opencode_system_prompt")
+            .await?;
+    let system_prompt = system_setting.map(|s| s.value).unwrap_or_default();
+    let account_snapshot = if schedule.job_kind == crate::agentic::model::JOB_KIND_TRADING {
+        Some(live_agent_snapshot_for_dispatch(
+            &agent.wallet_address,
+            &agent.environment,
+            &state.live_accounts,
+        ))
+    } else {
+        None
+    };
+    let request = dispatch_request_from_schedule(
+        &schedule,
+        run_id,
+        scheduled_for,
+        &agent,
+        selected_instruments,
+        system_prompt,
+        account_snapshot,
+    );
             spawn_dispatch_task(
                 state.db_pool.clone(),
                 state.agentic_backend.clone(),
@@ -1729,6 +1825,37 @@ impl IntoResponse for AppError {
             }
         }
     }
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+struct SettingsUpdateForm {
+    #[serde(default)]
+    system_prompt: String,
+}
+
+async fn settings_index(State(state): State<Arc<AppState>>) -> Result<Response, AppError> {
+    let row = crate::settings::store::get_setting(&state.db_pool, "opencode_system_prompt").await?;
+    let system_prompt = row.map(|r| r.value).unwrap_or_default();
+    let html = SettingsPageTemplate {
+        system_prompt,
+        current_path: "/settings".to_string(),
+    }
+    .render()?;
+    Ok(Html(html).into_response())
+}
+
+async fn settings_update(
+    State(state): State<Arc<AppState>>,
+    Form(form): Form<SettingsUpdateForm>,
+) -> Result<Response, AppError> {
+    crate::settings::store::upsert_setting(
+        &state.db_pool,
+        "opencode_system_prompt",
+        &form.system_prompt,
+        Some("Base system prompt prepended to every OpenCode agent job prompt."),
+    )
+    .await?;
+    Ok(Redirect::to("/settings").into_response())
 }
 
 async fn hermes_page(State(state): State<Arc<AppState>>) -> Result<Html<String>, AppError> {

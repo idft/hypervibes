@@ -1,6 +1,6 @@
 use std::{collections::BTreeMap, sync::Arc, time::Duration};
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use chrono::Utc;
 use tokio::{sync::watch, task::JoinHandle};
 use tracing::{debug, error, info, warn};
@@ -12,7 +12,10 @@ use crate::{
         store,
         timeframe::parse_timeframe_seconds,
     },
+    agents::store::{get_agent, list_agent_instrument_ids},
     db::DbPool,
+    hyperliquid::live_state::{LiveAccountStore, live_agent_snapshot_for_dispatch},
+    settings,
 };
 
 const SCHEDULER_POLL_INTERVAL: Duration = Duration::from_secs(10);
@@ -36,6 +39,7 @@ pub struct AgenticScheduler {
     pool: DbPool,
     shutdown_rx: watch::Receiver<bool>,
     backend: Arc<dyn AgenticBackend>,
+    live_accounts: Arc<LiveAccountStore>,
 }
 
 impl AgenticScheduler {
@@ -43,11 +47,13 @@ impl AgenticScheduler {
         pool: DbPool,
         shutdown_rx: watch::Receiver<bool>,
         backend: Arc<dyn AgenticBackend>,
+        live_accounts: Arc<LiveAccountStore>,
     ) -> Self {
         Self {
             pool,
             shutdown_rx,
             backend,
+            live_accounts,
         }
     }
 
@@ -99,9 +105,10 @@ impl AgenticScheduler {
         for (agent_key, schedules) in by_agent {
             let pool = self.pool.clone();
             let backend = self.backend.clone();
+            let live_accounts = self.live_accounts.clone();
             tokio::spawn(async move {
                 for schedule in schedules {
-                    process_schedule_for_agent(&pool, &backend, &agent_key, schedule).await;
+                    process_schedule_for_agent(&pool, &backend, &live_accounts, &agent_key, schedule).await;
                 }
             });
         }
@@ -113,12 +120,12 @@ impl AgenticScheduler {
 async fn process_schedule_for_agent(
     pool: &DbPool,
     backend: &Arc<dyn AgenticBackend>,
+    live_accounts: &Arc<LiveAccountStore>,
     agent_key: &str,
     schedule: DueOpenCodeScheduleRow,
 ) {
     let schedule_id = schedule.schedule_id;
     let job_key = schedule.job_key.clone();
-    let job_kind = schedule.job_kind.clone();
     let scheduled_for = schedule.next_run_at;
 
     let claim = match store::claim_due_schedule(pool, schedule_id, Utc::now()).await {
@@ -152,9 +159,42 @@ async fn process_schedule_for_agent(
             );
         }
         store::ClaimedScheduleRun::Dispatch { run_id } => {
-            let request = dispatch_request_from_schedule(&schedule, run_id, scheduled_for);
-            let _ = job_kind;
-            dispatch_run(pool.clone(), backend.clone(), request).await;
+            match build_dispatch_request(pool, live_accounts, &schedule, run_id, scheduled_for).await {
+                Ok(Some(request)) => {
+                    dispatch_run(pool.clone(), backend.clone(), request).await;
+                }
+                Ok(None) => {
+                    warn!(
+                        run_id,
+                        agent_key = %agent_key,
+                        job_key = %job_key,
+                        "no currencies selected for agent; job skipped"
+                    );
+                    let _ = store::mark_run_failed(
+                        pool,
+                        run_id,
+                        "no currencies selected for agent; job skipped",
+                        None,
+                    )
+                    .await;
+                }
+                Err(error) => {
+                    error!(
+                        run_id,
+                        agent_key = %agent_key,
+                        job_key = %job_key,
+                        error = ?error,
+                        "failed to build dispatch request"
+                    );
+                    let _ = store::mark_run_failed(
+                        pool,
+                        run_id,
+                        "dispatch request errored",
+                        None,
+                    )
+                    .await;
+                }
+            }
         }
     }
 }
@@ -163,6 +203,10 @@ pub fn dispatch_request_from_schedule(
     schedule: &DueOpenCodeScheduleRow,
     run_id: i64,
     scheduled_for: chrono::DateTime<Utc>,
+    agent: &crate::agents::model::AgentDetailRow,
+    selected_instruments: Vec<String>,
+    system_prompt: String,
+    account_snapshot: Option<crate::hyperliquid::live_state::LiveAgentSnapshot>,
 ) -> DispatchRequest {
     DispatchRequest {
         run_id,
@@ -173,6 +217,12 @@ pub fn dispatch_request_from_schedule(
         job_kind: schedule.job_kind.clone(),
         timeframe: schedule.timeframe.clone(),
         operator_prompt: schedule.operator_prompt.clone(),
+        analysis_prompt: agent.analysis_prompt.clone(),
+        trading_prompt: agent.trading_prompt.clone(),
+        system_prompt,
+        environment: agent.environment.clone(),
+        selected_instruments,
+        account_snapshot,
         model_provider_id: schedule.model_provider_id.clone(),
         model_id: schedule.model_id.clone(),
         timeout_seconds: schedule.timeout_seconds,
@@ -180,6 +230,47 @@ pub fn dispatch_request_from_schedule(
         runtime_config: schedule.runtime_config.clone(),
         scheduled_for,
     }
+}
+
+async fn build_dispatch_request(
+    pool: &DbPool,
+    live_accounts: &Arc<LiveAccountStore>,
+    schedule: &DueOpenCodeScheduleRow,
+    run_id: i64,
+    scheduled_for: chrono::DateTime<Utc>,
+) -> Result<Option<DispatchRequest>> {
+    let agent = get_agent(pool, &schedule.agent_key)
+        .await?
+        .context("agent not found while building dispatch request")?;
+
+    let selected_instruments = list_agent_instrument_ids(pool, &schedule.agent_key).await?;
+
+    if selected_instruments.is_empty() {
+        return Ok(None);
+    }
+
+    let system_setting = settings::store::get_setting(pool, "opencode_system_prompt").await?;
+    let system_prompt = system_setting.map(|s| s.value).unwrap_or_default();
+
+    let account_snapshot = if schedule.job_kind == JOB_KIND_TRADING {
+        Some(live_agent_snapshot_for_dispatch(
+            &agent.wallet_address,
+            &agent.environment,
+            live_accounts,
+        ))
+    } else {
+        None
+    };
+
+    Ok(Some(dispatch_request_from_schedule(
+        schedule,
+        run_id,
+        scheduled_for,
+        &agent,
+        selected_instruments,
+        system_prompt,
+        account_snapshot,
+    )))
 }
 
 /// Run a single dispatch through the backend, awaiting its completion.
@@ -323,9 +414,10 @@ pub fn spawn(
     pool: DbPool,
     shutdown_rx: watch::Receiver<bool>,
     backend: Arc<dyn AgenticBackend>,
+    live_accounts: Arc<LiveAccountStore>,
 ) -> JoinHandle<Result<()>> {
     tokio::spawn(async move {
-        AgenticScheduler::new(pool, shutdown_rx, backend)
+        AgenticScheduler::new(pool, shutdown_rx, backend, live_accounts)
             .run()
             .await
     })
@@ -351,7 +443,7 @@ mod tests {
             crypto::{EncryptionKey, encrypt},
             keys::derive_wallet_address,
             model::{AgentRegistryRow, BACKEND_KIND_OPENCODE},
-            store::insert_agent,
+            store::{insert_agent, replace_agent_instruments},
         },
         test_db,
     };
@@ -414,8 +506,8 @@ mod tests {
             updated_at: now,
             enabled: true,
             display_name: format!("Test {key}"),
-            analysis_prompt: String::new(),
-            trading_prompt: String::new(),
+            analysis_prompt: "Analyze trends.".to_string(),
+            trading_prompt: "Trade breakouts.".to_string(),
             wallet_address: wallet,
             environment: "live".to_string(),
             api_key: format!("vta_{key}"),
@@ -452,6 +544,25 @@ mod tests {
         insert_default_opencode_schedules(pool, key)
             .await
             .expect("insert defaults");
+
+        // Default schedules need selected instruments and strategy prompts or
+        // the enriched dispatch path will skip or produce empty prompts.
+        sqlx::query(
+            "INSERT INTO hyperliquid.instruments (
+                instrument_id, name, market_type, base_asset, quote_asset,
+                settlement_asset, asset_index, price_decimals, size_decimals,
+                lot_size, max_leverage, is_hip3, active, created_at, updated_at
+            ) VALUES (
+                'BTC', 'BTC', 'perp', 'BTC', 'USD', 'USDC', 1, 2, 3, 0.001, 50, false, true, NOW(), NOW()
+            )
+            ON CONFLICT (instrument_id) DO UPDATE SET active = EXCLUDED.active",
+        )
+        .execute(pool)
+        .await
+        .expect("seed BTC instrument");
+        replace_agent_instruments(pool, key, &["BTC".to_string()])
+            .await
+            .expect("seed agent instruments");
     }
 
     async fn run_until<F, Fut>(predicate: F)
@@ -514,8 +625,9 @@ mod tests {
         let calls: Arc<Mutex<Vec<DispatchRequest>>> = Arc::new(Mutex::new(Vec::new()));
         let backend: Arc<dyn AgenticBackend> = Arc::new(FakeBackend::success(calls.clone()));
 
+        let live_accounts = Arc::new(crate::hyperliquid::live_state::LiveAccountStore::new());
         let (_tx, rx) = watch::channel(false);
-        let mut scheduler = AgenticScheduler::new(pool.clone(), rx, backend);
+        let mut scheduler = AgenticScheduler::new(pool.clone(), rx, backend, live_accounts);
         scheduler.tick().await.expect("tick");
 
         run_until(|| async { calls.lock().map(|guard| !guard.is_empty()).unwrap_or(false) }).await;
@@ -574,14 +686,33 @@ mod tests {
         pin_schedule_due(&pool, fifteen_m_id, "15m").await;
         pin_schedule_due(&pool, one_h_id, "1h").await;
 
+        // Normalize both schedules to the same next_run_at so ordering is
+        // determined by duration, not by where the current wall-clock falls
+        // between candle boundaries. Using the later due time keeps both
+        // schedules fresh (not stale) for their respective timeframes.
+        sqlx::query(
+            "UPDATE agentic_job_schedules
+                SET next_run_at = (
+                    SELECT MAX(next_run_at) FROM agentic_job_schedules
+                    WHERE id = $1 OR id = $2
+                )
+              WHERE id = $1 OR id = $2",
+        )
+        .bind(fifteen_m_id)
+        .bind(one_h_id)
+        .execute(&pool)
+        .await
+        .expect("normalize schedule due times");
+
         let calls: Arc<Mutex<Vec<DispatchRequest>>> = Arc::new(Mutex::new(Vec::new()));
         let backend: Arc<dyn AgenticBackend> = Arc::new(FakeBackend {
             calls: calls.clone(),
             delay: Duration::from_millis(50),
         });
 
+        let live_accounts = Arc::new(crate::hyperliquid::live_state::LiveAccountStore::new());
         let (_tx, rx) = watch::channel(false);
-        let mut scheduler = AgenticScheduler::new(pool.clone(), rx, backend);
+        let mut scheduler = AgenticScheduler::new(pool.clone(), rx, backend, live_accounts);
         scheduler.tick().await.expect("tick");
 
         run_until(|| async { calls.lock().map(|guard| guard.len() >= 2).unwrap_or(false) }).await;
@@ -627,8 +758,9 @@ mod tests {
             delay: Duration::from_millis(30),
         });
 
+        let live_accounts = Arc::new(crate::hyperliquid::live_state::LiveAccountStore::new());
         let (_tx, rx) = watch::channel(false);
-        let mut scheduler = AgenticScheduler::new(pool.clone(), rx, backend);
+        let mut scheduler = AgenticScheduler::new(pool.clone(), rx, backend, live_accounts);
         scheduler.tick().await.expect("tick");
 
         run_until(|| async { calls.lock().map(|guard| guard.len() >= 2).unwrap_or(false) }).await;
@@ -679,8 +811,9 @@ mod tests {
             delay: Duration::from_millis(150),
         });
 
+        let live_accounts = Arc::new(crate::hyperliquid::live_state::LiveAccountStore::new());
         let (_tx, rx) = watch::channel(false);
-        let mut scheduler = AgenticScheduler::new(pool.clone(), rx, backend);
+        let mut scheduler = AgenticScheduler::new(pool.clone(), rx, backend, live_accounts);
         let started = std::time::Instant::now();
         scheduler.tick().await.expect("tick");
 
@@ -724,8 +857,9 @@ mod tests {
 
         let calls: Arc<Mutex<Vec<DispatchRequest>>> = Arc::new(Mutex::new(Vec::new()));
         let backend: Arc<dyn AgenticBackend> = Arc::new(FakeBackend::success(calls.clone()));
+        let live_accounts = Arc::new(crate::hyperliquid::live_state::LiveAccountStore::new());
         let (_tx, rx) = watch::channel(false);
-        let mut scheduler = AgenticScheduler::new(pool.clone(), rx, backend);
+        let mut scheduler = AgenticScheduler::new(pool.clone(), rx, backend, live_accounts);
         scheduler.tick().await.expect("tick");
 
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;

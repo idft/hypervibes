@@ -330,7 +330,7 @@ async fn get_account(
 /// agent as JSON; the operator UI's SSE stream emits the rendered view
 /// types from `src/web/templates.rs` directly.
 #[derive(Debug, Clone, serde::Serialize)]
-struct LiveAgentSnapshot {
+pub struct LiveAgentSnapshot {
     agent_key: String,
     account_address: String,
     environment: String,
@@ -338,6 +338,72 @@ struct LiveAgentSnapshot {
     balance: Option<AccountBalance>,
     open_positions: Vec<LivePosition>,
     open_orders: Vec<LiveOpenOrder>,
+}
+
+impl LiveAgentSnapshot {
+    pub fn to_markdown(&self,
+    ) -> String {
+        let available = self.account_data.available;
+        let stale = self.account_data.stale;
+        let as_of = self
+            .account_data
+            .as_of
+            .map(|ts| ts.to_rfc3339_opts(chrono::SecondsFormat::AutoSi, true))
+            .unwrap_or_default();
+
+        let mut body = format!(
+            "- Account: {}\n- Environment: {}\n- Available: {}\n- Stale: {}\n- As of: {}\n",
+            self.account_address,
+            self.environment,
+            available,
+            stale,
+            as_of,
+        );
+
+        if let Some(b) = &self.balance {
+            body.push_str(&format!(
+                "- Total equity USD: {}\n- Available to trade USD: {}\n- Margin used USD: {}\n- Unrealized PnL USD: {}\n",
+                b.total_equity_usd,
+                b.available_to_trade_usd,
+                b.margin_used_usd,
+                b.unrealized_pnl_usd,
+            ));
+        }
+
+        body.push_str("\n### Open positions\n");
+        if self.open_positions.is_empty() {
+            body.push_str("None\n");
+        } else {
+            for position in &self.open_positions {
+                body.push_str(&format!(
+                    "- {}: size {}, unrealized_pnl {}\n",
+                    position.coin,
+                    position.szi.map(|v| v.to_string()).unwrap_or_else(|| "-".to_string()),
+                    position
+                        .unrealized_pnl
+                        .map(|v| v.to_string())
+                        .unwrap_or_else(|| "-".to_string()),
+                ));
+            }
+        }
+
+        body.push_str("\n### Open orders\n");
+        if self.open_orders.is_empty() {
+            body.push_str("None\n");
+        } else {
+            for order in &self.open_orders {
+                body.push_str(&format!(
+                    "- {} {} {} @ {}\n",
+                    order.side.as_deref().unwrap_or("-"),
+                    order.sz.map(|v| v.to_string()).unwrap_or_else(|| "-".to_string()),
+                    order.coin,
+                    order.limit_px.map(|v| v.to_string()).unwrap_or_else(|| "-".to_string()),
+                ));
+            }
+        }
+
+        body
+    }
 }
 
 #[derive(Debug, Clone, serde::Serialize)]

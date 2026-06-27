@@ -6,6 +6,7 @@ mod hermes;
 mod hyperliquid;
 mod memory;
 mod opencode;
+mod settings;
 mod web;
 
 #[cfg(test)]
@@ -99,6 +100,7 @@ async fn main() -> Result<()> {
         pool.clone(),
         shutdown_rx.clone(),
         opencode_backend.clone(),
+        Arc::clone(&live_accounts),
     );
     let mut agentic_scheduler_handle = tokio::spawn(async move {
         if let Err(e) = agentic_scheduler.run().await {

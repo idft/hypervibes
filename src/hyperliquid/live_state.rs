@@ -103,6 +103,213 @@ pub struct LiveOpenOrder {
     pub is_position_tpsl: Option<bool>,
 }
 
+/// Agent-facing snapshot of live account state. Built from the in-memory
+/// `AccountLiveState` and used as the payload in OpenCode trading prompts.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct LiveAgentSnapshot {
+    pub account_address: String,
+    pub environment: String,
+    pub account_data_available: bool,
+    pub account_data_stale: bool,
+    pub account_data_as_of: Option<DateTime<Utc>>,
+    pub total_equity_usd: Option<Decimal>,
+    pub available_to_trade_usd: Option<Decimal>,
+    pub margin_used_usd: Option<Decimal>,
+    pub unrealized_pnl_usd: Option<Decimal>,
+    pub open_positions: Vec<LivePosition>,
+    pub open_orders: Vec<LiveOpenOrder>,
+}
+
+impl LiveAgentSnapshot {
+    pub fn to_markdown(&self) -> String {
+        let available = self.account_data_available;
+        let stale = self.account_data_stale;
+        let as_of = self
+            .account_data_as_of
+            .map(|ts| ts.to_rfc3339_opts(chrono::SecondsFormat::AutoSi, true))
+            .unwrap_or_default();
+
+        let mut body = format!(
+            "- Account: {}\n- Environment: {}\n- Available: {}\n- Stale: {}\n- As of: {}\n",
+            self.account_address, self.environment, available, stale, as_of,
+        );
+
+        body.push_str(&format!(
+            "- Total equity USD: {}\n- Available to trade USD: {}\n- Margin used USD: {}\n- Unrealized PnL USD: {}\n",
+            self.total_equity_usd.map(|v| v.to_string()).unwrap_or_else(|| "-".to_string()),
+            self.available_to_trade_usd.map(|v| v.to_string()).unwrap_or_else(|| "-".to_string()),
+            self.margin_used_usd.map(|v| v.to_string()).unwrap_or_else(|| "-".to_string()),
+            self.unrealized_pnl_usd.map(|v| v.to_string()).unwrap_or_else(|| "-".to_string()),
+        ));
+
+        body.push_str("\n### Open positions\n");
+        if self.open_positions.is_empty() {
+            body.push_str("None\n");
+        } else {
+            for position in &self.open_positions {
+                body.push_str(&format!(
+                    "- {}: size {}, unrealized_pnl {}\n",
+                    position.coin,
+                    position.szi.map(|v| v.to_string()).unwrap_or_else(|| "-".to_string()),
+                    position
+                        .unrealized_pnl
+                        .map(|v| v.to_string())
+                        .unwrap_or_else(|| "-".to_string()),
+                ));
+            }
+        }
+
+        body.push_str("\n### Open orders\n");
+        if self.open_orders.is_empty() {
+            body.push_str("None\n");
+        } else {
+            for order in &self.open_orders {
+                body.push_str(&format!(
+                    "- {} {} {} @ {}\n",
+                    order.side.as_deref().unwrap_or("-"),
+                    order.sz.map(|v| v.to_string()).unwrap_or_else(|| "-".to_string()),
+                    order.coin,
+                    order.limit_px.map(|v| v.to_string()).unwrap_or_else(|| "-".to_string()),
+                ));
+            }
+        }
+
+        body
+    }
+}
+
+/// Maximum age for live account data to be considered fresh enough for
+/// trading prompts. Data older than this is treated as stale/unavailable.
+const ACCOUNT_DATA_MAX_AGE: chrono::Duration = chrono::Duration::minutes(2);
+
+/// Assets treated as collateral when computing account equity and
+/// available-to-trade balances.
+const COLLATERAL_ASSETS: &[&str] = &["USDC", "USDE", "USDT0", "USDH"];
+
+impl LiveAgentSnapshot {
+    /// Build a prompt-ready snapshot from an in-memory account state.
+    ///
+    /// The caller is responsible for checking staleness; this method
+    /// copies the latest state verbatim and sets the `as_of` timestamp.
+    pub fn from_state(state: &AccountLiveState) -> Self {
+        let spot_balances = &state.spot_balances;
+
+        let collateral_total: Decimal = COLLATERAL_ASSETS
+            .iter()
+            .map(|asset| {
+                spot_balances
+                    .iter()
+                    .filter(|balance| balance.coin == *asset)
+                    .filter_map(|balance| balance.total)
+                    .sum::<Decimal>()
+            })
+            .sum();
+
+        let collateral_available: Decimal = COLLATERAL_ASSETS
+            .iter()
+            .map(|asset| {
+                spot_balances
+                    .iter()
+                    .filter(|balance| balance.coin == *asset)
+                    .filter_map(|balance| balance.available)
+                    .sum::<Decimal>()
+            })
+            .sum();
+
+        let margin_withdrawable = state
+            .margin
+            .as_ref()
+            .and_then(|margin| margin.withdrawable)
+            .unwrap_or(Decimal::ZERO);
+        let margin_account_value = state
+            .margin
+            .as_ref()
+            .and_then(|margin| margin.account_value)
+            .unwrap_or(Decimal::ZERO);
+        let margin_used_usd = state
+            .margin
+            .as_ref()
+            .and_then(|margin| margin.total_margin_used)
+            .unwrap_or(Decimal::ZERO);
+
+        let unrealized_pnl_usd: Decimal = state
+            .open_positions
+            .iter()
+            .filter_map(|position| position.unrealized_pnl)
+            .sum();
+
+        let total_equity_usd = if collateral_total > Decimal::ZERO || margin_account_value > Decimal::ZERO {
+            Some(collateral_total.max(margin_account_value))
+        } else {
+            None
+        };
+        let available_to_trade_usd = if collateral_available > Decimal::ZERO || margin_withdrawable > Decimal::ZERO {
+            Some(collateral_available.max(margin_withdrawable))
+        } else {
+            None
+        };
+
+        Self {
+            account_address: state.account_address.clone(),
+            environment: state.environment.clone(),
+            account_data_available: true,
+            account_data_stale: false,
+            account_data_as_of: state.updated_at,
+            total_equity_usd,
+            available_to_trade_usd,
+            margin_used_usd: if margin_used_usd > Decimal::ZERO { Some(margin_used_usd) } else { None },
+            unrealized_pnl_usd: if unrealized_pnl_usd != Decimal::ZERO { Some(unrealized_pnl_usd) } else { None },
+            open_positions: state.open_positions.clone(),
+            open_orders: state.open_orders.clone(),
+        }
+    }
+}
+
+/// Build a `LiveAgentSnapshot` from the in-memory live account store. If no
+/// fresh state is available, a stale placeholder is returned so prompts can
+/// still reason about the missing data.
+pub fn live_agent_snapshot_for_dispatch(
+    account_address: impl Into<String>,
+    environment: impl Into<String>,
+    store: &LiveAccountStore,
+) -> LiveAgentSnapshot {
+    let key = AccountKey::new(account_address, environment);
+    let Some(state) = store.get(&key) else {
+        return LiveAgentSnapshot {
+            account_address: key.account_address,
+            environment: key.environment,
+            account_data_available: false,
+            account_data_stale: true,
+            ..Default::default()
+        };
+    };
+
+    let Some(updated_at) = state.updated_at else {
+        return LiveAgentSnapshot {
+            account_address: state.account_address.clone(),
+            environment: state.environment.clone(),
+            account_data_available: false,
+            account_data_stale: true,
+            ..Default::default()
+        };
+    };
+
+    if Utc::now() - updated_at > ACCOUNT_DATA_MAX_AGE {
+        return LiveAgentSnapshot {
+            account_address: state.account_address.clone(),
+            environment: state.environment.clone(),
+            account_data_available: false,
+            account_data_stale: true,
+            ..Default::default()
+        };
+    }
+
+    let mut snapshot = LiveAgentSnapshot::from_state(&state);
+    snapshot.account_data_available = true;
+    snapshot.account_data_stale = false;
+    snapshot
+}
+
 /// Full per-account live state.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 pub struct AccountLiveState {
