@@ -6,9 +6,9 @@ use std::{
 
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
+use serde_json::Value;
 
-pub const PROFILE_SOURCE_RELATIVE_PATH: &str = "agent-runtime/opencode";
+pub const PROFILE_SOURCE_RELATIVE_PATH: &str = "agent-runtime/workspace-template";
 
 #[derive(Debug, Clone)]
 pub struct OpenCodeWorkspaceConfig {
@@ -29,7 +29,6 @@ pub struct OpenCodeWorkspaceAgent {
 pub struct GeneratedOpenCodeWorkspace {
     pub workspace_host_path: PathBuf,
     pub workspace_container_path: String,
-    pub generated_agent_json: Value,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -69,7 +68,6 @@ pub fn generate_agent_workspace(
         &workspace_host_path.join(".opencode/commands"),
         &workspace_host_path.join(".opencode/agents"),
         &workspace_host_path.join(".opencode/skills"),
-        &workspace_host_path.join("generated"),
         &workspace_host_path.join("scripts/generated"),
         &workspace_host_path.join("scripts/user"),
         &workspace_host_path.join("data"),
@@ -98,15 +96,15 @@ pub fn generate_agent_workspace(
     )?;
 
     copy_tree(
-        &config.source_root.join("commands"),
+        &config.source_root.join(".opencode/commands"),
         &workspace_host_path.join(".opencode/commands"),
     )?;
     copy_tree(
-        &config.source_root.join("agents"),
+        &config.source_root.join(".opencode/agents"),
         &workspace_host_path.join(".opencode/agents"),
     )?;
     copy_tree(
-        &config.source_root.join("skills"),
+        &config.source_root.join(".opencode/skills"),
         &workspace_host_path.join(".opencode/skills"),
     )?;
     copy_tree(
@@ -123,23 +121,9 @@ pub fn generate_agent_workspace(
     )
     .context("failed to write workspace .env")?;
 
-    let generated_agent_json = json!({
-        "agent_key": agent.agent_key,
-        "display_name": agent.display_name,
-        "api_base_url": config.api_base_url,
-        "workspace_container_path": workspace_container_path,
-    });
-    fs::write(
-        workspace_host_path.join("generated/agent.json"),
-        serde_json::to_vec_pretty(&generated_agent_json)
-            .context("failed to serialize generated/agent.json")?,
-    )
-    .context("failed to write generated/agent.json")?;
-
     Ok(GeneratedOpenCodeWorkspace {
         workspace_host_path,
         workspace_container_path,
-        generated_agent_json,
     })
 }
 
@@ -321,12 +305,16 @@ mod tests {
             generated
                 .workspace_host_path
                 .join(".opencode/agents/analysis.md"),
-            generated.workspace_host_path.join("generated/agent.json"),
             generated.workspace_host_path.join("scripts/user"),
             generated.workspace_host_path.join("scratch"),
         ] {
             assert!(path.exists(), "missing {}", path.display());
         }
+
+        assert!(
+            !generated.workspace_host_path.join("generated").exists(),
+            "generated/ should not be created into workspaces"
+        );
 
         // The workspace-local Python API client has been removed in favor
         // of the `vibetrading` MCP server, which is installed by the custom
@@ -401,24 +389,6 @@ mod tests {
         assert!(rendered.contains("btc-2"));
         assert!(rendered.contains("http://host.containers.internal:3003"));
         assert!(rendered.contains("/workspaces/agents/btc-2"));
-    }
-
-    #[test]
-    fn writes_generated_agent_json_without_api_key() {
-        let temp = TempDir::new("opencode-agent-json");
-        let generated = generate_agent_workspace(&sample_config(&temp.path), &sample_agent())
-            .expect("generate workspace");
-
-        assert_eq!(generated.generated_agent_json["agent_key"], json!("btc-2"));
-        assert_eq!(
-            generated.generated_agent_json["api_base_url"],
-            json!("http://host.containers.internal:3003")
-        );
-        assert_eq!(
-            generated.generated_agent_json["workspace_container_path"],
-            json!("/workspaces/agents/btc-2")
-        );
-        assert!(generated.generated_agent_json.get("api_key").is_none());
     }
 
     #[test]
@@ -498,9 +468,9 @@ mod tests {
         let temp = TempDir::new("opencode-unknown-placeholder");
         let source_temp = TempDir::new("opencode-source");
         let source_root = source_temp.path.join("profile");
-        fs::create_dir_all(source_root.join("commands")).expect("create commands");
-        fs::create_dir_all(source_root.join("agents")).expect("create agents");
-        fs::create_dir_all(source_root.join("skills")).expect("create skills");
+        fs::create_dir_all(source_root.join(".opencode/commands")).expect("create commands");
+        fs::create_dir_all(source_root.join(".opencode/agents")).expect("create agents");
+        fs::create_dir_all(source_root.join(".opencode/skills")).expect("create skills");
         fs::create_dir_all(source_root.join("scripts/generated"))
             .expect("create scripts/generated");
         fs::write(
@@ -514,11 +484,11 @@ mod tests {
         )
         .expect("write agents template");
         fs::write(
-            source_root.join("commands/vibetrading-analysis.md"),
+            source_root.join(".opencode/commands/vibetrading-analysis.md"),
             "test\n",
         )
         .expect("write command");
-        fs::write(source_root.join("agents/analysis.md"), "test\n").expect("write agent");
+        fs::write(source_root.join(".opencode/agents/analysis.md"), "test\n").expect("write agent");
 
         let error = generate_agent_workspace(
             &OpenCodeWorkspaceConfig {

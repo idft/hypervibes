@@ -26,5 +26,4 @@ Safety rules:
 - Never handle Hyperliquid private keys.
 - Real order submission, if enabled, must go through the `vibetrading` MCP
   trading tools only.
-- Treat `.env`, `generated/agent.json`, and `.opencode/` runtime files as
-  backend-owned generated state.
+- Treat `.env` and `.opencode/` runtime files as backend-owned generated state.

@@ -341,8 +341,7 @@ pub struct LiveAgentSnapshot {
 }
 
 impl LiveAgentSnapshot {
-    pub fn to_markdown(&self,
-    ) -> String {
+    pub fn to_markdown(&self) -> String {
         let available = self.account_data.available;
         let stale = self.account_data.stale;
         let as_of = self
@@ -353,11 +352,7 @@ impl LiveAgentSnapshot {
 
         let mut body = format!(
             "- Account: {}\n- Environment: {}\n- Available: {}\n- Stale: {}\n- As of: {}\n",
-            self.account_address,
-            self.environment,
-            available,
-            stale,
-            as_of,
+            self.account_address, self.environment, available, stale, as_of,
         );
 
         if let Some(b) = &self.balance {
@@ -378,7 +373,10 @@ impl LiveAgentSnapshot {
                 body.push_str(&format!(
                     "- {}: size {}, unrealized_pnl {}\n",
                     position.coin,
-                    position.szi.map(|v| v.to_string()).unwrap_or_else(|| "-".to_string()),
+                    position
+                        .szi
+                        .map(|v| v.to_string())
+                        .unwrap_or_else(|| "-".to_string()),
                     position
                         .unrealized_pnl
                         .map(|v| v.to_string())
@@ -395,9 +393,15 @@ impl LiveAgentSnapshot {
                 body.push_str(&format!(
                     "- {} {} {} @ {}\n",
                     order.side.as_deref().unwrap_or("-"),
-                    order.sz.map(|v| v.to_string()).unwrap_or_else(|| "-".to_string()),
+                    order
+                        .sz
+                        .map(|v| v.to_string())
+                        .unwrap_or_else(|| "-".to_string()),
                     order.coin,
-                    order.limit_px.map(|v| v.to_string()).unwrap_or_else(|| "-".to_string()),
+                    order
+                        .limit_px
+                        .map(|v| v.to_string())
+                        .unwrap_or_else(|| "-".to_string()),
                 ));
             }
         }

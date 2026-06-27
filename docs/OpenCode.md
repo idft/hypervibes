@@ -42,10 +42,9 @@ Current implemented slice:
   - `workspace_host_path`
   - `workspace_container_path`
   - `profile_source`
-- generated workspaces include a non-secret `generated/agent.json` file, an
-  agent-scoped `.env` file (consumed by the `vibetrading` MCP server inside
-  the container), and a project-level `opencode.json` registering the local
-  `vibetrading` MCP server
+- generated workspaces include an agent-scoped `.env` file (consumed by the
+  `vibetrading` MCP server inside the container) and a project-level
+  `opencode.json` registering the local `vibetrading` MCP server
 - the custom OpenCode container image installs the `vibetrading` MCP server at
   `/opt/vibetrading/mcp/` and includes its Python dependencies
 - the OpenCode HTTP server is reached via raw `reqwest` from a new
@@ -148,19 +147,20 @@ directory, similar in purpose to the current Hermes profile distribution.
 Source layout:
 
 ```text
-agent-runtime/opencode/
-├── README.md
-├── SOUL.md
-├── opencode.json.template
-├── AGENTS.md.template
-├── commands/
-│   ├── vibetrading-analysis.md
-│   └── vibetrading-trading.md
-├── agents/
-│   ├── analysis.md
-│   └── trading.md
-├── skills/
-├── scripts/
+agent-runtime/
+├── workspace-template/
+│   ├── opencode.json.template
+│   ├── AGENTS.md.template
+│   ├── .opencode/
+│   │   ├── commands/
+│   │   │   ├── vibetrading-analysis.md
+│   │   │   └── vibetrading-trading.md
+│   │   ├── agents/
+│   │   │   ├── analysis.md
+│   │   │   └── trading.md
+│   │   └── skills/
+│   └── scripts/
+│       └── generated/
 ├── mcp/
 │   ├── README.md
 │   ├── requirements.txt
@@ -178,8 +178,13 @@ server is the only Vibetrading API integration path.
 
 Generated agent workspaces may contain project-local `.opencode/` directories if
 OpenCode requires that layout for command, agent, and skill discovery. The source
-of truth should still be `agent-runtime/opencode/`, not the repository root
-`.opencode/`.
+of truth should still be `agent-runtime/workspace-template/`, not the repository
+root `.opencode/`.
+
+The workspace-template source now mirrors the destination more closely: files
+that land under `.opencode/` in generated workspaces also live under
+`.opencode/` in the template source. Some paths remain runtime-generated rather
+than copied, including `.env`, `scripts/user/`, `data/`, and `scratch/`.
 
 ## Agent Workspaces
 
@@ -196,8 +201,6 @@ Generated layout:
 │   ├── commands/
 │   ├── agents/
 │   └── skills/
-├── generated/
-│   └── agent.json
 ├── scripts/
 │   ├── generated/
 │   └── user/
@@ -225,10 +228,9 @@ The backend writes generated workspaces to `workspaces`, and the OpenCode
 container sees the same bind mount at `/workspaces`.
 
 The OpenCode container also bind-mounts
-`agent-runtime/opencode/container/opencode.jsonc` to
-`/opencode-data/opencode.jsonc`. Shared plugins, including the dotenv plugin,
-belong in that global container config rather than in generated workspace
-`opencode.json` files.
+`agent-runtime/container/opencode.jsonc` to `/opencode-data/opencode.jsonc`.
+Shared plugins, including the dotenv plugin, belong in that global container
+config rather than in generated workspace `opencode.json` files.
 
 Agent workspaces should be backed up. They are not intended to be disposable
 because analysis agents may write durable Python analysis scripts.
@@ -595,7 +597,7 @@ Postgres, including:
 ### Chosen Package
 
 - Package: `opencode-database-plugin@1.0.12` (pinned in
-  `agent-runtime/opencode/container/opencode.jsonc`)
+  `agent-runtime/container/opencode.jsonc`)
 - Upstream repository: https://github.com/aemr3/opencode-database-plugin
 - License: Apache-2.0
 - Vendored SQL: `migrations/vendor/opencode-database-plugin/schema.sql`
@@ -670,7 +672,7 @@ The custom image installs:
 - the Vibetrading MCP server source at `/opt/vibetrading/mcp/`
 - a Python virtualenv at `/opt/vibetrading/mcp/.venv/`, created with
   `uv venv`, with the MCP server dependencies from
-  `agent-runtime/opencode/mcp/requirements.txt` installed via `uv pip`
+  `agent-runtime/mcp/requirements.txt` installed via `uv pip`
 
 The `vibetrading` MCP server is launched per agent workspace via the
 project-level `opencode.json` that the backend writes for each generated
@@ -885,15 +887,15 @@ exist to remove unknowns from the plan's "Deferred Investigation Items" list.
 
 ### Phase 6: Runtime Profile Source
 
-- **6.1 - Create the `agent-runtime/opencode/` directory skeleton.** Add the
-  empty directory layout per the plan with `.gitkeep` placeholders. No
-  content yet.
-- **6.2 - Add `agent-runtime/opencode/README.md`.** Explain the purpose of
-  this directory, how it relates to the repo-root `.opencode/`, and how it
-  gets baked into the custom OpenCode image.
-- **6.3 - Add `agent-runtime/opencode/SOUL.md` and `AGENTS.md.template`.**
-  Add the trading-agent OpenCode command context and a per-agent template
-  that gets rendered into each workspace.
+- **6.1 - Create the `agent-runtime/workspace-template/` directory skeleton.**
+  Add the workspace-copied directory layout per the plan with `.gitkeep`
+  placeholders. No content yet.
+- **6.2 - Add `agent-runtime/workspace-template/AGENTS.md.template` and
+  `opencode.json.template`.** Add the per-agent templates that get rendered
+  into each workspace.
+- **6.3 - Keep runtime infrastructure under `agent-runtime/mcp/` and
+  `agent-runtime/container/`.** The MCP server is image-baked; the shared
+  OpenCode config stays container-global.
 - **6.4 - Add command stubs.** Create `commands/vibetrading-analysis.md` and
   `commands/vibetrading-trading.md` with placeholders describing what each
   will do.
@@ -901,8 +903,8 @@ exist to remove unknowns from the plan's "Deferred Investigation Items" list.
   `agents/trading.md` with placeholders.
 - **6.6 - ~~Add the `vibetrading/py/` Python client skeleton.~~** Removed by
   the MCP runtime plan. The Python client has been replaced by the
-  `vibetrading` MCP server under `agent-runtime/opencode/mcp/`. Generated
-  workspaces no longer contain a workspace-local Python client.
+  `vibetrading` MCP server under `agent-runtime/mcp/`. Generated workspaces
+  no longer contain a workspace-local Python client.
 - **6.7 - ~~Add `requirements.txt` for the workspace Python environment.~~**
   Removed by the MCP runtime plan. The MCP server has its own
   `mcp/requirements.txt`, installed at image build time into a fixed
@@ -920,10 +922,9 @@ exist to remove unknowns from the plan's "Deferred Investigation Items" list.
 - **7.3 - Render `opencode.json` and `AGENTS.md` from the profile source.**
   Copy `opencode.json.template` and `AGENTS.md.template` into the
   workspace, substituting `agent_key` and any other per-agent fields.
-  Track rendered values in `generated/agent.json`.
 - **7.4 - Place `.opencode/{commands,agents,skills}` from the profile
-  source.** Copy these subtrees from `agent-runtime/opencode/` into the
-  workspace's `.opencode/` directory on every regeneration.
+  source.** Copy these subtrees from `agent-runtime/workspace-template/`
+  into the workspace's `.opencode/` directory on every regeneration.
 - **7.5 - Place `scripts/{generated,user}`, `data/`, `scratch/` skeletons.**
   Create the runnable directories from the profile source. The
   `vibetrading/py/` Python client mirror was removed by the MCP runtime
@@ -1066,7 +1067,7 @@ Client" above for why raw `reqwest` is used instead of the
 - **13.3 - Verify Hyperliquid private keys never reach OpenCode.** Add a
   test that scans the OpenCode workspace files for any hex string that
   parses as a private key. Add the same scan to CI for
-  `agent-runtime/opencode/` and the workspace generator output.
+  `agent-runtime/workspace-template/` and the workspace generator output.
 - **13.4 - Document enabling real trading in production.** Update
   `OpenCode.md` and `Backends.md` with the explicit acknowledgement that
   real trading is now enabled, the kill switch procedure, and the rollback

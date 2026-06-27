@@ -718,7 +718,7 @@ mod tests {
             serde_json::json!({
                 "workspace_host_path": "workspaces/agents/runtime-config-test",
                 "workspace_container_path": "/workspaces/agents/runtime-config-test",
-                "profile_source": "agent-runtime/opencode"
+                "profile_source": "agent-runtime/workspace-template"
             }),
         )
         .await

@@ -150,7 +150,10 @@ impl LiveAgentSnapshot {
                 body.push_str(&format!(
                     "- {}: size {}, unrealized_pnl {}\n",
                     position.coin,
-                    position.szi.map(|v| v.to_string()).unwrap_or_else(|| "-".to_string()),
+                    position
+                        .szi
+                        .map(|v| v.to_string())
+                        .unwrap_or_else(|| "-".to_string()),
                     position
                         .unrealized_pnl
                         .map(|v| v.to_string())
@@ -167,9 +170,15 @@ impl LiveAgentSnapshot {
                 body.push_str(&format!(
                     "- {} {} {} @ {}\n",
                     order.side.as_deref().unwrap_or("-"),
-                    order.sz.map(|v| v.to_string()).unwrap_or_else(|| "-".to_string()),
+                    order
+                        .sz
+                        .map(|v| v.to_string())
+                        .unwrap_or_else(|| "-".to_string()),
                     order.coin,
-                    order.limit_px.map(|v| v.to_string()).unwrap_or_else(|| "-".to_string()),
+                    order
+                        .limit_px
+                        .map(|v| v.to_string())
+                        .unwrap_or_else(|| "-".to_string()),
                 ));
             }
         }
@@ -238,16 +247,18 @@ impl LiveAgentSnapshot {
             .filter_map(|position| position.unrealized_pnl)
             .sum();
 
-        let total_equity_usd = if collateral_total > Decimal::ZERO || margin_account_value > Decimal::ZERO {
-            Some(collateral_total.max(margin_account_value))
-        } else {
-            None
-        };
-        let available_to_trade_usd = if collateral_available > Decimal::ZERO || margin_withdrawable > Decimal::ZERO {
-            Some(collateral_available.max(margin_withdrawable))
-        } else {
-            None
-        };
+        let total_equity_usd =
+            if collateral_total > Decimal::ZERO || margin_account_value > Decimal::ZERO {
+                Some(collateral_total.max(margin_account_value))
+            } else {
+                None
+            };
+        let available_to_trade_usd =
+            if collateral_available > Decimal::ZERO || margin_withdrawable > Decimal::ZERO {
+                Some(collateral_available.max(margin_withdrawable))
+            } else {
+                None
+            };
 
         Self {
             account_address: state.account_address.clone(),
@@ -257,8 +268,16 @@ impl LiveAgentSnapshot {
             account_data_as_of: state.updated_at,
             total_equity_usd,
             available_to_trade_usd,
-            margin_used_usd: if margin_used_usd > Decimal::ZERO { Some(margin_used_usd) } else { None },
-            unrealized_pnl_usd: if unrealized_pnl_usd != Decimal::ZERO { Some(unrealized_pnl_usd) } else { None },
+            margin_used_usd: if margin_used_usd > Decimal::ZERO {
+                Some(margin_used_usd)
+            } else {
+                None
+            },
+            unrealized_pnl_usd: if unrealized_pnl_usd != Decimal::ZERO {
+                Some(unrealized_pnl_usd)
+            } else {
+                None
+            },
             open_positions: state.open_positions.clone(),
             open_orders: state.open_orders.clone(),
         }

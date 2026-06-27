@@ -20,7 +20,7 @@ RUN apk add --no-cache \
 # generated per-workspace `opencode.json` can launch it directly without
 # relying on shell startup files. `uv` creates the venv and installs the
 # pinned Python dependencies from `requirements.txt`.
-COPY agent-runtime/opencode/mcp /opt/vibetrading/mcp
+COPY agent-runtime/mcp /opt/vibetrading/mcp
 RUN uv venv /opt/vibetrading/mcp/.venv \
     && uv pip install --python /opt/vibetrading/mcp/.venv/bin/python \
         --no-cache \

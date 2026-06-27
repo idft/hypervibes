@@ -17,10 +17,11 @@ import sys
 import types
 import unittest
 from pathlib import Path
+from typing import Any
 from unittest import mock
 
-REPO_ROOT = Path(__file__).resolve().parents[3]
-MCP_DIR = REPO_ROOT / "agent-runtime" / "opencode" / "mcp"
+REPO_ROOT = Path(__file__).resolve().parents[2]
+MCP_DIR = REPO_ROOT / "agent-runtime" / "mcp"
 
 
 def _install_fake_mcp() -> None:
@@ -46,7 +47,7 @@ def _install_fake_mcp() -> None:
         def run(self) -> None:
             return None
 
-    fastmcp_mod.FastMCP = _FakeFastMCP
+    setattr(fastmcp_mod, "FastMCP", _FakeFastMCP)
     sys.modules["mcp"] = mcp_pkg
     sys.modules["mcp.server"] = server_pkg
     sys.modules["mcp.server.fastmcp"] = fastmcp_mod
@@ -67,7 +68,7 @@ def _load_server(defaults: dict[str, str] | None = None):
             "vibetrading_mcp_server", MCP_DIR / "server.py"
         )
         assert spec and spec.loader
-        module = importlib.util.module_from_spec(spec)
+        module: Any = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)
         return module
     finally:
@@ -123,7 +124,7 @@ class VibetradingMcpServerTests(unittest.TestCase):
             },
             clear=True,
         ):
-            self.server.CONFIG = ("", "", "")
+            setattr(self.server, "CONFIG", ("", "", ""))
             headers = self.server._headers()
         self.assertEqual(headers, {"Authorization": "Bearer vta_secret"})
 
@@ -146,7 +147,7 @@ class VibetradingMcpServerTests(unittest.TestCase):
             },
             clear=True,
         ):
-            self.server.CONFIG = self.server._load_config()
+            setattr(self.server, "CONFIG", self.server._load_config())
             with mock.patch.object(self.server, "_request", side_effect=fake_request):
                 self.server.get_latest_analysis("BTC", limit=3)
         self.assertEqual(captured["method"], "GET")
@@ -187,7 +188,7 @@ class VibetradingMcpServerTests(unittest.TestCase):
             },
             clear=True,
         ):
-            self.server.CONFIG = self.server._load_config()
+            setattr(self.server, "CONFIG", self.server._load_config())
             with mock.patch.object(self.server, "_request", side_effect=fake_request):
                 self.server.write_memory(
                     symbol="BTC",
@@ -232,7 +233,7 @@ class VibetradingMcpServerTests(unittest.TestCase):
             },
             clear=True,
         ):
-            self.server.CONFIG = self.server._load_config()
+            setattr(self.server, "CONFIG", self.server._load_config())
 
             class FakeResponse:
                 status_code = 500

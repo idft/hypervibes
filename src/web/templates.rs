@@ -2199,7 +2199,7 @@ mod tests {
         row.runtime_config = serde_json::json!({
             "workspace_host_path": "workspaces/agents/test-agent",
             "workspace_container_path": "/workspaces/agents/test-agent",
-            "profile_source": "agent-runtime/opencode"
+            "profile_source": "agent-runtime/workspace-template"
         });
         row
     }

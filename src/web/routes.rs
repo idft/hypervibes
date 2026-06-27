@@ -43,7 +43,9 @@ use crate::{
     },
     hermes::HermesHealth,
     hyperliquid::{
-        live_state::{AccountKey, AccountLiveState, LiveConnectionStatus, live_agent_snapshot_for_dispatch},
+        live_state::{
+            AccountKey, AccountLiveState, LiveConnectionStatus, live_agent_snapshot_for_dispatch,
+        },
         queries::{
             AccountTransactionRow, BalanceSeriesBucket, fetch_balance_series,
             list_account_sync_state, list_all_account_transactions,
@@ -110,6 +112,10 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route(
             "/agents/{agent_key}/settings/instruments",
             post(agents_update_instruments),
+        )
+        .route(
+            "/agents/{agent_key}/settings/regenerate-workspace",
+            post(agents_regenerate_workspace),
         )
         .route(
             "/agents/{agent_key}/jobs",
@@ -429,6 +435,39 @@ async fn agents_show_settings(
     render_agent_show_page(&state, &agent_key, AgentShowTab::Settings, None).await
 }
 
+async fn agents_regenerate_workspace(
+    State(state): State<Arc<AppState>>,
+    Path(agent_key): Path<String>,
+) -> Result<Response, AppError> {
+    let Some(agent) = get_agent(&state.db_pool, &agent_key).await? else {
+        return Ok((StatusCode::NOT_FOUND, "agent not found").into_response());
+    };
+    if agent.backend_kind != BACKEND_KIND_OPENCODE {
+        return Ok((
+            StatusCode::NOT_FOUND,
+            "workspace regeneration is only available for OpenCode agents",
+        )
+            .into_response());
+    }
+
+    let updated = generate_and_persist_opencode_workspace(
+        &state,
+        &OpenCodeWorkspaceAgent {
+            agent_key: agent.agent_key.clone(),
+            display_name: agent.display_name.clone(),
+            api_key: agent.api_key.clone(),
+        },
+    )
+    .await?;
+
+    if !updated {
+        error!(agent_key = %agent.agent_key, "agent disappeared before OpenCode workspace metadata update");
+        return Ok((StatusCode::NOT_FOUND, "agent not found").into_response());
+    }
+
+    Ok(Redirect::to(&format!("/agents/{agent_key}/settings")).into_response())
+}
+
 async fn agents_show_jobs(
     State(state): State<Arc<AppState>>,
     Path(agent_key): Path<String>,
@@ -485,12 +524,7 @@ async fn agents_show_job_detail(
     };
 
     let mut job_view = crate::web::templates::AgenticJobDetailView::from_row(&job);
-    match build_job_prompt_preview(&state,
-        &agent,
-        &job,
-    )
-    .await
-    {
+    match build_job_prompt_preview(&state, &agent, &job).await {
         Ok(text) => job_view.prompt_preview_text = text,
         Err(error) => {
             warn!(
@@ -854,30 +888,29 @@ async fn agents_run_job_now(
                 .await?
                 .ok_or_else(|| AppError(anyhow::anyhow!("agent not found")))?;
             let selected_instruments =
-                crate::agents::store::list_agent_instrument_ids(&state.db_pool, &agent_key)
+                crate::agents::store::list_agent_instrument_ids(&state.db_pool, &agent_key).await?;
+            let system_setting =
+                crate::settings::store::get_setting(&state.db_pool, "opencode_system_prompt")
                     .await?;
-    let system_setting =
-        crate::settings::store::get_setting(&state.db_pool, "opencode_system_prompt")
-            .await?;
-    let system_prompt = system_setting.map(|s| s.value).unwrap_or_default();
-    let account_snapshot = if schedule.job_kind == crate::agentic::model::JOB_KIND_TRADING {
-        Some(live_agent_snapshot_for_dispatch(
-            &agent.wallet_address,
-            &agent.environment,
-            &state.live_accounts,
-        ))
-    } else {
-        None
-    };
-    let request = dispatch_request_from_schedule(
-        &schedule,
-        run_id,
-        scheduled_for,
-        &agent,
-        selected_instruments,
-        system_prompt,
-        account_snapshot,
-    );
+            let system_prompt = system_setting.map(|s| s.value).unwrap_or_default();
+            let account_snapshot = if schedule.job_kind == crate::agentic::model::JOB_KIND_TRADING {
+                Some(live_agent_snapshot_for_dispatch(
+                    &agent.wallet_address,
+                    &agent.environment,
+                    &state.live_accounts,
+                ))
+            } else {
+                None
+            };
+            let request = dispatch_request_from_schedule(
+                &schedule,
+                run_id,
+                scheduled_for,
+                &agent,
+                selected_instruments,
+                system_prompt,
+                account_snapshot,
+            );
             spawn_dispatch_task(
                 state.db_pool.clone(),
                 state.agentic_backend.clone(),
@@ -909,6 +942,24 @@ async fn agents_update_instruments(
     }
 
     Ok(Redirect::to(&format!("/agents/{agent_key}/settings")).into_response())
+}
+
+async fn generate_and_persist_opencode_workspace(
+    state: &Arc<AppState>,
+    agent: &OpenCodeWorkspaceAgent,
+) -> Result<bool, AppError> {
+    let generated = generate_agent_workspace(&state.opencode_workspace_config, agent)
+        .inspect_err(|error| {
+            error!(agent_key = %agent.agent_key, error = ?error, "failed to generate OpenCode workspace");
+        })?;
+
+    let runtime_config = runtime_config_for_generated_workspace(&generated).into_value();
+    update_agent_runtime_config(&state.db_pool, &agent.agent_key, runtime_config)
+        .await
+        .inspect_err(|error| {
+            error!(agent_key = %agent.agent_key, error = ?error, "failed to persist OpenCode workspace metadata");
+        })
+        .map_err(AppError)
 }
 
 async fn render_agent_show_page(
@@ -1636,24 +1687,15 @@ async fn create_agent(
     }
 
     if row.backend_kind == BACKEND_KIND_OPENCODE {
-        let generated = generate_agent_workspace(
-            &state.opencode_workspace_config,
+        let updated = generate_and_persist_opencode_workspace(
+            &state,
             &OpenCodeWorkspaceAgent {
                 agent_key: row.agent_key.clone(),
                 display_name: row.display_name.clone(),
                 api_key: row.api_key.clone(),
             },
         )
-        .inspect_err(|error| {
-            error!(agent_key = %row.agent_key, error = ?error, "failed to generate OpenCode workspace");
-        })?;
-
-        let runtime_config = runtime_config_for_generated_workspace(&generated).into_value();
-        let updated = update_agent_runtime_config(&state.db_pool, &row.agent_key, runtime_config)
-            .await
-            .inspect_err(|error| {
-                error!(agent_key = %row.agent_key, error = ?error, "failed to persist OpenCode workspace metadata");
-            })?;
+        .await?;
 
         if !updated {
             error!(agent_key = %row.agent_key, "agent disappeared before OpenCode workspace metadata update");
@@ -1904,7 +1946,10 @@ async fn hermes_page(State(state): State<Arc<AppState>>) -> Result<Html<String>,
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::{Arc, Mutex};
+    use std::{
+        fs,
+        sync::{Arc, Mutex},
+    };
 
     use anyhow::Result;
     use async_trait::async_trait;
@@ -2765,6 +2810,96 @@ mod tests {
             )
             .await
             .unwrap();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn post_regenerate_workspace_refreshes_template_and_preserves_user_files() {
+        let state = test_state().await;
+        let pool = state.db_pool.clone();
+        let app = router(state);
+        let timestamp = chrono::Utc::now().timestamp_millis();
+        let display_name = format!("RegenerateWorkspace{}", timestamp);
+        let agent_key = slugify_agent_key(&display_name);
+        let private_key = random_private_key();
+        let body = format!(
+            "display_name={display_name}&hyperliquid_private_key={private_key}&backend_kind=opencode&runtime_id=opencode-local&enabled=on"
+        );
+
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/agents")
+                    .header("content-type", "application/x-www-form-urlencoded")
+                    .body(Body::from(body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::SEE_OTHER);
+
+        let stored = get_agent(&pool, &agent_key)
+            .await
+            .expect("get agent")
+            .expect("agent present");
+        let workspace = OpenCodeWorkspaceRuntimeConfig::from_value(&stored.runtime_config)
+            .expect("workspace metadata present");
+        let workspace_path = std::path::Path::new(&workspace.workspace_host_path);
+
+        let custom_file = workspace_path.join("scripts/user/custom.py");
+        fs::write(&custom_file, "print('custom')\n").expect("write custom file");
+
+        let agents_md_path = workspace_path.join("AGENTS.md");
+        let original_agents_md = fs::read_to_string(&agents_md_path).expect("read AGENTS.md");
+        fs::write(&agents_md_path, "user-modified agents file\n").expect("modify AGENTS.md");
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/agents/{agent_key}/settings/regenerate-workspace"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::SEE_OTHER);
+        assert_eq!(
+            response
+                .headers()
+                .get("location")
+                .and_then(|value| value.to_str().ok()),
+            Some(format!("/agents/{agent_key}/settings").as_str())
+        );
+        assert_eq!(
+            fs::read_to_string(&custom_file).expect("read custom file"),
+            "print('custom')\n"
+        );
+        assert_eq!(
+            fs::read_to_string(&agents_md_path).expect("read refreshed AGENTS.md"),
+            original_agents_md
+        );
+    }
+
+    #[tokio::test]
+    async fn post_regenerate_workspace_for_non_opencode_agent_returns_404() {
+        let state = test_state().await;
+        let (agent_key, _wallet_address) = insert_test_agent(&state).await.expect("insert agent");
+
+        let response = router(state)
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/agents/{agent_key}/settings/regenerate-workspace"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
         assert_eq!(response.status(), StatusCode::NOT_FOUND);
     }
 

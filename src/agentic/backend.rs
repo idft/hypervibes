@@ -297,7 +297,7 @@ mod tests {
             runtime_config: serde_json::json!({
                 "workspace_host_path": "workspaces/agents/btc-2",
                 "workspace_container_path": "/workspaces/agents/btc-2",
-                "profile_source": "agent-runtime/opencode"
+                "profile_source": "agent-runtime/workspace-template"
             }),
             scheduled_for: Utc::now(),
         }

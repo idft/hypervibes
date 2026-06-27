@@ -108,7 +108,14 @@ impl AgenticScheduler {
             let live_accounts = self.live_accounts.clone();
             tokio::spawn(async move {
                 for schedule in schedules {
-                    process_schedule_for_agent(&pool, &backend, &live_accounts, &agent_key, schedule).await;
+                    process_schedule_for_agent(
+                        &pool,
+                        &backend,
+                        &live_accounts,
+                        &agent_key,
+                        schedule,
+                    )
+                    .await;
                 }
             });
         }
@@ -159,7 +166,9 @@ async fn process_schedule_for_agent(
             );
         }
         store::ClaimedScheduleRun::Dispatch { run_id } => {
-            match build_dispatch_request(pool, live_accounts, &schedule, run_id, scheduled_for).await {
+            match build_dispatch_request(pool, live_accounts, &schedule, run_id, scheduled_for)
+                .await
+            {
                 Ok(Some(request)) => {
                     dispatch_run(pool.clone(), backend.clone(), request).await;
                 }
@@ -186,13 +195,8 @@ async fn process_schedule_for_agent(
                         error = ?error,
                         "failed to build dispatch request"
                     );
-                    let _ = store::mark_run_failed(
-                        pool,
-                        run_id,
-                        "dispatch request errored",
-                        None,
-                    )
-                    .await;
+                    let _ = store::mark_run_failed(pool, run_id, "dispatch request errored", None)
+                        .await;
                 }
             }
         }
@@ -517,7 +521,7 @@ mod tests {
             runtime_config: json!({
                 "workspace_host_path": format!("workspaces/agents/{key}"),
                 "workspace_container_path": format!("/workspaces/agents/{key}"),
-                "profile_source": "agent-runtime/opencode"
+                "profile_source": "agent-runtime/workspace-template"
             }),
             analysis_context_last_used_at: None,
             trading_context_last_used_at: None,

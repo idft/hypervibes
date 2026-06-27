@@ -71,18 +71,15 @@
                     {% endif %}
                 </dd>
             </div>
-            <div>
-                <dt class="text-xs uppercase tracking-[0.16em] text-zinc-500">Error summary</dt>
-                <dd class="mt-2 text-sm text-zinc-200">
-                    {% if run.error_summary.is_empty() %}
-                    <span class="text-zinc-500">—</span>
-                    {% else %}
-                    {{ run.error_summary }}
-                    {% endif %}
-                </dd>
-            </div>
         </dl>
     </section>
+
+    {% if !run.error_summary.is_empty() %}
+    <section class="mt-2 rounded-2xl border border-red-900/60 bg-red-950/20 p-6">
+        <h2 class="text-lg font-medium text-red-200">Error summary</h2>
+        <p class="mt-2 text-sm leading-6 text-red-100/90">{{ run.error_summary }}</p>
+    </section>
+    {% endif %}
 
     {% match session %}
     {% when Some with (session) %}

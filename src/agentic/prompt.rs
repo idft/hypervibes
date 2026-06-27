@@ -27,11 +27,15 @@ fn build_analysis_prompt(request: &DispatchRequest) -> String {
     body.push_str("\n\n## Selected instruments\n");
     body.push_str(&selected_instruments_section(&request.selected_instruments));
     body.push_str("\n\n## Instructions\n");
-    body.push_str("- Fetch OHLCV and relevant market data from Hyperliquid for the selected instruments.\n");
+    body.push_str(
+        "- Fetch OHLCV and relevant market data from Hyperliquid for the selected instruments.\n",
+    );
     body.push_str("- Analyze market structure, trend, volatility, support/resistance, liquidity zones, and risk/reward.\n");
     body.push_str("- Only produce actionable setups when confidence is at least the threshold defined in the strategy.\n");
     body.push_str("- If there is no clear edge, mark the bias neutral or mixed and provide no actionable setup.\n");
-    body.push_str("- Write a memory record summarizing your analysis so the trading job can consume it.\n");
+    body.push_str(
+        "- Write a memory record summarizing your analysis so the trading job can consume it.\n",
+    );
     body
 }
 
@@ -55,10 +59,14 @@ fn build_trading_prompt(request: &DispatchRequest) -> String {
     body.push_str(&selected_instruments_section(&request.selected_instruments));
     body.push_str("\n\n## Instructions\n");
     body.push_str("- Read the latest analysis memory(ies) before placing any trades.\n");
-    body.push_str("- Fetch current OHLCV and market data from Hyperliquid for the selected instruments.\n");
+    body.push_str(
+        "- Fetch current OHLCV and market data from Hyperliquid for the selected instruments.\n",
+    );
     body.push_str("- Use limit orders for new entries. Avoid full-size entries on first fill.\n");
     body.push_str("- Only open new exposure when analysis is fresh, non-neutral, and confidence meets the strategy threshold.\n");
-    body.push_str("- Cancel unfilled entry orders when the source analysis expires or is invalidated.\n");
+    body.push_str(
+        "- Cancel unfilled entry orders when the source analysis expires or is invalidated.\n",
+    );
     body.push_str("- Avoid duplicate resting orders at similar prices.\n");
     body.push_str("- Do not trade instruments that are not in the selected list.\n");
     body
