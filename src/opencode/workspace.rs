@@ -336,7 +336,10 @@ mod tests {
             "vibetrading/ should not be generated into workspaces"
         );
         assert!(
-            !generated.workspace_host_path.join("requirements.txt").exists(),
+            !generated
+                .workspace_host_path
+                .join("requirements.txt")
+                .exists(),
             "root requirements.txt should not be generated into workspaces"
         );
     }
@@ -365,10 +368,7 @@ mod tests {
             .get("command")
             .and_then(Value::as_array)
             .expect("command array");
-        let command_strs: Vec<&str> = command
-            .iter()
-            .filter_map(Value::as_str)
-            .collect();
+        let command_strs: Vec<&str> = command.iter().filter_map(Value::as_str).collect();
         assert!(
             command_strs
                 .iter()

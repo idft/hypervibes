@@ -1,0 +1,187 @@
+{% extends "base.html" %}
+
+{% block title %}{{ job.job_key }} · {{ agent.display_name }} · Vibetrading{% endblock %}
+
+{% block content %}
+<div class="mx-auto max-w-[1500px]">
+    <header class="flex flex-col gap-2 pb-6">
+        <div class="flex items-center gap-3">
+            <a href="/agents" class="text-sm text-zinc-500 hover:text-zinc-300">Agents</a>
+            <span class="text-zinc-600">/</span>
+            <a href="/agents/{{ agent.agent_key }}" class="text-sm text-zinc-400 hover:text-zinc-200">{{ agent.display_name }}</a>
+            <span class="text-zinc-600">/</span>
+            <a href="/agents/{{ agent.agent_key }}/jobs" class="text-sm text-zinc-400 hover:text-zinc-200">Jobs</a>
+        </div>
+        <div class="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+            <div>
+                <div class="flex items-center gap-3">
+                    <h1 class="text-2xl font-semibold tracking-tight text-white">{{ job.job_key }}</h1>
+                    <span class="inline-flex rounded-full border px-2 py-0.5 text-xs font-medium {{ job.enabled_class }}">{{ job.enabled_label }}</span>
+                </div>
+                <p class="mt-2 text-sm text-zinc-400">{{ job.job_kind }} job</p>
+            </div>
+            <a href="/agents/{{ agent.agent_key }}/jobs" class="inline-flex w-fit items-center gap-2 rounded-full border border-zinc-800 px-4 py-2 text-sm font-medium text-zinc-300 hover:border-zinc-700 hover:text-white">
+                <span aria-hidden="true">&larr;</span>
+                Back to jobs
+            </a>
+        </div>
+    </header>
+
+    <section class="grid grid-cols-1 gap-4 lg:grid-cols-4">
+        <div class="rounded-2xl border border-zinc-800 bg-[#0d0d10] p-5">
+            <p class="text-xs uppercase tracking-[0.16em] text-zinc-500">Interval</p>
+            <p class="mt-2 font-mono text-sm text-zinc-200">{{ job.interval_text }}</p>
+        </div>
+        <div class="rounded-2xl border border-zinc-800 bg-[#0d0d10] p-5">
+            <p class="text-xs uppercase tracking-[0.16em] text-zinc-500">Timeout</p>
+            <p class="mt-2 font-mono text-sm text-zinc-200">{{ job.timeout_text }}</p>
+        </div>
+        <div class="rounded-2xl border border-zinc-800 bg-[#0d0d10] p-5">
+            <p class="text-xs uppercase tracking-[0.16em] text-zinc-500">Next run</p>
+            <p class="mt-2 font-mono text-sm text-zinc-200">{{ job.next_run_text }}</p>
+        </div>
+        <div class="rounded-2xl border border-zinc-800 bg-[#0d0d10] p-5">
+            <p class="text-xs uppercase tracking-[0.16em] text-zinc-500">Model</p>
+            <p class="mt-2 break-all font-mono text-sm text-zinc-200">{{ job.model_text }}</p>
+        </div>
+    </section>
+
+    <section class="mt-2 rounded-2xl border border-zinc-800 bg-[#0d0d10] p-6">
+        <div class="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+            <div>
+                <h2 class="text-lg font-medium text-white">Job details</h2>
+            </div>
+            <div class="flex flex-wrap items-center gap-2">
+                <form action="{{ job.run_now_action }}" method="post">
+                    <button type="submit" class="rounded-full border border-sky-900/60 bg-sky-950/30 px-4 py-2 text-sm font-medium text-sky-300 hover:border-sky-800 hover:bg-sky-950/50 hover:text-sky-200">
+                        Run now
+                    </button>
+                </form>
+                <form action="{{ job.toggle_action }}" method="post">
+                    <input type="hidden" name="enabled" value="{{ job.hidden_enabled_value }}">
+                    <button type="submit" class="rounded-full border border-zinc-800 px-4 py-2 text-sm font-medium text-zinc-300 hover:border-zinc-700 hover:text-white">
+                        {% if job.enabled %}Disable{% else %}Enable{% endif %}
+                    </button>
+                </form>
+            </div>
+        </div>
+
+        <dl class="mt-4 grid grid-cols-1 gap-4 md:grid-cols-2">
+            <div>
+                <dt class="text-xs uppercase tracking-[0.16em] text-zinc-500">Job key</dt>
+                <dd class="mt-2 font-mono text-sm text-zinc-200">{{ job.job_key }}</dd>
+            </div>
+            <div>
+                <dt class="text-xs uppercase tracking-[0.16em] text-zinc-500">Kind</dt>
+                <dd class="mt-2 text-sm text-zinc-200">{{ job.job_kind }}</dd>
+            </div>
+        </dl>
+
+        <div class="mt-4 rounded-2xl border border-zinc-800 bg-zinc-950/50 p-5">
+            <h3 class="text-sm font-medium text-white">Operator prompt</h3>
+            <pre class="mt-3 overflow-x-auto whitespace-pre-wrap break-words text-xs leading-6 text-zinc-300">{{ job.operator_prompt_text }}</pre>
+        </div>
+    </section>
+
+    <section class="mt-2 rounded-2xl border border-zinc-800 bg-[#0d0d10] p-6">
+        <div>
+            <h2 class="text-lg font-medium text-white">Runs</h2>
+            <p class="mt-1 max-w-3xl text-sm leading-6 text-zinc-400">Most recent runs recorded for this job. Click any row for full run details and mirrored OpenCode session data.</p>
+        </div>
+        {% if !job_runs_loaded %}
+        <div class="mt-4 rounded-xl border border-amber-900/60 bg-amber-950/30 px-4 py-3 text-sm text-amber-200">Runs could not be loaded.</div>
+        {% else if job_runs.is_empty() %}
+        <div class="mt-4 rounded-xl border border-zinc-800 bg-zinc-950/70 p-6 text-center">
+            <p class="text-sm text-zinc-400">No runs have been recorded for this job yet.</p>
+        </div>
+        {% else %}
+        <div class="mt-4 overflow-x-auto">
+            <table class="min-w-full divide-y divide-zinc-800 text-sm">
+                <thead class="bg-zinc-950/60 text-left text-xs uppercase tracking-[0.16em] text-zinc-500">
+                    <tr>
+                        <th class="px-4 py-3 font-medium">Status</th>
+                        <th class="px-4 py-3 font-medium">Scheduled for</th>
+                        <th class="px-4 py-3 font-medium">Started</th>
+                        <th class="px-4 py-3 font-medium">Finished</th>
+                        <th class="px-4 py-3 font-medium">Duration</th>
+                        <th class="px-4 py-3 font-medium">Backend ref</th>
+                        <th class="px-4 py-3 font-medium">Error</th>
+                    </tr>
+                </thead>
+                <tbody class="divide-y divide-zinc-800">
+                    {% for run in job_runs %}
+                    <tr data-row-href="{{ run.detail_url }}" tabindex="0" role="link" class="cursor-pointer hover:bg-zinc-900/50">
+                        <td class="px-4 py-3 align-top">
+                            <span class="inline-flex rounded-full border px-2 py-0.5 text-xs font-medium {{ run.status_class }}">{{ run.status_label }}</span>
+                        </td>
+                        <td class="px-4 py-3 align-top font-mono text-xs text-zinc-300">{{ run.scheduled_for_text }}</td>
+                        <td class="px-4 py-3 align-top font-mono text-xs text-zinc-300">{{ run.started_text }}</td>
+                        <td class="px-4 py-3 align-top font-mono text-xs text-zinc-300">{{ run.finished_text }}</td>
+                        <td class="px-4 py-3 align-top font-mono text-xs text-zinc-300">{{ run.duration_text }}</td>
+                        <td class="px-4 py-3 align-top break-all font-mono text-xs text-zinc-300">
+                            {% if run.backend_run_ref.is_empty() %}
+                            <span class="text-zinc-500">—</span>
+                            {% else %}
+                            {{ run.backend_run_ref }}
+                            {% endif %}
+                        </td>
+                        <td class="px-4 py-3 align-top text-xs text-zinc-300">
+                            {% if run.error_summary.is_empty() %}
+                            <span class="text-zinc-500">—</span>
+                            {% else %}
+                            {{ run.error_summary }}
+                            {% endif %}
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% endif %}
+    </section>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+    (function () {
+        function initClickableRows() {
+            document.querySelectorAll('[data-row-href]').forEach(function (row) {
+                if (row.dataset.rowHrefBound === 'true') {
+                    return;
+                }
+
+                row.dataset.rowHrefBound = 'true';
+
+                function navigate() {
+                    const href = row.getAttribute('data-row-href');
+                    if (href) {
+                        window.location.href = href;
+                    }
+                }
+
+                row.addEventListener('click', function (event) {
+                    if (event.target.closest('a, button, input, select, textarea, label, form, summary')) {
+                        return;
+                    }
+                    navigate();
+                });
+
+                row.addEventListener('keydown', function (event) {
+                    if (event.key !== 'Enter' && event.key !== ' ') {
+                        return;
+                    }
+                    event.preventDefault();
+                    navigate();
+                });
+            });
+        }
+
+        if (document.readyState === 'loading') {
+            document.addEventListener('DOMContentLoaded', initClickableRows, { once: true });
+        } else {
+            initClickableRows();
+        }
+    })();
+</script>
+{% endblock %}

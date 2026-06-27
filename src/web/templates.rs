@@ -5,6 +5,8 @@ use askama::Template;
 use chrono::{DateTime, Utc};
 use pulldown_cmark::{Options as MarkdownOptions, Parser as MarkdownParser, html};
 use rust_decimal::Decimal;
+use serde::Deserialize;
+use serde_json::Value;
 
 use crate::{
     agents::{
@@ -437,6 +439,7 @@ pub enum AgentShowTab {
     Memories,
     Prompts,
     Settings,
+    Jobs,
 }
 
 impl AgentShowTab {
@@ -447,6 +450,7 @@ impl AgentShowTab {
             Self::Memories => format!("/agents/{agent_key}/memories"),
             Self::Prompts => format!("/agents/{agent_key}/prompts"),
             Self::Settings => format!("/agents/{agent_key}/settings"),
+            Self::Jobs => format!("/agents/{agent_key}/jobs"),
         }
     }
 }
@@ -504,6 +508,27 @@ pub struct BackendsNewPageTemplate {
     pub current_path: String,
 }
 
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct CreateAgentScheduleFormValues {
+    pub job_key: String,
+    pub job_kind: String,
+    pub interval_seconds: String,
+    pub timeout_seconds: String,
+    pub model_provider_id: String,
+    pub model_id: String,
+    pub operator_prompt: String,
+    pub enabled: bool,
+}
+
+#[derive(Template)]
+#[template(path = "agent_schedule_new.html")]
+pub struct AgentScheduleNewPageTemplate {
+    pub agent: AgentDetailRow,
+    pub form: CreateAgentScheduleFormValues,
+    pub errors: Vec<String>,
+    pub current_path: String,
+}
+
 #[derive(Template)]
 #[template(path = "agents_show.html")]
 #[allow(dead_code)]
@@ -515,6 +540,7 @@ pub struct AgentsShowPageTemplate {
     pub show_memories_tab: bool,
     pub show_prompts_tab: bool,
     pub show_settings_tab: bool,
+    pub show_jobs_tab: bool,
     pub transactions: Vec<TransactionView>,
     pub memory_timeline: Vec<MemoryTimelineItem>,
     pub memory_filter_date_value: String,
@@ -552,6 +578,10 @@ pub struct AgentsShowPageTemplate {
     pub created_at_text: String,
     pub updated_at_text: String,
     pub current_path: String,
+    pub jobs: Vec<AgenticJobScheduleView>,
+    pub recent_runs: Vec<AgenticRunView>,
+    pub jobs_loaded: bool,
+    pub recent_runs_loaded: bool,
 }
 
 impl AgentsShowPageTemplate {
@@ -559,6 +589,8 @@ impl AgentsShowPageTemplate {
         let agent_key = agent.agent_key.clone();
         let now = Utc::now();
         let uses_hermes_runtime = agent.backend_kind == crate::agents::model::BACKEND_KIND_HERMES;
+        let uses_opencode_runtime =
+            agent.backend_kind == crate::agents::model::BACKEND_KIND_OPENCODE;
         let analysis_context_never_checked_in = agent.analysis_context_last_used_at.is_none();
         let trading_context_never_checked_in = agent.trading_context_last_used_at.is_none();
         let analysis_context_stale = is_stale_checkin(
@@ -571,20 +603,24 @@ impl AgentsShowPageTemplate {
             now,
             TRADING_CONTEXT_STALE_AFTER_MINUTES,
         );
-        let tabs = [
+        let mut tab_entries: Vec<(&'static str, AgentShowTab)> = vec![
             ("Positions", AgentShowTab::Positions),
             ("Transactions", AgentShowTab::Transactions),
             ("Memories", AgentShowTab::Memories),
             ("Prompts", AgentShowTab::Prompts),
-            ("Settings", AgentShowTab::Settings),
-        ]
-        .into_iter()
-        .map(|(label, tab)| AgentShowTabLink {
-            label,
-            href: tab.path(&agent_key),
-            active: tab == active_tab,
-        })
-        .collect();
+        ];
+        if uses_opencode_runtime {
+            tab_entries.push(("Jobs", AgentShowTab::Jobs));
+        }
+        tab_entries.push(("Settings", AgentShowTab::Settings));
+        let tabs = tab_entries
+            .into_iter()
+            .map(|(label, tab)| AgentShowTabLink {
+                label,
+                href: tab.path(&agent_key),
+                active: tab == active_tab,
+            })
+            .collect();
 
         Self {
             api_key_last_used_text: format_optional_timestamp_utc(agent.api_key_last_used_at),
@@ -616,6 +652,7 @@ impl AgentsShowPageTemplate {
             show_memories_tab: active_tab == AgentShowTab::Memories,
             show_prompts_tab: active_tab == AgentShowTab::Prompts,
             show_settings_tab: active_tab == AgentShowTab::Settings,
+            show_jobs_tab: uses_opencode_runtime && active_tab == AgentShowTab::Jobs,
             agent,
             transactions: Vec::new(),
             memory_timeline: Vec::new(),
@@ -637,6 +674,10 @@ impl AgentsShowPageTemplate {
             latest_trade_execution_summary_html: String::new(),
             latest_analysis_summary_html: String::new(),
             sparklines_html: String::new(),
+            jobs: Vec::new(),
+            recent_runs: Vec::new(),
+            jobs_loaded: false,
+            recent_runs_loaded: false,
         }
     }
 
@@ -678,6 +719,558 @@ pub struct OpenCodeWorkspaceSettingsView {
     pub workspace_container_path: String,
     pub profile_source: String,
     pub env_exists: bool,
+}
+
+/// View-model for a single row on the Jobs table.
+#[derive(Debug, Clone)]
+pub struct AgenticJobScheduleView {
+    pub id: i64,
+    pub job_key: String,
+    pub job_kind: String,
+    pub enabled: bool,
+    pub enabled_label: &'static str,
+    pub enabled_class: &'static str,
+    pub interval_text: String,
+    pub timeout_text: String,
+    pub next_run_text: String,
+    pub model_text: String,
+    pub operator_prompt_summary: String,
+    pub detail_url: String,
+    pub run_now_action: String,
+    pub toggle_action: String,
+    pub hidden_enabled_value: &'static str,
+}
+
+#[derive(Debug, Clone)]
+pub struct AgenticJobDetailView {
+    pub id: i64,
+    pub job_key: String,
+    pub job_kind: String,
+    pub enabled: bool,
+    pub enabled_label: &'static str,
+    pub enabled_class: &'static str,
+    pub interval_text: String,
+    pub timeout_text: String,
+    pub next_run_text: String,
+    pub model_text: String,
+    pub operator_prompt_text: String,
+    pub run_now_action: String,
+    pub toggle_action: String,
+    pub hidden_enabled_value: &'static str,
+}
+
+/// View-model for a single row in a Runs table.
+#[derive(Debug, Clone)]
+pub struct AgenticRunView {
+    pub id: i64,
+    pub status_label: String,
+    pub status_class: String,
+    pub job_key: String,
+    pub scheduled_for_text: String,
+    pub started_text: String,
+    pub finished_text: String,
+    pub duration_text: String,
+    pub backend_run_ref: String,
+    pub detail_url: String,
+    pub error_summary: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct AgenticRunDetailView {
+    pub id: i64,
+    pub status_label: String,
+    pub status_class: String,
+    pub job_key: String,
+    pub job_kind: String,
+    pub scheduled_for_text: String,
+    pub started_text: String,
+    pub finished_text: String,
+    pub duration_text: String,
+    pub timeout_text: String,
+    pub model_text: String,
+    pub backend_run_ref: String,
+    pub error_summary: String,
+    pub job_url: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct OpenCodeSessionView {
+    pub id: String,
+    pub title: String,
+    pub status: String,
+    pub directory: String,
+    pub model_text: String,
+    pub created_at_text: String,
+    pub updated_at_text: String,
+    pub input_tokens_text: String,
+    pub output_tokens_text: String,
+    pub cache_read_tokens_text: String,
+    pub cache_write_tokens_text: String,
+    pub reasoning_tokens_text: String,
+    pub context_tokens_text: String,
+    pub peak_context_tokens_text: String,
+    pub estimated_cost_text: String,
+    pub compaction_count_text: String,
+    pub share_url: String,
+    pub commands: Vec<OpenCodeCommandView>,
+    pub messages: Vec<OpenCodeMessageView>,
+    pub tool_executions: Vec<OpenCodeToolExecutionView>,
+    pub session_errors: Vec<OpenCodeSessionErrorView>,
+}
+
+#[derive(Debug, Clone)]
+pub struct OpenCodeCommandView {
+    pub created_at_text: String,
+    pub command_name: String,
+    pub command_args: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct OpenCodeMessageView {
+    pub created_at_text: String,
+    pub role_label: String,
+    pub role_class: String,
+    pub model_text: String,
+    pub text: String,
+    pub summary: String,
+    pub system_prompt: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct OpenCodeToolExecutionView {
+    pub started_at_text: String,
+    pub completed_at_text: String,
+    pub tool_name: String,
+    pub success_label: String,
+    pub success_class: String,
+    pub duration_text: String,
+    pub args_json: String,
+    pub result_json: String,
+    pub error_text: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct OpenCodeSessionErrorView {
+    pub created_at_text: String,
+    pub error_type: String,
+    pub error_message: String,
+    pub error_data_json: String,
+}
+
+impl AgenticJobScheduleView {
+    pub fn from_row(row: &crate::agentic::model::AgenticJobScheduleRow) -> Self {
+        let operator_prompt = row.operator_prompt.trim();
+        let operator_summary = if operator_prompt.is_empty() {
+            "—".to_string()
+        } else {
+            let mut collapsed: String = operator_prompt
+                .split_whitespace()
+                .collect::<Vec<_>>()
+                .join(" ");
+            if collapsed.chars().count() > 80 {
+                collapsed = collapsed.chars().take(80).collect::<String>() + "…";
+            }
+            collapsed
+        };
+
+        let model_text = match (row.model_provider_id.as_deref(), row.model_id.as_deref()) {
+            (Some(provider), Some(model)) => format!("{provider}/{model}"),
+            _ => "—".to_string(),
+        };
+
+        let (enabled_label, enabled_class) = if row.enabled {
+            (
+                "Enabled",
+                "border-emerald-900/60 bg-emerald-950/30 text-emerald-300",
+            )
+        } else {
+            ("Disabled", "border-zinc-700 bg-zinc-900/60 text-zinc-400")
+        };
+
+        Self {
+            id: row.id,
+            job_key: row.job_key.clone(),
+            job_kind: row.job_kind.clone(),
+            enabled: row.enabled,
+            enabled_label,
+            enabled_class,
+            interval_text: format_duration(row.interval_seconds),
+            timeout_text: format_duration(row.timeout_seconds),
+            next_run_text: format_timestamp_utc(row.next_run_at),
+            model_text,
+            operator_prompt_summary: operator_summary,
+            detail_url: format!("/agents/{}/jobs/{}", row.agent_key, row.id),
+            run_now_action: format!("/agents/{}/jobs/{}/run", row.agent_key, row.id),
+            toggle_action: format!("/agents/{}/jobs/{}/toggle", row.agent_key, row.id),
+            hidden_enabled_value: if row.enabled { "off" } else { "on" },
+        }
+    }
+}
+
+impl AgenticJobDetailView {
+    pub fn from_row(row: &crate::agentic::model::AgenticJobScheduleRow) -> Self {
+        let summary = AgenticJobScheduleView::from_row(row);
+
+        Self {
+            id: row.id,
+            job_key: row.job_key.clone(),
+            job_kind: row.job_kind.clone(),
+            enabled: row.enabled,
+            enabled_label: summary.enabled_label,
+            enabled_class: summary.enabled_class,
+            interval_text: summary.interval_text,
+            timeout_text: summary.timeout_text,
+            next_run_text: summary.next_run_text,
+            model_text: summary.model_text,
+            operator_prompt_text: if row.operator_prompt.trim().is_empty() {
+                "—".to_string()
+            } else {
+                row.operator_prompt.clone()
+            },
+            run_now_action: summary.run_now_action,
+            toggle_action: summary.toggle_action,
+            hidden_enabled_value: summary.hidden_enabled_value,
+        }
+    }
+}
+
+impl AgenticRunView {
+    pub fn from_row(row: &crate::agentic::model::AgenticRunRow) -> Self {
+        let (status_label, status_class) = status_badge(row.status.as_str());
+        let duration_text = run_duration_text(row.started_at, row.finished_at);
+
+        Self {
+            id: row.id,
+            status_label,
+            status_class,
+            job_key: row.job_key.clone(),
+            scheduled_for_text: format_timestamp_utc(row.scheduled_for),
+            started_text: format_optional_timestamp_utc(row.started_at),
+            finished_text: format_optional_timestamp_utc(row.finished_at),
+            duration_text,
+            backend_run_ref: row.backend_run_ref.clone().unwrap_or_default(),
+            detail_url: format!("/agents/{}/runs/{}", row.agent_key, row.id),
+            error_summary: row.error_summary.clone().unwrap_or_default(),
+        }
+    }
+}
+
+impl AgenticRunDetailView {
+    pub fn from_row(row: &crate::agentic::model::AgenticRunRow) -> Self {
+        let (status_label, status_class) = status_badge(row.status.as_str());
+        let model_text = match (row.model_provider_id.as_deref(), row.model_id.as_deref()) {
+            (Some(provider), Some(model)) => format!("{provider}/{model}"),
+            _ => "—".to_string(),
+        };
+
+        Self {
+            id: row.id,
+            status_label,
+            status_class,
+            job_key: row.job_key.clone(),
+            job_kind: row.job_kind.clone(),
+            scheduled_for_text: format_timestamp_utc(row.scheduled_for),
+            started_text: format_optional_timestamp_utc(row.started_at),
+            finished_text: format_optional_timestamp_utc(row.finished_at),
+            duration_text: run_duration_text(row.started_at, row.finished_at),
+            timeout_text: format_duration(row.timeout_seconds),
+            model_text,
+            backend_run_ref: row.backend_run_ref.clone().unwrap_or_default(),
+            error_summary: row.error_summary.clone().unwrap_or_default(),
+            job_url: row
+                .schedule_id
+                .map(|schedule_id| format!("/agents/{}/jobs/{}", row.agent_key, schedule_id)),
+        }
+    }
+}
+
+impl OpenCodeSessionView {
+    pub fn from_detail(detail: &crate::opencode::store::OpenCodeSessionDetail) -> Self {
+        let session = &detail.session;
+        let model_text = if session.model_provider.is_empty() || session.model_id.is_empty() {
+            "—".to_string()
+        } else {
+            format!("{}/{}", session.model_provider, session.model_id)
+        };
+
+        Self {
+            id: session.id.clone(),
+            title: non_empty_or_dash(session.title.as_deref()),
+            status: non_empty_or_dash(session.status.as_deref()),
+            directory: non_empty_or_dash(session.directory.as_deref()),
+            model_text,
+            created_at_text: format_timestamp_utc(session.created_at),
+            updated_at_text: format_timestamp_utc(session.updated_at),
+            input_tokens_text: format_i32(session.input_tokens),
+            output_tokens_text: format_i32(session.output_tokens),
+            cache_read_tokens_text: format_i32(session.cache_read_tokens),
+            cache_write_tokens_text: format_i32(session.cache_write_tokens),
+            reasoning_tokens_text: format_i32(session.reasoning_tokens),
+            context_tokens_text: format_i32(session.context_tokens),
+            peak_context_tokens_text: format_i32(session.peak_context_tokens),
+            estimated_cost_text: format_decimal_with_commas(session.estimated_cost, 6),
+            compaction_count_text: format_i32(session.compaction_count),
+            share_url: session.share_url.clone().unwrap_or_default(),
+            commands: detail
+                .commands
+                .iter()
+                .map(|row| OpenCodeCommandView {
+                    created_at_text: format_timestamp_utc(row.created_at),
+                    command_name: row.command_name.clone(),
+                    command_args: row.command_args.clone().unwrap_or_default(),
+                })
+                .collect(),
+            messages: detail
+                .messages
+                .iter()
+                .map(OpenCodeMessageView::from_row)
+                .collect(),
+            tool_executions: detail
+                .tool_executions
+                .iter()
+                .map(OpenCodeToolExecutionView::from_row)
+                .collect(),
+            session_errors: detail
+                .session_errors
+                .iter()
+                .map(OpenCodeSessionErrorView::from_row)
+                .collect(),
+        }
+    }
+}
+
+impl OpenCodeMessageView {
+    fn from_row(row: &crate::opencode::store::OpenCodeMessageRow) -> Self {
+        let (role_label, role_class) = message_role_badge(row.role.as_str());
+        let model_text = match (row.model_provider.as_deref(), row.model_id.as_deref()) {
+            (Some(provider), Some(model)) if !provider.is_empty() && !model.is_empty() => {
+                format!("{provider}/{model}")
+            }
+            _ => "—".to_string(),
+        };
+
+        Self {
+            created_at_text: format_timestamp_utc(row.created_at),
+            role_label,
+            role_class,
+            model_text,
+            text: row.text.clone().unwrap_or_default(),
+            summary: row.summary.clone().unwrap_or_default(),
+            system_prompt: row.system_prompt.clone().unwrap_or_default(),
+        }
+    }
+}
+
+impl OpenCodeToolExecutionView {
+    fn from_row(row: &crate::opencode::store::OpenCodeToolExecutionRow) -> Self {
+        let (success_label, success_class) = match row.success {
+            Some(true) => (
+                "success".to_string(),
+                "border-emerald-900/60 bg-emerald-950/30 text-emerald-300".to_string(),
+            ),
+            Some(false) => (
+                "failed".to_string(),
+                "border-red-900/60 bg-red-950/30 text-red-300".to_string(),
+            ),
+            None => (
+                "unknown".to_string(),
+                "border-zinc-700 bg-zinc-900/60 text-zinc-300".to_string(),
+            ),
+        };
+
+        Self {
+            started_at_text: format_optional_timestamp_utc(row.started_at),
+            completed_at_text: format_optional_timestamp_utc(row.completed_at),
+            tool_name: row.tool_name.clone(),
+            success_label,
+            success_class,
+            duration_text: row
+                .duration_ms
+                .map(|duration_ms| format!("{duration_ms}ms"))
+                .unwrap_or_else(|| "—".to_string()),
+            args_json: format_json_value(row.args.as_ref()),
+            result_json: format_json_value(row.result.as_ref()),
+            error_text: row.error.clone().unwrap_or_default(),
+        }
+    }
+}
+
+impl OpenCodeSessionErrorView {
+    fn from_row(row: &crate::opencode::store::OpenCodeSessionErrorRow) -> Self {
+        Self {
+            created_at_text: format_timestamp_utc(row.created_at),
+            error_type: row.error_type.clone().unwrap_or_default(),
+            error_message: row.error_message.clone().unwrap_or_default(),
+            error_data_json: format_json_value(row.error_data.as_ref()),
+        }
+    }
+}
+
+#[derive(Template)]
+#[template(path = "agent_job_detail_page.html")]
+pub struct AgentJobDetailPageTemplate {
+    pub agent: AgentDetailRow,
+    pub job: AgenticJobDetailView,
+    pub job_runs: Vec<AgenticRunView>,
+    pub job_runs_loaded: bool,
+    pub current_path: String,
+}
+
+impl AgentJobDetailPageTemplate {
+    pub fn render_view(
+        agent: AgentDetailRow,
+        job: AgenticJobDetailView,
+        job_runs: Vec<AgenticRunView>,
+        job_runs_loaded: bool,
+    ) -> Result<String, askama::Error> {
+        let current_path = format!("/agents/{}/jobs/{}", agent.agent_key, job.id);
+        Self {
+            agent,
+            job,
+            job_runs,
+            job_runs_loaded,
+            current_path,
+        }
+        .render()
+    }
+}
+
+#[derive(Template)]
+#[template(path = "agent_run_detail_page.html")]
+pub struct AgentRunDetailPageTemplate {
+    pub agent: AgentDetailRow,
+    pub run: AgenticRunDetailView,
+    pub session: Option<OpenCodeSessionView>,
+    pub session_lookup_attempted: bool,
+    pub current_path: String,
+}
+
+impl AgentRunDetailPageTemplate {
+    pub fn render_view(
+        agent: AgentDetailRow,
+        run: AgenticRunDetailView,
+        session: Option<OpenCodeSessionView>,
+        session_lookup_attempted: bool,
+    ) -> Result<String, askama::Error> {
+        let current_path = format!("/agents/{}/runs/{}", agent.agent_key, run.id);
+        Self {
+            agent,
+            run,
+            session,
+            session_lookup_attempted,
+            current_path,
+        }
+        .render()
+    }
+}
+
+fn status_badge(status: &str) -> (String, String) {
+    match status {
+        "queued" => (
+            "queued".to_string(),
+            "border-zinc-700 bg-zinc-900/60 text-zinc-300".to_string(),
+        ),
+        "running" => (
+            "running".to_string(),
+            "border-sky-900/60 bg-sky-950/30 text-sky-300".to_string(),
+        ),
+        "succeeded" => (
+            "succeeded".to_string(),
+            "border-emerald-900/60 bg-emerald-950/30 text-emerald-300".to_string(),
+        ),
+        "failed" => (
+            "failed".to_string(),
+            "border-red-900/60 bg-red-950/30 text-red-300".to_string(),
+        ),
+        "aborted" => (
+            "aborted".to_string(),
+            "border-amber-900/60 bg-amber-950/30 text-amber-300".to_string(),
+        ),
+        "skipped" => (
+            "skipped".to_string(),
+            "border-violet-900/60 bg-violet-950/30 text-violet-300".to_string(),
+        ),
+        other => (
+            other.to_string(),
+            "border-zinc-700 bg-zinc-900/60 text-zinc-300".to_string(),
+        ),
+    }
+}
+
+fn run_duration_text(
+    started_at: Option<DateTime<Utc>>,
+    finished_at: Option<DateTime<Utc>>,
+) -> String {
+    match (started_at, finished_at) {
+        (Some(start), Some(end)) => {
+            let secs = (end - start).num_seconds().max(0);
+            format!("{secs}s")
+        }
+        _ => "—".to_string(),
+    }
+}
+
+fn message_role_badge(role: &str) -> (String, String) {
+    match role {
+        "assistant" => (
+            "assistant".to_string(),
+            "border-sky-900/60 bg-sky-950/30 text-sky-300".to_string(),
+        ),
+        "user" => (
+            "user".to_string(),
+            "border-emerald-900/60 bg-emerald-950/30 text-emerald-300".to_string(),
+        ),
+        "system" => (
+            "system".to_string(),
+            "border-violet-900/60 bg-violet-950/30 text-violet-300".to_string(),
+        ),
+        other => (
+            other.to_string(),
+            "border-zinc-700 bg-zinc-900/60 text-zinc-300".to_string(),
+        ),
+    }
+}
+
+fn non_empty_or_dash(value: Option<&str>) -> String {
+    value
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+        .unwrap_or_else(|| "—".to_string())
+}
+
+fn format_json_value(value: Option<&Value>) -> String {
+    value
+        .and_then(|value| serde_json::to_string_pretty(value).ok())
+        .unwrap_or_default()
+}
+
+fn format_i32(value: i32) -> String {
+    add_thousands_separators(&value.to_string())
+}
+
+fn format_duration(seconds: i32) -> String {
+    let seconds = seconds.max(0) as i64;
+    if seconds < 60 {
+        return format!("{seconds}s");
+    }
+    if seconds < 3600 {
+        let minutes = seconds / 60;
+        let rem_seconds = seconds % 60;
+        if rem_seconds == 0 {
+            format!("{minutes}m")
+        } else {
+            format!("{minutes}m {rem_seconds}s")
+        }
+    } else {
+        let hours = seconds / 3600;
+        let minutes = (seconds % 3600) / 60;
+        if minutes == 0 {
+            format!("{hours}h")
+        } else {
+            format!("{hours}h {minutes}m")
+        }
+    }
 }
 
 #[derive(Template)]
@@ -1584,6 +2177,241 @@ mod tests {
         assert!(rendered.contains("Balance"));
         assert!(rendered.contains("Unrealized"));
         assert!(rendered.contains("Scaled out into strength"));
+    }
+
+    fn sample_opencode_detail_row() -> AgentDetailRow {
+        let mut row = sample_agent_detail_row();
+        row.backend_kind = crate::agents::model::BACKEND_KIND_OPENCODE.to_string();
+        row.runtime_id = "opencode-local".to_string();
+        row.runtime_name = "OpenCode local".to_string();
+        row.runtime_config = serde_json::json!({
+            "workspace_host_path": "workspaces/agents/test-agent",
+            "workspace_container_path": "/workspaces/agents/test-agent",
+            "profile_source": "agent-runtime/opencode"
+        });
+        row
+    }
+
+    fn sample_schedule_row(
+        id: i64,
+        job_key: &str,
+        job_kind: &str,
+        enabled: bool,
+    ) -> crate::agentic::model::AgenticJobScheduleRow {
+        let now = Utc::now();
+        crate::agentic::model::AgenticJobScheduleRow {
+            id,
+            agent_key: "test-agent".to_string(),
+            job_key: job_key.to_string(),
+            job_kind: job_kind.to_string(),
+            enabled,
+            interval_seconds: 900,
+            next_run_at: now,
+            model_provider_id: Some("anthropic".to_string()),
+            model_id: Some("claude-3-5-sonnet".to_string()),
+            timeout_seconds: 600,
+            operator_prompt: String::new(),
+            created_at: now,
+            updated_at: now,
+        }
+    }
+
+    fn sample_run_row(
+        id: i64,
+        status: &str,
+        job_key: &str,
+    ) -> crate::agentic::model::AgenticRunRow {
+        let now = Utc::now();
+        crate::agentic::model::AgenticRunRow {
+            id,
+            schedule_id: Some(1),
+            agent_key: "test-agent".to_string(),
+            job_key: job_key.to_string(),
+            job_kind: crate::agentic::model::JOB_KIND_ANALYSIS.to_string(),
+            status: status.to_string(),
+            backend_run_ref: Some("ses_abc123".to_string()),
+            model_provider_id: Some("anthropic".to_string()),
+            model_id: Some("claude-3-5-sonnet".to_string()),
+            scheduled_for: now,
+            started_at: Some(now),
+            finished_at: Some(now + chrono::Duration::seconds(42)),
+            timeout_seconds: 600,
+            error_summary: None,
+            created_at: now,
+            updated_at: now,
+        }
+    }
+
+    #[test]
+    fn opencode_agent_shows_jobs_tab_with_recent_runs() {
+        let mut template =
+            AgentsShowPageTemplate::new(sample_opencode_detail_row(), AgentShowTab::Jobs);
+        template.jobs_loaded = true;
+        template.jobs = vec![
+            AgenticJobScheduleView::from_row(&sample_schedule_row(
+                1,
+                "analysis-15m",
+                "analysis",
+                true,
+            )),
+            AgenticJobScheduleView::from_row(&sample_schedule_row(
+                2,
+                "trading-1m",
+                "trading",
+                false,
+            )),
+        ];
+        template.recent_runs_loaded = true;
+        template.recent_runs = vec![AgenticRunView::from_row(&sample_run_row(
+            1,
+            "succeeded",
+            "analysis-15m",
+        ))];
+        let rendered = template.render().expect("render jobs tab");
+        assert!(rendered.contains("/agents/test-agent/jobs"));
+        assert!(rendered.contains("Jobs"));
+        assert!(rendered.contains("Runs"));
+        assert!(rendered.contains("analysis-15m"));
+        assert!(rendered.contains("trading-1m"));
+        assert!(rendered.contains("15m"));
+        assert!(rendered.contains("1m"));
+        assert!(rendered.contains("10m"));
+        assert!(rendered.contains("anthropic/claude-3-5-sonnet"));
+        assert!(rendered.contains("Run now"));
+        assert!(rendered.contains("/agents/test-agent/jobs/1/run"));
+        assert!(rendered.contains("/agents/test-agent/runs/1"));
+    }
+
+    #[test]
+    fn opencode_agent_places_settings_tab_after_jobs() {
+        let template =
+            AgentsShowPageTemplate::new(sample_opencode_detail_row(), AgentShowTab::Jobs);
+
+        let labels: Vec<&str> = template.tabs.iter().map(|tab| tab.label).collect();
+        assert_eq!(
+            labels,
+            vec![
+                "Positions",
+                "Transactions",
+                "Memories",
+                "Prompts",
+                "Jobs",
+                "Settings",
+            ]
+        );
+    }
+
+    #[test]
+    fn job_detail_page_renders_job_metadata_and_runs() {
+        let agent = sample_opencode_detail_row();
+        let job = AgenticJobDetailView::from_row(&sample_schedule_row(1, "analysis-15m", "analysis", true));
+        let runs = vec![
+            AgenticRunView::from_row(&sample_run_row(1, "succeeded", "analysis-15m")),
+            AgenticRunView::from_row(&sample_run_row(2, "failed", "analysis-15m")),
+        ];
+
+        let rendered = AgentJobDetailPageTemplate::render_view(agent, job, runs, true)
+            .expect("render job detail page");
+
+        assert!(rendered.contains("Back to jobs"));
+        assert!(rendered.contains("Job details"));
+        assert!(rendered.contains("Operator prompt"));
+        assert!(rendered.contains("/agents/test-agent/jobs/1/run"));
+        assert!(rendered.contains("/agents/test-agent/runs/1"));
+    }
+
+    #[test]
+    fn jobs_page_renders_recent_run_rows() {
+        let mut template =
+            AgentsShowPageTemplate::new(sample_opencode_detail_row(), AgentShowTab::Jobs);
+        template.recent_runs_loaded = true;
+        template.recent_runs = vec![
+            AgenticRunView::from_row(&sample_run_row(1, "succeeded", "analysis-15m")),
+            AgenticRunView::from_row(&sample_run_row(2, "failed", "trading-1m")),
+        ];
+        let rendered = template.render().expect("render jobs page runs section");
+        assert!(rendered.contains("ses_abc123"));
+        assert!(rendered.contains(">succeeded<"));
+        assert!(rendered.contains(">failed<"));
+        assert!(rendered.contains("42s"));
+        assert!(rendered.contains("/agents/test-agent/runs/1"));
+    }
+
+    #[test]
+    fn run_detail_page_renders_opencode_session_sections() {
+        let agent = sample_opencode_detail_row();
+        let run = AgenticRunDetailView::from_row(&sample_run_row(7, "succeeded", "analysis-15m"));
+        let session = OpenCodeSessionView {
+            id: "ses_abc123".to_string(),
+            title: "btc-2 analysis run".to_string(),
+            status: "idle".to_string(),
+            directory: "/workspaces/agents/test-agent".to_string(),
+            model_text: "anthropic/claude-3-5-sonnet".to_string(),
+            created_at_text: "2026-06-27 00:00 UTC".to_string(),
+            updated_at_text: "2026-06-27 00:02 UTC".to_string(),
+            input_tokens_text: "1,200".to_string(),
+            output_tokens_text: "800".to_string(),
+            cache_read_tokens_text: "0".to_string(),
+            cache_write_tokens_text: "0".to_string(),
+            reasoning_tokens_text: "50".to_string(),
+            context_tokens_text: "8,000".to_string(),
+            peak_context_tokens_text: "8,500".to_string(),
+            estimated_cost_text: "0.123456".to_string(),
+            compaction_count_text: "1".to_string(),
+            share_url: String::new(),
+            commands: vec![OpenCodeCommandView {
+                created_at_text: "2026-06-27 00:00 UTC".to_string(),
+                command_name: "vibetrading-analysis".to_string(),
+                command_args: "Agent key: test-agent".to_string(),
+            }],
+            messages: vec![OpenCodeMessageView {
+                created_at_text: "2026-06-27 00:01 UTC".to_string(),
+                role_label: "assistant".to_string(),
+                role_class: "border-sky-900/60 bg-sky-950/30 text-sky-300".to_string(),
+                model_text: "anthropic/claude-3-5-sonnet".to_string(),
+                text: "Analysis complete".to_string(),
+                summary: "Trend remains constructive".to_string(),
+                system_prompt: String::new(),
+            }],
+            tool_executions: vec![OpenCodeToolExecutionView {
+                started_at_text: "2026-06-27 00:01 UTC".to_string(),
+                completed_at_text: "2026-06-27 00:01 UTC".to_string(),
+                tool_name: "vibetrading.get_positions".to_string(),
+                success_label: "success".to_string(),
+                success_class: "border-emerald-900/60 bg-emerald-950/30 text-emerald-300"
+                    .to_string(),
+                duration_text: "45ms".to_string(),
+                args_json: "{}".to_string(),
+                result_json: "{}".to_string(),
+                error_text: String::new(),
+            }],
+            session_errors: Vec::new(),
+        };
+
+        let rendered = AgentRunDetailPageTemplate::render_view(agent, run, Some(session), true)
+            .expect("render run detail page");
+
+        assert!(rendered.contains("OpenCode session"));
+        assert!(rendered.contains("ses_abc123"));
+        assert!(rendered.contains("Transcript"));
+        assert!(rendered.contains("Tool executions"));
+        assert!(rendered.contains("Analysis complete"));
+    }
+
+    #[test]
+    fn hermes_agent_does_not_show_jobs_tab() {
+        let mut template =
+            AgentsShowPageTemplate::new(sample_agent_detail_row(), AgentShowTab::Positions);
+        template.account_balance_html =
+            AccountBalancePartialTemplate::render_view(sample_account_balance_view()).unwrap();
+        let rendered = template.render().expect("render hermes page");
+        // The Jobs tab link should not be present for Hermes agents. The href
+        // is the cleanest assertion target.
+        assert!(
+            !rendered.contains("/agents/test-agent/jobs"),
+            "Jobs tab should not be present for Hermes agents"
+        );
+        assert!(rendered.contains("/agents/test-agent\""));
     }
 
     #[test]

@@ -61,7 +61,7 @@
                             </td>
                             <td class="px-5 py-4 align-top text-right">
                                 {% if let Some(total) = entry.account_balance.total() %}
-                                <div class="font-mono text-sm font-semibold tabular-nums text-emerald-400">{{ total.value }}</div>
+                                <div class="font-mono text-sm font-semibold tabular-nums text-zinc-100">{{ total.value }}</div>
                                 {% else %}
                                 <span class="text-xs italic text-zinc-500">Loading…</span>
                                 {% endif %}

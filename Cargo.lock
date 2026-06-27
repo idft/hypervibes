@@ -8043,6 +8043,7 @@ dependencies = [
  "ammonia",
  "anyhow",
  "askama",
+ "async-trait",
  "axum",
  "base64",
  "chrono",

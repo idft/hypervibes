@@ -1,0 +1,306 @@
+{% extends "base.html" %}
+
+{% block title %}Run {{ run.id }} · {{ agent.display_name }} · Vibetrading{% endblock %}
+
+{% block content %}
+<div class="mx-auto max-w-[1500px]">
+    <header class="flex flex-col gap-2 pb-6">
+        <div class="flex items-center gap-3">
+            <a href="/agents" class="text-sm text-zinc-500 hover:text-zinc-300">Agents</a>
+            <span class="text-zinc-600">/</span>
+            <a href="/agents/{{ agent.agent_key }}" class="text-sm text-zinc-400 hover:text-zinc-200">{{ agent.display_name }}</a>
+            <span class="text-zinc-600">/</span>
+            <a href="/agents/{{ agent.agent_key }}/jobs" class="text-sm text-zinc-400 hover:text-zinc-200">Jobs</a>
+            {% if let Some(job_url) = run.job_url %}
+            <span class="text-zinc-600">/</span>
+            <a href="{{ job_url }}" class="text-sm text-zinc-400 hover:text-zinc-200">{{ run.job_key }}</a>
+            {% endif %}
+        </div>
+        <div class="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+            <div>
+                <div class="flex items-center gap-3">
+                    <h1 class="text-2xl font-semibold tracking-tight text-white">Run {{ run.id }}</h1>
+                    <span class="inline-flex rounded-full border px-2 py-0.5 text-xs font-medium {{ run.status_class }}">{{ run.status_label }}</span>
+                </div>
+                <p class="mt-2 text-sm text-zinc-400">{{ run.job_key }} · {{ run.job_kind }}</p>
+            </div>
+            <a href="{% if let Some(job_url) = run.job_url %}{{ job_url }}{% else %}/agents/{{ agent.agent_key }}/jobs{% endif %}" class="inline-flex w-fit items-center gap-2 rounded-full border border-zinc-800 px-4 py-2 text-sm font-medium text-zinc-300 hover:border-zinc-700 hover:text-white">
+                <span aria-hidden="true">&larr;</span>
+                {% if let Some(_job_url) = run.job_url %}Back to job{% else %}Back to jobs{% endif %}
+            </a>
+        </div>
+    </header>
+
+    <section class="grid grid-cols-1 gap-4 lg:grid-cols-4">
+        <div class="rounded-2xl border border-zinc-800 bg-[#0d0d10] p-5">
+            <p class="text-xs uppercase tracking-[0.16em] text-zinc-500">Scheduled for</p>
+            <p class="mt-2 font-mono text-sm text-zinc-200">{{ run.scheduled_for_text }}</p>
+        </div>
+        <div class="rounded-2xl border border-zinc-800 bg-[#0d0d10] p-5">
+            <p class="text-xs uppercase tracking-[0.16em] text-zinc-500">Duration</p>
+            <p class="mt-2 font-mono text-sm text-zinc-200">{{ run.duration_text }}</p>
+        </div>
+        <div class="rounded-2xl border border-zinc-800 bg-[#0d0d10] p-5">
+            <p class="text-xs uppercase tracking-[0.16em] text-zinc-500">Timeout</p>
+            <p class="mt-2 font-mono text-sm text-zinc-200">{{ run.timeout_text }}</p>
+        </div>
+        <div class="rounded-2xl border border-zinc-800 bg-[#0d0d10] p-5">
+            <p class="text-xs uppercase tracking-[0.16em] text-zinc-500">Model</p>
+            <p class="mt-2 break-all font-mono text-sm text-zinc-200">{{ run.model_text }}</p>
+        </div>
+    </section>
+
+    <section class="mt-2 rounded-2xl border border-zinc-800 bg-[#0d0d10] p-6">
+        <h2 class="text-lg font-medium text-white">Run metadata</h2>
+        <dl class="mt-4 grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
+            <div>
+                <dt class="text-xs uppercase tracking-[0.16em] text-zinc-500">Started</dt>
+                <dd class="mt-2 font-mono text-sm text-zinc-200">{{ run.started_text }}</dd>
+            </div>
+            <div>
+                <dt class="text-xs uppercase tracking-[0.16em] text-zinc-500">Finished</dt>
+                <dd class="mt-2 font-mono text-sm text-zinc-200">{{ run.finished_text }}</dd>
+            </div>
+            <div>
+                <dt class="text-xs uppercase tracking-[0.16em] text-zinc-500">Backend ref</dt>
+                <dd class="mt-2 break-all font-mono text-sm text-zinc-200">
+                    {% if run.backend_run_ref.is_empty() %}
+                    <span class="text-zinc-500">—</span>
+                    {% else %}
+                    {{ run.backend_run_ref }}
+                    {% endif %}
+                </dd>
+            </div>
+            <div>
+                <dt class="text-xs uppercase tracking-[0.16em] text-zinc-500">Error summary</dt>
+                <dd class="mt-2 text-sm text-zinc-200">
+                    {% if run.error_summary.is_empty() %}
+                    <span class="text-zinc-500">—</span>
+                    {% else %}
+                    {{ run.error_summary }}
+                    {% endif %}
+                </dd>
+            </div>
+        </dl>
+    </section>
+
+    {% match session %}
+    {% when Some with (session) %}
+    <section class="mt-2 rounded-2xl border border-zinc-800 bg-[#0d0d10] p-6">
+        <div class="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+            <div>
+                <h2 class="text-lg font-medium text-white">OpenCode session</h2>
+                <p class="mt-1 text-sm text-zinc-400">Mirrored from the <code class="font-mono text-xs text-zinc-300">opencode</code> schema using session id <code class="font-mono text-xs text-zinc-300">{{ session.id }}</code>.</p>
+            </div>
+            {% if !session.share_url.is_empty() %}
+            <a href="{{ session.share_url }}" class="inline-flex items-center rounded-full border border-zinc-800 px-4 py-2 text-sm font-medium text-zinc-300 hover:border-zinc-700 hover:text-white">Open share URL</a>
+            {% endif %}
+        </div>
+
+        <dl class="mt-4 grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
+            <div>
+                <dt class="text-xs uppercase tracking-[0.16em] text-zinc-500">Title</dt>
+                <dd class="mt-2 text-sm text-zinc-200">{{ session.title }}</dd>
+            </div>
+            <div>
+                <dt class="text-xs uppercase tracking-[0.16em] text-zinc-500">Status</dt>
+                <dd class="mt-2 text-sm text-zinc-200">{{ session.status }}</dd>
+            </div>
+            <div>
+                <dt class="text-xs uppercase tracking-[0.16em] text-zinc-500">Created</dt>
+                <dd class="mt-2 font-mono text-sm text-zinc-200">{{ session.created_at_text }}</dd>
+            </div>
+            <div>
+                <dt class="text-xs uppercase tracking-[0.16em] text-zinc-500">Updated</dt>
+                <dd class="mt-2 font-mono text-sm text-zinc-200">{{ session.updated_at_text }}</dd>
+            </div>
+            <div class="md:col-span-2 xl:col-span-2">
+                <dt class="text-xs uppercase tracking-[0.16em] text-zinc-500">Directory</dt>
+                <dd class="mt-2 break-all font-mono text-sm text-zinc-200">{{ session.directory }}</dd>
+            </div>
+            <div>
+                <dt class="text-xs uppercase tracking-[0.16em] text-zinc-500">Model</dt>
+                <dd class="mt-2 break-all font-mono text-sm text-zinc-200">{{ session.model_text }}</dd>
+            </div>
+            <div>
+                <dt class="text-xs uppercase tracking-[0.16em] text-zinc-500">Estimated cost</dt>
+                <dd class="mt-2 font-mono text-sm text-zinc-200">{{ session.estimated_cost_text }}</dd>
+            </div>
+        </dl>
+
+        <div class="mt-4 grid grid-cols-2 gap-4 md:grid-cols-4 xl:grid-cols-8">
+            <div class="rounded-xl border border-zinc-800 bg-zinc-950/50 p-4">
+                <p class="text-xs uppercase tracking-[0.16em] text-zinc-500">Input</p>
+                <p class="mt-2 font-mono text-sm text-zinc-200">{{ session.input_tokens_text }}</p>
+            </div>
+            <div class="rounded-xl border border-zinc-800 bg-zinc-950/50 p-4">
+                <p class="text-xs uppercase tracking-[0.16em] text-zinc-500">Output</p>
+                <p class="mt-2 font-mono text-sm text-zinc-200">{{ session.output_tokens_text }}</p>
+            </div>
+            <div class="rounded-xl border border-zinc-800 bg-zinc-950/50 p-4">
+                <p class="text-xs uppercase tracking-[0.16em] text-zinc-500">Reasoning</p>
+                <p class="mt-2 font-mono text-sm text-zinc-200">{{ session.reasoning_tokens_text }}</p>
+            </div>
+            <div class="rounded-xl border border-zinc-800 bg-zinc-950/50 p-4">
+                <p class="text-xs uppercase tracking-[0.16em] text-zinc-500">Context</p>
+                <p class="mt-2 font-mono text-sm text-zinc-200">{{ session.context_tokens_text }}</p>
+            </div>
+            <div class="rounded-xl border border-zinc-800 bg-zinc-950/50 p-4">
+                <p class="text-xs uppercase tracking-[0.16em] text-zinc-500">Peak context</p>
+                <p class="mt-2 font-mono text-sm text-zinc-200">{{ session.peak_context_tokens_text }}</p>
+            </div>
+            <div class="rounded-xl border border-zinc-800 bg-zinc-950/50 p-4">
+                <p class="text-xs uppercase tracking-[0.16em] text-zinc-500">Cache read</p>
+                <p class="mt-2 font-mono text-sm text-zinc-200">{{ session.cache_read_tokens_text }}</p>
+            </div>
+            <div class="rounded-xl border border-zinc-800 bg-zinc-950/50 p-4">
+                <p class="text-xs uppercase tracking-[0.16em] text-zinc-500">Cache write</p>
+                <p class="mt-2 font-mono text-sm text-zinc-200">{{ session.cache_write_tokens_text }}</p>
+            </div>
+            <div class="rounded-xl border border-zinc-800 bg-zinc-950/50 p-4">
+                <p class="text-xs uppercase tracking-[0.16em] text-zinc-500">Compactions</p>
+                <p class="mt-2 font-mono text-sm text-zinc-200">{{ session.compaction_count_text }}</p>
+            </div>
+        </div>
+    </section>
+
+    <section class="mt-2 grid grid-cols-1 gap-2 xl:grid-cols-[minmax(0,1.2fr)_minmax(0,0.8fr)]">
+        <section class="rounded-2xl border border-zinc-800 bg-[#0d0d10] p-6">
+            <h2 class="text-lg font-medium text-white">Transcript</h2>
+            <p class="mt-1 text-sm text-zinc-400">{{ session.messages.len() }} mirrored messages from the OpenCode conversation.</p>
+            {% if session.messages.is_empty() %}
+            <div class="mt-4 rounded-xl border border-zinc-800 bg-zinc-950/70 p-6 text-center text-sm text-zinc-400">No mirrored messages yet.</div>
+            {% else %}
+            <div class="mt-4 space-y-4">
+                {% for message in session.messages %}
+                <article class="rounded-2xl border border-zinc-800 bg-zinc-950/50 p-5">
+                    <div class="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                        <div class="flex items-center gap-2">
+                            <span class="inline-flex rounded-full border px-2 py-0.5 text-xs font-medium {{ message.role_class }}">{{ message.role_label }}</span>
+                            <span class="font-mono text-xs text-zinc-500">{{ message.created_at_text }}</span>
+                        </div>
+                        <span class="break-all font-mono text-xs text-zinc-500">{{ message.model_text }}</span>
+                    </div>
+                    {% if !message.summary.is_empty() %}
+                    <p class="mt-3 text-sm text-zinc-300">{{ message.summary }}</p>
+                    {% endif %}
+                    {% if !message.text.is_empty() %}
+                    <pre class="mt-3 overflow-x-auto whitespace-pre-wrap break-words rounded-xl border border-zinc-800 bg-[#09090b] px-4 py-3 text-xs leading-6 text-zinc-200">{{ message.text }}</pre>
+                    {% endif %}
+                    {% if !message.system_prompt.is_empty() %}
+                    <details class="mt-3 rounded-xl border border-zinc-800 bg-[#09090b] px-4 py-3">
+                        <summary class="cursor-pointer text-xs font-medium uppercase tracking-[0.16em] text-zinc-400">System prompt</summary>
+                        <pre class="mt-3 overflow-x-auto whitespace-pre-wrap break-words text-xs leading-6 text-zinc-300">{{ message.system_prompt }}</pre>
+                    </details>
+                    {% endif %}
+                </article>
+                {% endfor %}
+            </div>
+            {% endif %}
+        </section>
+
+        <div class="space-y-2">
+            <section class="rounded-2xl border border-zinc-800 bg-[#0d0d10] p-6">
+                <h2 class="text-lg font-medium text-white">Commands</h2>
+                {% if session.commands.is_empty() %}
+                <div class="mt-4 rounded-xl border border-zinc-800 bg-zinc-950/70 p-4 text-sm text-zinc-400">No commands mirrored for this session.</div>
+                {% else %}
+                <div class="mt-4 space-y-3">
+                    {% for command in session.commands %}
+                    <article class="rounded-xl border border-zinc-800 bg-zinc-950/50 p-4">
+                        <div class="flex items-center justify-between gap-3">
+                            <span class="font-mono text-sm text-zinc-200">/{{ command.command_name }}</span>
+                            <span class="font-mono text-xs text-zinc-500">{{ command.created_at_text }}</span>
+                        </div>
+                        {% if !command.command_args.is_empty() %}
+                        <pre class="mt-3 overflow-x-auto whitespace-pre-wrap break-words rounded-xl border border-zinc-800 bg-[#09090b] px-3 py-2 text-xs text-zinc-300">{{ command.command_args }}</pre>
+                        {% endif %}
+                    </article>
+                    {% endfor %}
+                </div>
+                {% endif %}
+            </section>
+
+            <section class="rounded-2xl border border-zinc-800 bg-[#0d0d10] p-6">
+                <h2 class="text-lg font-medium text-white">Tool executions</h2>
+                {% if session.tool_executions.is_empty() %}
+                <div class="mt-4 rounded-xl border border-zinc-800 bg-zinc-950/70 p-4 text-sm text-zinc-400">No tool executions mirrored for this session.</div>
+                {% else %}
+                <div class="mt-4 space-y-3">
+                    {% for tool in session.tool_executions %}
+                    <article class="rounded-xl border border-zinc-800 bg-zinc-950/50 p-4">
+                        <div class="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+                            <div class="flex items-center gap-2">
+                                <span class="font-mono text-sm text-zinc-200">{{ tool.tool_name }}</span>
+                                <span class="inline-flex rounded-full border px-2 py-0.5 text-xs font-medium {{ tool.success_class }}">{{ tool.success_label }}</span>
+                            </div>
+                            <span class="font-mono text-xs text-zinc-500">{{ tool.duration_text }}</span>
+                        </div>
+                        <div class="mt-3 grid grid-cols-1 gap-3 text-xs text-zinc-400">
+                            <div>
+                                <span class="uppercase tracking-[0.16em]">Started</span>
+                                <div class="mt-1 font-mono text-zinc-300">{{ tool.started_at_text }}</div>
+                            </div>
+                            <div>
+                                <span class="uppercase tracking-[0.16em]">Completed</span>
+                                <div class="mt-1 font-mono text-zinc-300">{{ tool.completed_at_text }}</div>
+                            </div>
+                        </div>
+                        {% if !tool.args_json.is_empty() %}
+                        <details class="mt-3 rounded-xl border border-zinc-800 bg-[#09090b] px-3 py-2">
+                            <summary class="cursor-pointer text-xs font-medium uppercase tracking-[0.16em] text-zinc-400">Args</summary>
+                            <pre class="mt-3 overflow-x-auto whitespace-pre-wrap break-words text-xs text-zinc-300">{{ tool.args_json }}</pre>
+                        </details>
+                        {% endif %}
+                        {% if !tool.result_json.is_empty() %}
+                        <details class="mt-3 rounded-xl border border-zinc-800 bg-[#09090b] px-3 py-2">
+                            <summary class="cursor-pointer text-xs font-medium uppercase tracking-[0.16em] text-zinc-400">Result</summary>
+                            <pre class="mt-3 overflow-x-auto whitespace-pre-wrap break-words text-xs text-zinc-300">{{ tool.result_json }}</pre>
+                        </details>
+                        {% endif %}
+                        {% if !tool.error_text.is_empty() %}
+                        <div class="mt-3 rounded-xl border border-red-900/60 bg-red-950/30 px-3 py-2 text-xs text-red-200">{{ tool.error_text }}</div>
+                        {% endif %}
+                    </article>
+                    {% endfor %}
+                </div>
+                {% endif %}
+            </section>
+
+            <section class="rounded-2xl border border-zinc-800 bg-[#0d0d10] p-6">
+                <h2 class="text-lg font-medium text-white">Session errors</h2>
+                {% if session.session_errors.is_empty() %}
+                <div class="mt-4 rounded-xl border border-zinc-800 bg-zinc-950/70 p-4 text-sm text-zinc-400">No mirrored session errors.</div>
+                {% else %}
+                <div class="mt-4 space-y-3">
+                    {% for error in session.session_errors %}
+                    <article class="rounded-xl border border-red-900/60 bg-red-950/20 p-4">
+                        <div class="flex items-center justify-between gap-3">
+                            <span class="text-sm font-medium text-red-200">{% if error.error_type.is_empty() %}error{% else %}{{ error.error_type }}{% endif %}</span>
+                            <span class="font-mono text-xs text-red-200/70">{{ error.created_at_text }}</span>
+                        </div>
+                        {% if !error.error_message.is_empty() %}
+                        <p class="mt-3 text-sm text-red-100/90">{{ error.error_message }}</p>
+                        {% endif %}
+                        {% if !error.error_data_json.is_empty() %}
+                        <pre class="mt-3 overflow-x-auto whitespace-pre-wrap break-words rounded-xl border border-red-900/60 bg-[#09090b] px-3 py-2 text-xs text-red-100/90">{{ error.error_data_json }}</pre>
+                        {% endif %}
+                    </article>
+                    {% endfor %}
+                </div>
+                {% endif %}
+            </section>
+        </div>
+    </section>
+    {% when None %}
+    <section class="mt-2 rounded-2xl border {% if session_lookup_attempted %}border-amber-900/60 bg-amber-950/20{% else %}border-zinc-800 bg-[#0d0d10]{% endif %} p-6">
+        <h2 class="text-lg font-medium {% if session_lookup_attempted %}text-amber-200{% else %}text-white{% endif %}">OpenCode session</h2>
+        {% if session_lookup_attempted %}
+        <p class="mt-2 text-sm leading-6 text-amber-100/80">This run has a backend session id, but no matching row was found yet in the <code class="font-mono text-xs text-amber-100">opencode.sessions</code> mirror. The plugin may still be writing, or the session mirror may have failed.</p>
+        {% else %}
+        <p class="mt-2 text-sm leading-6 text-zinc-400">This run does not have an OpenCode backend session id, so there is no mirrored session detail to display.</p>
+        {% endif %}
+    </section>
+    {% endmatch %}
+</div>
+{% endblock %}

@@ -1,3 +1,4 @@
+mod agentic;
 mod agents;
 mod config;
 mod db;
@@ -70,16 +71,38 @@ async fn main() -> Result<()> {
         api_base_url: config.vibetrading_agent_api_base_url.clone(),
     };
 
-    println!("Starting agent orchestrator");
-    let orchestrator = agents::AgentOrchestrator::new(
+    let opencode_client =
+        opencode::client::OpenCodeClient::new(opencode::client::OpenCodeClientConfig::new(
+            config.opencode_server_username.clone(),
+            config.opencode_server_password.clone(),
+        ))
+        .context("failed to build OpenCode HTTP client")?;
+    let opencode_backend: Arc<dyn agentic::backend::AgenticBackend> = Arc::new(
+        agentic::backend::OpenCodeBackend::new(Arc::new(opencode_client)),
+    );
+
+    println!("Starting Hyperliquid agent monitor");
+    let hyperliquid_monitor = agents::HyperliquidAgentMonitor::new(
         pool.clone(),
-        shutdown_rx,
+        shutdown_rx.clone(),
         Arc::clone(&live_accounts),
         encryption_key.clone(),
     );
-    let mut orchestrator_handle = tokio::spawn(async move {
-        if let Err(e) = orchestrator.run().await {
-            eprintln!("orchestrator exited with error: {e}");
+    let mut hyperliquid_monitor_handle = tokio::spawn(async move {
+        if let Err(e) = hyperliquid_monitor.run().await {
+            eprintln!("hyperliquid agent monitor exited with error: {e}");
+        }
+    });
+
+    println!("Starting agentic scheduler");
+    let agentic_scheduler = agentic::scheduler::AgenticScheduler::new(
+        pool.clone(),
+        shutdown_rx.clone(),
+        opencode_backend.clone(),
+    );
+    let mut agentic_scheduler_handle = tokio::spawn(async move {
+        if let Err(e) = agentic_scheduler.run().await {
+            eprintln!("agentic scheduler exited with error: {e}");
         }
     });
 
@@ -88,6 +111,7 @@ async fn main() -> Result<()> {
     let server_future = web::serve(
         &config.bind_addr,
         pool,
+        opencode_backend,
         encryption_key,
         Arc::clone(&live_accounts),
         hermes,
@@ -101,14 +125,19 @@ async fn main() -> Result<()> {
         result = &mut server_future => {
             result?;
         }
-        _ = &mut orchestrator_handle => {
-            eprintln!("orchestrator exited early");
+        _ = &mut hyperliquid_monitor_handle => {
+            eprintln!("hyperliquid agent monitor exited early");
+            return Ok(());
+        }
+        _ = &mut agentic_scheduler_handle => {
+            eprintln!("agentic scheduler exited early");
             return Ok(());
         }
     }
 
-    // Wait for the orchestrator to finish its graceful shutdown.
-    let _ = orchestrator_handle.await;
+    // Wait for the background tasks to finish their graceful shutdown.
+    let _ = hyperliquid_monitor_handle.await;
+    let _ = agentic_scheduler_handle.await;
 
     println!("Shutdown complete");
     Ok(())

@@ -48,7 +48,7 @@ struct AgentTaskHandle {
 }
 
 /// Supervises one background reconciliation task per enabled agent.
-pub struct AgentOrchestrator {
+pub struct HyperliquidAgentMonitor {
     pool: DbPool,
     shutdown_rx: watch::Receiver<bool>,
     tasks: HashMap<String, AgentTaskHandle>,
@@ -57,7 +57,7 @@ pub struct AgentOrchestrator {
     encryption_key: EncryptionKey,
 }
 
-impl AgentOrchestrator {
+impl HyperliquidAgentMonitor {
     pub fn new(
         pool: DbPool,
         shutdown_rx: watch::Receiver<bool>,
@@ -74,11 +74,11 @@ impl AgentOrchestrator {
         }
     }
 
-    /// Run the orchestrator loop until the shutdown signal is received.
+    /// Run the monitor loop until the shutdown signal is received.
     pub async fn run(mut self) -> Result<()> {
-        info!("agent orchestrator starting");
+        info!("hyperliquid agent monitor starting");
         self.lookup = load_instruments_with_retry(&self.pool, &mut self.shutdown_rx).await?;
-        info!("agent orchestrator loaded instruments");
+        info!("hyperliquid agent monitor loaded instruments");
         loop {
             if *self.shutdown_rx.borrow() {
                 break;
@@ -87,7 +87,7 @@ impl AgentOrchestrator {
             let agents = match load_enabled_agents(&self.pool).await {
                 Ok(agents) => agents,
                 Err(e) => {
-                    error!(error = ?e, "orchestrator failed to load enabled agents");
+                    error!(error = ?e, "hyperliquid agent monitor failed to load enabled agents");
                     tokio::select! {
                         _ = tokio::time::sleep(REGISTRY_REFRESH_INTERVAL) => continue,
                         _ = self.shutdown_rx.changed() => break,
@@ -104,7 +104,7 @@ impl AgentOrchestrator {
         }
 
         self.shutdown_all().await;
-        info!("agent orchestrator stopped");
+        info!("hyperliquid agent monitor stopped");
         Ok(())
     }
 
@@ -377,7 +377,7 @@ async fn load_instruments_with_retry(
                 warn!(
                     retry_in = ?INSTRUMENT_LOAD_RETRY_INTERVAL,
                     error = ?e,
-                    "orchestrator failed to load instruments"
+                    "hyperliquid agent monitor failed to load instruments"
                 );
                 tokio::select! {
                     _ = tokio::time::sleep(INSTRUMENT_LOAD_RETRY_INTERVAL) => {}

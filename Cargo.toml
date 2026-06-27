@@ -7,6 +7,7 @@ rust-version = "1.96"
 [dependencies]
 ammonia = "4"
 anyhow = "1"
+async-trait = "0.1"
 askama = "0.12"
 axum = "0.8"
 dotenvy = "0.15"

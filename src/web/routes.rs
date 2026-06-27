@@ -20,6 +20,11 @@ use tokio_stream::wrappers::BroadcastStream;
 use tracing::{error, warn};
 
 use crate::{
+    agentic::{
+        model::{JOB_KIND_ANALYSIS, JOB_KIND_TRADING},
+        scheduler::{dispatch_request_from_schedule, spawn_dispatch_task},
+        store::QueuedScheduleRun,
+    },
     agents::{
         crypto::{encrypt, generate_api_key},
         keys::derive_wallet_address,
@@ -55,10 +60,12 @@ use crate::{
         AppState,
         templates::{
             AccountBalancePartialTemplate, AccountBalanceView, AgentListEntry,
+            AgentJobDetailPageTemplate,
             AgentMemoryDetailPageTemplate, AgentMemoryDetailPartialTemplate,
-            AgentMemoryTimelinePartialTemplate, AgentShowTab, AgentsNewPageTemplate,
-            AgentsPageTemplate, AgentsShowPageTemplate, BackendsNewPageTemplate,
-            BackendsPageTemplate, BalanceSparklinesPartialTemplate, HermesPageTemplate,
+            AgentMemoryTimelinePartialTemplate, AgentRunDetailPageTemplate,
+            AgentScheduleNewPageTemplate, AgentShowTab, AgentsNewPageTemplate, AgentsPageTemplate,
+            AgentsShowPageTemplate, BackendsNewPageTemplate, BackendsPageTemplate,
+            BalanceSparklinesPartialTemplate, CreateAgentScheduleFormValues, HermesPageTemplate,
             LatestAnalysisSummaryPartialTemplate, LatestTradeExecutionSummaryPartialTemplate,
             MemoryView, OpenCodeWorkspaceSettingsView, OpenOrdersPartialTemplate, OpenOrdersView,
             OpenPositionsPartialTemplate, OpenPositionsView, ServerErrorPageTemplate,
@@ -104,6 +111,27 @@ pub fn router(state: Arc<AppState>) -> Router {
             "/agents/{agent_key}/settings/instruments",
             post(agents_update_instruments),
         )
+        .route(
+            "/agents/{agent_key}/jobs",
+            get(agents_show_jobs).post(agents_create_job),
+        )
+        .route(
+            "/agents/{agent_key}/jobs/new",
+            get(agents_new_job),
+        )
+        .route(
+            "/agents/{agent_key}/jobs/{job_id}",
+            get(agents_show_job_detail),
+        )
+        .route(
+            "/agents/{agent_key}/jobs/{job_id}/toggle",
+            post(agents_toggle_job),
+        )
+        .route(
+            "/agents/{agent_key}/jobs/{job_id}/run",
+            post(agents_run_job_now),
+        )
+        .route("/agents/{agent_key}/runs/{run_id}", get(agents_show_run_detail))
         .route("/agents/{agent_key}/delete", post(delete_agent))
         .route("/agents/{agent_key}/live/stream", get(agent_live_stream))
         .route("/hermes", get(hermes_page))
@@ -400,6 +428,371 @@ async fn agents_show_settings(
     render_agent_show_page(&state, &agent_key, AgentShowTab::Settings, None).await
 }
 
+async fn agents_show_jobs(
+    State(state): State<Arc<AppState>>,
+    Path(agent_key): Path<String>,
+) -> Result<Response, AppError> {
+    render_agent_show_page(&state, &agent_key, AgentShowTab::Jobs, None).await
+}
+
+async fn agents_show_job_detail(
+    State(state): State<Arc<AppState>>,
+    Path((agent_key, job_id)): Path<(String, i64)>,
+) -> Result<Response, AppError> {
+    let Some(agent) = get_agent(&state.db_pool, &agent_key).await? else {
+        return Ok((StatusCode::NOT_FOUND, "agent not found").into_response());
+    };
+    if agent.backend_kind != BACKEND_KIND_OPENCODE {
+        return Ok((
+            StatusCode::NOT_FOUND,
+            "jobs are only available for OpenCode agents",
+        )
+            .into_response());
+    }
+
+    let Some(job) = crate::agentic::store::get_agent_schedule(&state.db_pool, &agent_key, job_id).await?
+    else {
+        return Ok((StatusCode::NOT_FOUND, "job not found").into_response());
+    };
+
+    const RUNS_LIMIT: i64 = 50;
+    let mut job_runs_loaded = false;
+    let job_runs = match crate::agentic::store::list_schedule_runs(
+        &state.db_pool,
+        &agent_key,
+        job_id,
+        RUNS_LIMIT,
+    )
+    .await
+    {
+        Ok(rows) => {
+            job_runs_loaded = true;
+            rows.iter()
+                .map(crate::web::templates::AgenticRunView::from_row)
+                .collect()
+        }
+        Err(error) => {
+            warn!(
+                agent_key = %agent.agent_key,
+                job_id,
+                error = ?error,
+                "failed to list job runs for operator page"
+            );
+            Vec::new()
+        }
+    };
+
+    let html = AgentJobDetailPageTemplate::render_view(
+        agent.clone(),
+        crate::web::templates::AgenticJobDetailView::from_row(&job),
+        job_runs,
+        job_runs_loaded,
+    )?;
+    Ok(Html(html).into_response())
+}
+
+async fn agents_show_run_detail(
+    State(state): State<Arc<AppState>>,
+    Path((agent_key, run_id)): Path<(String, i64)>,
+) -> Result<Response, AppError> {
+    let Some(agent) = get_agent(&state.db_pool, &agent_key).await? else {
+        return Ok((StatusCode::NOT_FOUND, "agent not found").into_response());
+    };
+    if agent.backend_kind != BACKEND_KIND_OPENCODE {
+        return Ok((
+            StatusCode::NOT_FOUND,
+            "run details are only available for OpenCode agents",
+        )
+            .into_response());
+    }
+
+    let Some(run) = crate::agentic::store::get_run(&state.db_pool, run_id).await? else {
+        return Ok((StatusCode::NOT_FOUND, "run not found").into_response());
+    };
+    if run.agent_key != agent_key {
+        return Ok((StatusCode::NOT_FOUND, "run not found").into_response());
+    }
+
+    let run_view = crate::web::templates::AgenticRunDetailView::from_row(&run);
+    let session_lookup_attempted = !run_view.backend_run_ref.is_empty();
+    let session = if session_lookup_attempted {
+        crate::opencode::store::get_session_detail(&state.db_pool, &run_view.backend_run_ref)
+            .await?
+            .as_ref()
+            .map(crate::web::templates::OpenCodeSessionView::from_detail)
+    } else {
+        None
+    };
+
+    let html = AgentRunDetailPageTemplate::render_view(
+        agent.clone(),
+        run_view,
+        session,
+        session_lookup_attempted,
+    )?;
+    Ok(Html(html).into_response())
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+struct CreateAgentScheduleForm {
+    #[serde(default)]
+    job_key: String,
+    #[serde(default)]
+    job_kind: String,
+    #[serde(default)]
+    interval_seconds: String,
+    #[serde(default)]
+    timeout_seconds: String,
+    #[serde(default)]
+    model_provider_id: String,
+    #[serde(default)]
+    model_id: String,
+    #[serde(default)]
+    operator_prompt: String,
+    enabled: Option<String>,
+}
+
+#[derive(Debug)]
+struct ValidatedCreateAgentSchedule {
+    job_key: String,
+    job_kind: String,
+    interval_seconds: i32,
+    timeout_seconds: i32,
+    model_provider_id: Option<String>,
+    model_id: Option<String>,
+    operator_prompt: String,
+    enabled: bool,
+}
+
+impl CreateAgentScheduleForm {
+    fn defaults() -> Self {
+        Self {
+            job_kind: JOB_KIND_ANALYSIS.to_string(),
+            interval_seconds: "900".to_string(),
+            timeout_seconds: "600".to_string(),
+            enabled: Some("on".to_string()),
+            ..Self::default()
+        }
+    }
+
+    fn enabled(&self) -> bool {
+        self.enabled.is_some()
+    }
+
+    fn as_template_values(&self) -> CreateAgentScheduleFormValues {
+        CreateAgentScheduleFormValues {
+            job_key: self.job_key.clone(),
+            job_kind: self.job_kind.clone(),
+            interval_seconds: self.interval_seconds.clone(),
+            timeout_seconds: self.timeout_seconds.clone(),
+            model_provider_id: self.model_provider_id.clone(),
+            model_id: self.model_id.clone(),
+            operator_prompt: self.operator_prompt.clone(),
+            enabled: self.enabled(),
+        }
+    }
+
+    fn validate(&self) -> Result<ValidatedCreateAgentSchedule, Vec<String>> {
+        let mut errors = Vec::new();
+
+        let job_key = self.job_key.trim();
+        if job_key.is_empty() {
+            errors.push("Job key is required.".to_string());
+        } else if !is_valid_schedule_job_key(job_key) {
+            errors.push("Job key must use lowercase letters, digits, and hyphens.".to_string());
+        }
+
+        let job_kind = self.job_kind.trim();
+        if !matches!(job_kind, JOB_KIND_ANALYSIS | JOB_KIND_TRADING) {
+            errors.push("Job kind must be analysis or trading.".to_string());
+        }
+
+        let interval_seconds =
+            parse_positive_schedule_seconds(&self.interval_seconds, "Interval", &mut errors);
+        let timeout_seconds =
+            parse_positive_schedule_seconds(&self.timeout_seconds, "Timeout", &mut errors);
+
+        let model_provider_id = trim_optional_field(&self.model_provider_id);
+        let model_id = trim_optional_field(&self.model_id);
+        if model_provider_id.is_some() != model_id.is_some() {
+            errors.push(
+                "Model provider ID and model ID must either both be set or both be empty."
+                    .to_string(),
+            );
+        }
+
+        if errors.is_empty() {
+            Ok(ValidatedCreateAgentSchedule {
+                job_key: job_key.to_string(),
+                job_kind: job_kind.to_string(),
+                interval_seconds: interval_seconds.expect("validated interval seconds"),
+                timeout_seconds: timeout_seconds.expect("validated timeout seconds"),
+                model_provider_id,
+                model_id,
+                operator_prompt: self.operator_prompt.trim().to_string(),
+                enabled: self.enabled(),
+            })
+        } else {
+            Err(errors)
+        }
+    }
+}
+
+async fn agents_new_job(
+    State(state): State<Arc<AppState>>,
+    Path(agent_key): Path<String>,
+) -> Result<Response, AppError> {
+    let Some(agent) = get_agent(&state.db_pool, &agent_key).await? else {
+        return Ok((StatusCode::NOT_FOUND, "agent not found").into_response());
+    };
+    if agent.backend_kind != BACKEND_KIND_OPENCODE {
+        return Ok((StatusCode::NOT_FOUND, "jobs are only available for OpenCode agents")
+            .into_response());
+    }
+
+    Ok(render_new_job_form(
+        agent,
+        CreateAgentScheduleForm::defaults(),
+        Vec::new(),
+        StatusCode::OK,
+    ))
+}
+
+async fn agents_create_job(
+    State(state): State<Arc<AppState>>,
+    Path(agent_key): Path<String>,
+    Form(form): Form<CreateAgentScheduleForm>,
+) -> Result<Response, AppError> {
+    let Some(agent) = get_agent(&state.db_pool, &agent_key).await? else {
+        return Ok((StatusCode::NOT_FOUND, "agent not found").into_response());
+    };
+    if agent.backend_kind != BACKEND_KIND_OPENCODE {
+        return Ok((StatusCode::NOT_FOUND, "jobs are only available for OpenCode agents")
+            .into_response());
+    }
+
+    let validated = match form.validate() {
+        Ok(validated) => validated,
+        Err(errors) => {
+            return Ok(render_new_job_form(
+                agent,
+                form,
+                errors,
+                StatusCode::UNPROCESSABLE_ENTITY,
+            ));
+        }
+    };
+
+    if let Err(error) = crate::agentic::store::insert_agent_schedule(
+        &state.db_pool,
+        &agent_key,
+        &validated.job_key,
+        &validated.job_kind,
+        validated.enabled,
+        validated.interval_seconds,
+        Utc::now(),
+        validated.model_provider_id.as_deref(),
+        validated.model_id.as_deref(),
+        validated.timeout_seconds,
+        &validated.operator_prompt,
+    )
+    .await
+    {
+        let errors = match schedule_unique_violation_message(&error) {
+            Some(message) => vec![message],
+            None => return Err(AppError(error)),
+        };
+        return Ok(render_new_job_form(
+            agent,
+            form,
+            errors,
+            StatusCode::UNPROCESSABLE_ENTITY,
+        ));
+    }
+
+    Ok(Redirect::to(&format!("/agents/{agent_key}/jobs")).into_response())
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct ToggleScheduleForm {
+    enabled: Option<String>,
+}
+
+async fn agents_toggle_job(
+    State(state): State<Arc<AppState>>,
+    Path((agent_key, job_id)): Path<(String, i64)>,
+    Form(form): Form<ToggleScheduleForm>,
+) -> Result<Response, AppError> {
+    let Some(agent) = get_agent(&state.db_pool, &agent_key).await? else {
+        return Ok((StatusCode::NOT_FOUND, "agent not found").into_response());
+    };
+    if agent.backend_kind != BACKEND_KIND_OPENCODE {
+        return Ok((StatusCode::NOT_FOUND, "jobs are only available for OpenCode agents")
+            .into_response());
+    }
+
+    // Checkbox presence: if `enabled=on` was submitted, the new state is
+    // enabled. Otherwise (only `enabled=off` was submitted), the new state
+    // is disabled. This is the same shape used by the agent create form.
+    let enable = matches!(form.enabled.as_deref(), Some("on"));
+    let updated = crate::agentic::store::set_schedule_enabled(
+        &state.db_pool,
+        &agent_key,
+        job_id,
+        enable,
+    )
+    .await?;
+
+    if !updated {
+        return Ok((StatusCode::NOT_FOUND, "job not found").into_response());
+    }
+
+    Ok(Redirect::to(&format!("/agents/{agent_key}/jobs")).into_response())
+}
+
+async fn agents_run_job_now(
+    State(state): State<Arc<AppState>>,
+    Path((agent_key, job_id)): Path<(String, i64)>,
+) -> Result<Response, AppError> {
+    let Some(agent) = get_agent(&state.db_pool, &agent_key).await? else {
+        return Ok((StatusCode::NOT_FOUND, "agent not found").into_response());
+    };
+    if agent.backend_kind != BACKEND_KIND_OPENCODE {
+        return Ok((StatusCode::NOT_FOUND, "jobs are only available for OpenCode agents")
+            .into_response());
+    }
+
+    let Some(schedule) = crate::agentic::store::get_opencode_schedule_for_dispatch(
+        &state.db_pool,
+        &agent_key,
+        job_id,
+    )
+    .await?
+    else {
+        return Ok((StatusCode::NOT_FOUND, "job not found").into_response());
+    };
+
+    match crate::agentic::store::insert_queued_run(&state.db_pool, &agent_key, job_id).await? {
+        QueuedScheduleRun::Dispatch {
+            run_id,
+            scheduled_for,
+        } => {
+            let request = dispatch_request_from_schedule(&schedule, run_id, scheduled_for);
+            spawn_dispatch_task(
+                state.db_pool.clone(),
+                state.agentic_backend.clone(),
+                request,
+            );
+        }
+        QueuedScheduleRun::Skipped { .. } => {}
+        QueuedScheduleRun::Missing => {
+            return Ok((StatusCode::NOT_FOUND, "job not found").into_response());
+        }
+    }
+
+    Ok(Redirect::to(&format!("/agents/{agent_key}/jobs")).into_response())
+}
+
 async fn agents_update_instruments(
     State(state): State<Arc<AppState>>,
     Path(agent_key): Path<String>,
@@ -524,6 +917,53 @@ async fn render_agent_show_page(
                         agent_key = %agent.agent_key,
                         error = ?error,
                         "failed to list agent instrument options for settings page"
+                    );
+                }
+            }
+        }
+        AgentShowTab::Jobs => {
+            if agent.backend_kind != BACKEND_KIND_OPENCODE {
+                return Ok((StatusCode::NOT_FOUND, "jobs are only available for OpenCode agents")
+                    .into_response());
+            }
+            match crate::agentic::store::list_agent_schedules(&state.db_pool, &agent.agent_key)
+                .await
+            {
+                Ok(rows) => {
+                    template.jobs_loaded = true;
+                    template.jobs = rows
+                        .iter()
+                        .map(crate::web::templates::AgenticJobScheduleView::from_row)
+                        .collect();
+                }
+                Err(error) => {
+                    warn!(
+                        agent_key = %agent.agent_key,
+                        error = ?error,
+                        "failed to list agent jobs for operator page"
+                    );
+                }
+            }
+            const RUNS_LIMIT: i64 = 50;
+            match crate::agentic::store::list_agent_runs(
+                &state.db_pool,
+                &agent.agent_key,
+                RUNS_LIMIT,
+            )
+            .await
+            {
+                Ok(rows) => {
+                    template.recent_runs_loaded = true;
+                    template.recent_runs = rows
+                        .iter()
+                        .map(crate::web::templates::AgenticRunView::from_row)
+                        .collect();
+                }
+                Err(error) => {
+                    warn!(
+                        agent_key = %agent.agent_key,
+                        error = ?error,
+                        "failed to list recent agent runs for jobs page"
                     );
                 }
             }
@@ -1115,6 +1555,18 @@ async fn create_agent(
         if !updated {
             error!(agent_key = %row.agent_key, "agent disappeared before OpenCode workspace metadata update");
         }
+
+        if let Err(error) =
+            crate::agentic::store::insert_default_opencode_schedules(&state.db_pool, &row.agent_key)
+                .await
+        {
+            error!(
+                agent_key = %row.agent_key,
+                error = ?error,
+                "failed to insert default OpenCode schedules"
+            );
+            return Err(AppError(error));
+        }
     }
 
     Ok(Redirect::to(&format!("/agents/{agent_key}")).into_response())
@@ -1157,6 +1609,29 @@ fn render_backend_form(form: CreateAgentRuntimeForm, errors: Vec<String>) -> Res
     }
 }
 
+fn render_new_job_form(
+    agent: crate::agents::model::AgentDetailRow,
+    form: CreateAgentScheduleForm,
+    errors: Vec<String>,
+    status: StatusCode,
+) -> Response {
+    let current_path = format!("/agents/{}/jobs/new", agent.agent_key);
+    let template = AgentScheduleNewPageTemplate {
+        agent,
+        form: form.as_template_values(),
+        errors,
+        current_path,
+    };
+    match template.render() {
+        Ok(body) => (status, Html(body)).into_response(),
+        Err(error) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("template error: {error}"),
+        )
+            .into_response(),
+    }
+}
+
 fn unique_violation_message(error: &anyhow::Error) -> Option<String> {
     let db_err = error.downcast_ref::<sqlx::Error>()?.as_database_error()?;
     if db_err.is_unique_violation() {
@@ -1177,6 +1652,61 @@ fn unique_violation_message(error: &anyhow::Error) -> Option<String> {
     } else {
         None
     }
+}
+
+fn schedule_unique_violation_message(error: &anyhow::Error) -> Option<String> {
+    let db_err = error.downcast_ref::<sqlx::Error>()?.as_database_error()?;
+    if !db_err.is_unique_violation() {
+        return None;
+    }
+
+    let constraint = db_err.constraint().unwrap_or("unknown");
+    if constraint.contains("agentic_job_schedules") || constraint.contains("job_key") {
+        Some("A job with this job key already exists for this agent.".to_string())
+    } else {
+        Some("This job conflicts with an existing row.".to_string())
+    }
+}
+
+fn trim_optional_field(value: &str) -> Option<String> {
+    let trimmed = value.trim();
+    (!trimmed.is_empty()).then(|| trimmed.to_string())
+}
+
+fn parse_positive_schedule_seconds(
+    raw_value: &str,
+    field_name: &str,
+    errors: &mut Vec<String>,
+) -> Option<i32> {
+    match raw_value.trim().parse::<i32>() {
+        Ok(value) if value > 0 => Some(value),
+        _ => {
+            errors.push(format!(
+                "{field_name} must be a positive number of seconds."
+            ));
+            None
+        }
+    }
+}
+
+fn is_valid_schedule_job_key(job_key: &str) -> bool {
+    let mut chars = job_key.chars();
+    let Some(first) = chars.next() else {
+        return false;
+    };
+    if !first.is_ascii_lowercase() && !first.is_ascii_digit() {
+        return false;
+    }
+
+    let mut last = first;
+    for ch in chars {
+        if !ch.is_ascii_lowercase() && !ch.is_ascii_digit() && ch != '-' {
+            return false;
+        }
+        last = ch;
+    }
+
+    last.is_ascii_lowercase() || last.is_ascii_digit()
 }
 
 #[derive(Debug)]
@@ -1260,6 +1790,10 @@ async fn hermes_page(State(state): State<Arc<AppState>>) -> Result<Html<String>,
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::{Arc, Mutex};
+
+    use anyhow::Result;
+    use async_trait::async_trait;
     use axum::body::Body;
     use axum::http::{Request, StatusCode};
     use http_body_util::BodyExt as _;
@@ -1267,6 +1801,7 @@ mod tests {
     use tower::util::ServiceExt;
 
     use crate::{
+        agentic::backend::{AgenticBackend, DispatchRequest, DispatchResult},
         agents::{
             crypto::EncryptionKey,
             model::CreateAgentRuntimeForm,
@@ -1278,10 +1813,40 @@ mod tests {
         web::ui_events::UiEventHub,
     };
 
+    struct NoopAgenticBackend;
+
+    #[async_trait]
+    impl AgenticBackend for NoopAgenticBackend {
+        async fn dispatch(&self, _request: DispatchRequest) -> Result<DispatchResult> {
+            Ok(DispatchResult {
+                backend_run_ref: "ses_test".to_string(),
+            })
+        }
+    }
+
+    struct RecordingAgenticBackend {
+        calls: Arc<Mutex<Vec<DispatchRequest>>>,
+    }
+
+    #[async_trait]
+    impl AgenticBackend for RecordingAgenticBackend {
+        async fn dispatch(&self, request: DispatchRequest) -> Result<DispatchResult> {
+            self.calls.lock().unwrap().push(request);
+            Ok(DispatchResult {
+                backend_run_ref: "ses_recorded".to_string(),
+            })
+        }
+    }
+
     async fn test_state() -> Arc<AppState> {
+        test_state_with_backend(Arc::new(NoopAgenticBackend)).await
+    }
+
+    async fn test_state_with_backend(agentic_backend: Arc<dyn AgenticBackend>) -> Arc<AppState> {
         let pool = test_db::pool().await;
         Arc::new(AppState {
             db_pool: pool,
+            agentic_backend,
             encryption_key: EncryptionKey::new(
                 "test",
                 [
@@ -1772,6 +2337,52 @@ mod tests {
         insert_test_agent_with_text(state, String::new(), String::new()).await
     }
 
+    async fn insert_test_opencode_agent(state: &Arc<AppState>) -> Option<(String, String)> {
+        ensure_test_runtime(
+            state,
+            "opencode-local",
+            crate::agents::model::BACKEND_KIND_OPENCODE,
+        )
+        .await;
+
+        let timestamp = chrono::Utc::now().timestamp_millis();
+        let display_name = format!("OpenCodeScheduleTest{}", timestamp);
+        let agent_key = slugify_agent_key(&display_name);
+        let private_key = random_private_key();
+        let wallet_address = match derive_wallet_address(&private_key) {
+            Ok(addr) => addr,
+            Err(_) => return None,
+        };
+        let now = Utc::now();
+        let row = crate::agents::model::AgentRegistryRow {
+            agent_key: agent_key.clone(),
+            created_at: now,
+            updated_at: now,
+            enabled: true,
+            display_name,
+            analysis_prompt: String::new(),
+            trading_prompt: String::new(),
+            wallet_address: wallet_address.clone(),
+            environment: "live".to_string(),
+            api_key: format!("opencode-schedule-test-{timestamp}"),
+            api_key_last_used_at: None,
+            backend_kind: crate::agents::model::BACKEND_KIND_OPENCODE.to_string(),
+            runtime_id: "opencode-local".to_string(),
+            runtime_config: serde_json::json!({}),
+            analysis_context_last_used_at: None,
+            trading_context_last_used_at: None,
+            hyperliquid_private_key_ciphertext: Vec::new(),
+            hyperliquid_private_key_key_id: "test".to_string(),
+        };
+        if insert_agent(&state.db_pool, &row).await.is_err() {
+            return None;
+        }
+        crate::agentic::store::insert_default_opencode_schedules(&state.db_pool, &agent_key)
+            .await
+            .expect("insert default schedules");
+        Some((agent_key, wallet_address))
+    }
+
     async fn ensure_test_runtime(state: &Arc<AppState>, id: &str, backend_kind: &str) {
         let form = CreateAgentRuntimeForm {
             id: id.to_string(),
@@ -1895,6 +2506,22 @@ mod tests {
             .join(".env")
             .exists()
         );
+
+        // Default OpenCode schedules should have been inserted.
+        let schedules = crate::agentic::store::list_agent_schedules(&pool, &agent_key)
+            .await
+            .expect("list schedules");
+        assert_eq!(schedules.len(), 2);
+        let analysis = schedules
+            .iter()
+            .find(|row| row.job_key == "analysis-15m")
+            .expect("analysis schedule present");
+        assert!(analysis.enabled);
+        let trading = schedules
+            .iter()
+            .find(|row| row.job_key == "trading-1m")
+            .expect("trading schedule present");
+        assert!(!trading.enabled);
     }
 
     #[tokio::test]
@@ -1943,6 +2570,12 @@ mod tests {
             .expect("get agent")
             .expect("agent present");
         assert_eq!(stored.runtime_config, serde_json::json!({}));
+
+        // Hermes agents should not get default OpenCode schedules.
+        let schedules = crate::agentic::store::list_agent_schedules(&pool, &agent_key)
+            .await
+            .expect("list schedules");
+        assert!(schedules.is_empty());
     }
 
     #[tokio::test]
@@ -2888,6 +3521,268 @@ mod tests {
         assert!(text.contains("Container workspace path"));
         assert!(text.contains("Profile source"));
         assert!(text.contains("Workspace .env"));
+    }
+
+    #[tokio::test]
+    async fn jobs_route_renders_create_job_button_and_runs_section() {
+        let state = test_state().await;
+        let (agent_key, _wallet_address) = insert_test_opencode_agent(&state)
+            .await
+            .expect("insert opencode agent");
+
+        let response = router(state)
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/agents/{agent_key}/jobs"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let text = response_text(response).await;
+        assert!(text.contains("Create job"));
+        assert!(text.contains(&format!("/agents/{agent_key}/jobs/new")));
+        assert!(text.contains("Jobs"));
+        assert!(text.contains("Runs"));
+        assert!(text.contains("Run now"));
+    }
+
+    #[tokio::test]
+    async fn post_job_run_now_queues_and_dispatches_run() {
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let backend = Arc::new(RecordingAgenticBackend {
+            calls: Arc::clone(&calls),
+        });
+        let state = test_state_with_backend(backend).await;
+        let pool = state.db_pool.clone();
+        let (agent_key, _wallet_address) = insert_test_opencode_agent(&state)
+            .await
+            .expect("insert opencode agent");
+        let schedules = crate::agentic::store::list_agent_schedules(&pool, &agent_key)
+            .await
+            .expect("list schedules");
+        let schedule_id = schedules
+            .iter()
+            .find(|row| row.job_key == "analysis-15m")
+            .map(|row| row.id)
+            .expect("analysis schedule id");
+
+        let response = router(state)
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/agents/{agent_key}/jobs/{schedule_id}/run"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::SEE_OTHER);
+        assert_eq!(
+            response
+                .headers()
+                .get("location")
+                .and_then(|value| value.to_str().ok()),
+            Some(format!("/agents/{agent_key}/jobs").as_str())
+        );
+
+        let deadline = tokio::time::Instant::now() + tokio::time::Duration::from_secs(1);
+        loop {
+            if !calls.lock().unwrap().is_empty() {
+                break;
+            }
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "dispatch was not spawned"
+            );
+            tokio::time::sleep(tokio::time::Duration::from_millis(20)).await;
+        }
+
+        let recorded = calls.lock().unwrap();
+        assert_eq!(recorded.len(), 1);
+        assert_eq!(recorded[0].schedule_id, schedule_id);
+        assert_eq!(recorded[0].agent_key, agent_key);
+        assert_eq!(recorded[0].job_key, "analysis-15m");
+        drop(recorded);
+
+        let runs = crate::agentic::store::list_agent_runs(&pool, &agent_key, 10)
+            .await
+            .expect("list runs");
+        assert!(runs.iter().any(|run| run.schedule_id == Some(schedule_id)));
+    }
+
+    #[tokio::test]
+    async fn new_job_page_renders_for_opencode_agent() {
+        let state = test_state().await;
+        let (agent_key, _wallet_address) = insert_test_opencode_agent(&state)
+            .await
+            .expect("insert opencode agent");
+
+        let response = router(state)
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/agents/{agent_key}/jobs/new"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let text = response_text(response).await;
+        assert!(text.contains("Create job"));
+        assert!(text.contains("name=\"job_key\""));
+        assert!(text.contains("name=\"job_kind\""));
+        assert!(text.contains("name=\"interval_seconds\""));
+        assert!(text.contains("name=\"timeout_seconds\""));
+    }
+
+    #[tokio::test]
+    async fn post_job_creates_new_schedule_and_redirects() {
+        let state = test_state().await;
+        let pool = state.db_pool.clone();
+        let (agent_key, _wallet_address) = insert_test_opencode_agent(&state)
+            .await
+            .expect("insert opencode agent");
+
+        let response = router(state)
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/agents/{agent_key}/jobs"))
+                    .header("content-type", "application/x-www-form-urlencoded")
+                    .body(Body::from(
+                        "job_key=analysis-1h&job_kind=analysis&interval_seconds=3600&timeout_seconds=600&enabled=on&model_provider_id=anthropic&model_id=claude-sonnet-4&operator_prompt=Check+higher+timeframe+structure",
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::SEE_OTHER);
+        assert_eq!(
+            response
+                .headers()
+                .get("location")
+                .and_then(|value| value.to_str().ok()),
+            Some(format!("/agents/{agent_key}/jobs").as_str())
+        );
+
+        let schedules = crate::agentic::store::list_agent_schedules(&pool, &agent_key)
+            .await
+            .expect("list schedules");
+        let schedule = schedules
+            .iter()
+            .find(|row| row.job_key == "analysis-1h")
+            .expect("custom schedule present");
+        assert_eq!(schedule.job_kind, JOB_KIND_ANALYSIS);
+        assert!(schedule.enabled);
+        assert_eq!(schedule.interval_seconds, 3600);
+        assert_eq!(schedule.timeout_seconds, 600);
+        assert_eq!(schedule.model_provider_id.as_deref(), Some("anthropic"));
+        assert_eq!(schedule.model_id.as_deref(), Some("claude-sonnet-4"));
+        assert_eq!(schedule.operator_prompt, "Check higher timeframe structure");
+    }
+
+    #[tokio::test]
+    async fn post_job_with_duplicate_job_key_returns_validation_error() {
+        let state = test_state().await;
+        let (agent_key, _wallet_address) = insert_test_opencode_agent(&state)
+            .await
+            .expect("insert opencode agent");
+
+        let response = router(state)
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/agents/{agent_key}/jobs"))
+                    .header("content-type", "application/x-www-form-urlencoded")
+                    .body(Body::from(
+                        "job_key=analysis-15m&job_kind=analysis&interval_seconds=900&timeout_seconds=600&enabled=on",
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+        let text = response_text(response).await;
+        assert!(text.contains("A job with this job key already exists for this agent."));
+    }
+
+    #[tokio::test]
+    async fn job_detail_page_renders_job_specific_runs() {
+        let state = test_state().await;
+        let pool = state.db_pool.clone();
+        let (agent_key, _wallet_address) = insert_test_opencode_agent(&state)
+            .await
+            .expect("insert opencode agent");
+
+        let schedules = crate::agentic::store::list_agent_schedules(&pool, &agent_key)
+            .await
+            .expect("list schedules");
+        let schedule_id = schedules.first().expect("default schedule").id;
+        let run_id = crate::agentic::store::insert_test_run(&pool, schedule_id, "running")
+            .await
+            .expect("insert run");
+        crate::agentic::store::mark_run_succeeded(&pool, run_id, Some("ses_job_detail"))
+            .await
+            .expect("mark succeeded");
+
+        let response = router(state)
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/agents/{agent_key}/jobs/{schedule_id}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let text = response_text(response).await;
+        assert!(text.contains("Job details"));
+        assert!(text.contains("ses_job_detail"));
+        assert!(text.contains(&format!("/agents/{agent_key}/runs/{run_id}")));
+    }
+
+    #[tokio::test]
+    async fn run_detail_page_handles_missing_opencode_session_mirror() {
+        let state = test_state().await;
+        let pool = state.db_pool.clone();
+        let (agent_key, _wallet_address) = insert_test_opencode_agent(&state)
+            .await
+            .expect("insert opencode agent");
+
+        let schedules = crate::agentic::store::list_agent_schedules(&pool, &agent_key)
+            .await
+            .expect("list schedules");
+        let schedule_id = schedules.first().expect("default schedule").id;
+        let run_id = crate::agentic::store::insert_test_run(&pool, schedule_id, "running")
+            .await
+            .expect("insert run");
+        crate::agentic::store::mark_run_succeeded(&pool, run_id, Some("ses_ui_detail"))
+            .await
+            .expect("mark succeeded");
+
+        let response = router(state)
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/agents/{agent_key}/runs/{run_id}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let text = response_text(response).await;
+        assert!(text.contains("OpenCode session"));
+        assert!(text.contains("ses_ui_detail"));
+        assert!(text.contains("no matching row was found yet in the"));
     }
 
     #[tokio::test]

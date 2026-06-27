@@ -991,6 +991,8 @@ async fn cancel_all_handler(
 mod tests {
     use std::sync::Arc;
 
+    use anyhow::Result;
+    use async_trait::async_trait;
     use axum::Router;
     use axum::body::Body;
     use axum::http::{Request, StatusCode};
@@ -1001,6 +1003,7 @@ mod tests {
     use uuid::Uuid;
 
     use crate::{
+        agentic::backend::{AgenticBackend, DispatchRequest, DispatchResult},
         agents::{
             crypto::EncryptionKey,
             keys::derive_wallet_address,
@@ -1018,10 +1021,22 @@ mod tests {
         },
     };
 
+    struct NoopAgenticBackend;
+
+    #[async_trait]
+    impl AgenticBackend for NoopAgenticBackend {
+        async fn dispatch(&self, _request: DispatchRequest) -> Result<DispatchResult> {
+            Ok(DispatchResult {
+                backend_run_ref: "ses_test".to_string(),
+            })
+        }
+    }
+
     async fn test_state() -> Arc<AppState> {
         let pool = test_db::pool().await;
         Arc::new(AppState {
             db_pool: pool,
+            agentic_backend: Arc::new(NoopAgenticBackend),
             encryption_key: EncryptionKey::new(
                 "test",
                 [

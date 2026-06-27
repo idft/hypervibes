@@ -1,10 +1,10 @@
 pub mod auth;
 pub mod crypto;
+pub mod hyperliquid_monitor;
 pub mod keys;
 pub mod model;
-pub mod orchestrator;
 pub mod prompts;
 pub mod store;
 
 pub use auth::AuthenticatedAgent;
-pub use orchestrator::AgentOrchestrator;
+pub use hyperliquid_monitor::HyperliquidAgentMonitor;

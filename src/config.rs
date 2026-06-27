@@ -15,6 +15,8 @@ pub struct AppConfig {
     pub opencode_workspaces_root: PathBuf,
     pub opencode_container_workspaces_root: String,
     pub vibetrading_agent_api_base_url: String,
+    pub opencode_server_username: String,
+    pub opencode_server_password: Option<String>,
 }
 
 impl AppConfig {
@@ -36,6 +38,8 @@ impl AppConfig {
             opencode_workspaces_root: opencode_workspaces_root_from_env()?,
             opencode_container_workspaces_root: opencode_container_workspaces_root_from_env()?,
             vibetrading_agent_api_base_url: vibetrading_agent_api_base_url_from_env()?,
+            opencode_server_username: opencode_server_username_from_env(),
+            opencode_server_password: opencode_server_password_from_env(),
         })
     }
 }
@@ -202,6 +206,23 @@ fn vibetrading_agent_api_base_url_from_env() -> Result<String> {
     }
     validate_absolute_url("VIBETRADING_AGENT_API_BASE_URL", url)?;
     Ok(url.to_string())
+}
+
+fn opencode_server_username_from_env() -> String {
+    let raw = env::var("OPENCODE_SERVER_USERNAME").unwrap_or_else(|_| "opencode".to_string());
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        "opencode".to_string()
+    } else {
+        trimmed.to_string()
+    }
+}
+
+fn opencode_server_password_from_env() -> Option<String> {
+    env::var("OPENCODE_SERVER_PASSWORD")
+        .ok()
+        .map(|k| k.trim().to_string())
+        .filter(|k| !k.is_empty())
 }
 
 #[cfg(test)]

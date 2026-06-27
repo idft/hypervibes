@@ -12,8 +12,9 @@ use tower_http::{services::ServeDir, trace::TraceLayer};
 use tracing::Level;
 
 use crate::{
-    agents::crypto::EncryptionKey, db::DbPool, hermes::HermesClient,
-    hyperliquid::live_state::LiveAccountStore, opencode::workspace::OpenCodeWorkspaceConfig,
+    agentic::backend::AgenticBackend, agents::crypto::EncryptionKey, db::DbPool,
+    hermes::HermesClient, hyperliquid::live_state::LiveAccountStore,
+    opencode::workspace::OpenCodeWorkspaceConfig,
 };
 
 use self::ui_events::UiEventHub;
@@ -21,6 +22,7 @@ use self::ui_events::UiEventHub;
 #[derive(Clone)]
 pub struct AppState {
     pub db_pool: DbPool,
+    pub agentic_backend: Arc<dyn AgenticBackend>,
     pub encryption_key: EncryptionKey,
     pub live_accounts: Arc<LiveAccountStore>,
     pub ui_events: Arc<UiEventHub>,
@@ -32,6 +34,7 @@ pub struct AppState {
 pub async fn serve(
     bind_addr: &str,
     db_pool: DbPool,
+    agentic_backend: Arc<dyn AgenticBackend>,
     encryption_key: EncryptionKey,
     live_accounts: Arc<LiveAccountStore>,
     hermes: Option<HermesClient>,
@@ -41,6 +44,7 @@ pub async fn serve(
 ) -> Result<()> {
     let state = Arc::new(AppState {
         db_pool,
+        agentic_backend,
         encryption_key,
         live_accounts,
         ui_events: Arc::new(UiEventHub::new()),

@@ -48,6 +48,27 @@ Current implemented slice:
   `vibetrading` MCP server
 - the custom OpenCode container image installs the `vibetrading` MCP server at
   `/opt/vibetrading/mcp/` and includes its Python dependencies
+- the OpenCode HTTP server is reached via raw `reqwest` from a new
+  `OpenCodeClient` in `src/opencode/client.rs`. The `opencode-sdk` crate
+  (crates.io, `opencode-sdk` 0.1.x) was considered and rejected for the
+  current slice: it is pre-stable, sends an `x-opencode-directory` header
+  that OpenCode `1.17.11` ignores, does not expose the
+  `POST /session/{id}/command` slash-command endpoint that this slice
+  relies on, and has no public API for sending the HTTP Basic auth header
+  that the local OpenCode server requires. See "OpenCode Adapter Client"
+  below.
+- a new `AgenticScheduler` background task polls the `agentic_job_schedules`
+  table every 10 seconds, claims due OpenCode schedules atomically, and
+  dispatches each one through `OpenCodeBackend`. The existing
+  `AgentOrchestrator` has been renamed to `HyperliquidAgentMonitor` so the
+  two background systems are clearly distinguished in the codebase.
+- a new `agentic_runs` table tracks every dispatch attempt, including
+  `queued`, `running`, `succeeded`, `failed`, `aborted`, and `skipped`
+  states. Skipped runs are inserted (not merely logged) when an active
+  run exists for the same schedule.
+- the agent detail page now exposes a `Jobs` tab for OpenCode agents.
+  It lists jobs, shows recent runs below the jobs table, and links to
+  dedicated job and run detail pages. Hermes agents do not see this tab.
 - OpenCode agents interact with the Vibetrading backend exclusively through
   the `vibetrading` MCP server; there is no workspace-local Python API
   client anymore
@@ -218,12 +239,12 @@ Git should not be initialized in agent workspaces as part of the initial plan.
 
 OpenCode scheduling is owned by Vibetrading, unlike Hermes scheduling.
 
-The existing `AgentOrchestrator` is better understood as a Hyperliquid account
-sync and monitoring task. The OpenCode backend should introduce a separate
-agentic scheduler rather than mixing LLM run scheduling into the Hyperliquid
-sync loop.
+The previous `AgentOrchestrator` has been renamed to `HyperliquidAgentMonitor`
+to make the scope explicit: it supervises Hyperliquid account sync, live
+WebSocket state, and order reconciliation. OpenCode LLM-run scheduling is a
+separate concern and lives in a new `AgenticScheduler`.
 
-Proposed background systems:
+Background systems (implemented):
 
 ```text
 HyperliquidAgentMonitor
@@ -234,24 +255,31 @@ HyperliquidAgentMonitor
     order reconciliation
 
 AgenticScheduler
-  per enabled OpenCode agent schedule:
-    due-time calculation
-    OpenCodeBackend dispatch
-    run status tracking
-    timeout/failure handling
+  every 10s:
+    list_due_opencode_schedules()
+    claim_due_schedule(schedule_id) -> Dispatch | Skipped | NotDue
+      Dispatch: spawn OpenCodeBackend::dispatch
+      Skipped: insert agentic_runs row with status='skipped'
+    mark_run_running / mark_run_succeeded / mark_run_failed
 ```
 
-The scheduler must only dispatch agents whose `backend_kind` is `opencode`.
+The scheduler only dispatches agents whose `backend_kind` is `opencode`.
 Hermes agents continue to be scheduled by the operator's Hermes cron and are
 observed through `/api/v1/job-context` check-ins.
 
-The current orchestrator may be renamed or moved later to better reflect its
-Hyperliquid-specific responsibilities.
+Disabling an agent or schedule prevents new runs. It does not abort an
+already in-progress OpenCode session in this initial design. In-flight
+dispatch tasks are allowed to complete or be dropped when the runtime exits.
 
 ## DB-Backed Job Schedules
 
-OpenCode jobs should be DB-backed and configurable per agent. Do not hardcode
-only one analysis loop and one trading loop.
+OpenCode jobs are DB-backed and configurable per agent. The implemented
+schema is `agentic_job_schedules` (migration `0008_agentic_scheduler.sql`).
+
+Schedules are independently enabled and disabled, separate from the parent
+agent's enabled flag. This allows analysis-only mode, pausing trading while
+research continues, and disabling an expensive or broken job without disabling
+the whole agent.
 
 Examples:
 
@@ -278,44 +306,51 @@ analysis -> command vibetrading-analysis, agent analysis
 trading  -> command vibetrading-trading,  agent trading
 ```
 
-Schedule rows should store cadence, model choice, timeout, and an optional
+Schedule rows store cadence, model choice, timeout, and an optional
 operator prompt. The operator prompt is not the full executable prompt. It is a
 small per-job instruction fragment injected into the canonical OpenCode command
 or skill flow.
 
-Proposed table shape:
+Implemented table (`agentic_job_schedules`):
 
-```text
-agentic_job_schedules
-  id
-  agent_key
-  job_key
-  job_kind
-  enabled
-  interval_seconds
-  next_run_at
-  model_provider_id
-  model_id
-  timeout_seconds
-  operator_prompt
-  created_at
-  updated_at
+```sql
+CREATE TABLE agentic_job_schedules (
+    id BIGSERIAL PRIMARY KEY,
+    agent_key TEXT NOT NULL REFERENCES agents(agent_key) ON DELETE CASCADE,
+    job_key TEXT NOT NULL,
+    job_kind TEXT NOT NULL,             -- CHECK ('analysis', 'trading')
+    enabled BOOLEAN NOT NULL DEFAULT true,
+    interval_seconds INTEGER NOT NULL,  -- CHECK (> 0)
+    next_run_at TIMESTAMPTZ NOT NULL,
+    model_provider_id TEXT,
+    model_id TEXT,
+    timeout_seconds INTEGER NOT NULL,   -- CHECK (> 0)
+    operator_prompt TEXT NOT NULL DEFAULT '',
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (agent_key, job_key)
+);
 ```
 
-This table is OpenCode-only at first. It does not need backend-specific columns.
+This table is OpenCode-only at first. It does not need backend-specific
+columns. `(agent_key, job_key)` is the natural unique key.
 
-Recommended initial defaults:
+Default schedules inserted when an OpenCode agent is created
+(`agentic::store::insert_default_opencode_schedules`):
 
 ```text
-trading-1m:
-  job_kind: trading
-  interval: 60 seconds
-  timeout: 45 seconds
-
 analysis-15m:
   job_kind: analysis
+  enabled: true
   interval: 900 seconds
   timeout: 600 seconds
+
+trading-1m:
+  job_kind: trading
+  enabled: false
+  interval: 60 seconds
+  timeout: 45 seconds
+```
 ```
 
 Longer timeframe analysis jobs such as `analysis-1h` and `analysis-1d` can be
@@ -339,75 +374,123 @@ aborted
 skipped
 ```
 
-Proposed run table shape:
+Implemented run table (`agentic_runs`):
 
-```text
-agentic_runs
-  id
-  schedule_id
-  agent_key
-  job_key
-  job_kind
-  status
-  backend_run_ref
-  model_provider_id
-  model_id
-  scheduled_for
-  started_at
-  finished_at
-  timeout_seconds
-  error_summary
-  created_at
-  updated_at
+```sql
+CREATE TABLE agentic_runs (
+    id BIGSERIAL PRIMARY KEY,
+    schedule_id BIGINT REFERENCES agentic_job_schedules(id) ON DELETE SET NULL,
+    agent_key TEXT NOT NULL REFERENCES agents(agent_key) ON DELETE CASCADE,
+    job_key TEXT NOT NULL,
+    job_kind TEXT NOT NULL,             -- CHECK ('analysis', 'trading')
+    status TEXT NOT NULL,               -- CHECK ('queued','running','succeeded','failed','aborted','skipped')
+    backend_run_ref TEXT,
+    model_provider_id TEXT,
+    model_id TEXT,
+    scheduled_for TIMESTAMPTZ NOT NULL,
+    started_at TIMESTAMPTZ,
+    finished_at TIMESTAMPTZ,
+    timeout_seconds INTEGER NOT NULL,   -- CHECK (> 0)
+    error_summary TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
 ```
 
-`backend_run_ref` stores the underlying OpenCode session reference or equivalent
-adapter-level identifier. The table intentionally avoids OpenCode-specific
-columns such as command, agent, project path, or session ID.
+`backend_run_ref` stores the underlying OpenCode session id returned by
+`POST /session?directory=…`. The table intentionally avoids OpenCode-specific
+columns such as command, agent, project path, or session ID. The
+`job_kind -> command/agent` mapping lives inside the OpenCode adapter
+(`agentic::backend::OpenCodeBackend::dispatch`).
 
-The `job_kind -> command/agent` mapping lives inside the OpenCode adapter. If
-historical debugging later needs a resolved command snapshot, add it only after
-there is a concrete need.
+Do not copy large run context blobs into `agentic_runs` by default. Link runs
+to OpenCode plugin data with `backend_run_ref` (the database plugin stores
+session, message, tool execution, and cost data in the `opencode` schema).
 
-Do not copy large run context blobs into `agentic_runs` by default. Link runs to
-OpenCode plugin data with `backend_run_ref`.
-
-Skipped runs should be inserted, not merely logged. A skipped run represents a
-due schedule that did not start because another run for the same schedule was
+Skipped runs are inserted, not merely logged. A skipped run represents a due
+schedule that did not start because another run for the same schedule was
 already active.
 
-This table is OpenCode-only at first. Whether Hermes activity should ever be
-folded into `agentic_runs` is deferred.
+Error summaries are truncated to 500 characters in `agentic_runs`. They
+must never include `.env` contents, API keys, the OpenCode auth header,
+or Hyperliquid private keys.
 
 ## Scheduling Semantics
 
-For each enabled OpenCode schedule whose parent agent is enabled:
+Implemented in `agentic::store::claim_due_schedule` and
+`agentic::scheduler::AgenticScheduler::tick`.
+
+For each enabled OpenCode schedule whose parent agent is enabled and
+runtime is enabled and has a non-null `base_url`:
 
 ```text
 if now >= next_run_at:
-  if active run exists for the same schedule:
-    insert skipped run
-    advance next_run_at
-  else:
-    insert queued run
-    advance next_run_at
-    dispatch through OpenCodeBackend
+  claim_due_schedule(schedule_id):
+    SELECT ... FOR UPDATE
+    if disabled or next_run_at > now: rollback -> NotDue
+    if active (queued|running) run for this schedule:
+      insert agentic_runs with status='skipped',
+        finished_at=now, error_summary='previous run still active'
+    else:
+      insert agentic_runs with status='queued'
+    UPDATE agentic_job_schedules SET next_run_at = now + interval_seconds
+  if Dispatch { run_id }: spawn OpenCodeBackend::dispatch(run_id)
+  if Skipped: log and continue
+  if NotDue: continue
 ```
 
-Initial concurrency rule:
+Concurrency rule: max one active run per schedule. If a scheduled run is
+still active when the next interval arrives, a `skipped` run row is
+inserted and the schedule advances to the next interval. Different
+schedules on the same agent may run concurrently.
 
-```text
-max one active run per schedule
-```
+`next_run_at` is advanced to `now + interval_seconds` on every claim, not
+to `next_run_at + interval_seconds`. This is a simple first pass that
+does not try to catch up every missed interval; a missed run after a
+restart will simply wait one more interval before firing.
 
-If a scheduled run is still active when the next interval arrives, skip the new
-run. Do not queue overlapping work.
+If OpenCode is unavailable or a run fails, the run is marked `failed`
+with a sanitized error summary. The agent and schedule are *not*
+automatically disabled.
 
-If OpenCode is unavailable or a run fails, mark the run failed. Do not
-automatically disable the agent or schedule in the initial design.
+## Run Completion Polling
 
-Disabling an agent or schedule prevents new runs. It does not need to abort an
-already in-progress OpenCode session in the initial design.
+The first implementation does **not** poll `GET /session/{id}/status` to
+detect terminal completion. The OpenCode server returns 200 from
+`POST /session/{id}/command` once the command has been accepted, and the
+adapter treats that 200 as the success signal. The OpenCode database
+plugin records the actual final session state in the `opencode` schema
+(`opencode.sessions.status`), which is the canonical source of truth for
+"did the run actually succeed".
+
+If a future iteration needs in-process polling, the
+`OpenCodeClient::session_is_active` helper is already wired and can be
+hooked into the dispatch task loop without changing the run-row shape.
+
+## OpenCode Adapter Client
+
+The adapter talks to the local OpenCode server over HTTP using `reqwest`
+directly (see `src/opencode/client.rs`). The plan considered the
+`opencode-sdk` crate (crates.io, `opencode-sdk` 0.1.x) and rejected it for
+this slice for the following reasons:
+
+- The SDK is 0.1.x (pre-stable semver), with breaking changes allowed in
+  any release.
+- The SDK sets an `x-opencode-directory` header on every request. The
+  OpenCode `1.17.11` server does not read this header (see "OpenCode HTTP
+  API Notes" below); the directory must be passed as the `?directory=`
+  query parameter. The SDK does this for `POST /session` but sends the
+  ignored header on every other call.
+- The SDK does not expose the `POST /session/{id}/command` slash-command
+  endpoint, which is the dispatch path used by this slice.
+- The SDK's public `ClientBuilder` has no method to configure the HTTP
+  Basic auth header that the local OpenCode server requires. The only
+  escape hatch is `HttpClient::from_parts(...)`, which the SDK source
+  itself labels as a "legacy" entry point.
+
+If a future SDK release stabilizes and adds the missing pieces, the
+adapter can be migrated to it without changing the `AgenticBackend`
+trait or the `agentic_runs` schema.
 
 ## Analysis And Trading Behavior
 
@@ -813,7 +896,7 @@ exist to remove unknowns from the plan's "Deferred Investigation Items" list.
 - **8.3 - Define `DispatchRequest` and `DispatchResult` types.** Plain
   structs. The result should carry a `backend_run_ref` plus a status enum.
 - **8.4 - Implement `HermesBackend`.** Wrap the existing `HermesClient` and
-  `AgentOrchestrator` paths. Since Hermes is externally scheduled, the
+  `HyperliquidAgentMonitor` paths. Since Hermes is externally scheduled, the
   adapter is mostly read-only and reports health from the existing
   `*_context_last_used_at` timestamps.
 - **8.5 - Implement `OpenCodeBackend` as a mock.** Stand-in adapter that
@@ -822,52 +905,61 @@ exist to remove unknowns from the plan's "Deferred Investigation Items" list.
 
 ### Phase 9: Agentic Scheduler
 
-- **9.1 - Add `src/agentic_scheduler/mod.rs` and `scheduler.rs` skeleton.**
-  New module with `AgenticScheduler::new` and a `run` loop. Not yet wired
-  into `main.rs`.
-- **9.2 - Implement the due-time loop.** Walk enabled schedules for enabled
-  OpenCode agents and check `now >= next_run_at`.
-- **9.3 - Implement concurrency enforcement.** Before dispatch, check for
-  an active run on the same schedule; if present, insert a skipped run and
-  advance `next_run_at`.
-- **9.4 - Implement queued-run insertion and dispatch.** Insert a `queued`
-  row, advance `next_run_at` to `now + interval_seconds`, mark the run
-  `running`, then call the adapter. Move the actual `running` transition
-  inside the dispatch path.
-- **9.5 - Implement timeout and failure marking.** After dispatch, mark
-  the run `succeeded`, `failed`, or `aborted` based on the adapter result.
-  Record a short `error_summary` on failure.
-- **9.6 - Add unit tests for scheduling semantics.** Cover: due run
-  dispatches, active run is skipped, failed run is marked, disabled
-  schedule is skipped, disabled parent agent is skipped.
-- **9.7 - Wire `AgenticScheduler` into `main.rs`.** Start it next to the
-  existing `AgentOrchestrator`. Both should share the same shutdown signal.
+✅ **Done.** The module lives at `src/agentic/` (not `src/agentic_scheduler/`
+to keep the crate's module tree flat).
+
+- **9.1 ✅** `src/agentic/scheduler.rs` with `AgenticScheduler::new` and
+  a `run` loop. Wired into `main.rs` as a sibling of
+  `HyperliquidAgentMonitor`.
+- **9.2 ✅** `AgenticScheduler::tick` walks enabled schedules for
+  enabled OpenCode agents via
+  `agentic::store::list_due_opencode_schedules`.
+- **9.3 ✅** `agentic::store::claim_due_schedule` checks for an active
+  run (`status IN ('queued','running')`) and inserts a `skipped` run
+  if one exists.
+- **9.4 ✅** `claim_due_schedule` inserts a `queued` run and advances
+  `next_run_at` atomically. The dispatch task marks the run `running`
+  and stores the OpenCode session id as `backend_run_ref`.
+- **9.5 ✅** `agentic::backend::dispatch_with_timeout` wraps the
+  dispatch in `tokio::time::timeout` and marks the run `succeeded`,
+  `failed`, or `aborted` based on the outcome.
+- **9.6 ✅** Unit tests cover: due run dispatches and succeeds, backend
+  error marks run failed, missing workspace marks run failed, active
+  run causes skipped row, claim is not double-counted, disabled
+  schedule is not due.
+- **9.7 ✅** `main.rs` spawns `AgenticScheduler::run` next to
+  `HyperliquidAgentMonitor::run`, both observing a shared
+  `tokio::sync::watch` shutdown signal.
 
 ### Phase 10: Real OpenCode Backend
 
-- **10.1 - Add an OpenCode HTTP client.** Use `reqwest` to call the OpenCode
-  server. Place it in `src/agent_runtime/opencode/client.rs`. Support basic
-  auth via the configured password.
-- **10.2 - Implement real session creation.** Call `POST /session?directory={workspace_container_path}`
-  with the per-agent workspace path as the `?directory=` query parameter. The
-  server stores the directory on the session and returns a `Session` object
-  whose `directory` and `path` fields reflect the binding. Capture and return
-  the session id.
-- **10.3 - Implement real command dispatch.** Send the resolved OpenCode
-  command (analysis or trading) along with the operator prompt via
-  `POST /session/{id}/command` or `POST /session/{id}/message`. **Do not
-  repeat the `?directory=` query parameter** on these calls — the session is
-  already permanently bound to the workspace, and passing a different
-  directory is silently ignored. The directory binding cannot be changed for
-  an existing session; to switch directories, create a new session.
-- **10.4 - Implement session status polling.** Poll the session until it
-  reaches a terminal state or the schedule's `timeout_seconds` elapses,
-  then mark the run accordingly.
-- **10.5 - Replace the mock `OpenCodeBackend` with the real one.** Remove
-  the mock from production paths; keep it behind a test helper for now.
-- **10.6 - Add health reporting.** Expose an `is_healthy` method that
-  returns true when the OpenCode server responds to a basic health
-  endpoint.
+✅ **Done.** The adapter lives in `src/agentic/backend.rs` and the
+HTTP client in `src/opencode/client.rs`. See "OpenCode Adapter
+Client" above for why raw `reqwest` is used instead of the
+`opencode-sdk` crate.
+
+- **10.1 ✅** `OpenCodeClient` is a thin `reqwest` wrapper with
+  Basic-auth support. Configured from
+  `OPENCODE_SERVER_USERNAME` / `OPENCODE_SERVER_PASSWORD`.
+- **10.2 ✅** `OpenCodeBackend::dispatch` calls
+  `POST /session?directory=<workspace_container_path>` with the
+  per-agent workspace path. The session id is captured and returned
+  as `DispatchResult.backend_run_ref`.
+- **10.3 ✅** After session creation, the adapter calls
+  `POST /session/{id}/command` with the resolved
+  `vibetrading-analysis` / `vibetrading-trading` command and the
+  command arguments. The `?directory=` query parameter is **not**
+  repeated, matching the verified OpenCode 1.17.11 contract.
+- **10.4 ⏸** Polling is deferred. The first implementation treats a
+  successful `POST /session/{id}/command` response as the success
+  signal. The `OpenCodeClient::session_is_active` helper is wired
+  for future use. The OpenCode database plugin is the canonical
+  source of truth for actual session status.
+- **10.5 ✅** `OpenCodeBackend` is the production backend. The
+  `AgenticBackend` trait is the test seam; `agentic::scheduler::tests`
+  uses an in-process `FakeBackend` for unit tests.
+- **10.6 ⏸** Health reporting is deferred. The `OpenCodeClient` is
+  ready to be wrapped in a health-check helper when needed.
 
 ### Phase 11: Analysis Jobs
 
@@ -942,12 +1034,19 @@ exist to remove unknowns from the plan's "Deferred Investigation Items" list.
   OpenCode).
 - **14.4 - Runtime registration page.** Add `/runtimes` and
   `/runtimes/new` for creating `agent_runtime` rows.
-- **14.5 - OpenCode schedule management UI.** Add a "Schedules" tab to
-  the OpenCode agent detail page. List, enable, disable, and edit
-  `agentic_job_schedules` rows.
-- **14.6 - OpenCode run history UI.** Add a "Runs" tab to the OpenCode
-  agent detail page. Paginate `agentic_runs` rows with status, duration,
-  and a link to the OpenCode plugin session.
+- **14.5 - OpenCode job management UI.** ✅ Done. The agent detail page
+  shows a `Jobs` tab (OpenCode agents only) with a table of
+  `agentic_job_schedules` rows and per-row enable/disable and `Run now`
+  forms that POST to `/agents/{agent_key}/jobs/{job_id}/toggle` and
+  `/agents/{agent_key}/jobs/{job_id}/run`. Clicking a job row opens
+  `/agents/{agent_key}/jobs/{job_id}` for job-specific detail and run
+  history. Hermes agents do not see this tab.
+- **14.6 - OpenCode run history UI.** ✅ Done. The `Jobs` tab also shows
+  the most recent 50 `agentic_runs` rows for the agent, and each job detail
+  page shows runs for that specific job. Clicking any run row opens
+  `/agents/{agent_key}/runs/{run_id}`, which loads the mirrored OpenCode
+  session, transcript messages, commands, tool executions, and session
+  errors from the `opencode` schema. Pagination remains future work.
 - **14.7 - Backend filter on `/agents` list.** Allow operators to filter
   the list by `backend_kind` so they can isolate Hermes or OpenCode
   agents.
