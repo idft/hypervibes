@@ -44,3 +44,7 @@ The Hermes Agent profile distribution is Located in `../vibetrading-hermes-profi
 * Don't guess. Consult the documentation or source code if you are unsure.
 * Never `git push` without permission
 * Do not create database migrations without permission, unless a plan specficailly mentions creating it.
+
+## Future plans
+
+The Hermes agent backend system has been deprecated.  When planning features, do not worry about implementing them for the Hermes sytsem.
