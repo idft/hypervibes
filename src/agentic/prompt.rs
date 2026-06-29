@@ -27,9 +27,8 @@ fn build_analysis_prompt(request: &DispatchRequest) -> String {
     body.push_str("\n\n## Selected instruments\n");
     body.push_str(&selected_instruments_section(&request.selected_instruments));
     body.push_str("\n\n## Instructions\n");
-    body.push_str(
-        "- Fetch OHLCV and relevant market data from Hyperliquid for the selected instruments.\n",
-    );
+    body.push_str("- Fetch OHLCV and relevant public market data from Hyperliquid for the selected instruments. Use `python .opencode/skills/hyperliquid-data/fetch_ohlcv.py` for OHLCV candles.\n");
+    body.push_str("- Use the shared Python analysis runtime for pandas, numpy, scipy, statsmodels, pandas-ta-classic, plotting, and related analysis work.\n");
     body.push_str("- Analyze market structure, trend, volatility, support/resistance, liquidity zones, and risk/reward.\n");
     body.push_str("- Only produce actionable setups when confidence is at least the threshold defined in the strategy.\n");
     body.push_str("- If there is no clear edge, mark the bias neutral or mixed and provide no actionable setup.\n");
@@ -59,9 +58,7 @@ fn build_trading_prompt(request: &DispatchRequest) -> String {
     body.push_str(&selected_instruments_section(&request.selected_instruments));
     body.push_str("\n\n## Instructions\n");
     body.push_str("- Read the latest analysis memory(ies) before placing any trades.\n");
-    body.push_str(
-        "- Fetch current OHLCV and market data from Hyperliquid for the selected instruments.\n",
-    );
+    body.push_str("- Fetch current OHLCV and public market data from Hyperliquid for the selected instruments. Use `python .opencode/skills/hyperliquid-data/fetch_ohlcv.py` for OHLCV candles.\n");
     body.push_str("- Use limit orders for new entries. Avoid full-size entries on first fill.\n");
     body.push_str("- Only open new exposure when analysis is fresh, non-neutral, and confidence meets the strategy threshold.\n");
     body.push_str(
@@ -138,6 +135,8 @@ mod tests {
         assert!(prompt.contains("## Instructions"));
         assert!(prompt.contains("Analyze trends."));
         assert!(prompt.contains("You are a crypto trading assistant."));
+        assert!(prompt.contains("python .opencode/skills/hyperliquid-data/fetch_ohlcv.py"));
+        assert!(prompt.contains("shared Python analysis runtime"));
     }
 
     #[test]

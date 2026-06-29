@@ -148,6 +148,8 @@ Source layout:
 
 ```text
 agent-runtime/
+├── analysis/
+│   └── requirements.txt
 ├── workspace-template/
 │   ├── opencode.json.template
 │   ├── AGENTS.md.template
@@ -231,10 +233,12 @@ Ownership rules:
 The backend writes generated workspaces to `workspaces`, and the OpenCode
 container sees the same bind mount at `/workspaces`.
 
-The OpenCode container also bind-mounts
-`agent-runtime/container/opencode.jsonc` to `/opencode-data/opencode.jsonc`.
-Shared plugins, including the dotenv plugin, belong in that global container
-config rather than in generated workspace `opencode.json` files.
+The custom OpenCode image bakes `agent-runtime/container/opencode.jsonc` into
+`/opt/vibetrading/opencode/opencode.jsonc`, and compose loads it through
+`OPENCODE_CONFIG`. `/opencode-data` remains a mutable OpenCode state volume and
+is not the source of the baked runtime config. Shared plugins, including the
+dotenv plugin, belong in that global container config rather than in generated
+workspace `opencode.json` files.
 
 Agent workspaces should be backed up. They are not intended to be disposable
 because analysis agents may write durable Python analysis scripts.
@@ -526,9 +530,9 @@ hooked into the dispatch task loop without changing the run-row shape.
 
 The adapter talks to the local OpenCode server over HTTP using `reqwest`
 directly (see `src/opencode/client.rs`). Metadata calls such as session create
-and status checks keep a short 15s timeout, while `POST /session/{id}/command`
-uses a longer 120s client timeout and still remains bounded by the job's outer
-schedule timeout in the dispatcher. The plan considered the
+and status checks keep a short 15s timeout. `POST /session/{id}/command` is
+left to the outer job timeout in the dispatcher so long-running analysis jobs
+do not fail early on a shorter HTTP client timeout. The plan considered the
 `opencode-sdk` crate (crates.io, `opencode-sdk` 0.1.x) and rejected it for
 this slice for the following reasons:
 
@@ -681,6 +685,17 @@ The custom image installs:
 - the `uv` binary, copied from `docker.io/astral/uv:0.10-alpine`
 - Python 3 (the upstream image is Alpine-based and ships neither Python
   nor pip)
+- uv-managed CPython 3.13 for the dependency-heavy virtualenvs, so Alpine
+  package updates do not silently move the runtime to a Python version before
+  analysis wheels are available
+- the analysis requirements from `agent-runtime/analysis/requirements.txt`
+- a Python analysis virtualenv at `/opt/vibetrading/analysis/.venv/`, created
+  with `uv venv`, with pandas, numpy, technical-analysis, statistics, plotting,
+  and related dependencies installed via `uv pip`
+- `PATH` preferring `/opt/vibetrading/analysis/.venv/bin`, so `python` resolves
+  to the shared analysis runtime inside agent workspaces
+- the baked container-global OpenCode config at
+  `/opt/vibetrading/opencode/opencode.jsonc`, loaded via `OPENCODE_CONFIG`
 - the Vibetrading MCP server source at `/opt/vibetrading/mcp/`
 - a Python virtualenv at `/opt/vibetrading/mcp/.venv/`, created with
   `uv venv`, with the MCP server dependencies from

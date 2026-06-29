@@ -31,6 +31,7 @@ services:
     environment:
       OPENCODE_SERVER_PASSWORD: ${OPENCODE_SERVER_PASSWORD:?OPENCODE_SERVER_PASSWORD must be set}
       OPENCODE_SERVER_USERNAME: ${OPENCODE_SERVER_USERNAME:-opencode}
+      OPENCODE_CONFIG: /opt/vibetrading/opencode/opencode.jsonc
       OPENCODE_CONFIG_DIR: /opencode-data
       XDG_DATA_HOME: /opencode-data
       OPENCODE_DISABLE_AUTOUPDATE: "true"
@@ -57,7 +58,6 @@ services:
     volumes:
       - opencode_data:/opencode-data
       - ./workspaces:/workspaces
-      - ./agent-runtime/container/opencode.jsonc:/opencode-data/opencode.jsonc:ro
     healthcheck:
       test: ["CMD", "python3", "-c", "import socket; s = socket.create_connection(('127.0.0.1', 14096), 5); s.close()"]
       interval: 10s

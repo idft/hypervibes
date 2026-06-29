@@ -18,7 +18,7 @@ use crate::{
     },
 };
 
-const ERROR_SUMMARY_MAX_CHARS: usize = 240;
+const ERROR_SUMMARY_MAX_CHARS: usize = 500;
 const DEFAULT_ANALYSIS_AGENT: &str = "analysis";
 const DEFAULT_ANALYSIS_COMMAND: &str = "vibetrading-analysis";
 const DEFAULT_TRADING_AGENT: &str = "trading";

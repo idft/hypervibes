@@ -11,7 +11,6 @@ pub struct OpenCodeClientConfig {
     pub username: String,
     pub password: Option<String>,
     pub create_session_timeout: Duration,
-    pub command_timeout: Duration,
     pub status_timeout: Duration,
 }
 
@@ -21,7 +20,6 @@ impl OpenCodeClientConfig {
             username,
             password,
             create_session_timeout: Duration::from_secs(15),
-            command_timeout: Duration::from_secs(120),
             status_timeout: Duration::from_secs(15),
         }
     }
@@ -89,7 +87,6 @@ impl OpenCodeClient {
         let response = self
             .http
             .post(url)
-            .timeout(self.config.command_timeout)
             .apply_basic_auth(&self.config)
             .json(&request)
             .send()
@@ -269,10 +266,9 @@ mod tests {
     }
 
     #[test]
-    fn client_uses_longer_timeout_for_run_command_than_metadata_calls() {
+    fn client_uses_short_timeouts_for_metadata_calls() {
         let config = OpenCodeClientConfig::new("opencode".to_string(), None);
         assert_eq!(config.create_session_timeout, Duration::from_secs(15));
-        assert_eq!(config.command_timeout, Duration::from_secs(120));
         assert_eq!(config.status_timeout, Duration::from_secs(15));
     }
 

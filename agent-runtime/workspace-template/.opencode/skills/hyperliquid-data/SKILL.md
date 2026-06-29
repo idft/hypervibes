@@ -17,6 +17,10 @@ python .opencode/skills/hyperliquid-data/fetch_ohlcv.py BTC 15m --limit 100
 python .opencode/skills/hyperliquid-data/fetch_ohlcv.py ETH 1h --start-time 1710000000000 --end-time 1710100000000
 ```
 
+For analysis scripts, prefer calling this script and then loading its JSON output
+with pandas from `scripts/user/` code. The shared analysis Python runtime already
+includes pandas and related analysis libraries.
+
 ## Environment
 
 Set `HYPERLIQUID_ENVIRONMENT` to `mainnet` or `testnet`. Defaults to `mainnet`.

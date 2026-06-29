@@ -1,0 +1,12 @@
+requests
+httpx
+numpy
+pandas
+scipy
+statsmodels
+pandas-ta-classic
+polars
+matplotlib
+seaborn
+plotly
+tabulate

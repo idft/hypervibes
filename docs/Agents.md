@@ -51,8 +51,8 @@ simplified single-table registry (`agents`) with:
 - OpenCode-backed agent creation also generates a per-agent workspace and stores
   non-secret workspace metadata in `runtime_config`; the agent-scoped
   Vibetrading API key is written only to the generated workspace `.env` file,
-  which the OpenCode container loads via its bind-mounted global
-  `opencode.jsonc` config
+  which the custom OpenCode image loads through its baked container-global
+  `opencode.jsonc` config via `OPENCODE_CONFIG`
 - generated OpenCode workspace agent definitions under `.opencode/agents/`
   set `steps: 100` so analysis and trading runs eventually summarize instead of
   looping indefinitely
