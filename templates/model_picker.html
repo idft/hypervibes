@@ -1,0 +1,37 @@
+<div>
+    <div class="flex items-center justify-between gap-3">
+        <label for="{{ model_picker.input_id }}" class="block text-sm font-medium text-zinc-300">Model</label>
+        {% if let Some(warning) = model_picker.warning %}
+        <span class="text-xs text-amber-300">{{ warning }}</span>
+        {% endif %}
+    </div>
+    <input type="hidden" id="{{ model_picker.input_id }}" name="{{ model_picker.input_name }}" value="{{ model_picker.selected_value }}">
+    <details class="mt-2 rounded-2xl border border-zinc-800 bg-zinc-950/40" data-model-picker>
+        <summary class="flex cursor-pointer list-none items-center justify-between gap-3 px-4 py-3 text-sm text-zinc-200">
+            <span class="flex min-w-0 items-center gap-3">
+                <span class="flex h-8 w-8 items-center justify-center rounded-lg border border-zinc-700 bg-zinc-900 text-xs text-zinc-400" data-model-picker-default-badge>OC</span>
+                <img src="" alt="Selected provider logo" class="hidden h-8 w-8 rounded-lg border border-zinc-800 bg-white p-1" data-model-picker-logo>
+                <span class="truncate" data-model-picker-label>{{ model_picker.selected_label }}</span>
+            </span>
+            <span class="text-zinc-500">Select</span>
+        </summary>
+        <div class="border-t border-zinc-800 p-2">
+            <input type="text" placeholder="Filter models" class="mb-2 block w-full rounded-xl border border-zinc-800 bg-zinc-950 px-3 py-2 text-sm text-white placeholder-zinc-600 focus:border-zinc-600 focus:outline-none" data-model-picker-search>
+            <button type="button" class="flex w-full items-center gap-3 rounded-xl px-3 py-2 text-left text-sm text-zinc-200 hover:bg-zinc-900" data-model-picker-option data-value="" data-label="OpenCode default" data-search-text="OpenCode default">
+                <span class="flex h-8 w-8 items-center justify-center rounded-lg border border-zinc-700 bg-zinc-900 text-xs text-zinc-400">OC</span>
+                <span>OpenCode default</span>
+            </button>
+            {% for option in model_picker.options %}
+            <button type="button" class="mt-1 flex w-full items-start gap-3 rounded-xl px-3 py-2 text-left text-sm text-zinc-200 hover:bg-zinc-900" data-model-picker-option data-value="{{ option.value }}" data-label="{{ option.provider_name }} / {{ option.model_name }}" data-logo-url="{{ option.provider_logo_url }}" data-search-text="{{ option.provider_name }} {{ option.model_name }} {{ option.metadata_text }}">
+                <img src="{{ option.provider_logo_url }}" alt="{{ option.provider_name }} logo" class="mt-0.5 h-8 w-8 rounded-lg border border-zinc-800 bg-white p-1">
+                <span>
+                    <span class="block">{{ option.provider_name }} / {{ option.model_name }}</span>
+                    {% if !option.metadata_text.is_empty() %}
+                    <span class="block text-xs text-zinc-500">{{ option.metadata_text }}</span>
+                    {% endif %}
+                </span>
+            </button>
+            {% endfor %}
+        </div>
+    </details>
+</div>

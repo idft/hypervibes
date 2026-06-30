@@ -1,10 +1,12 @@
 mod agentic;
 mod agents;
+mod cache;
 mod config;
 mod db;
 mod hermes;
 mod hyperliquid;
 mod memory;
+mod model_catalog;
 mod opencode;
 mod settings;
 mod web;
@@ -73,14 +75,16 @@ async fn main() -> Result<()> {
     };
 
     let opencode_client =
-        opencode::client::OpenCodeClient::new(opencode::client::OpenCodeClientConfig::new(
+        Arc::new(opencode::client::OpenCodeClient::new(opencode::client::OpenCodeClientConfig::new(
             config.opencode_server_username.clone(),
             config.opencode_server_password.clone(),
         ))
-        .context("failed to build OpenCode HTTP client")?;
+        .context("failed to build OpenCode HTTP client")?);
     let opencode_backend: Arc<dyn agentic::backend::AgenticBackend> = Arc::new(
-        agentic::backend::OpenCodeBackend::new(pool.clone(), Arc::new(opencode_client)),
+        agentic::backend::OpenCodeBackend::new(pool.clone(), Arc::clone(&opencode_client)),
     );
+    let asset_cache = cache::asset::AssetCache::new(config.app_cache_dir.clone())?;
+    let model_catalog = model_catalog::models_dev::ModelsDevCatalog::shared(config.app_cache_dir.clone())?;
 
     println!("Starting Hyperliquid agent monitor");
     let hyperliquid_monitor = agents::HyperliquidAgentMonitor::new(
@@ -119,6 +123,9 @@ async fn main() -> Result<()> {
         hermes,
         config.hermes_dashboard_link_url.clone(),
         opencode_workspace_config,
+        opencode_client,
+        model_catalog,
+        Arc::new(asset_cache),
         shutdown_tx,
     );
     tokio::pin!(server_future);

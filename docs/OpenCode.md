@@ -68,6 +68,17 @@ Current implemented slice:
 - the agent detail page now exposes a `Jobs` tab for OpenCode agents.
   It lists jobs, shows recent runs below the jobs table, and links to
   dedicated job and run detail pages. Hermes agents do not see this tab.
+- OpenCode job and hook forms now allow either `OpenCode default` or an
+  explicit model selection.
+- the selectable model list comes from the OpenCode runtime
+  `GET /provider?directory=...` endpoint for that agent workspace; this is the
+  authoritative allow-list used for validation.
+- `models.dev` is used only to enrich provider and model display metadata and
+  provider logos; it is not stored in Postgres and does not affect validation.
+- `models.dev` catalog JSON and cached provider logos are stored under
+  `cache/models-dev/`, which is gitignored.
+- the app does not inspect `.env` files or expose OpenCode provider API keys
+  while building model picker options.
 - OpenCode agents interact with the Vibetrading backend exclusively through
   the `vibetrading` MCP server; there is no workspace-local Python API
   client anymore

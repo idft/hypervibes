@@ -47,6 +47,7 @@ use crate::{
             update_agent_analysis_prompt, update_agent_runtime_config, update_agent_trading_prompt,
         },
     },
+    cache::asset::{AssetCachePolicy, validate_key},
     hermes::HermesHealth,
     hyperliquid::{
         live_state::{
@@ -60,6 +61,10 @@ use crate::{
     memory::{
         get_latest_agent_memory_by_type, get_memory as get_memory_record, list_agent_memories,
         memory_expires_at,
+    },
+    model_catalog::options::{
+        ModelPickerOption, build_model_picker_options, parse_model_selection,
+        selection_exists_in_options,
     },
     opencode::workspace::{
         OpenCodeWorkspaceAgent, OpenCodeWorkspaceRuntimeConfig, generate_agent_workspace,
@@ -75,7 +80,7 @@ use crate::{
             AgentScheduleNewPageTemplate, AgentShowTab, AgentsNewPageTemplate, AgentsPageTemplate,
             AgentsShowPageTemplate, BackendsNewPageTemplate, BackendsPageTemplate,
             BalanceSparklinesPartialTemplate, CreateAgentHookFormValues,
-            CreateAgentScheduleFormValues, HermesPageTemplate,
+            CreateAgentScheduleFormValues, HermesPageTemplate, ModelPickerView,
             LatestAnalysisSummaryPartialTemplate, LatestTradeExecutionSummaryPartialTemplate,
             MemoryView, OpenCodeWorkspaceSettingsView, OpenOrdersPartialTemplate, OpenOrdersView,
             OpenPositionsPartialTemplate, OpenPositionsView, ServerErrorPageTemplate,
@@ -89,6 +94,7 @@ pub fn router(state: Arc<AppState>) -> Router {
     Router::new()
         .route("/", get(root))
         .route("/healthz", get(healthz))
+        .route("/model-catalog/logos/{provider}", get(model_catalog_logo))
         .route("/agents", get(agents_index).post(create_agent))
         .route("/agents/new", get(agents_new))
         .route("/backends", get(backends_index).post(create_backend))
@@ -154,6 +160,10 @@ pub fn router(state: Arc<AppState>) -> Router {
             "/agents/{agent_key}/jobs/{job_id}/run",
             post(agents_run_job_now),
         )
+        .route(
+            "/agents/{agent_key}/jobs/{job_id}/model",
+            post(agents_update_job_model),
+        )
         .route("/agents/{agent_key}/hooks/new", get(agents_new_hook))
         .route("/agents/{agent_key}/hooks", post(agents_create_hook))
         .route(
@@ -167,6 +177,10 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route(
             "/agents/{agent_key}/hooks/{hook_id}/delete",
             post(agents_delete_hook),
+        )
+        .route(
+            "/agents/{agent_key}/hooks/{hook_id}/model",
+            post(agents_update_hook_model),
         )
         .route(
             "/agents/{agent_key}/runs/{run_id}",
@@ -191,6 +205,54 @@ struct HealthResponse {
 async fn healthz(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     let _ = &state.db_pool;
     (StatusCode::OK, Json(HealthResponse { status: "ok" }))
+}
+
+#[derive(Debug, Clone)]
+struct ModelPickerContext {
+    options: Vec<ModelPickerOption>,
+    warning: Option<String>,
+}
+
+async fn model_catalog_logo(
+    State(state): State<Arc<AppState>>,
+    Path(provider): Path<String>,
+) -> impl IntoResponse {
+    let key = format!("{provider}.svg");
+    if validate_key(&key).is_err() {
+        return (StatusCode::BAD_REQUEST, [("Content-Type", "text/plain; charset=utf-8")], "invalid provider").into_response();
+    }
+
+    let body = match state
+        .asset_cache
+        .get_or_fetch(
+            "models-dev/logos",
+            &key,
+            &format!("https://models.dev/logos/{provider}.svg"),
+            AssetCachePolicy {
+                ttl: std::time::Duration::from_secs(30 * 24 * 60 * 60),
+                max_bytes: 256 * 1024,
+                allowed_content_types: vec![
+                    "image/svg+xml",
+                    "text/plain",
+                    "application/octet-stream",
+                ],
+            },
+        )
+        .await
+    {
+        Ok(asset) if body_looks_like_svg(&asset.bytes) => asset.bytes,
+        Ok(_) | Err(_) => fallback_logo_svg(&provider).into_bytes(),
+    };
+
+    (
+        StatusCode::OK,
+        [
+            ("Content-Type", "image/svg+xml; charset=utf-8"),
+            ("Cache-Control", "public, max-age=86400"),
+        ],
+        body,
+    )
+        .into_response()
 }
 
 async fn agents_index(State(state): State<Arc<AppState>>) -> Result<Html<String>, AppError> {
@@ -571,9 +633,16 @@ async fn agents_show_job_detail(
         }
     }
 
+    let picker = load_model_picker_context(&state, &agent).await;
+    let model_picker = build_model_picker_view(
+        "job-model-selection",
+        &job_view.model_selection,
+        picker,
+    );
     let html = AgentJobDetailPageTemplate::render_view(
         agent.clone(),
         job_view,
+        model_picker,
         job_runs,
         job_runs_loaded,
     )?;
@@ -641,9 +710,16 @@ async fn agents_show_hook_detail(
         }
     }
 
+    let picker = load_model_picker_context(&state, &agent).await;
+    let model_picker = build_model_picker_view(
+        "hook-model-selection",
+        &hook_view.model_selection,
+        picker,
+    );
     let html = AgentHookDetailPageTemplate::render_view(
         agent.clone(),
         hook_view,
+        model_picker,
         hook_runs,
         hook_runs_loaded,
     )?;
@@ -767,9 +843,7 @@ struct CreateAgentScheduleForm {
     #[serde(default)]
     timeout_seconds: String,
     #[serde(default)]
-    model_provider_id: String,
-    #[serde(default)]
-    model_id: String,
+    model_selection: String,
     #[serde(default)]
     operator_prompt: String,
     enabled: Option<String>,
@@ -781,8 +855,7 @@ struct ValidatedCreateAgentSchedule {
     timeframe: String,
     trigger_delay_seconds: i32,
     timeout_seconds: i32,
-    model_provider_id: Option<String>,
-    model_id: Option<String>,
+    model_selection: Option<(String, String)>,
     operator_prompt: String,
     enabled: bool,
 }
@@ -792,9 +865,7 @@ struct CreateAgentHookForm {
     #[serde(default)]
     timeout_seconds: String,
     #[serde(default)]
-    model_provider_id: String,
-    #[serde(default)]
-    model_id: String,
+    model_selection: String,
     #[serde(default)]
     operator_prompt: String,
     enabled: Option<String>,
@@ -803,8 +874,7 @@ struct CreateAgentHookForm {
 #[derive(Debug)]
 struct ValidatedCreateAgentHook {
     timeout_seconds: i32,
-    model_provider_id: Option<String>,
-    model_id: Option<String>,
+    model_selection: Option<(String, String)>,
     operator_prompt: String,
     enabled: bool,
 }
@@ -829,8 +899,7 @@ impl CreateAgentScheduleForm {
             job_kind: self.job_kind.clone(),
             timeframe: self.timeframe.clone(),
             timeout_seconds: self.timeout_seconds.clone(),
-            model_provider_id: self.model_provider_id.clone(),
-            model_id: self.model_id.clone(),
+            model_selection: self.model_selection.clone(),
             operator_prompt: self.operator_prompt.clone(),
             enabled: self.enabled(),
         }
@@ -855,14 +924,13 @@ impl CreateAgentScheduleForm {
         let timeout_seconds =
             parse_positive_schedule_seconds(&self.timeout_seconds, "Timeout", &mut errors);
 
-        let model_provider_id = trim_optional_field(&self.model_provider_id);
-        let model_id = trim_optional_field(&self.model_id);
-        if model_provider_id.is_some() != model_id.is_some() {
-            errors.push(
-                "Model provider ID and model ID must either both be set or both be empty."
-                    .to_string(),
-            );
-        }
+        let model_selection = match parse_model_selection(&self.model_selection) {
+            Ok(selection) => selection,
+            Err(error) => {
+                errors.push(error);
+                None
+            }
+        };
 
         if errors.is_empty() {
             Ok(ValidatedCreateAgentSchedule {
@@ -870,8 +938,7 @@ impl CreateAgentScheduleForm {
                 timeframe,
                 trigger_delay_seconds: 1,
                 timeout_seconds: timeout_seconds.expect("validated timeout seconds"),
-                model_provider_id,
-                model_id,
+                model_selection,
                 operator_prompt: self.operator_prompt.trim().to_string(),
                 enabled: self.enabled(),
             })
@@ -897,8 +964,7 @@ impl CreateAgentHookForm {
     fn as_template_values(&self) -> CreateAgentHookFormValues {
         CreateAgentHookFormValues {
             timeout_seconds: self.timeout_seconds.clone(),
-            model_provider_id: self.model_provider_id.clone(),
-            model_id: self.model_id.clone(),
+            model_selection: self.model_selection.clone(),
             operator_prompt: self.operator_prompt.clone(),
             enabled: self.enabled(),
         }
@@ -908,20 +974,18 @@ impl CreateAgentHookForm {
         let mut errors = Vec::new();
         let timeout_seconds =
             parse_positive_schedule_seconds(&self.timeout_seconds, "Timeout", &mut errors);
-        let model_provider_id = trim_optional_field(&self.model_provider_id);
-        let model_id = trim_optional_field(&self.model_id);
-        if model_provider_id.is_some() != model_id.is_some() {
-            errors.push(
-                "Model provider ID and model ID must either both be set or both be empty."
-                    .to_string(),
-            );
-        }
+        let model_selection = match parse_model_selection(&self.model_selection) {
+            Ok(selection) => selection,
+            Err(error) => {
+                errors.push(error);
+                None
+            }
+        };
 
         if errors.is_empty() {
             Ok(ValidatedCreateAgentHook {
                 timeout_seconds: timeout_seconds.expect("validated timeout seconds"),
-                model_provider_id,
-                model_id,
+                model_selection,
                 operator_prompt: self.operator_prompt.trim().to_string(),
                 enabled: self.enabled(),
             })
@@ -946,9 +1010,11 @@ async fn agents_new_job(
             .into_response());
     }
 
+    let picker = load_model_picker_context(&state, &agent).await;
     Ok(render_new_job_form(
         agent,
         CreateAgentScheduleForm::defaults().as_template_values(),
+        picker,
         Vec::new(),
         StatusCode::OK,
     ))
@@ -969,9 +1035,11 @@ async fn agents_new_hook(
             .into_response());
     }
 
+    let picker = load_model_picker_context(&state, &agent).await;
     Ok(render_new_hook_form(
         agent,
         CreateAgentHookForm::defaults().as_template_values(),
+        picker,
         Vec::new(),
         StatusCode::OK,
     ))
@@ -996,15 +1064,39 @@ async fn agents_create_job(
     let validated = match form.validate() {
         Ok(validated) => validated,
         Err(errors) => {
+            let picker = load_model_picker_context(&state, &agent).await;
             return Ok(render_new_job_form(
                 agent,
                 form.as_template_values(),
+                picker,
                 errors,
                 StatusCode::UNPROCESSABLE_ENTITY,
             ));
         }
     };
 
+    let validated_model_selection = match validate_model_selection_for_agent(
+        &state,
+        &agent,
+        validated.model_selection.clone(),
+    )
+    .await
+    {
+        Ok(selection) => selection,
+        Err(error) => {
+            let picker = load_model_picker_context(&state, &agent).await;
+            return Ok(render_new_job_form(
+                agent,
+                form.as_template_values(),
+                picker,
+                vec![error],
+                StatusCode::UNPROCESSABLE_ENTITY,
+            ));
+        }
+    };
+
+    let model_provider_id = validated_model_selection.as_ref().map(|(provider, _)| provider.as_str());
+    let model_id = validated_model_selection.as_ref().map(|(_, model)| model.as_str());
     if let Err(error) = crate::agentic::store::insert_agent_schedule(
         &state.db_pool,
         &agent_key,
@@ -1012,8 +1104,8 @@ async fn agents_create_job(
         validated.enabled,
         &validated.timeframe,
         validated.trigger_delay_seconds,
-        validated.model_provider_id.as_deref(),
-        validated.model_id.as_deref(),
+        model_provider_id,
+        model_id,
         validated.timeout_seconds,
         &validated.operator_prompt,
     )
@@ -1023,9 +1115,11 @@ async fn agents_create_job(
             Some(message) => vec![message],
             None => return Err(AppError(error)),
         };
+        let picker = load_model_picker_context(&state, &agent).await;
         return Ok(render_new_job_form(
             agent,
             form.as_template_values(),
+            picker,
             errors,
             StatusCode::UNPROCESSABLE_ENTITY,
         ));
@@ -1201,6 +1295,47 @@ async fn agents_run_job_now(
 }
 
 #[derive(Debug, Default, Deserialize)]
+struct ModelSelectionForm {
+    #[serde(default)]
+    model_selection: String,
+}
+
+async fn agents_update_job_model(
+    State(state): State<Arc<AppState>>,
+    Path((agent_key, job_id)): Path<(String, i64)>,
+    Form(form): Form<ModelSelectionForm>,
+) -> Result<Response, AppError> {
+    let Some(agent) = get_agent(&state.db_pool, &agent_key).await? else {
+        return Ok((StatusCode::NOT_FOUND, "agent not found").into_response());
+    };
+    let Some(_job) = crate::agentic::store::get_agent_schedule(&state.db_pool, &agent_key, job_id).await? else {
+        return Ok((StatusCode::NOT_FOUND, "job not found").into_response());
+    };
+
+    let parsed = parse_model_selection(&form.model_selection)
+        .map_err(|message| AppError(anyhow::anyhow!(message)))?;
+    let validated = validate_model_selection_for_agent(&state, &agent, parsed)
+        .await
+        .map_err(|message| AppError(anyhow::anyhow!(message)))?;
+    let model_provider_id = validated.as_ref().map(|(provider, _)| provider.as_str());
+    let model_id = validated.as_ref().map(|(_, model)| model.as_str());
+
+    if !crate::agentic::store::set_schedule_model(
+        &state.db_pool,
+        &agent_key,
+        job_id,
+        model_provider_id,
+        model_id,
+    )
+    .await?
+    {
+        return Ok((StatusCode::NOT_FOUND, "job not found").into_response());
+    }
+
+    Ok(Redirect::to(&format!("/agents/{agent_key}/jobs/{job_id}")).into_response())
+}
+
+#[derive(Debug, Default, Deserialize)]
 struct ToggleHookForm {
     enabled: Option<String>,
 }
@@ -1224,23 +1359,47 @@ async fn agents_create_hook(
     let validated = match form.validate() {
         Ok(validated) => validated,
         Err(errors) => {
+            let picker = load_model_picker_context(&state, &agent).await;
             return Ok(render_new_hook_form(
                 agent,
                 form.as_template_values(),
+                picker,
                 errors,
                 StatusCode::UNPROCESSABLE_ENTITY,
             ));
         }
     };
 
+    let validated_model_selection = match validate_model_selection_for_agent(
+        &state,
+        &agent,
+        validated.model_selection.clone(),
+    )
+    .await
+    {
+        Ok(selection) => selection,
+        Err(error) => {
+            let picker = load_model_picker_context(&state, &agent).await;
+            return Ok(render_new_hook_form(
+                agent,
+                form.as_template_values(),
+                picker,
+                vec![error],
+                StatusCode::UNPROCESSABLE_ENTITY,
+            ));
+        }
+    };
+
+    let model_provider_id = validated_model_selection.as_ref().map(|(provider, _)| provider.as_str());
+    let model_id = validated_model_selection.as_ref().map(|(_, model)| model.as_str());
     if let Err(error) = crate::agentic::store::insert_agent_hook(
         &state.db_pool,
         &agent_key,
         JOB_KIND_MARKET_ANALYSIS,
         HOOK_EVENT_ANALYSIS_BATCH_COMPLETED,
         validated.enabled,
-        validated.model_provider_id.as_deref(),
-        validated.model_id.as_deref(),
+        model_provider_id,
+        model_id,
         validated.timeout_seconds,
         &validated.operator_prompt,
     )
@@ -1250,9 +1409,11 @@ async fn agents_create_hook(
             Some(message) => vec![message],
             None => return Err(AppError(error)),
         };
+        let picker = load_model_picker_context(&state, &agent).await;
         return Ok(render_new_hook_form(
             agent,
             form.as_template_values(),
+            picker,
             errors,
             StatusCode::UNPROCESSABLE_ENTITY,
         ));
@@ -1365,6 +1526,41 @@ async fn agents_delete_hook(
     }
 
     Ok(Redirect::to(&format!("/agents/{agent_key}/jobs")).into_response())
+}
+
+async fn agents_update_hook_model(
+    State(state): State<Arc<AppState>>,
+    Path((agent_key, hook_id)): Path<(String, i64)>,
+    Form(form): Form<ModelSelectionForm>,
+) -> Result<Response, AppError> {
+    let Some(agent) = get_agent(&state.db_pool, &agent_key).await? else {
+        return Ok((StatusCode::NOT_FOUND, "agent not found").into_response());
+    };
+    let Some(_hook) = crate::agentic::store::get_agent_hook(&state.db_pool, &agent_key, hook_id).await? else {
+        return Ok((StatusCode::NOT_FOUND, "hook not found").into_response());
+    };
+
+    let parsed = parse_model_selection(&form.model_selection)
+        .map_err(|message| AppError(anyhow::anyhow!(message)))?;
+    let validated = validate_model_selection_for_agent(&state, &agent, parsed)
+        .await
+        .map_err(|message| AppError(anyhow::anyhow!(message)))?;
+    let model_provider_id = validated.as_ref().map(|(provider, _)| provider.as_str());
+    let model_id = validated.as_ref().map(|(_, model)| model.as_str());
+
+    if !crate::agentic::store::set_hook_model(
+        &state.db_pool,
+        &agent_key,
+        hook_id,
+        model_provider_id,
+        model_id,
+    )
+    .await?
+    {
+        return Ok((StatusCode::NOT_FOUND, "hook not found").into_response());
+    }
+
+    Ok(Redirect::to(&format!("/agents/{agent_key}/hooks/{hook_id}")).into_response())
 }
 
 async fn agents_update_instruments(
@@ -1603,13 +1799,16 @@ async fn populate_jobs_tab(
 fn render_new_hook_form(
     agent: crate::agents::model::AgentDetailRow,
     form: CreateAgentHookFormValues,
+    picker: ModelPickerContext,
     errors: Vec<String>,
     status: StatusCode,
 ) -> Response {
     let current_path = format!("/agents/{}/hooks/new", agent.agent_key);
+    let model_picker = build_model_picker_view("hook-model-selection", &form.model_selection, picker);
     let template = AgentHookNewPageTemplate {
         agent,
         form,
+        model_picker,
         errors,
         current_path,
     };
@@ -2248,13 +2447,16 @@ fn render_backend_form(form: CreateAgentRuntimeForm, errors: Vec<String>) -> Res
 fn render_new_job_form(
     agent: crate::agents::model::AgentDetailRow,
     form: CreateAgentScheduleFormValues,
+    picker: ModelPickerContext,
     errors: Vec<String>,
     status: StatusCode,
 ) -> Response {
     let current_path = format!("/agents/{}/jobs/new", agent.agent_key);
+    let model_picker = build_model_picker_view("job-model-selection", &form.model_selection, picker);
     let template = AgentScheduleNewPageTemplate {
         agent,
         form,
+        model_picker,
         errors,
         current_path,
     };
@@ -2318,9 +2520,86 @@ fn hook_unique_violation_message(error: &anyhow::Error) -> Option<String> {
     }
 }
 
-fn trim_optional_field(value: &str) -> Option<String> {
-    let trimmed = value.trim();
-    (!trimmed.is_empty()).then(|| trimmed.to_string())
+async fn load_model_picker_context(state: &Arc<AppState>, agent: &crate::agents::model::AgentDetailRow) -> ModelPickerContext {
+    match build_model_picker_options(agent, &state.opencode_client, &state.model_catalog).await {
+        Ok(options) => ModelPickerContext {
+            options,
+            warning: None,
+        },
+        Err(error) => {
+            warn!(agent_key = %agent.agent_key, error = ?error, "failed to load model picker options");
+            ModelPickerContext {
+                options: Vec::new(),
+                warning: Some(
+                    "Could not load configured OpenCode models. You can still use OpenCode default."
+                        .to_string(),
+                ),
+            }
+        }
+    }
+}
+
+fn selected_model_label(selected: &str, options: &[ModelPickerOption]) -> String {
+    if selected.trim().is_empty() {
+        return "OpenCode default".to_string();
+    }
+
+    options
+        .iter()
+        .find(|option| option.value == selected)
+        .map(|option| format!("{} / {}", option.provider_name, option.model_name))
+        .unwrap_or_else(|| selected.to_string())
+}
+
+fn build_model_picker_view(
+    input_id: &str,
+    selected_value: &str,
+    picker: ModelPickerContext,
+) -> ModelPickerView {
+    ModelPickerView {
+        input_id: input_id.to_string(),
+        input_name: "model_selection".to_string(),
+        selected_value: selected_value.to_string(),
+        selected_label: selected_model_label(selected_value, &picker.options),
+        options: picker.options,
+        warning: picker.warning,
+    }
+}
+
+async fn validate_model_selection_for_agent(
+    state: &Arc<AppState>,
+    agent: &crate::agents::model::AgentDetailRow,
+    selection: Option<(String, String)>,
+) -> Result<Option<(String, String)>, String> {
+    let Some(selection) = selection else {
+        return Ok(None);
+    };
+
+    let options = build_model_picker_options(agent, &state.opencode_client, &state.model_catalog)
+        .await
+        .map_err(|_| {
+            "Could not load configured OpenCode models. Try again or use OpenCode default."
+                .to_string()
+        })?;
+    if selection_exists_in_options(&options, &selection) {
+        Ok(Some(selection))
+    } else {
+        Err("Select a valid model.".to_string())
+    }
+}
+
+fn body_looks_like_svg(body: &[u8]) -> bool {
+    let text = String::from_utf8_lossy(body);
+    let trimmed = text.trim_start();
+    trimmed.starts_with("<svg")
+        || (trimmed.starts_with("<?xml") && trimmed.contains("<svg"))
+}
+
+fn fallback_logo_svg(provider: &str) -> String {
+    let initial = provider.chars().next().unwrap_or('M').to_ascii_uppercase();
+    format!(
+        r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" role="img" aria-label="{provider}"><rect width="32" height="32" rx="8" fill="#18181b"/><text x="16" y="21" text-anchor="middle" font-family="ui-sans-serif,system-ui" font-size="14" fill="#fafafa">{initial}</text></svg>"##
+    )
 }
 
 fn parse_positive_schedule_seconds(
@@ -2508,6 +2787,7 @@ mod tests {
 
     async fn test_state_with_backend(agentic_backend: Arc<dyn AgenticBackend>) -> Arc<AppState> {
         let pool = test_db::pool().await;
+        let cache_dir = std::path::PathBuf::from("/tmp/opencode/vibetrading-routes-cache");
         Arc::new(AppState {
             db_pool: pool,
             agentic_backend,
@@ -2529,6 +2809,20 @@ mod tests {
                 container_workspaces_root: "/workspaces".to_string(),
                 api_base_url: "http://host.containers.internal:3003".to_string(),
             },
+            opencode_client: Arc::new(
+                crate::opencode::client::OpenCodeClient::new(
+                    crate::opencode::client::OpenCodeClientConfig::new(
+                        "opencode".to_string(),
+                        None,
+                    ),
+                )
+                .unwrap(),
+            ),
+            model_catalog: crate::model_catalog::models_dev::ModelsDevCatalog::shared(
+                cache_dir.clone(),
+            )
+            .unwrap(),
+            asset_cache: Arc::new(crate::cache::asset::AssetCache::new(cache_dir).unwrap()),
         })
     }
 
@@ -4318,14 +4612,14 @@ mod tests {
 
         assert_eq!(response.status(), StatusCode::OK);
         let text = response_text(response).await;
-        assert!(text.contains("Create job"));
+        assert!(text.contains("New job"));
         assert!(text.contains(&format!("/agents/{agent_key}/jobs/new")));
         assert!(text.contains("Scheduled Jobs"));
         assert!(text.contains("Hook Jobs"));
         assert!(text.contains("Enable all"));
         assert!(text.contains("Disable all"));
         assert!(text.contains("Recent Runs"));
-        assert!(text.contains("Create hook"));
+        assert!(text.contains("New hook"));
         assert!(text.contains(&format!("/agents/{agent_key}/hooks/new")));
         assert!(text.contains("Run now"));
         assert!(!text.contains("Operator prompt"));
@@ -4353,8 +4647,7 @@ mod tests {
         assert!(text.contains("Create market-analysis hook"));
         assert!(text.contains("analysis_batch_completed"));
         assert!(text.contains("name=\"timeout_seconds\""));
-        assert!(text.contains("name=\"model_provider_id\""));
-        assert!(text.contains("name=\"model_id\""));
+        assert!(text.contains("name=\"model_selection\""));
         assert!(text.contains("name=\"operator_prompt\""));
     }
 
@@ -4382,7 +4675,7 @@ mod tests {
                     .uri(format!("/agents/{agent_key}/hooks"))
                     .header("content-type", "application/x-www-form-urlencoded")
                     .body(Body::from(
-                        "timeout_seconds=600&enabled=on&model_provider_id=anthropic&model_id=claude-sonnet-4&operator_prompt=Summarize+multi-timeframe+agreement",
+                        "timeout_seconds=600&enabled=on&model_selection=&operator_prompt=Summarize+multi-timeframe+agreement",
                     ))
                     .unwrap(),
             )
@@ -4817,7 +5110,7 @@ mod tests {
                     .uri(format!("/agents/{agent_key}/jobs"))
                     .header("content-type", "application/x-www-form-urlencoded")
                     .body(Body::from(
-                        "job_kind=analysis&timeframe=4h&timeout_seconds=600&enabled=on&model_provider_id=anthropic&model_id=claude-sonnet-4&operator_prompt=Check+higher+timeframe+structure",
+                        "job_kind=analysis&timeframe=4h&timeout_seconds=600&enabled=on&model_selection=&operator_prompt=Check+higher+timeframe+structure",
                     ))
                     .unwrap(),
             )
@@ -4844,8 +5137,8 @@ mod tests {
         assert!(schedule.enabled);
         assert_eq!(schedule.timeframe, "4h");
         assert_eq!(schedule.timeout_seconds, 600);
-        assert_eq!(schedule.model_provider_id.as_deref(), Some("anthropic"));
-        assert_eq!(schedule.model_id.as_deref(), Some("claude-sonnet-4"));
+        assert_eq!(schedule.model_provider_id.as_deref(), None);
+        assert_eq!(schedule.model_id.as_deref(), None);
         assert_eq!(schedule.operator_prompt, "Check higher timeframe structure");
     }
 

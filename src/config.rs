@@ -7,6 +7,7 @@ use reqwest::Url;
 pub struct AppConfig {
     pub database_url: String,
     pub bind_addr: String,
+    pub app_cache_dir: PathBuf,
     pub agents_encryption_key: [u8; 32],
     pub agents_encryption_key_id: String,
     pub hermes_dashboard_url: String,
@@ -27,6 +28,7 @@ impl AppConfig {
         Ok(Self {
             database_url: database_url_from_env()?,
             bind_addr: bind_addr_from_env(),
+            app_cache_dir: app_cache_dir_from_env()?,
             agents_encryption_key: agents_encryption_key_from_env()?,
             agents_encryption_key_id: agents_encryption_key_id_from_env()?,
             hermes_dashboard_url: hermes_dashboard_url.clone(),
@@ -41,6 +43,23 @@ impl AppConfig {
             opencode_server_username: opencode_server_username_from_env(),
             opencode_server_password: opencode_server_password_from_env(),
         })
+    }
+}
+
+fn app_cache_dir_from_env() -> Result<PathBuf> {
+    let raw = env::var("APP_CACHE_DIR").unwrap_or_else(|_| "cache".to_string());
+    let raw = raw.trim();
+    if raw.is_empty() {
+        bail!("APP_CACHE_DIR must not be empty");
+    }
+
+    let path = PathBuf::from(raw);
+    if path.is_absolute() {
+        Ok(path)
+    } else {
+        Ok(env::current_dir()
+            .context("failed to resolve current working directory for APP_CACHE_DIR")?
+            .join(path))
     }
 }
 
@@ -227,7 +246,9 @@ fn opencode_server_password_from_env() -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::hermes_dashboard_link_url;
+    use std::env;
+
+    use super::{app_cache_dir_from_env, hermes_dashboard_link_url};
 
     #[test]
     fn hermes_dashboard_link_defaults_to_backend_url() {
@@ -253,5 +274,39 @@ mod tests {
         )
         .unwrap();
         assert_eq!(link, "https://ops.example.com:19119");
+    }
+
+    #[test]
+    fn app_cache_dir_defaults_relative_to_current_directory() {
+        let previous = env::var_os("APP_CACHE_DIR");
+        unsafe {
+            env::remove_var("APP_CACHE_DIR");
+        }
+
+        let result = app_cache_dir_from_env().unwrap();
+
+        match previous {
+            Some(value) => unsafe { env::set_var("APP_CACHE_DIR", value) },
+            None => unsafe { env::remove_var("APP_CACHE_DIR") },
+        }
+
+        assert_eq!(result, env::current_dir().unwrap().join("cache"));
+    }
+
+    #[test]
+    fn app_cache_dir_resolves_relative_env_value() {
+        let previous = env::var_os("APP_CACHE_DIR");
+        unsafe {
+            env::set_var("APP_CACHE_DIR", "tmp/cache-dir");
+        }
+
+        let result = app_cache_dir_from_env().unwrap();
+
+        match previous {
+            Some(value) => unsafe { env::set_var("APP_CACHE_DIR", value) },
+            None => unsafe { env::remove_var("APP_CACHE_DIR") },
+        }
+
+        assert_eq!(result, env::current_dir().unwrap().join("tmp/cache-dir"));
     }
 }

@@ -12,9 +12,10 @@ use tower_http::{services::ServeDir, trace::TraceLayer};
 use tracing::Level;
 
 use crate::{
+    cache::asset::AssetCache,
     agentic::backend::AgenticBackend, agents::crypto::EncryptionKey, db::DbPool,
     hermes::HermesClient, hyperliquid::live_state::LiveAccountStore,
-    opencode::workspace::OpenCodeWorkspaceConfig,
+    model_catalog::models_dev::ModelsDevCatalog, opencode::{client::OpenCodeClient, workspace::OpenCodeWorkspaceConfig},
 };
 
 use self::ui_events::UiEventHub;
@@ -29,6 +30,9 @@ pub struct AppState {
     pub hermes: Option<HermesClient>,
     pub hermes_dashboard_link_url: String,
     pub opencode_workspace_config: OpenCodeWorkspaceConfig,
+    pub opencode_client: Arc<OpenCodeClient>,
+    pub model_catalog: Arc<ModelsDevCatalog>,
+    pub asset_cache: Arc<AssetCache>,
 }
 
 pub async fn serve(
@@ -40,6 +44,9 @@ pub async fn serve(
     hermes: Option<HermesClient>,
     hermes_dashboard_link_url: String,
     opencode_workspace_config: OpenCodeWorkspaceConfig,
+    opencode_client: Arc<OpenCodeClient>,
+    model_catalog: Arc<ModelsDevCatalog>,
+    asset_cache: Arc<AssetCache>,
     shutdown_tx: watch::Sender<bool>,
 ) -> Result<()> {
     let state = Arc::new(AppState {
@@ -51,6 +58,9 @@ pub async fn serve(
         hermes,
         hermes_dashboard_link_url,
         opencode_workspace_config,
+        opencode_client,
+        model_catalog,
+        asset_cache,
     });
     let app = router(state);
     let listener = tokio::net::TcpListener::bind(bind_addr)

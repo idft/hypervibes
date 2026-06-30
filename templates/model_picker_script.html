@@ -1,0 +1,57 @@
+<script>
+    (function () {
+        document.querySelectorAll('[data-model-picker]').forEach(function (picker) {
+            const input = picker.parentElement.querySelector('input[name="model_selection"]');
+            const label = picker.querySelector('[data-model-picker-label]');
+            const logo = picker.querySelector('[data-model-picker-logo]');
+            const defaultBadge = picker.querySelector('[data-model-picker-default-badge]');
+            const search = picker.querySelector('[data-model-picker-search]');
+            const options = picker.querySelectorAll('[data-model-picker-option]');
+            if (!input || !label || !logo || !defaultBadge) {
+                return;
+            }
+
+            function updateSelected(option) {
+                label.textContent = option.dataset.label || 'OpenCode default';
+                if (option.dataset.logoUrl) {
+                    logo.src = option.dataset.logoUrl;
+                    logo.classList.remove('hidden');
+                    defaultBadge.classList.add('hidden');
+                } else {
+                    logo.src = '';
+                    logo.classList.add('hidden');
+                    defaultBadge.classList.remove('hidden');
+                }
+            }
+
+            if (search) {
+                search.addEventListener('input', function () {
+                    const query = search.value.trim().toLowerCase();
+                    options.forEach(function (option) {
+                        const haystack = (option.dataset.searchText || option.dataset.label || '').toLowerCase();
+                        option.classList.toggle('hidden', query !== '' && !haystack.includes(query));
+                    });
+                });
+            }
+
+            options.forEach(function (option) {
+                option.addEventListener('click', function () {
+                    input.value = option.dataset.value || '';
+                    updateSelected(option);
+                    if (search) {
+                        search.value = '';
+                        options.forEach(function (entry) { entry.classList.remove('hidden'); });
+                    }
+                    picker.removeAttribute('open');
+                });
+            });
+
+            const selected = Array.from(options).find(function (option) {
+                return option.dataset.value === input.value;
+            }) || options[0];
+            if (selected) {
+                updateSelected(selected);
+            }
+        });
+    })();
+</script>

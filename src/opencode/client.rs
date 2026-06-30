@@ -1,5 +1,7 @@
 use std::time::Duration;
 
+use std::collections::BTreeMap;
+
 use anyhow::{Context, Result, anyhow};
 use reqwest::StatusCode;
 use serde::{Deserialize, Serialize};
@@ -135,6 +137,31 @@ impl OpenCodeClient {
             snippet
         ))
     }
+
+    pub async fn list_providers(
+        &self,
+        base_url: &str,
+        workspace_container_path: &str,
+    ) -> Result<OpenCodeProvidersResponse> {
+        let url = build_url(
+            base_url,
+            "provider",
+            &[("directory", workspace_container_path)],
+        );
+        let response = self
+            .http
+            .get(url)
+            .timeout(self.config.status_timeout)
+            .apply_basic_auth(&self.config)
+            .send()
+            .await
+            .map_err(|error| anyhow!("OpenCode list_providers request failed: {error}"))?;
+        let response = parse_opencode_response(response).await?;
+        response
+            .json()
+            .await
+            .context("failed to decode OpenCode provider discovery response")
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -154,6 +181,33 @@ pub struct OpenCodeCommandRequest {
     pub agent: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct OpenCodeProvidersResponse {
+    #[serde(default)]
+    pub all: Vec<OpenCodeProviderInfo>,
+    #[serde(default)]
+    pub connected: Vec<String>,
+    #[serde(default)]
+    pub default: BTreeMap<String, String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct OpenCodeProviderInfo {
+    pub id: String,
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(default)]
+    pub models: BTreeMap<String, OpenCodeModelInfo>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct OpenCodeModelInfo {
+    #[serde(default)]
+    pub id: Option<String>,
+    #[serde(default)]
+    pub name: Option<String>,
 }
 
 trait ApplyBasicAuth {
@@ -290,5 +344,26 @@ mod tests {
         assert_eq!(json["model"], "anthropic/claude-sonnet-4");
         assert!(json.get("provider_id").is_none());
         assert!(json.get("model_id").is_none());
+    }
+
+    #[test]
+    fn provider_response_parses_models_and_connected_providers() {
+        let response: OpenCodeProvidersResponse = serde_json::from_str(
+            r#"{
+                "all": [{
+                    "id": "anthropic",
+                    "name": "Anthropic",
+                    "models": {
+                        "claude-sonnet-4": { "name": "Claude Sonnet 4" }
+                    }
+                }],
+                "connected": ["anthropic"],
+                "default": { "analysis": "anthropic/claude-sonnet-4" }
+            }"#,
+        )
+        .unwrap();
+
+        assert_eq!(response.connected, vec!["anthropic"]);
+        assert_eq!(response.all[0].models["claude-sonnet-4"].name.as_deref(), Some("Claude Sonnet 4"));
     }
 }

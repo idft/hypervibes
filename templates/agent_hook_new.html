@@ -53,19 +53,7 @@
             </div>
         </div>
 
-        <div class="grid gap-6 sm:grid-cols-2">
-            <div>
-                <label for="model_provider_id" class="block text-sm font-medium text-zinc-300">Model provider ID</label>
-                <input type="text" id="model_provider_id" name="model_provider_id" value="{{ form.model_provider_id }}" placeholder="anthropic"
-                    class="mt-2 block w-full rounded-xl border border-zinc-800 bg-zinc-950 px-3 py-2 text-sm text-white placeholder-zinc-600 focus:border-zinc-600 focus:outline-none">
-            </div>
-
-            <div>
-                <label for="model_id" class="block text-sm font-medium text-zinc-300">Model ID</label>
-                <input type="text" id="model_id" name="model_id" value="{{ form.model_id }}" placeholder="claude-sonnet-4"
-                    class="mt-2 block w-full rounded-xl border border-zinc-800 bg-zinc-950 px-3 py-2 text-sm text-white placeholder-zinc-600 focus:border-zinc-600 focus:outline-none">
-            </div>
-        </div>
+        {% include "model_picker.html" %}
 
         <div>
             <label for="operator_prompt" class="block text-sm font-medium text-zinc-300">Operator prompt</label>
@@ -84,4 +72,8 @@
         </div>
     </form>
 </div>
+{% endblock %}
+
+{% block scripts %}
+{% include "model_picker_script.html" %}
 {% endblock %}

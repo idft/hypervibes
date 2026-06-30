@@ -1104,6 +1104,7 @@ mod tests {
 
     async fn test_state() -> Arc<AppState> {
         let pool = test_db::pool().await;
+        let cache_dir = std::path::PathBuf::from("/tmp/opencode/vibetrading-api-cache");
         Arc::new(AppState {
             db_pool: pool,
             agentic_backend: Arc::new(NoopAgenticBackend),
@@ -1125,6 +1126,20 @@ mod tests {
                 container_workspaces_root: "/workspaces".to_string(),
                 api_base_url: "http://host.containers.internal:3003".to_string(),
             },
+            opencode_client: Arc::new(
+                crate::opencode::client::OpenCodeClient::new(
+                    crate::opencode::client::OpenCodeClientConfig::new(
+                        "opencode".to_string(),
+                        None,
+                    ),
+                )
+                .unwrap(),
+            ),
+            model_catalog: crate::model_catalog::models_dev::ModelsDevCatalog::shared(
+                cache_dir.clone(),
+            )
+            .unwrap(),
+            asset_cache: Arc::new(crate::cache::asset::AssetCache::new(cache_dir).unwrap()),
         })
     }
 

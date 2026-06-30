@@ -684,6 +684,58 @@ pub async fn set_schedule_enabled(
     Ok(result.rows_affected() > 0)
 }
 
+pub async fn set_schedule_model(
+    pool: &DbPool,
+    agent_key: &str,
+    schedule_id: i64,
+    model_provider_id: Option<&str>,
+    model_id: Option<&str>,
+) -> Result<bool> {
+    let result = sqlx::query(
+        "UPDATE agentic_job_schedules
+            SET model_provider_id = $3,
+                model_id = $4,
+                updated_at = now()
+          WHERE agent_key = $1
+            AND id = $2",
+    )
+    .bind(agent_key)
+    .bind(schedule_id)
+    .bind(model_provider_id)
+    .bind(model_id)
+    .execute(pool)
+    .await
+    .with_context(|| format!("failed to update model for schedule {schedule_id} agent {agent_key}"))?;
+
+    Ok(result.rows_affected() > 0)
+}
+
+pub async fn set_hook_model(
+    pool: &DbPool,
+    agent_key: &str,
+    hook_id: i64,
+    model_provider_id: Option<&str>,
+    model_id: Option<&str>,
+) -> Result<bool> {
+    let result = sqlx::query(
+        "UPDATE agentic_job_hooks
+            SET model_provider_id = $3,
+                model_id = $4,
+                updated_at = now()
+          WHERE agent_key = $1
+            AND id = $2",
+    )
+    .bind(agent_key)
+    .bind(hook_id)
+    .bind(model_provider_id)
+    .bind(model_id)
+    .execute(pool)
+    .await
+    .with_context(|| format!("failed to update model for hook {hook_id} agent {agent_key}"))?;
+
+    Ok(result.rows_affected() > 0)
+}
+
 /// List OpenCode schedules that are due and dispatchable.
 ///
 /// The join is intentionally strict: disabled agents, disabled runtimes,

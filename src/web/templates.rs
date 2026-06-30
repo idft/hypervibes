@@ -21,6 +21,7 @@ use crate::{
         queries::{AccountTransactionRow, BalancePoint},
         sync_state::SyncStateRow,
     },
+    model_catalog::options::ModelPickerOption,
     memory::MemoryRecord,
 };
 
@@ -513,8 +514,7 @@ pub struct CreateAgentScheduleFormValues {
     pub job_kind: String,
     pub timeframe: String,
     pub timeout_seconds: String,
-    pub model_provider_id: String,
-    pub model_id: String,
+    pub model_selection: String,
     pub operator_prompt: String,
     pub enabled: bool,
 }
@@ -522,10 +522,19 @@ pub struct CreateAgentScheduleFormValues {
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct CreateAgentHookFormValues {
     pub timeout_seconds: String,
-    pub model_provider_id: String,
-    pub model_id: String,
+    pub model_selection: String,
     pub operator_prompt: String,
     pub enabled: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct ModelPickerView {
+    pub input_id: String,
+    pub input_name: String,
+    pub selected_value: String,
+    pub selected_label: String,
+    pub options: Vec<ModelPickerOption>,
+    pub warning: Option<String>,
 }
 
 #[derive(Template)]
@@ -533,6 +542,7 @@ pub struct CreateAgentHookFormValues {
 pub struct AgentScheduleNewPageTemplate {
     pub agent: AgentDetailRow,
     pub form: CreateAgentScheduleFormValues,
+    pub model_picker: ModelPickerView,
     pub errors: Vec<String>,
     pub current_path: String,
 }
@@ -542,6 +552,7 @@ pub struct AgentScheduleNewPageTemplate {
 pub struct AgentHookNewPageTemplate {
     pub agent: AgentDetailRow,
     pub form: CreateAgentHookFormValues,
+    pub model_picker: ModelPickerView,
     pub errors: Vec<String>,
     pub current_path: String,
 }
@@ -755,6 +766,7 @@ pub struct AgenticJobScheduleView {
     pub timeout_text: String,
     pub next_run_text: String,
     pub model_text: String,
+    pub model_logo_url: Option<String>,
     pub operator_prompt_summary: String,
     pub detail_url: String,
     pub run_now_action: String,
@@ -774,6 +786,7 @@ pub struct AgenticJobHookView {
     pub enabled_class: &'static str,
     pub timeout_text: String,
     pub model_text: String,
+    pub model_logo_url: Option<String>,
     pub operator_prompt_summary: String,
     pub detail_url: String,
     pub run_now_action: String,
@@ -797,6 +810,8 @@ pub struct AgenticJobDetailView {
     pub operator_prompt_text: String,
     pub prompt_preview_text: String,
     pub prompt_preview_error: Option<String>,
+    pub model_selection: String,
+    pub model_update_action: String,
     pub run_now_action: String,
     pub toggle_action: String,
     pub hidden_enabled_value: &'static str,
@@ -818,6 +833,8 @@ pub struct AgenticHookDetailView {
     pub operator_prompt_text: String,
     pub prompt_preview_text: String,
     pub prompt_preview_error: Option<String>,
+    pub model_selection: String,
+    pub model_update_action: String,
     pub run_now_action: String,
     pub toggle_action: String,
     pub hidden_enabled_value: &'static str,
@@ -944,6 +961,10 @@ impl AgenticJobScheduleView {
             (Some(provider), Some(model)) => format!("{provider}/{model}"),
             _ => "—".to_string(),
         };
+        let model_logo_url = row
+            .model_provider_id
+            .as_ref()
+            .map(|provider| format!("/model-catalog/logos/{provider}"));
 
         let (enabled_label, enabled_class) = if row.enabled {
             (
@@ -967,6 +988,7 @@ impl AgenticJobScheduleView {
             timeout_text: format_duration(row.timeout_seconds),
             next_run_text: format_timestamp_utc(row.next_run_at),
             model_text,
+            model_logo_url,
             operator_prompt_summary: operator_summary,
             detail_url: format!("/agents/{}/jobs/{}", row.agent_key, row.id),
             run_now_action: format!("/agents/{}/jobs/{}/run", row.agent_key, row.id),
@@ -997,6 +1019,10 @@ impl AgenticJobHookView {
             (Some(provider), Some(model)) => format!("{provider}/{model}"),
             _ => "—".to_string(),
         };
+        let model_logo_url = row
+            .model_provider_id
+            .as_ref()
+            .map(|provider| format!("/model-catalog/logos/{provider}"));
 
         let (enabled_label, enabled_class) = if row.enabled {
             (
@@ -1017,6 +1043,7 @@ impl AgenticJobHookView {
             enabled_class,
             timeout_text: format_duration(row.timeout_seconds),
             model_text,
+            model_logo_url,
             operator_prompt_summary,
             detail_url: format!("/agents/{}/hooks/{}", row.agent_key, row.id),
             run_now_action: format!("/agents/{}/hooks/{}/run", row.agent_key, row.id),
@@ -1050,6 +1077,11 @@ impl AgenticHookDetailView {
             },
             prompt_preview_text: String::new(),
             prompt_preview_error: None,
+            model_selection: match (row.model_provider_id.as_deref(), row.model_id.as_deref()) {
+                (Some(provider), Some(model)) => format!("{provider}/{model}"),
+                _ => String::new(),
+            },
+            model_update_action: format!("/agents/{}/hooks/{}/model", row.agent_key, row.id),
             run_now_action: summary.run_now_action,
             toggle_action: summary.toggle_action,
             hidden_enabled_value: summary.hidden_enabled_value,
@@ -1079,6 +1111,11 @@ impl AgenticJobDetailView {
             },
             prompt_preview_text: String::new(),
             prompt_preview_error: None,
+            model_selection: match (row.model_provider_id.as_deref(), row.model_id.as_deref()) {
+                (Some(provider), Some(model)) => format!("{provider}/{model}"),
+                _ => String::new(),
+            },
+            model_update_action: format!("/agents/{}/jobs/{}/model", row.agent_key, row.id),
             run_now_action: summary.run_now_action,
             toggle_action: summary.toggle_action,
             hidden_enabled_value: summary.hidden_enabled_value,
@@ -1270,6 +1307,7 @@ impl OpenCodeSessionErrorView {
 pub struct AgentJobDetailPageTemplate {
     pub agent: AgentDetailRow,
     pub job: AgenticJobDetailView,
+    pub model_picker: ModelPickerView,
     pub job_runs: Vec<AgenticRunView>,
     pub job_runs_loaded: bool,
     pub current_path: String,
@@ -1279,6 +1317,7 @@ impl AgentJobDetailPageTemplate {
     pub fn render_view(
         agent: AgentDetailRow,
         job: AgenticJobDetailView,
+        model_picker: ModelPickerView,
         job_runs: Vec<AgenticRunView>,
         job_runs_loaded: bool,
     ) -> Result<String, askama::Error> {
@@ -1286,6 +1325,7 @@ impl AgentJobDetailPageTemplate {
         Self {
             agent,
             job,
+            model_picker,
             job_runs,
             job_runs_loaded,
             current_path,
@@ -1299,6 +1339,7 @@ impl AgentJobDetailPageTemplate {
 pub struct AgentHookDetailPageTemplate {
     pub agent: AgentDetailRow,
     pub hook: AgenticHookDetailView,
+    pub model_picker: ModelPickerView,
     pub hook_runs: Vec<AgenticRunView>,
     pub hook_runs_loaded: bool,
     pub current_path: String,
@@ -1308,6 +1349,7 @@ impl AgentHookDetailPageTemplate {
     pub fn render_view(
         agent: AgentDetailRow,
         hook: AgenticHookDetailView,
+        model_picker: ModelPickerView,
         hook_runs: Vec<AgenticRunView>,
         hook_runs_loaded: bool,
     ) -> Result<String, askama::Error> {
@@ -1315,6 +1357,7 @@ impl AgentHookDetailPageTemplate {
         Self {
             agent,
             hook,
+            model_picker,
             hook_runs,
             hook_runs_loaded,
             current_path,
@@ -2431,6 +2474,18 @@ mod tests {
         }
     }
 
+    fn sample_model_options() -> Vec<ModelPickerOption> {
+        vec![ModelPickerOption {
+            value: "anthropic/claude-sonnet-4".to_string(),
+            provider_id: "anthropic".to_string(),
+            provider_name: "Anthropic".to_string(),
+            provider_logo_url: "/model-catalog/logos/anthropic.svg".to_string(),
+            model_id: "claude-sonnet-4".to_string(),
+            model_name: "Claude Sonnet 4".to_string(),
+            metadata_text: "1M ctx · tools".to_string(),
+        }]
+    }
+
     fn sample_run_row(
         id: i64,
         status: &str,
@@ -2542,7 +2597,20 @@ mod tests {
             AgenticRunView::from_row(&sample_run_row(2, "failed", "analysis-15m")),
         ];
 
-        let rendered = AgentJobDetailPageTemplate::render_view(agent, job, runs, true)
+        let rendered = AgentJobDetailPageTemplate::render_view(
+            agent,
+            job,
+            ModelPickerView {
+                input_id: "job-model-selection".to_string(),
+                input_name: "model_selection".to_string(),
+                selected_value: "anthropic/claude-sonnet-4".to_string(),
+                selected_label: "Anthropic / Claude Sonnet 4".to_string(),
+                options: sample_model_options(),
+                warning: None,
+            },
+            runs,
+            true,
+        )
             .expect("render job detail page");
 
         assert!(rendered.contains("Back to jobs"));
@@ -2563,7 +2631,20 @@ mod tests {
         hook_run.timeframe = None;
         let runs = vec![AgenticRunView::from_row(&hook_run)];
 
-        let rendered = AgentHookDetailPageTemplate::render_view(agent, hook, runs, true)
+        let rendered = AgentHookDetailPageTemplate::render_view(
+            agent,
+            hook,
+            ModelPickerView {
+                input_id: "hook-model-selection".to_string(),
+                input_name: "model_selection".to_string(),
+                selected_value: "anthropic/claude-sonnet-4".to_string(),
+                selected_label: "Anthropic / Claude Sonnet 4".to_string(),
+                options: sample_model_options(),
+                warning: None,
+            },
+            runs,
+            true,
+        )
             .expect("render hook detail page");
 
         assert!(rendered.contains("Back to jobs"));
@@ -2599,7 +2680,7 @@ mod tests {
             AgentsShowPageTemplate::new(sample_opencode_detail_row(), AgentShowTab::Jobs);
         template.hooks_loaded = true;
         let rendered = template.render().expect("render jobs page hook section");
-        assert!(rendered.contains("Create hook"));
+        assert!(rendered.contains("New hook"));
         assert!(rendered.contains("/agents/test-agent/hooks/new"));
     }
 
@@ -2609,10 +2690,17 @@ mod tests {
             agent: sample_opencode_detail_row(),
             form: CreateAgentHookFormValues {
                 timeout_seconds: "600".to_string(),
-                model_provider_id: "anthropic".to_string(),
-                model_id: "claude-sonnet-4".to_string(),
+                model_selection: "anthropic/claude-sonnet-4".to_string(),
                 operator_prompt: "Summarize multi-timeframe agreement".to_string(),
                 enabled: true,
+            },
+            model_picker: ModelPickerView {
+                input_id: "hook-model-selection".to_string(),
+                input_name: "model_selection".to_string(),
+                selected_value: "anthropic/claude-sonnet-4".to_string(),
+                selected_label: "Anthropic / Claude Sonnet 4".to_string(),
+                options: sample_model_options(),
+                warning: None,
             },
             errors: Vec::new(),
             current_path: "/agents/test-agent/hooks/new".to_string(),
