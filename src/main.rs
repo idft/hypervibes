@@ -70,6 +70,12 @@ async fn main() -> Result<()> {
     let asset_cache = cache::asset::AssetCache::new(config.app_cache_dir.clone())?;
     let model_catalog =
         model_catalog::models_dev::ModelsDevCatalog::shared(config.app_cache_dir.clone())?;
+    let warm_model_catalog = Arc::clone(&model_catalog);
+    tokio::spawn(async move {
+        if let Err(error) = warm_model_catalog.snapshot().await {
+            eprintln!("models.dev catalog warmup failed: {error:#}");
+        }
+    });
 
     println!("Starting Hyperliquid agent monitor");
     let hyperliquid_monitor = agents::HyperliquidAgentMonitor::new(
