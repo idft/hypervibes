@@ -131,6 +131,10 @@ pub fn router(state: Arc<AppState>) -> Router {
         )
         .route("/agents/{agent_key}/jobs/new", get(agents_new_job))
         .route(
+            "/agents/{agent_key}/jobs/toggle-all",
+            post(agents_toggle_all_jobs),
+        )
+        .route(
             "/agents/{agent_key}/jobs/{job_id}",
             get(agents_show_job_detail),
         )
@@ -1066,6 +1070,28 @@ async fn agents_toggle_job(
     Ok(Redirect::to(&format!("/agents/{agent_key}/jobs")).into_response())
 }
 
+async fn agents_toggle_all_jobs(
+    State(state): State<Arc<AppState>>,
+    Path(agent_key): Path<String>,
+    Form(form): Form<ToggleScheduleForm>,
+) -> Result<Response, AppError> {
+    let Some(agent) = get_agent(&state.db_pool, &agent_key).await? else {
+        return Ok((StatusCode::NOT_FOUND, "agent not found").into_response());
+    };
+    if agent.backend_kind != BACKEND_KIND_OPENCODE {
+        return Ok((
+            StatusCode::NOT_FOUND,
+            "jobs are only available for OpenCode agents",
+        )
+            .into_response());
+    }
+
+    let enable = matches!(form.enabled.as_deref(), Some("on"));
+    crate::agentic::store::set_all_agent_jobs_enabled(&state.db_pool, &agent_key, enable).await?;
+
+    Ok(Redirect::to(&format!("/agents/{agent_key}/jobs")).into_response())
+}
+
 async fn agents_delete_job(
     State(state): State<Arc<AppState>>,
     Path((agent_key, job_id)): Path<(String, i64)>,
@@ -1389,6 +1415,22 @@ async fn render_agent_show_page(
 
     let mut template = AgentsShowPageTemplate::new(agent.clone(), active_tab);
 
+    let instrument_options = match list_agent_instrument_options(&state.db_pool, &agent.agent_key).await {
+        Ok(rows) => {
+            template.instrument_options_loaded = true;
+            template.has_selected_instruments = rows.iter().any(|row| row.selected);
+            Some(rows)
+        }
+        Err(error) => {
+            warn!(
+                agent_key = %agent.agent_key,
+                error = ?error,
+                "failed to list agent instrument options for agent page"
+            );
+            None
+        }
+    };
+
     match active_tab {
         AgentShowTab::Positions => {
             populate_positions_tab(state, &agent, &mut template).await?;
@@ -1472,19 +1514,11 @@ async fn render_agent_show_page(
                     Vec::new()
                 }
             };
-            match list_agent_instrument_options(&state.db_pool, &agent.agent_key).await {
-                Ok(rows) => {
-                    template.instrument_options_loaded = true;
-                    template.has_selected_instruments = rows.iter().any(|row| row.selected);
+            match instrument_options {
+                Some(rows) => {
                     template.instrument_options = rows;
                 }
-                Err(error) => {
-                    warn!(
-                        agent_key = %agent.agent_key,
-                        error = ?error,
-                        "failed to list agent instrument options for settings page"
-                    );
-                }
+                None => {}
             }
         }
         AgentShowTab::Jobs => {
@@ -3148,21 +3182,31 @@ mod tests {
             .exists()
         );
 
-        // Default OpenCode schedules should have been inserted.
+        // Default OpenCode schedules and hooks should have been inserted.
         let schedules = crate::agentic::store::list_agent_schedules(&pool, &agent_key)
             .await
             .expect("list schedules");
-        assert_eq!(schedules.len(), 2);
+        assert_eq!(schedules.len(), 4);
         let analysis = schedules
             .iter()
             .find(|row| row.job_key == "analysis-15m")
             .expect("analysis schedule present");
-        assert!(analysis.enabled);
+        assert!(!analysis.enabled);
+        assert!(schedules.iter().any(|row| row.job_key == "analysis-1h"));
+        assert!(schedules.iter().any(|row| row.job_key == "analysis-1d"));
         let trading = schedules
             .iter()
             .find(|row| row.job_key == "trading-1m")
             .expect("trading schedule present");
         assert!(!trading.enabled);
+
+        let hooks = crate::agentic::store::list_agent_hooks(&pool, &agent_key)
+            .await
+            .expect("list hooks");
+        assert_eq!(hooks.len(), 1);
+        let hook = hooks.first().expect("default hook present");
+        assert_eq!(hook.job_key, "market-analysis");
+        assert!(!hook.enabled);
     }
 
     #[tokio::test]
@@ -4278,10 +4322,13 @@ mod tests {
         assert!(text.contains(&format!("/agents/{agent_key}/jobs/new")));
         assert!(text.contains("Scheduled Jobs"));
         assert!(text.contains("Hook Jobs"));
+        assert!(text.contains("Enable all"));
+        assert!(text.contains("Disable all"));
         assert!(text.contains("Recent Runs"));
         assert!(text.contains("Create hook"));
         assert!(text.contains(&format!("/agents/{agent_key}/hooks/new")));
         assert!(text.contains("Run now"));
+        assert!(!text.contains("Operator prompt"));
     }
 
     #[tokio::test]
@@ -4318,6 +4365,15 @@ mod tests {
         let (agent_key, _wallet_address) = insert_test_opencode_agent(&state)
             .await
             .expect("insert opencode agent");
+        let default_hook_id = crate::agentic::store::list_agent_hooks(&pool, &agent_key)
+            .await
+            .expect("list hooks")
+            .first()
+            .expect("default hook present")
+            .id;
+        crate::agentic::store::delete_agent_hook(&pool, &agent_key, default_hook_id)
+            .await
+            .expect("delete default hook");
 
         let response = router(state)
             .oneshot(
@@ -4426,19 +4482,15 @@ mod tests {
         replace_agent_instruments(&pool, &agent_key, &["BTC".to_string()])
             .await
             .expect("seed instruments");
-        crate::agentic::store::insert_agent_hook(
-            &pool,
-            &agent_key,
-            JOB_KIND_MARKET_ANALYSIS,
-            HOOK_EVENT_ANALYSIS_BATCH_COMPLETED,
-            true,
-            None,
-            None,
-            600,
-            "",
-        )
-        .await
-        .expect("insert hook");
+        let hook_id = crate::agentic::store::list_agent_hooks(&pool, &agent_key)
+            .await
+            .expect("list hooks")
+            .first()
+            .expect("default hook present")
+            .id;
+        crate::agentic::store::set_hook_enabled(&pool, &agent_key, hook_id, true)
+            .await
+            .expect("enable default hook");
         let schedule_id = crate::agentic::store::list_agent_schedules(&pool, &agent_key)
             .await
             .expect("list schedules")
@@ -4492,19 +4544,15 @@ mod tests {
         let (agent_key, _wallet_address) = insert_test_opencode_agent(&state)
             .await
             .expect("insert opencode agent");
-        crate::agentic::store::insert_agent_hook(
-            &pool,
-            &agent_key,
-            JOB_KIND_MARKET_ANALYSIS,
-            HOOK_EVENT_ANALYSIS_BATCH_COMPLETED,
-            true,
-            None,
-            None,
-            600,
-            "",
-        )
-        .await
-        .expect("insert hook");
+        let hook_id = crate::agentic::store::list_agent_hooks(&pool, &agent_key)
+            .await
+            .expect("list hooks")
+            .first()
+            .expect("default hook present")
+            .id;
+        crate::agentic::store::set_hook_enabled(&pool, &agent_key, hook_id, true)
+            .await
+            .expect("enable default hook");
         let schedule_id = crate::agentic::store::list_agent_schedules(&pool, &agent_key)
             .await
             .expect("list schedules")
@@ -4550,19 +4598,15 @@ mod tests {
         replace_agent_instruments(&pool, &agent_key, &["BTC".to_string()])
             .await
             .expect("seed instruments");
-        crate::agentic::store::insert_agent_hook(
-            &pool,
-            &agent_key,
-            JOB_KIND_MARKET_ANALYSIS,
-            HOOK_EVENT_ANALYSIS_BATCH_COMPLETED,
-            true,
-            None,
-            None,
-            600,
-            "",
-        )
-        .await
-        .expect("insert hook");
+        let hook_id = crate::agentic::store::list_agent_hooks(&pool, &agent_key)
+            .await
+            .expect("list hooks")
+            .first()
+            .expect("default hook present")
+            .id;
+        crate::agentic::store::set_hook_enabled(&pool, &agent_key, hook_id, true)
+            .await
+            .expect("enable default hook");
         let schedule_id = crate::agentic::store::list_agent_schedules(&pool, &agent_key)
             .await
             .expect("list schedules")
@@ -4619,19 +4663,15 @@ mod tests {
         replace_agent_instruments(&pool, &agent_key, &["BTC".to_string()])
             .await
             .expect("seed instruments");
-        let hook_id = crate::agentic::store::insert_agent_hook(
-            &pool,
-            &agent_key,
-            JOB_KIND_MARKET_ANALYSIS,
-            HOOK_EVENT_ANALYSIS_BATCH_COMPLETED,
-            true,
-            None,
-            None,
-            600,
-            "",
-        )
-        .await
-        .expect("insert hook");
+        let hook_id = crate::agentic::store::list_agent_hooks(&pool, &agent_key)
+            .await
+            .expect("list hooks")
+            .first()
+            .expect("default hook present")
+            .id;
+        crate::agentic::store::set_hook_enabled(&pool, &agent_key, hook_id, true)
+            .await
+            .expect("enable default hook");
 
         let response = router(state)
             .oneshot(
@@ -4672,19 +4712,15 @@ mod tests {
         let (agent_key, _wallet_address) = insert_test_opencode_agent(&state)
             .await
             .expect("insert opencode agent");
-        let hook_id = crate::agentic::store::insert_agent_hook(
-            &pool,
-            &agent_key,
-            JOB_KIND_MARKET_ANALYSIS,
-            HOOK_EVENT_ANALYSIS_BATCH_COMPLETED,
-            true,
-            None,
-            None,
-            600,
-            "",
-        )
-        .await
-        .expect("insert hook");
+        let hook_id = crate::agentic::store::list_agent_hooks(&pool, &agent_key)
+            .await
+            .expect("list hooks")
+            .first()
+            .expect("default hook present")
+            .id;
+        crate::agentic::store::set_hook_enabled(&pool, &agent_key, hook_id, true)
+            .await
+            .expect("enable default hook");
 
         let response = router(state)
             .oneshot(
@@ -4713,19 +4749,12 @@ mod tests {
         let (agent_key, _wallet_address) = insert_test_opencode_agent(&state)
             .await
             .expect("insert opencode agent");
-        let hook_id = crate::agentic::store::insert_agent_hook(
-            &pool,
-            &agent_key,
-            JOB_KIND_MARKET_ANALYSIS,
-            HOOK_EVENT_ANALYSIS_BATCH_COMPLETED,
-            true,
-            None,
-            None,
-            600,
-            "",
-        )
-        .await
-        .expect("insert hook");
+        let hook_id = crate::agentic::store::list_agent_hooks(&pool, &agent_key)
+            .await
+            .expect("list hooks")
+            .first()
+            .expect("default hook present")
+            .id;
 
         let response = router(state)
             .oneshot(
@@ -4788,7 +4817,7 @@ mod tests {
                     .uri(format!("/agents/{agent_key}/jobs"))
                     .header("content-type", "application/x-www-form-urlencoded")
                     .body(Body::from(
-                        "job_kind=analysis&timeframe=1h&timeout_seconds=600&enabled=on&model_provider_id=anthropic&model_id=claude-sonnet-4&operator_prompt=Check+higher+timeframe+structure",
+                        "job_kind=analysis&timeframe=4h&timeout_seconds=600&enabled=on&model_provider_id=anthropic&model_id=claude-sonnet-4&operator_prompt=Check+higher+timeframe+structure",
                     ))
                     .unwrap(),
             )
@@ -4809,15 +4838,72 @@ mod tests {
             .expect("list schedules");
         let schedule = schedules
             .iter()
-            .find(|row| row.job_key == "analysis-1h")
+            .find(|row| row.job_key == "analysis-4h")
             .expect("custom schedule present");
         assert_eq!(schedule.job_kind, JOB_KIND_ANALYSIS);
         assert!(schedule.enabled);
-        assert_eq!(schedule.timeframe, "1h");
+        assert_eq!(schedule.timeframe, "4h");
         assert_eq!(schedule.timeout_seconds, 600);
         assert_eq!(schedule.model_provider_id.as_deref(), Some("anthropic"));
         assert_eq!(schedule.model_id.as_deref(), Some("claude-sonnet-4"));
         assert_eq!(schedule.operator_prompt, "Check higher timeframe structure");
+    }
+
+    #[tokio::test]
+    async fn post_toggle_all_jobs_updates_schedules_and_hooks() {
+        let state = test_state().await;
+        let pool = state.db_pool.clone();
+        let (agent_key, _wallet_address) = insert_test_opencode_agent(&state)
+            .await
+            .expect("insert opencode agent");
+
+        let response = router(state.clone())
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/agents/{agent_key}/jobs/toggle-all"))
+                    .header("content-type", "application/x-www-form-urlencoded")
+                    .body(Body::from("enabled=on"))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::SEE_OTHER);
+        assert!(crate::agentic::store::list_agent_schedules(&pool, &agent_key)
+            .await
+            .expect("list schedules")
+            .iter()
+            .all(|row| row.enabled));
+        assert!(crate::agentic::store::list_agent_hooks(&pool, &agent_key)
+            .await
+            .expect("list hooks")
+            .iter()
+            .all(|row| row.enabled));
+
+        let response = router(state)
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/agents/{agent_key}/jobs/toggle-all"))
+                    .header("content-type", "application/x-www-form-urlencoded")
+                    .body(Body::from("enabled=off"))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::SEE_OTHER);
+        assert!(crate::agentic::store::list_agent_schedules(&pool, &agent_key)
+            .await
+            .expect("list schedules")
+            .iter()
+            .all(|row| !row.enabled));
+        assert!(crate::agentic::store::list_agent_hooks(&pool, &agent_key)
+            .await
+            .expect("list hooks")
+            .iter()
+            .all(|row| !row.enabled));
     }
 
     #[tokio::test]
@@ -4893,19 +4979,12 @@ mod tests {
         replace_agent_instruments(&pool, &agent_key, &["BTC".to_string()])
             .await
             .expect("seed instruments");
-        let hook_id = crate::agentic::store::insert_agent_hook(
-            &pool,
-            &agent_key,
-            JOB_KIND_MARKET_ANALYSIS,
-            HOOK_EVENT_ANALYSIS_BATCH_COMPLETED,
-            true,
-            None,
-            None,
-            600,
-            "",
-        )
-        .await
-        .expect("insert hook");
+        let hook_id = crate::agentic::store::list_agent_hooks(&pool, &agent_key)
+            .await
+            .expect("list hooks")
+            .first()
+            .expect("default hook present")
+            .id;
         let run_id = match crate::agentic::store::insert_queued_hook_run(&pool, &agent_key, hook_id)
             .await
             .expect("insert hook run")

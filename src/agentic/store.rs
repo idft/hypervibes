@@ -7,9 +7,9 @@ use crate::{
         job_key::{build_generated_hook_job_key, build_generated_job_key},
         model::{
             AgenticJobHookRow, AgenticJobScheduleRow, AgenticRunRow, DueOpenCodeHookRow,
-            DueOpenCodeScheduleRow, JOB_KIND_ANALYSIS, JOB_KIND_MARKET_ANALYSIS, JOB_KIND_TRADING,
-            RUN_STATUS_ABORTED, RUN_STATUS_FAILED, RUN_STATUS_QUEUED, RUN_STATUS_RUNNING,
-            RUN_STATUS_SKIPPED, RUN_STATUS_SUCCEEDED,
+            DueOpenCodeScheduleRow, HOOK_EVENT_ANALYSIS_BATCH_COMPLETED, JOB_KIND_ANALYSIS,
+            JOB_KIND_MARKET_ANALYSIS, JOB_KIND_TRADING, RUN_STATUS_ABORTED, RUN_STATUS_FAILED,
+            RUN_STATUS_QUEUED, RUN_STATUS_RUNNING, RUN_STATUS_SKIPPED, RUN_STATUS_SUCCEEDED,
         },
         timeframe::{
             DEFAULT_TRIGGER_DELAY_SECONDS, boundary_for_due_at, latest_due_at_or_before,
@@ -23,9 +23,11 @@ const ERROR_SUMMARY_MAX_CHARS: usize = 500;
 const ACTIVE_STATUSES: [&str; 2] = [RUN_STATUS_QUEUED, RUN_STATUS_RUNNING];
 
 const DEFAULT_ANALYSIS_TIMEFRAME: &str = "15m";
+const DEFAULT_ANALYSIS_TIMEFRAMES: [&str; 3] = ["15m", "1h", "1d"];
 const DEFAULT_TRADING_TIMEFRAME: &str = "1m";
 const DEFAULT_ANALYSIS_TIMEOUT_SECONDS: i32 = 600;
 const DEFAULT_TRADING_TIMEOUT_SECONDS: i32 = 45;
+const DEFAULT_MARKET_ANALYSIS_TIMEOUT_SECONDS: i32 = 600;
 
 fn active_job_kinds_for_lane(job_kind: &str) -> &'static [&'static str] {
     match job_kind {
@@ -68,21 +70,25 @@ fn default_trading_job_key() -> String {
     build_generated_job_key(JOB_KIND_TRADING, DEFAULT_TRADING_TIMEFRAME)
 }
 
-/// Seed the canonical default schedules for a newly-created OpenCode agent.
+/// Seed the canonical default schedules and hook for a newly-created OpenCode agent.
 ///
 /// This is idempotent: existing `(agent_key, job_kind, timeframe)` rows
-/// are left untouched. New agents always get both an `analysis-15m`
-/// schedule (enabled) and a `trading-1m` schedule (disabled).
+/// are left untouched, and the default market-analysis hook is inserted only
+/// when it does not already exist. New agents always get disabled
+/// `analysis-15m`, `analysis-1h`, `analysis-1d`, and `trading-1m` rows plus
+/// a disabled `market-analysis` hook.
 pub async fn insert_default_opencode_schedules(pool: &DbPool, agent_key: &str) -> Result<()> {
-    insert_default_opencode_schedule(
-        pool,
-        agent_key,
-        JOB_KIND_ANALYSIS,
-        DEFAULT_ANALYSIS_TIMEFRAME,
-        true,
-        DEFAULT_ANALYSIS_TIMEOUT_SECONDS,
-    )
-    .await?;
+    for timeframe in DEFAULT_ANALYSIS_TIMEFRAMES {
+        insert_default_opencode_schedule(
+            pool,
+            agent_key,
+            JOB_KIND_ANALYSIS,
+            timeframe,
+            false,
+            DEFAULT_ANALYSIS_TIMEOUT_SECONDS,
+        )
+        .await?;
+    }
 
     insert_default_opencode_schedule(
         pool,
@@ -93,6 +99,8 @@ pub async fn insert_default_opencode_schedules(pool: &DbPool, agent_key: &str) -
         DEFAULT_TRADING_TIMEOUT_SECONDS,
     )
     .await?;
+
+    insert_default_opencode_hook(pool, agent_key).await?;
 
     Ok(())
 }
@@ -138,6 +146,35 @@ async fn insert_default_opencode_schedule(
     .with_context(|| {
         format!("failed to insert default {job_key} schedule for agent {agent_key}")
     })?;
+
+    Ok(())
+}
+
+async fn insert_default_opencode_hook(pool: &DbPool, agent_key: &str) -> Result<()> {
+    let job_key = build_generated_hook_job_key(JOB_KIND_MARKET_ANALYSIS);
+
+    sqlx::query(
+        "INSERT INTO agentic_job_hooks (
+            agent_key,
+            job_key,
+            job_kind,
+            hook_event,
+            enabled,
+            timeout_seconds,
+            operator_prompt
+         ) VALUES ($1, $2, $3, $4, $5, $6, $7)
+         ON CONFLICT (agent_key, job_kind, hook_event) DO NOTHING",
+    )
+    .bind(agent_key)
+    .bind(&job_key)
+    .bind(JOB_KIND_MARKET_ANALYSIS)
+    .bind(HOOK_EVENT_ANALYSIS_BATCH_COMPLETED)
+    .bind(false)
+    .bind(DEFAULT_MARKET_ANALYSIS_TIMEOUT_SECONDS)
+    .bind("")
+    .execute(pool)
+    .await
+    .with_context(|| format!("failed to insert default {job_key} hook for agent {agent_key}"))?;
 
     Ok(())
 }
@@ -456,6 +493,45 @@ pub async fn delete_agent_hook(pool: &DbPool, agent_key: &str, hook_id: i64) -> 
     .with_context(|| format!("failed to delete hook {hook_id} for agent {agent_key}"))?;
 
     Ok(result.rows_affected() > 0)
+}
+
+/// Toggle every schedule and hook for an agent to the same enabled state.
+pub async fn set_all_agent_jobs_enabled(
+    pool: &DbPool,
+    agent_key: &str,
+    enabled: bool,
+) -> Result<()> {
+    let mut tx = pool.begin().await.context("failed to start jobs toggle transaction")?;
+
+    sqlx::query(
+        "UPDATE agentic_job_schedules
+            SET enabled = $2,
+                updated_at = now()
+          WHERE agent_key = $1",
+    )
+    .bind(agent_key)
+    .bind(enabled)
+    .execute(&mut *tx)
+    .await
+    .with_context(|| format!("failed to toggle schedules for agent {agent_key}"))?;
+
+    sqlx::query(
+        "UPDATE agentic_job_hooks
+            SET enabled = $2,
+                updated_at = now()
+          WHERE agent_key = $1",
+    )
+    .bind(agent_key)
+    .bind(enabled)
+    .execute(&mut *tx)
+    .await
+    .with_context(|| format!("failed to toggle hooks for agent {agent_key}"))?;
+
+    tx.commit()
+        .await
+        .context("failed to commit jobs toggle transaction")?;
+
+    Ok(())
 }
 
 /// List the most recent runs for an agent.
@@ -1500,6 +1576,18 @@ mod tests {
             .await
             .expect("insert default schedules");
 
+        query(
+            "UPDATE agentic_job_schedules
+                SET enabled = true
+              WHERE agent_key = $1
+                AND job_key = $2",
+        )
+        .bind(key)
+        .bind(default_analysis_job_key())
+        .execute(pool)
+        .await
+        .expect("enable seeded analysis schedule");
+
         if schedule_id_offset > 0 {
             query(
                 "UPDATE agentic_job_schedules
@@ -1516,9 +1604,10 @@ mod tests {
         let (id,): (i64,) = query_as(
             "SELECT id FROM agentic_job_schedules
               WHERE agent_key = $1
-              ORDER BY id ASC LIMIT 1",
+                AND job_key = $2",
         )
         .bind(key)
+        .bind(default_analysis_job_key())
         .fetch_one(pool)
         .await
         .expect("fetch schedule id");
@@ -1526,7 +1615,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn default_schedules_insert_two_rows_with_expected_defaults() {
+    async fn default_schedules_insert_expected_rows_with_disabled_defaults() {
         let pool = test_db::pool().await;
         let key = format!(
             "default-sched-{}",
@@ -1543,13 +1632,13 @@ mod tests {
         let rows = list_agent_schedules(&pool, &key)
             .await
             .expect("list schedules");
-        assert_eq!(rows.len(), 2);
+        assert_eq!(rows.len(), 4);
 
         let analysis = rows
             .iter()
             .find(|row| row.job_key == default_analysis_job_key())
             .expect("analysis schedule present");
-        assert!(analysis.enabled);
+        assert!(!analysis.enabled);
         assert_eq!(analysis.job_kind, JOB_KIND_ANALYSIS);
         assert_eq!(analysis.timeframe, DEFAULT_ANALYSIS_TIMEFRAME);
         assert_eq!(
@@ -1557,6 +1646,22 @@ mod tests {
             DEFAULT_TRIGGER_DELAY_SECONDS
         );
         assert_eq!(analysis.timeout_seconds, DEFAULT_ANALYSIS_TIMEOUT_SECONDS);
+
+        let analysis_1h = rows
+            .iter()
+            .find(|row| row.job_key == "analysis-1h")
+            .expect("1h analysis schedule present");
+        assert!(!analysis_1h.enabled);
+        assert_eq!(analysis_1h.job_kind, JOB_KIND_ANALYSIS);
+        assert_eq!(analysis_1h.timeframe, "1h");
+
+        let analysis_1d = rows
+            .iter()
+            .find(|row| row.job_key == "analysis-1d")
+            .expect("1d analysis schedule present");
+        assert!(!analysis_1d.enabled);
+        assert_eq!(analysis_1d.job_kind, JOB_KIND_ANALYSIS);
+        assert_eq!(analysis_1d.timeframe, "1d");
 
         let trading = rows
             .iter()
@@ -1567,6 +1672,17 @@ mod tests {
         assert_eq!(trading.timeframe, DEFAULT_TRADING_TIMEFRAME);
         assert_eq!(trading.trigger_delay_seconds, DEFAULT_TRIGGER_DELAY_SECONDS);
         assert_eq!(trading.timeout_seconds, DEFAULT_TRADING_TIMEOUT_SECONDS);
+
+        let hooks = list_agent_hooks(&pool, &key).await.expect("list hooks");
+        assert_eq!(hooks.len(), 1);
+        let hook = hooks.first().expect("default hook present");
+        assert_eq!(hook.job_key, "market-analysis");
+        assert_eq!(hook.job_kind, JOB_KIND_MARKET_ANALYSIS);
+        assert_eq!(
+            hook.hook_event,
+            crate::agentic::model::HOOK_EVENT_ANALYSIS_BATCH_COMPLETED
+        );
+        assert!(!hook.enabled);
     }
 
     #[tokio::test]
@@ -1593,7 +1709,15 @@ mod tests {
                 .fetch_one(&pool)
                 .await
                 .expect("count");
-        assert_eq!(count.0, 2);
+        assert_eq!(count.0, 4);
+
+        let hook_count: (i64,) =
+            query_as("SELECT COUNT(*) FROM agentic_job_hooks WHERE agent_key = $1")
+                .bind(&key)
+                .fetch_one(&pool)
+                .await
+                .expect("hook count");
+        assert_eq!(hook_count.0, 1);
     }
 
     #[tokio::test]
@@ -1846,19 +1970,12 @@ mod tests {
             .into_iter()
             .find(|row| row.id == schedule_id)
             .expect("schedule present");
-        let hook_id = insert_agent_hook(
-            &pool,
-            &key,
-            JOB_KIND_MARKET_ANALYSIS,
-            crate::agentic::model::HOOK_EVENT_ANALYSIS_BATCH_COMPLETED,
-            true,
-            None,
-            None,
-            600,
-            "",
-        )
-        .await
-        .expect("insert hook");
+        let hook_id = list_agent_hooks(&pool, &key)
+            .await
+            .expect("list hooks")
+            .first()
+            .expect("default hook present")
+            .id;
 
         let both_sources = query(
             "INSERT INTO agentic_runs (
@@ -1969,6 +2086,40 @@ mod tests {
             .expect("delete hook");
         assert!(deleted);
         assert!(get_run(&pool, run_id).await.expect("get run").is_none());
+    }
+
+    #[tokio::test]
+    async fn set_all_agent_jobs_enabled_toggles_schedules_and_hooks_together() {
+        let pool = test_db::pool().await;
+        let key = format!("toggle-all-{}", Utc::now().timestamp_nanos_opt().unwrap_or(0));
+        insert_agent(&pool, &sample_agent(&key))
+            .await
+            .expect("insert agent");
+        insert_default_opencode_schedules(&pool, &key)
+            .await
+            .expect("insert defaults");
+
+        set_all_agent_jobs_enabled(&pool, &key, true)
+            .await
+            .expect("enable all");
+
+        let schedules = list_agent_schedules(&pool, &key)
+            .await
+            .expect("list schedules");
+        assert!(schedules.iter().all(|row| row.enabled));
+        let hooks = list_agent_hooks(&pool, &key).await.expect("list hooks");
+        assert!(hooks.iter().all(|row| row.enabled));
+
+        set_all_agent_jobs_enabled(&pool, &key, false)
+            .await
+            .expect("disable all");
+
+        let schedules = list_agent_schedules(&pool, &key)
+            .await
+            .expect("list schedules again");
+        assert!(schedules.iter().all(|row| !row.enabled));
+        let hooks = list_agent_hooks(&pool, &key).await.expect("list hooks again");
+        assert!(hooks.iter().all(|row| !row.enabled));
     }
 
     #[tokio::test]

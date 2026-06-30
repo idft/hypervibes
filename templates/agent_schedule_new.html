@@ -91,7 +91,12 @@
         </div>
 
         <div class="flex items-center gap-3 border-t border-zinc-800 pt-6">
-            <button type="submit" class="rounded-full bg-zinc-100 px-5 py-2 text-sm font-medium text-zinc-950 hover:bg-white">Create job</button>
+            <button type="submit" class="inline-flex items-center gap-2 rounded-full border border-zinc-700 bg-zinc-900/70 px-5 py-2 text-sm font-medium text-zinc-200 hover:border-zinc-600 hover:bg-zinc-800 hover:text-white">
+                <svg class="h-4 w-4" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
+                    <path d="M10 4a1 1 0 0 1 1 1v4h4a1 1 0 1 1 0 2h-4v4a1 1 0 1 1-2 0v-4H5a1 1 0 1 1 0-2h4V5a1 1 0 0 1 1-1Z"></path>
+                </svg>
+                Create job
+            </button>
             <a href="/agents/{{ agent.agent_key }}/jobs" class="rounded-full border border-zinc-800 px-5 py-2 text-sm font-medium text-zinc-300 hover:border-zinc-700 hover:text-white">Cancel</a>
         </div>
     </form>

@@ -848,13 +848,6 @@ mod tests {
         );
         seed_test_agent(&pool, &key).await;
 
-        // Add a 1h analysis schedule on top of the default 15m.
-        let one_h_id = store::insert_agent_schedule(
-            &pool, &key, "analysis", true, "1h", 1, None, None, 600, "",
-        )
-        .await
-        .expect("insert 1h analysis");
-
         // Force both analysis schedules to be due at the same boundary.
         let (fifteen_m_id,): (i64,) = sqlx::query_as(
             "SELECT id FROM agentic_job_schedules
@@ -864,6 +857,14 @@ mod tests {
         .fetch_one(&pool)
         .await
         .expect("fetch 15m schedule id");
+        let (one_h_id,): (i64,) = sqlx::query_as(
+            "SELECT id FROM agentic_job_schedules
+              WHERE agent_key = $1 AND job_key = 'analysis-1h'",
+        )
+        .bind(&key)
+        .fetch_one(&pool)
+        .await
+        .expect("fetch 1h schedule id");
         pin_schedule_due(&pool, fifteen_m_id, "15m").await;
         pin_schedule_due(&pool, one_h_id, "1h").await;
 
@@ -970,19 +971,15 @@ mod tests {
         );
         seed_test_agent(&pool, &key).await;
 
-        store::insert_agent_hook(
-            &pool,
-            &key,
-            crate::agentic::model::JOB_KIND_MARKET_ANALYSIS,
-            crate::agentic::model::HOOK_EVENT_ANALYSIS_BATCH_COMPLETED,
-            true,
-            None,
-            None,
-            600,
-            "",
-        )
-        .await
-        .expect("insert hook");
+        let hook_id = store::list_agent_hooks(&pool, &key)
+            .await
+            .expect("list hooks")
+            .first()
+            .expect("default hook present")
+            .id;
+        store::set_hook_enabled(&pool, &key, hook_id, true)
+            .await
+            .expect("enable default hook");
 
         let (schedule_id,): (i64,) = sqlx::query_as(
             "SELECT id FROM agentic_job_schedules

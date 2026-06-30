@@ -2490,6 +2490,8 @@ mod tests {
         assert!(rendered.contains("/agents/test-agent/jobs"));
         assert!(rendered.contains("Scheduled Jobs"));
         assert!(rendered.contains("Hook Jobs"));
+        assert!(rendered.contains("Enable all"));
+        assert!(rendered.contains("Disable all"));
         assert!(rendered.contains("Recent Runs"));
         assert!(rendered.contains("analysis-15m"));
         assert!(rendered.contains("trading-1m"));
@@ -2499,10 +2501,12 @@ mod tests {
         assert!(rendered.contains("10m"));
         assert!(rendered.contains("anthropic/claude-3-5-sonnet"));
         assert!(rendered.contains("Run now"));
+        assert!(!rendered.contains("Operator prompt</th>"));
         assert!(rendered.contains("/agents/test-agent/jobs/1/run"));
         assert!(rendered.contains("/agents/test-agent/hooks/3/run"));
         assert!(rendered.contains("/agents/test-agent/hooks/3"));
         assert!(rendered.contains("/agents/test-agent/runs/1"));
+        assert!(rendered.contains("data-agent-job-delete-trigger"));
     }
 
     #[test]
