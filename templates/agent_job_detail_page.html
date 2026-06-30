@@ -34,7 +34,41 @@
         </div>
         <div class="rounded-2xl border border-zinc-800 bg-[#0d0d10] p-5">
             <p class="text-xs uppercase tracking-[0.16em] text-zinc-500">Timeout</p>
-            <p class="mt-2 font-mono text-sm text-zinc-200">{{ job.timeout_text }}</p>
+            <div data-timeout-editor class="mt-2 flex flex-col gap-1" {% if let Some(_) = job.timeout_editor.error %}data-timeout-editor-open{% endif %}>
+                <div class="flex flex-wrap items-center gap-2" data-timeout-display-row>
+                    <span class="font-mono text-sm text-zinc-200">{{ job.timeout_editor.display_text }}</span>
+                    <button type="button" data-timeout-edit-trigger
+                        class="inline-flex items-center justify-center rounded-full p-1 text-zinc-500 transition hover:text-zinc-200"
+                        aria-label="Edit timeout">
+                        <svg class="h-3.5 w-3.5" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
+                            <path d="M2.695 14.763l-1.262 3.155a.5.5 0 0 0 .65.65l3.155-1.262a4 4 0 0 0 1.343-.886L17.5 6.5a2.121 2.121 0 0 0-3-3L3.818 14.182a4 4 0 0 0-.885 1.343Z"></path>
+                        </svg>
+                    </button>
+                </div>
+                <form data-timeout-edit-form action="{{ job.timeout_editor.action }}" method="post"
+                    class="hidden flex flex-wrap items-center gap-2">
+                    <input type="text" name="timeout" value="{{ job.timeout_editor.edit_text }}"
+                        data-timeout-input
+                        class="w-32 rounded-md border border-zinc-700 bg-zinc-950 px-2 py-1 font-mono text-sm text-white focus:border-zinc-500 focus:outline-none"
+                        placeholder="e.g. 15m"
+                        spellcheck="false"
+                        autocomplete="off"
+                        aria-label="Timeout"
+                        required>
+                    <button type="submit" data-timeout-save
+                        class="rounded-md border border-zinc-700 bg-zinc-900/70 px-3 py-1 text-sm font-medium text-zinc-200 hover:border-zinc-600 hover:text-white">
+                        Save
+                    </button>
+                    <button type="button" data-timeout-cancel
+                        class="rounded-md border border-zinc-800 px-3 py-1 text-sm font-medium text-zinc-300 hover:border-zinc-700 hover:text-white">
+                        Cancel
+                    </button>
+                    <span class="text-xs text-zinc-500">e.g. 15m, 1h 30m, 900</span>
+                </form>
+                {% if let Some(error) = job.timeout_editor.error %}
+                <p data-timeout-error class="text-xs text-amber-300">{{ error }}</p>
+                {% endif %}
+            </div>
         </div>
         <div class="rounded-2xl border border-zinc-800 bg-[#0d0d10] p-5">
             <p class="text-xs uppercase tracking-[0.16em] text-zinc-500">Next run</p>
@@ -201,12 +235,77 @@
             });
         }
 
-        if (document.readyState === 'loading') {
-            document.addEventListener('DOMContentLoaded', function () {
-                initClickableRows();
-            }, { once: true });
-        } else {
+        function initTimeoutEditors() {
+            document.querySelectorAll('[data-timeout-editor]').forEach(function (root) {
+                if (root.dataset.timeoutEditorBound === 'true') {
+                    return;
+                }
+                root.dataset.timeoutEditorBound = 'true';
+
+                const displayRow = root.querySelector('[data-timeout-display-row]');
+                const form = root.querySelector('[data-timeout-edit-form]');
+                const trigger = root.querySelector('[data-timeout-edit-trigger]');
+                const cancel = root.querySelector('[data-timeout-cancel]');
+                const input = root.querySelector('[data-timeout-input]');
+
+                if (!displayRow || !form || !trigger || !cancel || !input) {
+                    return;
+                }
+
+                function openEditor() {
+                    document.querySelectorAll('[data-timeout-editor]').forEach(function (other) {
+                        if (other !== root) {
+                            closeEditor(other);
+                        }
+                    });
+                    displayRow.classList.add('hidden');
+                    form.classList.remove('hidden');
+                    input.focus();
+                    input.select();
+                }
+
+                function closeEditor(target) {
+                    const other = target || root;
+                    const otherDisplay = other.querySelector('[data-timeout-display-row]');
+                    const otherForm = other.querySelector('[data-timeout-edit-form]');
+                    if (otherDisplay && otherForm) {
+                        otherDisplay.classList.remove('hidden');
+                        otherForm.classList.add('hidden');
+                    }
+                }
+
+                trigger.addEventListener('click', function (event) {
+                    event.preventDefault();
+                    openEditor();
+                });
+
+                cancel.addEventListener('click', function (event) {
+                    event.preventDefault();
+                    closeEditor();
+                });
+
+                input.addEventListener('keydown', function (event) {
+                    if (event.key === 'Escape') {
+                        event.preventDefault();
+                        closeEditor();
+                    }
+                });
+
+                if (root.hasAttribute('data-timeout-editor-open')) {
+                    openEditor();
+                }
+            });
+        }
+
+        function init() {
             initClickableRows();
+            initTimeoutEditors();
+        }
+
+        if (document.readyState === 'loading') {
+            document.addEventListener('DOMContentLoaded', init, { once: true });
+        } else {
+            init();
         }
     })();
 </script>

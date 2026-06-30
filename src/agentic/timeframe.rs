@@ -52,6 +52,75 @@ pub fn parse_timeframe_seconds(timeframe: &str) -> Result<i64> {
     Ok(seconds)
 }
 
+/// Parse a humanized timeout string into a duration in whole seconds.
+///
+/// Accepts the same units as [`parse_timeframe_seconds`] (`Nm`, `Nh`, `Nd`)
+/// plus a seconds suffix (`Ns`), whitespace-separated composites like
+/// `1h 30m`, and bare integers of seconds (e.g. `900`). Whitespace is
+/// ignored between parts; the value must be strictly positive.
+///
+/// Rejects empty values, negative integers, zero, unknown units,
+/// non-integer magnitudes, and overflows.
+pub fn parse_timeout_seconds(raw: &str) -> Result<i64> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Err(anyhow!("timeout must not be empty"));
+    }
+
+    if let Ok(value) = trimmed.parse::<i64>() {
+        if value <= 0 {
+            return Err(anyhow!("timeout must be greater than zero"));
+        }
+        return Ok(value);
+    }
+
+    let mut total: i64 = 0;
+    let mut matched_any = false;
+    for part in trimmed.split_whitespace() {
+        let (number_part, unit_part) = part.split_at(part.len() - 1);
+        if unit_part.chars().count() != 1 {
+            return Err(anyhow!(
+                "timeout part {part:?} must end with a single unit character (s, m, h, or d)"
+            ));
+        }
+        if number_part.is_empty() {
+            return Err(anyhow!("timeout part {part:?} must include a number before the unit"));
+        }
+        let magnitude: i64 = number_part
+            .parse()
+            .map_err(|_| anyhow!("timeout part {part:?} must be a positive integer"))?;
+        if magnitude <= 0 {
+            return Err(anyhow!("timeout part {part:?} must be greater than zero"));
+        }
+        let seconds: i64 = match unit_part {
+            "s" => magnitude,
+            "m" => magnitude
+                .checked_mul(60)
+                .ok_or_else(|| anyhow!("timeout minutes overflowed i64"))?,
+            "h" => magnitude
+                .checked_mul(60 * 60)
+                .ok_or_else(|| anyhow!("timeout hours overflowed i64"))?,
+            "d" => magnitude
+                .checked_mul(60 * 60 * 24)
+                .ok_or_else(|| anyhow!("timeout days overflowed i64"))?,
+            other => return Err(anyhow!("unsupported timeout unit: {other}")),
+        };
+        total = total
+            .checked_add(seconds)
+            .ok_or_else(|| anyhow!("timeout overflowed i64"))?;
+        matched_any = true;
+    }
+
+    if !matched_any {
+        return Err(anyhow!("timeout must include at least one duration"));
+    }
+    if total <= 0 {
+        return Err(anyhow!("timeout must be greater than zero"));
+    }
+
+    Ok(total)
+}
+
 /// Compute the first candle boundary (plus trigger delay) strictly after
 /// `now` for the given timeframe.
 ///
@@ -266,5 +335,49 @@ mod tests {
         let due = at(12 * 3600 + 1);
         assert_eq!(boundary_for_due_at(due, 1), at(12 * 3600));
         assert_eq!(boundary_for_due_at(due, 0), at(12 * 3600 + 1));
+    }
+
+    #[test]
+    fn parse_timeout_accepts_timeframe_units() {
+        assert_eq!(parse_timeout_seconds("1m").unwrap(), 60);
+        assert_eq!(parse_timeout_seconds("15m").unwrap(), 900);
+        assert_eq!(parse_timeout_seconds("1h").unwrap(), 3600);
+        assert_eq!(parse_timeout_seconds("2h").unwrap(), 7200);
+        assert_eq!(parse_timeout_seconds("1d").unwrap(), 24 * 3600);
+    }
+
+    #[test]
+    fn parse_timeout_accepts_seconds() {
+        assert_eq!(parse_timeout_seconds("30s").unwrap(), 30);
+        assert_eq!(parse_timeout_seconds("90s").unwrap(), 90);
+    }
+
+    #[test]
+    fn parse_timeout_accepts_composites() {
+        assert_eq!(parse_timeout_seconds("1h 30m").unwrap(), 3600 + 30 * 60);
+        assert_eq!(parse_timeout_seconds("2h 15m 30s").unwrap(), 2 * 3600 + 15 * 60 + 30);
+        assert_eq!(parse_timeout_seconds("  1h   30m  ").unwrap(), 3600 + 30 * 60);
+    }
+
+    #[test]
+    fn parse_timeout_accepts_bare_seconds() {
+        assert_eq!(parse_timeout_seconds("900").unwrap(), 900);
+        assert_eq!(parse_timeout_seconds("  120 ").unwrap(), 120);
+    }
+
+    #[test]
+    fn parse_timeout_rejects_invalid_values() {
+        assert!(parse_timeout_seconds("").is_err());
+        assert!(parse_timeout_seconds("   ").is_err());
+        assert!(parse_timeout_seconds("0").is_err());
+        assert!(parse_timeout_seconds("0m").is_err());
+        assert!(parse_timeout_seconds("0h").is_err());
+        assert!(parse_timeout_seconds("-1m").is_err());
+        assert!(parse_timeout_seconds("-30").is_err());
+        assert!(parse_timeout_seconds("abc").is_err());
+        assert!(parse_timeout_seconds("m").is_err());
+        assert!(parse_timeout_seconds("1mm").is_err());
+        assert!(parse_timeout_seconds("1.5h").is_err());
+        assert!(parse_timeout_seconds("5x").is_err());
     }
 }

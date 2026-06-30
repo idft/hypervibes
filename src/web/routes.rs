@@ -30,7 +30,7 @@ use crate::{
             dispatch_request_from_schedule, dispatch_run,
         },
         store::{QueuedHookRun, QueuedScheduleRun},
-        timeframe::parse_timeframe_seconds,
+        timeframe::{parse_timeout_seconds, parse_timeframe_seconds},
     },
     agents::{
         crypto::{encrypt, generate_api_key},
@@ -163,6 +163,10 @@ pub fn router(state: Arc<AppState>) -> Router {
             "/agents/{agent_key}/jobs/{job_id}/model",
             post(agents_update_job_model),
         )
+        .route(
+            "/agents/{agent_key}/jobs/{job_id}/timeout",
+            post(agents_update_job_timeout),
+        )
         .route("/agents/{agent_key}/hooks/new", get(agents_new_hook))
         .route("/agents/{agent_key}/hooks", post(agents_create_hook))
         .route(
@@ -180,6 +184,10 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route(
             "/agents/{agent_key}/hooks/{hook_id}/model",
             post(agents_update_hook_model),
+        )
+        .route(
+            "/agents/{agent_key}/hooks/{hook_id}/timeout",
+            post(agents_update_hook_timeout),
         )
         .route(
             "/agents/{agent_key}/runs/{run_id}",
@@ -578,6 +586,7 @@ async fn agents_show_jobs(
 async fn agents_show_job_detail(
     State(state): State<Arc<AppState>>,
     Path((agent_key, job_id)): Path<(String, i64)>,
+    Query(query): Query<TimeoutErrorQuery>,
 ) -> Result<Response, AppError> {
     let Some(agent) = get_agent(&state.db_pool, &agent_key).await? else {
         return Ok((StatusCode::NOT_FOUND, "agent not found").into_response());
@@ -624,6 +633,9 @@ async fn agents_show_job_detail(
     };
 
     let mut job_view = crate::web::templates::AgenticJobDetailView::from_row(&job);
+    if let Some(error) = query.timeout_error {
+        job_view.timeout_editor.error = Some(error);
+    }
     match build_job_prompt_preview(&state, &agent, &job).await {
         Ok(text) => job_view.prompt_preview_text = text,
         Err(error) => {
@@ -653,6 +665,7 @@ async fn agents_show_job_detail(
 async fn agents_show_hook_detail(
     State(state): State<Arc<AppState>>,
     Path((agent_key, hook_id)): Path<(String, i64)>,
+    Query(query): Query<TimeoutErrorQuery>,
 ) -> Result<Response, AppError> {
     let Some(agent) = get_agent(&state.db_pool, &agent_key).await? else {
         return Ok((StatusCode::NOT_FOUND, "agent not found").into_response());
@@ -699,6 +712,9 @@ async fn agents_show_hook_detail(
     };
 
     let mut hook_view = crate::web::templates::AgenticHookDetailView::from_row(&hook);
+    if let Some(error) = query.timeout_error {
+        hook_view.timeout_editor.error = Some(error);
+    }
     match build_hook_prompt_preview(&state, &agent_key, hook_id).await {
         Ok(text) => hook_view.prompt_preview_text = text,
         Err(error) => {
@@ -886,7 +902,7 @@ impl CreateAgentScheduleForm {
         Self {
             job_kind: JOB_KIND_ANALYSIS.to_string(),
             timeframe: "15m".to_string(),
-            timeout_seconds: "600".to_string(),
+            timeout_seconds: "900".to_string(),
             enabled: Some("on".to_string()),
             ..Self::default()
         }
@@ -953,7 +969,7 @@ impl CreateAgentScheduleForm {
 impl CreateAgentHookForm {
     fn defaults() -> Self {
         Self {
-            timeout_seconds: "600".to_string(),
+            timeout_seconds: "900".to_string(),
             enabled: Some("on".to_string()),
             ..Self::default()
         }
@@ -1303,6 +1319,12 @@ struct ModelSelectionForm {
     model_selection: String,
 }
 
+#[derive(Debug, Default, Deserialize)]
+struct TimeoutErrorQuery {
+    #[serde(default)]
+    timeout_error: Option<String>,
+}
+
 async fn agents_update_job_model(
     State(state): State<Arc<AppState>>,
     Path((agent_key, job_id)): Path<(String, i64)>,
@@ -1569,6 +1591,129 @@ async fn agents_update_hook_model(
     }
 
     Ok(Redirect::to(&format!("/agents/{agent_key}/hooks/{hook_id}")).into_response())
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct TimeoutForm {
+    #[serde(default)]
+    timeout: String,
+}
+
+fn timeout_error_redirect(detail_url: &str, message: String) -> Response {
+    let encoded = urlencode(&message);
+    Redirect::to(&format!("{detail_url}?timeout_error={encoded}")).into_response()
+}
+
+fn urlencode(value: &str) -> String {
+    value
+        .bytes()
+        .flat_map(|byte| {
+            if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b'~') {
+                vec![byte as char].into_iter().collect::<Vec<_>>()
+            } else {
+                format!("%{byte:02X}").chars().collect::<Vec<_>>()
+            }
+            .into_iter()
+        })
+        .collect()
+}
+
+async fn agents_update_job_timeout(
+    State(state): State<Arc<AppState>>,
+    Path((agent_key, job_id)): Path<(String, i64)>,
+    Form(form): Form<TimeoutForm>,
+) -> Result<Response, AppError> {
+    let detail_url = format!("/agents/{agent_key}/jobs/{job_id}");
+
+    if crate::agentic::store::get_agent_schedule(&state.db_pool, &agent_key, job_id)
+        .await?
+        .is_none()
+    {
+        return Ok((StatusCode::NOT_FOUND, "job not found").into_response());
+    }
+
+    let timeout_seconds = match parse_timeout_seconds(&form.timeout) {
+        Ok(value) => value,
+        Err(error) => {
+            return Ok(timeout_error_redirect(
+                &detail_url,
+                format!("Invalid timeout: {error}"),
+            ));
+        }
+    };
+    let timeout_i32 = match i32::try_from(timeout_seconds) {
+        Ok(value) => value,
+        Err(_) => {
+            return Ok(timeout_error_redirect(
+                &detail_url,
+                format!(
+                    "Invalid timeout: {timeout_seconds} seconds exceeds the maximum allowed value"
+                ),
+            ));
+        }
+    };
+
+    if !crate::agentic::store::set_schedule_timeout(
+        &state.db_pool,
+        &agent_key,
+        job_id,
+        timeout_i32,
+    )
+    .await?
+    {
+        return Ok((StatusCode::NOT_FOUND, "job not found").into_response());
+    }
+
+    Ok(Redirect::to(&detail_url).into_response())
+}
+
+async fn agents_update_hook_timeout(
+    State(state): State<Arc<AppState>>,
+    Path((agent_key, hook_id)): Path<(String, i64)>,
+    Form(form): Form<TimeoutForm>,
+) -> Result<Response, AppError> {
+    let detail_url = format!("/agents/{agent_key}/hooks/{hook_id}");
+
+    if crate::agentic::store::get_agent_hook(&state.db_pool, &agent_key, hook_id)
+        .await?
+        .is_none()
+    {
+        return Ok((StatusCode::NOT_FOUND, "hook not found").into_response());
+    }
+
+    let timeout_seconds = match parse_timeout_seconds(&form.timeout) {
+        Ok(value) => value,
+        Err(error) => {
+            return Ok(timeout_error_redirect(
+                &detail_url,
+                format!("Invalid timeout: {error}"),
+            ));
+        }
+    };
+    let timeout_i32 = match i32::try_from(timeout_seconds) {
+        Ok(value) => value,
+        Err(_) => {
+            return Ok(timeout_error_redirect(
+                &detail_url,
+                format!(
+                    "Invalid timeout: {timeout_seconds} seconds exceeds the maximum allowed value"
+                ),
+            ));
+        }
+    };
+
+    if !crate::agentic::store::set_hook_timeout(
+        &state.db_pool,
+        &agent_key,
+        hook_id,
+        timeout_i32,
+    )
+    .await?
+    {
+        return Ok((StatusCode::NOT_FOUND, "hook not found").into_response());
+    }
+
+    Ok(Redirect::to(&detail_url).into_response())
 }
 
 async fn agents_update_instruments(
@@ -5477,5 +5622,250 @@ mod tests {
         assert!(text.contains("ETH"));
         assert!(text.contains("buy"));
         assert!(text.contains("limit"));
+    }
+
+    #[tokio::test]
+    async fn post_job_timeout_updates_and_redirects() {
+        let state = test_state().await;
+        let pool = state.db_pool.clone();
+        let (agent_key, _wallet_address) = insert_test_opencode_agent(&state)
+            .await
+            .expect("insert opencode agent");
+        let schedule_id = crate::agentic::store::list_agent_schedules(&pool, &agent_key)
+            .await
+            .expect("list schedules")
+            .first()
+            .expect("default schedule present")
+            .id;
+
+        let response = router(state.clone())
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/agents/{agent_key}/jobs/{schedule_id}/timeout"))
+                    .header("content-type", "application/x-www-form-urlencoded")
+                    .body(Body::from("timeout=20m"))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::SEE_OTHER);
+        assert_eq!(
+            response
+                .headers()
+                .get("location")
+                .and_then(|value| value.to_str().ok()),
+            Some(format!("/agents/{agent_key}/jobs/{schedule_id}").as_str())
+        );
+
+        let schedule = crate::agentic::store::get_agent_schedule(&pool, &agent_key, schedule_id)
+            .await
+            .expect("get schedule")
+            .expect("schedule present");
+        assert_eq!(schedule.timeout_seconds, 20 * 60);
+    }
+
+    #[tokio::test]
+    async fn post_job_timeout_accepts_humanized_and_composite_inputs() {
+        let state = test_state().await;
+        let pool = state.db_pool.clone();
+        let (agent_key, _wallet_address) = insert_test_opencode_agent(&state)
+            .await
+            .expect("insert opencode agent");
+        let schedule_id = crate::agentic::store::list_agent_schedules(&pool, &agent_key)
+            .await
+            .expect("list schedules")
+            .first()
+            .expect("default schedule present")
+            .id;
+
+        for (raw, expected_seconds) in [("1h 30m", 90 * 60), ("90", 90), ("45s", 45)] {
+            let response = router(state.clone())
+                .oneshot(
+                    Request::builder()
+                        .method("POST")
+                        .uri(format!("/agents/{agent_key}/jobs/{schedule_id}/timeout"))
+                        .header("content-type", "application/x-www-form-urlencoded")
+                        .body(Body::from(format!("timeout={}", urlencode(raw))))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::SEE_OTHER, "input: {raw}");
+
+            let schedule =
+                crate::agentic::store::get_agent_schedule(&pool, &agent_key, schedule_id)
+                    .await
+                    .expect("get schedule")
+                    .expect("schedule present");
+            assert_eq!(schedule.timeout_seconds, expected_seconds, "input: {raw}");
+        }
+    }
+
+    #[tokio::test]
+    async fn post_job_timeout_invalid_value_redirects_with_error() {
+        let state = test_state().await;
+        let pool = state.db_pool.clone();
+        let (agent_key, _wallet_address) = insert_test_opencode_agent(&state)
+            .await
+            .expect("insert opencode agent");
+        let schedule_id = crate::agentic::store::list_agent_schedules(&pool, &agent_key)
+            .await
+            .expect("list schedules")
+            .first()
+            .expect("default schedule present")
+            .id;
+
+        let response = router(state.clone())
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/agents/{agent_key}/jobs/{schedule_id}/timeout"))
+                    .header("content-type", "application/x-www-form-urlencoded")
+                    .body(Body::from("timeout=not-a-time"))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::SEE_OTHER);
+        let location = response
+            .headers()
+            .get("location")
+            .and_then(|value| value.to_str().ok())
+            .expect("location header");
+        assert!(location.starts_with(&format!(
+            "/agents/{agent_key}/jobs/{schedule_id}?timeout_error="
+        )));
+
+        let schedule = crate::agentic::store::get_agent_schedule(&pool, &agent_key, schedule_id)
+            .await
+            .expect("get schedule")
+            .expect("schedule present");
+        assert_ne!(schedule.timeout_seconds, 0);
+    }
+
+    #[tokio::test]
+    async fn post_job_timeout_missing_schedule_returns_404() {
+        let state = test_state().await;
+        let (agent_key, _wallet_address) = insert_test_opencode_agent(&state)
+            .await
+            .expect("insert opencode agent");
+
+        let response = router(state.clone())
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/agents/{agent_key}/jobs/999999/timeout"))
+                    .header("content-type", "application/x-www-form-urlencoded")
+                    .body(Body::from("timeout=15m"))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn post_hook_timeout_updates_and_redirects() {
+        let state = test_state().await;
+        let pool = state.db_pool.clone();
+        let (agent_key, _wallet_address) = insert_test_opencode_agent(&state)
+            .await
+            .expect("insert opencode agent");
+        let hook_id = crate::agentic::store::list_agent_hooks(&pool, &agent_key)
+            .await
+            .expect("list hooks")
+            .first()
+            .expect("default hook present")
+            .id;
+
+        let response = router(state.clone())
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/agents/{agent_key}/hooks/{hook_id}/timeout"))
+                    .header("content-type", "application/x-www-form-urlencoded")
+                    .body(Body::from("timeout=25m"))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::SEE_OTHER);
+        assert_eq!(
+            response
+                .headers()
+                .get("location")
+                .and_then(|value| value.to_str().ok()),
+            Some(format!("/agents/{agent_key}/hooks/{hook_id}").as_str())
+        );
+
+        let hook = crate::agentic::store::get_agent_hook(&pool, &agent_key, hook_id)
+            .await
+            .expect("get hook")
+            .expect("hook present");
+        assert_eq!(hook.timeout_seconds, 25 * 60);
+    }
+
+    #[tokio::test]
+    async fn post_hook_timeout_invalid_value_redirects_with_error() {
+        let state = test_state().await;
+        let pool = state.db_pool.clone();
+        let (agent_key, _wallet_address) = insert_test_opencode_agent(&state)
+            .await
+            .expect("insert opencode agent");
+        let hook_id = crate::agentic::store::list_agent_hooks(&pool, &agent_key)
+            .await
+            .expect("list hooks")
+            .first()
+            .expect("default hook present")
+            .id;
+
+        let response = router(state.clone())
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/agents/{agent_key}/hooks/{hook_id}/timeout"))
+                    .header("content-type", "application/x-www-form-urlencoded")
+                    .body(Body::from("timeout=5x"))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::SEE_OTHER);
+        let location = response
+            .headers()
+            .get("location")
+            .and_then(|value| value.to_str().ok())
+            .expect("location header");
+        assert!(location.starts_with(&format!(
+            "/agents/{agent_key}/hooks/{hook_id}?timeout_error="
+        )));
+    }
+
+    #[tokio::test]
+    async fn post_hook_timeout_missing_hook_returns_404() {
+        let state = test_state().await;
+        let (agent_key, _wallet_address) = insert_test_opencode_agent(&state)
+            .await
+            .expect("insert opencode agent");
+
+        let response = router(state.clone())
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/agents/{agent_key}/hooks/999999/timeout"))
+                    .header("content-type", "application/x-www-form-urlencoded")
+                    .body(Body::from("timeout=15m"))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
     }
 }

@@ -25,9 +25,9 @@ const ACTIVE_STATUSES: [&str; 2] = [RUN_STATUS_QUEUED, RUN_STATUS_RUNNING];
 const DEFAULT_ANALYSIS_TIMEFRAME: &str = "15m";
 const DEFAULT_ANALYSIS_TIMEFRAMES: [&str; 3] = ["15m", "1h", "1d"];
 const DEFAULT_TRADING_TIMEFRAME: &str = "1m";
-const DEFAULT_ANALYSIS_TIMEOUT_SECONDS: i32 = 600;
-const DEFAULT_TRADING_TIMEOUT_SECONDS: i32 = 45;
-const DEFAULT_MARKET_ANALYSIS_TIMEOUT_SECONDS: i32 = 600;
+const DEFAULT_ANALYSIS_TIMEOUT_SECONDS: i32 = 900;
+const DEFAULT_TRADING_TIMEOUT_SECONDS: i32 = 900;
+const DEFAULT_MARKET_ANALYSIS_TIMEOUT_SECONDS: i32 = 900;
 
 fn active_job_kinds_for_lane(job_kind: &str) -> &'static [&'static str] {
     match job_kind {
@@ -737,6 +737,60 @@ pub async fn set_hook_model(
     .execute(pool)
     .await
     .with_context(|| format!("failed to update model for hook {hook_id} agent {agent_key}"))?;
+
+    Ok(result.rows_affected() > 0)
+}
+
+pub async fn set_schedule_timeout(
+    pool: &DbPool,
+    agent_key: &str,
+    schedule_id: i64,
+    timeout_seconds: i32,
+) -> Result<bool> {
+    if timeout_seconds <= 0 {
+        anyhow::bail!("timeout_seconds must be positive, got {timeout_seconds}");
+    }
+    let result = sqlx::query(
+        "UPDATE agentic_job_schedules
+            SET timeout_seconds = $3,
+                updated_at = now()
+          WHERE agent_key = $1
+            AND id = $2",
+    )
+    .bind(agent_key)
+    .bind(schedule_id)
+    .bind(timeout_seconds)
+    .execute(pool)
+    .await
+    .with_context(|| {
+        format!("failed to update timeout for schedule {schedule_id} agent {agent_key}")
+    })?;
+
+    Ok(result.rows_affected() > 0)
+}
+
+pub async fn set_hook_timeout(
+    pool: &DbPool,
+    agent_key: &str,
+    hook_id: i64,
+    timeout_seconds: i32,
+) -> Result<bool> {
+    if timeout_seconds <= 0 {
+        anyhow::bail!("timeout_seconds must be positive, got {timeout_seconds}");
+    }
+    let result = sqlx::query(
+        "UPDATE agentic_job_hooks
+            SET timeout_seconds = $3,
+                updated_at = now()
+          WHERE agent_key = $1
+            AND id = $2",
+    )
+    .bind(agent_key)
+    .bind(hook_id)
+    .bind(timeout_seconds)
+    .execute(pool)
+    .await
+    .with_context(|| format!("failed to update timeout for hook {hook_id} agent {agent_key}"))?;
 
     Ok(result.rows_affected() > 0)
 }
@@ -2657,5 +2711,118 @@ mod tests {
             .expect("run present");
         assert_eq!(run.status, RUN_STATUS_ABORTED);
         assert!(run.finished_at.is_some());
+    }
+
+    #[tokio::test]
+    async fn set_schedule_timeout_updates_value() {
+        let pool = test_db::pool().await;
+        let key = format!(
+            "sched-timeout-{}",
+            Utc::now().timestamp_nanos_opt().unwrap_or(0)
+        );
+        let schedule_id = seed_agent_and_schedule(&pool, &key, 0).await;
+
+        let updated = set_schedule_timeout(&pool, &key, schedule_id, 1234)
+            .await
+            .expect("update timeout");
+        assert!(updated);
+
+        let schedule = get_agent_schedule(&pool, &key, schedule_id)
+            .await
+            .expect("fetch schedule")
+            .expect("schedule present");
+        assert_eq!(schedule.timeout_seconds, 1234);
+    }
+
+    #[tokio::test]
+    async fn set_schedule_timeout_rejects_non_positive() {
+        let pool = test_db::pool().await;
+        let key = format!(
+            "sched-timeout-bad-{}",
+            Utc::now().timestamp_nanos_opt().unwrap_or(0)
+        );
+        let schedule_id = seed_agent_and_schedule(&pool, &key, 0).await;
+
+        let err = set_schedule_timeout(&pool, &key, schedule_id, 0)
+            .await
+            .expect_err("zero should fail");
+        assert!(err.to_string().contains("positive"));
+    }
+
+    #[tokio::test]
+    async fn set_schedule_timeout_missing_returns_false() {
+        let pool = test_db::pool().await;
+        let err = set_schedule_timeout(&pool, "no-such-agent", 999, 900)
+            .await
+            .expect("update returns false for missing schedule");
+        assert!(!err);
+    }
+
+    #[tokio::test]
+    async fn set_hook_timeout_updates_value() {
+        let pool = test_db::pool().await;
+        let key = format!(
+            "hook-timeout-{}",
+            Utc::now().timestamp_nanos_opt().unwrap_or(0)
+        );
+        insert_agent(&pool, &sample_agent(&key))
+            .await
+            .expect("insert agent");
+
+        let hook_id = insert_agent_hook(
+            &pool,
+            &key,
+            JOB_KIND_MARKET_ANALYSIS,
+            crate::agentic::model::HOOK_EVENT_ANALYSIS_BATCH_COMPLETED,
+            true,
+            None,
+            None,
+            600,
+            "",
+        )
+        .await
+        .expect("insert hook");
+
+        let updated = set_hook_timeout(&pool, &key, hook_id, 777)
+            .await
+            .expect("update timeout");
+        assert!(updated);
+
+        let hook = get_agent_hook(&pool, &key, hook_id)
+            .await
+            .expect("fetch hook")
+            .expect("hook present");
+        assert_eq!(hook.timeout_seconds, 777);
+    }
+
+    #[tokio::test]
+    async fn set_hook_timeout_rejects_non_positive() {
+        let pool = test_db::pool().await;
+        let key = format!(
+            "hook-timeout-bad-{}",
+            Utc::now().timestamp_nanos_opt().unwrap_or(0)
+        );
+        insert_agent(&pool, &sample_agent(&key))
+            .await
+            .expect("insert agent");
+
+        let hook_id = insert_agent_hook(
+            &pool,
+            &key,
+            JOB_KIND_MARKET_ANALYSIS,
+            crate::agentic::model::HOOK_EVENT_ANALYSIS_BATCH_COMPLETED,
+            true,
+            None,
+            None,
+            600,
+            "",
+        )
+        .await
+        .expect("insert hook");
+
+        let err = set_hook_timeout(&pool, &key, hook_id, -5)
+            .await
+            .expect_err("negative should fail");
+        assert!(err.to_string().contains("positive"));
     }
 }

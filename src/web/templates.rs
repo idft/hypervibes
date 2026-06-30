@@ -735,6 +735,14 @@ pub struct AgenticJobHookView {
 }
 
 #[derive(Debug, Clone)]
+pub struct TimeoutEditorView {
+    pub display_text: String,
+    pub edit_text: String,
+    pub action: String,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone)]
 pub struct AgenticJobDetailView {
     pub id: i64,
     pub job_key: String,
@@ -744,6 +752,7 @@ pub struct AgenticJobDetailView {
     pub enabled_class: &'static str,
     pub timeframe_text: String,
     pub timeout_text: String,
+    pub timeout_editor: TimeoutEditorView,
     pub next_run_text: String,
     pub model_text: String,
     pub operator_prompt_text: String,
@@ -766,6 +775,7 @@ pub struct AgenticHookDetailView {
     pub enabled_label: &'static str,
     pub enabled_class: &'static str,
     pub timeout_text: String,
+    pub timeout_editor: TimeoutEditorView,
     pub model_text: String,
     pub created_at_text: String,
     pub updated_at_text: String,
@@ -1005,7 +1015,13 @@ impl AgenticHookDetailView {
             enabled: row.enabled,
             enabled_label: summary.enabled_label,
             enabled_class: summary.enabled_class,
-            timeout_text: summary.timeout_text,
+            timeout_text: summary.timeout_text.clone(),
+            timeout_editor: TimeoutEditorView {
+                display_text: summary.timeout_text,
+                edit_text: format_duration(row.timeout_seconds),
+                action: format!("/agents/{}/hooks/{}/timeout", row.agent_key, row.id),
+                error: None,
+            },
             model_text: summary.model_text,
             created_at_text: format_timestamp_utc(row.created_at),
             updated_at_text: format_timestamp_utc(row.updated_at),
@@ -1040,7 +1056,13 @@ impl AgenticJobDetailView {
             enabled_label: summary.enabled_label,
             enabled_class: summary.enabled_class,
             timeframe_text: summary.timeframe_text,
-            timeout_text: summary.timeout_text,
+            timeout_text: summary.timeout_text.clone(),
+            timeout_editor: TimeoutEditorView {
+                display_text: summary.timeout_text,
+                edit_text: format_duration(row.timeout_seconds),
+                action: format!("/agents/{}/jobs/{}/timeout", row.agent_key, row.id),
+                error: None,
+            },
             next_run_text: summary.next_run_text,
             model_text: summary.model_text,
             operator_prompt_text: if row.operator_prompt.trim().is_empty() {
