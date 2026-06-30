@@ -5,6 +5,11 @@ By default `cargo test` uses the dedicated `test-postgres` service from `podman-
 
 `src/test_db.rs` creates a fresh database for each `pool()` call when `TEST_DATABASE_URL` is set, runs migrations inside that database, and lets those isolated test databases be created concurrently on the dedicated test Postgres service.
 
+The helper also does two cleanup passes:
+
+- a one-time startup sweep that drops stale `vt_test_*` databases left behind by earlier interrupted runs
+- per-test cleanup that closes the pool and drops the created database when the test handle is dropped
+
 The dedicated test Postgres service is intentionally speed-optimized and disposable:
 
 - port `15433`
@@ -12,6 +17,8 @@ The dedicated test Postgres service is intentionally speed-optimized and disposa
 - `fsync=off`
 - `synchronous_commit=off`
 - `full_page_writes=off`
+- `shm_size=512m`
+- tmpfs-backed `PGDATA` so test data never persists across container restarts
 
 ### Frontend build during tests
 

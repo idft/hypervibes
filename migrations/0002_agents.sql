@@ -21,3 +21,33 @@ CREATE TABLE IF NOT EXISTS agents (
 CREATE UNIQUE INDEX IF NOT EXISTS agents_agent_key_idx ON agents (agent_key);
 CREATE UNIQUE INDEX IF NOT EXISTS agents_wallet_address_idx ON agents (wallet_address);
 CREATE UNIQUE INDEX IF NOT EXISTS agents_api_key_idx ON agents (api_key);
+
+ALTER TABLE hyperliquid.sync_state
+    ADD CONSTRAINT sync_state_agent_account_fkey
+    FOREIGN KEY (account_address, environment)
+    REFERENCES agents(wallet_address, environment)
+    ON DELETE CASCADE;
+
+ALTER TABLE hyperliquid.trade_fills
+    ADD CONSTRAINT trade_fills_agent_account_fkey
+    FOREIGN KEY (account_address, environment)
+    REFERENCES agents(wallet_address, environment)
+    ON DELETE CASCADE;
+
+ALTER TABLE hyperliquid.funding_events
+    ADD CONSTRAINT funding_events_agent_account_fkey
+    FOREIGN KEY (account_address, environment)
+    REFERENCES agents(wallet_address, environment)
+    ON DELETE CASCADE;
+
+ALTER TABLE hyperliquid.ledger_events
+    ADD CONSTRAINT ledger_events_agent_account_fkey
+    FOREIGN KEY (account_address, environment)
+    REFERENCES agents(wallet_address, environment)
+    ON DELETE CASCADE;
+
+ALTER TABLE hyperliquid.historical_orders
+    ADD CONSTRAINT historical_orders_agent_account_fkey
+    FOREIGN KEY (account_address, environment)
+    REFERENCES agents(wallet_address, environment)
+    ON DELETE CASCADE;

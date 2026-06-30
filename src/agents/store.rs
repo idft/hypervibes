@@ -357,13 +357,37 @@ pub async fn insert_agent(pool: &DbPool, row: &AgentRegistryRow) -> Result<()> {
 ///
 /// Returns `true` if a row was deleted, `false` if the agent did not exist.
 pub async fn delete_agent(pool: &DbPool, agent_key: &str) -> Result<bool> {
-    let result = sqlx::query("DELETE FROM agents WHERE agent_key = $1")
+    let mut tx = pool
+        .begin()
+        .await
+        .context("failed to start delete-agent transaction")?;
+
+    let agent: Option<(String, String, String)> = query_as(
+        "SELECT agent_key, wallet_address, environment
+           FROM agents
+          WHERE agent_key = $1
+          FOR UPDATE",
+    )
+    .bind(agent_key)
+    .fetch_optional(&mut *tx)
+    .await
+    .context("failed to lock agent for deletion")?;
+
+    if agent.is_none() {
+        return Ok(false);
+    }
+
+    sqlx::query("DELETE FROM agents WHERE agent_key = $1")
         .bind(agent_key)
-        .execute(pool)
+        .execute(&mut *tx)
         .await
         .context("failed to delete agent")?;
 
-    Ok(result.rows_affected() > 0)
+    tx.commit()
+        .await
+        .context("failed to commit delete-agent transaction")?;
+
+    Ok(true)
 }
 
 /// Update only the analysis strategy prompt for one agent.
@@ -528,6 +552,7 @@ pub async fn runtime_matches_backend(
 mod tests {
     use super::*;
     use chrono::Utc;
+    use uuid::Uuid;
 
     use crate::{
         agents::{
@@ -1039,6 +1064,185 @@ mod tests {
             .await
             .expect("count agent instruments");
         assert_eq!(count.0, 0);
+    }
+
+    #[tokio::test]
+    async fn deleting_agent_cascades_hyperliquid_rows_but_preserves_instruments() {
+        let pool = test_db::pool().await;
+        let key = format!("agent-hl-cascade-{}", Utc::now().timestamp_millis());
+        let agent = sample_agent(&key);
+        let wallet_address = agent.wallet_address.clone();
+        let environment = agent.environment.clone();
+        insert_agent(&pool, &agent).await.expect("insert agent");
+
+        seed_instrument(&pool, "BTC", "perp", true).await;
+
+        sqlx::query(
+            "INSERT INTO hyperliquid.sync_state
+                (account_address, environment, stream_name, status, metadata)
+             VALUES ($1, $2, 'fills', 'healthy', '{}'::jsonb)",
+        )
+        .bind(&wallet_address)
+        .bind(&environment)
+        .execute(&pool)
+        .await
+        .expect("insert sync_state");
+
+        sqlx::query(
+            "INSERT INTO hyperliquid.trade_fills
+                (hash, account_address, environment, event_time, source_stream, instrument_id,
+                 fill_time, direction, side, price, size, trade_id, payload, ingest_source, inserted_at)
+             VALUES ($1, $2, $3, now(), 'fills', 'BTC', now(), 'open_long', 'buy', 1, 1, $4, '{}'::jsonb, 'test', now())",
+        )
+        .bind(format!("fill-hash-{key}"))
+        .bind(&wallet_address)
+        .bind(&environment)
+        .bind(format!("trade-{key}"))
+        .execute(&pool)
+        .await
+        .expect("insert trade_fill");
+
+        sqlx::query(
+            "INSERT INTO hyperliquid.funding_events
+                (account_address, environment, instrument_id, event_time, source_stream,
+                 usdc, payload, ingest_source, inserted_at)
+             VALUES ($1, $2, 'BTC', now(), 'funding', 1, '{}'::jsonb, 'test', now())",
+        )
+        .bind(&wallet_address)
+        .bind(&environment)
+        .execute(&pool)
+        .await
+        .expect("insert funding_event");
+
+        sqlx::query(
+            "INSERT INTO hyperliquid.ledger_events
+                (hash, account_address, environment, event_time, event_type, source_stream,
+                 ledger_type, payload, ingest_source, inserted_at)
+             VALUES ($1, $2, $3, now(), 'ledger', 'ledger', 'deposit', '{}'::jsonb, 'test', now())",
+        )
+        .bind(format!("ledger-hash-{key}"))
+        .bind(&wallet_address)
+        .bind(&environment)
+        .execute(&pool)
+        .await
+        .expect("insert ledger_event");
+
+        sqlx::query(
+            "INSERT INTO hyperliquid.historical_orders
+                (account_address, environment, order_id, event_time, instrument_id, payload, ingest_source, inserted_at)
+             VALUES ($1, $2, $3, now(), 'BTC', '{}'::jsonb, 'test', now())",
+        )
+        .bind(&wallet_address)
+        .bind(&environment)
+        .bind(format!("historical-{key}"))
+        .execute(&pool)
+        .await
+        .expect("insert historical_order");
+
+        let order_id = Uuid::new_v4();
+        sqlx::query(
+            "INSERT INTO hyperliquid.orders
+                (id, created_at, updated_at, agent_key, account_address, environment, symbol,
+                 instrument_id, side, order_kind, requested_size, cloid, status)
+             VALUES ($1, now(), now(), $2, $3, $4, 'BTC', 'BTC', 'buy', 'limit', 1, $5, 'pending_submission')",
+        )
+        .bind(order_id)
+        .bind(&key)
+        .bind(&wallet_address)
+        .bind(&environment)
+        .bind(format!("cloid-{key}"))
+        .execute(&pool)
+        .await
+        .expect("insert order");
+
+        sqlx::query(
+            "INSERT INTO hyperliquid.order_events
+                (id, order_id, account_address, environment, status, status_timestamp, source, payload, inserted_at)
+             VALUES ($1, $2, $3, $4, 'pending_submission', now(), 'http_response', '{}'::jsonb, now())",
+        )
+        .bind(Uuid::new_v4())
+        .bind(order_id)
+        .bind(&wallet_address)
+        .bind(&environment)
+        .execute(&pool)
+        .await
+        .expect("insert order_event");
+
+        let deleted = delete_agent(&pool, &key).await.expect("delete agent");
+        assert!(deleted);
+
+        let agent_count: (i64,) = query_as("SELECT COUNT(*) FROM agents WHERE agent_key = $1")
+            .bind(&key)
+            .fetch_one(&pool)
+            .await
+            .expect("count agents");
+        let sync_state_count: (i64,) = query_as(
+            "SELECT COUNT(*) FROM hyperliquid.sync_state WHERE account_address = $1 AND environment = $2",
+        )
+        .bind(&wallet_address)
+        .bind(&environment)
+        .fetch_one(&pool)
+        .await
+        .expect("count sync_state");
+        let trade_fills_count: (i64,) = query_as(
+            "SELECT COUNT(*) FROM hyperliquid.trade_fills WHERE account_address = $1 AND environment = $2",
+        )
+        .bind(&wallet_address)
+        .bind(&environment)
+        .fetch_one(&pool)
+        .await
+        .expect("count trade_fills");
+        let funding_count: (i64,) = query_as(
+            "SELECT COUNT(*) FROM hyperliquid.funding_events WHERE account_address = $1 AND environment = $2",
+        )
+        .bind(&wallet_address)
+        .bind(&environment)
+        .fetch_one(&pool)
+        .await
+        .expect("count funding_events");
+        let ledger_count: (i64,) = query_as(
+            "SELECT COUNT(*) FROM hyperliquid.ledger_events WHERE account_address = $1 AND environment = $2",
+        )
+        .bind(&wallet_address)
+        .bind(&environment)
+        .fetch_one(&pool)
+        .await
+        .expect("count ledger_events");
+        let historical_count: (i64,) = query_as(
+            "SELECT COUNT(*) FROM hyperliquid.historical_orders WHERE account_address = $1 AND environment = $2",
+        )
+        .bind(&wallet_address)
+        .bind(&environment)
+        .fetch_one(&pool)
+        .await
+        .expect("count historical_orders");
+        let order_count: (i64,) =
+            query_as("SELECT COUNT(*) FROM hyperliquid.orders WHERE agent_key = $1")
+                .bind(&key)
+                .fetch_one(&pool)
+                .await
+                .expect("count orders");
+        let order_events_count: (i64,) =
+            query_as("SELECT COUNT(*) FROM hyperliquid.order_events WHERE order_id = $1")
+                .bind(order_id)
+                .fetch_one(&pool)
+                .await
+                .expect("count order_events");
+        let instrument_count: (i64,) =
+            query_as("SELECT COUNT(*) FROM hyperliquid.instruments WHERE instrument_id = 'BTC'")
+                .fetch_one(&pool)
+                .await
+                .expect("count instruments");
+
+        assert_eq!(agent_count.0, 0);
+        assert_eq!(sync_state_count.0, 0);
+        assert_eq!(trade_fills_count.0, 0);
+        assert_eq!(funding_count.0, 0);
+        assert_eq!(ledger_count.0, 0);
+        assert_eq!(historical_count.0, 0);
+        assert_eq!(order_count.0, 0);
+        assert_eq!(order_events_count.0, 0);
+        assert_eq!(instrument_count.0, 1);
     }
 
     #[tokio::test]

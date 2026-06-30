@@ -392,7 +392,7 @@
 
         <section class="rounded-2xl border border-red-900/60 bg-red-950/20 p-6">
             <h2 class="text-lg font-medium text-white">Delete agent</h2>
-            <p class="mt-2 max-w-3xl text-sm leading-6 text-zinc-400">Remove this agent from the registry. This action cannot be undone.</p>
+            <p class="mt-2 max-w-3xl text-sm leading-6 text-zinc-400">Delete this agent, its related database records, Hyperliquid history for this account, and its OpenCode workspace files. This cannot be undone.</p>
             <div class="mt-6 flex justify-end">
                 <button type="button" id="delete-agent-btn" data-delete-agent-trigger class="rounded-full border border-red-900/60 bg-red-950/30 px-4 py-2 text-sm font-medium text-red-300 hover:border-red-800 hover:bg-red-950/50">
                     Delete agent
@@ -671,7 +671,7 @@
     <div class="w-full max-w-md rounded-2xl border border-zinc-800 bg-[#0d0d10] p-6 shadow-2xl">
         <h3 class="text-lg font-semibold text-white">Delete agent</h3>
         <p class="mt-2 text-sm leading-6 text-zinc-400">
-            Are you sure you want to delete <span class="font-medium text-zinc-200">{{ agent.display_name }}</span>? This will remove the agent from the registry and cannot be undone.
+            Are you sure you want to delete <span class="font-medium text-zinc-200">{{ agent.display_name }}</span>? This removes the agent, related database records, Hyperliquid history for this account, and its OpenCode workspace files. This cannot be undone.
         </p>
         <div class="mt-6 flex flex-col-reverse gap-3 sm:flex-row sm:justify-end">
             <button type="button" id="cancel-delete-btn" class="w-full rounded-full border border-zinc-800 px-4 py-2 text-sm font-medium text-zinc-300 hover:border-zinc-700 hover:text-white sm:w-auto">

@@ -70,6 +70,16 @@ Non-secret metadata is stored in `agents.runtime_config`, including:
 
 The generated workspace `.env` receives the agent-scoped Vibetrading API key. The backend does not read that file back.
 
+Deleting an agent removes the registry row and cascades through agent-owned state:
+
+- agent schedules, hooks, and runs
+- memory records
+- selected instruments
+- Hyperliquid orders and order events
+- account-scoped Hyperliquid sync/history rows for that wallet+environment
+
+Global Hyperliquid instrument metadata is preserved.
+
 ## Instrument Selection
 
 Each agent may be linked to zero or more Hyperliquid perp instruments.

@@ -28,7 +28,7 @@ CREATE TABLE IF NOT EXISTS hyperliquid.orders (
     request_payload JSONB NOT NULL DEFAULT '{}'::jsonb,
     response_payload JSONB,
     CONSTRAINT orders_cloid_unique UNIQUE (account_address, environment, cloid),
-    FOREIGN KEY (agent_key) REFERENCES agents(agent_key),
+    FOREIGN KEY (agent_key) REFERENCES agents(agent_key) ON DELETE CASCADE,
     FOREIGN KEY (instrument_id) REFERENCES hyperliquid.instruments(instrument_id),
     CHECK (environment IN ('live')),
     CHECK (side IN ('buy', 'sell')),

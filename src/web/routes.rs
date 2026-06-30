@@ -66,8 +66,8 @@ use crate::{
         selection_exists_in_options,
     },
     opencode::workspace::{
-        OpenCodeWorkspaceAgent, OpenCodeWorkspaceRuntimeConfig, generate_agent_workspace,
-        runtime_config_for_generated_workspace,
+        OpenCodeWorkspaceAgent, OpenCodeWorkspaceRuntimeConfig, WorkspaceGenerationMode,
+        delete_agent_workspace, generate_agent_workspace, runtime_config_for_generated_workspace,
     },
     web::{
         AppState,
@@ -556,6 +556,7 @@ async fn agents_regenerate_workspace(
             display_name: agent.display_name.clone(),
             api_key: agent.api_key.clone(),
         },
+        WorkspaceGenerationMode::Regenerate,
     )
     .await?;
 
@@ -1591,8 +1592,9 @@ async fn agents_update_instruments(
 async fn generate_and_persist_opencode_workspace(
     state: &Arc<AppState>,
     agent: &OpenCodeWorkspaceAgent,
+    mode: WorkspaceGenerationMode,
 ) -> Result<bool, AppError> {
-    let generated = generate_agent_workspace(&state.opencode_workspace_config, agent)
+    let generated = generate_agent_workspace(&state.opencode_workspace_config, agent, mode)
         .inspect_err(|error| {
             error!(agent_key = %agent.agent_key, error = ?error, "failed to generate OpenCode workspace");
         })?;
@@ -2065,12 +2067,26 @@ async fn delete_agent(
     State(state): State<Arc<AppState>>,
     Path(agent_key): Path<String>,
 ) -> Result<Response, AppError> {
+    let Some(agent) = get_agent(&state.db_pool, &agent_key).await? else {
+        return Ok((StatusCode::NOT_FOUND, "agent not found").into_response());
+    };
+
+    let account_key = AccountKey::new(&agent.wallet_address, &agent.environment);
     let deleted = delete_agent_in_store(&state.db_pool, &agent_key).await?;
-    if deleted {
-        Ok(Redirect::to("/agents").into_response())
-    } else {
-        Ok((StatusCode::NOT_FOUND, "agent not found").into_response())
+    if !deleted {
+        return Ok((StatusCode::NOT_FOUND, "agent not found").into_response());
     }
+
+    state.live_accounts.remove(&account_key);
+
+    if agent.backend_kind == BACKEND_KIND_OPENCODE {
+        delete_agent_workspace(&state.opencode_workspace_config, &agent.agent_key)
+            .inspect_err(|error| {
+                error!(agent_key = %agent.agent_key, error = ?error, "failed to delete OpenCode workspace after deleting agent");
+            })?;
+    }
+
+    Ok(Redirect::to("/agents").into_response())
 }
 
 /// Stream all live account views for `agent_key` over a single Server-Sent
@@ -2348,6 +2364,36 @@ async fn create_agent(
 
     let now = Utc::now();
     let agent_key = slugify_agent_key(&form.display_name);
+    let api_key = generate_api_key();
+
+    let opencode_workspace_runtime_config = if runtime.backend_kind == BACKEND_KIND_OPENCODE {
+        let generated = generate_agent_workspace(
+            &state.opencode_workspace_config,
+            &OpenCodeWorkspaceAgent {
+                agent_key: agent_key.clone(),
+                display_name: form.display_name.trim().to_string(),
+                api_key: api_key.clone(),
+            },
+            WorkspaceGenerationMode::CreateNew,
+        )
+        .map_err(|error| {
+            error!(agent_key = %agent_key, error = ?error, "failed to create OpenCode workspace for new agent");
+            error
+        });
+
+        match generated {
+            Ok(generated) => Some(runtime_config_for_generated_workspace(&generated).into_value()),
+            Err(error) => {
+                return Ok(render_new_form(
+                    form,
+                    runtimes,
+                    vec![format!("Failed to create OpenCode workspace: {error}")],
+                ));
+            }
+        }
+    } else {
+        None
+    };
 
     let row = AgentRegistryRow {
         agent_key: agent_key.clone(),
@@ -2359,11 +2405,11 @@ async fn create_agent(
         trading_prompt: DEFAULT_TRADING_STRATEGY_PROMPT.to_string(),
         wallet_address,
         environment: "live".to_string(),
-        api_key: generate_api_key(),
+        api_key: api_key.clone(),
         api_key_last_used_at: None,
         backend_kind: runtime.backend_kind.clone(),
         runtime_id: runtime.id.clone(),
-        runtime_config: serde_json::json!({}),
+        runtime_config: opencode_workspace_runtime_config.unwrap_or_else(|| serde_json::json!({})),
         analysis_context_last_used_at: None,
         trading_context_last_used_at: None,
         hyperliquid_private_key_ciphertext: ciphertext,
@@ -2371,6 +2417,14 @@ async fn create_agent(
     };
 
     if let Err(e) = insert_agent(&state.db_pool, &row).await {
+        if row.backend_kind == BACKEND_KIND_OPENCODE {
+            if let Err(error) =
+                delete_agent_workspace(&state.opencode_workspace_config, &row.agent_key)
+            {
+                error!(agent_key = %row.agent_key, error = ?error, "failed to clean up newly created workspace after agent insert failure");
+            }
+        }
+
         let errors = match unique_violation_message(&e) {
             Some(msg) => vec![msg],
             None => {
@@ -2381,20 +2435,6 @@ async fn create_agent(
     }
 
     if row.backend_kind == BACKEND_KIND_OPENCODE {
-        let updated = generate_and_persist_opencode_workspace(
-            &state,
-            &OpenCodeWorkspaceAgent {
-                agent_key: row.agent_key.clone(),
-                display_name: row.display_name.clone(),
-                api_key: row.api_key.clone(),
-            },
-        )
-        .await?;
-
-        if !updated {
-            error!(agent_key = %row.agent_key, "agent disappeared before OpenCode workspace metadata update");
-        }
-
         if let Err(error) =
             crate::agentic::store::insert_default_opencode_schedules(&state.db_pool, &row.agent_key)
                 .await
@@ -2750,10 +2790,11 @@ mod tests {
     }
 
     async fn test_state_with_backend(agentic_backend: Arc<dyn AgenticBackend>) -> Arc<AppState> {
-        let pool = test_db::pool().await;
+        let pool = Arc::new(test_db::pool().await);
         let cache_dir = std::path::PathBuf::from("/tmp/opencode/vibetrading-routes-cache");
         Arc::new(AppState {
-            db_pool: pool,
+            db_pool: pool.as_ref().as_ref().clone(),
+            _test_db_guard: Some(Arc::clone(&pool)),
             agentic_backend,
             encryption_key: EncryptionKey::new(
                 "test",
@@ -2933,7 +2974,7 @@ mod tests {
     async fn get_agents_renders_db_data() {
         let state = test_state().await;
 
-        let app = router(state);
+        let app = router(state.clone());
         let response = app
             .oneshot(
                 Request::builder()
@@ -2951,10 +2992,11 @@ mod tests {
     async fn post_agents_with_invalid_private_key_returns_validation_error() {
         let state = test_state().await;
 
-        let app = router(state);
+        let app = router(state.clone());
         let body =
             "display_name=Test Agent&hyperliquid_private_key=not-a-key&runtime_id=opencode-local";
         let response = app
+            .clone()
             .oneshot(
                 Request::builder()
                     .method("POST")
@@ -2973,7 +3015,7 @@ mod tests {
     async fn agents_new_page_renders_runtime_control() {
         let state = test_state().await;
 
-        let response = router(state)
+        let response = router(state.clone())
             .oneshot(
                 Request::builder()
                     .uri("/agents/new")
@@ -2995,7 +3037,7 @@ mod tests {
     async fn backends_new_page_renders_create_form() {
         let state = test_state().await;
 
-        let response = router(state)
+        let response = router(state.clone())
             .oneshot(
                 Request::builder()
                     .uri("/backends/new")
@@ -3016,7 +3058,7 @@ mod tests {
     async fn backends_index_renders_seeded_runtime() {
         let state = test_state().await;
 
-        let response = router(state)
+        let response = router(state.clone())
             .oneshot(
                 Request::builder()
                     .uri("/backends")
@@ -3050,12 +3092,13 @@ mod tests {
         .await
         .expect("insert disabled runtime");
 
-        let app = router(state);
+        let app = router(state.clone());
         let private_key = random_private_key();
         let body = format!(
             "display_name=DisabledRuntimeTest&hyperliquid_private_key={private_key}&runtime_id={runtime_id}"
         );
         let response = app
+            .clone()
             .oneshot(
                 Request::builder()
                     .method("POST")
@@ -3335,8 +3378,13 @@ mod tests {
     async fn post_agents_creates_agent_with_default_strategy_prompts() {
         let state = test_state().await;
         let pool = state.db_pool.clone();
+        let guard = state
+            ._test_db_guard
+            .as_ref()
+            .cloned()
+            .expect("test db guard");
 
-        let app = router(state);
+        let app = router(state.clone());
         let timestamp = chrono::Utc::now().timestamp_millis();
         let display_name = format!("SoulTest{}", timestamp);
         let agent_key = slugify_agent_key(&display_name);
@@ -3347,6 +3395,7 @@ mod tests {
         );
 
         let response = app
+            .clone()
             .oneshot(
                 Request::builder()
                     .method("POST")
@@ -3416,13 +3465,15 @@ mod tests {
         let hook = hooks.first().expect("default hook present");
         assert_eq!(hook.job_key, "market-analysis");
         assert!(!hook.enabled);
+        drop(guard);
     }
 
     #[tokio::test]
     async fn post_delete_agent_removes_agent_and_redirects() {
         let state = test_state().await;
+        let pool = state.db_pool.clone();
 
-        let app = router(state);
+        let app = router(state.clone());
         let timestamp = chrono::Utc::now().timestamp_millis();
         let display_name = format!("DeleteRouteTest{}", timestamp);
         let agent_key = slugify_agent_key(&display_name);
@@ -3446,6 +3497,31 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::SEE_OTHER);
+
+        let stored = get_agent(&pool, &agent_key)
+            .await
+            .expect("get stored agent before delete")
+            .expect("agent present before delete");
+        let live_account_key = AccountKey::new(&stored.wallet_address, &stored.environment);
+        let workspace = OpenCodeWorkspaceRuntimeConfig::from_value(&stored.runtime_config)
+            .expect("workspace metadata present");
+        let workspace_path = std::path::PathBuf::from(&workspace.workspace_host_path);
+        assert!(workspace_path.exists());
+        fs::write(
+            workspace_path.join("scratch/delete-sentinel.txt"),
+            "cleanup",
+        )
+        .expect("write delete sentinel");
+        state.live_accounts.replace(
+            live_account_key.clone(),
+            AccountLiveState {
+                account_address: stored.wallet_address.clone(),
+                environment: stored.environment.clone(),
+                status: LiveConnectionStatus::Connected,
+                updated_at: Some(Utc::now()),
+                ..Default::default()
+            },
+        );
 
         // Verify the agent exists.
         let response = app
@@ -3492,6 +3568,57 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::NOT_FOUND);
+        assert!(!workspace_path.exists());
+        assert!(state.live_accounts.get(&live_account_key).is_none());
+    }
+
+    #[tokio::test]
+    async fn post_agents_rejects_stale_existing_workspace_directory() {
+        let state = test_state().await;
+        let pool = state.db_pool.clone();
+        let app = router(state.clone());
+        let timestamp = chrono::Utc::now().timestamp_millis();
+        let display_name = format!("StaleWorkspace{}", timestamp);
+        let agent_key = slugify_agent_key(&display_name);
+        let workspace_path = state
+            .opencode_workspace_config
+            .host_workspaces_root
+            .join("agents")
+            .join(&agent_key);
+        fs::create_dir_all(&workspace_path).expect("create stale workspace dir");
+        let sentinel = workspace_path.join("scripts/user/sentinel.txt");
+        fs::create_dir_all(sentinel.parent().expect("sentinel parent"))
+            .expect("create sentinel parent");
+        fs::write(&sentinel, "stale").expect("write sentinel");
+
+        let private_key = random_private_key();
+        let body = format!(
+            "display_name={display_name}&hyperliquid_private_key={private_key}&runtime_id=opencode-local&enabled=on"
+        );
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/agents")
+                    .header("content-type", "application/x-www-form-urlencoded")
+                    .body(Body::from(body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+        let text = response_text(response).await;
+        assert!(text.contains("Failed to create OpenCode workspace"));
+        assert!(text.contains("workspace already exists"));
+        assert!(
+            get_agent(&pool, &agent_key)
+                .await
+                .expect("get agent")
+                .is_none()
+        );
+        assert!(sentinel.exists());
     }
 
     #[tokio::test]
@@ -3570,7 +3697,7 @@ mod tests {
         let state = test_state().await;
         let (agent_key, _wallet_address) = insert_test_agent(&state).await.expect("insert agent");
 
-        let response = router(state)
+        let response = router(state.clone())
             .oneshot(
                 Request::builder()
                     .uri(format!("/agents/{agent_key}/chat"))
@@ -3596,7 +3723,7 @@ mod tests {
         )
         .await;
 
-        let response = router(state)
+        let response = router(state.clone())
             .oneshot(
                 Request::builder()
                     .uri(format!("/agents/{agent_key}/transactions"))
@@ -3644,7 +3771,7 @@ mod tests {
             },
         );
 
-        let response = router(state)
+        let response = router(state.clone())
             .oneshot(
                 Request::builder()
                     .uri(format!("/agents/{agent_key}/transactions"))
@@ -3703,7 +3830,7 @@ mod tests {
         )
         .await;
 
-        let response = router(state)
+        let response = router(state.clone())
             .oneshot(
                 Request::builder()
                     .uri(format!("/agents/{agent_key}"))
@@ -3768,7 +3895,7 @@ mod tests {
         )
         .await;
 
-        let response = router(state)
+        let response = router(state.clone())
             .oneshot(
                 Request::builder()
                     .uri(format!("/agents/{agent_key}"))
@@ -3794,7 +3921,7 @@ mod tests {
         let state = test_state().await;
         let (agent_key, _wallet_address) = insert_test_agent(&state).await.expect("insert agent");
 
-        let response = router(state)
+        let response = router(state.clone())
             .oneshot(
                 Request::builder()
                     .uri(format!("/agents/{agent_key}"))
@@ -3917,7 +4044,7 @@ mod tests {
         )
         .await;
 
-        let response = router(state)
+        let response = router(state.clone())
             .oneshot(
                 Request::builder()
                     .uri(format!("/agents/{agent_key}/memories"))
@@ -3949,7 +4076,7 @@ mod tests {
         )
         .await;
 
-        let response = router(state)
+        let response = router(state.clone())
             .oneshot(
                 Request::builder()
                     .uri(format!("/agents/{agent_key}/memories/{}", memory.id))
@@ -3982,7 +4109,7 @@ mod tests {
         )
         .await;
 
-        let response = router(state)
+        let response = router(state.clone())
             .oneshot(
                 Request::builder()
                     .uri(format!("/agents/{agent_key}/memories/{}", memory.id))
@@ -4011,7 +4138,7 @@ mod tests {
         let state = test_state().await;
         let (agent_key, _wallet_address) = insert_test_agent(&state).await.expect("insert agent");
 
-        let response = router(state)
+        let response = router(state.clone())
             .oneshot(
                 Request::builder()
                     .uri(format!(
@@ -4064,7 +4191,7 @@ mod tests {
         .await
         .expect("insert agent");
 
-        let response = router(state)
+        let response = router(state.clone())
             .oneshot(
                 Request::builder()
                     .uri(format!("/agents/{agent_key}/prompts"))
@@ -4119,7 +4246,7 @@ mod tests {
         );
 
         let body2 = "prompt=Original+trading+prompt.";
-        let _ = router(state)
+        let _ = router(state.clone())
             .oneshot(
                 Request::builder()
                     .method("POST")
@@ -4181,7 +4308,7 @@ mod tests {
         );
 
         let body2 = "prompt=Original+analysis+prompt.";
-        let _ = router(state)
+        let _ = router(state.clone())
             .oneshot(
                 Request::builder()
                     .method("POST")
@@ -4215,7 +4342,7 @@ mod tests {
             .await
             .expect("seed selected instruments");
 
-        let response = router(state)
+        let response = router(state.clone())
             .oneshot(
                 Request::builder()
                     .uri(format!("/agents/{agent_key}/settings"))
@@ -4290,7 +4417,7 @@ mod tests {
             .await
             .expect("insert opencode agent");
 
-        let response = router(state)
+        let response = router(state.clone())
             .oneshot(
                 Request::builder()
                     .uri(format!("/agents/{agent_key}/jobs"))
@@ -4322,7 +4449,7 @@ mod tests {
             .await
             .expect("insert opencode agent");
 
-        let response = router(state)
+        let response = router(state.clone())
             .oneshot(
                 Request::builder()
                     .uri(format!("/agents/{agent_key}/hooks/new"))
@@ -4358,7 +4485,7 @@ mod tests {
             .await
             .expect("delete default hook");
 
-        let response = router(state)
+        let response = router(state.clone())
             .oneshot(
                 Request::builder()
                     .method("POST")
@@ -4405,7 +4532,7 @@ mod tests {
             .map(|row| row.id)
             .expect("analysis schedule id");
 
-        let response = router(state)
+        let response = router(state.clone())
             .oneshot(
                 Request::builder()
                     .method("POST")
@@ -4482,7 +4609,7 @@ mod tests {
             .map(|row| row.id)
             .expect("analysis schedule id");
 
-        let response = router(state)
+        let response = router(state.clone())
             .oneshot(
                 Request::builder()
                     .method("POST")
@@ -4550,7 +4677,7 @@ mod tests {
             .await
             .expect("mark active run running");
 
-        let response = router(state)
+        let response = router(state.clone())
             .oneshot(
                 Request::builder()
                     .method("POST")
@@ -4598,7 +4725,7 @@ mod tests {
             .map(|row| row.id)
             .expect("trading schedule id");
 
-        let response = router(state)
+        let response = router(state.clone())
             .oneshot(
                 Request::builder()
                     .method("POST")
@@ -4656,7 +4783,7 @@ mod tests {
             .await
             .expect("enable default hook");
 
-        let response = router(state)
+        let response = router(state.clone())
             .oneshot(
                 Request::builder()
                     .method("POST")
@@ -4705,7 +4832,7 @@ mod tests {
             .await
             .expect("enable default hook");
 
-        let response = router(state)
+        let response = router(state.clone())
             .oneshot(
                 Request::builder()
                     .method("POST")
@@ -4739,7 +4866,7 @@ mod tests {
             .expect("default hook present")
             .id;
 
-        let response = router(state)
+        let response = router(state.clone())
             .oneshot(
                 Request::builder()
                     .method("POST")
@@ -4766,7 +4893,7 @@ mod tests {
             .await
             .expect("insert opencode agent");
 
-        let response = router(state)
+        let response = router(state.clone())
             .oneshot(
                 Request::builder()
                     .uri(format!("/agents/{agent_key}/jobs/new"))
@@ -4793,7 +4920,7 @@ mod tests {
             .await
             .expect("insert opencode agent");
 
-        let response = router(state)
+        let response = router(state.clone())
             .oneshot(
                 Request::builder()
                     .method("POST")
@@ -4868,7 +4995,7 @@ mod tests {
                 .all(|row| row.enabled)
         );
 
-        let response = router(state)
+        let response = router(state.clone())
             .oneshot(
                 Request::builder()
                     .method("POST")
@@ -4904,7 +5031,7 @@ mod tests {
             .await
             .expect("insert opencode agent");
 
-        let response = router(state)
+        let response = router(state.clone())
             .oneshot(
                 Request::builder()
                     .method("POST")
@@ -4942,7 +5069,7 @@ mod tests {
             .await
             .expect("mark succeeded");
 
-        let response = router(state)
+        let response = router(state.clone())
             .oneshot(
                 Request::builder()
                     .uri(format!("/agents/{agent_key}/jobs/{schedule_id}"))
@@ -5045,11 +5172,16 @@ mod tests {
     async fn post_agent_instruments_updates_selection_and_redirects() {
         let state = test_state().await;
         let pool = state.db_pool.clone();
+        let guard = state
+            ._test_db_guard
+            .as_ref()
+            .cloned()
+            .expect("test db guard");
         let (agent_key, _wallet_address) = insert_test_agent(&state).await.expect("insert agent");
         seed_instrument(&state, "BTC", true).await;
         seed_instrument(&state, "ETH", true).await;
 
-        let response = router(state)
+        let response = router(state.clone())
             .oneshot(
                 Request::builder()
                     .method("POST")
@@ -5075,19 +5207,25 @@ mod tests {
             .await
             .expect("list selected instruments");
         assert_eq!(selected, vec!["BTC".to_string(), "ETH".to_string()]);
+        drop(guard);
     }
 
     #[tokio::test]
     async fn post_agent_instruments_without_values_clears_selection_and_redirects() {
         let state = test_state().await;
         let pool = state.db_pool.clone();
+        let guard = state
+            ._test_db_guard
+            .as_ref()
+            .cloned()
+            .expect("test db guard");
         let (agent_key, _wallet_address) = insert_test_agent(&state).await.expect("insert agent");
         seed_instrument(&state, "BTC", true).await;
         replace_agent_instruments(&pool, &agent_key, &["BTC".to_string()])
             .await
             .expect("seed selected instruments");
 
-        let response = router(state)
+        let response = router(state.clone())
             .oneshot(
                 Request::builder()
                     .method("POST")
@@ -5105,6 +5243,7 @@ mod tests {
             .await
             .expect("list selected instruments");
         assert!(selected.is_empty());
+        drop(guard);
     }
 
     #[tokio::test]

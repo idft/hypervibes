@@ -26,6 +26,8 @@ use self::ui_events::UiEventHub;
 #[derive(Clone)]
 pub struct AppState {
     pub db_pool: DbPool,
+    #[cfg(test)]
+    pub _test_db_guard: Option<Arc<crate::test_db::TestDb>>,
     pub agentic_backend: Arc<dyn AgenticBackend>,
     pub encryption_key: EncryptionKey,
     pub live_accounts: Arc<LiveAccountStore>,
@@ -50,6 +52,8 @@ pub async fn serve(
 ) -> Result<()> {
     let state = Arc::new(AppState {
         db_pool,
+        #[cfg(test)]
+        _test_db_guard: None,
         agentic_backend,
         encryption_key,
         live_accounts,

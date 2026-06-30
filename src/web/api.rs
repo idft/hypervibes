@@ -1105,10 +1105,11 @@ mod tests {
     }
 
     async fn test_state() -> Arc<AppState> {
-        let pool = test_db::pool().await;
+        let pool = Arc::new(test_db::pool().await);
         let cache_dir = std::path::PathBuf::from("/tmp/opencode/vibetrading-api-cache");
         Arc::new(AppState {
-            db_pool: pool,
+            db_pool: pool.as_ref().as_ref().clone(),
+            _test_db_guard: Some(Arc::clone(&pool)),
             agentic_backend: Arc::new(NoopAgenticBackend),
             encryption_key: EncryptionKey::new(
                 "test",

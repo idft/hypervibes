@@ -272,7 +272,13 @@ pub async fn list_account_sync_state(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_db;
+    use crate::{
+        agents::{
+            model::{AgentRegistryRow, BACKEND_KIND_OPENCODE},
+            store::insert_agent,
+        },
+        test_db,
+    };
     use chrono::Duration;
 
     /// Insert the minimum parent rows a journal event needs. Returns the
@@ -354,11 +360,42 @@ mod tests {
         .expect("insert trade fill");
     }
 
+    async fn seed_agent_account(pool: &DbPool, account: &str, suffix: &str) {
+        let now = Utc::now();
+        insert_agent(
+            pool,
+            &AgentRegistryRow {
+                agent_key: format!("queries-agent-{suffix}"),
+                created_at: now,
+                updated_at: now,
+                enabled: true,
+                display_name: format!("Queries Agent {suffix}"),
+                analysis_prompt: String::new(),
+                trading_prompt: String::new(),
+                wallet_address: account.to_string(),
+                environment: "live".to_string(),
+                api_key: format!("queries-api-{suffix}"),
+                api_key_last_used_at: None,
+                backend_kind: BACKEND_KIND_OPENCODE.to_string(),
+                runtime_id: "opencode-local".to_string(),
+                runtime_config: serde_json::json!({}),
+                analysis_context_last_used_at: None,
+                trading_context_last_used_at: None,
+                hyperliquid_private_key_ciphertext: Vec::new(),
+                hyperliquid_private_key_key_id: "test".to_string(),
+            },
+        )
+        .await
+        .expect("insert agent account");
+    }
+
     #[tokio::test]
     async fn list_account_sync_state_returns_rows_for_account() {
         let pool = test_db::pool().await;
 
-        let account = format!("0xqueries{}", chrono::Utc::now().timestamp_millis());
+        let suffix = chrono::Utc::now().timestamp_millis().to_string();
+        let account = format!("0xqueries{suffix}");
+        seed_agent_account(&pool, &account, &suffix).await;
         sqlx::query(
             "INSERT INTO hyperliquid.sync_state (account_address, environment, stream_name, status, metadata) VALUES ($1, 'live', 'fills', $2, '{}')",
         )
@@ -383,6 +420,7 @@ mod tests {
             chrono::Utc::now().timestamp_nanos_opt().unwrap_or(0)
         );
         let account = format!("0x{suffix}");
+        seed_agent_account(&pool, &account, &suffix).await;
         let _ = seed_instrument(&pool, &suffix).await;
 
         // Three events at distinct, ordered timestamps with deltas
@@ -445,6 +483,7 @@ mod tests {
             chrono::Utc::now().timestamp_nanos_opt().unwrap_or(0)
         );
         let account = format!("0x{suffix}");
+        seed_agent_account(&pool, &account, &suffix).await;
         let _ = seed_instrument(&pool, &suffix).await;
 
         // Anchor: one event well before the window.
@@ -541,6 +580,7 @@ mod tests {
             chrono::Utc::now().timestamp_nanos_opt().unwrap_or(0)
         );
         let account = format!("0x{suffix}");
+        seed_agent_account(&pool, &account, &suffix).await;
         let _ = seed_instrument(&pool, &suffix).await;
 
         let anchor_time = Utc::now() - Duration::hours(3);
@@ -594,6 +634,7 @@ mod tests {
             chrono::Utc::now().timestamp_nanos_opt().unwrap_or(0)
         );
         let account = format!("0x{suffix}");
+        seed_agent_account(&pool, &account, &suffix).await;
         let _ = seed_instrument(&pool, &suffix).await;
 
         let now = truncate_to_micros(Utc::now());
@@ -637,6 +678,7 @@ mod tests {
             chrono::Utc::now().timestamp_nanos_opt().unwrap_or(0)
         );
         let account = format!("0x{suffix}");
+        seed_agent_account(&pool, &account, &suffix).await;
         let instrument_id = seed_instrument(&pool, &suffix).await;
 
         let now = truncate_to_micros(Utc::now());

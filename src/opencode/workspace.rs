@@ -31,6 +31,12 @@ pub struct GeneratedOpenCodeWorkspace {
     pub workspace_container_path: String,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WorkspaceGenerationMode {
+    CreateNew,
+    Regenerate,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct OpenCodeWorkspaceRuntimeConfig {
     pub workspace_host_path: String,
@@ -51,17 +57,20 @@ impl OpenCodeWorkspaceRuntimeConfig {
 pub fn generate_agent_workspace(
     config: &OpenCodeWorkspaceConfig,
     agent: &OpenCodeWorkspaceAgent,
+    mode: WorkspaceGenerationMode,
 ) -> Result<GeneratedOpenCodeWorkspace> {
-    validate_agent_key(&agent.agent_key)?;
-
-    let workspace_host_path = config
-        .host_workspaces_root
-        .join("agents")
-        .join(&agent.agent_key);
+    let workspace_host_path = agent_workspace_host_path(config, &agent.agent_key)?;
     let workspace_container_path = join_container_path(
         &config.container_workspaces_root,
         &["agents", agent.agent_key.as_str()],
     );
+
+    if matches!(mode, WorkspaceGenerationMode::CreateNew) && workspace_host_path.exists() {
+        bail!(
+            "workspace already exists for agent {}; remove it before reusing this agent key",
+            agent.agent_key
+        );
+    }
 
     for path in [
         workspace_host_path.as_path(),
@@ -125,6 +134,61 @@ pub fn generate_agent_workspace(
         workspace_host_path,
         workspace_container_path,
     })
+}
+
+pub fn agent_workspace_host_path(
+    config: &OpenCodeWorkspaceConfig,
+    agent_key: &str,
+) -> Result<PathBuf> {
+    validate_agent_key(agent_key)?;
+    Ok(config.host_workspaces_root.join("agents").join(agent_key))
+}
+
+pub fn delete_agent_workspace(config: &OpenCodeWorkspaceConfig, agent_key: &str) -> Result<bool> {
+    let workspace_host_path = agent_workspace_host_path(config, agent_key)?;
+    if !workspace_host_path.exists() {
+        return Ok(false);
+    }
+
+    let metadata = fs::metadata(&workspace_host_path)
+        .with_context(|| format!("failed to stat workspace {}", workspace_host_path.display()))?;
+    if !metadata.is_dir() {
+        bail!(
+            "workspace path {} exists but is not a directory",
+            workspace_host_path.display()
+        );
+    }
+
+    let canonical_root = config
+        .host_workspaces_root
+        .canonicalize()
+        .with_context(|| {
+            format!(
+                "failed to canonicalize workspace root {}",
+                config.host_workspaces_root.display()
+            )
+        })?;
+    let canonical_candidate = workspace_host_path.canonicalize().with_context(|| {
+        format!(
+            "failed to canonicalize workspace path {}",
+            workspace_host_path.display()
+        )
+    })?;
+    let canonical_agents_root = canonical_root.join("agents");
+    if !canonical_candidate.starts_with(&canonical_agents_root) {
+        bail!(
+            "refusing to delete workspace outside managed root: {}",
+            canonical_candidate.display()
+        );
+    }
+
+    fs::remove_dir_all(&workspace_host_path).with_context(|| {
+        format!(
+            "failed to delete workspace {}",
+            workspace_host_path.display()
+        )
+    })?;
+    Ok(true)
 }
 
 pub fn runtime_config_for_generated_workspace(
@@ -292,8 +356,12 @@ mod tests {
     #[test]
     fn generates_expected_workspace_layout() {
         let temp = TempDir::new("opencode-layout");
-        let generated = generate_agent_workspace(&sample_config(&temp.path), &sample_agent())
-            .expect("generate workspace");
+        let generated = generate_agent_workspace(
+            &sample_config(&temp.path),
+            &sample_agent(),
+            WorkspaceGenerationMode::CreateNew,
+        )
+        .expect("generate workspace");
 
         for path in [
             generated.workspace_host_path.join("opencode.json"),
@@ -341,8 +409,12 @@ mod tests {
     #[test]
     fn generated_opencode_json_registers_vibetrading_mcp_server() {
         let temp = TempDir::new("opencode-mcp-config");
-        let generated = generate_agent_workspace(&sample_config(&temp.path), &sample_agent())
-            .expect("generate workspace");
+        let generated = generate_agent_workspace(
+            &sample_config(&temp.path),
+            &sample_agent(),
+            WorkspaceGenerationMode::CreateNew,
+        )
+        .expect("generate workspace");
         let raw = fs::read_to_string(generated.workspace_host_path.join("opencode.json"))
             .expect("read opencode.json");
         let parsed: Value = serde_json::from_str(&raw).expect("parse opencode.json");
@@ -387,8 +459,12 @@ mod tests {
     #[test]
     fn renders_agents_template_placeholders() {
         let temp = TempDir::new("opencode-agents-template");
-        let generated = generate_agent_workspace(&sample_config(&temp.path), &sample_agent())
-            .expect("generate workspace");
+        let generated = generate_agent_workspace(
+            &sample_config(&temp.path),
+            &sample_agent(),
+            WorkspaceGenerationMode::CreateNew,
+        )
+        .expect("generate workspace");
         let rendered = fs::read_to_string(generated.workspace_host_path.join("AGENTS.md"))
             .expect("read AGENTS.md");
 
@@ -400,8 +476,12 @@ mod tests {
     #[test]
     fn writes_env_with_agent_credentials() {
         let temp = TempDir::new("opencode-env");
-        let generated = generate_agent_workspace(&sample_config(&temp.path), &sample_agent())
-            .expect("generate workspace");
+        let generated = generate_agent_workspace(
+            &sample_config(&temp.path),
+            &sample_agent(),
+            WorkspaceGenerationMode::CreateNew,
+        )
+        .expect("generate workspace");
         let env_text =
             fs::read_to_string(generated.workspace_host_path.join(".env")).expect("read .env");
 
@@ -414,8 +494,12 @@ mod tests {
     #[test]
     fn copies_commands_and_agents_into_project_opencode_dir() {
         let temp = TempDir::new("opencode-copy");
-        let generated = generate_agent_workspace(&sample_config(&temp.path), &sample_agent())
-            .expect("generate workspace");
+        let generated = generate_agent_workspace(
+            &sample_config(&temp.path),
+            &sample_agent(),
+            WorkspaceGenerationMode::CreateNew,
+        )
+        .expect("generate workspace");
 
         let commands = fs::read_to_string(
             generated
@@ -440,11 +524,17 @@ mod tests {
         let temp = TempDir::new("opencode-preserve");
         let config = sample_config(&temp.path);
         let generated =
-            generate_agent_workspace(&config, &sample_agent()).expect("generate workspace");
+            generate_agent_workspace(&config, &sample_agent(), WorkspaceGenerationMode::CreateNew)
+                .expect("generate workspace");
         let custom_script = generated.workspace_host_path.join("scripts/user/custom.py");
         fs::write(&custom_script, "print('hello')\n").expect("write custom script");
 
-        generate_agent_workspace(&config, &sample_agent()).expect("regenerate workspace");
+        generate_agent_workspace(
+            &config,
+            &sample_agent(),
+            WorkspaceGenerationMode::Regenerate,
+        )
+        .expect("regenerate workspace");
 
         assert_eq!(
             fs::read_to_string(custom_script).expect("read custom script"),
@@ -464,6 +554,7 @@ mod tests {
                     agent_key: bad_key.to_string(),
                     ..sample_agent()
                 },
+                WorkspaceGenerationMode::CreateNew,
             )
             .expect_err("unsafe key should fail");
             assert!(error.to_string().contains("agent_key"));
@@ -505,6 +596,7 @@ mod tests {
                 api_base_url: "http://host.containers.internal:3003".to_string(),
             },
             &sample_agent(),
+            WorkspaceGenerationMode::CreateNew,
         )
         .expect_err("unknown placeholder should fail");
 
@@ -514,13 +606,67 @@ mod tests {
     #[test]
     fn renders_opencode_json_without_workspace_plugin_config() {
         let temp = TempDir::new("opencode-json");
-        let generated = generate_agent_workspace(&sample_config(&temp.path), &sample_agent())
-            .expect("generate workspace");
+        let generated = generate_agent_workspace(
+            &sample_config(&temp.path),
+            &sample_agent(),
+            WorkspaceGenerationMode::CreateNew,
+        )
+        .expect("generate workspace");
         let rendered = fs::read_to_string(generated.workspace_host_path.join("opencode.json"))
             .expect("read opencode.json");
 
         assert!(rendered.contains("https://opencode.ai/config.json"));
         assert!(!rendered.contains("@aeondave/opencode-dotenv@latest"));
         assert!(rendered.contains("vibetrading"));
+    }
+
+    #[test]
+    fn delete_agent_workspace_removes_existing_directory() {
+        let temp = TempDir::new("opencode-delete-existing");
+        let config = sample_config(&temp.path);
+        let generated =
+            generate_agent_workspace(&config, &sample_agent(), WorkspaceGenerationMode::CreateNew)
+                .expect("generate workspace");
+
+        let deleted =
+            delete_agent_workspace(&config, &sample_agent().agent_key).expect("delete workspace");
+
+        assert!(deleted);
+        assert!(!generated.workspace_host_path.exists());
+    }
+
+    #[test]
+    fn delete_agent_workspace_returns_false_for_missing_directory() {
+        let temp = TempDir::new("opencode-delete-missing");
+        let deleted = delete_agent_workspace(&sample_config(&temp.path), &sample_agent().agent_key)
+            .expect("delete missing workspace");
+
+        assert!(!deleted);
+    }
+
+    #[test]
+    fn delete_agent_workspace_rejects_unsafe_keys() {
+        let temp = TempDir::new("opencode-delete-unsafe");
+        let error = delete_agent_workspace(&sample_config(&temp.path), "../btc")
+            .expect_err("unsafe key should fail");
+
+        assert!(error.to_string().contains("agent_key"));
+    }
+
+    #[test]
+    fn create_new_workspace_fails_when_directory_already_exists() {
+        let temp = TempDir::new("opencode-existing-dir");
+        let config = sample_config(&temp.path);
+        let workspace_path =
+            agent_workspace_host_path(&config, &sample_agent().agent_key).expect("workspace path");
+        fs::create_dir_all(&workspace_path).expect("create existing workspace dir");
+        fs::write(workspace_path.join("sentinel.txt"), "keep").expect("write sentinel");
+
+        let error =
+            generate_agent_workspace(&config, &sample_agent(), WorkspaceGenerationMode::CreateNew)
+                .expect_err("existing directory should fail");
+
+        assert!(error.to_string().contains("workspace already exists"));
+        assert!(workspace_path.join("sentinel.txt").exists());
     }
 }

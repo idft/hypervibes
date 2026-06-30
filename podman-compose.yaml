@@ -22,6 +22,7 @@ services:
   test-postgres:
     image: docker.io/library/postgres:18.4-alpine
     restart: unless-stopped
+    shm_size: 512m
     # Dedicated disposable database for cargo test. These settings trade
     # durability for speed because test data is throwaway.
     command: >-
@@ -34,10 +35,11 @@ services:
       POSTGRES_USER: vibetrading
       POSTGRES_PASSWORD: vibetrading
       POSTGRES_DB: postgres
+      PGDATA: /var/lib/postgresql/data
     ports:
       - "15433:5432"
-    volumes:
-      - test_postgres_data:/var/lib/postgresql
+    tmpfs:
+      - /var/lib/postgresql/data:rw,size=2g
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U vibetrading -d postgres"]
       interval: 10s
@@ -92,8 +94,6 @@ services:
 
 volumes:
   postgres_data:
-    driver: local
-  test_postgres_data:
     driver: local
   opencode_data:
     driver: local

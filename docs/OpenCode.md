@@ -42,6 +42,8 @@ The seeded runtime is:
 
 Creating an agent generates a workspace under the configured host workspace root.
 
+New agent creation refuses to reuse an existing stale workspace directory for the same derived agent key.
+
 The generated workspace includes:
 
 - `opencode.json`
@@ -51,6 +53,10 @@ The generated workspace includes:
 - writable `scripts/user/`, `data/`, and `scratch/` paths
 
 The workspace `.env` is backend-owned generated state and should not be read or modified by agents.
+
+Re-generating a workspace refreshes generated files while preserving user-managed files under paths like `scripts/user/`, `data/`, and `scratch/`.
+
+Deleting an OpenCode agent deletes its generated workspace directory after the database delete succeeds.
 
 ## Scheduling
 
