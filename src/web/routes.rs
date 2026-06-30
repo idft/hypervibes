@@ -43,7 +43,7 @@ use crate::{
         store::{
             delete_agent as delete_agent_in_store, get_agent, insert_agent, insert_agent_runtime,
             list_agent_instrument_options, list_agent_runtimes, list_agents,
-            list_enabled_agent_runtimes, replace_agent_instruments, runtime_matches_backend,
+            list_enabled_agent_runtimes, replace_agent_instruments,
             update_agent_analysis_prompt, update_agent_runtime_config, update_agent_trading_prompt,
         },
     },
@@ -2097,22 +2097,17 @@ async fn create_agent(
         }
     };
 
-    if !runtime_matches_backend(
-        &state.db_pool,
-        form.runtime_id.trim(),
-        form.backend_kind.trim(),
-    )
-    .await?
-    {
+    let Some(runtime) = runtimes
+        .iter()
+        .find(|runtime| runtime.id == form.runtime_id.trim())
+        .cloned()
+    else {
         return Ok(render_new_form(
             form,
             runtimes,
-            vec![
-                "Selected runtime must exist, be enabled, and match the selected backend kind."
-                    .to_string(),
-            ],
+            vec!["Selected runtime must exist and be enabled.".to_string()],
         ));
-    }
+    };
 
     let now = Utc::now();
     let agent_key = slugify_agent_key(&form.display_name);
@@ -2129,8 +2124,8 @@ async fn create_agent(
         environment: "live".to_string(),
         api_key: generate_api_key(),
         api_key_last_used_at: None,
-        backend_kind: form.backend_kind.trim().to_string(),
-        runtime_id: form.runtime_id.trim().to_string(),
+        backend_kind: runtime.backend_kind.clone(),
+        runtime_id: runtime.id.clone(),
         runtime_config: serde_json::json!({}),
         analysis_context_last_used_at: None,
         trading_context_last_used_at: None,
@@ -2713,7 +2708,8 @@ mod tests {
         let state = test_state().await;
 
         let app = router(state);
-        let body = "display_name=Test Agent&hyperliquid_private_key=not-a-key&backend_kind=opencode&runtime_id=opencode-local";
+        let body =
+            "display_name=Test Agent&hyperliquid_private_key=not-a-key&runtime_id=opencode-local";
         let response = app
             .oneshot(
                 Request::builder()
@@ -2730,7 +2726,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn agents_new_page_renders_backend_and_runtime_controls() {
+    async fn agents_new_page_renders_runtime_control() {
         let state = test_state().await;
 
         let response = router(state)
@@ -2745,8 +2741,9 @@ mod tests {
 
         assert_eq!(response.status(), StatusCode::OK);
         let text = response_text(response).await;
-        assert!(text.contains("name=\"backend_kind\""));
+        assert!(!text.contains("name=\"backend_kind\""));
         assert!(text.contains("name=\"runtime_id\""));
+        assert!(text.contains("Runtime instance"));
         assert!(text.contains("OpenCode local"));
     }
 
@@ -2793,13 +2790,26 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn post_agents_rejects_runtime_backend_mismatch() {
+    async fn post_agents_rejects_disabled_runtime() {
         let state = test_state().await;
+        let runtime_id = format!("disabled-runtime-{}", chrono::Utc::now().timestamp_millis());
+        insert_agent_runtime(
+            &state.db_pool,
+            &CreateAgentRuntimeForm {
+                id: runtime_id.clone(),
+                name: "Disabled runtime".to_string(),
+                backend_kind: crate::agents::model::BACKEND_KIND_HERMES.to_string(),
+                base_url: "http://localhost:19119".to_string(),
+                enabled: None,
+            },
+        )
+        .await
+        .expect("insert disabled runtime");
 
         let app = router(state);
         let private_key = random_private_key();
         let body = format!(
-            "display_name=MismatchTest&hyperliquid_private_key={private_key}&backend_kind=hermes&runtime_id=opencode-local"
+            "display_name=DisabledRuntimeTest&hyperliquid_private_key={private_key}&runtime_id={runtime_id}"
         );
         let response = app
             .oneshot(
@@ -2815,9 +2825,7 @@ mod tests {
 
         assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
         let text = response_text(response).await;
-        assert!(text.contains(
-            "Selected runtime must exist, be enabled, and match the selected backend kind."
-        ));
+        assert!(text.contains("Selected runtime must exist and be enabled."));
     }
 
     #[tokio::test]
@@ -2838,7 +2846,6 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore = "SSE body read hangs in pglite-oxide test environment; see AGENTS.md"]
     async fn account_balance_stream_emits_initial_loading_placeholder() {
         let state = test_state().await;
 
@@ -2877,7 +2884,6 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore = "SSE body read hangs in pglite-oxide test environment; see AGENTS.md"]
     async fn account_balance_stream_emits_initial_value_when_state_present() {
         let state = test_state().await;
 
@@ -2921,7 +2927,6 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore = "SSE body read hangs in pglite-oxide test environment; see AGENTS.md"]
     async fn account_balance_stream_emits_updates_when_state_changes() {
         let state = test_state().await;
 
@@ -3097,7 +3102,7 @@ mod tests {
         let agent_key = slugify_agent_key(&display_name);
         let private_key = random_private_key();
         let body = format!(
-            "display_name={}&hyperliquid_private_key={}&backend_kind=opencode&runtime_id=opencode-local",
+            "display_name={}&hyperliquid_private_key={}&runtime_id=opencode-local",
             display_name, private_key
         );
 
@@ -3126,6 +3131,7 @@ mod tests {
             .await
             .expect("get agent")
             .expect("agent present");
+        assert_eq!(stored.backend_kind, crate::agents::model::BACKEND_KIND_OPENCODE);
         assert_eq!(stored.analysis_prompt, DEFAULT_ANALYSIS_STRATEGY_PROMPT);
         assert_eq!(stored.trading_prompt, DEFAULT_TRADING_STRATEGY_PROMPT);
         assert_eq!(
@@ -3183,7 +3189,7 @@ mod tests {
         let agent_key = slugify_agent_key(&display_name);
         let private_key = random_private_key();
         let body = format!(
-            "display_name={}&hyperliquid_private_key={}&backend_kind=hermes&runtime_id={}",
+            "display_name={}&hyperliquid_private_key={}&runtime_id={}",
             display_name, private_key, runtime_id
         );
 
@@ -3204,6 +3210,7 @@ mod tests {
             .await
             .expect("get agent")
             .expect("agent present");
+        assert_eq!(stored.backend_kind, crate::agents::model::BACKEND_KIND_HERMES);
         assert_eq!(stored.runtime_config, serde_json::json!({}));
 
         // Hermes agents should not get default OpenCode schedules.
@@ -3223,7 +3230,7 @@ mod tests {
         let agent_key = slugify_agent_key(&display_name);
         let private_key = random_private_key();
         let body = format!(
-            "display_name={}&hyperliquid_private_key={}&backend_kind=opencode&runtime_id=opencode-local&enabled=on",
+            "display_name={}&hyperliquid_private_key={}&runtime_id=opencode-local&enabled=on",
             display_name, private_key
         );
 
@@ -3299,7 +3306,7 @@ mod tests {
         let agent_key = slugify_agent_key(&display_name);
         let private_key = random_private_key();
         let body = format!(
-            "display_name={display_name}&hyperliquid_private_key={private_key}&backend_kind=opencode&runtime_id=opencode-local&enabled=on"
+            "display_name={display_name}&hyperliquid_private_key={private_key}&runtime_id=opencode-local&enabled=on"
         );
 
         let response = app
@@ -4212,7 +4219,7 @@ mod tests {
         let agent_key = slugify_agent_key(&display_name);
         let private_key = random_private_key();
         let body = format!(
-            "display_name={}&hyperliquid_private_key={}&backend_kind=opencode&runtime_id=opencode-local",
+            "display_name={}&hyperliquid_private_key={}&runtime_id=opencode-local",
             display_name, private_key
         );
 
@@ -5065,7 +5072,6 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore = "SSE body read hangs in pglite-oxide test environment; see AGENTS.md"]
     async fn open_positions_stream_emits_initial_loading_placeholder() {
         let state = test_state().await;
 
@@ -5102,7 +5108,6 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore = "SSE body read hangs in pglite-oxide test environment; see AGENTS.md"]
     async fn open_positions_stream_emits_initial_rows_when_state_present() {
         let state = test_state().await;
 
@@ -5127,7 +5132,7 @@ mod tests {
                     margin_used: Some(rust_decimal::Decimal::new(6000, 0)),
                     position_value: Some(rust_decimal::Decimal::new(30000, 0)),
                     unrealized_pnl: Some(rust_decimal::Decimal::new(1500, 0)),
-                    return_on_equity: Some(rust_decimal::Decimal::new(25, 2)),
+                    return_on_equity: Some(rust_decimal::Decimal::new(2500, 2)),
                     leverage_type: Some("cross".to_string()),
                     leverage_value: Some(5),
                     max_leverage: Some(50),
@@ -5173,7 +5178,6 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore = "SSE body read hangs in pglite-oxide test environment; see AGENTS.md"]
     async fn open_orders_stream_emits_initial_loading_placeholder() {
         let state = test_state().await;
 
@@ -5210,7 +5214,6 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore = "SSE body read hangs in pglite-oxide test environment; see AGENTS.md"]
     async fn open_orders_stream_emits_initial_rows_when_state_present() {
         let state = test_state().await;
 
@@ -5261,9 +5264,9 @@ mod tests {
         assert_eq!(response.status(), StatusCode::OK);
 
         let text = read_sse_chunk(response.into_body(), 250).await;
-        assert!(text.contains("event: positions"));
-        assert!(text.contains("BTC"));
-        assert!(text.contains("long"));
-        assert!(text.contains("+25.00%"));
+        assert!(text.contains("event: orders"));
+        assert!(text.contains("ETH"));
+        assert!(text.contains("buy"));
+        assert!(text.contains("limit"));
     }
 }

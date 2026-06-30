@@ -1,5 +1,22 @@
 
-### Known-ignored tests
+### Test database
 
-Seven SSE body-read tests in `src/web/routes.rs` are marked `#[ignore]` because the body reader (a custom `read_sse_chunk` helper) hangs in the pglite-oxide test environment: the embedded server's broadcast stream does not produce updates within the test timeout, so subsequent `body.frame()` polls return `Pending` until the deadline fires. These tests cover `account_balance_stream_emits_initial_loading_placeholder`, `account_balance_stream_emits_initial_value_when_state_present`, `account_balance_stream_emits_updates_when_state_changes`, `open_positions_stream_emits_initial_loading_placeholder`, `open_positions_stream_emits_initial_rows_when_state_present`, `open_orders_stream_emits_initial_loading_placeholder`, and `open_orders_stream_emits_initial_rows_when_state_present`. They were never actually executing before the test-DB refactor (the old `DATABASE_URL` gate returned `None` in this environment). Run them with `cargo test -- --ignored` to investigate; fix when the SSE reader can be made to surface initial events without depending on broadcasts from the orchestrator.
+By default `cargo test` uses the dedicated `test-postgres` service from `podman-compose.yaml` via `TEST_DATABASE_URL=postgres://vibetrading:vibetrading@127.0.0.1:15433/postgres` from `.cargo/config.toml`.
 
+`src/test_db.rs` creates a fresh database for each `pool()` call when `TEST_DATABASE_URL` is set, runs migrations inside that database, and lets those isolated test databases be created concurrently on the dedicated test Postgres service.
+
+The dedicated test Postgres service is intentionally speed-optimized and disposable:
+
+- port `15433`
+- `max_connections=400`
+- `fsync=off`
+- `synchronous_commit=off`
+- `full_page_writes=off`
+
+### Frontend build during tests
+
+`build.rs` skips the automatic frontend `pnpm build` path during `cargo test`. Template and route tests render directly from source templates and do not need compiled assets. If you explicitly need the build-script asset step during a test invocation, run with `VIBETRADING_FORCE_FRONTEND_BUILD=1 cargo test`.
+
+### SSE tests
+
+The SSE route tests in `src/web/routes.rs` run in the normal suite against the dedicated `test-postgres` service. The shared `read_sse_chunk` helper still only reads an initial slice of each long-lived stream, so keep those tests focused on the initial event payload and explicit follow-up updates triggered inside the test.

@@ -2940,8 +2940,9 @@ mod tests {
         assert!(rendered.contains("<!DOCTYPE html>"));
         assert!(rendered.contains("Create agent · Vibetrading"));
         assert!(rendered.contains("display_name"));
-        assert!(rendered.contains("name=\"backend_kind\""));
+        assert!(!rendered.contains("name=\"backend_kind\""));
         assert!(rendered.contains("name=\"runtime_id\""));
+        assert!(rendered.contains("Runtime instance"));
         assert!(rendered.contains("OpenCode local"));
     }
 

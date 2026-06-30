@@ -5,6 +5,13 @@ use std::process::Command;
 use std::time::SystemTime;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Unit tests render templates directly and do not need compiled frontend assets.
+    if std::env::var_os("CARGO_CFG_TEST").is_some()
+        && std::env::var_os("VIBETRADING_FORCE_FRONTEND_BUILD").is_none()
+    {
+        return Ok(());
+    }
+
     println!("cargo:rerun-if-changed=assets/");
     println!("cargo:rerun-if-changed=package.json");
     println!("cargo:rerun-if-changed=pnpm-lock.yaml");

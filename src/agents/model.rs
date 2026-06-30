@@ -160,7 +160,6 @@ impl CreateAgentRuntimeForm {
 pub struct CreateAgentForm {
     pub display_name: String,
     pub hyperliquid_private_key: String,
-    pub backend_kind: String,
     pub runtime_id: String,
     /// HTML checkboxes only send a value when checked, so this is optional.
     pub enabled: Option<String>,
@@ -191,10 +190,6 @@ impl CreateAgentForm {
             errors.push("Hyperliquid private key is required.".to_string());
         } else if crate::agents::keys::derive_wallet_address(private_key).is_err() {
             errors.push("Hyperliquid private key is invalid.".to_string());
-        }
-
-        if !is_valid_backend_kind(self.backend_kind.trim()) {
-            errors.push("Backend kind must be hermes or opencode.".to_string());
         }
 
         if self.runtime_id.trim().is_empty() {
@@ -326,22 +321,16 @@ mod tests {
     }
 
     #[test]
-    fn create_agent_form_requires_backend_and_runtime() {
+    fn create_agent_form_requires_runtime() {
         let form = CreateAgentForm {
             display_name: "Test Agent".to_string(),
             hyperliquid_private_key:
                 "0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d".to_string(),
-            backend_kind: String::new(),
             runtime_id: String::new(),
             enabled: Some("on".to_string()),
         };
 
         let errors = form.validate().expect_err("validation should fail");
-        assert!(
-            errors
-                .iter()
-                .any(|error| error.contains("Backend kind must be hermes or opencode"))
-        );
         assert!(
             errors
                 .iter()
