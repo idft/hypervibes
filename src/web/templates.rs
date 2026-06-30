@@ -21,8 +21,8 @@ use crate::{
         queries::{AccountTransactionRow, BalancePoint},
         sync_state::SyncStateRow,
     },
-    model_catalog::options::ModelPickerOption,
     memory::MemoryRecord,
+    model_catalog::options::ModelPickerOption,
 };
 
 #[derive(Debug, Clone)]
@@ -74,25 +74,6 @@ fn format_optional_timestamp_utc(value: Option<DateTime<Utc>>) -> String {
     value
         .map(format_timestamp_utc)
         .unwrap_or_else(|| "-".to_string())
-}
-
-const ANALYSIS_CONTEXT_STALE_AFTER_MINUTES: i64 = 30;
-const TRADING_CONTEXT_STALE_AFTER_MINUTES: i64 = 3;
-
-fn is_stale_checkin(
-    value: Option<DateTime<Utc>>,
-    now: DateTime<Utc>,
-    stale_after_minutes: i64,
-) -> bool {
-    value.is_some_and(|timestamp| {
-        now.signed_duration_since(timestamp) > chrono::Duration::minutes(stale_after_minutes)
-    })
-}
-
-fn build_cron_setup_prompt(agent_key: &str) -> String {
-    format!(
-        "Create the Vibetrading cron jobs for this Hermes profile.\n\nHermes profile: {agent_key}\n\nCreate an analysis cron job:\n- name: vibetrading-analysis\n- schedule: every 15m\n- skill: analysis-loop\n- enabled toolsets: terminal\n- prompt: Run the Vibetrading analysis loop for this profile. Use Vibetrading job context before reasoning.\n\nCreate a trading cron job:\n- name: vibetrading-trading\n- schedule: every 1m\n- skill: trading-loop\n- enabled toolsets: terminal\n- prompt: Run the Vibetrading trading loop for this profile. Use Vibetrading job context before reasoning.\n\nDo not create duplicate jobs if jobs with these names already exist.\n\nExample profile-scoped commands:\nhermes -p {agent_key} cron create ..."
-    )
 }
 
 pub fn format_money_text(amount: Option<Decimal>) -> String {
@@ -590,17 +571,6 @@ pub struct AgentsShowPageTemplate {
     pub latest_analysis_summary_html: String,
     pub sparklines_html: String,
     pub api_key_last_used_text: String,
-    pub analysis_context_last_used_text: String,
-    pub trading_context_last_used_text: String,
-    pub analysis_context_never_checked_in: bool,
-    pub trading_context_never_checked_in: bool,
-    pub analysis_context_stale: bool,
-    pub trading_context_stale: bool,
-    pub show_cron_setup_alert: bool,
-    pub show_cron_stale_warning: bool,
-    pub analysis_context_stale_after_minutes: i64,
-    pub trading_context_stale_after_minutes: i64,
-    pub cron_setup_prompt: String,
     pub default_analysis_strategy_prompt: &'static str,
     pub default_trading_strategy_prompt: &'static str,
     pub created_at_text: String,
@@ -617,22 +587,8 @@ pub struct AgentsShowPageTemplate {
 impl AgentsShowPageTemplate {
     pub fn new(agent: AgentDetailRow, active_tab: AgentShowTab) -> Self {
         let agent_key = agent.agent_key.clone();
-        let now = Utc::now();
-        let uses_hermes_runtime = agent.backend_kind == crate::agents::model::BACKEND_KIND_HERMES;
         let uses_opencode_runtime =
             agent.backend_kind == crate::agents::model::BACKEND_KIND_OPENCODE;
-        let analysis_context_never_checked_in = agent.analysis_context_last_used_at.is_none();
-        let trading_context_never_checked_in = agent.trading_context_last_used_at.is_none();
-        let analysis_context_stale = is_stale_checkin(
-            agent.analysis_context_last_used_at,
-            now,
-            ANALYSIS_CONTEXT_STALE_AFTER_MINUTES,
-        );
-        let trading_context_stale = is_stale_checkin(
-            agent.trading_context_last_used_at,
-            now,
-            TRADING_CONTEXT_STALE_AFTER_MINUTES,
-        );
         let mut tab_entries: Vec<(&'static str, AgentShowTab)> = vec![
             ("Positions", AgentShowTab::Positions),
             ("Transactions", AgentShowTab::Transactions),
@@ -654,23 +610,6 @@ impl AgentsShowPageTemplate {
 
         Self {
             api_key_last_used_text: format_optional_timestamp_utc(agent.api_key_last_used_at),
-            analysis_context_last_used_text: format_optional_timestamp_utc(
-                agent.analysis_context_last_used_at,
-            ),
-            trading_context_last_used_text: format_optional_timestamp_utc(
-                agent.trading_context_last_used_at,
-            ),
-            analysis_context_never_checked_in,
-            trading_context_never_checked_in,
-            analysis_context_stale,
-            trading_context_stale,
-            show_cron_setup_alert: uses_hermes_runtime
-                && (analysis_context_never_checked_in || trading_context_never_checked_in),
-            show_cron_stale_warning: uses_hermes_runtime
-                && (analysis_context_stale || trading_context_stale),
-            analysis_context_stale_after_minutes: ANALYSIS_CONTEXT_STALE_AFTER_MINUTES,
-            trading_context_stale_after_minutes: TRADING_CONTEXT_STALE_AFTER_MINUTES,
-            cron_setup_prompt: build_cron_setup_prompt(&agent_key),
             default_analysis_strategy_prompt: DEFAULT_ANALYSIS_STRATEGY_PROMPT,
             default_trading_strategy_prompt: DEFAULT_TRADING_STRATEGY_PROMPT,
             created_at_text: format_timestamp_utc(agent.created_at),
@@ -1573,18 +1512,6 @@ pub struct ServerErrorPageTemplate {
 }
 
 #[derive(Template)]
-#[template(path = "hermes.html")]
-pub struct HermesPageTemplate {
-    pub reachable: bool,
-    pub version: Option<String>,
-    pub active_profile: Option<String>,
-    pub profiles: Vec<String>,
-    pub error: Option<String>,
-    pub dashboard_url: Option<String>,
-    pub current_path: String,
-}
-
-#[derive(Template)]
 #[template(path = "settings.html")]
 pub struct SettingsPageTemplate {
     pub system_prompt: String,
@@ -2233,10 +2160,10 @@ mod tests {
             environment: "live".to_string(),
             api_key: "vt_test_key".to_string(),
             api_key_last_used_at: None,
-            backend_kind: "hermes".to_string(),
-            runtime_id: "hermes-local".to_string(),
-            runtime_name: "Hermes local".to_string(),
-            runtime_base_url: Some("http://localhost:19119".to_string()),
+            backend_kind: "opencode".to_string(),
+            runtime_id: "opencode-local".to_string(),
+            runtime_name: "OpenCode local".to_string(),
+            runtime_base_url: Some("http://localhost:14096".to_string()),
         }
     }
 
@@ -2252,10 +2179,10 @@ mod tests {
             environment: "live".to_string(),
             api_key: "vt_test_key".to_string(),
             api_key_last_used_at: None,
-            backend_kind: "hermes".to_string(),
-            runtime_id: "hermes-local".to_string(),
-            runtime_name: "Hermes local".to_string(),
-            runtime_base_url: Some("http://localhost:19119".to_string()),
+            backend_kind: "opencode".to_string(),
+            runtime_id: "opencode-local".to_string(),
+            runtime_name: "OpenCode local".to_string(),
+            runtime_base_url: Some("http://localhost:14096".to_string()),
             runtime_config: serde_json::json!({}),
             analysis_context_last_used_at: None,
             trading_context_last_used_at: None,
@@ -2338,8 +2265,8 @@ mod tests {
         assert!(rendered.contains("Account balance"));
         assert!(rendered.contains("232.6800"));
         assert!(!rendered.contains("USDC"));
-        assert!(rendered.contains("Hermes local"));
-        assert!(rendered.contains("hermes"));
+        assert!(rendered.contains("OpenCode local"));
+        assert!(rendered.contains("opencode"));
     }
 
     #[test]
@@ -2611,7 +2538,7 @@ mod tests {
             runs,
             true,
         )
-            .expect("render job detail page");
+        .expect("render job detail page");
 
         assert!(rendered.contains("Back to jobs"));
         assert!(rendered.contains("Job details"));
@@ -2645,7 +2572,7 @@ mod tests {
             runs,
             true,
         )
-            .expect("render hook detail page");
+        .expect("render hook detail page");
 
         assert!(rendered.contains("Back to jobs"));
         assert!(rendered.contains("Hook details"));
@@ -2785,22 +2712,6 @@ mod tests {
         assert_eq!(run.timeframe_text, "—");
         assert_eq!(run.job_url, Some("/agents/test-agent/hooks/3".to_string()));
         assert_eq!(run.job_label, "hook");
-    }
-
-    #[test]
-    fn hermes_agent_does_not_show_jobs_tab() {
-        let mut template =
-            AgentsShowPageTemplate::new(sample_agent_detail_row(), AgentShowTab::Positions);
-        template.account_balance_html =
-            AccountBalancePartialTemplate::render_view(sample_account_balance_view()).unwrap();
-        let rendered = template.render().expect("render hermes page");
-        // The Jobs tab link should not be present for Hermes agents. The href
-        // is the cleanest assertion target.
-        assert!(
-            !rendered.contains("/agents/test-agent/jobs"),
-            "Jobs tab should not be present for Hermes agents"
-        );
-        assert!(rendered.contains("/agents/test-agent\""));
     }
 
     #[test]
@@ -3056,7 +2967,7 @@ mod tests {
     fn backends_new_page_renders_create_form() {
         let template = BackendsNewPageTemplate {
             form: CreateAgentRuntimeForm {
-                backend_kind: "hermes".to_string(),
+                backend_kind: "opencode".to_string(),
                 enabled: Some("on".to_string()),
                 ..Default::default()
             },
@@ -3069,21 +2980,6 @@ mod tests {
         assert!(rendered.contains("name=\"id\""));
         assert!(rendered.contains("name=\"backend_kind\""));
         assert!(rendered.contains("name=\"base_url\""));
-    }
-
-    #[test]
-    fn opencode_agents_do_not_render_hermes_cron_alerts() {
-        let mut agent = sample_agent_detail_row();
-        agent.backend_kind = "opencode".to_string();
-        agent.runtime_name = "OpenCode local".to_string();
-        agent.runtime_id = "opencode-local".to_string();
-        agent.runtime_base_url = Some("http://localhost:14096".to_string());
-
-        let template = AgentsShowPageTemplate::new(agent, AgentShowTab::Positions);
-        let rendered = template.render().unwrap();
-
-        assert!(!rendered.contains("Hermes cron setup required"));
-        assert!(!rendered.contains("Hermes cron check-in is stale"));
     }
 
     #[test]

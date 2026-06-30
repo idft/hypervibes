@@ -1,11 +1,10 @@
 use chrono::{DateTime, Utc};
 use serde::Deserialize;
 
-pub const BACKEND_KIND_HERMES: &str = "hermes";
 pub const BACKEND_KIND_OPENCODE: &str = "opencode";
 
 pub fn is_valid_backend_kind(value: &str) -> bool {
-    matches!(value, BACKEND_KIND_HERMES | BACKEND_KIND_OPENCODE)
+    matches!(value, BACKEND_KIND_OPENCODE)
 }
 
 pub fn is_valid_runtime_id(value: &str) -> bool {
@@ -136,7 +135,7 @@ impl CreateAgentRuntimeForm {
 
         let backend_kind = self.backend_kind.trim();
         if !is_valid_backend_kind(backend_kind) {
-            errors.push("Backend kind must be hermes or opencode.".to_string());
+            errors.push("Backend kind must be opencode.".to_string());
         }
 
         let base_url = self.base_url.trim();
@@ -234,8 +233,8 @@ pub fn slugify_agent_key(name: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        BACKEND_KIND_HERMES, BACKEND_KIND_OPENCODE, CreateAgentForm, CreateAgentRuntimeForm,
-        is_valid_backend_kind, is_valid_runtime_id, slugify_agent_key,
+        BACKEND_KIND_OPENCODE, CreateAgentForm, CreateAgentRuntimeForm, is_valid_backend_kind,
+        is_valid_runtime_id, slugify_agent_key,
     };
 
     #[test]
@@ -256,9 +255,8 @@ mod tests {
 
     #[test]
     fn backend_kind_validation_accepts_known_values() {
-        assert!(is_valid_backend_kind(BACKEND_KIND_HERMES));
         assert!(is_valid_backend_kind(BACKEND_KIND_OPENCODE));
-        assert!(!is_valid_backend_kind("Hermes"));
+        assert!(!is_valid_backend_kind("OpenCode"));
         assert!(!is_valid_backend_kind("other"));
     }
 
@@ -293,7 +291,7 @@ mod tests {
         assert!(
             errors
                 .iter()
-                .any(|error| error.contains("Backend kind must be hermes or opencode"))
+                .any(|error| error.contains("Backend kind must be opencode"))
         );
         assert!(
             errors

@@ -12,10 +12,13 @@ use tower_http::{services::ServeDir, trace::TraceLayer};
 use tracing::Level;
 
 use crate::{
+    agentic::backend::AgenticBackend,
+    agents::crypto::EncryptionKey,
     cache::asset::AssetCache,
-    agentic::backend::AgenticBackend, agents::crypto::EncryptionKey, db::DbPool,
-    hermes::HermesClient, hyperliquid::live_state::LiveAccountStore,
-    model_catalog::models_dev::ModelsDevCatalog, opencode::{client::OpenCodeClient, workspace::OpenCodeWorkspaceConfig},
+    db::DbPool,
+    hyperliquid::live_state::LiveAccountStore,
+    model_catalog::models_dev::ModelsDevCatalog,
+    opencode::{client::OpenCodeClient, workspace::OpenCodeWorkspaceConfig},
 };
 
 use self::ui_events::UiEventHub;
@@ -27,8 +30,6 @@ pub struct AppState {
     pub encryption_key: EncryptionKey,
     pub live_accounts: Arc<LiveAccountStore>,
     pub ui_events: Arc<UiEventHub>,
-    pub hermes: Option<HermesClient>,
-    pub hermes_dashboard_link_url: String,
     pub opencode_workspace_config: OpenCodeWorkspaceConfig,
     pub opencode_client: Arc<OpenCodeClient>,
     pub model_catalog: Arc<ModelsDevCatalog>,
@@ -41,8 +42,6 @@ pub async fn serve(
     agentic_backend: Arc<dyn AgenticBackend>,
     encryption_key: EncryptionKey,
     live_accounts: Arc<LiveAccountStore>,
-    hermes: Option<HermesClient>,
-    hermes_dashboard_link_url: String,
     opencode_workspace_config: OpenCodeWorkspaceConfig,
     opencode_client: Arc<OpenCodeClient>,
     model_catalog: Arc<ModelsDevCatalog>,
@@ -55,8 +54,6 @@ pub async fn serve(
         encryption_key,
         live_accounts,
         ui_events: Arc::new(UiEventHub::new()),
-        hermes,
-        hermes_dashboard_link_url,
         opencode_workspace_config,
         opencode_client,
         model_catalog,

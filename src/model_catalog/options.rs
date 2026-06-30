@@ -59,7 +59,8 @@ pub fn build_model_picker_options_from_response(
 
         for (model_key, model_info) in &provider.models {
             let model_id = model_info.id.as_deref().unwrap_or(model_key).to_string();
-            let catalog_model = catalog_provider.and_then(|provider| provider.models.get(&model_id));
+            let catalog_model =
+                catalog_provider.and_then(|provider| provider.models.get(&model_id));
             let model_name = catalog_model
                 .map(|model| model.name.clone())
                 .or_else(|| model_info.name.clone())
@@ -103,9 +104,9 @@ pub fn selection_exists_in_options(
     options: &[ModelPickerOption],
     selection: &(String, String),
 ) -> bool {
-    options.iter().any(|option| {
-        option.provider_id == selection.0 && option.model_id == selection.1
-    })
+    options
+        .iter()
+        .any(|option| option.provider_id == selection.0 && option.model_id == selection.1)
 }
 
 fn provider_display_name(
@@ -156,7 +157,9 @@ mod tests {
     use std::collections::BTreeMap;
 
     use crate::{
-        model_catalog::models_dev::{ModelsDevCatalogSnapshot, ModelsDevCost, ModelsDevLimit, ModelsDevProvider},
+        model_catalog::models_dev::{
+            ModelsDevCatalogSnapshot, ModelsDevCost, ModelsDevLimit, ModelsDevProvider,
+        },
         opencode::client::{OpenCodeModelInfo, OpenCodeProviderInfo, OpenCodeProvidersResponse},
     };
 
@@ -228,7 +231,10 @@ mod tests {
         let options = build_model_picker_options_from_response(&response, Some(&snapshot));
         assert_eq!(options[0].provider_name, "Anthropic");
         assert_eq!(options[0].model_name, "Claude Sonnet 4");
-        assert_eq!(options[0].metadata_text, "1M ctx · tools · reasoning · $3/$15");
+        assert_eq!(
+            options[0].metadata_text,
+            "1M ctx · tools · reasoning · $3/$15"
+        );
     }
 
     #[test]

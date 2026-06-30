@@ -14,7 +14,7 @@ Writable paths:
 
 Backend access:
 
-- Use the `vibetrading` MCP tools for job context, account state, memories,
+- Use the `vibetrading` MCP tools for account state, memories,
   and orders.
 - Do not call Vibetrading HTTP endpoints directly.
 - Do not write or run Python scripts whose purpose is to call Vibetrading

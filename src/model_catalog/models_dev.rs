@@ -135,7 +135,12 @@ impl ModelsDevCatalog {
     }
 
     pub async fn get_provider(&self, provider_id: &str) -> Option<ModelsDevProvider> {
-        self.snapshot().await.ok()?.providers.get(provider_id).cloned()
+        self.snapshot()
+            .await
+            .ok()?
+            .providers
+            .get(provider_id)
+            .cloned()
     }
 
     pub async fn get_model(&self, provider_id: &str, model_id: &str) -> Option<ModelsDevModel> {
@@ -251,7 +256,8 @@ mod tests {
             .duration_since(UNIX_EPOCH)
             .expect("time after epoch")
             .as_nanos();
-        let path = PathBuf::from("/tmp/opencode").join(format!("{prefix}-{}-{suffix}", process::id()));
+        let path =
+            PathBuf::from("/tmp/opencode").join(format!("{prefix}-{}-{suffix}", process::id()));
         fs::create_dir_all(&path).unwrap();
         path
     }
@@ -276,7 +282,10 @@ mod tests {
         .unwrap();
 
         assert_eq!(providers["anthropic"].name, "Anthropic");
-        assert_eq!(providers["anthropic"].models["claude-sonnet-4"].name, "Claude Sonnet 4");
+        assert_eq!(
+            providers["anthropic"].models["claude-sonnet-4"].name,
+            "Claude Sonnet 4"
+        );
     }
 
     #[tokio::test]
@@ -298,7 +307,10 @@ mod tests {
         .unwrap();
 
         let catalog = ModelsDevCatalog::new(root).unwrap();
-        assert_eq!(catalog.get_provider("anthropic").await.unwrap().name, "Anthropic");
+        assert_eq!(
+            catalog.get_provider("anthropic").await.unwrap().name,
+            "Anthropic"
+        );
         assert_eq!(
             catalog
                 .get_model("anthropic", "claude-sonnet-4")
@@ -327,7 +339,9 @@ mod tests {
         )
         .unwrap();
 
-        let catalog = ModelsDevCatalog::new_with_api_url(root, "http://127.0.0.1:9/api.json".to_string()).unwrap();
+        let catalog =
+            ModelsDevCatalog::new_with_api_url(root, "http://127.0.0.1:9/api.json".to_string())
+                .unwrap();
         let snapshot = catalog.snapshot().await.unwrap();
         assert!(snapshot.stale);
         assert!(snapshot.providers.contains_key("anthropic"));

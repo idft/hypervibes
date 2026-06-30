@@ -10,6 +10,7 @@ use crate::{
     db::DbPool,
 };
 
+/// Deprecated support for the temporary `/api/v1/job-context` API.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum JobContextKind {
     Analysis,
@@ -478,6 +479,7 @@ pub async fn touch_api_key_last_used(pool: &DbPool, api_key: &str) -> Result<()>
     Ok(())
 }
 
+/// Deprecated support for the temporary `/api/v1/job-context` API.
 pub async fn touch_job_context_last_used(
     pool: &DbPool,
     agent_key: &str,
@@ -651,12 +653,12 @@ mod tests {
     #[tokio::test]
     async fn insert_agent_runtime_and_runtime_match_round_trip() {
         let pool = test_db::pool().await;
-        let id = format!("hermes-local-{}", Utc::now().timestamp_millis());
+        let id = format!("opencode-local-{}", Utc::now().timestamp_millis());
         let form = CreateAgentRuntimeForm {
             id: id.clone(),
-            name: format!("Hermes local {id}"),
-            backend_kind: crate::agents::model::BACKEND_KIND_HERMES.to_string(),
-            base_url: "http://localhost:19119".to_string(),
+            name: format!("OpenCode local {id}"),
+            backend_kind: crate::agents::model::BACKEND_KIND_OPENCODE.to_string(),
+            base_url: "http://localhost:14096".to_string(),
             enabled: Some("on".to_string()),
         };
 
@@ -669,14 +671,14 @@ mod tests {
             .expect("get runtime")
             .expect("runtime present");
         assert_eq!(stored.name, form.name);
-        assert_eq!(stored.base_url.as_deref(), Some("http://localhost:19119"));
+        assert_eq!(stored.base_url.as_deref(), Some("http://localhost:14096"));
         assert!(
-            runtime_matches_backend(&pool, &id, crate::agents::model::BACKEND_KIND_HERMES)
+            runtime_matches_backend(&pool, &id, crate::agents::model::BACKEND_KIND_OPENCODE)
                 .await
                 .expect("match runtime")
         );
         assert!(
-            !runtime_matches_backend(&pool, &id, crate::agents::model::BACKEND_KIND_OPENCODE)
+            !runtime_matches_backend(&pool, &id, "other")
                 .await
                 .expect("mismatch runtime")
         );
@@ -689,8 +691,8 @@ mod tests {
         let form = CreateAgentRuntimeForm {
             id: id.clone(),
             name: format!("Disabled runtime {id}"),
-            backend_kind: crate::agents::model::BACKEND_KIND_HERMES.to_string(),
-            base_url: String::new(),
+            backend_kind: crate::agents::model::BACKEND_KIND_OPENCODE.to_string(),
+            base_url: "http://localhost:14096".to_string(),
             enabled: None,
         };
 

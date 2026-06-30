@@ -7,7 +7,7 @@ CREATE TABLE IF NOT EXISTS agent_runtimes (
     enabled BOOLEAN NOT NULL DEFAULT true,
     base_url TEXT,
     runtime_config JSONB NOT NULL DEFAULT '{}'::jsonb,
-    CHECK (backend_kind IN ('hermes', 'opencode')),
+    CHECK (backend_kind IN ('opencode')),
     CHECK (id ~ '^[a-z0-9]([a-z0-9-]*[a-z0-9])?$')
 );
 
@@ -25,7 +25,7 @@ BEGIN
     ) THEN
         ALTER TABLE agents
             ADD CONSTRAINT agents_backend_kind_check
-            CHECK (backend_kind IN ('hermes', 'opencode'));
+            CHECK (backend_kind IN ('opencode'));
     END IF;
 END $$;
 

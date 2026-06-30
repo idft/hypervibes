@@ -1,38 +1,27 @@
-# V2 Architecture Options
+# Architecture
 
-WARNING: THIS IS A WORK IN PROGRESS AND IS IDEAS ONLY.
-NOTHING IN THIS FILE SHOULD BE IMPLEMENTED YET.
+The current application architecture is:
 
-## Goal
+- one Rust binary
+- one Postgres database
+- one server-rendered web UI and internal JSON API surface
+- background tasks for Hyperliquid account monitoring and OpenCode schedule dispatch
 
-Capture the current architecture options for a possible V2 rewrite, with a focus on Rust-based implementations.
+Core subsystems:
 
-This document is intentionally incomplete and should be refined later.
+- `agents` for registry, runtimes, prompts, and instrument ownership
+- `memory` for stored analysis and execution context
+- `hyperliquid` for account state, history, and execution
+- `agentic` for OpenCode job scheduling, dispatch, and run tracking
 
-Related docs:
+Current backend support:
 
-- `README.md` for top-level V2 direction
-- `Agents.md` for the agent registry and account/instrument ownership layer
-- `Memory.md` for the memory subsystem
-- `Hyperliquid.md` for the Hyperliquid reconciliation subsystem
+- only `opencode` is supported today
+- the runtime/backend schema remains generic so future backend kinds can be added later
 
-## Current Direction
+Deprecated API note:
 
-The system currently seems to want:
-
-- a single main backend service
-- Postgres as the main database
-- a dedicated `agents` schema for AI agent registry and ownership mapping
-- a dedicated `memory` schema for the memory subsystem
-- a dedicated `hyperliquid` schema for account reconciliation and history
-- a simple web UI
-- supervised internal background tasks
-- an internal execution gateway for private Hyperliquid order flow
-- strong Hyperliquid integration
-- app-driven execution, not NT strategies
-- Hyperliquid integration via the `hypersdk` Rust crate
-
-The main unresolved implementation choice is language and framework.
+- `/api/v1/job-context` still exists for older runtime flows but should not be the primary integration path for new OpenCode jobs
 
 ## Rust Focus
 
@@ -212,7 +201,7 @@ Responsibilities:
 
 - web UI
 - internal API
-- agent registry and Hermes integration management
+- agent registry and runtime management
 - read/write access to memory system
 - operator controls
 

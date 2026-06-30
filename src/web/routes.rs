@@ -43,12 +43,11 @@ use crate::{
         store::{
             delete_agent as delete_agent_in_store, get_agent, insert_agent, insert_agent_runtime,
             list_agent_instrument_options, list_agent_runtimes, list_agents,
-            list_enabled_agent_runtimes, replace_agent_instruments,
-            update_agent_analysis_prompt, update_agent_runtime_config, update_agent_trading_prompt,
+            list_enabled_agent_runtimes, replace_agent_instruments, update_agent_analysis_prompt,
+            update_agent_runtime_config, update_agent_trading_prompt,
         },
     },
     cache::asset::{AssetCachePolicy, validate_key},
-    hermes::HermesHealth,
     hyperliquid::{
         live_state::{
             AccountKey, AccountLiveState, LiveConnectionStatus, live_agent_snapshot_for_dispatch,
@@ -80,9 +79,9 @@ use crate::{
             AgentScheduleNewPageTemplate, AgentShowTab, AgentsNewPageTemplate, AgentsPageTemplate,
             AgentsShowPageTemplate, BackendsNewPageTemplate, BackendsPageTemplate,
             BalanceSparklinesPartialTemplate, CreateAgentHookFormValues,
-            CreateAgentScheduleFormValues, HermesPageTemplate, ModelPickerView,
-            LatestAnalysisSummaryPartialTemplate, LatestTradeExecutionSummaryPartialTemplate,
-            MemoryView, OpenCodeWorkspaceSettingsView, OpenOrdersPartialTemplate, OpenOrdersView,
+            CreateAgentScheduleFormValues, LatestAnalysisSummaryPartialTemplate,
+            LatestTradeExecutionSummaryPartialTemplate, MemoryView, ModelPickerView,
+            OpenCodeWorkspaceSettingsView, OpenOrdersPartialTemplate, OpenOrdersView,
             OpenPositionsPartialTemplate, OpenPositionsView, ServerErrorPageTemplate,
             SettingsPageTemplate, SparklineView, SyncStateView, TransactionView,
         },
@@ -188,7 +187,6 @@ pub fn router(state: Arc<AppState>) -> Router {
         )
         .route("/agents/{agent_key}/delete", post(delete_agent))
         .route("/agents/{agent_key}/live/stream", get(agent_live_stream))
-        .route("/hermes", get(hermes_page))
         .route("/settings", get(settings_index).post(settings_update))
         .with_state(state)
 }
@@ -219,7 +217,12 @@ async fn model_catalog_logo(
 ) -> impl IntoResponse {
     let key = format!("{provider}.svg");
     if validate_key(&key).is_err() {
-        return (StatusCode::BAD_REQUEST, [("Content-Type", "text/plain; charset=utf-8")], "invalid provider").into_response();
+        return (
+            StatusCode::BAD_REQUEST,
+            [("Content-Type", "text/plain; charset=utf-8")],
+            "invalid provider",
+        )
+            .into_response();
     }
 
     let body = match state
@@ -317,7 +320,7 @@ async fn backends_index(State(state): State<Arc<AppState>>) -> Result<Html<Strin
 async fn backends_new() -> Result<Html<String>, AppError> {
     let template = BackendsNewPageTemplate {
         form: CreateAgentRuntimeForm {
-            backend_kind: crate::agents::model::BACKEND_KIND_HERMES.to_string(),
+            backend_kind: crate::agents::model::BACKEND_KIND_OPENCODE.to_string(),
             enabled: Some("on".to_string()),
             ..Default::default()
         },
@@ -634,11 +637,8 @@ async fn agents_show_job_detail(
     }
 
     let picker = load_model_picker_context(&state, &agent).await;
-    let model_picker = build_model_picker_view(
-        "job-model-selection",
-        &job_view.model_selection,
-        picker,
-    );
+    let model_picker =
+        build_model_picker_view("job-model-selection", &job_view.model_selection, picker);
     let html = AgentJobDetailPageTemplate::render_view(
         agent.clone(),
         job_view,
@@ -664,7 +664,8 @@ async fn agents_show_hook_detail(
             .into_response());
     }
 
-    let Some(hook) = crate::agentic::store::get_agent_hook(&state.db_pool, &agent_key, hook_id).await?
+    let Some(hook) =
+        crate::agentic::store::get_agent_hook(&state.db_pool, &agent_key, hook_id).await?
     else {
         return Ok((StatusCode::NOT_FOUND, "hook not found").into_response());
     };
@@ -711,11 +712,8 @@ async fn agents_show_hook_detail(
     }
 
     let picker = load_model_picker_context(&state, &agent).await;
-    let model_picker = build_model_picker_view(
-        "hook-model-selection",
-        &hook_view.model_selection,
-        picker,
-    );
+    let model_picker =
+        build_model_picker_view("hook-model-selection", &hook_view.model_selection, picker);
     let html = AgentHookDetailPageTemplate::render_view(
         agent.clone(),
         hook_view,
@@ -781,13 +779,16 @@ async fn build_hook_prompt_preview(
     agent_key: &str,
     hook_id: i64,
 ) -> anyhow::Result<String> {
-    let hook = crate::agentic::store::get_opencode_hook_for_dispatch(&state.db_pool, agent_key, hook_id)
-        .await?
-        .ok_or_else(|| anyhow::anyhow!("hook dispatch metadata unavailable"))?;
+    let hook =
+        crate::agentic::store::get_opencode_hook_for_dispatch(&state.db_pool, agent_key, hook_id)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("hook dispatch metadata unavailable"))?;
 
     let request = build_hook_dispatch_request(&state.db_pool, &hook, 0, Utc::now())
         .await?
-        .ok_or_else(|| anyhow::anyhow!("prompt preview unavailable: no currencies selected for agent"))?;
+        .ok_or_else(|| {
+            anyhow::anyhow!("prompt preview unavailable: no currencies selected for agent")
+        })?;
 
     crate::agentic::prompt::build_prompt(&request)
 }
@@ -1075,28 +1076,29 @@ async fn agents_create_job(
         }
     };
 
-    let validated_model_selection = match validate_model_selection_for_agent(
-        &state,
-        &agent,
-        validated.model_selection.clone(),
-    )
-    .await
-    {
-        Ok(selection) => selection,
-        Err(error) => {
-            let picker = load_model_picker_context(&state, &agent).await;
-            return Ok(render_new_job_form(
-                agent,
-                form.as_template_values(),
-                picker,
-                vec![error],
-                StatusCode::UNPROCESSABLE_ENTITY,
-            ));
-        }
-    };
+    let validated_model_selection =
+        match validate_model_selection_for_agent(&state, &agent, validated.model_selection.clone())
+            .await
+        {
+            Ok(selection) => selection,
+            Err(error) => {
+                let picker = load_model_picker_context(&state, &agent).await;
+                return Ok(render_new_job_form(
+                    agent,
+                    form.as_template_values(),
+                    picker,
+                    vec![error],
+                    StatusCode::UNPROCESSABLE_ENTITY,
+                ));
+            }
+        };
 
-    let model_provider_id = validated_model_selection.as_ref().map(|(provider, _)| provider.as_str());
-    let model_id = validated_model_selection.as_ref().map(|(_, model)| model.as_str());
+    let model_provider_id = validated_model_selection
+        .as_ref()
+        .map(|(provider, _)| provider.as_str());
+    let model_id = validated_model_selection
+        .as_ref()
+        .map(|(_, model)| model.as_str());
     if let Err(error) = crate::agentic::store::insert_agent_schedule(
         &state.db_pool,
         &agent_key,
@@ -1308,7 +1310,9 @@ async fn agents_update_job_model(
     let Some(agent) = get_agent(&state.db_pool, &agent_key).await? else {
         return Ok((StatusCode::NOT_FOUND, "agent not found").into_response());
     };
-    let Some(_job) = crate::agentic::store::get_agent_schedule(&state.db_pool, &agent_key, job_id).await? else {
+    let Some(_job) =
+        crate::agentic::store::get_agent_schedule(&state.db_pool, &agent_key, job_id).await?
+    else {
         return Ok((StatusCode::NOT_FOUND, "job not found").into_response());
     };
 
@@ -1370,28 +1374,29 @@ async fn agents_create_hook(
         }
     };
 
-    let validated_model_selection = match validate_model_selection_for_agent(
-        &state,
-        &agent,
-        validated.model_selection.clone(),
-    )
-    .await
-    {
-        Ok(selection) => selection,
-        Err(error) => {
-            let picker = load_model_picker_context(&state, &agent).await;
-            return Ok(render_new_hook_form(
-                agent,
-                form.as_template_values(),
-                picker,
-                vec![error],
-                StatusCode::UNPROCESSABLE_ENTITY,
-            ));
-        }
-    };
+    let validated_model_selection =
+        match validate_model_selection_for_agent(&state, &agent, validated.model_selection.clone())
+            .await
+        {
+            Ok(selection) => selection,
+            Err(error) => {
+                let picker = load_model_picker_context(&state, &agent).await;
+                return Ok(render_new_hook_form(
+                    agent,
+                    form.as_template_values(),
+                    picker,
+                    vec![error],
+                    StatusCode::UNPROCESSABLE_ENTITY,
+                ));
+            }
+        };
 
-    let model_provider_id = validated_model_selection.as_ref().map(|(provider, _)| provider.as_str());
-    let model_id = validated_model_selection.as_ref().map(|(_, model)| model.as_str());
+    let model_provider_id = validated_model_selection
+        .as_ref()
+        .map(|(provider, _)| provider.as_str());
+    let model_id = validated_model_selection
+        .as_ref()
+        .map(|(_, model)| model.as_str());
     if let Err(error) = crate::agentic::store::insert_agent_hook(
         &state.db_pool,
         &agent_key,
@@ -1536,7 +1541,9 @@ async fn agents_update_hook_model(
     let Some(agent) = get_agent(&state.db_pool, &agent_key).await? else {
         return Ok((StatusCode::NOT_FOUND, "agent not found").into_response());
     };
-    let Some(_hook) = crate::agentic::store::get_agent_hook(&state.db_pool, &agent_key, hook_id).await? else {
+    let Some(_hook) =
+        crate::agentic::store::get_agent_hook(&state.db_pool, &agent_key, hook_id).await?
+    else {
         return Ok((StatusCode::NOT_FOUND, "hook not found").into_response());
     };
 
@@ -1611,21 +1618,22 @@ async fn render_agent_show_page(
 
     let mut template = AgentsShowPageTemplate::new(agent.clone(), active_tab);
 
-    let instrument_options = match list_agent_instrument_options(&state.db_pool, &agent.agent_key).await {
-        Ok(rows) => {
-            template.instrument_options_loaded = true;
-            template.has_selected_instruments = rows.iter().any(|row| row.selected);
-            Some(rows)
-        }
-        Err(error) => {
-            warn!(
-                agent_key = %agent.agent_key,
-                error = ?error,
-                "failed to list agent instrument options for agent page"
-            );
-            None
-        }
-    };
+    let instrument_options =
+        match list_agent_instrument_options(&state.db_pool, &agent.agent_key).await {
+            Ok(rows) => {
+                template.instrument_options_loaded = true;
+                template.has_selected_instruments = rows.iter().any(|row| row.selected);
+                Some(rows)
+            }
+            Err(error) => {
+                warn!(
+                    agent_key = %agent.agent_key,
+                    error = ?error,
+                    "failed to list agent instrument options for agent page"
+                );
+                None
+            }
+        };
 
     match active_tab {
         AgentShowTab::Positions => {
@@ -1725,12 +1733,7 @@ async fn render_agent_show_page(
                 )
                     .into_response());
             }
-            populate_jobs_tab(
-                state,
-                &agent,
-                &mut template,
-            )
-            .await;
+            populate_jobs_tab(state, &agent, &mut template).await;
         }
     }
 
@@ -1804,7 +1807,8 @@ fn render_new_hook_form(
     status: StatusCode,
 ) -> Response {
     let current_path = format!("/agents/{}/hooks/new", agent.agent_key);
-    let model_picker = build_model_picker_view("hook-model-selection", &form.model_selection, picker);
+    let model_picker =
+        build_model_picker_view("hook-model-selection", &form.model_selection, picker);
     let template = AgentHookNewPageTemplate {
         agent,
         form,
@@ -2452,7 +2456,8 @@ fn render_new_job_form(
     status: StatusCode,
 ) -> Response {
     let current_path = format!("/agents/{}/jobs/new", agent.agent_key);
-    let model_picker = build_model_picker_view("job-model-selection", &form.model_selection, picker);
+    let model_picker =
+        build_model_picker_view("job-model-selection", &form.model_selection, picker);
     let template = AgentScheduleNewPageTemplate {
         agent,
         form,
@@ -2520,7 +2525,10 @@ fn hook_unique_violation_message(error: &anyhow::Error) -> Option<String> {
     }
 }
 
-async fn load_model_picker_context(state: &Arc<AppState>, agent: &crate::agents::model::AgentDetailRow) -> ModelPickerContext {
+async fn load_model_picker_context(
+    state: &Arc<AppState>,
+    agent: &crate::agents::model::AgentDetailRow,
+) -> ModelPickerContext {
     match build_model_picker_options(agent, &state.opencode_client, &state.model_catalog).await {
         Ok(options) => ModelPickerContext {
             options,
@@ -2591,8 +2599,7 @@ async fn validate_model_selection_for_agent(
 fn body_looks_like_svg(body: &[u8]) -> bool {
     let text = String::from_utf8_lossy(body);
     let trimmed = text.trim_start();
-    trimmed.starts_with("<svg")
-        || (trimmed.starts_with("<?xml") && trimmed.contains("<svg"))
+    trimmed.starts_with("<svg") || (trimmed.starts_with("<?xml") && trimmed.contains("<svg"))
 }
 
 fn fallback_logo_svg(provider: &str) -> String {
@@ -2684,49 +2691,6 @@ async fn settings_update(
     Ok(Redirect::to("/settings").into_response())
 }
 
-async fn hermes_page(State(state): State<Arc<AppState>>) -> Result<Html<String>, AppError> {
-    let mut template = HermesPageTemplate {
-        reachable: false,
-        version: None,
-        active_profile: None,
-        profiles: Vec::new(),
-        error: None,
-        dashboard_url: None,
-        current_path: "/hermes".to_string(),
-    };
-
-    if let Some(hermes) = &state.hermes {
-        let health = hermes.health().await.unwrap_or(HermesHealth {
-            reachable: false,
-            version: None,
-        });
-        template.reachable = health.reachable;
-        template.version = health.version;
-        template.dashboard_url = Some(state.hermes_dashboard_link_url.clone());
-        match hermes.list_profiles().await {
-            Ok(profiles) => {
-                template.profiles = profiles.into_iter().map(|p| p.name).collect();
-            }
-            Err(e) => {
-                template.error = Some(format!("Failed to list profiles: {e}"));
-            }
-        }
-        if template.reachable {
-            match hermes.get_active_profile().await {
-                Ok(Some(p)) => template.active_profile = Some(p.name),
-                Ok(None) => {}
-                Err(e) => {
-                    template.error = Some(format!("Failed to get active profile: {e}"));
-                }
-            }
-        }
-    } else {
-        template.error = Some("Hermes is not configured".to_string());
-    }
-
-    Ok(Html(template.render()?))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2800,8 +2764,6 @@ mod tests {
             ),
             live_accounts: Arc::new(crate::hyperliquid::live_state::LiveAccountStore::new()),
             ui_events: Arc::new(UiEventHub::new()),
-            hermes: None,
-            hermes_dashboard_link_url: "http://127.0.0.1:19119".to_string(),
             opencode_workspace_config: crate::opencode::workspace::OpenCodeWorkspaceConfig {
                 source_root: std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
                     .join(crate::opencode::workspace::PROFILE_SOURCE_RELATIVE_PATH),
@@ -2967,52 +2929,6 @@ mod tests {
         .expect("insert instrument");
     }
 
-    async fn set_job_context_timestamps(
-        state: &Arc<AppState>,
-        agent_key: &str,
-        analysis_context_last_used_at: Option<chrono::DateTime<Utc>>,
-        trading_context_last_used_at: Option<chrono::DateTime<Utc>>,
-    ) {
-        sqlx::query(
-            "UPDATE agents
-                SET analysis_context_last_used_at = $2,
-                    trading_context_last_used_at = $3
-              WHERE agent_key = $1",
-        )
-        .bind(agent_key)
-        .bind(analysis_context_last_used_at)
-        .bind(trading_context_last_used_at)
-        .execute(&state.db_pool)
-        .await
-        .expect("update job context timestamps");
-    }
-
-    #[tokio::test]
-    async fn hermes_page_renders_not_configured_state() {
-        let state = test_state().await;
-
-        let app = router(state);
-        let response = app
-            .oneshot(
-                Request::builder()
-                    .uri("/hermes")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-
-        assert_eq!(response.status(), StatusCode::OK);
-        let body = response.into_body();
-        let bytes = http_body_util::BodyExt::collect(body)
-            .await
-            .unwrap()
-            .to_bytes();
-        let text = String::from_utf8_lossy(&bytes).into_owned();
-        assert!(text.contains("Hermes"));
-        assert!(text.contains("Hermes is not configured"));
-    }
-
     #[tokio::test]
     async fn get_agents_renders_db_data() {
         let state = test_state().await;
@@ -3126,8 +3042,8 @@ mod tests {
             &CreateAgentRuntimeForm {
                 id: runtime_id.clone(),
                 name: "Disabled runtime".to_string(),
-                backend_kind: crate::agents::model::BACKEND_KIND_HERMES.to_string(),
-                base_url: "http://localhost:19119".to_string(),
+                backend_kind: crate::agents::model::BACKEND_KIND_OPENCODE.to_string(),
+                base_url: "http://localhost:14096".to_string(),
                 enabled: None,
             },
         )
@@ -3356,11 +3272,7 @@ mod tests {
             id: id.to_string(),
             name: format!("{backend_kind}-{id}"),
             backend_kind: backend_kind.to_string(),
-            base_url: if backend_kind == crate::agents::model::BACKEND_KIND_HERMES {
-                "http://localhost:19119".to_string()
-            } else {
-                "http://localhost:14096".to_string()
-            },
+            base_url: "http://localhost:14096".to_string(),
             enabled: Some("on".to_string()),
         };
 
@@ -3374,8 +3286,8 @@ mod tests {
     ) -> Option<(String, String)> {
         ensure_test_runtime(
             state,
-            "hermes-local",
-            crate::agents::model::BACKEND_KIND_HERMES,
+            "opencode-local-balance-stream",
+            crate::agents::model::BACKEND_KIND_OPENCODE,
         )
         .await;
 
@@ -3400,8 +3312,8 @@ mod tests {
             environment: "live".to_string(),
             api_key: format!("balance-stream-test-{timestamp}"),
             api_key_last_used_at: None,
-            backend_kind: crate::agents::model::BACKEND_KIND_HERMES.to_string(),
-            runtime_id: "hermes-local".to_string(),
+            backend_kind: crate::agents::model::BACKEND_KIND_OPENCODE.to_string(),
+            runtime_id: "opencode-local-balance-stream".to_string(),
             runtime_config: serde_json::json!({}),
             analysis_context_last_used_at: None,
             trading_context_last_used_at: None,
@@ -3459,7 +3371,10 @@ mod tests {
             .await
             .expect("get agent")
             .expect("agent present");
-        assert_eq!(stored.backend_kind, crate::agents::model::BACKEND_KIND_OPENCODE);
+        assert_eq!(
+            stored.backend_kind,
+            crate::agents::model::BACKEND_KIND_OPENCODE
+        );
         assert_eq!(stored.analysis_prompt, DEFAULT_ANALYSIS_STRATEGY_PROMPT);
         assert_eq!(stored.trading_prompt, DEFAULT_TRADING_STRATEGY_PROMPT);
         assert_eq!(
@@ -3501,61 +3416,6 @@ mod tests {
         let hook = hooks.first().expect("default hook present");
         assert_eq!(hook.job_key, "market-analysis");
         assert!(!hook.enabled);
-    }
-
-    #[tokio::test]
-    async fn post_agents_with_hermes_runtime_does_not_generate_opencode_workspace() {
-        let state = test_state().await;
-        let pool = state.db_pool.clone();
-        let runtime_id = format!("hermes-local-{}", chrono::Utc::now().timestamp_millis());
-        insert_agent_runtime(
-            &pool,
-            &CreateAgentRuntimeForm {
-                id: runtime_id.clone(),
-                name: "Hermes local".to_string(),
-                backend_kind: crate::agents::model::BACKEND_KIND_HERMES.to_string(),
-                base_url: "http://localhost:19119".to_string(),
-                enabled: Some("on".to_string()),
-            },
-        )
-        .await
-        .expect("insert hermes runtime");
-
-        let app = router(state);
-        let timestamp = chrono::Utc::now().timestamp_millis();
-        let display_name = format!("HermesOnly{}", timestamp);
-        let agent_key = slugify_agent_key(&display_name);
-        let private_key = random_private_key();
-        let body = format!(
-            "display_name={}&hyperliquid_private_key={}&runtime_id={}",
-            display_name, private_key, runtime_id
-        );
-
-        let response = app
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri("/agents")
-                    .header("content-type", "application/x-www-form-urlencoded")
-                    .body(Body::from(body))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(response.status(), StatusCode::SEE_OTHER);
-
-        let stored = get_agent(&pool, &agent_key)
-            .await
-            .expect("get agent")
-            .expect("agent present");
-        assert_eq!(stored.backend_kind, crate::agents::model::BACKEND_KIND_HERMES);
-        assert_eq!(stored.runtime_config, serde_json::json!({}));
-
-        // Hermes agents should not get default OpenCode schedules.
-        let schedules = crate::agentic::store::list_agent_schedules(&pool, &agent_key)
-            .await
-            .expect("list schedules");
-        assert!(schedules.is_empty());
     }
 
     #[tokio::test]
@@ -3706,25 +3566,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn post_regenerate_workspace_for_non_opencode_agent_returns_404() {
-        let state = test_state().await;
-        let (agent_key, _wallet_address) = insert_test_agent(&state).await.expect("insert agent");
-
-        let response = router(state)
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri(format!("/agents/{agent_key}/settings/regenerate-workspace"))
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-
-        assert_eq!(response.status(), StatusCode::NOT_FOUND);
-    }
-
-    #[tokio::test]
     async fn agent_chat_route_is_not_registered() {
         let state = test_state().await;
         let (agent_key, _wallet_address) = insert_test_agent(&state).await.expect("insert agent");
@@ -3740,157 +3581,6 @@ mod tests {
             .unwrap();
 
         assert_eq!(response.status(), StatusCode::NOT_FOUND);
-    }
-
-    #[tokio::test]
-    async fn agent_detail_renders_setup_alert_when_both_checkins_missing() {
-        let state = test_state().await;
-        let (agent_key, _wallet_address) = insert_test_agent(&state).await.expect("insert agent");
-
-        let response = router(Arc::clone(&state))
-            .oneshot(
-                Request::builder()
-                    .uri(format!("/agents/{agent_key}"))
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-
-        assert_eq!(response.status(), StatusCode::OK);
-        let text = response_text(response).await;
-        assert!(text.contains("Hermes cron setup required"));
-        assert!(text.contains("Analysis loop has not checked in."));
-        assert!(text.contains("Trading loop has not checked in."));
-        assert!(text.contains(&format!("Hermes profile: {agent_key}")));
-    }
-
-    #[tokio::test]
-    async fn agent_detail_renders_only_analysis_missing_when_trading_checked_in_recently() {
-        let state = test_state().await;
-        let (agent_key, _wallet_address) = insert_test_agent(&state).await.expect("insert agent");
-        set_job_context_timestamps(&state, &agent_key, None, Some(Utc::now())).await;
-
-        let response = router(Arc::clone(&state))
-            .oneshot(
-                Request::builder()
-                    .uri(format!("/agents/{agent_key}"))
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-
-        assert_eq!(response.status(), StatusCode::OK);
-        let text = response_text(response).await;
-        assert!(text.contains("Hermes cron setup required"));
-        assert!(text.contains("Analysis loop has not checked in."));
-        assert!(!text.contains("Trading loop has not checked in."));
-    }
-
-    #[tokio::test]
-    async fn agent_detail_renders_only_trading_missing_when_analysis_checked_in_recently() {
-        let state = test_state().await;
-        let (agent_key, _wallet_address) = insert_test_agent(&state).await.expect("insert agent");
-        set_job_context_timestamps(&state, &agent_key, Some(Utc::now()), None).await;
-
-        let response = router(Arc::clone(&state))
-            .oneshot(
-                Request::builder()
-                    .uri(format!("/agents/{agent_key}"))
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-
-        assert_eq!(response.status(), StatusCode::OK);
-        let text = response_text(response).await;
-        assert!(text.contains("Hermes cron setup required"));
-        assert!(!text.contains("Analysis loop has not checked in."));
-        assert!(text.contains("Trading loop has not checked in."));
-    }
-
-    #[tokio::test]
-    async fn agent_detail_renders_stale_warning_for_analysis_checkin() {
-        let state = test_state().await;
-        let (agent_key, _wallet_address) = insert_test_agent(&state).await.expect("insert agent");
-        set_job_context_timestamps(
-            &state,
-            &agent_key,
-            Some(Utc::now() - chrono::Duration::minutes(31)),
-            Some(Utc::now()),
-        )
-        .await;
-
-        let response = router(Arc::clone(&state))
-            .oneshot(
-                Request::builder()
-                    .uri(format!("/agents/{agent_key}"))
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-
-        assert_eq!(response.status(), StatusCode::OK);
-        let text = response_text(response).await;
-        assert!(text.contains("Hermes cron check-in is stale"));
-        assert!(text.contains("Analysis loop: last checked in"));
-        assert!(text.contains("expected within 30 minutes."));
-        assert!(!text.contains("Trading loop: last checked in"));
-    }
-
-    #[tokio::test]
-    async fn agent_detail_renders_stale_warning_for_trading_checkin() {
-        let state = test_state().await;
-        let (agent_key, _wallet_address) = insert_test_agent(&state).await.expect("insert agent");
-        set_job_context_timestamps(
-            &state,
-            &agent_key,
-            Some(Utc::now()),
-            Some(Utc::now() - chrono::Duration::minutes(4)),
-        )
-        .await;
-
-        let response = router(Arc::clone(&state))
-            .oneshot(
-                Request::builder()
-                    .uri(format!("/agents/{agent_key}"))
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-
-        assert_eq!(response.status(), StatusCode::OK);
-        let text = response_text(response).await;
-        assert!(text.contains("Hermes cron check-in is stale"));
-        assert!(!text.contains("Analysis loop: last checked in"));
-        assert!(text.contains("Trading loop: last checked in"));
-        assert!(text.contains("expected within 3 minutes."));
-    }
-
-    #[tokio::test]
-    async fn agent_detail_hides_cron_alerts_when_both_checkins_are_recent() {
-        let state = test_state().await;
-        let (agent_key, _wallet_address) = insert_test_agent(&state).await.expect("insert agent");
-        set_job_context_timestamps(&state, &agent_key, Some(Utc::now()), Some(Utc::now())).await;
-
-        let response = router(Arc::clone(&state))
-            .oneshot(
-                Request::builder()
-                    .uri(format!("/agents/{agent_key}"))
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-
-        assert_eq!(response.status(), StatusCode::OK);
-        let text = response_text(response).await;
-        assert!(!text.contains("Hermes cron setup required"));
-        assert!(!text.contains("Hermes cron check-in is stale"));
     }
 
     #[tokio::test]
@@ -5163,16 +4853,20 @@ mod tests {
             .unwrap();
 
         assert_eq!(response.status(), StatusCode::SEE_OTHER);
-        assert!(crate::agentic::store::list_agent_schedules(&pool, &agent_key)
-            .await
-            .expect("list schedules")
-            .iter()
-            .all(|row| row.enabled));
-        assert!(crate::agentic::store::list_agent_hooks(&pool, &agent_key)
-            .await
-            .expect("list hooks")
-            .iter()
-            .all(|row| row.enabled));
+        assert!(
+            crate::agentic::store::list_agent_schedules(&pool, &agent_key)
+                .await
+                .expect("list schedules")
+                .iter()
+                .all(|row| row.enabled)
+        );
+        assert!(
+            crate::agentic::store::list_agent_hooks(&pool, &agent_key)
+                .await
+                .expect("list hooks")
+                .iter()
+                .all(|row| row.enabled)
+        );
 
         let response = router(state)
             .oneshot(
@@ -5187,16 +4881,20 @@ mod tests {
             .unwrap();
 
         assert_eq!(response.status(), StatusCode::SEE_OTHER);
-        assert!(crate::agentic::store::list_agent_schedules(&pool, &agent_key)
-            .await
-            .expect("list schedules")
-            .iter()
-            .all(|row| !row.enabled));
-        assert!(crate::agentic::store::list_agent_hooks(&pool, &agent_key)
-            .await
-            .expect("list hooks")
-            .iter()
-            .all(|row| !row.enabled));
+        assert!(
+            crate::agentic::store::list_agent_schedules(&pool, &agent_key)
+                .await
+                .expect("list schedules")
+                .iter()
+                .all(|row| !row.enabled)
+        );
+        assert!(
+            crate::agentic::store::list_agent_hooks(&pool, &agent_key)
+                .await
+                .expect("list hooks")
+                .iter()
+                .all(|row| !row.enabled)
+        );
     }
 
     #[tokio::test]

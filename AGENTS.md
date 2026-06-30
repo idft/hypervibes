@@ -1,6 +1,6 @@
 # Vibetrading V2
 
-This is a framework for allowing AI Agents (such as Hermes) to trade crypto on Hyperliquid exchange.
+This is a framework for allowing OpenCode-backed AI agents to trade crypto on Hyperliquid exchange.
 
 See `docs/` for project documentation.
 Keep documentation up to date when making signifigant code changes or archetecutre decisions.
@@ -35,10 +35,6 @@ Frontend assets are managed with `pnpm` and built via `esbuild` and Tailwind CSS
 
 Run `cargo test` from the repo root. Tests use the dedicated `test-postgres` service from `podman-compose.yaml` via `TEST_DATABASE_URL=postgres://vibetrading:vibetrading@127.0.0.1:15433/postgres`. `src/test_db.rs` creates isolated databases for test helper calls against that service and runs migrations in each one so database setup can happen concurrently. The dev server's container Postgres at `localhost:15432` (u: vibetrading, p: vibetrading) is never touched by tests.
 
-## Hermes Agent Profile Distribution
-
-The Hermes Agent profile distribution is Located in `../vibetrading-hermes-profile`.  This is a  hermes profile that can be installed by any user of Hermes Agent
-
 ## Coding agent Rules:
 
 * Don't guess. Consult the documentation or source code if you are unsure.
@@ -47,4 +43,4 @@ The Hermes Agent profile distribution is Located in `../vibetrading-hermes-profi
 
 ## Future plans
 
-The Hermes agent backend system has been deprecated.  When planning features, do not worry about implementing them for the Hermes sytsem.
+Hermes backend support has been removed. When planning features, do not implement Hermes-specific behavior.

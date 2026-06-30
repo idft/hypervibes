@@ -111,18 +111,25 @@ impl AssetCache {
         }
 
         if let Some(parent) = path.parent() {
-            tokio::fs::create_dir_all(parent)
-                .await
-                .with_context(|| format!("failed to create cache directory {}", parent.display()))?;
+            tokio::fs::create_dir_all(parent).await.with_context(|| {
+                format!("failed to create cache directory {}", parent.display())
+            })?;
         }
 
         let temp_path = path.with_extension(format!(
             "{}.tmp",
-            path.extension().and_then(|ext| ext.to_str()).unwrap_or("cache")
+            path.extension()
+                .and_then(|ext| ext.to_str())
+                .unwrap_or("cache")
         ));
         tokio::fs::write(&temp_path, body.as_ref())
             .await
-            .with_context(|| format!("failed to write temporary cache file {}", temp_path.display()))?;
+            .with_context(|| {
+                format!(
+                    "failed to write temporary cache file {}",
+                    temp_path.display()
+                )
+            })?;
         tokio::fs::rename(&temp_path, path)
             .await
             .with_context(|| format!("failed to move cache file into place {}", path.display()))?;
@@ -166,7 +173,9 @@ async fn read_if_exists(path: &Path) -> Result<Option<Vec<u8>>> {
     match tokio::fs::read(path).await {
         Ok(bytes) => Ok(Some(bytes)),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
-        Err(error) => Err(error).with_context(|| format!("failed to read cache file {}", path.display())),
+        Err(error) => {
+            Err(error).with_context(|| format!("failed to read cache file {}", path.display()))
+        }
     }
 }
 
@@ -197,7 +206,8 @@ mod tests {
             .duration_since(UNIX_EPOCH)
             .expect("time after epoch")
             .as_nanos();
-        let path = PathBuf::from("/tmp/opencode").join(format!("{prefix}-{}-{suffix}", process::id()));
+        let path =
+            PathBuf::from("/tmp/opencode").join(format!("{prefix}-{}-{suffix}", process::id()));
         fs::create_dir_all(&path).expect("create temp dir");
         path
     }
@@ -211,14 +221,28 @@ mod tests {
             allowed_content_types: Vec::new(),
         };
 
-        assert!(cache
-            .get_or_fetch("../bad", "logo.svg", "http://127.0.0.1:9/logo.svg", policy.clone())
-            .await
-            .is_err());
-        assert!(cache
-            .get_or_fetch("models-dev", "../logo.svg", "http://127.0.0.1:9/logo.svg", policy)
-            .await
-            .is_err());
+        assert!(
+            cache
+                .get_or_fetch(
+                    "../bad",
+                    "logo.svg",
+                    "http://127.0.0.1:9/logo.svg",
+                    policy.clone()
+                )
+                .await
+                .is_err()
+        );
+        assert!(
+            cache
+                .get_or_fetch(
+                    "models-dev",
+                    "../logo.svg",
+                    "http://127.0.0.1:9/logo.svg",
+                    policy
+                )
+                .await
+                .is_err()
+        );
     }
 
     #[tokio::test]

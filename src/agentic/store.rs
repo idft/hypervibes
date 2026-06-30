@@ -501,7 +501,10 @@ pub async fn set_all_agent_jobs_enabled(
     agent_key: &str,
     enabled: bool,
 ) -> Result<()> {
-    let mut tx = pool.begin().await.context("failed to start jobs toggle transaction")?;
+    let mut tx = pool
+        .begin()
+        .await
+        .context("failed to start jobs toggle transaction")?;
 
     sqlx::query(
         "UPDATE agentic_job_schedules
@@ -705,7 +708,9 @@ pub async fn set_schedule_model(
     .bind(model_id)
     .execute(pool)
     .await
-    .with_context(|| format!("failed to update model for schedule {schedule_id} agent {agent_key}"))?;
+    .with_context(|| {
+        format!("failed to update model for schedule {schedule_id} agent {agent_key}")
+    })?;
 
     Ok(result.rows_affected() > 0)
 }
@@ -2143,7 +2148,10 @@ mod tests {
     #[tokio::test]
     async fn set_all_agent_jobs_enabled_toggles_schedules_and_hooks_together() {
         let pool = test_db::pool().await;
-        let key = format!("toggle-all-{}", Utc::now().timestamp_nanos_opt().unwrap_or(0));
+        let key = format!(
+            "toggle-all-{}",
+            Utc::now().timestamp_nanos_opt().unwrap_or(0)
+        );
         insert_agent(&pool, &sample_agent(&key))
             .await
             .expect("insert agent");
@@ -2170,7 +2178,9 @@ mod tests {
             .await
             .expect("list schedules again");
         assert!(schedules.iter().all(|row| !row.enabled));
-        let hooks = list_agent_hooks(&pool, &key).await.expect("list hooks again");
+        let hooks = list_agent_hooks(&pool, &key)
+            .await
+            .expect("list hooks again");
         assert!(hooks.iter().all(|row| !row.enabled));
     }
 

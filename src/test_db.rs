@@ -7,15 +7,10 @@ use sqlx::{
 use uuid::Uuid;
 
 pub async fn pool() -> PgPool {
-    let url = env::var("TEST_DATABASE_URL").expect(
-        "TEST_DATABASE_URL must be set for tests; use the dedicated test-postgres service",
-    );
+    let url = env::var("TEST_DATABASE_URL")
+        .expect("TEST_DATABASE_URL must be set for tests; use the dedicated test-postgres service");
     let base_options = PgConnectOptions::from_str(&url).expect("parse test database url");
-    let database_name = format!(
-        "vt_test_{}_{}",
-        process::id(),
-        Uuid::new_v4().simple()
-    );
+    let database_name = format!("vt_test_{}_{}", process::id(), Uuid::new_v4().simple());
 
     let admin_pool = PgPoolOptions::new()
         .max_connections(1)

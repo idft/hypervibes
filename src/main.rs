@@ -3,7 +3,6 @@ mod agents;
 mod cache;
 mod config;
 mod db;
-mod hermes;
 mod hyperliquid;
 mod memory;
 mod model_catalog;
@@ -19,9 +18,7 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 use config::AppConfig;
 use db::{connect, migrate};
-use hermes::HermesClient;
 use tokio::sync::watch;
-use tracing::{info, warn};
 use tracing_subscriber::{EnvFilter, fmt};
 
 use crate::hyperliquid::live_state::LiveAccountStore;
@@ -51,20 +48,6 @@ async fn main() -> Result<()> {
         config.agents_encryption_key,
     );
 
-    let hermes = match HermesClient::new(
-        config.hermes_dashboard_url.clone(),
-        config.hermes_dashboard_session_token.clone(),
-    ) {
-        Ok(client) => {
-            info!("Hermes client configured");
-            Some(client)
-        }
-        Err(e) => {
-            warn!(error = ?e, "Hermes client disabled");
-            None
-        }
-    };
-
     let repo_root =
         std::env::current_dir().context("failed to resolve current working directory")?;
     let opencode_workspace_config = opencode::workspace::OpenCodeWorkspaceConfig {
@@ -74,17 +57,19 @@ async fn main() -> Result<()> {
         api_base_url: config.vibetrading_agent_api_base_url.clone(),
     };
 
-    let opencode_client =
-        Arc::new(opencode::client::OpenCodeClient::new(opencode::client::OpenCodeClientConfig::new(
+    let opencode_client = Arc::new(
+        opencode::client::OpenCodeClient::new(opencode::client::OpenCodeClientConfig::new(
             config.opencode_server_username.clone(),
             config.opencode_server_password.clone(),
         ))
-        .context("failed to build OpenCode HTTP client")?);
+        .context("failed to build OpenCode HTTP client")?,
+    );
     let opencode_backend: Arc<dyn agentic::backend::AgenticBackend> = Arc::new(
         agentic::backend::OpenCodeBackend::new(pool.clone(), Arc::clone(&opencode_client)),
     );
     let asset_cache = cache::asset::AssetCache::new(config.app_cache_dir.clone())?;
-    let model_catalog = model_catalog::models_dev::ModelsDevCatalog::shared(config.app_cache_dir.clone())?;
+    let model_catalog =
+        model_catalog::models_dev::ModelsDevCatalog::shared(config.app_cache_dir.clone())?;
 
     println!("Starting Hyperliquid agent monitor");
     let hyperliquid_monitor = agents::HyperliquidAgentMonitor::new(
@@ -120,8 +105,6 @@ async fn main() -> Result<()> {
         opencode_backend,
         encryption_key,
         Arc::clone(&live_accounts),
-        hermes,
-        config.hermes_dashboard_link_url.clone(),
         opencode_workspace_config,
         opencode_client,
         model_catalog,

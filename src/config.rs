@@ -2,7 +2,6 @@ use std::{env, path::PathBuf};
 
 use anyhow::{Context, Result, bail};
 use reqwest::Url;
-
 #[derive(Debug, Clone)]
 pub struct AppConfig {
     pub database_url: String,
@@ -10,9 +9,6 @@ pub struct AppConfig {
     pub app_cache_dir: PathBuf,
     pub agents_encryption_key: [u8; 32],
     pub agents_encryption_key_id: String,
-    pub hermes_dashboard_url: String,
-    pub hermes_dashboard_link_url: String,
-    pub hermes_dashboard_session_token: Option<String>,
     pub opencode_workspaces_root: PathBuf,
     pub opencode_container_workspaces_root: String,
     pub vibetrading_agent_api_base_url: String,
@@ -22,21 +18,12 @@ pub struct AppConfig {
 
 impl AppConfig {
     pub fn from_env() -> Result<Self> {
-        let hermes_dashboard_url = hermes_dashboard_url_from_env();
-        let app_public_url = app_public_url_from_env()?;
-
         Ok(Self {
             database_url: database_url_from_env()?,
             bind_addr: bind_addr_from_env(),
             app_cache_dir: app_cache_dir_from_env()?,
             agents_encryption_key: agents_encryption_key_from_env()?,
             agents_encryption_key_id: agents_encryption_key_id_from_env()?,
-            hermes_dashboard_url: hermes_dashboard_url.clone(),
-            hermes_dashboard_link_url: hermes_dashboard_link_url(
-                &hermes_dashboard_url,
-                app_public_url.as_deref(),
-            )?,
-            hermes_dashboard_session_token: hermes_dashboard_session_token_from_env(),
             opencode_workspaces_root: opencode_workspaces_root_from_env()?,
             opencode_container_workspaces_root: opencode_container_workspaces_root_from_env()?,
             vibetrading_agent_api_base_url: vibetrading_agent_api_base_url_from_env()?,
@@ -128,64 +115,6 @@ fn agents_encryption_key_id_from_env() -> Result<String> {
         .context("missing AGENTS_ENCRYPTION_KEY_ID environment variable")
 }
 
-fn hermes_dashboard_url_from_env() -> String {
-    let host = env::var("HERMES_DASHBOARD_HOST").unwrap_or_else(|_| "127.0.0.1".to_string());
-    let port = env::var("HERMES_DASHBOARD_PORT").unwrap_or_else(|_| "19119".to_string());
-    format!("http://{host}:{port}")
-}
-
-fn app_public_url_from_env() -> Result<Option<String>> {
-    match env::var("APP_PUBLIC_URL") {
-        Ok(url) => {
-            let url = url.trim();
-            if url.is_empty() {
-                return Ok(None);
-            }
-            validate_absolute_url("APP_PUBLIC_URL", url)?;
-            Ok(Some(url.to_string()))
-        }
-        Err(_) => Ok(None),
-    }
-}
-
-fn hermes_dashboard_link_url(
-    hermes_dashboard_url: &str,
-    app_public_url: Option<&str>,
-) -> Result<String> {
-    let Some(app_public_url) = app_public_url else {
-        return Ok(hermes_dashboard_url.to_string());
-    };
-
-    let dashboard_url = Url::parse(hermes_dashboard_url)
-        .with_context(|| format!("invalid Hermes dashboard URL: {hermes_dashboard_url}"))?;
-    let mut browser_url = Url::parse(app_public_url)
-        .with_context(|| format!("invalid APP_PUBLIC_URL: {app_public_url}"))?;
-
-    browser_url.set_path("");
-    browser_url.set_query(None);
-    browser_url.set_fragment(None);
-    browser_url
-        .set_port(dashboard_url.port_or_known_default())
-        .map_err(|_| anyhow::anyhow!("APP_PUBLIC_URL contains a host that cannot accept a port"))?;
-
-    Ok(browser_url.to_string().trim_end_matches('/').to_string())
-}
-
-fn validate_absolute_url(name: &str, value: &str) -> Result<()> {
-    let url = Url::parse(value).with_context(|| format!("{name} must be a valid absolute URL"))?;
-    if url.scheme().is_empty() || url.host_str().is_none() {
-        bail!("{name} must include a scheme and host");
-    }
-    Ok(())
-}
-
-fn hermes_dashboard_session_token_from_env() -> Option<String> {
-    env::var("HERMES_DASHBOARD_SESSION_TOKEN")
-        .ok()
-        .map(|k| k.trim().to_string())
-        .filter(|k| !k.is_empty())
-}
-
 fn opencode_workspaces_root_from_env() -> Result<PathBuf> {
     let raw = env::var("OPENCODE_WORKSPACES_ROOT").unwrap_or_else(|_| "workspaces".to_string());
     let raw = raw.trim();
@@ -227,6 +156,14 @@ fn vibetrading_agent_api_base_url_from_env() -> Result<String> {
     Ok(url.to_string())
 }
 
+fn validate_absolute_url(name: &str, value: &str) -> Result<()> {
+    let url = Url::parse(value).with_context(|| format!("{name} must be a valid absolute URL"))?;
+    if url.scheme().is_empty() || url.host_str().is_none() {
+        bail!("{name} must include a scheme and host");
+    }
+    Ok(())
+}
+
 fn opencode_server_username_from_env() -> String {
     let raw = env::var("OPENCODE_SERVER_USERNAME").unwrap_or_else(|_| "opencode".to_string());
     let trimmed = raw.trim();
@@ -248,33 +185,7 @@ fn opencode_server_password_from_env() -> Option<String> {
 mod tests {
     use std::env;
 
-    use super::{app_cache_dir_from_env, hermes_dashboard_link_url};
-
-    #[test]
-    fn hermes_dashboard_link_defaults_to_backend_url() {
-        let link = hermes_dashboard_link_url("http://127.0.0.1:19119", None).unwrap();
-        assert_eq!(link, "http://127.0.0.1:19119");
-    }
-
-    #[test]
-    fn hermes_dashboard_link_uses_public_app_host() {
-        let link = hermes_dashboard_link_url(
-            "http://127.0.0.1:19119",
-            Some("http://trading-box.local:3003"),
-        )
-        .unwrap();
-        assert_eq!(link, "http://trading-box.local:19119");
-    }
-
-    #[test]
-    fn hermes_dashboard_link_keeps_public_scheme() {
-        let link = hermes_dashboard_link_url(
-            "http://127.0.0.1:19119",
-            Some("https://ops.example.com/vibetrading"),
-        )
-        .unwrap();
-        assert_eq!(link, "https://ops.example.com:19119");
-    }
+    use super::app_cache_dir_from_env;
 
     #[test]
     fn app_cache_dir_defaults_relative_to_current_directory() {

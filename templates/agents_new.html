@@ -47,11 +47,7 @@
                     <option value="" {% if form.runtime_id.is_empty() %}selected{% endif %}>Select a runtime</option>
                     {% for runtime in runtimes %}
                     <option value="{{ runtime.id }}" {% if form.runtime_id == runtime.id %}selected{% endif %}>
-                        {% if runtime.backend_kind == "hermes" %}
-                        Hermes - {{ runtime.name }} ({{ runtime.id }})
-                        {% else %}
                         OpenCode - {{ runtime.name }} ({{ runtime.id }})
-                        {% endif %}
                     </option>
                     {% endfor %}
                 </select>

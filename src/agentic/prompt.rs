@@ -208,7 +208,9 @@ mod tests {
         assert!(prompt.contains("market-analysis hook job"));
         assert!(prompt.contains("get_latest_analysis(symbol)"));
         assert!(prompt.contains("memory_type = \"market_analysis\""));
-        assert!(prompt.contains("Do not pass a `timeframe` argument at all; leave it out entirely"));
+        assert!(
+            prompt.contains("Do not pass a `timeframe` argument at all; leave it out entirely")
+        );
         assert!(prompt.contains("valid_for_seconds = 1800"));
         assert!(prompt.contains("Do not place or cancel orders."));
     }

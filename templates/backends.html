@@ -7,7 +7,7 @@
     <header class="flex flex-col gap-4 border-b border-zinc-800 pb-6 lg:flex-row lg:items-start lg:justify-between">
         <div>
             <h1 class="text-3xl font-semibold tracking-tight text-white">Backends</h1>
-            <p class="mt-2 text-sm leading-6 text-zinc-400">Configured agent runtimes for Hermes and OpenCode-backed agents.</p>
+            <p class="mt-2 text-sm leading-6 text-zinc-400">Configured agent runtimes for OpenCode-backed agents.</p>
         </div>
         <div class="flex items-center gap-3">
             <a href="/backends/new" class="rounded-full bg-zinc-100 px-4 py-2 text-sm font-medium text-zinc-950 hover:bg-white">
@@ -36,11 +36,7 @@
                             <td class="px-5 py-4 align-top font-mono text-xs text-zinc-300">{{ runtime.id }}</td>
                             <td class="px-5 py-4 align-top font-medium text-white">{{ runtime.name }}</td>
                             <td class="px-5 py-4 align-top">
-                                {% if runtime.backend_kind == "hermes" %}
-                                <span class="inline-flex rounded-full border border-sky-900/60 bg-sky-950/30 px-2.5 py-1 text-xs text-sky-300">hermes</span>
-                                {% else %}
                                 <span class="inline-flex rounded-full border border-violet-900/60 bg-violet-950/30 px-2.5 py-1 text-xs text-violet-300">opencode</span>
-                                {% endif %}
                             </td>
                             <td class="px-5 py-4 align-top text-zinc-300">
                                 {% if let Some(base_url) = runtime.base_url %}

@@ -19,11 +19,6 @@
     {% else %}
     <a class="flex items-center rounded-xl px-3 py-2 text-zinc-300 hover:bg-zinc-800/80 hover:text-white" href="/backends">Backends</a>
     {% endif %}
-    {% if current_path.starts_with("/hermes") %}
-    <a class="flex items-center rounded-xl bg-zinc-800/80 px-3 py-2 font-medium text-white" href="/hermes">Hermes</a>
-    {% else %}
-    <a class="flex items-center rounded-xl px-3 py-2 text-zinc-300 hover:bg-zinc-800/80 hover:text-white" href="/hermes">Hermes</a>
-    {% endif %}
     <span class="flex items-center rounded-xl px-3 py-2 text-zinc-500">Wallet</span>
     <span class="flex items-center rounded-xl px-3 py-2 text-zinc-500">Documentation</span>
     {% if current_path.starts_with("/settings") %}

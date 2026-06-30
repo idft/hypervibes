@@ -364,6 +364,9 @@ mod tests {
         .unwrap();
 
         assert_eq!(response.connected, vec!["anthropic"]);
-        assert_eq!(response.all[0].models["claude-sonnet-4"].name.as_deref(), Some("Claude Sonnet 4"));
+        assert_eq!(
+            response.all[0].models["claude-sonnet-4"].name.as_deref(),
+            Some("Claude Sonnet 4")
+        );
     }
 }

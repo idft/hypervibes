@@ -50,6 +50,8 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/memories/latest", get(list_latest_memories))
         .route("/memories/{id}", get(get_memory_by_id))
         .route("/account", get(get_account))
+        // Deprecated: retained temporarily for older runtime/MCP flows. OpenCode jobs
+        // should receive initial context through dispatched prompt text instead.
         .route("/job-context", get(get_job_context))
         .route(
             "/orders",
@@ -1117,8 +1119,6 @@ mod tests {
             ),
             live_accounts: Arc::new(crate::hyperliquid::live_state::LiveAccountStore::new()),
             ui_events: Arc::new(UiEventHub::new()),
-            hermes: None,
-            hermes_dashboard_link_url: "http://127.0.0.1:19119".to_string(),
             opencode_workspace_config: crate::opencode::workspace::OpenCodeWorkspaceConfig {
                 source_root: std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
                     .join(crate::opencode::workspace::PROFILE_SOURCE_RELATIVE_PATH),

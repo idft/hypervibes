@@ -1,121 +1,25 @@
-# VIBETRADING-V2 DESIGN
+# Vibetrading V2
 
-WARNING: THIS IS A WORK IN PROGRESS AND IS IDEAS ONLY.
-NOTHING IN THE FILE SHOULD BE IMPLEMENTED YET.
+Vibetrading is a Rust application for running OpenCode-backed trading agents on Hyperliquid.
 
-
-# Overview
-
-This app / UI should be tied into Hermes agent. It is a trading framework for Hermes.
-
-The current V2 direction is:
+Current direction:
 
 - one main application binary
 - Postgres as the primary database
-- one normal shared migration directory for the whole app
-- a dedicated `agents` schema for AI agent registry and account/instrument ownership
-- a dedicated `memory` schema for the memory subsystem
-- a dedicated `hyperliquid` schema for account activity and reconciliation
-- a web UI plus internal APIs
-- supervised internal background tasks for sync, polling, and analysis work
-- `hypersdk` reused as the sole Hyperliquid library, not as the primary app runtime
+- one shared migrations directory
+- dedicated `agents`, `memory`, and `hyperliquid` database areas
+- a server-rendered operator UI plus internal agent APIs
+- supervised background tasks for account monitoring and OpenCode job dispatch
 
-This app should provide:
+Current docs:
 
-- a local Hyperliquid account history journal (HTTP-canonical ingest; websocket deferred)
-- a registry of AI agents and Hermes integrations
-- a structured memory system for AI agent analysis
-- internal services for operator UI and agent-facing workflows
+- `Agents.md` for agent registry, runtimes, prompts, and instruments
+- `OpenCode.md` for the supported agent backend
+- `Memory.md` for memory storage and retrieval
+- `Hyperliquid.md` for venue sync and execution ownership
+- `Architecture.md` for the current runtime shape
 
-## Current Docs
+Notes:
 
-- `Agents.md` - agent registry, Hermes integration, and account/instrument ownership
-- `Memory.md` - memory subsystem design
-- `Hyperliquid.md` - Hyperliquid account sync and reconciliation module
-- `Architecture.md` - Rust-oriented implementation options and runtime shape
-
-# Wishlist
-
-* Record all cron job contexts -- or could get from hermes db directly??
-
-* Single webserver / orchestrator binary? ( 1 per environment? )
-  - May initially use `HYPERLIQUID_PK` from environment, but longer term account ownership should come from the agent registry.
-  - Runs the app-owned execution gateway and web UI / API simultaneously.
-  - only 1 "Trader" - no traders table
-
-
-
-## Most minimal possible system
-
-* `hypersdk` as the sole Hyperliquid library
-* API / Webserver
-* Postgres in a container
-* Hermes in a container
-
-
-## Memory / Analysis system
-
-See `Memory.md`.
-
-Current direction:
-
-- separate memory subsystem
-- dedicated `memory` schema
-- scoped by `agent_key`
-- higher-timeframe analysis writes structured memories
-- lower-timeframe execution reads distilled active state
-- daily evaluation learns from actual results
-
-## Agents / Hermes integration
-
-See `Agents.md`.
-
-Current direction:
-
-* Separate agent registry subsystem
-* Dedicated `agents` schema
-* Registry of AI agents, Hermes profile bindings, instrument permissions, and DB-backed config
-* One execution account per agent
-* One agent may trade multiple instruments, even if early testing uses only one
-* Exactly one per-agent app API key for authenticated calls into the local app
-* Agent API keys are app-level credentials and may be shown repeatedly in the UI without obscuring them
-* Bridges `agent_key` in memory to execution-account ownership in Hyperliquid
-
-## Web UI
-
-* Design / Layout TODO
-* Tailwind CSS
-* Minimal JS first; frontend stack is still open
-
-
-## Hyperliquid connection
-
-See `Hyperliquid.md`.
-
-Current direction:
-
-* Separate Hyperliquid subsystem
-* Dedicated `hyperliquid` schema
-* Owns an internal execution gateway plus execution-intent and submitted-order records (later phase)
-* Startup reconciliation before live mode
-* Historical and ongoing HTTP `/info` polling for canonical account-history sync
-* Websocket live fill feed deferred to a later step (polling is the v1 correctness path)
-* Durable local account activity journal for fills, funding, fees, deposits, withdrawals, transfers, and historical orders
-* Instrument reference sync for symbol normalization (via `hypersdk`)
-* Uses `hypersdk` as the sole Hyperliquid venue SDK (instrument sync now; signing/order submission later); account-history endpoints `hypersdk` does not expose are fetched via an app-owned raw HTTP `/info` client
-* Agent event webhook fanout can be added later
-
-## Hermes Agent integration
-
-* Hermes skills / commands / scripts as a plugin?
-* Connect to hermes sqlite DB ??
-
-## Architecture
-
-See `Architecture.md`.
-
-Current direction:
-
-* Rust remains the main implementation language under consideration
-* `actix-web` and `axum` are the leading Rust web options
-* one binary with supervised internal tasks is currently preferred over separate deployables
+- `agent_runtimes.backend_kind` remains in the schema even though only `opencode` is currently valid.
+- `/api/v1/job-context` still exists temporarily for older runtime flows, but it is deprecated.
