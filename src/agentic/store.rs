@@ -4,11 +4,12 @@ use sqlx::{PgPool, Postgres, Transaction, query_as};
 
 use crate::{
     agentic::{
-        job_key::build_generated_job_key,
+        job_key::{build_generated_hook_job_key, build_generated_job_key},
         model::{
-            AgenticJobScheduleRow, AgenticRunRow, DueOpenCodeScheduleRow, JOB_KIND_ANALYSIS,
-            JOB_KIND_TRADING, RUN_STATUS_ABORTED, RUN_STATUS_FAILED, RUN_STATUS_QUEUED,
-            RUN_STATUS_RUNNING, RUN_STATUS_SKIPPED, RUN_STATUS_SUCCEEDED,
+            AgenticJobHookRow, AgenticJobScheduleRow, AgenticRunRow, DueOpenCodeHookRow,
+            DueOpenCodeScheduleRow, JOB_KIND_ANALYSIS, JOB_KIND_MARKET_ANALYSIS, JOB_KIND_TRADING,
+            RUN_STATUS_ABORTED, RUN_STATUS_FAILED, RUN_STATUS_QUEUED, RUN_STATUS_RUNNING,
+            RUN_STATUS_SKIPPED, RUN_STATUS_SUCCEEDED,
         },
         timeframe::{
             DEFAULT_TRIGGER_DELAY_SECONDS, boundary_for_due_at, latest_due_at_or_before,
@@ -25,6 +26,39 @@ const DEFAULT_ANALYSIS_TIMEFRAME: &str = "15m";
 const DEFAULT_TRADING_TIMEFRAME: &str = "1m";
 const DEFAULT_ANALYSIS_TIMEOUT_SECONDS: i32 = 600;
 const DEFAULT_TRADING_TIMEOUT_SECONDS: i32 = 45;
+
+fn active_job_kinds_for_lane(job_kind: &str) -> &'static [&'static str] {
+    match job_kind {
+        JOB_KIND_TRADING => &[JOB_KIND_TRADING],
+        JOB_KIND_ANALYSIS | JOB_KIND_MARKET_ANALYSIS => {
+            &[JOB_KIND_ANALYSIS, JOB_KIND_MARKET_ANALYSIS]
+        }
+        _ => &[],
+    }
+}
+
+async fn has_active_run_in_lane_tx(
+    tx: &mut Transaction<'_, Postgres>,
+    agent_key: &str,
+    job_kind: &str,
+) -> Result<bool> {
+    let lane_job_kinds = active_job_kinds_for_lane(job_kind);
+    let active: Option<(i32,)> = query_as(
+        "SELECT 1 FROM agentic_runs
+          WHERE agent_key = $1
+            AND status = ANY($2)
+            AND job_kind = ANY($3)
+          LIMIT 1",
+    )
+    .bind(agent_key)
+    .bind(&ACTIVE_STATUSES)
+    .bind(lane_job_kinds)
+    .fetch_optional(&mut **tx)
+    .await
+    .context("failed to check for active run in lane")?;
+
+    Ok(active.is_some())
+}
 
 fn default_analysis_job_key() -> String {
     build_generated_job_key(JOB_KIND_ANALYSIS, DEFAULT_ANALYSIS_TIMEFRAME)
@@ -236,6 +270,194 @@ pub async fn insert_agent_schedule(
     Ok(row.0)
 }
 
+pub async fn delete_agent_schedule(
+    pool: &DbPool,
+    agent_key: &str,
+    schedule_id: i64,
+) -> Result<bool> {
+    let result = sqlx::query(
+        "DELETE FROM agentic_job_schedules
+          WHERE agent_key = $1
+            AND id = $2",
+    )
+    .bind(agent_key)
+    .bind(schedule_id)
+    .execute(pool)
+    .await
+    .with_context(|| format!("failed to delete schedule {schedule_id} for agent {agent_key}"))?;
+
+    Ok(result.rows_affected() > 0)
+}
+
+pub async fn list_agent_hooks(pool: &DbPool, agent_key: &str) -> Result<Vec<AgenticJobHookRow>> {
+    let rows = query_as::<_, AgenticJobHookRow>(
+        "SELECT id,
+                agent_key,
+                job_key,
+                job_kind,
+                hook_event,
+                enabled,
+                model_provider_id,
+                model_id,
+                timeout_seconds,
+                operator_prompt,
+                created_at,
+                updated_at
+           FROM agentic_job_hooks
+          WHERE agent_key = $1
+          ORDER BY hook_event, job_key",
+    )
+    .bind(agent_key)
+    .fetch_all(pool)
+    .await
+    .with_context(|| format!("failed to list hooks for agent {agent_key}"))?;
+
+    Ok(rows)
+}
+
+pub async fn get_agent_hook(
+    pool: &DbPool,
+    agent_key: &str,
+    hook_id: i64,
+) -> Result<Option<AgenticJobHookRow>> {
+    let row = query_as::<_, AgenticJobHookRow>(
+        "SELECT id,
+                agent_key,
+                job_key,
+                job_kind,
+                hook_event,
+                enabled,
+                model_provider_id,
+                model_id,
+                timeout_seconds,
+                operator_prompt,
+                created_at,
+                updated_at
+           FROM agentic_job_hooks
+          WHERE agent_key = $1
+            AND id = $2",
+    )
+    .bind(agent_key)
+    .bind(hook_id)
+    .fetch_optional(pool)
+    .await
+    .with_context(|| format!("failed to load hook {hook_id} for agent {agent_key}"))?;
+
+    Ok(row)
+}
+
+pub async fn get_enabled_hook_for_event(
+    pool: &DbPool,
+    agent_key: &str,
+    hook_event: &str,
+) -> Result<Option<AgenticJobHookRow>> {
+    let row = query_as::<_, AgenticJobHookRow>(
+        "SELECT id,
+                agent_key,
+                job_key,
+                job_kind,
+                hook_event,
+                enabled,
+                model_provider_id,
+                model_id,
+                timeout_seconds,
+                operator_prompt,
+                created_at,
+                updated_at
+           FROM agentic_job_hooks
+          WHERE agent_key = $1
+            AND hook_event = $2
+            AND enabled = true",
+    )
+    .bind(agent_key)
+    .bind(hook_event)
+    .fetch_optional(pool)
+    .await
+    .with_context(|| format!("failed to load enabled hook {hook_event} for agent {agent_key}"))?;
+
+    Ok(row)
+}
+
+pub async fn insert_agent_hook(
+    pool: &DbPool,
+    agent_key: &str,
+    job_kind: &str,
+    hook_event: &str,
+    enabled: bool,
+    model_provider_id: Option<&str>,
+    model_id: Option<&str>,
+    timeout_seconds: i32,
+    operator_prompt: &str,
+) -> Result<i64> {
+    let job_key = build_generated_hook_job_key(job_kind);
+    let row: (i64,) = query_as(
+        "INSERT INTO agentic_job_hooks (
+            agent_key,
+            job_key,
+            job_kind,
+            hook_event,
+            enabled,
+            model_provider_id,
+            model_id,
+            timeout_seconds,
+            operator_prompt
+         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+         RETURNING id",
+    )
+    .bind(agent_key)
+    .bind(&job_key)
+    .bind(job_kind)
+    .bind(hook_event)
+    .bind(enabled)
+    .bind(model_provider_id)
+    .bind(model_id)
+    .bind(timeout_seconds)
+    .bind(operator_prompt)
+    .fetch_one(pool)
+    .await
+    .with_context(|| format!("failed to insert hook {job_key} for agent {agent_key}"))?;
+
+    Ok(row.0)
+}
+
+pub async fn set_hook_enabled(
+    pool: &DbPool,
+    agent_key: &str,
+    hook_id: i64,
+    enabled: bool,
+) -> Result<bool> {
+    let result = sqlx::query(
+        "UPDATE agentic_job_hooks
+            SET enabled = $3,
+                updated_at = now()
+          WHERE agent_key = $1
+            AND id = $2",
+    )
+    .bind(agent_key)
+    .bind(hook_id)
+    .bind(enabled)
+    .execute(pool)
+    .await
+    .with_context(|| format!("failed to toggle hook {hook_id} for agent {agent_key}"))?;
+
+    Ok(result.rows_affected() > 0)
+}
+
+pub async fn delete_agent_hook(pool: &DbPool, agent_key: &str, hook_id: i64) -> Result<bool> {
+    let result = sqlx::query(
+        "DELETE FROM agentic_job_hooks
+          WHERE agent_key = $1
+            AND id = $2",
+    )
+    .bind(agent_key)
+    .bind(hook_id)
+    .execute(pool)
+    .await
+    .with_context(|| format!("failed to delete hook {hook_id} for agent {agent_key}"))?;
+
+    Ok(result.rows_affected() > 0)
+}
+
 /// List the most recent runs for an agent.
 pub async fn list_agent_runs(
     pool: &DbPool,
@@ -245,6 +467,7 @@ pub async fn list_agent_runs(
     let rows = query_as::<_, AgenticRunRow>(
         "SELECT id,
                 schedule_id,
+                hook_id,
                 agent_key,
                 job_key,
                 job_kind,
@@ -284,6 +507,7 @@ pub async fn list_schedule_runs(
     let rows = query_as::<_, AgenticRunRow>(
         "SELECT id,
                 schedule_id,
+                hook_id,
                 agent_key,
                 job_key,
                 job_kind,
@@ -311,6 +535,48 @@ pub async fn list_schedule_runs(
     .fetch_all(pool)
     .await
     .with_context(|| format!("failed to list runs for schedule {schedule_id} agent {agent_key}"))?;
+
+    Ok(rows)
+}
+
+/// List the most recent runs for a single hook.
+pub async fn list_hook_runs(
+    pool: &DbPool,
+    agent_key: &str,
+    hook_id: i64,
+    limit: i64,
+) -> Result<Vec<AgenticRunRow>> {
+    let rows = query_as::<_, AgenticRunRow>(
+        "SELECT id,
+                schedule_id,
+                hook_id,
+                agent_key,
+                job_key,
+                job_kind,
+                timeframe,
+                status,
+                backend_run_ref,
+                model_provider_id,
+                model_id,
+                scheduled_for,
+                started_at,
+                finished_at,
+                timeout_seconds,
+                error_summary,
+                created_at,
+                updated_at
+           FROM agentic_runs
+          WHERE agent_key = $1
+            AND hook_id = $2
+          ORDER BY created_at DESC
+          LIMIT $3",
+    )
+    .bind(agent_key)
+    .bind(hook_id)
+    .bind(limit)
+    .fetch_all(pool)
+    .await
+    .with_context(|| format!("failed to list runs for hook {hook_id} agent {agent_key}"))?;
 
     Ok(rows)
 }
@@ -444,6 +710,49 @@ pub async fn get_opencode_schedule_for_dispatch(
     Ok(row)
 }
 
+pub async fn get_opencode_hook_for_dispatch(
+    pool: &DbPool,
+    agent_key: &str,
+    hook_id: i64,
+) -> Result<Option<DueOpenCodeHookRow>> {
+    let row = query_as::<_, DueOpenCodeHookRow>(
+        "SELECT hooks.id AS hook_id,
+                agents.agent_key,
+                agents.display_name,
+                hooks.job_key,
+                hooks.job_kind,
+                hooks.hook_event,
+                hooks.model_provider_id,
+                hooks.model_id,
+                hooks.timeout_seconds,
+                hooks.operator_prompt,
+                agents.runtime_id,
+                runtimes.name AS runtime_name,
+                runtimes.base_url AS runtime_base_url,
+                agents.runtime_config
+           FROM agentic_job_hooks AS hooks
+           JOIN agents
+             ON agents.agent_key = hooks.agent_key
+           JOIN agent_runtimes AS runtimes
+             ON runtimes.id = agents.runtime_id
+          WHERE hooks.agent_key = $1
+            AND hooks.id = $2
+            AND agents.backend_kind = 'opencode'
+            AND runtimes.enabled = true
+            AND runtimes.base_url IS NOT NULL
+            AND length(runtimes.base_url) > 0",
+    )
+    .bind(agent_key)
+    .bind(hook_id)
+    .fetch_optional(pool)
+    .await
+    .with_context(|| {
+        format!("failed to load OpenCode dispatch metadata for hook {hook_id} agent {agent_key}")
+    })?;
+
+    Ok(row)
+}
+
 #[derive(Debug, Clone)]
 pub enum ClaimedScheduleRun {
     /// The schedule was due and is now claimed for dispatch. The run is
@@ -541,60 +850,51 @@ pub async fn claim_due_schedule(
 
     let scheduled_for = boundary_for_due_at(schedule.next_run_at, trigger_delay_seconds);
 
-    let active: Option<(i32,)> = query_as(
-        "SELECT 1 FROM agentic_runs
-          WHERE agent_key = $1
-            AND status = ANY($2)
-          LIMIT 1",
-    )
-    .bind(&schedule.agent_key)
-    .bind(&ACTIVE_STATUSES)
-    .fetch_optional(&mut *tx)
-    .await
-    .context("failed to check for active run on agent")?;
-
-    let outcome = if active.is_some() {
-        let error_summary = "previous run still active";
-        let run_id = insert_run_in_tx(
-            &mut tx,
-            Some(schedule.id),
-            &schedule.agent_key,
-            &schedule.job_key,
-            &schedule.job_kind,
-            &timeframe,
-            RUN_STATUS_SKIPPED,
-            None,
-            None,
-            None,
-            scheduled_for,
-            None,
-            Some(now),
-            schedule.timeout_seconds,
-            Some(error_summary),
-        )
-        .await?;
-        ClaimedScheduleRun::Skipped { run_id }
-    } else {
-        let run_id = insert_run_in_tx(
-            &mut tx,
-            Some(schedule.id),
-            &schedule.agent_key,
-            &schedule.job_key,
-            &schedule.job_kind,
-            &timeframe,
-            RUN_STATUS_QUEUED,
-            None,
-            None,
-            None,
-            scheduled_for,
-            None,
-            None,
-            schedule.timeout_seconds,
-            None,
-        )
-        .await?;
-        ClaimedScheduleRun::Dispatch { run_id }
-    };
+    let outcome =
+        if has_active_run_in_lane_tx(&mut tx, &schedule.agent_key, &schedule.job_kind).await? {
+            let error_summary = "previous run still active";
+            let run_id = insert_run_in_tx(
+                &mut tx,
+                Some(schedule.id),
+                None,
+                &schedule.agent_key,
+                &schedule.job_key,
+                &schedule.job_kind,
+                Some(&timeframe),
+                RUN_STATUS_SKIPPED,
+                None,
+                None,
+                None,
+                scheduled_for,
+                None,
+                Some(now),
+                schedule.timeout_seconds,
+                Some(error_summary),
+            )
+            .await?;
+            ClaimedScheduleRun::Skipped { run_id }
+        } else {
+            let run_id = insert_run_in_tx(
+                &mut tx,
+                Some(schedule.id),
+                None,
+                &schedule.agent_key,
+                &schedule.job_key,
+                &schedule.job_kind,
+                Some(&timeframe),
+                RUN_STATUS_QUEUED,
+                None,
+                None,
+                None,
+                scheduled_for,
+                None,
+                None,
+                schedule.timeout_seconds,
+                None,
+            )
+            .await?;
+            ClaimedScheduleRun::Dispatch { run_id }
+        };
 
     advance_schedule(&mut tx, &schedule, now).await?;
 
@@ -644,14 +944,28 @@ struct ScheduleForUpdate {
     timeout_seconds: i32,
 }
 
+#[derive(Debug, Clone, sqlx::FromRow)]
+struct HookForUpdate {
+    id: i64,
+    agent_key: String,
+    job_key: String,
+    job_kind: String,
+    #[allow(dead_code)]
+    hook_event: String,
+    #[allow(dead_code)]
+    enabled: bool,
+    timeout_seconds: i32,
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn insert_run_in_tx(
     tx: &mut Transaction<'_, Postgres>,
     schedule_id: Option<i64>,
+    hook_id: Option<i64>,
     agent_key: &str,
     job_key: &str,
     job_kind: &str,
-    timeframe: &str,
+    timeframe: Option<&str>,
     status: &str,
     backend_run_ref: Option<&str>,
     model_provider_id: Option<&str>,
@@ -666,6 +980,7 @@ async fn insert_run_in_tx(
     let row: (i64,) = query_as(
         "INSERT INTO agentic_runs (
             schedule_id,
+            hook_id,
             agent_key,
             job_key,
             job_kind,
@@ -679,10 +994,11 @@ async fn insert_run_in_tx(
             finished_at,
             timeout_seconds,
             error_summary
-         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
          RETURNING id",
     )
     .bind(schedule_id)
+    .bind(hook_id)
     .bind(agent_key)
     .bind(job_key)
     .bind(job_kind)
@@ -822,6 +1138,7 @@ pub async fn get_run(pool: &DbPool, run_id: i64) -> Result<Option<AgenticRunRow>
     let row: Option<AgenticRunRow> = query_as(
         "SELECT id,
                 schedule_id,
+                hook_id,
                 agent_key,
                 job_key,
                 job_kind,
@@ -892,62 +1209,53 @@ pub async fn insert_queued_run(
     };
 
     let now = Utc::now();
-    let active: Option<(i32,)> = query_as(
-        "SELECT 1 FROM agentic_runs
-          WHERE agent_key = $1
-            AND status = ANY($2)
-          LIMIT 1",
-    )
-    .bind(&schedule.agent_key)
-    .bind(&ACTIVE_STATUSES)
-    .fetch_optional(&mut *tx)
-    .await
-    .context("failed to check for active run on manual schedule run")?;
-
-    let outcome = if active.is_some() {
-        let run_id = insert_run_in_tx(
-            &mut tx,
-            Some(schedule.id),
-            &schedule.agent_key,
-            &schedule.job_key,
-            &schedule.job_kind,
-            &schedule.timeframe,
-            RUN_STATUS_SKIPPED,
-            None,
-            None,
-            None,
-            now,
-            None,
-            Some(now),
-            schedule.timeout_seconds,
-            Some("previous run still active"),
-        )
-        .await?;
-        QueuedScheduleRun::Skipped { run_id }
-    } else {
-        let run_id = insert_run_in_tx(
-            &mut tx,
-            Some(schedule.id),
-            &schedule.agent_key,
-            &schedule.job_key,
-            &schedule.job_kind,
-            &schedule.timeframe,
-            RUN_STATUS_QUEUED,
-            None,
-            None,
-            None,
-            now,
-            None,
-            None,
-            schedule.timeout_seconds,
-            None,
-        )
-        .await?;
-        QueuedScheduleRun::Dispatch {
-            run_id,
-            scheduled_for: now,
-        }
-    };
+    let outcome =
+        if has_active_run_in_lane_tx(&mut tx, &schedule.agent_key, &schedule.job_kind).await? {
+            let run_id = insert_run_in_tx(
+                &mut tx,
+                Some(schedule.id),
+                None,
+                &schedule.agent_key,
+                &schedule.job_key,
+                &schedule.job_kind,
+                Some(&schedule.timeframe),
+                RUN_STATUS_SKIPPED,
+                None,
+                None,
+                None,
+                now,
+                None,
+                Some(now),
+                schedule.timeout_seconds,
+                Some("previous run still active"),
+            )
+            .await?;
+            QueuedScheduleRun::Skipped { run_id }
+        } else {
+            let run_id = insert_run_in_tx(
+                &mut tx,
+                Some(schedule.id),
+                None,
+                &schedule.agent_key,
+                &schedule.job_key,
+                &schedule.job_kind,
+                Some(&schedule.timeframe),
+                RUN_STATUS_QUEUED,
+                None,
+                None,
+                None,
+                now,
+                None,
+                None,
+                schedule.timeout_seconds,
+                None,
+            )
+            .await?;
+            QueuedScheduleRun::Dispatch {
+                run_id,
+                scheduled_for: now,
+            }
+        };
 
     tx.commit()
         .await
@@ -958,6 +1266,109 @@ pub async fn insert_queued_run(
 
 #[derive(Debug, Clone)]
 pub enum QueuedScheduleRun {
+    Dispatch {
+        run_id: i64,
+        scheduled_for: DateTime<Utc>,
+    },
+    Skipped {
+        run_id: i64,
+    },
+    Missing,
+}
+
+pub async fn insert_queued_hook_run(
+    pool: &DbPool,
+    agent_key: &str,
+    hook_id: i64,
+) -> Result<QueuedHookRun> {
+    let mut tx = pool
+        .begin()
+        .await
+        .context("failed to begin manual queued hook run insert")?;
+
+    let hook: Option<HookForUpdate> = query_as(
+        "SELECT id,
+                agent_key,
+                job_key,
+                job_kind,
+                hook_event,
+                enabled,
+                timeout_seconds
+           FROM agentic_job_hooks
+          WHERE agent_key = $1
+            AND id = $2
+          FOR UPDATE",
+    )
+    .bind(agent_key)
+    .bind(hook_id)
+    .fetch_optional(&mut *tx)
+    .await
+    .context("failed to lock hook for manual run")?;
+
+    let Some(hook) = hook else {
+        tx.rollback()
+            .await
+            .context("failed to roll back missing-hook manual run")?;
+        return Ok(QueuedHookRun::Missing);
+    };
+
+    let now = Utc::now();
+    let outcome = if has_active_run_in_lane_tx(&mut tx, &hook.agent_key, &hook.job_kind).await? {
+        let run_id = insert_run_in_tx(
+            &mut tx,
+            None,
+            Some(hook.id),
+            &hook.agent_key,
+            &hook.job_key,
+            &hook.job_kind,
+            None,
+            RUN_STATUS_SKIPPED,
+            None,
+            None,
+            None,
+            now,
+            None,
+            Some(now),
+            hook.timeout_seconds,
+            Some("previous run still active"),
+        )
+        .await?;
+        QueuedHookRun::Skipped { run_id }
+    } else {
+        let run_id = insert_run_in_tx(
+            &mut tx,
+            None,
+            Some(hook.id),
+            &hook.agent_key,
+            &hook.job_key,
+            &hook.job_kind,
+            None,
+            RUN_STATUS_QUEUED,
+            None,
+            None,
+            None,
+            now,
+            None,
+            None,
+            hook.timeout_seconds,
+            None,
+        )
+        .await?;
+        QueuedHookRun::Dispatch {
+            run_id,
+            scheduled_for: now,
+        }
+    };
+
+    tx.commit()
+        .await
+        .context("failed to commit manual queued hook run")?;
+
+    Ok(outcome)
+}
+
+#[derive(Debug, Clone)]
+pub enum QueuedHookRun {
     Dispatch {
         run_id: i64,
         scheduled_for: DateTime<Utc>,
@@ -1339,6 +1750,228 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn insert_agent_hook_generates_market_analysis_key_and_rejects_duplicates() {
+        let pool = test_db::pool().await;
+        let key = format!("hook-dup-{}", Utc::now().timestamp_nanos_opt().unwrap_or(0));
+        insert_agent(&pool, &sample_agent(&key))
+            .await
+            .expect("insert agent");
+
+        let hook_id = insert_agent_hook(
+            &pool,
+            &key,
+            JOB_KIND_MARKET_ANALYSIS,
+            crate::agentic::model::HOOK_EVENT_ANALYSIS_BATCH_COMPLETED,
+            true,
+            None,
+            None,
+            600,
+            "",
+        )
+        .await
+        .expect("insert hook");
+
+        let hook = get_agent_hook(&pool, &key, hook_id)
+            .await
+            .expect("get hook")
+            .expect("hook present");
+        assert_eq!(hook.job_key, "market-analysis");
+
+        let duplicate = insert_agent_hook(
+            &pool,
+            &key,
+            JOB_KIND_MARKET_ANALYSIS,
+            crate::agentic::model::HOOK_EVENT_ANALYSIS_BATCH_COMPLETED,
+            true,
+            None,
+            None,
+            600,
+            "",
+        )
+        .await;
+        assert!(duplicate.is_err());
+    }
+
+    #[tokio::test]
+    async fn insert_queued_hook_run_inserts_manual_dispatch_run_without_timeframe() {
+        let pool = test_db::pool().await;
+        let key = format!("hook-run-{}", Utc::now().timestamp_nanos_opt().unwrap_or(0));
+        insert_agent(&pool, &sample_agent(&key))
+            .await
+            .expect("insert agent");
+        let hook_id = insert_agent_hook(
+            &pool,
+            &key,
+            JOB_KIND_MARKET_ANALYSIS,
+            crate::agentic::model::HOOK_EVENT_ANALYSIS_BATCH_COMPLETED,
+            true,
+            None,
+            None,
+            600,
+            "",
+        )
+        .await
+        .expect("insert hook");
+
+        let outcome = insert_queued_hook_run(&pool, &key, hook_id)
+            .await
+            .expect("insert queued hook run");
+        let run_id = match outcome {
+            QueuedHookRun::Dispatch { run_id, .. } => run_id,
+            other => panic!("expected Dispatch, got {other:?}"),
+        };
+
+        let run = get_run(&pool, run_id)
+            .await
+            .expect("get run")
+            .expect("run present");
+        assert_eq!(run.schedule_id, None);
+        assert_eq!(run.hook_id, Some(hook_id));
+        assert_eq!(run.job_key, "market-analysis");
+        assert_eq!(run.job_kind, JOB_KIND_MARKET_ANALYSIS);
+        assert_eq!(run.timeframe, None);
+    }
+
+    #[tokio::test]
+    async fn agentic_runs_exactly_one_source_check_rejects_both_and_neither_sources() {
+        let pool = test_db::pool().await;
+        let key = format!(
+            "run-source-check-{}",
+            Utc::now().timestamp_nanos_opt().unwrap_or(0)
+        );
+        let schedule_id = seed_agent_and_schedule(&pool, &key, 0).await;
+        let schedule = list_agent_schedules(&pool, &key)
+            .await
+            .expect("list schedules")
+            .into_iter()
+            .find(|row| row.id == schedule_id)
+            .expect("schedule present");
+        let hook_id = insert_agent_hook(
+            &pool,
+            &key,
+            JOB_KIND_MARKET_ANALYSIS,
+            crate::agentic::model::HOOK_EVENT_ANALYSIS_BATCH_COMPLETED,
+            true,
+            None,
+            None,
+            600,
+            "",
+        )
+        .await
+        .expect("insert hook");
+
+        let both_sources = query(
+            "INSERT INTO agentic_runs (
+                schedule_id,
+                hook_id,
+                agent_key,
+                job_key,
+                job_kind,
+                timeframe,
+                status,
+                scheduled_for,
+                timeout_seconds
+             ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
+        )
+        .bind(schedule_id)
+        .bind(hook_id)
+        .bind(&key)
+        .bind(&schedule.job_key)
+        .bind(&schedule.job_kind)
+        .bind(&schedule.timeframe)
+        .bind(RUN_STATUS_QUEUED)
+        .bind(Utc::now())
+        .bind(schedule.timeout_seconds)
+        .execute(&pool)
+        .await;
+        assert!(both_sources.is_err(), "expected both-source insert to fail");
+
+        let neither_source = query(
+            "INSERT INTO agentic_runs (
+                schedule_id,
+                hook_id,
+                agent_key,
+                job_key,
+                job_kind,
+                timeframe,
+                status,
+                scheduled_for,
+                timeout_seconds
+             ) VALUES (NULL, NULL, $1, $2, $3, $4, $5, $6, $7)",
+        )
+        .bind(&key)
+        .bind(&schedule.job_key)
+        .bind(&schedule.job_kind)
+        .bind(&schedule.timeframe)
+        .bind(RUN_STATUS_QUEUED)
+        .bind(Utc::now())
+        .bind(schedule.timeout_seconds)
+        .execute(&pool)
+        .await;
+        assert!(
+            neither_source.is_err(),
+            "expected neither-source insert to fail"
+        );
+    }
+
+    #[tokio::test]
+    async fn deleting_schedule_cascades_run_rows() {
+        let pool = test_db::pool().await;
+        let key = format!(
+            "delete-schedule-{}",
+            Utc::now().timestamp_nanos_opt().unwrap_or(0)
+        );
+        let schedule_id = seed_agent_and_schedule(&pool, &key, 0).await;
+        let run_id = insert_test_run(&pool, schedule_id, RUN_STATUS_QUEUED)
+            .await
+            .expect("insert run");
+
+        let deleted = delete_agent_schedule(&pool, &key, schedule_id)
+            .await
+            .expect("delete schedule");
+        assert!(deleted);
+        assert!(get_run(&pool, run_id).await.expect("get run").is_none());
+    }
+
+    #[tokio::test]
+    async fn deleting_hook_cascades_run_rows() {
+        let pool = test_db::pool().await;
+        let key = format!(
+            "delete-hook-{}",
+            Utc::now().timestamp_nanos_opt().unwrap_or(0)
+        );
+        insert_agent(&pool, &sample_agent(&key))
+            .await
+            .expect("insert agent");
+        let hook_id = insert_agent_hook(
+            &pool,
+            &key,
+            JOB_KIND_MARKET_ANALYSIS,
+            crate::agentic::model::HOOK_EVENT_ANALYSIS_BATCH_COMPLETED,
+            true,
+            None,
+            None,
+            600,
+            "",
+        )
+        .await
+        .expect("insert hook");
+        let run_id = match insert_queued_hook_run(&pool, &key, hook_id)
+            .await
+            .expect("insert queued hook run")
+        {
+            QueuedHookRun::Dispatch { run_id, .. } => run_id,
+            other => panic!("expected Dispatch, got {other:?}"),
+        };
+
+        let deleted = delete_agent_hook(&pool, &key, hook_id)
+            .await
+            .expect("delete hook");
+        assert!(deleted);
+        assert!(get_run(&pool, run_id).await.expect("get run").is_none());
+    }
+
+    #[tokio::test]
     async fn list_due_opencode_schedules_excludes_disabled_and_other_backends() {
         let pool = test_db::pool().await;
         let key = format!("due-{}", Utc::now().timestamp_nanos_opt().unwrap_or(0));
@@ -1472,7 +2105,7 @@ mod tests {
             .expect("run present");
         assert_eq!(run.status, RUN_STATUS_QUEUED);
         assert_eq!(run.agent_key, key);
-        assert_eq!(run.timeframe, DEFAULT_ANALYSIS_TIMEFRAME);
+        assert_eq!(run.timeframe.as_deref(), Some(DEFAULT_ANALYSIS_TIMEFRAME));
         assert_eq!(
             run.scheduled_for,
             boundary_for_due_at(due_boundary, DEFAULT_TRIGGER_DELAY_SECONDS)
@@ -1574,7 +2207,7 @@ mod tests {
             Some("previous run still active")
         );
         assert!(run.finished_at.is_some());
-        assert_eq!(run.timeframe, DEFAULT_ANALYSIS_TIMEFRAME);
+        assert_eq!(run.timeframe.as_deref(), Some(DEFAULT_ANALYSIS_TIMEFRAME));
     }
 
     #[tokio::test]
@@ -1636,7 +2269,7 @@ mod tests {
         assert_eq!(run.status, RUN_STATUS_QUEUED);
         assert!(run.scheduled_for >= before);
         assert!(run.scheduled_for <= after);
-        assert_eq!(run.timeframe, DEFAULT_ANALYSIS_TIMEFRAME);
+        assert_eq!(run.timeframe.as_deref(), Some(DEFAULT_ANALYSIS_TIMEFRAME));
         let delta = (run.scheduled_for - scheduled_for)
             .num_microseconds()
             .unwrap_or(i64::MAX);

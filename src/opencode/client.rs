@@ -77,6 +77,10 @@ impl OpenCodeClient {
     }
 
     /// Run a slash command against an existing session.
+    ///
+    /// For the current OpenCode integration, this HTTP request blocks until the
+    /// command finishes. Vibetrading therefore marks the run succeeded only
+    /// after this request returns successfully.
     pub async fn run_command(
         &self,
         base_url: &str,
@@ -100,10 +104,10 @@ impl OpenCodeClient {
     ///
     /// Treats any successful (2xx) response as a live session. The
     /// `OpenCode /session/{id}/status` endpoint does not currently
-    /// return a structured terminal state across versions, so the first
-    /// implementation prefers the more reliable path: the command
-    /// dispatch response is treated as terminal success. The polling
-    /// shape is kept for future use.
+    /// return a structured terminal state across versions. Vibetrading does not
+    /// use this endpoint to decide command completion because
+    /// `POST /session/{id}/command` already blocks until completion for the
+    /// current integration. The polling shape is kept for future diagnostic use.
     pub async fn session_is_active(&self, base_url: &str, session_id: &str) -> Result<bool> {
         let url = build_url(base_url, &format!("session/{}/status", session_id), &[]);
         let response = self

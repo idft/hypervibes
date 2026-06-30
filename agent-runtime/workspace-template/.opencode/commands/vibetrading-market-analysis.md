@@ -1,0 +1,7 @@
+Run Vibetrading market-analysis synthesis for this agent.
+
+- Read the latest per-timeframe `analysis` memories for each selected symbol with `get_latest_analysis(symbol)`.
+- Produce exactly one `market_analysis` memory per selected symbol.
+- Use `write_memory` with `memory_type="market_analysis"` and omit the `timeframe` argument entirely. Do not pass an empty string.
+- Include source memory ids, source timeframes, schema version, analysis kind, and explicit validity metadata.
+- If there is no actionable edge, write a neutral market analysis that tells trading not to open new exposure.

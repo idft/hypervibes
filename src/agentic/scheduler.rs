@@ -8,7 +8,10 @@ use tracing::{debug, error, info, warn};
 use crate::{
     agentic::{
         backend::{AgenticBackend, DispatchRequest, dispatch_with_timeout},
-        model::{DueOpenCodeScheduleRow, JOB_KIND_ANALYSIS, JOB_KIND_TRADING},
+        model::{
+            DueOpenCodeHookRow, DueOpenCodeScheduleRow, HOOK_EVENT_ANALYSIS_BATCH_COMPLETED,
+            JOB_KIND_ANALYSIS, JOB_KIND_TRADING,
+        },
         store,
         timeframe::parse_timeframe_seconds,
     },
@@ -21,19 +24,15 @@ use crate::{
 const SCHEDULER_POLL_INTERVAL: Duration = Duration::from_secs(10);
 const DUE_SCHEDULE_LIMIT: i64 = 20;
 
-const JOB_KIND_PRIORITY_ANALYSIS: u8 = 0;
-const JOB_KIND_PRIORITY_TRADING: u8 = 1;
-const JOB_KIND_PRIORITY_UNKNOWN: u8 = 2;
-
 /// Periodic background loop that claims due OpenCode schedules and
 /// dispatches them through an [`AgenticBackend`].
 ///
 /// The scheduler is generic over the backend so tests can swap in a
 /// fake implementation. In production this is `OpenCodeBackend`.
 ///
-/// Schedules for the same agent run sequentially in a single worker
-/// task, ordered by shortest timeframe first, then `analysis` before
-/// `trading`, then numeric `schedule_id`. Different agents may run
+/// Schedules for the same agent run in two independent lanes:
+/// analysis-lane work (`analysis` plus `market_analysis` hooks) and
+/// trading-lane work (`trading`). Different agents may also run
 /// concurrently.
 pub struct AgenticScheduler {
     pool: DbPool,
@@ -79,8 +78,8 @@ impl AgenticScheduler {
         Ok(())
     }
 
-    /// One scheduling pass: load due schedules, claim each, and run
-    /// them sequentially per agent.
+    /// One scheduling pass: load due schedules, claim each, and run them in
+    /// per-agent analysis/trading lanes.
     ///
     /// This is exposed (not just called from [`Self::run`]) so tests can
     /// drive a single tick deterministically.
@@ -93,9 +92,8 @@ impl AgenticScheduler {
             return Ok(());
         }
 
-        let sorted = sort_due_for_dispatch(due);
         let mut by_agent: BTreeMap<String, Vec<DueOpenCodeScheduleRow>> = BTreeMap::new();
-        for schedule in sorted {
+        for schedule in due {
             by_agent
                 .entry(schedule.agent_key.clone())
                 .or_default()
@@ -103,24 +101,79 @@ impl AgenticScheduler {
         }
 
         for (agent_key, schedules) in by_agent {
-            let pool = self.pool.clone();
-            let backend = self.backend.clone();
-            let live_accounts = self.live_accounts.clone();
-            tokio::spawn(async move {
-                for schedule in schedules {
-                    process_schedule_for_agent(
+            let (analysis_schedules, trading_schedules): (Vec<_>, Vec<_>) = schedules
+                .into_iter()
+                .partition(|schedule| schedule.job_kind == JOB_KIND_ANALYSIS);
+
+            if !analysis_schedules.is_empty() {
+                let pool = self.pool.clone();
+                let backend = self.backend.clone();
+                let live_accounts = self.live_accounts.clone();
+                let agent_key = agent_key.clone();
+                tokio::spawn(async move {
+                    process_analysis_lane_for_agent(
                         &pool,
                         &backend,
                         &live_accounts,
                         &agent_key,
-                        schedule,
+                        sort_analysis_schedules_for_dispatch(analysis_schedules),
                     )
                     .await;
-                }
-            });
+                });
+            }
+
+            if !trading_schedules.is_empty() {
+                let pool = self.pool.clone();
+                let backend = self.backend.clone();
+                let live_accounts = self.live_accounts.clone();
+                tokio::spawn(async move {
+                    process_trading_lane_for_agent(
+                        &pool,
+                        &backend,
+                        &live_accounts,
+                        &agent_key,
+                        sort_trading_schedules_for_dispatch(trading_schedules),
+                    )
+                    .await;
+                });
+            }
         }
 
         Ok(())
+    }
+}
+
+async fn process_analysis_lane_for_agent(
+    pool: &DbPool,
+    backend: &Arc<dyn AgenticBackend>,
+    live_accounts: &Arc<LiveAccountStore>,
+    agent_key: &str,
+    schedules: Vec<DueOpenCodeScheduleRow>,
+) {
+    let mut any_succeeded = false;
+    for schedule in schedules {
+        if process_schedule_for_agent(pool, backend, live_accounts, agent_key, schedule).await {
+            any_succeeded = true;
+        }
+    }
+
+    if any_succeeded
+        && let Err(error) =
+            dispatch_analysis_batch_completed_hook(pool, backend, live_accounts, agent_key).await
+    {
+        warn!(agent_key, error = ?error, "failed to dispatch analysis batch completed hook");
+    }
+}
+
+async fn process_trading_lane_for_agent(
+    pool: &DbPool,
+    backend: &Arc<dyn AgenticBackend>,
+    live_accounts: &Arc<LiveAccountStore>,
+    agent_key: &str,
+    schedules: Vec<DueOpenCodeScheduleRow>,
+) {
+    for schedule in schedules {
+        let _ = process_schedule_for_agent(pool, backend, live_accounts, agent_key, schedule).await;
     }
 }
 
@@ -130,7 +183,7 @@ async fn process_schedule_for_agent(
     live_accounts: &Arc<LiveAccountStore>,
     agent_key: &str,
     schedule: DueOpenCodeScheduleRow,
-) {
+) -> bool {
     let schedule_id = schedule.schedule_id;
     let job_key = schedule.job_key.clone();
     let scheduled_for = schedule.next_run_at;
@@ -145,7 +198,7 @@ async fn process_schedule_for_agent(
                 error = ?error,
                 "failed to claim due schedule"
             );
-            return;
+            return false;
         }
     };
 
@@ -155,6 +208,7 @@ async fn process_schedule_for_agent(
                 schedule_id,
                 agent_key, "schedule no longer due at claim time"
             );
+            false
         }
         store::ClaimedScheduleRun::Skipped { run_id } => {
             info!(
@@ -164,13 +218,16 @@ async fn process_schedule_for_agent(
                 job_key = %job_key,
                 "agentic run skipped because previous run still active"
             );
+            false
         }
         store::ClaimedScheduleRun::Dispatch { run_id } => {
             match build_dispatch_request(pool, live_accounts, &schedule, run_id, scheduled_for)
                 .await
             {
                 Ok(Some(request)) => {
-                    dispatch_run(pool.clone(), backend.clone(), request).await;
+                    dispatch_run(pool.clone(), backend.clone(), request)
+                        .await
+                        .succeeded
                 }
                 Ok(None) => {
                     warn!(
@@ -186,6 +243,7 @@ async fn process_schedule_for_agent(
                         None,
                     )
                     .await;
+                    false
                 }
                 Err(error) => {
                     error!(
@@ -197,6 +255,7 @@ async fn process_schedule_for_agent(
                     );
                     let _ = store::mark_run_failed(pool, run_id, "dispatch request errored", None)
                         .await;
+                    false
                 }
             }
         }
@@ -214,12 +273,13 @@ pub fn dispatch_request_from_schedule(
 ) -> DispatchRequest {
     DispatchRequest {
         run_id,
-        schedule_id: schedule.schedule_id,
+        schedule_id: Some(schedule.schedule_id),
+        hook_id: None,
         agent_key: schedule.agent_key.clone(),
         display_name: schedule.display_name.clone(),
         job_key: schedule.job_key.clone(),
         job_kind: schedule.job_kind.clone(),
-        timeframe: schedule.timeframe.clone(),
+        timeframe: Some(schedule.timeframe.clone()),
         operator_prompt: schedule.operator_prompt.clone(),
         analysis_prompt: agent.analysis_prompt.clone(),
         trading_prompt: agent.trading_prompt.clone(),
@@ -232,6 +292,39 @@ pub fn dispatch_request_from_schedule(
         timeout_seconds: schedule.timeout_seconds,
         runtime_base_url: schedule.runtime_base_url.clone(),
         runtime_config: schedule.runtime_config.clone(),
+        scheduled_for,
+    }
+}
+
+pub fn dispatch_request_from_hook(
+    hook: &DueOpenCodeHookRow,
+    run_id: i64,
+    scheduled_for: chrono::DateTime<Utc>,
+    agent: &crate::agents::model::AgentDetailRow,
+    selected_instruments: Vec<String>,
+    system_prompt: String,
+) -> DispatchRequest {
+    DispatchRequest {
+        run_id,
+        schedule_id: None,
+        hook_id: Some(hook.hook_id),
+        agent_key: hook.agent_key.clone(),
+        display_name: hook.display_name.clone(),
+        job_key: hook.job_key.clone(),
+        job_kind: hook.job_kind.clone(),
+        timeframe: None,
+        operator_prompt: hook.operator_prompt.clone(),
+        analysis_prompt: agent.analysis_prompt.clone(),
+        trading_prompt: agent.trading_prompt.clone(),
+        system_prompt,
+        environment: agent.environment.clone(),
+        selected_instruments,
+        account_snapshot: None,
+        model_provider_id: hook.model_provider_id.clone(),
+        model_id: hook.model_id.clone(),
+        timeout_seconds: hook.timeout_seconds,
+        runtime_base_url: hook.runtime_base_url.clone(),
+        runtime_config: hook.runtime_config.clone(),
         scheduled_for,
     }
 }
@@ -277,14 +370,117 @@ async fn build_dispatch_request(
     )))
 }
 
+pub async fn build_hook_dispatch_request(
+    pool: &DbPool,
+    hook: &DueOpenCodeHookRow,
+    run_id: i64,
+    scheduled_for: chrono::DateTime<Utc>,
+) -> Result<Option<DispatchRequest>> {
+    let agent = get_agent(pool, &hook.agent_key)
+        .await?
+        .context("agent not found while building hook dispatch request")?;
+
+    let selected_instruments = list_agent_instrument_ids(pool, &hook.agent_key).await?;
+    if selected_instruments.is_empty() {
+        return Ok(None);
+    }
+
+    let system_setting = settings::store::get_setting(pool, "opencode_system_prompt").await?;
+    let system_prompt = system_setting.map(|s| s.value).unwrap_or_default();
+
+    Ok(Some(dispatch_request_from_hook(
+        hook,
+        run_id,
+        scheduled_for,
+        &agent,
+        selected_instruments,
+        system_prompt,
+    )))
+}
+
+pub async fn dispatch_analysis_batch_completed_hook(
+    pool: &DbPool,
+    backend: &Arc<dyn AgenticBackend>,
+    _live_accounts: &Arc<LiveAccountStore>,
+    agent_key: &str,
+) -> Result<()> {
+    let Some(hook) =
+        store::get_enabled_hook_for_event(pool, agent_key, HOOK_EVENT_ANALYSIS_BATCH_COMPLETED)
+            .await?
+    else {
+        debug!(
+            agent_key,
+            "no enabled analysis batch completed hook configured"
+        );
+        return Ok(());
+    };
+
+    match store::insert_queued_hook_run(pool, agent_key, hook.id).await? {
+        store::QueuedHookRun::Dispatch {
+            run_id,
+            scheduled_for,
+        } => {
+            let Some(hook_dispatch) =
+                store::get_opencode_hook_for_dispatch(pool, agent_key, hook.id).await?
+            else {
+                let _ =
+                    store::mark_run_failed(pool, run_id, "hook disappeared before dispatch", None)
+                        .await;
+                return Ok(());
+            };
+
+            match build_hook_dispatch_request(pool, &hook_dispatch, run_id, scheduled_for).await {
+                Ok(Some(request)) => {
+                    let _ = dispatch_run(pool.clone(), backend.clone(), request).await;
+                }
+                Ok(None) => {
+                    let _ = store::mark_run_failed(
+                        pool,
+                        run_id,
+                        "no currencies selected for agent; job skipped",
+                        None,
+                    )
+                    .await;
+                }
+                Err(error) => {
+                    let _ = store::mark_run_failed(pool, run_id, "dispatch request errored", None)
+                        .await;
+                    return Err(error);
+                }
+            }
+        }
+        store::QueuedHookRun::Skipped { run_id } => {
+            info!(
+                agent_key,
+                hook_id = hook.id,
+                run_id,
+                "hook run skipped because previous analysis-lane run is still active"
+            );
+        }
+        store::QueuedHookRun::Missing => {
+            debug!(
+                agent_key,
+                hook_id = hook.id,
+                "hook disappeared before queue insert"
+            );
+        }
+    }
+
+    Ok(())
+}
+
 /// Run a single dispatch through the backend, awaiting its completion.
 /// Sequential schedulers should call this so that the next schedule
 /// for the same agent is not processed until the current run finishes.
+pub struct DispatchRunResult {
+    pub succeeded: bool,
+}
+
 pub async fn dispatch_run(
     pool: DbPool,
     backend: Arc<dyn AgenticBackend>,
     request: DispatchRequest,
-) {
+) -> DispatchRunResult {
     let run_id = request.run_id;
     let agent_key = request.agent_key.clone();
     let job_key = request.job_key.clone();
@@ -297,7 +493,7 @@ pub async fn dispatch_run(
             error = ?error,
             "failed to mark agentic run as running"
         );
-        return;
+        return DispatchRunResult { succeeded: false };
     }
 
     match dispatch_with_timeout(&pool, backend, request).await {
@@ -308,6 +504,7 @@ pub async fn dispatch_run(
                 job_key = %job_key,
                 "agentic dispatch finished"
             );
+            DispatchRunResult { succeeded: true }
         }
         Err(error) => {
             error!(
@@ -318,6 +515,7 @@ pub async fn dispatch_run(
                 "agentic dispatch errored"
             );
             let _ = store::mark_run_failed(&pool, run_id, "dispatch task errored", None).await;
+            DispatchRunResult { succeeded: false }
         }
     }
 }
@@ -329,18 +527,12 @@ pub fn spawn_dispatch_task(
     backend: Arc<dyn AgenticBackend>,
     request: DispatchRequest,
 ) {
-    tokio::spawn(dispatch_run(pool, backend, request));
+    tokio::spawn(async move {
+        let _ = dispatch_run(pool, backend, request).await;
+    });
 }
 
-fn job_kind_priority(job_kind: &str) -> u8 {
-    match job_kind {
-        JOB_KIND_ANALYSIS => JOB_KIND_PRIORITY_ANALYSIS,
-        JOB_KIND_TRADING => JOB_KIND_PRIORITY_TRADING,
-        _ => JOB_KIND_PRIORITY_UNKNOWN,
-    }
-}
-
-fn schedule_sort_key(schedule: &DueOpenCodeScheduleRow) -> ScheduleSortKey {
+fn timeframe_duration_for_sort(schedule: &DueOpenCodeScheduleRow) -> i64 {
     let duration_seconds = match parse_timeframe_seconds(&schedule.timeframe) {
         Ok(seconds) => seconds,
         Err(error) => {
@@ -353,59 +545,44 @@ fn schedule_sort_key(schedule: &DueOpenCodeScheduleRow) -> ScheduleSortKey {
             i64::MAX
         }
     };
-    ScheduleSortKey {
-        next_run_at: schedule.next_run_at,
-        duration_seconds,
-        job_kind_priority: job_kind_priority(&schedule.job_kind),
-        schedule_id: schedule.schedule_id,
-    }
+    duration_seconds
 }
 
-#[derive(Debug, Clone, Copy)]
-struct ScheduleSortKey {
-    next_run_at: chrono::DateTime<Utc>,
-    duration_seconds: i64,
-    job_kind_priority: u8,
-    schedule_id: i64,
-}
-
-impl Ord for ScheduleSortKey {
-    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        // Tuple ordering: earliest next_run_at first, then shortest
-        // timeframe, then analysis-before-trading, then lowest id.
-        (
-            self.next_run_at,
-            self.duration_seconds,
-            self.job_kind_priority,
-            self.schedule_id,
-        )
-            .cmp(&(
-                other.next_run_at,
-                other.duration_seconds,
-                other.job_kind_priority,
-                other.schedule_id,
-            ))
-    }
-}
-
-impl PartialOrd for ScheduleSortKey {
-    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        Some(self.cmp(other))
-    }
-}
-
-impl Eq for ScheduleSortKey {}
-
-impl PartialEq for ScheduleSortKey {
-    fn eq(&self, other: &Self) -> bool {
-        self.cmp(other) == std::cmp::Ordering::Equal
-    }
-}
-
-fn sort_due_for_dispatch(due: Vec<DueOpenCodeScheduleRow>) -> Vec<DueOpenCodeScheduleRow> {
-    let mut indexed: Vec<(ScheduleSortKey, DueOpenCodeScheduleRow)> = due
+fn sort_analysis_schedules_for_dispatch(
+    due: Vec<DueOpenCodeScheduleRow>,
+) -> Vec<DueOpenCodeScheduleRow> {
+    let mut indexed: Vec<((i64, chrono::DateTime<Utc>, i64), DueOpenCodeScheduleRow)> = due
         .into_iter()
-        .map(|schedule| (schedule_sort_key(&schedule), schedule))
+        .map(|schedule| {
+            (
+                (
+                    timeframe_duration_for_sort(&schedule),
+                    schedule.next_run_at,
+                    schedule.schedule_id,
+                ),
+                schedule,
+            )
+        })
+        .collect();
+    indexed.sort_by_key(|(key, _)| *key);
+    indexed.into_iter().map(|(_, row)| row).collect()
+}
+
+fn sort_trading_schedules_for_dispatch(
+    due: Vec<DueOpenCodeScheduleRow>,
+) -> Vec<DueOpenCodeScheduleRow> {
+    let mut indexed: Vec<((chrono::DateTime<Utc>, i64, i64), DueOpenCodeScheduleRow)> = due
+        .into_iter()
+        .map(|schedule| {
+            (
+                (
+                    schedule.next_run_at,
+                    timeframe_duration_for_sort(&schedule),
+                    schedule.schedule_id,
+                ),
+                schedule,
+            )
+        })
         .collect();
     indexed.sort_by_key(|(key, _)| *key);
     indexed.into_iter().map(|(_, row)| row).collect()
@@ -641,7 +818,7 @@ mod tests {
         let request = &guard[0];
         assert_eq!(request.agent_key, key);
         assert_eq!(request.job_key, "analysis-15m");
-        assert_eq!(request.timeframe, "15m");
+        assert_eq!(request.timeframe.as_deref(), Some("15m"));
         drop(guard);
 
         run_until(|| async {
@@ -729,10 +906,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn tick_dispatches_equal_timeframe_analysis_before_trading() {
+    async fn tick_runs_analysis_and_trading_lanes_concurrently_for_same_agent() {
         let pool = test_db::pool().await;
         let key = format!(
-            "sched-kinds-{}",
+            "sched-lanes-{}",
             Utc::now().timestamp_nanos_opt().unwrap_or(0)
         );
         seed_test_agent(&pool, &key).await;
@@ -759,9 +936,66 @@ mod tests {
         let calls: Arc<Mutex<Vec<DispatchRequest>>> = Arc::new(Mutex::new(Vec::new()));
         let backend: Arc<dyn AgenticBackend> = Arc::new(FakeBackend {
             calls: calls.clone(),
-            delay: Duration::from_millis(30),
+            delay: Duration::from_millis(150),
         });
 
+        let live_accounts = Arc::new(crate::hyperliquid::live_state::LiveAccountStore::new());
+        let (_tx, rx) = watch::channel(false);
+        let mut scheduler = AgenticScheduler::new(pool.clone(), rx, backend, live_accounts);
+        let started = std::time::Instant::now();
+        scheduler.tick().await.expect("tick");
+
+        run_until(|| async { calls.lock().map(|guard| guard.len() >= 2).unwrap_or(false) }).await;
+        let elapsed = started.elapsed();
+
+        let guard = calls.lock().unwrap();
+        let mut jobs: Vec<&str> = guard.iter().map(|r| r.job_key.as_str()).collect();
+        jobs.sort();
+        assert!(
+            jobs == vec!["analysis-15m", "trading-1m"],
+            "expected both lanes to dispatch, got {jobs:?}"
+        );
+        assert!(
+            elapsed < Duration::from_millis(280),
+            "expected same-agent lanes to overlap, took {elapsed:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn tick_dispatches_market_analysis_hook_after_successful_analysis_batch() {
+        let pool = test_db::pool().await;
+        let key = format!(
+            "sched-hook-{}",
+            Utc::now().timestamp_nanos_opt().unwrap_or(0)
+        );
+        seed_test_agent(&pool, &key).await;
+
+        store::insert_agent_hook(
+            &pool,
+            &key,
+            crate::agentic::model::JOB_KIND_MARKET_ANALYSIS,
+            crate::agentic::model::HOOK_EVENT_ANALYSIS_BATCH_COMPLETED,
+            true,
+            None,
+            None,
+            600,
+            "",
+        )
+        .await
+        .expect("insert hook");
+
+        let (schedule_id,): (i64,) = sqlx::query_as(
+            "SELECT id FROM agentic_job_schedules
+              WHERE agent_key = $1 AND job_key = 'analysis-15m'",
+        )
+        .bind(&key)
+        .fetch_one(&pool)
+        .await
+        .expect("fetch analysis id");
+        pin_schedule_due(&pool, schedule_id, "15m").await;
+
+        let calls: Arc<Mutex<Vec<DispatchRequest>>> = Arc::new(Mutex::new(Vec::new()));
+        let backend: Arc<dyn AgenticBackend> = Arc::new(FakeBackend::success(calls.clone()));
         let live_accounts = Arc::new(crate::hyperliquid::live_state::LiveAccountStore::new());
         let (_tx, rx) = watch::channel(false);
         let mut scheduler = AgenticScheduler::new(pool.clone(), rx, backend, live_accounts);
@@ -770,11 +1004,12 @@ mod tests {
         run_until(|| async { calls.lock().map(|guard| guard.len() >= 2).unwrap_or(false) }).await;
 
         let guard = calls.lock().unwrap();
-        let order: Vec<&str> = guard.iter().map(|r| r.job_key.as_str()).collect();
-        assert!(
-            order[0] == "analysis-15m",
-            "expected analysis to dispatch first, got {order:?}"
-        );
+        let mut jobs: Vec<&str> = guard
+            .iter()
+            .map(|request| request.job_key.as_str())
+            .collect();
+        jobs.sort();
+        assert_eq!(jobs, vec!["analysis-15m", "market-analysis"]);
     }
 
     #[tokio::test]

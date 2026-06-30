@@ -8,7 +8,7 @@ use tracing::{info, warn};
 
 use crate::{
     agentic::{
-        model::{JOB_KIND_ANALYSIS, JOB_KIND_TRADING},
+        model::{JOB_KIND_ANALYSIS, JOB_KIND_MARKET_ANALYSIS, JOB_KIND_TRADING},
         store,
     },
     db::DbPool,
@@ -21,18 +21,21 @@ use crate::{
 const ERROR_SUMMARY_MAX_CHARS: usize = 500;
 const DEFAULT_ANALYSIS_AGENT: &str = "analysis";
 const DEFAULT_ANALYSIS_COMMAND: &str = "vibetrading-analysis";
+const DEFAULT_MARKET_ANALYSIS_AGENT: &str = "market-analysis";
+const DEFAULT_MARKET_ANALYSIS_COMMAND: &str = "vibetrading-market-analysis";
 const DEFAULT_TRADING_AGENT: &str = "trading";
 const DEFAULT_TRADING_COMMAND: &str = "vibetrading-trading";
 
 #[derive(Debug, Clone)]
 pub struct DispatchRequest {
     pub run_id: i64,
-    pub schedule_id: i64,
+    pub schedule_id: Option<i64>,
+    pub hook_id: Option<i64>,
     pub agent_key: String,
     pub display_name: String,
     pub job_key: String,
     pub job_kind: String,
-    pub timeframe: String,
+    pub timeframe: Option<String>,
     pub operator_prompt: String,
     pub analysis_prompt: String,
     pub trading_prompt: String,
@@ -51,6 +54,17 @@ pub struct DispatchRequest {
 #[derive(Debug, Clone)]
 pub struct DispatchResult {
     pub backend_run_ref: String,
+}
+
+impl DispatchRequest {
+    fn validate_source(&self) -> Result<()> {
+        match (self.schedule_id, self.hook_id) {
+            (Some(_), None) | (None, Some(_)) => Ok(()),
+            _ => Err(anyhow!(
+                "dispatch request must reference exactly one source: schedule_id or hook_id"
+            )),
+        }
+    }
 }
 
 /// Trait implemented by anything that can execute a single scheduled
@@ -76,6 +90,7 @@ impl OpenCodeBackend {
 #[async_trait]
 impl AgenticBackend for OpenCodeBackend {
     async fn dispatch(&self, request: DispatchRequest) -> Result<DispatchResult> {
+        request.validate_source()?;
         let workspace = OpenCodeWorkspaceRuntimeConfig::from_value(&request.runtime_config)
             .ok_or_else(|| anyhow!("OpenCode workspace is not configured"))?;
         let workspace_container_path = workspace.workspace_container_path.clone();
@@ -107,7 +122,8 @@ impl AgenticBackend for OpenCodeBackend {
 
         info!(
             run_id = request.run_id,
-            schedule_id = request.schedule_id,
+            schedule_id = ?request.schedule_id,
+            hook_id = ?request.hook_id,
             agent_key = %request.agent_key,
             display_name = %request.display_name,
             job_key = %request.job_key,
@@ -148,7 +164,8 @@ impl AgenticBackend for OpenCodeBackend {
 
         info!(
             run_id = request.run_id,
-            schedule_id = request.schedule_id,
+            schedule_id = ?request.schedule_id,
+            hook_id = ?request.hook_id,
             agent_key = %request.agent_key,
             display_name = %request.display_name,
             job_key = %request.job_key,
@@ -165,6 +182,10 @@ impl AgenticBackend for OpenCodeBackend {
 fn resolve_opencode_job(job_kind: &str) -> Result<(&'static str, &'static str)> {
     match job_kind {
         JOB_KIND_ANALYSIS => Ok((DEFAULT_ANALYSIS_AGENT, DEFAULT_ANALYSIS_COMMAND)),
+        JOB_KIND_MARKET_ANALYSIS => Ok((
+            DEFAULT_MARKET_ANALYSIS_AGENT,
+            DEFAULT_MARKET_ANALYSIS_COMMAND,
+        )),
         JOB_KIND_TRADING => Ok((DEFAULT_TRADING_AGENT, DEFAULT_TRADING_COMMAND)),
         other => Err(anyhow!("unknown job kind: {other}")),
     }
@@ -288,12 +309,13 @@ mod tests {
     fn make_request() -> DispatchRequest {
         DispatchRequest {
             run_id: 1,
-            schedule_id: 2,
+            schedule_id: Some(2),
+            hook_id: None,
             agent_key: "btc-2".to_string(),
             display_name: "BTC 2".to_string(),
             job_key: "analysis-15m".to_string(),
             job_kind: JOB_KIND_ANALYSIS.to_string(),
-            timeframe: "15m".to_string(),
+            timeframe: Some("15m".to_string()),
             operator_prompt: String::new(),
             analysis_prompt: "Analyze trends.".to_string(),
             trading_prompt: "Trade breakouts.".to_string(),
@@ -323,6 +345,13 @@ mod tests {
         assert_eq!(
             resolve_opencode_job(JOB_KIND_TRADING).unwrap(),
             (DEFAULT_TRADING_AGENT, DEFAULT_TRADING_COMMAND)
+        );
+        assert_eq!(
+            resolve_opencode_job(JOB_KIND_MARKET_ANALYSIS).unwrap(),
+            (
+                DEFAULT_MARKET_ANALYSIS_AGENT,
+                DEFAULT_MARKET_ANALYSIS_COMMAND,
+            )
         );
         assert!(resolve_opencode_job("unknown").is_err());
     }

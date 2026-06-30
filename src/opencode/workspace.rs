@@ -304,7 +304,13 @@ mod tests {
                 .join(".opencode/commands/vibetrading-analysis.md"),
             generated
                 .workspace_host_path
+                .join(".opencode/commands/vibetrading-market-analysis.md"),
+            generated
+                .workspace_host_path
                 .join(".opencode/agents/analysis.md"),
+            generated
+                .workspace_host_path
+                .join(".opencode/agents/market-analysis.md"),
             generated.workspace_host_path.join("scripts/user"),
             generated.workspace_host_path.join("scratch"),
         ] {
@@ -414,13 +420,13 @@ mod tests {
         let commands = fs::read_to_string(
             generated
                 .workspace_host_path
-                .join(".opencode/commands/vibetrading-analysis.md"),
+                .join(".opencode/commands/vibetrading-market-analysis.md"),
         )
         .expect("read command");
         let agent = fs::read_to_string(
             generated
                 .workspace_host_path
-                .join(".opencode/agents/analysis.md"),
+                .join(".opencode/agents/market-analysis.md"),
         )
         .expect("read agent");
 

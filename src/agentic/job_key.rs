@@ -10,6 +10,10 @@ pub fn build_generated_job_key(job_kind: &str, timeframe: &str) -> String {
     format!("{job_kind}-{timeframe}")
 }
 
+pub fn build_generated_hook_job_key(job_kind: &str) -> String {
+    job_kind.trim().replace('_', "-")
+}
+
 /// Trim a timeframe (or job kind) for inclusion in a generated key.
 ///
 /// The returned slice is the input with leading and trailing whitespace
@@ -42,5 +46,13 @@ mod tests {
     fn build_generated_job_key_does_not_include_agent_key() {
         let key = build_generated_job_key("analysis", "15m");
         assert!(!key.contains("agent"));
+    }
+
+    #[test]
+    fn build_generated_hook_job_key_replaces_underscores() {
+        assert_eq!(
+            build_generated_hook_job_key("market_analysis"),
+            "market-analysis"
+        );
     }
 }

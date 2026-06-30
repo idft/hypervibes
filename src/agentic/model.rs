@@ -2,7 +2,10 @@ use chrono::{DateTime, Utc};
 use serde_json::Value;
 
 pub const JOB_KIND_ANALYSIS: &str = "analysis";
+pub const JOB_KIND_MARKET_ANALYSIS: &str = "market_analysis";
 pub const JOB_KIND_TRADING: &str = "trading";
+
+pub const HOOK_EVENT_ANALYSIS_BATCH_COMPLETED: &str = "analysis_batch_completed";
 
 pub const RUN_STATUS_QUEUED: &str = "queued";
 pub const RUN_STATUS_RUNNING: &str = "running";
@@ -32,13 +35,31 @@ pub struct AgenticJobScheduleRow {
 
 #[derive(Debug, Clone, sqlx::FromRow)]
 #[allow(dead_code)]
-pub struct AgenticRunRow {
+pub struct AgenticJobHookRow {
     pub id: i64,
-    pub schedule_id: Option<i64>,
     pub agent_key: String,
     pub job_key: String,
     pub job_kind: String,
-    pub timeframe: String,
+    pub hook_event: String,
+    pub enabled: bool,
+    pub model_provider_id: Option<String>,
+    pub model_id: Option<String>,
+    pub timeout_seconds: i32,
+    pub operator_prompt: String,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, sqlx::FromRow)]
+#[allow(dead_code)]
+pub struct AgenticRunRow {
+    pub id: i64,
+    pub schedule_id: Option<i64>,
+    pub hook_id: Option<i64>,
+    pub agent_key: String,
+    pub job_key: String,
+    pub job_kind: String,
+    pub timeframe: Option<String>,
     pub status: String,
     pub backend_run_ref: Option<String>,
     pub model_provider_id: Option<String>,
@@ -52,6 +73,12 @@ pub struct AgenticRunRow {
     pub updated_at: DateTime<Utc>,
 }
 
+#[derive(Debug, Clone)]
+pub enum AgenticRunSource {
+    Schedule(i64),
+    Hook(i64),
+}
+
 #[derive(Debug, Clone, sqlx::FromRow)]
 #[allow(dead_code)]
 pub struct DueOpenCodeScheduleRow {
@@ -63,6 +90,25 @@ pub struct DueOpenCodeScheduleRow {
     pub timeframe: String,
     pub trigger_delay_seconds: i32,
     pub next_run_at: DateTime<Utc>,
+    pub model_provider_id: Option<String>,
+    pub model_id: Option<String>,
+    pub timeout_seconds: i32,
+    pub operator_prompt: String,
+    pub runtime_id: String,
+    pub runtime_name: String,
+    pub runtime_base_url: String,
+    pub runtime_config: Value,
+}
+
+#[derive(Debug, Clone, sqlx::FromRow)]
+#[allow(dead_code)]
+pub struct DueOpenCodeHookRow {
+    pub hook_id: i64,
+    pub agent_key: String,
+    pub display_name: String,
+    pub job_key: String,
+    pub job_kind: String,
+    pub hook_event: String,
     pub model_provider_id: Option<String>,
     pub model_id: Option<String>,
     pub timeout_seconds: i32,

@@ -509,13 +509,12 @@ automatically disabled.
 
 ## Run Completion Polling
 
-The first implementation does **not** poll `GET /session/{id}/status` to
-detect terminal completion. The OpenCode server returns 200 from
-`POST /session/{id}/command` once the command has been accepted, and the
-adapter treats that 200 as the dispatch success signal. The OpenCode database
-plugin records the actual final session state in the `opencode` schema
-(`opencode.sessions.status`), which is the canonical source of truth for
-"did the run actually succeed".
+For the current OpenCode integration, Vibetrading does **not** poll
+`GET /session/{id}/status` to detect terminal completion.
+
+`POST /session/{id}/command` blocks until the command finishes. Vibetrading
+therefore marks an `agentic_runs` row `succeeded` only after that HTTP request
+returns successfully. A non-success response or timeout marks the run failed.
 
 The adapter persists the OpenCode session id to `agentic_runs.backend_run_ref`
 immediately after `POST /session` succeeds, before waiting on the command
@@ -577,6 +576,8 @@ Trading jobs:
 - place or cancel orders only through Vibetrading execution APIs/tools
 - should not directly sign Hyperliquid orders
 - should not write Python scripts in the initial design
+- per-agent OpenCode tool deny-lists were not added in this slice; the current
+  protection is prompt-level guidance plus backend-side order safety checks
 
 The exact OpenCode skills, commands, and permissions are deferred to the runtime
 implementation phase.
@@ -1029,11 +1030,11 @@ Client" above for why raw `reqwest` is used instead of the
   `vibetrading-analysis` / `vibetrading-trading` command and the
   command arguments. The `?directory=` query parameter is **not**
   repeated, matching the verified OpenCode 1.17.11 contract.
-- **10.4 ⏸** Polling is deferred. The first implementation treats a
-  successful `POST /session/{id}/command` response as the success
-  signal. The `OpenCodeClient::session_is_active` helper is wired
-  for future use. The OpenCode database plugin is the canonical
-  source of truth for actual session status.
+- **10.4 ✅** Polling is not used for completion detection in the current
+  integration. `POST /session/{id}/command` blocks until completion, so a
+  successful response is the actual run-complete success signal. The
+  `OpenCodeClient::session_is_active` helper remains available for future
+  diagnostics.
 - **10.5 ✅** `OpenCodeBackend` is the production backend. The
   `AgenticBackend` trait is the test seam; `agentic::scheduler::tests`
   uses an in-process `FakeBackend` for unit tests.

@@ -199,10 +199,30 @@ def get_latest_analysis(symbol: str, limit: int | None = None) -> list[dict[str,
 
 
 @mcp.tool()
+def get_market_analysis(symbol: str) -> dict[str, Any] | None:
+    """Return the latest fresh market-analysis memory row for ``symbol``."""
+    symbol = _require_nonblank("symbol", symbol)
+    result = _request(
+        "GET",
+        "/api/v1/memories",
+        params={"symbol": symbol, "memory_type": "market_analysis", "limit": 1},
+    )
+    if not isinstance(result, list):
+        raise RuntimeError("Vibetrading /memories returned unexpected shape")
+    if not result:
+        return None
+    first = result[0]
+    if not isinstance(first, dict):
+        raise RuntimeError("Vibetrading /memories returned unexpected shape")
+    return first
+
+
+@mcp.tool()
 def list_memories(
     symbol: str | None = None,
     timeframe: str | None = None,
     memory_type: str | None = None,
+    limit: int | None = None,
     include_expired: bool = False,
 ) -> list[dict[str, Any]]:
     """List memory rows visible to this agent.
@@ -217,6 +237,8 @@ def list_memories(
         params["timeframe"] = _require_nonblank("timeframe", timeframe)
     if memory_type is not None:
         params["memory_type"] = _require_nonblank("memory_type", memory_type)
+    if limit is not None:
+        params["limit"] = _require_limit(limit)
     if include_expired:
         params["include_expired"] = "true"
     result = _request("GET", "/api/v1/memories", params=params or None)
@@ -274,8 +296,9 @@ def write_memory(
     """Persist a memory for this agent.
 
     Required: ``symbol``, ``memory_type``, ``summary``, ``content``.
-    ``timeframe`` is optional. ``metadata`` must be a JSON object when
-    provided; ``None`` is stored as an empty object.
+    ``timeframe`` is optional. For a general memory, omit the ``timeframe``
+    argument entirely; do not pass an empty string. ``metadata`` must be a
+    JSON object when provided; ``None`` is stored as an empty object.
     """
     symbol = _require_nonblank("symbol", symbol)
     memory_type = _require_nonblank("memory_type", memory_type)

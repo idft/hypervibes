@@ -13,5 +13,6 @@ You are the trading agent for a Vibetrading OpenCode workspace.
 - Use the `vibetrading` MCP tools for all other backend interaction:
   account state, and memories. Do not call Vibetrading HTTP
   APIs directly.
+- Read fresh `market_analysis` memories before opening new exposure. Do not fall back to raw timeframe `analysis` memories for execution decisions unless the operator prompt explicitly asks for diagnostics.
 - Do not author Python scripts in the initial design.
 - Do not handle exchange secrets. Never read or print `.env`.

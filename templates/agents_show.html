@@ -451,7 +451,7 @@
         <section class="rounded-2xl border border-zinc-800 bg-[#0d0d10] p-6">
             <div class="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
                 <div>
-                    <h2 class="text-lg font-medium text-white">Jobs</h2>
+                    <h2 class="text-lg font-medium text-white">Scheduled Jobs</h2>
                 </div>
                 <a href="/agents/{{ agent.agent_key }}/jobs/new" class="inline-flex items-center justify-center rounded-full bg-white px-4 py-2 text-sm font-medium text-black hover:bg-zinc-200">
                     Create job
@@ -505,6 +505,81 @@
                                             {% if row.enabled %}Disable{% else %}Enable{% endif %}
                                         </button>
                                     </form>
+                                    <form action="{{ row.delete_action }}" method="post">
+                                        <button type="submit" class="rounded-full border border-red-900/60 bg-red-950/20 px-3 py-1.5 text-xs font-medium text-red-300 hover:border-red-800 hover:bg-red-950/40">
+                                            Delete
+                                        </button>
+                                    </form>
+                                </div>
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            {% endif %}
+        </section>
+
+        <section class="rounded-2xl border border-zinc-800 bg-[#0d0d10] p-6">
+            <div class="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+                <div>
+                <h2 class="text-lg font-medium text-white">Hook Jobs</h2>
+                </div>
+                <a href="/agents/{{ agent.agent_key }}/hooks/new" class="inline-flex items-center justify-center rounded-full bg-white px-4 py-2 text-sm font-medium text-black hover:bg-zinc-200">
+                    Create hook
+                </a>
+            </div>
+            {% if !hooks_loaded %}
+            <div class="mt-4 rounded-xl border border-amber-900/60 bg-amber-950/30 px-4 py-3 text-sm text-amber-200">Hooks could not be loaded.</div>
+            {% else if hooks.is_empty() %}
+            <div class="mt-4 rounded-xl border border-zinc-800 bg-zinc-950/70 p-6 text-center">
+                <p class="text-sm text-zinc-400">No hook jobs have been created for this agent yet.</p>
+            </div>
+            {% else %}
+            <div class="mt-4 overflow-x-auto">
+                <table class="min-w-full divide-y divide-zinc-800 text-sm">
+                    <thead class="bg-zinc-950/60 text-left text-xs uppercase tracking-[0.16em] text-zinc-500">
+                        <tr>
+                            <th class="px-4 py-3 font-medium">Job key</th>
+                            <th class="px-4 py-3 font-medium">Kind</th>
+                            <th class="px-4 py-3 font-medium">Trigger</th>
+                            <th class="px-4 py-3 font-medium">Status</th>
+                            <th class="px-4 py-3 font-medium">Timeout</th>
+                            <th class="px-4 py-3 font-medium">Model</th>
+                            <th class="px-4 py-3 font-medium">Operator prompt</th>
+                            <th class="px-4 py-3 font-medium">Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody class="divide-y divide-zinc-800">
+                        {% for row in hooks %}
+                        <tr>
+                            <td class="px-4 py-3 align-top font-mono text-xs text-zinc-200">{{ row.job_key }}</td>
+                            <td class="px-4 py-3 align-top text-zinc-300">{{ row.job_kind }}</td>
+                            <td class="px-4 py-3 align-top text-zinc-300">{{ row.hook_event }}</td>
+                            <td class="px-4 py-3 align-top">
+                                <span class="inline-flex rounded-full border px-2 py-0.5 text-xs font-medium {{ row.enabled_class }}">{{ row.enabled_label }}</span>
+                            </td>
+                            <td class="px-4 py-3 align-top font-mono text-xs text-zinc-300">{{ row.timeout_text }}</td>
+                            <td class="px-4 py-3 align-top font-mono text-xs text-zinc-300">{{ row.model_text }}</td>
+                            <td class="px-4 py-3 align-top text-zinc-300">{{ row.operator_prompt_summary }}</td>
+                            <td class="px-4 py-3 align-top">
+                                <div class="flex flex-wrap items-center gap-2">
+                                    <form action="{{ row.run_now_action }}" method="post">
+                                        <button type="submit" class="rounded-full border border-sky-900/60 bg-sky-950/30 px-3 py-1.5 text-xs font-medium text-sky-300 hover:border-sky-800 hover:bg-sky-950/50 hover:text-sky-200">
+                                            Run now
+                                        </button>
+                                    </form>
+                                    <form action="{{ row.toggle_action }}" method="post">
+                                        <input type="hidden" name="enabled" value="{{ row.hidden_enabled_value }}">
+                                        <button type="submit" class="rounded-full border border-zinc-800 px-3 py-1.5 text-xs font-medium text-zinc-300 hover:border-zinc-700 hover:text-white">
+                                            {% if row.enabled %}Disable{% else %}Enable{% endif %}
+                                        </button>
+                                    </form>
+                                    <form action="{{ row.delete_action }}" method="post">
+                                        <button type="submit" class="rounded-full border border-red-900/60 bg-red-950/20 px-3 py-1.5 text-xs font-medium text-red-300 hover:border-red-800 hover:bg-red-950/40">
+                                            Delete
+                                        </button>
+                                    </form>
                                 </div>
                             </td>
                         </tr>
@@ -517,7 +592,7 @@
 
         <section class="rounded-2xl border border-zinc-800 bg-[#0d0d10] p-6" data-agent-runs>
             <div>
-                <h2 class="text-lg font-medium text-white">Runs</h2>
+                <h2 class="text-lg font-medium text-white">Recent Runs</h2>
             </div>
             {% if !recent_runs_loaded %}
             <div class="mt-4 rounded-xl border border-amber-900/60 bg-amber-950/30 px-4 py-3 text-sm text-amber-200">Runs could not be loaded.</div>
@@ -532,6 +607,7 @@
                         <tr>
                             <th class="px-4 py-3 font-medium">Status</th>
                             <th class="px-4 py-3 font-medium">Job key</th>
+                            <th class="px-4 py-3 font-medium">Timeframe</th>
                             <th class="px-4 py-3 font-medium">Scheduled for</th>
                             <th class="px-4 py-3 font-medium">Started</th>
                             <th class="px-4 py-3 font-medium">Finished</th>
@@ -546,6 +622,7 @@
                                 <span class="inline-flex rounded-full border px-2 py-0.5 text-xs font-medium {{ run.status_class }}">{{ run.status_label }}</span>
                             </td>
                             <td class="px-4 py-3 align-top font-mono text-xs text-zinc-300">{{ run.job_key }}</td>
+                            <td class="px-4 py-3 align-top font-mono text-xs text-zinc-300">{{ run.timeframe_text }}</td>
                             <td class="px-4 py-3 align-top font-mono text-xs text-zinc-300">{{ run.scheduled_for_text }}</td>
                             <td class="px-4 py-3 align-top font-mono text-xs text-zinc-300">{{ run.started_text }}</td>
                             <td class="px-4 py-3 align-top font-mono text-xs text-zinc-300">{{ run.finished_text }}</td>

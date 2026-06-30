@@ -161,6 +161,48 @@ class VibetradingMcpServerTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.server.get_latest_analysis("   ")
 
+    def test_get_market_analysis_query_construction(self) -> None:
+        captured: dict[str, object] = {}
+
+        def fake_request(method, path, *, params=None, json_body=None):
+            captured["method"] = method
+            captured["path"] = path
+            captured["params"] = params
+            captured["json_body"] = json_body
+            return []
+
+        with mock.patch.dict(
+            os.environ,
+            {
+                "VIBETRADING_API_BASE_URL": "http://example.test",
+                "VIBETRADING_API_KEY": "k",
+                "VIBETRADING_AGENT_KEY": "a",
+            },
+            clear=True,
+        ):
+            setattr(self.server, "CONFIG", self.server._load_config())
+            with mock.patch.object(self.server, "_request", side_effect=fake_request):
+                self.server.get_market_analysis("BTC")
+        self.assertEqual(captured["method"], "GET")
+        self.assertEqual(captured["path"], "/api/v1/memories")
+        self.assertEqual(
+            captured["params"],
+            {"symbol": "BTC", "memory_type": "market_analysis", "limit": 1},
+        )
+
+    def test_get_market_analysis_rejects_blank_symbol(self) -> None:
+        with self.assertRaises(ValueError):
+            self.server.get_market_analysis("   ")
+
+    def test_get_market_analysis_returns_none_for_no_rows(self) -> None:
+        with mock.patch.object(self.server, "_request", return_value=[]):
+            self.assertIsNone(self.server.get_market_analysis("BTC"))
+
+    def test_get_market_analysis_returns_first_row(self) -> None:
+        row = {"symbol": "BTC", "memory_type": "market_analysis"}
+        with mock.patch.object(self.server, "_request", return_value=[row]):
+            self.assertEqual(self.server.get_market_analysis("BTC"), row)
+
     def test_validation_rejects_invalid_job_kind(self) -> None:
         with self.assertRaises(ValueError):
             self.server.get_job_context("not-a-kind")
@@ -215,6 +257,16 @@ class VibetradingMcpServerTests(unittest.TestCase):
                 summary="s",
                 content="c",
                 metadata=["not", "a", "dict"],
+            )
+
+    def test_write_memory_rejects_blank_timeframe(self) -> None:
+        with self.assertRaises(ValueError):
+            self.server.write_memory(
+                symbol="BTC",
+                memory_type="market_analysis",
+                summary="summary",
+                content="content",
+                timeframe="   ",
             )
 
     def test_submit_orders_requires_non_empty_list(self) -> None:

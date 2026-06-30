@@ -156,6 +156,38 @@ Rules:
 - `summary` stays a concise one-liner for UI listing.
 - `content` stays the human-readable markdown narrative.
 
+## Market Analysis Memory Contract
+
+OpenCode analysis batches now hand off execution context through
+`memory_type="market_analysis"` memories.
+
+Required behavior:
+
+- one memory per symbol
+- `memory_type = "market_analysis"`
+- `timeframe = null`
+- trading consumes fresh `market_analysis` memories as its primary execution
+  handoff
+- trading must not open new exposure when no fresh `market_analysis` exists
+- trading must not fall back to raw timeframe `analysis` memories for execution
+  decisions
+
+Required metadata keys:
+
+- `schema_version = 1`
+- `analysis_kind = "market_analysis"`
+- `valid_for_seconds`
+- `source_memory_ids`
+- `source_timeframes`
+- `overall_bias`
+- `confidence`
+- `entry_setups`
+- `take_profit_levels`
+- `stop_loss_levels`
+- `invalidation`
+- `do_not_trade_if`
+- `risk_notes`
+
 ### Proposed Future Improvement: Multi-Model Analysis
 
 This section is an **initial draft plan**, not current implemented behavior.

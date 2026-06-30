@@ -33,7 +33,7 @@ Frontend assets are managed with `pnpm` and built via `esbuild` and Tailwind CSS
 
 ## Testing
 
-Run `cargo test` from the repo root. No `podman compose`, no Docker, no external Postgres is required: DB-touching tests use an embedded `pglite-oxide` PostgreSQL server that starts in-process via `src/test_db.rs`. The dev server's container Postgres at `localhost:15432` is never touched by tests.
+Run `cargo test` from the repo root. No `podman compose`, no Docker, no external Postgres is required: DB-touching tests use an embedded `pglite-oxide` PostgreSQL server that starts in-process via `src/test_db.rs`. The dev server's container Postgres at `localhost:15432` (u: vibetrading, p: vibetrading) is never touched by tests.
 
 ## Hermes Agent Profile Distribution
 

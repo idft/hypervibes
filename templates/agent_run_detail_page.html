@@ -26,15 +26,19 @@
             </div>
             <a href="{% if let Some(job_url) = run.job_url %}{{ job_url }}{% else %}/agents/{{ agent.agent_key }}/jobs{% endif %}" class="inline-flex w-fit items-center gap-2 rounded-full border border-zinc-800 px-4 py-2 text-sm font-medium text-zinc-300 hover:border-zinc-700 hover:text-white">
                 <span aria-hidden="true">&larr;</span>
-                {% if let Some(_job_url) = run.job_url %}Back to job{% else %}Back to jobs{% endif %}
+                {% if let Some(_job_url) = run.job_url %}Back to {{ run.job_label }}{% else %}Back to jobs{% endif %}
             </a>
         </div>
     </header>
 
-    <section class="grid grid-cols-1 gap-4 lg:grid-cols-4">
+    <section class="grid grid-cols-1 gap-4 lg:grid-cols-5">
         <div class="rounded-2xl border border-zinc-800 bg-[#0d0d10] p-5">
             <p class="text-xs uppercase tracking-[0.16em] text-zinc-500">Scheduled for</p>
             <p class="mt-2 font-mono text-sm text-zinc-200">{{ run.scheduled_for_text }}</p>
+        </div>
+        <div class="rounded-2xl border border-zinc-800 bg-[#0d0d10] p-5">
+            <p class="text-xs uppercase tracking-[0.16em] text-zinc-500">Timeframe</p>
+            <p class="mt-2 font-mono text-sm text-zinc-200">{{ run.timeframe_text }}</p>
         </div>
         <div class="rounded-2xl border border-zinc-800 bg-[#0d0d10] p-5">
             <p class="text-xs uppercase tracking-[0.16em] text-zinc-500">Duration</p>

@@ -519,11 +519,29 @@ pub struct CreateAgentScheduleFormValues {
     pub enabled: bool,
 }
 
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct CreateAgentHookFormValues {
+    pub timeout_seconds: String,
+    pub model_provider_id: String,
+    pub model_id: String,
+    pub operator_prompt: String,
+    pub enabled: bool,
+}
+
 #[derive(Template)]
 #[template(path = "agent_schedule_new.html")]
 pub struct AgentScheduleNewPageTemplate {
     pub agent: AgentDetailRow,
     pub form: CreateAgentScheduleFormValues,
+    pub errors: Vec<String>,
+    pub current_path: String,
+}
+
+#[derive(Template)]
+#[template(path = "agent_hook_new.html")]
+pub struct AgentHookNewPageTemplate {
+    pub agent: AgentDetailRow,
+    pub form: CreateAgentHookFormValues,
     pub errors: Vec<String>,
     pub current_path: String,
 }
@@ -578,8 +596,10 @@ pub struct AgentsShowPageTemplate {
     pub updated_at_text: String,
     pub current_path: String,
     pub jobs: Vec<AgenticJobScheduleView>,
+    pub hooks: Vec<AgenticJobHookView>,
     pub recent_runs: Vec<AgenticRunView>,
     pub jobs_loaded: bool,
+    pub hooks_loaded: bool,
     pub recent_runs_loaded: bool,
 }
 
@@ -674,8 +694,10 @@ impl AgentsShowPageTemplate {
             latest_analysis_summary_html: String::new(),
             sparklines_html: String::new(),
             jobs: Vec::new(),
+            hooks: Vec::new(),
             recent_runs: Vec::new(),
             jobs_loaded: false,
+            hooks_loaded: false,
             recent_runs_loaded: false,
         }
     }
@@ -737,6 +759,26 @@ pub struct AgenticJobScheduleView {
     pub detail_url: String,
     pub run_now_action: String,
     pub toggle_action: String,
+    pub delete_action: String,
+    pub hidden_enabled_value: &'static str,
+}
+
+#[derive(Debug, Clone)]
+pub struct AgenticJobHookView {
+    pub id: i64,
+    pub job_key: String,
+    pub job_kind: String,
+    pub hook_event: String,
+    pub enabled: bool,
+    pub enabled_label: &'static str,
+    pub enabled_class: &'static str,
+    pub timeout_text: String,
+    pub model_text: String,
+    pub operator_prompt_summary: String,
+    pub detail_url: String,
+    pub run_now_action: String,
+    pub toggle_action: String,
+    pub delete_action: String,
     pub hidden_enabled_value: &'static str,
 }
 
@@ -760,6 +802,27 @@ pub struct AgenticJobDetailView {
     pub hidden_enabled_value: &'static str,
 }
 
+#[derive(Debug, Clone)]
+pub struct AgenticHookDetailView {
+    pub id: i64,
+    pub job_key: String,
+    pub job_kind: String,
+    pub hook_event: String,
+    pub enabled: bool,
+    pub enabled_label: &'static str,
+    pub enabled_class: &'static str,
+    pub timeout_text: String,
+    pub model_text: String,
+    pub created_at_text: String,
+    pub updated_at_text: String,
+    pub operator_prompt_text: String,
+    pub prompt_preview_text: String,
+    pub prompt_preview_error: Option<String>,
+    pub run_now_action: String,
+    pub toggle_action: String,
+    pub hidden_enabled_value: &'static str,
+}
+
 /// View-model for a single row in a Runs table.
 #[derive(Debug, Clone)]
 pub struct AgenticRunView {
@@ -767,6 +830,7 @@ pub struct AgenticRunView {
     pub status_label: String,
     pub status_class: String,
     pub job_key: String,
+    pub timeframe_text: String,
     pub scheduled_for_text: String,
     pub started_text: String,
     pub finished_text: String,
@@ -783,6 +847,7 @@ pub struct AgenticRunDetailView {
     pub status_class: String,
     pub job_key: String,
     pub job_kind: String,
+    pub timeframe_text: String,
     pub scheduled_for_text: String,
     pub started_text: String,
     pub finished_text: String,
@@ -792,6 +857,7 @@ pub struct AgenticRunDetailView {
     pub backend_run_ref: String,
     pub error_summary: String,
     pub job_url: Option<String>,
+    pub job_label: &'static str,
 }
 
 #[derive(Debug, Clone)]
@@ -905,7 +971,88 @@ impl AgenticJobScheduleView {
             detail_url: format!("/agents/{}/jobs/{}", row.agent_key, row.id),
             run_now_action: format!("/agents/{}/jobs/{}/run", row.agent_key, row.id),
             toggle_action: format!("/agents/{}/jobs/{}/toggle", row.agent_key, row.id),
+            delete_action: format!("/agents/{}/jobs/{}/delete", row.agent_key, row.id),
             hidden_enabled_value: if row.enabled { "off" } else { "on" },
+        }
+    }
+}
+
+impl AgenticJobHookView {
+    pub fn from_row(row: &crate::agentic::model::AgenticJobHookRow) -> Self {
+        let operator_prompt = row.operator_prompt.trim();
+        let operator_prompt_summary = if operator_prompt.is_empty() {
+            "—".to_string()
+        } else {
+            let mut collapsed = operator_prompt
+                .split_whitespace()
+                .collect::<Vec<_>>()
+                .join(" ");
+            if collapsed.chars().count() > 80 {
+                collapsed = collapsed.chars().take(80).collect::<String>() + "…";
+            }
+            collapsed
+        };
+
+        let model_text = match (row.model_provider_id.as_deref(), row.model_id.as_deref()) {
+            (Some(provider), Some(model)) => format!("{provider}/{model}"),
+            _ => "—".to_string(),
+        };
+
+        let (enabled_label, enabled_class) = if row.enabled {
+            (
+                "Enabled",
+                "border-emerald-900/60 bg-emerald-950/30 text-emerald-300",
+            )
+        } else {
+            ("Disabled", "border-zinc-700 bg-zinc-900/60 text-zinc-400")
+        };
+
+        Self {
+            id: row.id,
+            job_key: row.job_key.clone(),
+            job_kind: row.job_kind.clone(),
+            hook_event: row.hook_event.clone(),
+            enabled: row.enabled,
+            enabled_label,
+            enabled_class,
+            timeout_text: format_duration(row.timeout_seconds),
+            model_text,
+            operator_prompt_summary,
+            detail_url: format!("/agents/{}/hooks/{}", row.agent_key, row.id),
+            run_now_action: format!("/agents/{}/hooks/{}/run", row.agent_key, row.id),
+            toggle_action: format!("/agents/{}/hooks/{}/toggle", row.agent_key, row.id),
+            delete_action: format!("/agents/{}/hooks/{}/delete", row.agent_key, row.id),
+            hidden_enabled_value: if row.enabled { "off" } else { "on" },
+        }
+    }
+}
+
+impl AgenticHookDetailView {
+    pub fn from_row(row: &crate::agentic::model::AgenticJobHookRow) -> Self {
+        let summary = AgenticJobHookView::from_row(row);
+
+        Self {
+            id: row.id,
+            job_key: row.job_key.clone(),
+            job_kind: row.job_kind.clone(),
+            hook_event: row.hook_event.clone(),
+            enabled: row.enabled,
+            enabled_label: summary.enabled_label,
+            enabled_class: summary.enabled_class,
+            timeout_text: summary.timeout_text,
+            model_text: summary.model_text,
+            created_at_text: format_timestamp_utc(row.created_at),
+            updated_at_text: format_timestamp_utc(row.updated_at),
+            operator_prompt_text: if row.operator_prompt.trim().is_empty() {
+                "—".to_string()
+            } else {
+                row.operator_prompt.clone()
+            },
+            prompt_preview_text: String::new(),
+            prompt_preview_error: None,
+            run_now_action: summary.run_now_action,
+            toggle_action: summary.toggle_action,
+            hidden_enabled_value: summary.hidden_enabled_value,
         }
     }
 }
@@ -949,6 +1096,7 @@ impl AgenticRunView {
             status_label,
             status_class,
             job_key: row.job_key.clone(),
+            timeframe_text: row.timeframe.clone().unwrap_or_else(|| "—".to_string()),
             scheduled_for_text: format_timestamp_utc(row.scheduled_for),
             started_text: format_optional_timestamp_utc(row.started_at),
             finished_text: format_optional_timestamp_utc(row.finished_at),
@@ -974,6 +1122,7 @@ impl AgenticRunDetailView {
             status_class,
             job_key: row.job_key.clone(),
             job_kind: row.job_kind.clone(),
+            timeframe_text: row.timeframe.clone().unwrap_or_else(|| "—".to_string()),
             scheduled_for_text: format_timestamp_utc(row.scheduled_for),
             started_text: format_optional_timestamp_utc(row.started_at),
             finished_text: format_optional_timestamp_utc(row.finished_at),
@@ -984,7 +1133,12 @@ impl AgenticRunDetailView {
             error_summary: row.error_summary.clone().unwrap_or_default(),
             job_url: row
                 .schedule_id
-                .map(|schedule_id| format!("/agents/{}/jobs/{}", row.agent_key, schedule_id)),
+                .map(|schedule_id| format!("/agents/{}/jobs/{}", row.agent_key, schedule_id))
+                .or_else(|| {
+                    row.hook_id
+                        .map(|hook_id| format!("/agents/{}/hooks/{}", row.agent_key, hook_id))
+                }),
+            job_label: if row.hook_id.is_some() { "hook" } else { "job" },
         }
     }
 }
@@ -1134,6 +1288,35 @@ impl AgentJobDetailPageTemplate {
             job,
             job_runs,
             job_runs_loaded,
+            current_path,
+        }
+        .render()
+    }
+}
+
+#[derive(Template)]
+#[template(path = "agent_hook_detail_page.html")]
+pub struct AgentHookDetailPageTemplate {
+    pub agent: AgentDetailRow,
+    pub hook: AgenticHookDetailView,
+    pub hook_runs: Vec<AgenticRunView>,
+    pub hook_runs_loaded: bool,
+    pub current_path: String,
+}
+
+impl AgentHookDetailPageTemplate {
+    pub fn render_view(
+        agent: AgentDetailRow,
+        hook: AgenticHookDetailView,
+        hook_runs: Vec<AgenticRunView>,
+        hook_runs_loaded: bool,
+    ) -> Result<String, askama::Error> {
+        let current_path = format!("/agents/{}/hooks/{}", agent.agent_key, hook.id);
+        Self {
+            agent,
+            hook,
+            hook_runs,
+            hook_runs_loaded,
             current_path,
         }
         .render()
@@ -2230,6 +2413,24 @@ mod tests {
         }
     }
 
+    fn sample_hook_row(id: i64, enabled: bool) -> crate::agentic::model::AgenticJobHookRow {
+        let now = Utc::now();
+        crate::agentic::model::AgenticJobHookRow {
+            id,
+            agent_key: "test-agent".to_string(),
+            job_key: "market-analysis".to_string(),
+            job_kind: crate::agentic::model::JOB_KIND_MARKET_ANALYSIS.to_string(),
+            hook_event: crate::agentic::model::HOOK_EVENT_ANALYSIS_BATCH_COMPLETED.to_string(),
+            enabled,
+            model_provider_id: Some("anthropic".to_string()),
+            model_id: Some("claude-3-5-sonnet".to_string()),
+            timeout_seconds: 600,
+            operator_prompt: String::new(),
+            created_at: now,
+            updated_at: now,
+        }
+    }
+
     fn sample_run_row(
         id: i64,
         status: &str,
@@ -2239,10 +2440,11 @@ mod tests {
         crate::agentic::model::AgenticRunRow {
             id,
             schedule_id: Some(1),
+            hook_id: None,
             agent_key: "test-agent".to_string(),
             job_key: job_key.to_string(),
             job_kind: crate::agentic::model::JOB_KIND_ANALYSIS.to_string(),
-            timeframe: "15m".to_string(),
+            timeframe: Some("15m".to_string()),
             status: status.to_string(),
             backend_run_ref: Some("ses_abc123".to_string()),
             model_provider_id: Some("anthropic".to_string()),
@@ -2276,6 +2478,8 @@ mod tests {
                 false,
             )),
         ];
+        template.hooks_loaded = true;
+        template.hooks = vec![AgenticJobHookView::from_row(&sample_hook_row(3, true))];
         template.recent_runs_loaded = true;
         template.recent_runs = vec![AgenticRunView::from_row(&sample_run_row(
             1,
@@ -2284,16 +2488,20 @@ mod tests {
         ))];
         let rendered = template.render().expect("render jobs tab");
         assert!(rendered.contains("/agents/test-agent/jobs"));
-        assert!(rendered.contains("Jobs"));
-        assert!(rendered.contains("Runs"));
+        assert!(rendered.contains("Scheduled Jobs"));
+        assert!(rendered.contains("Hook Jobs"));
+        assert!(rendered.contains("Recent Runs"));
         assert!(rendered.contains("analysis-15m"));
         assert!(rendered.contains("trading-1m"));
+        assert!(rendered.contains("market-analysis"));
         assert!(rendered.contains("15m"));
         assert!(rendered.contains("1m"));
         assert!(rendered.contains("10m"));
         assert!(rendered.contains("anthropic/claude-3-5-sonnet"));
         assert!(rendered.contains("Run now"));
         assert!(rendered.contains("/agents/test-agent/jobs/1/run"));
+        assert!(rendered.contains("/agents/test-agent/hooks/3/run"));
+        assert!(rendered.contains("/agents/test-agent/hooks/3"));
         assert!(rendered.contains("/agents/test-agent/runs/1"));
     }
 
@@ -2341,6 +2549,29 @@ mod tests {
     }
 
     #[test]
+    fn hook_detail_page_renders_hook_metadata_and_runs() {
+        let agent = sample_opencode_detail_row();
+        let hook = AgenticHookDetailView::from_row(&sample_hook_row(3, true));
+        let mut hook_run = sample_run_row(1, "succeeded", "market-analysis");
+        hook_run.schedule_id = None;
+        hook_run.hook_id = Some(3);
+        hook_run.job_kind = crate::agentic::model::JOB_KIND_MARKET_ANALYSIS.to_string();
+        hook_run.timeframe = None;
+        let runs = vec![AgenticRunView::from_row(&hook_run)];
+
+        let rendered = AgentHookDetailPageTemplate::render_view(agent, hook, runs, true)
+            .expect("render hook detail page");
+
+        assert!(rendered.contains("Back to jobs"));
+        assert!(rendered.contains("Hook details"));
+        assert!(rendered.contains("analysis_batch_completed"));
+        assert!(rendered.contains("Created"));
+        assert!(rendered.contains("Updated"));
+        assert!(rendered.contains("/agents/test-agent/hooks/3/run"));
+        assert!(rendered.contains("/agents/test-agent/runs/1"));
+    }
+
+    #[test]
     fn jobs_page_renders_recent_run_rows() {
         let mut template =
             AgentsShowPageTemplate::new(sample_opencode_detail_row(), AgentShowTab::Jobs);
@@ -2353,8 +2584,40 @@ mod tests {
         assert!(rendered.contains("ses_abc123"));
         assert!(rendered.contains(">succeeded<"));
         assert!(rendered.contains(">failed<"));
+        assert!(rendered.contains("15m"));
         assert!(rendered.contains("42s"));
         assert!(rendered.contains("/agents/test-agent/runs/1"));
+    }
+
+    #[test]
+    fn jobs_page_links_to_new_hook_page() {
+        let mut template =
+            AgentsShowPageTemplate::new(sample_opencode_detail_row(), AgentShowTab::Jobs);
+        template.hooks_loaded = true;
+        let rendered = template.render().expect("render jobs page hook section");
+        assert!(rendered.contains("Create hook"));
+        assert!(rendered.contains("/agents/test-agent/hooks/new"));
+    }
+
+    #[test]
+    fn new_hook_page_renders_form() {
+        let template = AgentHookNewPageTemplate {
+            agent: sample_opencode_detail_row(),
+            form: CreateAgentHookFormValues {
+                timeout_seconds: "600".to_string(),
+                model_provider_id: "anthropic".to_string(),
+                model_id: "claude-sonnet-4".to_string(),
+                operator_prompt: "Summarize multi-timeframe agreement".to_string(),
+                enabled: true,
+            },
+            errors: Vec::new(),
+            current_path: "/agents/test-agent/hooks/new".to_string(),
+        };
+
+        let rendered = template.render().expect("render new hook page");
+        assert!(rendered.contains("Create market-analysis hook"));
+        assert!(rendered.contains("action=\"/agents/test-agent/hooks\""));
+        assert!(rendered.contains("analysis_batch_completed"));
     }
 
     #[test]
@@ -2416,6 +2679,20 @@ mod tests {
         assert!(rendered.contains("Transcript"));
         assert!(rendered.contains("Tool executions"));
         assert!(rendered.contains("Analysis complete"));
+    }
+
+    #[test]
+    fn hook_run_detail_view_uses_dash_timeframe_and_hook_job_url() {
+        let mut row = sample_run_row(8, "succeeded", "market-analysis");
+        row.schedule_id = None;
+        row.hook_id = Some(3);
+        row.job_kind = crate::agentic::model::JOB_KIND_MARKET_ANALYSIS.to_string();
+        row.timeframe = None;
+
+        let run = AgenticRunDetailView::from_row(&row);
+        assert_eq!(run.timeframe_text, "—");
+        assert_eq!(run.job_url, Some("/agents/test-agent/hooks/3".to_string()));
+        assert_eq!(run.job_label, "hook");
     }
 
     #[test]
