@@ -48,7 +48,14 @@ Fetch candles with:
 python .opencode/skills/hyperliquid-data/fetch_ohlcv.py <SYMBOL> <TIMEFRAME> --limit <N>
 ```
 
-Then load the JSON into pandas for analysis.
+`SYMBOL` and `TIMEFRAME` are positional arguments. Do not use unsupported flags
+such as `--coin`, `--timeframe`, or `--days`.
+
+The command prints a small manifest to stdout and writes candle JSON to
+`scratch/ohlcv-cache/<SYMBOL>/<TIMEFRAME>/...json`. Read the manifest's
+`output_path`, then load that JSON file into pandas for analysis. Do not use
+`--stdout` unless manually debugging; full candle stdout can fill the LLM
+context window.
 
 Example import for technical indicators:
 

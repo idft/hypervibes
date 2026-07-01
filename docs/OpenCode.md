@@ -56,6 +56,10 @@ The workspace `.env` is backend-owned generated state and should not be read or 
 
 Re-generating a workspace refreshes generated files while preserving user-managed files under paths like `scripts/user/`, `data/`, and `scratch/`.
 
+The agent settings page shows whether the on-disk workspace has drifted from `agent-runtime/workspace-template/` and lists changed template-managed files with per-file line counts.
+
+That drift check only compares template-derived files such as `AGENTS.md`, `opencode.json`, `.opencode/...`, and `scripts/generated/...`. It does not inspect agent-created files under `scripts/user/`, `data/`, or `scratch/`.
+
 Deleting an OpenCode agent deletes its generated workspace directory after the database delete succeeds.
 
 ## Scheduling

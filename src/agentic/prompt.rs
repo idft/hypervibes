@@ -1,6 +1,6 @@
 use crate::agentic::backend::DispatchRequest;
 use crate::agentic::model::{JOB_KIND_ANALYSIS, JOB_KIND_MARKET_ANALYSIS, JOB_KIND_TRADING};
-use anyhow::{Result, anyhow};
+use anyhow::{anyhow, Result};
 
 pub fn build_prompt(request: &DispatchRequest) -> Result<String> {
     match request.job_kind.as_str() {
@@ -31,13 +31,13 @@ fn build_analysis_prompt(request: &DispatchRequest) -> String {
     body.push_str("\n\n## Selected instruments\n");
     body.push_str(&selected_instruments_section(&request.selected_instruments));
     body.push_str("\n\n## Instructions\n");
-    body.push_str("- Fetch OHLCV and relevant public market data from Hyperliquid for the selected instruments. Use `python .opencode/skills/hyperliquid-data/fetch_ohlcv.py` for OHLCV candles.\n");
+    body.push_str("- Fetch OHLCV and relevant public market data from Hyperliquid for the selected instruments. Use `python .opencode/skills/hyperliquid-data/fetch_ohlcv.py <SYMBOL> <TIMEFRAME> [--limit N]` for OHLCV candles. `SYMBOL` and `TIMEFRAME` are positional arguments; do not use `--coin`, `--timeframe`, or `--days`. The script prints a small manifest and writes candles to `scratch/ohlcv-cache/<SYMBOL>/<TIMEFRAME>/...json`; load the manifest's `output_path` instead of asking for full candle data on stdout.\n");
     body.push_str("- Use the shared Python analysis runtime for pandas, numpy, scipy, statsmodels, pandas-ta-classic, plotting, and related analysis work.\n");
     body.push_str("- Analyze market structure, trend, volatility, support/resistance, liquidity zones, and risk/reward.\n");
     body.push_str("- Only produce actionable setups when confidence is at least the threshold defined in the strategy.\n");
     body.push_str("- If there is no clear edge, mark the bias neutral or mixed and provide no actionable setup.\n");
     body.push_str(
-        "- Write a memory record summarizing your analysis so the trading job can consume it.\n",
+        "- Write a memory record with `vibetrading_write_memory` summarizing your analysis so the trading job can consume it.\n",
     );
     body
 }
@@ -61,9 +61,9 @@ fn build_market_analysis_prompt(request: &DispatchRequest) -> String {
     body.push_str("\n\n## Selected instruments\n");
     body.push_str(&selected_instruments_section(&request.selected_instruments));
     body.push_str("\n\n## Instructions\n");
-    body.push_str("- For each selected symbol, read the latest valid timeframe analysis memories with `get_latest_analysis(symbol)`.\n");
+    body.push_str("- For each selected symbol, read the latest valid timeframe analysis memories with `vibetrading_get_latest_analysis(symbol)`.\n");
     body.push_str("- Synthesize those timeframe-specific analysis memories into exactly one execution-facing market analysis per symbol.\n");
-    body.push_str("- Write exactly one memory per symbol with `write_memory`.\n");
+    body.push_str("- Write exactly one memory per symbol with `vibetrading_write_memory`.\n");
     body.push_str("- Use `memory_type = \"market_analysis\"`.\n");
     body.push_str("- Do not pass a `timeframe` argument at all; leave it out entirely so the memory is general rather than timeframe-specific. Do not pass an empty string.\n");
     body.push_str("- Include metadata with `schema_version = 1`, `analysis_kind = \"market_analysis\"`, `valid_for_seconds = 1800` unless the operator prompt explicitly requires a different validity, plus `source_memory_ids` and `source_timeframes`.\n");
@@ -95,12 +95,12 @@ fn build_trading_prompt(request: &DispatchRequest) -> String {
     body.push_str("\n\n## Selected instruments\n");
     body.push_str(&selected_instruments_section(&request.selected_instruments));
     body.push_str("\n\n## Instructions\n");
-    body.push_str("- Call `get_market_analysis(symbol)` for each selected symbol before placing any trades.\n");
+    body.push_str("- Call `vibetrading_get_market_analysis(symbol)` for each selected symbol before placing any trades.\n");
     body.push_str(
         "- Do not open new exposure when no fresh market analysis exists for the symbol.\n",
     );
     body.push_str("- Do not fall back to raw timeframe `analysis` memories for execution decisions. Raw analysis can be consulted only for diagnostics when the operator prompt explicitly asks for it.\n");
-    body.push_str("- Fetch current OHLCV and public market data from Hyperliquid for the selected instruments. Use `python .opencode/skills/hyperliquid-data/fetch_ohlcv.py` for OHLCV candles.\n");
+    body.push_str("- Fetch current OHLCV and public market data from Hyperliquid for the selected instruments. Use `python .opencode/skills/hyperliquid-data/fetch_ohlcv.py <SYMBOL> <TIMEFRAME> [--limit N]` for OHLCV candles. `SYMBOL` and `TIMEFRAME` are positional arguments; do not use `--coin`, `--timeframe`, or `--days`. The script prints a small manifest and writes candles to `scratch/ohlcv-cache/<SYMBOL>/<TIMEFRAME>/...json`; load the manifest's `output_path` instead of asking for full candle data on stdout.\n");
     body.push_str("- Use limit orders for new entries. Avoid full-size entries on first fill.\n");
     body.push_str("- Only open new exposure when market analysis is fresh, non-neutral, and confidence meets the strategy threshold.\n");
     body.push_str(
@@ -182,7 +182,9 @@ mod tests {
         assert!(prompt.contains("## Instructions"));
         assert!(prompt.contains("Analyze trends."));
         assert!(prompt.contains("You are a crypto trading assistant."));
-        assert!(prompt.contains("python .opencode/skills/hyperliquid-data/fetch_ohlcv.py"));
+        assert!(prompt.contains("fetch_ohlcv.py <SYMBOL> <TIMEFRAME> [--limit N]"));
+        assert!(prompt.contains("do not use `--coin`, `--timeframe`, or `--days`"));
+        assert!(prompt.contains("scratch/ohlcv-cache/<SYMBOL>/<TIMEFRAME>/...json"));
         assert!(prompt.contains("shared Python analysis runtime"));
     }
 
@@ -195,7 +197,7 @@ mod tests {
         assert!(prompt.contains("## Instructions"));
         assert!(prompt.contains("Trade breakouts."));
         assert!(prompt.contains("Account state unavailable. Do not place new opening orders."));
-        assert!(prompt.contains("get_market_analysis(symbol)"));
+        assert!(prompt.contains("vibetrading_get_market_analysis(symbol)"));
         assert!(prompt.contains("Do not fall back to raw timeframe `analysis` memories"));
     }
 
@@ -206,11 +208,9 @@ mod tests {
         request.timeframe = None;
         let prompt = build_prompt(&request).expect("build market-analysis prompt");
         assert!(prompt.contains("market-analysis hook job"));
-        assert!(prompt.contains("get_latest_analysis(symbol)"));
+        assert!(prompt.contains("vibetrading_get_latest_analysis(symbol)"));
         assert!(prompt.contains("memory_type = \"market_analysis\""));
-        assert!(
-            prompt.contains("Do not pass a `timeframe` argument at all; leave it out entirely")
-        );
+        assert!(prompt.contains("Do not pass a `timeframe` argument at all; leave it out entirely"));
         assert!(prompt.contains("valid_for_seconds = 1800"));
         assert!(prompt.contains("Do not place or cancel orders."));
     }

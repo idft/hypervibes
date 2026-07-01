@@ -70,6 +70,8 @@ Non-secret metadata is stored in `agents.runtime_config`, including:
 
 The generated workspace `.env` receives the agent-scoped Vibetrading API key. The backend does not read that file back.
 
+For OpenCode agents, the settings page also reports whether the generated workspace has drifted from `agent-runtime/workspace-template/`. The comparison is limited to template-managed files and ignores agent-authored files.
+
 Deleting an agent removes the registry row and cascades through agent-owned state:
 
 - agent schedules, hooks, and runs

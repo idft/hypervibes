@@ -12,7 +12,8 @@ It is **runtime infrastructure, not an agent-authored script**:
   their `opencode.json`.
 - The MCP server process is launched **per workspace** by OpenCode, not
   once globally.
-- Auth credentials are read from the workspace's own `.env` file:
+- Auth credentials are read from the workspace's own `.env` file in the
+  MCP process working directory:
   - `VIBETRADING_API_BASE_URL`
   - `VIBETRADING_API_KEY`
   - `VIBETRADING_AGENT_KEY`

@@ -30,7 +30,7 @@ use crate::{
             dispatch_request_from_schedule, dispatch_run,
         },
         store::{QueuedHookRun, QueuedScheduleRun},
-        timeframe::{parse_timeout_seconds, parse_timeframe_seconds},
+        timeframe::{parse_timeframe_seconds, parse_timeout_seconds},
     },
     agents::{
         crypto::{encrypt, generate_api_key},
@@ -67,7 +67,8 @@ use crate::{
     },
     opencode::workspace::{
         OpenCodeWorkspaceAgent, OpenCodeWorkspaceRuntimeConfig, WorkspaceGenerationMode,
-        delete_agent_workspace, generate_agent_workspace, runtime_config_for_generated_workspace,
+        agent_workspace_host_path, delete_agent_workspace, diff_agent_workspace_from_template,
+        generate_agent_workspace, runtime_config_for_generated_workspace,
     },
     web::{
         AppState,
@@ -1653,13 +1654,8 @@ async fn agents_update_job_timeout(
         }
     };
 
-    if !crate::agentic::store::set_schedule_timeout(
-        &state.db_pool,
-        &agent_key,
-        job_id,
-        timeout_i32,
-    )
-    .await?
+    if !crate::agentic::store::set_schedule_timeout(&state.db_pool, &agent_key, job_id, timeout_i32)
+        .await?
     {
         return Ok((StatusCode::NOT_FOUND, "job not found").into_response());
     }
@@ -1702,13 +1698,8 @@ async fn agents_update_hook_timeout(
         }
     };
 
-    if !crate::agentic::store::set_hook_timeout(
-        &state.db_pool,
-        &agent_key,
-        hook_id,
-        timeout_i32,
-    )
-    .await?
+    if !crate::agentic::store::set_hook_timeout(&state.db_pool, &agent_key, hook_id, timeout_i32)
+        .await?
     {
         return Ok((StatusCode::NOT_FOUND, "hook not found").into_response());
     }
@@ -1834,16 +1825,42 @@ async fn render_agent_show_page(
         AgentShowTab::Prompts => {}
         AgentShowTab::Settings => {
             if agent.backend_kind == BACKEND_KIND_OPENCODE {
+                let workspace_agent = OpenCodeWorkspaceAgent {
+                    agent_key: agent.agent_key.clone(),
+                    display_name: agent.display_name.clone(),
+                    api_key: agent.api_key.clone(),
+                };
+                let workspace_host_path = agent_workspace_host_path(
+                    &state.opencode_workspace_config,
+                    &agent.agent_key,
+                )
+                .inspect_err(|error| {
+                    warn!(agent_key = %agent.agent_key, error = ?error, "failed to derive OpenCode workspace path for settings page");
+                })
+                .ok();
+                let template_drift = diff_agent_workspace_from_template(
+                    &state.opencode_workspace_config,
+                    &workspace_agent,
+                )
+                .inspect_err(|error| {
+                    warn!(agent_key = %agent.agent_key, error = ?error, "failed to diff OpenCode workspace template for settings page");
+                })
+                .ok()
+                .map(crate::web::templates::OpenCodeWorkspaceTemplateDriftView::from_diff)
+                .unwrap_or_else(crate::web::templates::OpenCodeWorkspaceTemplateDriftView::unavailable);
+
                 template.opencode_workspace = OpenCodeWorkspaceRuntimeConfig::from_value(
                     &agent.runtime_config,
                 )
                 .map(|workspace| OpenCodeWorkspaceSettingsView {
-                    env_exists: std::path::Path::new(&workspace.workspace_host_path)
-                        .join(".env")
-                        .is_file(),
+                    env_exists: workspace_host_path
+                        .as_deref()
+                        .map(|path| path.join(".env").is_file())
+                        .unwrap_or(false),
                     workspace_host_path: workspace.workspace_host_path,
                     workspace_container_path: workspace.workspace_container_path,
                     profile_source: workspace.profile_source,
+                    template_drift,
                 });
             }
             template.sync_state = match list_account_sync_state(
@@ -3770,7 +3787,7 @@ mod tests {
     async fn post_regenerate_workspace_refreshes_template_and_preserves_user_files() {
         let state = test_state().await;
         let pool = state.db_pool.clone();
-        let app = router(state);
+        let app = router(Arc::clone(&state));
         let timestamp = chrono::Utc::now().timestamp_millis();
         let display_name = format!("RegenerateWorkspace{}", timestamp);
         let agent_key = slugify_agent_key(&display_name);
@@ -3808,7 +3825,23 @@ mod tests {
         let original_agents_md = fs::read_to_string(&agents_md_path).expect("read AGENTS.md");
         fs::write(&agents_md_path, "user-modified agents file\n").expect("modify AGENTS.md");
 
+        let dirty_settings_response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/agents/{agent_key}/settings"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(dirty_settings_response.status(), StatusCode::OK);
+        let dirty_settings_text = response_text(dirty_settings_response).await;
+        assert!(dirty_settings_text.contains("Template drift"));
+        assert!(dirty_settings_text.contains("AGENTS.md"));
+
         let response = app
+            .clone()
             .oneshot(
                 Request::builder()
                     .method("POST")
@@ -3835,6 +3868,20 @@ mod tests {
             fs::read_to_string(&agents_md_path).expect("read refreshed AGENTS.md"),
             original_agents_md
         );
+
+        let clean_settings_response = app
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/agents/{agent_key}/settings"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(clean_settings_response.status(), StatusCode::OK);
+        let clean_settings_text = response_text(clean_settings_response).await;
+        assert!(clean_settings_text.contains("In sync"));
+        assert!(!clean_settings_text.contains("Template drift"));
     }
 
     #[tokio::test]
@@ -4553,6 +4600,56 @@ mod tests {
         assert!(text.contains("Container workspace path"));
         assert!(text.contains("Profile source"));
         assert!(text.contains("Workspace .env"));
+        assert!(text.contains("In sync"));
+    }
+
+    #[tokio::test]
+    async fn opencode_agent_settings_route_renders_workspace_template_drift() {
+        let state = test_state().await;
+        let app = router(Arc::clone(&state));
+        let timestamp = chrono::Utc::now().timestamp_millis();
+        let display_name = format!("OpenCodeDrift{}", timestamp);
+        let agent_key = slugify_agent_key(&display_name);
+        let private_key = random_private_key();
+        let body = format!(
+            "display_name={}&hyperliquid_private_key={}&runtime_id=opencode-local",
+            display_name, private_key
+        );
+
+        let create_response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/agents")
+                    .header("content-type", "application/x-www-form-urlencoded")
+                    .body(Body::from(body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(create_response.status(), StatusCode::SEE_OTHER);
+
+        let workspace_path =
+            agent_workspace_host_path(&state.opencode_workspace_config, &agent_key)
+                .expect("workspace path");
+        fs::write(workspace_path.join("AGENTS.md"), "user-modified\n").expect("modify AGENTS.md");
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/agents/{agent_key}/settings"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let text = response_text(response).await;
+        assert!(text.contains("Template drift"));
+        assert!(text.contains("AGENTS.md"));
+        assert!(text.contains("Only files generated from the workspace template are compared."));
     }
 
     #[tokio::test]

@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import os
 import sys
+from pathlib import Path
 from typing import Any
 
 import httpx
@@ -36,7 +37,7 @@ def _load_config() -> tuple[str, str, str]:
     Returns ``(base_url, api_key, agent_key)``. ``base_url`` has any
     trailing slash stripped.
     """
-    load_dotenv()
+    load_dotenv(dotenv_path=Path.cwd() / ".env")
     base_url = os.getenv("VIBETRADING_API_BASE_URL", "").strip().rstrip("/")
     api_key = os.getenv("VIBETRADING_API_KEY", "").strip()
     agent_key = os.getenv("VIBETRADING_AGENT_KEY", "").strip()

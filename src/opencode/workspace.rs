@@ -44,6 +44,36 @@ pub struct OpenCodeWorkspaceRuntimeConfig {
     pub profile_source: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WorkspaceTemplateDrift {
+    pub workspace_exists: bool,
+    pub changed_files: Vec<WorkspaceTemplateFileChange>,
+}
+
+impl WorkspaceTemplateDrift {
+    pub fn is_in_sync(&self) -> bool {
+        self.workspace_exists && self.changed_files.is_empty()
+    }
+
+    pub fn has_changes(&self) -> bool {
+        !self.changed_files.is_empty()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WorkspaceTemplateFileChange {
+    pub path: String,
+    pub status: WorkspaceTemplateFileStatus,
+    pub added_lines: usize,
+    pub removed_lines: usize,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WorkspaceTemplateFileStatus {
+    Modified,
+    Deleted,
+}
+
 impl OpenCodeWorkspaceRuntimeConfig {
     pub fn from_value(value: &Value) -> Option<Self> {
         serde_json::from_value(value.clone()).ok()
@@ -136,6 +166,63 @@ pub fn generate_agent_workspace(
     })
 }
 
+pub fn diff_agent_workspace_from_template(
+    config: &OpenCodeWorkspaceConfig,
+    agent: &OpenCodeWorkspaceAgent,
+) -> Result<WorkspaceTemplateDrift> {
+    let workspace_host_path = agent_workspace_host_path(config, &agent.agent_key)?;
+    if !workspace_host_path.is_dir() {
+        return Ok(WorkspaceTemplateDrift {
+            workspace_exists: false,
+            changed_files: Vec::new(),
+        });
+    }
+
+    let expected_files = expected_workspace_template_files(config, agent)?;
+    let mut changed_files = Vec::new();
+
+    for expected_file in expected_files {
+        let actual_path = workspace_host_path.join(&expected_file.relative_path);
+        let actual_contents = match fs::read(&actual_path) {
+            Ok(contents) => contents,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                changed_files.push(WorkspaceTemplateFileChange {
+                    path: display_relative_path(&expected_file.relative_path),
+                    status: WorkspaceTemplateFileStatus::Deleted,
+                    added_lines: 0,
+                    removed_lines: count_lines(&expected_file.expected_contents),
+                });
+                continue;
+            }
+            Err(error) => {
+                return Err(error).with_context(|| {
+                    format!("failed to read workspace file {}", actual_path.display())
+                });
+            }
+        };
+
+        if actual_contents == expected_file.expected_contents {
+            continue;
+        }
+
+        let (removed_lines, added_lines) = line_change_counts(
+            &String::from_utf8_lossy(&expected_file.expected_contents),
+            &String::from_utf8_lossy(&actual_contents),
+        );
+        changed_files.push(WorkspaceTemplateFileChange {
+            path: display_relative_path(&expected_file.relative_path),
+            status: WorkspaceTemplateFileStatus::Modified,
+            added_lines,
+            removed_lines,
+        });
+    }
+
+    Ok(WorkspaceTemplateDrift {
+        workspace_exists: true,
+        changed_files,
+    })
+}
+
 pub fn agent_workspace_host_path(
     config: &OpenCodeWorkspaceConfig,
     agent_key: &str,
@@ -220,18 +307,123 @@ fn join_container_path(root: &str, segments: &[&str]) -> String {
     path
 }
 
+struct ExpectedWorkspaceFile {
+    relative_path: PathBuf,
+    expected_contents: Vec<u8>,
+}
+
+fn expected_workspace_template_files(
+    config: &OpenCodeWorkspaceConfig,
+    agent: &OpenCodeWorkspaceAgent,
+) -> Result<Vec<ExpectedWorkspaceFile>> {
+    let workspace_container_path = join_container_path(
+        &config.container_workspaces_root,
+        &["agents", agent.agent_key.as_str()],
+    );
+    let replacements = template_replacements(config, agent, &workspace_container_path);
+    let mut files = vec![
+        ExpectedWorkspaceFile {
+            relative_path: PathBuf::from("opencode.json"),
+            expected_contents: render_template_file(
+                &config.source_root.join("opencode.json.template"),
+                &replacements,
+            )?
+            .into_bytes(),
+        },
+        ExpectedWorkspaceFile {
+            relative_path: PathBuf::from("AGENTS.md"),
+            expected_contents: render_template_file(
+                &config.source_root.join("AGENTS.md.template"),
+                &replacements,
+            )?
+            .into_bytes(),
+        },
+    ];
+
+    for relative_root in [
+        Path::new(".opencode/commands"),
+        Path::new(".opencode/agents"),
+        Path::new(".opencode/skills"),
+        Path::new("scripts/generated"),
+    ] {
+        collect_expected_workspace_files(&config.source_root, relative_root, &mut files)?;
+    }
+
+    files.sort_by(|left, right| left.relative_path.cmp(&right.relative_path));
+    Ok(files)
+}
+
+fn collect_expected_workspace_files(
+    source_root: &Path,
+    relative_root: &Path,
+    files: &mut Vec<ExpectedWorkspaceFile>,
+) -> Result<()> {
+    let source_path = source_root.join(relative_root);
+    let entries = fs::read_dir(&source_path)
+        .with_context(|| format!("failed to read directory {}", source_path.display()))?;
+
+    for entry in entries {
+        let entry =
+            entry.with_context(|| format!("failed to read entry in {}", source_path.display()))?;
+        let file_name = entry.file_name();
+        let relative_path = relative_root.join(&file_name);
+        let entry_path = source_root.join(&relative_path);
+        let metadata = entry
+            .metadata()
+            .with_context(|| format!("failed to stat {}", entry_path.display()))?;
+        if metadata.is_dir() {
+            collect_expected_workspace_files(source_root, &relative_path, files)?;
+            continue;
+        }
+        if !metadata.is_file() || file_name == ".gitkeep" {
+            continue;
+        }
+        files.push(ExpectedWorkspaceFile {
+            relative_path,
+            expected_contents: fs::read(&entry_path).with_context(|| {
+                format!("failed to read template file {}", entry_path.display())
+            })?,
+        });
+    }
+
+    Ok(())
+}
+
+fn template_replacements(
+    config: &OpenCodeWorkspaceConfig,
+    agent: &OpenCodeWorkspaceAgent,
+    workspace_container_path: &str,
+) -> BTreeMap<&'static str, String> {
+    BTreeMap::from([
+        ("agent_key", agent.agent_key.clone()),
+        ("display_name", agent.display_name.clone()),
+        ("api_base_url", config.api_base_url.clone()),
+        (
+            "workspace_container_path",
+            workspace_container_path.to_string(),
+        ),
+    ])
+}
+
 fn write_rendered_template(
     source_path: &Path,
     destination_path: &Path,
     replacements: &BTreeMap<&str, String>,
 ) -> Result<()> {
-    let template = fs::read_to_string(source_path)
-        .with_context(|| format!("failed to read template {}", source_path.display()))?;
-    let rendered = render_template(&template, replacements)
-        .with_context(|| format!("failed to render template {}", source_path.display()))?;
+    let rendered = render_template_file(source_path, replacements)?;
     fs::write(destination_path, rendered)
         .with_context(|| format!("failed to write {}", destination_path.display()))?;
     Ok(())
+}
+
+fn render_template_file(
+    source_path: &Path,
+    replacements: &BTreeMap<&str, String>,
+) -> Result<String> {
+    let template = fs::read_to_string(source_path)
+        .with_context(|| format!("failed to read template {}", source_path.display()))?;
+    render_template(&template, replacements)
+        .with_context(|| format!("failed to render template {}", source_path.display()))
 }
 
 fn render_template(template: &str, replacements: &BTreeMap<&str, String>) -> Result<String> {
@@ -298,6 +490,36 @@ fn display_workspace_host_path(path: &Path) -> String {
             .unwrap_or_else(|_| path.to_string_lossy().into_owned()),
         Err(_) => path.to_string_lossy().into_owned(),
     }
+}
+
+fn display_relative_path(path: &Path) -> String {
+    path.to_string_lossy().replace('\\', "/")
+}
+
+fn count_lines(contents: &[u8]) -> usize {
+    String::from_utf8_lossy(contents).lines().count()
+}
+
+fn line_change_counts(expected: &str, actual: &str) -> (usize, usize) {
+    let expected_lines: Vec<&str> = expected.lines().collect();
+    let actual_lines: Vec<&str> = actual.lines().collect();
+    let mut lcs = vec![vec![0usize; actual_lines.len() + 1]; expected_lines.len() + 1];
+
+    for (expected_index, expected_line) in expected_lines.iter().enumerate() {
+        for (actual_index, actual_line) in actual_lines.iter().enumerate() {
+            lcs[expected_index + 1][actual_index + 1] = if expected_line == actual_line {
+                lcs[expected_index][actual_index] + 1
+            } else {
+                lcs[expected_index][actual_index + 1].max(lcs[expected_index + 1][actual_index])
+            };
+        }
+    }
+
+    let shared_lines = lcs[expected_lines.len()][actual_lines.len()];
+    (
+        expected_lines.len().saturating_sub(shared_lines),
+        actual_lines.len().saturating_sub(shared_lines),
+    )
 }
 
 #[cfg(test)]
@@ -540,6 +762,84 @@ mod tests {
             fs::read_to_string(custom_script).expect("read custom script"),
             "print('hello')\n"
         );
+    }
+
+    #[test]
+    fn workspace_template_diff_is_clean_for_new_workspace() {
+        let temp = TempDir::new("opencode-diff-clean");
+        let config = sample_config(&temp.path);
+        generate_agent_workspace(&config, &sample_agent(), WorkspaceGenerationMode::CreateNew)
+            .expect("generate workspace");
+
+        let drift =
+            diff_agent_workspace_from_template(&config, &sample_agent()).expect("diff workspace");
+
+        assert!(drift.workspace_exists);
+        assert!(drift.is_in_sync());
+        assert!(drift.changed_files.is_empty());
+    }
+
+    #[test]
+    fn workspace_template_diff_reports_modified_and_missing_template_files() {
+        let temp = TempDir::new("opencode-diff-dirty");
+        let config = sample_config(&temp.path);
+        let generated =
+            generate_agent_workspace(&config, &sample_agent(), WorkspaceGenerationMode::CreateNew)
+                .expect("generate workspace");
+
+        fs::write(
+            generated.workspace_host_path.join("AGENTS.md"),
+            "user-modified\n",
+        )
+        .expect("modify AGENTS.md");
+        fs::remove_file(
+            generated
+                .workspace_host_path
+                .join(".opencode/agents/trading.md"),
+        )
+        .expect("remove trading agent file");
+
+        let drift =
+            diff_agent_workspace_from_template(&config, &sample_agent()).expect("diff workspace");
+
+        assert!(drift.workspace_exists);
+        let agents_md = drift
+            .changed_files
+            .iter()
+            .find(|file| file.path == "AGENTS.md")
+            .expect("AGENTS.md changed");
+        assert_eq!(agents_md.status, WorkspaceTemplateFileStatus::Modified);
+        assert!(agents_md.added_lines > 0);
+        assert!(agents_md.removed_lines > 0);
+
+        let trading_md = drift
+            .changed_files
+            .iter()
+            .find(|file| file.path == ".opencode/agents/trading.md")
+            .expect("trading.md changed");
+        assert_eq!(trading_md.status, WorkspaceTemplateFileStatus::Deleted);
+        assert_eq!(trading_md.added_lines, 0);
+        assert!(trading_md.removed_lines > 0);
+    }
+
+    #[test]
+    fn workspace_template_diff_ignores_agent_generated_files() {
+        let temp = TempDir::new("opencode-diff-ignores-user-files");
+        let config = sample_config(&temp.path);
+        let generated =
+            generate_agent_workspace(&config, &sample_agent(), WorkspaceGenerationMode::CreateNew)
+                .expect("generate workspace");
+        fs::write(
+            generated.workspace_host_path.join("scripts/user/custom.py"),
+            "print('hello')\n",
+        )
+        .expect("write custom file");
+
+        let drift =
+            diff_agent_workspace_from_template(&config, &sample_agent()).expect("diff workspace");
+
+        assert!(drift.workspace_exists);
+        assert!(drift.changed_files.is_empty());
     }
 
     #[test]

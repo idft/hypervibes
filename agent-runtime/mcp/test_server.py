@@ -14,6 +14,7 @@ import importlib
 import importlib.util
 import os
 import sys
+import tempfile
 import types
 import unittest
 from pathlib import Path
@@ -91,16 +92,17 @@ class VibetradingMcpServerTests(unittest.TestCase):
         )
 
     def test_loads_required_env_from_workspace(self) -> None:
-        with mock.patch.dict(
-            os.environ,
-            {
-                "VIBETRADING_API_BASE_URL": "http://example.test/",
-                "VIBETRADING_API_KEY": "vta_test_xyz",
-                "VIBETRADING_AGENT_KEY": "btc-2",
-            },
-            clear=True,
-        ):
-            base_url, api_key, agent_key = self.server._load_config()
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp)
+            workspace.joinpath(".env").write_text(
+                "VIBETRADING_API_BASE_URL=http://example.test/\n"
+                "VIBETRADING_API_KEY=vta_test_xyz\n"
+                "VIBETRADING_AGENT_KEY=btc-2\n",
+                encoding="utf-8",
+            )
+            with mock.patch.dict(os.environ, {}, clear=True):
+                with mock.patch.object(self.server.Path, "cwd", return_value=workspace):
+                    base_url, api_key, agent_key = self.server._load_config()
         self.assertEqual(base_url, "http://example.test")  # trailing slash stripped
         self.assertEqual(api_key, "vta_test_xyz")
         self.assertEqual(agent_key, "btc-2")

@@ -690,6 +690,83 @@ pub struct OpenCodeWorkspaceSettingsView {
     pub workspace_container_path: String,
     pub profile_source: String,
     pub env_exists: bool,
+    pub template_drift: OpenCodeWorkspaceTemplateDriftView,
+}
+
+#[derive(Debug, Clone)]
+pub struct OpenCodeWorkspaceTemplateDriftView {
+    pub status_text: &'static str,
+    pub status_class: &'static str,
+    pub changed_files: Vec<OpenCodeWorkspaceTemplateFileChangeView>,
+    pub is_missing: bool,
+}
+
+impl OpenCodeWorkspaceTemplateDriftView {
+    pub fn from_diff(diff: crate::opencode::workspace::WorkspaceTemplateDrift) -> Self {
+        if !diff.workspace_exists {
+            return Self {
+                status_text: "Workspace missing",
+                status_class: "border-amber-900/60 bg-amber-950/30 text-amber-300",
+                changed_files: Vec::new(),
+                is_missing: true,
+            };
+        }
+
+        if diff.is_in_sync() {
+            return Self {
+                status_text: "In sync",
+                status_class: "border-emerald-900/60 bg-emerald-950/30 text-emerald-300",
+                changed_files: Vec::new(),
+                is_missing: false,
+            };
+        }
+
+        Self {
+            status_text: "Template drift",
+            status_class: "border-amber-900/60 bg-amber-950/30 text-amber-300",
+            changed_files: diff
+                .changed_files
+                .into_iter()
+                .map(OpenCodeWorkspaceTemplateFileChangeView::from_change)
+                .collect(),
+            is_missing: false,
+        }
+    }
+
+    pub fn unavailable() -> Self {
+        Self {
+            status_text: "Diff unavailable",
+            status_class: "border-zinc-800 bg-zinc-950/70 text-zinc-300",
+            changed_files: Vec::new(),
+            is_missing: false,
+        }
+    }
+
+    pub fn has_changes(&self) -> bool {
+        !self.changed_files.is_empty()
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct OpenCodeWorkspaceTemplateFileChangeView {
+    pub status_code: &'static str,
+    pub path: String,
+    pub added_lines: usize,
+    pub removed_lines: usize,
+}
+
+impl OpenCodeWorkspaceTemplateFileChangeView {
+    fn from_change(change: crate::opencode::workspace::WorkspaceTemplateFileChange) -> Self {
+        Self {
+            status_code: match change.status {
+                crate::opencode::workspace::WorkspaceTemplateFileStatus::Modified => "M",
+                crate::opencode::workspace::WorkspaceTemplateFileStatus::Deleted => "D",
+            },
+            path: change.path,
+            added_lines: change.added_lines,
+            removed_lines: change.removed_lines,
+        }
+    }
 }
 
 /// View-model for a single row on the Jobs table.
@@ -2786,6 +2863,38 @@ mod tests {
         assert!(rendered.contains("Settings"));
         assert!(rendered.contains("Sync status"));
         assert!(rendered.contains("fills"));
+    }
+
+    #[test]
+    fn settings_tab_renders_workspace_template_drift() {
+        let mut template =
+            AgentsShowPageTemplate::new(sample_opencode_detail_row(), AgentShowTab::Settings);
+        template.opencode_workspace = Some(OpenCodeWorkspaceSettingsView {
+            workspace_host_path: "workspaces/agents/test-agent".to_string(),
+            workspace_container_path: "/workspaces/agents/test-agent".to_string(),
+            profile_source: "agent-runtime/workspace-template".to_string(),
+            env_exists: true,
+            template_drift: OpenCodeWorkspaceTemplateDriftView {
+                status_text: "Template drift",
+                status_class: "border-amber-900/60 bg-amber-950/30 text-amber-300",
+                changed_files: vec![OpenCodeWorkspaceTemplateFileChangeView {
+                    status_code: "M",
+                    path: "AGENTS.md".to_string(),
+                    added_lines: 3,
+                    removed_lines: 1,
+                }],
+                is_missing: false,
+            },
+        });
+
+        let rendered = template.render().unwrap();
+        assert!(rendered.contains("Template drift"));
+        assert!(rendered.contains("AGENTS.md"));
+        assert!(rendered.contains("+3"));
+        assert!(rendered.contains("-1"));
+        assert!(
+            rendered.contains("Only files generated from the workspace template are compared.")
+        );
     }
 
     #[test]
