@@ -22,4 +22,4 @@ Current docs:
 Notes:
 
 - `agent_runtimes.backend_kind` remains in the schema even though only `opencode` is currently valid.
-- `/api/v1/job-context` still exists temporarily for older runtime flows, but it is deprecated.
+- OpenCode jobs receive initial agent/job context through dispatched prompt text.

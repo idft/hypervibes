@@ -700,8 +700,6 @@ mod tests {
                 "workspace_container_path": format!("/workspaces/agents/{key}"),
                 "profile_source": "agent-runtime/workspace-template"
             }),
-            analysis_context_last_used_at: None,
-            trading_context_last_used_at: None,
             hyperliquid_private_key_ciphertext: ciphertext,
             hyperliquid_private_key_key_id: "test".to_string(),
         }

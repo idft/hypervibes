@@ -57,7 +57,3 @@ Current important contract:
 
 - `memory_type = "market_analysis"` is the primary execution handoff for trading
 - trading should not open new exposure when no fresh `market_analysis` memory exists
-
-## Deprecated API Note
-
-`/api/v1/job-context` remains available temporarily, but memory retrieval should not depend on that endpoint long term.

@@ -205,10 +205,6 @@ class VibetradingMcpServerTests(unittest.TestCase):
         with mock.patch.object(self.server, "_request", return_value=[row]):
             self.assertEqual(self.server.get_market_analysis("BTC"), row)
 
-    def test_validation_rejects_invalid_job_kind(self) -> None:
-        with self.assertRaises(ValueError):
-            self.server.get_job_context("not-a-kind")
-
     def test_validation_rejects_zero_limit(self) -> None:
         with self.assertRaises(ValueError):
             self.server.get_latest_analysis("BTC", limit=0)

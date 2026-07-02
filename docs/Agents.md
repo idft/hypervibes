@@ -90,11 +90,4 @@ Each agent may be linked to zero or more Hyperliquid perp instruments.
 - empty selection means the agent should not analyze markets or place new trades
 - `POST /api/v1/orders` rejects orders for symbols not currently selected for that agent
 
-## Deprecated Job Context Support
-
-`/api/v1/job-context` still exists temporarily for older runtime flows, but it is deprecated.
-
-The following columns remain only to support that deprecated API:
-
-- `analysis_context_last_used_at`
-- `trading_context_last_used_at`
+OpenCode jobs receive agent prompts, selected instruments, and job metadata through the dispatched prompt text.

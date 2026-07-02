@@ -379,8 +379,6 @@ mod tests {
                 backend_kind: BACKEND_KIND_OPENCODE.to_string(),
                 runtime_id: "opencode-local".to_string(),
                 runtime_config: serde_json::json!({}),
-                analysis_context_last_used_at: None,
-                trading_context_last_used_at: None,
                 hyperliquid_private_key_ciphertext: Vec::new(),
                 hyperliquid_private_key_key_id: "test".to_string(),
             },

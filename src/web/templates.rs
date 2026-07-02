@@ -2283,8 +2283,6 @@ mod tests {
             runtime_name: "OpenCode local".to_string(),
             runtime_base_url: Some("http://localhost:14096".to_string()),
             runtime_config: serde_json::json!({}),
-            analysis_context_last_used_at: None,
-            trading_context_last_used_at: None,
             created_at: now,
             updated_at: now,
         }

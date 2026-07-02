@@ -26,7 +26,6 @@ from mcp.server.fastmcp import FastMCP
 
 
 HTTP_TIMEOUT_SECONDS = 30.0
-JOB_KINDS = frozenset({"analysis", "trading"})
 
 mcp = FastMCP("vibetrading")
 
@@ -122,14 +121,6 @@ def _request(
         ) from exc
 
 
-def _validate_job_kind(job_kind: str) -> str:
-    if job_kind not in JOB_KINDS:
-        raise ValueError(
-            f"job_kind must be one of {sorted(JOB_KINDS)}; got {job_kind!r}"
-        )
-    return job_kind
-
-
 def _require_nonblank(name: str, value: str) -> str:
     if not value or not value.strip():
         raise ValueError(f"{name} must not be blank")
@@ -142,32 +133,6 @@ def _require_limit(limit: int | None) -> int | None:
     if limit < 1:
         raise ValueError("limit must be >= 1")
     return limit
-
-
-@mcp.tool()
-def get_job_context(job_kind: str) -> dict[str, Any]:
-    """Return the current job context for this agent.
-
-    ``job_kind`` must be ``"analysis"`` or ``"trading"``. Returns the same
-    JSON body as ``GET /api/v1/job-context?job_kind=...``.
-    """
-    _validate_job_kind(job_kind)
-    result = _request("GET", "/api/v1/job-context", params={"job_kind": job_kind})
-    if not isinstance(result, dict):
-        raise RuntimeError("Vibetrading /job-context returned unexpected shape")
-    return result
-
-
-@mcp.tool()
-def get_analysis_context() -> dict[str, Any]:
-    """Return the current analysis job context for this agent."""
-    return get_job_context("analysis")
-
-
-@mcp.tool()
-def get_trading_context() -> dict[str, Any]:
-    """Return the current trading job context for this agent."""
-    return get_job_context("trading")
 
 
 @mcp.tool()

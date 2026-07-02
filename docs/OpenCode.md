@@ -70,6 +70,4 @@ The `AgenticScheduler` claims due work, dispatches runs through the OpenCode bac
 
 The agent detail page exposes a `Jobs` tab for OpenCode agents.
 
-## Deprecated API Note
-
-`/api/v1/job-context` still exists temporarily for older flows, but new OpenCode job dispatch should prefer prompt-injected context and the MCP tools.
+When a job is dispatched, Vibetrading builds the initial OpenCode command prompt with the agent metadata, selected instruments, strategy prompt, operator prompt, and trading account snapshot when applicable.

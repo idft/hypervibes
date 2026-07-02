@@ -10,13 +10,6 @@ use crate::{
     db::DbPool,
 };
 
-/// Deprecated support for the temporary `/api/v1/job-context` API.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum JobContextKind {
-    Analysis,
-    Trading,
-}
-
 #[derive(Debug, Clone, sqlx::FromRow)]
 pub struct AgentInstrumentOptionRow {
     pub instrument_id: String,
@@ -152,8 +145,6 @@ pub async fn get_agent(pool: &DbPool, agent_key: &str) -> Result<Option<AgentDet
                 agent_runtimes.name AS runtime_name,
                 agent_runtimes.base_url AS runtime_base_url,
                 agents.runtime_config,
-                analysis_context_last_used_at,
-                trading_context_last_used_at,
                 agents.created_at,
                 agents.updated_at
            FROM agents
@@ -322,11 +313,9 @@ pub async fn insert_agent(pool: &DbPool, row: &AgentRegistryRow) -> Result<()> {
             backend_kind,
             runtime_id,
             runtime_config,
-            analysis_context_last_used_at,
-            trading_context_last_used_at,
             hyperliquid_private_key_ciphertext,
             hyperliquid_private_key_key_id
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)",
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)",
     )
     .bind(&row.agent_key)
     .bind(row.created_at)
@@ -342,8 +331,6 @@ pub async fn insert_agent(pool: &DbPool, row: &AgentRegistryRow) -> Result<()> {
     .bind(&row.backend_kind)
     .bind(&row.runtime_id)
     .bind(&row.runtime_config)
-    .bind(row.analysis_context_last_used_at)
-    .bind(row.trading_context_last_used_at)
     .bind(&row.hyperliquid_private_key_ciphertext)
     .bind(&row.hyperliquid_private_key_key_id)
     .execute(pool)
@@ -503,30 +490,6 @@ pub async fn touch_api_key_last_used(pool: &DbPool, api_key: &str) -> Result<()>
     Ok(())
 }
 
-/// Deprecated support for the temporary `/api/v1/job-context` API.
-pub async fn touch_job_context_last_used(
-    pool: &DbPool,
-    agent_key: &str,
-    kind: JobContextKind,
-) -> Result<()> {
-    let query = match kind {
-        JobContextKind::Analysis => {
-            "UPDATE agents SET analysis_context_last_used_at = now() WHERE agent_key = $1"
-        }
-        JobContextKind::Trading => {
-            "UPDATE agents SET trading_context_last_used_at = now() WHERE agent_key = $1"
-        }
-    };
-
-    sqlx::query(query)
-        .bind(agent_key)
-        .execute(pool)
-        .await
-        .with_context(|| format!("failed to touch job-context check-in for agent {agent_key}"))?;
-
-    Ok(())
-}
-
 pub async fn runtime_matches_backend(
     pool: &DbPool,
     runtime_id: &str,
@@ -630,8 +593,6 @@ mod tests {
             backend_kind: crate::agents::model::BACKEND_KIND_OPENCODE.to_string(),
             runtime_id: "opencode-local".to_string(),
             runtime_config: serde_json::json!({}),
-            analysis_context_last_used_at: None,
-            trading_context_last_used_at: None,
             hyperliquid_private_key_ciphertext: ciphertext,
             hyperliquid_private_key_key_id: "test".to_string(),
         }
@@ -853,62 +814,6 @@ mod tests {
             .expect("fetch")
             .expect("present");
         assert!(after.api_key_last_used_at.is_some());
-    }
-
-    #[tokio::test]
-    async fn new_agents_start_with_no_job_context_checkins() {
-        let pool = test_db::pool().await;
-
-        let key = format!("job-context-none-{}", Utc::now().timestamp_millis());
-        let row = sample_agent(&key);
-        insert_agent(&pool, &row).await.expect("insert agent");
-
-        let agent = get_agent(&pool, &key)
-            .await
-            .expect("fetch")
-            .expect("present");
-        assert!(agent.analysis_context_last_used_at.is_none());
-        assert!(agent.trading_context_last_used_at.is_none());
-    }
-
-    #[tokio::test]
-    async fn touch_job_context_last_used_updates_only_analysis_timestamp() {
-        let pool = test_db::pool().await;
-
-        let key = format!("job-context-analysis-{}", Utc::now().timestamp_millis());
-        let row = sample_agent(&key);
-        insert_agent(&pool, &row).await.expect("insert agent");
-
-        touch_job_context_last_used(&pool, &key, JobContextKind::Analysis)
-            .await
-            .expect("touch analysis");
-
-        let agent = get_agent(&pool, &key)
-            .await
-            .expect("fetch")
-            .expect("present");
-        assert!(agent.analysis_context_last_used_at.is_some());
-        assert!(agent.trading_context_last_used_at.is_none());
-    }
-
-    #[tokio::test]
-    async fn touch_job_context_last_used_updates_only_trading_timestamp() {
-        let pool = test_db::pool().await;
-
-        let key = format!("job-context-trading-{}", Utc::now().timestamp_millis());
-        let row = sample_agent(&key);
-        insert_agent(&pool, &row).await.expect("insert agent");
-
-        touch_job_context_last_used(&pool, &key, JobContextKind::Trading)
-            .await
-            .expect("touch trading");
-
-        let agent = get_agent(&pool, &key)
-            .await
-            .expect("fetch")
-            .expect("present");
-        assert!(agent.analysis_context_last_used_at.is_none());
-        assert!(agent.trading_context_last_used_at.is_some());
     }
 
     #[tokio::test]

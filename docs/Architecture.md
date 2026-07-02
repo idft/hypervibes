@@ -13,15 +13,12 @@ Core subsystems:
 - `memory` for stored analysis and execution context
 - `hyperliquid` for account state, history, and execution
 - `agentic` for OpenCode job scheduling, dispatch, and run tracking
+- OpenCode job dispatch injects initial agent/job context into the command prompt
 
 Current backend support:
 
 - only `opencode` is supported today
 - the runtime/backend schema remains generic so future backend kinds can be added later
-
-Deprecated API note:
-
-- `/api/v1/job-context` still exists for older runtime flows but should not be the primary integration path for new OpenCode jobs
 
 ## Rust Focus
 

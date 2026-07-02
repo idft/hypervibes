@@ -2166,7 +2166,9 @@ async fn populate_positions_tab(
             .as_ref()
             .map(|memory| memory.summary.clone()),
         analysis_detail_url,
-        latest_market_analysis.as_ref().map(|memory| memory.created_at),
+        latest_market_analysis
+            .as_ref()
+            .map(|memory| memory.created_at),
         latest_market_analysis.as_ref().and_then(memory_expires_at),
     )
     .map_err(anyhow::Error::from)?;
@@ -2574,8 +2576,6 @@ async fn create_agent(
         backend_kind: runtime.backend_kind.clone(),
         runtime_id: runtime.id.clone(),
         runtime_config: opencode_workspace_runtime_config.unwrap_or_else(|| serde_json::json!({})),
-        analysis_context_last_used_at: None,
-        trading_context_last_used_at: None,
         hyperliquid_private_key_ciphertext: ciphertext,
         hyperliquid_private_key_key_id: state.encryption_key.key_id.clone(),
     };
@@ -3460,8 +3460,6 @@ mod tests {
             backend_kind: crate::agents::model::BACKEND_KIND_OPENCODE.to_string(),
             runtime_id: "opencode-local".to_string(),
             runtime_config: serde_json::json!({}),
-            analysis_context_last_used_at: None,
-            trading_context_last_used_at: None,
             hyperliquid_private_key_ciphertext: Vec::new(),
             hyperliquid_private_key_key_id: "test".to_string(),
         };
@@ -3522,8 +3520,6 @@ mod tests {
             backend_kind: crate::agents::model::BACKEND_KIND_OPENCODE.to_string(),
             runtime_id: "opencode-local-balance-stream".to_string(),
             runtime_config: serde_json::json!({}),
-            analysis_context_last_used_at: None,
-            trading_context_last_used_at: None,
             hyperliquid_private_key_ciphertext: Vec::new(),
             hyperliquid_private_key_key_id: "test".to_string(),
         };

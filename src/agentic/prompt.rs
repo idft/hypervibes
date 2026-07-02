@@ -1,6 +1,6 @@
 use crate::agentic::backend::DispatchRequest;
 use crate::agentic::model::{JOB_KIND_ANALYSIS, JOB_KIND_MARKET_ANALYSIS, JOB_KIND_TRADING};
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 
 pub fn build_prompt(request: &DispatchRequest) -> Result<String> {
     match request.job_kind.as_str() {
@@ -44,7 +44,9 @@ fn build_analysis_prompt(request: &DispatchRequest) -> String {
     body.push_str("- The analysis job is incomplete until `vibetrading_write_memory` succeeds for every selected symbol.\n");
     body.push_str("- For each selected symbol, write exactly one timeframe-specific memory with `memory_type = \"analysis\"` and `timeframe` set to this job's timeframe.\n");
     body.push_str("- If there is no actionable setup, still write the analysis memory with a neutral or mixed bias and explicitly state that there is no trade.\n");
-    body.push_str("- If you use `todowrite`, finish with no remaining items in `pending` or `in_progress`.\n");
+    body.push_str(
+        "- If you use `todowrite`, finish with no remaining items in `pending` or `in_progress`.\n",
+    );
     body
 }
 
@@ -152,6 +154,9 @@ fn account_state_section(
 mod tests {
     use super::*;
     use chrono::Utc;
+    use rust_decimal_macros::dec;
+
+    use crate::hyperliquid::live_state::{LiveAgentSnapshot, LiveOpenOrder, LivePosition};
 
     fn sample_request(job_kind: &str) -> DispatchRequest {
         DispatchRequest {
@@ -183,29 +188,72 @@ mod tests {
     fn analysis_prompt_contains_expected_sections() {
         let request = sample_request(JOB_KIND_ANALYSIS);
         let prompt = build_prompt(&request).expect("build analysis prompt");
+        assert!(prompt.contains("Agent key: btc-2"));
+        assert!(prompt.contains("Display name: BTC 2"));
+        assert!(prompt.contains("Environment: live"));
+        assert!(prompt.contains("Job key: analysis-15m"));
+        assert!(prompt.contains("Timeframe: 15m"));
+        assert!(prompt.contains("BTC, ETH"));
         assert!(prompt.contains("## Analysis strategy"));
         assert!(prompt.contains("## Job-specific strategy"));
         assert!(prompt.contains("## Instructions"));
         assert!(prompt.contains("Analyze trends."));
+        assert!(prompt.contains("Focus on BTC."));
         assert!(prompt.contains("You are a crypto trading assistant."));
         assert!(prompt.contains("fetch_ohlcv.py <SYMBOL> <TIMEFRAME> [--limit N]"));
         assert!(prompt.contains("do not use `--coin`, `--timeframe`, or `--days`"));
         assert!(prompt.contains("scratch/ohlcv-cache/<SYMBOL>/<TIMEFRAME>/...json"));
         assert!(prompt.contains("shared Python analysis runtime"));
         assert!(prompt.contains("## Completion requirements"));
-        assert!(prompt.contains("The analysis job is incomplete until `vibetrading_write_memory` succeeds"));
+        assert!(
+            prompt.contains(
+                "The analysis job is incomplete until `vibetrading_write_memory` succeeds"
+            )
+        );
         assert!(prompt.contains("`memory_type = \"analysis\"`"));
     }
 
     #[test]
     fn trading_prompt_contains_expected_sections() {
-        let request = sample_request(JOB_KIND_TRADING);
+        let mut request = sample_request(JOB_KIND_TRADING);
+        request.job_key = "trading-15m".to_string();
+        request.account_snapshot = Some(LiveAgentSnapshot {
+            account_address: "0xabc".to_string(),
+            environment: "live".to_string(),
+            account_data_available: true,
+            account_data_stale: false,
+            account_data_as_of: Some(Utc::now()),
+            total_equity_usd: Some(dec!(1000)),
+            available_to_trade_usd: Some(dec!(750)),
+            margin_used_usd: Some(dec!(250)),
+            unrealized_pnl_usd: Some(dec!(12.5)),
+            open_positions: vec![LivePosition {
+                coin: "BTC".to_string(),
+                szi: Some(dec!(0.25)),
+                unrealized_pnl: Some(dec!(12.5)),
+                ..Default::default()
+            }],
+            open_orders: vec![LiveOpenOrder {
+                coin: "BTC".to_string(),
+                side: Some("A".to_string()),
+                sz: Some(dec!(0.1)),
+                limit_px: Some(dec!(65000)),
+                ..Default::default()
+            }],
+        });
         let prompt = build_prompt(&request).expect("build trading prompt");
+        assert!(prompt.contains("Agent key: btc-2"));
+        assert!(prompt.contains("Display name: BTC 2"));
+        assert!(prompt.contains("Environment: live"));
+        assert!(prompt.contains("Job key: trading-15m"));
+        assert!(prompt.contains("Timeframe: 15m"));
+        assert!(prompt.contains("BTC, ETH"));
         assert!(prompt.contains("## Trading strategy"));
         assert!(prompt.contains("## Account state"));
         assert!(prompt.contains("## Instructions"));
         assert!(prompt.contains("Trade breakouts."));
-        assert!(prompt.contains("Account state unavailable. Do not place new opening orders."));
+        assert!(prompt.contains("- Account: 0xabc"));
+        assert!(prompt.contains("- Available to trade USD: 750"));
         assert!(prompt.contains("vibetrading_get_market_analysis(symbol)"));
         assert!(prompt.contains("Do not fall back to raw timeframe `analysis` memories"));
     }
@@ -216,12 +264,54 @@ mod tests {
         request.job_key = "market-analysis".to_string();
         request.timeframe = None;
         let prompt = build_prompt(&request).expect("build market-analysis prompt");
+        assert!(prompt.contains("Agent key: btc-2"));
+        assert!(prompt.contains("Display name: BTC 2"));
+        assert!(prompt.contains("Environment: live"));
+        assert!(prompt.contains("Job key: market-analysis"));
+        assert!(prompt.contains("BTC, ETH"));
         assert!(prompt.contains("market-analysis hook job"));
         assert!(prompt.contains("vibetrading_get_latest_analysis(symbol)"));
+        assert!(prompt.contains("source_memory_ids"));
         assert!(prompt.contains("memory_type = \"market_analysis\""));
-        assert!(prompt.contains("Do not pass a `timeframe` argument at all; leave it out entirely"));
+        assert!(
+            prompt.contains("Do not pass a `timeframe` argument at all; leave it out entirely")
+        );
         assert!(prompt.contains("valid_for_seconds = 1800"));
         assert!(prompt.contains("Do not place or cancel orders."));
+    }
+
+    #[test]
+    fn live_agent_snapshot_markdown_includes_positions_and_orders() {
+        let snapshot = LiveAgentSnapshot {
+            account_address: "0xabc".to_string(),
+            environment: "live".to_string(),
+            account_data_available: true,
+            account_data_stale: false,
+            account_data_as_of: Some(Utc::now()),
+            total_equity_usd: Some(dec!(1000)),
+            available_to_trade_usd: Some(dec!(750)),
+            margin_used_usd: Some(dec!(250)),
+            unrealized_pnl_usd: Some(dec!(12.5)),
+            open_positions: vec![LivePosition {
+                coin: "BTC".to_string(),
+                szi: Some(dec!(0.25)),
+                unrealized_pnl: Some(dec!(12.5)),
+                ..Default::default()
+            }],
+            open_orders: vec![LiveOpenOrder {
+                coin: "BTC".to_string(),
+                side: Some("A".to_string()),
+                sz: Some(dec!(0.1)),
+                limit_px: Some(dec!(65000)),
+                ..Default::default()
+            }],
+        };
+
+        let markdown = snapshot.to_markdown();
+        assert!(markdown.contains("### Open positions"));
+        assert!(markdown.contains("- BTC: size 0.25, unrealized_pnl 12.5"));
+        assert!(markdown.contains("### Open orders"));
+        assert!(markdown.contains("- A 0.1 BTC @ 65000"));
     }
 
     #[test]
