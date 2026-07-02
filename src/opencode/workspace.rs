@@ -189,8 +189,8 @@ pub fn diff_agent_workspace_from_template(
                 changed_files.push(WorkspaceTemplateFileChange {
                     path: display_relative_path(&expected_file.relative_path),
                     status: WorkspaceTemplateFileStatus::Deleted,
-                    added_lines: 0,
-                    removed_lines: count_lines(&expected_file.expected_contents),
+                    added_lines: count_lines(&expected_file.expected_contents),
+                    removed_lines: 0,
                 });
                 continue;
             }
@@ -206,8 +206,8 @@ pub fn diff_agent_workspace_from_template(
         }
 
         let (removed_lines, added_lines) = line_change_counts(
-            &String::from_utf8_lossy(&expected_file.expected_contents),
             &String::from_utf8_lossy(&actual_contents),
+            &String::from_utf8_lossy(&expected_file.expected_contents),
         );
         changed_files.push(WorkspaceTemplateFileChange {
             path: display_relative_path(&expected_file.relative_path),
@@ -818,8 +818,16 @@ mod tests {
             .find(|file| file.path == ".opencode/agents/trading.md")
             .expect("trading.md changed");
         assert_eq!(trading_md.status, WorkspaceTemplateFileStatus::Deleted);
-        assert_eq!(trading_md.added_lines, 0);
-        assert!(trading_md.removed_lines > 0);
+        assert!(trading_md.added_lines > 0);
+        assert_eq!(trading_md.removed_lines, 0);
+    }
+
+    #[test]
+    fn line_change_counts_match_template_sync_direction() {
+        let (removed_lines, added_lines) = line_change_counts("keep\nold\n", "keep\nnew\nextra\n");
+
+        assert_eq!(removed_lines, 1);
+        assert_eq!(added_lines, 2);
     }
 
     #[test]

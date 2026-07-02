@@ -13,4 +13,11 @@ Run Vibetrading analysis for this agent.
 - Prefer the `vibetrading_*` MCP tools for every backend interaction. Do not
   call Vibetrading HTTP APIs directly, and do not author Python scripts to reach
   the backend.
-- Write your final timeframe analysis using the `vibetrading_write_memory` MCP tool when completed.
+- Do not stop after planning, skill loading, or candle fetch alone.
+- The job is incomplete until `vibetrading_write_memory` succeeds for each
+  selected symbol.
+- Write exactly one timeframe-specific memory per selected symbol with
+  `memory_type="analysis"` and the job timeframe.
+- If there is no actionable setup, still write a neutral analysis memory that
+  explicitly says there is no trade.
+- If you use `todowrite`, end with no items left `pending` or `in_progress`.

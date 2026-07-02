@@ -2201,17 +2201,17 @@ impl LatestTradeExecutionSummaryPartialTemplate {
 pub struct LatestAnalysisSummaryPartialTemplate {
     pub summary: Option<String>,
     pub detail_url: Option<String>,
-    /// `created_at` of the latest `analysis` memory formatted as an
+    /// `created_at` of the latest `market_analysis` memory formatted as an
     /// ISO 8601 / RFC 3339 string with a `Z` suffix, suitable for the
     /// `datetime` attribute of a `<time>` element consumed by
     /// `timeago.js`. Empty when no memory exists yet.
     pub created_at_iso: String,
-    /// `created_at` of the latest `analysis` memory formatted as
+    /// `created_at` of the latest `market_analysis` memory formatted as
     /// `YYYY-MM-DD HH:MM UTC`. Used as the timeago fallback so the
     /// timestamp is meaningful even before client-side JS hydrates.
     /// Empty when no memory exists yet.
     pub created_at_fallback_text: String,
-    /// `expires_at` of the latest `analysis` memory (resolved from
+    /// `expires_at` of the latest `market_analysis` memory (resolved from
     /// `stale_after` / `valid_for_seconds` / per-timeframe defaults)
     /// formatted as an ISO 8601 / RFC 3339 string, suitable for the
     /// `title` attribute of a `<time>` element. Empty when the row has
@@ -2219,8 +2219,8 @@ pub struct LatestAnalysisSummaryPartialTemplate {
     pub expires_at_iso: String,
     /// `true` when `expires_at` is at or before the server's `now`. The
     /// agent page uses this to highlight the timestamp and surface a
-    /// warning icon, since the trading loop will treat the analysis as
-    /// stale and the operator should investigate the gap.
+    /// warning icon, since the trading loop will treat the market analysis
+    /// as stale and the operator should investigate the gap.
     pub is_expired: bool,
 }
 

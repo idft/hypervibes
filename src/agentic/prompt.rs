@@ -39,6 +39,12 @@ fn build_analysis_prompt(request: &DispatchRequest) -> String {
     body.push_str(
         "- Write a memory record with `vibetrading_write_memory` summarizing your analysis so the trading job can consume it.\n",
     );
+    body.push_str("\n## Completion requirements\n");
+    body.push_str("- Do not stop after planning, loading skills, fetching candles, or updating a todo list. Those are intermediate steps only.\n");
+    body.push_str("- The analysis job is incomplete until `vibetrading_write_memory` succeeds for every selected symbol.\n");
+    body.push_str("- For each selected symbol, write exactly one timeframe-specific memory with `memory_type = \"analysis\"` and `timeframe` set to this job's timeframe.\n");
+    body.push_str("- If there is no actionable setup, still write the analysis memory with a neutral or mixed bias and explicitly state that there is no trade.\n");
+    body.push_str("- If you use `todowrite`, finish with no remaining items in `pending` or `in_progress`.\n");
     body
 }
 
@@ -186,6 +192,9 @@ mod tests {
         assert!(prompt.contains("do not use `--coin`, `--timeframe`, or `--days`"));
         assert!(prompt.contains("scratch/ohlcv-cache/<SYMBOL>/<TIMEFRAME>/...json"));
         assert!(prompt.contains("shared Python analysis runtime"));
+        assert!(prompt.contains("## Completion requirements"));
+        assert!(prompt.contains("The analysis job is incomplete until `vibetrading_write_memory` succeeds"));
+        assert!(prompt.contains("`memory_type = \"analysis\"`"));
     }
 
     #[test]

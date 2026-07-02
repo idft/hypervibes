@@ -23,4 +23,10 @@ You are the analysis agent for a Vibetrading OpenCode workspace.
   `--days`. The script prints a small manifest and writes candles to
   `scratch/ohlcv-cache/<SYMBOL>/<TIMEFRAME>/...json`; load the manifest's
   `output_path` instead of asking for full candle data on stdout.
+- Do not stop after planning or data fetch alone. The job is incomplete until
+  `vibetrading_write_memory` succeeds for each selected symbol.
+- For analysis jobs, write exactly one timeframe-specific `analysis` memory per
+  selected symbol. If there is no edge, still write a neutral analysis memory
+  that explicitly says there is no trade.
+- If you use `todowrite`, end with no items left `pending` or `in_progress`.
 - Do not handle exchange secrets. Never read or print `.env`.

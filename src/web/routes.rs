@@ -2155,18 +2155,19 @@ async fn populate_positions_tab(
         )
         .map_err(anyhow::Error::from)?;
 
-    let latest_analysis =
-        get_latest_agent_memory_by_type(&state.db_pool, &agent.agent_key, "analysis").await?;
-    let analysis_detail_url = latest_analysis
+    let latest_market_analysis =
+        get_latest_agent_memory_by_type(&state.db_pool, &agent.agent_key, "market_analysis")
+            .await?;
+    let analysis_detail_url = latest_market_analysis
         .as_ref()
         .map(|memory| format!("/agents/{}/memories/{}", agent.agent_key, memory.id));
     template.latest_analysis_summary_html = LatestAnalysisSummaryPartialTemplate::render_view(
-        latest_analysis
+        latest_market_analysis
             .as_ref()
             .map(|memory| memory.summary.clone()),
         analysis_detail_url,
-        latest_analysis.as_ref().map(|memory| memory.created_at),
-        latest_analysis.as_ref().and_then(memory_expires_at),
+        latest_market_analysis.as_ref().map(|memory| memory.created_at),
+        latest_market_analysis.as_ref().and_then(memory_expires_at),
     )
     .map_err(anyhow::Error::from)?;
 
@@ -2263,10 +2264,11 @@ async fn delete_agent(
 /// `balance`, `positions`, and `orders`. Two companion memory-driven events,
 /// `latest-trade-execution-summary` and `latest-analysis-summary`, refresh
 /// the Open Orders subheader and the Analysis section when new
-/// `trade_execution` or `analysis` memories arrive. The `data` field of each
-/// is the freshly rendered partial for that section, which the HTMX SSE
-/// extension routes to the matching `sse-swap="..."` element. The stream begins with
-/// an initial snapshot and then re-emits updates for the matching account.
+/// `trade_execution` or `market_analysis` memories arrive. The `data` field
+/// of each is the freshly rendered partial for that section, which the HTMX
+/// SSE extension routes to the matching `sse-swap="..."` element. The stream
+/// begins with an initial snapshot and then re-emits updates for the matching
+/// account.
 #[derive(Debug)]
 enum MemoryNotification {
     Some(uuid::Uuid),
@@ -2367,7 +2369,7 @@ async fn agent_live_stream(
                         match get_memory_record(&db_pool, &agent_key, memory_id).await {
                             Ok(Some(memory)) => match memory.memory_type.as_str() {
                                 "trade_execution" => (true, false),
-                                "analysis" => (false, true),
+                                "market_analysis" => (false, true),
                                 _ => (false, false),
                             },
                             Ok(None) => (false, false),
@@ -2467,7 +2469,7 @@ async fn render_latest_analysis_summary_event(
     pool: &crate::db::DbPool,
     agent_key: &str,
 ) -> Result<Event, AppError> {
-    let latest = get_latest_agent_memory_by_type(pool, agent_key, "analysis").await?;
+    let latest = get_latest_agent_memory_by_type(pool, agent_key, "market_analysis").await?;
     let detail_url = latest
         .as_ref()
         .map(|memory| format!("/agents/{agent_key}/memories/{}", memory.id));
@@ -4073,7 +4075,7 @@ mod tests {
         let analysis = seed_memory_with_type(
             &state,
             &agent_key,
-            "analysis",
+            "market_analysis",
             "BTC bullish continuation above 67k",
             "## Thesis\nReclaimed intraday support.",
         )
@@ -4109,7 +4111,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn agent_positions_route_renders_empty_analysis_section_when_no_analysis_memory() {
+    async fn agent_positions_route_renders_empty_analysis_section_when_no_market_analysis_memory() {
         let state = test_state().await;
         let (agent_key, _wallet_address) = insert_test_agent(&state).await.expect("insert agent");
 
@@ -4137,7 +4139,7 @@ mod tests {
         let analysis = seed_memory_with_type(
             &state,
             &agent_key,
-            "analysis",
+            "market_analysis",
             "BTC bullish continuation above 67k",
             "## Thesis\nReclaimed intraday support.",
         )
@@ -4153,9 +4155,8 @@ mod tests {
         assert!(text.contains(&format!("/agents/{agent_key}/memories/{}", analysis.id)));
         assert!(text.contains("timeago"));
         assert!(text.contains("datetime="));
-        // Default analysis validity is 2x the schedule interval — the row
-        // we just inserted is brand new, so it should not be flagged as
-        // expired or carry a warning icon.
+        // The row we just inserted is brand new, so it should not be flagged
+        // as expired or carry a warning icon.
         assert!(!text.contains("text-amber-400"));
         assert!(!text.contains("(expired"));
     }
@@ -4171,8 +4172,8 @@ mod tests {
             &agent_key,
             &CreateMemory {
                 symbol: "BTC".to_string(),
-                timeframe: Some("1h".to_string()),
-                memory_type: "analysis".to_string(),
+                timeframe: None,
+                memory_type: "market_analysis".to_string(),
                 summary: "Stale breakout call".to_string(),
                 content: "## Thesis\nBid got pulled.".to_string(),
                 metadata: Some(serde_json::json!({ "valid_for_seconds": 1 })),
@@ -4195,22 +4196,22 @@ mod tests {
         assert!(text.contains("Stale breakout call"));
         assert!(
             text.contains("text-amber-400"),
-            "expired analysis should turn the timestamp amber"
+            "expired market analysis should turn the timestamp amber"
         );
         assert!(
             text.contains("(expired"),
-            "expired analysis should annotate the title"
+            "expired market analysis should annotate the title"
         );
-        // The inline warning triangle is the visual signal that the
+        // The inline warning triangle is the visual signal that the market
         // analysis has aged past `valid_for_seconds` / `stale_after`.
         assert!(
             text.contains("viewBox=\\\"0 0 20 20\\\""),
-            "expired analysis should render a warning icon"
+            "expired market analysis should render a warning icon"
         );
     }
 
     #[tokio::test]
-    async fn latest_analysis_summary_event_renders_empty_when_no_analysis_memory() {
+    async fn latest_analysis_summary_event_renders_empty_when_no_market_analysis_memory() {
         let state = test_state().await;
         let (agent_key, _wallet_address) = insert_test_agent(&state).await.expect("insert agent");
 
