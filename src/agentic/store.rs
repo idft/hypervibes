@@ -648,6 +648,16 @@ pub async fn list_agent_runs(
     agent_key: &str,
     limit: i64,
 ) -> Result<Vec<AgenticRunRow>> {
+    list_agent_runs_page(pool, agent_key, limit, 0).await
+}
+
+/// List a page of recent runs for an agent.
+pub async fn list_agent_runs_page(
+    pool: &DbPool,
+    agent_key: &str,
+    limit: i64,
+    offset: i64,
+) -> Result<Vec<AgenticRunRow>> {
     let rows = query_as::<_, AgenticRunRow>(
         "SELECT id,
                 schedule_id,
@@ -670,15 +680,28 @@ pub async fn list_agent_runs(
            FROM agentic_runs
           WHERE agent_key = $1
           ORDER BY created_at DESC
-          LIMIT $2",
+          LIMIT $2
+         OFFSET $3",
     )
     .bind(agent_key)
     .bind(limit)
+    .bind(offset)
     .fetch_all(pool)
     .await
     .with_context(|| format!("failed to list runs for agent {agent_key}"))?;
 
     Ok(rows)
+}
+
+/// Count runs recorded for an agent.
+pub async fn count_agent_runs(pool: &DbPool, agent_key: &str) -> Result<i64> {
+    let (count,): (i64,) = query_as("SELECT COUNT(*) FROM agentic_runs WHERE agent_key = $1")
+        .bind(agent_key)
+        .fetch_one(pool)
+        .await
+        .with_context(|| format!("failed to count runs for agent {agent_key}"))?;
+
+    Ok(count)
 }
 
 /// List the most recent runs for a single job.

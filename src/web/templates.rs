@@ -582,6 +582,13 @@ pub struct AgentsShowPageTemplate {
     pub jobs_loaded: bool,
     pub hooks_loaded: bool,
     pub recent_runs_loaded: bool,
+    pub recent_runs_page: usize,
+    pub recent_runs_total_pages: usize,
+    pub recent_runs_total_count: usize,
+    pub recent_runs_range_start: usize,
+    pub recent_runs_range_end: usize,
+    pub recent_runs_previous_page_url: Option<String>,
+    pub recent_runs_next_page_url: Option<String>,
 }
 
 impl AgentsShowPageTemplate {
@@ -649,6 +656,13 @@ impl AgentsShowPageTemplate {
             jobs_loaded: false,
             hooks_loaded: false,
             recent_runs_loaded: false,
+            recent_runs_page: 1,
+            recent_runs_total_pages: 0,
+            recent_runs_total_count: 0,
+            recent_runs_range_start: 0,
+            recent_runs_range_end: 0,
+            recent_runs_previous_page_url: None,
+            recent_runs_next_page_url: None,
         }
     }
 
@@ -2689,6 +2703,11 @@ mod tests {
             AgenticRunView::from_row(&sample_run_row(1, "succeeded", "analysis-15m")),
             AgenticRunView::from_row(&sample_run_row(2, "failed", "trading-1m")),
         ];
+        template.recent_runs_page = 1;
+        template.recent_runs_total_pages = 1;
+        template.recent_runs_total_count = 2;
+        template.recent_runs_range_start = 1;
+        template.recent_runs_range_end = 2;
         let rendered = template.render().expect("render jobs page runs section");
         assert!(rendered.contains("ses_abc123"));
         assert!(rendered.contains(">succeeded<"));
@@ -2696,6 +2715,38 @@ mod tests {
         assert!(rendered.contains("15m"));
         assert!(rendered.contains("42s"));
         assert!(rendered.contains("/agents/test-agent/runs/1"));
+        assert!(rendered.contains("Showing 1-2 of 2 runs"));
+    }
+
+    #[test]
+    fn jobs_page_renders_recent_runs_pagination_controls() {
+        let mut template =
+            AgentsShowPageTemplate::new(sample_opencode_detail_row(), AgentShowTab::Jobs);
+        template.recent_runs_loaded = true;
+        template.recent_runs = vec![AgenticRunView::from_row(&sample_run_row(
+            12,
+            "succeeded",
+            "analysis-15m",
+        ))];
+        template.recent_runs_page = 2;
+        template.recent_runs_total_pages = 3;
+        template.recent_runs_total_count = 25;
+        template.recent_runs_range_start = 11;
+        template.recent_runs_range_end = 20;
+        template.recent_runs_previous_page_url = Some("/agents/test-agent/jobs?page=1".to_string());
+        template.recent_runs_next_page_url = Some("/agents/test-agent/jobs?page=3".to_string());
+
+        let rendered = template.render().expect("render jobs page pagination");
+
+        assert!(rendered.contains("Showing 11-20 of 25 runs"));
+        assert!(rendered.contains("Page 2 of 3"));
+        assert!(rendered.contains("/agents/test-agent/jobs?page=1"));
+        assert!(rendered.contains("/agents/test-agent/jobs?page=3"));
+        assert!(rendered.contains("id=\"agent-recent-runs\""));
+        assert!(rendered.contains("hx-select=\"#agent-recent-runs\""));
+        assert!(rendered.contains("hx-target=\"#agent-recent-runs\""));
+        assert!(rendered.contains("hx-swap=\"outerHTML\""));
+        assert!(rendered.contains("hx-push-url=\"true\""));
     }
 
     #[test]

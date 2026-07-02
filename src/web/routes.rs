@@ -362,14 +362,14 @@ async fn agents_show(
     State(state): State<Arc<AppState>>,
     Path(agent_key): Path<String>,
 ) -> Result<Response, AppError> {
-    render_agent_show_page(&state, &agent_key, AgentShowTab::Positions, None).await
+    render_agent_show_page(&state, &agent_key, AgentShowTab::Positions, None, None).await
 }
 
 async fn agents_show_transactions(
     State(state): State<Arc<AppState>>,
     Path(agent_key): Path<String>,
 ) -> Result<Response, AppError> {
-    render_agent_show_page(&state, &agent_key, AgentShowTab::Transactions, None).await
+    render_agent_show_page(&state, &agent_key, AgentShowTab::Transactions, None, None).await
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -378,12 +378,25 @@ struct AgentMemoriesQuery {
     date: String,
 }
 
+#[derive(Debug, Clone, Default, Deserialize)]
+struct AgentJobsQuery {
+    #[serde(default)]
+    page: String,
+}
+
 async fn agents_show_memories(
     State(state): State<Arc<AppState>>,
     Path(agent_key): Path<String>,
     Query(query): Query<AgentMemoriesQuery>,
 ) -> Result<Response, AppError> {
-    render_agent_show_page(&state, &agent_key, AgentShowTab::Memories, Some(query)).await
+    render_agent_show_page(
+        &state,
+        &agent_key,
+        AgentShowTab::Memories,
+        Some(query),
+        None,
+    )
+    .await
 }
 
 async fn agents_show_memory_detail(
@@ -497,7 +510,7 @@ async fn agents_show_prompts(
     State(state): State<Arc<AppState>>,
     Path(agent_key): Path<String>,
 ) -> Result<Response, AppError> {
-    render_agent_show_page(&state, &agent_key, AgentShowTab::Prompts, None).await
+    render_agent_show_page(&state, &agent_key, AgentShowTab::Prompts, None, None).await
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -540,7 +553,7 @@ async fn agents_show_settings(
     State(state): State<Arc<AppState>>,
     Path(agent_key): Path<String>,
 ) -> Result<Response, AppError> {
-    render_agent_show_page(&state, &agent_key, AgentShowTab::Settings, None).await
+    render_agent_show_page(&state, &agent_key, AgentShowTab::Settings, None, None).await
 }
 
 async fn agents_regenerate_workspace(
@@ -580,8 +593,9 @@ async fn agents_regenerate_workspace(
 async fn agents_show_jobs(
     State(state): State<Arc<AppState>>,
     Path(agent_key): Path<String>,
+    Query(query): Query<AgentJobsQuery>,
 ) -> Result<Response, AppError> {
-    render_agent_show_page(&state, &agent_key, AgentShowTab::Jobs, None).await
+    render_agent_show_page(&state, &agent_key, AgentShowTab::Jobs, None, Some(query)).await
 }
 
 async fn agents_show_job_detail(
@@ -1749,6 +1763,7 @@ async fn render_agent_show_page(
     agent_key: &str,
     active_tab: AgentShowTab,
     memories_query: Option<AgentMemoriesQuery>,
+    jobs_query: Option<AgentJobsQuery>,
 ) -> Result<Response, AppError> {
     let Some(agent) = get_agent(&state.db_pool, agent_key).await? else {
         return Ok((StatusCode::NOT_FOUND, "agent not found").into_response());
@@ -1897,7 +1912,11 @@ async fn render_agent_show_page(
                 )
                     .into_response());
             }
-            populate_jobs_tab(state, &agent, &mut template).await;
+            let requested_page = jobs_query
+                .as_ref()
+                .map(|query| parse_positive_page(&query.page))
+                .unwrap_or(1);
+            populate_jobs_tab(state, &agent, &mut template, requested_page).await;
         }
     }
 
@@ -1908,7 +1927,10 @@ async fn populate_jobs_tab(
     state: &Arc<AppState>,
     agent: &crate::agents::model::AgentDetailRow,
     template: &mut AgentsShowPageTemplate,
+    requested_runs_page: usize,
 ) {
+    const RUNS_PER_PAGE: usize = 10;
+
     match crate::agentic::store::list_agent_schedules(&state.db_pool, &agent.agent_key).await {
         Ok(rows) => {
             template.jobs_loaded = true;
@@ -1943,24 +1965,77 @@ async fn populate_jobs_tab(
         }
     }
 
-    const RUNS_LIMIT: i64 = 50;
-    match crate::agentic::store::list_agent_runs(&state.db_pool, &agent.agent_key, RUNS_LIMIT).await
-    {
-        Ok(rows) => {
-            template.recent_runs_loaded = true;
-            template.recent_runs = rows
-                .iter()
-                .map(crate::web::templates::AgenticRunView::from_row)
-                .collect();
+    match crate::agentic::store::count_agent_runs(&state.db_pool, &agent.agent_key).await {
+        Ok(total_count) => {
+            let total_count = total_count as usize;
+            let total_pages = if total_count == 0 {
+                0
+            } else {
+                (total_count + RUNS_PER_PAGE - 1) / RUNS_PER_PAGE
+            };
+            let current_page = if total_pages == 0 {
+                1
+            } else {
+                requested_runs_page.min(total_pages)
+            };
+
+            template.recent_runs_page = current_page;
+            template.recent_runs_total_pages = total_pages;
+            template.recent_runs_total_count = total_count;
+            template.recent_runs_previous_page_url = (current_page > 1)
+                .then(|| format!("/agents/{}/jobs?page={}", agent.agent_key, current_page - 1));
+            template.recent_runs_next_page_url = (total_pages > 0 && current_page < total_pages)
+                .then(|| format!("/agents/{}/jobs?page={}", agent.agent_key, current_page + 1));
+
+            if total_count == 0 {
+                template.recent_runs_loaded = true;
+                return;
+            }
+
+            let offset = ((current_page - 1) * RUNS_PER_PAGE) as i64;
+            match crate::agentic::store::list_agent_runs_page(
+                &state.db_pool,
+                &agent.agent_key,
+                RUNS_PER_PAGE as i64,
+                offset,
+            )
+            .await
+            {
+                Ok(rows) => {
+                    let run_count = rows.len();
+                    template.recent_runs_loaded = true;
+                    template.recent_runs = rows
+                        .iter()
+                        .map(crate::web::templates::AgenticRunView::from_row)
+                        .collect();
+                    template.recent_runs_range_start = offset as usize + 1;
+                    template.recent_runs_range_end = offset as usize + run_count;
+                }
+                Err(error) => {
+                    warn!(
+                        agent_key = %agent.agent_key,
+                        error = ?error,
+                        "failed to list recent agent runs for jobs page"
+                    );
+                }
+            }
         }
         Err(error) => {
             warn!(
                 agent_key = %agent.agent_key,
                 error = ?error,
-                "failed to list recent agent runs for jobs page"
+                "failed to count recent agent runs for jobs page"
             );
         }
     }
+}
+
+fn parse_positive_page(raw: &str) -> usize {
+    raw.trim()
+        .parse::<usize>()
+        .ok()
+        .filter(|page| *page > 0)
+        .unwrap_or(1)
 }
 
 fn render_new_hook_form(
@@ -4679,6 +4754,79 @@ mod tests {
         assert!(text.contains(&format!("/agents/{agent_key}/hooks/new")));
         assert!(text.contains("Run now"));
         assert!(!text.contains("Operator prompt"));
+    }
+
+    #[tokio::test]
+    async fn jobs_route_paginates_recent_runs() {
+        let state = test_state().await;
+        let (agent_key, _wallet_address) = insert_test_opencode_agent(&state)
+            .await
+            .expect("insert opencode agent");
+        let schedule_id = crate::agentic::store::list_agent_schedules(&state.db_pool, &agent_key)
+            .await
+            .expect("list schedules")
+            .into_iter()
+            .next()
+            .expect("default schedule")
+            .id;
+
+        let base_time = chrono::Utc::now();
+        for index in 1..=12 {
+            let run_id =
+                crate::agentic::store::insert_test_run(&state.db_pool, schedule_id, "succeeded")
+                    .await
+                    .expect("insert test run");
+            sqlx::query(
+                "UPDATE agentic_runs
+                    SET backend_run_ref = $1,
+                        created_at = $2,
+                        updated_at = $2
+                  WHERE id = $3",
+            )
+            .bind(format!("run-{index:02}"))
+            .bind(base_time + chrono::Duration::seconds(index.into()))
+            .bind(run_id)
+            .execute(&state.db_pool)
+            .await
+            .expect("label test run");
+        }
+
+        let page_one = router(state.clone())
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/agents/{agent_key}/jobs"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(page_one.status(), StatusCode::OK);
+        let page_one_text = response_text(page_one).await;
+        assert!(page_one_text.contains("Showing 1-10 of 12 runs"));
+        assert!(page_one_text.contains("Page 1 of 2"));
+        assert!(page_one_text.contains("run-12"));
+        assert!(page_one_text.contains("run-03"));
+        assert!(!page_one_text.contains("run-02"));
+        assert!(!page_one_text.contains("run-01"));
+        assert!(page_one_text.contains(&format!("/agents/{agent_key}/jobs?page=2")));
+
+        let page_two = router(state.clone())
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/agents/{agent_key}/jobs?page=2"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(page_two.status(), StatusCode::OK);
+        let page_two_text = response_text(page_two).await;
+        assert!(page_two_text.contains("Showing 11-12 of 12 runs"));
+        assert!(page_two_text.contains("Page 2 of 2"));
+        assert!(page_two_text.contains("run-02"));
+        assert!(page_two_text.contains("run-01"));
+        assert!(!page_two_text.contains("run-03"));
+        assert!(page_two_text.contains(&format!("/agents/{agent_key}/jobs?page=1")));
     }
 
     #[tokio::test]
