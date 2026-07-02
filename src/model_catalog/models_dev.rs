@@ -219,7 +219,8 @@ impl ModelsDevCatalog {
             etag,
             last_modified,
         };
-        self.write_snapshot_to_disk(&snapshot, &meta, &bytes).await?;
+        self.write_snapshot_to_disk(&snapshot, &meta, &bytes)
+            .await?;
         let mut cached_meta = self.inner.meta.write().await;
         *cached_meta = Some(meta);
         Ok(snapshot)
@@ -285,12 +286,9 @@ impl ModelsDevCatalog {
         tokio::fs::write(&api_path, raw_bytes)
             .await
             .with_context(|| format!("failed to write {}", api_path.display()))?;
-        tokio::fs::write(
-            &meta_path,
-            serde_json::to_vec_pretty(meta)?,
-        )
-        .await
-        .with_context(|| format!("failed to write {}", meta_path.display()))?;
+        tokio::fs::write(&meta_path, serde_json::to_vec_pretty(meta)?)
+            .await
+            .with_context(|| format!("failed to write {}", meta_path.display()))?;
         Ok(())
     }
 
@@ -305,11 +303,17 @@ impl ModelsDevCatalog {
             .await
             .clone()
             .ok_or_else(|| anyhow!("models.dev returned 304 without a cached snapshot"))?;
-        let existing_meta = self.inner.meta.read().await.clone().unwrap_or(ModelsDevCatalogMeta {
-            fetched_at: existing_snapshot.fetched_at,
-            etag: None,
-            last_modified: None,
-        });
+        let existing_meta = self
+            .inner
+            .meta
+            .read()
+            .await
+            .clone()
+            .unwrap_or(ModelsDevCatalogMeta {
+                fetched_at: existing_snapshot.fetched_at,
+                etag: None,
+                last_modified: None,
+            });
         let fetched_at = Utc::now();
         let snapshot = ModelsDevCatalogSnapshot {
             providers: existing_snapshot.providers,
@@ -327,7 +331,8 @@ impl ModelsDevCatalog {
         let bytes = tokio::fs::read(&api_path)
             .await
             .with_context(|| format!("failed to read {}", api_path.display()))?;
-        self.write_snapshot_to_disk(&snapshot, &meta, &bytes).await?;
+        self.write_snapshot_to_disk(&snapshot, &meta, &bytes)
+            .await?;
 
         let mut cached_meta = self.inner.meta.write().await;
         *cached_meta = Some(meta);
@@ -358,9 +363,7 @@ impl ModelsDevCatalog {
                 }
             }
 
-            this.inner
-                .refresh_in_flight
-                .store(false, Ordering::Release);
+            this.inner.refresh_in_flight.store(false, Ordering::Release);
         });
     }
 }
@@ -521,11 +524,8 @@ mod tests {
             tokio::time::sleep(Duration::from_secs(5)).await;
         });
 
-        let catalog = ModelsDevCatalog::new_with_api_url(
-            root,
-            format!("http://{address}/api.json"),
-        )
-        .unwrap();
+        let catalog =
+            ModelsDevCatalog::new_with_api_url(root, format!("http://{address}/api.json")).unwrap();
 
         let snapshot = tokio::time::timeout(Duration::from_millis(100), catalog.snapshot())
             .await
@@ -571,9 +571,7 @@ mod tests {
             let request = String::from_utf8(request).context("request should be utf8")?;
             let request = request.to_ascii_lowercase();
             anyhow::ensure!(request.contains("if-none-match: \"etag-123\""));
-            anyhow::ensure!(
-                request.contains("if-modified-since: tue, 01 jul 2025 12:00:00 gmt")
-            );
+            anyhow::ensure!(request.contains("if-modified-since: tue, 01 jul 2025 12:00:00 gmt"));
             stream
                 .write_all(
                     b"HTTP/1.1 304 Not Modified\r\nETag: \"etag-123\"\r\nLast-Modified: Tue, 01 Jul 2025 12:00:00 GMT\r\nContent-Length: 0\r\n\r\n",
@@ -583,7 +581,9 @@ mod tests {
             Result::<_, anyhow::Error>::Ok(())
         });
 
-        let catalog = ModelsDevCatalog::new_with_api_url(root.clone(), format!("http://{address}/api.json")).unwrap();
+        let catalog =
+            ModelsDevCatalog::new_with_api_url(root.clone(), format!("http://{address}/api.json"))
+                .unwrap();
         let (snapshot, meta) = catalog.load_snapshot_from_disk().await.unwrap().unwrap();
         *catalog.inner.state.write().await = Some(snapshot);
         *catalog.inner.meta.write().await = Some(meta);
@@ -595,10 +595,9 @@ mod tests {
 
         server.await.unwrap().unwrap();
 
-        let saved_meta: ModelsDevCatalogMeta = serde_json::from_slice(
-            &fs::read(root.join("models-dev/api.meta.json")).unwrap(),
-        )
-        .unwrap();
+        let saved_meta: ModelsDevCatalogMeta =
+            serde_json::from_slice(&fs::read(root.join("models-dev/api.meta.json")).unwrap())
+                .unwrap();
         assert_eq!(saved_meta.etag.as_deref(), Some("\"etag-123\""));
         assert_eq!(
             saved_meta.last_modified.as_deref(),

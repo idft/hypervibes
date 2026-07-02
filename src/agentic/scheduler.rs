@@ -606,6 +606,8 @@ pub fn spawn(
 
 #[cfg(test)]
 mod tests {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
     use super::*;
 
     use std::sync::{Arc, Mutex};
@@ -632,15 +634,24 @@ mod tests {
     struct FakeBackend {
         calls: Arc<Mutex<Vec<DispatchRequest>>>,
         delay: Duration,
+        active_calls: Arc<AtomicUsize>,
+        max_active_calls: Arc<AtomicUsize>,
     }
 
     #[async_trait]
     impl AgenticBackend for FakeBackend {
         async fn dispatch(&self, request: DispatchRequest) -> Result<DispatchResult> {
+            let active = self.active_calls.fetch_add(1, Ordering::SeqCst) + 1;
+            let _ =
+                self.max_active_calls
+                    .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |current| {
+                        (active > current).then_some(active)
+                    });
             if !self.delay.is_zero() {
                 tokio::time::sleep(self.delay).await;
             }
             self.calls.lock().unwrap().push(request);
+            self.active_calls.fetch_sub(1, Ordering::SeqCst);
             Ok(DispatchResult {
                 backend_run_ref: "ses_fake".to_string(),
             })
@@ -652,7 +663,22 @@ mod tests {
             Self {
                 calls,
                 delay: Duration::ZERO,
+                active_calls: Arc::new(AtomicUsize::new(0)),
+                max_active_calls: Arc::new(AtomicUsize::new(0)),
             }
+        }
+
+        fn with_delay(calls: Arc<Mutex<Vec<DispatchRequest>>>, delay: Duration) -> Self {
+            Self {
+                calls,
+                delay,
+                active_calls: Arc::new(AtomicUsize::new(0)),
+                max_active_calls: Arc::new(AtomicUsize::new(0)),
+            }
+        }
+
+        fn max_active_calls(&self) -> usize {
+            self.max_active_calls.load(Ordering::SeqCst)
         }
     }
 
@@ -885,10 +911,10 @@ mod tests {
         .expect("normalize schedule due times");
 
         let calls: Arc<Mutex<Vec<DispatchRequest>>> = Arc::new(Mutex::new(Vec::new()));
-        let backend: Arc<dyn AgenticBackend> = Arc::new(FakeBackend {
-            calls: calls.clone(),
-            delay: Duration::from_millis(50),
-        });
+        let backend: Arc<dyn AgenticBackend> = Arc::new(FakeBackend::with_delay(
+            calls.clone(),
+            Duration::from_millis(50),
+        ));
 
         let live_accounts = Arc::new(crate::hyperliquid::live_state::LiveAccountStore::new());
         let (_tx, rx) = watch::channel(false);
@@ -933,19 +959,18 @@ mod tests {
         pin_schedule_due(&pool, trading_id, "1m").await;
 
         let calls: Arc<Mutex<Vec<DispatchRequest>>> = Arc::new(Mutex::new(Vec::new()));
-        let backend: Arc<dyn AgenticBackend> = Arc::new(FakeBackend {
-            calls: calls.clone(),
-            delay: Duration::from_millis(150),
-        });
+        let backend_impl = Arc::new(FakeBackend::with_delay(
+            calls.clone(),
+            Duration::from_millis(150),
+        ));
+        let backend: Arc<dyn AgenticBackend> = backend_impl.clone();
 
         let live_accounts = Arc::new(crate::hyperliquid::live_state::LiveAccountStore::new());
         let (_tx, rx) = watch::channel(false);
         let mut scheduler = AgenticScheduler::new(pool.clone(), rx, backend, live_accounts);
-        let started = std::time::Instant::now();
         scheduler.tick().await.expect("tick");
 
         run_until(|| async { calls.lock().map(|guard| guard.len() >= 2).unwrap_or(false) }).await;
-        let elapsed = started.elapsed();
 
         let guard = calls.lock().unwrap();
         let mut jobs: Vec<&str> = guard.iter().map(|r| r.job_key.as_str()).collect();
@@ -955,8 +980,9 @@ mod tests {
             "expected both lanes to dispatch, got {jobs:?}"
         );
         assert!(
-            elapsed < Duration::from_millis(280),
-            "expected same-agent lanes to overlap, took {elapsed:?}"
+            backend_impl.max_active_calls() >= 2,
+            "expected same-agent lanes to overlap, max active calls was {}",
+            backend_impl.max_active_calls()
         );
     }
 
@@ -1040,29 +1066,28 @@ mod tests {
         }
 
         let calls: Arc<Mutex<Vec<DispatchRequest>>> = Arc::new(Mutex::new(Vec::new()));
-        let backend: Arc<dyn AgenticBackend> = Arc::new(FakeBackend {
-            calls: calls.clone(),
-            delay: Duration::from_millis(150),
-        });
+        let backend_impl = Arc::new(FakeBackend::with_delay(
+            calls.clone(),
+            Duration::from_millis(150),
+        ));
+        let backend: Arc<dyn AgenticBackend> = backend_impl.clone();
 
         let live_accounts = Arc::new(crate::hyperliquid::live_state::LiveAccountStore::new());
         let (_tx, rx) = watch::channel(false);
         let mut scheduler = AgenticScheduler::new(pool.clone(), rx, backend, live_accounts);
-        let started = std::time::Instant::now();
         scheduler.tick().await.expect("tick");
 
         run_until(|| async { calls.lock().map(|guard| guard.len() >= 2).unwrap_or(false) }).await;
-        let elapsed = started.elapsed();
 
         let guard = calls.lock().unwrap();
         assert_eq!(guard.len(), 2);
         let mut agents: Vec<&str> = guard.iter().map(|r| r.agent_key.as_str()).collect();
         agents.sort();
         assert_eq!(agents, vec![key_a.as_str(), key_b.as_str()]);
-        // Concurrency: total time should be roughly one dispatch, not two.
         assert!(
-            elapsed < Duration::from_millis(280),
-            "expected concurrent dispatch, took {elapsed:?}"
+            backend_impl.max_active_calls() >= 2,
+            "expected concurrent dispatch, max active calls was {}",
+            backend_impl.max_active_calls()
         );
     }
 

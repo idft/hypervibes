@@ -68,6 +68,8 @@ OpenCode jobs are scheduled by Vibetrading.
 
 The `AgenticScheduler` claims due work, dispatches runs through the OpenCode backend adapter, and stores run state in Postgres.
 
+Before claiming new work for an agent lane, Vibetrading reconciles stale active runs left behind by app restarts. A `running` run whose OpenCode session is recorded as `idle` after a command was created is marked `succeeded`; queued/running orphan rows that never reached OpenCode are failed after their configured timeout. This prevents one interrupted process from causing all later runs in the same lane to be skipped forever.
+
 The agent detail page exposes a `Jobs` tab for OpenCode agents.
 
 When a job is dispatched, Vibetrading builds the initial OpenCode command prompt with the agent metadata, selected instruments, strategy prompt, operator prompt, and trading account snapshot when applicable.

@@ -84,7 +84,9 @@ pub fn parse_timeout_seconds(raw: &str) -> Result<i64> {
             ));
         }
         if number_part.is_empty() {
-            return Err(anyhow!("timeout part {part:?} must include a number before the unit"));
+            return Err(anyhow!(
+                "timeout part {part:?} must include a number before the unit"
+            ));
         }
         let magnitude: i64 = number_part
             .parse()
@@ -355,8 +357,14 @@ mod tests {
     #[test]
     fn parse_timeout_accepts_composites() {
         assert_eq!(parse_timeout_seconds("1h 30m").unwrap(), 3600 + 30 * 60);
-        assert_eq!(parse_timeout_seconds("2h 15m 30s").unwrap(), 2 * 3600 + 15 * 60 + 30);
-        assert_eq!(parse_timeout_seconds("  1h   30m  ").unwrap(), 3600 + 30 * 60);
+        assert_eq!(
+            parse_timeout_seconds("2h 15m 30s").unwrap(),
+            2 * 3600 + 15 * 60 + 30
+        );
+        assert_eq!(
+            parse_timeout_seconds("  1h   30m  ").unwrap(),
+            3600 + 30 * 60
+        );
     }
 
     #[test]

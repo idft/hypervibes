@@ -21,6 +21,9 @@ use crate::{
 
 const ERROR_SUMMARY_MAX_CHARS: usize = 500;
 const ACTIVE_STATUSES: [&str; 2] = [RUN_STATUS_QUEUED, RUN_STATUS_RUNNING];
+const OPENCODE_STATUS_IDLE: &str = "idle";
+const ORPHANED_QUEUED_RUN_SUMMARY: &str = "queued run orphaned by app restart after timeout";
+const ORPHANED_RUNNING_RUN_SUMMARY: &str = "running run orphaned by app restart after timeout";
 
 const DEFAULT_ANALYSIS_TIMEFRAME: &str = "15m";
 const DEFAULT_ANALYSIS_TIMEFRAMES: [&str; 3] = ["15m", "1h", "1d"];
@@ -43,7 +46,18 @@ async fn has_active_run_in_lane_tx(
     tx: &mut Transaction<'_, Postgres>,
     agent_key: &str,
     job_kind: &str,
+    now: DateTime<Utc>,
 ) -> Result<bool> {
+    let recovered = recover_inactive_runs_in_lane_tx(tx, agent_key, job_kind, now).await?;
+    if recovered > 0 {
+        tracing::info!(
+            agent_key,
+            job_kind,
+            recovered,
+            "recovered inactive agentic runs before lane active check"
+        );
+    }
+
     let lane_job_kinds = active_job_kinds_for_lane(job_kind);
     let active: Option<(i32,)> = query_as(
         "SELECT 1 FROM agentic_runs
@@ -60,6 +74,97 @@ async fn has_active_run_in_lane_tx(
     .context("failed to check for active run in lane")?;
 
     Ok(active.is_some())
+}
+
+async fn recover_inactive_runs_in_lane_tx(
+    tx: &mut Transaction<'_, Postgres>,
+    agent_key: &str,
+    job_kind: &str,
+    now: DateTime<Utc>,
+) -> Result<u64> {
+    let lane_job_kinds = active_job_kinds_for_lane(job_kind);
+    if lane_job_kinds.is_empty() {
+        return Ok(0);
+    }
+
+    let recovered_succeeded = sqlx::query(
+        "UPDATE agentic_runs AS runs
+            SET status = $3,
+                finished_at = COALESCE(runs.finished_at, sessions.updated_at, now()),
+                error_summary = NULL,
+                updated_at = now()
+           FROM opencode.sessions AS sessions
+          WHERE runs.agent_key = $1
+            AND runs.job_kind = ANY($2)
+            AND runs.status = $4
+            AND runs.backend_run_ref IS NOT NULL
+            AND sessions.id = runs.backend_run_ref
+            AND sessions.status = $5
+            AND EXISTS (
+                SELECT 1
+                  FROM opencode.commands AS commands
+                 WHERE commands.session_id = runs.backend_run_ref
+            )",
+    )
+    .bind(agent_key)
+    .bind(lane_job_kinds)
+    .bind(RUN_STATUS_SUCCEEDED)
+    .bind(RUN_STATUS_RUNNING)
+    .bind(OPENCODE_STATUS_IDLE)
+    .execute(&mut **tx)
+    .await
+    .context("failed to recover idle OpenCode runs in lane")?
+    .rows_affected();
+
+    let recovered_queued = sqlx::query(
+        "UPDATE agentic_runs
+            SET status = $3,
+                finished_at = $4,
+                error_summary = $5,
+                updated_at = now()
+          WHERE agent_key = $1
+            AND job_kind = ANY($2)
+            AND status = $6
+            AND started_at IS NULL
+            AND finished_at IS NULL
+            AND created_at + (timeout_seconds * interval '1 second') <= $4",
+    )
+    .bind(agent_key)
+    .bind(lane_job_kinds)
+    .bind(RUN_STATUS_FAILED)
+    .bind(now)
+    .bind(ORPHANED_QUEUED_RUN_SUMMARY)
+    .bind(RUN_STATUS_QUEUED)
+    .execute(&mut **tx)
+    .await
+    .context("failed to recover orphaned queued runs in lane")?
+    .rows_affected();
+
+    let recovered_running = sqlx::query(
+        "UPDATE agentic_runs
+            SET status = $3,
+                finished_at = $4,
+                error_summary = $5,
+                updated_at = now()
+          WHERE agent_key = $1
+            AND job_kind = ANY($2)
+            AND status = $6
+            AND backend_run_ref IS NULL
+            AND finished_at IS NULL
+            AND COALESCE(started_at, created_at) + (timeout_seconds * interval '1 second') <= $4",
+    )
+    .bind(agent_key)
+    .bind(lane_job_kinds)
+    .bind(RUN_STATUS_FAILED)
+    .bind(now)
+    .bind(ORPHANED_RUNNING_RUN_SUMMARY)
+    .bind(RUN_STATUS_RUNNING)
+    .execute(&mut **tx)
+    .await
+    .context("failed to recover orphaned running runs in lane")?
+    .rows_affected();
+
+    Ok(recovered_succeeded + recovered_queued + recovered_running)
 }
 
 fn default_analysis_job_key() -> String {
@@ -1037,51 +1142,57 @@ pub async fn claim_due_schedule(
 
     let scheduled_for = boundary_for_due_at(schedule.next_run_at, trigger_delay_seconds);
 
-    let outcome =
-        if has_active_run_in_lane_tx(&mut tx, &schedule.agent_key, &schedule.job_kind).await? {
-            let error_summary = "previous run still active";
-            let run_id = insert_run_in_tx(
-                &mut tx,
-                Some(schedule.id),
-                None,
-                &schedule.agent_key,
-                &schedule.job_key,
-                &schedule.job_kind,
-                Some(&timeframe),
-                RUN_STATUS_SKIPPED,
-                None,
-                None,
-                None,
-                scheduled_for,
-                None,
-                Some(now),
-                schedule.timeout_seconds,
-                Some(error_summary),
-            )
-            .await?;
-            ClaimedScheduleRun::Skipped { run_id }
-        } else {
-            let run_id = insert_run_in_tx(
-                &mut tx,
-                Some(schedule.id),
-                None,
-                &schedule.agent_key,
-                &schedule.job_key,
-                &schedule.job_kind,
-                Some(&timeframe),
-                RUN_STATUS_QUEUED,
-                None,
-                None,
-                None,
-                scheduled_for,
-                None,
-                None,
-                schedule.timeout_seconds,
-                None,
-            )
-            .await?;
-            ClaimedScheduleRun::Dispatch { run_id }
-        };
+    let outcome = if has_active_run_in_lane_tx(
+        &mut tx,
+        &schedule.agent_key,
+        &schedule.job_kind,
+        now,
+    )
+    .await?
+    {
+        let error_summary = "previous run still active";
+        let run_id = insert_run_in_tx(
+            &mut tx,
+            Some(schedule.id),
+            None,
+            &schedule.agent_key,
+            &schedule.job_key,
+            &schedule.job_kind,
+            Some(&timeframe),
+            RUN_STATUS_SKIPPED,
+            None,
+            None,
+            None,
+            scheduled_for,
+            None,
+            Some(now),
+            schedule.timeout_seconds,
+            Some(error_summary),
+        )
+        .await?;
+        ClaimedScheduleRun::Skipped { run_id }
+    } else {
+        let run_id = insert_run_in_tx(
+            &mut tx,
+            Some(schedule.id),
+            None,
+            &schedule.agent_key,
+            &schedule.job_key,
+            &schedule.job_kind,
+            Some(&timeframe),
+            RUN_STATUS_QUEUED,
+            None,
+            None,
+            None,
+            scheduled_for,
+            None,
+            None,
+            schedule.timeout_seconds,
+            None,
+        )
+        .await?;
+        ClaimedScheduleRun::Dispatch { run_id }
+    };
 
     advance_schedule(&mut tx, &schedule, now).await?;
 
@@ -1396,53 +1507,59 @@ pub async fn insert_queued_run(
     };
 
     let now = Utc::now();
-    let outcome =
-        if has_active_run_in_lane_tx(&mut tx, &schedule.agent_key, &schedule.job_kind).await? {
-            let run_id = insert_run_in_tx(
-                &mut tx,
-                Some(schedule.id),
-                None,
-                &schedule.agent_key,
-                &schedule.job_key,
-                &schedule.job_kind,
-                Some(&schedule.timeframe),
-                RUN_STATUS_SKIPPED,
-                None,
-                None,
-                None,
-                now,
-                None,
-                Some(now),
-                schedule.timeout_seconds,
-                Some("previous run still active"),
-            )
-            .await?;
-            QueuedScheduleRun::Skipped { run_id }
-        } else {
-            let run_id = insert_run_in_tx(
-                &mut tx,
-                Some(schedule.id),
-                None,
-                &schedule.agent_key,
-                &schedule.job_key,
-                &schedule.job_kind,
-                Some(&schedule.timeframe),
-                RUN_STATUS_QUEUED,
-                None,
-                None,
-                None,
-                now,
-                None,
-                None,
-                schedule.timeout_seconds,
-                None,
-            )
-            .await?;
-            QueuedScheduleRun::Dispatch {
-                run_id,
-                scheduled_for: now,
-            }
-        };
+    let outcome = if has_active_run_in_lane_tx(
+        &mut tx,
+        &schedule.agent_key,
+        &schedule.job_kind,
+        now,
+    )
+    .await?
+    {
+        let run_id = insert_run_in_tx(
+            &mut tx,
+            Some(schedule.id),
+            None,
+            &schedule.agent_key,
+            &schedule.job_key,
+            &schedule.job_kind,
+            Some(&schedule.timeframe),
+            RUN_STATUS_SKIPPED,
+            None,
+            None,
+            None,
+            now,
+            None,
+            Some(now),
+            schedule.timeout_seconds,
+            Some("previous run still active"),
+        )
+        .await?;
+        QueuedScheduleRun::Skipped { run_id }
+    } else {
+        let run_id = insert_run_in_tx(
+            &mut tx,
+            Some(schedule.id),
+            None,
+            &schedule.agent_key,
+            &schedule.job_key,
+            &schedule.job_kind,
+            Some(&schedule.timeframe),
+            RUN_STATUS_QUEUED,
+            None,
+            None,
+            None,
+            now,
+            None,
+            None,
+            schedule.timeout_seconds,
+            None,
+        )
+        .await?;
+        QueuedScheduleRun::Dispatch {
+            run_id,
+            scheduled_for: now,
+        }
+    };
 
     tx.commit()
         .await
@@ -1500,52 +1617,53 @@ pub async fn insert_queued_hook_run(
     };
 
     let now = Utc::now();
-    let outcome = if has_active_run_in_lane_tx(&mut tx, &hook.agent_key, &hook.job_kind).await? {
-        let run_id = insert_run_in_tx(
-            &mut tx,
-            None,
-            Some(hook.id),
-            &hook.agent_key,
-            &hook.job_key,
-            &hook.job_kind,
-            None,
-            RUN_STATUS_SKIPPED,
-            None,
-            None,
-            None,
-            now,
-            None,
-            Some(now),
-            hook.timeout_seconds,
-            Some("previous run still active"),
-        )
-        .await?;
-        QueuedHookRun::Skipped { run_id }
-    } else {
-        let run_id = insert_run_in_tx(
-            &mut tx,
-            None,
-            Some(hook.id),
-            &hook.agent_key,
-            &hook.job_key,
-            &hook.job_kind,
-            None,
-            RUN_STATUS_QUEUED,
-            None,
-            None,
-            None,
-            now,
-            None,
-            None,
-            hook.timeout_seconds,
-            None,
-        )
-        .await?;
-        QueuedHookRun::Dispatch {
-            run_id,
-            scheduled_for: now,
-        }
-    };
+    let outcome =
+        if has_active_run_in_lane_tx(&mut tx, &hook.agent_key, &hook.job_kind, now).await? {
+            let run_id = insert_run_in_tx(
+                &mut tx,
+                None,
+                Some(hook.id),
+                &hook.agent_key,
+                &hook.job_key,
+                &hook.job_kind,
+                None,
+                RUN_STATUS_SKIPPED,
+                None,
+                None,
+                None,
+                now,
+                None,
+                Some(now),
+                hook.timeout_seconds,
+                Some("previous run still active"),
+            )
+            .await?;
+            QueuedHookRun::Skipped { run_id }
+        } else {
+            let run_id = insert_run_in_tx(
+                &mut tx,
+                None,
+                Some(hook.id),
+                &hook.agent_key,
+                &hook.job_key,
+                &hook.job_kind,
+                None,
+                RUN_STATUS_QUEUED,
+                None,
+                None,
+                None,
+                now,
+                None,
+                None,
+                hook.timeout_seconds,
+                None,
+            )
+            .await?;
+            QueuedHookRun::Dispatch {
+                run_id,
+                scheduled_for: now,
+            }
+        };
 
     tx.commit()
         .await
@@ -1721,6 +1839,25 @@ mod tests {
         .await
         .expect("fetch schedule id");
         id
+    }
+
+    async fn insert_test_opencode_session(pool: &DbPool, session_id: &str, status: &str) {
+        query("INSERT INTO opencode.sessions (id, status, updated_at) VALUES ($1, $2, now())")
+            .bind(session_id)
+            .bind(status)
+            .execute(pool)
+            .await
+            .expect("insert opencode session");
+    }
+
+    async fn insert_test_opencode_command(pool: &DbPool, session_id: &str) {
+        query(
+            "INSERT INTO opencode.commands (session_id, command_name, command_args) VALUES ($1, 'vibetrading-trading', '')",
+        )
+        .bind(session_id)
+        .execute(pool)
+        .await
+        .expect("insert opencode command");
     }
 
     #[tokio::test]
@@ -2473,6 +2610,265 @@ mod tests {
         );
         assert!(run.finished_at.is_some());
         assert_eq!(run.timeframe.as_deref(), Some(DEFAULT_ANALYSIS_TIMEFRAME));
+    }
+
+    #[tokio::test]
+    async fn claim_due_schedule_recovers_idle_running_run_and_dispatches_next() {
+        let pool = test_db::pool().await;
+        let key = format!(
+            "recover-idle-{}",
+            Utc::now().timestamp_nanos_opt().unwrap_or(0)
+        );
+        let schedule_id = seed_agent_and_schedule(&pool, &key, 0).await;
+        let previous_run_id = insert_test_run(&pool, schedule_id, RUN_STATUS_RUNNING)
+            .await
+            .expect("seed running run");
+        let session_id = format!(
+            "ses_recovered_{}",
+            Utc::now().timestamp_nanos_opt().unwrap_or(0)
+        );
+        query(
+            "UPDATE agentic_runs
+                SET backend_run_ref = $2,
+                    started_at = COALESCE(started_at, now())
+              WHERE id = $1",
+        )
+        .bind(previous_run_id)
+        .bind(&session_id)
+        .execute(&pool)
+        .await
+        .expect("attach backend session ref");
+        insert_test_opencode_session(&pool, &session_id, OPENCODE_STATUS_IDLE).await;
+        insert_test_opencode_command(&pool, &session_id).await;
+
+        let now = Utc::now();
+        let due_boundary = latest_due_at_or_before(
+            now,
+            DEFAULT_ANALYSIS_TIMEFRAME,
+            DEFAULT_TRIGGER_DELAY_SECONDS,
+        )
+        .expect("compute latest due")
+        .expect("should have a previous due boundary");
+        query("UPDATE agentic_job_schedules SET next_run_at = $1 WHERE id = $2")
+            .bind(due_boundary)
+            .bind(schedule_id)
+            .execute(&pool)
+            .await
+            .expect("set due");
+
+        let outcome = claim_due_schedule(&pool, schedule_id, now)
+            .await
+            .expect("claim");
+        let new_run_id = match outcome {
+            ClaimedScheduleRun::Dispatch { run_id } => run_id,
+            other => panic!("expected Dispatch, got {other:?}"),
+        };
+
+        let previous_run = get_run(&pool, previous_run_id)
+            .await
+            .expect("fetch previous run")
+            .expect("previous run present");
+        assert_eq!(previous_run.status, RUN_STATUS_SUCCEEDED);
+
+        let new_run = get_run(&pool, new_run_id)
+            .await
+            .expect("fetch new run")
+            .expect("new run present");
+        assert_eq!(new_run.status, RUN_STATUS_QUEUED);
+    }
+
+    #[tokio::test]
+    async fn claim_due_schedule_keeps_active_opencode_run_blocking() {
+        let pool = test_db::pool().await;
+        let key = format!(
+            "recover-busy-{}",
+            Utc::now().timestamp_nanos_opt().unwrap_or(0)
+        );
+        let schedule_id = seed_agent_and_schedule(&pool, &key, 0).await;
+        let previous_run_id = insert_test_run(&pool, schedule_id, RUN_STATUS_RUNNING)
+            .await
+            .expect("seed running run");
+        let session_id = format!(
+            "ses_active_{}",
+            Utc::now().timestamp_nanos_opt().unwrap_or(0)
+        );
+        query(
+            "UPDATE agentic_runs
+                SET backend_run_ref = $2,
+                    started_at = COALESCE(started_at, now())
+              WHERE id = $1",
+        )
+        .bind(previous_run_id)
+        .bind(&session_id)
+        .execute(&pool)
+        .await
+        .expect("attach backend session ref");
+        insert_test_opencode_session(&pool, &session_id, "active").await;
+        insert_test_opencode_command(&pool, &session_id).await;
+
+        let now = Utc::now();
+        let due_boundary = latest_due_at_or_before(
+            now,
+            DEFAULT_ANALYSIS_TIMEFRAME,
+            DEFAULT_TRIGGER_DELAY_SECONDS,
+        )
+        .expect("compute latest due")
+        .expect("should have a previous due boundary");
+        query("UPDATE agentic_job_schedules SET next_run_at = $1 WHERE id = $2")
+            .bind(due_boundary)
+            .bind(schedule_id)
+            .execute(&pool)
+            .await
+            .expect("set due");
+
+        let outcome = claim_due_schedule(&pool, schedule_id, now)
+            .await
+            .expect("claim");
+        let skipped_run_id = match outcome {
+            ClaimedScheduleRun::Skipped { run_id } => run_id,
+            other => panic!("expected Skipped, got {other:?}"),
+        };
+
+        let previous_run = get_run(&pool, previous_run_id)
+            .await
+            .expect("fetch previous run")
+            .expect("previous run present");
+        assert_eq!(previous_run.status, RUN_STATUS_RUNNING);
+
+        let skipped_run = get_run(&pool, skipped_run_id)
+            .await
+            .expect("fetch skipped run")
+            .expect("skipped run present");
+        assert_eq!(skipped_run.status, RUN_STATUS_SKIPPED);
+        assert_eq!(
+            skipped_run.error_summary.as_deref(),
+            Some("previous run still active")
+        );
+    }
+
+    #[tokio::test]
+    async fn claim_due_schedule_fails_timed_out_queued_orphan_and_dispatches_next() {
+        let pool = test_db::pool().await;
+        let key = format!(
+            "recover-queued-{}",
+            Utc::now().timestamp_nanos_opt().unwrap_or(0)
+        );
+        let schedule_id = seed_agent_and_schedule(&pool, &key, 0).await;
+        let previous_run_id = insert_test_run(&pool, schedule_id, RUN_STATUS_QUEUED)
+            .await
+            .expect("seed queued run");
+        query(
+            "UPDATE agentic_runs
+                SET created_at = now() - (timeout_seconds + 60) * interval '1 second',
+                    updated_at = now() - (timeout_seconds + 60) * interval '1 second'
+              WHERE id = $1",
+        )
+        .bind(previous_run_id)
+        .execute(&pool)
+        .await
+        .expect("age queued run past timeout");
+
+        let now = Utc::now();
+        let due_boundary = latest_due_at_or_before(
+            now,
+            DEFAULT_ANALYSIS_TIMEFRAME,
+            DEFAULT_TRIGGER_DELAY_SECONDS,
+        )
+        .expect("compute latest due")
+        .expect("should have a previous due boundary");
+        query("UPDATE agentic_job_schedules SET next_run_at = $1 WHERE id = $2")
+            .bind(due_boundary)
+            .bind(schedule_id)
+            .execute(&pool)
+            .await
+            .expect("set due");
+
+        let outcome = claim_due_schedule(&pool, schedule_id, now)
+            .await
+            .expect("claim");
+        let new_run_id = match outcome {
+            ClaimedScheduleRun::Dispatch { run_id } => run_id,
+            other => panic!("expected Dispatch, got {other:?}"),
+        };
+
+        let previous_run = get_run(&pool, previous_run_id)
+            .await
+            .expect("fetch previous run")
+            .expect("previous run present");
+        assert_eq!(previous_run.status, RUN_STATUS_FAILED);
+        assert_eq!(
+            previous_run.error_summary.as_deref(),
+            Some(ORPHANED_QUEUED_RUN_SUMMARY)
+        );
+
+        let new_run = get_run(&pool, new_run_id)
+            .await
+            .expect("fetch new run")
+            .expect("new run present");
+        assert_eq!(new_run.status, RUN_STATUS_QUEUED);
+    }
+
+    #[tokio::test]
+    async fn claim_due_schedule_fails_timed_out_running_orphan_without_backend_ref() {
+        let pool = test_db::pool().await;
+        let key = format!(
+            "recover-running-{}",
+            Utc::now().timestamp_nanos_opt().unwrap_or(0)
+        );
+        let schedule_id = seed_agent_and_schedule(&pool, &key, 0).await;
+        let previous_run_id = insert_test_run(&pool, schedule_id, RUN_STATUS_RUNNING)
+            .await
+            .expect("seed running run");
+        query(
+            "UPDATE agentic_runs
+                SET started_at = now() - (timeout_seconds + 60) * interval '1 second',
+                    created_at = now() - (timeout_seconds + 60) * interval '1 second',
+                    updated_at = now() - (timeout_seconds + 60) * interval '1 second'
+              WHERE id = $1",
+        )
+        .bind(previous_run_id)
+        .execute(&pool)
+        .await
+        .expect("age running run past timeout");
+
+        let now = Utc::now();
+        let due_boundary = latest_due_at_or_before(
+            now,
+            DEFAULT_ANALYSIS_TIMEFRAME,
+            DEFAULT_TRIGGER_DELAY_SECONDS,
+        )
+        .expect("compute latest due")
+        .expect("should have a previous due boundary");
+        query("UPDATE agentic_job_schedules SET next_run_at = $1 WHERE id = $2")
+            .bind(due_boundary)
+            .bind(schedule_id)
+            .execute(&pool)
+            .await
+            .expect("set due");
+
+        let outcome = claim_due_schedule(&pool, schedule_id, now)
+            .await
+            .expect("claim");
+        let new_run_id = match outcome {
+            ClaimedScheduleRun::Dispatch { run_id } => run_id,
+            other => panic!("expected Dispatch, got {other:?}"),
+        };
+
+        let previous_run = get_run(&pool, previous_run_id)
+            .await
+            .expect("fetch previous run")
+            .expect("previous run present");
+        assert_eq!(previous_run.status, RUN_STATUS_FAILED);
+        assert_eq!(
+            previous_run.error_summary.as_deref(),
+            Some(ORPHANED_RUNNING_RUN_SUMMARY)
+        );
+
+        let new_run = get_run(&pool, new_run_id)
+            .await
+            .expect("fetch new run")
+            .expect("new run present");
+        assert_eq!(new_run.status, RUN_STATUS_QUEUED);
     }
 
     #[tokio::test]
