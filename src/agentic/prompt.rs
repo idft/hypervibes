@@ -28,14 +28,14 @@ fn build_analysis_prompt(request: &DispatchRequest) -> String {
     body.push_str(&request.analysis_prompt);
     body.push_str("\n\n## Job-specific strategy\n");
     body.push_str(&operator_prompt_section(&request.operator_prompt));
+    body.push_str(
+        "(Job-specific strategy is additive: it adds narrower details for this job and complements the strategy above; it does not replace it.)\n",
+    );
     body.push_str("\n\n## Selected instruments\n");
     body.push_str(&selected_instruments_section(&request.selected_instruments));
     body.push_str("\n\n## Instructions\n");
-    body.push_str("- Fetch OHLCV and relevant public market data from Hyperliquid for the selected instruments. Use `python .opencode/skills/hyperliquid-data/fetch_ohlcv.py <SYMBOL> <TIMEFRAME> [--limit N]` for OHLCV candles. `SYMBOL` and `TIMEFRAME` are positional arguments; do not use `--coin`, `--timeframe`, or `--days`. The script prints a small manifest and writes candles to `scratch/ohlcv-cache/<SYMBOL>/<TIMEFRAME>/...json`; load the manifest's `output_path` instead of asking for full candle data on stdout.\n");
-    body.push_str("- Use the shared Python analysis runtime for pandas, numpy, scipy, statsmodels, pandas-ta-classic, plotting, and related analysis work.\n");
-    body.push_str("- Analyze market structure, trend, volatility, support/resistance, liquidity zones, and risk/reward.\n");
-    body.push_str("- Only produce actionable setups when confidence is at least the threshold defined in the strategy.\n");
-    body.push_str("- If there is no clear edge, mark the bias neutral or mixed and provide no actionable setup.\n");
+    body.push_str("- Fetch OHLCV and relevant public market data from Hyperliquid for the selected instruments using the `hyperliquid-data` skill.\n");
+    body.push_str("- Use the shared `python-analysis` runtime for indicator and statistical work.\n");
     body.push_str(
         "- Write a memory record with `vibetrading_write_memory` summarizing your analysis so the trading job can consume it.\n",
     );
@@ -98,6 +98,9 @@ fn build_trading_prompt(request: &DispatchRequest) -> String {
     body.push_str(&request.trading_prompt);
     body.push_str("\n\n## Job-specific strategy\n");
     body.push_str(&operator_prompt_section(&request.operator_prompt));
+    body.push_str(
+        "(Job-specific strategy is additive: it adds narrower details for this job and complements the strategy above; it does not replace it.)\n",
+    );
     body.push_str("\n\n## Account state\n");
     body.push_str(&account_state_section(request.account_snapshot.as_ref()));
     body.push_str("\n\n## Selected instruments\n");
@@ -108,13 +111,8 @@ fn build_trading_prompt(request: &DispatchRequest) -> String {
         "- Do not open new exposure when no fresh market analysis exists for the symbol.\n",
     );
     body.push_str("- Do not fall back to raw timeframe `analysis` memories for execution decisions. Raw analysis can be consulted only for diagnostics when the operator prompt explicitly asks for it.\n");
-    body.push_str("- Fetch current OHLCV and public market data from Hyperliquid for the selected instruments. Use `python .opencode/skills/hyperliquid-data/fetch_ohlcv.py <SYMBOL> <TIMEFRAME> [--limit N]` for OHLCV candles. `SYMBOL` and `TIMEFRAME` are positional arguments; do not use `--coin`, `--timeframe`, or `--days`. The script prints a small manifest and writes candles to `scratch/ohlcv-cache/<SYMBOL>/<TIMEFRAME>/...json`; load the manifest's `output_path` instead of asking for full candle data on stdout.\n");
-    body.push_str("- Use limit orders for new entries. Avoid full-size entries on first fill.\n");
-    body.push_str("- Only open new exposure when market analysis is fresh, non-neutral, and confidence meets the strategy threshold.\n");
-    body.push_str(
-        "- Cancel unfilled entry orders when the source analysis expires or is invalidated.\n",
-    );
-    body.push_str("- Avoid duplicate resting orders at similar prices.\n");
+    body.push_str("- Fetch current OHLCV and public market data from Hyperliquid for the selected instruments using the `hyperliquid-data` skill.\n");
+    body.push_str("- Submit and cancel orders only through the `vibetrading` MCP trading tools.\n");
     body.push_str("- Do not trade instruments that are not in the selected list.\n");
     body
 }
@@ -200,10 +198,9 @@ mod tests {
         assert!(prompt.contains("Analyze trends."));
         assert!(prompt.contains("Focus on BTC."));
         assert!(prompt.contains("You are a crypto trading assistant."));
-        assert!(prompt.contains("fetch_ohlcv.py <SYMBOL> <TIMEFRAME> [--limit N]"));
-        assert!(prompt.contains("do not use `--coin`, `--timeframe`, or `--days`"));
-        assert!(prompt.contains("scratch/ohlcv-cache/<SYMBOL>/<TIMEFRAME>/...json"));
-        assert!(prompt.contains("shared Python analysis runtime"));
+        assert!(prompt.contains("`hyperliquid-data` skill"));
+        assert!(prompt.contains("`python-analysis` runtime"));
+        assert!(prompt.contains("Job-specific strategy is additive"));
         assert!(prompt.contains("## Completion requirements"));
         assert!(
             prompt.contains(
@@ -256,6 +253,7 @@ mod tests {
         assert!(prompt.contains("- Available to trade USD: 750"));
         assert!(prompt.contains("vibetrading_get_market_analysis(symbol)"));
         assert!(prompt.contains("Do not fall back to raw timeframe `analysis` memories"));
+        assert!(prompt.contains("Job-specific strategy is additive"));
     }
 
     #[test]
