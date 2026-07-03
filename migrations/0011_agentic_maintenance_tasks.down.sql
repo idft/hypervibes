@@ -1,0 +1,4 @@
+DROP INDEX IF EXISTS agentic_maintenance_tasks_one_active_workspace_task_idx;
+DROP INDEX IF EXISTS agentic_maintenance_tasks_status_created_idx;
+DROP INDEX IF EXISTS agentic_maintenance_tasks_agent_created_idx;
+DROP TABLE IF EXISTS agentic_maintenance_tasks;

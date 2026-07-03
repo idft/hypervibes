@@ -1,15 +1,20 @@
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
-use sqlx::{PgPool, Postgres, Transaction, query_as};
+use sqlx::{Error as SqlxError, PgPool, Postgres, Transaction, query_as};
 
 use crate::{
     agentic::{
         job_key::{build_generated_hook_job_key, build_generated_job_key},
         model::{
-            AgenticJobHookRow, AgenticJobScheduleRow, AgenticRunRow, DueOpenCodeHookRow,
-            DueOpenCodeScheduleRow, HOOK_EVENT_ANALYSIS_BATCH_COMPLETED, JOB_KIND_ANALYSIS,
-            JOB_KIND_MARKET_ANALYSIS, JOB_KIND_TRADING, RUN_STATUS_ABORTED, RUN_STATUS_FAILED,
-            RUN_STATUS_QUEUED, RUN_STATUS_RUNNING, RUN_STATUS_SKIPPED, RUN_STATUS_SUCCEEDED,
+            AgentMaintenanceTaskRow, AgenticJobHookRow, AgenticJobScheduleRow, AgenticRunRow,
+            DueOpenCodeHookRow, DueOpenCodeScheduleRow,
+            HOOK_EVENT_ANALYSIS_BATCH_COMPLETED, JOB_KIND_ANALYSIS,
+            JOB_KIND_MARKET_ANALYSIS, JOB_KIND_TRADING,
+            MAINTENANCE_STATUS_FAILED, MAINTENANCE_STATUS_QUEUED,
+            MAINTENANCE_STATUS_RUNNING, MAINTENANCE_STATUS_SUCCEEDED,
+            MAINTENANCE_TASK_KIND_WORKSPACE_REGENERATE, RUN_STATUS_ABORTED,
+            RUN_STATUS_FAILED, RUN_STATUS_QUEUED, RUN_STATUS_RUNNING, RUN_STATUS_SKIPPED,
+            RUN_STATUS_SUCCEEDED,
         },
         timeframe::{
             DEFAULT_TRIGGER_DELAY_SECONDS, boundary_for_due_at, latest_due_at_or_before,
@@ -31,6 +36,9 @@ const DEFAULT_TRADING_TIMEFRAME: &str = "1m";
 const DEFAULT_ANALYSIS_TIMEOUT_SECONDS: i32 = 900;
 const DEFAULT_TRADING_TIMEOUT_SECONDS: i32 = 900;
 const DEFAULT_MARKET_ANALYSIS_TIMEOUT_SECONDS: i32 = 900;
+
+const ACTIVE_MAINTENANCE_STATUSES: [&str; 2] =
+    [MAINTENANCE_STATUS_QUEUED, MAINTENANCE_STATUS_RUNNING];
 
 fn active_job_kinds_for_lane(job_kind: &str) -> &'static [&'static str] {
     match job_kind {
@@ -162,6 +170,85 @@ async fn recover_inactive_runs_in_lane_tx(
     .execute(&mut **tx)
     .await
     .context("failed to recover orphaned running runs in lane")?
+    .rows_affected();
+
+    Ok(recovered_succeeded + recovered_queued + recovered_running)
+}
+
+async fn recover_inactive_agent_runs_tx(
+    tx: &mut Transaction<'_, Postgres>,
+    agent_key: &str,
+    now: DateTime<Utc>,
+) -> Result<u64> {
+    let recovered_succeeded = sqlx::query(
+        "UPDATE agentic_runs AS runs
+            SET status = $2,
+                finished_at = COALESCE(runs.finished_at, sessions.updated_at, now()),
+                error_summary = NULL,
+                updated_at = now()
+           FROM opencode.sessions AS sessions
+          WHERE runs.agent_key = $1
+            AND runs.status = $3
+            AND runs.backend_run_ref IS NOT NULL
+            AND sessions.id = runs.backend_run_ref
+            AND sessions.status = $4
+            AND EXISTS (
+                SELECT 1
+                  FROM opencode.commands AS commands
+                 WHERE commands.session_id = runs.backend_run_ref
+            )",
+    )
+    .bind(agent_key)
+    .bind(RUN_STATUS_SUCCEEDED)
+    .bind(RUN_STATUS_RUNNING)
+    .bind(OPENCODE_STATUS_IDLE)
+    .execute(&mut **tx)
+    .await
+    .context("failed to recover idle OpenCode runs for agent")?
+    .rows_affected();
+
+    let recovered_queued = sqlx::query(
+        "UPDATE agentic_runs
+            SET status = $2,
+                finished_at = $3,
+                error_summary = $4,
+                updated_at = now()
+          WHERE agent_key = $1
+            AND status = $5
+            AND started_at IS NULL
+            AND finished_at IS NULL
+            AND created_at + (timeout_seconds * interval '1 second') <= $3",
+    )
+    .bind(agent_key)
+    .bind(RUN_STATUS_FAILED)
+    .bind(now)
+    .bind(ORPHANED_QUEUED_RUN_SUMMARY)
+    .bind(RUN_STATUS_QUEUED)
+    .execute(&mut **tx)
+    .await
+    .context("failed to recover orphaned queued runs for agent")?
+    .rows_affected();
+
+    let recovered_running = sqlx::query(
+        "UPDATE agentic_runs
+            SET status = $2,
+                finished_at = $3,
+                error_summary = $4,
+                updated_at = now()
+          WHERE agent_key = $1
+            AND status = $5
+            AND backend_run_ref IS NULL
+            AND finished_at IS NULL
+            AND COALESCE(started_at, created_at) + (timeout_seconds * interval '1 second') <= $3",
+    )
+    .bind(agent_key)
+    .bind(RUN_STATUS_FAILED)
+    .bind(now)
+    .bind(ORPHANED_RUNNING_RUN_SUMMARY)
+    .bind(RUN_STATUS_RUNNING)
+    .execute(&mut **tx)
+    .await
+    .context("failed to recover orphaned running runs for agent")?
     .rows_affected();
 
     Ok(recovered_succeeded + recovered_queued + recovered_running)
@@ -642,6 +729,256 @@ pub async fn set_all_agent_jobs_enabled(
     Ok(())
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum InsertWorkspaceMaintenanceTaskOutcome {
+    Inserted { task_id: i64 },
+    DuplicateActiveTask,
+}
+
+pub async fn insert_workspace_regenerate_task(
+    pool: &DbPool,
+    agent_key: &str,
+    hard_reset: bool,
+) -> Result<InsertWorkspaceMaintenanceTaskOutcome> {
+    let row: Result<(i64,), SqlxError> = query_as(
+        "INSERT INTO agentic_maintenance_tasks (
+            agent_key,
+            task_kind,
+            hard_reset,
+            status
+         ) VALUES ($1, $2, $3, $4)
+         RETURNING id",
+    )
+    .bind(agent_key)
+    .bind(MAINTENANCE_TASK_KIND_WORKSPACE_REGENERATE)
+    .bind(hard_reset)
+    .bind(MAINTENANCE_STATUS_QUEUED)
+    .fetch_one(pool)
+    .await;
+
+    match row {
+        Ok((task_id,)) => Ok(InsertWorkspaceMaintenanceTaskOutcome::Inserted { task_id }),
+        Err(SqlxError::Database(db_err)) if db_err.is_unique_violation() => {
+            Ok(InsertWorkspaceMaintenanceTaskOutcome::DuplicateActiveTask)
+        }
+        Err(error) => Err(error).with_context(|| {
+            format!("failed to insert workspace regenerate task for agent {agent_key}")
+        }),
+    }
+}
+
+pub async fn get_latest_workspace_regenerate_task(
+    pool: &DbPool,
+    agent_key: &str,
+) -> Result<Option<AgentMaintenanceTaskRow>> {
+    let row = query_as::<_, AgentMaintenanceTaskRow>(
+        "SELECT id,
+                agent_key,
+                task_kind,
+                hard_reset,
+                status,
+                error_summary,
+                created_at,
+                updated_at,
+                started_at,
+                finished_at
+           FROM agentic_maintenance_tasks
+          WHERE agent_key = $1
+            AND task_kind = $2
+          ORDER BY created_at DESC, id DESC
+          LIMIT 1",
+    )
+    .bind(agent_key)
+    .bind(MAINTENANCE_TASK_KIND_WORKSPACE_REGENERATE)
+    .fetch_optional(pool)
+    .await
+    .with_context(|| format!("failed to load latest workspace maintenance task for {agent_key}"))?;
+
+    Ok(row)
+}
+
+pub async fn get_next_queued_workspace_regenerate_task(
+    pool: &DbPool,
+) -> Result<Option<AgentMaintenanceTaskRow>> {
+    let row = query_as::<_, AgentMaintenanceTaskRow>(
+        "SELECT id,
+                agent_key,
+                task_kind,
+                hard_reset,
+                status,
+                error_summary,
+                created_at,
+                updated_at,
+                started_at,
+                finished_at
+           FROM agentic_maintenance_tasks
+          WHERE task_kind = $1
+            AND status = $2
+          ORDER BY created_at ASC, id ASC
+          LIMIT 1",
+    )
+    .bind(MAINTENANCE_TASK_KIND_WORKSPACE_REGENERATE)
+    .bind(MAINTENANCE_STATUS_QUEUED)
+    .fetch_optional(pool)
+    .await
+    .context("failed to load next queued workspace maintenance task")?;
+
+    Ok(row)
+}
+
+pub async fn mark_maintenance_task_running(pool: &DbPool, task_id: i64) -> Result<bool> {
+    let result = sqlx::query(
+        "UPDATE agentic_maintenance_tasks
+            SET status = $2,
+                started_at = COALESCE(started_at, now()),
+                updated_at = now()
+          WHERE id = $1
+            AND status = $3",
+    )
+    .bind(task_id)
+    .bind(MAINTENANCE_STATUS_RUNNING)
+    .bind(MAINTENANCE_STATUS_QUEUED)
+    .execute(pool)
+    .await
+    .with_context(|| format!("failed to mark maintenance task {task_id} running"))?;
+
+    Ok(result.rows_affected() > 0)
+}
+
+pub async fn mark_maintenance_task_succeeded(pool: &DbPool, task_id: i64) -> Result<bool> {
+    let result = sqlx::query(
+        "UPDATE agentic_maintenance_tasks
+            SET status = $2,
+                finished_at = now(),
+                error_summary = NULL,
+                updated_at = now()
+          WHERE id = $1",
+    )
+    .bind(task_id)
+    .bind(MAINTENANCE_STATUS_SUCCEEDED)
+    .execute(pool)
+    .await
+    .with_context(|| format!("failed to mark maintenance task {task_id} succeeded"))?;
+
+    Ok(result.rows_affected() > 0)
+}
+
+pub async fn mark_maintenance_task_failed(
+    pool: &DbPool,
+    task_id: i64,
+    error_summary: &str,
+) -> Result<bool> {
+    let result = sqlx::query(
+        "UPDATE agentic_maintenance_tasks
+            SET status = $2,
+                finished_at = now(),
+                error_summary = $3,
+                updated_at = now()
+          WHERE id = $1",
+    )
+    .bind(task_id)
+    .bind(MAINTENANCE_STATUS_FAILED)
+    .bind(truncate_error_summary(error_summary))
+    .execute(pool)
+    .await
+    .with_context(|| format!("failed to mark maintenance task {task_id} failed"))?;
+
+    Ok(result.rows_affected() > 0)
+}
+
+async fn agent_has_blocking_workspace_maintenance_tx(
+    tx: &mut Transaction<'_, Postgres>,
+    agent_key: &str,
+) -> Result<bool> {
+    let row: Option<(i32,)> = query_as(
+        "SELECT 1
+           FROM agentic_maintenance_tasks
+          WHERE agent_key = $1
+            AND task_kind = $2
+            AND status = ANY($3)
+          LIMIT 1",
+    )
+    .bind(agent_key)
+    .bind(MAINTENANCE_TASK_KIND_WORKSPACE_REGENERATE)
+    .bind(&ACTIVE_MAINTENANCE_STATUSES)
+    .fetch_optional(&mut **tx)
+    .await
+    .with_context(|| format!("failed to check workspace maintenance state for {agent_key}"))?;
+
+    Ok(row.is_some())
+}
+
+pub async fn agent_has_blocking_workspace_maintenance(
+    pool: &DbPool,
+    agent_key: &str,
+) -> Result<bool> {
+    let mut tx = pool
+        .begin()
+        .await
+        .context("failed to begin maintenance state transaction")?;
+    let blocked = agent_has_blocking_workspace_maintenance_tx(&mut tx, agent_key).await?;
+    tx.commit()
+        .await
+        .context("failed to commit maintenance state transaction")?;
+    Ok(blocked)
+}
+
+pub async fn list_active_agent_runs(pool: &DbPool, agent_key: &str) -> Result<Vec<AgenticRunRow>> {
+    let mut tx = pool
+        .begin()
+        .await
+        .context("failed to begin active-run listing transaction")?;
+
+    let recovered = recover_inactive_agent_runs_tx(&mut tx, agent_key, Utc::now()).await?;
+    if recovered > 0 {
+        tracing::info!(
+            agent_key,
+            recovered,
+            "recovered inactive agentic runs before agent-wide active check"
+        );
+    }
+
+    let rows = query_as::<_, AgenticRunRow>(
+        "SELECT id,
+                schedule_id,
+                hook_id,
+                agent_key,
+                job_key,
+                job_kind,
+                timeframe,
+                status,
+                backend_run_ref,
+                model_provider_id,
+                model_id,
+                scheduled_for,
+                started_at,
+                finished_at,
+                timeout_seconds,
+                error_summary,
+                created_at,
+                updated_at
+           FROM agentic_runs
+          WHERE agent_key = $1
+            AND status = ANY($2)
+          ORDER BY created_at ASC, id ASC",
+    )
+    .bind(agent_key)
+    .bind(&ACTIVE_STATUSES)
+    .fetch_all(&mut *tx)
+    .await
+    .with_context(|| format!("failed to list active runs for agent {agent_key}"))?;
+
+    tx.commit()
+        .await
+        .context("failed to commit active-run listing transaction")?;
+
+    Ok(rows)
+}
+
+pub async fn agent_has_active_runs(pool: &DbPool, agent_key: &str) -> Result<bool> {
+    Ok(!list_active_agent_runs(pool, agent_key).await?.is_empty())
+}
+
 /// List the most recent runs for an agent.
 pub async fn list_agent_runs(
     pool: &DbPool,
@@ -1080,6 +1417,9 @@ pub enum ClaimedScheduleRun {
     /// The schedule was no longer due (concurrent claim, disabled,
     /// missing, etc.). No row was written.
     NotDue,
+    /// The schedule remained due, but queued/running workspace maintenance
+    /// prevents dispatch until the agent is available again.
+    BlockedByMaintenance,
 }
 
 /// Atomically advance the schedule, optionally inserting a `queued` or
@@ -1161,6 +1501,13 @@ pub async fn claim_due_schedule(
             .await
             .context("failed to commit stale-skip claim")?;
         return Ok(ClaimedScheduleRun::NotDue);
+    }
+
+    if agent_has_blocking_workspace_maintenance_tx(&mut tx, &schedule.agent_key).await? {
+        tx.rollback()
+            .await
+            .context("failed to roll back maintenance-blocked claim")?;
+        return Ok(ClaimedScheduleRun::BlockedByMaintenance);
     }
 
     let scheduled_for = boundary_for_due_at(schedule.next_run_at, trigger_delay_seconds);
@@ -1529,6 +1876,13 @@ pub async fn insert_queued_run(
         return Ok(QueuedScheduleRun::Missing);
     };
 
+    if agent_has_blocking_workspace_maintenance_tx(&mut tx, &schedule.agent_key).await? {
+        tx.rollback()
+            .await
+            .context("failed to roll back maintenance-blocked manual run")?;
+        return Ok(QueuedScheduleRun::BlockedByMaintenance);
+    }
+
     let now = Utc::now();
     let outcome = if has_active_run_in_lane_tx(
         &mut tx,
@@ -1601,12 +1955,30 @@ pub enum QueuedScheduleRun {
         run_id: i64,
     },
     Missing,
+    BlockedByMaintenance,
 }
 
 pub async fn insert_queued_hook_run(
     pool: &DbPool,
     agent_key: &str,
     hook_id: i64,
+) -> Result<QueuedHookRun> {
+    insert_queued_hook_run_with_mode(pool, agent_key, hook_id, true).await
+}
+
+pub async fn insert_queued_hook_run_for_automatic_dispatch(
+    pool: &DbPool,
+    agent_key: &str,
+    hook_id: i64,
+) -> Result<QueuedHookRun> {
+    insert_queued_hook_run_with_mode(pool, agent_key, hook_id, false).await
+}
+
+async fn insert_queued_hook_run_with_mode(
+    pool: &DbPool,
+    agent_key: &str,
+    hook_id: i64,
+    block_on_maintenance: bool,
 ) -> Result<QueuedHookRun> {
     let mut tx = pool
         .begin()
@@ -1638,6 +2010,14 @@ pub async fn insert_queued_hook_run(
             .context("failed to roll back missing-hook manual run")?;
         return Ok(QueuedHookRun::Missing);
     };
+
+    if block_on_maintenance && agent_has_blocking_workspace_maintenance_tx(&mut tx, &hook.agent_key).await?
+    {
+        tx.rollback()
+            .await
+            .context("failed to roll back maintenance-blocked manual hook run")?;
+        return Ok(QueuedHookRun::BlockedByMaintenance);
+    }
 
     let now = Utc::now();
     let outcome =
@@ -1705,6 +2085,7 @@ pub enum QueuedHookRun {
         run_id: i64,
     },
     Missing,
+    BlockedByMaintenance,
 }
 
 /// Small helper to keep the row insert signature in one place for tests.
@@ -2918,6 +3299,182 @@ mod tests {
             .await
             .expect("claim");
         assert!(matches!(outcome, ClaimedScheduleRun::NotDue));
+    }
+
+    #[tokio::test]
+    async fn insert_workspace_regenerate_task_rejects_duplicate_active_task() {
+        let pool = test_db::pool().await;
+        let key = format!("maintenance-dup-{}", Utc::now().timestamp_nanos_opt().unwrap_or(0));
+        let _schedule_id = seed_agent_and_schedule(&pool, &key, 0).await;
+
+        let first = insert_workspace_regenerate_task(&pool, &key, false)
+            .await
+            .expect("insert maintenance task");
+        let task_id = match first {
+            InsertWorkspaceMaintenanceTaskOutcome::Inserted { task_id } => task_id,
+            other => panic!("expected Inserted, got {other:?}"),
+        };
+
+        let latest = get_latest_workspace_regenerate_task(&pool, &key)
+            .await
+            .expect("load latest task")
+            .expect("task present");
+        assert_eq!(latest.id, task_id);
+        assert_eq!(latest.status, MAINTENANCE_STATUS_QUEUED);
+        assert!(!latest.hard_reset);
+
+        let duplicate = insert_workspace_regenerate_task(&pool, &key, true)
+            .await
+            .expect("insert duplicate maintenance task");
+        assert_eq!(
+            duplicate,
+            InsertWorkspaceMaintenanceTaskOutcome::DuplicateActiveTask
+        );
+    }
+
+    #[tokio::test]
+    async fn agent_has_blocking_workspace_maintenance_only_for_queued_or_running_tasks() {
+        let pool = test_db::pool().await;
+        let key = format!("maintenance-state-{}", Utc::now().timestamp_nanos_opt().unwrap_or(0));
+        let _schedule_id = seed_agent_and_schedule(&pool, &key, 0).await;
+
+        assert!(
+            !agent_has_blocking_workspace_maintenance(&pool, &key)
+                .await
+                .expect("initial maintenance state")
+        );
+
+        let task_id = match insert_workspace_regenerate_task(&pool, &key, false)
+            .await
+            .expect("insert maintenance task")
+        {
+            InsertWorkspaceMaintenanceTaskOutcome::Inserted { task_id } => task_id,
+            other => panic!("expected Inserted, got {other:?}"),
+        };
+        assert!(
+            agent_has_blocking_workspace_maintenance(&pool, &key)
+                .await
+                .expect("queued maintenance state")
+        );
+
+        mark_maintenance_task_running(&pool, task_id)
+            .await
+            .expect("mark running");
+        assert!(
+            agent_has_blocking_workspace_maintenance(&pool, &key)
+                .await
+                .expect("running maintenance state")
+        );
+
+        mark_maintenance_task_succeeded(&pool, task_id)
+            .await
+            .expect("mark succeeded");
+        assert!(
+            !agent_has_blocking_workspace_maintenance(&pool, &key)
+                .await
+                .expect("terminal maintenance state")
+        );
+    }
+
+    #[tokio::test]
+    async fn claim_due_schedule_returns_blocked_by_maintenance_without_inserting_run() {
+        let pool = test_db::pool().await;
+        let key = format!("claim-maint-{}", Utc::now().timestamp_nanos_opt().unwrap_or(0));
+        let schedule_id = seed_agent_and_schedule(&pool, &key, 0).await;
+
+        let now = Utc::now();
+        let due_boundary = latest_due_at_or_before(
+            now,
+            DEFAULT_ANALYSIS_TIMEFRAME,
+            DEFAULT_TRIGGER_DELAY_SECONDS,
+        )
+        .expect("compute latest due")
+        .expect("should have a previous due boundary");
+        query("UPDATE agentic_job_schedules SET next_run_at = $1 WHERE id = $2")
+            .bind(due_boundary)
+            .bind(schedule_id)
+            .execute(&pool)
+            .await
+            .expect("set due");
+
+        insert_workspace_regenerate_task(&pool, &key, false)
+            .await
+            .expect("insert maintenance task");
+
+        let outcome = claim_due_schedule(&pool, schedule_id, now)
+            .await
+            .expect("claim");
+        assert!(matches!(outcome, ClaimedScheduleRun::BlockedByMaintenance));
+        assert_eq!(count_agent_runs(&pool, &key).await.expect("count runs"), 0);
+    }
+
+    #[tokio::test]
+    async fn insert_queued_run_returns_blocked_by_maintenance() {
+        let pool = test_db::pool().await;
+        let key = format!("manual-maint-{}", Utc::now().timestamp_nanos_opt().unwrap_or(0));
+        let schedule_id = seed_agent_and_schedule(&pool, &key, 0).await;
+        insert_workspace_regenerate_task(&pool, &key, false)
+            .await
+            .expect("insert maintenance task");
+
+        let outcome = insert_queued_run(&pool, &key, schedule_id)
+            .await
+            .expect("manual run");
+        assert!(matches!(outcome, QueuedScheduleRun::BlockedByMaintenance));
+        assert_eq!(count_agent_runs(&pool, &key).await.expect("count runs"), 0);
+    }
+
+    #[tokio::test]
+    async fn insert_queued_hook_run_returns_blocked_by_maintenance() {
+        let pool = test_db::pool().await;
+        let key = format!("hook-maint-{}", Utc::now().timestamp_nanos_opt().unwrap_or(0));
+        let _schedule_id = seed_agent_and_schedule(&pool, &key, 0).await;
+        let hook_id = list_agent_hooks(&pool, &key)
+            .await
+            .expect("list hooks")
+            .first()
+            .expect("default hook present")
+            .id;
+        insert_workspace_regenerate_task(&pool, &key, false)
+            .await
+            .expect("insert maintenance task");
+
+        let outcome = insert_queued_hook_run(&pool, &key, hook_id)
+            .await
+            .expect("manual hook run");
+        assert!(matches!(outcome, QueuedHookRun::BlockedByMaintenance));
+        assert_eq!(count_agent_runs(&pool, &key).await.expect("count runs"), 0);
+    }
+
+    #[tokio::test]
+    async fn automatic_hook_insert_still_dispatches_during_maintenance() {
+        let pool = test_db::pool().await;
+        let key = format!("hook-auto-maint-{}", Utc::now().timestamp_nanos_opt().unwrap_or(0));
+        let _schedule_id = seed_agent_and_schedule(&pool, &key, 0).await;
+        let hook_id = list_agent_hooks(&pool, &key)
+            .await
+            .expect("list hooks")
+            .first()
+            .expect("default hook present")
+            .id;
+        insert_workspace_regenerate_task(&pool, &key, false)
+            .await
+            .expect("insert maintenance task");
+
+        let outcome = insert_queued_hook_run_for_automatic_dispatch(&pool, &key, hook_id)
+            .await
+            .expect("automatic hook insert");
+        let run_id = match outcome {
+            QueuedHookRun::Dispatch { run_id, .. } => run_id,
+            other => panic!("expected Dispatch, got {other:?}"),
+        };
+
+        let run = get_run(&pool, run_id)
+            .await
+            .expect("get run")
+            .expect("run present");
+        assert_eq!(run.hook_id, Some(hook_id));
+        assert_eq!(run.status, RUN_STATUS_QUEUED);
     }
 
     #[tokio::test]

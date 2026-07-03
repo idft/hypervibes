@@ -14,6 +14,14 @@ pub const RUN_STATUS_FAILED: &str = "failed";
 pub const RUN_STATUS_ABORTED: &str = "aborted";
 pub const RUN_STATUS_SKIPPED: &str = "skipped";
 
+pub const MAINTENANCE_TASK_KIND_WORKSPACE_REGENERATE: &str = "workspace_regenerate";
+
+pub const MAINTENANCE_STATUS_QUEUED: &str = "queued";
+pub const MAINTENANCE_STATUS_RUNNING: &str = "running";
+pub const MAINTENANCE_STATUS_SUCCEEDED: &str = "succeeded";
+pub const MAINTENANCE_STATUS_FAILED: &str = "failed";
+pub const MAINTENANCE_STATUS_ABORTED: &str = "aborted";
+
 #[derive(Debug, Clone, sqlx::FromRow)]
 #[allow(dead_code)]
 pub struct AgenticJobScheduleRow {
@@ -71,6 +79,21 @@ pub struct AgenticRunRow {
     pub error_summary: Option<String>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, sqlx::FromRow)]
+#[allow(dead_code)]
+pub struct AgentMaintenanceTaskRow {
+    pub id: i64,
+    pub agent_key: String,
+    pub task_kind: String,
+    pub hard_reset: bool,
+    pub status: String,
+    pub error_summary: Option<String>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+    pub started_at: Option<DateTime<Utc>>,
+    pub finished_at: Option<DateTime<Utc>>,
 }
 
 #[derive(Debug, Clone)]

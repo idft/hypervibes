@@ -29,7 +29,9 @@ use crate::{
             build_hook_dispatch_request, dispatch_analysis_batch_completed_hook,
             dispatch_request_from_schedule, dispatch_run,
         },
-        store::{QueuedHookRun, QueuedScheduleRun},
+        store::{
+            InsertWorkspaceMaintenanceTaskOutcome, QueuedHookRun, QueuedScheduleRun,
+        },
         timeframe::{parse_timeframe_seconds, parse_timeout_seconds},
     },
     agents::{
@@ -83,6 +85,7 @@ use crate::{
             CreateAgentScheduleFormValues, LatestAnalysisSummaryPartialTemplate,
             LatestTradeExecutionSummaryPartialTemplate, MemoryView, ModelPickerView,
             OpenCodeWorkspaceSettingsView, OpenOrdersPartialTemplate, OpenOrdersView,
+            OpenCodeWorkspaceMaintenanceStatusTemplate, OpenCodeWorkspaceMaintenanceView,
             OpenPositionsPartialTemplate, OpenPositionsView, ServerErrorPageTemplate,
             SettingsPageTemplate, SparklineView, SyncStateView, TransactionView,
         },
@@ -130,6 +133,10 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route(
             "/agents/{agent_key}/settings/regenerate-workspace",
             post(agents_regenerate_workspace),
+        )
+        .route(
+            "/agents/{agent_key}/settings/workspace-maintenance-status",
+            get(agents_workspace_maintenance_status),
         )
         .route(
             "/agents/{agent_key}/jobs",
@@ -203,6 +210,11 @@ pub fn router(state: Arc<AppState>) -> Router {
 async fn root() -> Redirect {
     Redirect::to("/agents")
 }
+
+const WORKSPACE_MAINTENANCE_ACTIVE_WARNING: &str =
+    "Workspace maintenance is queued or running for this agent. Run now is unavailable until it completes.";
+const WORKSPACE_MAINTENANCE_DUPLICATE_WARNING: &str =
+    "A workspace maintenance task is already queued or running for this agent.";
 
 #[derive(Debug, Serialize)]
 struct HealthResponse {
@@ -362,14 +374,14 @@ async fn agents_show(
     State(state): State<Arc<AppState>>,
     Path(agent_key): Path<String>,
 ) -> Result<Response, AppError> {
-    render_agent_show_page(&state, &agent_key, AgentShowTab::Positions, None, None).await
+    render_agent_show_page(&state, &agent_key, AgentShowTab::Positions, None, None, None).await
 }
 
 async fn agents_show_transactions(
     State(state): State<Arc<AppState>>,
     Path(agent_key): Path<String>,
 ) -> Result<Response, AppError> {
-    render_agent_show_page(&state, &agent_key, AgentShowTab::Transactions, None, None).await
+    render_agent_show_page(&state, &agent_key, AgentShowTab::Transactions, None, None, None).await
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -382,6 +394,26 @@ struct AgentMemoriesQuery {
 struct AgentJobsQuery {
     #[serde(default)]
     page: String,
+    #[serde(default)]
+    warning: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+struct AgentSettingsQuery {
+    #[serde(default)]
+    workspace_warning: Option<String>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct RegenerateWorkspaceForm {
+    #[serde(default)]
+    hard_reset: Option<String>,
+}
+
+impl RegenerateWorkspaceForm {
+    fn hard_reset(&self) -> bool {
+        self.hard_reset.is_some()
+    }
 }
 
 async fn agents_show_memories(
@@ -394,6 +426,7 @@ async fn agents_show_memories(
         &agent_key,
         AgentShowTab::Memories,
         Some(query),
+        None,
         None,
     )
     .await
@@ -510,7 +543,7 @@ async fn agents_show_prompts(
     State(state): State<Arc<AppState>>,
     Path(agent_key): Path<String>,
 ) -> Result<Response, AppError> {
-    render_agent_show_page(&state, &agent_key, AgentShowTab::Prompts, None, None).await
+    render_agent_show_page(&state, &agent_key, AgentShowTab::Prompts, None, None, None).await
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -552,13 +585,23 @@ async fn agents_update_trading_prompt(
 async fn agents_show_settings(
     State(state): State<Arc<AppState>>,
     Path(agent_key): Path<String>,
+    Query(query): Query<AgentSettingsQuery>,
 ) -> Result<Response, AppError> {
-    render_agent_show_page(&state, &agent_key, AgentShowTab::Settings, None, None).await
+    render_agent_show_page(
+        &state,
+        &agent_key,
+        AgentShowTab::Settings,
+        None,
+        Some(query),
+        None,
+    )
+    .await
 }
 
 async fn agents_regenerate_workspace(
     State(state): State<Arc<AppState>>,
     Path(agent_key): Path<String>,
+    Form(form): Form<RegenerateWorkspaceForm>,
 ) -> Result<Response, AppError> {
     let Some(agent) = get_agent(&state.db_pool, &agent_key).await? else {
         return Ok((StatusCode::NOT_FOUND, "agent not found").into_response());
@@ -571,23 +614,39 @@ async fn agents_regenerate_workspace(
             .into_response());
     }
 
-    let updated = generate_and_persist_opencode_workspace(
-        &state,
-        &OpenCodeWorkspaceAgent {
-            agent_key: agent.agent_key.clone(),
-            display_name: agent.display_name.clone(),
-            api_key: agent.api_key.clone(),
-        },
-        WorkspaceGenerationMode::Regenerate,
+    let redirect_url = format!("/agents/{agent_key}/settings");
+    match crate::agentic::store::insert_workspace_regenerate_task(
+        &state.db_pool,
+        &agent.agent_key,
+        form.hard_reset(),
     )
-    .await?;
+    .await?
+    {
+        InsertWorkspaceMaintenanceTaskOutcome::Inserted { .. } => {
+            Ok(Redirect::to(&redirect_url).into_response())
+        }
+        InsertWorkspaceMaintenanceTaskOutcome::DuplicateActiveTask => Ok(Redirect::to(&format!(
+            "{redirect_url}?workspace_warning={}",
+            urlencode(WORKSPACE_MAINTENANCE_DUPLICATE_WARNING)
+        ))
+        .into_response()),
+    }
+}
 
-    if !updated {
-        error!(agent_key = %agent.agent_key, "agent disappeared before OpenCode workspace metadata update");
+async fn agents_workspace_maintenance_status(
+    State(state): State<Arc<AppState>>,
+    Path(agent_key): Path<String>,
+) -> Result<Response, AppError> {
+    let Some(agent) = get_agent(&state.db_pool, &agent_key).await? else {
+        return Ok((StatusCode::NOT_FOUND, "agent not found").into_response());
+    };
+    if agent.backend_kind != BACKEND_KIND_OPENCODE {
         return Ok((StatusCode::NOT_FOUND, "agent not found").into_response());
     }
 
-    Ok(Redirect::to(&format!("/agents/{agent_key}/settings")).into_response())
+    let maintenance = load_workspace_maintenance_view(&state.db_pool, &agent.agent_key).await?;
+    let html = OpenCodeWorkspaceMaintenanceStatusTemplate::render_view(maintenance)?;
+    Ok(Html(html).into_response())
 }
 
 async fn agents_show_jobs(
@@ -595,7 +654,7 @@ async fn agents_show_jobs(
     Path(agent_key): Path<String>,
     Query(query): Query<AgentJobsQuery>,
 ) -> Result<Response, AppError> {
-    render_agent_show_page(&state, &agent_key, AgentShowTab::Jobs, None, Some(query)).await
+    render_agent_show_page(&state, &agent_key, AgentShowTab::Jobs, None, None, Some(query)).await
 }
 
 async fn agents_show_job_detail(
@@ -767,7 +826,10 @@ async fn build_job_prompt_preview(
         crate::agents::store::list_agent_instrument_ids(&state.db_pool, &agent.agent_key).await?;
     let system_setting =
         crate::settings::store::get_setting(&state.db_pool, "opencode_system_prompt").await?;
-    let system_prompt = system_setting.map(|s| s.value).unwrap_or_default();
+    let system_prompt = system_setting
+        .map(|s| s.value)
+        .filter(|v| !v.trim().is_empty())
+        .unwrap_or_else(|| crate::agents::prompts::DEFAULT_SYSTEM_PROMPT.to_string());
 
     let account_snapshot = if job.job_kind == crate::agentic::model::JOB_KIND_TRADING {
         Some(live_agent_snapshot_for_dispatch(
@@ -1282,7 +1344,10 @@ async fn agents_run_job_now(
             let system_setting =
                 crate::settings::store::get_setting(&state.db_pool, "opencode_system_prompt")
                     .await?;
-            let system_prompt = system_setting.map(|s| s.value).unwrap_or_default();
+            let system_prompt = system_setting
+                .map(|s| s.value)
+                .filter(|v| !v.trim().is_empty())
+                .unwrap_or_else(|| crate::agents::prompts::DEFAULT_SYSTEM_PROMPT.to_string());
             let account_snapshot = if schedule.job_kind == crate::agentic::model::JOB_KIND_TRADING {
                 Some(live_agent_snapshot_for_dispatch(
                     &agent.wallet_address,
@@ -1322,6 +1387,12 @@ async fn agents_run_job_now(
         QueuedScheduleRun::Skipped { .. } => {}
         QueuedScheduleRun::Missing => {
             return Ok((StatusCode::NOT_FOUND, "job not found").into_response());
+        }
+        QueuedScheduleRun::BlockedByMaintenance => {
+            return Ok(jobs_warning_redirect(
+                &agent_key,
+                WORKSPACE_MAINTENANCE_ACTIVE_WARNING,
+            ));
         }
     }
 
@@ -1515,6 +1586,12 @@ async fn agents_run_hook_now(
         QueuedHookRun::Missing => {
             return Ok((StatusCode::NOT_FOUND, "hook not found").into_response());
         }
+        QueuedHookRun::BlockedByMaintenance => {
+            return Ok(jobs_warning_redirect(
+                &agent_key,
+                WORKSPACE_MAINTENANCE_ACTIVE_WARNING,
+            ));
+        }
     }
 
     Ok(Redirect::to(&format!("/agents/{agent_key}/jobs")).into_response())
@@ -1633,6 +1710,14 @@ fn urlencode(value: &str) -> String {
         .collect()
 }
 
+fn jobs_warning_redirect(agent_key: &str, message: &str) -> Response {
+    Redirect::to(&format!(
+        "/agents/{agent_key}/jobs?warning={}",
+        urlencode(message)
+    ))
+    .into_response()
+}
+
 async fn agents_update_job_timeout(
     State(state): State<Arc<AppState>>,
     Path((agent_key, job_id)): Path<(String, i64)>,
@@ -1739,23 +1824,71 @@ async fn agents_update_instruments(
     Ok(Redirect::to(&format!("/agents/{agent_key}/settings")).into_response())
 }
 
-async fn generate_and_persist_opencode_workspace(
-    state: &Arc<AppState>,
-    agent: &OpenCodeWorkspaceAgent,
-    mode: WorkspaceGenerationMode,
-) -> Result<bool, AppError> {
-    let generated = generate_agent_workspace(&state.opencode_workspace_config, agent, mode)
-        .inspect_err(|error| {
-            error!(agent_key = %agent.agent_key, error = ?error, "failed to generate OpenCode workspace");
-        })?;
+async fn load_workspace_maintenance_view(
+    pool: &crate::db::DbPool,
+    agent_key: &str,
+) -> Result<OpenCodeWorkspaceMaintenanceView, AppError> {
+    let task = crate::agentic::store::get_latest_workspace_regenerate_task(pool, agent_key).await?;
+    Ok(task
+        .map(|task| OpenCodeWorkspaceMaintenanceView::from_task(agent_key, task))
+        .unwrap_or_else(|| OpenCodeWorkspaceMaintenanceView::idle(agent_key)))
+}
 
-    let runtime_config = runtime_config_for_generated_workspace(&generated).into_value();
-    update_agent_runtime_config(&state.db_pool, &agent.agent_key, runtime_config)
+async fn build_opencode_workspace_settings_view(
+    state: &Arc<AppState>,
+    agent: &crate::agents::model::AgentDetailRow,
+) -> Option<OpenCodeWorkspaceSettingsView> {
+    let workspace_agent = OpenCodeWorkspaceAgent {
+        agent_key: agent.agent_key.clone(),
+        display_name: agent.display_name.clone(),
+        api_key: agent.api_key.clone(),
+    };
+    let workspace_host_path = agent_workspace_host_path(
+        &state.opencode_workspace_config,
+        &agent.agent_key,
+    )
+    .inspect_err(|error| {
+        warn!(agent_key = %agent.agent_key, error = ?error, "failed to derive OpenCode workspace path for settings page");
+    })
+    .ok();
+    let template_drift = diff_agent_workspace_from_template(
+        &state.opencode_workspace_config,
+        &workspace_agent,
+    )
+    .inspect_err(|error| {
+        warn!(agent_key = %agent.agent_key, error = ?error, "failed to diff OpenCode workspace template for settings page");
+    })
+    .ok()
+    .map(crate::web::templates::OpenCodeWorkspaceTemplateDriftView::from_diff)
+    .unwrap_or_else(crate::web::templates::OpenCodeWorkspaceTemplateDriftView::unavailable);
+    let maintenance = load_workspace_maintenance_view(&state.db_pool, &agent.agent_key)
         .await
         .inspect_err(|error| {
-            error!(agent_key = %agent.agent_key, error = ?error, "failed to persist OpenCode workspace metadata");
+            warn!(agent_key = %agent.agent_key, error = ?error, "failed to load workspace maintenance state for settings page");
         })
-        .map_err(AppError)
+        .unwrap_or_else(|_| OpenCodeWorkspaceMaintenanceView::idle(&agent.agent_key));
+    let maintenance_html = OpenCodeWorkspaceMaintenanceStatusTemplate::render_view(
+        maintenance.clone(),
+    )
+    .inspect_err(|error| {
+        warn!(agent_key = %agent.agent_key, error = ?error, "failed to render workspace maintenance status partial");
+    })
+    .unwrap_or_default();
+
+    OpenCodeWorkspaceRuntimeConfig::from_value(&agent.runtime_config).map(|workspace| {
+        OpenCodeWorkspaceSettingsView {
+            env_exists: workspace_host_path
+                .as_deref()
+                .map(|path| path.join(".env").is_file())
+                .unwrap_or(false),
+            workspace_host_path: workspace.workspace_host_path,
+            workspace_container_path: workspace.workspace_container_path,
+            profile_source: workspace.profile_source,
+            template_drift,
+            maintenance_html,
+            maintenance,
+        }
+    })
 }
 
 async fn render_agent_show_page(
@@ -1763,6 +1896,7 @@ async fn render_agent_show_page(
     agent_key: &str,
     active_tab: AgentShowTab,
     memories_query: Option<AgentMemoriesQuery>,
+    settings_query: Option<AgentSettingsQuery>,
     jobs_query: Option<AgentJobsQuery>,
 ) -> Result<Response, AppError> {
     let Some(agent) = get_agent(&state.db_pool, agent_key).await? else {
@@ -1840,43 +1974,10 @@ async fn render_agent_show_page(
         AgentShowTab::Prompts => {}
         AgentShowTab::Settings => {
             if agent.backend_kind == BACKEND_KIND_OPENCODE {
-                let workspace_agent = OpenCodeWorkspaceAgent {
-                    agent_key: agent.agent_key.clone(),
-                    display_name: agent.display_name.clone(),
-                    api_key: agent.api_key.clone(),
-                };
-                let workspace_host_path = agent_workspace_host_path(
-                    &state.opencode_workspace_config,
-                    &agent.agent_key,
-                )
-                .inspect_err(|error| {
-                    warn!(agent_key = %agent.agent_key, error = ?error, "failed to derive OpenCode workspace path for settings page");
-                })
-                .ok();
-                let template_drift = diff_agent_workspace_from_template(
-                    &state.opencode_workspace_config,
-                    &workspace_agent,
-                )
-                .inspect_err(|error| {
-                    warn!(agent_key = %agent.agent_key, error = ?error, "failed to diff OpenCode workspace template for settings page");
-                })
-                .ok()
-                .map(crate::web::templates::OpenCodeWorkspaceTemplateDriftView::from_diff)
-                .unwrap_or_else(crate::web::templates::OpenCodeWorkspaceTemplateDriftView::unavailable);
-
-                template.opencode_workspace = OpenCodeWorkspaceRuntimeConfig::from_value(
-                    &agent.runtime_config,
-                )
-                .map(|workspace| OpenCodeWorkspaceSettingsView {
-                    env_exists: workspace_host_path
-                        .as_deref()
-                        .map(|path| path.join(".env").is_file())
-                        .unwrap_or(false),
-                    workspace_host_path: workspace.workspace_host_path,
-                    workspace_container_path: workspace.workspace_container_path,
-                    profile_source: workspace.profile_source,
-                    template_drift,
-                });
+                template.settings_workspace_warning = settings_query
+                    .as_ref()
+                    .and_then(|query| query.workspace_warning.clone());
+                template.opencode_workspace = build_opencode_workspace_settings_view(state, &agent).await;
             }
             template.sync_state = match list_account_sync_state(
                 &state.db_pool,
@@ -1916,6 +2017,7 @@ async fn render_agent_show_page(
                 .as_ref()
                 .map(|query| parse_positive_page(&query.page))
                 .unwrap_or(1);
+            template.jobs_warning = jobs_query.as_ref().and_then(|query| query.warning.clone());
             populate_jobs_tab(state, &agent, &mut template, requested_page).await;
         }
     }
@@ -2947,7 +3049,10 @@ struct SettingsUpdateForm {
 
 async fn settings_index(State(state): State<Arc<AppState>>) -> Result<Response, AppError> {
     let row = crate::settings::store::get_setting(&state.db_pool, "opencode_system_prompt").await?;
-    let system_prompt = row.map(|r| r.value).unwrap_or_default();
+    let system_prompt = row
+        .map(|r| r.value)
+        .filter(|v| !v.trim().is_empty())
+        .unwrap_or_else(|| crate::agents::prompts::DEFAULT_SYSTEM_PROMPT.to_string());
     let html = SettingsPageTemplate {
         system_prompt,
         current_path: "/settings".to_string(),
@@ -2992,7 +3097,10 @@ mod tests {
             crypto::EncryptionKey,
             model::CreateAgentRuntimeForm,
             prompts::{DEFAULT_ANALYSIS_STRATEGY_PROMPT, DEFAULT_TRADING_STRATEGY_PROMPT},
-            store::{insert_agent_runtime, list_agent_instrument_ids, replace_agent_instruments},
+            store::{
+                insert_agent_runtime, list_agent_instrument_ids, replace_agent_instruments,
+                update_agent_runtime_config,
+            },
         },
         memory::CreateMemory,
         test_db,
@@ -3559,6 +3667,20 @@ mod tests {
         let _ = insert_agent_runtime(&state.db_pool, &form).await;
     }
 
+    async fn seed_workspace_runtime_config(state: &Arc<AppState>, agent_key: &str) {
+        update_agent_runtime_config(
+            &state.db_pool,
+            agent_key,
+            serde_json::json!({
+                "workspace_host_path": format!("workspaces/agents/{agent_key}"),
+                "workspace_container_path": format!("/workspaces/agents/{agent_key}"),
+                "profile_source": "agent-runtime/workspace-template"
+            }),
+        )
+        .await
+        .expect("seed workspace runtime config");
+    }
+
     async fn insert_test_agent_with_text(
         state: &Arc<AppState>,
         analysis_prompt: String,
@@ -3857,69 +3979,18 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn post_regenerate_workspace_refreshes_template_and_preserves_user_files() {
+    async fn post_regenerate_workspace_queues_regular_maintenance_task() {
         let state = test_state().await;
-        let pool = state.db_pool.clone();
         let app = router(Arc::clone(&state));
-        let timestamp = chrono::Utc::now().timestamp_millis();
-        let display_name = format!("RegenerateWorkspace{}", timestamp);
-        let agent_key = slugify_agent_key(&display_name);
-        let private_key = random_private_key();
-        let body = format!(
-            "display_name={display_name}&hyperliquid_private_key={private_key}&runtime_id=opencode-local&enabled=on"
-        );
+        let (agent_key, _) = insert_test_opencode_agent(&state).await.expect("insert agent");
 
         let response = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .method("POST")
-                    .uri("/agents")
-                    .header("content-type", "application/x-www-form-urlencoded")
-                    .body(Body::from(body))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(response.status(), StatusCode::SEE_OTHER);
-
-        let stored = get_agent(&pool, &agent_key)
-            .await
-            .expect("get agent")
-            .expect("agent present");
-        let workspace = OpenCodeWorkspaceRuntimeConfig::from_value(&stored.runtime_config)
-            .expect("workspace metadata present");
-        let workspace_path = std::path::Path::new(&workspace.workspace_host_path);
-
-        let custom_file = workspace_path.join("scripts/user/custom.py");
-        fs::write(&custom_file, "print('custom')\n").expect("write custom file");
-
-        let agents_md_path = workspace_path.join("AGENTS.md");
-        let original_agents_md = fs::read_to_string(&agents_md_path).expect("read AGENTS.md");
-        fs::write(&agents_md_path, "user-modified agents file\n").expect("modify AGENTS.md");
-
-        let dirty_settings_response = app
-            .clone()
-            .oneshot(
-                Request::builder()
-                    .uri(format!("/agents/{agent_key}/settings"))
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(dirty_settings_response.status(), StatusCode::OK);
-        let dirty_settings_text = response_text(dirty_settings_response).await;
-        assert!(dirty_settings_text.contains("Template drift"));
-        assert!(dirty_settings_text.contains("AGENTS.md"));
-
-        let response = app
-            .clone()
             .oneshot(
                 Request::builder()
                     .method("POST")
                     .uri(format!("/agents/{agent_key}/settings/regenerate-workspace"))
-                    .body(Body::empty())
+                    .header("content-type", "application/x-www-form-urlencoded")
+                    .body(Body::from(""))
                     .unwrap(),
             )
             .await
@@ -3933,16 +4004,155 @@ mod tests {
                 .and_then(|value| value.to_str().ok()),
             Some(format!("/agents/{agent_key}/settings").as_str())
         );
-        assert_eq!(
-            fs::read_to_string(&custom_file).expect("read custom file"),
-            "print('custom')\n"
-        );
-        assert_eq!(
-            fs::read_to_string(&agents_md_path).expect("read refreshed AGENTS.md"),
-            original_agents_md
-        );
 
-        let clean_settings_response = app
+        let task = crate::agentic::store::get_latest_workspace_regenerate_task(&state.db_pool, &agent_key)
+            .await
+            .expect("load maintenance task")
+            .expect("maintenance task present");
+        assert_eq!(task.status, crate::agentic::model::MAINTENANCE_STATUS_QUEUED);
+        assert!(!task.hard_reset);
+    }
+
+    #[tokio::test]
+    async fn post_regenerate_workspace_with_hard_reset_queues_hard_reset_task() {
+        let state = test_state().await;
+        let app = router(Arc::clone(&state));
+        let (agent_key, _) = insert_test_opencode_agent(&state).await.expect("insert agent");
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/agents/{agent_key}/settings/regenerate-workspace"))
+                    .header("content-type", "application/x-www-form-urlencoded")
+                    .body(Body::from("hard_reset=on"))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::SEE_OTHER);
+        let task = crate::agentic::store::get_latest_workspace_regenerate_task(&state.db_pool, &agent_key)
+            .await
+            .expect("load maintenance task")
+            .expect("maintenance task present");
+        assert!(task.hard_reset);
+    }
+
+    #[tokio::test]
+    async fn post_regenerate_workspace_redirects_with_warning_when_task_already_exists() {
+        let state = test_state().await;
+        let app = router(Arc::clone(&state));
+        let (agent_key, _) = insert_test_opencode_agent(&state).await.expect("insert agent");
+        crate::agentic::store::insert_workspace_regenerate_task(&state.db_pool, &agent_key, false)
+            .await
+            .expect("seed maintenance task");
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/agents/{agent_key}/settings/regenerate-workspace"))
+                    .header("content-type", "application/x-www-form-urlencoded")
+                    .body(Body::from(""))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::SEE_OTHER);
+        let location = response
+            .headers()
+            .get("location")
+            .and_then(|value| value.to_str().ok())
+            .expect("redirect location");
+        assert!(location.contains("workspace_warning="));
+    }
+
+    #[tokio::test]
+    async fn manual_job_run_redirects_with_warning_during_workspace_maintenance() {
+        let state = test_state().await;
+        let app = router(Arc::clone(&state));
+        let (agent_key, _) = insert_test_opencode_agent(&state).await.expect("insert agent");
+        let schedules = crate::agentic::store::list_agent_schedules(&state.db_pool, &agent_key)
+            .await
+            .expect("list schedules");
+        let schedule_id = schedules
+            .iter()
+            .find(|row| row.job_key == "analysis-15m")
+            .expect("analysis schedule present")
+            .id;
+        crate::agentic::store::insert_workspace_regenerate_task(&state.db_pool, &agent_key, false)
+            .await
+            .expect("seed maintenance task");
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/agents/{agent_key}/jobs/{schedule_id}/run"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::SEE_OTHER);
+        let location = response
+            .headers()
+            .get("location")
+            .and_then(|value| value.to_str().ok())
+            .expect("redirect location");
+        assert!(location.contains("/jobs?warning="));
+    }
+
+    #[tokio::test]
+    async fn manual_hook_run_redirects_with_warning_during_workspace_maintenance() {
+        let state = test_state().await;
+        let app = router(Arc::clone(&state));
+        let (agent_key, _) = insert_test_opencode_agent(&state).await.expect("insert agent");
+        let hook_id = crate::agentic::store::list_agent_hooks(&state.db_pool, &agent_key)
+            .await
+            .expect("list hooks")
+            .first()
+            .expect("default hook present")
+            .id;
+        crate::agentic::store::insert_workspace_regenerate_task(&state.db_pool, &agent_key, false)
+            .await
+            .expect("seed maintenance task");
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/agents/{agent_key}/hooks/{hook_id}/run"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::SEE_OTHER);
+        let location = response
+            .headers()
+            .get("location")
+            .and_then(|value| value.to_str().ok())
+            .expect("redirect location");
+        assert!(location.contains("/jobs?warning="));
+    }
+
+    #[tokio::test]
+    async fn settings_page_and_partial_render_workspace_maintenance_status() {
+        let state = test_state().await;
+        let app = router(Arc::clone(&state));
+        let (agent_key, _) = insert_test_opencode_agent(&state).await.expect("insert agent");
+        seed_workspace_runtime_config(&state, &agent_key).await;
+        crate::agentic::store::insert_workspace_regenerate_task(&state.db_pool, &agent_key, true)
+            .await
+            .expect("seed maintenance task");
+
+        let settings_response = app
+            .clone()
             .oneshot(
                 Request::builder()
                     .uri(format!("/agents/{agent_key}/settings"))
@@ -3951,10 +4161,27 @@ mod tests {
             )
             .await
             .unwrap();
-        assert_eq!(clean_settings_response.status(), StatusCode::OK);
-        let clean_settings_text = response_text(clean_settings_response).await;
-        assert!(clean_settings_text.contains("In sync"));
-        assert!(!clean_settings_text.contains("Template drift"));
+        assert_eq!(settings_response.status(), StatusCode::OK);
+        let settings_text = response_text(settings_response).await;
+        assert!(settings_text.contains("Workspace maintenance"));
+        assert!(settings_text.contains("Waiting for active jobs and sessions to finish"));
+        assert!(settings_text.contains("Hard reset"));
+
+        let partial_response = app
+            .oneshot(
+                Request::builder()
+                    .uri(format!(
+                        "/agents/{agent_key}/settings/workspace-maintenance-status"
+                    ))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(partial_response.status(), StatusCode::OK);
+        let partial_text = response_text(partial_response).await;
+        assert!(partial_text.contains("workspace-maintenance-status"));
+        assert!(partial_text.contains("hx-trigger=\"every 2s\""));
     }
 
     #[tokio::test]

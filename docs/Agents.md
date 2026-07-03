@@ -72,6 +72,20 @@ The generated workspace `.env` receives the agent-scoped Vibetrading API key. Th
 
 For OpenCode agents, the settings page also reports whether the generated workspace has drifted from `agent-runtime/workspace-template/`. The comparison is limited to template-managed files and ignores agent-authored files.
 
+Workspace regeneration is queued as agent-scoped maintenance work:
+
+- regular re-generation preserves `scripts/user/`, `data/`, and `scratch/`
+- hard reset deletes the full workspace before re-generating it
+- only one queued/running maintenance task is allowed per agent
+- duplicate regenerate submissions are rejected
+- queued maintenance waits for active runs and live OpenCode sessions to finish
+
+While workspace maintenance is queued or running:
+
+- scheduled jobs are held until maintenance completes
+- manual job `Run now` and manual hook `Run now` are blocked
+- automatic follow-up hooks for already-running analysis jobs still complete before maintenance begins
+
 Deleting an agent removes the registry row and cascades through agent-owned state:
 
 - agent schedules, hooks, and runs

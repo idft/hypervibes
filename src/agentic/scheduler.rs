@@ -10,19 +10,32 @@ use crate::{
         backend::{AgenticBackend, DispatchRequest, dispatch_with_timeout},
         model::{
             DueOpenCodeHookRow, DueOpenCodeScheduleRow, HOOK_EVENT_ANALYSIS_BATCH_COMPLETED,
-            JOB_KIND_ANALYSIS, JOB_KIND_TRADING,
+            JOB_KIND_ANALYSIS, JOB_KIND_TRADING, MAINTENANCE_STATUS_QUEUED,
         },
         store,
         timeframe::parse_timeframe_seconds,
     },
-    agents::store::{get_agent, list_agent_instrument_ids},
+    agents::{
+        model::BACKEND_KIND_OPENCODE,
+        store::{get_agent, list_agent_instrument_ids, update_agent_runtime_config},
+    },
     db::DbPool,
     hyperliquid::live_state::{LiveAccountStore, live_agent_snapshot_for_dispatch},
+    opencode::{
+        client::OpenCodeClient,
+        workspace::{
+            OpenCodeWorkspaceAgent, OpenCodeWorkspaceConfig, OpenCodeWorkspaceRuntimeConfig,
+            WorkspaceGenerationMode, delete_agent_workspace, generate_agent_workspace,
+            runtime_config_for_generated_workspace,
+        },
+    },
     settings,
 };
 
 const SCHEDULER_POLL_INTERVAL: Duration = Duration::from_secs(10);
 const DUE_SCHEDULE_LIMIT: i64 = 20;
+const WORKSPACE_MAINTENANCE_SESSION_PROBE_LIMIT: i64 = 20;
+const OPENCODE_SESSION_STATUS_IDLE: &str = "idle";
 
 /// Periodic background loop that claims due OpenCode schedules and
 /// dispatches them through an [`AgenticBackend`].
@@ -39,6 +52,8 @@ pub struct AgenticScheduler {
     shutdown_rx: watch::Receiver<bool>,
     backend: Arc<dyn AgenticBackend>,
     live_accounts: Arc<LiveAccountStore>,
+    opencode_workspace_config: OpenCodeWorkspaceConfig,
+    opencode_client: Arc<OpenCodeClient>,
 }
 
 impl AgenticScheduler {
@@ -47,12 +62,16 @@ impl AgenticScheduler {
         shutdown_rx: watch::Receiver<bool>,
         backend: Arc<dyn AgenticBackend>,
         live_accounts: Arc<LiveAccountStore>,
+        opencode_workspace_config: OpenCodeWorkspaceConfig,
+        opencode_client: Arc<OpenCodeClient>,
     ) -> Self {
         Self {
             pool,
             shutdown_rx,
             backend,
             live_accounts,
+            opencode_workspace_config,
+            opencode_client,
         }
     }
 
@@ -84,6 +103,13 @@ impl AgenticScheduler {
     /// This is exposed (not just called from [`Self::run`]) so tests can
     /// drive a single tick deterministically.
     pub async fn tick(&mut self) -> Result<()> {
+        process_workspace_maintenance_tasks(
+            &self.pool,
+            &self.opencode_workspace_config,
+            &self.opencode_client,
+        )
+        .await?;
+
         let now = Utc::now();
         let due = store::list_due_opencode_schedules(&self.pool, now, DUE_SCHEDULE_LIMIT).await?;
         debug!(count = due.len(), "due opencode schedules loaded");
@@ -140,6 +166,175 @@ impl AgenticScheduler {
         }
 
         Ok(())
+    }
+}
+
+async fn process_workspace_maintenance_tasks(
+    pool: &DbPool,
+    workspace_config: &OpenCodeWorkspaceConfig,
+    opencode_client: &Arc<OpenCodeClient>,
+) -> Result<()> {
+    let Some(task) = store::get_next_queued_workspace_regenerate_task(pool).await? else {
+        return Ok(());
+    };
+
+    let Some(agent) = get_agent(pool, &task.agent_key).await? else {
+        let _ = store::mark_maintenance_task_failed(
+            pool,
+            task.id,
+            "agent disappeared before maintenance",
+        )
+        .await;
+        return Ok(());
+    };
+
+    if agent.backend_kind != BACKEND_KIND_OPENCODE {
+        let _ = store::mark_maintenance_task_failed(
+            pool,
+            task.id,
+            "workspace maintenance is only supported for OpenCode agents",
+        )
+        .await;
+        return Ok(());
+    }
+
+    if store::agent_has_active_runs(pool, &task.agent_key).await? {
+        debug!(
+            task_id = task.id,
+            agent_key = %task.agent_key,
+            status = MAINTENANCE_STATUS_QUEUED,
+            "workspace maintenance remains queued while agent runs are active"
+        );
+        return Ok(());
+    }
+
+    let Some(workspace_runtime) = OpenCodeWorkspaceRuntimeConfig::from_value(&agent.runtime_config)
+    else {
+        let _ = store::mark_maintenance_task_failed(
+            pool,
+            task.id,
+            "agent is missing OpenCode workspace metadata",
+        )
+        .await;
+        return Ok(());
+    };
+
+    let Some(runtime_base_url) = agent.runtime_base_url.as_deref().filter(|url| !url.is_empty())
+    else {
+        let _ = store::mark_maintenance_task_failed(
+            pool,
+            task.id,
+            "agent runtime base URL is missing",
+        )
+        .await;
+        return Ok(());
+    };
+
+    let sessions = crate::opencode::store::list_sessions_for_directory(
+        pool,
+        &workspace_runtime.workspace_container_path,
+        WORKSPACE_MAINTENANCE_SESSION_PROBE_LIMIT,
+    )
+    .await?;
+
+    for session in sessions {
+        if session.status.as_deref() == Some(OPENCODE_SESSION_STATUS_IDLE) {
+            continue;
+        }
+
+        match opencode_client
+            .session_is_active(runtime_base_url, &session.id)
+            .await
+        {
+            Ok(true) => {
+                debug!(
+                    task_id = task.id,
+                    agent_key = %task.agent_key,
+                    session_id = %session.id,
+                    "workspace maintenance remains queued while an OpenCode session is active"
+                );
+                return Ok(());
+            }
+            Ok(false) => {}
+            Err(error) => {
+                warn!(
+                    task_id = task.id,
+                    agent_key = %task.agent_key,
+                    session_id = %session.id,
+                    error = ?error,
+                    "failed to probe OpenCode session activity; leaving maintenance queued"
+                );
+                return Ok(());
+            }
+        }
+    }
+
+    if !store::mark_maintenance_task_running(pool, task.id).await? {
+        debug!(
+            task_id = task.id,
+            agent_key = %task.agent_key,
+            "workspace maintenance task was claimed concurrently before execution"
+        );
+        return Ok(());
+    }
+
+    let maintenance_result = async {
+        let workspace_agent = OpenCodeWorkspaceAgent {
+            agent_key: agent.agent_key.clone(),
+            display_name: agent.display_name.clone(),
+            api_key: agent.api_key.clone(),
+        };
+
+        if task.hard_reset {
+            let _ = delete_agent_workspace(workspace_config, &agent.agent_key)?;
+        }
+
+        let generated = generate_agent_workspace(
+            workspace_config,
+            &workspace_agent,
+            WorkspaceGenerationMode::Regenerate,
+        )?;
+        let runtime_config = runtime_config_for_generated_workspace(&generated).into_value();
+        if !update_agent_runtime_config(pool, &agent.agent_key, runtime_config).await? {
+            anyhow::bail!("agent disappeared before workspace metadata update");
+        }
+
+        Ok::<(), anyhow::Error>(())
+    }
+    .await;
+
+    match maintenance_result {
+        Ok(()) => {
+            store::mark_maintenance_task_succeeded(pool, task.id).await?;
+            info!(
+                task_id = task.id,
+                agent_key = %task.agent_key,
+                hard_reset = task.hard_reset,
+                "workspace maintenance completed"
+            );
+        }
+        Err(error) => {
+            error!(
+                task_id = task.id,
+                agent_key = %task.agent_key,
+                hard_reset = task.hard_reset,
+                error = ?error,
+                "workspace maintenance failed"
+            );
+            let summary = maintenance_error_summary(&error);
+            store::mark_maintenance_task_failed(pool, task.id, &summary).await?;
+        }
+    }
+
+    Ok(())
+}
+
+fn maintenance_error_summary(error: &anyhow::Error) -> String {
+    let summary = error.root_cause().to_string();
+    if summary.trim().is_empty() {
+        "workspace maintenance failed".to_string()
+    } else {
+        summary
     }
 }
 
@@ -207,6 +402,15 @@ async fn process_schedule_for_agent(
             debug!(
                 schedule_id,
                 agent_key, "schedule no longer due at claim time"
+            );
+            false
+        }
+        store::ClaimedScheduleRun::BlockedByMaintenance => {
+            info!(
+                schedule_id,
+                agent_key,
+                job_key = %job_key,
+                "scheduled dispatch held because workspace maintenance is queued or running"
             );
             false
         }
@@ -347,7 +551,10 @@ async fn build_dispatch_request(
     }
 
     let system_setting = settings::store::get_setting(pool, "opencode_system_prompt").await?;
-    let system_prompt = system_setting.map(|s| s.value).unwrap_or_default();
+    let system_prompt = system_setting
+        .map(|s| s.value)
+        .filter(|v| !v.trim().is_empty())
+        .unwrap_or_else(|| crate::agents::prompts::DEFAULT_SYSTEM_PROMPT.to_string());
 
     let account_snapshot = if schedule.job_kind == JOB_KIND_TRADING {
         Some(live_agent_snapshot_for_dispatch(
@@ -386,7 +593,10 @@ pub async fn build_hook_dispatch_request(
     }
 
     let system_setting = settings::store::get_setting(pool, "opencode_system_prompt").await?;
-    let system_prompt = system_setting.map(|s| s.value).unwrap_or_default();
+    let system_prompt = system_setting
+        .map(|s| s.value)
+        .filter(|v| !v.trim().is_empty())
+        .unwrap_or_else(|| crate::agents::prompts::DEFAULT_SYSTEM_PROMPT.to_string());
 
     Ok(Some(dispatch_request_from_hook(
         hook,
@@ -415,7 +625,7 @@ pub async fn dispatch_analysis_batch_completed_hook(
         return Ok(());
     };
 
-    match store::insert_queued_hook_run(pool, agent_key, hook.id).await? {
+    match store::insert_queued_hook_run_for_automatic_dispatch(pool, agent_key, hook.id).await? {
         store::QueuedHookRun::Dispatch {
             run_id,
             scheduled_for,
@@ -462,6 +672,13 @@ pub async fn dispatch_analysis_batch_completed_hook(
                 agent_key,
                 hook_id = hook.id,
                 "hook disappeared before queue insert"
+            );
+        }
+        store::QueuedHookRun::BlockedByMaintenance => {
+            warn!(
+                agent_key,
+                hook_id = hook.id,
+                "automatic follow-up hook was unexpectedly blocked by maintenance"
             );
         }
     }
@@ -596,9 +813,18 @@ pub fn spawn(
     shutdown_rx: watch::Receiver<bool>,
     backend: Arc<dyn AgenticBackend>,
     live_accounts: Arc<LiveAccountStore>,
+    opencode_workspace_config: OpenCodeWorkspaceConfig,
+    opencode_client: Arc<OpenCodeClient>,
 ) -> JoinHandle<Result<()>> {
     tokio::spawn(async move {
-        AgenticScheduler::new(pool, shutdown_rx, backend, live_accounts)
+        AgenticScheduler::new(
+            pool,
+            shutdown_rx,
+            backend,
+            live_accounts,
+            opencode_workspace_config,
+            opencode_client,
+        )
             .run()
             .await
     })
@@ -610,11 +836,22 @@ mod tests {
 
     use super::*;
 
-    use std::sync::{Arc, Mutex};
+    use std::{
+        collections::BTreeSet,
+        path::PathBuf,
+        sync::{Arc, Mutex},
+    };
 
     use async_trait::async_trait;
+    use axum::{
+        Router,
+        extract::{Path as AxumPath, State as AxumState},
+        http::StatusCode,
+        routing::get,
+    };
     use chrono::Utc;
     use serde_json::json;
+    use tokio::net::TcpListener;
 
     use crate::{
         agentic::{
@@ -656,6 +893,55 @@ mod tests {
                 backend_run_ref: "ses_fake".to_string(),
             })
         }
+    }
+
+    fn sample_workspace_config() -> OpenCodeWorkspaceConfig {
+        OpenCodeWorkspaceConfig {
+            source_root: PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join(crate::opencode::workspace::PROFILE_SOURCE_RELATIVE_PATH),
+            host_workspaces_root: PathBuf::from("/tmp/opencode/vibetrading-scheduler-tests"),
+            container_workspaces_root: "/workspaces".to_string(),
+            api_base_url: "http://host.containers.internal:3003".to_string(),
+        }
+    }
+
+    fn sample_opencode_client() -> Arc<OpenCodeClient> {
+        Arc::new(
+            OpenCodeClient::new(crate::opencode::client::OpenCodeClientConfig::new(
+                "opencode".to_string(),
+                None,
+            ))
+            .expect("build OpenCode client"),
+        )
+    }
+
+    async fn spawn_session_status_server(active_session_ids: &[String]) -> String {
+        async fn session_status(
+            AxumState(active_session_ids): AxumState<Arc<BTreeSet<String>>>,
+            AxumPath(session_id): AxumPath<String>,
+        ) -> StatusCode {
+            if active_session_ids.contains(&session_id) {
+                StatusCode::OK
+            } else {
+                StatusCode::NOT_FOUND
+            }
+        }
+
+        let active_session_ids = Arc::new(active_session_ids.iter().cloned().collect::<BTreeSet<_>>());
+        let app = Router::new()
+            .route("/session/{session_id}/status", get(session_status))
+            .with_state(active_session_ids);
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind test session status server");
+        let address = listener.local_addr().expect("read listener address");
+        tokio::spawn(async move {
+            axum::serve(listener, app)
+                .await
+                .expect("serve test session status server");
+        });
+
+        format!("http://{address}")
     }
 
     impl FakeBackend {
@@ -832,7 +1118,14 @@ mod tests {
 
         let live_accounts = Arc::new(crate::hyperliquid::live_state::LiveAccountStore::new());
         let (_tx, rx) = watch::channel(false);
-        let mut scheduler = AgenticScheduler::new(pool.clone(), rx, backend, live_accounts);
+        let mut scheduler = AgenticScheduler::new(
+            pool.clone(),
+            rx,
+            backend,
+            live_accounts,
+            sample_workspace_config(),
+            sample_opencode_client(),
+        );
         scheduler.tick().await.expect("tick");
 
         run_until(|| async { calls.lock().map(|guard| !guard.is_empty()).unwrap_or(false) }).await;
@@ -918,7 +1211,14 @@ mod tests {
 
         let live_accounts = Arc::new(crate::hyperliquid::live_state::LiveAccountStore::new());
         let (_tx, rx) = watch::channel(false);
-        let mut scheduler = AgenticScheduler::new(pool.clone(), rx, backend, live_accounts);
+        let mut scheduler = AgenticScheduler::new(
+            pool.clone(),
+            rx,
+            backend,
+            live_accounts,
+            sample_workspace_config(),
+            sample_opencode_client(),
+        );
         scheduler.tick().await.expect("tick");
 
         run_until(|| async { calls.lock().map(|guard| guard.len() >= 2).unwrap_or(false) }).await;
@@ -967,7 +1267,14 @@ mod tests {
 
         let live_accounts = Arc::new(crate::hyperliquid::live_state::LiveAccountStore::new());
         let (_tx, rx) = watch::channel(false);
-        let mut scheduler = AgenticScheduler::new(pool.clone(), rx, backend, live_accounts);
+        let mut scheduler = AgenticScheduler::new(
+            pool.clone(),
+            rx,
+            backend,
+            live_accounts,
+            sample_workspace_config(),
+            sample_opencode_client(),
+        );
         scheduler.tick().await.expect("tick");
 
         run_until(|| async { calls.lock().map(|guard| guard.len() >= 2).unwrap_or(false) }).await;
@@ -1019,7 +1326,14 @@ mod tests {
         let backend: Arc<dyn AgenticBackend> = Arc::new(FakeBackend::success(calls.clone()));
         let live_accounts = Arc::new(crate::hyperliquid::live_state::LiveAccountStore::new());
         let (_tx, rx) = watch::channel(false);
-        let mut scheduler = AgenticScheduler::new(pool.clone(), rx, backend, live_accounts);
+        let mut scheduler = AgenticScheduler::new(
+            pool.clone(),
+            rx,
+            backend,
+            live_accounts,
+            sample_workspace_config(),
+            sample_opencode_client(),
+        );
         scheduler.tick().await.expect("tick");
 
         run_until(|| async { calls.lock().map(|guard| guard.len() >= 2).unwrap_or(false) }).await;
@@ -1074,7 +1388,14 @@ mod tests {
 
         let live_accounts = Arc::new(crate::hyperliquid::live_state::LiveAccountStore::new());
         let (_tx, rx) = watch::channel(false);
-        let mut scheduler = AgenticScheduler::new(pool.clone(), rx, backend, live_accounts);
+        let mut scheduler = AgenticScheduler::new(
+            pool.clone(),
+            rx,
+            backend,
+            live_accounts,
+            sample_workspace_config(),
+            sample_opencode_client(),
+        );
         scheduler.tick().await.expect("tick");
 
         run_until(|| async { calls.lock().map(|guard| guard.len() >= 2).unwrap_or(false) }).await;
@@ -1118,7 +1439,14 @@ mod tests {
         let backend: Arc<dyn AgenticBackend> = Arc::new(FakeBackend::success(calls.clone()));
         let live_accounts = Arc::new(crate::hyperliquid::live_state::LiveAccountStore::new());
         let (_tx, rx) = watch::channel(false);
-        let mut scheduler = AgenticScheduler::new(pool.clone(), rx, backend, live_accounts);
+        let mut scheduler = AgenticScheduler::new(
+            pool.clone(),
+            rx,
+            backend,
+            live_accounts,
+            sample_workspace_config(),
+            sample_opencode_client(),
+        );
         scheduler.tick().await.expect("tick");
 
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
@@ -1135,6 +1463,192 @@ mod tests {
             skipped.error_summary.as_deref(),
             Some("previous run still active")
         );
+    }
+
+    #[tokio::test]
+    async fn tick_leaves_workspace_maintenance_queued_while_agent_run_is_active() {
+        let pool = test_db::pool().await;
+        let key = format!("maint-busy-{}", Utc::now().timestamp_nanos_opt().unwrap_or(0));
+        seed_test_agent(&pool, &key).await;
+
+        let (schedule_id,): (i64,) = sqlx::query_as(
+            "SELECT id FROM agentic_job_schedules
+              WHERE agent_key = $1 AND job_key = 'analysis-15m'",
+        )
+        .bind(&key)
+        .fetch_one(&pool)
+        .await
+        .expect("fetch schedule id");
+        insert_test_run(&pool, schedule_id, "running")
+            .await
+            .expect("seed active run");
+        store::insert_workspace_regenerate_task(&pool, &key, false)
+            .await
+            .expect("insert maintenance task");
+
+        let backend: Arc<dyn AgenticBackend> = Arc::new(FakeBackend::success(Arc::new(
+            Mutex::new(Vec::new()),
+        )));
+        let live_accounts = Arc::new(crate::hyperliquid::live_state::LiveAccountStore::new());
+        let (_tx, rx) = watch::channel(false);
+        let mut scheduler = AgenticScheduler::new(
+            pool.clone(),
+            rx,
+            backend,
+            live_accounts,
+            sample_workspace_config(),
+            sample_opencode_client(),
+        );
+        scheduler.tick().await.expect("tick");
+
+        let task = store::get_latest_workspace_regenerate_task(&pool, &key)
+            .await
+            .expect("load maintenance task")
+            .expect("maintenance task present");
+        assert_eq!(task.status, crate::agentic::model::MAINTENANCE_STATUS_QUEUED);
+    }
+
+    #[tokio::test]
+    async fn tick_leaves_workspace_maintenance_queued_while_live_session_is_active() {
+        let pool = test_db::pool().await;
+        let key = format!("maint-session-{}", Utc::now().timestamp_nanos_opt().unwrap_or(0));
+        seed_test_agent(&pool, &key).await;
+        store::insert_workspace_regenerate_task(&pool, &key, false)
+            .await
+            .expect("insert maintenance task");
+
+        let session_id = format!("ses-maint-{}", Utc::now().timestamp_nanos_opt().unwrap_or(0));
+        let directory = format!("/workspaces/agents/{key}");
+        sqlx::query(
+            "INSERT INTO opencode.sessions (id, directory, updated_at)
+             VALUES ($1, $2, now())",
+        )
+        .bind(&session_id)
+        .bind(&directory)
+        .execute(&pool)
+        .await
+        .expect("insert active session row");
+
+        let base_url = spawn_session_status_server(std::slice::from_ref(&session_id)).await;
+        sqlx::query("UPDATE agent_runtimes SET base_url = $2 WHERE id = $1")
+            .bind("opencode-local")
+            .bind(&base_url)
+            .execute(&pool)
+            .await
+            .expect("update runtime base url");
+
+        let backend: Arc<dyn AgenticBackend> = Arc::new(FakeBackend::success(Arc::new(
+            Mutex::new(Vec::new()),
+        )));
+        let live_accounts = Arc::new(crate::hyperliquid::live_state::LiveAccountStore::new());
+        let (_tx, rx) = watch::channel(false);
+        let mut scheduler = AgenticScheduler::new(
+            pool.clone(),
+            rx,
+            backend,
+            live_accounts,
+            sample_workspace_config(),
+            sample_opencode_client(),
+        );
+        scheduler.tick().await.expect("tick");
+
+        let task = store::get_latest_workspace_regenerate_task(&pool, &key)
+            .await
+            .expect("load maintenance task")
+            .expect("maintenance task present");
+        assert_eq!(task.status, crate::agentic::model::MAINTENANCE_STATUS_QUEUED);
+    }
+
+    #[tokio::test]
+    async fn tick_runs_workspace_maintenance_once_agent_is_idle() {
+        let pool = test_db::pool().await;
+        let key = format!("maint-idle-{}", Utc::now().timestamp_nanos_opt().unwrap_or(0));
+        seed_test_agent(&pool, &key).await;
+        store::insert_workspace_regenerate_task(&pool, &key, true)
+            .await
+            .expect("insert maintenance task");
+
+        let backend: Arc<dyn AgenticBackend> = Arc::new(FakeBackend::success(Arc::new(
+            Mutex::new(Vec::new()),
+        )));
+        let live_accounts = Arc::new(crate::hyperliquid::live_state::LiveAccountStore::new());
+        let (_tx, rx) = watch::channel(false);
+        let mut scheduler = AgenticScheduler::new(
+            pool.clone(),
+            rx,
+            backend,
+            live_accounts,
+            sample_workspace_config(),
+            sample_opencode_client(),
+        );
+        scheduler.tick().await.expect("tick");
+
+        let task = store::get_latest_workspace_regenerate_task(&pool, &key)
+            .await
+            .expect("load maintenance task")
+            .expect("maintenance task present");
+        assert_eq!(task.status, crate::agentic::model::MAINTENANCE_STATUS_SUCCEEDED);
+
+        let agent = get_agent(&pool, &key)
+            .await
+            .expect("get agent")
+            .expect("agent present");
+        let workspace = OpenCodeWorkspaceRuntimeConfig::from_value(&agent.runtime_config)
+            .expect("updated workspace runtime config");
+        let workspace_path = PathBuf::from(&workspace.workspace_host_path);
+        assert!(workspace_path.join("AGENTS.md").exists());
+        assert!(workspace_path.join("scripts/user").exists());
+    }
+
+    #[tokio::test]
+    async fn tick_ignores_idle_workspace_sessions_when_running_maintenance() {
+        let pool = test_db::pool().await;
+        let key = format!("maint-idle-session-{}", Utc::now().timestamp_nanos_opt().unwrap_or(0));
+        seed_test_agent(&pool, &key).await;
+        store::insert_workspace_regenerate_task(&pool, &key, false)
+            .await
+            .expect("insert maintenance task");
+
+        let session_id = format!("ses-idle-maint-{}", Utc::now().timestamp_nanos_opt().unwrap_or(0));
+        let directory = format!("/workspaces/agents/{key}");
+        sqlx::query(
+            "INSERT INTO opencode.sessions (id, directory, status, updated_at)
+             VALUES ($1, $2, 'idle', now())",
+        )
+        .bind(&session_id)
+        .bind(&directory)
+        .execute(&pool)
+        .await
+        .expect("insert idle session row");
+
+        let base_url = spawn_session_status_server(std::slice::from_ref(&session_id)).await;
+        sqlx::query("UPDATE agent_runtimes SET base_url = $2 WHERE id = $1")
+            .bind("opencode-local")
+            .bind(&base_url)
+            .execute(&pool)
+            .await
+            .expect("update runtime base url");
+
+        let backend: Arc<dyn AgenticBackend> = Arc::new(FakeBackend::success(Arc::new(
+            Mutex::new(Vec::new()),
+        )));
+        let live_accounts = Arc::new(crate::hyperliquid::live_state::LiveAccountStore::new());
+        let (_tx, rx) = watch::channel(false);
+        let mut scheduler = AgenticScheduler::new(
+            pool.clone(),
+            rx,
+            backend,
+            live_accounts,
+            sample_workspace_config(),
+            sample_opencode_client(),
+        );
+        scheduler.tick().await.expect("tick");
+
+        let task = store::get_latest_workspace_regenerate_task(&pool, &key)
+            .await
+            .expect("load maintenance task")
+            .expect("maintenance task present");
+        assert_eq!(task.status, crate::agentic::model::MAINTENANCE_STATUS_SUCCEEDED);
     }
 
     #[tokio::test]

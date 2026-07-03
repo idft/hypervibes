@@ -96,6 +96,8 @@ async fn main() -> Result<()> {
         shutdown_rx.clone(),
         opencode_backend.clone(),
         Arc::clone(&live_accounts),
+        opencode_workspace_config.clone(),
+        Arc::clone(&opencode_client),
     );
     let mut agentic_scheduler_handle = tokio::spawn(async move {
         if let Err(e) = agentic_scheduler.run().await {

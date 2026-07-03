@@ -193,3 +193,41 @@ pub async fn get_session_detail(
         session_errors,
     }))
 }
+
+pub async fn list_sessions_for_directory(
+    pool: &DbPool,
+    directory: &str,
+    limit: i64,
+) -> Result<Vec<OpenCodeSessionRow>> {
+    let rows = query_as::<_, OpenCodeSessionRow>(
+        "SELECT id,
+                created_at,
+                updated_at,
+                directory,
+                title,
+                status,
+                COALESCE(model_provider, '') AS model_provider,
+                COALESCE(model_id, '') AS model_id,
+                share_url,
+                COALESCE(input_tokens, 0) AS input_tokens,
+                COALESCE(output_tokens, 0) AS output_tokens,
+                COALESCE(cache_read_tokens, 0) AS cache_read_tokens,
+                COALESCE(cache_write_tokens, 0) AS cache_write_tokens,
+                COALESCE(reasoning_tokens, 0) AS reasoning_tokens,
+                COALESCE(context_tokens, 0) AS context_tokens,
+                COALESCE(peak_context_tokens, 0) AS peak_context_tokens,
+                COALESCE(estimated_cost, 0)::numeric(10, 6) AS estimated_cost,
+                COALESCE(compaction_count, 0) AS compaction_count
+           FROM opencode.sessions
+          WHERE directory = $1
+          ORDER BY updated_at DESC, id DESC
+          LIMIT $2",
+    )
+    .bind(directory)
+    .bind(limit)
+    .fetch_all(pool)
+    .await
+    .with_context(|| format!("failed to list OpenCode sessions for directory {directory}"))?;
+
+    Ok(rows)
+}

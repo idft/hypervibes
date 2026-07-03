@@ -54,7 +54,13 @@ The generated workspace includes:
 
 The workspace `.env` is backend-owned generated state and should not be read or modified by agents.
 
-Re-generating a workspace refreshes generated files while preserving user-managed files under paths like `scripts/user/`, `data/`, and `scratch/`.
+Re-generating a workspace is now queued as per-agent maintenance work instead of running inline in the settings POST handler.
+
+Regular re-generation still refreshes generated files while preserving user-managed files under paths like `scripts/user/`, `data/`, and `scratch/`.
+
+Operators may also queue a hard reset, which deletes the full workspace directory first and then re-generates it from the template.
+
+Only one queued/running workspace maintenance task is allowed per agent. Duplicate submissions are rejected.
 
 The agent settings page shows whether the on-disk workspace has drifted from `agent-runtime/workspace-template/` and lists changed template-managed files with per-file line counts.
 
@@ -69,6 +75,18 @@ OpenCode jobs are scheduled by Vibetrading.
 The `AgenticScheduler` claims due work, dispatches runs through the OpenCode backend adapter, and stores run state in Postgres.
 
 Before claiming new work for an agent lane, Vibetrading reconciles stale active runs left behind by app restarts. A `running` run whose OpenCode session is recorded as `idle` after a command was created is marked `succeeded`; queued/running orphan rows that never reached OpenCode are failed after their configured timeout. This prevents one interrupted process from causing all later runs in the same lane to be skipped forever.
+
+Queued workspace maintenance is processed before normal schedule dispatch, but it only starts once the agent is fully idle:
+
+- no queued/running `agentic_runs` remain for that agent
+- no recorded OpenCode sessions for that workspace still probe as active
+
+While workspace maintenance is queued or running:
+
+- scheduled jobs stay due and are held for later instead of being skipped
+- manual job `Run now` and manual hook `Run now` are blocked with a warning
+
+Automatic follow-up hooks for an analysis job that was already allowed to run are still queued and completed before maintenance starts.
 
 The agent detail page exposes a `Jobs` tab for OpenCode agents.
 

@@ -765,6 +765,63 @@ mod tests {
     }
 
     #[test]
+    fn hard_reset_deletes_user_managed_files_before_regeneration() {
+        let temp = TempDir::new("opencode-hard-reset");
+        let config = sample_config(&temp.path);
+        let generated =
+            generate_agent_workspace(&config, &sample_agent(), WorkspaceGenerationMode::CreateNew)
+                .expect("generate workspace");
+        let workspace_root = &generated.workspace_host_path;
+
+        fs::write(workspace_root.join("scripts/user/custom.py"), "print('hello')\n")
+            .expect("write custom script");
+        fs::write(workspace_root.join("data/cache.json"), "{}\n").expect("write data file");
+        fs::write(workspace_root.join("scratch/note.txt"), "scratch\n")
+            .expect("write scratch file");
+        fs::write(workspace_root.join("extra.txt"), "extra\n").expect("write extra file");
+
+        let deleted = delete_agent_workspace(&config, &sample_agent().agent_key)
+            .expect("delete workspace for hard reset");
+        assert!(deleted);
+
+        let regenerated =
+            generate_agent_workspace(&config, &sample_agent(), WorkspaceGenerationMode::Regenerate)
+                .expect("recreate workspace after hard reset");
+
+        assert!(!regenerated.workspace_host_path.join("scripts/user/custom.py").exists());
+        assert!(!regenerated.workspace_host_path.join("data/cache.json").exists());
+        assert!(!regenerated.workspace_host_path.join("scratch/note.txt").exists());
+        assert!(!regenerated.workspace_host_path.join("extra.txt").exists());
+    }
+
+    #[test]
+    fn hard_reset_recreates_template_managed_files() {
+        let temp = TempDir::new("opencode-hard-reset-template");
+        let config = sample_config(&temp.path);
+        let generated =
+            generate_agent_workspace(&config, &sample_agent(), WorkspaceGenerationMode::CreateNew)
+                .expect("generate workspace");
+        fs::remove_file(generated.workspace_host_path.join("AGENTS.md"))
+            .expect("remove AGENTS.md");
+
+        delete_agent_workspace(&config, &sample_agent().agent_key)
+            .expect("delete workspace for hard reset");
+
+        let regenerated =
+            generate_agent_workspace(&config, &sample_agent(), WorkspaceGenerationMode::Regenerate)
+                .expect("recreate workspace after hard reset");
+
+        assert!(regenerated.workspace_host_path.join("AGENTS.md").exists());
+        assert!(
+            regenerated
+                .workspace_host_path
+                .join(".opencode/commands/vibetrading-analysis.md")
+                .exists()
+        );
+        assert!(regenerated.workspace_host_path.join("scripts/generated").exists());
+    }
+
+    #[test]
     fn workspace_template_diff_is_clean_for_new_workspace() {
         let temp = TempDir::new("opencode-diff-clean");
         let config = sample_config(&temp.path);
