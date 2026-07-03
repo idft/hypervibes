@@ -1,0 +1,50 @@
+mod common;
+mod hooks;
+mod recovery;
+mod runs;
+mod schedules;
+mod workspace;
+
+#[allow(unused_imports)]
+pub use common::set_all_agent_jobs_enabled;
+#[allow(unused_imports)]
+pub use hooks::{
+    delete_agent_hook, get_agent_hook, get_enabled_hook_for_event, get_opencode_hook_for_dispatch,
+    insert_agent_hook, list_agent_hooks, list_hook_runs, set_hook_enabled, set_hook_model,
+    set_hook_timeout,
+};
+#[allow(unused_imports)]
+pub use runs::{
+    agent_has_active_runs, count_agent_runs, get_run, insert_queued_hook_run,
+    insert_queued_hook_run_for_automatic_dispatch, insert_queued_run, insert_test_run,
+    list_active_agent_runs, list_agent_runs, list_agent_runs_page, mark_run_aborted,
+    mark_run_failed, mark_run_running, mark_run_succeeded, QueuedHookRun, QueuedScheduleRun,
+};
+#[allow(unused_imports)]
+pub use schedules::{
+    claim_due_schedule, delete_agent_schedule, get_agent_schedule, get_opencode_schedule_for_dispatch,
+    insert_agent_schedule, insert_default_opencode_schedules, list_agent_schedules,
+    list_due_opencode_schedules, list_schedule_runs, set_schedule_enabled, set_schedule_model,
+    set_schedule_timeout, ClaimedScheduleRun,
+};
+#[allow(unused_imports)]
+pub use workspace::{
+    InsertWorkspaceMaintenanceTaskOutcome, agent_has_blocking_workspace_maintenance,
+    get_latest_workspace_regenerate_task, get_next_queued_workspace_regenerate_task,
+    insert_workspace_regenerate_task, mark_maintenance_task_failed, mark_maintenance_task_running,
+    mark_maintenance_task_succeeded,
+};
+
+#[cfg(test)]
+mod test_support;
+
+#[cfg(test)]
+mod common_tests;
+#[cfg(test)]
+mod hooks_tests;
+#[cfg(test)]
+mod runs_tests;
+#[cfg(test)]
+mod schedules_tests;
+#[cfg(test)]
+mod workspace_tests;

@@ -1,7 +1,13 @@
 mod api;
+mod error;
 mod routes;
+mod state;
 mod templates;
 pub(crate) mod ui_events;
+
+pub use state::AppState;
+
+
 
 use std::sync::Arc;
 
@@ -22,21 +28,6 @@ use crate::{
 };
 
 use self::ui_events::UiEventHub;
-
-#[derive(Clone)]
-pub struct AppState {
-    pub db_pool: DbPool,
-    #[cfg(test)]
-    pub _test_db_guard: Option<Arc<crate::test_db::TestDb>>,
-    pub agentic_backend: Arc<dyn AgenticBackend>,
-    pub encryption_key: EncryptionKey,
-    pub live_accounts: Arc<LiveAccountStore>,
-    pub ui_events: Arc<UiEventHub>,
-    pub opencode_workspace_config: OpenCodeWorkspaceConfig,
-    pub opencode_client: Arc<OpenCodeClient>,
-    pub model_catalog: Arc<ModelsDevCatalog>,
-    pub asset_cache: Arc<AssetCache>,
-}
 
 pub async fn serve(
     bind_addr: &str,

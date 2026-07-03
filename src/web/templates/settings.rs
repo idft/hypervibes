@@ -1,0 +1,15 @@
+use askama::Template;
+
+#[derive(Template)]
+#[template(path = "server_error.html")]
+pub struct ServerErrorPageTemplate {
+    pub message: String,
+    pub current_path: String,
+}
+
+#[derive(Template)]
+#[template(path = "settings.html")]
+pub struct SettingsPageTemplate {
+    pub system_prompt: String,
+    pub current_path: String,
+}

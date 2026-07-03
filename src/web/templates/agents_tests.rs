@@ -1,0 +1,378 @@
+use askama::Template;
+
+use crate::{
+    agents::model::CreateAgentForm,
+    hyperliquid::live_state::{AccountLiveState, LiveConnectionStatus},
+    hyperliquid::sync_state::SyncStateRow,
+};
+
+use super::*;
+use crate::web::templates::test_support::*;
+use chrono::Utc;
+
+#[test]
+fn agents_page_renders_base_layout_and_status_box() {
+    let entry = AgentListEntry {
+        row: sample_agent_list_row(),
+        account_balance: AccountBalanceView {
+            account_address: "0x1234567890abcdef".to_string(),
+            environment: "live".to_string(),
+            total_balance: Some(rust_decimal::Decimal::new(232_6800, 4)),
+            total_u_pnl: AnimatedNumber::for_pnl(rust_decimal::Decimal::ZERO),
+            status: crate::hyperliquid::live_state::LiveConnectionStatus::Connected,
+            updated_at: Some(Utc::now()),
+        },
+        api_key_last_used_iso: None,
+    };
+    let template = AgentsPageTemplate {
+        agents: vec![entry],
+        current_path: "/agents".to_string(),
+    };
+    let rendered = template.render().unwrap();
+    assert!(rendered.contains("<!DOCTYPE html>"));
+    assert!(rendered.contains("Vibetrading Agents"));
+    assert!(!rendered.contains("Registered agents"));
+    assert!(!rendered.contains("Agents persisted in the registry database."));
+    assert!(rendered.contains("Account balance"));
+    assert!(rendered.contains("232.6800"));
+    assert!(!rendered.contains("USDC"));
+    assert!(rendered.contains("OpenCode local"));
+    assert!(rendered.contains("opencode"));
+}
+
+#[test]
+fn agents_page_renders_loading_placeholder_when_no_balance() {
+    let entry = AgentListEntry {
+        row: sample_agent_list_row(),
+        account_balance: AccountBalanceView {
+            account_address: "0x1234567890abcdef".to_string(),
+            environment: "live".to_string(),
+            total_balance: None,
+            total_u_pnl: AnimatedNumber::for_pnl(rust_decimal::Decimal::ZERO),
+            status: crate::hyperliquid::live_state::LiveConnectionStatus::Starting,
+            updated_at: None,
+        },
+        api_key_last_used_iso: None,
+    };
+    let template = AgentsPageTemplate {
+        agents: vec![entry],
+        current_path: "/agents".to_string(),
+    };
+    let rendered = template.render().unwrap();
+    assert!(rendered.contains("Loading"));
+    assert!(!rendered.contains("232.6800"));
+}
+
+#[test]
+fn agents_show_page_renders_base_layout_and_delete_modal() {
+    let view = sample_account_balance_view();
+    let account_balance_html = AccountBalancePartialTemplate::render_view(view).unwrap();
+    let positions_view = OpenPositionsView::from_live_state(AccountLiveState {
+        account_address: "0x1234567890abcdef".to_string(),
+        environment: "live".to_string(),
+        ..Default::default()
+    });
+    let open_positions_html =
+        OpenPositionsPartialTemplate::render_view(positions_view).unwrap();
+    let orders_view = OpenOrdersView::from_live_state(AccountLiveState {
+        account_address: "0x1234567890abcdef".to_string(),
+        environment: "live".to_string(),
+        ..Default::default()
+    });
+    let open_orders_html = OpenOrdersPartialTemplate::render_view(orders_view).unwrap();
+    let sparklines = vec![
+        SparklineView::from_series("24h", &[], 240, 48),
+        SparklineView::from_series("30d", &[], 240, 48),
+    ];
+    let sparklines_html = BalanceSparklinesPartialTemplate::render_view(sparklines).unwrap();
+    let mut template =
+        AgentsShowPageTemplate::new(sample_agent_detail_row(), AgentShowTab::Positions);
+    template.account_balance_html = account_balance_html;
+    template.open_positions_html = open_positions_html;
+    template.open_orders_html = open_orders_html;
+    template.latest_trade_execution_summary_html =
+        LatestTradeExecutionSummaryPartialTemplate::render_view(
+            Some("Scaled out into strength".to_string()),
+            Some(Utc::now()),
+        )
+        .unwrap();
+    template.sparklines_html = sparklines_html;
+    let rendered = template.render().unwrap();
+    assert!(rendered.contains("<!DOCTYPE html>"));
+    assert!(rendered.contains("Test Agent · Vibetrading"));
+    assert!(rendered.contains("delete-modal"));
+    assert!(rendered.contains("Delete agent"));
+    assert!(rendered.contains("Agent sections"));
+    assert!(rendered.contains("data-agent-tabs"));
+    assert!(rendered.contains("hx-target=\"#agent-show-tab-content\""));
+    assert!(rendered.contains("aria-current=\"page\""));
+    assert!(rendered.contains("Transactions"));
+    assert!(rendered.contains("Memories"));
+    assert!(rendered.contains("Prompts"));
+    assert!(rendered.contains("Settings"));
+    assert!(rendered.contains("Balance"));
+    assert!(rendered.contains("Unrealized"));
+    assert!(rendered.contains("Scaled out into strength"));
+}
+
+#[test]
+fn opencode_agent_shows_jobs_tab_with_recent_runs() {
+    let mut template =
+        AgentsShowPageTemplate::new(sample_opencode_detail_row(), AgentShowTab::Jobs);
+    template.jobs_loaded = true;
+    template.jobs = vec![
+        AgenticJobScheduleView::from_row(&sample_schedule_row(
+            1,
+            "analysis-15m",
+            "analysis",
+            true,
+        )),
+        AgenticJobScheduleView::from_row(&sample_schedule_row(
+            2,
+            "trading-1m",
+            "trading",
+            false,
+        )),
+    ];
+    template.hooks_loaded = true;
+    template.hooks = vec![AgenticJobHookView::from_row(&sample_hook_row(3, true))];
+    template.recent_runs_loaded = true;
+    template.recent_runs = vec![AgenticRunView::from_row(&sample_run_row(
+        1,
+        "succeeded",
+        "analysis-15m",
+    ))];
+    let rendered = template.render().expect("render jobs tab");
+    assert!(rendered.contains("/agents/test-agent/jobs"));
+    assert!(rendered.contains("Scheduled Jobs"));
+    assert!(rendered.contains("Hook Jobs"));
+    assert!(rendered.contains("Enable all"));
+    assert!(rendered.contains("Disable all"));
+    assert!(rendered.contains("Recent Runs"));
+    assert!(rendered.contains("analysis-15m"));
+    assert!(rendered.contains("trading-1m"));
+    assert!(rendered.contains("market-analysis"));
+    assert!(rendered.contains("15m"));
+    assert!(rendered.contains("1m"));
+    assert!(rendered.contains("10m"));
+    assert!(rendered.contains("anthropic/claude-3-5-sonnet"));
+    assert!(rendered.contains("Run now"));
+    assert!(!rendered.contains("Operator prompt</th>"));
+    assert!(rendered.contains("/agents/test-agent/jobs/1/run"));
+    assert!(rendered.contains("/agents/test-agent/hooks/3/run"));
+    assert!(rendered.contains("/agents/test-agent/hooks/3"));
+    assert!(rendered.contains("/agents/test-agent/runs/1"));
+    assert!(rendered.contains("data-agent-job-delete-trigger"));
+}
+
+#[test]
+fn opencode_agent_places_settings_tab_after_jobs() {
+    let template =
+        AgentsShowPageTemplate::new(sample_opencode_detail_row(), AgentShowTab::Jobs);
+
+    let labels: Vec<&str> = template.tabs.iter().map(|tab| tab.label).collect();
+    assert_eq!(
+        labels,
+        vec![
+            "Positions",
+            "Transactions",
+            "Memories",
+            "Prompts",
+            "Jobs",
+            "Settings",
+        ]
+    );
+}
+
+#[test]
+fn jobs_page_renders_recent_run_rows() {
+    let mut template =
+        AgentsShowPageTemplate::new(sample_opencode_detail_row(), AgentShowTab::Jobs);
+    template.recent_runs_loaded = true;
+    template.recent_runs = vec![
+        AgenticRunView::from_row(&sample_run_row(1, "succeeded", "analysis-15m")),
+        AgenticRunView::from_row(&sample_run_row(2, "failed", "trading-1m")),
+    ];
+    template.recent_runs_page = 1;
+    template.recent_runs_total_pages = 1;
+    template.recent_runs_total_count = 2;
+    template.recent_runs_range_start = 1;
+    template.recent_runs_range_end = 2;
+    let rendered = template.render().expect("render jobs page runs section");
+    assert!(rendered.contains("ses_abc123"));
+    assert!(rendered.contains(">succeeded<"));
+    assert!(rendered.contains(">failed<"));
+    assert!(rendered.contains("15m"));
+    assert!(rendered.contains("42s"));
+    assert!(rendered.contains("/agents/test-agent/runs/1"));
+    assert!(rendered.contains("Showing 1-2 of 2 runs"));
+}
+
+#[test]
+fn jobs_page_renders_recent_runs_pagination_controls() {
+    let mut template =
+        AgentsShowPageTemplate::new(sample_opencode_detail_row(), AgentShowTab::Jobs);
+    template.recent_runs_loaded = true;
+    template.recent_runs = vec![AgenticRunView::from_row(&sample_run_row(
+        12,
+        "succeeded",
+        "analysis-15m",
+    ))];
+    template.recent_runs_page = 2;
+    template.recent_runs_total_pages = 3;
+    template.recent_runs_total_count = 25;
+    template.recent_runs_range_start = 11;
+    template.recent_runs_range_end = 20;
+    template.recent_runs_previous_page_url = Some("/agents/test-agent/jobs?page=1".to_string());
+    template.recent_runs_next_page_url = Some("/agents/test-agent/jobs?page=3".to_string());
+
+    let rendered = template.render().expect("render jobs page pagination");
+
+    assert!(rendered.contains("Showing 11-20 of 25 runs"));
+    assert!(rendered.contains("Page 2 of 3"));
+    assert!(rendered.contains("/agents/test-agent/jobs?page=1"));
+    assert!(rendered.contains("/agents/test-agent/jobs?page=3"));
+    assert!(rendered.contains("id=\"agent-recent-runs\""));
+    assert!(rendered.contains("hx-select=\"#agent-recent-runs\""));
+    assert!(rendered.contains("hx-target=\"#agent-recent-runs\""));
+    assert!(rendered.contains("hx-swap=\"outerHTML\""));
+    assert!(rendered.contains("hx-push-url=\"true\""));
+}
+
+#[test]
+fn jobs_page_links_to_new_hook_page() {
+    let mut template =
+        AgentsShowPageTemplate::new(sample_opencode_detail_row(), AgentShowTab::Jobs);
+    template.hooks_loaded = true;
+    let rendered = template.render().expect("render jobs page hook section");
+    assert!(rendered.contains("New hook"));
+    assert!(rendered.contains("/agents/test-agent/hooks/new"));
+}
+
+#[test]
+fn memories_tab_renders_timeline_date_filter_and_markdown_content() {
+    let mut template =
+        AgentsShowPageTemplate::new(sample_agent_detail_row(), AgentShowTab::Memories);
+    template.set_memories(
+        vec![
+            sample_memory_record(
+                "BTC",
+                Some("15m"),
+                "analysis",
+                "Momentum remains constructive",
+                "### Readout\n\n- Wait for a pullback before adding risk.\n- Use patient entries and avoid chasing.",
+            ),
+            sample_memory_record(
+                "ETH",
+                None,
+                "trade_management",
+                "Tighten invalidation",
+                "Trail the stop closer if funding flips and spot momentum weakens.",
+            ),
+        ],
+        "2026-06-20".to_string(),
+        Some("Saturday, June 20, 2026".to_string()),
+        None,
+    );
+
+    let rendered = template.render().unwrap();
+    assert!(rendered.contains("Timeline"));
+    assert!(rendered.contains("Showing Saturday, June 20, 2026"));
+    assert!(rendered.contains("name=\"date\""));
+    assert!(rendered.contains("Momentum remains constructive"));
+    assert!(rendered.contains("<h3>Readout</h3>"));
+    assert!(rendered.contains("<li>Wait for a pullback before adding risk.</li>"));
+    assert!(rendered.contains("metadata keys"));
+}
+
+#[test]
+fn settings_tab_renders_sync_status_table() {
+    let mut template =
+        AgentsShowPageTemplate::new(sample_agent_detail_row(), AgentShowTab::Settings);
+    template.sync_state = vec![SyncStateView::from_row(SyncStateRow::new(
+        "0x1234567890abcdef".to_string(),
+        "live".to_string(),
+        crate::hyperliquid::sync_state::SyncStream::Fills,
+    ))];
+
+    let rendered = template.render().unwrap();
+    assert!(rendered.contains("Settings"));
+    assert!(rendered.contains("Sync status"));
+    assert!(rendered.contains("fills"));
+}
+
+#[test]
+fn settings_tab_renders_workspace_template_drift() {
+    let mut template =
+        AgentsShowPageTemplate::new(sample_opencode_detail_row(), AgentShowTab::Settings);
+    template.opencode_workspace = Some(OpenCodeWorkspaceSettingsView {
+        workspace_host_path: "workspaces/agents/test-agent".to_string(),
+        workspace_container_path: "/workspaces/agents/test-agent".to_string(),
+        profile_source: "agent-runtime/workspace-template".to_string(),
+        env_exists: true,
+        template_drift: OpenCodeWorkspaceTemplateDriftView {
+            status_text: "Template drift",
+            status_class: "border-amber-900/60 bg-amber-950/30 text-amber-300",
+            changed_files: vec![OpenCodeWorkspaceTemplateFileChangeView {
+                status_code: "M",
+                path: "AGENTS.md".to_string(),
+                added_lines: 3,
+                removed_lines: 1,
+            }],
+            is_missing: false,
+        },
+        maintenance_html: OpenCodeWorkspaceMaintenanceStatusTemplate::render_view(
+            OpenCodeWorkspaceMaintenanceView::idle("test-agent"),
+        )
+        .expect("render maintenance partial"),
+        maintenance: OpenCodeWorkspaceMaintenanceView::idle("test-agent"),
+    });
+
+    let rendered = template.render().unwrap();
+    assert!(rendered.contains("id=\"agent-workspace-section\""));
+    assert!(rendered.contains("Template drift"));
+    assert!(rendered.contains("AGENTS.md"));
+    assert!(rendered.contains("+3"));
+    assert!(rendered.contains("-1"));
+    assert!(
+        rendered.contains("Only files generated from the workspace template are compared.")
+    );
+}
+
+#[test]
+fn prompts_tab_renders_strategy_copy_and_reset_defaults_ui() {
+    let template =
+        AgentsShowPageTemplate::new(sample_agent_detail_row(), AgentShowTab::Prompts);
+
+    let rendered = template.render().unwrap();
+    assert!(rendered.contains("Strategy Prompts"));
+    assert!(rendered.contains("Analysis Strategy Prompt"));
+    assert!(rendered.contains("Trading Strategy Prompt"));
+    assert!(rendered.contains("data-agent-prompt-form=\"analysis\""));
+    assert!(rendered.contains("data-agent-prompt-form=\"trading\""));
+    assert!(rendered.contains("data-agent-prompt-reset=\"analysis\""));
+    assert!(rendered.contains("data-agent-prompt-reset=\"trading\""));
+    assert!(rendered.contains("data-agent-prompt-save=\"analysis\""));
+    assert!(rendered.contains("data-agent-prompt-save=\"trading\""));
+    assert!(rendered.contains("default-analysis-strategy-prompt-value"));
+    assert!(rendered.contains("Default analysis validity"));
+    assert!(rendered.contains("Time-in-force"));
+}
+
+#[test]
+fn agents_new_page_renders_base_layout_and_form() {
+    let template = AgentsNewPageTemplate {
+        form: CreateAgentForm::default(),
+        runtimes: vec![sample_runtime_row()],
+        errors: vec![],
+        current_path: "/agents/new".to_string(),
+    };
+    let rendered = template.render().unwrap();
+    assert!(rendered.contains("<!DOCTYPE html>"));
+    assert!(rendered.contains("Create agent · Vibetrading"));
+    assert!(rendered.contains("display_name"));
+    assert!(!rendered.contains("name=\"backend_kind\""));
+    assert!(rendered.contains("name=\"runtime_id\""));
+    assert!(rendered.contains("Runtime instance"));
+    assert!(rendered.contains("OpenCode local"));
+}
