@@ -1,4 +1,5 @@
-<div id="workspace-maintenance-status" class="mt-4"{% if maintenance.should_poll %} hx-get="{{ maintenance.poll_url }}" hx-trigger="every 2s" hx-swap="outerHTML"{% endif %}>
+{% if maintenance.is_visible() %}
+<div class="mt-4">
     <div class="rounded-xl border border-zinc-800 bg-zinc-950/70 p-4">
         <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
             <div>
@@ -7,8 +8,6 @@
             </div>
             {% if let Some(status) = maintenance.status %}
             <span class="inline-flex rounded-full border px-3 py-1 text-xs font-medium {{ status.status_class }}">{{ status.status_label }}</span>
-            {% else %}
-            <span class="inline-flex rounded-full border border-zinc-700 bg-zinc-900/60 px-3 py-1 text-xs font-medium text-zinc-300">Idle</span>
             {% endif %}
         </div>
         {% if let Some(status) = maintenance.status %}
@@ -29,8 +28,7 @@
             {{ error_text }}
         </div>
         {% endif %}
-        {% else %}
-        <p class="mt-4 text-sm text-zinc-400">No workspace maintenance is queued or running.</p>
         {% endif %}
     </div>
 </div>
+{% endif %}

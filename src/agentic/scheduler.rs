@@ -219,14 +219,14 @@ async fn process_workspace_maintenance_tasks(
         return Ok(());
     };
 
-    let Some(runtime_base_url) = agent.runtime_base_url.as_deref().filter(|url| !url.is_empty())
+    let Some(runtime_base_url) = agent
+        .runtime_base_url
+        .as_deref()
+        .filter(|url| !url.is_empty())
     else {
-        let _ = store::mark_maintenance_task_failed(
-            pool,
-            task.id,
-            "agent runtime base URL is missing",
-        )
-        .await;
+        let _ =
+            store::mark_maintenance_task_failed(pool, task.id, "agent runtime base URL is missing")
+                .await;
         return Ok(());
     };
 
@@ -825,8 +825,8 @@ pub fn spawn(
             opencode_workspace_config,
             opencode_client,
         )
-            .run()
-            .await
+        .run()
+        .await
     })
 }
 
@@ -927,7 +927,8 @@ mod tests {
             }
         }
 
-        let active_session_ids = Arc::new(active_session_ids.iter().cloned().collect::<BTreeSet<_>>());
+        let active_session_ids =
+            Arc::new(active_session_ids.iter().cloned().collect::<BTreeSet<_>>());
         let app = Router::new()
             .route("/session/{session_id}/status", get(session_status))
             .with_state(active_session_ids);
@@ -1468,7 +1469,10 @@ mod tests {
     #[tokio::test]
     async fn tick_leaves_workspace_maintenance_queued_while_agent_run_is_active() {
         let pool = test_db::pool().await;
-        let key = format!("maint-busy-{}", Utc::now().timestamp_nanos_opt().unwrap_or(0));
+        let key = format!(
+            "maint-busy-{}",
+            Utc::now().timestamp_nanos_opt().unwrap_or(0)
+        );
         seed_test_agent(&pool, &key).await;
 
         let (schedule_id,): (i64,) = sqlx::query_as(
@@ -1486,9 +1490,8 @@ mod tests {
             .await
             .expect("insert maintenance task");
 
-        let backend: Arc<dyn AgenticBackend> = Arc::new(FakeBackend::success(Arc::new(
-            Mutex::new(Vec::new()),
-        )));
+        let backend: Arc<dyn AgenticBackend> =
+            Arc::new(FakeBackend::success(Arc::new(Mutex::new(Vec::new()))));
         let live_accounts = Arc::new(crate::hyperliquid::live_state::LiveAccountStore::new());
         let (_tx, rx) = watch::channel(false);
         let mut scheduler = AgenticScheduler::new(
@@ -1505,19 +1508,28 @@ mod tests {
             .await
             .expect("load maintenance task")
             .expect("maintenance task present");
-        assert_eq!(task.status, crate::agentic::model::MAINTENANCE_STATUS_QUEUED);
+        assert_eq!(
+            task.status,
+            crate::agentic::model::MAINTENANCE_STATUS_QUEUED
+        );
     }
 
     #[tokio::test]
     async fn tick_leaves_workspace_maintenance_queued_while_live_session_is_active() {
         let pool = test_db::pool().await;
-        let key = format!("maint-session-{}", Utc::now().timestamp_nanos_opt().unwrap_or(0));
+        let key = format!(
+            "maint-session-{}",
+            Utc::now().timestamp_nanos_opt().unwrap_or(0)
+        );
         seed_test_agent(&pool, &key).await;
         store::insert_workspace_regenerate_task(&pool, &key, false)
             .await
             .expect("insert maintenance task");
 
-        let session_id = format!("ses-maint-{}", Utc::now().timestamp_nanos_opt().unwrap_or(0));
+        let session_id = format!(
+            "ses-maint-{}",
+            Utc::now().timestamp_nanos_opt().unwrap_or(0)
+        );
         let directory = format!("/workspaces/agents/{key}");
         sqlx::query(
             "INSERT INTO opencode.sessions (id, directory, updated_at)
@@ -1537,9 +1549,8 @@ mod tests {
             .await
             .expect("update runtime base url");
 
-        let backend: Arc<dyn AgenticBackend> = Arc::new(FakeBackend::success(Arc::new(
-            Mutex::new(Vec::new()),
-        )));
+        let backend: Arc<dyn AgenticBackend> =
+            Arc::new(FakeBackend::success(Arc::new(Mutex::new(Vec::new()))));
         let live_accounts = Arc::new(crate::hyperliquid::live_state::LiveAccountStore::new());
         let (_tx, rx) = watch::channel(false);
         let mut scheduler = AgenticScheduler::new(
@@ -1556,21 +1567,26 @@ mod tests {
             .await
             .expect("load maintenance task")
             .expect("maintenance task present");
-        assert_eq!(task.status, crate::agentic::model::MAINTENANCE_STATUS_QUEUED);
+        assert_eq!(
+            task.status,
+            crate::agentic::model::MAINTENANCE_STATUS_QUEUED
+        );
     }
 
     #[tokio::test]
     async fn tick_runs_workspace_maintenance_once_agent_is_idle() {
         let pool = test_db::pool().await;
-        let key = format!("maint-idle-{}", Utc::now().timestamp_nanos_opt().unwrap_or(0));
+        let key = format!(
+            "maint-idle-{}",
+            Utc::now().timestamp_nanos_opt().unwrap_or(0)
+        );
         seed_test_agent(&pool, &key).await;
         store::insert_workspace_regenerate_task(&pool, &key, true)
             .await
             .expect("insert maintenance task");
 
-        let backend: Arc<dyn AgenticBackend> = Arc::new(FakeBackend::success(Arc::new(
-            Mutex::new(Vec::new()),
-        )));
+        let backend: Arc<dyn AgenticBackend> =
+            Arc::new(FakeBackend::success(Arc::new(Mutex::new(Vec::new()))));
         let live_accounts = Arc::new(crate::hyperliquid::live_state::LiveAccountStore::new());
         let (_tx, rx) = watch::channel(false);
         let mut scheduler = AgenticScheduler::new(
@@ -1587,7 +1603,10 @@ mod tests {
             .await
             .expect("load maintenance task")
             .expect("maintenance task present");
-        assert_eq!(task.status, crate::agentic::model::MAINTENANCE_STATUS_SUCCEEDED);
+        assert_eq!(
+            task.status,
+            crate::agentic::model::MAINTENANCE_STATUS_SUCCEEDED
+        );
 
         let agent = get_agent(&pool, &key)
             .await
@@ -1603,13 +1622,19 @@ mod tests {
     #[tokio::test]
     async fn tick_ignores_idle_workspace_sessions_when_running_maintenance() {
         let pool = test_db::pool().await;
-        let key = format!("maint-idle-session-{}", Utc::now().timestamp_nanos_opt().unwrap_or(0));
+        let key = format!(
+            "maint-idle-session-{}",
+            Utc::now().timestamp_nanos_opt().unwrap_or(0)
+        );
         seed_test_agent(&pool, &key).await;
         store::insert_workspace_regenerate_task(&pool, &key, false)
             .await
             .expect("insert maintenance task");
 
-        let session_id = format!("ses-idle-maint-{}", Utc::now().timestamp_nanos_opt().unwrap_or(0));
+        let session_id = format!(
+            "ses-idle-maint-{}",
+            Utc::now().timestamp_nanos_opt().unwrap_or(0)
+        );
         let directory = format!("/workspaces/agents/{key}");
         sqlx::query(
             "INSERT INTO opencode.sessions (id, directory, status, updated_at)
@@ -1629,9 +1654,8 @@ mod tests {
             .await
             .expect("update runtime base url");
 
-        let backend: Arc<dyn AgenticBackend> = Arc::new(FakeBackend::success(Arc::new(
-            Mutex::new(Vec::new()),
-        )));
+        let backend: Arc<dyn AgenticBackend> =
+            Arc::new(FakeBackend::success(Arc::new(Mutex::new(Vec::new()))));
         let live_accounts = Arc::new(crate::hyperliquid::live_state::LiveAccountStore::new());
         let (_tx, rx) = watch::channel(false);
         let mut scheduler = AgenticScheduler::new(
@@ -1648,7 +1672,10 @@ mod tests {
             .await
             .expect("load maintenance task")
             .expect("maintenance task present");
-        assert_eq!(task.status, crate::agentic::model::MAINTENANCE_STATUS_SUCCEEDED);
+        assert_eq!(
+            task.status,
+            crate::agentic::model::MAINTENANCE_STATUS_SUCCEEDED
+        );
     }
 
     #[tokio::test]

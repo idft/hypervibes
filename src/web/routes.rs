@@ -29,9 +29,7 @@ use crate::{
             build_hook_dispatch_request, dispatch_analysis_batch_completed_hook,
             dispatch_request_from_schedule, dispatch_run,
         },
-        store::{
-            InsertWorkspaceMaintenanceTaskOutcome, QueuedHookRun, QueuedScheduleRun,
-        },
+        store::{InsertWorkspaceMaintenanceTaskOutcome, QueuedHookRun, QueuedScheduleRun},
         timeframe::{parse_timeframe_seconds, parse_timeout_seconds},
     },
     agents::{
@@ -84,10 +82,11 @@ use crate::{
             BalanceSparklinesPartialTemplate, CreateAgentHookFormValues,
             CreateAgentScheduleFormValues, LatestAnalysisSummaryPartialTemplate,
             LatestTradeExecutionSummaryPartialTemplate, MemoryView, ModelPickerView,
-            OpenCodeWorkspaceSettingsView, OpenOrdersPartialTemplate, OpenOrdersView,
             OpenCodeWorkspaceMaintenanceStatusTemplate, OpenCodeWorkspaceMaintenanceView,
-            OpenPositionsPartialTemplate, OpenPositionsView, ServerErrorPageTemplate,
-            SettingsPageTemplate, SparklineView, SyncStateView, TransactionView,
+            OpenCodeWorkspaceSectionTemplate, OpenCodeWorkspaceSettingsView,
+            OpenOrdersPartialTemplate, OpenOrdersView, OpenPositionsPartialTemplate,
+            OpenPositionsView, ServerErrorPageTemplate, SettingsPageTemplate, SparklineView,
+            SyncStateView, TransactionView,
         },
         ui_events::UiEvent,
     },
@@ -211,8 +210,7 @@ async fn root() -> Redirect {
     Redirect::to("/agents")
 }
 
-const WORKSPACE_MAINTENANCE_ACTIVE_WARNING: &str =
-    "Workspace maintenance is queued or running for this agent. Run now is unavailable until it completes.";
+const WORKSPACE_MAINTENANCE_ACTIVE_WARNING: &str = "Workspace maintenance is queued or running for this agent. Run now is unavailable until it completes.";
 const WORKSPACE_MAINTENANCE_DUPLICATE_WARNING: &str =
     "A workspace maintenance task is already queued or running for this agent.";
 
@@ -374,14 +372,30 @@ async fn agents_show(
     State(state): State<Arc<AppState>>,
     Path(agent_key): Path<String>,
 ) -> Result<Response, AppError> {
-    render_agent_show_page(&state, &agent_key, AgentShowTab::Positions, None, None, None).await
+    render_agent_show_page(
+        &state,
+        &agent_key,
+        AgentShowTab::Positions,
+        None,
+        None,
+        None,
+    )
+    .await
 }
 
 async fn agents_show_transactions(
     State(state): State<Arc<AppState>>,
     Path(agent_key): Path<String>,
 ) -> Result<Response, AppError> {
-    render_agent_show_page(&state, &agent_key, AgentShowTab::Transactions, None, None, None).await
+    render_agent_show_page(
+        &state,
+        &agent_key,
+        AgentShowTab::Transactions,
+        None,
+        None,
+        None,
+    )
+    .await
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -644,8 +658,8 @@ async fn agents_workspace_maintenance_status(
         return Ok((StatusCode::NOT_FOUND, "agent not found").into_response());
     }
 
-    let maintenance = load_workspace_maintenance_view(&state.db_pool, &agent.agent_key).await?;
-    let html = OpenCodeWorkspaceMaintenanceStatusTemplate::render_view(maintenance)?;
+    let opencode_workspace = build_opencode_workspace_settings_view(&state, &agent).await;
+    let html = OpenCodeWorkspaceSectionTemplate::render_view(agent, opencode_workspace, None)?;
     Ok(Html(html).into_response())
 }
 
@@ -654,7 +668,15 @@ async fn agents_show_jobs(
     Path(agent_key): Path<String>,
     Query(query): Query<AgentJobsQuery>,
 ) -> Result<Response, AppError> {
-    render_agent_show_page(&state, &agent_key, AgentShowTab::Jobs, None, None, Some(query)).await
+    render_agent_show_page(
+        &state,
+        &agent_key,
+        AgentShowTab::Jobs,
+        None,
+        None,
+        Some(query),
+    )
+    .await
 }
 
 async fn agents_show_job_detail(
@@ -1977,7 +1999,8 @@ async fn render_agent_show_page(
                 template.settings_workspace_warning = settings_query
                     .as_ref()
                     .and_then(|query| query.workspace_warning.clone());
-                template.opencode_workspace = build_opencode_workspace_settings_view(state, &agent).await;
+                template.opencode_workspace =
+                    build_opencode_workspace_settings_view(state, &agent).await;
             }
             template.sync_state = match list_account_sync_state(
                 &state.db_pool,
@@ -3982,7 +4005,9 @@ mod tests {
     async fn post_regenerate_workspace_queues_regular_maintenance_task() {
         let state = test_state().await;
         let app = router(Arc::clone(&state));
-        let (agent_key, _) = insert_test_opencode_agent(&state).await.expect("insert agent");
+        let (agent_key, _) = insert_test_opencode_agent(&state)
+            .await
+            .expect("insert agent");
 
         let response = app
             .oneshot(
@@ -4005,11 +4030,15 @@ mod tests {
             Some(format!("/agents/{agent_key}/settings").as_str())
         );
 
-        let task = crate::agentic::store::get_latest_workspace_regenerate_task(&state.db_pool, &agent_key)
-            .await
-            .expect("load maintenance task")
-            .expect("maintenance task present");
-        assert_eq!(task.status, crate::agentic::model::MAINTENANCE_STATUS_QUEUED);
+        let task =
+            crate::agentic::store::get_latest_workspace_regenerate_task(&state.db_pool, &agent_key)
+                .await
+                .expect("load maintenance task")
+                .expect("maintenance task present");
+        assert_eq!(
+            task.status,
+            crate::agentic::model::MAINTENANCE_STATUS_QUEUED
+        );
         assert!(!task.hard_reset);
     }
 
@@ -4017,7 +4046,9 @@ mod tests {
     async fn post_regenerate_workspace_with_hard_reset_queues_hard_reset_task() {
         let state = test_state().await;
         let app = router(Arc::clone(&state));
-        let (agent_key, _) = insert_test_opencode_agent(&state).await.expect("insert agent");
+        let (agent_key, _) = insert_test_opencode_agent(&state)
+            .await
+            .expect("insert agent");
 
         let response = app
             .oneshot(
@@ -4032,10 +4063,11 @@ mod tests {
             .unwrap();
 
         assert_eq!(response.status(), StatusCode::SEE_OTHER);
-        let task = crate::agentic::store::get_latest_workspace_regenerate_task(&state.db_pool, &agent_key)
-            .await
-            .expect("load maintenance task")
-            .expect("maintenance task present");
+        let task =
+            crate::agentic::store::get_latest_workspace_regenerate_task(&state.db_pool, &agent_key)
+                .await
+                .expect("load maintenance task")
+                .expect("maintenance task present");
         assert!(task.hard_reset);
     }
 
@@ -4043,7 +4075,9 @@ mod tests {
     async fn post_regenerate_workspace_redirects_with_warning_when_task_already_exists() {
         let state = test_state().await;
         let app = router(Arc::clone(&state));
-        let (agent_key, _) = insert_test_opencode_agent(&state).await.expect("insert agent");
+        let (agent_key, _) = insert_test_opencode_agent(&state)
+            .await
+            .expect("insert agent");
         crate::agentic::store::insert_workspace_regenerate_task(&state.db_pool, &agent_key, false)
             .await
             .expect("seed maintenance task");
@@ -4073,7 +4107,9 @@ mod tests {
     async fn manual_job_run_redirects_with_warning_during_workspace_maintenance() {
         let state = test_state().await;
         let app = router(Arc::clone(&state));
-        let (agent_key, _) = insert_test_opencode_agent(&state).await.expect("insert agent");
+        let (agent_key, _) = insert_test_opencode_agent(&state)
+            .await
+            .expect("insert agent");
         let schedules = crate::agentic::store::list_agent_schedules(&state.db_pool, &agent_key)
             .await
             .expect("list schedules");
@@ -4110,7 +4146,9 @@ mod tests {
     async fn manual_hook_run_redirects_with_warning_during_workspace_maintenance() {
         let state = test_state().await;
         let app = router(Arc::clone(&state));
-        let (agent_key, _) = insert_test_opencode_agent(&state).await.expect("insert agent");
+        let (agent_key, _) = insert_test_opencode_agent(&state)
+            .await
+            .expect("insert agent");
         let hook_id = crate::agentic::store::list_agent_hooks(&state.db_pool, &agent_key)
             .await
             .expect("list hooks")
@@ -4145,11 +4183,23 @@ mod tests {
     async fn settings_page_and_partial_render_workspace_maintenance_status() {
         let state = test_state().await;
         let app = router(Arc::clone(&state));
-        let (agent_key, _) = insert_test_opencode_agent(&state).await.expect("insert agent");
-        seed_workspace_runtime_config(&state, &agent_key).await;
-        crate::agentic::store::insert_workspace_regenerate_task(&state.db_pool, &agent_key, true)
+        let (agent_key, _) = insert_test_opencode_agent(&state)
             .await
-            .expect("seed maintenance task");
+            .expect("insert agent");
+        seed_workspace_runtime_config(&state, &agent_key).await;
+        let task_id = match crate::agentic::store::insert_workspace_regenerate_task(
+            &state.db_pool,
+            &agent_key,
+            true,
+        )
+        .await
+        .expect("seed maintenance task")
+        {
+            crate::agentic::store::InsertWorkspaceMaintenanceTaskOutcome::Inserted { task_id } => {
+                task_id
+            }
+            other => panic!("expected inserted maintenance task, got {other:?}"),
+        };
 
         let settings_response = app
             .clone()
@@ -4168,6 +4218,7 @@ mod tests {
         assert!(settings_text.contains("Hard reset"));
 
         let partial_response = app
+            .clone()
             .oneshot(
                 Request::builder()
                     .uri(format!(
@@ -4180,8 +4231,31 @@ mod tests {
             .unwrap();
         assert_eq!(partial_response.status(), StatusCode::OK);
         let partial_text = response_text(partial_response).await;
-        assert!(partial_text.contains("workspace-maintenance-status"));
+        assert!(partial_text.contains("id=\"agent-workspace-section\""));
         assert!(partial_text.contains("hx-trigger=\"every 2s\""));
+
+        assert!(
+            crate::agentic::store::mark_maintenance_task_succeeded(&state.db_pool, task_id,)
+                .await
+                .expect("mark maintenance succeeded")
+        );
+
+        let completed_response = app
+            .oneshot(
+                Request::builder()
+                    .uri(format!(
+                        "/agents/{agent_key}/settings/workspace-maintenance-status"
+                    ))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(completed_response.status(), StatusCode::OK);
+        let completed_text = response_text(completed_response).await;
+        assert!(completed_text.contains("id=\"agent-workspace-section\""));
+        assert!(!completed_text.contains("Workspace maintenance"));
+        assert!(!completed_text.contains("hx-trigger=\"every 2s\""));
     }
 
     #[tokio::test]

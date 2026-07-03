@@ -725,11 +725,16 @@ pub struct OpenCodeWorkspaceMaintenanceView {
 }
 
 impl OpenCodeWorkspaceMaintenanceView {
+    pub fn is_visible(&self) -> bool {
+        self.status
+            .as_ref()
+            .map(|status| status.is_visible())
+            .unwrap_or(false)
+    }
+
     pub fn idle(agent_key: &str) -> Self {
         Self {
-            poll_url: format!(
-                "/agents/{agent_key}/settings/workspace-maintenance-status"
-            ),
+            poll_url: format!("/agents/{agent_key}/settings/workspace-maintenance-status"),
             should_poll: false,
             status: None,
         }
@@ -738,9 +743,7 @@ impl OpenCodeWorkspaceMaintenanceView {
     pub fn from_task(agent_key: &str, task: AgentMaintenanceTaskRow) -> Self {
         let status = OpenCodeWorkspaceMaintenanceStatusView::from_task(task);
         Self {
-            poll_url: format!(
-                "/agents/{agent_key}/settings/workspace-maintenance-status"
-            ),
+            poll_url: format!("/agents/{agent_key}/settings/workspace-maintenance-status"),
             should_poll: status.should_poll,
             status: Some(status),
         }
@@ -754,19 +757,25 @@ pub struct OpenCodeWorkspaceMaintenanceStatusView {
     pub status_label: String,
     pub status_class: String,
     pub detail_text: String,
+    pub is_visible: bool,
     pub should_poll: bool,
     pub show_spinner: bool,
     pub error_text: Option<String>,
 }
 
 impl OpenCodeWorkspaceMaintenanceStatusView {
+    pub fn is_visible(&self) -> bool {
+        self.is_visible
+    }
+
     pub fn from_task(task: AgentMaintenanceTaskRow) -> Self {
-        let (status_label, status_class, detail_text, should_poll, show_spinner) =
+        let (status_label, status_class, detail_text, is_visible, should_poll, show_spinner) =
             match task.status.as_str() {
                 MAINTENANCE_STATUS_QUEUED => (
                     "Queued".to_string(),
                     "border-amber-900/60 bg-amber-950/30 text-amber-300".to_string(),
                     "Waiting for active jobs and sessions to finish".to_string(),
+                    true,
                     true,
                     true,
                 ),
@@ -776,11 +785,13 @@ impl OpenCodeWorkspaceMaintenanceStatusView {
                     "Hard-resetting workspace".to_string(),
                     true,
                     true,
+                    true,
                 ),
                 MAINTENANCE_STATUS_RUNNING => (
                     "Running".to_string(),
                     "border-sky-900/60 bg-sky-950/30 text-sky-300".to_string(),
                     "Re-generating workspace".to_string(),
+                    true,
                     true,
                     true,
                 ),
@@ -790,11 +801,13 @@ impl OpenCodeWorkspaceMaintenanceStatusView {
                     "Workspace maintenance completed".to_string(),
                     false,
                     false,
+                    false,
                 ),
                 MAINTENANCE_STATUS_FAILED => (
                     "Failed".to_string(),
                     "border-red-900/60 bg-red-950/30 text-red-300".to_string(),
                     "Workspace maintenance failed".to_string(),
+                    true,
                     false,
                     false,
                 ),
@@ -802,6 +815,7 @@ impl OpenCodeWorkspaceMaintenanceStatusView {
                     "Aborted".to_string(),
                     "border-amber-900/60 bg-amber-950/30 text-amber-300".to_string(),
                     "Workspace maintenance was aborted".to_string(),
+                    true,
                     false,
                     false,
                 ),
@@ -809,6 +823,7 @@ impl OpenCodeWorkspaceMaintenanceStatusView {
                     other.to_string(),
                     "border-zinc-700 bg-zinc-900/60 text-zinc-300".to_string(),
                     "Workspace maintenance status is unknown".to_string(),
+                    true,
                     false,
                     false,
                 ),
@@ -820,6 +835,7 @@ impl OpenCodeWorkspaceMaintenanceStatusView {
             status_label,
             status_class,
             detail_text,
+            is_visible,
             should_poll,
             show_spinner,
             error_text: task.error_summary,
@@ -1762,6 +1778,29 @@ impl OpenCodeWorkspaceMaintenanceStatusTemplate {
         maintenance: OpenCodeWorkspaceMaintenanceView,
     ) -> Result<String, askama::Error> {
         Self { maintenance }.render()
+    }
+}
+
+#[derive(Template)]
+#[template(path = "agent_workspace_section.html")]
+pub struct OpenCodeWorkspaceSectionTemplate {
+    pub agent: AgentDetailRow,
+    pub opencode_workspace: Option<OpenCodeWorkspaceSettingsView>,
+    pub settings_workspace_warning: Option<String>,
+}
+
+impl OpenCodeWorkspaceSectionTemplate {
+    pub fn render_view(
+        agent: AgentDetailRow,
+        opencode_workspace: Option<OpenCodeWorkspaceSettingsView>,
+        settings_workspace_warning: Option<String>,
+    ) -> Result<String, askama::Error> {
+        Self {
+            agent,
+            opencode_workspace,
+            settings_workspace_warning,
+        }
+        .render()
     }
 }
 
@@ -3076,6 +3115,7 @@ mod tests {
         });
 
         let rendered = template.render().unwrap();
+        assert!(rendered.contains("id=\"agent-workspace-section\""));
         assert!(rendered.contains("Template drift"));
         assert!(rendered.contains("AGENTS.md"));
         assert!(rendered.contains("+3"));
@@ -3083,6 +3123,30 @@ mod tests {
         assert!(
             rendered.contains("Only files generated from the workspace template are compared.")
         );
+    }
+
+    #[test]
+    fn workspace_maintenance_partial_hides_succeeded_state() {
+        let rendered = OpenCodeWorkspaceMaintenanceStatusTemplate::render_view(
+            OpenCodeWorkspaceMaintenanceView::from_task(
+                "test-agent",
+                AgentMaintenanceTaskRow {
+                    id: 42,
+                    agent_key: "test-agent".to_string(),
+                    task_kind: "workspace_regenerate".to_string(),
+                    hard_reset: false,
+                    status: MAINTENANCE_STATUS_SUCCEEDED.to_string(),
+                    error_summary: None,
+                    created_at: Utc::now(),
+                    updated_at: Utc::now(),
+                    started_at: None,
+                    finished_at: Some(Utc::now()),
+                },
+            ),
+        )
+        .unwrap();
+
+        assert!(rendered.trim().is_empty());
     }
 
     #[test]

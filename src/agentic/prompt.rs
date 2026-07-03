@@ -35,7 +35,9 @@ fn build_analysis_prompt(request: &DispatchRequest) -> String {
     body.push_str(&selected_instruments_section(&request.selected_instruments));
     body.push_str("\n\n## Instructions\n");
     body.push_str("- Fetch OHLCV and relevant public market data from Hyperliquid for the selected instruments using the `hyperliquid-data` skill.\n");
-    body.push_str("- Use the shared `python-analysis` runtime for indicator and statistical work.\n");
+    body.push_str(
+        "- Use the shared `python-analysis` runtime for indicator and statistical work.\n",
+    );
     body.push_str(
         "- Write a memory record with `vibetrading_write_memory` summarizing your analysis so the trading job can consume it.\n",
     );

@@ -7,14 +7,12 @@ use crate::{
         job_key::{build_generated_hook_job_key, build_generated_job_key},
         model::{
             AgentMaintenanceTaskRow, AgenticJobHookRow, AgenticJobScheduleRow, AgenticRunRow,
-            DueOpenCodeHookRow, DueOpenCodeScheduleRow,
-            HOOK_EVENT_ANALYSIS_BATCH_COMPLETED, JOB_KIND_ANALYSIS,
-            JOB_KIND_MARKET_ANALYSIS, JOB_KIND_TRADING,
-            MAINTENANCE_STATUS_FAILED, MAINTENANCE_STATUS_QUEUED,
-            MAINTENANCE_STATUS_RUNNING, MAINTENANCE_STATUS_SUCCEEDED,
-            MAINTENANCE_TASK_KIND_WORKSPACE_REGENERATE, RUN_STATUS_ABORTED,
-            RUN_STATUS_FAILED, RUN_STATUS_QUEUED, RUN_STATUS_RUNNING, RUN_STATUS_SKIPPED,
-            RUN_STATUS_SUCCEEDED,
+            DueOpenCodeHookRow, DueOpenCodeScheduleRow, HOOK_EVENT_ANALYSIS_BATCH_COMPLETED,
+            JOB_KIND_ANALYSIS, JOB_KIND_MARKET_ANALYSIS, JOB_KIND_TRADING,
+            MAINTENANCE_STATUS_FAILED, MAINTENANCE_STATUS_QUEUED, MAINTENANCE_STATUS_RUNNING,
+            MAINTENANCE_STATUS_SUCCEEDED, MAINTENANCE_TASK_KIND_WORKSPACE_REGENERATE,
+            RUN_STATUS_ABORTED, RUN_STATUS_FAILED, RUN_STATUS_QUEUED, RUN_STATUS_RUNNING,
+            RUN_STATUS_SKIPPED, RUN_STATUS_SUCCEEDED,
         },
         timeframe::{
             DEFAULT_TRIGGER_DELAY_SECONDS, boundary_for_due_at, latest_due_at_or_before,
@@ -2011,7 +2009,8 @@ async fn insert_queued_hook_run_with_mode(
         return Ok(QueuedHookRun::Missing);
     };
 
-    if block_on_maintenance && agent_has_blocking_workspace_maintenance_tx(&mut tx, &hook.agent_key).await?
+    if block_on_maintenance
+        && agent_has_blocking_workspace_maintenance_tx(&mut tx, &hook.agent_key).await?
     {
         tx.rollback()
             .await
@@ -3304,7 +3303,10 @@ mod tests {
     #[tokio::test]
     async fn insert_workspace_regenerate_task_rejects_duplicate_active_task() {
         let pool = test_db::pool().await;
-        let key = format!("maintenance-dup-{}", Utc::now().timestamp_nanos_opt().unwrap_or(0));
+        let key = format!(
+            "maintenance-dup-{}",
+            Utc::now().timestamp_nanos_opt().unwrap_or(0)
+        );
         let _schedule_id = seed_agent_and_schedule(&pool, &key, 0).await;
 
         let first = insert_workspace_regenerate_task(&pool, &key, false)
@@ -3335,7 +3337,10 @@ mod tests {
     #[tokio::test]
     async fn agent_has_blocking_workspace_maintenance_only_for_queued_or_running_tasks() {
         let pool = test_db::pool().await;
-        let key = format!("maintenance-state-{}", Utc::now().timestamp_nanos_opt().unwrap_or(0));
+        let key = format!(
+            "maintenance-state-{}",
+            Utc::now().timestamp_nanos_opt().unwrap_or(0)
+        );
         let _schedule_id = seed_agent_and_schedule(&pool, &key, 0).await;
 
         assert!(
@@ -3379,7 +3384,10 @@ mod tests {
     #[tokio::test]
     async fn claim_due_schedule_returns_blocked_by_maintenance_without_inserting_run() {
         let pool = test_db::pool().await;
-        let key = format!("claim-maint-{}", Utc::now().timestamp_nanos_opt().unwrap_or(0));
+        let key = format!(
+            "claim-maint-{}",
+            Utc::now().timestamp_nanos_opt().unwrap_or(0)
+        );
         let schedule_id = seed_agent_and_schedule(&pool, &key, 0).await;
 
         let now = Utc::now();
@@ -3411,7 +3419,10 @@ mod tests {
     #[tokio::test]
     async fn insert_queued_run_returns_blocked_by_maintenance() {
         let pool = test_db::pool().await;
-        let key = format!("manual-maint-{}", Utc::now().timestamp_nanos_opt().unwrap_or(0));
+        let key = format!(
+            "manual-maint-{}",
+            Utc::now().timestamp_nanos_opt().unwrap_or(0)
+        );
         let schedule_id = seed_agent_and_schedule(&pool, &key, 0).await;
         insert_workspace_regenerate_task(&pool, &key, false)
             .await
@@ -3427,7 +3438,10 @@ mod tests {
     #[tokio::test]
     async fn insert_queued_hook_run_returns_blocked_by_maintenance() {
         let pool = test_db::pool().await;
-        let key = format!("hook-maint-{}", Utc::now().timestamp_nanos_opt().unwrap_or(0));
+        let key = format!(
+            "hook-maint-{}",
+            Utc::now().timestamp_nanos_opt().unwrap_or(0)
+        );
         let _schedule_id = seed_agent_and_schedule(&pool, &key, 0).await;
         let hook_id = list_agent_hooks(&pool, &key)
             .await
@@ -3449,7 +3463,10 @@ mod tests {
     #[tokio::test]
     async fn automatic_hook_insert_still_dispatches_during_maintenance() {
         let pool = test_db::pool().await;
-        let key = format!("hook-auto-maint-{}", Utc::now().timestamp_nanos_opt().unwrap_or(0));
+        let key = format!(
+            "hook-auto-maint-{}",
+            Utc::now().timestamp_nanos_opt().unwrap_or(0)
+        );
         let _schedule_id = seed_agent_and_schedule(&pool, &key, 0).await;
         let hook_id = list_agent_hooks(&pool, &key)
             .await

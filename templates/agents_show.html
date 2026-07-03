@@ -312,75 +312,7 @@
         </section>
 
         {% if agent.backend_kind == "opencode" %}
-        <section class="rounded-2xl border border-zinc-800 bg-[#0d0d10] p-6">
-            <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                <h2 class="text-lg font-medium text-white">OpenCode workspace</h2>
-                <div class="flex flex-wrap items-center gap-3">
-                    {% if let Some(workspace) = opencode_workspace %}
-                    <span class="rounded-full border px-3 py-1 text-xs font-medium {{ workspace.template_drift.status_class }}">{{ workspace.template_drift.status_text }}</span>
-                    <button type="button" data-regenerate-workspace-trigger class="rounded-full border border-violet-900/60 bg-violet-950/30 px-4 py-2 text-sm font-medium text-violet-200 hover:border-violet-800 hover:bg-violet-950/50">
-                        Re-generate workspace
-                    </button>
-                    {% else %}
-                    <span class="rounded-full border border-amber-900/60 bg-amber-950/30 px-3 py-1 text-xs font-medium text-amber-300">Missing metadata</span>
-                    {% endif %}
-                </div>
-            </div>
-            {% if let Some(workspace_warning) = settings_workspace_warning %}
-            <div class="mt-4 rounded-xl border border-amber-900/60 bg-amber-950/30 px-4 py-3 text-sm text-amber-200">
-                {{ workspace_warning }}
-            </div>
-            {% endif %}
-            {% if let Some(workspace) = opencode_workspace %}
-            <dl class="mt-4 grid gap-4 sm:grid-cols-2">
-                <div>
-                    <dt class="text-xs uppercase tracking-[0.16em] text-zinc-500">Host workspace path</dt>
-                    <dd class="mt-1 break-all font-mono text-xs text-zinc-300">{{ workspace.workspace_host_path }}</dd>
-                </div>
-                <div>
-                    <dt class="text-xs uppercase tracking-[0.16em] text-zinc-500">Container workspace path</dt>
-                    <dd class="mt-1 break-all font-mono text-xs text-zinc-300">{{ workspace.workspace_container_path }}</dd>
-                </div>
-                <div>
-                    <dt class="text-xs uppercase tracking-[0.16em] text-zinc-500">Profile source</dt>
-                    <dd class="mt-1 break-all font-mono text-xs text-zinc-300">{{ workspace.profile_source }}</dd>
-                </div>
-                <div>
-                    <dt class="text-xs uppercase tracking-[0.16em] text-zinc-500">Workspace .env</dt>
-                    <dd class="mt-1 text-sm text-zinc-300">{% if workspace.env_exists %}Present{% else %}Missing{% endif %}</dd>
-                </div>
-            </dl>
-            {{ workspace.maintenance_html|safe }}
-            {% if workspace.template_drift.is_missing %}
-            <div class="mt-4 rounded-xl border border-amber-900/60 bg-amber-950/30 px-4 py-3 text-sm text-amber-200">
-                The workspace directory is missing from disk.
-            </div>
-            {% else if workspace.template_drift.has_changes() %}
-            <div class="mt-4 overflow-hidden rounded-xl border border-zinc-800 bg-zinc-950/70">
-                <div class="border-b border-zinc-800 px-4 py-3 text-xs uppercase tracking-[0.16em] text-zinc-500">Template drift</div>
-                <ul class="divide-y divide-zinc-800 font-mono text-xs text-zinc-300">
-                    {% for file in workspace.template_drift.changed_files %}
-                    <li class="flex items-center justify-between gap-4 px-4 py-3">
-                        <div class="flex min-w-0 items-center gap-3">
-                            <span class="w-4 shrink-0 text-zinc-500">{{ file.status_code }}</span>
-                            <span class="truncate">{{ file.path }}</span>
-                        </div>
-                        <div class="shrink-0 whitespace-nowrap">
-                            <span class="text-emerald-300">+{{ file.added_lines }}</span>
-                            <span class="ml-3 text-red-400">-{{ file.removed_lines }}</span>
-                        </div>
-                    </li>
-                    {% endfor %}
-                </ul>
-            </div>
-            <p class="mt-3 text-xs text-zinc-500">Only files generated from the workspace template are compared.</p>
-            {% endif %}
-            {% else %}
-            <div class="mt-4 rounded-xl border border-amber-900/60 bg-amber-950/30 px-4 py-3 text-sm text-amber-200">
-                Workspace metadata is missing. This OpenCode agent has not generated a workspace yet.
-            </div>
-            {% endif %}
-        </section>
+        {% include "agent_workspace_section.html" %}
         {% endif %}
 
         <section class="rounded-2xl border border-zinc-800 bg-[#0d0d10] p-6">
