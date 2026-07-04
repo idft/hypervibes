@@ -589,7 +589,7 @@ mod tests {
         order_kind: &str,
         symbol: &str,
         reduce_only: bool,
-        oid: Option<&str>,
+        _oid: Option<&str>,
     ) -> orders_store::NewOrder {
         orders_store::NewOrder {
             id: Uuid::new_v4(),
@@ -1008,7 +1008,7 @@ mod tests {
 
         // Reader returns a flat BTC position (szi=0).
         let reader = {
-            let mut r = FakeReader::new();
+            let r = FakeReader::new();
             r.positions.lock().await.push(PositionRow {
                 symbol: "BTC".to_string(),
                 szi: Some(dec!(0)),

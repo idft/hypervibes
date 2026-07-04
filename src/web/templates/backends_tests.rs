@@ -8,7 +8,7 @@ use crate::web::templates::test_support::*;
 #[test]
 fn backends_page_renders_runtime_row() {
     let template = BackendsPageTemplate {
-        runtimes: vec![sample_runtime_row()],
+        runtimes: vec![AgentRuntimeView::from_row(sample_runtime_row())],
         current_path: "/backends".to_string(),
     };
 

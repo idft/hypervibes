@@ -19,8 +19,11 @@ use self::{account::*, memories::*, orders::*};
 
 use std::sync::Arc;
 
-use axum::{Router, routing::{get, post}};
 use crate::web::AppState;
+use axum::{
+    Router,
+    routing::{get, post},
+};
 
 /// Build the `/api/v1` sub-router. Merged into the main router in
 /// `src/web/routes.rs`.

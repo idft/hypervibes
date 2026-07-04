@@ -1,6 +1,6 @@
+use askama::Template;
 use axum::http::StatusCode;
 use axum::response::{Html, IntoResponse, Response};
-use askama::Template;
 use tracing::error;
 
 use crate::web::templates::ServerErrorPageTemplate;

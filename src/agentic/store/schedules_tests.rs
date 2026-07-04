@@ -4,12 +4,10 @@ use sqlx::{query, query_as};
 use crate::{
     agentic::{
         model::{
-            JOB_KIND_ANALYSIS, JOB_KIND_MARKET_ANALYSIS, JOB_KIND_TRADING, RUN_STATUS_FAILED,
-            RUN_STATUS_QUEUED, RUN_STATUS_RUNNING, RUN_STATUS_SKIPPED, RUN_STATUS_SUCCEEDED,
+            JOB_KIND_ANALYSIS, JOB_KIND_MARKET_ANALYSIS, RUN_STATUS_FAILED, RUN_STATUS_QUEUED,
+            RUN_STATUS_RUNNING, RUN_STATUS_SKIPPED, RUN_STATUS_SUCCEEDED,
         },
-        timeframe::{
-            DEFAULT_TRIGGER_DELAY_SECONDS, latest_due_at_or_before, next_due_after,
-        },
+        timeframe::{DEFAULT_TRIGGER_DELAY_SECONDS, latest_due_at_or_before, next_due_after},
     },
     agents::store::insert_agent,
     test_db,
@@ -17,7 +15,7 @@ use crate::{
 
 use super::recovery::{ORPHANED_QUEUED_RUN_SUMMARY, ORPHANED_RUNNING_RUN_SUMMARY};
 use super::schedules::{
-    DEFAULT_ANALYSIS_TIMEOUT_SECONDS, DEFAULT_ANALYSIS_TIMEFRAME, DEFAULT_TRADING_TIMEFRAME,
+    DEFAULT_ANALYSIS_TIMEFRAME, DEFAULT_ANALYSIS_TIMEOUT_SECONDS, DEFAULT_TRADING_TIMEFRAME,
     DEFAULT_TRADING_TIMEOUT_SECONDS, default_analysis_job_key, default_trading_job_key,
 };
 use super::test_support::{
@@ -25,10 +23,10 @@ use super::test_support::{
     seed_agent_and_schedule,
 };
 use super::{
-    ClaimedScheduleRun, count_agent_runs, delete_agent_schedule, get_agent_schedule, get_run,
-    insert_agent_schedule, insert_default_opencode_schedules,
-    insert_queued_run, insert_test_run, insert_workspace_regenerate_task, list_agent_hooks,
-    list_agent_schedules, list_due_opencode_schedules, claim_due_schedule, set_schedule_timeout,
+    ClaimedScheduleRun, claim_due_schedule, count_agent_runs, delete_agent_schedule,
+    get_agent_schedule, get_run, insert_agent_schedule, insert_default_opencode_schedules,
+    insert_test_run, insert_workspace_regenerate_task, list_agent_hooks, list_agent_schedules,
+    list_due_opencode_schedules, set_schedule_timeout,
 };
 
 #[tokio::test]
@@ -120,12 +118,11 @@ async fn default_schedules_are_idempotent() {
         .await
         .expect("second insert");
 
-    let count: (i64,) =
-        query_as("SELECT COUNT(*) FROM agentic_job_schedules WHERE agent_key = $1")
-            .bind(&key)
-            .fetch_one(&pool)
-            .await
-            .expect("count");
+    let count: (i64,) = query_as("SELECT COUNT(*) FROM agentic_job_schedules WHERE agent_key = $1")
+        .bind(&key)
+        .fetch_one(&pool)
+        .await
+        .expect("count");
     assert_eq!(count.0, 4);
 
     let hook_count: (i64,) =
@@ -348,14 +345,12 @@ async fn list_due_opencode_schedules_excludes_disabled_and_other_backends() {
         "expected no rows for disabled/future agent, got {due:?}"
     );
 
-    query(
-        "UPDATE agentic_job_schedules SET enabled = true, next_run_at = $1 WHERE job_key = $2",
-    )
-    .bind(now - chrono::Duration::seconds(1))
-    .bind(default_analysis_job_key())
-    .execute(&pool)
-    .await
-    .expect("re-enable analysis due");
+    query("UPDATE agentic_job_schedules SET enabled = true, next_run_at = $1 WHERE job_key = $2")
+        .bind(now - chrono::Duration::seconds(1))
+        .bind(default_analysis_job_key())
+        .execute(&pool)
+        .await
+        .expect("re-enable analysis due");
     let due = list_due_opencode_schedules(&pool, now, 20)
         .await
         .expect("list due again");
@@ -382,14 +377,12 @@ async fn list_due_opencode_schedules_filters_by_agent_enabled_flag() {
         .expect("defaults");
 
     let past = Utc::now() - chrono::Duration::seconds(60);
-    query(
-        "UPDATE agentic_job_schedules SET enabled = true, next_run_at = $1 WHERE job_key = $2",
-    )
-    .bind(past)
-    .bind(default_analysis_job_key())
-    .execute(&pool)
-    .await
-    .expect("set analysis due");
+    query("UPDATE agentic_job_schedules SET enabled = true, next_run_at = $1 WHERE job_key = $2")
+        .bind(past)
+        .bind(default_analysis_job_key())
+        .execute(&pool)
+        .await
+        .expect("set analysis due");
     query("UPDATE agents SET enabled = false WHERE agent_key = $1")
         .bind(&key)
         .execute(&pool)

@@ -11,6 +11,9 @@ mod runs;
 mod settings;
 mod shared;
 
+#[cfg(test)]
+use self::shared::*;
+
 pub use agents::*;
 pub use backends::*;
 pub use balance::*;
@@ -22,7 +25,6 @@ pub use orders::*;
 pub use positions::*;
 pub use runs::*;
 pub use settings::*;
-pub use shared::*;
 
 #[cfg(test)]
 mod test_support;

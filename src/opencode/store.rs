@@ -3,7 +3,6 @@ use chrono::{DateTime, Utc};
 use rust_decimal::Decimal;
 use serde_json::Value;
 use sqlx::query_as;
-use uuid::Uuid;
 
 use crate::db::DbPool;
 
@@ -40,7 +39,6 @@ pub struct OpenCodeSessionRow {
 
 #[derive(Debug, Clone, sqlx::FromRow)]
 pub struct OpenCodeCommandRow {
-    pub id: Uuid,
     pub created_at: DateTime<Utc>,
     pub command_name: String,
     pub command_args: Option<String>,
@@ -48,7 +46,6 @@ pub struct OpenCodeCommandRow {
 
 #[derive(Debug, Clone, sqlx::FromRow)]
 pub struct OpenCodeMessageRow {
-    pub id: String,
     pub created_at: DateTime<Utc>,
     pub role: String,
     pub model_provider: Option<String>,
@@ -60,8 +57,6 @@ pub struct OpenCodeMessageRow {
 
 #[derive(Debug, Clone, sqlx::FromRow)]
 pub struct OpenCodeToolExecutionRow {
-    pub id: Uuid,
-    pub created_at: DateTime<Utc>,
     pub started_at: Option<DateTime<Utc>>,
     pub completed_at: Option<DateTime<Utc>>,
     pub tool_name: String,
@@ -74,7 +69,6 @@ pub struct OpenCodeToolExecutionRow {
 
 #[derive(Debug, Clone, sqlx::FromRow)]
 pub struct OpenCodeSessionErrorRow {
-    pub id: Uuid,
     pub created_at: DateTime<Utc>,
     pub error_type: Option<String>,
     pub error_message: Option<String>,
@@ -117,8 +111,7 @@ pub async fn get_session_detail(
     };
 
     let commands = query_as::<_, OpenCodeCommandRow>(
-        "SELECT id,
-                created_at,
+        "SELECT created_at,
                 command_name,
                 command_args
            FROM opencode.commands
@@ -131,8 +124,7 @@ pub async fn get_session_detail(
     .with_context(|| format!("failed to fetch OpenCode commands for session {session_id}"))?;
 
     let messages = query_as::<_, OpenCodeMessageRow>(
-        "SELECT id,
-                created_at,
+        "SELECT created_at,
                 role,
                 model_provider,
                 model_id,
@@ -149,9 +141,7 @@ pub async fn get_session_detail(
     .with_context(|| format!("failed to fetch OpenCode messages for session {session_id}"))?;
 
     let tool_executions = query_as::<_, OpenCodeToolExecutionRow>(
-        "SELECT id,
-                created_at,
-                started_at,
+        "SELECT started_at,
                 completed_at,
                 tool_name,
                 args,
@@ -171,8 +161,7 @@ pub async fn get_session_detail(
     })?;
 
     let session_errors = query_as::<_, OpenCodeSessionErrorRow>(
-        "SELECT id,
-                created_at,
+        "SELECT created_at,
                 error_type,
                 error_message,
                 error_data

@@ -12,7 +12,7 @@ Fetch OHLCV candle data directly from Hyperliquid's public REST API.
 Run the script from the agent workspace root:
 
 ```bash
-python .opencode/skills/hyperliquid-data/fetch_ohlcv.py <SYMBOL> <TIMEFRAME> [--limit N] [--start-time EPOCH_MS] [--end-time EPOCH_MS]
+python .opencode/skills/hyperliquid-data/fetch_ohlcv.py <SYMBOL> <TIMEFRAME> [--limit N] [--start-time EPOCH_MS] [--end-time EPOCH_MS] [--closed-before EPOCH_MS]
 ```
 
 `SYMBOL` and `TIMEFRAME` are positional arguments. Do not use unsupported flags
@@ -23,6 +23,7 @@ Examples:
 ```bash
 python .opencode/skills/hyperliquid-data/fetch_ohlcv.py BTC 15m --limit 100
 python .opencode/skills/hyperliquid-data/fetch_ohlcv.py ETH 1h --start-time 1710000000000 --end-time 1710100000000
+python .opencode/skills/hyperliquid-data/fetch_ohlcv.py BTC 15m --limit 500 --closed-before 1783114200000
 ```
 
 The script writes candles to `scratch/ohlcv-cache/<SYMBOL>/<TIMEFRAME>/...json`
@@ -45,6 +46,13 @@ Set `HYPERLIQUID_ENVIRONMENT` to `mainnet` or `testnet`. Defaults to `mainnet`.
 ## Supported timeframes
 
 `5m`, `15m`, `1h`, `4h`, `1d` (and any others Hyperliquid supports).
+
+## Closed Candles
+
+- Hyperliquid candle field `t` is the candle start time.
+- A `15m` candle with `t = 21:30:00Z` spans `21:30:00Z` through `21:44:59.999Z` and is not closed at `21:30:00Z`.
+- For a job anchored to boundary `B`, fetch with `--closed-before B_ms` or `--end-time B_ms - 1`.
+- Exclude any candle whose start time is greater than or equal to the job boundary.
 
 ## Output
 

@@ -135,6 +135,11 @@ def main() -> None:
     parser.add_argument("--start-time", type=int, help="Start time in epoch milliseconds")
     parser.add_argument("--end-time", type=int, help="End time in epoch milliseconds")
     parser.add_argument(
+        "--closed-before",
+        type=int,
+        help="Fetch only candles closed before this epoch millisecond boundary",
+    )
+    parser.add_argument(
         "--ttl-hours",
         type=float,
         default=DEFAULT_TTL_HOURS,
@@ -154,6 +159,12 @@ def main() -> None:
 
     if args.ttl_hours < 0:
         parser.error("--ttl-hours must be non-negative")
+    if args.closed_before is not None:
+        if args.closed_before <= 0:
+            parser.error("--closed-before must be greater than zero")
+        if args.end_time is not None:
+            parser.error("--closed-before cannot be combined with --end-time")
+        args.end_time = args.closed_before - 1
 
     try:
         candles = fetch_ohlcv(

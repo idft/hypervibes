@@ -13,24 +13,24 @@ use crate::{
 };
 
 use super::balance::AccountBalanceView;
-use super::jobs::AgenticJobScheduleView;
 use super::hooks::AgenticJobHookView;
+use super::jobs::AgenticJobScheduleView;
 use super::memories::{
     AgentMemoryDetailPartialTemplate, AgentMemoryTimelinePartialTemplate, MemoryTimelineItem,
     MemoryView, TransactionView, build_memory_timeline,
 };
 use super::opencode::OpenCodeWorkspaceSettingsView;
 use super::runs::AgenticRunView;
-use super::shared::{format_optional_timestamp_utc, format_timestamp_utc};
+use super::shared::{LocalTimestampView, local_timestamp_view, optional_local_timestamp_view};
 
 #[derive(Debug, Clone)]
 pub struct SyncStateView {
     pub stream_name: String,
     pub status_text: String,
     pub status_class: &'static str,
-    pub last_event_time_text: String,
+    pub last_event_time: Option<LocalTimestampView>,
     pub last_event_key_text: String,
-    pub last_synced_at_text: String,
+    pub last_synced_at: Option<LocalTimestampView>,
 }
 
 impl SyncStateView {
@@ -58,9 +58,9 @@ impl SyncStateView {
             stream_name: row.stream_name,
             status_text,
             status_class,
-            last_event_time_text: format_optional_timestamp_utc(row.last_event_time),
+            last_event_time: optional_local_timestamp_view(row.last_event_time),
             last_event_key_text: row.last_event_key.unwrap_or_else(|| "-".to_string()),
-            last_synced_at_text: format_optional_timestamp_utc(row.last_synced_at),
+            last_synced_at: optional_local_timestamp_view(row.last_synced_at),
         }
     }
 }
@@ -207,11 +207,11 @@ pub struct AgentsShowPageTemplate {
     pub latest_trade_execution_summary_html: String,
     pub latest_analysis_summary_html: String,
     pub sparklines_html: String,
-    pub api_key_last_used_text: String,
+    pub api_key_last_used_at: Option<LocalTimestampView>,
     pub default_analysis_strategy_prompt: &'static str,
     pub default_trading_strategy_prompt: &'static str,
-    pub created_at_text: String,
-    pub updated_at_text: String,
+    pub created_at: LocalTimestampView,
+    pub updated_at: LocalTimestampView,
     pub current_path: String,
     pub jobs: Vec<AgenticJobScheduleView>,
     pub hooks: Vec<AgenticJobHookView>,
@@ -254,11 +254,11 @@ impl AgentsShowPageTemplate {
             .collect();
 
         Self {
-            api_key_last_used_text: format_optional_timestamp_utc(agent.api_key_last_used_at),
+            api_key_last_used_at: optional_local_timestamp_view(agent.api_key_last_used_at),
             default_analysis_strategy_prompt: DEFAULT_ANALYSIS_STRATEGY_PROMPT,
             default_trading_strategy_prompt: DEFAULT_TRADING_STRATEGY_PROMPT,
-            created_at_text: format_timestamp_utc(agent.created_at),
-            updated_at_text: format_timestamp_utc(agent.updated_at),
+            created_at: local_timestamp_view(agent.created_at),
+            updated_at: local_timestamp_view(agent.updated_at),
             current_path: active_tab.path(&agent_key),
             tabs,
             show_positions_tab: active_tab == AgentShowTab::Positions,

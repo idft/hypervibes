@@ -7,8 +7,6 @@ pub(crate) mod ui_events;
 
 pub use state::AppState;
 
-
-
 use std::sync::Arc;
 
 use anyhow::{Context, Result};

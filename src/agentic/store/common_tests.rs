@@ -1,10 +1,13 @@
 use chrono::Utc;
 
-use crate::test_db;
 use crate::agents::store::insert_agent;
+use crate::test_db;
 
 use super::test_support::sample_agent;
-use super::{insert_default_opencode_schedules, list_agent_hooks, list_agent_schedules, set_all_agent_jobs_enabled};
+use super::{
+    insert_default_opencode_schedules, list_agent_hooks, list_agent_schedules,
+    set_all_agent_jobs_enabled,
+};
 
 #[tokio::test]
 async fn set_all_agent_jobs_enabled_toggles_schedules_and_hooks_together() {

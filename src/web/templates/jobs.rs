@@ -4,12 +4,11 @@ use crate::agents::model::AgentDetailRow;
 
 use super::agents::ModelPickerView;
 use super::runs::AgenticRunView;
-use super::shared::{TimeoutEditorView, format_duration, format_timestamp_utc};
+use super::shared::{LocalTimestampView, TimeoutEditorView, format_duration, local_timestamp_view};
 
 /// View-model for a single row on the Jobs table.
 #[derive(Debug, Clone)]
 pub struct AgenticJobScheduleView {
-    pub id: i64,
     pub job_key: String,
     pub job_kind: String,
     pub enabled: bool,
@@ -17,10 +16,9 @@ pub struct AgenticJobScheduleView {
     pub enabled_class: &'static str,
     pub timeframe_text: String,
     pub timeout_text: String,
-    pub next_run_text: String,
+    pub next_run_at: LocalTimestampView,
     pub model_text: String,
     pub model_logo_url: Option<String>,
-    pub operator_prompt_summary: String,
     pub detail_url: String,
     pub run_now_action: String,
     pub toggle_action: String,
@@ -37,9 +35,8 @@ pub struct AgenticJobDetailView {
     pub enabled_label: &'static str,
     pub enabled_class: &'static str,
     pub timeframe_text: String,
-    pub timeout_text: String,
     pub timeout_editor: TimeoutEditorView,
-    pub next_run_text: String,
+    pub next_run_at: LocalTimestampView,
     pub model_text: String,
     pub operator_prompt_text: String,
     pub prompt_preview_text: String,
@@ -53,20 +50,6 @@ pub struct AgenticJobDetailView {
 
 impl AgenticJobScheduleView {
     pub fn from_row(row: &crate::agentic::model::AgenticJobScheduleRow) -> Self {
-        let operator_prompt = row.operator_prompt.trim();
-        let operator_summary = if operator_prompt.is_empty() {
-            "—".to_string()
-        } else {
-            let mut collapsed: String = operator_prompt
-                .split_whitespace()
-                .collect::<Vec<_>>()
-                .join(" ");
-            if collapsed.chars().count() > 80 {
-                collapsed = collapsed.chars().take(80).collect::<String>() + "…";
-            }
-            collapsed
-        };
-
         let model_text = match (row.model_provider_id.as_deref(), row.model_id.as_deref()) {
             (Some(provider), Some(model)) => format!("{provider}/{model}"),
             _ => "—".to_string(),
@@ -88,7 +71,6 @@ impl AgenticJobScheduleView {
         let timeframe_text = row.timeframe.clone();
 
         Self {
-            id: row.id,
             job_key: row.job_key.clone(),
             job_kind: row.job_kind.clone(),
             enabled: row.enabled,
@@ -96,10 +78,9 @@ impl AgenticJobScheduleView {
             enabled_class,
             timeframe_text,
             timeout_text: format_duration(row.timeout_seconds),
-            next_run_text: format_timestamp_utc(row.next_run_at),
+            next_run_at: local_timestamp_view(row.next_run_at),
             model_text,
             model_logo_url,
-            operator_prompt_summary: operator_summary,
             detail_url: format!("/agents/{}/jobs/{}", row.agent_key, row.id),
             run_now_action: format!("/agents/{}/jobs/{}/run", row.agent_key, row.id),
             toggle_action: format!("/agents/{}/jobs/{}/toggle", row.agent_key, row.id),
@@ -121,14 +102,13 @@ impl AgenticJobDetailView {
             enabled_label: summary.enabled_label,
             enabled_class: summary.enabled_class,
             timeframe_text: summary.timeframe_text,
-            timeout_text: summary.timeout_text.clone(),
             timeout_editor: TimeoutEditorView {
                 display_text: summary.timeout_text,
                 edit_text: format_duration(row.timeout_seconds),
                 action: format!("/agents/{}/jobs/{}/timeout", row.agent_key, row.id),
                 error: None,
             },
-            next_run_text: summary.next_run_text,
+            next_run_at: summary.next_run_at,
             model_text: summary.model_text,
             operator_prompt_text: if row.operator_prompt.trim().is_empty() {
                 "—".to_string()

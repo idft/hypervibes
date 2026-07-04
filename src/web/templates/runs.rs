@@ -5,21 +5,20 @@ use serde_json::Value;
 use crate::agents::model::AgentDetailRow;
 
 use super::shared::{
-    add_thousands_separators, format_decimal_with_commas, format_duration,
-    format_optional_timestamp_utc, format_timestamp_utc,
+    LocalTimestampView, add_thousands_separators, format_decimal_with_commas, format_duration,
+    local_timestamp_view, optional_local_timestamp_view,
 };
 
 /// View-model for a single row in a Runs table.
 #[derive(Debug, Clone)]
 pub struct AgenticRunView {
-    pub id: i64,
     pub status_label: String,
     pub status_class: String,
     pub job_key: String,
     pub timeframe_text: String,
-    pub scheduled_for_text: String,
-    pub started_text: String,
-    pub finished_text: String,
+    pub scheduled_for: LocalTimestampView,
+    pub started_at: Option<LocalTimestampView>,
+    pub finished_at: Option<LocalTimestampView>,
     pub duration_text: String,
     pub backend_run_ref: String,
     pub detail_url: String,
@@ -34,9 +33,9 @@ pub struct AgenticRunDetailView {
     pub job_key: String,
     pub job_kind: String,
     pub timeframe_text: String,
-    pub scheduled_for_text: String,
-    pub started_text: String,
-    pub finished_text: String,
+    pub scheduled_for: LocalTimestampView,
+    pub started_at: Option<LocalTimestampView>,
+    pub finished_at: Option<LocalTimestampView>,
     pub duration_text: String,
     pub timeout_text: String,
     pub model_text: String,
@@ -53,8 +52,8 @@ pub struct OpenCodeSessionView {
     pub status: String,
     pub directory: String,
     pub model_text: String,
-    pub created_at_text: String,
-    pub updated_at_text: String,
+    pub created_at: LocalTimestampView,
+    pub updated_at: LocalTimestampView,
     pub input_tokens_text: String,
     pub output_tokens_text: String,
     pub cache_read_tokens_text: String,
@@ -73,14 +72,14 @@ pub struct OpenCodeSessionView {
 
 #[derive(Debug, Clone)]
 pub struct OpenCodeCommandView {
-    pub created_at_text: String,
+    pub created_at: LocalTimestampView,
     pub command_name: String,
     pub command_args: String,
 }
 
 #[derive(Debug, Clone)]
 pub struct OpenCodeMessageView {
-    pub created_at_text: String,
+    pub created_at: LocalTimestampView,
     pub role_label: String,
     pub role_class: String,
     pub model_text: String,
@@ -91,8 +90,8 @@ pub struct OpenCodeMessageView {
 
 #[derive(Debug, Clone)]
 pub struct OpenCodeToolExecutionView {
-    pub started_at_text: String,
-    pub completed_at_text: String,
+    pub started_at: Option<LocalTimestampView>,
+    pub completed_at: Option<LocalTimestampView>,
     pub tool_name: String,
     pub success_label: String,
     pub success_class: String,
@@ -104,7 +103,7 @@ pub struct OpenCodeToolExecutionView {
 
 #[derive(Debug, Clone)]
 pub struct OpenCodeSessionErrorView {
-    pub created_at_text: String,
+    pub created_at: LocalTimestampView,
     pub error_type: String,
     pub error_message: String,
     pub error_data_json: String,
@@ -116,14 +115,13 @@ impl AgenticRunView {
         let duration_text = run_duration_text(row.started_at, row.finished_at);
 
         Self {
-            id: row.id,
             status_label,
             status_class,
             job_key: row.job_key.clone(),
             timeframe_text: row.timeframe.clone().unwrap_or_else(|| "—".to_string()),
-            scheduled_for_text: format_timestamp_utc(row.scheduled_for),
-            started_text: format_optional_timestamp_utc(row.started_at),
-            finished_text: format_optional_timestamp_utc(row.finished_at),
+            scheduled_for: local_timestamp_view(row.scheduled_for),
+            started_at: optional_local_timestamp_view(row.started_at),
+            finished_at: optional_local_timestamp_view(row.finished_at),
             duration_text,
             backend_run_ref: row.backend_run_ref.clone().unwrap_or_default(),
             detail_url: format!("/agents/{}/runs/{}", row.agent_key, row.id),
@@ -147,9 +145,9 @@ impl AgenticRunDetailView {
             job_key: row.job_key.clone(),
             job_kind: row.job_kind.clone(),
             timeframe_text: row.timeframe.clone().unwrap_or_else(|| "—".to_string()),
-            scheduled_for_text: format_timestamp_utc(row.scheduled_for),
-            started_text: format_optional_timestamp_utc(row.started_at),
-            finished_text: format_optional_timestamp_utc(row.finished_at),
+            scheduled_for: local_timestamp_view(row.scheduled_for),
+            started_at: optional_local_timestamp_view(row.started_at),
+            finished_at: optional_local_timestamp_view(row.finished_at),
             duration_text: run_duration_text(row.started_at, row.finished_at),
             timeout_text: format_duration(row.timeout_seconds),
             model_text,
@@ -182,8 +180,8 @@ impl OpenCodeSessionView {
             status: non_empty_or_dash(session.status.as_deref()),
             directory: non_empty_or_dash(session.directory.as_deref()),
             model_text,
-            created_at_text: format_timestamp_utc(session.created_at),
-            updated_at_text: format_timestamp_utc(session.updated_at),
+            created_at: local_timestamp_view(session.created_at),
+            updated_at: local_timestamp_view(session.updated_at),
             input_tokens_text: format_i32(session.input_tokens),
             output_tokens_text: format_i32(session.output_tokens),
             cache_read_tokens_text: format_i32(session.cache_read_tokens),
@@ -198,7 +196,7 @@ impl OpenCodeSessionView {
                 .commands
                 .iter()
                 .map(|row| OpenCodeCommandView {
-                    created_at_text: format_timestamp_utc(row.created_at),
+                    created_at: local_timestamp_view(row.created_at),
                     command_name: row.command_name.clone(),
                     command_args: row.command_args.clone().unwrap_or_default(),
                 })
@@ -233,7 +231,7 @@ impl OpenCodeMessageView {
         };
 
         Self {
-            created_at_text: format_timestamp_utc(row.created_at),
+            created_at: local_timestamp_view(row.created_at),
             role_label,
             role_class,
             model_text,
@@ -262,8 +260,8 @@ impl OpenCodeToolExecutionView {
         };
 
         Self {
-            started_at_text: format_optional_timestamp_utc(row.started_at),
-            completed_at_text: format_optional_timestamp_utc(row.completed_at),
+            started_at: optional_local_timestamp_view(row.started_at),
+            completed_at: optional_local_timestamp_view(row.completed_at),
             tool_name: row.tool_name.clone(),
             success_label,
             success_class,
@@ -281,7 +279,7 @@ impl OpenCodeToolExecutionView {
 impl OpenCodeSessionErrorView {
     fn from_row(row: &crate::opencode::store::OpenCodeSessionErrorRow) -> Self {
         Self {
-            created_at_text: format_timestamp_utc(row.created_at),
+            created_at: local_timestamp_view(row.created_at),
             error_type: row.error_type.clone().unwrap_or_default(),
             error_message: row.error_message.clone().unwrap_or_default(),
             error_data_json: format_json_value(row.error_data.as_ref()),

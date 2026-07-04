@@ -1,11 +1,8 @@
 use askama::Template;
 
-use crate::{
-    agentic::model::{
-        AgentMaintenanceTaskRow, MAINTENANCE_STATUS_ABORTED, MAINTENANCE_STATUS_FAILED,
-        MAINTENANCE_STATUS_QUEUED, MAINTENANCE_STATUS_RUNNING, MAINTENANCE_STATUS_SUCCEEDED,
-    },
-    agents::model::AgentDetailRow,
+use crate::agentic::model::{
+    AgentMaintenanceTaskRow, MAINTENANCE_STATUS_ABORTED, MAINTENANCE_STATUS_FAILED,
+    MAINTENANCE_STATUS_QUEUED, MAINTENANCE_STATUS_RUNNING, MAINTENANCE_STATUS_SUCCEEDED,
 };
 
 #[derive(Debug, Clone)]
@@ -238,19 +235,16 @@ impl OpenCodeWorkspaceMaintenanceStatusTemplate {
 #[derive(Template)]
 #[template(path = "agent_workspace_section.html")]
 pub struct OpenCodeWorkspaceSectionTemplate {
-    pub agent: AgentDetailRow,
     pub opencode_workspace: Option<OpenCodeWorkspaceSettingsView>,
     pub settings_workspace_warning: Option<String>,
 }
 
 impl OpenCodeWorkspaceSectionTemplate {
     pub fn render_view(
-        agent: AgentDetailRow,
         opencode_workspace: Option<OpenCodeWorkspaceSettingsView>,
         settings_workspace_warning: Option<String>,
     ) -> Result<String, askama::Error> {
         Self {
-            agent,
             opencode_workspace,
             settings_workspace_warning,
         }

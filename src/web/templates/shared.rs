@@ -2,6 +2,12 @@ use chrono::{DateTime, Utc};
 use rust_decimal::Decimal;
 
 #[derive(Debug, Clone)]
+pub struct LocalTimestampView {
+    pub iso: String,
+    pub fallback_text: String,
+}
+
+#[derive(Debug, Clone)]
 pub struct MoneyCell {
     pub value: String,
     pub color_class: &'static str,
@@ -46,10 +52,17 @@ pub(super) fn format_timestamp_iso(value: DateTime<Utc>) -> String {
     value.to_rfc3339_opts(chrono::SecondsFormat::AutoSi, true)
 }
 
-pub(super) fn format_optional_timestamp_utc(value: Option<DateTime<Utc>>) -> String {
-    value
-        .map(format_timestamp_utc)
-        .unwrap_or_else(|| "-".to_string())
+pub(super) fn local_timestamp_view(value: DateTime<Utc>) -> LocalTimestampView {
+    LocalTimestampView {
+        iso: format_timestamp_iso(value),
+        fallback_text: format_timestamp_utc(value),
+    }
+}
+
+pub(super) fn optional_local_timestamp_view(
+    value: Option<DateTime<Utc>>,
+) -> Option<LocalTimestampView> {
+    value.map(local_timestamp_view)
 }
 
 pub fn format_money_text(amount: Option<Decimal>) -> String {
@@ -132,11 +145,10 @@ pub(super) fn dash_cell() -> MoneyCell {
     }
 }
 
-pub fn format_neutral_money_cell(amount: Option<Decimal>) -> MoneyCell {
-    format_neutral_money_cell_with_decimals(amount, 4)
-}
-
-pub fn format_neutral_money_cell_with_decimals(amount: Option<Decimal>, decimals: usize) -> MoneyCell {
+pub fn format_neutral_money_cell_with_decimals(
+    amount: Option<Decimal>,
+    decimals: usize,
+) -> MoneyCell {
     match amount {
         None => dash_cell(),
         Some(value) if value.is_zero() => dash_cell(),

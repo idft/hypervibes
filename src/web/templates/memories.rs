@@ -3,18 +3,19 @@ use askama::Template;
 use pulldown_cmark::{Options as MarkdownOptions, Parser as MarkdownParser, html};
 
 use crate::{
-    agents::model::AgentDetailRow,
-    hyperliquid::queries::AccountTransactionRow,
+    agents::model::AgentDetailRow, hyperliquid::queries::AccountTransactionRow,
     memory::MemoryRecord,
 };
 
 use super::shared::{
-    MoneyCell, format_money_cell, format_money_text, format_timestamp_iso, format_timestamp_utc,
+    LocalTimestampView, MoneyCell, format_money_cell, format_money_text, format_timestamp_iso,
+    format_timestamp_utc, local_timestamp_view,
 };
 
 #[derive(Debug, Clone)]
 pub struct TransactionView {
     pub row: AccountTransactionRow,
+    pub event_time: LocalTimestampView,
     pub fee_usdc: String,
     pub realized_pnl_usdc: MoneyCell,
     pub usdc_delta: MoneyCell,
@@ -28,6 +29,7 @@ impl TransactionView {
         let usdc_delta = format_money_cell(row.usdc_delta);
         let running_balance = format_money_cell(row.running_balance);
         Self {
+            event_time: local_timestamp_view(row.event_time),
             row,
             fee_usdc,
             realized_pnl_usdc,

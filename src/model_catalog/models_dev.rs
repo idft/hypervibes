@@ -23,17 +23,13 @@ const CATALOG_TTL: Duration = Duration::from_secs(24 * 60 * 60);
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct ModelsDevProvider {
-    pub id: String,
     pub name: String,
-    #[serde(default)]
-    pub env: Vec<String>,
     #[serde(default)]
     pub models: BTreeMap<String, ModelsDevModel>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct ModelsDevModel {
-    pub id: String,
     pub name: String,
     #[serde(default)]
     pub reasoning: Option<bool>,
@@ -151,6 +147,7 @@ impl ModelsDevCatalog {
         Ok(snapshot)
     }
 
+    #[cfg_attr(not(test), allow(dead_code))]
     pub async fn get_provider(&self, provider_id: &str) -> Option<ModelsDevProvider> {
         self.snapshot()
             .await
@@ -160,6 +157,7 @@ impl ModelsDevCatalog {
             .cloned()
     }
 
+    #[cfg_attr(not(test), allow(dead_code))]
     pub async fn get_model(&self, provider_id: &str, model_id: &str) -> Option<ModelsDevModel> {
         self.snapshot()
             .await

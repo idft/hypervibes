@@ -52,7 +52,9 @@
                                 <span class="inline-flex rounded-full border border-zinc-700 px-2.5 py-1 text-xs text-zinc-300">Disabled</span>
                                 {% endif %}
                             </td>
-                            <td class="px-5 py-4 align-top font-mono text-xs text-zinc-400">{{ runtime.created_at.format("%Y-%m-%d %H:%M UTC") }}</td>
+                            <td class="px-5 py-4 align-top font-mono text-xs text-zinc-400">
+                                <time class="local-datetime" data-local-format="datetime" datetime="{{ runtime.created_at.iso }}" title="{{ runtime.created_at.fallback_text }}">{{ runtime.created_at.fallback_text }}</time>
+                            </td>
                         </tr>
                         {% endfor %}
                     </tbody>

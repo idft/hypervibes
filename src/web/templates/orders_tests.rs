@@ -1,7 +1,6 @@
 use crate::hyperliquid::live_state::LiveConnectionStatus;
 
 use super::*;
-use crate::web::templates::test_support::*;
 
 #[test]
 fn open_orders_view_sorts_by_price_descending() {

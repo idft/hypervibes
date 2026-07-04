@@ -3,7 +3,7 @@ use chrono::{DateTime, TimeZone, Utc};
 
 /// Default trigger delay (in seconds) applied after each candle boundary
 /// before a scheduled run is considered due.
-pub const DEFAULT_TRIGGER_DELAY_SECONDS: i32 = 1;
+pub const DEFAULT_TRIGGER_DELAY_SECONDS: i32 = 2;
 
 /// Parse a timeframe string into a duration in whole seconds.
 ///
@@ -260,29 +260,32 @@ mod tests {
     #[test]
     fn next_due_after_1m_aligns_to_minute_boundary() {
         let now = at(37);
-        let next = next_due_after(now, "1m", 1).unwrap();
-        assert_eq!(next, at(61));
+        let next = next_due_after(now, "1m", DEFAULT_TRIGGER_DELAY_SECONDS).unwrap();
+        assert_eq!(next, at(60 + DEFAULT_TRIGGER_DELAY_SECONDS as i64));
     }
 
     #[test]
     fn next_due_after_15m_aligns_to_quarter_hour() {
         let now = at(12 * 3600 + 7 * 60);
-        let next = next_due_after(now, "15m", 1).unwrap();
-        assert_eq!(next, at(12 * 3600 + 15 * 60 + 1));
+        let next = next_due_after(now, "15m", DEFAULT_TRIGGER_DELAY_SECONDS).unwrap();
+        assert_eq!(
+            next,
+            at(12 * 3600 + 15 * 60 + DEFAULT_TRIGGER_DELAY_SECONDS as i64)
+        );
     }
 
     #[test]
     fn next_due_after_1h_aligns_to_hour() {
         let now = at(12 * 3600 + 17 * 60);
-        let next = next_due_after(now, "1h", 1).unwrap();
-        assert_eq!(next, at(13 * 3600 + 1));
+        let next = next_due_after(now, "1h", DEFAULT_TRIGGER_DELAY_SECONDS).unwrap();
+        assert_eq!(next, at(13 * 3600 + DEFAULT_TRIGGER_DELAY_SECONDS as i64));
     }
 
     #[test]
     fn next_due_after_1d_aligns_to_midnight() {
         let now = at(12 * 3600 + 30 * 60);
-        let next = next_due_after(now, "1d", 1).unwrap();
-        assert_eq!(next, at(24 * 3600 + 1));
+        let next = next_due_after(now, "1d", DEFAULT_TRIGGER_DELAY_SECONDS).unwrap();
+        assert_eq!(next, at(24 * 3600 + DEFAULT_TRIGGER_DELAY_SECONDS as i64));
     }
 
     #[test]
@@ -301,27 +304,38 @@ mod tests {
     #[test]
     fn latest_due_at_or_before_returns_none_before_first_due() {
         let now = at(0);
-        assert!(latest_due_at_or_before(now, "1m", 1).unwrap().is_none());
+        assert!(
+            latest_due_at_or_before(now, "1m", DEFAULT_TRIGGER_DELAY_SECONDS)
+                .unwrap()
+                .is_none()
+        );
     }
 
     #[test]
     fn latest_due_at_or_before_finds_exact_due_instant() {
-        let now = at(12 * 3600 + 1);
-        let due = latest_due_at_or_before(now, "1m", 1).unwrap().unwrap();
-        assert_eq!(due, at(12 * 3600 + 1));
+        let now = at(12 * 3600 + DEFAULT_TRIGGER_DELAY_SECONDS as i64);
+        let due = latest_due_at_or_before(now, "1m", DEFAULT_TRIGGER_DELAY_SECONDS)
+            .unwrap()
+            .unwrap();
+        assert_eq!(due, now);
     }
 
     #[test]
     fn latest_due_at_or_before_returns_latest_boundary_in_past() {
         let now = at(12 * 3600 + 34 * 60 + 50);
-        let due = latest_due_at_or_before(now, "1m", 1).unwrap().unwrap();
-        assert_eq!(due, at(12 * 3600 + 34 * 60 + 1));
+        let due = latest_due_at_or_before(now, "1m", DEFAULT_TRIGGER_DELAY_SECONDS)
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            due,
+            at(12 * 3600 + 34 * 60 + DEFAULT_TRIGGER_DELAY_SECONDS as i64)
+        );
     }
 
     #[test]
     fn latest_due_at_or_before_returns_none_within_delay_window() {
         let now = at(0);
-        let due = latest_due_at_or_before(now, "1m", 1).unwrap();
+        let due = latest_due_at_or_before(now, "1m", DEFAULT_TRIGGER_DELAY_SECONDS).unwrap();
         assert!(due.is_none());
     }
 
@@ -334,9 +348,17 @@ mod tests {
 
     #[test]
     fn boundary_for_due_at_subtracts_delay() {
-        let due = at(12 * 3600 + 1);
-        assert_eq!(boundary_for_due_at(due, 1), at(12 * 3600));
-        assert_eq!(boundary_for_due_at(due, 0), at(12 * 3600 + 1));
+        let due = at(12 * 3600 + DEFAULT_TRIGGER_DELAY_SECONDS as i64);
+        assert_eq!(
+            boundary_for_due_at(due, DEFAULT_TRIGGER_DELAY_SECONDS),
+            at(12 * 3600)
+        );
+        assert_eq!(boundary_for_due_at(due, 0), due);
+    }
+
+    #[test]
+    fn default_trigger_delay_is_two_seconds() {
+        assert_eq!(DEFAULT_TRIGGER_DELAY_SECONDS, 2);
     }
 
     #[test]

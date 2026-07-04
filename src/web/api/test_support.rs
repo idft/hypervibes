@@ -14,14 +14,10 @@ use crate::{
         crypto::EncryptionKey,
         keys::derive_wallet_address,
         model::AgentRegistryRow,
-        store::{get_agent, insert_agent, replace_agent_instruments},
+        store::{insert_agent, replace_agent_instruments},
     },
     test_db,
-    web::{
-        AppState,
-        api,
-        ui_events::{UiEvent, UiEventHub},
-    },
+    web::{AppState, api, ui_events::UiEventHub},
 };
 
 pub struct NoopAgenticBackend;
@@ -45,8 +41,8 @@ pub async fn test_state() -> Arc<AppState> {
         encryption_key: EncryptionKey::new(
             "test",
             [
-                0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21,
-                22, 23, 24, 25, 26, 27, 28, 29, 30, 31,
+                0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22,
+                23, 24, 25, 26, 27, 28, 29, 30, 31,
             ],
         ),
         live_accounts: Arc::new(crate::hyperliquid::live_state::LiveAccountStore::new()),
@@ -60,10 +56,7 @@ pub async fn test_state() -> Arc<AppState> {
         },
         opencode_client: Arc::new(
             crate::opencode::client::OpenCodeClient::new(
-                crate::opencode::client::OpenCodeClientConfig::new(
-                    "opencode".to_string(),
-                    None,
-                ),
+                crate::opencode::client::OpenCodeClientConfig::new("opencode".to_string(), None),
             )
             .unwrap(),
         ),
@@ -156,11 +149,7 @@ pub async fn seed_instrument(state: &Arc<AppState>, instrument_id: &str, active:
     .expect("insert instrument");
 }
 
-pub async fn select_instruments(
-    state: &Arc<AppState>,
-    agent_key: &str,
-    instrument_ids: &[&str],
-) {
+pub async fn select_instruments(state: &Arc<AppState>, agent_key: &str, instrument_ids: &[&str]) {
     let instrument_ids: Vec<String> = instrument_ids.iter().map(|id| (*id).to_string()).collect();
     replace_agent_instruments(&state.db_pool, agent_key, &instrument_ids)
         .await

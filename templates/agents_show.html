@@ -110,7 +110,9 @@
                     <tbody class="divide-y divide-zinc-800">
                         {% for tx in transactions %}
                         <tr class="hover:bg-zinc-900/50">
-                            <td class="px-4 py-3 align-top font-mono text-xs tabular-nums text-zinc-300">{{ tx.row.event_time.format("%Y-%m-%d %H:%M UTC") }}</td>
+                            <td class="px-4 py-3 align-top font-mono text-xs tabular-nums text-zinc-300">
+                                <time class="local-datetime" data-local-format="datetime" datetime="{{ tx.event_time.iso }}" title="{{ tx.event_time.fallback_text }}">{{ tx.event_time.fallback_text }}</time>
+                            </td>
                             <td class="px-4 py-3 align-top">
                                 <span class="inline-flex rounded border border-zinc-700 px-1.5 py-0.5 text-xs text-zinc-300">{{ tx.row.event_category }}</span>
                             </td>
@@ -234,15 +236,25 @@
                 </div>
                 <div>
                     <dt class="text-xs uppercase tracking-[0.16em] text-zinc-500">API key last used</dt>
-                    <dd class="mt-1 text-sm text-zinc-300">{{ api_key_last_used_text }}</dd>
+                    <dd class="mt-1 text-sm text-zinc-300">
+                        {% if let Some(api_key_last_used_at) = api_key_last_used_at %}
+                        <time class="local-datetime" data-local-format="datetime" datetime="{{ api_key_last_used_at.iso }}" title="{{ api_key_last_used_at.fallback_text }}">{{ api_key_last_used_at.fallback_text }}</time>
+                        {% else %}
+                        <span class="text-zinc-500">—</span>
+                        {% endif %}
+                    </dd>
                 </div>
                 <div>
                     <dt class="text-xs uppercase tracking-[0.16em] text-zinc-500">Created</dt>
-                    <dd class="mt-1 text-sm text-zinc-300">{{ created_at_text }}</dd>
+                    <dd class="mt-1 text-sm text-zinc-300">
+                        <time class="local-datetime" data-local-format="datetime" datetime="{{ created_at.iso }}" title="{{ created_at.fallback_text }}">{{ created_at.fallback_text }}</time>
+                    </dd>
                 </div>
                 <div>
                     <dt class="text-xs uppercase tracking-[0.16em] text-zinc-500">Updated</dt>
-                    <dd class="mt-1 text-sm text-zinc-300">{{ updated_at_text }}</dd>
+                    <dd class="mt-1 text-sm text-zinc-300">
+                        <time class="local-datetime" data-local-format="datetime" datetime="{{ updated_at.iso }}" title="{{ updated_at.fallback_text }}">{{ updated_at.fallback_text }}</time>
+                    </dd>
                 </div>
             </dl>
         </section>
@@ -340,9 +352,21 @@
                             <td class="px-4 py-3 align-top">
                                 <span class="inline-flex rounded-full border px-2 py-0.5 text-xs font-medium {{ row.status_class }}">{{ row.status_text }}</span>
                             </td>
-                            <td class="px-4 py-3 align-top font-mono text-xs text-zinc-300">{{ row.last_event_time_text }}</td>
+                            <td class="px-4 py-3 align-top font-mono text-xs text-zinc-300">
+                                {% if let Some(last_event_time) = row.last_event_time %}
+                                <time class="local-datetime" data-local-format="datetime" datetime="{{ last_event_time.iso }}" title="{{ last_event_time.fallback_text }}">{{ last_event_time.fallback_text }}</time>
+                                {% else %}
+                                <span class="text-zinc-500">—</span>
+                                {% endif %}
+                            </td>
                             <td class="px-4 py-3 align-top font-mono text-xs text-zinc-300">{{ row.last_event_key_text }}</td>
-                            <td class="px-4 py-3 align-top font-mono text-xs text-zinc-300">{{ row.last_synced_at_text }}</td>
+                            <td class="px-4 py-3 align-top font-mono text-xs text-zinc-300">
+                                {% if let Some(last_synced_at) = row.last_synced_at %}
+                                <time class="local-datetime" data-local-format="datetime" datetime="{{ last_synced_at.iso }}" title="{{ last_synced_at.fallback_text }}">{{ last_synced_at.fallback_text }}</time>
+                                {% else %}
+                                <span class="text-zinc-500">—</span>
+                                {% endif %}
+                            </td>
                         </tr>
                         {% endfor %}
                     </tbody>
@@ -434,7 +458,9 @@
                                 </td>
                                 <td class="px-4 py-3 align-top font-mono text-xs tabular-nums text-zinc-300">{{ row.timeframe_text }}</td>
                                 <td class="px-4 py-3 align-top font-mono text-xs tabular-nums text-zinc-300">{{ row.timeout_text }}</td>
-                                <td class="px-4 py-3 align-top font-mono text-xs text-zinc-300">{{ row.next_run_text }}</td>
+                                <td class="px-4 py-3 align-top font-mono text-xs text-zinc-300">
+                                    <time class="local-datetime" data-local-format="datetime" datetime="{{ row.next_run_at.iso }}" title="{{ row.next_run_at.fallback_text }}">{{ row.next_run_at.fallback_text }}</time>
+                                </td>
                                 <td class="px-4 py-3 align-top text-xs text-zinc-300">
                                     <span class="inline-flex items-center gap-2">
                                         {% if let Some(logo_url) = row.model_logo_url %}
@@ -609,9 +635,23 @@
                             </td>
                             <td class="px-4 py-3 align-top font-mono text-xs text-zinc-300">{{ run.job_key }}</td>
                             <td class="px-4 py-3 align-top font-mono text-xs text-zinc-300">{{ run.timeframe_text }}</td>
-                            <td class="px-4 py-3 align-top font-mono text-xs text-zinc-300">{{ run.scheduled_for_text }}</td>
-                            <td class="px-4 py-3 align-top font-mono text-xs text-zinc-300">{{ run.started_text }}</td>
-                            <td class="px-4 py-3 align-top font-mono text-xs text-zinc-300">{{ run.finished_text }}</td>
+                            <td class="px-4 py-3 align-top font-mono text-xs text-zinc-300">
+                                <time class="local-datetime" data-local-format="datetime" datetime="{{ run.scheduled_for.iso }}" title="{{ run.scheduled_for.fallback_text }}">{{ run.scheduled_for.fallback_text }}</time>
+                            </td>
+                            <td class="px-4 py-3 align-top font-mono text-xs text-zinc-300">
+                                {% if let Some(started_at) = run.started_at %}
+                                <time class="local-datetime" data-local-format="datetime" datetime="{{ started_at.iso }}" title="{{ started_at.fallback_text }}">{{ started_at.fallback_text }}</time>
+                                {% else %}
+                                <span class="text-zinc-500">—</span>
+                                {% endif %}
+                            </td>
+                            <td class="px-4 py-3 align-top font-mono text-xs text-zinc-300">
+                                {% if let Some(finished_at) = run.finished_at %}
+                                <time class="local-datetime" data-local-format="datetime" datetime="{{ finished_at.iso }}" title="{{ finished_at.fallback_text }}">{{ finished_at.fallback_text }}</time>
+                                {% else %}
+                                <span class="text-zinc-500">—</span>
+                                {% endif %}
+                            </td>
                             <td class="px-4 py-3 align-top font-mono text-xs text-zinc-300">{{ run.duration_text }}</td>
                             <td class="px-4 py-3 align-top break-all font-mono text-xs text-zinc-300">
                                 {% if run.backend_run_ref.is_empty() %}

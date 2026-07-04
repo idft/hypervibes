@@ -1,14 +1,11 @@
 use chrono::Utc;
 use sqlx::{query, query_as};
 
-use crate::{
-    agents::{
-        crypto::{EncryptionKey, encrypt},
-        keys::derive_wallet_address,
-        model::{AgentRegistryRow, BACKEND_KIND_OPENCODE},
-        store::insert_agent,
-    },
-    test_db,
+use crate::agents::{
+    crypto::{EncryptionKey, encrypt},
+    keys::derive_wallet_address,
+    model::{AgentRegistryRow, BACKEND_KIND_OPENCODE},
+    store::insert_agent,
 };
 use crate::db::DbPool;
 
@@ -28,8 +25,8 @@ pub fn sample_agent(key: &str) -> AgentRegistryRow {
     let enc = EncryptionKey::new(
         "test",
         [
-            0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22,
-            23, 24, 25, 26, 27, 28, 29, 30, 31,
+            0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23,
+            24, 25, 26, 27, 28, 29, 30, 31,
         ],
     );
     let private_key = deterministic_private_key(key);
@@ -58,8 +55,8 @@ pub fn sample_agent(key: &str) -> AgentRegistryRow {
 }
 
 pub async fn seed_agent_and_schedule(pool: &DbPool, key: &str, schedule_id_offset: i64) -> i64 {
-    use super::schedules::default_analysis_job_key;
     use super::insert_default_opencode_schedules;
+    use super::schedules::default_analysis_job_key;
 
     insert_agent(pool, &sample_agent(key))
         .await

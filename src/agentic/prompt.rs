@@ -1,6 +1,8 @@
 use crate::agentic::backend::DispatchRequest;
 use crate::agentic::model::{JOB_KIND_ANALYSIS, JOB_KIND_MARKET_ANALYSIS, JOB_KIND_TRADING};
+use crate::agentic::timeframe::parse_timeframe_seconds;
 use anyhow::{Result, anyhow};
+use chrono::{Duration, SecondsFormat, Utc};
 
 pub fn build_prompt(request: &DispatchRequest) -> Result<String> {
     match request.job_kind.as_str() {
@@ -33,8 +35,12 @@ fn build_analysis_prompt(request: &DispatchRequest) -> String {
     );
     body.push_str("\n\n## Selected instruments\n");
     body.push_str(&selected_instruments_section(&request.selected_instruments));
+    if let Some(section) = closed_candle_cutoff_section(request) {
+        body.push_str("\n\n");
+        body.push_str(&section);
+    }
     body.push_str("\n\n## Instructions\n");
-    body.push_str("- Fetch OHLCV and relevant public market data from Hyperliquid for the selected instruments using the `hyperliquid-data` skill.\n");
+    body.push_str("- Fetch OHLCV with `python .opencode/skills/hyperliquid-data/fetch_ohlcv.py` and the closed-candle `--end-time` above. Use the `hyperliquid-data` skill for details.\n");
     body.push_str(
         "- Use the shared `python-analysis` runtime for indicator and statistical work.\n",
     );
@@ -128,6 +134,47 @@ fn operator_prompt_section(prompt: &str) -> String {
     }
 }
 
+fn closed_candle_cutoff_section(request: &DispatchRequest) -> Option<String> {
+    let timeframe = request.timeframe.as_deref()?;
+    let mut body = String::from("## Closed-candle cutoff\n");
+    body.push_str("- Hyperliquid candle timestamps are candle start times.\n");
+
+    let boundary = request.scheduled_for;
+    body.push_str(&format!(
+        "- This job is anchored to candle boundary: {}.\n",
+        format_utc(boundary)
+    ));
+
+    match parse_timeframe_seconds(timeframe) {
+        Ok(timeframe_seconds) => {
+            let latest_closed_start = boundary - Duration::seconds(timeframe_seconds);
+            let fetch_end_ms = boundary.timestamp_millis().saturating_sub(1);
+            body.push_str(&format!(
+                "- For timeframe {timeframe}, the latest eligible closed candle starts at: {}.\n",
+                format_utc(latest_closed_start)
+            ));
+            body.push_str(&format!(
+                "- Exclude any {timeframe} candle with start time greater than or equal to {}.\n",
+                format_utc(boundary)
+            ));
+            body.push_str(&format!(
+                "- Fetch OHLCV with `--end-time {fetch_end_ms}` or otherwise enforce this cutoff before computing indicators.\n"
+            ));
+        }
+        Err(_) => {
+            body.push_str(&format!(
+                "- Could not compute a timeframe-specific cutoff because timeframe `{timeframe}` is invalid. Exclude open candles manually.\n"
+            ));
+        }
+    }
+
+    Some(body)
+}
+
+fn format_utc(value: chrono::DateTime<Utc>) -> String {
+    value.to_rfc3339_opts(SecondsFormat::Secs, true)
+}
+
 fn timeframe_text(timeframe: Option<&str>) -> &str {
     timeframe.unwrap_or("general")
 }
@@ -153,7 +200,7 @@ fn account_state_section(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use chrono::Utc;
+    use chrono::{TimeZone, Utc};
     use rust_decimal_macros::dec;
 
     use crate::hyperliquid::live_state::{LiveAgentSnapshot, LiveOpenOrder, LivePosition};
@@ -186,7 +233,11 @@ mod tests {
 
     #[test]
     fn analysis_prompt_contains_expected_sections() {
-        let request = sample_request(JOB_KIND_ANALYSIS);
+        let mut request = sample_request(JOB_KIND_ANALYSIS);
+        request.scheduled_for = Utc
+            .with_ymd_and_hms(2026, 7, 3, 21, 30, 0)
+            .single()
+            .expect("valid timestamp");
         let prompt = build_prompt(&request).expect("build analysis prompt");
         assert!(prompt.contains("Agent key: btc-2"));
         assert!(prompt.contains("Display name: BTC 2"));
@@ -196,10 +247,18 @@ mod tests {
         assert!(prompt.contains("BTC, ETH"));
         assert!(prompt.contains("## Analysis strategy"));
         assert!(prompt.contains("## Job-specific strategy"));
+        assert!(prompt.contains("## Closed-candle cutoff"));
         assert!(prompt.contains("## Instructions"));
         assert!(prompt.contains("Analyze trends."));
         assert!(prompt.contains("Focus on BTC."));
         assert!(prompt.contains("You are a crypto trading assistant."));
+        assert!(prompt.contains("2026-07-03T21:30:00Z"));
+        assert!(prompt.contains("2026-07-03T21:15:00Z"));
+        assert!(prompt.contains(&format!(
+            "`--end-time {}`",
+            request.scheduled_for.timestamp_millis() - 1
+        )));
+        assert!(prompt.contains("python .opencode/skills/hyperliquid-data/fetch_ohlcv.py"));
         assert!(prompt.contains("`hyperliquid-data` skill"));
         assert!(prompt.contains("`python-analysis` runtime"));
         assert!(prompt.contains("Job-specific strategy is additive"));

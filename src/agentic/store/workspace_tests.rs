@@ -1,9 +1,6 @@
 use chrono::Utc;
 
-use crate::{
-    agentic::model::MAINTENANCE_STATUS_QUEUED,
-    test_db,
-};
+use crate::{agentic::model::MAINTENANCE_STATUS_QUEUED, test_db};
 
 use super::test_support::seed_agent_and_schedule;
 use super::{

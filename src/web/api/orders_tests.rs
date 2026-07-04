@@ -5,8 +5,6 @@ use axum::http::{Request, StatusCode};
 use serde_json::json;
 use tower::util::ServiceExt;
 
-use crate::web::AppState;
-
 use super::test_support::*;
 // ---- orders endpoint tests -----------------------------------------
 

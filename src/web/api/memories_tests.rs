@@ -7,10 +7,7 @@ use serde_json::json;
 use tower::util::ServiceExt;
 use uuid::Uuid;
 
-use crate::{
-    agents::store::get_agent,
-    web::{AppState, ui_events::UiEvent},
-};
+use crate::{agents::store::get_agent, web::ui_events::UiEvent};
 
 use super::test_support::*;
 #[tokio::test]

@@ -80,20 +80,6 @@ impl AccountBalanceView {
         self.total_balance
             .map(|v| AnimatedNumber::from_decimal(v, "text-zinc-100"))
     }
-
-    /// Short human-readable status label, suitable for a small caption.
-    pub fn status_label(&self) -> &'static str {
-        match self.status {
-            LiveConnectionStatus::Starting => "starting",
-            LiveConnectionStatus::StartupSyncing => "startup sync",
-            LiveConnectionStatus::Connecting => "connecting",
-            LiveConnectionStatus::Connected => "live",
-            LiveConnectionStatus::Reconnecting => "reconnecting",
-            LiveConnectionStatus::Disconnected => "disconnected",
-            LiveConnectionStatus::Failed => "failed",
-            LiveConnectionStatus::Stopped => "stopped",
-        }
-    }
 }
 
 #[derive(Template)]

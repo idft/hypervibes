@@ -7,6 +7,7 @@ use crate::{
         AgenticRunRow, RUN_STATUS_ABORTED, RUN_STATUS_FAILED, RUN_STATUS_QUEUED,
         RUN_STATUS_RUNNING, RUN_STATUS_SKIPPED, RUN_STATUS_SUCCEEDED,
     },
+    agentic::timeframe::{boundary_for_due_at, latest_due_at_or_before},
     db::DbPool,
 };
 
@@ -324,6 +325,10 @@ pub async fn insert_queued_run(
     }
 
     let now = Utc::now();
+    let scheduled_for =
+        latest_due_at_or_before(now, &schedule.timeframe, schedule.trigger_delay_seconds)?
+            .map(|due| boundary_for_due_at(due, schedule.trigger_delay_seconds))
+            .unwrap_or(now);
     let outcome = if has_active_run_in_lane_tx(
         &mut tx,
         &schedule.agent_key,
@@ -344,7 +349,7 @@ pub async fn insert_queued_run(
             None,
             None,
             None,
-            now,
+            scheduled_for,
             None,
             Some(now),
             schedule.timeout_seconds,
@@ -365,7 +370,7 @@ pub async fn insert_queued_run(
             None,
             None,
             None,
-            now,
+            scheduled_for,
             None,
             None,
             schedule.timeout_seconds,
@@ -374,7 +379,7 @@ pub async fn insert_queued_run(
         .await?;
         QueuedScheduleRun::Dispatch {
             run_id,
-            scheduled_for: now,
+            scheduled_for,
         }
     };
 

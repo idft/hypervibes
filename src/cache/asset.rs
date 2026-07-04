@@ -15,6 +15,7 @@ pub struct AssetCachePolicy {
 #[derive(Debug, Clone)]
 pub struct CachedAsset {
     pub bytes: Vec<u8>,
+    #[cfg_attr(not(test), allow(dead_code))]
     pub stale: bool,
 }
 

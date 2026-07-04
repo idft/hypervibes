@@ -5,8 +5,8 @@ use crate::{
     agentic::{
         job_key::build_generated_hook_job_key,
         model::{
-            AgenticJobHookRow, AgenticRunRow, DueOpenCodeHookRow, HOOK_EVENT_ANALYSIS_BATCH_COMPLETED,
-            JOB_KIND_MARKET_ANALYSIS,
+            AgenticJobHookRow, AgenticRunRow, DueOpenCodeHookRow,
+            HOOK_EVENT_ANALYSIS_BATCH_COMPLETED, JOB_KIND_MARKET_ANALYSIS,
         },
     },
     db::DbPool,

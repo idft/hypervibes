@@ -4,11 +4,10 @@ use crate::agents::model::AgentDetailRow;
 
 use super::agents::ModelPickerView;
 use super::runs::AgenticRunView;
-use super::shared::{TimeoutEditorView, format_duration, format_timestamp_utc};
+use super::shared::{LocalTimestampView, TimeoutEditorView, format_duration, local_timestamp_view};
 
 #[derive(Debug, Clone)]
 pub struct AgenticJobHookView {
-    pub id: i64,
     pub job_key: String,
     pub job_kind: String,
     pub hook_event: String,
@@ -18,7 +17,6 @@ pub struct AgenticJobHookView {
     pub timeout_text: String,
     pub model_text: String,
     pub model_logo_url: Option<String>,
-    pub operator_prompt_summary: String,
     pub detail_url: String,
     pub run_now_action: String,
     pub toggle_action: String,
@@ -35,11 +33,10 @@ pub struct AgenticHookDetailView {
     pub enabled: bool,
     pub enabled_label: &'static str,
     pub enabled_class: &'static str,
-    pub timeout_text: String,
     pub timeout_editor: TimeoutEditorView,
     pub model_text: String,
-    pub created_at_text: String,
-    pub updated_at_text: String,
+    pub created_at: LocalTimestampView,
+    pub updated_at: LocalTimestampView,
     pub operator_prompt_text: String,
     pub prompt_preview_text: String,
     pub prompt_preview_error: Option<String>,
@@ -52,20 +49,6 @@ pub struct AgenticHookDetailView {
 
 impl AgenticJobHookView {
     pub fn from_row(row: &crate::agentic::model::AgenticJobHookRow) -> Self {
-        let operator_prompt = row.operator_prompt.trim();
-        let operator_prompt_summary = if operator_prompt.is_empty() {
-            "—".to_string()
-        } else {
-            let mut collapsed = operator_prompt
-                .split_whitespace()
-                .collect::<Vec<_>>()
-                .join(" ");
-            if collapsed.chars().count() > 80 {
-                collapsed = collapsed.chars().take(80).collect::<String>() + "…";
-            }
-            collapsed
-        };
-
         let model_text = match (row.model_provider_id.as_deref(), row.model_id.as_deref()) {
             (Some(provider), Some(model)) => format!("{provider}/{model}"),
             _ => "—".to_string(),
@@ -85,7 +68,6 @@ impl AgenticJobHookView {
         };
 
         Self {
-            id: row.id,
             job_key: row.job_key.clone(),
             job_kind: row.job_kind.clone(),
             hook_event: row.hook_event.clone(),
@@ -95,7 +77,6 @@ impl AgenticJobHookView {
             timeout_text: format_duration(row.timeout_seconds),
             model_text,
             model_logo_url,
-            operator_prompt_summary,
             detail_url: format!("/agents/{}/hooks/{}", row.agent_key, row.id),
             run_now_action: format!("/agents/{}/hooks/{}/run", row.agent_key, row.id),
             toggle_action: format!("/agents/{}/hooks/{}/toggle", row.agent_key, row.id),
@@ -117,7 +98,6 @@ impl AgenticHookDetailView {
             enabled: row.enabled,
             enabled_label: summary.enabled_label,
             enabled_class: summary.enabled_class,
-            timeout_text: summary.timeout_text.clone(),
             timeout_editor: TimeoutEditorView {
                 display_text: summary.timeout_text,
                 edit_text: format_duration(row.timeout_seconds),
@@ -125,8 +105,8 @@ impl AgenticHookDetailView {
                 error: None,
             },
             model_text: summary.model_text,
-            created_at_text: format_timestamp_utc(row.created_at),
-            updated_at_text: format_timestamp_utc(row.updated_at),
+            created_at: local_timestamp_view(row.created_at),
+            updated_at: local_timestamp_view(row.updated_at),
             operator_prompt_text: if row.operator_prompt.trim().is_empty() {
                 "—".to_string()
             } else {

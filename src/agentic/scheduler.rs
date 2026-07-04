@@ -13,7 +13,7 @@ use crate::{
             JOB_KIND_ANALYSIS, JOB_KIND_TRADING, MAINTENANCE_STATUS_QUEUED,
         },
         store,
-        timeframe::parse_timeframe_seconds,
+        timeframe::{boundary_for_due_at, parse_timeframe_seconds},
     },
     agents::{
         model::BACKEND_KIND_OPENCODE,
@@ -381,7 +381,7 @@ async fn process_schedule_for_agent(
 ) -> bool {
     let schedule_id = schedule.schedule_id;
     let job_key = schedule.job_key.clone();
-    let scheduled_for = schedule.next_run_at;
+    let scheduled_for = boundary_for_due_at(schedule.next_run_at, schedule.trigger_delay_seconds);
 
     let claim = match store::claim_due_schedule(pool, schedule_id, Utc::now()).await {
         Ok(claim) => claim,
@@ -737,18 +737,6 @@ pub async fn dispatch_run(
     }
 }
 
-/// Spawn a detached dispatch task. Used by manual `Run now` flows
-/// where the caller is not waiting for completion.
-pub fn spawn_dispatch_task(
-    pool: DbPool,
-    backend: Arc<dyn AgenticBackend>,
-    request: DispatchRequest,
-) {
-    tokio::spawn(async move {
-        let _ = dispatch_run(pool, backend, request).await;
-    });
-}
-
 fn timeframe_duration_for_sort(schedule: &DueOpenCodeScheduleRow) -> i64 {
     let duration_seconds = match parse_timeframe_seconds(&schedule.timeframe) {
         Ok(seconds) => seconds,
@@ -1081,11 +1069,19 @@ mod tests {
 
     /// Pin a schedule's `next_run_at` to the latest due boundary for
     /// `timeframe` at or before `now`, so a claim at `now` will fire.
-    async fn pin_schedule_due(pool: &DbPool, schedule_id: i64, timeframe: &str) {
+    async fn pin_schedule_due(
+        pool: &DbPool,
+        schedule_id: i64,
+        timeframe: &str,
+    ) -> chrono::DateTime<Utc> {
         let now = Utc::now();
-        let due = crate::agentic::timeframe::latest_due_at_or_before(now, timeframe, 1)
-            .expect("compute latest due")
-            .expect("should have a previous due boundary");
+        let due = crate::agentic::timeframe::latest_due_at_or_before(
+            now,
+            timeframe,
+            crate::agentic::timeframe::DEFAULT_TRIGGER_DELAY_SECONDS,
+        )
+        .expect("compute latest due")
+        .expect("should have a previous due boundary");
         sqlx::query(
             "UPDATE agentic_job_schedules
                 SET enabled = true, next_run_at = $2
@@ -1096,6 +1092,7 @@ mod tests {
         .execute(pool)
         .await
         .expect("force due");
+        due
     }
 
     #[tokio::test]
@@ -1112,7 +1109,7 @@ mod tests {
         .fetch_one(&pool)
         .await
         .expect("fetch schedule id");
-        pin_schedule_due(&pool, schedule_id, "15m").await;
+        let due = pin_schedule_due(&pool, schedule_id, "15m").await;
 
         let calls: Arc<Mutex<Vec<DispatchRequest>>> = Arc::new(Mutex::new(Vec::new()));
         let backend: Arc<dyn AgenticBackend> = Arc::new(FakeBackend::success(calls.clone()));
@@ -1137,6 +1134,13 @@ mod tests {
         assert_eq!(request.agent_key, key);
         assert_eq!(request.job_key, "analysis-15m");
         assert_eq!(request.timeframe.as_deref(), Some("15m"));
+        assert_eq!(
+            request.scheduled_for,
+            crate::agentic::timeframe::boundary_for_due_at(
+                due,
+                crate::agentic::timeframe::DEFAULT_TRIGGER_DELAY_SECONDS,
+            )
+        );
         drop(guard);
 
         run_until(|| async {

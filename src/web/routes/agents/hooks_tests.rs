@@ -2,9 +2,9 @@
 use crate::web::routes::router;
 use crate::web::routes::test_support::*;
 
-use std::{sync::{Arc, Mutex}};
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
+use std::sync::{Arc, Mutex};
 use tower::util::ServiceExt;
 
 use crate::{

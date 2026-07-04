@@ -10,7 +10,6 @@ use tower::util::ServiceExt;
 use crate::{
     agents::store::get_agent,
     hyperliquid::live_state::{AccountKey, AccountLiveState, LiveMarginState},
-    web::AppState,
 };
 
 use super::test_support::*;

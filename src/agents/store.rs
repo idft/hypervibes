@@ -83,6 +83,7 @@ pub async fn list_enabled_agent_runtimes(pool: &DbPool) -> Result<Vec<AgentRunti
     Ok(rows)
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
 pub async fn get_agent_runtime(pool: &DbPool, id: &str) -> Result<Option<AgentRuntimeRow>> {
     let row = query_as::<_, AgentRuntimeRow>(
         "SELECT id,
@@ -490,6 +491,7 @@ pub async fn touch_api_key_last_used(pool: &DbPool, api_key: &str) -> Result<()>
     Ok(())
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
 pub async fn runtime_matches_backend(
     pool: &DbPool,
     runtime_id: &str,

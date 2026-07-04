@@ -1,6 +1,5 @@
-use std::time::Duration;
-
 use std::collections::BTreeMap;
+use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow};
 use reqwest::StatusCode;
@@ -41,6 +40,7 @@ impl OpenCodeClient {
         Ok(Self { http, config })
     }
 
+    #[cfg_attr(not(test), allow(dead_code))]
     pub fn config(&self) -> &OpenCodeClientConfig {
         &self.config
     }
@@ -189,8 +189,6 @@ pub struct OpenCodeProvidersResponse {
     pub all: Vec<OpenCodeProviderInfo>,
     #[serde(default)]
     pub connected: Vec<String>,
-    #[serde(default)]
-    pub default: BTreeMap<String, String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]

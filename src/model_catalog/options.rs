@@ -197,19 +197,15 @@ mod tests {
                 )]),
             }],
             connected: vec!["anthropic".to_string()],
-            default: BTreeMap::new(),
         };
         let snapshot = ModelsDevCatalogSnapshot {
             providers: BTreeMap::from([(
                 "anthropic".to_string(),
                 ModelsDevProvider {
-                    id: "anthropic".to_string(),
                     name: "Anthropic".to_string(),
-                    env: Vec::new(),
                     models: BTreeMap::from([(
                         "claude-sonnet-4".to_string(),
                         ModelsDevModel {
-                            id: "claude-sonnet-4".to_string(),
                             name: "Claude Sonnet 4".to_string(),
                             reasoning: Some(true),
                             tool_call: Some(true),

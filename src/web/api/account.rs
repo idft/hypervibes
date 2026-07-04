@@ -1,6 +1,10 @@
 use std::sync::Arc;
 
-use axum::{Json, extract::State, response::{IntoResponse, Response}};
+use axum::{
+    Json,
+    extract::State,
+    response::{IntoResponse, Response},
+};
 use chrono::{DateTime, Duration, Utc};
 use rust_decimal::Decimal;
 

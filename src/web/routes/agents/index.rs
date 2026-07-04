@@ -10,15 +10,37 @@ use axum::{
 use chrono::Utc;
 use tracing::error;
 
+use super::super::shared::unique_violation_message;
 use crate::web::error::AppError;
 use crate::{
-    agents::{crypto::{encrypt, generate_api_key}, keys::derive_wallet_address, model::{AgentRegistryRow, AgentRuntimeRow, BACKEND_KIND_OPENCODE, CreateAgentForm, slugify_agent_key}, prompts::{DEFAULT_ANALYSIS_STRATEGY_PROMPT, DEFAULT_TRADING_STRATEGY_PROMPT}, store::{delete_agent as delete_agent_in_store, get_agent, insert_agent, list_agents, list_enabled_agent_runtimes}},
-    hyperliquid::{live_state::{AccountKey, AccountLiveState, LiveConnectionStatus}},
-    opencode::workspace::{OpenCodeWorkspaceAgent, WorkspaceGenerationMode, delete_agent_workspace, generate_agent_workspace, runtime_config_for_generated_workspace},
-    web::{AppState, templates::{AccountBalanceView, AgentListEntry, AgentsNewPageTemplate, AgentsPageTemplate}},
+    agents::{
+        crypto::{encrypt, generate_api_key},
+        keys::derive_wallet_address,
+        model::{
+            AgentRegistryRow, AgentRuntimeRow, BACKEND_KIND_OPENCODE, CreateAgentForm,
+            slugify_agent_key,
+        },
+        prompts::{DEFAULT_ANALYSIS_STRATEGY_PROMPT, DEFAULT_TRADING_STRATEGY_PROMPT},
+        store::{
+            delete_agent as delete_agent_in_store, get_agent, insert_agent, list_agents,
+            list_enabled_agent_runtimes,
+        },
+    },
+    hyperliquid::live_state::{AccountKey, AccountLiveState, LiveConnectionStatus},
+    opencode::workspace::{
+        OpenCodeWorkspaceAgent, WorkspaceGenerationMode, delete_agent_workspace,
+        generate_agent_workspace, runtime_config_for_generated_workspace,
+    },
+    web::{
+        AppState,
+        templates::{
+            AccountBalanceView, AgentListEntry, AgentsNewPageTemplate, AgentsPageTemplate,
+        },
+    },
 };
-use super::super::shared::unique_violation_message;
-pub(in crate::web::routes) async fn agents_index(State(state): State<Arc<AppState>>) -> Result<Html<String>, AppError> {
+pub(in crate::web::routes) async fn agents_index(
+    State(state): State<Arc<AppState>>,
+) -> Result<Html<String>, AppError> {
     let agents = list_agents(&state.db_pool).await?;
 
     let entries: Vec<AgentListEntry> = agents
@@ -54,7 +76,9 @@ pub(in crate::web::routes) async fn agents_index(State(state): State<Arc<AppStat
 
     Ok(Html(template.render()?))
 }
-pub(in crate::web::routes) async fn agents_new(State(state): State<Arc<AppState>>) -> Result<Html<String>, AppError> {
+pub(in crate::web::routes) async fn agents_new(
+    State(state): State<Arc<AppState>>,
+) -> Result<Html<String>, AppError> {
     let runtimes = list_enabled_agent_runtimes(&state.db_pool).await?;
     let template = AgentsNewPageTemplate {
         form: CreateAgentForm {

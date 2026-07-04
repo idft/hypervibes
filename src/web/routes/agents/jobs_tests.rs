@@ -3,13 +3,13 @@ use super::*;
 use crate::web::routes::router;
 use crate::web::routes::test_support::*;
 
-use std::{sync::{Arc, Mutex}};
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
+use std::sync::{Arc, Mutex};
 use tower::util::ServiceExt;
 
 use crate::{
-    agentic::{model::{JOB_KIND_ANALYSIS, JOB_KIND_TRADING}},
+    agentic::model::{JOB_KIND_ANALYSIS, JOB_KIND_TRADING},
     agents::store::replace_agent_instruments,
 };
 
@@ -664,11 +664,10 @@ async fn post_job_timeout_accepts_humanized_and_composite_inputs() {
             .unwrap();
         assert_eq!(response.status(), StatusCode::SEE_OTHER, "input: {raw}");
 
-        let schedule =
-            crate::agentic::store::get_agent_schedule(&pool, &agent_key, schedule_id)
-                .await
-                .expect("get schedule")
-                .expect("schedule present");
+        let schedule = crate::agentic::store::get_agent_schedule(&pool, &agent_key, schedule_id)
+            .await
+            .expect("get schedule")
+            .expect("schedule present");
         assert_eq!(schedule.timeout_seconds, expected_seconds, "input: {raw}");
     }
 }

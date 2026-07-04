@@ -939,7 +939,6 @@ pub struct CancelAllSummary {
 mod tests {
     use super::super::model;
     use rust_decimal_macros::dec;
-    use serde_json::json;
     use tokio::sync::Mutex;
 
     use super::*;
@@ -994,11 +993,6 @@ mod tests {
             me
         }
 
-        async fn with_mid(symbol: &str, value: Decimal) -> Self {
-            let me = Self::new().await;
-            me.mids.lock().await.insert(symbol.to_string(), value);
-            me
-        }
     }
 
     impl ExchangeClient for FakeExchange {

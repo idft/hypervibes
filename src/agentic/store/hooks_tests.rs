@@ -1,16 +1,11 @@
 use chrono::Utc;
-use sqlx::query_as;
 
-use crate::{
-    agentic::model::{JOB_KIND_MARKET_ANALYSIS, RUN_STATUS_QUEUED},
-    agents::store::insert_agent,
-    test_db,
-};
+use crate::{agentic::model::JOB_KIND_MARKET_ANALYSIS, agents::store::insert_agent, test_db};
 
 use super::test_support::sample_agent;
 use super::{
     QueuedHookRun, delete_agent_hook, get_agent_hook, get_run, insert_agent_hook,
-    insert_queued_hook_run, list_agent_hooks, set_hook_enabled, set_hook_timeout,
+    insert_queued_hook_run, set_hook_timeout,
 };
 
 #[tokio::test]

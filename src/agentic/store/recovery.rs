@@ -10,8 +10,10 @@ use crate::agentic::model::{
 use super::common::ACTIVE_STATUSES;
 
 const OPENCODE_STATUS_IDLE: &str = "idle";
-pub(crate) const ORPHANED_QUEUED_RUN_SUMMARY: &str = "queued run orphaned by app restart after timeout";
-pub(crate) const ORPHANED_RUNNING_RUN_SUMMARY: &str = "running run orphaned by app restart after timeout";
+pub(crate) const ORPHANED_QUEUED_RUN_SUMMARY: &str =
+    "queued run orphaned by app restart after timeout";
+pub(crate) const ORPHANED_RUNNING_RUN_SUMMARY: &str =
+    "running run orphaned by app restart after timeout";
 
 fn active_job_kinds_for_lane(job_kind: &str) -> &'static [&'static str] {
     match job_kind {

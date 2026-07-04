@@ -6,9 +6,8 @@ use crate::{
     agentic::{
         job_key::build_generated_job_key,
         model::{
-            AgenticJobScheduleRow, AgenticRunRow, DueOpenCodeScheduleRow,
-            JOB_KIND_ANALYSIS, JOB_KIND_TRADING, RUN_STATUS_QUEUED,
-            RUN_STATUS_SKIPPED,
+            AgenticJobScheduleRow, AgenticRunRow, DueOpenCodeScheduleRow, JOB_KIND_ANALYSIS,
+            JOB_KIND_TRADING, RUN_STATUS_QUEUED, RUN_STATUS_SKIPPED,
         },
         timeframe::{
             DEFAULT_TRIGGER_DELAY_SECONDS, boundary_for_due_at, latest_due_at_or_before,

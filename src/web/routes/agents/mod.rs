@@ -1,39 +1,40 @@
-mod index;
-mod show;
-mod transactions;
-mod memories;
-mod prompts;
-mod settings;
-mod jobs;
 mod hooks;
-mod runs;
-mod live_stream;
-mod shared;
+#[cfg(test)]
+mod hooks_tests;
+mod index;
 #[cfg(test)]
 mod index_tests;
+mod jobs;
 #[cfg(test)]
-mod show_tests;
+mod jobs_tests;
+mod live_stream;
 #[cfg(test)]
-mod transactions_tests;
+mod live_stream_tests;
+mod memories;
 #[cfg(test)]
 mod memories_tests;
+mod prompts;
 #[cfg(test)]
 mod prompts_tests;
 #[cfg(test)]
-mod settings_tests;
-#[cfg(test)]
-mod jobs_tests;
-#[cfg(test)]
-mod hooks_tests;
+mod router_tests;
+mod runs;
 #[cfg(test)]
 mod runs_tests;
+mod settings;
 #[cfg(test)]
-mod live_stream_tests;
+mod settings_tests;
+mod shared;
+mod show;
 #[cfg(test)]
-mod router_tests;
+mod show_tests;
+mod transactions;
+#[cfg(test)]
+mod transactions_tests;
 
-pub(in crate::web::routes) use self::{
-    index::*, show::*, transactions::*, memories::*, prompts::*, settings::*,
-    jobs::*, hooks::*, runs::*, live_stream::*,
-};
+#[cfg(test)]
 use self::shared::*;
+pub(in crate::web::routes) use self::{
+    hooks::*, index::*, jobs::*, live_stream::*, memories::*, prompts::*, runs::*, settings::*,
+    show::*, transactions::*,
+};

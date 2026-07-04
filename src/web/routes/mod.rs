@@ -1,11 +1,11 @@
 mod agents;
 mod backends;
+#[cfg(test)]
+mod backends_tests;
 mod model_catalog;
 mod root;
 mod settings;
 mod shared;
-#[cfg(test)]
-mod backends_tests;
 #[cfg(test)]
 pub(in crate::web::routes) mod test_support;
 
@@ -13,7 +13,10 @@ use self::{agents::*, backends::*, model_catalog::*, root::*, settings::*};
 
 use std::sync::Arc;
 
-use axum::{Router, routing::{get, post}};
+use axum::{
+    Router,
+    routing::{get, post},
+};
 
 use crate::web::AppState;
 
@@ -130,4 +133,3 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/settings", get(settings_index).post(settings_update))
         .with_state(state)
 }
-

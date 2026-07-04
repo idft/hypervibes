@@ -1,7 +1,6 @@
 use askama::Template;
 
 use super::*;
-use crate::web::templates::test_support::*;
 
 #[test]
 fn server_error_page_renders_base_layout() {

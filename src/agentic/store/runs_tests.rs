@@ -6,6 +6,9 @@ use crate::{
         JOB_KIND_MARKET_ANALYSIS, RUN_STATUS_ABORTED, RUN_STATUS_FAILED, RUN_STATUS_QUEUED,
         RUN_STATUS_RUNNING, RUN_STATUS_SKIPPED, RUN_STATUS_SUCCEEDED,
     },
+    agentic::timeframe::{
+        DEFAULT_TRIGGER_DELAY_SECONDS, boundary_for_due_at, latest_due_at_or_before,
+    },
     agents::store::insert_agent,
     test_db,
 };
@@ -225,7 +228,6 @@ async fn insert_queued_run_inserts_manual_dispatch_run_and_does_not_advance_sche
             .await
             .expect("fetch before next_run_at");
 
-    let before = Utc::now();
     let outcome = insert_queued_run(&pool, &key, schedule_id)
         .await
         .expect("manual run");
@@ -243,12 +245,19 @@ async fn insert_queued_run_inserts_manual_dispatch_run_and_does_not_advance_sche
         .expect("fetch run")
         .expect("run present");
     assert_eq!(run.status, RUN_STATUS_QUEUED);
-    assert!(run.scheduled_for >= before);
-    assert!(run.scheduled_for <= after);
     assert_eq!(
         run.timeframe.as_deref(),
         Some(super::schedules::DEFAULT_ANALYSIS_TIMEFRAME)
     );
+    let expected_scheduled_for = latest_due_at_or_before(
+        after,
+        super::schedules::DEFAULT_ANALYSIS_TIMEFRAME,
+        DEFAULT_TRIGGER_DELAY_SECONDS,
+    )
+    .expect("compute latest due")
+    .map(|due| boundary_for_due_at(due, DEFAULT_TRIGGER_DELAY_SECONDS))
+    .expect("expected a closed 15m boundary");
+    assert_eq!(run.scheduled_for, expected_scheduled_for);
     let delta = (run.scheduled_for - scheduled_for)
         .num_microseconds()
         .unwrap_or(i64::MAX);

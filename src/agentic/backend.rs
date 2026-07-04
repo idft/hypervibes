@@ -239,6 +239,7 @@ pub async fn dispatch_with_timeout(
 }
 
 #[derive(Debug, Clone)]
+#[cfg_attr(not(test), allow(dead_code))]
 pub enum DispatchOutcome {
     Succeeded { backend_run_ref: String },
     Failed { summary: String },

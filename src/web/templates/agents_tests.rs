@@ -1,8 +1,7 @@
 use askama::Template;
 
 use crate::{
-    agents::model::CreateAgentForm,
-    hyperliquid::live_state::{AccountLiveState, LiveConnectionStatus},
+    agents::model::CreateAgentForm, hyperliquid::live_state::AccountLiveState,
     hyperliquid::sync_state::SyncStateRow,
 };
 
@@ -72,8 +71,7 @@ fn agents_show_page_renders_base_layout_and_delete_modal() {
         environment: "live".to_string(),
         ..Default::default()
     });
-    let open_positions_html =
-        OpenPositionsPartialTemplate::render_view(positions_view).unwrap();
+    let open_positions_html = OpenPositionsPartialTemplate::render_view(positions_view).unwrap();
     let orders_view = OpenOrdersView::from_live_state(AccountLiveState {
         account_address: "0x1234567890abcdef".to_string(),
         environment: "live".to_string(),
@@ -121,18 +119,8 @@ fn opencode_agent_shows_jobs_tab_with_recent_runs() {
         AgentsShowPageTemplate::new(sample_opencode_detail_row(), AgentShowTab::Jobs);
     template.jobs_loaded = true;
     template.jobs = vec![
-        AgenticJobScheduleView::from_row(&sample_schedule_row(
-            1,
-            "analysis-15m",
-            "analysis",
-            true,
-        )),
-        AgenticJobScheduleView::from_row(&sample_schedule_row(
-            2,
-            "trading-1m",
-            "trading",
-            false,
-        )),
+        AgenticJobScheduleView::from_row(&sample_schedule_row(1, "analysis-15m", "analysis", true)),
+        AgenticJobScheduleView::from_row(&sample_schedule_row(2, "trading-1m", "trading", false)),
     ];
     template.hooks_loaded = true;
     template.hooks = vec![AgenticJobHookView::from_row(&sample_hook_row(3, true))];
@@ -167,8 +155,7 @@ fn opencode_agent_shows_jobs_tab_with_recent_runs() {
 
 #[test]
 fn opencode_agent_places_settings_tab_after_jobs() {
-    let template =
-        AgentsShowPageTemplate::new(sample_opencode_detail_row(), AgentShowTab::Jobs);
+    let template = AgentsShowPageTemplate::new(sample_opencode_detail_row(), AgentShowTab::Jobs);
 
     let labels: Vec<&str> = template.tabs.iter().map(|tab| tab.label).collect();
     assert_eq!(
@@ -334,15 +321,12 @@ fn settings_tab_renders_workspace_template_drift() {
     assert!(rendered.contains("AGENTS.md"));
     assert!(rendered.contains("+3"));
     assert!(rendered.contains("-1"));
-    assert!(
-        rendered.contains("Only files generated from the workspace template are compared.")
-    );
+    assert!(rendered.contains("Only files generated from the workspace template are compared."));
 }
 
 #[test]
 fn prompts_tab_renders_strategy_copy_and_reset_defaults_ui() {
-    let template =
-        AgentsShowPageTemplate::new(sample_agent_detail_row(), AgentShowTab::Prompts);
+    let template = AgentsShowPageTemplate::new(sample_agent_detail_row(), AgentShowTab::Prompts);
 
     let rendered = template.render().unwrap();
     assert!(rendered.contains("Strategy Prompts"));

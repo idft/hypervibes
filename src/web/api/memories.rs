@@ -133,9 +133,7 @@ impl LatestMemoryQuery {
     }
 }
 
-pub(super) fn parse_latest_memories_limit(
-    limit: Option<&str>,
-) -> Result<Option<usize>, ApiError> {
+pub(super) fn parse_latest_memories_limit(limit: Option<&str>) -> Result<Option<usize>, ApiError> {
     let Some(raw_limit) = limit.map(str::trim) else {
         return Ok(None);
     };

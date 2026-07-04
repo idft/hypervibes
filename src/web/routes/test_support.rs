@@ -7,16 +7,20 @@ use axum::body::Body;
 use chrono::Utc;
 use rust_decimal::Decimal;
 
+use crate::agents::{keys::derive_wallet_address, model::slugify_agent_key, store::insert_agent};
 use crate::{
     agentic::backend::{AgenticBackend, DispatchRequest, DispatchResult},
-    agents::{crypto::EncryptionKey, model::CreateAgentRuntimeForm, store::{insert_agent_runtime, update_agent_runtime_config}},
+    agents::{
+        crypto::EncryptionKey,
+        model::CreateAgentRuntimeForm,
+        store::{insert_agent_runtime, update_agent_runtime_config},
+    },
     memory::CreateMemory,
     test_db,
-    web::{ui_events::UiEventHub, AppState},
+    web::{AppState, ui_events::UiEventHub},
 };
-use crate::agents::{keys::derive_wallet_address, model::slugify_agent_key, store::insert_agent};
-use http_body_util::BodyExt as _;
 use axum::response::Response;
+use http_body_util::BodyExt as _;
 
 pub(in crate::web::routes) struct NoopAgenticBackend;
 #[async_trait]
@@ -42,7 +46,9 @@ impl AgenticBackend for RecordingAgenticBackend {
 pub(in crate::web::routes) async fn test_state() -> Arc<AppState> {
     test_state_with_backend(Arc::new(NoopAgenticBackend)).await
 }
-pub(in crate::web::routes) async fn test_state_with_backend(agentic_backend: Arc<dyn AgenticBackend>) -> Arc<AppState> {
+pub(in crate::web::routes) async fn test_state_with_backend(
+    agentic_backend: Arc<dyn AgenticBackend>,
+) -> Arc<AppState> {
     let pool = Arc::new(test_db::pool().await);
     let cache_dir = std::path::PathBuf::from("/tmp/opencode/vibetrading-routes-cache");
     Arc::new(AppState {
@@ -52,8 +58,8 @@ pub(in crate::web::routes) async fn test_state_with_backend(agentic_backend: Arc
         encryption_key: EncryptionKey::new(
             "test",
             [
-                0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21,
-                22, 23, 24, 25, 26, 27, 28, 29, 30, 31,
+                0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22,
+                23, 24, 25, 26, 27, 28, 29, 30, 31,
             ],
         ),
         live_accounts: Arc::new(crate::hyperliquid::live_state::LiveAccountStore::new()),
@@ -67,10 +73,7 @@ pub(in crate::web::routes) async fn test_state_with_backend(agentic_backend: Arc
         },
         opencode_client: Arc::new(
             crate::opencode::client::OpenCodeClient::new(
-                crate::opencode::client::OpenCodeClientConfig::new(
-                    "opencode".to_string(),
-                    None,
-                ),
+                crate::opencode::client::OpenCodeClientConfig::new("opencode".to_string(), None),
             )
             .unwrap(),
         ),
@@ -176,7 +179,11 @@ pub(in crate::web::routes) async fn seed_sync_state(state: &Arc<AppState>, walle
     .await
     .expect("insert sync state");
 }
-pub(in crate::web::routes) async fn seed_instrument(state: &Arc<AppState>, instrument_id: &str, active: bool) {
+pub(in crate::web::routes) async fn seed_instrument(
+    state: &Arc<AppState>,
+    instrument_id: &str,
+    active: bool,
+) {
     let now = Utc::now();
     sqlx::query(
         "INSERT INTO hyperliquid.instruments (
@@ -210,10 +217,14 @@ pub(in crate::web::routes) async fn seed_instrument(state: &Arc<AppState>, instr
     .await
     .expect("insert instrument");
 }
-pub(in crate::web::routes) async fn insert_test_agent(state: &Arc<AppState>) -> Option<(String, String)> {
+pub(in crate::web::routes) async fn insert_test_agent(
+    state: &Arc<AppState>,
+) -> Option<(String, String)> {
     insert_test_agent_with_text(state, String::new(), String::new()).await
 }
-pub(in crate::web::routes) async fn insert_test_opencode_agent(state: &Arc<AppState>) -> Option<(String, String)> {
+pub(in crate::web::routes) async fn insert_test_opencode_agent(
+    state: &Arc<AppState>,
+) -> Option<(String, String)> {
     ensure_test_runtime(
         state,
         "opencode-local",
@@ -256,7 +267,11 @@ pub(in crate::web::routes) async fn insert_test_opencode_agent(state: &Arc<AppSt
         .expect("insert default schedules");
     Some((agent_key, wallet_address))
 }
-pub(in crate::web::routes) async fn ensure_test_runtime(state: &Arc<AppState>, id: &str, backend_kind: &str) {
+pub(in crate::web::routes) async fn ensure_test_runtime(
+    state: &Arc<AppState>,
+    id: &str,
+    backend_kind: &str,
+) {
     let form = CreateAgentRuntimeForm {
         id: id.to_string(),
         name: format!("{backend_kind}-{id}"),
@@ -267,7 +282,10 @@ pub(in crate::web::routes) async fn ensure_test_runtime(state: &Arc<AppState>, i
 
     let _ = insert_agent_runtime(&state.db_pool, &form).await;
 }
-pub(in crate::web::routes) async fn seed_workspace_runtime_config(state: &Arc<AppState>, agent_key: &str) {
+pub(in crate::web::routes) async fn seed_workspace_runtime_config(
+    state: &Arc<AppState>,
+    agent_key: &str,
+) {
     update_agent_runtime_config(
         &state.db_pool,
         agent_key,

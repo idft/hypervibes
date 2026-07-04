@@ -11,8 +11,14 @@ fn run_detail_page_renders_opencode_session_sections() {
         status: "idle".to_string(),
         directory: "/workspaces/agents/test-agent".to_string(),
         model_text: "anthropic/claude-3-5-sonnet".to_string(),
-        created_at_text: "2026-06-27 00:00 UTC".to_string(),
-        updated_at_text: "2026-06-27 00:02 UTC".to_string(),
+        created_at: LocalTimestampView {
+            iso: "2026-06-27T00:00:00Z".to_string(),
+            fallback_text: "2026-06-27 00:00 UTC".to_string(),
+        },
+        updated_at: LocalTimestampView {
+            iso: "2026-06-27T00:02:00Z".to_string(),
+            fallback_text: "2026-06-27 00:02 UTC".to_string(),
+        },
         input_tokens_text: "1,200".to_string(),
         output_tokens_text: "800".to_string(),
         cache_read_tokens_text: "0".to_string(),
@@ -24,12 +30,18 @@ fn run_detail_page_renders_opencode_session_sections() {
         compaction_count_text: "1".to_string(),
         share_url: String::new(),
         commands: vec![OpenCodeCommandView {
-            created_at_text: "2026-06-27 00:00 UTC".to_string(),
+            created_at: LocalTimestampView {
+                iso: "2026-06-27T00:00:00Z".to_string(),
+                fallback_text: "2026-06-27 00:00 UTC".to_string(),
+            },
             command_name: "vibetrading-analysis".to_string(),
             command_args: "Agent key: test-agent".to_string(),
         }],
         messages: vec![OpenCodeMessageView {
-            created_at_text: "2026-06-27 00:01 UTC".to_string(),
+            created_at: LocalTimestampView {
+                iso: "2026-06-27T00:01:00Z".to_string(),
+                fallback_text: "2026-06-27 00:01 UTC".to_string(),
+            },
             role_label: "assistant".to_string(),
             role_class: "border-sky-900/60 bg-sky-950/30 text-sky-300".to_string(),
             model_text: "anthropic/claude-3-5-sonnet".to_string(),
@@ -38,12 +50,17 @@ fn run_detail_page_renders_opencode_session_sections() {
             system_prompt: String::new(),
         }],
         tool_executions: vec![OpenCodeToolExecutionView {
-            started_at_text: "2026-06-27 00:01 UTC".to_string(),
-            completed_at_text: "2026-06-27 00:01 UTC".to_string(),
+            started_at: Some(LocalTimestampView {
+                iso: "2026-06-27T00:01:00Z".to_string(),
+                fallback_text: "2026-06-27 00:01 UTC".to_string(),
+            }),
+            completed_at: Some(LocalTimestampView {
+                iso: "2026-06-27T00:01:45Z".to_string(),
+                fallback_text: "2026-06-27 00:01 UTC".to_string(),
+            }),
             tool_name: "vibetrading.get_positions".to_string(),
             success_label: "success".to_string(),
-            success_class: "border-emerald-900/60 bg-emerald-950/30 text-emerald-300"
-                .to_string(),
+            success_class: "border-emerald-900/60 bg-emerald-950/30 text-emerald-300".to_string(),
             duration_text: "45ms".to_string(),
             args_json: "{}".to_string(),
             result_json: "{}".to_string(),

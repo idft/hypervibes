@@ -2,14 +2,19 @@
 use crate::web::routes::router;
 use crate::web::routes::test_support::*;
 
-use std::fs;
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use chrono::Utc;
+use std::fs;
 use tower::util::ServiceExt;
 
 use crate::{
-    agents::{model::CreateAgentRuntimeForm, prompts::{DEFAULT_ANALYSIS_STRATEGY_PROMPT, DEFAULT_TRADING_STRATEGY_PROMPT}, store::{get_agent, insert_agent_runtime}, model::slugify_agent_key},
+    agents::{
+        model::CreateAgentRuntimeForm,
+        model::slugify_agent_key,
+        prompts::{DEFAULT_ANALYSIS_STRATEGY_PROMPT, DEFAULT_TRADING_STRATEGY_PROMPT},
+        store::{get_agent, insert_agent_runtime},
+    },
     hyperliquid::live_state::{AccountKey, AccountLiveState, LiveConnectionStatus},
     opencode::workspace::OpenCodeWorkspaceRuntimeConfig,
 };

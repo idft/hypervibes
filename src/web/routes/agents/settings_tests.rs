@@ -2,13 +2,16 @@
 use crate::web::routes::router;
 use crate::web::routes::test_support::*;
 
-use std::{fs, sync::Arc};
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
+use std::{fs, sync::Arc};
 use tower::util::ServiceExt;
 
 use crate::{
-    agents::{store::{list_agent_instrument_ids, replace_agent_instruments}, model::slugify_agent_key},
+    agents::{
+        model::slugify_agent_key,
+        store::{list_agent_instrument_ids, replace_agent_instruments},
+    },
     opencode::workspace::agent_workspace_host_path,
 };
 
@@ -294,9 +297,8 @@ async fn opencode_agent_settings_route_renders_workspace_template_drift() {
         .unwrap();
     assert_eq!(create_response.status(), StatusCode::SEE_OTHER);
 
-    let workspace_path =
-        agent_workspace_host_path(&state.opencode_workspace_config, &agent_key)
-            .expect("workspace path");
+    let workspace_path = agent_workspace_host_path(&state.opencode_workspace_config, &agent_key)
+        .expect("workspace path");
     fs::write(workspace_path.join("AGENTS.md"), "user-modified\n").expect("modify AGENTS.md");
 
     let response = app

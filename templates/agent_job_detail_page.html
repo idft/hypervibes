@@ -72,7 +72,9 @@
         </div>
         <div class="rounded-2xl border border-zinc-800 bg-[#0d0d10] p-5">
             <p class="text-xs uppercase tracking-[0.16em] text-zinc-500">Next run</p>
-            <p class="mt-2 font-mono text-sm text-zinc-200">{{ job.next_run_text }}</p>
+            <p class="mt-2 font-mono text-sm text-zinc-200">
+                <time class="local-datetime" data-local-format="datetime" datetime="{{ job.next_run_at.iso }}" title="{{ job.next_run_at.fallback_text }}">{{ job.next_run_at.fallback_text }}</time>
+            </p>
         </div>
         <div class="rounded-2xl border border-zinc-800 bg-[#0d0d10] p-5">
             <p class="text-xs uppercase tracking-[0.16em] text-zinc-500">Model</p>
@@ -172,9 +174,23 @@
                         <td class="px-4 py-3 align-top">
                             <span class="inline-flex rounded-full border px-2 py-0.5 text-xs font-medium {{ run.status_class }}">{{ run.status_label }}</span>
                         </td>
-                        <td class="px-4 py-3 align-top font-mono text-xs text-zinc-300">{{ run.scheduled_for_text }}</td>
-                        <td class="px-4 py-3 align-top font-mono text-xs text-zinc-300">{{ run.started_text }}</td>
-                        <td class="px-4 py-3 align-top font-mono text-xs text-zinc-300">{{ run.finished_text }}</td>
+                        <td class="px-4 py-3 align-top font-mono text-xs text-zinc-300">
+                            <time class="local-datetime" data-local-format="datetime" datetime="{{ run.scheduled_for.iso }}" title="{{ run.scheduled_for.fallback_text }}">{{ run.scheduled_for.fallback_text }}</time>
+                        </td>
+                        <td class="px-4 py-3 align-top font-mono text-xs text-zinc-300">
+                            {% if let Some(started_at) = run.started_at %}
+                            <time class="local-datetime" data-local-format="datetime" datetime="{{ started_at.iso }}" title="{{ started_at.fallback_text }}">{{ started_at.fallback_text }}</time>
+                            {% else %}
+                            <span class="text-zinc-500">—</span>
+                            {% endif %}
+                        </td>
+                        <td class="px-4 py-3 align-top font-mono text-xs text-zinc-300">
+                            {% if let Some(finished_at) = run.finished_at %}
+                            <time class="local-datetime" data-local-format="datetime" datetime="{{ finished_at.iso }}" title="{{ finished_at.fallback_text }}">{{ finished_at.fallback_text }}</time>
+                            {% else %}
+                            <span class="text-zinc-500">—</span>
+                            {% endif %}
+                        </td>
                         <td class="px-4 py-3 align-top font-mono text-xs text-zinc-300">{{ run.duration_text }}</td>
                         <td class="px-4 py-3 align-top break-all font-mono text-xs text-zinc-300">
                             {% if run.backend_run_ref.is_empty() %}

@@ -8,7 +8,7 @@ use chrono::Utc;
 use rust_decimal::Decimal;
 use tower::util::ServiceExt;
 
-use crate::{hyperliquid::live_state::{AccountKey, AccountLiveState}};
+use crate::hyperliquid::live_state::{AccountKey, AccountLiveState};
 
 #[tokio::test]
 async fn agent_transactions_route_renders_full_timeline() {

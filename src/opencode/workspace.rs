@@ -54,10 +54,6 @@ impl WorkspaceTemplateDrift {
     pub fn is_in_sync(&self) -> bool {
         self.workspace_exists && self.changed_files.is_empty()
     }
-
-    pub fn has_changes(&self) -> bool {
-        !self.changed_files.is_empty()
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

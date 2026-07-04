@@ -9,11 +9,11 @@ use axum::{
 use uuid::Uuid;
 
 use crate::{
+    agents::crypto as agent_crypto,
     agents::{
         AuthenticatedAgent,
         store::{get_agent, get_agent_private_key_ciphertext, list_agent_instrument_ids},
     },
-    agents::crypto as agent_crypto,
     hyperliquid::orders::{
         gateway::{
             CancelAllSummary, CancelOutcome, GatewayError, HyperliquidExchange, cancel_all,

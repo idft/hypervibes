@@ -31,11 +31,13 @@ pub fn is_valid_runtime_id(value: &str) -> bool {
 pub struct AgentRuntimeRow {
     pub id: String,
     pub created_at: DateTime<Utc>,
+    #[allow(dead_code)]
     pub updated_at: DateTime<Utc>,
     pub name: String,
     pub backend_kind: String,
     pub enabled: bool,
     pub base_url: Option<String>,
+    #[allow(dead_code)]
     pub runtime_config: serde_json::Value,
 }
 

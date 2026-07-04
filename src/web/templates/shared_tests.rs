@@ -1,5 +1,4 @@
 use super::*;
-use crate::web::templates::test_support::*;
 
 #[test]
 fn animated_number_formats_with_thousands_separators() {

@@ -96,12 +96,6 @@ pub struct AgentMaintenanceTaskRow {
     pub finished_at: Option<DateTime<Utc>>,
 }
 
-#[derive(Debug, Clone)]
-pub enum AgenticRunSource {
-    Schedule(i64),
-    Hook(i64),
-}
-
 #[derive(Debug, Clone, sqlx::FromRow)]
 #[allow(dead_code)]
 pub struct DueOpenCodeScheduleRow {
