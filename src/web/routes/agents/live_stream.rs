@@ -13,7 +13,7 @@ use tracing::warn;
 
 use crate::web::error::AppError;
 use crate::{
-    agents::store::get_agent,
+    agents::store::{get_agent, list_agent_instrument_ids},
     hyperliquid::live_state::{
             AccountKey, AccountLiveState, LiveConnectionStatus,
         },
@@ -46,6 +46,17 @@ pub(in crate::web::routes) async fn agent_live_stream(
         Some(agent) => agent,
         None => return Ok((StatusCode::NOT_FOUND, "agent not found").into_response()),
     };
+    let configured_coins = match list_agent_instrument_ids(&state.db_pool, &agent.agent_key).await {
+        Ok(rows) => rows,
+        Err(error) => {
+            warn!(
+                agent_key = %agent.agent_key,
+                error = ?error,
+                "failed to list configured instruments for live positions stream"
+            );
+            Vec::new()
+        }
+    };
 
     let account_key = AccountKey::new(&agent.wallet_address, &agent.environment);
     let live_accounts = Arc::clone(&state.live_accounts);
@@ -63,7 +74,7 @@ pub(in crate::web::routes) async fn agent_live_stream(
             status: LiveConnectionStatus::Starting,
             ..Default::default()
         });
-    let mut initial_events = render_live_events(&initial_snapshot)?;
+    let mut initial_events = render_live_events(&initial_snapshot, &configured_coins)?;
     initial_events
         .push(render_latest_trade_execution_summary_event(&state.db_pool, &agent.agent_key).await?);
     initial_events
@@ -71,6 +82,7 @@ pub(in crate::web::routes) async fn agent_live_stream(
 
     let account_key_filter = account_key.clone();
     let live_accounts_filter = Arc::clone(&live_accounts);
+    let configured_coins_filter = configured_coins.clone();
     let notifications = BroadcastStream::new(live_accounts.subscribe())
         .filter_map(move |item| {
             let account_key = account_key_filter.clone();
@@ -91,8 +103,9 @@ pub(in crate::web::routes) async fn agent_live_stream(
         .flat_map(move |_key| {
             let live_accounts = Arc::clone(&live_accounts_filter);
             let key = account_key.clone();
+            let configured_coins = configured_coins_filter.clone();
             let events = match live_accounts.get(&key) {
-                Some(snapshot) => match render_live_events(&snapshot) {
+                Some(snapshot) => match render_live_events(&snapshot, &configured_coins) {
                     Ok(events) => events,
                     Err(e) => {
                         warn!(error = ?e, "failed to render live SSE events");
@@ -188,10 +201,11 @@ pub(in crate::web::routes) async fn agent_live_stream(
 }
 pub(in crate::web::routes) fn render_live_events(
     state: &AccountLiveState,
+    configured_coins: &[String],
 ) -> Result<Vec<Event>, AppError> {
     Ok(vec![
         render_account_balance_event(state)?,
-        render_open_positions_event(state)?,
+        render_open_positions_event(state, configured_coins)?,
         render_open_orders_event(state)?,
     ])
 }
@@ -204,8 +218,12 @@ pub(in crate::web::routes) fn render_account_balance_event(
 }
 pub(in crate::web::routes) fn render_open_positions_event(
     state: &AccountLiveState,
+    configured_coins: &[String],
 ) -> Result<Event, AppError> {
-    let view = OpenPositionsView::from_live_state(state.clone());
+    let view = OpenPositionsView::from_live_state_with_configured_coins(
+        state.clone(),
+        configured_coins,
+    );
     let html = OpenPositionsPartialTemplate::render_view(view)?;
     Ok(Event::default().event("positions").data(html))
 }

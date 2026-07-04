@@ -8,6 +8,7 @@ use chrono::Utc;
 use tower::util::ServiceExt;
 
 use crate::{
+    agents::store::replace_agent_instruments,
     hyperliquid::live_state::{AccountKey, AccountLiveState, LiveConnectionStatus},
     memory::CreateMemory,
 };
@@ -255,6 +256,52 @@ async fn open_positions_stream_emits_initial_rows_when_state_present() {
     assert!(text.contains("BTC"));
     assert!(text.contains("long"));
     assert!(text.contains("+25.00%"));
+}
+
+#[tokio::test]
+async fn open_positions_stream_emits_configured_placeholder_rows_without_live_position() {
+    let state = test_state().await;
+
+    let (agent_key, wallet_address) = match insert_test_agent(&state).await {
+        Some(pair) => pair,
+        None => return,
+    };
+
+    seed_instrument(&state, "BTC", true).await;
+    replace_agent_instruments(&state.db_pool, &agent_key, &["BTC".to_string()])
+        .await
+        .expect("select BTC instrument");
+
+    let key = AccountKey::new(&wallet_address, "live");
+    state.live_accounts.replace(
+        key.clone(),
+        AccountLiveState {
+            account_address: key.account_address.clone(),
+            environment: key.environment.clone(),
+            status: LiveConnectionStatus::Connected,
+            updated_at: Some(Utc::now()),
+            ..Default::default()
+        },
+    );
+
+    let app = router(state);
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri(format!("/agents/{}/live/stream", agent_key))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let text = read_sse_chunk(response.into_body(), 250).await;
+    assert!(text.contains("event: positions"));
+    assert!(text.contains("BTC"));
+    assert!(text.contains("No position"));
+    assert!(text.contains("https://app.hyperliquid.xyz/trade/BTC"));
+    assert!(!text.contains("No open positions"));
 }
 #[tokio::test]
 async fn open_orders_stream_returns_404_for_unknown_agent() {

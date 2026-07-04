@@ -16,7 +16,7 @@ use super::transactions::apply_live_cash_balance_anchor;
 use crate::{
     agents::{
         model::BACKEND_KIND_OPENCODE,
-        store::{get_agent, list_agent_instrument_options},
+        store::{get_agent, list_agent_instrument_ids, list_agent_instrument_options},
     },
     hyperliquid::{
         live_state::{AccountKey, AccountLiveState, LiveConnectionStatus},
@@ -318,6 +318,18 @@ pub(in crate::web::routes) async fn populate_positions_tab(
     agent: &crate::agents::model::AgentDetailRow,
     template: &mut AgentsShowPageTemplate,
 ) -> Result<(), AppError> {
+    let configured_coins = match list_agent_instrument_ids(&state.db_pool, &agent.agent_key).await {
+        Ok(rows) => rows,
+        Err(error) => {
+            warn!(
+                agent_key = %agent.agent_key,
+                error = ?error,
+                "failed to list configured instruments for positions tab"
+            );
+            Vec::new()
+        }
+    };
+
     let account_key = AccountKey::new(&agent.wallet_address, &agent.environment);
     let live_snapshot = state
         .live_accounts
@@ -334,7 +346,8 @@ pub(in crate::web::routes) async fn populate_positions_tab(
         AccountBalancePartialTemplate::render_view(account_balance_view.clone())
             .map_err(anyhow::Error::from)?;
 
-    let open_positions_view = OpenPositionsView::from_live_state(live_snapshot.clone());
+    let open_positions_view =
+        OpenPositionsView::from_live_state_with_configured_coins(live_snapshot.clone(), &configured_coins);
     template.open_positions_html = OpenPositionsPartialTemplate::render_view(open_positions_view)
         .map_err(anyhow::Error::from)?;
 

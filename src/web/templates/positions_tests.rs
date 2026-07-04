@@ -92,6 +92,40 @@ fn open_positions_view_handles_no_positions() {
 }
 
 #[test]
+fn open_positions_view_includes_configured_coins_without_live_positions() {
+    use crate::hyperliquid::live_state::{AccountLiveState, LivePosition};
+
+    let state = AccountLiveState {
+        account_address: "0xtest".to_string(),
+        environment: "live".to_string(),
+        status: LiveConnectionStatus::Connected,
+        open_positions: vec![LivePosition {
+            coin: "BTC".to_string(),
+            szi: Some(rust_decimal::Decimal::new(1, 0)),
+            position_value: Some(rust_decimal::Decimal::new(30_000, 0)),
+            unrealized_pnl: Some(rust_decimal::Decimal::new(250, 0)),
+            margin_used: Some(rust_decimal::Decimal::new(600, 0)),
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+
+    let view = OpenPositionsView::from_live_state_with_configured_coins(
+        state,
+        &["ETH".to_string(), "BTC".to_string()],
+    );
+
+    assert_eq!(view.positions.len(), 2);
+    assert_eq!(view.positions[0].coin, "ETH");
+    assert!(!view.positions[0].has_position);
+    assert_eq!(view.positions[0].side, "No position");
+    assert_eq!(view.positions[0].market_url, "https://app.hyperliquid.xyz/trade/ETH");
+    assert_eq!(view.positions[1].coin, "BTC");
+    assert!(view.positions[1].has_position);
+    assert_eq!(view.summary.position_count, 1);
+}
+
+#[test]
 fn open_positions_view_has_no_state_when_only_starting() {
     use crate::hyperliquid::live_state::AccountLiveState;
     let state = AccountLiveState {
@@ -131,6 +165,31 @@ fn open_positions_partial_renders_empty_state() {
     let view = OpenPositionsView::from_live_state(state);
     let html = OpenPositionsPartialTemplate::render_view(view).unwrap();
     assert!(html.contains("No open positions"));
+}
+
+#[test]
+fn open_positions_partial_renders_configured_placeholder_rows_and_market_links() {
+    use crate::hyperliquid::live_state::AccountLiveState;
+
+    let state = AccountLiveState {
+        account_address: "0xtest".to_string(),
+        environment: "live".to_string(),
+        status: LiveConnectionStatus::Connected,
+        updated_at: Some(Utc::now()),
+        ..Default::default()
+    };
+
+    let view = OpenPositionsView::from_live_state_with_configured_coins(
+        state,
+        &["BTC".to_string()],
+    );
+    let html = OpenPositionsPartialTemplate::render_view(view).unwrap();
+
+    assert!(html.contains("No position"));
+    assert!(html.contains("https://app.hyperliquid.xyz/trade/BTC"));
+    assert!(html.contains("target=\"_blank\""));
+    assert!(html.contains("rel=\"noopener noreferrer\""));
+    assert!(!html.contains("No open positions"));
 }
 
 #[test]

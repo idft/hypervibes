@@ -24,9 +24,13 @@
             <tbody class="divide-y divide-zinc-800">
                 {% for pos in view.positions %}
                 <tr class="hover:bg-zinc-900/50">
-                    <td class="px-4 py-3 align-top font-medium text-zinc-100">{{ pos.coin }}</td>
+                    <td class="px-4 py-3 align-top font-medium text-zinc-100">
+                        <a href="{{ pos.market_url }}" target="_blank" rel="noopener noreferrer" class="hover:text-violet-300 hover:underline">{{ pos.coin }}</a>
+                    </td>
                     <td class="px-4 py-3 align-top">
-                        {% if pos.side == "long" %}
+                        {% if !pos.has_position %}
+                        <span class="text-zinc-500">{{ pos.side }}</span>
+                        {% else if pos.side == "long" %}
                         <span class="inline-flex rounded-full border border-emerald-900/60 bg-emerald-950/30 px-2 py-0.5 text-xs font-medium text-emerald-300">long</span>
                         {% else %}
                         <span class="inline-flex rounded-full border border-red-900/60 bg-red-950/30 px-2 py-0.5 text-xs font-medium text-red-300">short</span>

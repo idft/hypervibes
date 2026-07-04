@@ -1,3 +1,5 @@
+use std::collections::{HashMap, HashSet};
+
 use askama::Template;
 use rust_decimal::Decimal;
 
@@ -13,6 +15,8 @@ use super::shared::{
 #[allow(dead_code)]
 pub struct OpenPositionView {
     pub coin: String,
+    pub market_url: String,
+    pub has_position: bool,
     pub side: &'static str,
     pub size: String,
     pub entry_px: MoneyCell,
@@ -44,7 +48,15 @@ pub struct OpenPositionsView {
 }
 
 impl OpenPositionsView {
+    #[cfg_attr(not(test), allow(dead_code))]
     pub fn from_live_state(state: AccountLiveState) -> Self {
+        Self::from_live_state_with_configured_coins(state, &[])
+    }
+
+    pub fn from_live_state_with_configured_coins(
+        state: AccountLiveState,
+        configured_coins: &[String],
+    ) -> Self {
         let has_any_state = state.status != LiveConnectionStatus::Starting
             || state.updated_at.is_some()
             || !state.open_positions.is_empty()
@@ -66,7 +78,31 @@ impl OpenPositionsView {
                 .then_with(|| a.coin.cmp(&b.coin))
         });
 
-        let positions: Vec<OpenPositionView> = visible.iter().map(|p| position_view(p)).collect();
+        let mut visible_by_coin: HashMap<&str, &LivePosition> = visible
+            .iter()
+            .copied()
+            .map(|position| (position.coin.as_str(), position))
+            .collect();
+        let mut configured_seen = HashSet::new();
+        let mut positions = Vec::new();
+
+        for coin in configured_coins {
+            if !configured_seen.insert(coin.as_str()) {
+                continue;
+            }
+
+            if let Some(position) = visible_by_coin.remove(coin.as_str()) {
+                positions.push(position_view(position));
+            } else {
+                positions.push(empty_position_view(coin));
+            }
+        }
+
+        for position in &visible {
+            if visible_by_coin.contains_key(position.coin.as_str()) {
+                positions.push(position_view(position));
+            }
+        }
 
         let mut total_u_pnl = Decimal::ZERO;
         let mut total_notional = Decimal::ZERO;
@@ -84,7 +120,7 @@ impl OpenPositionsView {
         }
 
         let summary = OpenPositionsSummary {
-            position_count: positions.len(),
+            position_count: visible.len(),
             total_u_pnl: AnimatedNumber::for_pnl(total_u_pnl),
             total_notional: format_money_text(Some(total_notional)),
             total_margin_used: format_money_text(Some(total_margin)),
@@ -119,6 +155,8 @@ pub(super) fn position_view(pos: &LivePosition) -> OpenPositionView {
 
     OpenPositionView {
         coin: pos.coin.clone(),
+        market_url: hyperliquid_market_url(&pos.coin),
+        has_position: true,
         side,
         size: format_size(abs_szi),
         entry_px: format_neutral_money_cell_with_decimals(pos.entry_px, 0),
@@ -129,6 +167,27 @@ pub(super) fn position_view(pos: &LivePosition) -> OpenPositionView {
         return_on_equity: roe,
         roe_color_class,
     }
+}
+
+fn empty_position_view(coin: &str) -> OpenPositionView {
+    OpenPositionView {
+        coin: coin.to_string(),
+        market_url: hyperliquid_market_url(coin),
+        has_position: false,
+        side: "No position",
+        size: "-".to_string(),
+        entry_px: dash_cell(),
+        mark_px_or_value: "-".to_string(),
+        unrealized_pnl: dash_cell(),
+        liquidation_px: dash_cell(),
+        margin_used: dash_cell(),
+        return_on_equity: "-".to_string(),
+        roe_color_class: "text-zinc-500",
+    }
+}
+
+fn hyperliquid_market_url(coin: &str) -> String {
+    format!("https://app.hyperliquid.xyz/trade/{coin}")
 }
 
 pub(super) fn money_cell_for_pnl(value: Decimal) -> MoneyCell {
