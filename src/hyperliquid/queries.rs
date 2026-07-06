@@ -88,6 +88,7 @@ pub async fn list_account_transactions(
 
 /// Return all USDC balance-impacting events for an account, newest first,
 /// with the same running-balance calculation as [`list_account_transactions`].
+#[cfg_attr(not(test), allow(dead_code))]
 pub async fn list_all_account_transactions(
     pool: &DbPool,
     account_address: &str,
@@ -134,6 +135,111 @@ pub async fn list_all_account_transactions(
     .fetch_all(pool)
     .await
     .context("failed to list all account transactions")?;
+
+    Ok(rows)
+}
+
+/// Return the total number of USDC balance-impacting events recorded for an
+/// account. Used to compute pagination totals for the transactions tab.
+pub async fn count_account_transactions(
+    pool: &DbPool,
+    account_address: &str,
+    environment: &str,
+) -> Result<i64> {
+    let (count,): (i64,) =
+        sqlx::query_as("SELECT COUNT(*) FROM hyperliquid.account_timeline WHERE account_address = $1 AND environment = $2")
+            .bind(account_address)
+            .bind(environment)
+            .fetch_one(pool)
+            .await
+            .context("failed to count account transactions")?;
+    Ok(count)
+}
+
+/// Return the cumulative net USDC flow across the full account history —
+/// i.e. the running balance immediately after the most recent event. This
+/// is the same value the window-function CTE in
+/// [`list_account_transactions_page`] computes on its first ordered row,
+/// exposed separately so that a paginated caller can re-anchor displayed
+/// balances against a live wallet snapshot even when only a slice of rows
+/// is loaded. Returns `None` when the account has no journaled events
+/// (the SQL `SUM` of zero rows is `NULL`).
+pub async fn latest_account_running_balance(
+    pool: &DbPool,
+    account_address: &str,
+    environment: &str,
+) -> Result<Option<Decimal>> {
+    let (balance,): (Option<Decimal>,) = sqlx::query_as(
+        "SELECT SUM(COALESCE(usdc_delta, 0))
+           FROM hyperliquid.account_timeline
+          WHERE account_address = $1
+            AND environment = $2",
+    )
+    .bind(account_address)
+    .bind(environment)
+    .fetch_one(pool)
+    .await
+    .context("failed to fetch latest account running balance")?;
+    Ok(balance)
+}
+
+/// Return a single page of USDC balance-impacting events for an account,
+/// newest first. The `running_balance` value on each row is computed across
+/// the account's **full** history (via a window-function CTE) before the
+/// outer query slices the requested `limit`/`offset` window, so the
+/// displayed balance is correct on every page — not just the first.
+pub async fn list_account_transactions_page(
+    pool: &DbPool,
+    account_address: &str,
+    environment: &str,
+    limit: i64,
+    offset: i64,
+) -> Result<Vec<AccountTransactionRow>> {
+    let rows = sqlx::query_as::<_, AccountTransactionRow>(
+        "WITH ordered AS (
+             SELECT event_id,
+                    event_time,
+                    event_category,
+                    event_type,
+                    source_stream,
+                    symbol,
+                    asset,
+                    fee_usdc,
+                    realized_pnl_usdc,
+                    usdc_delta,
+                    payload,
+                    SUM(COALESCE(usdc_delta, 0))
+                      OVER (ORDER BY event_time, event_id
+                            ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)
+                      AS running_balance
+               FROM hyperliquid.account_timeline
+              WHERE account_address = $1
+                AND environment = $2
+          )
+         SELECT event_id,
+                event_time,
+                event_category,
+                event_type,
+                source_stream,
+                symbol,
+                asset,
+                fee_usdc,
+                realized_pnl_usdc,
+                usdc_delta,
+                payload,
+                running_balance
+           FROM ordered
+          ORDER BY event_time DESC, event_id DESC
+          LIMIT $3
+         OFFSET $4",
+    )
+    .bind(account_address)
+    .bind(environment)
+    .bind(limit)
+    .bind(offset)
+    .fetch_all(pool)
+    .await
+    .context("failed to list account transactions page")?;
 
     Ok(rows)
 }

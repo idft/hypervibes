@@ -45,9 +45,18 @@
     </section>
     {% else if show_transactions_tab %}
     <section class="mt-2 space-y-2">
-        <section class="rounded-2xl border border-zinc-800 bg-[#0d0d10] p-6">
-            <div>
+        <section id="agent-transactions" class="rounded-2xl border border-zinc-800 bg-[#0d0d10] p-6">
+            <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                 <h2 class="text-lg font-medium text-white">Transactions</h2>
+                <div class="flex items-center gap-2">
+                    {% if let Some(previous_page_url) = transactions_previous_page_url %}
+                    <a href="{{ previous_page_url }}" hx-get="{{ previous_page_url }}" hx-select="#agent-transactions" hx-target="#agent-transactions" hx-swap="outerHTML" hx-push-url="true" class="inline-flex items-center rounded-full border border-zinc-800 px-3 py-1.5 text-xs font-medium text-zinc-300 hover:border-zinc-700 hover:text-white">Previous</a>
+                    {% endif %}
+                    <span class="px-2 text-xs uppercase tracking-[0.16em] text-zinc-500">Page {{ transactions_page }} of {{ transactions_total_pages }}</span>
+                    {% if let Some(next_page_url) = transactions_next_page_url %}
+                    <a href="{{ next_page_url }}" hx-get="{{ next_page_url }}" hx-select="#agent-transactions" hx-target="#agent-transactions" hx-swap="outerHTML" hx-push-url="true" class="inline-flex items-center rounded-full border border-zinc-800 px-3 py-1.5 text-xs font-medium text-zinc-300 hover:border-zinc-700 hover:text-white">Next</a>
+                    {% endif %}
+                </div>
             </div>
             {% if transactions.is_empty() %}
             <div class="mt-4 rounded-xl border border-zinc-800 bg-zinc-950/70 p-6 text-center">
@@ -88,11 +97,23 @@
                             <td class="px-4 py-3 text-right align-top font-mono text-xs tabular-nums text-zinc-300">{{ tx.fee_usdc }}</td>
                             <td class="px-4 py-3 text-right align-top font-mono text-xs tabular-nums {{ tx.realized_pnl_usdc.color_class }}">{{ tx.realized_pnl_usdc.value }}</td>
                             <td class="px-4 py-3 text-right align-top font-mono text-xs tabular-nums {{ tx.usdc_delta.color_class }}">{{ tx.usdc_delta.value }}</td>
-                            <td class="px-4 py-3 text-right align-top font-mono text-xs tabular-nums {{ tx.running_balance.color_class }}">{{ tx.running_balance.value }}</td>
+                            <td class="px-4 py-3 text-right align-top font-mono text-xs tabular-nums text-zinc-300">{{ tx.running_balance.value }}</td>
                         </tr>
                         {% endfor %}
                     </tbody>
                 </table>
+            </div>
+            <div class="mt-4 flex flex-col gap-3 border-t border-zinc-800 pt-4 text-sm text-zinc-400 sm:flex-row sm:items-center sm:justify-between">
+                <p>Showing {{ transactions_range_start }}-{{ transactions_range_end }} of {{ transactions_total_count }} transactions</p>
+                <div class="flex items-center gap-2">
+                    {% if let Some(previous_page_url) = transactions_previous_page_url %}
+                    <a href="{{ previous_page_url }}" hx-get="{{ previous_page_url }}" hx-select="#agent-transactions" hx-target="#agent-transactions" hx-swap="outerHTML" hx-push-url="true" class="inline-flex items-center rounded-full border border-zinc-800 px-3 py-1.5 text-xs font-medium text-zinc-300 hover:border-zinc-700 hover:text-white">Previous</a>
+                    {% endif %}
+                    <span class="px-2 text-xs uppercase tracking-[0.16em] text-zinc-500">Page {{ transactions_page }} of {{ transactions_total_pages }}</span>
+                    {% if let Some(next_page_url) = transactions_next_page_url %}
+                    <a href="{{ next_page_url }}" hx-get="{{ next_page_url }}" hx-select="#agent-transactions" hx-target="#agent-transactions" hx-swap="outerHTML" hx-push-url="true" class="inline-flex items-center rounded-full border border-zinc-800 px-3 py-1.5 text-xs font-medium text-zinc-300 hover:border-zinc-700 hover:text-white">Next</a>
+                    {% endif %}
+                </div>
             </div>
             {% endif %}
         </section>

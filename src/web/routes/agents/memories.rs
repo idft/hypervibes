@@ -44,6 +44,7 @@ pub(in crate::web::routes) async fn agents_show_memories(
         &state,
         &agent_key,
         AgentShowTab::Memories,
+        None,
         Some(query),
         None,
         None,

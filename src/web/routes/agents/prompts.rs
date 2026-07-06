@@ -22,7 +22,7 @@ pub(in crate::web::routes) async fn agents_show_prompts(
     State(state): State<Arc<AppState>>,
     Path(agent_key): Path<String>,
 ) -> Result<Response, AppError> {
-    render_agent_show_page(&state, &agent_key, AgentShowTab::Prompts, None, None, None).await
+    render_agent_show_page(&state, &agent_key, AgentShowTab::Prompts, None, None, None, None).await
 }
 #[derive(Debug, Default, Deserialize)]
 pub(in crate::web::routes) struct UpdateAgentPromptForm {

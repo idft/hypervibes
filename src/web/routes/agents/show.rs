@@ -21,8 +21,9 @@ use crate::{
     hyperliquid::{
         live_state::{AccountKey, AccountLiveState, LiveConnectionStatus},
         queries::{
-            BalanceSeriesBucket, fetch_balance_series,
-            list_account_sync_state, list_all_account_transactions,
+            BalanceSeriesBucket, count_account_transactions, fetch_balance_series,
+            latest_account_running_balance, list_account_sync_state,
+            list_account_transactions_page,
         },
     },
     memory::{get_latest_agent_memory_by_type, list_agent_memories, memory_expires_at},
@@ -51,6 +52,7 @@ pub(in crate::web::routes) async fn agents_show(
         None,
         None,
         None,
+        None,
     )
     .await
 }
@@ -62,6 +64,11 @@ pub(in crate::web::routes) struct AgentJobsQuery {
     pub warning: Option<String>,
 }
 #[derive(Debug, Clone, Default, Deserialize)]
+pub(in crate::web::routes) struct AgentTransactionsQuery {
+    #[serde(default)]
+    pub page: String,
+}
+#[derive(Debug, Clone, Default, Deserialize)]
 pub(in crate::web::routes) struct AgentSettingsQuery {
     #[serde(default)]
     pub workspace_warning: Option<String>,
@@ -70,6 +77,7 @@ pub(in crate::web::routes) async fn render_agent_show_page(
     state: &Arc<AppState>,
     agent_key: &str,
     active_tab: AgentShowTab,
+    transactions_query: Option<AgentTransactionsQuery>,
     memories_query: Option<AgentMemoriesQuery>,
     settings_query: Option<AgentSettingsQuery>,
     jobs_query: Option<AgentJobsQuery>,
@@ -102,28 +110,11 @@ pub(in crate::web::routes) async fn render_agent_show_page(
             populate_positions_tab(state, &agent, &mut template).await?;
         }
         AgentShowTab::Transactions => {
-            template.transactions = match list_all_account_transactions(
-                &state.db_pool,
-                &agent.wallet_address,
-                &agent.environment,
-            )
-            .await
-            {
-                Ok(mut rows) => {
-                    apply_live_cash_balance_anchor(state, &agent, &mut rows);
-                    rows.into_iter().map(TransactionView::from_row).collect()
-                }
-                Err(error) => {
-                    warn!(
-                        agent_key = %agent.agent_key,
-                        wallet_address = %agent.wallet_address,
-                        environment = %agent.environment,
-                        error = ?error,
-                        "failed to list full account transactions for agent page"
-                    );
-                    Vec::new()
-                }
-            };
+            let requested_page = transactions_query
+                .as_ref()
+                .map(|query| parse_positive_page(&query.page))
+                .unwrap_or(1);
+            populate_transactions_tab(state, &agent, &mut template, requested_page).await;
         }
         AgentShowTab::Memories => {
             let memory_query = memories_query.unwrap_or_default();
@@ -312,6 +303,113 @@ pub(in crate::web::routes) fn parse_positive_page(raw: &str) -> usize {
         .ok()
         .filter(|page| *page > 0)
         .unwrap_or(1)
+}
+pub(in crate::web::routes) async fn populate_transactions_tab(
+    state: &Arc<AppState>,
+    agent: &crate::agents::model::AgentDetailRow,
+    template: &mut AgentsShowPageTemplate,
+    requested_transactions_page: usize,
+) {
+    const TRANSACTIONS_PER_PAGE: usize = 25;
+
+    match count_account_transactions(
+        &state.db_pool,
+        &agent.wallet_address,
+        &agent.environment,
+    )
+    .await
+    {
+        Ok(total_count) => {
+            let total_count = total_count as usize;
+            let total_pages = if total_count == 0 {
+                0
+            } else {
+                (total_count + TRANSACTIONS_PER_PAGE - 1) / TRANSACTIONS_PER_PAGE
+            };
+            let current_page = if total_pages == 0 {
+                1
+            } else {
+                requested_transactions_page.min(total_pages)
+            };
+
+            template.transactions_page = current_page;
+            template.transactions_total_pages = total_pages;
+            template.transactions_total_count = total_count;
+            template.transactions_previous_page_url = (current_page > 1)
+                .then(|| format!("/agents/{}/transactions?page={}", agent.agent_key, current_page - 1));
+            template.transactions_next_page_url = (total_pages > 0 && current_page < total_pages)
+                .then(|| format!("/agents/{}/transactions?page={}", agent.agent_key, current_page + 1));
+
+            if total_count == 0 {
+                return;
+            }
+
+            let offset = ((current_page - 1) * TRANSACTIONS_PER_PAGE) as i64;
+            let latest_running_balance = match latest_account_running_balance(
+                &state.db_pool,
+                &agent.wallet_address,
+                &agent.environment,
+            )
+            .await
+            {
+                Ok(value) => value,
+                Err(error) => {
+                    warn!(
+                        agent_key = %agent.agent_key,
+                        wallet_address = %agent.wallet_address,
+                        environment = %agent.environment,
+                        error = ?error,
+                        "failed to fetch latest account running balance for transactions page"
+                    );
+                    None
+                }
+            };
+
+            match list_account_transactions_page(
+                &state.db_pool,
+                &agent.wallet_address,
+                &agent.environment,
+                TRANSACTIONS_PER_PAGE as i64,
+                offset,
+            )
+            .await
+            {
+                Ok(mut rows) => {
+                    apply_live_cash_balance_anchor(
+                        state,
+                        agent,
+                        latest_running_balance,
+                        &mut rows,
+                    );
+                    let row_count = rows.len();
+                    template.transactions = rows
+                        .into_iter()
+                        .map(TransactionView::from_row)
+                        .collect();
+                    template.transactions_range_start = offset as usize + 1;
+                    template.transactions_range_end = offset as usize + row_count;
+                }
+                Err(error) => {
+                    warn!(
+                        agent_key = %agent.agent_key,
+                        wallet_address = %agent.wallet_address,
+                        environment = %agent.environment,
+                        error = ?error,
+                        "failed to list account transactions page for agent page"
+                    );
+                }
+            }
+        }
+        Err(error) => {
+            warn!(
+                agent_key = %agent.agent_key,
+                wallet_address = %agent.wallet_address,
+                environment = %agent.environment,
+                error = ?error,
+                "failed to count account transactions for agent page"
+            );
+        }
+    }
 }
 pub(in crate::web::routes) async fn populate_positions_tab(
     state: &Arc<AppState>,

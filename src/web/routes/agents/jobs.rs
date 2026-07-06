@@ -58,6 +58,7 @@ pub(in crate::web::routes) async fn agents_show_jobs(
         AgentShowTab::Jobs,
         None,
         None,
+        None,
         Some(query),
     )
     .await

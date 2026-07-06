@@ -2,7 +2,7 @@ use askama::Template;
 
 use crate::{
     agents::model::CreateAgentForm, hyperliquid::live_state::AccountLiveState,
-    hyperliquid::sync_state::SyncStateRow,
+    hyperliquid::queries::AccountTransactionRow, hyperliquid::sync_state::SyncStateRow,
 };
 
 use super::*;
@@ -222,6 +222,49 @@ fn jobs_page_renders_recent_runs_pagination_controls() {
     assert!(rendered.contains("id=\"agent-recent-runs\""));
     assert!(rendered.contains("hx-select=\"#agent-recent-runs\""));
     assert!(rendered.contains("hx-target=\"#agent-recent-runs\""));
+    assert!(rendered.contains("hx-swap=\"outerHTML\""));
+    assert!(rendered.contains("hx-push-url=\"true\""));
+}
+
+#[test]
+fn transactions_page_renders_pagination_controls() {
+    let row = AccountTransactionRow {
+        event_id: "tx-page-005".to_string(),
+        event_time: Utc::now(),
+        event_category: "ledger".to_string(),
+        event_type: "ledger".to_string(),
+        source_stream: "test".to_string(),
+        symbol: None,
+        asset: None,
+        fee_usdc: None,
+        realized_pnl_usdc: None,
+        usdc_delta: Some(rust_decimal::Decimal::new(1, 0)),
+        payload: serde_json::Value::Null,
+        running_balance: Some(rust_decimal::Decimal::new(5, 0)),
+    };
+    let mut template =
+        AgentsShowPageTemplate::new(sample_agent_detail_row(), AgentShowTab::Transactions);
+    template.transactions = vec![TransactionView::from_row(row)];
+    template.transactions_page = 2;
+    template.transactions_total_pages = 3;
+    template.transactions_total_count = 125;
+    template.transactions_range_start = 51;
+    template.transactions_range_end = 100;
+    template.transactions_previous_page_url =
+        Some("/agents/test-agent/transactions?page=1".to_string());
+    template.transactions_next_page_url = Some("/agents/test-agent/transactions?page=3".to_string());
+
+    let rendered = template
+        .render()
+        .expect("render transactions page pagination");
+
+    assert!(rendered.contains("Showing 51-100 of 125 transactions"));
+    assert!(rendered.contains("Page 2 of 3"));
+    assert!(rendered.contains("/agents/test-agent/transactions?page=1"));
+    assert!(rendered.contains("/agents/test-agent/transactions?page=3"));
+    assert!(rendered.contains("id=\"agent-transactions\""));
+    assert!(rendered.contains("hx-select=\"#agent-transactions\""));
+    assert!(rendered.contains("hx-target=\"#agent-transactions\""));
     assert!(rendered.contains("hx-swap=\"outerHTML\""));
     assert!(rendered.contains("hx-push-url=\"true\""));
 }

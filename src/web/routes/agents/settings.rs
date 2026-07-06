@@ -47,6 +47,7 @@ pub(in crate::web::routes) async fn agents_show_settings(
         &agent_key,
         AgentShowTab::Settings,
         None,
+        None,
         Some(query),
         None,
     )
