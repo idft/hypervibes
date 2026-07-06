@@ -14,6 +14,8 @@ pub use hooks::{
     set_hook_timeout,
 };
 #[allow(unused_imports)]
+pub use recovery::recover_inactive_runs_all;
+#[allow(unused_imports)]
 pub use runs::{
     QueuedHookRun, QueuedScheduleRun, agent_has_active_runs, count_agent_runs, get_run,
     insert_queued_hook_run, insert_queued_hook_run_for_automatic_dispatch, insert_queued_run,

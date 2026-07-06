@@ -12,18 +12,21 @@ use super::shared::{WORKSPACE_MAINTENANCE_DUPLICATE_WARNING, urlencode};
 use super::show::{AgentSettingsQuery, render_agent_show_page};
 use crate::{
     agentic::store::InsertWorkspaceMaintenanceTaskOutcome,
-    agents::{model::BACKEND_KIND_OPENCODE, store::{get_agent, replace_agent_instruments}},
+    agents::{
+        model::BACKEND_KIND_OPENCODE,
+        store::{get_agent, replace_agent_instruments},
+    },
     opencode::workspace::{
         OpenCodeWorkspaceAgent, OpenCodeWorkspaceRuntimeConfig, agent_workspace_host_path,
         diff_agent_workspace_from_template,
     },
     web::{
-        error::AppError,
         AppState,
+        error::AppError,
         templates::{
-            AgentShowTab,
-            OpenCodeWorkspaceMaintenanceStatusTemplate, OpenCodeWorkspaceMaintenanceView,
-            OpenCodeWorkspaceSectionTemplate, OpenCodeWorkspaceSettingsView,
+            AgentShowTab, OpenCodeWorkspaceMaintenanceStatusTemplate,
+            OpenCodeWorkspaceMaintenanceView, OpenCodeWorkspaceSectionTemplate,
+            OpenCodeWorkspaceSettingsView,
         },
     },
 };

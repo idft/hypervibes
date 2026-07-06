@@ -20,26 +20,18 @@ use super::shared::{
 use crate::web::error::AppError;
 use crate::{
     agentic::{
-        model::{
-            HOOK_EVENT_ANALYSIS_BATCH_COMPLETED, JOB_KIND_MARKET_ANALYSIS,
-        },
-        scheduler::{
-            build_hook_dispatch_request, dispatch_run,
-        },
+        model::{HOOK_EVENT_ANALYSIS_BATCH_COMPLETED, JOB_KIND_MARKET_ANALYSIS},
+        scheduler::{build_hook_dispatch_request, dispatch_run},
         store::QueuedHookRun,
         timeframe::parse_timeout_seconds,
     },
-    agents::{
-        model::BACKEND_KIND_OPENCODE,
-        store::get_agent,
-    },
+    agents::{model::BACKEND_KIND_OPENCODE, store::get_agent},
     model_catalog::options::parse_model_selection,
     web::{
         AppState,
         templates::{
-            AgentHookDetailPageTemplate,
-            AgentHookNewPageTemplate, AgentShowTab, CreateAgentHookFormValues,
-            build_agent_show_tabs,
+            AgentHookDetailPageTemplate, AgentHookNewPageTemplate, AgentShowTab,
+            CreateAgentHookFormValues, build_agent_show_tabs,
         },
     },
 };
@@ -344,7 +336,13 @@ pub(in crate::web::routes) async fn agents_run_hook_now(
             Some(request) => {
                 let pool = state.db_pool.clone();
                 let backend = state.agentic_backend.clone();
+                // Hook jobs are intentionally allowed to start after
+                // shutdown has been initiated; the tracker guard below
+                // makes sure the dispatch is awaited on the way out so
+                // we don't exit with a half-completed run row.
+                let in_flight = state.in_flight.clone();
                 tokio::spawn(async move {
+                    let _guard = in_flight.track();
                     let _ = dispatch_run(pool, backend, request).await;
                 });
             }

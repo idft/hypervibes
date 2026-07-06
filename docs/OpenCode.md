@@ -74,7 +74,19 @@ OpenCode jobs are scheduled by Vibetrading.
 
 The `AgenticScheduler` claims due work, dispatches runs through the OpenCode backend adapter, and stores run state in Postgres.
 
-Before claiming new work for an agent lane, Vibetrading reconciles stale active runs left behind by app restarts. A `running` run whose OpenCode session is recorded as `idle` after a command was created is marked `succeeded`; queued/running orphan rows that never reached OpenCode are failed after their configured timeout. This prevents one interrupted process from causing all later runs in the same lane to be skipped forever.
+Before claiming new work for an agent lane, Vibetrading reconciles stale active runs left behind by app restarts. A `running` run whose OpenCode session is recorded as `idle` after a command was created is marked `succeeded`; queued or running orphan rows that have exceeded their configured timeout are marked `failed`, regardless of whether they ever reached an OpenCode session. The `AgenticScheduler` also runs a periodic global recovery sweep (throttled to once a minute) that applies the same reconciliation across every agent, so a `running` run whose dispatch worker has died does not block its lane until the next claim attempt. This prevents one interrupted process from causing all later runs in the same lane to be skipped forever.
+
+## Graceful shutdown
+
+A single signal handler in `main` watches for `SIGINT` (Ctrl-C) and `SIGTERM` and flips one shared `watch<bool>`. The web server, the `AgenticScheduler`, and the `HyperliquidAgentMonitor` all observe that flag and stop claiming new work. The web server's `axum::serve` `with_graceful_shutdown` future is driven by the same flag, so in-flight HTTP requests still finish.
+
+Every dispatch is wrapped in an `InFlightTracker` guard that increments when the task starts and decrements on `Drop`. The scheduler and `main` both call `wait_idle_with_timeout(30m)` after the shutdown signal so any `run_command` HTTP call already in flight is given a chance to return naturally (or hit the schedule's own `timeout_seconds`). The 30-minute ceiling is `max schedule timeout (15m) + 15m buffer`; if it is hit, a warning is logged and the next start's recovery sweep will mark the affected runs as failed orphans.
+
+The new policy on what may and may not start after the shutdown signal:
+
+- **Automatic scheduled dispatches** are not started. The scheduler's `tick` short-circuits when `shutdown_rx` is set, and the `for (agent_key, schedules) in by_agent` loop checks the flag between agents.
+- **Manual "Run now" on a schedule** is rejected by the jobs route with a redirect that flashes a "server is shutting down" warning. The run row is inserted and immediately marked `failed` so the operator's intent is recorded.
+- **Hook jobs (manual and automatic)** are still allowed to start after shutdown. Manual hook "Run now" runs even after the signal; the automatic `analysis_batch_completed` hook runs as part of its already-in-flight analysis lane. Both are tracked by the `InFlightTracker` so the drain logic awaits them.
 
 Queued workspace maintenance is processed before normal schedule dispatch, but it only starts once the agent is fully idle:
 

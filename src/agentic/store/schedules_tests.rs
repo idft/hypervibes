@@ -801,6 +801,195 @@ async fn claim_due_schedule_fails_timed_out_running_orphan_without_backend_ref()
 }
 
 #[tokio::test]
+async fn claim_due_schedule_fails_timed_out_running_orphan_with_stuck_session() {
+    let pool = test_db::pool().await;
+    let key = format!(
+        "recover-running-stuck-{}",
+        Utc::now().timestamp_nanos_opt().unwrap_or(0)
+    );
+    let schedule_id = seed_agent_and_schedule(&pool, &key, 0).await;
+    let previous_run_id = insert_test_run(&pool, schedule_id, RUN_STATUS_RUNNING)
+        .await
+        .expect("seed running run");
+    let session_id = format!(
+        "ses_stuck_{}",
+        Utc::now().timestamp_nanos_opt().unwrap_or(0)
+    );
+    query(
+        "UPDATE agentic_runs
+            SET backend_run_ref = $2,
+                started_at = now() - (timeout_seconds + 60) * interval '1 second',
+                created_at = now() - (timeout_seconds + 60) * interval '1 second',
+                updated_at = now() - (timeout_seconds + 60) * interval '1 second'
+          WHERE id = $1",
+    )
+    .bind(previous_run_id)
+    .bind(&session_id)
+    .execute(&pool)
+    .await
+    .expect("attach stuck session and age past timeout");
+    insert_test_opencode_session(&pool, &session_id, "active").await;
+
+    let now = Utc::now();
+    let due_boundary = latest_due_at_or_before(
+        now,
+        DEFAULT_ANALYSIS_TIMEFRAME,
+        DEFAULT_TRIGGER_DELAY_SECONDS,
+    )
+    .expect("compute latest due")
+    .expect("should have a previous due boundary");
+    query("UPDATE agentic_job_schedules SET next_run_at = $1 WHERE id = $2")
+        .bind(due_boundary)
+        .bind(schedule_id)
+        .execute(&pool)
+        .await
+        .expect("set due");
+
+    let outcome = claim_due_schedule(&pool, schedule_id, now)
+        .await
+        .expect("claim");
+    let new_run_id = match outcome {
+        ClaimedScheduleRun::Dispatch { run_id } => run_id,
+        other => panic!("expected Dispatch, got {other:?}"),
+    };
+
+    let previous_run = get_run(&pool, previous_run_id)
+        .await
+        .expect("fetch previous run")
+        .expect("previous run present");
+    assert_eq!(previous_run.status, RUN_STATUS_FAILED);
+    assert_eq!(
+        previous_run.error_summary.as_deref(),
+        Some(ORPHANED_RUNNING_RUN_SUMMARY)
+    );
+
+    let new_run = get_run(&pool, new_run_id)
+        .await
+        .expect("fetch new run")
+        .expect("new run present");
+    assert_eq!(new_run.status, RUN_STATUS_QUEUED);
+}
+
+#[tokio::test]
+async fn recover_inactive_runs_all_fails_stuck_session_orphan() {
+    let pool = test_db::pool().await;
+    let key = format!(
+        "recover-all-stuck-{}",
+        Utc::now().timestamp_nanos_opt().unwrap_or(0)
+    );
+    let schedule_id = seed_agent_and_schedule(&pool, &key, 0).await;
+    let run_id = insert_test_run(&pool, schedule_id, RUN_STATUS_RUNNING)
+        .await
+        .expect("seed running run");
+    let session_id = format!(
+        "ses_stuck_all_{}",
+        Utc::now().timestamp_nanos_opt().unwrap_or(0)
+    );
+    query(
+        "UPDATE agentic_runs
+            SET backend_run_ref = $2,
+                started_at = now() - (timeout_seconds + 60) * interval '1 second',
+                created_at = now() - (timeout_seconds + 60) * interval '1 second',
+                updated_at = now() - (timeout_seconds + 60) * interval '1 second'
+          WHERE id = $1",
+    )
+    .bind(run_id)
+    .bind(&session_id)
+    .execute(&pool)
+    .await
+    .expect("attach stuck session and age past timeout");
+    insert_test_opencode_session(&pool, &session_id, "active").await;
+
+    let recovered = crate::agentic::store::recover_inactive_runs_all(&pool, Utc::now())
+        .await
+        .expect("recover all");
+    assert!(
+        recovered >= 1,
+        "expected at least one recovery, got {recovered}"
+    );
+
+    let run = get_run(&pool, run_id)
+        .await
+        .expect("fetch run")
+        .expect("run present");
+    assert_eq!(run.status, RUN_STATUS_FAILED);
+    assert_eq!(
+        run.error_summary.as_deref(),
+        Some(ORPHANED_RUNNING_RUN_SUMMARY)
+    );
+    assert!(run.finished_at.is_some());
+}
+
+#[tokio::test]
+async fn recover_inactive_runs_all_recovers_idle_session_with_command() {
+    let pool = test_db::pool().await;
+    let key = format!(
+        "recover-all-idle-{}",
+        Utc::now().timestamp_nanos_opt().unwrap_or(0)
+    );
+    let schedule_id = seed_agent_and_schedule(&pool, &key, 0).await;
+    let run_id = insert_test_run(&pool, schedule_id, RUN_STATUS_RUNNING)
+        .await
+        .expect("seed running run");
+    let session_id = format!(
+        "ses_idle_all_{}",
+        Utc::now().timestamp_nanos_opt().unwrap_or(0)
+    );
+    query(
+        "UPDATE agentic_runs
+            SET backend_run_ref = $2
+          WHERE id = $1",
+    )
+    .bind(run_id)
+    .bind(&session_id)
+    .execute(&pool)
+    .await
+    .expect("attach session");
+    insert_test_opencode_session(&pool, &session_id, "idle").await;
+    insert_test_opencode_command(&pool, &session_id).await;
+
+    let recovered = crate::agentic::store::recover_inactive_runs_all(&pool, Utc::now())
+        .await
+        .expect("recover all");
+    assert!(
+        recovered >= 1,
+        "expected at least one recovery, got {recovered}"
+    );
+
+    let run = get_run(&pool, run_id)
+        .await
+        .expect("fetch run")
+        .expect("run present");
+    assert_eq!(run.status, RUN_STATUS_SUCCEEDED);
+    assert!(run.finished_at.is_some());
+}
+
+#[tokio::test]
+async fn recover_inactive_runs_all_skips_fresh_running_run() {
+    let pool = test_db::pool().await;
+    let key = format!(
+        "recover-all-fresh-{}",
+        Utc::now().timestamp_nanos_opt().unwrap_or(0)
+    );
+    let schedule_id = seed_agent_and_schedule(&pool, &key, 0).await;
+    let run_id = insert_test_run(&pool, schedule_id, RUN_STATUS_RUNNING)
+        .await
+        .expect("seed running run");
+
+    // Recover the run normally so other agents' orphans don't leak in.
+    let _ = crate::agentic::store::recover_inactive_runs_all(&pool, Utc::now())
+        .await
+        .expect("recover all");
+
+    let run = get_run(&pool, run_id)
+        .await
+        .expect("fetch run")
+        .expect("run present");
+    assert_eq!(run.status, RUN_STATUS_RUNNING);
+    assert!(run.finished_at.is_none());
+}
+
+#[tokio::test]
 async fn claim_due_schedule_returns_not_due_when_schedule_disabled() {
     let pool = test_db::pool().await;
     let key = format!("notdue-{}", Utc::now().timestamp_nanos_opt().unwrap_or(0));

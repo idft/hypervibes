@@ -10,19 +10,23 @@ use std::sync::Arc;
 use super::show::render_agent_show_page;
 use crate::web::error::AppError;
 use crate::{
-    agents::store::{
-            update_agent_analysis_prompt, update_agent_trading_prompt,
-        },
-    web::{
-        AppState,
-        templates::AgentShowTab,
-    },
+    agents::store::{update_agent_analysis_prompt, update_agent_trading_prompt},
+    web::{AppState, templates::AgentShowTab},
 };
 pub(in crate::web::routes) async fn agents_show_prompts(
     State(state): State<Arc<AppState>>,
     Path(agent_key): Path<String>,
 ) -> Result<Response, AppError> {
-    render_agent_show_page(&state, &agent_key, AgentShowTab::Prompts, None, None, None, None).await
+    render_agent_show_page(
+        &state,
+        &agent_key,
+        AgentShowTab::Prompts,
+        None,
+        None,
+        None,
+        None,
+    )
+    .await
 }
 #[derive(Debug, Default, Deserialize)]
 pub(in crate::web::routes) struct UpdateAgentPromptForm {

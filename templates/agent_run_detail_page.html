@@ -9,22 +9,12 @@
     {% include "agent_tabs.html" %}
 
     <header class="mt-2 flex flex-col gap-2 pb-6">
-        <div class="flex items-center gap-3">
-            <a href="/agents/{{ agent.agent_key }}/jobs" class="text-sm text-zinc-400 hover:text-zinc-200">Jobs</a>
-            {% if let Some(job_url) = run.job_url %}
-            <span class="text-zinc-600">/</span>
-            <a href="{{ job_url }}" class="text-sm text-zinc-400 hover:text-zinc-200">{{ run.job_key }}</a>
-            {% endif %}
-            <span class="text-zinc-600">/</span>
-            <span class="text-sm text-zinc-500">Run {{ run.id }}</span>
-        </div>
         <div class="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
             <div>
                 <div class="flex items-center gap-3">
-                    <h2 class="text-2xl font-semibold tracking-tight text-white">Run {{ run.id }}</h2>
+                    <h2 class="text-2xl font-semibold tracking-tight text-white">{{ run.job_key }} · Run {{ run.id }}</h2>
                     <span class="inline-flex rounded-full border px-2 py-0.5 text-xs font-medium {{ run.status_class }}">{{ run.status_label }}</span>
                 </div>
-                <p class="mt-2 text-sm text-zinc-400">{{ run.job_key }} · {{ run.job_kind }}</p>
             </div>
             <a href="{% if let Some(job_url) = run.job_url %}{{ job_url }}{% else %}/agents/{{ agent.agent_key }}/jobs{% endif %}" class="inline-flex w-fit items-center gap-2 rounded-full border border-zinc-800 px-4 py-2 text-sm font-medium text-zinc-300 hover:border-zinc-700 hover:text-white">
                 <span aria-hidden="true">&larr;</span>
@@ -46,7 +36,7 @@
         </div>
         <div class="rounded-2xl border border-zinc-800 bg-[#0d0d10] p-5">
             <p class="text-xs uppercase tracking-[0.16em] text-zinc-500">Duration</p>
-            <p class="mt-2 font-mono text-sm text-zinc-200">{{ run.duration_text }}</p>
+            <p class="mt-2 font-mono text-sm text-zinc-200">{% if run.status == "running" %}{% if let Some(started_at) = run.started_at %}<span data-running-duration data-started-at="{{ started_at.iso }}">{{ run.duration_text }}</span>{% else %}{{ run.duration_text }}{% endif %}{% else %}{{ run.duration_text }}{% endif %}</p>
         </div>
         <div class="rounded-2xl border border-zinc-800 bg-[#0d0d10] p-5">
             <p class="text-xs uppercase tracking-[0.16em] text-zinc-500">Timeout</p>

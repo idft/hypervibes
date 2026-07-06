@@ -11,39 +11,30 @@ use serde::Deserialize;
 use tracing::warn;
 
 use super::shared::{
-    ModelPickerContext, ModelSelectionForm, TimeoutErrorQuery, TimeoutForm, ToggleScheduleForm,
-    WORKSPACE_MAINTENANCE_ACTIVE_WARNING, build_model_picker_view, jobs_warning_redirect,
-    load_model_picker_context, parse_positive_schedule_seconds, timeout_error_redirect,
-    validate_model_selection_for_agent,
+    ModelPickerContext, ModelSelectionForm, SERVER_SHUTTING_DOWN_WARNING, TimeoutErrorQuery,
+    TimeoutForm, ToggleScheduleForm, WORKSPACE_MAINTENANCE_ACTIVE_WARNING, build_model_picker_view,
+    jobs_warning_redirect, load_model_picker_context, parse_positive_schedule_seconds,
+    timeout_error_redirect, validate_model_selection_for_agent,
 };
 use super::show::{AgentJobsQuery, render_agent_show_page};
 use crate::web::error::AppError;
 use crate::{
     agentic::{
-        model::{
-            JOB_KIND_ANALYSIS,
-            JOB_KIND_TRADING,
-        },
+        model::{JOB_KIND_ANALYSIS, JOB_KIND_TRADING},
         scheduler::{
-            dispatch_analysis_batch_completed_hook,
-            dispatch_request_from_schedule, dispatch_run,
+            dispatch_analysis_batch_completed_hook, dispatch_request_from_schedule, dispatch_run,
         },
-        store::QueuedScheduleRun,
+        store::{self, QueuedScheduleRun},
         timeframe::{parse_timeframe_seconds, parse_timeout_seconds},
     },
-    agents::{
-        model::BACKEND_KIND_OPENCODE,
-        store::get_agent,
-    },
+    agents::{model::BACKEND_KIND_OPENCODE, store::get_agent},
     hyperliquid::live_state::live_agent_snapshot_for_dispatch,
     model_catalog::options::parse_model_selection,
     web::{
         AppState,
         templates::{
-            AgentJobDetailPageTemplate,
-            AgentScheduleNewPageTemplate, AgentShowTab,
-            build_agent_show_tabs,
-            CreateAgentScheduleFormValues,
+            AgentJobDetailPageTemplate, AgentScheduleNewPageTemplate, AgentShowTab,
+            CreateAgentScheduleFormValues, build_agent_show_tabs,
         },
     },
 };
@@ -496,6 +487,23 @@ pub(in crate::web::routes) async fn agents_run_job_now(
             run_id,
             scheduled_for,
         } => {
+            // Scheduled Run now is not allowed once the server has
+            // begun shutting down: new work would either be killed
+            // mid-dispatch or block the drain until completion. Hook
+            // Run now is still allowed (see the hook route).
+            if *state.shutdown_rx.borrow() {
+                let _ = store::mark_run_failed(
+                    &state.db_pool,
+                    run_id,
+                    "server is shutting down; Run now was rejected",
+                    None,
+                )
+                .await;
+                return Ok(jobs_warning_redirect(
+                    &agent_key,
+                    SERVER_SHUTTING_DOWN_WARNING,
+                ));
+            }
             let agent = get_agent(&state.db_pool, &agent_key)
                 .await?
                 .ok_or_else(|| AppError(anyhow::anyhow!("agent not found")))?;
@@ -531,7 +539,9 @@ pub(in crate::web::routes) async fn agents_run_job_now(
             let live_accounts = state.live_accounts.clone();
             let trigger_hook = schedule.job_kind == JOB_KIND_ANALYSIS;
             let hook_agent_key = agent_key.clone();
+            let in_flight = state.in_flight.clone();
             tokio::spawn(async move {
+                let _guard = in_flight.track();
                 let result = dispatch_run(pool.clone(), backend.clone(), request).await;
                 if trigger_hook && result.succeeded {
                     let _ = dispatch_analysis_batch_completed_hook(

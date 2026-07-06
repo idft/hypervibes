@@ -11,11 +11,7 @@ use crate::{
         live_state::{AccountKey, AccountLiveState},
         queries::AccountTransactionRow,
     },
-    web::{
-        error::AppError,
-        AppState,
-        templates::AgentShowTab,
-    },
+    web::{AppState, error::AppError, templates::AgentShowTab},
 };
 pub(in crate::web::routes) async fn agents_show_transactions(
     State(state): State<Arc<AppState>>,

@@ -8,13 +8,7 @@ use axum::{
 };
 use serde::Deserialize;
 
-use crate::{
-    web::{
-        error::AppError,
-        AppState,
-        templates::SettingsPageTemplate,
-    },
-};
+use crate::web::{AppState, error::AppError, templates::SettingsPageTemplate};
 #[derive(Debug, Clone, Default, Deserialize)]
 pub(in crate::web::routes) struct SettingsUpdateForm {
     #[serde(default)]

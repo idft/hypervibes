@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use crate::{
-    agentic::backend::AgenticBackend,
+    agentic::{backend::AgenticBackend, in_flight::InFlightTracker},
     agents::crypto::EncryptionKey,
     cache::asset::AssetCache,
     db::DbPool,
@@ -25,4 +25,6 @@ pub struct AppState {
     pub opencode_client: Arc<OpenCodeClient>,
     pub model_catalog: Arc<ModelsDevCatalog>,
     pub asset_cache: Arc<AssetCache>,
+    pub in_flight: InFlightTracker,
+    pub shutdown_rx: tokio::sync::watch::Receiver<bool>,
 }

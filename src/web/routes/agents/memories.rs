@@ -18,9 +18,7 @@ use super::show::render_agent_show_page;
 use crate::web::error::AppError;
 use crate::{
     agents::store::get_agent,
-    memory::{
-        get_memory as get_memory_record, list_agent_memories,
-    },
+    memory::{get_memory as get_memory_record, list_agent_memories},
     web::{
         AppState,
         templates::{

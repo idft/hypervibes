@@ -73,7 +73,10 @@ fn run_detail_page_renders_opencode_session_sections() {
         .expect("render run detail page");
 
     assert!(rendered.contains("Agent sections"));
-    assert!(rendered.contains("href=\"/agents/test-agent/jobs\" data-agent-tab-link aria-current=\"page\""));
+    assert!(
+        rendered
+            .contains("href=\"/agents/test-agent/jobs\" data-agent-tab-link aria-current=\"page\"")
+    );
     assert!(!rendered.contains("hx-target=\"#agent-show-tab-content\""));
     assert!(rendered.contains("OpenCode session"));
     assert!(rendered.contains("ses_abc123"));

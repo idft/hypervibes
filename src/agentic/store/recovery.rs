@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
-use sqlx::{Postgres, Transaction, query_as};
+use sqlx::{PgPool, Postgres, Transaction, query_as};
 
 use crate::agentic::model::{
     JOB_KIND_ANALYSIS, JOB_KIND_MARKET_ANALYSIS, JOB_KIND_TRADING, RUN_STATUS_FAILED,
@@ -132,7 +132,6 @@ pub(crate) async fn recover_inactive_runs_in_lane_tx(
           WHERE agent_key = $1
             AND job_kind = ANY($2)
             AND status = $6
-            AND backend_run_ref IS NULL
             AND finished_at IS NULL
             AND COALESCE(started_at, created_at) + (timeout_seconds * interval '1 second') <= $4",
     )
@@ -146,6 +145,92 @@ pub(crate) async fn recover_inactive_runs_in_lane_tx(
     .await
     .context("failed to recover orphaned running runs in lane")?
     .rows_affected();
+
+    Ok(recovered_succeeded + recovered_queued + recovered_running)
+}
+
+/// Run a global recovery pass across every agent.
+///
+/// This is the periodic backstop that complements the per-lane
+/// [`recover_inactive_runs_in_lane_tx`] recovery. Lane recovery only
+/// fires when a new run is claimed for the same agent; without this
+/// periodic pass, a `running` run whose dispatch worker has died would
+/// block its lane until the next claim attempt. Periodic recovery
+/// turns those orphans into terminal `failed`/`succeeded` rows on a
+/// fixed cadence so subsequent schedules dispatch normally.
+pub async fn recover_inactive_runs_all(pool: &PgPool, now: DateTime<Utc>) -> Result<u64> {
+    let mut tx = pool
+        .begin()
+        .await
+        .context("failed to begin global agentic run recovery transaction")?;
+
+    let recovered_succeeded = sqlx::query(
+        "UPDATE agentic_runs AS runs
+            SET status = $1,
+                finished_at = COALESCE(runs.finished_at, sessions.updated_at, now()),
+                error_summary = NULL,
+                updated_at = now()
+           FROM opencode.sessions AS sessions
+          WHERE runs.status = $2
+            AND runs.backend_run_ref IS NOT NULL
+            AND sessions.id = runs.backend_run_ref
+            AND sessions.status = $3
+            AND EXISTS (
+                SELECT 1
+                  FROM opencode.commands AS commands
+                 WHERE commands.session_id = runs.backend_run_ref
+            )",
+    )
+    .bind(RUN_STATUS_SUCCEEDED)
+    .bind(RUN_STATUS_RUNNING)
+    .bind(OPENCODE_STATUS_IDLE)
+    .execute(&mut *tx)
+    .await
+    .context("failed to recover idle OpenCode runs globally")?
+    .rows_affected();
+
+    let recovered_queued = sqlx::query(
+        "UPDATE agentic_runs
+            SET status = $1,
+                finished_at = $2,
+                error_summary = $3,
+                updated_at = $2
+          WHERE status = $4
+            AND started_at IS NULL
+            AND finished_at IS NULL
+            AND created_at + (timeout_seconds * interval '1 second') <= $2",
+    )
+    .bind(RUN_STATUS_FAILED)
+    .bind(now)
+    .bind(ORPHANED_QUEUED_RUN_SUMMARY)
+    .bind(RUN_STATUS_QUEUED)
+    .execute(&mut *tx)
+    .await
+    .context("failed to recover orphaned queued runs globally")?
+    .rows_affected();
+
+    let recovered_running = sqlx::query(
+        "UPDATE agentic_runs
+            SET status = $1,
+                finished_at = $2,
+                error_summary = $3,
+                updated_at = $2
+          WHERE status = $4
+            AND finished_at IS NULL
+            AND COALESCE(started_at, created_at) + (timeout_seconds * interval '1 second') <= $2",
+    )
+    .bind(RUN_STATUS_FAILED)
+    .bind(now)
+    .bind(ORPHANED_RUNNING_RUN_SUMMARY)
+    .bind(RUN_STATUS_RUNNING)
+    .execute(&mut *tx)
+    .await
+    .context("failed to recover orphaned running runs globally")?
+    .rows_affected();
+
+    tx.commit()
+        .await
+        .context("failed to commit global agentic run recovery transaction")?;
 
     Ok(recovered_succeeded + recovered_queued + recovered_running)
 }
@@ -212,7 +297,6 @@ pub(crate) async fn recover_inactive_agent_runs_tx(
                 updated_at = now()
           WHERE agent_key = $1
             AND status = $5
-            AND backend_run_ref IS NULL
             AND finished_at IS NULL
             AND COALESCE(started_at, created_at) + (timeout_seconds * interval '1 second') <= $3",
     )

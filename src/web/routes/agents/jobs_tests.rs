@@ -287,6 +287,81 @@ async fn post_analysis_job_run_now_triggers_market_analysis_hook_after_success()
     assert!(job_keys.contains(&"analysis-15m"));
     assert!(job_keys.contains(&"market-analysis"));
 }
+
+#[tokio::test]
+async fn post_schedule_run_now_rejected_after_shutdown_signal() {
+    let calls = Arc::new(Mutex::new(Vec::new()));
+    let backend = Arc::new(RecordingAgenticBackend {
+        calls: Arc::clone(&calls),
+    });
+    let state = test_state_with_backend_and_shutdown(backend, true).await;
+    let pool = state.db_pool.clone();
+    let (agent_key, _wallet_address) = insert_test_opencode_agent(&state)
+        .await
+        .expect("insert opencode agent");
+    seed_instrument(&state, "BTC", true).await;
+    replace_agent_instruments(&pool, &agent_key, &["BTC".to_string()])
+        .await
+        .expect("seed instruments");
+    let schedule_id = crate::agentic::store::list_agent_schedules(&pool, &agent_key)
+        .await
+        .expect("list schedules")
+        .into_iter()
+        .find(|row| row.job_key == "analysis-15m")
+        .map(|row| row.id)
+        .expect("analysis schedule id");
+
+    let response = router(state.clone())
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/agents/{agent_key}/jobs/{schedule_id}/run"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+    let location = response
+        .headers()
+        .get("location")
+        .and_then(|value| value.to_str().ok())
+        .expect("redirect location");
+    assert!(
+        location.contains("/jobs?warning="),
+        "expected shutdown warning redirect, got: {location}"
+    );
+    assert!(
+        location.contains("shutting+down") || location.contains("shutting%20down"),
+        "expected shutdown warning text in redirect, got: {location}"
+    );
+
+    // The run row should have been inserted (the route claimed the
+    // schedule) but immediately failed and never dispatched.
+    let runs = crate::agentic::store::list_agent_runs(&pool, &agent_key, 10)
+        .await
+        .expect("list runs");
+    let run = runs
+        .iter()
+        .find(|row| row.schedule_id == Some(schedule_id))
+        .expect("a run row was inserted");
+    assert_eq!(run.status, "failed");
+    assert!(
+        run.error_summary
+            .as_deref()
+            .unwrap_or("")
+            .contains("shutting down"),
+        "error_summary should mention shutdown, got: {:?}",
+        run.error_summary
+    );
+
+    // No backend call should have been recorded.
+    assert!(
+        calls.lock().unwrap().is_empty(),
+        "schedule Run now should not dispatch when shutdown_rx is set"
+    );
+}
 #[tokio::test]
 async fn post_analysis_job_run_now_skipped_does_not_trigger_market_analysis_hook() {
     let calls = Arc::new(Mutex::new(Vec::new()));

@@ -37,8 +37,10 @@ pub async fn serve(
     opencode_client: Arc<OpenCodeClient>,
     model_catalog: Arc<ModelsDevCatalog>,
     asset_cache: Arc<AssetCache>,
-    shutdown_tx: watch::Sender<bool>,
+    shutdown_rx: watch::Receiver<bool>,
+    in_flight: crate::agentic::in_flight::InFlightTracker,
 ) -> Result<()> {
+    let shutdown_rx_for_state = shutdown_rx.clone();
     let state = Arc::new(AppState {
         db_pool,
         #[cfg(test)]
@@ -51,17 +53,34 @@ pub async fn serve(
         opencode_client,
         model_catalog,
         asset_cache,
+        in_flight,
+        shutdown_rx: shutdown_rx_for_state,
     });
     let app = router(state);
     let listener = tokio::net::TcpListener::bind(bind_addr)
         .await
         .with_context(|| format!("failed to bind web server to {bind_addr}"))?;
 
+    let mut shutdown_rx = shutdown_rx;
+    let shutdown_signal = async move {
+        // Wait for the shared shutdown signal set by `main` (in response
+        // to SIGINT/SIGTERM) instead of installing our own signal
+        // handler. This keeps the shutdown path single-sourced: a
+        // single signal handler in `main` flips the watch, and every
+        // long-running task observes the same flag.
+        loop {
+            if *shutdown_rx.borrow() {
+                return;
+            }
+            if shutdown_rx.changed().await.is_err() {
+                // Sender was dropped; treat as shutdown.
+                return;
+            }
+        }
+    };
+
     axum::serve(listener, app)
-        .with_graceful_shutdown(async move {
-            tokio::signal::ctrl_c().await.ok();
-            let _ = shutdown_tx.send(true);
-        })
+        .with_graceful_shutdown(shutdown_signal)
         .await
         .context("web server terminated unexpectedly")
 }

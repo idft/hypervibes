@@ -380,3 +380,58 @@ async fn post_hook_timeout_missing_hook_returns_404() {
 
     assert_eq!(response.status(), StatusCode::NOT_FOUND);
 }
+
+#[tokio::test]
+async fn manual_hook_run_still_dispatches_after_shutdown_signal() {
+    let calls = Arc::new(Mutex::new(Vec::new()));
+    let backend = Arc::new(RecordingAgenticBackend {
+        calls: Arc::clone(&calls),
+    });
+    let state = test_state_with_backend_and_shutdown(backend, true).await;
+    let pool = state.db_pool.clone();
+    let (agent_key, _wallet_address) = insert_test_opencode_agent(&state)
+        .await
+        .expect("insert opencode agent");
+    seed_instrument(&state, "BTC", true).await;
+    replace_agent_instruments(&pool, &agent_key, &["BTC".to_string()])
+        .await
+        .expect("seed instruments");
+    let hook_id = crate::agentic::store::list_agent_hooks(&pool, &agent_key)
+        .await
+        .expect("list hooks")
+        .first()
+        .expect("default hook present")
+        .id;
+    crate::agentic::store::set_hook_enabled(&pool, &agent_key, hook_id, true)
+        .await
+        .expect("enable default hook");
+
+    let response = router(state.clone())
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/agents/{agent_key}/hooks/{hook_id}/run"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+
+    let deadline = tokio::time::Instant::now() + tokio::time::Duration::from_secs(1);
+    loop {
+        if !calls.lock().unwrap().is_empty() {
+            break;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "hook dispatch was not spawned after shutdown signal"
+        );
+        tokio::time::sleep(tokio::time::Duration::from_millis(20)).await;
+    }
+
+    let recorded = calls.lock().unwrap();
+    assert_eq!(recorded.len(), 1);
+    assert_eq!(recorded[0].hook_id, Some(hook_id));
+}

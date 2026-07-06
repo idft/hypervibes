@@ -1,4 +1,5 @@
 pub mod backend;
+pub mod in_flight;
 pub mod job_key;
 pub mod model;
 pub mod prompt;

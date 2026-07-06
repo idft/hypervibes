@@ -34,6 +34,7 @@ impl AgenticBackend for NoopAgenticBackend {
 pub async fn test_state() -> Arc<AppState> {
     let pool = Arc::new(test_db::pool().await);
     let cache_dir = std::path::PathBuf::from("/tmp/opencode/vibetrading-api-cache");
+    let (_shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
     Arc::new(AppState {
         db_pool: pool.as_ref().as_ref().clone(),
         _test_db_guard: Some(Arc::clone(&pool)),
@@ -65,6 +66,8 @@ pub async fn test_state() -> Arc<AppState> {
         )
         .unwrap(),
         asset_cache: Arc::new(crate::cache::asset::AssetCache::new(cache_dir).unwrap()),
+        in_flight: crate::agentic::in_flight::InFlightTracker::new(),
+        shutdown_rx,
     })
 }
 

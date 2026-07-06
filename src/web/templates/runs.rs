@@ -29,10 +29,10 @@ pub struct AgenticRunView {
 #[derive(Debug, Clone)]
 pub struct AgenticRunDetailView {
     pub id: i64,
+    pub status: String,
     pub status_label: String,
     pub status_class: String,
     pub job_key: String,
-    pub job_kind: String,
     pub timeframe_text: String,
     pub scheduled_for: LocalTimestampView,
     pub started_at: Option<LocalTimestampView>,
@@ -141,10 +141,10 @@ impl AgenticRunDetailView {
 
         Self {
             id: row.id,
+            status: row.status.clone(),
             status_label,
             status_class,
             job_key: row.job_key.clone(),
-            job_kind: row.job_kind.clone(),
             timeframe_text: row.timeframe.clone().unwrap_or_else(|| "—".to_string()),
             scheduled_for: local_timestamp_view(row.scheduled_for),
             started_at: optional_local_timestamp_view(row.started_at),

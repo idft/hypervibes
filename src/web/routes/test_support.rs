@@ -49,8 +49,19 @@ pub(in crate::web::routes) async fn test_state() -> Arc<AppState> {
 pub(in crate::web::routes) async fn test_state_with_backend(
     agentic_backend: Arc<dyn AgenticBackend>,
 ) -> Arc<AppState> {
+    test_state_with_backend_and_shutdown(agentic_backend, false).await
+}
+
+pub(in crate::web::routes) async fn test_state_with_backend_and_shutdown(
+    agentic_backend: Arc<dyn AgenticBackend>,
+    shutdown_signaled: bool,
+) -> Arc<AppState> {
     let pool = Arc::new(test_db::pool().await);
     let cache_dir = std::path::PathBuf::from("/tmp/opencode/vibetrading-routes-cache");
+    let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(shutdown_signaled);
+    // Keep the sender alive for the test by leaking it; tests are
+    // short-lived and the watch is shared with the AppState clone.
+    let _ = Box::leak(Box::new(shutdown_tx));
     Arc::new(AppState {
         db_pool: pool.as_ref().as_ref().clone(),
         _test_db_guard: Some(Arc::clone(&pool)),
@@ -82,6 +93,8 @@ pub(in crate::web::routes) async fn test_state_with_backend(
         )
         .unwrap(),
         asset_cache: Arc::new(crate::cache::asset::AssetCache::new(cache_dir).unwrap()),
+        in_flight: crate::agentic::in_flight::InFlightTracker::new(),
+        shutdown_rx,
     })
 }
 pub(in crate::web::routes) async fn read_sse_chunk(body: Body, timeout_ms: u64) -> String {

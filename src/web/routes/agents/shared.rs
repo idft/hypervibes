@@ -2,10 +2,7 @@ use crate::{
     model_catalog::options::{
         ModelPickerOption, build_model_picker_options, selection_exists_in_options,
     },
-    web::{
-        AppState,
-        templates::ModelPickerView,
-    },
+    web::{AppState, templates::ModelPickerView},
 };
 use axum::{
     http::HeaderMap,
@@ -17,6 +14,7 @@ use tracing::warn;
 pub(in crate::web::routes) const WORKSPACE_MAINTENANCE_ACTIVE_WARNING: &str = "Workspace maintenance is queued or running for this agent. Run now is unavailable until it completes.";
 pub(in crate::web::routes) const WORKSPACE_MAINTENANCE_DUPLICATE_WARNING: &str =
     "A workspace maintenance task is already queued or running for this agent.";
+pub(in crate::web::routes) const SERVER_SHUTTING_DOWN_WARNING: &str = "Server is shutting down. Scheduled Run now is unavailable until the next start. Hook Run now is still allowed while the server drains.";
 #[derive(Debug, Clone)]
 pub(in crate::web::routes) struct ModelPickerContext {
     pub options: Vec<ModelPickerOption>,

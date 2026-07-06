@@ -8,6 +8,7 @@ use tracing::{debug, error, info, warn};
 use crate::{
     agentic::{
         backend::{AgenticBackend, DispatchRequest, dispatch_with_timeout},
+        in_flight::InFlightTracker,
         model::{
             DueOpenCodeHookRow, DueOpenCodeScheduleRow, HOOK_EVENT_ANALYSIS_BATCH_COMPLETED,
             JOB_KIND_ANALYSIS, JOB_KIND_TRADING, MAINTENANCE_STATUS_QUEUED,
@@ -33,6 +34,14 @@ use crate::{
 };
 
 const SCHEDULER_POLL_INTERVAL: Duration = Duration::from_secs(10);
+const ORPHAN_RECOVERY_INTERVAL: Duration = Duration::from_secs(60);
+/// Maximum time the scheduler will wait for in-flight dispatches to
+/// finish after the shutdown signal before logging a warning and
+/// returning. Sized to be larger than the longest configured
+/// `agentic_job_schedules.timeout_seconds` (currently 900s) so a
+/// hung-but-still-progressing dispatch can complete, plus a 15m
+/// buffer for cleanup.
+const SHUTDOWN_IN_FLIGHT_GRACE: Duration = Duration::from_secs(30 * 60);
 const DUE_SCHEDULE_LIMIT: i64 = 20;
 const WORKSPACE_MAINTENANCE_SESSION_PROBE_LIMIT: i64 = 20;
 const OPENCODE_SESSION_STATUS_IDLE: &str = "idle";
@@ -54,6 +63,8 @@ pub struct AgenticScheduler {
     live_accounts: Arc<LiveAccountStore>,
     opencode_workspace_config: OpenCodeWorkspaceConfig,
     opencode_client: Arc<OpenCodeClient>,
+    last_orphan_recovery_at: Option<chrono::DateTime<Utc>>,
+    in_flight: InFlightTracker,
 }
 
 impl AgenticScheduler {
@@ -64,6 +75,7 @@ impl AgenticScheduler {
         live_accounts: Arc<LiveAccountStore>,
         opencode_workspace_config: OpenCodeWorkspaceConfig,
         opencode_client: Arc<OpenCodeClient>,
+        in_flight: InFlightTracker,
     ) -> Self {
         Self {
             pool,
@@ -72,10 +84,17 @@ impl AgenticScheduler {
             live_accounts,
             opencode_workspace_config,
             opencode_client,
+            last_orphan_recovery_at: None,
+            in_flight,
         }
     }
 
-    /// Run the scheduler until a shutdown signal is observed.
+    /// Run the scheduler until a shutdown signal is observed, then
+    /// drain any in-flight dispatches before returning. Manual
+    /// `Run now` requests from the web UI register with the same
+    /// shared [`InFlightTracker`], so `main` calls
+    /// `wait_idle_with_timeout` once more after this returns as a
+    /// belt-and-suspenders check.
     pub async fn run(mut self) -> Result<()> {
         info!("agentic scheduler starting");
         loop {
@@ -93,6 +112,28 @@ impl AgenticScheduler {
             }
         }
 
+        let in_flight = self.in_flight.in_flight();
+        if in_flight > 0 {
+            info!(
+                in_flight,
+                grace_seconds = SHUTDOWN_IN_FLIGHT_GRACE.as_secs(),
+                "waiting for in-flight agentic dispatches to complete"
+            );
+            let drained = self
+                .in_flight
+                .wait_idle_with_timeout(SHUTDOWN_IN_FLIGHT_GRACE)
+                .await;
+            if !drained {
+                warn!(
+                    remaining = self.in_flight.in_flight(),
+                    "in-flight agentic dispatches did not drain within grace period; \
+                     leaving them orphaned for the next start to recover"
+                );
+            } else {
+                info!("all in-flight agentic dispatches completed");
+            }
+        }
+
         info!("agentic scheduler stopped");
         Ok(())
     }
@@ -103,6 +144,12 @@ impl AgenticScheduler {
     /// This is exposed (not just called from [`Self::run`]) so tests can
     /// drive a single tick deterministically.
     pub async fn tick(&mut self) -> Result<()> {
+        if *self.shutdown_rx.borrow() {
+            return Ok(());
+        }
+
+        self.maybe_recover_orphans().await?;
+
         process_workspace_maintenance_tasks(
             &self.pool,
             &self.opencode_workspace_config,
@@ -127,6 +174,10 @@ impl AgenticScheduler {
         }
 
         for (agent_key, schedules) in by_agent {
+            if *self.shutdown_rx.borrow() {
+                break;
+            }
+
             let (analysis_schedules, trading_schedules): (Vec<_>, Vec<_>) = schedules
                 .into_iter()
                 .partition(|schedule| schedule.job_kind == JOB_KIND_ANALYSIS);
@@ -136,7 +187,9 @@ impl AgenticScheduler {
                 let backend = self.backend.clone();
                 let live_accounts = self.live_accounts.clone();
                 let agent_key = agent_key.clone();
+                let in_flight = self.in_flight.clone();
                 tokio::spawn(async move {
+                    let _guard = in_flight.track();
                     process_analysis_lane_for_agent(
                         &pool,
                         &backend,
@@ -152,7 +205,10 @@ impl AgenticScheduler {
                 let pool = self.pool.clone();
                 let backend = self.backend.clone();
                 let live_accounts = self.live_accounts.clone();
+                let agent_key = agent_key.clone();
+                let in_flight = self.in_flight.clone();
                 tokio::spawn(async move {
+                    let _guard = in_flight.track();
                     process_trading_lane_for_agent(
                         &pool,
                         &backend,
@@ -165,6 +221,37 @@ impl AgenticScheduler {
             }
         }
 
+        Ok(())
+    }
+
+    /// Periodically sweep every agent's `agentic_runs` for orphans and
+    /// mark them with a terminal status. The per-lane recovery in
+    /// [`store::recovery::recover_inactive_runs_in_lane_tx`] only fires
+    /// when a new run is claimed for the same lane, so a `running` run
+    /// whose dispatch worker has died would otherwise block its lane
+    /// until something else claimed the schedule. This periodic sweep
+    /// is throttled to `ORPHAN_RECOVERY_INTERVAL` to bound the work
+    /// done per tick.
+    async fn maybe_recover_orphans(&mut self) -> Result<()> {
+        let now = Utc::now();
+        if let Some(last) = self.last_orphan_recovery_at {
+            let elapsed = now
+                .signed_duration_since(last)
+                .to_std()
+                .unwrap_or(ORPHAN_RECOVERY_INTERVAL);
+            if elapsed < ORPHAN_RECOVERY_INTERVAL {
+                return Ok(());
+            }
+        }
+
+        let recovered = store::recover_inactive_runs_all(&self.pool, now).await?;
+        if recovered > 0 {
+            info!(
+                recovered,
+                "recovered inactive agentic runs during periodic sweep"
+            );
+        }
+        self.last_orphan_recovery_at = Some(now);
         Ok(())
     }
 }
@@ -803,6 +890,7 @@ pub fn spawn(
     live_accounts: Arc<LiveAccountStore>,
     opencode_workspace_config: OpenCodeWorkspaceConfig,
     opencode_client: Arc<OpenCodeClient>,
+    in_flight: InFlightTracker,
 ) -> JoinHandle<Result<()>> {
     tokio::spawn(async move {
         AgenticScheduler::new(
@@ -812,6 +900,7 @@ pub fn spawn(
             live_accounts,
             opencode_workspace_config,
             opencode_client,
+            in_flight,
         )
         .run()
         .await
@@ -844,6 +933,7 @@ mod tests {
     use crate::{
         agentic::{
             backend::{AgenticBackend, DispatchResult},
+            in_flight::InFlightTracker,
             model::{AgenticRunRow, RUN_STATUS_SKIPPED, RUN_STATUS_SUCCEEDED},
             store::{self, ClaimedScheduleRun, insert_default_opencode_schedules, insert_test_run},
         },
@@ -1123,6 +1213,7 @@ mod tests {
             live_accounts,
             sample_workspace_config(),
             sample_opencode_client(),
+            InFlightTracker::new(),
         );
         scheduler.tick().await.expect("tick");
 
@@ -1223,6 +1314,7 @@ mod tests {
             live_accounts,
             sample_workspace_config(),
             sample_opencode_client(),
+            InFlightTracker::new(),
         );
         scheduler.tick().await.expect("tick");
 
@@ -1279,6 +1371,7 @@ mod tests {
             live_accounts,
             sample_workspace_config(),
             sample_opencode_client(),
+            InFlightTracker::new(),
         );
         scheduler.tick().await.expect("tick");
 
@@ -1338,6 +1431,7 @@ mod tests {
             live_accounts,
             sample_workspace_config(),
             sample_opencode_client(),
+            InFlightTracker::new(),
         );
         scheduler.tick().await.expect("tick");
 
@@ -1400,6 +1494,7 @@ mod tests {
             live_accounts,
             sample_workspace_config(),
             sample_opencode_client(),
+            InFlightTracker::new(),
         );
         scheduler.tick().await.expect("tick");
 
@@ -1451,6 +1546,7 @@ mod tests {
             live_accounts,
             sample_workspace_config(),
             sample_opencode_client(),
+            InFlightTracker::new(),
         );
         scheduler.tick().await.expect("tick");
 
@@ -1505,6 +1601,7 @@ mod tests {
             live_accounts,
             sample_workspace_config(),
             sample_opencode_client(),
+            InFlightTracker::new(),
         );
         scheduler.tick().await.expect("tick");
 
@@ -1564,6 +1661,7 @@ mod tests {
             live_accounts,
             sample_workspace_config(),
             sample_opencode_client(),
+            InFlightTracker::new(),
         );
         scheduler.tick().await.expect("tick");
 
@@ -1600,6 +1698,7 @@ mod tests {
             live_accounts,
             sample_workspace_config(),
             sample_opencode_client(),
+            InFlightTracker::new(),
         );
         scheduler.tick().await.expect("tick");
 
@@ -1669,6 +1768,7 @@ mod tests {
             live_accounts,
             sample_workspace_config(),
             sample_opencode_client(),
+            InFlightTracker::new(),
         );
         scheduler.tick().await.expect("tick");
 
@@ -1718,5 +1818,150 @@ mod tests {
         now: chrono::DateTime<Utc>,
     ) -> Result<ClaimedScheduleRun> {
         store::claim_due_schedule(pool, schedule_id, now).await
+    }
+
+    #[tokio::test]
+    async fn tick_does_not_spawn_dispatches_when_shutdown_is_already_signaled() {
+        let pool = test_db::pool().await;
+        let key = format!(
+            "shutdown-noop-{}",
+            Utc::now().timestamp_nanos_opt().unwrap_or(0)
+        );
+        seed_test_agent(&pool, &key).await;
+
+        let (schedule_id,): (i64,) = sqlx::query_as(
+            "SELECT id FROM agentic_job_schedules
+              WHERE agent_key = $1 AND job_key = 'analysis-15m'",
+        )
+        .bind(&key)
+        .fetch_one(&pool)
+        .await
+        .expect("fetch schedule id");
+        pin_schedule_due(&pool, schedule_id, "15m").await;
+
+        let calls: Arc<Mutex<Vec<DispatchRequest>>> = Arc::new(Mutex::new(Vec::new()));
+        let backend: Arc<dyn AgenticBackend> = Arc::new(FakeBackend::success(calls.clone()));
+        let (_shutdown_tx, shutdown_rx) = watch::channel(true);
+
+        let live_accounts = Arc::new(crate::hyperliquid::live_state::LiveAccountStore::new());
+        let mut scheduler = AgenticScheduler::new(
+            pool.clone(),
+            shutdown_rx,
+            backend,
+            live_accounts,
+            sample_workspace_config(),
+            sample_opencode_client(),
+            InFlightTracker::new(),
+        );
+        scheduler.tick().await.expect("tick");
+
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        assert!(
+            calls.lock().unwrap().is_empty(),
+            "tick should be a no-op when shutdown_rx is set"
+        );
+    }
+
+    #[tokio::test]
+    async fn run_drains_in_flight_dispatch_after_shutdown_signal() {
+        let pool = test_db::pool().await;
+        let key = format!(
+            "shutdown-drain-{}",
+            Utc::now().timestamp_nanos_opt().unwrap_or(0)
+        );
+        seed_test_agent(&pool, &key).await;
+
+        let (schedule_id,): (i64,) = sqlx::query_as(
+            "SELECT id FROM agentic_job_schedules
+              WHERE agent_key = $1 AND job_key = 'analysis-15m'",
+        )
+        .bind(&key)
+        .fetch_one(&pool)
+        .await
+        .expect("fetch schedule id");
+        pin_schedule_due(&pool, schedule_id, "15m").await;
+
+        // The fake backend takes 200ms; the in-flight tracker should
+        // keep `run()` alive long enough for the dispatch to finish
+        // after the shutdown signal is observed.
+        let calls: Arc<Mutex<Vec<DispatchRequest>>> = Arc::new(Mutex::new(Vec::new()));
+        let backend_impl = Arc::new(FakeBackend::with_delay(
+            calls.clone(),
+            Duration::from_millis(200),
+        ));
+        let backend: Arc<dyn AgenticBackend> = backend_impl.clone();
+
+        let (shutdown_tx, shutdown_rx) = watch::channel(false);
+        let in_flight = InFlightTracker::new();
+        let in_flight_for_run = in_flight.clone();
+        let live_accounts = Arc::new(crate::hyperliquid::live_state::LiveAccountStore::new());
+        let mut scheduler = AgenticScheduler::new(
+            pool.clone(),
+            shutdown_rx,
+            backend,
+            live_accounts,
+            sample_workspace_config(),
+            sample_opencode_client(),
+            in_flight_for_run,
+        );
+
+        // Drive the first tick manually so the spawn happens before we
+        // signal shutdown, then run the loop on a background task.
+        scheduler.tick().await.expect("first tick");
+
+        let run_handle = tokio::spawn(async move { scheduler.run().await });
+
+        // Give the spawned dispatch a moment to actually start.
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert_eq!(in_flight.in_flight(), 1, "dispatch should be in flight");
+
+        // Signal shutdown. `run` should observe it on the next
+        // `changed()`, break the loop, then wait for the dispatch.
+        shutdown_tx.send(true).expect("send shutdown");
+
+        // If the drain logic works, `run` returns only after the
+        // dispatch (200ms total) finishes. Generous bound: 2s.
+        let joined = tokio::time::timeout(Duration::from_secs(2), run_handle)
+            .await
+            .expect("run should return within 2s of shutdown signal")
+            .expect("join")
+            .expect("run result");
+
+        assert_eq!(in_flight.in_flight(), 0, "tracker should be empty");
+        assert_eq!(calls.lock().unwrap().len(), 1, "dispatch should have run");
+        let _ = joined;
+    }
+
+    #[tokio::test]
+    async fn run_returns_immediately_when_no_dispatches_are_in_flight() {
+        let pool = test_db::pool().await;
+        let (_shutdown_tx, shutdown_rx) = watch::channel(true);
+        let in_flight = InFlightTracker::new();
+        let backend: Arc<dyn AgenticBackend> =
+            Arc::new(FakeBackend::success(Arc::new(Mutex::new(Vec::new()))));
+        let live_accounts = Arc::new(crate::hyperliquid::live_state::LiveAccountStore::new());
+        let scheduler = AgenticScheduler::new(
+            pool.clone(),
+            shutdown_rx,
+            backend,
+            live_accounts,
+            sample_workspace_config(),
+            sample_opencode_client(),
+            in_flight,
+        );
+
+        // Pre-set shutdown so the loop exits immediately, then assert
+        // `run` returns promptly.
+        let started = std::time::Instant::now();
+        tokio::time::timeout(Duration::from_secs(1), scheduler.run())
+            .await
+            .expect("run should return immediately with no in-flight work")
+            .expect("run result");
+        assert!(
+            started.elapsed() < Duration::from_millis(500),
+            "run took {}ms; expected <500ms",
+            started.elapsed().as_millis()
+        );
+        let _ = pool;
     }
 }

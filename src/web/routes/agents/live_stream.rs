@@ -14,18 +14,13 @@ use tracing::warn;
 use crate::web::error::AppError;
 use crate::{
     agents::store::{get_agent, list_agent_instrument_ids},
-    hyperliquid::live_state::{
-            AccountKey, AccountLiveState, LiveConnectionStatus,
-        },
-    memory::{
-        get_latest_agent_memory_by_type, get_memory as get_memory_record,
-        memory_expires_at,
-    },
+    hyperliquid::live_state::{AccountKey, AccountLiveState, LiveConnectionStatus},
+    memory::{get_latest_agent_memory_by_type, get_memory as get_memory_record, memory_expires_at},
     web::{
         AppState,
         templates::{
-            AccountBalancePartialTemplate, AccountBalanceView, LatestAnalysisSummaryPartialTemplate,
-            LatestTradeExecutionSummaryPartialTemplate,
+            AccountBalancePartialTemplate, AccountBalanceView,
+            LatestAnalysisSummaryPartialTemplate, LatestTradeExecutionSummaryPartialTemplate,
             OpenOrdersPartialTemplate, OpenOrdersView, OpenPositionsPartialTemplate,
             OpenPositionsView,
         },
@@ -220,10 +215,8 @@ pub(in crate::web::routes) fn render_open_positions_event(
     state: &AccountLiveState,
     configured_coins: &[String],
 ) -> Result<Event, AppError> {
-    let view = OpenPositionsView::from_live_state_with_configured_coins(
-        state.clone(),
-        configured_coins,
-    );
+    let view =
+        OpenPositionsView::from_live_state_with_configured_coins(state.clone(), configured_coins);
     let html = OpenPositionsPartialTemplate::render_view(view)?;
     Ok(Event::default().event("positions").data(html))
 }

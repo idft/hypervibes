@@ -263,6 +263,12 @@ async fn agent_transactions_route_anchors_running_balance_to_live_cash_balance_o
     let anchored_for_event_1 = Decimal::new(1, 0) + adjustment;
     let formatted_5 = format_money_like_template(anchored_for_event_5);
     let formatted_1 = format_money_like_template(anchored_for_event_1);
-    assert!(text.contains(&formatted_5), "expected anchored balance {formatted_5} for event 5 in {text}");
-    assert!(text.contains(&formatted_1), "expected anchored balance {formatted_1} for event 1 in {text}");
+    assert!(
+        text.contains(&formatted_5),
+        "expected anchored balance {formatted_5} for event 5 in {text}"
+    );
+    assert!(
+        text.contains(&formatted_1),
+        "expected anchored balance {formatted_1} for event 1 in {text}"
+    );
 }

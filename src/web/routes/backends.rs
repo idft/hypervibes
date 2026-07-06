@@ -15,8 +15,8 @@ use crate::{
         store::{insert_agent_runtime, list_agent_runtimes},
     },
     web::{
-        error::AppError,
         AppState,
+        error::AppError,
         templates::{AgentRuntimeView, BackendsNewPageTemplate, BackendsPageTemplate},
     },
 };

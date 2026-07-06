@@ -252,7 +252,8 @@ fn transactions_page_renders_pagination_controls() {
     template.transactions_range_end = 100;
     template.transactions_previous_page_url =
         Some("/agents/test-agent/transactions?page=1".to_string());
-    template.transactions_next_page_url = Some("/agents/test-agent/transactions?page=3".to_string());
+    template.transactions_next_page_url =
+        Some("/agents/test-agent/transactions?page=3".to_string());
 
     let rendered = template
         .render()
@@ -434,7 +435,10 @@ fn new_job_page_renders_agent_navbar_with_jobs_active() {
     let rendered = template.render().expect("render new job page");
 
     assert!(rendered.contains("Agent sections"));
-    assert!(rendered.contains("href=\"/agents/test-agent/jobs\" data-agent-tab-link aria-current=\"page\""));
+    assert!(
+        rendered
+            .contains("href=\"/agents/test-agent/jobs\" data-agent-tab-link aria-current=\"page\"")
+    );
     assert!(!rendered.contains("hx-target=\"#agent-show-tab-content\""));
     assert!(rendered.contains("Create job"));
     assert!(rendered.contains("action=\"/agents/test-agent/jobs\""));

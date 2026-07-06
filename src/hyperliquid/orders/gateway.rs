@@ -992,7 +992,6 @@ mod tests {
             *me.place_err.lock().await = Some(msg.to_string());
             me
         }
-
     }
 
     impl ExchangeClient for FakeExchange {

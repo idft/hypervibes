@@ -28,16 +28,14 @@ use crate::{
     },
     memory::{get_latest_agent_memory_by_type, list_agent_memories, memory_expires_at},
     web::{
-        error::AppError,
         AppState,
+        error::AppError,
         templates::{
             AccountBalancePartialTemplate, AccountBalanceView, AgentShowTab,
             AgentsShowPageTemplate, BalanceSparklinesPartialTemplate,
-            LatestAnalysisSummaryPartialTemplate,
-            LatestTradeExecutionSummaryPartialTemplate,
+            LatestAnalysisSummaryPartialTemplate, LatestTradeExecutionSummaryPartialTemplate,
             OpenOrdersPartialTemplate, OpenOrdersView, OpenPositionsPartialTemplate,
-            OpenPositionsView, SparklineView,
-            SyncStateView, TransactionView,
+            OpenPositionsView, SparklineView, SyncStateView, TransactionView,
         },
     },
 };
@@ -312,12 +310,8 @@ pub(in crate::web::routes) async fn populate_transactions_tab(
 ) {
     const TRANSACTIONS_PER_PAGE: usize = 25;
 
-    match count_account_transactions(
-        &state.db_pool,
-        &agent.wallet_address,
-        &agent.environment,
-    )
-    .await
+    match count_account_transactions(&state.db_pool, &agent.wallet_address, &agent.environment)
+        .await
     {
         Ok(total_count) => {
             let total_count = total_count as usize;
@@ -335,10 +329,21 @@ pub(in crate::web::routes) async fn populate_transactions_tab(
             template.transactions_page = current_page;
             template.transactions_total_pages = total_pages;
             template.transactions_total_count = total_count;
-            template.transactions_previous_page_url = (current_page > 1)
-                .then(|| format!("/agents/{}/transactions?page={}", agent.agent_key, current_page - 1));
+            template.transactions_previous_page_url = (current_page > 1).then(|| {
+                format!(
+                    "/agents/{}/transactions?page={}",
+                    agent.agent_key,
+                    current_page - 1
+                )
+            });
             template.transactions_next_page_url = (total_pages > 0 && current_page < total_pages)
-                .then(|| format!("/agents/{}/transactions?page={}", agent.agent_key, current_page + 1));
+                .then(|| {
+                    format!(
+                        "/agents/{}/transactions?page={}",
+                        agent.agent_key,
+                        current_page + 1
+                    )
+                });
 
             if total_count == 0 {
                 return;
@@ -375,17 +380,10 @@ pub(in crate::web::routes) async fn populate_transactions_tab(
             .await
             {
                 Ok(mut rows) => {
-                    apply_live_cash_balance_anchor(
-                        state,
-                        agent,
-                        latest_running_balance,
-                        &mut rows,
-                    );
+                    apply_live_cash_balance_anchor(state, agent, latest_running_balance, &mut rows);
                     let row_count = rows.len();
-                    template.transactions = rows
-                        .into_iter()
-                        .map(TransactionView::from_row)
-                        .collect();
+                    template.transactions =
+                        rows.into_iter().map(TransactionView::from_row).collect();
                     template.transactions_range_start = offset as usize + 1;
                     template.transactions_range_end = offset as usize + row_count;
                 }
@@ -444,8 +442,10 @@ pub(in crate::web::routes) async fn populate_positions_tab(
         AccountBalancePartialTemplate::render_view(account_balance_view.clone())
             .map_err(anyhow::Error::from)?;
 
-    let open_positions_view =
-        OpenPositionsView::from_live_state_with_configured_coins(live_snapshot.clone(), &configured_coins);
+    let open_positions_view = OpenPositionsView::from_live_state_with_configured_coins(
+        live_snapshot.clone(),
+        &configured_coins,
+    );
     template.open_positions_html = OpenPositionsPartialTemplate::render_view(open_positions_view)
         .map_err(anyhow::Error::from)?;
 

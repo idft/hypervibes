@@ -6,12 +6,8 @@ use axum::{
 use std::sync::Arc;
 
 use crate::{
-    web::{
-        error::AppError,
-        AppState,
-        templates::AgentRunDetailPageTemplate,
-    },
     agents::{model::BACKEND_KIND_OPENCODE, store::get_agent},
+    web::{AppState, error::AppError, templates::AgentRunDetailPageTemplate},
 };
 pub(in crate::web::routes) async fn agents_show_run_detail(
     State(state): State<Arc<AppState>>,

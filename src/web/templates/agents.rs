@@ -100,8 +100,7 @@ pub fn build_agent_show_tabs(
     active_tab: AgentShowTab,
 ) -> Vec<AgentShowTabLink> {
     let agent_key = agent.agent_key.as_str();
-    let uses_opencode_runtime =
-        agent.backend_kind == crate::agents::model::BACKEND_KIND_OPENCODE;
+    let uses_opencode_runtime = agent.backend_kind == crate::agents::model::BACKEND_KIND_OPENCODE;
     let mut tab_entries: Vec<(&'static str, AgentShowTab)> = vec![
         ("Positions", AgentShowTab::Positions),
         ("Transactions", AgentShowTab::Transactions),

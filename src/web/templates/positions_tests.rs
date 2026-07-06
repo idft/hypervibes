@@ -119,7 +119,10 @@ fn open_positions_view_includes_configured_coins_without_live_positions() {
     assert_eq!(view.positions[0].coin, "ETH");
     assert!(!view.positions[0].has_position);
     assert_eq!(view.positions[0].side, "No position");
-    assert_eq!(view.positions[0].market_url, "https://app.hyperliquid.xyz/trade/ETH");
+    assert_eq!(
+        view.positions[0].market_url,
+        "https://app.hyperliquid.xyz/trade/ETH"
+    );
     assert_eq!(view.positions[1].coin, "BTC");
     assert!(view.positions[1].has_position);
     assert_eq!(view.summary.position_count, 1);
@@ -179,10 +182,8 @@ fn open_positions_partial_renders_configured_placeholder_rows_and_market_links()
         ..Default::default()
     };
 
-    let view = OpenPositionsView::from_live_state_with_configured_coins(
-        state,
-        &["BTC".to_string()],
-    );
+    let view =
+        OpenPositionsView::from_live_state_with_configured_coins(state, &["BTC".to_string()]);
     let html = OpenPositionsPartialTemplate::render_view(view).unwrap();
 
     assert!(html.contains("No position"));

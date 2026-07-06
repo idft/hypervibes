@@ -149,6 +149,50 @@ function seedNumberRoll(container: HTMLElement) {
   previousValues.set(key, { raw: rawValue, formatted: formattedValue });
 }
 
+function formatElapsedDuration(seconds: number): string {
+  const total = Math.max(0, Math.floor(seconds));
+  if (total < 60) {
+    return `${total}s`;
+  }
+  if (total < 3600) {
+    const minutes = Math.floor(total / 60);
+    const remSeconds = total % 60;
+    if (remSeconds === 0) {
+      return `${minutes}m`;
+    }
+    return `${minutes}m ${remSeconds}s`;
+  }
+  const hours = Math.floor(total / 3600);
+  const minutes = Math.floor((total % 3600) / 60);
+  if (minutes === 0) {
+    return `${hours}h`;
+  }
+  return `${hours}h ${minutes}m`;
+}
+
+function tickRunningDurations() {
+  const now = Date.now();
+  document
+    .querySelectorAll<HTMLElement>("[data-running-duration]")
+    .forEach((node) => {
+      const startedAt = node.getAttribute("data-started-at");
+      if (!startedAt) {
+        return;
+      }
+      const startedMs = new Date(startedAt).getTime();
+      if (Number.isNaN(startedMs)) {
+        return;
+      }
+      const elapsedSeconds = (now - startedMs) / 1000;
+      node.textContent = formatElapsedDuration(elapsedSeconds);
+    });
+}
+
+function startRunningDurationTicker() {
+  tickRunningDurations();
+  window.setInterval(tickRunningDurations, 1000);
+}
+
 function setActiveMemoryTimelineItem(activeItem: HTMLElement) {
   const root = activeItem.closest<HTMLElement>("[data-agent-memories]");
   if (root) {
@@ -375,6 +419,7 @@ function init() {
   initMemoryTimelineDragScroll();
   seedSelectedMemoryTimelineItems();
   restoreSelectedMemoryTimelineItem();
+  startRunningDurationTicker();
 
   document.querySelectorAll<HTMLElement>(".number-roll").forEach(seedNumberRoll);
 
