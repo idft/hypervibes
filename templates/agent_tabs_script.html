@@ -1,0 +1,123 @@
+<script>
+    (function () {
+        function normalizePathname(href) {
+            try {
+                return new URL(href, window.location.origin).pathname;
+            } catch (_) {
+                return href;
+            }
+        }
+
+        const AGENT_TAB_SLIDE_MS = 200;
+
+        function applyAgentTabClasses(nav, activeLink) {
+            const links = nav.querySelectorAll('[data-agent-tab-link]');
+
+            links.forEach(function (link) {
+                const isActive = link === activeLink;
+                if (isActive) {
+                    link.setAttribute('aria-current', 'page');
+                    link.classList.add('text-white');
+                    link.classList.remove('text-zinc-400');
+                } else {
+                    link.removeAttribute('aria-current');
+                    link.classList.remove('text-white');
+                    link.classList.add('text-zinc-400');
+                }
+            });
+        }
+
+        function moveAgentTabIndicator(nav, activeLink) {
+            if (!nav) {
+                return;
+            }
+
+            const indicator = nav.querySelector('[data-agent-tab-indicator]');
+
+            if (!indicator || !activeLink) {
+                return;
+            }
+
+            indicator.style.width = activeLink.offsetWidth + 'px';
+            indicator.style.transform = 'translateX(' + activeLink.offsetLeft + 'px)';
+            indicator.classList.remove('opacity-0');
+        }
+
+        function setAgentTabActive(nav, activeLink, options) {
+            if (!nav || !activeLink) {
+                return;
+            }
+
+            const animate = !options || options.animate !== false;
+            const previousActive = nav.querySelector('[data-agent-tab-link][aria-current="page"]');
+
+            if (!animate || !previousActive || previousActive === activeLink) {
+                applyAgentTabClasses(nav, activeLink);
+                moveAgentTabIndicator(nav, activeLink);
+                return;
+            }
+
+            if (nav.dataset.agentTabTimerId) {
+                window.clearTimeout(Number(nav.dataset.agentTabTimerId));
+            }
+
+            moveAgentTabIndicator(nav, activeLink);
+
+            nav.dataset.agentTabTimerId = String(window.setTimeout(function () {
+                applyAgentTabClasses(nav, activeLink);
+                delete nav.dataset.agentTabTimerId;
+            }, AGENT_TAB_SLIDE_MS));
+        }
+
+        function syncAgentTabs() {
+            document.querySelectorAll('[data-agent-tabs]').forEach(function (nav) {
+                const links = Array.from(nav.querySelectorAll('[data-agent-tab-link]'));
+                const currentPath = window.location.pathname;
+                const activeLink = links.find(function (link) {
+                    return normalizePathname(link.getAttribute('href') || '') === currentPath;
+                }) || links.find(function (link) {
+                    return link.getAttribute('aria-current') === 'page';
+                }) || links[0] || null;
+
+                setAgentTabActive(nav, activeLink, { animate: false });
+
+                if (nav.dataset.agentTabsBound === 'true') {
+                    return;
+                }
+
+                nav.dataset.agentTabsBound = 'true';
+                nav.addEventListener('click', function (event) {
+                    const target = event.target.closest('[data-agent-tab-link]');
+                    if (!target) {
+                        return;
+                    }
+
+                    setAgentTabActive(nav, target);
+                });
+            });
+        }
+
+        if (document.readyState === 'loading') {
+            document.addEventListener('DOMContentLoaded', syncAgentTabs, { once: true });
+        } else {
+            syncAgentTabs();
+        }
+
+        document.addEventListener('htmx:afterSwap', function (event) {
+            const detail = event.detail;
+            const target = detail && detail.target;
+            if (!(target instanceof Element)) {
+                return;
+            }
+
+            if (target.id === 'agent-show-tab-content' || target.querySelector('#agent-show-tab-content')) {
+                syncAgentTabs();
+            }
+        });
+
+        window.addEventListener('resize', syncAgentTabs);
+        window.addEventListener('popstate', function () {
+            window.setTimeout(syncAgentTabs, 0);
+        });
+    })();
+</script>

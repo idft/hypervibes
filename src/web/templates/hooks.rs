@@ -2,7 +2,7 @@ use askama::Template;
 
 use crate::agents::model::AgentDetailRow;
 
-use super::agents::ModelPickerView;
+use super::agents::{AgentShowTab, AgentShowTabLink, ModelPickerView, build_agent_show_tabs};
 use super::runs::AgenticRunView;
 use super::shared::{LocalTimestampView, TimeoutEditorView, format_duration, local_timestamp_view};
 
@@ -130,6 +130,8 @@ impl AgenticHookDetailView {
 #[template(path = "agent_hook_detail_page.html")]
 pub struct AgentHookDetailPageTemplate {
     pub agent: AgentDetailRow,
+    pub tabs: Vec<AgentShowTabLink>,
+    pub agent_tabs_use_htmx: bool,
     pub hook: AgenticHookDetailView,
     pub model_picker: ModelPickerView,
     pub hook_runs: Vec<AgenticRunView>,
@@ -147,6 +149,8 @@ impl AgentHookDetailPageTemplate {
     ) -> Result<String, askama::Error> {
         let current_path = format!("/agents/{}/hooks/{}", agent.agent_key, hook.id);
         Self {
+            tabs: build_agent_show_tabs(&agent, AgentShowTab::Jobs),
+            agent_tabs_use_htmx: false,
             agent,
             hook,
             model_picker,

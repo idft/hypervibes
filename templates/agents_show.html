@@ -4,48 +4,9 @@
 
 {% block content %}
 <div class="mx-auto max-w-[1400px]">
-    <header class="flex flex-col gap-4 pb-2 lg:flex-row lg:items-start lg:justify-between">
-        <div>
-            <div class="flex items-center gap-3">
-                <a href="/agents" class="text-sm text-zinc-500 hover:text-zinc-300">Agents</a>
-                <span class="text-zinc-600">/</span>
-                <span class="text-sm text-zinc-400">{{ agent.agent_key }}</span>
-            </div>
-            <div class="mt-3 flex items-center gap-3">
-                <h1 class="text-3xl font-semibold tracking-tight text-white">{{ agent.display_name }}</h1>
-                <span class="inline-flex rounded-full border border-violet-900/60 bg-violet-950/30 px-2.5 py-1 text-xs font-medium text-violet-300">opencode</span>
-                {% if agent.environment == "live" %}
-                <span class="inline-flex rounded-full border border-emerald-900/60 bg-emerald-950/30 px-2.5 py-1 text-xs font-medium text-emerald-300">live</span>
-                {% else if agent.environment == "sandbox" %}
-                <span class="inline-flex rounded-full border border-sky-900/60 bg-sky-950/30 px-2.5 py-1 text-xs font-medium text-sky-300">sandbox</span>
-                {% endif %}
-            </div>
-        </div>
-        <div class="flex items-center gap-3">
-            {% if agent.enabled %}
-            <span class="inline-flex rounded-full border border-emerald-900/60 bg-emerald-950/30 px-3 py-1.5 text-sm text-emerald-300">Enabled</span>
-            {% else %}
-            <span class="inline-flex rounded-full border border-zinc-700 px-3 py-1.5 text-sm text-zinc-300">Disabled</span>
-            {% endif %}
-        </div>
-    </header>
+    {% include "agent_page_header.html" %}
 
-    <nav class="mt-2 overflow-x-auto" aria-label="Agent sections">
-        <div data-agent-tabs class="relative flex min-w-[48rem] gap-1 rounded-2xl border border-zinc-800 bg-[#0d0d10] p-1 sm:min-w-full">
-            <div data-agent-tab-indicator aria-hidden="true" class="pointer-events-none absolute bottom-1 left-0 top-1 z-0 rounded-xl bg-zinc-800 opacity-0" style="transition: transform 200ms ease-out, width 200ms ease-out, opacity 200ms ease-out;"></div>
-            {% for tab in tabs %}
-            {% if tab.active %}
-            <a href="{{ tab.href }}" data-agent-tab-link hx-get="{{ tab.href }}" hx-select="#agent-show-tab-content" hx-target="#agent-show-tab-content" hx-swap="outerHTML" hx-push-url="true" aria-current="page" class="relative z-10 inline-flex w-full items-center justify-center whitespace-nowrap rounded-xl px-4 py-2 text-sm font-medium text-white" style="flex: 1 1 0;">
-                {{ tab.label }}
-            </a>
-            {% else %}
-            <a href="{{ tab.href }}" data-agent-tab-link hx-get="{{ tab.href }}" hx-select="#agent-show-tab-content" hx-target="#agent-show-tab-content" hx-swap="outerHTML" hx-push-url="true" class="relative z-10 inline-flex w-full items-center justify-center whitespace-nowrap rounded-xl px-4 py-2 text-sm font-medium text-zinc-400 hover:text-white" style="flex: 1 1 0;">
-                {{ tab.label }}
-            </a>
-            {% endif %}
-            {% endfor %}
-        </div>
-    </nav>
+    {% include "agent_tabs.html" %}
 
     {% if !has_selected_instruments %}
     <a href="/agents/{{ agent.agent_key }}/settings" class="mt-2 flex items-center justify-center gap-2 rounded-2xl border border-amber-900/60 bg-amber-950/30 px-4 py-2 text-sm text-amber-200 hover:border-amber-800 hover:bg-amber-950/40">
@@ -761,105 +722,9 @@
 {% endblock %}
 
 {% block scripts %}
+{% include "agent_tabs_script.html" %}
 <script>
     (function () {
-        function normalizePathname(href) {
-            try {
-                return new URL(href, window.location.origin).pathname;
-            } catch (_) {
-                return href;
-            }
-        }
-
-        const AGENT_TAB_SLIDE_MS = 200;
-
-        function applyAgentTabClasses(nav, activeLink) {
-            const links = nav.querySelectorAll('[data-agent-tab-link]');
-
-            links.forEach(function (link) {
-                const isActive = link === activeLink;
-                if (isActive) {
-                    link.setAttribute('aria-current', 'page');
-                    link.classList.add('text-white');
-                    link.classList.remove('text-zinc-400');
-                } else {
-                    link.removeAttribute('aria-current');
-                    link.classList.remove('text-white');
-                    link.classList.add('text-zinc-400');
-                }
-            });
-        }
-
-        function moveAgentTabIndicator(nav, activeLink) {
-            if (!nav) {
-                return;
-            }
-
-            const indicator = nav.querySelector('[data-agent-tab-indicator]');
-
-            if (!indicator || !activeLink) {
-                return;
-            }
-
-            indicator.style.width = activeLink.offsetWidth + 'px';
-            indicator.style.transform = 'translateX(' + activeLink.offsetLeft + 'px)';
-            indicator.classList.remove('opacity-0');
-        }
-
-        function setAgentTabActive(nav, activeLink, options) {
-            if (!nav || !activeLink) {
-                return;
-            }
-
-            const animate = !options || options.animate !== false;
-            const previousActive = nav.querySelector('[data-agent-tab-link][aria-current="page"]');
-
-            if (!animate || !previousActive || previousActive === activeLink) {
-                applyAgentTabClasses(nav, activeLink);
-                moveAgentTabIndicator(nav, activeLink);
-                return;
-            }
-
-            if (nav.dataset.agentTabTimerId) {
-                window.clearTimeout(Number(nav.dataset.agentTabTimerId));
-            }
-
-            moveAgentTabIndicator(nav, activeLink);
-
-            nav.dataset.agentTabTimerId = String(window.setTimeout(function () {
-                applyAgentTabClasses(nav, activeLink);
-                delete nav.dataset.agentTabTimerId;
-            }, AGENT_TAB_SLIDE_MS));
-        }
-
-        function syncAgentTabs() {
-            document.querySelectorAll('[data-agent-tabs]').forEach(function (nav) {
-                const links = Array.from(nav.querySelectorAll('[data-agent-tab-link]'));
-                const currentPath = window.location.pathname;
-                const activeLink = links.find(function (link) {
-                    return normalizePathname(link.getAttribute('href') || '') === currentPath;
-                }) || links.find(function (link) {
-                    return link.getAttribute('aria-current') === 'page';
-                }) || links[0] || null;
-
-                setAgentTabActive(nav, activeLink, { animate: false });
-
-                if (nav.dataset.agentTabsBound === 'true') {
-                    return;
-                }
-
-                nav.dataset.agentTabsBound = 'true';
-                nav.addEventListener('click', function (event) {
-                    const target = event.target.closest('[data-agent-tab-link]');
-                    if (!target) {
-                        return;
-                    }
-
-                    setAgentTabActive(nav, target);
-                });
-            });
-        }
-
         function initPromptEditor() {
             const container = document.querySelector('[data-agent-prompts]');
             if (!container || container.dataset.agentPromptsBound === 'true') {
@@ -1274,7 +1139,6 @@
         }
 
         function initAgentShowPage() {
-            syncAgentTabs();
             initPromptEditor();
             initAgentInstrumentSelector();
             initClickableRows();
@@ -1326,11 +1190,6 @@
             if (target.id === 'agent-show-tab-content' || target.querySelector('#agent-show-tab-content')) {
                 initAgentShowPage();
             }
-        });
-
-        window.addEventListener('resize', syncAgentTabs);
-        window.addEventListener('popstate', function () {
-            window.setTimeout(syncAgentTabs, 0);
         });
     })();
 </script>

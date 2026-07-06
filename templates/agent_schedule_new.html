@@ -4,16 +4,17 @@
 
 {% block content %}
 <div class="mx-auto max-w-3xl">
-    <div class="flex items-center gap-3 text-sm text-zinc-500">
-        <a href="/agents" class="hover:text-zinc-300">Agents</a>
-        <span>/</span>
-        <a href="/agents/{{ agent.agent_key }}" class="hover:text-zinc-300">{{ agent.display_name }}</a>
-        <span>/</span>
-        <a href="/agents/{{ agent.agent_key }}/jobs" class="hover:text-zinc-300">Jobs</a>
-    </div>
+    {% include "agent_page_header.html" %}
+
+    {% include "agent_tabs.html" %}
 
     <header class="mt-4 border-b border-zinc-800 pb-6">
-        <h1 class="text-3xl font-semibold tracking-tight text-white">Create job</h1>
+        <div class="flex items-center gap-3 text-sm text-zinc-500">
+            <a href="/agents/{{ agent.agent_key }}/jobs" class="hover:text-zinc-300">Jobs</a>
+            <span>/</span>
+            <span>Create job</span>
+        </div>
+        <h2 class="mt-4 text-3xl font-semibold tracking-tight text-white">Create job</h2>
         <p class="mt-2 text-sm leading-6 text-zinc-400">
             Add a new OpenCode job for <span class="font-medium text-zinc-200">{{ agent.display_name }}</span>. The job key is generated from the kind and timeframe (e.g. <code class="font-mono text-xs text-zinc-300">analysis-1h</code>). New enabled jobs become eligible on the next scheduler poll.
         </p>
@@ -92,5 +93,6 @@
 {% endblock %}
 
 {% block scripts %}
+{% include "agent_tabs_script.html" %}
 {% include "model_picker_script.html" %}
 {% endblock %}

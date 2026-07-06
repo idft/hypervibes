@@ -42,6 +42,7 @@ use crate::{
         templates::{
             AgentJobDetailPageTemplate,
             AgentScheduleNewPageTemplate, AgentShowTab,
+            build_agent_show_tabs,
             CreateAgentScheduleFormValues,
         },
     },
@@ -646,6 +647,8 @@ pub(in crate::web::routes) fn render_new_job_form(
     let model_picker =
         build_model_picker_view("job-model-selection", &form.model_selection, picker);
     let template = AgentScheduleNewPageTemplate {
+        tabs: build_agent_show_tabs(&agent, AgentShowTab::Jobs),
+        agent_tabs_use_htmx: false,
         agent,
         form,
         model_picker,

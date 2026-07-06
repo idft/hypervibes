@@ -95,6 +95,34 @@ pub struct AgentShowTabLink {
     pub active: bool,
 }
 
+pub fn build_agent_show_tabs(
+    agent: &AgentDetailRow,
+    active_tab: AgentShowTab,
+) -> Vec<AgentShowTabLink> {
+    let agent_key = agent.agent_key.as_str();
+    let uses_opencode_runtime =
+        agent.backend_kind == crate::agents::model::BACKEND_KIND_OPENCODE;
+    let mut tab_entries: Vec<(&'static str, AgentShowTab)> = vec![
+        ("Positions", AgentShowTab::Positions),
+        ("Transactions", AgentShowTab::Transactions),
+        ("Memories", AgentShowTab::Memories),
+        ("Prompts", AgentShowTab::Prompts),
+    ];
+    if uses_opencode_runtime {
+        tab_entries.push(("Jobs", AgentShowTab::Jobs));
+    }
+    tab_entries.push(("Settings", AgentShowTab::Settings));
+
+    tab_entries
+        .into_iter()
+        .map(|(label, tab)| AgentShowTabLink {
+            label,
+            href: tab.path(agent_key),
+            active: tab == active_tab,
+        })
+        .collect()
+}
+
 /// Row entry shown on the agents index page. Combines the durable
 /// [`AgentListRow`] with the in-memory live account-balance view so the
 /// page can render the current Hyperliquid total balance in a single
@@ -158,6 +186,8 @@ pub struct ModelPickerView {
 #[template(path = "agent_schedule_new.html")]
 pub struct AgentScheduleNewPageTemplate {
     pub agent: AgentDetailRow,
+    pub tabs: Vec<AgentShowTabLink>,
+    pub agent_tabs_use_htmx: bool,
     pub form: CreateAgentScheduleFormValues,
     pub model_picker: ModelPickerView,
     pub errors: Vec<String>,
@@ -168,6 +198,8 @@ pub struct AgentScheduleNewPageTemplate {
 #[template(path = "agent_hook_new.html")]
 pub struct AgentHookNewPageTemplate {
     pub agent: AgentDetailRow,
+    pub tabs: Vec<AgentShowTabLink>,
+    pub agent_tabs_use_htmx: bool,
     pub form: CreateAgentHookFormValues,
     pub model_picker: ModelPickerView,
     pub errors: Vec<String>,
@@ -180,6 +212,7 @@ pub struct AgentHookNewPageTemplate {
 pub struct AgentsShowPageTemplate {
     pub agent: AgentDetailRow,
     pub tabs: Vec<AgentShowTabLink>,
+    pub agent_tabs_use_htmx: bool,
     pub show_positions_tab: bool,
     pub show_transactions_tab: bool,
     pub show_memories_tab: bool,
@@ -234,24 +267,7 @@ impl AgentsShowPageTemplate {
         let agent_key = agent.agent_key.clone();
         let uses_opencode_runtime =
             agent.backend_kind == crate::agents::model::BACKEND_KIND_OPENCODE;
-        let mut tab_entries: Vec<(&'static str, AgentShowTab)> = vec![
-            ("Positions", AgentShowTab::Positions),
-            ("Transactions", AgentShowTab::Transactions),
-            ("Memories", AgentShowTab::Memories),
-            ("Prompts", AgentShowTab::Prompts),
-        ];
-        if uses_opencode_runtime {
-            tab_entries.push(("Jobs", AgentShowTab::Jobs));
-        }
-        tab_entries.push(("Settings", AgentShowTab::Settings));
-        let tabs = tab_entries
-            .into_iter()
-            .map(|(label, tab)| AgentShowTabLink {
-                label,
-                href: tab.path(&agent_key),
-                active: tab == active_tab,
-            })
-            .collect();
+        let tabs = build_agent_show_tabs(&agent, active_tab);
 
         Self {
             api_key_last_used_at: optional_local_timestamp_view(agent.api_key_last_used_at),
@@ -261,6 +277,7 @@ impl AgentsShowPageTemplate {
             updated_at: local_timestamp_view(agent.updated_at),
             current_path: active_tab.path(&agent_key),
             tabs,
+            agent_tabs_use_htmx: true,
             show_positions_tab: active_tab == AgentShowTab::Positions,
             show_transactions_tab: active_tab == AgentShowTab::Transactions,
             show_memories_tab: active_tab == AgentShowTab::Memories,

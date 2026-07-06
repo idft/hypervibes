@@ -38,7 +38,8 @@ use crate::{
         AppState,
         templates::{
             AgentHookDetailPageTemplate,
-            AgentHookNewPageTemplate, CreateAgentHookFormValues,
+            AgentHookNewPageTemplate, AgentShowTab, CreateAgentHookFormValues,
+            build_agent_show_tabs,
         },
     },
 };
@@ -510,6 +511,8 @@ pub(in crate::web::routes) fn render_new_hook_form(
     let model_picker =
         build_model_picker_view("hook-model-selection", &form.model_selection, picker);
     let template = AgentHookNewPageTemplate {
+        tabs: build_agent_show_tabs(&agent, AgentShowTab::Jobs),
+        agent_tabs_use_htmx: false,
         agent,
         form,
         model_picker,

@@ -4,6 +4,7 @@ use serde_json::Value;
 
 use crate::agents::model::AgentDetailRow;
 
+use super::agents::{AgentShowTab, AgentShowTabLink, build_agent_show_tabs};
 use super::shared::{
     LocalTimestampView, add_thousands_separators, format_decimal_with_commas, format_duration,
     local_timestamp_view, optional_local_timestamp_view,
@@ -291,6 +292,8 @@ impl OpenCodeSessionErrorView {
 #[template(path = "agent_run_detail_page.html")]
 pub struct AgentRunDetailPageTemplate {
     pub agent: AgentDetailRow,
+    pub tabs: Vec<AgentShowTabLink>,
+    pub agent_tabs_use_htmx: bool,
     pub run: AgenticRunDetailView,
     pub session: Option<OpenCodeSessionView>,
     pub session_lookup_attempted: bool,
@@ -306,6 +309,8 @@ impl AgentRunDetailPageTemplate {
     ) -> Result<String, askama::Error> {
         let current_path = format!("/agents/{}/runs/{}", agent.agent_key, run.id);
         Self {
+            tabs: build_agent_show_tabs(&agent, AgentShowTab::Jobs),
+            agent_tabs_use_htmx: false,
             agent,
             run,
             session,

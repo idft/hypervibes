@@ -7,6 +7,7 @@ use crate::{
     memory::MemoryRecord,
 };
 
+use super::agents::{AgentShowTab, AgentShowTabLink, build_agent_show_tabs};
 use super::shared::{
     LocalTimestampView, MoneyCell, format_money_cell, format_money_text, format_timestamp_iso,
     format_timestamp_utc, local_timestamp_view,
@@ -176,6 +177,8 @@ impl AgentMemoryDetailPartialTemplate {
 #[template(path = "agent_memory_detail_page.html")]
 pub struct AgentMemoryDetailPageTemplate {
     pub agent: AgentDetailRow,
+    pub tabs: Vec<AgentShowTabLink>,
+    pub agent_tabs_use_htmx: bool,
     pub memory: MemoryView,
     pub memory_detail_html: String,
     pub current_path: String,
@@ -189,6 +192,8 @@ impl AgentMemoryDetailPageTemplate {
     ) -> Result<String, askama::Error> {
         let current_path = format!("/agents/{}/memories/{}", agent.agent_key, memory.memory_id);
         Self {
+            tabs: build_agent_show_tabs(&agent, AgentShowTab::Memories),
+            agent_tabs_use_htmx: false,
             agent,
             memory,
             memory_detail_html,

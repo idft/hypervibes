@@ -27,9 +27,13 @@ fn job_detail_page_renders_job_metadata_and_runs() {
     )
     .expect("render job detail page");
 
-    assert!(rendered.contains("Back to jobs"));
-    assert!(rendered.contains("Job details"));
+    assert!(rendered.contains("Agent sections"));
+    assert!(rendered.contains("href=\"/agents/test-agent/jobs\" data-agent-tab-link aria-current=\"page\""));
+    assert!(!rendered.contains("hx-target=\"#agent-show-tab-content\""));
+    assert!(!rendered.contains("Back to jobs"));
+    assert!(rendered.contains("analysis-15m"));
     assert!(rendered.contains("Operator prompt"));
     assert!(rendered.contains("/agents/test-agent/jobs/1/run"));
+    assert!(rendered.contains("Disable"));
     assert!(rendered.contains("/agents/test-agent/runs/1"));
 }

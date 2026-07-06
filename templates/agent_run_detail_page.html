@@ -4,22 +4,24 @@
 
 {% block content %}
 <div class="mx-auto max-w-[1500px]">
-    <header class="flex flex-col gap-2 pb-6">
+    {% include "agent_page_header.html" %}
+
+    {% include "agent_tabs.html" %}
+
+    <header class="mt-2 flex flex-col gap-2 pb-6">
         <div class="flex items-center gap-3">
-            <a href="/agents" class="text-sm text-zinc-500 hover:text-zinc-300">Agents</a>
-            <span class="text-zinc-600">/</span>
-            <a href="/agents/{{ agent.agent_key }}" class="text-sm text-zinc-400 hover:text-zinc-200">{{ agent.display_name }}</a>
-            <span class="text-zinc-600">/</span>
             <a href="/agents/{{ agent.agent_key }}/jobs" class="text-sm text-zinc-400 hover:text-zinc-200">Jobs</a>
             {% if let Some(job_url) = run.job_url %}
             <span class="text-zinc-600">/</span>
             <a href="{{ job_url }}" class="text-sm text-zinc-400 hover:text-zinc-200">{{ run.job_key }}</a>
             {% endif %}
+            <span class="text-zinc-600">/</span>
+            <span class="text-sm text-zinc-500">Run {{ run.id }}</span>
         </div>
         <div class="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
             <div>
                 <div class="flex items-center gap-3">
-                    <h1 class="text-2xl font-semibold tracking-tight text-white">Run {{ run.id }}</h1>
+                    <h2 class="text-2xl font-semibold tracking-tight text-white">Run {{ run.id }}</h2>
                     <span class="inline-flex rounded-full border px-2 py-0.5 text-xs font-medium {{ run.status_class }}">{{ run.status_label }}</span>
                 </div>
                 <p class="mt-2 text-sm text-zinc-400">{{ run.job_key }} · {{ run.job_kind }}</p>
@@ -334,4 +336,8 @@
     </section>
     {% endmatch %}
 </div>
+{% endblock %}
+
+{% block scripts %}
+{% include "agent_tabs_script.html" %}
 {% endblock %}

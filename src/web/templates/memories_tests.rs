@@ -1,0 +1,26 @@
+use super::*;
+use crate::web::templates::test_support::*;
+
+#[test]
+fn memory_detail_page_renders_agent_navbar_with_memories_active() {
+    let agent = sample_agent_detail_row();
+    let memory = MemoryView::from_record(sample_memory_record(
+        "BTC",
+        Some("15m"),
+        "analysis",
+        "Momentum remains constructive",
+        "### Readout\n\n- Wait for confirmation.",
+    ));
+    let memory_detail_html = AgentMemoryDetailPartialTemplate::render_view(memory.clone())
+        .expect("render memory detail partial");
+
+    let rendered = AgentMemoryDetailPageTemplate::render_view(agent, memory, memory_detail_html)
+        .expect("render memory detail page");
+
+    assert!(rendered.contains("Agent sections"));
+    assert!(rendered.contains(
+        "href=\"/agents/test-agent/memories\" data-agent-tab-link aria-current=\"page\""
+    ));
+    assert!(!rendered.contains("hx-target=\"#agent-show-tab-content\""));
+    assert!(rendered.contains("Momentum remains constructive"));
+}

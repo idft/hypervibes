@@ -70,5 +70,9 @@ mod positions_tests;
 mod orders_tests;
 
 #[cfg(test)]
+#[path = "memories_tests.rs"]
+mod memories_tests;
+
+#[cfg(test)]
 #[path = "settings_tests.rs"]
 mod settings_tests;

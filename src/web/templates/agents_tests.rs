@@ -360,3 +360,39 @@ fn agents_new_page_renders_base_layout_and_form() {
     assert!(rendered.contains("Runtime instance"));
     assert!(rendered.contains("OpenCode local"));
 }
+
+#[test]
+fn new_job_page_renders_agent_navbar_with_jobs_active() {
+    let agent = sample_opencode_detail_row();
+    let template = AgentScheduleNewPageTemplate {
+        tabs: build_agent_show_tabs(&agent, AgentShowTab::Jobs),
+        agent_tabs_use_htmx: false,
+        agent,
+        form: CreateAgentScheduleFormValues {
+            job_kind: "analysis".to_string(),
+            timeframe: "15m".to_string(),
+            timeout_seconds: "900".to_string(),
+            model_selection: "anthropic/claude-sonnet-4".to_string(),
+            operator_prompt: "Focus on clean continuation setups".to_string(),
+            enabled: true,
+        },
+        model_picker: ModelPickerView {
+            input_id: "job-model-selection".to_string(),
+            input_name: "model_selection".to_string(),
+            selected_value: "anthropic/claude-sonnet-4".to_string(),
+            selected_label: "Anthropic / Claude Sonnet 4".to_string(),
+            options: sample_model_options(),
+            warning: None,
+        },
+        errors: Vec::new(),
+        current_path: "/agents/test-agent/jobs/new".to_string(),
+    };
+
+    let rendered = template.render().expect("render new job page");
+
+    assert!(rendered.contains("Agent sections"));
+    assert!(rendered.contains("href=\"/agents/test-agent/jobs\" data-agent-tab-link aria-current=\"page\""));
+    assert!(!rendered.contains("hx-target=\"#agent-show-tab-content\""));
+    assert!(rendered.contains("Create job"));
+    assert!(rendered.contains("action=\"/agents/test-agent/jobs\""));
+}

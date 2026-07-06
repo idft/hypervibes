@@ -30,6 +30,9 @@ fn hook_detail_page_renders_hook_metadata_and_runs() {
     )
     .expect("render hook detail page");
 
+    assert!(rendered.contains("Agent sections"));
+    assert!(rendered.contains("href=\"/agents/test-agent/jobs\" data-agent-tab-link aria-current=\"page\""));
+    assert!(!rendered.contains("hx-target=\"#agent-show-tab-content\""));
     assert!(rendered.contains("Back to jobs"));
     assert!(rendered.contains("Hook details"));
     assert!(rendered.contains("analysis_batch_completed"));
@@ -43,6 +46,8 @@ fn hook_detail_page_renders_hook_metadata_and_runs() {
 fn new_hook_page_renders_form() {
     let template = AgentHookNewPageTemplate {
         agent: sample_opencode_detail_row(),
+        tabs: build_agent_show_tabs(&sample_opencode_detail_row(), AgentShowTab::Jobs),
+        agent_tabs_use_htmx: false,
         form: CreateAgentHookFormValues {
             timeout_seconds: "600".to_string(),
             model_selection: "anthropic/claude-sonnet-4".to_string(),
@@ -62,6 +67,9 @@ fn new_hook_page_renders_form() {
     };
 
     let rendered = template.render().expect("render new hook page");
+    assert!(rendered.contains("Agent sections"));
+    assert!(rendered.contains("href=\"/agents/test-agent/jobs\" data-agent-tab-link aria-current=\"page\""));
+    assert!(!rendered.contains("hx-target=\"#agent-show-tab-content\""));
     assert!(rendered.contains("Create market-analysis hook"));
     assert!(rendered.contains("action=\"/agents/test-agent/hooks\""));
     assert!(rendered.contains("analysis_batch_completed"));
