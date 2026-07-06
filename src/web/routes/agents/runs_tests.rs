@@ -36,7 +36,6 @@ async fn run_detail_page_handles_missing_opencode_session_mirror() {
 
     assert_eq!(response.status(), StatusCode::OK);
     let text = response_text(response).await;
-    assert!(text.contains("OpenCode session"));
-    assert!(text.contains("ses_ui_detail"));
+    assert!(text.contains("Scheduled for"));
     assert!(text.contains("no matching row was found yet in the"));
 }

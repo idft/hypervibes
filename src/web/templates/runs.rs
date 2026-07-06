@@ -39,7 +39,6 @@ pub struct AgenticRunDetailView {
     pub finished_at: Option<LocalTimestampView>,
     pub duration_text: String,
     pub timeout_text: String,
-    pub model_text: String,
     pub backend_run_ref: String,
     pub error_summary: String,
     pub job_url: Option<String>,
@@ -48,13 +47,7 @@ pub struct AgenticRunDetailView {
 
 #[derive(Debug, Clone)]
 pub struct OpenCodeSessionView {
-    pub id: String,
-    pub title: String,
-    pub status: String,
-    pub directory: String,
     pub model_text: String,
-    pub created_at: LocalTimestampView,
-    pub updated_at: LocalTimestampView,
     pub input_tokens_text: String,
     pub output_tokens_text: String,
     pub cache_read_tokens_text: String,
@@ -65,17 +58,14 @@ pub struct OpenCodeSessionView {
     pub estimated_cost_text: String,
     pub compaction_count_text: String,
     pub share_url: String,
-    pub commands: Vec<OpenCodeCommandView>,
-    pub messages: Vec<OpenCodeMessageView>,
-    pub tool_executions: Vec<OpenCodeToolExecutionView>,
+    pub transcript: Vec<TranscriptItem>,
     pub session_errors: Vec<OpenCodeSessionErrorView>,
 }
 
 #[derive(Debug, Clone)]
-pub struct OpenCodeCommandView {
-    pub created_at: LocalTimestampView,
-    pub command_name: String,
-    pub command_args: String,
+pub enum TranscriptItem {
+    Message(OpenCodeMessageView),
+    Tool(OpenCodeToolExecutionView),
 }
 
 #[derive(Debug, Clone)]
@@ -134,10 +124,6 @@ impl AgenticRunView {
 impl AgenticRunDetailView {
     pub fn from_row(row: &crate::agentic::model::AgenticRunRow) -> Self {
         let (status_label, status_class) = status_badge(row.status.as_str());
-        let model_text = match (row.model_provider_id.as_deref(), row.model_id.as_deref()) {
-            (Some(provider), Some(model)) => format!("{provider}/{model}"),
-            _ => "—".to_string(),
-        };
 
         Self {
             id: row.id,
@@ -151,7 +137,6 @@ impl AgenticRunDetailView {
             finished_at: optional_local_timestamp_view(row.finished_at),
             duration_text: run_duration_text(row.started_at, row.finished_at),
             timeout_text: format_duration(row.timeout_seconds),
-            model_text,
             backend_run_ref: row.backend_run_ref.clone().unwrap_or_default(),
             error_summary: row.error_summary.clone().unwrap_or_default(),
             job_url: row
@@ -175,14 +160,32 @@ impl OpenCodeSessionView {
             format!("{}/{}", session.model_provider, session.model_id)
         };
 
+        let mut transcript: Vec<(DateTime<Utc>, String, TranscriptItem)> =
+            Vec::with_capacity(detail.messages.len() + detail.tool_executions.len());
+        for message in &detail.messages {
+            let view = OpenCodeMessageView::from_row(message);
+            if view.is_empty() {
+                continue;
+            }
+            transcript.push((
+                message.created_at,
+                message.id.clone(),
+                TranscriptItem::Message(view),
+            ));
+        }
+        for tool in &detail.tool_executions {
+            transcript.push((
+                tool.started_at.unwrap_or(tool.created_at),
+                tool.id.to_string(),
+                TranscriptItem::Tool(OpenCodeToolExecutionView::from_row(tool)),
+            ));
+        }
+        transcript.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.cmp(&b.1)));
+        let transcript: Vec<TranscriptItem> =
+            transcript.into_iter().map(|(_, _, item)| item).collect();
+
         Self {
-            id: session.id.clone(),
-            title: non_empty_or_dash(session.title.as_deref()),
-            status: non_empty_or_dash(session.status.as_deref()),
-            directory: non_empty_or_dash(session.directory.as_deref()),
             model_text,
-            created_at: local_timestamp_view(session.created_at),
-            updated_at: local_timestamp_view(session.updated_at),
             input_tokens_text: format_i32(session.input_tokens),
             output_tokens_text: format_i32(session.output_tokens),
             cache_read_tokens_text: format_i32(session.cache_read_tokens),
@@ -193,25 +196,7 @@ impl OpenCodeSessionView {
             estimated_cost_text: format_decimal_with_commas(session.estimated_cost, 6),
             compaction_count_text: format_i32(session.compaction_count),
             share_url: session.share_url.clone().unwrap_or_default(),
-            commands: detail
-                .commands
-                .iter()
-                .map(|row| OpenCodeCommandView {
-                    created_at: local_timestamp_view(row.created_at),
-                    command_name: row.command_name.clone(),
-                    command_args: row.command_args.clone().unwrap_or_default(),
-                })
-                .collect(),
-            messages: detail
-                .messages
-                .iter()
-                .map(OpenCodeMessageView::from_row)
-                .collect(),
-            tool_executions: detail
-                .tool_executions
-                .iter()
-                .map(OpenCodeToolExecutionView::from_row)
-                .collect(),
+            transcript,
             session_errors: detail
                 .session_errors
                 .iter()
@@ -222,6 +207,10 @@ impl OpenCodeSessionView {
 }
 
 impl OpenCodeMessageView {
+    fn is_empty(&self) -> bool {
+        self.text.is_empty() && self.summary.is_empty() && self.system_prompt.is_empty()
+    }
+
     fn from_row(row: &crate::opencode::store::OpenCodeMessageRow) -> Self {
         let (role_label, role_class) = message_role_badge(row.role.as_str());
         let model_text = match (row.model_provider.as_deref(), row.model_id.as_deref()) {
@@ -386,14 +375,6 @@ pub(super) fn message_role_badge(role: &str) -> (String, String) {
             "border-zinc-700 bg-zinc-900/60 text-zinc-300".to_string(),
         ),
     }
-}
-
-pub(super) fn non_empty_or_dash(value: Option<&str>) -> String {
-    value
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToOwned::to_owned)
-        .unwrap_or_else(|| "—".to_string())
 }
 
 pub(super) fn format_json_value(value: Option<&Value>) -> String {
