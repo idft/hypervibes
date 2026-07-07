@@ -88,7 +88,9 @@ pub struct OpenCodeToolExecutionView {
     pub success_class: String,
     pub duration_text: String,
     pub args_json: String,
+    pub args_preview: String,
     pub result_json: String,
+    pub result_preview: String,
     pub error_text: String,
 }
 
@@ -260,7 +262,9 @@ impl OpenCodeToolExecutionView {
                 .map(|duration_ms| format!("{duration_ms}ms"))
                 .unwrap_or_else(|| "—".to_string()),
             args_json: format_json_value(row.args.as_ref()),
+            args_preview: pick_json_preview(row.args.as_ref()),
             result_json: format_json_value(row.result.as_ref()),
+            result_preview: pick_json_preview(row.result.as_ref()),
             error_text: row.error.clone().unwrap_or_default(),
         }
     }
@@ -381,6 +385,62 @@ pub(super) fn format_json_value(value: Option<&Value>) -> String {
     value
         .and_then(|value| serde_json::to_string_pretty(value).ok())
         .unwrap_or_default()
+}
+
+const JSON_PREVIEW_MAX_CHARS: usize = 200;
+const JSON_PREVIEW_PRIORITY_FIELDS: &[&str] = &[
+    "command",
+    "content",
+    "text",
+    "query",
+    "path",
+    "filePath",
+    "url",
+    "input",
+    "prompt",
+    "message",
+    "output",
+    "result",
+    "data",
+    "response",
+];
+
+fn json_value_preview(value: &Value) -> String {
+    let raw = match value {
+        Value::String(s) => s.clone(),
+        other => other.to_string(),
+    };
+    let total_chars = raw.chars().count();
+    if total_chars > JSON_PREVIEW_MAX_CHARS {
+        let truncated: String = raw.chars().take(JSON_PREVIEW_MAX_CHARS).collect();
+        format!("{truncated}…")
+    } else {
+        raw
+    }
+}
+
+pub(super) fn pick_json_preview(value: Option<&Value>) -> String {
+    let Some(value) = value else {
+        return String::new();
+    };
+    match value {
+        Value::Object(map) => {
+            for field in JSON_PREVIEW_PRIORITY_FIELDS {
+                if let Some(inner) = map.get(*field) {
+                    return json_value_preview(inner);
+                }
+            }
+            if let Some((_, inner)) = map.iter().next() {
+                return json_value_preview(inner);
+            }
+            String::new()
+        }
+        Value::Array(items) => items
+            .first()
+            .map(json_value_preview)
+            .unwrap_or_default(),
+        _ => json_value_preview(value),
+    }
 }
 
 pub(super) fn format_i32(value: i32) -> String {

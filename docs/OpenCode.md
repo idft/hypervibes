@@ -80,7 +80,11 @@ Before claiming new work for an agent lane, Vibetrading reconciles stale active 
 
 A single signal handler in `main` watches for `SIGINT` (Ctrl-C) and `SIGTERM` and flips one shared `watch<bool>`. The web server, the `AgenticScheduler`, and the `HyperliquidAgentMonitor` all observe that flag and stop claiming new work. The web server's `axum::serve` `with_graceful_shutdown` future is driven by the same flag, so in-flight HTTP requests still finish.
 
+The web server additionally waits for the shared `InFlightTracker` to drain (or hit the 30-minute grace) once the shutdown flag flips, because the agent's MCP server makes HTTP calls back into this API during a dispatch. Without that hold, the web server can return between agent tool calls and starve the in-flight dispatch's API calls (each MCP call from the agent would fail with connection refused).
+
 Every dispatch is wrapped in an `InFlightTracker` guard that increments when the task starts and decrements on `Drop`. The scheduler and `main` both call `wait_idle_with_timeout(30m)` after the shutdown signal so any `run_command` HTTP call already in flight is given a chance to return naturally (or hit the schedule's own `timeout_seconds`). The 30-minute ceiling is `max schedule timeout (15m) + 15m buffer`; if it is hit, a warning is logged and the next start's recovery sweep will mark the affected runs as failed orphans.
+
+A second `SIGINT` or `SIGTERM` flips a separate `force` watch (`force_shutdown_rx`). Both the web server's in-flight hold and the scheduler's drain wait observe it and return immediately, so the API is cut and the in-flight dispatches fail fast on their next MCP call (which then surfaces the timeout/error back through `run_command` and lets the process exit). After the second signal, further signals are ignored; use `kill -9` if a hard exit is required.
 
 The new policy on what may and may not start after the shutdown signal:
 

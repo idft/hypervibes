@@ -14,7 +14,6 @@ mod web;
 mod test_db;
 
 use std::sync::Arc;
-use std::time::Duration;
 
 use anyhow::{Context, Result};
 use config::AppConfig;
@@ -22,17 +21,8 @@ use db::{connect, migrate};
 use tokio::sync::watch;
 use tracing_subscriber::{EnvFilter, fmt};
 
-use crate::agentic::in_flight::InFlightTracker;
+use crate::agentic::in_flight::{InFlightTracker, SHUTDOWN_IN_FLIGHT_GRACE};
 use crate::hyperliquid::live_state::LiveAccountStore;
-
-/// Maximum time `main` will wait for in-flight agentic dispatches to
-/// drain after the scheduler and web server have both stopped, before
-/// exiting anyway. Sized to be larger than the longest configured
-/// `agentic_job_schedules.timeout_seconds` (currently 900s) so a
-/// hung-but-still-progressing dispatch can complete, plus a 15m
-/// buffer for cleanup. The scheduler enforces the same ceiling, so
-/// this is a belt-and-suspenders check.
-const SHUTDOWN_IN_FLIGHT_GRACE: Duration = Duration::from_secs(30 * 60);
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -53,6 +43,7 @@ async fn main() -> Result<()> {
     migrate(&pool).await?;
 
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
+    let (force_shutdown_tx, force_shutdown_rx) = watch::channel(false);
     let live_accounts = Arc::new(LiveAccountStore::new());
     let encryption_key = agents::crypto::EncryptionKey::new(
         config.agents_encryption_key_id.clone(),
@@ -108,6 +99,7 @@ async fn main() -> Result<()> {
     let agentic_scheduler = agentic::scheduler::AgenticScheduler::new(
         pool.clone(),
         shutdown_rx.clone(),
+        force_shutdown_rx.clone(),
         opencode_backend.clone(),
         Arc::clone(&live_accounts),
         opencode_workspace_config.clone(),
@@ -133,6 +125,7 @@ async fn main() -> Result<()> {
         model_catalog,
         Arc::new(asset_cache),
         shutdown_rx.clone(),
+        force_shutdown_rx.clone(),
         in_flight_for_web,
     );
     tokio::pin!(server_future);
@@ -140,8 +133,12 @@ async fn main() -> Result<()> {
     // Single source of truth for shutdown: when SIGINT or SIGTERM
     // arrives, set the shared flag. Every long-running task
     // (web server's graceful shutdown, agentic scheduler's loop,
-    // hyperliquid monitor's loop) observes it and drains.
-    spawn_shutdown_listener(shutdown_tx);
+    // hyperliquid monitor's loop) observes it and drains. A second
+    // signal flips a separate `force` watch that short-circuits
+    // the web server's in-flight hold and the scheduler's drain
+    // wait, so the API is cut immediately and in-flight dispatches
+    // fail fast on their next MCP call.
+    spawn_shutdown_listener(shutdown_tx, force_shutdown_tx);
 
     tokio::select! {
         result = &mut server_future => {
@@ -164,20 +161,28 @@ async fn main() -> Result<()> {
     // The scheduler drains the trackers it knows about inside its
     // own `run`, but manual hook dispatches that started after the
     // scheduler already drained are only visible here. One more
-    // bounded wait covers them.
+    // bounded wait covers them, and the wait is short-circuited by
+    // the force watch so a second Ctrl-C exits immediately.
     if in_flight.in_flight() > 0 {
         tracing::info!(
             in_flight = in_flight.in_flight(),
             grace_seconds = SHUTDOWN_IN_FLIGHT_GRACE.as_secs(),
             "main waiting for in-flight agentic dispatches to complete"
         );
-        let drained = in_flight
-            .wait_idle_with_timeout(SHUTDOWN_IN_FLIGHT_GRACE)
-            .await;
+        let mut force_rx = force_shutdown_rx;
+        let drained = tokio::select! {
+            drained = in_flight.wait_idle_with_timeout(SHUTDOWN_IN_FLIGHT_GRACE) => drained,
+            _ = async {
+                loop {
+                    if *force_rx.borrow() { break; }
+                    if force_rx.changed().await.is_err() { return; }
+                }
+            } => false,
+        };
         if !drained {
             tracing::warn!(
                 remaining = in_flight.in_flight(),
-                "in-flight agentic dispatches did not drain within grace period; \
+                "in-flight agentic dispatches did not drain; \
                  leaving them orphaned for the next start to recover"
             );
         } else {
@@ -189,11 +194,15 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
-/// Spawn a background task that listens for `SIGINT` and `SIGTERM`
-/// and flips the shutdown watch on the first signal received. The
-/// second signal is logged but ignored so operators can see it; force
-/// kill the process if they need a hard exit.
-fn spawn_shutdown_listener(shutdown_tx: watch::Sender<bool>) {
+/// Spawn a background task that listens for `SIGINT` and `SIGTERM` and
+/// flips the shutdown watch on the first signal received. A second
+/// signal flips a separate `force` watch that the web server and
+/// scheduler observe to short-circuit the graceful drain path. After
+/// the second signal, further signals are ignored.
+fn spawn_shutdown_listener(
+    shutdown_tx: watch::Sender<bool>,
+    force_shutdown_tx: watch::Sender<bool>,
+) {
     tokio::spawn(async move {
         #[cfg(unix)]
         let mut sigterm =
@@ -225,5 +234,22 @@ fn spawn_shutdown_listener(shutdown_tx: watch::Sender<bool>) {
 
         tracing::info!(signal = signal_name, "shutdown signal received; draining");
         let _ = shutdown_tx.send(true);
+
+        // Wait for a second signal to flip the force flag. The
+        // web server observes it to cut the API immediately, and
+        // the scheduler observes it to abandon its in-flight wait.
+        #[cfg(unix)]
+        {
+            tokio::select! {
+                _ = tokio::signal::ctrl_c() => {}
+                _ = sigterm.recv() => {}
+            }
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = tokio::signal::ctrl_c().await;
+        }
+        tracing::warn!("second shutdown signal received; force-shutting down");
+        let _ = force_shutdown_tx.send(true);
     });
 }

@@ -4,6 +4,17 @@ use std::time::Duration;
 
 use tokio::sync::Notify;
 
+/// Maximum time callers wait for in-flight agentic dispatches to
+/// drain after a shutdown signal. Sized to be larger than the longest
+/// configured `agentic_job_schedules.timeout_seconds` (currently
+/// 900s) so a hung-but-still-progressing dispatch can complete, plus
+/// a 15m buffer. The agentic scheduler and `main` enforce this
+/// ceiling on the in-flight tracker, and the web server's graceful
+/// shutdown observes it so the API stays up while an in-flight agent
+/// is still running (the agent's MCP server makes HTTP calls back
+/// into this API during a dispatch).
+pub const SHUTDOWN_IN_FLIGHT_GRACE: Duration = Duration::from_secs(30 * 60);
+
 /// Shared counter of in-flight agentic dispatches, used to drain work
 /// on graceful shutdown.
 ///

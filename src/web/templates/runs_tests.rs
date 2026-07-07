@@ -1,5 +1,6 @@
 use super::*;
 use crate::web::templates::test_support::*;
+use serde_json::json;
 
 #[test]
 fn run_detail_page_renders_opencode_session_sections() {
@@ -70,4 +71,47 @@ fn hook_run_detail_view_uses_dash_timeframe_and_hook_job_url() {
     assert_eq!(run.timeframe_text, "—");
     assert_eq!(run.job_url, Some("/agents/test-agent/hooks/3".to_string()));
     assert_eq!(run.job_label, "hook");
+}
+
+#[test]
+fn pick_json_preview_prefers_priority_field_and_truncates() {
+    let value = json!({
+        "command": "echo hi",
+        "extra": "noise",
+    });
+    assert_eq!(pick_json_preview(Some(&value)), "echo hi");
+}
+
+#[test]
+fn pick_json_preview_falls_back_to_first_field() {
+    let value = json!({
+        "alpha_key": "alpha value",
+        "beta_key": "beta value",
+    });
+    let preview = pick_json_preview(Some(&value));
+    assert!(
+        preview == "alpha value" || preview == "beta value",
+        "expected one of the field values, got: {preview}"
+    );
+}
+
+#[test]
+fn pick_json_preview_handles_arrays_and_scalars() {
+    assert_eq!(
+        pick_json_preview(Some(&json!(["first", "second"]))),
+        "first"
+    );
+    assert_eq!(pick_json_preview(Some(&json!("just a string"))), "just a string");
+    assert_eq!(pick_json_preview(Some(&json!(42))), "42");
+    assert_eq!(pick_json_preview(None), "");
+    assert_eq!(pick_json_preview(Some(&json!({}))), "");
+}
+
+#[test]
+fn pick_json_preview_truncates_long_strings() {
+    let long = "a".repeat(500);
+    let value = json!({ "content": long });
+    let preview = pick_json_preview(Some(&value));
+    assert!(preview.ends_with('…'));
+    assert_eq!(preview.chars().count(), 201);
 }

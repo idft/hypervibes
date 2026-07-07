@@ -8,7 +8,7 @@ use tracing::{debug, error, info, warn};
 use crate::{
     agentic::{
         backend::{AgenticBackend, DispatchRequest, dispatch_with_timeout},
-        in_flight::InFlightTracker,
+        in_flight::{InFlightTracker, SHUTDOWN_IN_FLIGHT_GRACE},
         model::{
             DueOpenCodeHookRow, DueOpenCodeScheduleRow, HOOK_EVENT_ANALYSIS_BATCH_COMPLETED,
             JOB_KIND_ANALYSIS, JOB_KIND_TRADING, MAINTENANCE_STATUS_QUEUED,
@@ -35,13 +35,6 @@ use crate::{
 
 const SCHEDULER_POLL_INTERVAL: Duration = Duration::from_secs(10);
 const ORPHAN_RECOVERY_INTERVAL: Duration = Duration::from_secs(60);
-/// Maximum time the scheduler will wait for in-flight dispatches to
-/// finish after the shutdown signal before logging a warning and
-/// returning. Sized to be larger than the longest configured
-/// `agentic_job_schedules.timeout_seconds` (currently 900s) so a
-/// hung-but-still-progressing dispatch can complete, plus a 15m
-/// buffer for cleanup.
-const SHUTDOWN_IN_FLIGHT_GRACE: Duration = Duration::from_secs(30 * 60);
 const DUE_SCHEDULE_LIMIT: i64 = 20;
 const WORKSPACE_MAINTENANCE_SESSION_PROBE_LIMIT: i64 = 20;
 const OPENCODE_SESSION_STATUS_IDLE: &str = "idle";
@@ -59,6 +52,7 @@ const OPENCODE_SESSION_STATUS_IDLE: &str = "idle";
 pub struct AgenticScheduler {
     pool: DbPool,
     shutdown_rx: watch::Receiver<bool>,
+    force_shutdown_rx: watch::Receiver<bool>,
     backend: Arc<dyn AgenticBackend>,
     live_accounts: Arc<LiveAccountStore>,
     opencode_workspace_config: OpenCodeWorkspaceConfig,
@@ -71,6 +65,7 @@ impl AgenticScheduler {
     pub fn new(
         pool: DbPool,
         shutdown_rx: watch::Receiver<bool>,
+        force_shutdown_rx: watch::Receiver<bool>,
         backend: Arc<dyn AgenticBackend>,
         live_accounts: Arc<LiveAccountStore>,
         opencode_workspace_config: OpenCodeWorkspaceConfig,
@@ -80,6 +75,7 @@ impl AgenticScheduler {
         Self {
             pool,
             shutdown_rx,
+            force_shutdown_rx,
             backend,
             live_accounts,
             opencode_workspace_config,
@@ -95,6 +91,10 @@ impl AgenticScheduler {
     /// shared [`InFlightTracker`], so `main` calls
     /// `wait_idle_with_timeout` once more after this returns as a
     /// belt-and-suspenders check.
+    ///
+    /// The drain wait is raced against the `force_shutdown_rx` watch
+    /// so a second shutdown signal (force) returns immediately
+    /// instead of waiting for the 30-minute grace to elapse.
     pub async fn run(mut self) -> Result<()> {
         info!("agentic scheduler starting");
         loop {
@@ -119,14 +119,20 @@ impl AgenticScheduler {
                 grace_seconds = SHUTDOWN_IN_FLIGHT_GRACE.as_secs(),
                 "waiting for in-flight agentic dispatches to complete"
             );
-            let drained = self
-                .in_flight
-                .wait_idle_with_timeout(SHUTDOWN_IN_FLIGHT_GRACE)
-                .await;
+            let mut force_rx = self.force_shutdown_rx.clone();
+            let drained = tokio::select! {
+                drained = self.in_flight.wait_idle_with_timeout(SHUTDOWN_IN_FLIGHT_GRACE) => drained,
+                _ = async {
+                    loop {
+                        if *force_rx.borrow() { break; }
+                        if force_rx.changed().await.is_err() { return; }
+                    }
+                } => false,
+            };
             if !drained {
                 warn!(
                     remaining = self.in_flight.in_flight(),
-                    "in-flight agentic dispatches did not drain within grace period; \
+                    "in-flight agentic dispatches did not drain; \
                      leaving them orphaned for the next start to recover"
                 );
             } else {
@@ -886,6 +892,7 @@ fn sort_trading_schedules_for_dispatch(
 pub fn spawn(
     pool: DbPool,
     shutdown_rx: watch::Receiver<bool>,
+    force_shutdown_rx: watch::Receiver<bool>,
     backend: Arc<dyn AgenticBackend>,
     live_accounts: Arc<LiveAccountStore>,
     opencode_workspace_config: OpenCodeWorkspaceConfig,
@@ -896,6 +903,7 @@ pub fn spawn(
         AgenticScheduler::new(
             pool,
             shutdown_rx,
+            force_shutdown_rx,
             backend,
             live_accounts,
             opencode_workspace_config,
@@ -1206,9 +1214,11 @@ mod tests {
 
         let live_accounts = Arc::new(crate::hyperliquid::live_state::LiveAccountStore::new());
         let (_tx, rx) = watch::channel(false);
+        let (_force_tx, force_rx) = watch::channel(false);
         let mut scheduler = AgenticScheduler::new(
             pool.clone(),
             rx,
+            force_rx,
             backend,
             live_accounts,
             sample_workspace_config(),
@@ -1307,9 +1317,11 @@ mod tests {
 
         let live_accounts = Arc::new(crate::hyperliquid::live_state::LiveAccountStore::new());
         let (_tx, rx) = watch::channel(false);
+        let (_force_tx, force_rx) = watch::channel(false);
         let mut scheduler = AgenticScheduler::new(
             pool.clone(),
             rx,
+            force_rx,
             backend,
             live_accounts,
             sample_workspace_config(),
@@ -1364,9 +1376,11 @@ mod tests {
 
         let live_accounts = Arc::new(crate::hyperliquid::live_state::LiveAccountStore::new());
         let (_tx, rx) = watch::channel(false);
+        let (_force_tx, force_rx) = watch::channel(false);
         let mut scheduler = AgenticScheduler::new(
             pool.clone(),
             rx,
+            force_rx,
             backend,
             live_accounts,
             sample_workspace_config(),
@@ -1424,9 +1438,11 @@ mod tests {
         let backend: Arc<dyn AgenticBackend> = Arc::new(FakeBackend::success(calls.clone()));
         let live_accounts = Arc::new(crate::hyperliquid::live_state::LiveAccountStore::new());
         let (_tx, rx) = watch::channel(false);
+        let (_force_tx, force_rx) = watch::channel(false);
         let mut scheduler = AgenticScheduler::new(
             pool.clone(),
             rx,
+            force_rx,
             backend,
             live_accounts,
             sample_workspace_config(),
@@ -1487,9 +1503,11 @@ mod tests {
 
         let live_accounts = Arc::new(crate::hyperliquid::live_state::LiveAccountStore::new());
         let (_tx, rx) = watch::channel(false);
+        let (_force_tx, force_rx) = watch::channel(false);
         let mut scheduler = AgenticScheduler::new(
             pool.clone(),
             rx,
+            force_rx,
             backend,
             live_accounts,
             sample_workspace_config(),
@@ -1539,9 +1557,11 @@ mod tests {
         let backend: Arc<dyn AgenticBackend> = Arc::new(FakeBackend::success(calls.clone()));
         let live_accounts = Arc::new(crate::hyperliquid::live_state::LiveAccountStore::new());
         let (_tx, rx) = watch::channel(false);
+        let (_force_tx, force_rx) = watch::channel(false);
         let mut scheduler = AgenticScheduler::new(
             pool.clone(),
             rx,
+            force_rx,
             backend,
             live_accounts,
             sample_workspace_config(),
@@ -1594,9 +1614,11 @@ mod tests {
             Arc::new(FakeBackend::success(Arc::new(Mutex::new(Vec::new()))));
         let live_accounts = Arc::new(crate::hyperliquid::live_state::LiveAccountStore::new());
         let (_tx, rx) = watch::channel(false);
+        let (_force_tx, force_rx) = watch::channel(false);
         let mut scheduler = AgenticScheduler::new(
             pool.clone(),
             rx,
+            force_rx,
             backend,
             live_accounts,
             sample_workspace_config(),
@@ -1654,9 +1676,11 @@ mod tests {
             Arc::new(FakeBackend::success(Arc::new(Mutex::new(Vec::new()))));
         let live_accounts = Arc::new(crate::hyperliquid::live_state::LiveAccountStore::new());
         let (_tx, rx) = watch::channel(false);
+        let (_force_tx, force_rx) = watch::channel(false);
         let mut scheduler = AgenticScheduler::new(
             pool.clone(),
             rx,
+            force_rx,
             backend,
             live_accounts,
             sample_workspace_config(),
@@ -1691,9 +1715,11 @@ mod tests {
             Arc::new(FakeBackend::success(Arc::new(Mutex::new(Vec::new()))));
         let live_accounts = Arc::new(crate::hyperliquid::live_state::LiveAccountStore::new());
         let (_tx, rx) = watch::channel(false);
+        let (_force_tx, force_rx) = watch::channel(false);
         let mut scheduler = AgenticScheduler::new(
             pool.clone(),
             rx,
+            force_rx,
             backend,
             live_accounts,
             sample_workspace_config(),
@@ -1761,9 +1787,11 @@ mod tests {
             Arc::new(FakeBackend::success(Arc::new(Mutex::new(Vec::new()))));
         let live_accounts = Arc::new(crate::hyperliquid::live_state::LiveAccountStore::new());
         let (_tx, rx) = watch::channel(false);
+        let (_force_tx, force_rx) = watch::channel(false);
         let mut scheduler = AgenticScheduler::new(
             pool.clone(),
             rx,
+            force_rx,
             backend,
             live_accounts,
             sample_workspace_config(),
@@ -1842,11 +1870,13 @@ mod tests {
         let calls: Arc<Mutex<Vec<DispatchRequest>>> = Arc::new(Mutex::new(Vec::new()));
         let backend: Arc<dyn AgenticBackend> = Arc::new(FakeBackend::success(calls.clone()));
         let (_shutdown_tx, shutdown_rx) = watch::channel(true);
+        let (_force_tx, force_rx) = watch::channel(false);
 
         let live_accounts = Arc::new(crate::hyperliquid::live_state::LiveAccountStore::new());
         let mut scheduler = AgenticScheduler::new(
             pool.clone(),
             shutdown_rx,
+            force_rx,
             backend,
             live_accounts,
             sample_workspace_config(),
@@ -1892,12 +1922,14 @@ mod tests {
         let backend: Arc<dyn AgenticBackend> = backend_impl.clone();
 
         let (shutdown_tx, shutdown_rx) = watch::channel(false);
+        let (_force_tx, force_rx) = watch::channel(false);
         let in_flight = InFlightTracker::new();
         let in_flight_for_run = in_flight.clone();
         let live_accounts = Arc::new(crate::hyperliquid::live_state::LiveAccountStore::new());
         let mut scheduler = AgenticScheduler::new(
             pool.clone(),
             shutdown_rx,
+            force_rx,
             backend,
             live_accounts,
             sample_workspace_config(),
@@ -1933,9 +1965,90 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn run_abandons_in_flight_wait_when_force_signal_fires() {
+        let pool = test_db::pool().await;
+        let key = format!(
+            "shutdown-force-{}",
+            Utc::now().timestamp_nanos_opt().unwrap_or(0)
+        );
+        seed_test_agent(&pool, &key).await;
+
+        let (schedule_id,): (i64,) = sqlx::query_as(
+            "SELECT id FROM agentic_job_schedules
+              WHERE agent_key = $1 AND job_key = 'analysis-15m'",
+        )
+        .bind(&key)
+        .fetch_one(&pool)
+        .await
+        .expect("fetch schedule id");
+        pin_schedule_due(&pool, schedule_id, "15m").await;
+
+        // The fake backend holds the dispatch for 30s so the only way
+        // `run` can return quickly is via the force signal.
+        let calls: Arc<Mutex<Vec<DispatchRequest>>> = Arc::new(Mutex::new(Vec::new()));
+        let backend_impl = Arc::new(FakeBackend::with_delay(
+            calls.clone(),
+            Duration::from_secs(30),
+        ));
+        let backend: Arc<dyn AgenticBackend> = backend_impl.clone();
+
+        let (shutdown_tx, shutdown_rx) = watch::channel(false);
+        let (force_tx, force_rx) = watch::channel(false);
+        let in_flight = InFlightTracker::new();
+        let in_flight_for_run = in_flight.clone();
+        let live_accounts = Arc::new(crate::hyperliquid::live_state::LiveAccountStore::new());
+        let mut scheduler = AgenticScheduler::new(
+            pool.clone(),
+            shutdown_rx,
+            force_rx,
+            backend,
+            live_accounts,
+            sample_workspace_config(),
+            sample_opencode_client(),
+            in_flight_for_run,
+        );
+
+        scheduler.tick().await.expect("first tick");
+        let run_handle = tokio::spawn(async move { scheduler.run().await });
+
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert_eq!(in_flight.in_flight(), 1, "dispatch should be in flight");
+
+        shutdown_tx.send(true).expect("send shutdown");
+        // Let `run` enter its drain wait.
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert!(
+            !run_handle.is_finished(),
+            "run should still be waiting for the in-flight dispatch"
+        );
+
+        let force_started = std::time::Instant::now();
+        force_tx.send(true).expect("send force");
+
+        // Without the force short-circuit, this would block for the
+        // 30-minute SHUTDOWN_IN_FLIGHT_GRACE. With force, the wait
+        // unwinds quickly. Bound generously to avoid CI flake.
+        tokio::time::timeout(Duration::from_secs(2), run_handle)
+            .await
+            .expect("run should return promptly after force signal")
+            .expect("join")
+            .expect("run result");
+        assert!(
+            force_started.elapsed() < Duration::from_secs(1),
+            "force path should bypass the 30-minute grace; took {:?}",
+            force_started.elapsed()
+        );
+        // The in-flight tracker is still occupied; we abandoned the
+        // wait, not the dispatch itself.
+        assert_eq!(in_flight.in_flight(), 1, "tracker should still hold");
+        let _ = calls;
+    }
+
+    #[tokio::test]
     async fn run_returns_immediately_when_no_dispatches_are_in_flight() {
         let pool = test_db::pool().await;
         let (_shutdown_tx, shutdown_rx) = watch::channel(true);
+        let (_force_tx, force_rx) = watch::channel(false);
         let in_flight = InFlightTracker::new();
         let backend: Arc<dyn AgenticBackend> =
             Arc::new(FakeBackend::success(Arc::new(Mutex::new(Vec::new()))));
@@ -1943,6 +2056,7 @@ mod tests {
         let scheduler = AgenticScheduler::new(
             pool.clone(),
             shutdown_rx,
+            force_rx,
             backend,
             live_accounts,
             sample_workspace_config(),
