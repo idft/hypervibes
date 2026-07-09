@@ -47,7 +47,7 @@ async fn default_schedules_insert_expected_rows_with_disabled_defaults() {
     let rows = list_agent_schedules(&pool, &key)
         .await
         .expect("list schedules");
-    assert_eq!(rows.len(), 4);
+    assert_eq!(rows.len(), 5);
 
     let analysis = rows
         .iter()
@@ -88,6 +88,14 @@ async fn default_schedules_insert_expected_rows_with_disabled_defaults() {
     assert_eq!(trading.trigger_delay_seconds, DEFAULT_TRIGGER_DELAY_SECONDS);
     assert_eq!(trading.timeout_seconds, DEFAULT_TRADING_TIMEOUT_SECONDS);
 
+    let daily_review = rows
+        .iter()
+        .find(|row| row.job_key == "daily-review-1d")
+        .expect("daily review schedule present");
+    assert!(!daily_review.enabled);
+    assert_eq!(daily_review.job_kind, crate::agentic::model::JOB_KIND_DAILY_REVIEW);
+    assert_eq!(daily_review.timeframe, "1d");
+
     let hooks = list_agent_hooks(&pool, &key).await.expect("list hooks");
     assert_eq!(hooks.len(), 1);
     let hook = hooks.first().expect("default hook present");
@@ -123,7 +131,7 @@ async fn default_schedules_are_idempotent() {
         .fetch_one(&pool)
         .await
         .expect("count");
-    assert_eq!(count.0, 4);
+    assert_eq!(count.0, 5);
 
     let hook_count: (i64,) =
         query_as("SELECT COUNT(*) FROM agentic_job_hooks WHERE agent_key = $1")

@@ -15,7 +15,7 @@ The agents module is the system of record for:
 - which runtime each agent uses
 - which Hyperliquid account each agent controls
 - which instruments each agent may trade
-- which prompts and API credentials belong to the agent
+- which strategy prompts and API credentials belong to the agent
 
 ## Current Data Model
 
@@ -24,6 +24,7 @@ The current implementation keeps the registry intentionally small:
 - one `agents` row per trading agent
 - one `agent_runtimes` row per reusable runtime instance
 - one `agent_instruments` mapping table for selected markets
+- one `agent_strategy_prompts` row per `(agent_key, prompt_kind)`
 
 Important `agents` fields:
 
@@ -33,11 +34,16 @@ Important `agents` fields:
 - `environment`
 - `wallet_address`
 - `api_key`
-- `analysis_prompt`
-- `trading_prompt`
 - `backend_kind`
 - `runtime_id`
 - `runtime_config`
+
+Strategy prompts are no longer stored directly on `agents`. They live in `agent_strategy_prompts` with prompt kinds:
+
+- `analysis`
+- `market_analysis`
+- `trading`
+- `daily_review`
 
 The Hyperliquid private key is encrypted before storage.
 
@@ -104,4 +110,4 @@ Each agent may be linked to zero or more Hyperliquid perp instruments.
 - empty selection means the agent should not analyze markets or place new trades
 - `POST /api/v1/orders` rejects orders for symbols not currently selected for that agent
 
-OpenCode jobs receive agent prompts, selected instruments, and job metadata through the dispatched prompt text.
+OpenCode jobs receive the job-specific strategy prompt, the latest agent-level learnings memory, selected instruments, and job metadata through the dispatched prompt text.

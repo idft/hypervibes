@@ -13,6 +13,10 @@ use crate::{
     agents::{
         crypto::EncryptionKey,
         model::CreateAgentRuntimeForm,
+        strategy_prompts::{
+            PROMPT_KIND_ANALYSIS, PROMPT_KIND_TRADING, insert_default_strategy_prompts_for_agent,
+            upsert_agent_strategy_prompt,
+        },
         store::{insert_agent_runtime, update_agent_runtime_config},
     },
     memory::CreateMemory,
@@ -175,6 +179,7 @@ pub(in crate::web::routes) async fn seed_memory_with_type(
             summary: summary.to_string(),
             content: content.to_string(),
             metadata: Some(serde_json::json!({ "confidence": 0.8 })),
+            links: None,
         },
     )
     .await
@@ -260,8 +265,6 @@ pub(in crate::web::routes) async fn insert_test_opencode_agent(
         updated_at: now,
         enabled: true,
         display_name,
-        analysis_prompt: String::new(),
-        trading_prompt: String::new(),
         wallet_address: wallet_address.clone(),
         environment: "live".to_string(),
         api_key: format!("opencode-schedule-test-{timestamp}"),
@@ -275,6 +278,9 @@ pub(in crate::web::routes) async fn insert_test_opencode_agent(
     if insert_agent(&state.db_pool, &row).await.is_err() {
         return None;
     }
+    insert_default_strategy_prompts_for_agent(&state.db_pool, &agent_key)
+        .await
+        .expect("insert default prompts");
     crate::agentic::store::insert_default_opencode_schedules(&state.db_pool, &agent_key)
         .await
         .expect("insert default schedules");
@@ -338,8 +344,6 @@ pub(in crate::web::routes) async fn insert_test_agent_with_text(
         updated_at: now,
         enabled: true,
         display_name,
-        analysis_prompt,
-        trading_prompt,
         wallet_address: wallet_address.clone(),
         environment: "live".to_string(),
         api_key: format!("balance-stream-test-{timestamp}"),
@@ -353,6 +357,25 @@ pub(in crate::web::routes) async fn insert_test_agent_with_text(
     if insert_agent(&state.db_pool, &row).await.is_err() {
         return None;
     }
+    insert_default_strategy_prompts_for_agent(&state.db_pool, &agent_key)
+        .await
+        .expect("insert default prompts");
+    upsert_agent_strategy_prompt(
+        &state.db_pool,
+        &agent_key,
+        PROMPT_KIND_ANALYSIS,
+        &analysis_prompt,
+    )
+    .await
+    .expect("seed analysis prompt");
+    upsert_agent_strategy_prompt(
+        &state.db_pool,
+        &agent_key,
+        PROMPT_KIND_TRADING,
+        &trading_prompt,
+    )
+    .await
+    .expect("seed trading prompt");
     Some((agent_key, wallet_address))
 }
 pub(in crate::web::routes) fn random_private_key() -> String {

@@ -46,6 +46,12 @@ pub struct PlaceOrderInput {
     /// through onto the `hyperliquid.orders` row.
     #[serde(default)]
     pub memory_record_ids: Vec<String>,
+    #[serde(default = "default_attribution_source")]
+    pub attribution_source: String,
+}
+
+fn default_attribution_source() -> String {
+    "agent".to_string()
 }
 
 /// A take-profit or stop-loss leg attached to an entry order.
@@ -141,6 +147,15 @@ impl PlaceOrderInput {
                 .map_err(|e| format!("stop_losses[{idx}]: {e}"))?;
         }
 
+        match self.attribution_source.as_str() {
+            "agent" | "manual" => {}
+            other => {
+                return Err(format!(
+                    "attribution_source must be 'agent' or 'manual', got '{other}'"
+                ));
+            }
+        }
+
         Ok(())
     }
 }
@@ -201,6 +216,7 @@ mod tests {
             take_profits: vec![],
             stop_losses: vec![],
             memory_record_ids: vec![],
+            attribution_source: "agent".to_string(),
         }
     }
 

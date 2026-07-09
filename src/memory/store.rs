@@ -1,11 +1,11 @@
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
-use sqlx::QueryBuilder;
+use sqlx::{Postgres, QueryBuilder, Transaction};
 use uuid::Uuid;
 
 use crate::{
     db::DbPool,
-    memory::model::{CreateMemory, MemoryListFilter, MemoryRecord},
+    memory::model::{CreateMemory, MemoryLinkRecord, MemoryListFilter, MemoryRecord},
 };
 
 const DEFAULT_LIMIT: i64 = 50;
@@ -33,6 +33,7 @@ pub async fn insert_memory(
     let id = Uuid::new_v4();
     let metadata = input.metadata_or_default();
     let timeframe = input.timeframe.as_deref();
+    let mut tx = pool.begin().await.context("failed to begin memory insert tx")?;
 
     let row = sqlx::query_as::<_, MemoryRecord>(
         "INSERT INTO memory.records (
@@ -48,11 +49,53 @@ pub async fn insert_memory(
     .bind(input.summary.trim())
     .bind(input.content.trim())
     .bind(&metadata)
-    .fetch_one(pool)
+    .fetch_one(&mut *tx)
     .await
     .context("failed to insert memory record")?;
 
+    for link in input.links_or_empty() {
+        insert_memory_link_in_tx(&mut tx, agent_key, id, &link).await?;
+    }
+
+    tx.commit().await.context("failed to commit memory insert tx")?;
+
     Ok(row)
+}
+
+async fn insert_memory_link_in_tx(
+    tx: &mut Transaction<'_, Postgres>,
+    agent_key: &str,
+    source_memory_id: Uuid,
+    link: &crate::memory::model::CreateMemoryLink,
+) -> Result<()> {
+    let metadata = link
+        .metadata
+        .clone()
+        .unwrap_or_else(|| serde_json::json!({}));
+    sqlx::query(
+        "INSERT INTO memory.links (
+            agent_key,
+            source_memory_id,
+            target_memory_id,
+            link_type,
+            metadata
+         ) VALUES ($1, $2, $3, $4, $5)
+         ON CONFLICT (source_memory_id, target_memory_id, link_type) DO NOTHING",
+    )
+    .bind(agent_key)
+    .bind(source_memory_id)
+    .bind(link.target_memory_id)
+    .bind(link.link_type.trim())
+    .bind(metadata)
+    .execute(&mut **tx)
+    .await
+    .with_context(|| {
+        format!(
+            "failed to insert memory link from {source_memory_id} to {}",
+            link.target_memory_id
+        )
+    })?;
+    Ok(())
 }
 
 /// List memories for the given agent, newest first.
@@ -212,6 +255,44 @@ pub async fn get_memory(pool: &DbPool, agent_key: &str, id: Uuid) -> Result<Opti
     Ok(row)
 }
 
+pub async fn list_memory_links_from(
+    pool: &DbPool,
+    agent_key: &str,
+    source_memory_id: Uuid,
+) -> Result<Vec<MemoryLinkRecord>> {
+    sqlx::query_as::<_, MemoryLinkRecord>(
+        "SELECT id, agent_key, source_memory_id, target_memory_id, link_type, metadata, created_at
+           FROM memory.links
+          WHERE agent_key = $1
+            AND source_memory_id = $2
+          ORDER BY created_at ASC, id ASC",
+    )
+    .bind(agent_key)
+    .bind(source_memory_id)
+    .fetch_all(pool)
+    .await
+    .context("failed to list outgoing memory links")
+}
+
+pub async fn list_memory_links_to(
+    pool: &DbPool,
+    agent_key: &str,
+    target_memory_id: Uuid,
+) -> Result<Vec<MemoryLinkRecord>> {
+    sqlx::query_as::<_, MemoryLinkRecord>(
+        "SELECT id, agent_key, source_memory_id, target_memory_id, link_type, metadata, created_at
+           FROM memory.links
+          WHERE agent_key = $1
+            AND target_memory_id = $2
+          ORDER BY created_at ASC, id ASC",
+    )
+    .bind(agent_key)
+    .bind(target_memory_id)
+    .fetch_all(pool)
+    .await
+    .context("failed to list incoming memory links")
+}
+
 #[cfg(test)]
 mod tests {
     use chrono::Utc;
@@ -262,8 +343,6 @@ mod tests {
             updated_at: now,
             enabled: true,
             display_name: format!("Test {}", key),
-            analysis_prompt: String::new(),
-            trading_prompt: String::new(),
             wallet_address: wallet,
             environment: "live".to_string(),
             api_key: format!("vta_{}", key),
@@ -289,6 +368,7 @@ mod tests {
             summary: summary.to_string(),
             content: format!("body for {summary}"),
             metadata: Some(serde_json::json!({ "k": "v" })),
+            links: None,
         }
     }
 

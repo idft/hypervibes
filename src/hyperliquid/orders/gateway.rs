@@ -415,6 +415,7 @@ async fn place_one(
             group_id: leg.group_id,
             parent_cloid: leg.parent_cloid.clone(),
             memory_record_ids: json!(memory_ids),
+            attribution_source: input.attribution_source.clone(),
             symbol: leg.symbol.clone(),
             instrument_id: leg.instrument_id.clone(),
             side: leg.side.clone(),
@@ -885,7 +886,7 @@ pub async fn cancel_all(
     environment: &str,
     symbol: Option<&str>,
 ) -> Result<CancelAllSummary, GatewayError> {
-    let open = store::list_orders(pool, agent_key, Some("open"), symbol)
+    let open = store::list_orders(pool, agent_key, Some("open"), symbol, None, None, None)
         .await
         .map_err(GatewayError::Internal)?;
 
@@ -1059,8 +1060,6 @@ mod tests {
             updated_at: now,
             enabled: true,
             display_name: format!("GW Test {suffix}"),
-            analysis_prompt: String::new(),
-            trading_prompt: String::new(),
             wallet_address: wallet,
             environment: "live".to_string(),
             api_key: format!("vta_gw-{suffix}-{ts}"),
@@ -1112,6 +1111,7 @@ mod tests {
             take_profits: vec![],
             stop_losses: vec![],
             memory_record_ids: vec![],
+            attribution_source: "agent".to_string(),
         }
     }
 
@@ -1144,7 +1144,7 @@ mod tests {
         assert!(r.error.is_none());
 
         // The DB has exactly one row for this agent, status resting.
-        let stored = store::list_orders(&pool, &agent_key, None, None)
+        let stored = store::list_orders(&pool, &agent_key, None, None, None, None, None)
             .await
             .unwrap();
         assert_eq!(stored.len(), 1);
@@ -1196,7 +1196,7 @@ mod tests {
             .expect("place ok");
         assert_eq!(resp.results.len(), 3);
 
-        let stored = store::list_orders(&pool, &agent_key, None, None)
+        let stored = store::list_orders(&pool, &agent_key, None, None, None, None, None)
             .await
             .unwrap();
         assert_eq!(stored.len(), 3);
@@ -1308,7 +1308,7 @@ mod tests {
             assert_eq!(r.status, "error");
             assert_eq!(r.error.as_deref(), Some("network down"));
         }
-        let stored = store::list_orders(&pool, &agent_key, None, None)
+        let stored = store::list_orders(&pool, &agent_key, None, None, None, None, None)
             .await
             .unwrap();
         for s in &stored {
@@ -1351,7 +1351,7 @@ mod tests {
         assert_eq!(outcomes[0].status, "canceled");
 
         // The local row's exchange_oid matches, status updated.
-        let stored = store::list_orders(&pool, &agent_key, None, None)
+        let stored = store::list_orders(&pool, &agent_key, None, None, None, None, None)
             .await
             .unwrap();
         assert_eq!(stored.len(), 1);

@@ -480,6 +480,7 @@ async fn latest_analysis_summary_event_marks_expired_memory_with_warning() {
             summary: "Stale breakout call".to_string(),
             content: "## Thesis\nBid got pulled.".to_string(),
             metadata: Some(serde_json::json!({ "valid_for_seconds": 1 })),
+            links: None,
         },
     )
     .await

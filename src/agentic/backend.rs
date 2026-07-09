@@ -8,7 +8,7 @@ use tracing::{info, warn};
 
 use crate::{
     agentic::{
-        model::{JOB_KIND_ANALYSIS, JOB_KIND_MARKET_ANALYSIS, JOB_KIND_TRADING},
+        model::{JOB_KIND_ANALYSIS, JOB_KIND_DAILY_REVIEW, JOB_KIND_MARKET_ANALYSIS, JOB_KIND_TRADING},
         store,
     },
     db::DbPool,
@@ -23,6 +23,8 @@ const DEFAULT_ANALYSIS_AGENT: &str = "analysis";
 const DEFAULT_ANALYSIS_COMMAND: &str = "vibetrading-analysis";
 const DEFAULT_MARKET_ANALYSIS_AGENT: &str = "market-analysis";
 const DEFAULT_MARKET_ANALYSIS_COMMAND: &str = "vibetrading-market-analysis";
+const DEFAULT_DAILY_REVIEW_AGENT: &str = "daily-review";
+const DEFAULT_DAILY_REVIEW_COMMAND: &str = "vibetrading-daily-review";
 const DEFAULT_TRADING_AGENT: &str = "trading";
 const DEFAULT_TRADING_COMMAND: &str = "vibetrading-trading";
 
@@ -37,8 +39,8 @@ pub struct DispatchRequest {
     pub job_kind: String,
     pub timeframe: Option<String>,
     pub operator_prompt: String,
-    pub analysis_prompt: String,
-    pub trading_prompt: String,
+    pub strategy_prompt: String,
+    pub accumulated_learnings: Option<String>,
     pub system_prompt: String,
     pub environment: String,
     pub selected_instruments: Vec<String>,
@@ -49,6 +51,8 @@ pub struct DispatchRequest {
     pub runtime_base_url: String,
     pub runtime_config: Value,
     pub scheduled_for: DateTime<Utc>,
+    pub review_window_start: Option<DateTime<Utc>>,
+    pub review_window_end: Option<DateTime<Utc>>,
 }
 
 #[derive(Debug, Clone)]
@@ -186,6 +190,7 @@ fn resolve_opencode_job(job_kind: &str) -> Result<(&'static str, &'static str)> 
             DEFAULT_MARKET_ANALYSIS_AGENT,
             DEFAULT_MARKET_ANALYSIS_COMMAND,
         )),
+        JOB_KIND_DAILY_REVIEW => Ok((DEFAULT_DAILY_REVIEW_AGENT, DEFAULT_DAILY_REVIEW_COMMAND)),
         JOB_KIND_TRADING => Ok((DEFAULT_TRADING_AGENT, DEFAULT_TRADING_COMMAND)),
         other => Err(anyhow!("unknown job kind: {other}")),
     }
@@ -318,8 +323,8 @@ mod tests {
             job_kind: JOB_KIND_ANALYSIS.to_string(),
             timeframe: Some("15m".to_string()),
             operator_prompt: String::new(),
-            analysis_prompt: "Analyze trends.".to_string(),
-            trading_prompt: "Trade breakouts.".to_string(),
+            strategy_prompt: "Analyze trends.".to_string(),
+            accumulated_learnings: None,
             system_prompt: "You are a crypto trading assistant.".to_string(),
             environment: "live".to_string(),
             selected_instruments: Vec::new(),
@@ -334,6 +339,8 @@ mod tests {
                 "profile_source": "agent-runtime/workspace-template"
             }),
             scheduled_for: Utc::now(),
+            review_window_start: None,
+            review_window_end: None,
         }
     }
 

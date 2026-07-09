@@ -15,6 +15,24 @@ pub struct MemoryRecord {
     pub metadata: serde_json::Value,
 }
 
+#[derive(Debug, Clone, sqlx::FromRow, serde::Serialize)]
+pub struct MemoryLinkRecord {
+    pub id: i64,
+    pub agent_key: String,
+    pub source_memory_id: Uuid,
+    pub target_memory_id: Uuid,
+    pub link_type: String,
+    pub metadata: serde_json::Value,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct CreateMemoryLink {
+    pub target_memory_id: Uuid,
+    pub link_type: String,
+    pub metadata: Option<serde_json::Value>,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct CreateMemory {
     pub symbol: String,
@@ -23,6 +41,7 @@ pub struct CreateMemory {
     pub summary: String,
     pub content: String,
     pub metadata: Option<serde_json::Value>,
+    pub links: Option<Vec<CreateMemoryLink>>,
 }
 
 impl CreateMemory {
@@ -51,6 +70,18 @@ impl CreateMemory {
         {
             errors.push("metadata must be a JSON object.".to_string());
         }
+        if let Some(links) = &self.links {
+            for (index, link) in links.iter().enumerate() {
+                if link.link_type.trim().is_empty() {
+                    errors.push(format!("links[{index}].link_type is required."));
+                }
+                if let Some(metadata) = &link.metadata
+                    && !metadata.is_object()
+                {
+                    errors.push(format!("links[{index}].metadata must be a JSON object."));
+                }
+            }
+        }
 
         if errors.is_empty() {
             Ok(())
@@ -63,6 +94,10 @@ impl CreateMemory {
         self.metadata
             .clone()
             .unwrap_or_else(|| serde_json::json!({}))
+    }
+
+    pub fn links_or_empty(&self) -> Vec<CreateMemoryLink> {
+        self.links.clone().unwrap_or_default()
     }
 }
 

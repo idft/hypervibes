@@ -52,6 +52,13 @@ The generated workspace includes:
 - `scripts/generated/`
 - writable `scripts/user/`, `data/`, and `scratch/` paths
 
+The generated workspace template now includes dedicated OpenCode agent/command files for:
+
+- `analysis`
+- `market-analysis`
+- `trading`
+- `daily-review`
+
 The workspace `.env` is backend-owned generated state and should not be read or modified by agents.
 
 Re-generating a workspace is now queued as per-agent maintenance work instead of running inline in the settings POST handler.
@@ -71,6 +78,13 @@ Deleting an OpenCode agent deletes its generated workspace directory after the d
 ## Scheduling
 
 OpenCode jobs are scheduled by Vibetrading.
+
+Current built-in job kinds are:
+
+- `analysis`
+- `market_analysis` hook
+- `trading`
+- `daily_review`
 
 The `AgenticScheduler` claims due work, dispatches runs through the OpenCode backend adapter, and stores run state in Postgres.
 
@@ -104,6 +118,8 @@ While workspace maintenance is queued or running:
 
 Automatic follow-up hooks for an analysis job that was already allowed to run are still queued and completed before maintenance starts.
 
-The agent detail page exposes a `Jobs` tab for OpenCode agents.
+The agent detail page exposes `Jobs` and `Prompts` tabs for OpenCode agents.
 
-When a job is dispatched, Vibetrading builds the initial OpenCode command prompt with the agent metadata, selected instruments, strategy prompt, operator prompt, and trading account snapshot when applicable.
+When a job is dispatched, Vibetrading builds the initial OpenCode command prompt with the agent metadata, selected instruments, the job-specific strategy prompt, the latest `agent_learnings` memory, operator prompt, and trading account snapshot when applicable.
+
+Scheduled jobs and hooks must have an explicit model selected before they can be enabled from the operator UI.

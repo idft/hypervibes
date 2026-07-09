@@ -9,10 +9,10 @@ The current application architecture is:
 
 Core subsystems:
 
-- `agents` for registry, runtimes, prompts, and instrument ownership
+- `agents` for registry, runtimes, strategy prompts, and instrument ownership
 - `memory` for stored analysis and execution context
 - `hyperliquid` for account state, history, and execution
-- `agentic` for OpenCode job scheduling, dispatch, and run tracking
+- `agentic` for OpenCode job scheduling, dispatch, run tracking, and lane coordination
 - OpenCode job dispatch injects initial agent/job context into the command prompt
 
 Current backend support:
@@ -218,6 +218,14 @@ Responsibilities:
   OpenCode-side candle-aligned scheduler: it polls
   `agentic_job_schedules` every 10 seconds, claims due schedules
   (using `agentic::timeframe::next_due_after` to find the next UTC
+
+The analysis lane now contains:
+
+- scheduled `analysis` jobs
+- the `market_analysis` follow-up hook
+- scheduled `daily_review` jobs
+
+When both analysis and daily review are due for the same agent, Vibetrading processes due analysis jobs first, then attempts the `analysis_batch_completed` hook, then runs due daily-review jobs even if that hook was disabled, skipped, or failed.
   boundary for each schedule's `timeframe`), and dispatches them
   sequentially per agent while still allowing different agents to
   run concurrently. `job_key` is generated server-side as

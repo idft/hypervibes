@@ -168,12 +168,23 @@ async fn post_agents_creates_agent_with_default_strategy_prompts() {
         stored.backend_kind,
         crate::agents::model::BACKEND_KIND_OPENCODE
     );
-    assert_eq!(stored.analysis_prompt, DEFAULT_ANALYSIS_STRATEGY_PROMPT);
-    assert_eq!(stored.trading_prompt, DEFAULT_TRADING_STRATEGY_PROMPT);
     assert_eq!(
         stored.runtime_config["workspace_container_path"],
         serde_json::json!(format!("/workspaces/agents/{agent_key}"))
     );
+    let prompts = crate::agents::strategy_prompts::list_agent_strategy_prompts(&pool, &agent_key)
+        .await
+        .expect("list prompts");
+    let analysis = prompts
+        .iter()
+        .find(|row| row.prompt_kind == "analysis")
+        .expect("analysis prompt row");
+    let trading = prompts
+        .iter()
+        .find(|row| row.prompt_kind == "trading")
+        .expect("trading prompt row");
+    assert_eq!(analysis.prompt, DEFAULT_ANALYSIS_STRATEGY_PROMPT);
+    assert_eq!(trading.prompt, DEFAULT_TRADING_STRATEGY_PROMPT);
     assert!(
         std::path::Path::new(
             stored.runtime_config["workspace_host_path"]
@@ -188,7 +199,7 @@ async fn post_agents_creates_agent_with_default_strategy_prompts() {
     let schedules = crate::agentic::store::list_agent_schedules(&pool, &agent_key)
         .await
         .expect("list schedules");
-    assert_eq!(schedules.len(), 4);
+    assert_eq!(schedules.len(), 5);
     let analysis = schedules
         .iter()
         .find(|row| row.job_key == "analysis-15m")

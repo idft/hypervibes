@@ -188,6 +188,8 @@ def list_memories(
     symbol: str | None = None,
     timeframe: str | None = None,
     memory_type: str | None = None,
+    since: str | None = None,
+    until: str | None = None,
     limit: int | None = None,
     include_expired: bool = False,
 ) -> list[dict[str, Any]]:
@@ -203,6 +205,10 @@ def list_memories(
         params["timeframe"] = _require_nonblank("timeframe", timeframe)
     if memory_type is not None:
         params["memory_type"] = _require_nonblank("memory_type", memory_type)
+    if since is not None:
+        params["since"] = _require_nonblank("since", since)
+    if until is not None:
+        params["until"] = _require_nonblank("until", until)
     if limit is not None:
         params["limit"] = _require_limit(limit)
     if include_expired:
@@ -217,6 +223,9 @@ def list_memories(
 def list_orders(
     status: str | None = None,
     symbol: str | None = None,
+    since: str | None = None,
+    until: str | None = None,
+    limit: int | None = None,
 ) -> list[dict[str, Any]]:
     """List orders visible to this agent.
 
@@ -228,6 +237,12 @@ def list_orders(
         params["status"] = _require_nonblank("status", status)
     if symbol is not None:
         params["symbol"] = _require_nonblank("symbol", symbol)
+    if since is not None:
+        params["since"] = _require_nonblank("since", since)
+    if until is not None:
+        params["until"] = _require_nonblank("until", until)
+    if limit is not None:
+        params["limit"] = _require_limit(limit)
     result = _request("GET", "/api/v1/orders", params=params or None)
     if not isinstance(result, list):
         raise RuntimeError("Vibetrading /orders returned unexpected shape")
@@ -258,13 +273,16 @@ def write_memory(
     content: str,
     timeframe: str | None = None,
     metadata: dict[str, Any] | None = None,
+    links: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Persist a memory for this agent.
 
     Required: ``symbol``, ``memory_type``, ``summary``, ``content``.
     ``timeframe`` is optional. For a general memory, omit the ``timeframe``
     argument entirely; do not pass an empty string. ``metadata`` must be a
-    JSON object when provided; ``None`` is stored as an empty object.
+    JSON object when provided; ``None`` is stored as an empty object. ``links``
+    may be a list of objects with ``target_memory_id``, ``link_type``, and an
+    optional object ``metadata``.
     """
     symbol = _require_nonblank("symbol", symbol)
     memory_type = _require_nonblank("memory_type", memory_type)
@@ -274,6 +292,12 @@ def write_memory(
         timeframe = _require_nonblank("timeframe", timeframe)
     if metadata is not None and not isinstance(metadata, dict):
         raise ValueError("metadata must be a JSON object")
+    if links is not None:
+        if not isinstance(links, list):
+            raise ValueError("links must be a list")
+        for index, link in enumerate(links):
+            if not isinstance(link, dict):
+                raise ValueError(f"links[{index}] must be a JSON object")
     body: dict[str, Any] = {
         "symbol": symbol,
         "memory_type": memory_type,
@@ -283,6 +307,8 @@ def write_memory(
     if timeframe is not None:
         body["timeframe"] = timeframe
     body["metadata"] = metadata if metadata is not None else {}
+    if links is not None:
+        body["links"] = links
     result = _request("POST", "/api/v1/memories", json_body=body)
     if not isinstance(result, dict):
         raise RuntimeError("Vibetrading /memories POST returned unexpected shape")
@@ -294,9 +320,10 @@ def submit_orders(orders: list[dict[str, Any]]) -> dict[str, Any]:
     """Submit one or more orders through the Vibetrading backend.
 
     ``orders`` is the same list shape the backend expects on
-    ``POST /api/v1/orders``. This is a real backend action: the server
-    selects instruments, signs the request, and submits to Hyperliquid.
-    The MCP server does not hold or use any private key.
+    ``POST /api/v1/orders``. Opening agent orders should include the selected
+    fresh market-analysis memory ID in ``memory_record_ids``. This is a real
+    backend action: the server selects instruments, signs the request, and
+    submits to Hyperliquid. The MCP server does not hold or use any private key.
     """
     if not isinstance(orders, list) or not orders:
         raise ValueError("orders must be a non-empty list")

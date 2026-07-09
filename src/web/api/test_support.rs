@@ -14,6 +14,10 @@ use crate::{
         crypto::EncryptionKey,
         keys::derive_wallet_address,
         model::AgentRegistryRow,
+        strategy_prompts::{
+            PROMPT_KIND_ANALYSIS, PROMPT_KIND_TRADING, insert_default_strategy_prompts_for_agent,
+            upsert_agent_strategy_prompt,
+        },
         store::{insert_agent, replace_agent_instruments},
     },
     test_db,
@@ -99,8 +103,6 @@ pub async fn seed_agent_with_prompts(
         updated_at: now,
         enabled: true,
         display_name,
-        analysis_prompt: analysis_prompt.to_string(),
-        trading_prompt: trading_prompt.to_string(),
         wallet_address,
         environment: "live".to_string(),
         api_key: api_key.clone(),
@@ -114,6 +116,25 @@ pub async fn seed_agent_with_prompts(
     insert_agent(&state.db_pool, &row)
         .await
         .expect("insert agent");
+    insert_default_strategy_prompts_for_agent(&state.db_pool, &agent_key)
+        .await
+        .expect("insert default prompts");
+    upsert_agent_strategy_prompt(
+        &state.db_pool,
+        &agent_key,
+        PROMPT_KIND_ANALYSIS,
+        analysis_prompt,
+    )
+    .await
+    .expect("seed analysis prompt");
+    upsert_agent_strategy_prompt(
+        &state.db_pool,
+        &agent_key,
+        PROMPT_KIND_TRADING,
+        trading_prompt,
+    )
+    .await
+    .expect("seed trading prompt");
     (agent_key, api_key)
 }
 

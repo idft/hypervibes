@@ -4,6 +4,7 @@ use serde_json::Value;
 pub const JOB_KIND_ANALYSIS: &str = "analysis";
 pub const JOB_KIND_MARKET_ANALYSIS: &str = "market_analysis";
 pub const JOB_KIND_TRADING: &str = "trading";
+pub const JOB_KIND_DAILY_REVIEW: &str = "daily_review";
 
 pub const HOOK_EVENT_ANALYSIS_BATCH_COMPLETED: &str = "analysis_batch_completed";
 

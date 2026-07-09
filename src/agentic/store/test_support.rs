@@ -40,8 +40,6 @@ pub fn sample_agent(key: &str) -> AgentRegistryRow {
         updated_at: now,
         enabled: true,
         display_name: format!("Test {key}"),
-        analysis_prompt: String::new(),
-        trading_prompt: String::new(),
         wallet_address: wallet,
         environment: "live".to_string(),
         api_key: format!("vta_{key}"),

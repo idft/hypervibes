@@ -13,7 +13,8 @@ use uuid::Uuid;
 use crate::{
     agents::AuthenticatedAgent,
     memory::{
-        CreateMemory, MemoryListFilter, MemoryRecord, memory_expires_at, store as memory_store,
+        CreateMemory, MemoryListFilter, MemoryRecord, memory_expires_at,
+        store as memory_store,
     },
     web::{AppState, ui_events::UiEvent},
 };
@@ -198,6 +199,7 @@ pub(super) async fn get_memory_by_id(
     State(state): State<Arc<AppState>>,
     agent: AuthenticatedAgent,
     Path(id): Path<String>,
+    Query(filter): Query<MemoryDetailQuery>,
 ) -> Result<Response, ApiError> {
     let id = Uuid::parse_str(&id).map_err(|_| ApiError::BadUuid)?;
     let record = memory_store::get_memory(&state.db_pool, &agent.agent_key, id)
@@ -205,8 +207,43 @@ pub(super) async fn get_memory_by_id(
         .map_err(ApiError::Internal)?;
 
     match record {
-        Some(r) => Ok(Json(MemoryRecordResponse::from(r)).into_response()),
+        Some(r) => {
+            let mut body = serde_json::to_value(MemoryRecordResponse::from(r))
+                .map_err(|e| ApiError::Internal(anyhow::anyhow!(e)))?;
+            if filter.includes("links") {
+                let outgoing = memory_store::list_memory_links_from(&state.db_pool, &agent.agent_key, id)
+                    .await
+                    .map_err(ApiError::Internal)?;
+                let incoming = memory_store::list_memory_links_to(&state.db_pool, &agent.agent_key, id)
+                    .await
+                    .map_err(ApiError::Internal)?;
+                if let Some(obj) = body.as_object_mut() {
+                    obj.insert(
+                        "links_from".to_string(),
+                        serde_json::to_value(outgoing).map_err(|e| ApiError::Internal(anyhow::anyhow!(e)))?,
+                    );
+                    obj.insert(
+                        "links_to".to_string(),
+                        serde_json::to_value(incoming).map_err(|e| ApiError::Internal(anyhow::anyhow!(e)))?,
+                    );
+                }
+            }
+            Ok(Json(body).into_response())
+        }
         None => Err(ApiError::NotFound("memory not found")),
+    }
+}
+
+#[derive(Debug, Default, serde::Deserialize)]
+pub(super) struct MemoryDetailQuery {
+    include: Option<String>,
+}
+
+impl MemoryDetailQuery {
+    fn includes(&self, key: &str) -> bool {
+        self.include
+            .as_deref()
+            .is_some_and(|value| value.split(',').any(|part| part.trim() == key))
     }
 }
 
@@ -235,6 +272,7 @@ pub struct MemoryRecordResponse {
     /// delayed).
     pub expires_at: Option<DateTime<Utc>>,
 }
+
 
 impl From<MemoryRecord> for MemoryRecordResponse {
     fn from(r: MemoryRecord) -> Self {

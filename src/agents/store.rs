@@ -135,8 +135,6 @@ pub async fn get_agent(pool: &DbPool, agent_key: &str) -> Result<Option<AgentDet
         "SELECT display_name,
                 agents.agent_key,
                 agents.enabled,
-                analysis_prompt,
-                trading_prompt,
                 wallet_address,
                 environment,
                 api_key,
@@ -305,8 +303,6 @@ pub async fn insert_agent(pool: &DbPool, row: &AgentRegistryRow) -> Result<()> {
             updated_at,
             enabled,
             display_name,
-            analysis_prompt,
-            trading_prompt,
             wallet_address,
             environment,
             api_key,
@@ -316,15 +312,13 @@ pub async fn insert_agent(pool: &DbPool, row: &AgentRegistryRow) -> Result<()> {
             runtime_config,
             hyperliquid_private_key_ciphertext,
             hyperliquid_private_key_key_id
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)",
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)",
     )
     .bind(&row.agent_key)
     .bind(row.created_at)
     .bind(row.updated_at)
     .bind(row.enabled)
     .bind(&row.display_name)
-    .bind(&row.analysis_prompt)
-    .bind(&row.trading_prompt)
     .bind(&row.wallet_address)
     .bind(&row.environment)
     .bind(&row.api_key)
@@ -376,48 +370,6 @@ pub async fn delete_agent(pool: &DbPool, agent_key: &str) -> Result<bool> {
         .context("failed to commit delete-agent transaction")?;
 
     Ok(true)
-}
-
-/// Update only the analysis strategy prompt for one agent.
-pub async fn update_agent_analysis_prompt(
-    pool: &DbPool,
-    agent_key: &str,
-    analysis_prompt: &str,
-) -> Result<bool> {
-    let result = sqlx::query(
-        "UPDATE agents
-            SET analysis_prompt = $2,
-                updated_at = now()
-          WHERE agent_key = $1",
-    )
-    .bind(agent_key)
-    .bind(analysis_prompt)
-    .execute(pool)
-    .await
-    .context("failed to update agent analysis prompt")?;
-
-    Ok(result.rows_affected() > 0)
-}
-
-/// Update only the trading strategy prompt for one agent.
-pub async fn update_agent_trading_prompt(
-    pool: &DbPool,
-    agent_key: &str,
-    trading_prompt: &str,
-) -> Result<bool> {
-    let result = sqlx::query(
-        "UPDATE agents
-            SET trading_prompt = $2,
-                updated_at = now()
-          WHERE agent_key = $1",
-    )
-    .bind(agent_key)
-    .bind(trading_prompt)
-    .execute(pool)
-    .await
-    .context("failed to update agent trading prompt")?;
-
-    Ok(result.rows_affected() > 0)
 }
 
 pub async fn update_agent_runtime_config(
@@ -586,8 +538,6 @@ mod tests {
             updated_at: now,
             enabled: true,
             display_name: format!("Test {}", key),
-            analysis_prompt: "Test analysis prompt".to_string(),
-            trading_prompt: "Test trading prompt".to_string(),
             wallet_address: wallet,
             environment: "live".to_string(),
             api_key: format!("vta_{}", key),
@@ -816,69 +766,6 @@ mod tests {
             .expect("fetch")
             .expect("present");
         assert!(after.api_key_last_used_at.is_some());
-    }
-
-    #[tokio::test]
-    async fn update_agent_analysis_prompt_updates_only_analysis_and_timestamp() {
-        let pool = test_db::pool().await;
-
-        let key = format!("prompt-analysis-{}", Utc::now().timestamp_millis());
-        let row = sample_agent(&key);
-        insert_agent(&pool, &row).await.expect("insert agent");
-
-        let original_trading = row.trading_prompt.clone();
-
-        let updated = update_agent_analysis_prompt(&pool, &key, "New analysis prompt")
-            .await
-            .expect("update agent analysis prompt");
-        assert!(updated);
-
-        let agent = get_agent(&pool, &key)
-            .await
-            .expect("fetch")
-            .expect("present");
-        assert_eq!(agent.analysis_prompt, "New analysis prompt");
-        assert_eq!(agent.trading_prompt, original_trading);
-        assert!(agent.updated_at >= row.updated_at);
-    }
-
-    #[tokio::test]
-    async fn update_agent_trading_prompt_updates_only_trading_and_timestamp() {
-        let pool = test_db::pool().await;
-
-        let key = format!("prompt-trading-{}", Utc::now().timestamp_millis());
-        let row = sample_agent(&key);
-        insert_agent(&pool, &row).await.expect("insert agent");
-
-        let original_analysis = row.analysis_prompt.clone();
-
-        let updated = update_agent_trading_prompt(&pool, &key, "New trading prompt")
-            .await
-            .expect("update agent trading prompt");
-        assert!(updated);
-
-        let agent = get_agent(&pool, &key)
-            .await
-            .expect("fetch")
-            .expect("present");
-        assert_eq!(agent.analysis_prompt, original_analysis);
-        assert_eq!(agent.trading_prompt, "New trading prompt");
-        assert!(agent.updated_at >= row.updated_at);
-    }
-
-    #[tokio::test]
-    async fn update_agent_prompts_return_false_for_missing_agent() {
-        let pool = test_db::pool().await;
-
-        let analysis = update_agent_analysis_prompt(&pool, "does-not-exist", "a")
-            .await
-            .expect("update missing agent analysis");
-        assert!(!analysis);
-
-        let trading = update_agent_trading_prompt(&pool, "does-not-exist", "b")
-            .await
-            .expect("update missing agent trading");
-        assert!(!trading);
     }
 
     #[tokio::test]

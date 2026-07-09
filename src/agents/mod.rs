@@ -4,6 +4,7 @@ pub mod hyperliquid_monitor;
 pub mod keys;
 pub mod model;
 pub mod prompts;
+pub mod strategy_prompts;
 pub mod store;
 
 pub use auth::AuthenticatedAgent;

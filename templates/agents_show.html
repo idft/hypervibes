@@ -154,29 +154,21 @@
                     <h2 class="text-lg font-medium text-white">Strategy Prompts</h2>
                 </div>
             </div>
-            <form action="/agents/{{ agent.agent_key }}/prompts/analysis" method="post" class="mt-6 space-y-5" data-agent-prompt-form="analysis">
+            {% for editor in prompt_editors %}
+            <form action="/agents/{{ agent.agent_key }}/prompts/update" method="post" class="mt-6 space-y-5" data-agent-prompt-form="{{ editor.prompt_kind }}">
+                <input type="hidden" name="prompt_kind" value="{{ editor.prompt_kind }}">
                 <div>
-                    <label for="analysis_prompt" class="text-xs uppercase tracking-[0.16em] text-zinc-500">Analysis Strategy Prompt</label>
-                    <textarea id="analysis_prompt" name="prompt" rows="8" placeholder="Assets, timeframes, analysis methods, confidence thresholds, validity, and trade blockers." class="mt-2 w-full rounded-xl border border-zinc-800 bg-zinc-950/70 px-4 py-3 text-sm leading-6 text-zinc-200 outline-none placeholder:text-zinc-600 focus:border-zinc-700">{{ agent.analysis_prompt }}</textarea>
+                    <label for="{{ editor.textarea_id }}" class="text-xs uppercase tracking-[0.16em] text-zinc-500">{{ editor.label }}</label>
+                    <textarea id="{{ editor.textarea_id }}" name="prompt" rows="8" placeholder="{{ editor.placeholder }}" class="mt-2 w-full rounded-xl border border-zinc-800 bg-zinc-950/70 px-4 py-3 text-sm leading-6 text-zinc-200 outline-none placeholder:text-zinc-600 focus:border-zinc-700">{{ editor.prompt }}</textarea>
                     <div class="mt-3 flex flex-col-reverse gap-3 sm:flex-row sm:justify-end">
-                        <button type="button" data-agent-prompt-reset="analysis" class="rounded-full border border-zinc-800 px-4 py-2 text-sm font-medium text-zinc-300 hover:border-zinc-700 hover:text-white">Reset to default</button>
-                        <button type="submit" data-agent-prompt-save="analysis" disabled class="hidden rounded-full bg-white px-4 py-2 text-sm font-medium text-black hover:bg-zinc-200 disabled:cursor-not-allowed disabled:bg-zinc-700 disabled:text-zinc-300">Save</button>
+                        <button type="button" data-agent-prompt-reset="{{ editor.prompt_kind }}" class="rounded-full border border-zinc-800 px-4 py-2 text-sm font-medium text-zinc-300 hover:border-zinc-700 hover:text-white">Reset to default</button>
+                        <button type="submit" data-agent-prompt-save="{{ editor.prompt_kind }}" disabled class="hidden rounded-full bg-white px-4 py-2 text-sm font-medium text-black hover:bg-zinc-200 disabled:cursor-not-allowed disabled:bg-zinc-700 disabled:text-zinc-300">Save</button>
                     </div>
                 </div>
             </form>
-            <form action="/agents/{{ agent.agent_key }}/prompts/trading" method="post" class="mt-6 space-y-5" data-agent-prompt-form="trading">
-                <div>
-                    <label for="trading_prompt" class="text-xs uppercase tracking-[0.16em] text-zinc-500">Trading Strategy Prompt</label>
-                    <textarea id="trading_prompt" name="prompt" rows="8" placeholder="Sizing, laddering, time-in-force preference, max orders, stale-order policy, and scaling rules." class="mt-2 w-full rounded-xl border border-zinc-800 bg-zinc-950/70 px-4 py-3 text-sm leading-6 text-zinc-200 outline-none placeholder:text-zinc-600 focus:border-zinc-700">{{ agent.trading_prompt }}</textarea>
-                    <div class="mt-3 flex flex-col-reverse gap-3 sm:flex-row sm:justify-end">
-                        <button type="button" data-agent-prompt-reset="trading" class="rounded-full border border-zinc-800 px-4 py-2 text-sm font-medium text-zinc-300 hover:border-zinc-700 hover:text-white">Reset to default</button>
-                        <button type="submit" data-agent-prompt-save="trading" disabled class="hidden rounded-full bg-white px-4 py-2 text-sm font-medium text-black hover:bg-zinc-200 disabled:cursor-not-allowed disabled:bg-zinc-300">Save</button>
-                    </div>
-                </div>
-            </form>
+            <textarea id="default-{{ editor.prompt_kind }}-strategy-prompt-value" class="hidden" aria-hidden="true" tabindex="-1">{{ editor.default_prompt }}</textarea>
+            {% endfor %}
         </section>
-        <textarea id="default-analysis-strategy-prompt-value" class="hidden" aria-hidden="true" tabindex="-1">{{ default_analysis_strategy_prompt }}</textarea>
-        <textarea id="default-trading-strategy-prompt-value" class="hidden" aria-hidden="true" tabindex="-1">{{ default_trading_strategy_prompt }}</textarea>
     </section>
     {% else if show_settings_tab %}
     <section class="mt-2 space-y-2">
@@ -752,20 +744,21 @@
                 return;
             }
 
-            const fields = [
-                { key: 'analysis', textarea: container.querySelector('#analysis_prompt') },
-                { key: 'trading', textarea: container.querySelector('#trading_prompt') },
-            ];
+            const forms = Array.from(container.querySelectorAll('[data-agent-prompt-form]'));
+            const fields = forms.map(function (form) {
+                const key = form.getAttribute('data-agent-prompt-form');
+                return {
+                    key: key,
+                    textarea: form.querySelector('textarea[name="prompt"]'),
+                    saveBtn: container.querySelector('[data-agent-prompt-save="' + key + '"]'),
+                    resetBtn: container.querySelector('[data-agent-prompt-reset="' + key + '"]'),
+                    defaultTextarea: container.querySelector('#default-' + key + '-strategy-prompt-value'),
+                };
+            });
 
-            const defaults = {
-                analysis: container.querySelector('#default-analysis-strategy-prompt-value'),
-                trading: container.querySelector('#default-trading-strategy-prompt-value'),
-            };
-
-            const ready = fields.every(function (f) { return f.textarea; })
-                && fields.every(function (f) { return defaults[f.key]; })
-                && container.querySelector('[data-agent-prompt-form="analysis"]')
-                && container.querySelector('[data-agent-prompt-form="trading"]');
+            const ready = fields.length > 0 && fields.every(function (field) {
+                return field.key && field.textarea && field.saveBtn && field.resetBtn && field.defaultTextarea;
+            });
 
             if (!ready) {
                 return;
@@ -774,18 +767,16 @@
             container.dataset.agentPromptsBound = 'true';
 
             fields.forEach(function (field) {
-                const saveBtn = container.querySelector('[data-agent-prompt-save="' + field.key + '"]');
-                const resetBtn = container.querySelector('[data-agent-prompt-reset="' + field.key + '"]');
                 const original = field.textarea.value;
 
                 function updateSaveState() {
                     const isDirty = field.textarea.value !== original;
-                    saveBtn.disabled = !isDirty;
-                    saveBtn.classList.toggle('hidden', !isDirty);
+                    field.saveBtn.disabled = !isDirty;
+                    field.saveBtn.classList.toggle('hidden', !isDirty);
                 }
 
-                resetBtn.addEventListener('click', function () {
-                    field.textarea.value = defaults[field.key].value;
+                field.resetBtn.addEventListener('click', function () {
+                    field.textarea.value = field.defaultTextarea.value;
                     updateSaveState();
                 });
 

@@ -478,8 +478,6 @@ mod tests {
                 updated_at: now,
                 enabled: true,
                 display_name: format!("Queries Agent {suffix}"),
-                analysis_prompt: String::new(),
-                trading_prompt: String::new(),
                 wallet_address: account.to_string(),
                 environment: "live".to_string(),
                 api_key: format!("queries-api-{suffix}"),

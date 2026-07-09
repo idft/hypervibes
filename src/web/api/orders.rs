@@ -120,6 +120,8 @@ pub(super) struct OrderListItem {
     filled_size: Option<rust_decimal::Decimal>,
     avg_fill_price: Option<rust_decimal::Decimal>,
     group_id: Option<Uuid>,
+    memory_record_ids: serde_json::Value,
+    attribution_source: String,
 }
 
 impl From<orders_store::OrderRow> for OrderListItem {
@@ -137,6 +139,8 @@ impl From<orders_store::OrderRow> for OrderListItem {
             filled_size: r.filled_size,
             avg_fill_price: r.avg_fill_price,
             group_id: r.group_id,
+            memory_record_ids: r.memory_record_ids,
+            attribution_source: r.attribution_source,
         }
     }
 }
@@ -151,6 +155,9 @@ pub(super) struct ListFilterQuery {
     status: Option<String>,
     symbol: Option<String>,
     include: Option<String>,
+    since: Option<chrono::DateTime<chrono::Utc>>,
+    until: Option<chrono::DateTime<chrono::Utc>>,
+    limit: Option<i64>,
 }
 
 #[derive(Debug, serde::Serialize)]
@@ -269,6 +276,9 @@ pub(super) async fn list_orders_handler(
         &agent.agent_key,
         filter.status.as_deref(),
         filter.symbol.as_deref(),
+        filter.since,
+        filter.until,
+        filter.limit,
     )
     .await
     .map_err(ApiError::Internal)?;

@@ -7,7 +7,7 @@
 pub fn build_generated_job_key(job_kind: &str, timeframe: &str) -> String {
     let job_kind = normalize_timeframe_for_job_key(job_kind);
     let timeframe = normalize_timeframe_for_job_key(timeframe);
-    format!("{job_kind}-{timeframe}")
+    format!("{}-{timeframe}", job_kind.replace('_', "-"))
 }
 
 pub fn build_generated_hook_job_key(job_kind: &str) -> String {
@@ -32,6 +32,7 @@ mod tests {
         assert_eq!(build_generated_job_key("analysis", "15m"), "analysis-15m");
         assert_eq!(build_generated_job_key("trading", "1m"), "trading-1m");
         assert_eq!(build_generated_job_key("analysis", "1h"), "analysis-1h");
+        assert_eq!(build_generated_job_key("daily_review", "1d"), "daily-review-1d");
     }
 
     #[test]

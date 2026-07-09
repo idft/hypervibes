@@ -44,14 +44,7 @@ pub fn router(state: Arc<AppState>) -> Router {
             get(agents_show_memory_detail),
         )
         .route("/agents/{agent_key}/prompts", get(agents_show_prompts))
-        .route(
-            "/agents/{agent_key}/prompts/analysis",
-            post(agents_update_analysis_prompt),
-        )
-        .route(
-            "/agents/{agent_key}/prompts/trading",
-            post(agents_update_trading_prompt),
-        )
+        .route("/agents/{agent_key}/prompts/update", post(agents_update_prompt))
         .route("/agents/{agent_key}/settings", get(agents_show_settings))
         .route(
             "/agents/{agent_key}/settings/instruments",

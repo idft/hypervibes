@@ -28,6 +28,7 @@ pub struct OrderRow {
     pub group_id: Option<Uuid>,
     pub parent_cloid: Option<String>,
     pub memory_record_ids: Value,
+    pub attribution_source: String,
     pub symbol: String,
     pub instrument_id: Option<String>,
     pub side: String,
@@ -58,6 +59,7 @@ pub struct NewOrder {
     pub group_id: Option<Uuid>,
     pub parent_cloid: Option<String>,
     pub memory_record_ids: Value,
+    pub attribution_source: String,
     pub symbol: String,
     pub instrument_id: Option<String>,
     pub side: String,
@@ -95,12 +97,12 @@ pub struct OrderEventInsert {
 
 #[allow(dead_code)]
 const ORDER_COLUMNS: &str = "id, created_at, updated_at, agent_key, account_address, environment, \
-     group_id, parent_cloid, memory_record_ids, symbol, instrument_id, side, order_kind, \
+     group_id, parent_cloid, memory_record_ids, attribution_source, symbol, instrument_id, side, order_kind, \
      reduce_only, requested_price, rounded_price, requested_size, rounded_size, trigger_price, \
      time_in_force, cloid, exchange_oid, status, status_detail, filled_size, avg_fill_price";
 
 const SELECT_ORDER: &str = "SELECT id, created_at, updated_at, agent_key, account_address, environment, \
-     group_id, parent_cloid, memory_record_ids, symbol, instrument_id, side, order_kind, \
+     group_id, parent_cloid, memory_record_ids, attribution_source, symbol, instrument_id, side, order_kind, \
      reduce_only, requested_price, rounded_price, requested_size, rounded_size, trigger_price, \
      time_in_force, cloid, exchange_oid, status, status_detail, filled_size, avg_fill_price \
      FROM hyperliquid.orders";
@@ -110,16 +112,16 @@ pub async fn insert_order(pool: &DbPool, new: &NewOrder) -> Result<()> {
     sqlx::query(
         "INSERT INTO hyperliquid.orders (
             id, created_at, updated_at, agent_key, account_address, environment,
-            group_id, parent_cloid, memory_record_ids, symbol, instrument_id,
+            group_id, parent_cloid, memory_record_ids, attribution_source, symbol, instrument_id,
             side, order_kind, reduce_only, requested_price, rounded_price,
             requested_size, rounded_size, trigger_price, time_in_force, cloid,
             status, status_detail, request_payload
          ) VALUES (
             $1, now(), now(), $2, $3, $4,
-            $5, $6, $7, $8, $9,
-            $10, $11, $12, $13, $14,
-            $15, $16, $17, $18, $19,
-            $20, $21, $22
+            $5, $6, $7, $8, $9, $10,
+            $11, $12, $13, $14, $15,
+            $16, $17, $18, $19, $20,
+            $21, $22, $23
          )",
     )
     .bind(new.id)
@@ -129,6 +131,7 @@ pub async fn insert_order(pool: &DbPool, new: &NewOrder) -> Result<()> {
     .bind(new.group_id)
     .bind(new.parent_cloid.as_deref())
     .bind(&new.memory_record_ids)
+    .bind(&new.attribution_source)
     .bind(&new.symbol)
     .bind(new.instrument_id.as_deref())
     .bind(&new.side)
@@ -319,6 +322,9 @@ pub async fn list_orders(
     agent_key: &str,
     status_filter: Option<&str>,
     symbol_filter: Option<&str>,
+    since: Option<DateTime<Utc>>,
+    until: Option<DateTime<Utc>>,
+    limit: Option<i64>,
 ) -> Result<Vec<OrderRow>> {
     let mut qb: sqlx::QueryBuilder<sqlx::Postgres> = sqlx::QueryBuilder::new(SELECT_ORDER);
     qb.push(" WHERE agent_key = ")
@@ -347,7 +353,16 @@ pub async fn list_orders(
         qb.push(" AND symbol = ").push_bind(symbol.to_string());
     }
 
-    qb.push(" ORDER BY created_at DESC LIMIT 500");
+    if let Some(since) = since {
+        qb.push(" AND created_at >= ").push_bind(since);
+    }
+
+    if let Some(until) = until {
+        qb.push(" AND created_at < ").push_bind(until);
+    }
+
+    qb.push(" ORDER BY created_at DESC LIMIT ")
+        .push_bind(limit.unwrap_or(500).clamp(1, 500));
 
     let rows = qb
         .build_query_as::<OrderRow>()
@@ -477,8 +492,6 @@ mod tests {
             updated_at: now,
             enabled: true,
             display_name: format!("OrderTest {suffix}"),
-            analysis_prompt: String::new(),
-            trading_prompt: String::new(),
             wallet_address: wallet,
             environment: "live".to_string(),
             api_key: format!("vta_ord-{suffix}-{ts}"),
@@ -500,6 +513,7 @@ mod tests {
             group_id: None,
             parent_cloid: None,
             memory_record_ids: json!([]),
+            attribution_source: "agent".to_string(),
             symbol: "BTC".to_string(),
             // instrument_id None skips the FK to hyperliquid.instruments
             // (the test DB starts empty). Production rows always set it.
@@ -562,19 +576,19 @@ mod tests {
         insert_order(&pool, &b).await.unwrap();
 
         // Agent A sees only its BTC order.
-        let a_rows = list_orders(&pool, &a_key, None, None).await.unwrap();
+        let a_rows = list_orders(&pool, &a_key, None, None, None, None, None).await.unwrap();
         assert!(a_rows.iter().all(|r| r.agent_key == a_key));
         assert!(a_rows.iter().any(|r| r.symbol == "BTC"));
 
         // Symbol filter further narrows it.
-        let a_btc = list_orders(&pool, &a_key, None, Some("BTC")).await.unwrap();
+        let a_btc = list_orders(&pool, &a_key, None, Some("BTC"), None, None, None).await.unwrap();
         assert!(a_btc.iter().all(|r| r.symbol == "BTC"));
 
-        let a_eth = list_orders(&pool, &a_key, None, Some("ETH")).await.unwrap();
+        let a_eth = list_orders(&pool, &a_key, None, Some("ETH"), None, None, None).await.unwrap();
         assert!(a_eth.is_empty());
 
         // Agent B sees only its ETH order.
-        let b_rows = list_orders(&pool, &b_key, None, None).await.unwrap();
+        let b_rows = list_orders(&pool, &b_key, None, None, None, None, None).await.unwrap();
         assert!(b_rows.iter().all(|r| r.agent_key == b_key));
         assert!(b_rows.iter().any(|r| r.symbol == "ETH"));
     }
@@ -592,7 +606,7 @@ mod tests {
         filled.status = "filled".to_string();
         insert_order(&pool, &filled).await.unwrap();
 
-        let open = list_orders(&pool, &agent_key, Some("open"), None)
+        let open = list_orders(&pool, &agent_key, Some("open"), None, None, None, None)
             .await
             .unwrap();
         assert_eq!(open.len(), 1);

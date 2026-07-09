@@ -7,7 +7,7 @@ use crate::{
         job_key::build_generated_job_key,
         model::{
             AgenticJobScheduleRow, AgenticRunRow, DueOpenCodeScheduleRow, JOB_KIND_ANALYSIS,
-            JOB_KIND_TRADING, RUN_STATUS_QUEUED, RUN_STATUS_SKIPPED,
+            JOB_KIND_DAILY_REVIEW, JOB_KIND_TRADING, RUN_STATUS_QUEUED, RUN_STATUS_SKIPPED,
         },
         timeframe::{
             DEFAULT_TRIGGER_DELAY_SECONDS, boundary_for_due_at, latest_due_at_or_before,
@@ -26,8 +26,10 @@ use super::workspace::agent_has_blocking_workspace_maintenance_tx;
 pub(crate) const DEFAULT_ANALYSIS_TIMEFRAME: &str = "15m";
 const DEFAULT_ANALYSIS_TIMEFRAMES: [&str; 3] = ["15m", "1h", "1d"];
 pub(crate) const DEFAULT_TRADING_TIMEFRAME: &str = "1m";
+pub(crate) const DEFAULT_DAILY_REVIEW_TIMEFRAME: &str = "1d";
 pub(crate) const DEFAULT_ANALYSIS_TIMEOUT_SECONDS: i32 = 900;
 pub(crate) const DEFAULT_TRADING_TIMEOUT_SECONDS: i32 = 900;
+pub(crate) const DEFAULT_DAILY_REVIEW_TIMEOUT_SECONDS: i32 = 900;
 
 #[allow(dead_code)]
 pub(crate) fn default_analysis_job_key() -> String {
@@ -66,6 +68,16 @@ pub async fn insert_default_opencode_schedules(pool: &DbPool, agent_key: &str) -
         DEFAULT_TRADING_TIMEFRAME,
         false,
         DEFAULT_TRADING_TIMEOUT_SECONDS,
+    )
+    .await?;
+
+    insert_default_opencode_schedule(
+        pool,
+        agent_key,
+        JOB_KIND_DAILY_REVIEW,
+        DEFAULT_DAILY_REVIEW_TIMEFRAME,
+        false,
+        DEFAULT_DAILY_REVIEW_TIMEOUT_SECONDS,
     )
     .await?;
 

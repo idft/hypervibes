@@ -20,7 +20,7 @@ use crate::{
             AgentRegistryRow, AgentRuntimeRow, BACKEND_KIND_OPENCODE, CreateAgentForm,
             slugify_agent_key,
         },
-        prompts::{DEFAULT_ANALYSIS_STRATEGY_PROMPT, DEFAULT_TRADING_STRATEGY_PROMPT},
+        strategy_prompts::insert_default_strategy_prompts_for_agent,
         store::{
             delete_agent as delete_agent_in_store, get_agent, insert_agent, list_agents,
             list_enabled_agent_runtimes,
@@ -199,8 +199,6 @@ pub(in crate::web::routes) async fn create_agent(
         updated_at: now,
         enabled: form.enabled(),
         display_name: form.display_name.trim().to_string(),
-        analysis_prompt: DEFAULT_ANALYSIS_STRATEGY_PROMPT.to_string(),
-        trading_prompt: DEFAULT_TRADING_STRATEGY_PROMPT.to_string(),
         wallet_address,
         environment: "live".to_string(),
         api_key: api_key.clone(),
@@ -228,6 +226,11 @@ pub(in crate::web::routes) async fn create_agent(
             }
         };
         return Ok(render_new_form(form, runtimes, errors));
+    }
+
+    if let Err(error) = insert_default_strategy_prompts_for_agent(&state.db_pool, &row.agent_key).await {
+        error!(agent_key = %row.agent_key, error = ?error, "failed to insert default strategy prompts");
+        return Err(AppError(error));
     }
 
     if row.backend_kind == BACKEND_KIND_OPENCODE {

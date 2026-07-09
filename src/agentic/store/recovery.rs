@@ -3,7 +3,7 @@ use chrono::{DateTime, Utc};
 use sqlx::{PgPool, Postgres, Transaction, query_as};
 
 use crate::agentic::model::{
-    JOB_KIND_ANALYSIS, JOB_KIND_MARKET_ANALYSIS, JOB_KIND_TRADING, RUN_STATUS_FAILED,
+    JOB_KIND_ANALYSIS, JOB_KIND_DAILY_REVIEW, JOB_KIND_MARKET_ANALYSIS, JOB_KIND_TRADING, RUN_STATUS_FAILED,
     RUN_STATUS_QUEUED, RUN_STATUS_RUNNING, RUN_STATUS_SUCCEEDED,
 };
 
@@ -18,8 +18,8 @@ pub(crate) const ORPHANED_RUNNING_RUN_SUMMARY: &str =
 fn active_job_kinds_for_lane(job_kind: &str) -> &'static [&'static str] {
     match job_kind {
         JOB_KIND_TRADING => &[JOB_KIND_TRADING],
-        JOB_KIND_ANALYSIS | JOB_KIND_MARKET_ANALYSIS => {
-            &[JOB_KIND_ANALYSIS, JOB_KIND_MARKET_ANALYSIS]
+        JOB_KIND_ANALYSIS | JOB_KIND_MARKET_ANALYSIS | JOB_KIND_DAILY_REVIEW => {
+            &[JOB_KIND_ANALYSIS, JOB_KIND_MARKET_ANALYSIS, JOB_KIND_DAILY_REVIEW]
         }
         _ => &[],
     }

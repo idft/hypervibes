@@ -5,7 +5,7 @@ use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use tower::util::ServiceExt;
 
-use crate::agents::store::get_agent;
+use crate::agents::strategy_prompts::get_agent_strategy_prompt;
 
 #[tokio::test]
 async fn agent_prompts_route_renders_prompt_fields() {
@@ -32,6 +32,8 @@ async fn agent_prompts_route_renders_prompt_fields() {
     let text = response_text(response).await;
     assert!(text.contains("Wait for analysis confirmation first."));
     assert!(text.contains("Trade breakouts only after confirmation."));
+    assert!(text.contains("Market Analysis Strategy Prompt"));
+    assert!(text.contains("Daily Review Strategy Prompt"));
 }
 #[tokio::test]
 async fn post_agent_analysis_prompt_updates_only_analysis() {
@@ -39,12 +41,12 @@ async fn post_agent_analysis_prompt_updates_only_analysis() {
     let pool = state.db_pool.clone();
     let (agent_key, _wallet_address) = insert_test_agent(&state).await.expect("insert agent");
 
-    let body = "prompt=Analyze+momentum+with+market+structure.";
+    let body = "prompt_kind=analysis&prompt=Analyze+momentum+with+market+structure.";
     let response = router(state.clone())
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri(format!("/agents/{agent_key}/prompts/analysis"))
+                .uri(format!("/agents/{agent_key}/prompts/update"))
                 .header("content-type", "application/x-www-form-urlencoded")
                 .body(Body::from(body))
                 .unwrap(),
@@ -62,21 +64,21 @@ async fn post_agent_analysis_prompt_updates_only_analysis() {
         Some(expected_location.as_str())
     );
 
-    let stored = get_agent(&pool, &agent_key)
+    let stored = get_agent_strategy_prompt(&pool, &agent_key, "analysis")
         .await
-        .expect("get agent")
-        .expect("agent present");
+        .expect("get analysis prompt")
+        .expect("analysis prompt present");
     assert_eq!(
-        stored.analysis_prompt,
+        stored.prompt,
         "Analyze momentum with market structure."
     );
 
-    let body2 = "prompt=Original+trading+prompt.";
+    let body2 = "prompt_kind=trading&prompt=Original+trading+prompt.";
     let _ = router(state.clone())
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri(format!("/agents/{agent_key}/prompts/trading"))
+                .uri(format!("/agents/{agent_key}/prompts/update"))
                 .header("content-type", "application/x-www-form-urlencoded")
                 .body(Body::from(body2))
                 .unwrap(),
@@ -84,13 +86,17 @@ async fn post_agent_analysis_prompt_updates_only_analysis() {
         .await
         .unwrap();
 
-    let stored = get_agent(&pool, &agent_key)
+    let stored = get_agent_strategy_prompt(&pool, &agent_key, "trading")
         .await
-        .expect("get agent")
-        .expect("agent present");
-    assert_eq!(stored.trading_prompt, "Original trading prompt.");
+        .expect("get trading prompt")
+        .expect("trading prompt present");
+    assert_eq!(stored.prompt, "Original trading prompt.");
+    let analysis = get_agent_strategy_prompt(&pool, &agent_key, "analysis")
+        .await
+        .expect("get analysis prompt")
+        .expect("analysis prompt present");
     assert_eq!(
-        stored.analysis_prompt,
+        analysis.prompt,
         "Analyze momentum with market structure."
     );
 }
@@ -100,12 +106,12 @@ async fn post_agent_trading_prompt_updates_only_trading() {
     let pool = state.db_pool.clone();
     let (agent_key, _wallet_address) = insert_test_agent(&state).await.expect("insert agent");
 
-    let body = "prompt=Only+place+limit+orders+near+support.";
+    let body = "prompt_kind=trading&prompt=Only+place+limit+orders+near+support.";
     let response = router(state.clone())
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri(format!("/agents/{agent_key}/prompts/trading"))
+                .uri(format!("/agents/{agent_key}/prompts/update"))
                 .header("content-type", "application/x-www-form-urlencoded")
                 .body(Body::from(body))
                 .unwrap(),
@@ -123,21 +129,21 @@ async fn post_agent_trading_prompt_updates_only_trading() {
         Some(expected_location.as_str())
     );
 
-    let stored = get_agent(&pool, &agent_key)
+    let stored = get_agent_strategy_prompt(&pool, &agent_key, "trading")
         .await
-        .expect("get agent")
-        .expect("agent present");
+        .expect("get trading prompt")
+        .expect("trading prompt present");
     assert_eq!(
-        stored.trading_prompt,
+        stored.prompt,
         "Only place limit orders near support."
     );
 
-    let body2 = "prompt=Original+analysis+prompt.";
+    let body2 = "prompt_kind=analysis&prompt=Original+analysis+prompt.";
     let _ = router(state.clone())
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri(format!("/agents/{agent_key}/prompts/analysis"))
+                .uri(format!("/agents/{agent_key}/prompts/update"))
                 .header("content-type", "application/x-www-form-urlencoded")
                 .body(Body::from(body2))
                 .unwrap(),
@@ -145,13 +151,17 @@ async fn post_agent_trading_prompt_updates_only_trading() {
         .await
         .unwrap();
 
-    let stored = get_agent(&pool, &agent_key)
+    let stored = get_agent_strategy_prompt(&pool, &agent_key, "analysis")
         .await
-        .expect("get agent")
-        .expect("agent present");
-    assert_eq!(stored.analysis_prompt, "Original analysis prompt.");
+        .expect("get analysis prompt")
+        .expect("analysis prompt present");
+    assert_eq!(stored.prompt, "Original analysis prompt.");
+    let trading = get_agent_strategy_prompt(&pool, &agent_key, "trading")
+        .await
+        .expect("get trading prompt")
+        .expect("trading prompt present");
     assert_eq!(
-        stored.trading_prompt,
+        trading.prompt,
         "Only place limit orders near support."
     );
 }

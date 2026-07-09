@@ -1,5 +1,7 @@
 use crate::agentic::backend::DispatchRequest;
-use crate::agentic::model::{JOB_KIND_ANALYSIS, JOB_KIND_MARKET_ANALYSIS, JOB_KIND_TRADING};
+use crate::agentic::model::{
+    JOB_KIND_ANALYSIS, JOB_KIND_DAILY_REVIEW, JOB_KIND_MARKET_ANALYSIS, JOB_KIND_TRADING,
+};
 use crate::agentic::timeframe::parse_timeframe_seconds;
 use anyhow::{Result, anyhow};
 use chrono::{Duration, SecondsFormat, Utc};
@@ -9,6 +11,7 @@ pub fn build_prompt(request: &DispatchRequest) -> Result<String> {
         JOB_KIND_ANALYSIS => Ok(build_analysis_prompt(request)),
         JOB_KIND_MARKET_ANALYSIS => Ok(build_market_analysis_prompt(request)),
         JOB_KIND_TRADING => Ok(build_trading_prompt(request)),
+        JOB_KIND_DAILY_REVIEW => Ok(build_daily_review_prompt(request)?),
         other => Err(anyhow!("unknown job kind for prompt building: {other}")),
     }
 }
@@ -26,8 +29,10 @@ fn build_analysis_prompt(request: &DispatchRequest) -> String {
         "- Timeframe: {}\n",
         timeframe_text(request.timeframe.as_deref())
     ));
+    body.push_str("\n## Accumulated learnings\n");
+    body.push_str(&accumulated_learnings_section(request));
     body.push_str("\n## Analysis strategy\n");
-    body.push_str(&request.analysis_prompt);
+    body.push_str(&request.strategy_prompt);
     body.push_str("\n\n## Job-specific strategy\n");
     body.push_str(&operator_prompt_section(&request.operator_prompt));
     body.push_str(
@@ -70,8 +75,10 @@ fn build_market_analysis_prompt(request: &DispatchRequest) -> String {
     body.push_str(&format!("- Environment: {}\n", request.environment));
     body.push_str(&format!("- Job key: {}\n", request.job_key));
     body.push_str("- Trigger: analysis_batch_completed\n");
-    body.push_str("\n## Analysis strategy\n");
-    body.push_str(&request.analysis_prompt);
+    body.push_str("\n## Accumulated learnings\n");
+    body.push_str(&accumulated_learnings_section(request));
+    body.push_str("\n## Market-analysis strategy\n");
+    body.push_str(&request.strategy_prompt);
     body.push_str("\n\n## Job-specific strategy\n");
     body.push_str(&operator_prompt_section(&request.operator_prompt));
     body.push_str("\n\n## Selected instruments\n");
@@ -83,6 +90,7 @@ fn build_market_analysis_prompt(request: &DispatchRequest) -> String {
     body.push_str("- Use `memory_type = \"market_analysis\"`.\n");
     body.push_str("- Do not pass a `timeframe` argument at all; leave it out entirely so the memory is general rather than timeframe-specific. Do not pass an empty string.\n");
     body.push_str("- Include metadata with `schema_version = 1`, `analysis_kind = \"market_analysis\"`, `valid_for_seconds = 1800` unless the operator prompt explicitly requires a different validity, plus `source_memory_ids` and `source_timeframes`.\n");
+    body.push_str("- When you write a market-analysis memory, attach `links` with `link_type = \"derived_from\"` to the source analysis memory IDs used for the synthesis.\n");
     body.push_str("- Include actionable entries, exits, invalidation, confidence, and risk notes in the memory content and metadata.\n");
     body.push_str("- If the source analyses conflict, are stale, or are insufficiently actionable, write a neutral market analysis that explicitly tells trading not to open new exposure.\n");
     body.push_str("- Do not place or cancel orders.\n");
@@ -102,8 +110,10 @@ fn build_trading_prompt(request: &DispatchRequest) -> String {
         "- Timeframe: {}\n",
         timeframe_text(request.timeframe.as_deref())
     ));
+    body.push_str("\n## Accumulated learnings\n");
+    body.push_str(&accumulated_learnings_section(request));
     body.push_str("\n## Trading strategy\n");
-    body.push_str(&request.trading_prompt);
+    body.push_str(&request.strategy_prompt);
     body.push_str("\n\n## Job-specific strategy\n");
     body.push_str(&operator_prompt_section(&request.operator_prompt));
     body.push_str(
@@ -118,11 +128,52 @@ fn build_trading_prompt(request: &DispatchRequest) -> String {
     body.push_str(
         "- Do not open new exposure when no fresh market analysis exists for the symbol.\n",
     );
+    body.push_str("- Every non-reduce-only agent opening order must include the selected fresh market-analysis memory ID in `memory_record_ids` or the backend will reject it.\n");
+    body.push_str("- Reduce-only or risk-reduction orders may omit `memory_record_ids`.\n");
+    body.push_str("- Agent-submitted orders should use the default `attribution_source = \"agent\"`.\n");
     body.push_str("- Do not fall back to raw timeframe `analysis` memories for execution decisions. Raw analysis can be consulted only for diagnostics when the operator prompt explicitly asks for it.\n");
     body.push_str("- Fetch current OHLCV and public market data from Hyperliquid for the selected instruments using the `hyperliquid-data` skill.\n");
     body.push_str("- Submit and cancel orders only through the `vibetrading` MCP trading tools.\n");
     body.push_str("- Do not trade instruments that are not in the selected list.\n");
     body
+}
+
+fn build_daily_review_prompt(request: &DispatchRequest) -> Result<String> {
+    let review_window_start = request.review_window_start.unwrap_or_else(|| {
+        request.scheduled_for - Duration::days(1)
+    });
+    let review_window_end = request.review_window_end.unwrap_or(request.scheduled_for);
+
+    let mut body = String::new();
+    body.push_str(&request.system_prompt);
+    body.push_str("\n\nYou are running a **daily-review job** for the Vibetrading agent system.\n\n");
+    body.push_str("## Agent\n");
+    body.push_str(&format!("- Agent key: {}\n", request.agent_key));
+    body.push_str(&format!("- Display name: {}\n", request.display_name));
+    body.push_str(&format!("- Environment: {}\n", request.environment));
+    body.push_str(&format!("- Job key: {}\n", request.job_key));
+    body.push_str("\n## Review window\n");
+    body.push_str(&format!("- Start: {}\n", format_utc(review_window_start)));
+    body.push_str(&format!("- End: {}\n", format_utc(review_window_end)));
+    body.push_str("\n## Accumulated learnings\n");
+    body.push_str(&accumulated_learnings_section(request));
+    body.push_str("\n## Daily-review strategy\n");
+    body.push_str(&request.strategy_prompt);
+    body.push_str("\n\n## Job-specific strategy\n");
+    body.push_str(&operator_prompt_section(&request.operator_prompt));
+    body.push_str("\n\n## Selected instruments\n");
+    body.push_str(&selected_instruments_section(&request.selected_instruments));
+    body.push_str("\n\n## Instructions\n");
+    body.push_str("- List recent `analysis`, `market_analysis`, `daily_review`, and `agent_learnings` memories for the review window.\n");
+    body.push_str("- List recent orders for the review window, including unfilled, rejected, canceled, open, and filled orders.\n");
+    body.push_str("- Connect orders to `market_analysis` using `memory_record_ids`, and follow `memory.links` from market analysis back to analysis when those links exist.\n");
+    body.push_str("- Identify failures, good patterns, stale assumptions, and prompt improvement suggestions. Keep prompt-edit suggestions inside the `daily_review` memory content.\n");
+    body.push_str("- You may edit helper files only under `scripts/user/`, `data/`, and `scratch/`.\n");
+    body.push_str("- Write exactly one `daily_review` memory with `symbol = \"__agent__\"`, no timeframe, and `links` of type `reviews` to the memories you reviewed.\n");
+    body.push_str("- If learnings changed, write a new `agent_learnings` memory with `symbol = \"__agent__\"`, no timeframe, then link the daily review memory to it with `link_type = \"updates_learnings\"`.\n");
+    body.push_str("- Do not place or cancel orders.\n");
+    body.push_str("- Do not edit strategy prompts directly.\n");
+    Ok(body)
 }
 
 fn operator_prompt_section(prompt: &str) -> String {
@@ -179,6 +230,13 @@ fn timeframe_text(timeframe: Option<&str>) -> &str {
     timeframe.unwrap_or("general")
 }
 
+fn accumulated_learnings_section(request: &DispatchRequest) -> String {
+    match request.accumulated_learnings.as_deref().map(str::trim) {
+        Some("") | None => "(none yet)\n".to_string(),
+        Some(text) => format!("{}\n", text),
+    }
+}
+
 fn selected_instruments_section(instruments: &[String]) -> String {
     if instruments.is_empty() {
         "None. Do not analyze markets or place trades.\n".to_string()
@@ -216,8 +274,8 @@ mod tests {
             job_kind: job_kind.to_string(),
             timeframe: Some("15m".to_string()),
             operator_prompt: "Focus on BTC.".to_string(),
-            analysis_prompt: "Analyze trends.".to_string(),
-            trading_prompt: "Trade breakouts.".to_string(),
+            strategy_prompt: "Analyze trends.".to_string(),
+            accumulated_learnings: Some("Summary: Be patient\nCreated at: 2026-07-02T00:00:00Z\nContent: Wait for cleaner trend alignment.".to_string()),
             system_prompt: "You are a crypto trading assistant.".to_string(),
             environment: "live".to_string(),
             selected_instruments: vec!["BTC".to_string(), "ETH".to_string()],
@@ -228,6 +286,8 @@ mod tests {
             runtime_base_url: "http://localhost:14096".to_string(),
             runtime_config: serde_json::json!({}),
             scheduled_for: Utc::now(),
+            review_window_start: None,
+            review_window_end: None,
         }
     }
 
@@ -245,6 +305,7 @@ mod tests {
         assert!(prompt.contains("Job key: analysis-15m"));
         assert!(prompt.contains("Timeframe: 15m"));
         assert!(prompt.contains("BTC, ETH"));
+        assert!(prompt.contains("## Accumulated learnings"));
         assert!(prompt.contains("## Analysis strategy"));
         assert!(prompt.contains("## Job-specific strategy"));
         assert!(prompt.contains("## Closed-candle cutoff"));
@@ -275,6 +336,7 @@ mod tests {
     fn trading_prompt_contains_expected_sections() {
         let mut request = sample_request(JOB_KIND_TRADING);
         request.job_key = "trading-15m".to_string();
+        request.strategy_prompt = "Trade breakouts.".to_string();
         request.account_snapshot = Some(LiveAgentSnapshot {
             account_address: "0xabc".to_string(),
             environment: "live".to_string(),
@@ -306,6 +368,7 @@ mod tests {
         assert!(prompt.contains("Job key: trading-15m"));
         assert!(prompt.contains("Timeframe: 15m"));
         assert!(prompt.contains("BTC, ETH"));
+        assert!(prompt.contains("## Accumulated learnings"));
         assert!(prompt.contains("## Trading strategy"));
         assert!(prompt.contains("## Account state"));
         assert!(prompt.contains("## Instructions"));
@@ -328,14 +391,41 @@ mod tests {
         assert!(prompt.contains("Environment: live"));
         assert!(prompt.contains("Job key: market-analysis"));
         assert!(prompt.contains("BTC, ETH"));
+        assert!(prompt.contains("## Accumulated learnings"));
         assert!(prompt.contains("market-analysis hook job"));
         assert!(prompt.contains("vibetrading_get_latest_analysis(symbol)"));
         assert!(prompt.contains("source_memory_ids"));
         assert!(prompt.contains("memory_type = \"market_analysis\""));
+        assert!(prompt.contains("link_type = \"derived_from\""));
         assert!(
             prompt.contains("Do not pass a `timeframe` argument at all; leave it out entirely")
         );
         assert!(prompt.contains("valid_for_seconds = 1800"));
+        assert!(prompt.contains("Do not place or cancel orders."));
+    }
+
+    #[test]
+    fn daily_review_prompt_contains_expected_sections() {
+        let mut request = sample_request(JOB_KIND_DAILY_REVIEW);
+        request.job_key = "daily-review-1d".to_string();
+        request.timeframe = Some("1d".to_string());
+        request.review_window_start = Some(
+            Utc.with_ymd_and_hms(2026, 7, 2, 0, 0, 0)
+                .single()
+                .expect("valid start"),
+        );
+        request.review_window_end = Some(
+            Utc.with_ymd_and_hms(2026, 7, 3, 0, 0, 0)
+                .single()
+                .expect("valid end"),
+        );
+        let prompt = build_prompt(&request).expect("build daily review prompt");
+        assert!(prompt.contains("daily-review job"));
+        assert!(prompt.contains("Start: 2026-07-02T00:00:00Z"));
+        assert!(prompt.contains("End: 2026-07-03T00:00:00Z"));
+        assert!(prompt.contains("`daily_review` memory"));
+        assert!(prompt.contains("`agent_learnings` memory"));
+        assert!(prompt.contains("scripts/user/`"));
         assert!(prompt.contains("Do not place or cancel orders."));
     }
 

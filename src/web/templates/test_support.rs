@@ -33,8 +33,6 @@ pub fn sample_agent_detail_row() -> AgentDetailRow {
         display_name: "Test Agent".to_string(),
         agent_key: "test-agent".to_string(),
         enabled: true,
-        analysis_prompt: "Beep boop analysis.".to_string(),
-        trading_prompt: "Beep boop trading.".to_string(),
         wallet_address: "0x1234567890abcdef".to_string(),
         environment: "live".to_string(),
         api_key: "vt_test_key".to_string(),

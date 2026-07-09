@@ -16,6 +16,10 @@ use super::transactions::apply_live_cash_balance_anchor;
 use crate::{
     agents::{
         model::BACKEND_KIND_OPENCODE,
+        strategy_prompts::{
+            default_prompt_for_kind, list_agent_strategy_prompts, PROMPT_KIND_ANALYSIS,
+            PROMPT_KIND_DAILY_REVIEW, PROMPT_KIND_MARKET_ANALYSIS, PROMPT_KIND_TRADING,
+        },
         store::{get_agent, list_agent_instrument_ids, list_agent_instrument_options},
     },
     hyperliquid::{
@@ -135,7 +139,57 @@ pub(in crate::web::routes) async fn render_agent_show_page(
                 }
             }
         }
-        AgentShowTab::Prompts => {}
+        AgentShowTab::Prompts => {
+            match list_agent_strategy_prompts(&state.db_pool, &agent.agent_key).await {
+                Ok(rows) => {
+                    let prompt_map: std::collections::BTreeMap<String, String> = rows
+                        .into_iter()
+                        .map(|row| (row.prompt_kind, row.prompt))
+                        .collect();
+                    template.set_prompt_editors(vec![
+                        crate::web::templates::PromptEditorView::new(
+                            PROMPT_KIND_ANALYSIS,
+                            prompt_map
+                                .get(PROMPT_KIND_ANALYSIS)
+                                .cloned()
+                                .unwrap_or_default(),
+                            default_prompt_for_kind(PROMPT_KIND_ANALYSIS),
+                        ),
+                        crate::web::templates::PromptEditorView::new(
+                            PROMPT_KIND_MARKET_ANALYSIS,
+                            prompt_map
+                                .get(PROMPT_KIND_MARKET_ANALYSIS)
+                                .cloned()
+                                .unwrap_or_default(),
+                            default_prompt_for_kind(PROMPT_KIND_MARKET_ANALYSIS),
+                        ),
+                        crate::web::templates::PromptEditorView::new(
+                            PROMPT_KIND_TRADING,
+                            prompt_map
+                                .get(PROMPT_KIND_TRADING)
+                                .cloned()
+                                .unwrap_or_default(),
+                            default_prompt_for_kind(PROMPT_KIND_TRADING),
+                        ),
+                        crate::web::templates::PromptEditorView::new(
+                            PROMPT_KIND_DAILY_REVIEW,
+                            prompt_map
+                                .get(PROMPT_KIND_DAILY_REVIEW)
+                                .cloned()
+                                .unwrap_or_default(),
+                            default_prompt_for_kind(PROMPT_KIND_DAILY_REVIEW),
+                        ),
+                    ]);
+                }
+                Err(error) => {
+                    warn!(
+                        agent_key = %agent.agent_key,
+                        error = ?error,
+                        "failed to list strategy prompts for operator page"
+                    );
+                }
+            }
+        }
         AgentShowTab::Settings => {
             if agent.backend_kind == BACKEND_KIND_OPENCODE {
                 template.settings_workspace_warning = settings_query
