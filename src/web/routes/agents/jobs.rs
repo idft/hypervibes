@@ -27,8 +27,13 @@ use crate::{
         store::{self, QueuedScheduleRun},
         timeframe::{parse_timeframe_seconds, parse_timeout_seconds},
     },
-    agents::{model::BACKEND_KIND_OPENCODE, store::get_agent},
+    agents::{
+        model::BACKEND_KIND_OPENCODE,
+        strategy_prompts::{get_agent_strategy_prompt, prompt_kind_for_job_kind},
+        store::get_agent,
+    },
     hyperliquid::live_state::live_agent_snapshot_for_dispatch,
+    memory::get_latest_agent_memory_by_type,
     model_catalog::options::parse_model_selection,
     web::{
         AppState,
@@ -121,8 +126,10 @@ pub(in crate::web::routes) async fn agents_show_job_detail(
     }
 
     let picker = load_model_picker_context(&state, &agent).await;
-    let model_picker =
+    let mut model_picker =
         build_model_picker_view("job-model-selection", &job_view.model_selection, picker);
+    model_picker.show_label = false;
+    model_picker.use_modal = true;
     let html = AgentJobDetailPageTemplate::render_view(
         agent.clone(),
         job_view,
@@ -168,8 +175,8 @@ pub(in crate::web::routes) async fn build_job_prompt_preview(
         job_kind: job.job_kind.clone(),
         timeframe: Some(job.timeframe.clone()),
         operator_prompt: job.operator_prompt.clone(),
-        analysis_prompt: agent.analysis_prompt.clone(),
-        trading_prompt: agent.trading_prompt.clone(),
+        strategy_prompt: load_strategy_prompt(&state, &agent.agent_key, &job.job_kind).await?,
+        accumulated_learnings: load_accumulated_learnings(&state, &agent.agent_key).await?,
         system_prompt,
         environment: agent.environment.clone(),
         selected_instruments,
@@ -180,9 +187,40 @@ pub(in crate::web::routes) async fn build_job_prompt_preview(
         runtime_base_url: String::new(),
         runtime_config: serde_json::json!({}),
         scheduled_for: job.next_run_at,
+        review_window_start: None,
+        review_window_end: None,
     };
 
     crate::agentic::prompt::build_prompt(&request)
+}
+
+async fn load_strategy_prompt(
+    state: &Arc<AppState>,
+    agent_key: &str,
+    job_kind: &str,
+) -> anyhow::Result<String> {
+    let prompt_kind = prompt_kind_for_job_kind(job_kind)
+        .ok_or_else(|| anyhow::anyhow!("unknown job kind {job_kind}"))?;
+    Ok(get_agent_strategy_prompt(&state.db_pool, agent_key, prompt_kind)
+        .await?
+        .map(|row| row.prompt)
+        .unwrap_or_default())
+}
+
+async fn load_accumulated_learnings(
+    state: &Arc<AppState>,
+    agent_key: &str,
+) -> anyhow::Result<Option<String>> {
+    Ok(get_latest_agent_memory_by_type(&state.db_pool, agent_key, "agent_learnings")
+        .await?
+        .map(|memory| {
+            format!(
+                "Summary: {}\nCreated at: {}\nContent: {}",
+                memory.summary,
+                memory.created_at.to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+                memory.content
+            )
+        }))
 }
 #[derive(Debug, Clone, Default, Deserialize)]
 pub(in crate::web::routes) struct CreateAgentScheduleForm {
@@ -531,6 +569,8 @@ pub(in crate::web::routes) async fn agents_run_job_now(
                 scheduled_for,
                 &agent,
                 selected_instruments,
+                load_strategy_prompt(&state, &agent_key, &schedule.job_kind).await?,
+                load_accumulated_learnings(&state, &agent_key).await?,
                 system_prompt,
                 account_snapshot,
             );

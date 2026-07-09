@@ -4,7 +4,10 @@ use serde::Deserialize;
 use crate::{
     agents::{
         model::{AgentDetailRow, AgentListRow, AgentRuntimeRow, CreateAgentForm},
-        prompts::{DEFAULT_ANALYSIS_STRATEGY_PROMPT, DEFAULT_TRADING_STRATEGY_PROMPT},
+        strategy_prompts::{
+            PROMPT_KIND_ANALYSIS, PROMPT_KIND_DAILY_REVIEW, PROMPT_KIND_MARKET_ANALYSIS,
+            PROMPT_KIND_TRADING,
+        },
         store::AgentInstrumentOptionRow,
     },
     hyperliquid::sync_state::SyncStateRow,
@@ -172,13 +175,72 @@ pub struct CreateAgentHookFormValues {
 }
 
 #[derive(Debug, Clone)]
+pub struct ModelPickerProviderGroup {
+    pub provider_id: String,
+    pub provider_name: String,
+    pub provider_logo_url: Option<String>,
+    pub options: Vec<ModelPickerOption>,
+}
+
+#[derive(Debug, Clone)]
 pub struct ModelPickerView {
     pub input_id: String,
     pub input_name: String,
     pub selected_value: String,
     pub selected_label: String,
+    pub empty_label: String,
+    pub provider_groups: Vec<ModelPickerProviderGroup>,
     pub options: Vec<ModelPickerOption>,
     pub warning: Option<String>,
+    pub show_label: bool,
+    pub auto_submit: bool,
+    pub use_modal: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct PromptEditorView {
+    pub prompt_kind: String,
+    pub label: &'static str,
+    pub textarea_id: &'static str,
+    pub placeholder: &'static str,
+    pub prompt: String,
+    pub default_prompt: &'static str,
+}
+
+impl PromptEditorView {
+    pub fn new(prompt_kind: &str, prompt: String, default_prompt: &'static str) -> Self {
+        let (label, textarea_id, placeholder) = match prompt_kind {
+            PROMPT_KIND_ANALYSIS => (
+                "Analysis Strategy Prompt",
+                "analysis_prompt",
+                "Assets, timeframes, analysis methods, confidence thresholds, validity, and trade blockers.",
+            ),
+            PROMPT_KIND_MARKET_ANALYSIS => (
+                "Market Analysis Strategy Prompt",
+                "market_analysis_prompt",
+                "How timeframe analyses should be synthesized into one execution-facing market view.",
+            ),
+            PROMPT_KIND_TRADING => (
+                "Trading Strategy Prompt",
+                "trading_prompt",
+                "Sizing, laddering, time-in-force preference, max orders, stale-order policy, and scaling rules.",
+            ),
+            PROMPT_KIND_DAILY_REVIEW => (
+                "Daily Review Strategy Prompt",
+                "daily_review_prompt",
+                "What the daily review should inspect, how it should record learnings, and what patterns to emphasize.",
+            ),
+            _ => ("Strategy Prompt", "strategy_prompt", ""),
+        };
+        Self {
+            prompt_kind: prompt_kind.to_string(),
+            label,
+            textarea_id,
+            placeholder,
+            prompt,
+            default_prompt,
+        }
+    }
 }
 
 #[derive(Template)]
@@ -247,8 +309,7 @@ pub struct AgentsShowPageTemplate {
     pub latest_analysis_summary_html: String,
     pub sparklines_html: String,
     pub api_key_last_used_at: Option<LocalTimestampView>,
-    pub default_analysis_strategy_prompt: &'static str,
-    pub default_trading_strategy_prompt: &'static str,
+    pub prompt_editors: Vec<PromptEditorView>,
     pub created_at: LocalTimestampView,
     pub updated_at: LocalTimestampView,
     pub current_path: String,
@@ -277,8 +338,7 @@ impl AgentsShowPageTemplate {
 
         Self {
             api_key_last_used_at: optional_local_timestamp_view(agent.api_key_last_used_at),
-            default_analysis_strategy_prompt: DEFAULT_ANALYSIS_STRATEGY_PROMPT,
-            default_trading_strategy_prompt: DEFAULT_TRADING_STRATEGY_PROMPT,
+            prompt_editors: Vec::new(),
             created_at: local_timestamp_view(agent.created_at),
             updated_at: local_timestamp_view(agent.updated_at),
             current_path: active_tab.path(&agent_key),
@@ -365,5 +425,9 @@ impl AgentsShowPageTemplate {
             self.selected_memory_date_text.clone(),
         )
         .unwrap_or_default();
+    }
+
+    pub fn set_prompt_editors(&mut self, prompt_editors: Vec<PromptEditorView>) {
+        self.prompt_editors = prompt_editors;
     }
 }

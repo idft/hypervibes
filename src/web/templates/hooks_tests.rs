@@ -22,8 +22,18 @@ fn hook_detail_page_renders_hook_metadata_and_runs() {
             input_name: "model_selection".to_string(),
             selected_value: "anthropic/claude-sonnet-4".to_string(),
             selected_label: "Anthropic / Claude Sonnet 4".to_string(),
+            empty_label: "None selected".to_string(),
+            provider_groups: vec![ModelPickerProviderGroup {
+                provider_id: "anthropic".to_string(),
+                provider_name: "Anthropic".to_string(),
+                provider_logo_url: Some("/model-catalog/logos/anthropic.svg".to_string()),
+                options: sample_model_options(),
+            }],
             options: sample_model_options(),
             warning: None,
+            show_label: false,
+            auto_submit: false,
+            use_modal: true,
         },
         runs,
         true,
@@ -43,6 +53,9 @@ fn hook_detail_page_renders_hook_metadata_and_runs() {
     assert!(rendered.contains("Updated"));
     assert!(rendered.contains("/agents/test-agent/hooks/3/run"));
     assert!(rendered.contains("/agents/test-agent/runs/1"));
+    assert!(rendered.contains("Select model"));
+    assert!(rendered.contains("data-model-picker-mode="));
+    assert!(!rendered.contains("Save model"));
 }
 
 #[test]
@@ -62,8 +75,18 @@ fn new_hook_page_renders_form() {
             input_name: "model_selection".to_string(),
             selected_value: "anthropic/claude-sonnet-4".to_string(),
             selected_label: "Anthropic / Claude Sonnet 4".to_string(),
+            empty_label: "None selected".to_string(),
+            provider_groups: vec![ModelPickerProviderGroup {
+                provider_id: "anthropic".to_string(),
+                provider_name: "Anthropic".to_string(),
+                provider_logo_url: Some("/model-catalog/logos/anthropic.svg".to_string()),
+                options: sample_model_options(),
+            }],
             options: sample_model_options(),
             warning: None,
+            show_label: true,
+            auto_submit: false,
+            use_modal: false,
         },
         errors: Vec::new(),
         current_path: "/agents/test-agent/hooks/new".to_string(),

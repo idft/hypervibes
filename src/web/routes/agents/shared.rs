@@ -2,7 +2,10 @@ use crate::{
     model_catalog::options::{
         ModelPickerOption, build_model_picker_options, selection_exists_in_options,
     },
-    web::{AppState, templates::ModelPickerView},
+    web::{
+        AppState,
+        templates::{ModelPickerProviderGroup, ModelPickerView},
+    },
 };
 use axum::{
     http::HeaderMap,
@@ -99,7 +102,7 @@ pub(in crate::web::routes) fn selected_model_label(
     options: &[ModelPickerOption],
 ) -> String {
     if selected.trim().is_empty() {
-        return "OpenCode default".to_string();
+        return "None selected".to_string();
     }
 
     options
@@ -113,14 +116,44 @@ pub(in crate::web::routes) fn build_model_picker_view(
     selected_value: &str,
     picker: ModelPickerContext,
 ) -> ModelPickerView {
+    let provider_groups = build_provider_groups(&picker.options);
+
     ModelPickerView {
         input_id: input_id.to_string(),
         input_name: "model_selection".to_string(),
         selected_value: selected_value.to_string(),
         selected_label: selected_model_label(selected_value, &picker.options),
+        empty_label: "None selected".to_string(),
+        provider_groups,
         options: picker.options,
         warning: picker.warning,
+        show_label: true,
+        auto_submit: false,
+        use_modal: false,
     }
+}
+
+fn build_provider_groups(options: &[ModelPickerOption]) -> Vec<ModelPickerProviderGroup> {
+    let mut groups = Vec::new();
+
+    for option in options {
+        if let Some(group) = groups
+            .iter_mut()
+            .find(|group: &&mut ModelPickerProviderGroup| group.provider_id == option.provider_id)
+        {
+            group.options.push(option.clone());
+            continue;
+        }
+
+        groups.push(ModelPickerProviderGroup {
+            provider_id: option.provider_id.clone(),
+            provider_name: option.provider_name.clone(),
+            provider_logo_url: Some(option.provider_logo_url.clone()),
+            options: vec![option.clone()],
+        });
+    }
+
+    groups
 }
 pub(in crate::web::routes) async fn validate_model_selection_for_agent(
     state: &Arc<AppState>,

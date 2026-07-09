@@ -102,8 +102,10 @@ pub(in crate::web::routes) async fn agents_show_hook_detail(
     }
 
     let picker = load_model_picker_context(&state, &agent).await;
-    let model_picker =
+    let mut model_picker =
         build_model_picker_view("hook-model-selection", &hook_view.model_selection, picker);
+    model_picker.show_label = false;
+    model_picker.use_modal = true;
     let html = AgentHookDetailPageTemplate::render_view(
         agent.clone(),
         hook_view,

@@ -19,8 +19,18 @@ fn job_detail_page_renders_job_metadata_and_runs() {
             input_name: "model_selection".to_string(),
             selected_value: "anthropic/claude-sonnet-4".to_string(),
             selected_label: "Anthropic / Claude Sonnet 4".to_string(),
+            empty_label: "None selected".to_string(),
+            provider_groups: vec![ModelPickerProviderGroup {
+                provider_id: "anthropic".to_string(),
+                provider_name: "Anthropic".to_string(),
+                provider_logo_url: Some("/model-catalog/logos/anthropic.svg".to_string()),
+                options: sample_model_options(),
+            }],
             options: sample_model_options(),
             warning: None,
+            show_label: false,
+            auto_submit: false,
+            use_modal: true,
         },
         runs,
         true,
@@ -39,4 +49,8 @@ fn job_detail_page_renders_job_metadata_and_runs() {
     assert!(rendered.contains("/agents/test-agent/jobs/1/run"));
     assert!(rendered.contains("Disable"));
     assert!(rendered.contains("/agents/test-agent/runs/1"));
+    assert!(rendered.contains("Select model"));
+    assert!(rendered.contains("data-model-picker-mode="));
+    assert!(rendered.contains("Cancel"));
+    assert!(rendered.contains("Save"));
 }

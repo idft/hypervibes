@@ -370,19 +370,50 @@ fn settings_tab_renders_workspace_template_drift() {
 
 #[test]
 fn prompts_tab_renders_strategy_copy_and_reset_defaults_ui() {
-    let template = AgentsShowPageTemplate::new(sample_agent_detail_row(), AgentShowTab::Prompts);
+    let mut template = AgentsShowPageTemplate::new(sample_agent_detail_row(), AgentShowTab::Prompts);
+    template.set_prompt_editors(vec![
+        PromptEditorView::new(
+            "analysis",
+            "Beep boop analysis.".to_string(),
+            crate::agents::prompts::DEFAULT_ANALYSIS_STRATEGY_PROMPT,
+        ),
+        PromptEditorView::new(
+            "market_analysis",
+            "Beep boop market analysis.".to_string(),
+            crate::agents::prompts::DEFAULT_MARKET_ANALYSIS_STRATEGY_PROMPT,
+        ),
+        PromptEditorView::new(
+            "trading",
+            "Beep boop trading.".to_string(),
+            crate::agents::prompts::DEFAULT_TRADING_STRATEGY_PROMPT,
+        ),
+        PromptEditorView::new(
+            "daily_review",
+            "Beep boop review.".to_string(),
+            crate::agents::prompts::DEFAULT_DAILY_REVIEW_STRATEGY_PROMPT,
+        ),
+    ]);
 
     let rendered = template.render().unwrap();
     assert!(rendered.contains("Strategy Prompts"));
     assert!(rendered.contains("Analysis Strategy Prompt"));
+    assert!(rendered.contains("Market Analysis Strategy Prompt"));
     assert!(rendered.contains("Trading Strategy Prompt"));
+    assert!(rendered.contains("Daily Review Strategy Prompt"));
     assert!(rendered.contains("data-agent-prompt-form=\"analysis\""));
+    assert!(rendered.contains("data-agent-prompt-form=\"market_analysis\""));
     assert!(rendered.contains("data-agent-prompt-form=\"trading\""));
+    assert!(rendered.contains("data-agent-prompt-form=\"daily_review\""));
     assert!(rendered.contains("data-agent-prompt-reset=\"analysis\""));
+    assert!(rendered.contains("data-agent-prompt-reset=\"market_analysis\""));
     assert!(rendered.contains("data-agent-prompt-reset=\"trading\""));
+    assert!(rendered.contains("data-agent-prompt-reset=\"daily_review\""));
     assert!(rendered.contains("data-agent-prompt-save=\"analysis\""));
+    assert!(rendered.contains("data-agent-prompt-save=\"market_analysis\""));
     assert!(rendered.contains("data-agent-prompt-save=\"trading\""));
+    assert!(rendered.contains("data-agent-prompt-save=\"daily_review\""));
     assert!(rendered.contains("default-analysis-strategy-prompt-value"));
+    assert!(rendered.contains("default-market_analysis-strategy-prompt-value"));
     assert!(rendered.contains("Default analysis validity"));
     assert!(rendered.contains("Time-in-force"));
 }
@@ -425,8 +456,18 @@ fn new_job_page_renders_agent_navbar_with_jobs_active() {
             input_name: "model_selection".to_string(),
             selected_value: "anthropic/claude-sonnet-4".to_string(),
             selected_label: "Anthropic / Claude Sonnet 4".to_string(),
+            empty_label: "None selected".to_string(),
+            provider_groups: vec![ModelPickerProviderGroup {
+                provider_id: "anthropic".to_string(),
+                provider_name: "Anthropic".to_string(),
+                provider_logo_url: Some("/model-catalog/logos/anthropic.svg".to_string()),
+                options: sample_model_options(),
+            }],
             options: sample_model_options(),
             warning: None,
+            show_label: true,
+            auto_submit: false,
+            use_modal: false,
         },
         errors: Vec::new(),
         current_path: "/agents/test-agent/jobs/new".to_string(),

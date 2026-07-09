@@ -2,17 +2,27 @@
     (function () {
         document.querySelectorAll('[data-model-picker]').forEach(function (picker) {
             const input = picker.parentElement.querySelector('input[name="model_selection"]');
+            const form = input ? input.closest('form') : null;
             const label = picker.querySelector('[data-model-picker-label]');
             const logo = picker.querySelector('[data-model-picker-logo]');
             const defaultBadge = picker.querySelector('[data-model-picker-default-badge]');
             const search = picker.querySelector('[data-model-picker-search]');
             const options = picker.querySelectorAll('[data-model-picker-option]');
+            const providers = picker.querySelectorAll('[data-model-picker-provider]');
+            const modal = picker.querySelector('[data-model-picker-modal]');
+            const openButton = picker.querySelector('[data-model-picker-open]');
+            const closeButtons = picker.querySelectorAll('[data-model-picker-close], [data-model-picker-cancel]');
+            const saveButton = picker.querySelector('[data-model-picker-save]');
             if (!input || !label || !logo || !defaultBadge) {
                 return;
             }
 
+            const isModal = picker.dataset.modelPickerMode === 'modal';
+            let draftValue = input.value;
+            let activeProviderId = '__none__';
+
             function updateSelected(option) {
-                label.textContent = option.dataset.label || 'OpenCode default';
+                label.textContent = option.dataset.label || 'None selected';
                 if (option.dataset.logoUrl) {
                     logo.src = option.dataset.logoUrl;
                     logo.classList.remove('hidden');
@@ -24,18 +34,125 @@
                 }
             }
 
-            if (search) {
-                search.addEventListener('input', function () {
-                    const query = search.value.trim().toLowerCase();
-                    options.forEach(function (option) {
-                        const haystack = (option.dataset.searchText || option.dataset.label || '').toLowerCase();
-                        option.classList.toggle('hidden', query !== '' && !haystack.includes(query));
-                    });
+            function selectedOptionForValue(value) {
+                return Array.from(options).find(function (option) {
+                    return option.dataset.value === value;
+                }) || options[0];
+            }
+
+            function updateProviderState() {
+                providers.forEach(function (provider) {
+                    const selected = provider.dataset.providerId === activeProviderId;
+                    provider.classList.toggle('bg-zinc-900', selected);
+                    provider.classList.toggle('text-white', selected);
                 });
             }
 
+            function updateOptionState() {
+                options.forEach(function (option) {
+                    const selected = option.dataset.value === draftValue;
+                    option.classList.toggle('bg-zinc-900', selected);
+                    option.classList.toggle('text-white', selected);
+                });
+            }
+
+            function applyFilters() {
+                const query = search ? search.value.trim().toLowerCase() : '';
+
+                if (isModal) {
+                    const visibleProviders = new Set();
+
+                    options.forEach(function (option) {
+                        const haystack = (option.dataset.searchText || option.dataset.label || '').toLowerCase();
+                        const matches = query === '' || haystack.includes(query);
+                        const providerMatches = option.dataset.providerId === activeProviderId;
+                        option.classList.toggle('hidden', !matches || !providerMatches);
+                        if (matches) {
+                            visibleProviders.add(option.dataset.providerId || '__none__');
+                        }
+                    });
+
+                    providers.forEach(function (provider) {
+                        const haystack = (provider.dataset.searchText || '').toLowerCase();
+                        const providerMatches = query === '' || haystack.includes(query) || visibleProviders.has(provider.dataset.providerId || '__none__');
+                        provider.classList.toggle('hidden', !providerMatches);
+                    });
+
+                    const activeProviderVisible = Array.from(providers).some(function (provider) {
+                        return provider.dataset.providerId === activeProviderId && !provider.classList.contains('hidden');
+                    });
+
+                    if (!activeProviderVisible) {
+                        const firstVisibleProvider = Array.from(providers).find(function (provider) {
+                            return !provider.classList.contains('hidden');
+                        });
+                        activeProviderId = firstVisibleProvider ? (firstVisibleProvider.dataset.providerId || '__none__') : '__none__';
+                        options.forEach(function (option) {
+                            const haystack = (option.dataset.searchText || option.dataset.label || '').toLowerCase();
+                            const matches = query === '' || haystack.includes(query);
+                            const providerMatches = option.dataset.providerId === activeProviderId;
+                            option.classList.toggle('hidden', !matches || !providerMatches);
+                        });
+                    }
+
+                    updateProviderState();
+                    updateOptionState();
+                    return;
+                }
+
+                options.forEach(function (option) {
+                    const haystack = (option.dataset.searchText || option.dataset.label || '').toLowerCase();
+                    option.classList.toggle('hidden', query !== '' && !haystack.includes(query));
+                });
+            }
+
+            function openModal() {
+                draftValue = input.value;
+                const selected = selectedOptionForValue(draftValue);
+                activeProviderId = selected ? (selected.dataset.providerId || '__none__') : '__none__';
+                if (search) {
+                    search.value = '';
+                }
+                applyFilters();
+                if (modal) {
+                    modal.classList.remove('hidden');
+                }
+                document.body.classList.add('overflow-hidden');
+                if (search) {
+                    search.focus();
+                }
+            }
+
+            function closeModal() {
+                if (modal) {
+                    modal.classList.add('hidden');
+                }
+                document.body.classList.remove('overflow-hidden');
+            }
+
+            if (search) {
+                search.addEventListener('input', function () {
+                    applyFilters();
+                });
+            }
+
+            providers.forEach(function (provider) {
+                provider.addEventListener('click', function () {
+                    activeProviderId = provider.dataset.providerId || '__none__';
+                    applyFilters();
+                });
+            });
+
             options.forEach(function (option) {
                 option.addEventListener('click', function () {
+                    if (isModal) {
+                        draftValue = option.dataset.value || '';
+                        activeProviderId = option.dataset.providerId || '__none__';
+                        updateProviderState();
+                        updateOptionState();
+                        return;
+                    }
+
                     input.value = option.dataset.value || '';
                     updateSelected(option);
                     if (search) {
@@ -43,12 +160,47 @@
                         options.forEach(function (entry) { entry.classList.remove('hidden'); });
                     }
                     picker.removeAttribute('open');
+                    if (picker.dataset.modelPickerAutoSubmit === 'true' && form) {
+                        form.requestSubmit();
+                    }
                 });
             });
 
-            const selected = Array.from(options).find(function (option) {
-                return option.dataset.value === input.value;
-            }) || options[0];
+            if (openButton) {
+                openButton.addEventListener('click', function () {
+                    openModal();
+                });
+            }
+
+            closeButtons.forEach(function (button) {
+                button.addEventListener('click', function () {
+                    closeModal();
+                });
+            });
+
+            if (saveButton) {
+                saveButton.addEventListener('click', function () {
+                    input.value = draftValue;
+                    const selected = selectedOptionForValue(input.value);
+                    if (selected) {
+                        updateSelected(selected);
+                    }
+                    closeModal();
+                    if (form) {
+                        form.requestSubmit();
+                    }
+                });
+            }
+
+            if (isModal) {
+                document.addEventListener('keydown', function (event) {
+                    if (event.key === 'Escape' && modal && !modal.classList.contains('hidden')) {
+                        closeModal();
+                    }
+                });
+            }
+
+            const selected = selectedOptionForValue(input.value);
             if (selected) {
                 updateSelected(selected);
             }
