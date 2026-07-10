@@ -31,6 +31,7 @@ fn job_detail_page_renders_job_metadata_and_runs() {
             show_label: false,
             auto_submit: false,
             use_modal: true,
+            lazy_options_url: None,
         },
         runs,
         true,

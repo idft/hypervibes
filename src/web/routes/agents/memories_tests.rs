@@ -6,7 +6,7 @@ use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use tower::util::ServiceExt;
 
-use crate::memory::list_agent_memories;
+use crate::memory::list_agent_memory_timeline;
 
 #[tokio::test]
 async fn agent_memories_route_renders_saved_memories() {
@@ -137,16 +137,82 @@ async fn memory_timeline_event_renders_refresh_without_selected_card() {
     )
     .await;
 
-    let event = render_memory_timeline_event(&state.db_pool, &agent_key, None, None, None)
+    let event = render_memory_timeline_event(
+        &state.db_pool,
+        &agent_key,
+        None,
+        None,
+        None,
+        String::new(),
+    )
         .await
         .expect("render event");
     let text = format!("{event:?}");
 
     assert!(text.contains("memories-timeline"));
     assert!(text.contains("Remember the breakout"));
-    let rows = list_agent_memories(&state.db_pool, &agent_key, None, None)
+    let rows = list_agent_memory_timeline(&state.db_pool, &agent_key, None, None, None)
         .await
         .expect("list memories");
     let timeline = crate::web::templates::build_memory_timeline_for_sse(&agent_key, &rows);
     assert!(timeline.iter().all(|item| !item.selected));
+}
+
+#[tokio::test]
+async fn agent_memories_route_pages_timeline_and_loads_older_rows() {
+    let state = test_state().await;
+    let (agent_key, _wallet_address) = insert_test_agent(&state).await.expect("insert agent");
+    for index in 0..55 {
+        seed_memory(
+            &state,
+            &agent_key,
+            &format!("Memory {index}"),
+            "Timeline pagination content.",
+        )
+        .await;
+    }
+
+    let response = router(state.clone())
+        .oneshot(
+            Request::builder()
+                .uri(format!("/agents/{agent_key}/memories"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let text = response_text(response).await;
+    assert_eq!(
+        text.matches("data-memory-timeline-item data-memory-id")
+            .count(),
+        50
+    );
+    assert!(text.contains("data-memory-timeline-loader"));
+
+    let rows = list_agent_memory_timeline(&state.db_pool, &agent_key, None, None, None)
+        .await
+        .expect("list first timeline page");
+    let cursor = &rows[49];
+    let response = router(state)
+        .oneshot(
+            Request::builder()
+                .uri(format!(
+                    "/agents/{agent_key}/memories/timeline?before_us={}&before_id={}",
+                    cursor.created_at.timestamp_micros(),
+                    cursor.id
+                ))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let text = response_text(response).await;
+    assert_eq!(
+        text.matches("data-memory-timeline-item data-memory-id")
+            .count(),
+        5
+    );
+    assert!(!text.contains("data-memory-timeline-loader"));
 }

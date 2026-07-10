@@ -164,3 +164,15 @@ impl AgentJobDetailPageTemplate {
         .render()
     }
 }
+
+#[derive(Template)]
+#[template(path = "model_picker_partial.html")]
+pub struct ModelPickerPartialTemplate {
+    pub model_picker: ModelPickerView,
+}
+
+impl ModelPickerPartialTemplate {
+    pub fn render_view(model_picker: ModelPickerView) -> Result<String, askama::Error> {
+        Self { model_picker }.render()
+    }
+}

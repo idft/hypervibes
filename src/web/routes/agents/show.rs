@@ -10,7 +10,9 @@ use chrono::Utc;
 use serde::Deserialize;
 use tracing::warn;
 
-use super::memories::{AgentMemoriesQuery, parse_memory_date_filter};
+use super::memories::{
+    AgentMemoriesQuery, parse_memory_date_filter, prepare_memory_timeline_page,
+};
 use super::settings::build_opencode_workspace_settings_view;
 use super::transactions::apply_live_cash_balance_anchor;
 use crate::{
@@ -30,7 +32,10 @@ use crate::{
             list_account_transactions_page,
         },
     },
-    memory::{get_latest_agent_memory_by_type, list_agent_memories, memory_expires_at},
+    memory::{
+        get_latest_agent_memory_by_type, get_memory, list_agent_memory_timeline,
+        memory_expires_at,
+    },
     web::{
         AppState,
         error::AppError,
@@ -123,13 +128,36 @@ pub(in crate::web::routes) async fn render_agent_show_page(
             let (filter_date_value, selected_date_text, filter_error_text, since, until) =
                 parse_memory_date_filter(&memory_query.date);
 
-            match list_agent_memories(&state.db_pool, &agent.agent_key, since, until).await {
-                Ok(rows) => template.set_memories(
-                    rows,
-                    filter_date_value,
-                    selected_date_text,
-                    filter_error_text,
-                ),
+            match list_agent_memory_timeline(
+                &state.db_pool,
+                &agent.agent_key,
+                since,
+                until,
+                None,
+            )
+            .await
+            {
+                Ok(rows) => {
+                    let (rows, next_page_url) = prepare_memory_timeline_page(
+                        &agent.agent_key,
+                        rows,
+                        selected_date_text
+                            .as_ref()
+                            .map(|_| filter_date_value.as_str()),
+                    );
+                    let selected_memory = match rows.first() {
+                        Some(row) => get_memory(&state.db_pool, &agent.agent_key, row.id).await?,
+                        None => None,
+                    };
+                    template.set_memories(
+                        rows,
+                        selected_memory,
+                        filter_date_value,
+                        selected_date_text,
+                        filter_error_text,
+                        next_page_url,
+                    );
+                }
                 Err(error) => {
                     warn!(
                         agent_key = %agent.agent_key,

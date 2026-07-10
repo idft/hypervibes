@@ -1,5 +1,5 @@
 <nav class="mt-2 overflow-x-auto" aria-label="Agent sections">
-    <div data-agent-tabs class="relative flex min-w-[48rem] gap-1 rounded-2xl border border-zinc-800 bg-[#0d0d10] p-1 sm:min-w-full">
+    <div data-agent-tabs hx-sync="this:replace" class="relative flex min-w-[48rem] gap-1 rounded-2xl border border-zinc-800 bg-[#0d0d10] p-1 sm:min-w-full">
         <div data-agent-tab-indicator aria-hidden="true" class="pointer-events-none absolute bottom-1 left-0 top-1 z-0 rounded-xl bg-zinc-800 opacity-0" style="transition: transform 200ms ease-out, width 200ms ease-out, opacity 200ms ease-out;"></div>
         {% for tab in tabs %}
         {% if agent_tabs_use_htmx %}

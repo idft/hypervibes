@@ -9,6 +9,7 @@
         }
 
         const AGENT_TAB_SLIDE_MS = 200;
+        const AGENT_TAB_INDICATOR_TRANSITION = 'transform 200ms ease-out, width 200ms ease-out, opacity 200ms ease-out';
 
         function applyAgentTabClasses(nav, activeLink) {
             const links = nav.querySelectorAll('[data-agent-tab-link]');
@@ -51,7 +52,27 @@
             const animate = !options || options.animate !== false;
             const previousActive = nav.querySelector('[data-agent-tab-link][aria-current="page"]');
 
-            if (!animate || !previousActive || previousActive === activeLink) {
+            if (!animate) {
+                if (nav.dataset.agentTabTimerId) {
+                    window.clearTimeout(Number(nav.dataset.agentTabTimerId));
+                    delete nav.dataset.agentTabTimerId;
+                }
+                const indicator = nav.querySelector('[data-agent-tab-indicator]');
+                if (indicator) {
+                    indicator.style.transition = 'none';
+                }
+
+                applyAgentTabClasses(nav, activeLink);
+                moveAgentTabIndicator(nav, activeLink);
+
+                if (indicator) {
+                    void indicator.offsetWidth;
+                    indicator.style.transition = AGENT_TAB_INDICATOR_TRANSITION;
+                }
+                return;
+            }
+
+            if (!previousActive || previousActive === activeLink) {
                 applyAgentTabClasses(nav, activeLink);
                 moveAgentTabIndicator(nav, activeLink);
                 return;

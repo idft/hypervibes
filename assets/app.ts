@@ -259,6 +259,8 @@ function seedSelectedMemoryTimelineItems(root: ParentNode = document) {
   });
 }
 
+let memoryDetailAbortController: AbortController | null = null;
+
 function loadMemoryTimelineItem(item: HTMLElement) {
   const url = item.getAttribute("hx-get");
   const target = item.getAttribute("hx-target");
@@ -271,15 +273,31 @@ function loadMemoryTimelineItem(item: HTMLElement) {
     return;
   }
 
+  memoryDetailAbortController?.abort();
+  const abortController = new AbortController();
+  memoryDetailAbortController = abortController;
+  const memoryRoot = item.closest<HTMLElement>("[data-agent-memories]");
+  const loadingIndicator = memoryRoot?.querySelector<HTMLElement>(
+    "[data-memory-detail-loading]",
+  );
+
   setActiveMemoryTimelineItem(item);
   item.setAttribute("aria-busy", "true");
+  targetElement.setAttribute("aria-busy", "true");
+  targetElement.classList.add("opacity-50");
+  loadingIndicator?.classList.remove("hidden");
+  loadingIndicator?.classList.add("flex");
 
   void fetch(url, {
+    signal: abortController.signal,
     headers: {
       "HX-Request": "true",
     },
   })
     .then(async (response) => {
+      if (memoryDetailAbortController !== abortController) {
+        return;
+      }
       if (!response.ok) {
         throw new Error(`Failed to load memory detail: ${response.status}`);
       }
@@ -287,10 +305,20 @@ function loadMemoryTimelineItem(item: HTMLElement) {
       targetElement.outerHTML = html;
     })
     .catch((error) => {
-      console.error(error);
+      if (!(error instanceof DOMException && error.name === "AbortError")) {
+        console.error(error);
+      }
     })
     .finally(() => {
       item.removeAttribute("aria-busy");
+      if (memoryDetailAbortController !== abortController) {
+        return;
+      }
+      memoryDetailAbortController = null;
+      targetElement.removeAttribute("aria-busy");
+      targetElement.classList.remove("opacity-50");
+      loadingIndicator?.classList.add("hidden");
+      loadingIndicator?.classList.remove("flex");
     });
 }
 

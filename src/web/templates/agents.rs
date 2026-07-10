@@ -195,6 +195,7 @@ pub struct ModelPickerView {
     pub show_label: bool,
     pub auto_submit: bool,
     pub use_modal: bool,
+    pub lazy_options_url: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -398,12 +399,14 @@ impl AgentsShowPageTemplate {
 
     pub fn set_memories(
         &mut self,
-        rows: Vec<MemoryRecord>,
+        rows: Vec<crate::memory::MemoryTimelineRecord>,
+        selected_memory: Option<MemoryRecord>,
         filter_date_value: String,
         selected_date_text: Option<String>,
         filter_error_text: Option<String>,
+        next_page_url: Option<String>,
     ) {
-        let selected_memory = rows.first().cloned().map(MemoryView::from_record);
+        let selected_memory = selected_memory.map(MemoryView::from_record);
         let selected_memory_id = selected_memory
             .as_ref()
             .map(|memory| memory.memory_id.as_str());
@@ -423,6 +426,7 @@ impl AgentsShowPageTemplate {
             self.memory_timeline.clone(),
             self.memory_count,
             self.selected_memory_date_text.clone(),
+            next_page_url,
         )
         .unwrap_or_default();
     }

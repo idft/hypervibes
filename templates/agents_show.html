@@ -141,7 +141,11 @@
             {% endif %}
             <div hx-ext="sse" sse-connect="/agents/{{ agent.agent_key }}/memories/stream?date={{ memory_filter_date_value }}" sse-swap="memories-timeline">{{ memory_timeline_html|safe }}</div>
 
-            <div class="mt-6">
+            <div class="relative mt-6 min-h-24">
+                <div data-memory-detail-loading class="pointer-events-none absolute inset-0 z-10 hidden items-center justify-center rounded-2xl bg-zinc-950/70 backdrop-blur-sm" role="status" aria-live="polite">
+                    <span class="size-7 animate-spin rounded-full border-2 border-zinc-700 border-t-white" aria-hidden="true"></span>
+                    <span class="sr-only">Loading memory</span>
+                </div>
                 {{ selected_memory_html|safe }}
             </div>
         </section>

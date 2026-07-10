@@ -4,7 +4,7 @@ use pulldown_cmark::{Options as MarkdownOptions, Parser as MarkdownParser, html}
 
 use crate::{
     agents::model::AgentDetailRow, hyperliquid::queries::AccountTransactionRow,
-    memory::MemoryRecord,
+    memory::{MemoryRecord, MemoryTimelineRecord},
 };
 
 use super::agents::{AgentShowTab, AgentShowTabLink, build_agent_show_tabs};
@@ -107,7 +107,7 @@ pub(super) fn render_memory_markdown_html(content: &str) -> String {
 
 pub(super) fn build_memory_timeline(
     agent_key: &str,
-    rows: &[MemoryRecord],
+    rows: &[MemoryTimelineRecord],
     selected_memory_id: Option<&str>,
 ) -> Vec<MemoryTimelineItem> {
     rows.iter()
@@ -133,7 +133,7 @@ pub(super) fn build_memory_timeline(
 
 pub fn build_memory_timeline_for_sse(
     agent_key: &str,
-    rows: &[MemoryRecord],
+    rows: &[MemoryTimelineRecord],
 ) -> Vec<MemoryTimelineItem> {
     build_memory_timeline(agent_key, rows, None)
 }
@@ -144,6 +144,7 @@ pub struct AgentMemoryTimelinePartialTemplate {
     pub memory_timeline: Vec<MemoryTimelineItem>,
     pub memory_count: usize,
     pub selected_memory_date_text: Option<String>,
+    pub next_page_url: Option<String>,
 }
 
 impl AgentMemoryTimelinePartialTemplate {
@@ -151,11 +152,33 @@ impl AgentMemoryTimelinePartialTemplate {
         memory_timeline: Vec<MemoryTimelineItem>,
         memory_count: usize,
         selected_memory_date_text: Option<String>,
+        next_page_url: Option<String>,
     ) -> Result<String, askama::Error> {
         Self {
             memory_timeline,
             memory_count,
             selected_memory_date_text,
+            next_page_url,
+        }
+        .render()
+    }
+}
+
+#[derive(Template)]
+#[template(path = "agent_memory_timeline_items.html")]
+pub struct AgentMemoryTimelineItemsPartialTemplate {
+    pub memory_timeline: Vec<MemoryTimelineItem>,
+    pub next_page_url: Option<String>,
+}
+
+impl AgentMemoryTimelineItemsPartialTemplate {
+    pub fn render_view(
+        memory_timeline: Vec<MemoryTimelineItem>,
+        next_page_url: Option<String>,
+    ) -> Result<String, askama::Error> {
+        Self {
+            memory_timeline,
+            next_page_url,
         }
         .render()
     }

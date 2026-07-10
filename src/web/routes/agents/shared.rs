@@ -130,6 +130,7 @@ pub(in crate::web::routes) fn build_model_picker_view(
         show_label: true,
         auto_submit: false,
         use_modal: false,
+        lazy_options_url: None,
     }
 }
 

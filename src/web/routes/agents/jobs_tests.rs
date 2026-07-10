@@ -669,6 +669,27 @@ async fn job_detail_page_renders_job_specific_runs() {
     assert!(text.contains("Run now"));
     assert!(text.contains("ses_job_detail"));
     assert!(text.contains(&format!("/agents/{agent_key}/runs/{run_id}")));
+    assert!(text.contains(&format!(
+        "/agents/{agent_key}/jobs/{schedule_id}/model-picker"
+    )));
+    assert!(text.contains("data-model-picker-lazy-open"));
+    assert!(!text.contains("data-model-picker-mode=\"modal\""));
+
+    let response = router(state)
+        .oneshot(
+            Request::builder()
+                .uri(format!(
+                    "/agents/{agent_key}/jobs/{schedule_id}/model-picker"
+                ))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let text = response_text(response).await;
+    assert!(text.contains("data-model-picker-mode=\"modal\""));
+    assert!(text.contains("Could not load configured OpenCode models"));
 }
 #[tokio::test]
 async fn post_job_timeout_updates_and_redirects() {

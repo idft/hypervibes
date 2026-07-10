@@ -15,6 +15,29 @@ pub struct MemoryRecord {
     pub metadata: serde_json::Value,
 }
 
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub struct MemoryTimelineRecord {
+    pub id: Uuid,
+    pub created_at: DateTime<Utc>,
+    pub symbol: String,
+    pub timeframe: Option<String>,
+    pub memory_type: String,
+    pub summary: String,
+}
+
+impl From<&MemoryRecord> for MemoryTimelineRecord {
+    fn from(row: &MemoryRecord) -> Self {
+        Self {
+            id: row.id,
+            created_at: row.created_at,
+            symbol: row.symbol.clone(),
+            timeframe: row.timeframe.clone(),
+            memory_type: row.memory_type.clone(),
+            summary: row.summary.clone(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, sqlx::FromRow, serde::Serialize)]
 pub struct MemoryLinkRecord {
     pub id: i64,

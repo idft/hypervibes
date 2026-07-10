@@ -40,6 +40,10 @@ pub fn router(state: Arc<AppState>) -> Router {
             get(agent_memories_stream),
         )
         .route(
+            "/agents/{agent_key}/memories/timeline",
+            get(agent_memory_timeline_page),
+        )
+        .route(
             "/agents/{agent_key}/memories/{memory_id}",
             get(agents_show_memory_detail),
         )
@@ -70,6 +74,10 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route(
             "/agents/{agent_key}/jobs/{job_id}",
             get(agents_show_job_detail),
+        )
+        .route(
+            "/agents/{agent_key}/jobs/{job_id}/model-picker",
+            get(agents_job_model_picker),
         )
         .route(
             "/agents/{agent_key}/hooks/{hook_id}",

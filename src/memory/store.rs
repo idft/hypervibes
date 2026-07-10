@@ -5,12 +5,15 @@ use uuid::Uuid;
 
 use crate::{
     db::DbPool,
-    memory::model::{CreateMemory, MemoryLinkRecord, MemoryListFilter, MemoryRecord},
+    memory::model::{
+        CreateMemory, MemoryLinkRecord, MemoryListFilter, MemoryRecord, MemoryTimelineRecord,
+    },
 };
 
 const DEFAULT_LIMIT: i64 = 50;
 const MAX_LIMIT: i64 = 200;
 const LATEST_CANDIDATE_LIMIT: i64 = 200;
+pub const AGENT_MEMORY_TIMELINE_PAGE_SIZE: i64 = 50;
 
 fn clamp_limit(limit: Option<i64>) -> i64 {
     let raw = limit.unwrap_or(DEFAULT_LIMIT);
@@ -154,15 +157,16 @@ pub async fn list_memories(
     Ok(rows)
 }
 
-/// List all memories for the given agent, newest first.
-pub async fn list_agent_memories(
+/// List one page of lightweight timeline rows for the operator UI, newest first.
+pub async fn list_agent_memory_timeline(
     pool: &DbPool,
     agent_key: &str,
     since: Option<DateTime<Utc>>,
     until: Option<DateTime<Utc>>,
-) -> Result<Vec<MemoryRecord>> {
+    before: Option<(DateTime<Utc>, Uuid)>,
+) -> Result<Vec<MemoryTimelineRecord>> {
     let mut qb: QueryBuilder<sqlx::Postgres> = QueryBuilder::new(
-        "SELECT id, created_at, agent_key, symbol, timeframe, memory_type, summary, content, metadata \
+        "SELECT id, created_at, symbol, timeframe, memory_type, summary \
          FROM memory.records WHERE agent_key = ",
     );
     qb.push_bind(agent_key.to_string());
@@ -173,14 +177,22 @@ pub async fn list_agent_memories(
     if let Some(until) = until {
         qb.push(" AND created_at < ").push_bind(until);
     }
+    if let Some((created_at, id)) = before {
+        qb.push(" AND (created_at, id) < (")
+            .push_bind(created_at)
+            .push(", ")
+            .push_bind(id)
+            .push(")");
+    }
 
-    qb.push(" ORDER BY created_at DESC");
+    qb.push(" ORDER BY created_at DESC, id DESC LIMIT ")
+        .push_bind(AGENT_MEMORY_TIMELINE_PAGE_SIZE + 1);
 
     let rows = qb
-        .build_query_as::<MemoryRecord>()
+        .build_query_as::<MemoryTimelineRecord>()
         .fetch_all(pool)
         .await
-        .context("failed to list agent memory records")?;
+        .context("failed to list agent memory timeline")?;
 
     Ok(rows)
 }

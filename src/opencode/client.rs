@@ -1,11 +1,14 @@
-use std::collections::BTreeMap;
-use std::time::Duration;
+use std::collections::{BTreeMap, HashMap};
+use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, anyhow};
 use reqwest::StatusCode;
 use serde::{Deserialize, Serialize};
+use tokio::sync::RwLock;
 
 const RESPONSE_SNIPPET_MAX_CHARS: usize = 200;
+const PROVIDER_CACHE_TTL: Duration = Duration::from_secs(5 * 60);
 
 #[derive(Debug, Clone)]
 pub struct OpenCodeClientConfig {
@@ -30,6 +33,12 @@ impl OpenCodeClientConfig {
 pub struct OpenCodeClient {
     http: reqwest::Client,
     config: OpenCodeClientConfig,
+    provider_cache: Arc<RwLock<HashMap<(String, String), CachedProvidersResponse>>>,
+}
+
+struct CachedProvidersResponse {
+    fetched_at: Instant,
+    response: OpenCodeProvidersResponse,
 }
 
 impl OpenCodeClient {
@@ -37,7 +46,11 @@ impl OpenCodeClient {
         let http = reqwest::Client::builder()
             .build()
             .context("failed to build OpenCode HTTP client")?;
-        Ok(Self { http, config })
+        Ok(Self {
+            http,
+            config,
+            provider_cache: Arc::new(RwLock::new(HashMap::new())),
+        })
     }
 
     #[cfg_attr(not(test), allow(dead_code))]
@@ -143,6 +156,21 @@ impl OpenCodeClient {
         base_url: &str,
         workspace_container_path: &str,
     ) -> Result<OpenCodeProvidersResponse> {
+        let cache_key = (
+            base_url.trim_end_matches('/').to_string(),
+            workspace_container_path.to_string(),
+        );
+        if let Some(response) = self
+            .provider_cache
+            .read()
+            .await
+            .get(&cache_key)
+            .filter(|entry| entry.fetched_at.elapsed() < PROVIDER_CACHE_TTL)
+            .map(|entry| entry.response.clone())
+        {
+            return Ok(response);
+        }
+
         let url = build_url(
             base_url,
             "provider",
@@ -157,10 +185,20 @@ impl OpenCodeClient {
             .await
             .map_err(|error| anyhow!("OpenCode list_providers request failed: {error}"))?;
         let response = parse_opencode_response(response).await?;
-        response
+        let response: OpenCodeProvidersResponse = response
             .json()
             .await
-            .context("failed to decode OpenCode provider discovery response")
+            .context("failed to decode OpenCode provider discovery response")?;
+        let mut cache = self.provider_cache.write().await;
+        cache.retain(|_, entry| entry.fetched_at.elapsed() < PROVIDER_CACHE_TTL);
+        cache.insert(
+            cache_key,
+            CachedProvidersResponse {
+                fetched_at: Instant::now(),
+                response: response.clone(),
+            },
+        );
+        Ok(response)
     }
 }
 
@@ -326,6 +364,37 @@ mod tests {
         let config = OpenCodeClientConfig::new("opencode".to_string(), None);
         assert_eq!(config.create_session_timeout, Duration::from_secs(15));
         assert_eq!(config.status_timeout, Duration::from_secs(15));
+    }
+
+    #[tokio::test]
+    async fn list_providers_reuses_cached_workspace_response() {
+        let client = OpenCodeClient::new(OpenCodeClientConfig::new("opencode".to_string(), None))
+            .expect("client");
+        let cache_key = (
+            "http://127.0.0.1:1".to_string(),
+            "/workspaces/agents/btc-1".to_string(),
+        );
+        client.provider_cache.write().await.insert(
+            cache_key,
+            CachedProvidersResponse {
+                fetched_at: Instant::now(),
+                response: OpenCodeProvidersResponse {
+                    all: vec![OpenCodeProviderInfo {
+                        id: "anthropic".to_string(),
+                        name: Some("Anthropic".to_string()),
+                        models: BTreeMap::new(),
+                    }],
+                    connected: vec!["anthropic".to_string()],
+                },
+            },
+        );
+
+        let response = client
+            .list_providers("http://127.0.0.1:1/", "/workspaces/agents/btc-1")
+            .await
+            .expect("cached response");
+
+        assert_eq!(response.connected, vec!["anthropic"]);
     }
 
     #[test]

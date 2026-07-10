@@ -284,26 +284,29 @@ fn jobs_page_links_to_new_hook_page() {
 fn memories_tab_renders_timeline_date_filter_and_markdown_content() {
     let mut template =
         AgentsShowPageTemplate::new(sample_agent_detail_row(), AgentShowTab::Memories);
+    let records = vec![
+        sample_memory_record(
+            "BTC",
+            Some("15m"),
+            "analysis",
+            "Momentum remains constructive",
+            "### Readout\n\n- Wait for a pullback before adding risk.\n- Use patient entries and avoid chasing.",
+        ),
+        sample_memory_record(
+            "ETH",
+            None,
+            "trade_management",
+            "Tighten invalidation",
+            "Trail the stop closer if funding flips and spot momentum weakens.",
+        ),
+    ];
     template.set_memories(
-        vec![
-            sample_memory_record(
-                "BTC",
-                Some("15m"),
-                "analysis",
-                "Momentum remains constructive",
-                "### Readout\n\n- Wait for a pullback before adding risk.\n- Use patient entries and avoid chasing.",
-            ),
-            sample_memory_record(
-                "ETH",
-                None,
-                "trade_management",
-                "Tighten invalidation",
-                "Trail the stop closer if funding flips and spot momentum weakens.",
-            ),
-        ],
+        records.iter().map(crate::memory::MemoryTimelineRecord::from).collect(),
+        records.first().cloned(),
         "2026-06-20".to_string(),
         Some("Saturday, June 20, 2026".to_string()),
         None,
+        Some("/agents/test-agent/memories/timeline?before_us=1&before_id=00000000-0000-0000-0000-000000000000&date=2026-06-20".to_string()),
     );
 
     let rendered = template.render().unwrap();
@@ -314,6 +317,8 @@ fn memories_tab_renders_timeline_date_filter_and_markdown_content() {
     assert!(rendered.contains("<h3>Readout</h3>"));
     assert!(rendered.contains("<li>Wait for a pullback before adding risk.</li>"));
     assert!(rendered.contains("metadata keys"));
+    assert!(rendered.contains("data-memory-detail-loading"));
+    assert!(rendered.contains("hx-trigger=\"intersect once root:.memory-timeline-scroll threshold:0.5\""));
 }
 
 #[test]
@@ -468,6 +473,7 @@ fn new_job_page_renders_agent_navbar_with_jobs_active() {
             show_label: true,
             auto_submit: false,
             use_modal: false,
+            lazy_options_url: None,
         },
         errors: Vec::new(),
         current_path: "/agents/test-agent/jobs/new".to_string(),

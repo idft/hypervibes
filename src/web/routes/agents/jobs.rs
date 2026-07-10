@@ -39,7 +39,7 @@ use crate::{
         AppState,
         templates::{
             AgentJobDetailPageTemplate, AgentScheduleNewPageTemplate, AgentShowTab,
-            CreateAgentScheduleFormValues, build_agent_show_tabs,
+            CreateAgentScheduleFormValues, ModelPickerPartialTemplate, build_agent_show_tabs,
         },
     },
 };
@@ -125,11 +125,19 @@ pub(in crate::web::routes) async fn agents_show_job_detail(
         }
     }
 
-    let picker = load_model_picker_context(&state, &agent).await;
-    let mut model_picker =
-        build_model_picker_view("job-model-selection", &job_view.model_selection, picker);
+    let mut model_picker = build_model_picker_view(
+        "job-model-selection",
+        &job_view.model_selection,
+        ModelPickerContext {
+            options: Vec::new(),
+            warning: None,
+        },
+    );
     model_picker.show_label = false;
     model_picker.use_modal = true;
+    model_picker.lazy_options_url = Some(format!(
+        "/agents/{agent_key}/jobs/{job_id}/model-picker"
+    ));
     let html = AgentJobDetailPageTemplate::render_view(
         agent.clone(),
         job_view,
@@ -137,6 +145,31 @@ pub(in crate::web::routes) async fn agents_show_job_detail(
         job_runs,
         job_runs_loaded,
     )?;
+    Ok(Html(html).into_response())
+}
+pub(in crate::web::routes) async fn agents_job_model_picker(
+    State(state): State<Arc<AppState>>,
+    Path((agent_key, job_id)): Path<(String, i64)>,
+) -> Result<Response, AppError> {
+    let Some(agent) = get_agent(&state.db_pool, &agent_key).await? else {
+        return Ok((StatusCode::NOT_FOUND, "agent not found").into_response());
+    };
+    if agent.backend_kind != BACKEND_KIND_OPENCODE {
+        return Ok((StatusCode::NOT_FOUND, "job not found").into_response());
+    }
+    let Some(job) = store::get_agent_schedule(&state.db_pool, &agent_key, job_id).await? else {
+        return Ok((StatusCode::NOT_FOUND, "job not found").into_response());
+    };
+
+    let selected = match (job.model_provider_id.as_deref(), job.model_id.as_deref()) {
+        (Some(provider), Some(model)) => format!("{provider}/{model}"),
+        _ => String::new(),
+    };
+    let picker = load_model_picker_context(&state, &agent).await;
+    let mut model_picker = build_model_picker_view("job-model-selection", &selected, picker);
+    model_picker.show_label = false;
+    model_picker.use_modal = true;
+    let html = ModelPickerPartialTemplate::render_view(model_picker)?;
     Ok(Html(html).into_response())
 }
 pub(in crate::web::routes) async fn build_job_prompt_preview(
