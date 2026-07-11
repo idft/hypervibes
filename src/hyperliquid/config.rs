@@ -1,7 +1,10 @@
-use std::{env, str::FromStr};
+use std::str::FromStr;
 
+#[cfg(test)]
 use alloy::signers::local::PrivateKeySigner;
-use anyhow::{Context, Result, bail};
+use anyhow::{Result, bail};
+#[cfg(test)]
+use anyhow::Context;
 
 /// Hyperliquid network environment.
 ///
@@ -49,70 +52,7 @@ pub struct AccountSyncConfig {
     pub overlap_ms: u64,
 }
 
-#[derive(Debug, Clone)]
-#[allow(dead_code)]
-pub struct AppConfig {
-    pub database_url: String,
-    pub environment: HyperliquidEnvironment,
-    pub account_address: String,
-    pub history_start_ms: u64,
-    pub poll_once: bool,
-}
-
-impl AppConfig {
-    #[allow(dead_code)]
-    pub fn to_account_sync_config(&self) -> AccountSyncConfig {
-        AccountSyncConfig {
-            account_address: self.account_address.clone(),
-            environment: self.environment,
-            history_start_ms: self.history_start_ms,
-            overlap_ms: 300_000,
-        }
-    }
-}
-
-impl AppConfig {
-    #[allow(dead_code)]
-    pub fn from_env() -> Result<Self> {
-        let private_key =
-            env::var("HYPERLIQUID_PK").context("missing HYPERLIQUID_PK environment variable")?;
-        let database_url = database_url_from_env()?;
-        let environment = env::var("HYPERLIQUID_ENVIRONMENT")
-            .unwrap_or_else(|_| "live".to_string())
-            .parse()?;
-        let history_start_ms = env::var("HYPERLIQUID_HISTORY_START_MS")
-            .ok()
-            .map(|value| value.parse())
-            .transpose()
-            .context("failed to parse HYPERLIQUID_HISTORY_START_MS")?
-            .unwrap_or(0);
-        let poll_once = env::var("HYPERLIQUID_POLL_ONCE")
-            .ok()
-            .map(|value| {
-                matches!(
-                    value.trim().to_ascii_lowercase().as_str(),
-                    "1" | "true" | "yes"
-                )
-            })
-            .unwrap_or(true);
-        let account_address = derive_account_address(&private_key)?;
-
-        Ok(Self {
-            database_url,
-            environment,
-            account_address,
-            history_start_ms,
-            poll_once,
-        })
-    }
-}
-
-#[allow(dead_code)]
-fn database_url_from_env() -> Result<String> {
-    crate::config::database_url_from_env()
-}
-
-#[allow(dead_code)]
+#[cfg(test)]
 pub fn derive_account_address(private_key: &str) -> Result<String> {
     let signer = PrivateKeySigner::from_str(private_key)
         .context("failed to parse HYPERLIQUID_PK as an Ethereum private key")?;

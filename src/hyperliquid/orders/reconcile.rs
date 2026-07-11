@@ -21,13 +21,6 @@
 //! a trait, and the orphan-cancel and status-merge decisions are pure
 //! functions tested with seeded DB rows.
 //!
-//! The runtime wiring (spawning one `run_reconcile_loop` per enabled
-//! agent in `src/main.rs`) is left as a follow-up. The types and
-//! functions in this module are therefore `#[allow(dead_code)]` for
-//! the items not exercised by the offline tests.
-
-#![allow(dead_code)]
-
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
@@ -65,12 +58,12 @@ pub struct OpenOrderRow {
 /// Coarse status of an open order, derived from the exchange.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OpenOrderStatus {
-    /// Order is open on the book.
-    Open,
     /// Order is filled (terminal).
     Filled,
     /// Order is cancelled (terminal).
     Canceled,
+    /// Order is open on the book.
+    Open,
 }
 
 /// Minimal per-symbol position view. A position is considered flat when

@@ -15,8 +15,6 @@ pub struct AssetCachePolicy {
 #[derive(Debug, Clone)]
 pub struct CachedAsset {
     pub bytes: Vec<u8>,
-    #[cfg_attr(not(test), allow(dead_code))]
-    pub stale: bool,
 }
 
 #[derive(Clone)]
@@ -50,19 +48,15 @@ impl AssetCache {
             if is_fresh(&path, policy.ttl).await? {
                 return Ok(CachedAsset {
                     bytes: bytes.clone(),
-                    stale: false,
                 });
             }
         }
 
         match self.fetch_and_store(&path, url, &policy).await {
-            Ok(bytes) => Ok(CachedAsset {
-                bytes,
-                stale: false,
-            }),
+            Ok(bytes) => Ok(CachedAsset { bytes }),
             Err(error) => {
                 if let Some(bytes) = stale_bytes {
-                    Ok(CachedAsset { bytes, stale: true })
+                    Ok(CachedAsset { bytes })
                 } else {
                     Err(error)
                 }
@@ -271,7 +265,6 @@ mod tests {
             .unwrap();
 
         assert_eq!(asset.bytes, b"cached");
-        assert!(!asset.stale);
     }
 
     #[tokio::test]
@@ -299,6 +292,5 @@ mod tests {
             .unwrap();
 
         assert_eq!(asset.bytes, b"stale");
-        assert!(asset.stale);
     }
 }

@@ -276,7 +276,6 @@ pub struct AgentHookNewPageTemplate {
 
 #[derive(Template)]
 #[template(path = "agents_show.html")]
-#[allow(dead_code)]
 pub struct AgentsShowPageTemplate {
     pub agent: AgentDetailRow,
     pub tabs: Vec<AgentShowTabLink>,

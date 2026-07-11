@@ -7,8 +7,6 @@ pub mod live_state;
 pub mod live_ws;
 pub mod normalize;
 pub mod orders;
-pub mod polling;
 pub mod queries;
 pub mod raw_http;
-pub mod store;
 pub mod sync_state;

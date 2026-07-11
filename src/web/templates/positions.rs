@@ -2,17 +2,15 @@ use std::collections::{HashMap, HashSet};
 
 use askama::Template;
 use rust_decimal::Decimal;
-
 use crate::hyperliquid::live_state::{AccountLiveState, LiveConnectionStatus, LivePosition};
 
 use super::shared::{
-    AnimatedNumber, MoneyCell, dash_cell, format_decimal_with_commas, format_money_text,
-    format_money_text_with_decimals, format_neutral_money_cell_with_decimals,
+    MoneyCell, dash_cell, format_decimal_with_commas, format_money_text_with_decimals,
+    format_neutral_money_cell_with_decimals,
 };
 
 /// Per-row view of an open perpetual position for the agent detail page.
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
 pub struct OpenPositionView {
     pub coin: String,
     pub market_url: String,
@@ -28,27 +26,15 @@ pub struct OpenPositionView {
     pub roe_color_class: &'static str,
 }
 
-/// Aggregates over all positions for the summary card above the table.
-#[derive(Debug, Clone)]
-#[allow(dead_code)]
-pub struct OpenPositionsSummary {
-    pub position_count: usize,
-    pub total_u_pnl: AnimatedNumber,
-    pub total_notional: String,
-    pub total_margin_used: String,
-}
-
 /// View-model bundle handed to the open-positions partial template.
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
 pub struct OpenPositionsView {
     pub positions: Vec<OpenPositionView>,
-    pub summary: OpenPositionsSummary,
     pub has_any_state: bool,
 }
 
 impl OpenPositionsView {
-    #[cfg_attr(not(test), allow(dead_code))]
+    #[cfg(test)]
     pub fn from_live_state(state: AccountLiveState) -> Self {
         Self::from_live_state_with_configured_coins(state, &[])
     }
@@ -104,31 +90,8 @@ impl OpenPositionsView {
             }
         }
 
-        let mut total_u_pnl = Decimal::ZERO;
-        let mut total_notional = Decimal::ZERO;
-        let mut total_margin = Decimal::ZERO;
-        for pos in &visible {
-            if let Some(v) = pos.unrealized_pnl {
-                total_u_pnl += v;
-            }
-            if let Some(v) = pos.position_value {
-                total_notional += v.abs();
-            }
-            if let Some(v) = pos.margin_used {
-                total_margin += v;
-            }
-        }
-
-        let summary = OpenPositionsSummary {
-            position_count: visible.len(),
-            total_u_pnl: AnimatedNumber::for_pnl(total_u_pnl),
-            total_notional: format_money_text(Some(total_notional)),
-            total_margin_used: format_money_text(Some(total_margin)),
-        };
-
         Self {
             positions,
-            summary,
             has_any_state,
         }
     }

@@ -34,7 +34,6 @@ pub struct AgenticHookDetailView {
     pub enabled_label: &'static str,
     pub enabled_class: &'static str,
     pub timeout_editor: TimeoutEditorView,
-    pub model_text: String,
     pub created_at: LocalTimestampView,
     pub updated_at: LocalTimestampView,
     pub operator_prompt_text: String,
@@ -104,7 +103,6 @@ impl AgenticHookDetailView {
                 action: format!("/agents/{}/hooks/{}/timeout", row.agent_key, row.id),
                 error: None,
             },
-            model_text: summary.model_text,
             created_at: local_timestamp_view(row.created_at),
             updated_at: local_timestamp_view(row.updated_at),
             operator_prompt_text: if row.operator_prompt.trim().is_empty() {

@@ -31,31 +31,22 @@ pub fn is_valid_runtime_id(value: &str) -> bool {
 pub struct AgentRuntimeRow {
     pub id: String,
     pub created_at: DateTime<Utc>,
-    #[allow(dead_code)]
-    pub updated_at: DateTime<Utc>,
     pub name: String,
     pub backend_kind: String,
     pub enabled: bool,
     pub base_url: Option<String>,
-    #[allow(dead_code)]
-    pub runtime_config: serde_json::Value,
 }
 
 /// Row shape returned by the registry list query.
 #[derive(Debug, Clone, sqlx::FromRow)]
-#[allow(dead_code)]
 pub struct AgentListRow {
     pub display_name: String,
     pub agent_key: String,
     pub enabled: bool,
     pub wallet_address: String,
     pub environment: String,
-    pub api_key: String,
     pub api_key_last_used_at: Option<DateTime<Utc>>,
-    pub backend_kind: String,
-    pub runtime_id: String,
     pub runtime_name: String,
-    pub runtime_base_url: Option<String>,
 }
 
 /// Row shape returned by the single-agent detail query.

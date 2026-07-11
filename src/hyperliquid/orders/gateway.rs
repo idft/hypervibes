@@ -1510,6 +1510,5 @@ mod tests {
     }
 
     // ensure unused import warnings stay quiet
-    #[allow(dead_code)]
     fn _unused(_j: serde_json::Value) {}
 }

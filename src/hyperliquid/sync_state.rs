@@ -94,6 +94,7 @@ pub struct SyncStateRow {
 }
 
 impl SyncStateRow {
+    #[cfg(test)]
     pub fn new(account_address: String, environment: String, stream: SyncStream) -> Self {
         Self {
             account_address,

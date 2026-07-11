@@ -14,12 +14,8 @@ fn agents_page_renders_base_layout_and_status_box() {
     let entry = AgentListEntry {
         row: sample_agent_list_row(),
         account_balance: AccountBalanceView {
-            account_address: "0x1234567890abcdef".to_string(),
-            environment: "live".to_string(),
             total_balance: Some(rust_decimal::Decimal::new(232_6800, 4)),
             total_u_pnl: AnimatedNumber::for_pnl(rust_decimal::Decimal::ZERO),
-            status: crate::hyperliquid::live_state::LiveConnectionStatus::Connected,
-            updated_at: Some(Utc::now()),
         },
         api_key_last_used_iso: None,
     };
@@ -44,12 +40,8 @@ fn agents_page_renders_loading_placeholder_when_no_balance() {
     let entry = AgentListEntry {
         row: sample_agent_list_row(),
         account_balance: AccountBalanceView {
-            account_address: "0x1234567890abcdef".to_string(),
-            environment: "live".to_string(),
             total_balance: None,
             total_u_pnl: AnimatedNumber::for_pnl(rust_decimal::Decimal::ZERO),
-            status: crate::hyperliquid::live_state::LiveConnectionStatus::Starting,
-            updated_at: None,
         },
         api_key_last_used_iso: None,
     };

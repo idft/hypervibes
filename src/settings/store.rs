@@ -66,7 +66,6 @@ mod tests {
             .expect("get setting")
             .expect("row present");
         assert_eq!(first.value, "first");
-        assert_eq!(first.description.as_deref(), Some("desc"));
 
         upsert_setting(&pool, key, "second", None)
             .await
@@ -76,6 +75,5 @@ mod tests {
             .expect("get setting")
             .expect("row present");
         assert_eq!(second.value, "second");
-        assert!(second.updated_at >= first.updated_at);
     }
 }

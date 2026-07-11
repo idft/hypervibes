@@ -398,7 +398,7 @@ impl LiveAccountStore {
     /// Build the initial empty state for an account, returning a clone of the
     /// new state. If a state already exists, the existing state is returned
     /// unchanged.
-    #[allow(dead_code)]
+    #[cfg(test)]
     pub fn ensure_account(&self, key: &AccountKey) -> AccountLiveState {
         {
             let guard = self.inner.read().expect("live account store poisoned");
@@ -501,14 +501,13 @@ impl LiveAccountStore {
     }
 
     /// Snapshot read of all stored accounts.
-    #[allow(dead_code)]
+    #[cfg(test)]
     pub fn snapshot(&self) -> Vec<AccountLiveState> {
         let guard = self.inner.read().expect("live account store poisoned");
         guard.values().cloned().collect()
     }
 
     /// Remove the stored entry for `key`, returning the previous value if any.
-    #[allow(dead_code)]
     pub fn remove(&self, key: &AccountKey) -> Option<AccountLiveState> {
         let mut guard = self.inner.write().expect("live account store poisoned");
         guard.remove(key)

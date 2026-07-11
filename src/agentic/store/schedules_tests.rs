@@ -56,10 +56,6 @@ async fn default_schedules_insert_expected_rows_with_disabled_defaults() {
     assert!(!analysis.enabled);
     assert_eq!(analysis.job_kind, JOB_KIND_ANALYSIS);
     assert_eq!(analysis.timeframe, DEFAULT_ANALYSIS_TIMEFRAME);
-    assert_eq!(
-        analysis.trigger_delay_seconds,
-        DEFAULT_TRIGGER_DELAY_SECONDS
-    );
     assert_eq!(analysis.timeout_seconds, DEFAULT_ANALYSIS_TIMEOUT_SECONDS);
 
     let analysis_1h = rows
@@ -85,7 +81,6 @@ async fn default_schedules_insert_expected_rows_with_disabled_defaults() {
     assert!(!trading.enabled);
     assert_eq!(trading.job_kind, crate::agentic::model::JOB_KIND_TRADING);
     assert_eq!(trading.timeframe, DEFAULT_TRADING_TIMEFRAME);
-    assert_eq!(trading.trigger_delay_seconds, DEFAULT_TRIGGER_DELAY_SECONDS);
     assert_eq!(trading.timeout_seconds, DEFAULT_TRADING_TIMEOUT_SECONDS);
 
     let daily_review = rows
@@ -219,7 +214,6 @@ async fn insert_agent_schedule_persists_custom_schedule() {
     assert_eq!(row.job_kind, JOB_KIND_ANALYSIS);
     assert!(row.enabled);
     assert_eq!(row.timeframe, "1h");
-    assert_eq!(row.trigger_delay_seconds, 1);
     assert_eq!(row.timeout_seconds, 600);
     assert_eq!(row.model_provider_id.as_deref(), Some("anthropic"));
     assert_eq!(row.model_id.as_deref(), Some("claude-sonnet-4"));

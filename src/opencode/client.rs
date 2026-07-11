@@ -53,10 +53,6 @@ impl OpenCodeClient {
         })
     }
 
-    #[cfg_attr(not(test), allow(dead_code))]
-    pub fn config(&self) -> &OpenCodeClientConfig {
-        &self.config
-    }
 
     /// Create a new session bound to the given workspace container path.
     pub async fn create_session(
@@ -356,7 +352,7 @@ mod tests {
         let config = OpenCodeClientConfig::new("opencode".to_string(), None);
         let client = OpenCodeClient::new(config).expect("client");
         let cloned = client.clone();
-        assert!(cloned.config().password.is_none());
+        assert!(cloned.config.password.is_none());
     }
 
     #[test]

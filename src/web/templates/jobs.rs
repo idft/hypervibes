@@ -30,14 +30,12 @@ pub struct AgenticJobScheduleView {
 pub struct AgenticJobDetailView {
     pub id: i64,
     pub job_key: String,
-    pub job_kind: String,
     pub enabled: bool,
     pub enabled_label: &'static str,
     pub enabled_class: &'static str,
     pub timeframe_text: String,
     pub timeout_editor: TimeoutEditorView,
     pub next_run_at: LocalTimestampView,
-    pub model_text: String,
     pub operator_prompt_text: String,
     pub prompt_preview_text: String,
     pub prompt_preview_error: Option<String>,
@@ -97,7 +95,6 @@ impl AgenticJobDetailView {
         Self {
             id: row.id,
             job_key: row.job_key.clone(),
-            job_kind: row.job_kind.clone(),
             enabled: row.enabled,
             enabled_label: summary.enabled_label,
             enabled_class: summary.enabled_class,
@@ -109,7 +106,6 @@ impl AgenticJobDetailView {
                 error: None,
             },
             next_run_at: summary.next_run_at,
-            model_text: summary.model_text,
             operator_prompt_text: if row.operator_prompt.trim().is_empty() {
                 "—".to_string()
             } else {

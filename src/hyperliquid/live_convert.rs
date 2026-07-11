@@ -9,6 +9,7 @@
 use anyhow::Result;
 use chrono::Utc;
 use rust_decimal::Decimal;
+#[cfg(test)]
 use serde_json::Value;
 
 use crate::hyperliquid::{
@@ -17,9 +18,10 @@ use crate::hyperliquid::{
     live_state::{
         AccountKey, AccountLiveState, LiveMarginState, LiveOpenOrder, LivePosition, LiveSpotBalance,
     },
-    normalize::{FundingEventRow, LedgerEventRow, TradeFillRow, parse_decimal},
-    raw_http::RawLedgerUpdate,
+    normalize::{FundingEventRow, TradeFillRow},
 };
+#[cfg(test)]
+use crate::hyperliquid::{normalize::{LedgerEventRow, parse_decimal}, raw_http::RawLedgerUpdate};
 
 /// Map a `hypersdk` [`ClearinghouseState`](hypersdk::hypercore::types::ClearinghouseState)
 /// into the app's [`AccountLiveState`] margin summary, returning a fully
@@ -252,7 +254,7 @@ pub fn funding_event_row_from_hypersdk_funding(
 }
 
 /// Convert a non-funding ledger update into a durable [`LedgerEventRow`].
-#[allow(dead_code)]
+#[cfg(test)]
 pub fn ledger_event_row_from_value(
     config: &AccountSyncConfig,
     lookup: &InstrumentLookupMap,

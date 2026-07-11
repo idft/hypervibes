@@ -2,7 +2,9 @@ use std::{collections::BTreeMap, sync::Arc, time::Duration};
 
 use anyhow::{Context, Result, anyhow};
 use chrono::Utc;
-use tokio::{sync::watch, task::JoinHandle};
+use tokio::sync::watch;
+#[cfg(test)]
+use tokio::task::JoinHandle;
 use tracing::{debug, error, info, warn};
 
 use crate::{
@@ -943,7 +945,7 @@ fn sort_trading_schedules_for_dispatch(
 
 /// Convenience: spawn the scheduler on the current Tokio runtime and
 /// return the join handle. The handle aborts when the runtime drops.
-#[allow(dead_code)]
+#[cfg(test)]
 pub fn spawn(
     pool: DbPool,
     shutdown_rx: watch::Receiver<bool>,

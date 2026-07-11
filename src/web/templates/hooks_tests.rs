@@ -10,7 +10,6 @@ fn hook_detail_page_renders_hook_metadata_and_runs() {
     let mut hook_run = sample_run_row(1, "succeeded", "market-analysis");
     hook_run.schedule_id = None;
     hook_run.hook_id = Some(3);
-    hook_run.job_kind = crate::agentic::model::JOB_KIND_MARKET_ANALYSIS.to_string();
     hook_run.timeframe = None;
     let runs = vec![AgenticRunView::from_row(&hook_run)];
 

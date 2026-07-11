@@ -63,29 +63,17 @@ pub(super) async fn build_exchange_for_agent(
     Ok(HyperliquidExchange::new(signer, client))
 }
 
-/// Per-leg outcome as serialized to the agent. The struct itself is
-/// only used as a serde target for `From<GatewayOrderResult>`, so the
-/// direct field access is gated behind `#[allow(dead_code)]`.
-#[allow(dead_code)]
+/// Per-leg outcome as serialized to the agent.
 #[derive(Debug, serde::Serialize)]
 pub(super) struct OrderResultResponse {
-    #[allow(dead_code)]
     id: Uuid,
-    #[allow(dead_code)]
     cloid: String,
-    #[allow(dead_code)]
     symbol: String,
-    #[allow(dead_code)]
     side: String,
-    #[allow(dead_code)]
     order_kind: String,
-    #[allow(dead_code)]
     status: String,
-    #[allow(dead_code)]
     exchange_oid: Option<String>,
-    #[allow(dead_code)]
     group_id: Option<Uuid>,
-    #[allow(dead_code)]
     error: Option<String>,
 }
 

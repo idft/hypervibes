@@ -81,8 +81,6 @@ pub struct OpenCodeMessageView {
 
 #[derive(Debug, Clone)]
 pub struct OpenCodeToolExecutionView {
-    pub started_at: Option<LocalTimestampView>,
-    pub completed_at: Option<LocalTimestampView>,
     pub tool_name: String,
     pub success_label: String,
     pub success_class: String,
@@ -252,8 +250,6 @@ impl OpenCodeToolExecutionView {
         };
 
         Self {
-            started_at: optional_local_timestamp_view(row.started_at),
-            completed_at: optional_local_timestamp_view(row.completed_at),
             tool_name: row.tool_name.clone(),
             success_label,
             success_class,

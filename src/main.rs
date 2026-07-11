@@ -19,6 +19,7 @@ use anyhow::{Context, Result};
 use config::AppConfig;
 use db::{connect, migrate};
 use tokio::sync::watch;
+use tracing::{error, info, warn};
 use tracing_subscriber::{EnvFilter, fmt};
 
 use crate::agentic::in_flight::{InFlightTracker, SHUTDOWN_IN_FLIGHT_GRACE};
@@ -36,10 +37,10 @@ async fn main() -> Result<()> {
         .init();
 
     let config = AppConfig::from_env()?;
-    println!("Starting Vibetrading web server");
-    println!("Connecting to database");
+    info!("starting Vibetrading web server");
+    info!("connecting to database");
     let pool = connect(&config.database_url).await?;
-    println!("Running migrations");
+    info!("running migrations");
     migrate(&pool).await?;
 
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
@@ -78,11 +79,11 @@ async fn main() -> Result<()> {
     let warm_model_catalog = Arc::clone(&model_catalog);
     tokio::spawn(async move {
         if let Err(error) = warm_model_catalog.snapshot().await {
-            eprintln!("models.dev catalog warmup failed: {error:#}");
+            warn!(error = ?error, "models.dev catalog warmup failed");
         }
     });
 
-    println!("Starting Hyperliquid agent monitor");
+    info!("starting Hyperliquid agent monitor");
     let hyperliquid_monitor = agents::HyperliquidAgentMonitor::new(
         pool.clone(),
         shutdown_rx.clone(),
@@ -91,11 +92,11 @@ async fn main() -> Result<()> {
     );
     let mut hyperliquid_monitor_handle = tokio::spawn(async move {
         if let Err(e) = hyperliquid_monitor.run().await {
-            eprintln!("hyperliquid agent monitor exited with error: {e}");
+            error!(error = ?e, "hyperliquid agent monitor exited with error");
         }
     });
 
-    println!("Starting agentic scheduler");
+    info!("starting agentic scheduler");
     let agentic_scheduler = agentic::scheduler::AgenticScheduler::new(
         pool.clone(),
         shutdown_rx.clone(),
@@ -108,11 +109,11 @@ async fn main() -> Result<()> {
     );
     let mut agentic_scheduler_handle = tokio::spawn(async move {
         if let Err(e) = agentic_scheduler.run().await {
-            eprintln!("agentic scheduler exited with error: {e}");
+            error!(error = ?e, "agentic scheduler exited with error");
         }
     });
 
-    println!("Listening on http://{}", config.bind_addr);
+    info!(address = %config.bind_addr, "listening for web requests");
 
     let server_future = web::serve(
         &config.bind_addr,
@@ -145,11 +146,11 @@ async fn main() -> Result<()> {
             result?;
         }
         _ = &mut hyperliquid_monitor_handle => {
-            eprintln!("hyperliquid agent monitor exited early");
+            warn!("hyperliquid agent monitor exited early");
             return Ok(());
         }
         _ = &mut agentic_scheduler_handle => {
-            eprintln!("agentic scheduler exited early");
+            warn!("agentic scheduler exited early");
             return Ok(());
         }
     }
@@ -164,7 +165,7 @@ async fn main() -> Result<()> {
     // bounded wait covers them, and the wait is short-circuited by
     // the force watch so a second Ctrl-C exits immediately.
     if in_flight.in_flight() > 0 {
-        tracing::info!(
+        info!(
             in_flight = in_flight.in_flight(),
             grace_seconds = SHUTDOWN_IN_FLIGHT_GRACE.as_secs(),
             "main waiting for in-flight agentic dispatches to complete"
@@ -180,17 +181,17 @@ async fn main() -> Result<()> {
             } => false,
         };
         if !drained {
-            tracing::warn!(
+            warn!(
                 remaining = in_flight.in_flight(),
                 "in-flight agentic dispatches did not drain; \
                  leaving them orphaned for the next start to recover"
             );
         } else {
-            tracing::info!("all in-flight agentic dispatches completed");
+            info!("all in-flight agentic dispatches completed");
         }
     }
 
-    println!("Shutdown complete");
+    info!("shutdown complete");
     Ok(())
 }
 
@@ -209,7 +210,7 @@ fn spawn_shutdown_listener(
             match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
                 Ok(stream) => stream,
                 Err(error) => {
-                    tracing::error!(error = ?error, "failed to install SIGTERM handler");
+                    error!(error = ?error, "failed to install SIGTERM handler");
                     return;
                 }
             };
@@ -232,7 +233,7 @@ fn spawn_shutdown_listener(
             signal_name = "ctrl_c";
         }
 
-        tracing::info!(signal = signal_name, "shutdown signal received; draining");
+        info!(signal = signal_name, "shutdown signal received; draining");
         let _ = shutdown_tx.send(true);
 
         // Wait for a second signal to flip the force flag. The
@@ -249,7 +250,7 @@ fn spawn_shutdown_listener(
         {
             let _ = tokio::signal::ctrl_c().await;
         }
-        tracing::warn!("second shutdown signal received; force-shutting down");
+        warn!("second shutdown signal received; force-shutting down");
         let _ = force_shutdown_tx.send(true);
     });
 }

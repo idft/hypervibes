@@ -18,12 +18,8 @@ pub fn sample_agent_list_row() -> AgentListRow {
         enabled: true,
         wallet_address: "0x1234567890abcdef".to_string(),
         environment: "live".to_string(),
-        api_key: "vt_test_key".to_string(),
         api_key_last_used_at: None,
-        backend_kind: "opencode".to_string(),
-        runtime_id: "opencode-local".to_string(),
         runtime_name: "OpenCode local".to_string(),
-        runtime_base_url: Some("http://localhost:14096".to_string()),
     }
 }
 
@@ -49,12 +45,8 @@ pub fn sample_agent_detail_row() -> AgentDetailRow {
 
 pub fn sample_account_balance_view() -> AccountBalanceView {
     AccountBalanceView {
-        account_address: "0x1234567890abcdef".to_string(),
-        environment: "live".to_string(),
         total_balance: Some(rust_decimal::Decimal::new(232_6800, 4)),
         total_u_pnl: AnimatedNumber::for_pnl(rust_decimal::Decimal::new(12_3400, 4)),
-        status: crate::hyperliquid::live_state::LiveConnectionStatus::Connected,
-        updated_at: Some(Utc::now()),
     }
 }
 
@@ -63,12 +55,10 @@ pub fn sample_runtime_row() -> AgentRuntimeRow {
     AgentRuntimeRow {
         id: "opencode-local".to_string(),
         created_at: now,
-        updated_at: now,
         name: "OpenCode local".to_string(),
         backend_kind: "opencode".to_string(),
         enabled: true,
         base_url: Some("http://localhost:14096".to_string()),
-        runtime_config: serde_json::json!({}),
     }
 }
 
@@ -123,14 +113,11 @@ pub fn sample_schedule_row(
         job_kind: job_kind.to_string(),
         enabled,
         timeframe: timeframe.to_string(),
-        trigger_delay_seconds: 1,
         next_run_at: now,
         model_provider_id: Some("anthropic".to_string()),
         model_id: Some("claude-3-5-sonnet".to_string()),
         timeout_seconds: 600,
         operator_prompt: String::new(),
-        created_at: now,
-        updated_at: now,
     }
 }
 
@@ -176,19 +163,14 @@ pub fn sample_run_row(
         hook_id: None,
         agent_key: "test-agent".to_string(),
         job_key: job_key.to_string(),
-        job_kind: crate::agentic::model::JOB_KIND_ANALYSIS.to_string(),
         timeframe: Some("15m".to_string()),
         status: status.to_string(),
         backend_run_ref: Some("ses_abc123".to_string()),
-        model_provider_id: Some("anthropic".to_string()),
-        model_id: Some("claude-3-5-sonnet".to_string()),
         scheduled_for: now,
         started_at: Some(now),
         finished_at: Some(now + chrono::Duration::seconds(42)),
         timeout_seconds: 600,
         error_summary: None,
-        created_at: now,
-        updated_at: now,
     }
 }
 

@@ -52,15 +52,6 @@ fn open_positions_view_filters_zero_szi_and_sign_based_side() {
     assert_eq!(view.positions[0].side, "short");
     assert_eq!(view.positions[1].coin, "BTC");
     assert_eq!(view.positions[1].side, "long");
-    // Aggregates.
-    assert_eq!(view.summary.position_count, 2);
-    // uPnL: 100 + (-150) = -50 → red
-    assert_eq!(view.summary.total_u_pnl.value, "(50.0000)");
-    assert_eq!(view.summary.total_u_pnl.color_class, "text-red-400");
-    // Notional: 30000 + 6000 = 36000
-    assert_eq!(view.summary.total_notional, "36,000.0000");
-    // Margin: 600 + 200 = 800
-    assert_eq!(view.summary.total_margin_used, "800.0000");
     assert_eq!(view.positions[0].entry_px.value, "2,000");
     assert_eq!(view.positions[0].mark_px_or_value, "6,000");
     assert_eq!(view.positions[0].entry_px.color_class, "text-zinc-300");
@@ -85,10 +76,6 @@ fn open_positions_view_handles_no_positions() {
     let view = OpenPositionsView::from_live_state(state);
     assert!(view.has_any_state);
     assert!(view.positions.is_empty());
-    assert_eq!(view.summary.position_count, 0);
-    // Zero totals still formatted as zero.
-    assert_eq!(view.summary.total_u_pnl.value, "-");
-    assert_eq!(view.summary.total_notional, "0.0000");
 }
 
 #[test]
@@ -125,7 +112,6 @@ fn open_positions_view_includes_configured_coins_without_live_positions() {
     );
     assert_eq!(view.positions[1].coin, "BTC");
     assert!(view.positions[1].has_position);
-    assert_eq!(view.summary.position_count, 1);
 }
 
 #[test]

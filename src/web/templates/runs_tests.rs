@@ -64,7 +64,6 @@ fn hook_run_detail_view_uses_dash_timeframe_and_hook_job_url() {
     let mut row = sample_run_row(8, "succeeded", "market-analysis");
     row.schedule_id = None;
     row.hook_id = Some(3);
-    row.job_kind = crate::agentic::model::JOB_KIND_MARKET_ANALYSIS.to_string();
     row.timeframe = None;
 
     let run = AgenticRunDetailView::from_row(&row);

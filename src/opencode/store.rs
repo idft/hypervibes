@@ -18,10 +18,6 @@ pub struct OpenCodeSessionDetail {
 #[derive(Debug, Clone, sqlx::FromRow)]
 pub struct OpenCodeSessionRow {
     pub id: String,
-    pub created_at: DateTime<Utc>,
-    pub updated_at: DateTime<Utc>,
-    pub directory: Option<String>,
-    pub title: Option<String>,
     pub status: Option<String>,
     pub model_provider: String,
     pub model_id: String,
@@ -54,7 +50,6 @@ pub struct OpenCodeToolExecutionRow {
     pub id: Uuid,
     pub created_at: DateTime<Utc>,
     pub started_at: Option<DateTime<Utc>>,
-    pub completed_at: Option<DateTime<Utc>>,
     pub tool_name: String,
     pub args: Option<Value>,
     pub result: Option<Value>,
@@ -77,10 +72,6 @@ pub async fn get_session_detail(
 ) -> Result<Option<OpenCodeSessionDetail>> {
     let session = query_as::<_, OpenCodeSessionRow>(
         "SELECT id,
-                created_at,
-                updated_at,
-                directory,
-                title,
                 status,
                 COALESCE(model_provider, '') AS model_provider,
                 COALESCE(model_id, '') AS model_id,
@@ -128,7 +119,6 @@ pub async fn get_session_detail(
         "SELECT id,
                 created_at,
                 started_at,
-                completed_at,
                 tool_name,
                 args,
                 result,
@@ -175,10 +165,6 @@ pub async fn list_sessions_for_directory(
 ) -> Result<Vec<OpenCodeSessionRow>> {
     let rows = query_as::<_, OpenCodeSessionRow>(
         "SELECT id,
-                created_at,
-                updated_at,
-                directory,
-                title,
                 status,
                 COALESCE(model_provider, '') AS model_provider,
                 COALESCE(model_id, '') AS model_id,

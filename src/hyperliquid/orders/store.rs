@@ -16,7 +16,6 @@ use crate::db::DbPool;
 ///
 /// Payloads (`request_payload`, `response_payload`) are accessed via
 /// dedicated helpers below when needed.
-#[allow(dead_code)] // many fields used by API serialization, others by tests
 #[derive(Debug, Clone, sqlx::FromRow)]
 pub struct OrderRow {
     pub id: Uuid,
@@ -95,12 +94,6 @@ pub struct OrderEventInsert {
     pub payload: Value,
 }
 
-#[allow(dead_code)]
-const ORDER_COLUMNS: &str = "id, created_at, updated_at, agent_key, account_address, environment, \
-     group_id, parent_cloid, memory_record_ids, attribution_source, symbol, instrument_id, side, order_kind, \
-     reduce_only, requested_price, rounded_price, requested_size, rounded_size, trigger_price, \
-     time_in_force, cloid, exchange_oid, status, status_detail, filled_size, avg_fill_price";
-
 const SELECT_ORDER: &str = "SELECT id, created_at, updated_at, agent_key, account_address, environment, \
      group_id, parent_cloid, memory_record_ids, attribution_source, symbol, instrument_id, side, order_kind, \
      reduce_only, requested_price, rounded_price, requested_size, rounded_size, trigger_price, \
@@ -157,9 +150,7 @@ pub async fn insert_order(pool: &DbPool, new: &NewOrder) -> Result<()> {
 ///
 /// The unique constraint `(order_id, status, status_timestamp, source)` makes
 /// this idempotent: a duplicate insert is silently ignored.
-#[allow(dead_code)] // Public helper; the gateway currently uses
-// `update_order_outcome` (which calls the in-tx
-// variant) so this standalone fn is unused today.
+#[cfg(test)]
 pub async fn append_order_event(pool: &DbPool, ev: &OrderEventInsert) -> Result<()> {
     sqlx::query(
         "INSERT INTO hyperliquid.order_events (

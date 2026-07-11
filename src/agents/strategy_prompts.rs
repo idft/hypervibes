@@ -15,13 +15,9 @@ pub const PROMPT_KIND_TRADING: &str = "trading";
 pub const PROMPT_KIND_DAILY_REVIEW: &str = "daily_review";
 
 #[derive(Debug, Clone, sqlx::FromRow)]
-#[allow(dead_code)]
 pub struct AgentStrategyPromptRow {
-    pub agent_key: String,
     pub prompt_kind: String,
     pub prompt: String,
-    pub created_at: chrono::DateTime<chrono::Utc>,
-    pub updated_at: chrono::DateTime<chrono::Utc>,
 }
 
 pub fn prompt_kind_for_job_kind(job_kind: &str) -> Option<&'static str> {

@@ -12,7 +12,6 @@ use super::shared::{
 
 /// Per-row view of an open resting order for the agent detail page.
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
 pub struct OpenOrderView {
     pub coin: String,
     pub side: String,
@@ -30,7 +29,6 @@ pub struct OpenOrderView {
 
 /// View-model bundle handed to the open-orders partial template.
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
 pub struct OpenOrdersView {
     pub orders: Vec<OpenOrderView>,
     pub has_any_state: bool,

@@ -26,28 +26,14 @@ pub type InstrumentLookupMap = HashMap<String, (String, String, String)>;
 const FUNDING_LOOKBACK_MS: u64 = 7 * 24 * 60 * 60 * 1_000;
 
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
 pub struct StreamSyncResult {
     pub stream: SyncStream,
-    pub status: SyncStatus,
-    pub count: usize,
-    pub last_event_time: Option<DateTime<Utc>>,
     pub error: Option<String>,
 }
 
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
 pub struct SyncSummary {
-    pub account_address: String,
-    pub environment: String,
     pub streams: Vec<StreamSyncResult>,
-}
-
-impl SyncSummary {
-    #[allow(dead_code)]
-    pub fn is_healthy(&self) -> bool {
-        self.streams.iter().all(|s| s.status == SyncStatus::Healthy)
-    }
 }
 
 /// Reconcile one account's fills, funding, and ledger streams incrementally.
@@ -81,9 +67,6 @@ pub async fn sync_account_once(
                 .await?;
                 StreamSyncResult {
                     stream,
-                    status: SyncStatus::Failed,
-                    count: 0,
-                    last_event_time: None,
                     error: Some(msg),
                 }
             }
@@ -92,8 +75,6 @@ pub async fn sync_account_once(
     }
 
     Ok(SyncSummary {
-        account_address: config.account_address.clone(),
-        environment: config.environment.as_journal_str().to_string(),
         streams,
     })
 }
@@ -206,9 +187,6 @@ async fn reconcile_stream(
 
     Ok(StreamSyncResult {
         stream,
-        status: SyncStatus::Healthy,
-        count,
-        last_event_time,
         error: None,
     })
 }

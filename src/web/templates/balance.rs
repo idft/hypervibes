@@ -1,11 +1,10 @@
 use askama::Template;
-use chrono::{DateTime, Utc};
 use rust_decimal::Decimal;
 
-use crate::hyperliquid::{live_state::LiveConnectionStatus, queries::BalancePoint};
+use crate::hyperliquid::queries::BalancePoint;
 
 use super::shared::{
-    AnimatedNumber, MoneyCell, dash_cell, format_money_text, format_signed_money_cell,
+    AnimatedNumber, MoneyCell, dash_cell, format_signed_money_cell,
 };
 
 /// View-model for the live account balance card shown on the agent detail
@@ -21,14 +20,9 @@ use super::shared::{
 /// inside `accountValue`. When the live state has no margin snapshot
 /// yet, the spot USDC available is used on its own.
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
 pub struct AccountBalanceView {
-    pub account_address: String,
-    pub environment: String,
     pub total_balance: Option<Decimal>,
     pub total_u_pnl: AnimatedNumber,
-    pub status: LiveConnectionStatus,
-    pub updated_at: Option<DateTime<Utc>>,
 }
 
 impl AccountBalanceView {
@@ -63,12 +57,8 @@ impl AccountBalanceView {
             .fold(Decimal::ZERO, |acc, value| acc + value);
 
         Self {
-            account_address: state.account_address,
-            environment: state.environment,
             total_balance,
             total_u_pnl: AnimatedNumber::for_pnl(total_u_pnl),
-            status: state.status,
-            updated_at: state.updated_at,
         }
     }
 
@@ -99,11 +89,9 @@ impl AccountBalancePartialTemplate {
 /// pre-formatted `<polyline points="...">` attribute string so the
 /// template can drop it straight into the markup.
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
 pub struct SparklineView {
     pub label: &'static str,
     pub polyline: String,
-    pub last_value: String,
     pub change: MoneyCell,
     pub is_empty: bool,
     pub width: u32,
@@ -132,7 +120,6 @@ impl SparklineView {
             return Self {
                 label,
                 polyline: String::new(),
-                last_value: "-".to_string(),
                 change: dash_cell(),
                 is_empty: true,
                 width,
@@ -144,7 +131,6 @@ impl SparklineView {
             return Self {
                 label,
                 polyline: String::new(),
-                last_value: format_money_text(Some(points[0].balance)),
                 change: dash_cell(),
                 is_empty: true,
                 width,
@@ -155,7 +141,6 @@ impl SparklineView {
         let first = points.first().expect("non-empty").balance;
         let last = points.last().expect("non-empty").balance;
         let change = format_signed_money_cell(Some(last - first));
-        let last_value = format_money_text(Some(last));
 
         let mut min = first;
         let mut max = first;
@@ -217,7 +202,6 @@ impl SparklineView {
         Self {
             label,
             polyline: buf,
-            last_value,
             change,
             is_empty: false,
             width,

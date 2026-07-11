@@ -7,7 +7,6 @@ use crate::{db::DbPool, hyperliquid::sync_state::SyncStateRow};
 
 /// A single USDC balance-impacting event from the account timeline.
 #[derive(Debug, Clone, sqlx::FromRow)]
-#[allow(dead_code)]
 pub struct AccountTransactionRow {
     pub event_id: String,
     pub event_time: DateTime<Utc>,
@@ -32,7 +31,7 @@ pub struct AccountTransactionRow {
 /// account's full history (so the value on each row equals the realized
 /// cash-flow balance immediately after that event was applied) before
 /// slicing the newest `limit` rows for display.
-#[cfg_attr(not(test), allow(dead_code))]
+#[cfg(test)]
 pub async fn list_account_transactions(
     pool: &DbPool,
     account_address: &str,
@@ -88,7 +87,7 @@ pub async fn list_account_transactions(
 
 /// Return all USDC balance-impacting events for an account, newest first,
 /// with the same running-balance calculation as [`list_account_transactions`].
-#[cfg_attr(not(test), allow(dead_code))]
+#[cfg(test)]
 pub async fn list_all_account_transactions(
     pool: &DbPool,
     account_address: &str,
@@ -248,14 +247,12 @@ pub async fn list_account_transactions_page(
 /// time-bucket boundary and `balance` is the cumulative net USDC flow
 /// closing value for that bucket.
 #[derive(Debug, Clone, sqlx::FromRow)]
-#[allow(dead_code)]
 pub struct BalancePoint {
     pub bucket: DateTime<Utc>,
     pub balance: Decimal,
 }
 
 #[derive(Debug, Clone, sqlx::FromRow)]
-#[allow(dead_code)]
 struct BalancePointQueryRow {
     pub bucket: DateTime<Utc>,
     pub balance: Decimal,

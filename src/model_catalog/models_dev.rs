@@ -147,28 +147,6 @@ impl ModelsDevCatalog {
         Ok(snapshot)
     }
 
-    #[cfg_attr(not(test), allow(dead_code))]
-    pub async fn get_provider(&self, provider_id: &str) -> Option<ModelsDevProvider> {
-        self.snapshot()
-            .await
-            .ok()?
-            .providers
-            .get(provider_id)
-            .cloned()
-    }
-
-    #[cfg_attr(not(test), allow(dead_code))]
-    pub async fn get_model(&self, provider_id: &str, model_id: &str) -> Option<ModelsDevModel> {
-        self.snapshot()
-            .await
-            .ok()?
-            .providers
-            .get(provider_id)?
-            .models
-            .get(model_id)
-            .cloned()
-    }
-
     async fn fetch_snapshot(&self) -> Result<ModelsDevCatalogSnapshot> {
         let request = self.inner.http.get(&self.inner.api_url);
         let request = if let Some(meta) = self.inner.meta.read().await.clone() {
@@ -453,16 +431,13 @@ mod tests {
         .unwrap();
 
         let catalog = ModelsDevCatalog::new(root).unwrap();
+        let snapshot = catalog.snapshot().await.unwrap();
         assert_eq!(
-            catalog.get_provider("anthropic").await.unwrap().name,
+            snapshot.providers["anthropic"].name,
             "Anthropic"
         );
         assert_eq!(
-            catalog
-                .get_model("anthropic", "claude-sonnet-4")
-                .await
-                .unwrap()
-                .name,
+            snapshot.providers["anthropic"].models["claude-sonnet-4"].name,
             "Claude Sonnet 4"
         );
     }

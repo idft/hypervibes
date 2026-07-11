@@ -22,7 +22,7 @@ use super::hooks::insert_default_opencode_hook;
 use super::recovery::has_active_run_in_lane_tx;
 use super::workspace::agent_has_blocking_workspace_maintenance_tx;
 
-#[allow(dead_code)]
+#[cfg(test)]
 pub(crate) const DEFAULT_ANALYSIS_TIMEFRAME: &str = "15m";
 const DEFAULT_ANALYSIS_TIMEFRAMES: [&str; 3] = ["15m", "1h", "1d"];
 pub(crate) const DEFAULT_TRADING_TIMEFRAME: &str = "1m";
@@ -31,12 +31,12 @@ pub(crate) const DEFAULT_ANALYSIS_TIMEOUT_SECONDS: i32 = 900;
 pub(crate) const DEFAULT_TRADING_TIMEOUT_SECONDS: i32 = 900;
 pub(crate) const DEFAULT_DAILY_REVIEW_TIMEOUT_SECONDS: i32 = 900;
 
-#[allow(dead_code)]
+#[cfg(test)]
 pub(crate) fn default_analysis_job_key() -> String {
     build_generated_job_key(JOB_KIND_ANALYSIS, DEFAULT_ANALYSIS_TIMEFRAME)
 }
 
-#[allow(dead_code)]
+#[cfg(test)]
 pub(crate) fn default_trading_job_key() -> String {
     build_generated_job_key(JOB_KIND_TRADING, DEFAULT_TRADING_TIMEFRAME)
 }

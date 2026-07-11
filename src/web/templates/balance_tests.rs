@@ -8,12 +8,8 @@ use rust_decimal::Decimal;
 #[test]
 fn account_balance_partial_renders_loading_state_when_value_missing() {
     let view = AccountBalanceView {
-        account_address: "0xabc".to_string(),
-        environment: "live".to_string(),
         total_balance: None,
         total_u_pnl: AnimatedNumber::for_pnl(rust_decimal::Decimal::ZERO),
-        status: crate::hyperliquid::live_state::LiveConnectionStatus::Starting,
-        updated_at: None,
     };
     let html = AccountBalancePartialTemplate::render_view(view).unwrap();
     assert!(html.contains("Balance"));
@@ -134,7 +130,6 @@ fn sparkline_from_series_empty_when_no_points() {
     let view = SparklineView::from_series("24h", &[], 240, 48);
     assert!(view.is_empty);
     assert_eq!(view.label, "24h");
-    assert_eq!(view.last_value, "-");
     assert!(view.polyline.is_empty());
     assert_eq!(view.change.value, "-");
     assert_eq!(view.change.color_class, "text-zinc-500");
@@ -145,7 +140,6 @@ fn sparkline_from_series_empty_when_single_point() {
     let now = Utc::now();
     let view = SparklineView::from_series("24h", &[bp(now, Decimal::new(100, 0))], 240, 48);
     assert!(view.is_empty);
-    assert_eq!(view.last_value, "100.0000");
     assert!(view.polyline.is_empty());
     // Change is undefined for a single point: dash cell.
     assert_eq!(view.change.value, "-");
@@ -161,7 +155,6 @@ fn sparkline_from_series_builds_polyline_and_change() {
     ];
     let view = SparklineView::from_series("24h", &points, 240, 48);
     assert!(!view.is_empty);
-    assert_eq!(view.last_value, "120.0000");
     // last - first = 120 - 100 = 20 → emerald, + prefix.
     assert_eq!(view.change.value, "+20.0000");
     assert_eq!(view.change.color_class, "text-emerald-400");
@@ -185,5 +178,4 @@ fn sparkline_from_series_change_sign_and_color() {
     let view = SparklineView::from_series("30d", &points, 240, 48);
     assert_eq!(view.change.value, "(150.0000)");
     assert_eq!(view.change.color_class, "text-red-400");
-    assert_eq!(view.last_value, "50.0000");
 }

@@ -1,10 +1,14 @@
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
-use sqlx::{PgPool, query_as};
+use sqlx::query_as;
+#[cfg(test)]
+use sqlx::PgPool;
+#[cfg(test)]
+use crate::agentic::model::RUN_STATUS_ABORTED;
 
 use crate::{
     agentic::model::{
-        AgenticRunRow, RUN_STATUS_ABORTED, RUN_STATUS_FAILED, RUN_STATUS_QUEUED,
+        AgenticRunRow, RUN_STATUS_FAILED, RUN_STATUS_QUEUED,
         RUN_STATUS_RUNNING, RUN_STATUS_SKIPPED, RUN_STATUS_SUCCEEDED,
     },
     agentic::timeframe::{boundary_for_due_at, latest_due_at_or_before},
@@ -29,7 +33,7 @@ pub async fn list_active_agent_runs(pool: &DbPool, agent_key: &str) -> Result<Ve
             agent_key,
             recovered,
             "recovered inactive agentic runs before agent-wide active check"
-        );
+);
     }
 
     let rows = query_as::<_, AgenticRunRow>(
@@ -74,7 +78,7 @@ pub async fn agent_has_active_runs(pool: &DbPool, agent_key: &str) -> Result<boo
 }
 
 /// List the most recent runs for an agent.
-#[allow(dead_code)]
+#[cfg(test)]
 pub async fn list_agent_runs(
     pool: &DbPool,
     agent_key: &str,
@@ -214,7 +218,7 @@ pub async fn mark_run_failed(
 }
 
 /// Mark a run as aborted with a short, sanitized error summary.
-#[allow(dead_code)]
+#[cfg(test)]
 pub async fn mark_run_aborted(
     pool: &DbPool,
     run_id: i64,
@@ -356,7 +360,8 @@ pub async fn insert_queued_run(
             Some("previous run still active"),
         )
         .await?;
-        QueuedScheduleRun::Skipped { run_id }
+        let _ = run_id;
+        QueuedScheduleRun::Skipped
     } else {
         let run_id = insert_run_in_tx(
             &mut tx,
@@ -396,10 +401,7 @@ pub enum QueuedScheduleRun {
         run_id: i64,
         scheduled_for: DateTime<Utc>,
     },
-    Skipped {
-        #[allow(dead_code)]
-        run_id: i64,
-    },
+    Skipped,
     Missing,
     BlockedByMaintenance,
 }
@@ -523,7 +525,6 @@ pub(crate) async fn insert_queued_hook_run_with_mode(
 }
 
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
 pub enum QueuedHookRun {
     Dispatch {
         run_id: i64,
@@ -537,7 +538,7 @@ pub enum QueuedHookRun {
 }
 
 /// Small helper to keep the row insert signature in one place for tests.
-#[allow(dead_code)]
+#[cfg(test)]
 pub async fn insert_test_run(pool: &PgPool, schedule_id: i64, status: &str) -> Result<i64> {
     let schedule: ScheduleForUpdate = query_as(
         "SELECT id,

@@ -4,7 +4,7 @@ use sqlx::{query, query_as};
 use crate::{
     agentic::model::{
         JOB_KIND_MARKET_ANALYSIS, RUN_STATUS_ABORTED, RUN_STATUS_FAILED, RUN_STATUS_QUEUED,
-        RUN_STATUS_RUNNING, RUN_STATUS_SKIPPED, RUN_STATUS_SUCCEEDED,
+        RUN_STATUS_RUNNING, RUN_STATUS_SUCCEEDED,
     },
     agentic::timeframe::{
         DEFAULT_TRIGGER_DELAY_SECONDS, boundary_for_due_at, latest_due_at_or_before,
@@ -58,7 +58,6 @@ async fn insert_queued_hook_run_inserts_manual_dispatch_run_without_timeframe() 
     assert_eq!(run.schedule_id, None);
     assert_eq!(run.hook_id, Some(hook_id));
     assert_eq!(run.job_key, "market-analysis");
-    assert_eq!(run.job_kind, JOB_KIND_MARKET_ANALYSIS);
     assert_eq!(run.timeframe, None);
 }
 
@@ -290,21 +289,10 @@ async fn insert_queued_run_inserts_skipped_run_when_previous_run_is_active() {
     let outcome = insert_queued_run(&pool, &key, schedule_id)
         .await
         .expect("manual run");
-    let run_id = match outcome {
-        QueuedScheduleRun::Skipped { run_id } => run_id,
+    match outcome {
+        QueuedScheduleRun::Skipped => {}
         other => panic!("expected Skipped, got {other:?}"),
-    };
-
-    let run = get_run(&pool, run_id)
-        .await
-        .expect("fetch run")
-        .expect("run present");
-    assert_eq!(run.status, RUN_STATUS_SKIPPED);
-    assert_eq!(
-        run.error_summary.as_deref(),
-        Some("previous run still active")
-    );
-    assert!(run.finished_at.is_some());
+    }
 }
 
 #[tokio::test]

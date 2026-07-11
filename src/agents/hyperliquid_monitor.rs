@@ -43,7 +43,6 @@ struct EnabledAgent {
 struct AgentTaskHandle {
     wallet_address: String,
     environment: String,
-    #[allow(dead_code)]
     task: JoinHandle<()>,
 }
 
@@ -203,9 +202,11 @@ async fn run_agent_task(
     let environment = match agent.environment.parse::<HyperliquidEnvironment>() {
         Ok(env) => env,
         Err(e) => {
-            eprintln!(
-                "agent {} has invalid environment '{}': {e}",
-                agent.agent_key, agent.environment
+            error!(
+                agent_key = %agent.agent_key,
+                environment = %agent.environment,
+                error = ?e,
+                "agent has invalid environment"
             );
             return;
         }

@@ -194,7 +194,7 @@ pub(crate) async fn agent_has_blocking_workspace_maintenance_tx(
     Ok(row.is_some())
 }
 
-#[allow(dead_code)]
+#[cfg(test)]
 pub async fn agent_has_blocking_workspace_maintenance(
     pool: &DbPool,
     agent_key: &str,

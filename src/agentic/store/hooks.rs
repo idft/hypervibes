@@ -355,9 +355,5 @@ pub(crate) struct HookForUpdate {
     pub(crate) agent_key: String,
     pub(crate) job_key: String,
     pub(crate) job_kind: String,
-    #[allow(dead_code)]
-    pub(crate) hook_event: String,
-    #[allow(dead_code)]
-    pub(crate) enabled: bool,
     pub(crate) timeout_seconds: i32,
 }
