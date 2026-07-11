@@ -26,7 +26,7 @@ use super::{
     ClaimedScheduleRun, claim_due_schedule, count_agent_runs, delete_agent_schedule,
     get_agent_schedule, get_run, insert_agent_schedule, insert_default_opencode_schedules,
     insert_test_run, insert_workspace_regenerate_task, list_agent_hooks, list_agent_schedules,
-    list_due_opencode_schedules, set_schedule_timeout,
+    list_due_opencode_schedules, set_schedule_timeframe, set_schedule_timeout,
 };
 
 #[tokio::test]
@@ -287,6 +287,32 @@ async fn insert_agent_schedule_rejects_duplicate_job_kind_timeframe() {
     )
     .await;
     assert!(result.is_err());
+}
+
+#[tokio::test]
+async fn updating_schedule_timeframe_reanchors_the_next_run() {
+    let pool = test_db::pool().await;
+    let key = format!(
+        "update-timeframe-{}",
+        Utc::now().timestamp_nanos_opt().unwrap_or(0)
+    );
+    let schedule_id = seed_agent_and_schedule(&pool, &key, 0).await;
+
+    assert!(set_schedule_timeframe(&pool, &key, schedule_id, "4h")
+        .await
+        .expect("update timeframe"));
+
+    let schedule = get_agent_schedule(&pool, &key, schedule_id)
+        .await
+        .expect("get schedule")
+        .expect("schedule present");
+    assert_eq!(schedule.timeframe, "4h");
+    assert_eq!(schedule.job_key, "analysis-4h");
+    assert!(schedule.next_run_at > Utc::now());
+    assert_eq!(
+        (schedule.next_run_at.timestamp() - i64::from(DEFAULT_TRIGGER_DELAY_SECONDS)) % (4 * 60 * 60),
+        0
+    );
 }
 
 #[tokio::test]

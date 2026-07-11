@@ -403,6 +403,69 @@ pub async fn set_schedule_timeout(
     Ok(result.rows_affected() > 0)
 }
 
+/// Change a schedule's timeframe and re-anchor its next run to the next
+/// boundary for that timeframe. Keeping these fields together prevents an
+/// edited schedule from firing at a boundary from its previous cadence.
+pub async fn set_schedule_timeframe(
+    pool: &DbPool,
+    agent_key: &str,
+    schedule_id: i64,
+    timeframe: &str,
+) -> Result<bool> {
+    let timeframe = timeframe.trim();
+    parse_timeframe_seconds(timeframe)
+        .with_context(|| format!("invalid timeframe {timeframe:?}"))?;
+
+    let mut tx = pool
+        .begin()
+        .await
+        .context("failed to begin schedule timeframe update transaction")?;
+    let schedule: Option<(String, i32)> = query_as(
+        "SELECT job_kind, trigger_delay_seconds
+           FROM agentic_job_schedules
+          WHERE agent_key = $1
+            AND id = $2
+          FOR UPDATE",
+    )
+    .bind(agent_key)
+    .bind(schedule_id)
+    .fetch_optional(&mut *tx)
+    .await
+    .with_context(|| format!("failed to lock schedule {schedule_id} for agent {agent_key}"))?;
+
+    let Some((job_kind, trigger_delay_seconds)) = schedule else {
+        tx.rollback()
+            .await
+            .context("failed to roll back missing schedule timeframe update")?;
+        return Ok(false);
+    };
+
+    let next_run_at = next_due_after(Utc::now(), timeframe, trigger_delay_seconds)?;
+    let job_key = build_generated_job_key(&job_kind, timeframe);
+    sqlx::query(
+        "UPDATE agentic_job_schedules
+            SET job_key = $3,
+                timeframe = $4,
+                next_run_at = $5,
+                updated_at = now()
+          WHERE agent_key = $1
+            AND id = $2",
+    )
+    .bind(agent_key)
+    .bind(schedule_id)
+    .bind(&job_key)
+    .bind(timeframe)
+    .bind(next_run_at)
+    .execute(&mut *tx)
+    .await
+    .with_context(|| format!("failed to update timeframe for schedule {schedule_id} agent {agent_key}"))?;
+    tx.commit()
+        .await
+        .context("failed to commit schedule timeframe update")?;
+
+    Ok(true)
+}
+
 /// List OpenCode schedules that are due and dispatchable.
 ///
 /// The join is intentionally strict: disabled agents, disabled runtimes,

@@ -11,8 +11,8 @@ use serde::Deserialize;
 use tracing::warn;
 
 use super::shared::{
-    ModelPickerContext, ModelSelectionForm, SERVER_SHUTTING_DOWN_WARNING, TimeoutErrorQuery,
-    TimeoutForm, ToggleScheduleForm, WORKSPACE_MAINTENANCE_ACTIVE_WARNING, build_model_picker_view,
+    ModelPickerContext, ModelSelectionForm, SERVER_SHUTTING_DOWN_WARNING, TimeoutForm,
+    ToggleScheduleForm, WORKSPACE_MAINTENANCE_ACTIVE_WARNING, build_model_picker_view,
     jobs_warning_redirect, load_model_picker_context, parse_positive_schedule_seconds,
     timeout_error_redirect, validate_model_selection_for_agent,
 };
@@ -62,7 +62,7 @@ pub(in crate::web::routes) async fn agents_show_jobs(
 pub(in crate::web::routes) async fn agents_show_job_detail(
     State(state): State<Arc<AppState>>,
     Path((agent_key, job_id)): Path<(String, i64)>,
-    Query(query): Query<TimeoutErrorQuery>,
+    Query(query): Query<JobDetailQuery>,
 ) -> Result<Response, AppError> {
     let Some(agent) = get_agent(&state.db_pool, &agent_key).await? else {
         return Ok((StatusCode::NOT_FOUND, "agent not found").into_response());
@@ -111,6 +111,9 @@ pub(in crate::web::routes) async fn agents_show_job_detail(
     let mut job_view = crate::web::templates::AgenticJobDetailView::from_row(&job);
     if let Some(error) = query.timeout_error {
         job_view.timeout_editor.error = Some(error);
+    }
+    if let Some(error) = query.timeframe_error {
+        job_view.timeframe_editor.error = Some(error);
     }
     match build_job_prompt_preview(&state, &agent, &job).await {
         Ok(text) => job_view.prompt_preview_text = text,
@@ -719,6 +722,58 @@ pub(in crate::web::routes) async fn agents_update_job_timeout(
     }
 
     Ok(Redirect::to(&detail_url).into_response())
+}
+#[derive(Debug, Default, Deserialize)]
+pub(in crate::web::routes) struct TimeframeForm {
+    #[serde(default)]
+    pub timeframe: String,
+}
+
+#[derive(Debug, Default, Deserialize)]
+pub(in crate::web::routes) struct JobDetailQuery {
+    #[serde(default)]
+    pub timeout_error: Option<String>,
+    #[serde(default)]
+    pub timeframe_error: Option<String>,
+}
+
+pub(in crate::web::routes) async fn agents_update_job_timeframe(
+    State(state): State<Arc<AppState>>,
+    Path((agent_key, job_id)): Path<(String, i64)>,
+    Form(form): Form<TimeframeForm>,
+) -> Result<Response, AppError> {
+    let detail_url = format!("/agents/{agent_key}/jobs/{job_id}");
+    let timeframe = form.timeframe.trim();
+    if let Err(error) = parse_timeframe_seconds(timeframe) {
+        return Ok(timeframe_error_redirect(
+            &detail_url,
+            format!("Invalid timeframe: {error}"),
+        ));
+    }
+
+    match crate::agentic::store::set_schedule_timeframe(
+        &state.db_pool,
+        &agent_key,
+        job_id,
+        timeframe,
+    )
+    .await
+    {
+        Ok(true) => Ok(Redirect::to(&detail_url).into_response()),
+        Ok(false) => Ok((StatusCode::NOT_FOUND, "job not found").into_response()),
+        Err(error) => match schedule_unique_violation_message(&error) {
+            Some(message) => Ok(timeframe_error_redirect(&detail_url, message)),
+            None => Err(AppError(error)),
+        },
+    }
+}
+
+fn timeframe_error_redirect(detail_url: &str, message: String) -> Response {
+    Redirect::to(&format!(
+        "{detail_url}?timeframe_error={}",
+        super::shared::urlencode(&message)
+    ))
+    .into_response()
 }
 pub(in crate::web::routes) fn render_new_job_form(
     agent: crate::agents::model::AgentDetailRow,

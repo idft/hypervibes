@@ -29,7 +29,7 @@ pub use schedules::{
     ClaimedScheduleRun, claim_due_schedule, delete_agent_schedule, get_agent_schedule,
     get_opencode_schedule_for_dispatch, insert_agent_schedule, insert_default_opencode_schedules,
     list_agent_schedules, list_due_opencode_schedules, list_schedule_runs, set_schedule_enabled,
-    set_schedule_model, set_schedule_timeout,
+    set_schedule_model, set_schedule_timeframe, set_schedule_timeout,
 };
 #[allow(unused_imports)]
 pub use workspace::{

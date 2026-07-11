@@ -104,6 +104,10 @@ pub fn router(state: Arc<AppState>) -> Router {
             "/agents/{agent_key}/jobs/{job_id}/timeout",
             post(agents_update_job_timeout),
         )
+        .route(
+            "/agents/{agent_key}/jobs/{job_id}/timeframe",
+            post(agents_update_job_timeframe),
+        )
         .route("/agents/{agent_key}/hooks/new", get(agents_new_hook))
         .route("/agents/{agent_key}/hooks", post(agents_create_hook))
         .route(

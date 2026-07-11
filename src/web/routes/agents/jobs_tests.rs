@@ -672,6 +672,10 @@ async fn job_detail_page_renders_job_specific_runs() {
     assert!(text.contains(&format!(
         "/agents/{agent_key}/jobs/{schedule_id}/model-picker"
     )));
+    assert!(text.contains(&format!(
+        "/agents/{agent_key}/jobs/{schedule_id}/timeframe"
+    )));
+    assert!(text.contains("cursor-pointer"));
     assert!(text.contains("data-model-picker-lazy-open"));
     assert!(!text.contains("data-model-picker-mode=\"modal\""));
 
@@ -731,6 +735,90 @@ async fn post_job_timeout_updates_and_redirects() {
         .expect("get schedule")
         .expect("schedule present");
     assert_eq!(schedule.timeout_seconds, 20 * 60);
+}
+#[tokio::test]
+async fn post_job_timeframe_reanchors_schedule_and_regenerates_job_key() {
+    let state = test_state().await;
+    let pool = state.db_pool.clone();
+    let (agent_key, _wallet_address) = insert_test_opencode_agent(&state)
+        .await
+        .expect("insert opencode agent");
+    let schedule = crate::agentic::store::list_agent_schedules(&pool, &agent_key)
+        .await
+        .expect("list schedules")
+        .into_iter()
+        .find(|schedule| schedule.job_key == "analysis-15m")
+        .expect("analysis schedule present");
+
+    let response = router(state.clone())
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/agents/{agent_key}/jobs/{}/timeframe", schedule.id))
+                .header("content-type", "application/x-www-form-urlencoded")
+                .body(Body::from("timeframe=4h"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+    assert_eq!(
+        response
+            .headers()
+            .get("location")
+            .and_then(|value| value.to_str().ok()),
+        Some(format!("/agents/{agent_key}/jobs/{}", schedule.id).as_str())
+    );
+
+    let updated = crate::agentic::store::get_agent_schedule(&pool, &agent_key, schedule.id)
+        .await
+        .expect("get schedule")
+        .expect("schedule present");
+    assert_eq!(updated.timeframe, "4h");
+    assert_eq!(updated.job_key, "analysis-4h");
+    assert!(updated.next_run_at > chrono::Utc::now());
+    assert_eq!(
+        (updated.next_run_at.timestamp()
+            - i64::from(crate::agentic::timeframe::DEFAULT_TRIGGER_DELAY_SECONDS))
+            % (4 * 60 * 60),
+        0
+    );
+}
+#[tokio::test]
+async fn post_job_timeframe_invalid_value_redirects_with_error() {
+    let state = test_state().await;
+    let pool = state.db_pool.clone();
+    let (agent_key, _wallet_address) = insert_test_opencode_agent(&state)
+        .await
+        .expect("insert opencode agent");
+    let schedule_id = crate::agentic::store::list_agent_schedules(&pool, &agent_key)
+        .await
+        .expect("list schedules")
+        .first()
+        .expect("default schedule present")
+        .id;
+
+    let response = router(state)
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/agents/{agent_key}/jobs/{schedule_id}/timeframe"))
+                .header("content-type", "application/x-www-form-urlencoded")
+                .body(Body::from("timeframe=15s"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+    assert!(response
+        .headers()
+        .get("location")
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|location| location.starts_with(&format!(
+            "/agents/{agent_key}/jobs/{schedule_id}?timeframe_error="
+        ))));
 }
 #[tokio::test]
 async fn post_job_timeout_accepts_humanized_and_composite_inputs() {

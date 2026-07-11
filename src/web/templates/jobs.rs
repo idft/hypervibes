@@ -33,7 +33,7 @@ pub struct AgenticJobDetailView {
     pub enabled: bool,
     pub enabled_label: &'static str,
     pub enabled_class: &'static str,
-    pub timeframe_text: String,
+    pub timeframe_editor: TimeframeEditorView,
     pub timeout_editor: TimeoutEditorView,
     pub next_run_at: LocalTimestampView,
     pub operator_prompt_text: String,
@@ -44,6 +44,14 @@ pub struct AgenticJobDetailView {
     pub run_now_action: String,
     pub toggle_action: String,
     pub hidden_enabled_value: &'static str,
+}
+
+#[derive(Debug, Clone)]
+pub struct TimeframeEditorView {
+    pub display_text: String,
+    pub edit_text: String,
+    pub action: String,
+    pub error: Option<String>,
 }
 
 impl AgenticJobScheduleView {
@@ -98,7 +106,12 @@ impl AgenticJobDetailView {
             enabled: row.enabled,
             enabled_label: summary.enabled_label,
             enabled_class: summary.enabled_class,
-            timeframe_text: summary.timeframe_text,
+            timeframe_editor: TimeframeEditorView {
+                display_text: summary.timeframe_text,
+                edit_text: row.timeframe.clone(),
+                action: format!("/agents/{}/jobs/{}/timeframe", row.agent_key, row.id),
+                error: None,
+            },
             timeout_editor: TimeoutEditorView {
                 display_text: summary.timeout_text,
                 edit_text: format_duration(row.timeout_seconds),
