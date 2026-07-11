@@ -372,8 +372,9 @@
             </div>
             {% endif %}
             <div class="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-                <div></div>
+                <h2 class="text-lg font-medium text-white">Jobs</h2>
                 <div class="flex flex-wrap items-center gap-2">
+                    {% if can_enable_all_jobs %}
                     <form action="/agents/{{ agent.agent_key }}/jobs/toggle-all" method="post">
                         <input type="hidden" name="enabled" value="on">
                         <button type="submit" class="inline-flex cursor-pointer items-center justify-center gap-2 rounded-full border border-emerald-900/60 bg-emerald-950/20 px-4 py-2 text-sm font-medium text-emerald-300 hover:border-emerald-800 hover:bg-emerald-950/40 hover:text-emerald-200">
@@ -383,6 +384,8 @@
                             Enable all
                         </button>
                     </form>
+                    {% endif %}
+                    {% if can_disable_all_jobs %}
                     <form action="/agents/{{ agent.agent_key }}/jobs/toggle-all" method="post">
                         <input type="hidden" name="enabled" value="off">
                         <button type="submit" class="inline-flex cursor-pointer items-center justify-center gap-2 rounded-full border border-zinc-700 bg-zinc-900/70 px-4 py-2 text-sm font-medium text-zinc-300 hover:border-zinc-600 hover:bg-zinc-800 hover:text-white">
@@ -392,19 +395,24 @@
                             Disable all
                         </button>
                     </form>
-                </div>
-            </div>
-
-            <div class="mt-8">
-                <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                    <h3 class="text-base font-medium text-white">Scheduled Jobs</h3>
-                    <a href="/agents/{{ agent.agent_key }}/jobs/new" class="inline-flex items-center justify-center gap-2 self-start rounded-full border border-zinc-700 bg-zinc-900/70 px-4 py-2 text-sm font-medium text-zinc-200 hover:border-zinc-600 hover:bg-zinc-800 hover:text-white">
+                    {% endif %}
+                    <a href="/agents/{{ agent.agent_key }}/jobs/new" class="inline-flex items-center justify-center gap-2 rounded-full border border-zinc-700 bg-zinc-900/70 px-4 py-2 text-sm font-medium text-zinc-200 hover:border-zinc-600 hover:bg-zinc-800 hover:text-white">
                         <svg class="h-4 w-4" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
                             <path d="M10 4a1 1 0 0 1 1 1v4h4a1 1 0 1 1 0 2h-4v4a1 1 0 1 1-2 0v-4H5a1 1 0 1 1 0-2h4V5a1 1 0 0 1 1-1Z"></path>
                         </svg>
                         New job
                     </a>
+                    <a href="/agents/{{ agent.agent_key }}/hooks/new" class="inline-flex items-center justify-center gap-2 rounded-full border border-zinc-700 bg-zinc-900/70 px-4 py-2 text-sm font-medium text-zinc-200 hover:border-zinc-600 hover:bg-zinc-800 hover:text-white">
+                        <svg class="h-4 w-4" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
+                            <path d="M10 4a1 1 0 0 1 1 1v4h4a1 1 0 1 1 0 2h-4v4a1 1 0 1 1-2 0v-4H5a1 1 0 1 1 0-2h4V5a1 1 0 0 1 1-1Z"></path>
+                        </svg>
+                        New hook
+                    </a>
                 </div>
+            </div>
+
+            <div class="mt-8">
+                <h3 class="text-base font-medium text-white">Scheduled</h3>
                 {% if !jobs_loaded %}
                 <div class="mt-4 rounded-xl border border-amber-900/60 bg-amber-950/30 px-4 py-3 text-sm text-amber-200">Jobs could not be loaded.</div>
                 {% else if jobs.is_empty() %}
@@ -490,15 +498,7 @@
             </div>
 
             <div class="mt-8 border-t border-zinc-800 pt-8">
-                <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                    <h3 class="text-base font-medium text-white">Hook Jobs</h3>
-                    <a href="/agents/{{ agent.agent_key }}/hooks/new" class="inline-flex items-center justify-center gap-2 self-start rounded-full border border-zinc-700 bg-zinc-900/70 px-4 py-2 text-sm font-medium text-zinc-200 hover:border-zinc-600 hover:bg-zinc-800 hover:text-white">
-                        <svg class="h-4 w-4" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
-                            <path d="M10 4a1 1 0 0 1 1 1v4h4a1 1 0 1 1 0 2h-4v4a1 1 0 1 1-2 0v-4H5a1 1 0 1 1 0-2h4V5a1 1 0 0 1 1-1Z"></path>
-                        </svg>
-                        New hook
-                    </a>
-                </div>
+                <h3 class="text-base font-medium text-white">Hooks</h3>
                 {% if !hooks_loaded %}
                 <div class="mt-4 rounded-xl border border-amber-900/60 bg-amber-950/30 px-4 py-3 text-sm text-amber-200">Hooks could not be loaded.</div>
                 {% else if hooks.is_empty() %}

@@ -1,0 +1,5 @@
+{% for agent in agents %}
+<a href="/agents/{{ agent.agent_key }}" data-agent-key="{{ agent.agent_key }}" data-agent-name="{{ agent.display_name }}" data-agent-enabled="{{ agent.enabled }}" class="flex items-center gap-2 rounded-md px-3 py-2 text-sm text-zinc-300 hover:bg-zinc-800 hover:text-white"><span class="h-2 w-2 rounded-full {% if agent.enabled %}bg-emerald-400{% else %}bg-red-400{% endif %}"></span>{{ agent.display_name }}</a>
+{% endfor %}
+<div class="my-1 border-t border-zinc-700"></div>
+<a href="/agents/new" class="block rounded-md px-3 py-2 text-sm font-medium text-sky-300 hover:bg-zinc-800 hover:text-sky-200">Create new agent</a>

@@ -441,10 +441,124 @@ function initMemoryTimelineDragScroll() {
     });
 }
 
+function isAgentDetailPath(pathname: string) {
+  return pathname.startsWith("/agents/") && pathname !== "/agents/new";
+}
+
+function initAgentRailTransition() {
+  const rail = document.querySelector<HTMLElement>(".agent-rail");
+  const destination = window.sessionStorage.getItem("agent-rail-enter-destination");
+  window.sessionStorage.removeItem("agent-rail-enter-destination");
+  if (!rail || destination !== window.location.pathname) {
+    return;
+  }
+
+  rail.classList.add("agent-rail-enter");
+}
+
+function initAgentRailEntryNavigation() {
+  document.addEventListener("click", (event) => {
+    if (
+      event.defaultPrevented ||
+      event.button !== 0 ||
+      event.metaKey ||
+      event.ctrlKey ||
+      event.shiftKey ||
+      event.altKey
+    ) {
+      return;
+    }
+
+    const link = (event.target as Element | null)?.closest<HTMLAnchorElement>("a[href]");
+    if (!link || link.hasAttribute("hx-get")) {
+      return;
+    }
+
+    const destination = new URL(link.href, window.location.href);
+    if (
+      destination.origin === window.location.origin &&
+      isAgentDetailPath(destination.pathname) &&
+      !isAgentDetailPath(window.location.pathname)
+    ) {
+      window.sessionStorage.setItem("agent-rail-enter-destination", destination.pathname);
+    }
+  });
+}
+
+function initAgentRailNavigation() {
+  document.addEventListener("click", (event) => {
+    if (
+      event.defaultPrevented ||
+      event.button !== 0 ||
+      event.metaKey ||
+      event.ctrlKey ||
+      event.shiftKey ||
+      event.altKey
+    ) {
+      return;
+    }
+
+    const link = (event.target as Element | null)?.closest<HTMLAnchorElement>("a[href]");
+    const rail = document.querySelector<HTMLElement>(".agent-rail");
+    if (!link || !rail || link.hasAttribute("hx-get")) {
+      return;
+    }
+
+    const destination = new URL(link.href, window.location.href);
+    const isAgentDetail =
+      destination.origin === window.location.origin && isAgentDetailPath(destination.pathname);
+    if (isAgentDetail || destination.origin !== window.location.origin) {
+      return;
+    }
+
+    event.preventDefault();
+    rail.classList.add("agent-rail-exit");
+    window.setTimeout(() => {
+      window.location.assign(destination.href);
+    }, 180);
+  });
+}
+
+function syncAgentSelector() {
+  const currentAgent = document.querySelector<HTMLElement>("[data-current-agent-key]");
+  const match = window.location.pathname.match(/^\/agents\/([^/]+)/);
+  const agentKey = currentAgent?.dataset.currentAgentKey ?? match?.[1];
+  const selected = currentAgent ?? Array.from(
+    document.querySelectorAll<HTMLElement>("[data-agent-key]"),
+  ).find((agent) => agent.dataset.agentKey === agentKey);
+  const label = document.querySelector<HTMLElement>("[data-agent-selector-label]");
+  const status = document.querySelector<HTMLElement>("[data-agent-selector-status]");
+  if (!selected || !label || !status) {
+    return;
+  }
+
+  label.textContent = selected.dataset.currentAgentName ?? selected.dataset.agentName ?? agentKey ?? "";
+  status.classList.remove("bg-zinc-600", "bg-emerald-400", "bg-red-400");
+  status.classList.add(
+    (selected.dataset.currentAgentEnabled ?? selected.dataset.agentEnabled) === "true"
+      ? "bg-emerald-400"
+      : "bg-red-400",
+  );
+}
+
+function initAgentSelectorDismissal() {
+  document.addEventListener("click", (event) => {
+    const selector = document.querySelector<HTMLDetailsElement>("[data-agent-selector]");
+    if (selector?.open && !selector.contains(event.target as Node)) {
+      selector.open = false;
+    }
+  });
+}
+
 function init() {
   renderTimeago();
   renderLocalDateTimes();
   initMemoryTimelineDragScroll();
+  initAgentRailTransition();
+  initAgentRailEntryNavigation();
+  initAgentRailNavigation();
+  syncAgentSelector();
+  initAgentSelectorDismissal();
   seedSelectedMemoryTimelineItems();
   restoreSelectedMemoryTimelineItem();
   startRunningDurationTicker();
@@ -472,12 +586,24 @@ function init() {
       return;
     }
 
+    if (target.id === "agent-selector-items") {
+      syncAgentSelector();
+    }
+
     if (
       target.matches('[sse-swap="memories-timeline"]') ||
       target.querySelector('[sse-swap="memories-timeline"]')
     ) {
       seedSelectedMemoryTimelineItems();
       restoreSelectedMemoryTimelineItem();
+    }
+  });
+
+  window.addEventListener("pageshow", (event) => {
+    const rail = document.querySelector(".agent-rail");
+    rail?.classList.remove("agent-rail-exit");
+    if (event.persisted) {
+      rail?.classList.add("agent-rail-enter");
     }
   });
 

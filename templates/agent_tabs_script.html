@@ -19,10 +19,12 @@
                 if (isActive) {
                     link.setAttribute('aria-current', 'page');
                     link.classList.add('text-white');
+                    link.classList.add('bg-zinc-800');
                     link.classList.remove('text-zinc-400');
                 } else {
                     link.removeAttribute('aria-current');
                     link.classList.remove('text-white');
+                    link.classList.remove('bg-zinc-800');
                     link.classList.add('text-zinc-400');
                 }
             });

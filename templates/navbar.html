@@ -1,29 +1,21 @@
-<div class="flex items-center justify-between lg:block">
-    <div>
-        <div class="flex items-center gap-3">
-            <img src="/static/apple-touch-icon.png" alt="Vibetrading logo" class="h-8 w-8 rounded-lg object-cover">
-            <div class="text-sm font-semibold tracking-wide text-zinc-200">Vibetrading</div>
+<div class="relative flex h-full items-center">
+    <details class="relative h-full" data-agent-selector>
+        <summary hx-get="/agents/navigation" hx-trigger="click once" hx-target="#agent-selector-items" hx-swap="innerHTML" class="flex h-full cursor-pointer list-none items-center gap-2 px-4 text-sm text-zinc-300 hover:bg-zinc-800 hover:text-white [&::-webkit-details-marker]:hidden">
+            <span data-agent-selector-status class="h-2 w-2 rounded-full bg-zinc-600"></span>
+            <span data-agent-selector-label>Agents</span>
+            <svg class="h-4 w-4 text-zinc-500" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true"><path fill-rule="evenodd" d="M5.23 7.21a.75.75 0 0 1 1.06.02L10 11.17l3.71-3.94a.75.75 0 1 1 1.09 1.04l-4.25 4.5a.75.75 0 0 1-1.09 0l-4.25-4.5a.75.75 0 0 1 .02-1.06Z" clip-rule="evenodd"></path></svg>
+        </summary>
+        <div class="absolute left-0 top-full mt-2 w-64 rounded-lg border border-zinc-700 bg-[#1b1d20] p-1 shadow-2xl">
+            <div id="agent-selector-items">
+                <div class="px-3 py-2 text-sm text-zinc-500">Open to load agents…</div>
+            </div>
         </div>
-        <div class="mt-4 border-t border-zinc-800"></div>
-    </div>
+    </details>
+    <a href="/agents" class="absolute left-1/2 flex h-full -translate-x-1/2 items-center gap-2 px-4 text-sm font-semibold tracking-wide text-zinc-100 hover:bg-zinc-800" aria-label="Vibetrading agents">
+        <img src="/static/apple-touch-icon.png" alt="" class="h-7 w-7 rounded-md object-cover">
+        <span>Vibetrading</span>
+    </a>
+    <a href="/settings" title="Settings" class="ml-auto mr-2 inline-flex h-9 w-9 items-center justify-center rounded-lg text-zinc-400 hover:bg-zinc-800 hover:text-white">
+        <svg class="h-5 w-5" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="M8.7 2.4a1.5 1.5 0 0 1 2.6 0l.35.69a1.5 1.5 0 0 0 1.4.82l.77-.1a1.5 1.5 0 0 1 1.84 1.84l-.1.77a1.5 1.5 0 0 0 .82 1.4l.69.35a1.5 1.5 0 0 1 0 2.6l-.69.35a1.5 1.5 0 0 0-.82 1.4l.1.77a1.5 1.5 0 0 1-1.84 1.84l-.77-.1a1.5 1.5 0 0 0-1.4.82l-.35.69a1.5 1.5 0 0 1-2.6 0l-.35-.69a1.5 1.5 0 0 0-1.4-.82l-.77.1a1.5 1.5 0 0 1-1.84-1.84l.1-.77a1.5 1.5 0 0 0-.82-1.4l-.69-.35a1.5 1.5 0 0 1 0-2.6l.69-.35a1.5 1.5 0 0 0 .82-1.4l-.1-.77A1.5 1.5 0 0 1 6.6 3.8l.77.1a1.5 1.5 0 0 0 1.4-.82l.35-.69Z"></path><circle cx="10" cy="10" r="2.5"></circle></svg>
+    </a>
 </div>
-
-<nav class="mt-6 space-y-1 text-sm">
-    {% if current_path.starts_with("/agents") %}
-    <a class="flex items-center rounded-xl bg-zinc-800/80 px-3 py-2 font-medium text-white" href="/agents">Agents</a>
-    {% else %}
-    <a class="flex items-center rounded-xl px-3 py-2 text-zinc-300 hover:bg-zinc-800/80 hover:text-white" href="/agents">Agents</a>
-    {% endif %}
-    {% if current_path.starts_with("/backends") %}
-    <a class="flex items-center rounded-xl bg-zinc-800/80 px-3 py-2 font-medium text-white" href="/backends">Backends</a>
-    {% else %}
-    <a class="flex items-center rounded-xl px-3 py-2 text-zinc-300 hover:bg-zinc-800/80 hover:text-white" href="/backends">Backends</a>
-    {% endif %}
-    <span class="flex items-center rounded-xl px-3 py-2 text-zinc-500">Wallet</span>
-    <span class="flex items-center rounded-xl px-3 py-2 text-zinc-500">Documentation</span>
-    {% if current_path.starts_with("/settings") %}
-    <a class="flex items-center rounded-xl bg-zinc-800/80 px-3 py-2 font-medium text-white" href="/settings">Settings</a>
-    {% else %}
-    <a class="flex items-center rounded-xl px-3 py-2 text-zinc-300 hover:bg-zinc-800/80 hover:text-white" href="/settings">Settings</a>
-    {% endif %}
-</nav>

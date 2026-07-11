@@ -148,6 +148,12 @@ pub struct AgentsPageTemplate {
 }
 
 #[derive(Template)]
+#[template(path = "agent_selector_items.html")]
+pub struct AgentSelectorItemsTemplate {
+    pub agents: Vec<AgentListRow>,
+}
+
+#[derive(Template)]
 #[template(path = "agents_new.html")]
 pub struct AgentsNewPageTemplate {
     pub form: CreateAgentForm,
@@ -319,6 +325,8 @@ pub struct AgentsShowPageTemplate {
     pub recent_runs: Vec<AgenticRunView>,
     pub jobs_loaded: bool,
     pub hooks_loaded: bool,
+    pub can_enable_all_jobs: bool,
+    pub can_disable_all_jobs: bool,
     pub recent_runs_loaded: bool,
     pub recent_runs_page: usize,
     pub recent_runs_total_pages: usize,
@@ -385,6 +393,8 @@ impl AgentsShowPageTemplate {
             recent_runs: Vec::new(),
             jobs_loaded: false,
             hooks_loaded: false,
+            can_enable_all_jobs: false,
+            can_disable_all_jobs: false,
             recent_runs_loaded: false,
             recent_runs_page: 1,
             recent_runs_total_pages: 0,

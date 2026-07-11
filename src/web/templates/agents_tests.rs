@@ -124,6 +124,8 @@ fn opencode_agent_shows_jobs_tab_with_recent_runs() {
     ];
     template.hooks_loaded = true;
     template.hooks = vec![AgenticJobHookView::from_row(&sample_hook_row(3, true))];
+    template.can_enable_all_jobs = true;
+    template.can_disable_all_jobs = true;
     template.recent_runs_loaded = true;
     template.recent_runs = vec![AgenticRunView::from_row(&sample_run_row(
         1,
@@ -132,8 +134,8 @@ fn opencode_agent_shows_jobs_tab_with_recent_runs() {
     ))];
     let rendered = template.render().expect("render jobs tab");
     assert!(rendered.contains("/agents/test-agent/jobs"));
-    assert!(rendered.contains("Scheduled Jobs"));
-    assert!(rendered.contains("Hook Jobs"));
+    assert!(rendered.contains("Scheduled"));
+    assert!(rendered.contains("Hooks"));
     assert!(rendered.contains("Enable all"));
     assert!(rendered.contains("Disable all"));
     assert!(rendered.contains("Recent Runs"));

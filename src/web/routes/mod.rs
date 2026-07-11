@@ -25,6 +25,7 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/", get(root))
         .route("/healthz", get(healthz))
         .route("/model-catalog/logos/{provider}", get(model_catalog_logo))
+        .route("/agents/navigation", get(agent_selector_items))
         .route("/agents", get(agents_index).post(create_agent))
         .route("/agents/new", get(agents_new))
         .route("/backends", get(backends_index).post(create_backend))

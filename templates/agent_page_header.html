@@ -1,27 +1,12 @@
-<header class="flex flex-col gap-4 pb-2 lg:flex-row lg:items-start lg:justify-between">
-    <div>
-        <div class="flex items-center gap-3">
-            <a href="/agents" class="text-sm text-zinc-500 hover:text-zinc-300">Agents</a>
-            <span class="text-zinc-600">/</span>
-            <span class="text-sm text-zinc-400">{{ agent.agent_key }}</span>
-        </div>
-        <div class="mt-3 flex items-center gap-3">
-            <h1 class="text-3xl font-semibold tracking-tight text-white">{{ agent.display_name }}</h1>
-            {% if agent.backend_kind == "opencode" %}
-            <span class="inline-flex rounded-full border border-violet-900/60 bg-violet-950/30 px-2.5 py-1 text-xs font-medium text-violet-300">opencode</span>
-            {% endif %}
-            {% if agent.environment == "live" %}
-            <span class="inline-flex rounded-full border border-emerald-900/60 bg-emerald-950/30 px-2.5 py-1 text-xs font-medium text-emerald-300">live</span>
-            {% else if agent.environment == "sandbox" %}
-            <span class="inline-flex rounded-full border border-sky-900/60 bg-sky-950/30 px-2.5 py-1 text-xs font-medium text-sky-300">sandbox</span>
-            {% endif %}
-        </div>
-    </div>
-    <div class="flex items-center gap-3">
-        {% if agent.enabled %}
-        <span class="inline-flex rounded-full border border-emerald-900/60 bg-emerald-950/30 px-3 py-1.5 text-sm text-emerald-300">Enabled</span>
-        {% else %}
-        <span class="inline-flex rounded-full border border-zinc-700 px-3 py-1.5 text-sm text-zinc-300">Disabled</span>
-        {% endif %}
-    </div>
-</header>
+<div class="hidden" data-current-agent-key="{{ agent.agent_key }}" data-current-agent-name="{{ agent.display_name }}" data-current-agent-enabled="{{ agent.enabled }}"></div>
+<script>
+    (function () {
+        var agent = document.querySelector('[data-current-agent-key]');
+        var label = document.querySelector('[data-agent-selector-label]');
+        var status = document.querySelector('[data-agent-selector-status]');
+        if (!agent || !label || !status) return;
+        label.textContent = agent.dataset.currentAgentName || agent.dataset.currentAgentKey || '';
+        status.classList.remove('bg-zinc-600', 'bg-emerald-400', 'bg-red-400');
+        status.classList.add(agent.dataset.currentAgentEnabled === 'true' ? 'bg-emerald-400' : 'bg-red-400');
+    })();
+</script>

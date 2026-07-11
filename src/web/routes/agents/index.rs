@@ -34,7 +34,8 @@ use crate::{
     web::{
         AppState,
         templates::{
-            AccountBalanceView, AgentListEntry, AgentsNewPageTemplate, AgentsPageTemplate,
+            AccountBalanceView, AgentListEntry, AgentSelectorItemsTemplate, AgentsNewPageTemplate,
+            AgentsPageTemplate,
         },
     },
 };
@@ -75,6 +76,12 @@ pub(in crate::web::routes) async fn agents_index(
     };
 
     Ok(Html(template.render()?))
+}
+pub(in crate::web::routes) async fn agent_selector_items(
+    State(state): State<Arc<AppState>>,
+) -> Result<Html<String>, AppError> {
+    let agents = list_agents(&state.db_pool).await?;
+    Ok(Html(AgentSelectorItemsTemplate { agents }.render()?))
 }
 pub(in crate::web::routes) async fn agents_new(
     State(state): State<Arc<AppState>>,

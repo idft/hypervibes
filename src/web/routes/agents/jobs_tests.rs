@@ -72,10 +72,10 @@ async fn jobs_route_renders_create_job_button_and_runs_section() {
     let text = response_text(response).await;
     assert!(text.contains("New job"));
     assert!(text.contains(&format!("/agents/{agent_key}/jobs/new")));
-    assert!(text.contains("Scheduled Jobs"));
-    assert!(text.contains("Hook Jobs"));
+    assert!(text.contains("Scheduled"));
+    assert!(text.contains("Hooks"));
     assert!(text.contains("Enable all"));
-    assert!(text.contains("Disable all"));
+    assert!(!text.contains("Disable all"));
     assert!(text.contains("Recent Runs"));
     assert!(text.contains("New hook"));
     assert!(text.contains(&format!("/agents/{agent_key}/hooks/new")));

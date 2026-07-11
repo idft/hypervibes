@@ -313,6 +313,13 @@ pub(in crate::web::routes) async fn populate_jobs_tab(
         }
     }
 
+    if template.jobs_loaded && template.hooks_loaded {
+        template.can_enable_all_jobs = template.jobs.iter().any(|job| !job.enabled)
+            || template.hooks.iter().any(|hook| !hook.enabled);
+        template.can_disable_all_jobs = template.jobs.iter().any(|job| job.enabled)
+            || template.hooks.iter().any(|hook| hook.enabled);
+    }
+
     match crate::agentic::store::count_agent_runs(&state.db_pool, &agent.agent_key).await {
         Ok(total_count) => {
             let total_count = total_count as usize;
