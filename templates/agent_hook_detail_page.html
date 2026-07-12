@@ -8,7 +8,8 @@
 
     {% include "agent_tabs.html" %}
 
-    <header class="mt-2 flex flex-col gap-2 pb-6">
+    <section class="mt-2 rounded-2xl border border-zinc-800 bg-[#0d0d10] p-6">
+        <header class="flex flex-col gap-2 pb-6">
         <div class="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
             <div>
                 <div class="flex items-center gap-3">
@@ -21,14 +22,14 @@
                 Back to jobs
             </a>
         </div>
-    </header>
+        </header>
 
     <section class="grid grid-cols-1 gap-4 lg:grid-cols-3">
-        <div class="rounded-2xl border border-zinc-800 bg-[#0d0d10] p-5">
+        <div class="bg-zinc-950/50 p-5">
             <p class="text-xs uppercase tracking-[0.16em] text-zinc-500">Trigger</p>
             <p class="mt-2 font-mono text-sm text-zinc-200">{{ hook.hook_event }}</p>
         </div>
-        <div class="rounded-2xl border border-zinc-800 bg-[#0d0d10] p-5">
+        <div class="bg-zinc-950/50 p-5">
             <p class="text-xs uppercase tracking-[0.16em] text-zinc-500">Timeout</p>
             <div data-timeout-editor class="mt-2 flex flex-col gap-1" {% if let Some(_) = hook.timeout_editor.error %}data-timeout-editor-open{% endif %}>
                 <div class="flex flex-wrap items-center gap-2" data-timeout-display-row>
@@ -66,7 +67,7 @@
                 {% endif %}
             </div>
         </div>
-        <div class="rounded-2xl border border-zinc-800 bg-[#0d0d10] p-5">
+        <div class="bg-zinc-950/50 p-5">
             <p class="text-xs uppercase tracking-[0.16em] text-zinc-500">Model</p>
             <form action="{{ hook.model_update_action }}" method="post" class="mt-2">
                 {% include "model_picker.html" %}
@@ -74,7 +75,7 @@
         </div>
     </section>
 
-    <section class="mt-2 rounded-2xl border border-zinc-800 bg-[#0d0d10] p-6">
+    <section class="mt-6 border-t border-zinc-800 pt-6">
         <div class="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
             <div>
                 <h2 class="text-lg font-medium text-white">Hook details</h2>
@@ -117,12 +118,12 @@
             </div>
         </dl>
 
-        <div class="mt-4 rounded-2xl border border-zinc-800 bg-zinc-950/50 p-5">
+        <div class="mt-4 bg-zinc-950/50 p-5">
             <h3 class="text-sm font-medium text-white">Operator prompt</h3>
             <pre class="mt-3 overflow-x-auto whitespace-pre-wrap break-words text-xs leading-6 text-zinc-300">{{ hook.operator_prompt_text }}</pre>
         </div>
 
-        <details class="mt-4 group rounded-2xl border border-zinc-800 bg-zinc-950/50">
+        <details class="mt-4 group bg-zinc-950/50">
             <summary class="flex cursor-pointer items-center justify-between p-5 text-sm font-medium text-white marker:hidden">
                 <span>Prompt preview</span>
                 <span aria-hidden="true" class="text-zinc-500 transition group-open:rotate-180">&#9662;</span>
@@ -139,7 +140,7 @@
         </details>
     </section>
 
-    <section class="mt-2 rounded-2xl border border-zinc-800 bg-[#0d0d10] p-6">
+    <section class="mt-6 border-t border-zinc-800 pt-6">
         <div>
             <h2 class="text-lg font-medium text-white">Runs</h2>
             <p class="mt-1 max-w-3xl text-sm leading-6 text-zinc-400">Most recent runs recorded for this hook. Click any row for full run details and mirrored OpenCode session data.</p>
@@ -208,6 +209,7 @@
             </table>
         </div>
         {% endif %}
+    </section>
     </section>
 </div>
 {% endblock %}

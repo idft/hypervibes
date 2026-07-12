@@ -8,7 +8,8 @@
 
     {% include "agent_tabs.html" %}
 
-    <header class="mt-2 flex flex-col gap-2 pb-6">
+    <section class="mt-2 rounded-2xl border border-zinc-800 bg-[#0d0d10] p-6">
+        <header class="flex flex-col gap-2 pb-6">
         <div class="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
             <div>
                 <div class="flex items-center gap-3">
@@ -23,7 +24,7 @@
         </div>
     </header>
 
-    <section class="mt-2 rounded-2xl border border-zinc-800 bg-[#0d0d10] p-4">
+    <div>
         <dl class="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
             <div>
                 <dt class="text-xs uppercase tracking-[0.16em] text-zinc-500">Scheduled for</dt>
@@ -82,44 +83,44 @@
 
         {% if let Some(session) = session %}
         <div class="mt-4 grid grid-cols-2 gap-4 md:grid-cols-4 xl:grid-cols-8">
-            <div class="rounded-xl border border-zinc-800 bg-zinc-950/50 p-4">
+            <div class="bg-zinc-950/50 p-4">
                 <p class="text-xs uppercase tracking-[0.16em] text-zinc-500">Input</p>
                 <p class="mt-2 font-mono text-sm text-zinc-200">{{ session.input_tokens_text }}</p>
             </div>
-            <div class="rounded-xl border border-zinc-800 bg-zinc-950/50 p-4">
+            <div class="bg-zinc-950/50 p-4">
                 <p class="text-xs uppercase tracking-[0.16em] text-zinc-500">Output</p>
                 <p class="mt-2 font-mono text-sm text-zinc-200">{{ session.output_tokens_text }}</p>
             </div>
-            <div class="rounded-xl border border-zinc-800 bg-zinc-950/50 p-4">
+            <div class="bg-zinc-950/50 p-4">
                 <p class="text-xs uppercase tracking-[0.16em] text-zinc-500">Reasoning</p>
                 <p class="mt-2 font-mono text-sm text-zinc-200">{{ session.reasoning_tokens_text }}</p>
             </div>
-            <div class="rounded-xl border border-zinc-800 bg-zinc-950/50 p-4">
+            <div class="bg-zinc-950/50 p-4">
                 <p class="text-xs uppercase tracking-[0.16em] text-zinc-500">Context</p>
                 <p class="mt-2 font-mono text-sm text-zinc-200">{{ session.context_tokens_text }}</p>
             </div>
-            <div class="rounded-xl border border-zinc-800 bg-zinc-950/50 p-4">
+            <div class="bg-zinc-950/50 p-4">
                 <p class="text-xs uppercase tracking-[0.16em] text-zinc-500">Peak context</p>
                 <p class="mt-2 font-mono text-sm text-zinc-200">{{ session.peak_context_tokens_text }}</p>
             </div>
-            <div class="rounded-xl border border-zinc-800 bg-zinc-950/50 p-4">
+            <div class="bg-zinc-950/50 p-4">
                 <p class="text-xs uppercase tracking-[0.16em] text-zinc-500">Cache read</p>
                 <p class="mt-2 font-mono text-sm text-zinc-200">{{ session.cache_read_tokens_text }}</p>
             </div>
-            <div class="rounded-xl border border-zinc-800 bg-zinc-950/50 p-4">
+            <div class="bg-zinc-950/50 p-4">
                 <p class="text-xs uppercase tracking-[0.16em] text-zinc-500">Cache write</p>
                 <p class="mt-2 font-mono text-sm text-zinc-200">{{ session.cache_write_tokens_text }}</p>
             </div>
-            <div class="rounded-xl border border-zinc-800 bg-zinc-950/50 p-4">
+            <div class="bg-zinc-950/50 p-4">
                 <p class="text-xs uppercase tracking-[0.16em] text-zinc-500">Compactions</p>
                 <p class="mt-2 font-mono text-sm text-zinc-200">{{ session.compaction_count_text }}</p>
             </div>
         </div>
         {% endif %}
-    </section>
+    </div>
 
     {% if !run.error_summary.is_empty() %}
-    <section class="mt-2 rounded-2xl border border-red-900/60 bg-red-950/20 p-4">
+    <section class="mt-6 border-t border-zinc-800 bg-red-950/20 p-4">
         <h2 class="text-lg font-medium text-red-200">Error summary</h2>
         <p class="mt-2 text-sm leading-6 text-red-100/90">{{ run.error_summary }}</p>
     </section>
@@ -127,11 +128,11 @@
 
     {% if let Some(session) = session %}
     {% if !session.session_errors.is_empty() %}
-    <section class="mt-2 rounded-2xl border border-red-900/60 bg-red-950/20 p-4">
+    <section class="mt-6 border-t border-zinc-800 bg-red-950/20 p-4">
         <h2 class="text-lg font-medium text-red-200">Session errors</h2>
         <div class="mt-4 space-y-3">
             {% for error in session.session_errors %}
-            <article class="rounded-xl border border-red-900/60 bg-red-950/30 p-4">
+            <article class="bg-red-950/30 p-4">
                 <div class="flex items-center justify-between gap-3">
                     <span class="text-sm font-medium text-red-200">{% if error.error_type.is_empty() %}error{% else %}{{ error.error_type }}{% endif %}</span>
                     <time class="local-datetime font-mono text-xs text-red-200/70" data-local-format="datetime" datetime="{{ error.created_at.iso }}" title="{{ error.created_at.fallback_text }}">{{ error.created_at.fallback_text }}</time>
@@ -140,7 +141,7 @@
                 <p class="mt-3 text-sm text-red-100/90">{{ error.error_message }}</p>
                 {% endif %}
                 {% if !error.error_data_json.is_empty() %}
-                <pre class="mt-3 overflow-x-auto whitespace-pre-wrap break-words rounded-xl border border-red-900/60 bg-[#09090b] px-3 py-2 text-xs text-red-100/90">{{ error.error_data_json }}</pre>
+                <pre class="mt-3 overflow-x-auto whitespace-pre-wrap break-words bg-[#09090b] px-3 py-2 text-xs text-red-100/90">{{ error.error_data_json }}</pre>
                 {% endif %}
             </article>
             {% endfor %}
@@ -148,15 +149,15 @@
     </section>
     {% endif %}
 
-    <section class="mt-2 rounded-2xl border border-zinc-800 bg-[#0d0d10] p-2">
+    <section class="mt-6 border-t border-zinc-800 pt-6">
         {% if session.transcript.is_empty() %}
-        <div class="rounded-xl border border-zinc-800 bg-zinc-950/70 p-4 text-center text-sm text-zinc-400">No mirrored messages or tool executions yet.</div>
+        <div class="bg-zinc-950/70 p-4 text-center text-sm text-zinc-400">No mirrored messages or tool executions yet.</div>
         {% else %}
         <div class="space-y-2">
             {% for item in session.transcript %}
                 {% match item %}
                     {% when TranscriptItem::Message(message) %}
-                    <article class="rounded-2xl border border-zinc-800 bg-zinc-950/50 p-2">
+                    <article class="bg-zinc-950/50 p-2">
                         <div class="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
                             <div class="flex items-center gap-2">
                                 <span class="inline-flex rounded-full border px-2 py-0.5 text-xs font-medium {{ message.role_class }}">{{ message.role_label }}</span>
@@ -171,14 +172,14 @@
                         <pre class="mt-3 overflow-x-auto whitespace-pre-wrap break-words text-sm leading-6 text-zinc-200">{{ message.text }}</pre>
                         {% endif %}
                         {% if !message.system_prompt.is_empty() %}
-                        <details class="mt-3 rounded-xl border border-zinc-800 bg-[#09090b] px-4 py-3">
+                        <details class="mt-3 bg-[#09090b] px-4 py-3">
                             <summary class="cursor-pointer text-xs font-medium uppercase tracking-[0.16em] text-zinc-400">System prompt</summary>
                             <pre class="mt-3 overflow-x-auto whitespace-pre-wrap break-words text-xs leading-6 text-zinc-300">{{ message.system_prompt }}</pre>
                         </details>
                         {% endif %}
                     </article>
                     {% when TranscriptItem::Tool(tool) %}
-                    <article class="rounded-xl border border-zinc-800 bg-zinc-950/50 p-2">
+                    <article class="bg-zinc-950/50 p-2">
                         <div class="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
                             <div class="flex items-center gap-2">
                                 <span class="font-mono text-sm text-zinc-200">{{ tool.tool_name }}</span>
@@ -194,7 +195,7 @@
                                 <span class="font-mono">{{ tool.args_preview }}</span>
                                 {% endif %}
                             </summary>
-                            <pre class="mt-1 overflow-x-auto whitespace-pre-wrap break-words rounded-md border border-zinc-800 bg-[#09090b] px-2 py-1 font-mono text-xs text-zinc-300">{{ tool.args_json }}</pre>
+                            <pre class="mt-1 overflow-x-auto whitespace-pre-wrap break-words bg-[#09090b] px-2 py-1 font-mono text-xs text-zinc-300">{{ tool.args_json }}</pre>
                         </details>
                         {% endif %}
                         {% if !tool.result_json.is_empty() %}
@@ -205,7 +206,7 @@
                                 <span class="font-mono">{{ tool.result_preview }}</span>
                                 {% endif %}
                             </summary>
-                            <pre class="mt-1 overflow-x-auto whitespace-pre-wrap break-words rounded-md border border-zinc-800 bg-[#09090b] px-2 py-1 font-mono text-xs text-zinc-300">{{ tool.result_json }}</pre>
+                            <pre class="mt-1 overflow-x-auto whitespace-pre-wrap break-words bg-[#09090b] px-2 py-1 font-mono text-xs text-zinc-300">{{ tool.result_json }}</pre>
                         </details>
                         {% endif %}
                         {% if !tool.error_text.is_empty() %}
@@ -218,10 +219,11 @@
         {% endif %}
     </section>
     {% else %}
-    <section class="mt-2 rounded-2xl border {% if session_lookup_attempted %}border-amber-900/60 bg-amber-950/20{% else %}border-zinc-800 bg-[#0d0d10]{% endif %} p-4">
+    <section class="mt-6 border-t border-zinc-800 {% if session_lookup_attempted %}bg-amber-950/20{% else %}bg-zinc-950/50{% endif %} p-4">
         <p class="text-sm leading-6 {% if session_lookup_attempted %}text-amber-100/80{% else %}text-zinc-400{% endif %}">{% if session_lookup_attempted %}This run has a backend session id, but no matching row was found yet in the <code class="font-mono text-xs {% if session_lookup_attempted %}text-amber-100{% else %}text-zinc-300{% endif %}">opencode.sessions</code> mirror. The plugin may still be writing, or the session mirror may have failed.{% else %}This run does not have an OpenCode backend session id, so there is no mirrored session detail to display.{% endif %}</p>
     </section>
     {% endif %}
+    </section>
 </div>
 {% endblock %}
 
