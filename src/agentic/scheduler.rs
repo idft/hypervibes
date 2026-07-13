@@ -42,7 +42,7 @@ const SCHEDULER_POLL_INTERVAL: Duration = Duration::from_secs(10);
 const ORPHAN_RECOVERY_INTERVAL: Duration = Duration::from_secs(60);
 const DUE_SCHEDULE_LIMIT: i64 = 20;
 const WORKSPACE_MAINTENANCE_SESSION_PROBE_LIMIT: i64 = 20;
-const OPENCODE_SESSION_STATUS_IDLE: &str = "idle";
+const ACTIVE_OPENCODE_SESSION_STATUSES: [&str; 2] = ["busy", "retry"];
 
 /// Periodic background loop that claims due OpenCode schedules and
 /// dispatches them through an [`AgenticBackend`].
@@ -279,7 +279,7 @@ impl AgenticScheduler {
 async fn process_workspace_maintenance_tasks(
     pool: &DbPool,
     workspace_config: &OpenCodeWorkspaceConfig,
-    opencode_client: &Arc<OpenCodeClient>,
+    _opencode_client: &Arc<OpenCodeClient>,
 ) -> Result<()> {
     let Some(task) = store::get_next_queued_workspace_regenerate_task(pool).await? else {
         return Ok(());
@@ -326,17 +326,6 @@ async fn process_workspace_maintenance_tasks(
         return Ok(());
     };
 
-    let Some(runtime_base_url) = agent
-        .runtime_base_url
-        .as_deref()
-        .filter(|url| !url.is_empty())
-    else {
-        let _ =
-            store::mark_maintenance_task_failed(pool, task.id, "agent runtime base URL is missing")
-                .await;
-        return Ok(());
-    };
-
     let sessions = crate::opencode::store::list_sessions_for_directory(
         pool,
         &workspace_runtime.workspace_container_path,
@@ -345,34 +334,15 @@ async fn process_workspace_maintenance_tasks(
     .await?;
 
     for session in sessions {
-        if session.status.as_deref() == Some(OPENCODE_SESSION_STATUS_IDLE) {
-            continue;
-        }
-
-        match opencode_client
-            .session_is_active(runtime_base_url, &session.id)
-            .await
-        {
-            Ok(true) => {
-                debug!(
-                    task_id = task.id,
-                    agent_key = %task.agent_key,
-                    session_id = %session.id,
-                    "workspace maintenance remains queued while an OpenCode session is active"
-                );
-                return Ok(());
-            }
-            Ok(false) => {}
-            Err(error) => {
-                warn!(
-                    task_id = task.id,
-                    agent_key = %task.agent_key,
-                    session_id = %session.id,
-                    error = ?error,
-                    "failed to probe OpenCode session activity; leaving maintenance queued"
-                );
-                return Ok(());
-            }
+        if ACTIVE_OPENCODE_SESSION_STATUSES.contains(&session.status.as_deref().unwrap_or_default()) {
+            debug!(
+                task_id = task.id,
+                agent_key = %task.agent_key,
+                session_id = %session.id,
+                status = ?session.status,
+                "workspace maintenance remains queued while an OpenCode session is active"
+            );
+            return Ok(());
         }
     }
 
@@ -1710,8 +1680,8 @@ mod tests {
         );
         let directory = format!("/workspaces/agents/{key}");
         sqlx::query(
-            "INSERT INTO opencode.sessions (id, directory, updated_at)
-             VALUES ($1, $2, now())",
+            "INSERT INTO opencode.sessions (id, directory, status, updated_at)
+             VALUES ($1, $2, 'busy', now())",
         )
         .bind(&session_id)
         .bind(&directory)
@@ -1837,6 +1807,59 @@ mod tests {
             .execute(&pool)
             .await
             .expect("update runtime base url");
+
+        let backend: Arc<dyn AgenticBackend> =
+            Arc::new(FakeBackend::success(Arc::new(Mutex::new(Vec::new()))));
+        let live_accounts = Arc::new(crate::hyperliquid::live_state::LiveAccountStore::new());
+        let (_tx, rx) = watch::channel(false);
+        let (_force_tx, force_rx) = watch::channel(false);
+        let mut scheduler = AgenticScheduler::new(
+            pool.clone(),
+            rx,
+            force_rx,
+            backend,
+            live_accounts,
+            sample_workspace_config(),
+            sample_opencode_client(),
+            InFlightTracker::new(),
+        );
+        scheduler.tick().await.expect("tick");
+
+        let task = store::get_latest_workspace_regenerate_task(&pool, &key)
+            .await
+            .expect("load maintenance task")
+            .expect("maintenance task present");
+        assert_eq!(
+            task.status,
+            crate::agentic::model::MAINTENANCE_STATUS_SUCCEEDED
+        );
+    }
+
+    #[tokio::test]
+    async fn tick_ignores_workspace_sessions_without_an_active_status_when_running_maintenance() {
+        let pool = test_db::pool().await;
+        let key = format!(
+            "maint-unknown-session-{}",
+            Utc::now().timestamp_nanos_opt().unwrap_or(0)
+        );
+        seed_test_agent(&pool, &key).await;
+        store::insert_workspace_regenerate_task(&pool, &key, false)
+            .await
+            .expect("insert maintenance task");
+
+        let directory = format!("/workspaces/agents/{key}");
+        sqlx::query(
+            "INSERT INTO opencode.sessions (id, directory, updated_at)
+             VALUES ($1, $2, now())",
+        )
+        .bind(format!(
+            "ses-unknown-maint-{}",
+            Utc::now().timestamp_nanos_opt().unwrap_or(0)
+        ))
+        .bind(&directory)
+        .execute(&pool)
+        .await
+        .expect("insert session without status");
 
         let backend: Arc<dyn AgenticBackend> =
             Arc::new(FakeBackend::success(Arc::new(Mutex::new(Vec::new()))));

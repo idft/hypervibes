@@ -332,6 +332,22 @@ fn settings_tab_renders_sync_status_table() {
 }
 
 #[test]
+fn settings_tab_renders_masked_api_key_with_wallet_actions() {
+    let template = AgentsShowPageTemplate::new(sample_agent_detail_row(), AgentShowTab::Settings);
+
+    let rendered = template.render().unwrap();
+
+    assert!(rendered.contains("https://arbiscan.io/address/0x1234567890abcdef"));
+    assert!(rendered.contains("data-copy-value=\"0x1234567890abcdef\""));
+    assert!(rendered.contains("data-copy-value=\"vt_test_key\""));
+    assert!(rendered.contains("aria-label=\"Copy wallet address\""));
+    assert!(rendered.contains("aria-label=\"Copy API key\""));
+    assert!(rendered.contains(">****<"));
+    assert!(!rendered.contains("API key last used"));
+    assert!(!rendered.contains("Runtime base URL"));
+}
+
+#[test]
 fn settings_tab_renders_workspace_template_drift() {
     let mut template =
         AgentsShowPageTemplate::new(sample_opencode_detail_row(), AgentShowTab::Settings);

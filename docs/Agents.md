@@ -84,7 +84,7 @@ Workspace regeneration is queued as agent-scoped maintenance work:
 - hard reset deletes the full workspace before re-generating it
 - only one queued/running maintenance task is allowed per agent
 - duplicate regenerate submissions are rejected
-- queued maintenance waits for active runs and live OpenCode sessions to finish
+- queued maintenance waits for active runs and OpenCode sessions marked `busy` or `retry` to finish
 
 While workspace maintenance is queued or running:
 

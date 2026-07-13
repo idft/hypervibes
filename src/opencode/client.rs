@@ -111,42 +111,6 @@ impl OpenCodeClient {
         Ok(())
     }
 
-    /// Best-effort session liveness check.
-    ///
-    /// Treats any successful (2xx) response as a live session. The
-    /// `OpenCode /session/{id}/status` endpoint does not currently
-    /// return a structured terminal state across versions. Vibetrading does not
-    /// use this endpoint to decide command completion because
-    /// `POST /session/{id}/command` already blocks until completion for the
-    /// current integration. The polling shape is kept for future diagnostic use.
-    pub async fn session_is_active(&self, base_url: &str, session_id: &str) -> Result<bool> {
-        let url = build_url(base_url, &format!("session/{}/status", session_id), &[]);
-        let response = self
-            .http
-            .get(url)
-            .timeout(self.config.status_timeout)
-            .apply_basic_auth(&self.config)
-            .send()
-            .await
-            .map_err(|error| anyhow!("OpenCode session status request failed: {error}"))?;
-        let status = response.status();
-        if status.is_success() {
-            return Ok(true);
-        }
-        if status == StatusCode::UNAUTHORIZED || status == StatusCode::FORBIDDEN {
-            return Err(anyhow!("OpenCode authentication failed"));
-        }
-        if status == StatusCode::NOT_FOUND {
-            return Ok(false);
-        }
-        let snippet = snippet_from_response(response).await;
-        Err(anyhow!(
-            "OpenCode session status returned {}: {}",
-            status,
-            snippet
-        ))
-    }
-
     pub async fn list_providers(
         &self,
         base_url: &str,

@@ -550,6 +550,62 @@ function initAgentSelectorDismissal() {
   });
 }
 
+async function copyToClipboard(value: string): Promise<boolean> {
+  try {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(value);
+      return true;
+    }
+  } catch {
+    // Fall back for HTTP deployments where the Clipboard API is unavailable.
+  }
+
+  const textarea = document.createElement("textarea");
+  textarea.value = value;
+  textarea.setAttribute("readonly", "");
+  textarea.style.position = "fixed";
+  textarea.style.opacity = "0";
+  document.body.append(textarea);
+  textarea.select();
+  textarea.setSelectionRange(0, value.length);
+
+  try {
+    return document.execCommand("copy");
+  } finally {
+    textarea.remove();
+  }
+}
+
+function updateCopyButton(button: HTMLButtonElement, copied: boolean) {
+  const label = button.dataset.copyLabel ?? button.ariaLabel ?? "Copy";
+  button.dataset.copyLabel = label;
+  button.classList.remove("text-zinc-400", "text-emerald-300", "text-red-300");
+  button.classList.add(copied ? "text-emerald-300" : "text-red-300");
+  button.ariaLabel = copied ? "Copied" : "Copy failed";
+  button.title = button.ariaLabel;
+
+  window.setTimeout(() => {
+    button.classList.remove("text-emerald-300", "text-red-300");
+    button.classList.add("text-zinc-400");
+    button.ariaLabel = label;
+    button.title = label;
+  }, 1500);
+}
+
+function initCopyButtons() {
+  document.addEventListener("click", (event) => {
+    const button = (event.target as Element | null)?.closest<HTMLButtonElement>(
+      "[data-copy-button]",
+    );
+    const value = button?.dataset.copyValue;
+    if (!button || !value) {
+      return;
+    }
+
+    void copyToClipboard(value).then((copied) => updateCopyButton(button, copied));
+  });
+}
+
 function init() {
   renderTimeago();
   renderLocalDateTimes();
@@ -559,6 +615,7 @@ function init() {
   initAgentRailNavigation();
   syncAgentSelector();
   initAgentSelectorDismissal();
+  initCopyButtons();
   seedSelectedMemoryTimelineItems();
   restoreSelectedMemoryTimelineItem();
   startRunningDurationTicker();

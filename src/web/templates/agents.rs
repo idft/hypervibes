@@ -24,7 +24,7 @@ use super::memories::{
 };
 use super::opencode::OpenCodeWorkspaceSettingsView;
 use super::runs::AgenticRunView;
-use super::shared::{LocalTimestampView, local_timestamp_view, optional_local_timestamp_view};
+use super::shared::{LocalTimestampView, optional_local_timestamp_view};
 
 #[derive(Debug, Clone)]
 pub struct SyncStateView {
@@ -314,10 +314,8 @@ pub struct AgentsShowPageTemplate {
     pub latest_trade_execution_summary_html: String,
     pub latest_analysis_summary_html: String,
     pub sparklines_html: String,
-    pub api_key_last_used_at: Option<LocalTimestampView>,
+    pub api_key_masked: String,
     pub prompt_editors: Vec<PromptEditorView>,
-    pub created_at: LocalTimestampView,
-    pub updated_at: LocalTimestampView,
     pub current_path: String,
     pub jobs: Vec<AgenticJobScheduleView>,
     pub hooks: Vec<AgenticJobHookView>,
@@ -345,10 +343,8 @@ impl AgentsShowPageTemplate {
         let tabs = build_agent_show_tabs(&agent, active_tab);
 
         Self {
-            api_key_last_used_at: optional_local_timestamp_view(agent.api_key_last_used_at),
+            api_key_masked: mask_api_key(&agent.api_key),
             prompt_editors: Vec::new(),
-            created_at: local_timestamp_view(agent.created_at),
-            updated_at: local_timestamp_view(agent.updated_at),
             current_path: active_tab.path(&agent_key),
             tabs,
             agent_tabs_use_htmx: true,
@@ -443,4 +439,15 @@ impl AgentsShowPageTemplate {
     pub fn set_prompt_editors(&mut self, prompt_editors: Vec<PromptEditorView>) {
         self.prompt_editors = prompt_editors;
     }
+}
+
+fn mask_api_key(api_key: &str) -> String {
+    let characters: Vec<char> = api_key.chars().collect();
+    if characters.len() <= 12 {
+        return "****".to_string();
+    }
+
+    let prefix: String = characters[..8].iter().collect();
+    let suffix: String = characters[characters.len() - 4..].iter().collect();
+    format!("{prefix}...{suffix}")
 }

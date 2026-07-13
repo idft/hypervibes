@@ -178,60 +178,23 @@
     <section class="mt-2 space-y-2">
         <section class="rounded-2xl border border-zinc-800 bg-[#0d0d10] p-6">
             <h2 class="text-lg font-medium text-white">Settings</h2>
-            <dl class="mt-4 grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
-                <div>
-                    <dt class="text-xs uppercase tracking-[0.16em] text-zinc-500">Environment</dt>
-                    <dd class="mt-1 text-sm text-zinc-300">{{ agent.environment }}</dd>
-                </div>
-                <div>
-                    <dt class="text-xs uppercase tracking-[0.16em] text-zinc-500">Backend kind</dt>
-                    <dd class="mt-1 text-sm text-zinc-300">{{ agent.backend_kind }}</dd>
-                </div>
-                <div>
-                    <dt class="text-xs uppercase tracking-[0.16em] text-zinc-500">Runtime</dt>
-                    <dd class="mt-1 text-sm text-zinc-300">
-                        {{ agent.runtime_name }}
-                        <span class="text-zinc-500">({{ agent.runtime_id }})</span>
-                    </dd>
-                </div>
-                <div>
-                    <dt class="text-xs uppercase tracking-[0.16em] text-zinc-500">Runtime base URL</dt>
-                    <dd class="mt-1 break-all font-mono text-xs text-zinc-300">
-                        {% if let Some(runtime_base_url) = agent.runtime_base_url %}
-                        {{ runtime_base_url }}
-                        {% else %}
-                        <span class="text-zinc-500">-</span>
-                        {% endif %}
-                    </dd>
-                </div>
+            <dl class="mt-4 grid gap-4 sm:grid-cols-2">
                 <div>
                     <dt class="text-xs uppercase tracking-[0.16em] text-zinc-500">Wallet address</dt>
-                    <dd class="mt-1 break-all font-mono text-xs text-zinc-300">{{ agent.wallet_address }}</dd>
+                    <dd class="mt-1 flex items-center gap-2 font-mono text-xs">
+                        <a href="https://arbiscan.io/address/{{ agent.wallet_address }}" target="_blank" rel="noopener noreferrer" class="break-all text-zinc-300 hover:text-white hover:underline">{{ agent.wallet_address }}</a>
+                        <button type="button" data-copy-button data-copy-value="{{ agent.wallet_address }}" class="shrink-0 cursor-pointer rounded-md p-1.5 text-zinc-400 hover:bg-zinc-800 hover:text-white" aria-label="Copy wallet address" title="Copy wallet address">
+                            <svg class="h-3.5 w-3.5" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><rect x="7" y="7" width="10" height="10" rx="1.5"></rect><path stroke-linecap="round" stroke-linejoin="round" d="M13 7V5.5A2.5 2.5 0 0 0 10.5 3h-5A2.5 2.5 0 0 0 3 5.5v5A2.5 2.5 0 0 0 5.5 13H7"></path></svg>
+                        </button>
+                    </dd>
                 </div>
                 <div>
                     <dt class="text-xs uppercase tracking-[0.16em] text-zinc-500">API key</dt>
-                    <dd class="mt-1 break-all font-mono text-xs text-zinc-300">{{ agent.api_key }}</dd>
-                </div>
-                <div>
-                    <dt class="text-xs uppercase tracking-[0.16em] text-zinc-500">API key last used</dt>
-                    <dd class="mt-1 text-sm text-zinc-300">
-                        {% if let Some(api_key_last_used_at) = api_key_last_used_at %}
-                        <time class="local-datetime" data-local-format="datetime" datetime="{{ api_key_last_used_at.iso }}" title="{{ api_key_last_used_at.fallback_text }}">{{ api_key_last_used_at.fallback_text }}</time>
-                        {% else %}
-                        <span class="text-zinc-500">—</span>
-                        {% endif %}
-                    </dd>
-                </div>
-                <div>
-                    <dt class="text-xs uppercase tracking-[0.16em] text-zinc-500">Created</dt>
-                    <dd class="mt-1 text-sm text-zinc-300">
-                        <time class="local-datetime" data-local-format="datetime" datetime="{{ created_at.iso }}" title="{{ created_at.fallback_text }}">{{ created_at.fallback_text }}</time>
-                    </dd>
-                </div>
-                <div>
-                    <dt class="text-xs uppercase tracking-[0.16em] text-zinc-500">Updated</dt>
-                    <dd class="mt-1 text-sm text-zinc-300">
-                        <time class="local-datetime" data-local-format="datetime" datetime="{{ updated_at.iso }}" title="{{ updated_at.fallback_text }}">{{ updated_at.fallback_text }}</time>
+                    <dd class="mt-1 flex items-center gap-2 font-mono text-xs">
+                        <span class="break-all text-zinc-300">{{ api_key_masked }}</span>
+                        <button type="button" data-copy-button data-copy-value="{{ agent.api_key }}" class="shrink-0 cursor-pointer rounded-md p-1.5 text-zinc-400 hover:bg-zinc-800 hover:text-white" aria-label="Copy API key" title="Copy API key">
+                            <svg class="h-3.5 w-3.5" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><rect x="7" y="7" width="10" height="10" rx="1.5"></rect><path stroke-linecap="round" stroke-linejoin="round" d="M13 7V5.5A2.5 2.5 0 0 0 10.5 3h-5A2.5 2.5 0 0 0 3 5.5v5A2.5 2.5 0 0 0 5.5 13H7"></path></svg>
+                        </button>
                     </dd>
                 </div>
             </dl>

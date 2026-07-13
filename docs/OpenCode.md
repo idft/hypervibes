@@ -109,7 +109,7 @@ The new policy on what may and may not start after the shutdown signal:
 Queued workspace maintenance is processed before normal schedule dispatch, but it only starts once the agent is fully idle:
 
 - no queued/running `agentic_runs` remain for that agent
-- no recorded OpenCode sessions for that workspace still probe as active
+- no recorded OpenCode sessions for that workspace are marked `busy` or `retry`
 
 While workspace maintenance is queued or running:
 
