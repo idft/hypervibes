@@ -144,7 +144,7 @@ async fn insert_queued_run_returns_blocked_by_maintenance() {
         Utc::now().timestamp_nanos_opt().unwrap_or(0)
     );
     let schedule_id = seed_agent_and_schedule(&pool, &key, 0).await;
-    insert_workspace_regenerate_task(&pool, &key, false)
+    insert_workspace_regenerate_task(&pool, &key, false, false)
         .await
         .expect("insert maintenance task");
 
@@ -169,7 +169,7 @@ async fn insert_queued_hook_run_returns_blocked_by_maintenance() {
         .first()
         .expect("default hook present")
         .id;
-    insert_workspace_regenerate_task(&pool, &key, false)
+    insert_workspace_regenerate_task(&pool, &key, false, false)
         .await
         .expect("insert maintenance task");
 
@@ -194,7 +194,7 @@ async fn automatic_hook_insert_still_dispatches_during_maintenance() {
         .first()
         .expect("default hook present")
         .id;
-    insert_workspace_regenerate_task(&pool, &key, false)
+    insert_workspace_regenerate_task(&pool, &key, false, false)
         .await
         .expect("insert maintenance task");
 

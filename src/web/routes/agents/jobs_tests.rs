@@ -28,7 +28,7 @@ async fn manual_job_run_redirects_with_warning_during_workspace_maintenance() {
         .find(|row| row.job_key == "analysis-15m")
         .expect("analysis schedule present")
         .id;
-    crate::agentic::store::insert_workspace_regenerate_task(&state.db_pool, &agent_key, false)
+    crate::agentic::store::insert_workspace_regenerate_task(&state.db_pool, &agent_key, false, false)
         .await
         .expect("seed maintenance task");
 

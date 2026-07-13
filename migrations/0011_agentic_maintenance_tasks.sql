@@ -4,7 +4,7 @@ CREATE TABLE IF NOT EXISTS agentic_maintenance_tasks (
     id BIGSERIAL PRIMARY KEY,
     agent_key TEXT NOT NULL REFERENCES agents(agent_key) ON DELETE CASCADE,
     task_kind TEXT NOT NULL,
-    hard_reset BOOLEAN NOT NULL DEFAULT false,
+    parameters JSONB NOT NULL DEFAULT '{}'::jsonb,
     status TEXT NOT NULL,
     error_summary TEXT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),

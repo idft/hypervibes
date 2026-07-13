@@ -18,7 +18,7 @@ async fn insert_workspace_regenerate_task_rejects_duplicate_active_task() {
     );
     let _schedule_id = seed_agent_and_schedule(&pool, &key, 0).await;
 
-    let first = insert_workspace_regenerate_task(&pool, &key, false)
+    let first = insert_workspace_regenerate_task(&pool, &key, false, false)
         .await
         .expect("insert maintenance task");
     let task_id = match first {
@@ -32,9 +32,9 @@ async fn insert_workspace_regenerate_task_rejects_duplicate_active_task() {
         .expect("task present");
     assert_eq!(latest.id, task_id);
     assert_eq!(latest.status, MAINTENANCE_STATUS_QUEUED);
-    assert!(!latest.hard_reset);
+    assert!(!latest.parameter_bool("hard_reset"));
 
-    let duplicate = insert_workspace_regenerate_task(&pool, &key, true)
+    let duplicate = insert_workspace_regenerate_task(&pool, &key, true, false)
         .await
         .expect("insert duplicate maintenance task");
     assert_eq!(
@@ -58,7 +58,7 @@ async fn agent_has_blocking_workspace_maintenance_only_for_queued_or_running_tas
             .expect("initial maintenance state")
     );
 
-    let task_id = match insert_workspace_regenerate_task(&pool, &key, false)
+    let task_id = match insert_workspace_regenerate_task(&pool, &key, false, false)
         .await
         .expect("insert maintenance task")
     {

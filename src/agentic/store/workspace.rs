@@ -1,4 +1,5 @@
 use anyhow::{Context, Result};
+use serde_json::json;
 use sqlx::{Error as SqlxError, Postgres, Transaction, query_as};
 
 use crate::{
@@ -25,19 +26,24 @@ pub async fn insert_workspace_regenerate_task(
     pool: &DbPool,
     agent_key: &str,
     hard_reset: bool,
+    reset_memories: bool,
 ) -> Result<InsertWorkspaceMaintenanceTaskOutcome> {
+    let parameters = json!({
+        "hard_reset": hard_reset,
+        "reset_memories": hard_reset && reset_memories,
+    });
     let row: Result<(i64,), SqlxError> = query_as(
         "INSERT INTO agentic_maintenance_tasks (
             agent_key,
             task_kind,
-            hard_reset,
+            parameters,
             status
          ) VALUES ($1, $2, $3, $4)
          RETURNING id",
     )
     .bind(agent_key)
     .bind(MAINTENANCE_TASK_KIND_WORKSPACE_REGENERATE)
-    .bind(hard_reset)
+    .bind(parameters)
     .bind(MAINTENANCE_STATUS_QUEUED)
     .fetch_one(pool)
     .await;
@@ -61,7 +67,7 @@ pub async fn get_latest_workspace_regenerate_task(
         "SELECT id,
                 agent_key,
                 task_kind,
-                hard_reset,
+                parameters,
                 status,
                 error_summary,
                 created_at,
@@ -90,7 +96,7 @@ pub async fn get_next_queued_workspace_regenerate_task(
         "SELECT id,
                 agent_key,
                 task_kind,
-                hard_reset,
+                parameters,
                 status,
                 error_summary,
                 created_at,

@@ -53,6 +53,7 @@ impl OpenCodeWorkspaceMaintenanceView {
 pub struct OpenCodeWorkspaceMaintenanceStatusView {
     pub task_id: i64,
     pub hard_reset: bool,
+    pub reset_memories: bool,
     pub status_label: String,
     pub status_class: String,
     pub detail_text: String,
@@ -68,6 +69,8 @@ impl OpenCodeWorkspaceMaintenanceStatusView {
     }
 
     pub fn from_task(task: AgentMaintenanceTaskRow) -> Self {
+        let hard_reset = task.parameter_bool("hard_reset");
+        let reset_memories = task.parameter_bool("reset_memories");
         let (status_label, status_class, detail_text, is_visible, should_poll, show_spinner) =
             match task.status.as_str() {
                 MAINTENANCE_STATUS_QUEUED => (
@@ -78,7 +81,7 @@ impl OpenCodeWorkspaceMaintenanceStatusView {
                     true,
                     true,
                 ),
-                MAINTENANCE_STATUS_RUNNING if task.hard_reset => (
+                MAINTENANCE_STATUS_RUNNING if hard_reset => (
                     "Running".to_string(),
                     "border-sky-900/60 bg-sky-950/30 text-sky-300".to_string(),
                     "Hard-resetting workspace".to_string(),
@@ -130,7 +133,8 @@ impl OpenCodeWorkspaceMaintenanceStatusView {
 
         Self {
             task_id: task.id,
-            hard_reset: task.hard_reset,
+            hard_reset,
+            reset_memories,
             status_label,
             status_class,
             detail_text,

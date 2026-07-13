@@ -53,10 +53,10 @@ async fn post_regenerate_workspace_queues_regular_maintenance_task() {
         task.status,
         crate::agentic::model::MAINTENANCE_STATUS_QUEUED
     );
-    assert!(!task.hard_reset);
+    assert!(!task.parameter_bool("hard_reset"));
 }
 #[tokio::test]
-async fn post_regenerate_workspace_with_hard_reset_queues_hard_reset_task() {
+async fn post_regenerate_workspace_with_hard_reset_and_memory_reset_queues_both_options() {
     let state = test_state().await;
     let app = router(Arc::clone(&state));
     let (agent_key, _) = insert_test_opencode_agent(&state)
@@ -69,7 +69,7 @@ async fn post_regenerate_workspace_with_hard_reset_queues_hard_reset_task() {
                 .method("POST")
                 .uri(format!("/agents/{agent_key}/settings/regenerate-workspace"))
                 .header("content-type", "application/x-www-form-urlencoded")
-                .body(Body::from("hard_reset=on"))
+                .body(Body::from("hard_reset=on&reset_memories=on"))
                 .unwrap(),
         )
         .await
@@ -81,7 +81,8 @@ async fn post_regenerate_workspace_with_hard_reset_queues_hard_reset_task() {
             .await
             .expect("load maintenance task")
             .expect("maintenance task present");
-    assert!(task.hard_reset);
+    assert!(task.parameter_bool("hard_reset"));
+    assert!(task.parameter_bool("reset_memories"));
 }
 #[tokio::test]
 async fn post_regenerate_workspace_redirects_with_warning_when_task_already_exists() {
@@ -90,7 +91,7 @@ async fn post_regenerate_workspace_redirects_with_warning_when_task_already_exis
     let (agent_key, _) = insert_test_opencode_agent(&state)
         .await
         .expect("insert agent");
-    crate::agentic::store::insert_workspace_regenerate_task(&state.db_pool, &agent_key, false)
+    crate::agentic::store::insert_workspace_regenerate_task(&state.db_pool, &agent_key, false, false)
         .await
         .expect("seed maintenance task");
 
@@ -126,6 +127,7 @@ async fn settings_page_and_partial_render_workspace_maintenance_status() {
         &state.db_pool,
         &agent_key,
         true,
+        false,
     )
     .await
     .expect("seed maintenance task")

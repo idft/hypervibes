@@ -65,6 +65,16 @@ pub async fn insert_memory(
     Ok(row)
 }
 
+pub async fn delete_memories_for_agent(pool: &DbPool, agent_key: &str) -> Result<u64> {
+    let result = sqlx::query("DELETE FROM memory.records WHERE agent_key = $1")
+        .bind(agent_key)
+        .execute(pool)
+        .await
+        .with_context(|| format!("failed to delete memory records for agent {agent_key}"))?;
+
+    Ok(result.rows_affected())
+}
+
 async fn insert_memory_link_in_tx(
     tx: &mut Transaction<'_, Postgres>,
     agent_key: &str,

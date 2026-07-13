@@ -34,10 +34,16 @@ use crate::{
 pub(in crate::web::routes) struct RegenerateWorkspaceForm {
     #[serde(default)]
     pub hard_reset: Option<String>,
+    #[serde(default)]
+    pub reset_memories: Option<String>,
 }
 impl RegenerateWorkspaceForm {
     fn hard_reset(&self) -> bool {
         self.hard_reset.is_some()
+    }
+
+    fn reset_memories(&self) -> bool {
+        self.hard_reset() && self.reset_memories.is_some()
     }
 }
 pub(in crate::web::routes) async fn agents_show_settings(
@@ -77,6 +83,7 @@ pub(in crate::web::routes) async fn agents_regenerate_workspace(
         &state.db_pool,
         &agent.agent_key,
         form.hard_reset(),
+        form.reset_memories(),
     )
     .await?
     {

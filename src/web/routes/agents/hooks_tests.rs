@@ -25,7 +25,7 @@ async fn manual_hook_run_redirects_with_warning_during_workspace_maintenance() {
         .first()
         .expect("default hook present")
         .id;
-    crate::agentic::store::insert_workspace_regenerate_task(&state.db_pool, &agent_key, false)
+    crate::agentic::store::insert_workspace_regenerate_task(&state.db_pool, &agent_key, false, false)
         .await
         .expect("seed maintenance task");
 

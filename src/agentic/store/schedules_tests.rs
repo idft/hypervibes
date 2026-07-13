@@ -1067,7 +1067,7 @@ async fn claim_due_schedule_returns_blocked_by_maintenance_without_inserting_run
         .await
         .expect("set due");
 
-    insert_workspace_regenerate_task(&pool, &key, false)
+    insert_workspace_regenerate_task(&pool, &key, false, false)
         .await
         .expect("insert maintenance task");
 

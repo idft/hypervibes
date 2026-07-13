@@ -76,9 +76,18 @@ pub struct AgenticRunRow {
 pub struct AgentMaintenanceTaskRow {
     pub id: i64,
     pub agent_key: String,
-    pub hard_reset: bool,
+    pub parameters: Value,
     pub status: String,
     pub error_summary: Option<String>,
+}
+
+impl AgentMaintenanceTaskRow {
+    pub fn parameter_bool(&self, name: &str) -> bool {
+        self.parameters
+            .get(name)
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+    }
 }
 
 #[derive(Debug, Clone, sqlx::FromRow)]

@@ -26,7 +26,7 @@ use crate::{
     },
     db::DbPool,
     hyperliquid::live_state::{LiveAccountStore, live_agent_snapshot_for_dispatch},
-    memory::get_latest_agent_memory_by_type,
+    memory::{delete_memories_for_agent, get_latest_agent_memory_by_type},
     opencode::{
         client::OpenCodeClient,
         workspace::{
@@ -355,6 +355,8 @@ async fn process_workspace_maintenance_tasks(
         return Ok(());
     }
 
+    let hard_reset = task.parameter_bool("hard_reset");
+    let reset_memories = task.parameter_bool("reset_memories");
     let maintenance_result = async {
         let workspace_agent = OpenCodeWorkspaceAgent {
             agent_key: agent.agent_key.clone(),
@@ -362,7 +364,7 @@ async fn process_workspace_maintenance_tasks(
             api_key: agent.api_key.clone(),
         };
 
-        if task.hard_reset {
+        if hard_reset {
             let _ = delete_agent_workspace(workspace_config, &agent.agent_key)?;
         }
 
@@ -375,6 +377,9 @@ async fn process_workspace_maintenance_tasks(
         if !update_agent_runtime_config(pool, &agent.agent_key, runtime_config).await? {
             anyhow::bail!("agent disappeared before workspace metadata update");
         }
+        if reset_memories {
+            delete_memories_for_agent(pool, &agent.agent_key).await?;
+        }
 
         Ok::<(), anyhow::Error>(())
     }
@@ -386,7 +391,8 @@ async fn process_workspace_maintenance_tasks(
             info!(
                 task_id = task.id,
                 agent_key = %task.agent_key,
-                hard_reset = task.hard_reset,
+                hard_reset,
+                reset_memories,
                 "workspace maintenance completed"
             );
         }
@@ -394,7 +400,8 @@ async fn process_workspace_maintenance_tasks(
             error!(
                 task_id = task.id,
                 agent_key = %task.agent_key,
-                hard_reset = task.hard_reset,
+                hard_reset,
+                reset_memories,
                 error = ?error,
                 "workspace maintenance failed"
             );
@@ -1631,7 +1638,7 @@ mod tests {
         insert_test_run(&pool, schedule_id, "running")
             .await
             .expect("seed active run");
-        store::insert_workspace_regenerate_task(&pool, &key, false)
+        store::insert_workspace_regenerate_task(&pool, &key, false, false)
             .await
             .expect("insert maintenance task");
 
@@ -1670,7 +1677,7 @@ mod tests {
             Utc::now().timestamp_nanos_opt().unwrap_or(0)
         );
         seed_test_agent(&pool, &key).await;
-        store::insert_workspace_regenerate_task(&pool, &key, false)
+        store::insert_workspace_regenerate_task(&pool, &key, false, false)
             .await
             .expect("insert maintenance task");
 
@@ -1732,7 +1739,17 @@ mod tests {
             Utc::now().timestamp_nanos_opt().unwrap_or(0)
         );
         seed_test_agent(&pool, &key).await;
-        store::insert_workspace_regenerate_task(&pool, &key, true)
+        sqlx::query(
+            "INSERT INTO memory.records (
+                id, agent_key, symbol, memory_type, summary, content
+             ) VALUES ($1, $2, 'BTC', 'observation', 'memory', 'memory content')",
+        )
+        .bind(uuid::Uuid::new_v4())
+        .bind(&key)
+        .execute(&pool)
+        .await
+        .expect("insert memory");
+        store::insert_workspace_regenerate_task(&pool, &key, true, true)
             .await
             .expect("insert maintenance task");
 
@@ -1771,6 +1788,15 @@ mod tests {
         let workspace_path = PathBuf::from(&workspace.workspace_host_path);
         assert!(workspace_path.join("AGENTS.md").exists());
         assert!(workspace_path.join("scripts/user").exists());
+
+        let (memory_count,): (i64,) = sqlx::query_as(
+            "SELECT COUNT(*) FROM memory.records WHERE agent_key = $1",
+        )
+        .bind(&key)
+        .fetch_one(&pool)
+        .await
+        .expect("count memories");
+        assert_eq!(memory_count, 0);
     }
 
     #[tokio::test]
@@ -1781,7 +1807,7 @@ mod tests {
             Utc::now().timestamp_nanos_opt().unwrap_or(0)
         );
         seed_test_agent(&pool, &key).await;
-        store::insert_workspace_regenerate_task(&pool, &key, false)
+        store::insert_workspace_regenerate_task(&pool, &key, false, false)
             .await
             .expect("insert maintenance task");
 
@@ -1843,7 +1869,7 @@ mod tests {
             Utc::now().timestamp_nanos_opt().unwrap_or(0)
         );
         seed_test_agent(&pool, &key).await;
-        store::insert_workspace_regenerate_task(&pool, &key, false)
+        store::insert_workspace_regenerate_task(&pool, &key, false, false)
             .await
             .expect("insert maintenance task");
 

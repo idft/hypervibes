@@ -660,10 +660,17 @@
         </p>
         <div class="mt-4 rounded-xl border border-zinc-800 bg-zinc-950/70 p-4">
             <label class="flex items-start gap-3 text-sm text-zinc-200">
-                <input type="checkbox" name="hard_reset" value="on" form="regenerate-workspace-form" class="mt-0.5 h-4 w-4 rounded border-zinc-700 bg-zinc-950 text-white">
+                <input id="hard-reset-workspace" type="checkbox" name="hard_reset" value="on" form="regenerate-workspace-form" class="mt-0.5 h-4 w-4 rounded border-zinc-700 bg-zinc-950 text-white">
                 <span>
                     <span class="block font-medium text-white">Hard-reset workspace</span>
                     <span class="mt-1 block text-xs leading-5 text-zinc-500">Delete the full workspace before recreating it from the template. This removes user-managed and agent-generated files.</span>
+                </span>
+            </label>
+            <label id="reset-memories-option" class="mt-3 ml-7 flex items-start gap-3 text-sm text-zinc-500">
+                <input id="reset-memories" type="checkbox" name="reset_memories" value="on" form="regenerate-workspace-form" disabled class="mt-0.5 h-4 w-4 rounded border-zinc-700 bg-zinc-950 text-white disabled:cursor-not-allowed disabled:opacity-50">
+                <span>
+                    <span id="reset-memories-title" class="block font-medium text-zinc-400">Reset memories</span>
+                    <span id="reset-memories-description" class="mt-1 block text-xs leading-5 text-zinc-600">Delete all memories stored for this agent.</span>
                 </span>
             </label>
         </div>
@@ -1052,6 +1059,34 @@
         function initRegenerateWorkspaceModal() {
             const modal = document.getElementById('regenerate-workspace-modal');
             const cancelBtn = document.getElementById('cancel-regenerate-workspace-btn');
+            const hardReset = document.getElementById('hard-reset-workspace');
+            const resetMemories = document.getElementById('reset-memories');
+            const resetMemoriesOption = document.getElementById('reset-memories-option');
+            const resetMemoriesTitle = document.getElementById('reset-memories-title');
+            const resetMemoriesDescription = document.getElementById('reset-memories-description');
+
+            function syncResetMemoriesOption() {
+                if (!hardReset || !resetMemories || !resetMemoriesOption || !resetMemoriesTitle || !resetMemoriesDescription) {
+                    return;
+                }
+
+                resetMemories.disabled = !hardReset.checked;
+                if (!hardReset.checked) {
+                    resetMemories.checked = false;
+                }
+                resetMemoriesOption.classList.toggle('text-zinc-500', !hardReset.checked);
+                resetMemoriesOption.classList.toggle('text-zinc-200', hardReset.checked);
+                resetMemoriesTitle.classList.toggle('text-zinc-400', !hardReset.checked);
+                resetMemoriesTitle.classList.toggle('text-white', hardReset.checked);
+                resetMemoriesDescription.classList.toggle('text-zinc-600', !hardReset.checked);
+                resetMemoriesDescription.classList.toggle('text-zinc-400', hardReset.checked);
+            }
+
+            if (hardReset && hardReset.dataset.resetMemoriesBound !== 'true') {
+                hardReset.dataset.resetMemoriesBound = 'true';
+                hardReset.addEventListener('change', syncResetMemoriesOption);
+            }
+            syncResetMemoriesOption();
 
             if (modal && modal.dataset.regenerateWorkspaceModalBound !== 'true') {
                 modal.dataset.regenerateWorkspaceModalBound = 'true';

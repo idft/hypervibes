@@ -20,7 +20,7 @@
             {% endif %}
             <div>
                 <p class="text-sm text-zinc-200">{{ status.detail_text }}</p>
-                <p class="mt-1 text-xs text-zinc-500">Task #{{ status.task_id }}{% if status.hard_reset %} · Hard reset{% else %} · Re-generate{% endif %}</p>
+                <p class="mt-1 text-xs text-zinc-500">Task #{{ status.task_id }}{% if status.hard_reset %} · Hard reset{% else %} · Re-generate{% endif %}{% if status.reset_memories %} · Reset memories{% endif %}</p>
             </div>
         </div>
         {% if let Some(error_text) = status.error_text %}
