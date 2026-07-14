@@ -2,7 +2,7 @@ use std::{env, ops::Deref, process, str::FromStr};
 
 use futures::{future::BoxFuture, stream::BoxStream};
 use sqlx::{
-    Database, Describe, Either, Error, Execute, Executor, PgPool, Postgres,
+    AssertSqlSafe, Database, Describe, Either, Error, Execute, Executor, PgPool, Postgres, SqlStr,
     postgres::{PgConnectOptions, PgPoolOptions},
 };
 use tokio::runtime::Builder;
@@ -61,18 +61,21 @@ impl<'p> Executor<'p> for &'_ TestDb {
         (&self.pool).fetch_optional(query)
     }
 
-    fn prepare_with<'e, 'q: 'e>(
+    fn prepare_with<'e>(
         self,
-        sql: &'q str,
+        sql: SqlStr,
         parameters: &'e [<Self::Database as Database>::TypeInfo],
-    ) -> BoxFuture<'e, Result<<Self::Database as Database>::Statement<'q>, Error>> {
+    ) -> BoxFuture<'e, Result<<Self::Database as Database>::Statement, Error>>
+    where
+        'p: 'e,
+    {
         (&self.pool).prepare_with(sql, parameters)
     }
 
-    fn describe<'e, 'q: 'e>(
-        self,
-        sql: &'q str,
-    ) -> BoxFuture<'e, Result<Describe<Self::Database>, Error>> {
+    fn describe<'e>(self, sql: SqlStr) -> BoxFuture<'e, Result<Describe<Self::Database>, Error>>
+    where
+        'p: 'e,
+    {
         (&self.pool).describe(sql)
     }
 }
@@ -113,10 +116,12 @@ pub async fn pool() -> TestDb {
         .connect_with(base_options.clone())
         .await
         .expect("connect to test postgres admin database");
-    sqlx::query(&format!("CREATE DATABASE \"{database_name}\""))
-        .execute(&admin_pool)
-        .await
-        .expect("create test database");
+    sqlx::query(AssertSqlSafe(format!(
+        "CREATE DATABASE \"{database_name}\""
+    )))
+    .execute(&admin_pool)
+    .await
+    .expect("create test database");
     admin_pool.close().await;
 
     let pool = PgPoolOptions::new()
@@ -157,9 +162,9 @@ async fn drop_stale_test_databases(base_options: PgConnectOptions) -> Result<(),
     .await?;
 
     for (database_name,) in database_names {
-        sqlx::query(&format!(
+        sqlx::query(AssertSqlSafe(format!(
             "DROP DATABASE IF EXISTS \"{database_name}\" WITH (FORCE)"
-        ))
+        )))
         .execute(&admin_pool)
         .await?;
     }
@@ -185,9 +190,9 @@ async fn drop_database(
         return;
     };
 
-    let _ = sqlx::query(&format!(
+    let _ = sqlx::query(AssertSqlSafe(format!(
         "DROP DATABASE IF EXISTS \"{database_name}\" WITH (FORCE)"
-    ))
+    )))
     .execute(&admin_pool)
     .await;
     admin_pool.close().await;

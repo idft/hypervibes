@@ -354,13 +354,14 @@ pub async fn list_orders(
 /// Returns `None` for both "not found" and "not owned" so existence does
 /// not leak across agents.
 pub async fn get_order(pool: &DbPool, agent_key: &str, id: Uuid) -> Result<Option<OrderRow>> {
-    let row =
-        sqlx::query_as::<_, OrderRow>(&format!("{SELECT_ORDER} WHERE id = $1 AND agent_key = $2"))
-            .bind(id)
-            .bind(agent_key)
-            .fetch_optional(pool)
-            .await
-            .context("failed to fetch order")?;
+    let row = sqlx::query_as::<_, OrderRow>(sqlx::AssertSqlSafe(format!(
+        "{SELECT_ORDER} WHERE id = $1 AND agent_key = $2"
+    )))
+    .bind(id)
+    .bind(agent_key)
+    .fetch_optional(pool)
+    .await
+    .context("failed to fetch order")?;
     Ok(row)
 }
 
@@ -388,9 +389,9 @@ pub async fn find_order_by_cloid(
     environment: &str,
     cloid: &str,
 ) -> Result<Option<OrderRow>> {
-    let row = sqlx::query_as::<_, OrderRow>(&format!(
+    let row = sqlx::query_as::<_, OrderRow>(sqlx::AssertSqlSafe(format!(
         "{SELECT_ORDER} WHERE account_address = $1 AND environment = $2 AND cloid = $3"
-    ))
+    )))
     .bind(account_address)
     .bind(environment)
     .bind(cloid)
@@ -408,9 +409,9 @@ pub async fn find_order_by_oid(
     environment: &str,
     exchange_oid: &str,
 ) -> Result<Option<OrderRow>> {
-    let row = sqlx::query_as::<_, OrderRow>(&format!(
+    let row = sqlx::query_as::<_, OrderRow>(sqlx::AssertSqlSafe(format!(
         "{SELECT_ORDER} WHERE account_address = $1 AND environment = $2 AND exchange_oid = $3"
-    ))
+    )))
     .bind(account_address)
     .bind(environment)
     .bind(exchange_oid)

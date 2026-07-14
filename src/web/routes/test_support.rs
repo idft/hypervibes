@@ -379,6 +379,6 @@ pub(in crate::web::routes) async fn insert_test_agent_with_text(
     Some((agent_key, wallet_address))
 }
 pub(in crate::web::routes) fn random_private_key() -> String {
-    use rand::Rng;
-    format!("0x{}", hex::encode(rand::thread_rng().r#gen::<[u8; 32]>()))
+    use rand::RngExt;
+    format!("0x{}", hex::encode(rand::rng().random::<[u8; 32]>()))
 }

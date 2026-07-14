@@ -11,13 +11,13 @@ use crate::db::DbPool;
 
 pub fn deterministic_private_key(key: &str) -> String {
     use rand::rngs::StdRng;
-    use rand::{Rng, SeedableRng};
+    use rand::{RngExt, SeedableRng};
 
     let seed = key
         .bytes()
         .fold(0u64, |acc, b| acc.wrapping_mul(31).wrapping_add(b as u64));
     let mut rng = StdRng::seed_from_u64(seed);
-    let bytes: [u8; 32] = rng.r#gen();
+    let bytes: [u8; 32] = rng.random();
     format!("0x{}", hex::encode(bytes))
 }
 

@@ -76,8 +76,8 @@ pub async fn test_state() -> Arc<AppState> {
 }
 
 pub fn random_private_key() -> String {
-    use rand::Rng;
-    format!("0x{}", hex::encode(rand::thread_rng().r#gen::<[u8; 32]>()))
+    use rand::RngExt;
+    format!("0x{}", hex::encode(rand::rng().random::<[u8; 32]>()))
 }
 
 pub async fn seed_agent(state: &Arc<AppState>, suffix: &str) -> (String, String) {

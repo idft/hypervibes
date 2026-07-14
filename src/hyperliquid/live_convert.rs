@@ -9,6 +9,7 @@
 use anyhow::Result;
 use chrono::Utc;
 use rust_decimal::Decimal;
+
 use crate::hyperliquid::{
     account_sync::InstrumentLookupMap,
     config::AccountSyncConfig,
@@ -17,6 +18,7 @@ use crate::hyperliquid::{
     },
     normalize::{FundingEventRow, TradeFillRow},
 };
+
 /// Map a `hypersdk` [`ClearinghouseState`](hypersdk::hypercore::types::ClearinghouseState)
 /// into the app's [`AccountLiveState`] margin summary, returning a fully
 /// assembled live state for the account.
@@ -293,6 +295,7 @@ mod tests {
             cloid: None,
             fee_token: "USDC".to_string(),
             liquidation: None,
+            builder_fee: None,
         }
     }
 

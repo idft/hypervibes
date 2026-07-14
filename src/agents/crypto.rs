@@ -1,10 +1,10 @@
 use aes_gcm::{
     Aes256Gcm,
-    aead::{Aead, AeadCore, KeyInit},
+    aead::{Aead, KeyInit},
 };
 use anyhow::{Context, Result, ensure};
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
-use rand::RngCore;
+use rand::RngExt;
 
 const KEY_LEN: usize = 32;
 const NONCE_LEN: usize = 12;
@@ -54,7 +54,9 @@ pub fn encrypt(key: &EncryptionKey, plaintext: &str) -> Result<Vec<u8>> {
     let cipher =
         Aes256Gcm::new_from_slice(&key.bytes).context("failed to initialize AES-256-GCM cipher")?;
 
-    let nonce = Aes256Gcm::generate_nonce(&mut rand::thread_rng());
+    let mut nonce_bytes = [0u8; NONCE_LEN];
+    rand::rng().fill(&mut nonce_bytes);
+    let nonce: aes_gcm::Nonce<aes_gcm::aead::consts::U12> = nonce_bytes.into();
     let ciphertext = cipher
         .encrypt(&nonce, plaintext.as_bytes())
         .map_err(|e| anyhow::anyhow!("encryption failed: {:?}", e))?;
@@ -75,10 +77,11 @@ pub fn decrypt(key: &EncryptionKey, ciphertext: &[u8]) -> Result<String> {
     let (nonce_bytes, sealed) = ciphertext.split_at(NONCE_LEN);
     let cipher =
         Aes256Gcm::new_from_slice(&key.bytes).context("failed to initialize AES-256-GCM cipher")?;
-    let nonce: &aes_gcm::Nonce<aes_gcm::aead::consts::U12> = nonce_bytes.into();
+    let nonce_array: [u8; NONCE_LEN] = nonce_bytes.try_into().expect("nonce length checked");
+    let nonce: aes_gcm::Nonce<aes_gcm::aead::consts::U12> = nonce_array.into();
 
     let plaintext = cipher
-        .decrypt(nonce, sealed)
+        .decrypt(&nonce, sealed)
         .map_err(|e| anyhow::anyhow!("decryption failed: {:?}", e))?;
 
     String::from_utf8(plaintext).context("decrypted plaintext is not valid UTF-8")
@@ -87,7 +90,7 @@ pub fn decrypt(key: &EncryptionKey, ciphertext: &[u8]) -> Result<String> {
 /// Generate an opaque high-entropy app API key for a new agent.
 pub fn generate_api_key() -> String {
     let mut bytes = [0u8; 32];
-    rand::thread_rng().fill_bytes(&mut bytes);
+    rand::rng().fill(&mut bytes);
     format!("vta_{}", URL_SAFE_NO_PAD.encode(bytes))
 }
 
