@@ -8,7 +8,9 @@ use tracing::{info, warn};
 
 use crate::{
     agentic::{
-        model::{JOB_KIND_ANALYSIS, JOB_KIND_DAILY_REVIEW, JOB_KIND_MARKET_ANALYSIS, JOB_KIND_TRADING},
+        model::{
+            JOB_KIND_ANALYSIS, JOB_KIND_DAILY_REVIEW, JOB_KIND_MARKET_ANALYSIS, JOB_KIND_TRADING,
+        },
         store,
     },
     db::DbPool,

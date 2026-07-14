@@ -107,10 +107,10 @@ fn visit_dirs(dir: &Path, extension: &str, than: SystemTime) -> io::Result<bool>
             if visit_dirs(&path, extension, than)? {
                 return Ok(true);
             }
-        } else if path.extension().and_then(|e| e.to_str()) == Some(extension) {
-            if path.metadata()?.modified()? > than {
-                return Ok(true);
-            }
+        } else if path.extension().and_then(|e| e.to_str()) == Some(extension)
+            && path.metadata()?.modified()? > than
+        {
+            return Ok(true);
         }
     }
     Ok(false)

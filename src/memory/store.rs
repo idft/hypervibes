@@ -36,7 +36,10 @@ pub async fn insert_memory(
     let id = Uuid::new_v4();
     let metadata = input.metadata_or_default();
     let timeframe = input.timeframe.as_deref();
-    let mut tx = pool.begin().await.context("failed to begin memory insert tx")?;
+    let mut tx = pool
+        .begin()
+        .await
+        .context("failed to begin memory insert tx")?;
 
     let row = sqlx::query_as::<_, MemoryRecord>(
         "INSERT INTO memory.records (
@@ -60,7 +63,9 @@ pub async fn insert_memory(
         insert_memory_link_in_tx(&mut tx, agent_key, id, &link).await?;
     }
 
-    tx.commit().await.context("failed to commit memory insert tx")?;
+    tx.commit()
+        .await
+        .context("failed to commit memory insert tx")?;
 
     Ok(row)
 }

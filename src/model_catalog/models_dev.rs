@@ -432,10 +432,7 @@ mod tests {
 
         let catalog = ModelsDevCatalog::new(root).unwrap();
         let snapshot = catalog.snapshot().await.unwrap();
-        assert_eq!(
-            snapshot.providers["anthropic"].name,
-            "Anthropic"
-        );
+        assert_eq!(snapshot.providers["anthropic"].name, "Anthropic");
         assert_eq!(
             snapshot.providers["anthropic"].models["claude-sonnet-4"].name,
             "Claude Sonnet 4"

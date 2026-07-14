@@ -491,7 +491,7 @@ async fn place_one(
     // ---- Map the response back to each leg ----
     let now = Utc::now();
     let mut out: Vec<OrderResult> = Vec::with_capacity(legs.len());
-    for (leg, status) in legs.into_iter().zip(statuses.into_iter()) {
+    for (leg, status) in legs.into_iter().zip(statuses) {
         let (db_status, oid_opt, filled, avg_px, status_detail) = map_response_status(&status);
         let outcome = OrderOutcome {
             order_id: leg.id,
@@ -798,7 +798,7 @@ pub async fn cancel_orders(
     let now = Utc::now();
     let mut status_iter = statuses.into_iter();
 
-    for (input, decision) in req.orders.iter().zip(decisions.into_iter()) {
+    for (input, decision) in req.orders.iter().zip(decisions) {
         match decision {
             Decision::UnknownSymbol => outcomes.push(CancelOutcome {
                 symbol: input.symbol.clone(),
@@ -1151,13 +1151,12 @@ mod tests {
         assert_eq!(stored[0].status, "resting");
         assert_eq!(stored[0].exchange_oid.as_deref(), Some("42"));
         assert_eq!(stored[0].cloid, r.cloid);
-        let (rounded_size,): (Option<Decimal>,) = sqlx::query_as(
-            "SELECT rounded_size FROM hyperliquid.orders WHERE id = $1",
-        )
-        .bind(stored[0].id)
-        .fetch_one(&pool)
-        .await
-        .expect("fetch rounded size");
+        let (rounded_size,): (Option<Decimal>,) =
+            sqlx::query_as("SELECT rounded_size FROM hyperliquid.orders WHERE id = $1")
+                .bind(stored[0].id)
+                .fetch_one(&pool)
+                .await
+                .expect("fetch rounded size");
         assert_eq!(rounded_size, Some(dec!(0.1)));
     }
 
@@ -1227,14 +1226,13 @@ mod tests {
         // SL leg: stop-market, so limit_px == trigger_px
         assert_eq!(sl.side, "sell");
         assert!(sl.reduce_only);
-        let (rounded_price, trigger_price): (Option<Decimal>, Option<Decimal>) =
-            sqlx::query_as(
-                "SELECT rounded_price, trigger_price FROM hyperliquid.orders WHERE id = $1",
-            )
-            .bind(sl.id)
-            .fetch_one(&pool)
-            .await
-            .expect("fetch stop prices");
+        let (rounded_price, trigger_price): (Option<Decimal>, Option<Decimal>) = sqlx::query_as(
+            "SELECT rounded_price, trigger_price FROM hyperliquid.orders WHERE id = $1",
+        )
+        .bind(sl.id)
+        .fetch_one(&pool)
+        .await
+        .expect("fetch stop prices");
         assert_eq!(rounded_price, trigger_price);
     }
 

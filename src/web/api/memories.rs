@@ -13,8 +13,7 @@ use uuid::Uuid;
 use crate::{
     agents::AuthenticatedAgent,
     memory::{
-        CreateMemory, MemoryListFilter, MemoryRecord, memory_expires_at,
-        store as memory_store,
+        CreateMemory, MemoryListFilter, MemoryRecord, memory_expires_at, store as memory_store,
     },
     web::{AppState, ui_events::UiEvent},
 };
@@ -211,20 +210,24 @@ pub(super) async fn get_memory_by_id(
             let mut body = serde_json::to_value(MemoryRecordResponse::from(r))
                 .map_err(|e| ApiError::Internal(anyhow::anyhow!(e)))?;
             if filter.includes("links") {
-                let outgoing = memory_store::list_memory_links_from(&state.db_pool, &agent.agent_key, id)
-                    .await
-                    .map_err(ApiError::Internal)?;
-                let incoming = memory_store::list_memory_links_to(&state.db_pool, &agent.agent_key, id)
-                    .await
-                    .map_err(ApiError::Internal)?;
+                let outgoing =
+                    memory_store::list_memory_links_from(&state.db_pool, &agent.agent_key, id)
+                        .await
+                        .map_err(ApiError::Internal)?;
+                let incoming =
+                    memory_store::list_memory_links_to(&state.db_pool, &agent.agent_key, id)
+                        .await
+                        .map_err(ApiError::Internal)?;
                 if let Some(obj) = body.as_object_mut() {
                     obj.insert(
                         "links_from".to_string(),
-                        serde_json::to_value(outgoing).map_err(|e| ApiError::Internal(anyhow::anyhow!(e)))?,
+                        serde_json::to_value(outgoing)
+                            .map_err(|e| ApiError::Internal(anyhow::anyhow!(e)))?,
                     );
                     obj.insert(
                         "links_to".to_string(),
-                        serde_json::to_value(incoming).map_err(|e| ApiError::Internal(anyhow::anyhow!(e)))?,
+                        serde_json::to_value(incoming)
+                            .map_err(|e| ApiError::Internal(anyhow::anyhow!(e)))?,
                     );
                 }
             }
@@ -272,7 +275,6 @@ pub struct MemoryRecordResponse {
     /// delayed).
     pub expires_at: Option<DateTime<Utc>>,
 }
-
 
 impl From<MemoryRecord> for MemoryRecordResponse {
     fn from(r: MemoryRecord) -> Self {

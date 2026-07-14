@@ -536,13 +536,12 @@ mod tests {
         assert_eq!(fetched.cloid, "0xcloid_rt_1");
         assert_eq!(fetched.symbol, "BTC");
         assert_eq!(fetched.status, "pending_submission");
-        let (requested_size,): (Decimal,) = sqlx::query_as(
-            "SELECT requested_size FROM hyperliquid.orders WHERE id = $1",
-        )
-        .bind(id)
-        .fetch_one(&pool)
-        .await
-        .expect("fetch requested size");
+        let (requested_size,): (Decimal,) =
+            sqlx::query_as("SELECT requested_size FROM hyperliquid.orders WHERE id = $1")
+                .bind(id)
+                .fetch_one(&pool)
+                .await
+                .expect("fetch requested size");
         assert_eq!(requested_size, dec!(0.1));
     }
 
@@ -561,19 +560,27 @@ mod tests {
         insert_order(&pool, &b).await.unwrap();
 
         // Agent A sees only its BTC order.
-        let a_rows = list_orders(&pool, &a_key, None, None, None, None, None).await.unwrap();
+        let a_rows = list_orders(&pool, &a_key, None, None, None, None, None)
+            .await
+            .unwrap();
         assert!(a_rows.iter().all(|r| r.agent_key == a_key));
         assert!(a_rows.iter().any(|r| r.symbol == "BTC"));
 
         // Symbol filter further narrows it.
-        let a_btc = list_orders(&pool, &a_key, None, Some("BTC"), None, None, None).await.unwrap();
+        let a_btc = list_orders(&pool, &a_key, None, Some("BTC"), None, None, None)
+            .await
+            .unwrap();
         assert!(a_btc.iter().all(|r| r.symbol == "BTC"));
 
-        let a_eth = list_orders(&pool, &a_key, None, Some("ETH"), None, None, None).await.unwrap();
+        let a_eth = list_orders(&pool, &a_key, None, Some("ETH"), None, None, None)
+            .await
+            .unwrap();
         assert!(a_eth.is_empty());
 
         // Agent B sees only its ETH order.
-        let b_rows = list_orders(&pool, &b_key, None, None, None, None, None).await.unwrap();
+        let b_rows = list_orders(&pool, &b_key, None, None, None, None, None)
+            .await
+            .unwrap();
         assert!(b_rows.iter().all(|r| r.agent_key == b_key));
         assert!(b_rows.iter().any(|r| r.symbol == "ETH"));
     }

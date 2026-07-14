@@ -10,9 +10,7 @@ use std::sync::Arc;
 use super::show::render_agent_show_page;
 use crate::web::error::AppError;
 use crate::{
-    agents::strategy_prompts::{
-        is_valid_prompt_kind, upsert_agent_strategy_prompt,
-    },
+    agents::strategy_prompts::{is_valid_prompt_kind, upsert_agent_strategy_prompt},
     web::{AppState, templates::AgentShowTab},
 };
 pub(in crate::web::routes) async fn agents_show_prompts(
@@ -47,7 +45,9 @@ pub(in crate::web::routes) async fn agents_update_prompt(
         return Ok((StatusCode::BAD_REQUEST, "invalid prompt kind").into_response());
     }
 
-    let updated = upsert_agent_strategy_prompt(&state.db_pool, &agent_key, prompt_kind, form.prompt.trim()).await?;
+    let updated =
+        upsert_agent_strategy_prompt(&state.db_pool, &agent_key, prompt_kind, form.prompt.trim())
+            .await?;
 
     if !updated {
         return Ok((StatusCode::NOT_FOUND, "agent not found").into_response());

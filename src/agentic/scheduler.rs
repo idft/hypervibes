@@ -11,16 +11,15 @@ use crate::{
         in_flight::{InFlightTracker, SHUTDOWN_IN_FLIGHT_GRACE},
         model::{
             DueOpenCodeHookRow, DueOpenCodeScheduleRow, HOOK_EVENT_ANALYSIS_BATCH_COMPLETED,
-            JOB_KIND_ANALYSIS, JOB_KIND_DAILY_REVIEW, JOB_KIND_TRADING,
-            MAINTENANCE_STATUS_QUEUED,
+            JOB_KIND_ANALYSIS, JOB_KIND_DAILY_REVIEW, JOB_KIND_TRADING, MAINTENANCE_STATUS_QUEUED,
         },
         store,
         timeframe::{boundary_for_due_at, parse_timeframe_seconds},
     },
     agents::{
         model::BACKEND_KIND_OPENCODE,
-        strategy_prompts::{get_agent_strategy_prompt, prompt_kind_for_job_kind},
         store::{get_agent, list_agent_instrument_ids, update_agent_runtime_config},
+        strategy_prompts::{get_agent_strategy_prompt, prompt_kind_for_job_kind},
     },
     db::DbPool,
     hyperliquid::live_state::{LiveAccountStore, live_agent_snapshot_for_dispatch},
@@ -65,6 +64,7 @@ pub struct AgenticScheduler {
 }
 
 impl AgenticScheduler {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         pool: DbPool,
         shutdown_rx: watch::Receiver<bool>,
@@ -332,7 +332,8 @@ async fn process_workspace_maintenance_tasks(
     .await?;
 
     for session in sessions {
-        if ACTIVE_OPENCODE_SESSION_STATUSES.contains(&session.status.as_deref().unwrap_or_default()) {
+        if ACTIVE_OPENCODE_SESSION_STATUSES.contains(&session.status.as_deref().unwrap_or_default())
+        {
             debug!(
                 task_id = task.id,
                 agent_key = %task.agent_key,
@@ -553,6 +554,7 @@ async fn process_schedule_for_agent(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn dispatch_request_from_schedule(
     schedule: &DueOpenCodeScheduleRow,
     run_id: i64,
@@ -591,6 +593,7 @@ pub fn dispatch_request_from_schedule(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn dispatch_request_from_hook(
     hook: &DueOpenCodeHookRow,
     run_id: i64,
@@ -650,7 +653,8 @@ async fn build_dispatch_request(
         .map(|s| s.value)
         .filter(|v| !v.trim().is_empty())
         .unwrap_or_else(|| crate::agents::prompts::DEFAULT_SYSTEM_PROMPT.to_string());
-    let strategy_prompt = load_strategy_prompt(pool, &schedule.agent_key, &schedule.job_kind).await?;
+    let strategy_prompt =
+        load_strategy_prompt(pool, &schedule.agent_key, &schedule.job_kind).await?;
     let accumulated_learnings = load_accumulated_learnings(pool, &schedule.agent_key).await?;
 
     let account_snapshot = if schedule.job_kind == JOB_KIND_TRADING {
@@ -721,16 +725,20 @@ async fn load_strategy_prompt(pool: &DbPool, agent_key: &str, job_kind: &str) ->
 }
 
 async fn load_accumulated_learnings(pool: &DbPool, agent_key: &str) -> Result<Option<String>> {
-    Ok(get_latest_agent_memory_by_type(pool, agent_key, "agent_learnings")
-        .await?
-        .map(|memory| {
-            format!(
-                "Summary: {}\nCreated at: {}\nContent: {}",
-                memory.summary,
-                memory.created_at.to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
-                memory.content
-            )
-        }))
+    Ok(
+        get_latest_agent_memory_by_type(pool, agent_key, "agent_learnings")
+            .await?
+            .map(|memory| {
+                format!(
+                    "Summary: {}\nCreated at: {}\nContent: {}",
+                    memory.summary,
+                    memory
+                        .created_at
+                        .to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+                    memory.content
+                )
+            }),
+    )
 }
 
 pub async fn dispatch_analysis_batch_completed_hook(
@@ -863,7 +871,7 @@ pub async fn dispatch_run(
 }
 
 fn timeframe_duration_for_sort(schedule: &DueOpenCodeScheduleRow) -> i64 {
-    let duration_seconds = match parse_timeframe_seconds(&schedule.timeframe) {
+    match parse_timeframe_seconds(&schedule.timeframe) {
         Ok(seconds) => seconds,
         Err(error) => {
             warn!(
@@ -874,14 +882,14 @@ fn timeframe_duration_for_sort(schedule: &DueOpenCodeScheduleRow) -> i64 {
             );
             i64::MAX
         }
-    };
-    duration_seconds
+    }
 }
 
 fn sort_analysis_schedules_for_dispatch(
     due: Vec<DueOpenCodeScheduleRow>,
 ) -> Vec<DueOpenCodeScheduleRow> {
-    let mut indexed: Vec<((i64, chrono::DateTime<Utc>, i64), DueOpenCodeScheduleRow)> = due
+    type AnalysisSortKey = (i64, chrono::DateTime<Utc>, i64);
+    let mut indexed: Vec<(AnalysisSortKey, DueOpenCodeScheduleRow)> = due
         .into_iter()
         .map(|schedule| {
             (
@@ -901,7 +909,8 @@ fn sort_analysis_schedules_for_dispatch(
 fn sort_trading_schedules_for_dispatch(
     due: Vec<DueOpenCodeScheduleRow>,
 ) -> Vec<DueOpenCodeScheduleRow> {
-    let mut indexed: Vec<((chrono::DateTime<Utc>, i64, i64), DueOpenCodeScheduleRow)> = due
+    type TradingSortKey = (chrono::DateTime<Utc>, i64, i64);
+    let mut indexed: Vec<(TradingSortKey, DueOpenCodeScheduleRow)> = due
         .into_iter()
         .map(|schedule| {
             (
@@ -1230,20 +1239,21 @@ mod tests {
 
         run_until(|| async { calls.lock().map(|guard| !guard.is_empty()).unwrap_or(false) }).await;
 
-        let guard = calls.lock().unwrap();
-        assert_eq!(guard.len(), 1);
-        let request = &guard[0];
-        assert_eq!(request.agent_key, key);
-        assert_eq!(request.job_key, "analysis-15m");
-        assert_eq!(request.timeframe.as_deref(), Some("15m"));
-        assert_eq!(
-            request.scheduled_for,
-            crate::agentic::timeframe::boundary_for_due_at(
-                due,
-                crate::agentic::timeframe::DEFAULT_TRIGGER_DELAY_SECONDS,
-            )
-        );
-        drop(guard);
+        {
+            let guard = calls.lock().unwrap();
+            assert_eq!(guard.len(), 1);
+            let request = &guard[0];
+            assert_eq!(request.agent_key, key);
+            assert_eq!(request.job_key, "analysis-15m");
+            assert_eq!(request.timeframe.as_deref(), Some("15m"));
+            assert_eq!(
+                request.scheduled_for,
+                crate::agentic::timeframe::boundary_for_due_at(
+                    due,
+                    crate::agentic::timeframe::DEFAULT_TRIGGER_DELAY_SECONDS,
+                )
+            );
+        }
 
         run_until(|| async {
             list_run_statuses(&pool, &key)
@@ -1758,13 +1768,12 @@ mod tests {
         assert!(workspace_path.join("AGENTS.md").exists());
         assert!(workspace_path.join("scripts/user").exists());
 
-        let (memory_count,): (i64,) = sqlx::query_as(
-            "SELECT COUNT(*) FROM memory.records WHERE agent_key = $1",
-        )
-        .bind(&key)
-        .fetch_one(&pool)
-        .await
-        .expect("count memories");
+        let (memory_count,): (i64,) =
+            sqlx::query_as("SELECT COUNT(*) FROM memory.records WHERE agent_key = $1")
+                .bind(&key)
+                .fetch_one(&pool)
+                .await
+                .expect("count memories");
         assert_eq!(memory_count, 0);
     }
 
@@ -2026,15 +2035,17 @@ mod tests {
 
         // If the drain logic works, `run` returns only after the
         // dispatch (200ms total) finishes. Generous bound: 2s.
-        let joined = tokio::time::timeout(Duration::from_secs(2), run_handle)
+        tokio::time::timeout(Duration::from_secs(2), run_handle)
             .await
             .expect("run should return within 2s of shutdown signal")
             .expect("join")
             .expect("run result");
 
         assert_eq!(in_flight.in_flight(), 0, "tracker should be empty");
-        assert!(calls.lock().unwrap().len() >= 1, "dispatch should have run");
-        let _ = joined;
+        assert!(
+            !calls.lock().unwrap().is_empty(),
+            "dispatch should have run"
+        );
     }
 
     #[tokio::test]

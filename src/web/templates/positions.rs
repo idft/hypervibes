@@ -1,12 +1,12 @@
 use std::collections::{HashMap, HashSet};
 
+use crate::hyperliquid::live_state::{AccountLiveState, LiveConnectionStatus, LivePosition};
 use askama::Template;
 use rust_decimal::Decimal;
-use crate::hyperliquid::live_state::{AccountLiveState, LiveConnectionStatus, LivePosition};
 
 use super::shared::{
-    MoneyCell, dash_cell, format_decimal_with_commas, format_money_text_with_decimals,
-    format_neutral_money_cell_with_decimals, currency_logo_url,
+    MoneyCell, currency_logo_url, dash_cell, format_decimal_with_commas,
+    format_money_text_with_decimals, format_neutral_money_cell_with_decimals,
 };
 
 /// Per-row view of an open perpetual position for the agent detail page.

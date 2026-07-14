@@ -385,20 +385,8 @@ pub(super) fn format_json_value(value: Option<&Value>) -> String {
 
 const JSON_PREVIEW_MAX_CHARS: usize = 200;
 const JSON_PREVIEW_PRIORITY_FIELDS: &[&str] = &[
-    "command",
-    "content",
-    "text",
-    "query",
-    "path",
-    "filePath",
-    "url",
-    "input",
-    "prompt",
-    "message",
-    "output",
-    "result",
-    "data",
-    "response",
+    "command", "content", "text", "query", "path", "filePath", "url", "input", "prompt", "message",
+    "output", "result", "data", "response",
 ];
 
 fn json_value_preview(value: &Value) -> String {
@@ -431,10 +419,7 @@ pub(super) fn pick_json_preview(value: Option<&Value>) -> String {
             }
             String::new()
         }
-        Value::Array(items) => items
-            .first()
-            .map(json_value_preview)
-            .unwrap_or_default(),
+        Value::Array(items) => items.first().map(json_value_preview).unwrap_or_default(),
         _ => json_value_preview(value),
     }
 }

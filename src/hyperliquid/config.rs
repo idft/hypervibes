@@ -2,9 +2,9 @@ use std::str::FromStr;
 
 #[cfg(test)]
 use alloy::signers::local::PrivateKeySigner;
-use anyhow::{Result, bail};
 #[cfg(test)]
 use anyhow::Context;
+use anyhow::{Result, bail};
 
 /// Hyperliquid network environment.
 ///

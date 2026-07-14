@@ -30,6 +30,7 @@ use crate::{
 
 use self::ui_events::UiEventHub;
 
+#[allow(clippy::too_many_arguments)]
 pub async fn serve(
     bind_addr: &str,
     db_pool: DbPool,
@@ -138,7 +139,12 @@ fn shutdown_signal_future(
     force_shutdown_rx: watch::Receiver<bool>,
     in_flight: InFlightTracker,
 ) -> impl std::future::Future<Output = ()> {
-    shutdown_signal_future_with_grace(shutdown_rx, force_shutdown_rx, in_flight, SHUTDOWN_IN_FLIGHT_GRACE)
+    shutdown_signal_future_with_grace(
+        shutdown_rx,
+        force_shutdown_rx,
+        in_flight,
+        SHUTDOWN_IN_FLIGHT_GRACE,
+    )
 }
 
 fn router(state: Arc<AppState>) -> Router {
@@ -165,7 +171,8 @@ mod tests {
         force_shutdown_rx: watch::Receiver<bool>,
         in_flight: InFlightTracker,
     ) {
-        shutdown_signal_future_with_grace(shutdown_rx, force_shutdown_rx, in_flight, TEST_GRACE).await;
+        shutdown_signal_future_with_grace(shutdown_rx, force_shutdown_rx, in_flight, TEST_GRACE)
+            .await;
     }
 
     #[tokio::test]

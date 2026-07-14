@@ -91,9 +91,14 @@ async fn post_regenerate_workspace_redirects_with_warning_when_task_already_exis
     let (agent_key, _) = insert_test_opencode_agent(&state)
         .await
         .expect("insert agent");
-    crate::agentic::store::insert_workspace_regenerate_task(&state.db_pool, &agent_key, false, false)
-        .await
-        .expect("seed maintenance task");
+    crate::agentic::store::insert_workspace_regenerate_task(
+        &state.db_pool,
+        &agent_key,
+        false,
+        false,
+    )
+    .await
+    .expect("seed maintenance task");
 
     let response = app
         .oneshot(

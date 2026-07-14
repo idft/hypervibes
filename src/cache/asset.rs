@@ -55,12 +55,12 @@ impl AssetCache {
         let path = self.root.join(namespace).join(key);
         let stale_bytes = read_if_exists(&path).await?;
 
-        if let Some(bytes) = stale_bytes.as_ref() {
-            if is_fresh(&path, policy.ttl).await? {
-                return Ok(CachedAsset {
-                    bytes: bytes.clone(),
-                });
-            }
+        if let Some(bytes) = stale_bytes.as_ref()
+            && is_fresh(&path, policy.ttl).await?
+        {
+            return Ok(CachedAsset {
+                bytes: bytes.clone(),
+            });
         }
 
         let key_lock = {

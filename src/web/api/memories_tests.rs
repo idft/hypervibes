@@ -303,13 +303,12 @@ async fn auth_touches_api_key_last_used_at() {
         .unwrap();
     assert_eq!(response.status(), StatusCode::CREATED);
 
-    let (last_used_at,): (Option<chrono::DateTime<chrono::Utc>>,) = sqlx::query_as(
-        "SELECT api_key_last_used_at FROM agents WHERE agent_key = $1",
-    )
-    .bind(agent_key)
-    .fetch_one(&state.db_pool)
-    .await
-    .unwrap();
+    let (last_used_at,): (Option<chrono::DateTime<chrono::Utc>>,) =
+        sqlx::query_as("SELECT api_key_last_used_at FROM agents WHERE agent_key = $1")
+            .bind(agent_key)
+            .fetch_one(&state.db_pool)
+            .await
+            .unwrap();
     assert!(last_used_at.is_some());
 }
 

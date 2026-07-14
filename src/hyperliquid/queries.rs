@@ -357,6 +357,7 @@ mod tests {
         .expect("insert ledger event");
     }
 
+    #[allow(clippy::too_many_arguments)]
     async fn seed_trade_fill(
         pool: &DbPool,
         hash: &str,

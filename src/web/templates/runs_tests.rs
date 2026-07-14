@@ -100,7 +100,10 @@ fn pick_json_preview_handles_arrays_and_scalars() {
         pick_json_preview(Some(&json!(["first", "second"]))),
         "first"
     );
-    assert_eq!(pick_json_preview(Some(&json!("just a string"))), "just a string");
+    assert_eq!(
+        pick_json_preview(Some(&json!("just a string"))),
+        "just a string"
+    );
     assert_eq!(pick_json_preview(Some(&json!(42))), "42");
     assert_eq!(pick_json_preview(None), "");
     assert_eq!(pick_json_preview(Some(&json!({}))), "");

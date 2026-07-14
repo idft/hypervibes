@@ -274,7 +274,7 @@ fn jobs_page_links_to_new_hook_page() {
 fn memories_tab_renders_timeline_date_filter_and_markdown_content() {
     let mut template =
         AgentsShowPageTemplate::new(sample_agent_detail_row(), AgentShowTab::Memories);
-    let records = vec![
+    let records = [
         sample_memory_record(
             "BTC",
             Some("15m"),
@@ -308,7 +308,10 @@ fn memories_tab_renders_timeline_date_filter_and_markdown_content() {
     assert!(rendered.contains("<li>Wait for a pullback before adding risk.</li>"));
     assert!(rendered.contains("metadata keys"));
     assert!(rendered.contains("data-memory-detail-loading"));
-    assert!(rendered.contains("hx-trigger=\"intersect once root:.memory-timeline-scroll threshold:0.5\""));
+    assert!(
+        rendered
+            .contains("hx-trigger=\"intersect once root:.memory-timeline-scroll threshold:0.5\"")
+    );
 }
 
 #[test]
@@ -381,7 +384,8 @@ fn settings_tab_renders_workspace_template_drift() {
 
 #[test]
 fn prompts_tab_renders_strategy_copy_and_reset_defaults_ui() {
-    let mut template = AgentsShowPageTemplate::new(sample_agent_detail_row(), AgentShowTab::Prompts);
+    let mut template =
+        AgentsShowPageTemplate::new(sample_agent_detail_row(), AgentShowTab::Prompts);
     template.set_prompt_editors(vec![
         PromptEditorView::new(
             "analysis",

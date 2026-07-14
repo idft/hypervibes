@@ -192,7 +192,7 @@ pub(crate) async fn agent_has_blocking_workspace_maintenance_tx(
     )
     .bind(agent_key)
     .bind(MAINTENANCE_TASK_KIND_WORKSPACE_REGENERATE)
-    .bind(&ACTIVE_MAINTENANCE_STATUSES)
+    .bind(ACTIVE_MAINTENANCE_STATUSES)
     .fetch_optional(&mut **tx)
     .await
     .with_context(|| format!("failed to check workspace maintenance state for {agent_key}"))?;

@@ -28,9 +28,14 @@ async fn manual_job_run_redirects_with_warning_during_workspace_maintenance() {
         .find(|row| row.job_key == "analysis-15m")
         .expect("analysis schedule present")
         .id;
-    crate::agentic::store::insert_workspace_regenerate_task(&state.db_pool, &agent_key, false, false)
-        .await
-        .expect("seed maintenance task");
+    crate::agentic::store::insert_workspace_regenerate_task(
+        &state.db_pool,
+        &agent_key,
+        false,
+        false,
+    )
+    .await
+    .expect("seed maintenance task");
 
     let response = app
         .oneshot(
@@ -210,12 +215,13 @@ async fn post_job_run_now_queues_and_dispatches_run() {
         tokio::time::sleep(tokio::time::Duration::from_millis(20)).await;
     }
 
-    let recorded = calls.lock().unwrap();
-    assert_eq!(recorded.len(), 1);
-    assert_eq!(recorded[0].schedule_id, Some(schedule_id));
-    assert_eq!(recorded[0].agent_key, agent_key);
-    assert_eq!(recorded[0].job_key, "analysis-15m");
-    drop(recorded);
+    {
+        let recorded = calls.lock().unwrap();
+        assert_eq!(recorded.len(), 1);
+        assert_eq!(recorded[0].schedule_id, Some(schedule_id));
+        assert_eq!(recorded[0].agent_key, agent_key);
+        assert_eq!(recorded[0].job_key, "analysis-15m");
+    }
 
     let runs = crate::agentic::store::list_agent_runs(&pool, &agent_key, 10)
         .await
@@ -672,9 +678,7 @@ async fn job_detail_page_renders_job_specific_runs() {
     assert!(text.contains(&format!(
         "/agents/{agent_key}/jobs/{schedule_id}/model-picker"
     )));
-    assert!(text.contains(&format!(
-        "/agents/{agent_key}/jobs/{schedule_id}/timeframe"
-    )));
+    assert!(text.contains(&format!("/agents/{agent_key}/jobs/{schedule_id}/timeframe")));
     assert!(text.contains("cursor-pointer"));
     assert!(text.contains("data-model-picker-lazy-open"));
     assert!(!text.contains("data-model-picker-mode=\"modal\""));
@@ -754,7 +758,10 @@ async fn post_job_timeframe_reanchors_schedule_and_regenerates_job_key() {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri(format!("/agents/{agent_key}/jobs/{}/timeframe", schedule.id))
+                .uri(format!(
+                    "/agents/{agent_key}/jobs/{}/timeframe",
+                    schedule.id
+                ))
                 .header("content-type", "application/x-www-form-urlencoded")
                 .body(Body::from("timeframe=4h"))
                 .unwrap(),
@@ -812,13 +819,15 @@ async fn post_job_timeframe_invalid_value_redirects_with_error() {
         .unwrap();
 
     assert_eq!(response.status(), StatusCode::SEE_OTHER);
-    assert!(response
-        .headers()
-        .get("location")
-        .and_then(|value| value.to_str().ok())
-        .is_some_and(|location| location.starts_with(&format!(
-            "/agents/{agent_key}/jobs/{schedule_id}?timeframe_error="
-        ))));
+    assert!(
+        response
+            .headers()
+            .get("location")
+            .and_then(|value| value.to_str().ok())
+            .is_some_and(|location| location.starts_with(&format!(
+                "/agents/{agent_key}/jobs/{schedule_id}?timeframe_error="
+            )))
+    );
 }
 #[tokio::test]
 async fn post_job_timeout_accepts_humanized_and_composite_inputs() {

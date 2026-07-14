@@ -178,7 +178,7 @@ pub(in crate::web::routes) async fn agent_live_stream(
                 events
             }
         })
-        .flat_map(|events| tokio_stream::iter(events));
+        .flat_map(tokio_stream::iter);
 
     let stream = tokio_stream::iter(
         initial_events

@@ -3,7 +3,8 @@ use askama::Template;
 use pulldown_cmark::{Options as MarkdownOptions, Parser as MarkdownParser, html};
 
 use crate::{
-    agents::model::AgentDetailRow, hyperliquid::queries::AccountTransactionRow,
+    agents::model::AgentDetailRow,
+    hyperliquid::queries::AccountTransactionRow,
     memory::{MemoryRecord, MemoryTimelineRecord},
 };
 

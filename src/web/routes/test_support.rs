@@ -13,11 +13,11 @@ use crate::{
     agents::{
         crypto::EncryptionKey,
         model::CreateAgentRuntimeForm,
+        store::{insert_agent_runtime, update_agent_runtime_config},
         strategy_prompts::{
             PROMPT_KIND_ANALYSIS, PROMPT_KIND_TRADING, insert_default_strategy_prompts_for_agent,
             upsert_agent_strategy_prompt,
         },
-        store::{insert_agent_runtime, update_agent_runtime_config},
     },
     memory::CreateMemory,
     test_db,

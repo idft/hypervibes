@@ -1,15 +1,15 @@
-use anyhow::{Context, Result};
-use chrono::{DateTime, Utc};
-use sqlx::query_as;
-#[cfg(test)]
-use sqlx::PgPool;
 #[cfg(test)]
 use crate::agentic::model::RUN_STATUS_ABORTED;
+use anyhow::{Context, Result};
+use chrono::{DateTime, Utc};
+#[cfg(test)]
+use sqlx::PgPool;
+use sqlx::query_as;
 
 use crate::{
     agentic::model::{
-        AgenticRunRow, RUN_STATUS_FAILED, RUN_STATUS_QUEUED,
-        RUN_STATUS_RUNNING, RUN_STATUS_SKIPPED, RUN_STATUS_SUCCEEDED,
+        AgenticRunRow, RUN_STATUS_FAILED, RUN_STATUS_QUEUED, RUN_STATUS_RUNNING,
+        RUN_STATUS_SKIPPED, RUN_STATUS_SUCCEEDED,
     },
     agentic::timeframe::{boundary_for_due_at, latest_due_at_or_before},
     db::DbPool,
@@ -33,7 +33,7 @@ pub async fn list_active_agent_runs(pool: &DbPool, agent_key: &str) -> Result<Ve
             agent_key,
             recovered,
             "recovered inactive agentic runs before agent-wide active check"
-);
+        );
     }
 
     let rows = query_as::<_, AgenticRunRow>(
@@ -61,7 +61,7 @@ pub async fn list_active_agent_runs(pool: &DbPool, agent_key: &str) -> Result<Ve
           ORDER BY created_at ASC, id ASC",
     )
     .bind(agent_key)
-    .bind(&ACTIVE_STATUSES)
+    .bind(ACTIVE_STATUSES)
     .fetch_all(&mut *tx)
     .await
     .with_context(|| format!("failed to list active runs for agent {agent_key}"))?;

@@ -19,8 +19,8 @@ pub use recovery::recover_inactive_runs_all;
 pub use runs::{
     QueuedHookRun, QueuedScheduleRun, agent_has_active_runs, count_agent_runs, get_run,
     insert_queued_hook_run, insert_queued_hook_run_for_automatic_dispatch, insert_queued_run,
-    list_active_agent_runs, list_agent_runs_page, mark_run_failed,
-    mark_run_running, mark_run_succeeded,
+    list_active_agent_runs, list_agent_runs_page, mark_run_failed, mark_run_running,
+    mark_run_succeeded,
 };
 #[cfg(test)]
 pub use runs::{insert_test_run, list_agent_runs, mark_run_aborted};
@@ -31,15 +31,14 @@ pub use schedules::{
     list_agent_schedules, list_due_opencode_schedules, list_schedule_runs, set_schedule_enabled,
     set_schedule_model, set_schedule_timeframe, set_schedule_timeout,
 };
+#[cfg(test)]
+pub use workspace::agent_has_blocking_workspace_maintenance;
 #[allow(unused_imports)]
 pub use workspace::{
     InsertWorkspaceMaintenanceTaskOutcome, get_latest_workspace_regenerate_task,
-    get_next_queued_workspace_regenerate_task,
-    insert_workspace_regenerate_task, mark_maintenance_task_failed, mark_maintenance_task_running,
-    mark_maintenance_task_succeeded,
+    get_next_queued_workspace_regenerate_task, insert_workspace_regenerate_task,
+    mark_maintenance_task_failed, mark_maintenance_task_running, mark_maintenance_task_succeeded,
 };
-#[cfg(test)]
-pub use workspace::agent_has_blocking_workspace_maintenance;
 
 #[cfg(test)]
 mod test_support;

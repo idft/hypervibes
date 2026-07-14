@@ -68,10 +68,7 @@ async fn post_agent_analysis_prompt_updates_only_analysis() {
         .await
         .expect("get analysis prompt")
         .expect("analysis prompt present");
-    assert_eq!(
-        stored.prompt,
-        "Analyze momentum with market structure."
-    );
+    assert_eq!(stored.prompt, "Analyze momentum with market structure.");
 
     let body2 = "prompt_kind=trading&prompt=Original+trading+prompt.";
     let _ = router(state.clone())
@@ -95,10 +92,7 @@ async fn post_agent_analysis_prompt_updates_only_analysis() {
         .await
         .expect("get analysis prompt")
         .expect("analysis prompt present");
-    assert_eq!(
-        analysis.prompt,
-        "Analyze momentum with market structure."
-    );
+    assert_eq!(analysis.prompt, "Analyze momentum with market structure.");
 }
 #[tokio::test]
 async fn post_agent_trading_prompt_updates_only_trading() {
@@ -133,10 +127,7 @@ async fn post_agent_trading_prompt_updates_only_trading() {
         .await
         .expect("get trading prompt")
         .expect("trading prompt present");
-    assert_eq!(
-        stored.prompt,
-        "Only place limit orders near support."
-    );
+    assert_eq!(stored.prompt, "Only place limit orders near support.");
 
     let body2 = "prompt_kind=analysis&prompt=Original+analysis+prompt.";
     let _ = router(state.clone())
@@ -160,8 +151,5 @@ async fn post_agent_trading_prompt_updates_only_trading() {
         .await
         .expect("get trading prompt")
         .expect("trading prompt present");
-    assert_eq!(
-        trading.prompt,
-        "Only place limit orders near support."
-    );
+    assert_eq!(trading.prompt, "Only place limit orders near support.");
 }

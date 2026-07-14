@@ -53,7 +53,6 @@ impl OpenCodeClient {
         })
     }
 
-
     /// Create a new session bound to the given workspace container path.
     pub async fn create_session(
         &self,

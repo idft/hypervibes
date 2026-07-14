@@ -20,11 +20,11 @@ use crate::{
             AgentRegistryRow, AgentRuntimeRow, BACKEND_KIND_OPENCODE, CreateAgentForm,
             slugify_agent_key,
         },
-        strategy_prompts::insert_default_strategy_prompts_for_agent,
         store::{
             delete_agent as delete_agent_in_store, get_agent, insert_agent, list_agents,
             list_enabled_agent_runtimes,
         },
+        strategy_prompts::insert_default_strategy_prompts_for_agent,
     },
     hyperliquid::live_state::{AccountKey, AccountLiveState, LiveConnectionStatus},
     opencode::workspace::{
@@ -218,12 +218,11 @@ pub(in crate::web::routes) async fn create_agent(
     };
 
     if let Err(e) = insert_agent(&state.db_pool, &row).await {
-        if row.backend_kind == BACKEND_KIND_OPENCODE {
-            if let Err(error) =
+        if row.backend_kind == BACKEND_KIND_OPENCODE
+            && let Err(error) =
                 delete_agent_workspace(&state.opencode_workspace_config, &row.agent_key)
-            {
-                error!(agent_key = %row.agent_key, error = ?error, "failed to clean up newly created workspace after agent insert failure");
-            }
+        {
+            error!(agent_key = %row.agent_key, error = ?error, "failed to clean up newly created workspace after agent insert failure");
         }
 
         let errors = match unique_violation_message(&e) {
@@ -235,23 +234,24 @@ pub(in crate::web::routes) async fn create_agent(
         return Ok(render_new_form(form, runtimes, errors));
     }
 
-    if let Err(error) = insert_default_strategy_prompts_for_agent(&state.db_pool, &row.agent_key).await {
+    if let Err(error) =
+        insert_default_strategy_prompts_for_agent(&state.db_pool, &row.agent_key).await
+    {
         error!(agent_key = %row.agent_key, error = ?error, "failed to insert default strategy prompts");
         return Err(AppError(error));
     }
 
-    if row.backend_kind == BACKEND_KIND_OPENCODE {
-        if let Err(error) =
+    if row.backend_kind == BACKEND_KIND_OPENCODE
+        && let Err(error) =
             crate::agentic::store::insert_default_opencode_schedules(&state.db_pool, &row.agent_key)
                 .await
-        {
-            error!(
-                agent_key = %row.agent_key,
-                error = ?error,
-                "failed to insert default OpenCode schedules"
-            );
-            return Err(AppError(error));
-        }
+    {
+        error!(
+            agent_key = %row.agent_key,
+            error = ?error,
+            "failed to insert default OpenCode schedules"
+        );
+        return Err(AppError(error));
     }
 
     Ok(Redirect::to(&format!("/agents/{agent_key}")).into_response())

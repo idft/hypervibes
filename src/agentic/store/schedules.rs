@@ -200,6 +200,7 @@ pub async fn get_agent_schedule(
 /// Insert a new schedule. The `job_key` is generated from
 /// `job_kind` + `timeframe` and the schedule's first `next_run_at` is
 /// computed from the same timeframe and trigger delay.
+#[allow(clippy::too_many_arguments)]
 pub async fn insert_agent_schedule(
     pool: &DbPool,
     agent_key: &str,
@@ -458,7 +459,9 @@ pub async fn set_schedule_timeframe(
     .bind(next_run_at)
     .execute(&mut *tx)
     .await
-    .with_context(|| format!("failed to update timeframe for schedule {schedule_id} agent {agent_key}"))?;
+    .with_context(|| {
+        format!("failed to update timeframe for schedule {schedule_id} agent {agent_key}")
+    })?;
     tx.commit()
         .await
         .context("failed to commit schedule timeframe update")?;

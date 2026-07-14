@@ -88,7 +88,10 @@ async fn default_schedules_insert_expected_rows_with_disabled_defaults() {
         .find(|row| row.job_key == "daily-review-1d")
         .expect("daily review schedule present");
     assert!(!daily_review.enabled);
-    assert_eq!(daily_review.job_kind, crate::agentic::model::JOB_KIND_DAILY_REVIEW);
+    assert_eq!(
+        daily_review.job_kind,
+        crate::agentic::model::JOB_KIND_DAILY_REVIEW
+    );
     assert_eq!(daily_review.timeframe, "1d");
 
     let hooks = list_agent_hooks(&pool, &key).await.expect("list hooks");
@@ -298,9 +301,11 @@ async fn updating_schedule_timeframe_reanchors_the_next_run() {
     );
     let schedule_id = seed_agent_and_schedule(&pool, &key, 0).await;
 
-    assert!(set_schedule_timeframe(&pool, &key, schedule_id, "4h")
-        .await
-        .expect("update timeframe"));
+    assert!(
+        set_schedule_timeframe(&pool, &key, schedule_id, "4h")
+            .await
+            .expect("update timeframe")
+    );
 
     let schedule = get_agent_schedule(&pool, &key, schedule_id)
         .await
@@ -310,7 +315,8 @@ async fn updating_schedule_timeframe_reanchors_the_next_run() {
     assert_eq!(schedule.job_key, "analysis-4h");
     assert!(schedule.next_run_at > Utc::now());
     assert_eq!(
-        (schedule.next_run_at.timestamp() - i64::from(DEFAULT_TRIGGER_DELAY_SECONDS)) % (4 * 60 * 60),
+        (schedule.next_run_at.timestamp() - i64::from(DEFAULT_TRIGGER_DELAY_SECONDS))
+            % (4 * 60 * 60),
         0
     );
 }

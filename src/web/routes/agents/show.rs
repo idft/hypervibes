@@ -10,19 +10,17 @@ use chrono::Utc;
 use serde::Deserialize;
 use tracing::warn;
 
-use super::memories::{
-    AgentMemoriesQuery, parse_memory_date_filter, prepare_memory_timeline_page,
-};
+use super::memories::{AgentMemoriesQuery, parse_memory_date_filter, prepare_memory_timeline_page};
 use super::settings::build_opencode_workspace_settings_view;
 use super::transactions::apply_live_cash_balance_anchor;
 use crate::{
     agents::{
         model::BACKEND_KIND_OPENCODE,
-        strategy_prompts::{
-            default_prompt_for_kind, list_agent_strategy_prompts, PROMPT_KIND_ANALYSIS,
-            PROMPT_KIND_DAILY_REVIEW, PROMPT_KIND_MARKET_ANALYSIS, PROMPT_KIND_TRADING,
-        },
         store::{get_agent, list_agent_instrument_ids, list_agent_instrument_options},
+        strategy_prompts::{
+            PROMPT_KIND_ANALYSIS, PROMPT_KIND_DAILY_REVIEW, PROMPT_KIND_MARKET_ANALYSIS,
+            PROMPT_KIND_TRADING, default_prompt_for_kind, list_agent_strategy_prompts,
+        },
     },
     hyperliquid::{
         live_state::{AccountKey, AccountLiveState, LiveConnectionStatus},
@@ -33,8 +31,7 @@ use crate::{
         },
     },
     memory::{
-        get_latest_agent_memory_by_type, get_memory, list_agent_memory_timeline,
-        memory_expires_at,
+        get_latest_agent_memory_by_type, get_memory, list_agent_memory_timeline, memory_expires_at,
     },
     web::{
         AppState,
@@ -128,14 +125,8 @@ pub(in crate::web::routes) async fn render_agent_show_page(
             let (filter_date_value, selected_date_text, filter_error_text, since, until) =
                 parse_memory_date_filter(&memory_query.date);
 
-            match list_agent_memory_timeline(
-                &state.db_pool,
-                &agent.agent_key,
-                since,
-                until,
-                None,
-            )
-            .await
+            match list_agent_memory_timeline(&state.db_pool, &agent.agent_key, since, until, None)
+                .await
             {
                 Ok(rows) => {
                     let (rows, next_page_url) = prepare_memory_timeline_page(
@@ -245,11 +236,8 @@ pub(in crate::web::routes) async fn render_agent_show_page(
                     Vec::new()
                 }
             };
-            match instrument_options {
-                Some(rows) => {
-                    template.instrument_options = rows;
-                }
-                None => {}
+            if let Some(rows) = instrument_options {
+                template.instrument_options = rows;
             }
         }
         AgentShowTab::Jobs => {
@@ -326,7 +314,7 @@ pub(in crate::web::routes) async fn populate_jobs_tab(
             let total_pages = if total_count == 0 {
                 0
             } else {
-                (total_count + RUNS_PER_PAGE - 1) / RUNS_PER_PAGE
+                total_count.div_ceil(RUNS_PER_PAGE)
             };
             let current_page = if total_pages == 0 {
                 1
@@ -407,7 +395,7 @@ pub(in crate::web::routes) async fn populate_transactions_tab(
             let total_pages = if total_count == 0 {
                 0
             } else {
-                (total_count + TRANSACTIONS_PER_PAGE - 1) / TRANSACTIONS_PER_PAGE
+                total_count.div_ceil(TRANSACTIONS_PER_PAGE)
             };
             let current_page = if total_pages == 0 {
                 1

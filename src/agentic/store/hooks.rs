@@ -132,6 +132,7 @@ pub async fn get_enabled_hook_for_event(
     Ok(row)
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn insert_agent_hook(
     pool: &DbPool,
     agent_key: &str,

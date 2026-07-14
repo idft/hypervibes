@@ -130,7 +130,9 @@ fn build_trading_prompt(request: &DispatchRequest) -> String {
     );
     body.push_str("- Every non-reduce-only agent opening order must include the selected fresh market-analysis memory ID in `memory_record_ids` or the backend will reject it.\n");
     body.push_str("- Reduce-only or risk-reduction orders may omit `memory_record_ids`.\n");
-    body.push_str("- Agent-submitted orders should use the default `attribution_source = \"agent\"`.\n");
+    body.push_str(
+        "- Agent-submitted orders should use the default `attribution_source = \"agent\"`.\n",
+    );
     body.push_str("- Do not fall back to raw timeframe `analysis` memories for execution decisions. Raw analysis can be consulted only for diagnostics when the operator prompt explicitly asks for it.\n");
     body.push_str("- Fetch current OHLCV and public market data from Hyperliquid for the selected instruments using the `hyperliquid-data` skill.\n");
     body.push_str("- Submit and cancel orders only through the `vibetrading` MCP trading tools.\n");
@@ -139,14 +141,16 @@ fn build_trading_prompt(request: &DispatchRequest) -> String {
 }
 
 fn build_daily_review_prompt(request: &DispatchRequest) -> Result<String> {
-    let review_window_start = request.review_window_start.unwrap_or_else(|| {
-        request.scheduled_for - Duration::days(1)
-    });
+    let review_window_start = request
+        .review_window_start
+        .unwrap_or_else(|| request.scheduled_for - Duration::days(1));
     let review_window_end = request.review_window_end.unwrap_or(request.scheduled_for);
 
     let mut body = String::new();
     body.push_str(&request.system_prompt);
-    body.push_str("\n\nYou are running a **daily-review job** for the Vibetrading agent system.\n\n");
+    body.push_str(
+        "\n\nYou are running a **daily-review job** for the Vibetrading agent system.\n\n",
+    );
     body.push_str("## Agent\n");
     body.push_str(&format!("- Agent key: {}\n", request.agent_key));
     body.push_str(&format!("- Display name: {}\n", request.display_name));
@@ -168,7 +172,9 @@ fn build_daily_review_prompt(request: &DispatchRequest) -> Result<String> {
     body.push_str("- List recent orders for the review window, including unfilled, rejected, canceled, open, and filled orders.\n");
     body.push_str("- Connect orders to `market_analysis` using `memory_record_ids`, and follow `memory.links` from market analysis back to analysis when those links exist.\n");
     body.push_str("- Identify failures, good patterns, stale assumptions, and prompt improvement suggestions. Keep prompt-edit suggestions inside the `daily_review` memory content.\n");
-    body.push_str("- You may edit helper files only under `scripts/user/`, `data/`, and `scratch/`.\n");
+    body.push_str(
+        "- You may edit helper files only under `scripts/user/`, `data/`, and `scratch/`.\n",
+    );
     body.push_str("- Write exactly one `daily_review` memory with `symbol = \"__agent__\"`, no timeframe, and `links` of type `reviews` to the memories you reviewed.\n");
     body.push_str("- If learnings changed, write a new `agent_learnings` memory with `symbol = \"__agent__\"`, no timeframe, then link the daily review memory to it with `link_type = \"updates_learnings\"`.\n");
     body.push_str("- Do not place or cancel orders.\n");

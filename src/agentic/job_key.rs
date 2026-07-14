@@ -32,7 +32,10 @@ mod tests {
         assert_eq!(build_generated_job_key("analysis", "15m"), "analysis-15m");
         assert_eq!(build_generated_job_key("trading", "1m"), "trading-1m");
         assert_eq!(build_generated_job_key("analysis", "1h"), "analysis-1h");
-        assert_eq!(build_generated_job_key("daily_review", "1d"), "daily-review-1d");
+        assert_eq!(
+            build_generated_job_key("daily_review", "1d"),
+            "daily-review-1d"
+        );
     }
 
     #[test]

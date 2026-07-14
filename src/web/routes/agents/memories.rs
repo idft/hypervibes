@@ -19,8 +19,8 @@ use crate::web::error::AppError;
 use crate::{
     agents::store::get_agent,
     memory::{
-        AGENT_MEMORY_TIMELINE_PAGE_SIZE, MemoryTimelineRecord,
-        get_memory as get_memory_record, list_agent_memory_timeline,
+        AGENT_MEMORY_TIMELINE_PAGE_SIZE, MemoryTimelineRecord, get_memory as get_memory_record,
+        list_agent_memory_timeline,
     },
     web::{
         AppState,
@@ -234,15 +234,15 @@ fn parse_memory_cursor(
         _ => Err(()),
     }
 }
-pub(in crate::web::routes) fn parse_memory_date_filter(
-    raw: &str,
-) -> (
+type MemoryDateFilter = (
     String,
     Option<String>,
     Option<String>,
     Option<chrono::DateTime<Utc>>,
     Option<chrono::DateTime<Utc>>,
-) {
+);
+
+pub(in crate::web::routes) fn parse_memory_date_filter(raw: &str) -> MemoryDateFilter {
     let trimmed = raw.trim();
     if trimmed.is_empty() {
         return (String::new(), None, None, None, None);

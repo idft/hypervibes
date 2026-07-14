@@ -51,10 +51,10 @@ fn app_cache_dir_from_env() -> Result<PathBuf> {
 }
 
 fn bind_addr_from_env() -> String {
-    if let Ok(bind_addr) = env::var("APP_BIND_ADDR") {
-        if !bind_addr.trim().is_empty() {
-            return bind_addr;
-        }
+    if let Ok(bind_addr) = env::var("APP_BIND_ADDR")
+        && !bind_addr.trim().is_empty()
+    {
+        return bind_addr;
     }
 
     let host = env::var("APP_HOST").unwrap_or_else(|_| "127.0.0.1".to_string());
@@ -64,10 +64,10 @@ fn bind_addr_from_env() -> String {
 }
 
 pub fn database_url_from_env() -> Result<String> {
-    if let Ok(database_url) = env::var("DATABASE_URL") {
-        if !database_url.trim().is_empty() {
-            return Ok(database_url);
-        }
+    if let Ok(database_url) = env::var("DATABASE_URL")
+        && !database_url.trim().is_empty()
+    {
+        return Ok(database_url);
     }
 
     let host = env::var("POSTGRES_HOST").unwrap_or_else(|_| "localhost".to_string());

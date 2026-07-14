@@ -761,26 +761,24 @@ mod tests {
         let row = sample_agent(&key);
         insert_agent(&pool, &row).await.expect("insert agent");
 
-        let (before,): (Option<chrono::DateTime<Utc>>,) = sqlx::query_as(
-            "SELECT api_key_last_used_at FROM agents WHERE agent_key = $1",
-        )
-        .bind(&key)
-        .fetch_one(&pool)
-        .await
-        .expect("fetch");
+        let (before,): (Option<chrono::DateTime<Utc>>,) =
+            sqlx::query_as("SELECT api_key_last_used_at FROM agents WHERE agent_key = $1")
+                .bind(&key)
+                .fetch_one(&pool)
+                .await
+                .expect("fetch");
         assert!(before.is_none());
 
         touch_api_key_last_used(&pool, &row.api_key)
             .await
             .expect("touch");
 
-        let (after,): (Option<chrono::DateTime<Utc>>,) = sqlx::query_as(
-            "SELECT api_key_last_used_at FROM agents WHERE agent_key = $1",
-        )
-        .bind(&key)
-        .fetch_one(&pool)
-        .await
-        .expect("fetch");
+        let (after,): (Option<chrono::DateTime<Utc>>,) =
+            sqlx::query_as("SELECT api_key_last_used_at FROM agents WHERE agent_key = $1")
+                .bind(&key)
+                .fetch_one(&pool)
+                .await
+                .expect("fetch");
         assert!(after.is_some());
     }
 

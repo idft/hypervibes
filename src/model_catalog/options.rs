@@ -134,10 +134,10 @@ fn build_metadata_text(model: Option<&ModelsDevModel>) -> String {
     if model.reasoning.unwrap_or(false) {
         parts.push("reasoning".to_string());
     }
-    if let Some(cost) = model.cost.as_ref() {
-        if let (Some(input), Some(output)) = (cost.input, cost.output) {
-            parts.push(format!("${input}/${output}"));
-        }
+    if let Some(cost) = model.cost.as_ref()
+        && let (Some(input), Some(output)) = (cost.input, cost.output)
+    {
+        parts.push(format!("${input}/${output}"));
     }
     parts.join(" · ")
 }

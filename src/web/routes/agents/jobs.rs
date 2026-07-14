@@ -29,8 +29,8 @@ use crate::{
     },
     agents::{
         model::BACKEND_KIND_OPENCODE,
-        strategy_prompts::{get_agent_strategy_prompt, prompt_kind_for_job_kind},
         store::get_agent,
+        strategy_prompts::{get_agent_strategy_prompt, prompt_kind_for_job_kind},
     },
     hyperliquid::live_state::live_agent_snapshot_for_dispatch,
     memory::get_latest_agent_memory_by_type,
@@ -138,9 +138,7 @@ pub(in crate::web::routes) async fn agents_show_job_detail(
     );
     model_picker.show_label = false;
     model_picker.use_modal = true;
-    model_picker.lazy_options_url = Some(format!(
-        "/agents/{agent_key}/jobs/{job_id}/model-picker"
-    ));
+    model_picker.lazy_options_url = Some(format!("/agents/{agent_key}/jobs/{job_id}/model-picker"));
     let html = AgentJobDetailPageTemplate::render_view(
         agent.clone(),
         job_view,
@@ -211,8 +209,8 @@ pub(in crate::web::routes) async fn build_job_prompt_preview(
         job_kind: job.job_kind.clone(),
         timeframe: Some(job.timeframe.clone()),
         operator_prompt: job.operator_prompt.clone(),
-        strategy_prompt: load_strategy_prompt(&state, &agent.agent_key, &job.job_kind).await?,
-        accumulated_learnings: load_accumulated_learnings(&state, &agent.agent_key).await?,
+        strategy_prompt: load_strategy_prompt(state, &agent.agent_key, &job.job_kind).await?,
+        accumulated_learnings: load_accumulated_learnings(state, &agent.agent_key).await?,
         system_prompt,
         environment: agent.environment.clone(),
         selected_instruments,
@@ -237,26 +235,32 @@ async fn load_strategy_prompt(
 ) -> anyhow::Result<String> {
     let prompt_kind = prompt_kind_for_job_kind(job_kind)
         .ok_or_else(|| anyhow::anyhow!("unknown job kind {job_kind}"))?;
-    Ok(get_agent_strategy_prompt(&state.db_pool, agent_key, prompt_kind)
-        .await?
-        .map(|row| row.prompt)
-        .unwrap_or_default())
+    Ok(
+        get_agent_strategy_prompt(&state.db_pool, agent_key, prompt_kind)
+            .await?
+            .map(|row| row.prompt)
+            .unwrap_or_default(),
+    )
 }
 
 async fn load_accumulated_learnings(
     state: &Arc<AppState>,
     agent_key: &str,
 ) -> anyhow::Result<Option<String>> {
-    Ok(get_latest_agent_memory_by_type(&state.db_pool, agent_key, "agent_learnings")
-        .await?
-        .map(|memory| {
-            format!(
-                "Summary: {}\nCreated at: {}\nContent: {}",
-                memory.summary,
-                memory.created_at.to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
-                memory.content
-            )
-        }))
+    Ok(
+        get_latest_agent_memory_by_type(&state.db_pool, agent_key, "agent_learnings")
+            .await?
+            .map(|memory| {
+                format!(
+                    "Summary: {}\nCreated at: {}\nContent: {}",
+                    memory.summary,
+                    memory
+                        .created_at
+                        .to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+                    memory.content
+                )
+            }),
+    )
 }
 #[derive(Debug, Clone, Default, Deserialize)]
 pub(in crate::web::routes) struct CreateAgentScheduleForm {
@@ -630,7 +634,7 @@ pub(in crate::web::routes) async fn agents_run_job_now(
                 }
             });
         }
-        QueuedScheduleRun::Skipped { .. } => {}
+        QueuedScheduleRun::Skipped => {}
         QueuedScheduleRun::Missing => {
             return Ok((StatusCode::NOT_FOUND, "job not found").into_response());
         }

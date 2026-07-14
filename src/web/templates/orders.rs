@@ -6,8 +6,8 @@ use chrono::{DateTime, Utc};
 use crate::hyperliquid::live_state::{AccountLiveState, LiveConnectionStatus, LiveOpenOrder};
 
 use super::shared::{
-    MoneyCell, format_money_cell, format_neutral_money_cell_with_decimals, format_timestamp_iso,
-    format_timestamp_utc, currency_logo_url,
+    MoneyCell, currency_logo_url, format_money_cell, format_neutral_money_cell_with_decimals,
+    format_timestamp_iso, format_timestamp_utc,
 };
 
 /// Per-row view of an open resting order for the agent detail page.

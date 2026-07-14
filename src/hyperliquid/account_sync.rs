@@ -74,9 +74,7 @@ pub async fn sync_account_once(
         streams.push(result);
     }
 
-    Ok(SyncSummary {
-        streams,
-    })
+    Ok(SyncSummary { streams })
 }
 
 /// Reconcile a single stream and update its sync_state.

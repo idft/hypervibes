@@ -14,11 +14,11 @@ use crate::{
         crypto::EncryptionKey,
         keys::derive_wallet_address,
         model::AgentRegistryRow,
+        store::{insert_agent, replace_agent_instruments},
         strategy_prompts::{
             PROMPT_KIND_ANALYSIS, PROMPT_KIND_TRADING, insert_default_strategy_prompts_for_agent,
             upsert_agent_strategy_prompt,
         },
-        store::{insert_agent, replace_agent_instruments},
     },
     test_db,
     web::{AppState, api, ui_events::UiEventHub},
@@ -192,6 +192,7 @@ pub fn json_body<T: serde::Serialize>(value: &T) -> (Option<(&'static str, Strin
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn insert_memory_at(
     state: &Arc<AppState>,
     agent_key: &str,

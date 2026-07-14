@@ -3,9 +3,7 @@ use rust_decimal::Decimal;
 
 use crate::hyperliquid::queries::BalancePoint;
 
-use super::shared::{
-    AnimatedNumber, MoneyCell, dash_cell, format_signed_money_cell,
-};
+use super::shared::{AnimatedNumber, MoneyCell, dash_cell, format_signed_money_cell};
 
 /// View-model for the live account balance card shown on the agent detail
 /// page and as a column on the agents index page. The same struct drives

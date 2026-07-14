@@ -4,11 +4,11 @@ use serde::Deserialize;
 use crate::{
     agents::{
         model::{AgentDetailRow, AgentListRow, AgentRuntimeRow, CreateAgentForm},
+        store::AgentInstrumentOptionRow,
         strategy_prompts::{
             PROMPT_KIND_ANALYSIS, PROMPT_KIND_DAILY_REVIEW, PROMPT_KIND_MARKET_ANALYSIS,
             PROMPT_KIND_TRADING,
         },
-        store::AgentInstrumentOptionRow,
     },
     hyperliquid::sync_state::SyncStateRow,
     memory::MemoryRecord,

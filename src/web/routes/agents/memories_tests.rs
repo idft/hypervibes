@@ -137,16 +137,10 @@ async fn memory_timeline_event_renders_refresh_without_selected_card() {
     )
     .await;
 
-    let event = render_memory_timeline_event(
-        &state.db_pool,
-        &agent_key,
-        None,
-        None,
-        None,
-        String::new(),
-    )
-        .await
-        .expect("render event");
+    let event =
+        render_memory_timeline_event(&state.db_pool, &agent_key, None, None, None, String::new())
+            .await
+            .expect("render event");
     let text = format!("{event:?}");
 
     assert!(text.contains("memories-timeline"));

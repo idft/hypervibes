@@ -68,19 +68,22 @@ pub(in crate::web::routes) fn body_looks_like_svg(body: &[u8]) -> bool {
         return false;
     }
 
-    document.descendants().filter(|node| node.is_element()).all(|element| {
-        let name = element.tag_name().name();
-        name != "script"
-            && name != "foreignObject"
-            && element.attributes().all(|attribute| {
-                let local_name = attribute.name();
-                !local_name
-                    .get(..2)
-                    .is_some_and(|prefix| prefix.eq_ignore_ascii_case("on"))
-                    && (!local_name.eq_ignore_ascii_case("href")
-                        || attribute.value().starts_with('#'))
-            })
-    })
+    document
+        .descendants()
+        .filter(|node| node.is_element())
+        .all(|element| {
+            let name = element.tag_name().name();
+            name != "script"
+                && name != "foreignObject"
+                && element.attributes().all(|attribute| {
+                    let local_name = attribute.name();
+                    !local_name
+                        .get(..2)
+                        .is_some_and(|prefix| prefix.eq_ignore_ascii_case("on"))
+                        && (!local_name.eq_ignore_ascii_case("href")
+                            || attribute.value().starts_with('#'))
+                })
+        })
 }
 pub(in crate::web::routes) fn fallback_logo_svg(provider: &str) -> String {
     let initial = provider.chars().next().unwrap_or('M').to_ascii_uppercase();

@@ -90,9 +90,7 @@ pub async fn get_agent_strategy_prompt(
     .bind(prompt_kind)
     .fetch_optional(pool)
     .await
-    .with_context(|| {
-        format!("failed to load strategy prompt {prompt_kind} for agent {agent_key}")
-    })
+    .with_context(|| format!("failed to load strategy prompt {prompt_kind} for agent {agent_key}"))
 }
 
 pub async fn upsert_agent_strategy_prompt(
@@ -122,7 +120,10 @@ pub async fn upsert_agent_strategy_prompt(
     Ok(result.rows_affected() > 0)
 }
 
-pub async fn insert_default_strategy_prompts_for_agent(pool: &DbPool, agent_key: &str) -> Result<()> {
+pub async fn insert_default_strategy_prompts_for_agent(
+    pool: &DbPool,
+    agent_key: &str,
+) -> Result<()> {
     for prompt_kind in all_prompt_kinds() {
         sqlx::query(
             "INSERT INTO agent_strategy_prompts (
