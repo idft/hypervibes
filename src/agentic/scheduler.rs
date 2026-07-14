@@ -3,8 +3,6 @@ use std::{collections::BTreeMap, sync::Arc, time::Duration};
 use anyhow::{Context, Result, anyhow};
 use chrono::Utc;
 use tokio::sync::watch;
-#[cfg(test)]
-use tokio::task::JoinHandle;
 use tracing::{debug, error, info, warn};
 
 use crate::{
@@ -918,35 +916,6 @@ fn sort_trading_schedules_for_dispatch(
         .collect();
     indexed.sort_by_key(|(key, _)| *key);
     indexed.into_iter().map(|(_, row)| row).collect()
-}
-
-/// Convenience: spawn the scheduler on the current Tokio runtime and
-/// return the join handle. The handle aborts when the runtime drops.
-#[cfg(test)]
-pub fn spawn(
-    pool: DbPool,
-    shutdown_rx: watch::Receiver<bool>,
-    force_shutdown_rx: watch::Receiver<bool>,
-    backend: Arc<dyn AgenticBackend>,
-    live_accounts: Arc<LiveAccountStore>,
-    opencode_workspace_config: OpenCodeWorkspaceConfig,
-    opencode_client: Arc<OpenCodeClient>,
-    in_flight: InFlightTracker,
-) -> JoinHandle<Result<()>> {
-    tokio::spawn(async move {
-        AgenticScheduler::new(
-            pool,
-            shutdown_rx,
-            force_shutdown_rx,
-            backend,
-            live_accounts,
-            opencode_workspace_config,
-            opencode_client,
-            in_flight,
-        )
-        .run()
-        .await
-    })
 }
 
 #[cfg(test)]

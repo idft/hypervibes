@@ -6,7 +6,7 @@ use super::model::SystemSettingRow;
 
 pub async fn get_setting(pool: &DbPool, key: &str) -> Result<Option<SystemSettingRow>> {
     let row = query_as::<_, SystemSettingRow>(
-        "SELECT value, description, updated_at
+        "SELECT value
            FROM system_settings
           WHERE key = $1",
     )

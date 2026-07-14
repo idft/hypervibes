@@ -24,7 +24,6 @@ pub fn sample_agent_list_row() -> AgentListRow {
 }
 
 pub fn sample_agent_detail_row() -> AgentDetailRow {
-    let now = Utc::now();
     AgentDetailRow {
         display_name: "Test Agent".to_string(),
         agent_key: "test-agent".to_string(),
@@ -32,14 +31,9 @@ pub fn sample_agent_detail_row() -> AgentDetailRow {
         wallet_address: "0x1234567890abcdef".to_string(),
         environment: "live".to_string(),
         api_key: "vt_test_key".to_string(),
-        api_key_last_used_at: None,
         backend_kind: "opencode".to_string(),
-        runtime_id: "opencode-local".to_string(),
-        runtime_name: "OpenCode local".to_string(),
         runtime_base_url: Some("http://localhost:14096".to_string()),
         runtime_config: serde_json::json!({}),
-        created_at: now,
-        updated_at: now,
     }
 }
 
@@ -88,8 +82,6 @@ pub fn sample_memory_record(
 pub fn sample_opencode_detail_row() -> AgentDetailRow {
     let mut row = sample_agent_detail_row();
     row.backend_kind = crate::agents::model::BACKEND_KIND_OPENCODE.to_string();
-    row.runtime_id = "opencode-local".to_string();
-    row.runtime_name = "OpenCode local".to_string();
     row.runtime_config = serde_json::json!({
         "workspace_host_path": "workspaces/agents/test-agent",
         "workspace_container_path": "/workspaces/agents/test-agent",

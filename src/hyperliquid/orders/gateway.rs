@@ -1151,7 +1151,14 @@ mod tests {
         assert_eq!(stored[0].status, "resting");
         assert_eq!(stored[0].exchange_oid.as_deref(), Some("42"));
         assert_eq!(stored[0].cloid, r.cloid);
-        assert_eq!(stored[0].rounded_size, Some(dec!(0.1)));
+        let (rounded_size,): (Option<Decimal>,) = sqlx::query_as(
+            "SELECT rounded_size FROM hyperliquid.orders WHERE id = $1",
+        )
+        .bind(stored[0].id)
+        .fetch_one(&pool)
+        .await
+        .expect("fetch rounded size");
+        assert_eq!(rounded_size, Some(dec!(0.1)));
     }
 
     #[tokio::test]
@@ -1220,7 +1227,15 @@ mod tests {
         // SL leg: stop-market, so limit_px == trigger_px
         assert_eq!(sl.side, "sell");
         assert!(sl.reduce_only);
-        assert_eq!(sl.rounded_price, sl.trigger_price);
+        let (rounded_price, trigger_price): (Option<Decimal>, Option<Decimal>) =
+            sqlx::query_as(
+                "SELECT rounded_price, trigger_price FROM hyperliquid.orders WHERE id = $1",
+            )
+            .bind(sl.id)
+            .fetch_one(&pool)
+            .await
+            .expect("fetch stop prices");
+        assert_eq!(rounded_price, trigger_price);
     }
 
     #[tokio::test]

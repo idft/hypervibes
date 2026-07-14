@@ -41,3 +41,33 @@ Frontend assets are managed with `pnpm` and built via `esbuild` and Tailwind CSS
 * Don't guess. Consult the documentation or source code if you are unsure.
 * Never `git push` without permission
 * Do not create database migrations without permission, unless a plan specficailly mentions creating it.
+
+## Code Quality & Linting Standards
+
+Strict Clippy Enforcement: All Rust code must pass cargo clippy --workspace --all-targets -- -D warnings before commit. This treats dead code warnings as compilation errors, forcing immediate resolution rather than suppression. 
+
+Dead Code Policy:
+
+Remove unreachable, unused, or unreferenced code immediately
+Never use #[allow(dead_code)] unless documenting a specific exception (e.g., public API stability, future feature scaffolding)
+Document any allowed dead code with a comment explaining why it exists and when it will be addressed 
+Error Handling Requirements:
+
+Use ? operator for error propagation in library code
+Replace .unwrap() with .expect("descriptive message") only for invariant violations
+Use thiserror for library errors and anyhow for application entry points 
+Type System Leverage:
+
+Maximize compile-time safety through Rust's type system
+Avoid unwrap() in library code; prefer explicit error handling
+Make match statements exhaustive; avoid wildcard arms when possible 
+Pre-Commit Automation:
+
+### Run before every commit
+```
+cargo clippy --workspace --all-targets -- -D warnings
+cargo fmt --check
+cargo test --workspace
+```
+
+Definition of Done: No new Clippy warnings, no dead code, all tests passing.

@@ -1,24 +1,19 @@
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use rust_decimal::Decimal;
-use serde_json::Value;
 
 use crate::{db::DbPool, hyperliquid::sync_state::SyncStateRow};
 
 /// A single USDC balance-impacting event from the account timeline.
 #[derive(Debug, Clone, sqlx::FromRow)]
 pub struct AccountTransactionRow {
-    pub event_id: String,
     pub event_time: DateTime<Utc>,
     pub event_category: String,
-    pub event_type: String,
-    pub source_stream: String,
     pub symbol: Option<String>,
     pub asset: Option<String>,
     pub fee_usdc: Option<Decimal>,
     pub realized_pnl_usdc: Option<Decimal>,
     pub usdc_delta: Option<Decimal>,
-    pub payload: Value,
     /// Cumulative net USDC flow as of this event, computed across the
     /// account's full history and anchored at 0 at the first journaled
     /// event. This is realized cash flow only — unrealized PnL is not
@@ -43,14 +38,11 @@ pub async fn list_account_transactions(
              SELECT event_id,
                     event_time,
                     event_category,
-                    event_type,
-                    source_stream,
                     symbol,
                     asset,
                     fee_usdc,
                     realized_pnl_usdc,
                     usdc_delta,
-                    payload,
                     SUM(COALESCE(usdc_delta, 0))
                       OVER (ORDER BY event_time, event_id
                             ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)
@@ -59,17 +51,13 @@ pub async fn list_account_transactions(
               WHERE account_address = $1
                 AND environment = $2
           )
-         SELECT event_id,
-                event_time,
-                event_category,
-                event_type,
-                source_stream,
+          SELECT event_time,
+                 event_category,
                 symbol,
                 asset,
                 fee_usdc,
                 realized_pnl_usdc,
                 usdc_delta,
-                payload,
                 running_balance
            FROM ordered
           ORDER BY event_time DESC, event_id DESC
@@ -81,59 +69,6 @@ pub async fn list_account_transactions(
     .fetch_all(pool)
     .await
     .context("failed to list account transactions")?;
-
-    Ok(rows)
-}
-
-/// Return all USDC balance-impacting events for an account, newest first,
-/// with the same running-balance calculation as [`list_account_transactions`].
-#[cfg(test)]
-pub async fn list_all_account_transactions(
-    pool: &DbPool,
-    account_address: &str,
-    environment: &str,
-) -> Result<Vec<AccountTransactionRow>> {
-    let rows = sqlx::query_as::<_, AccountTransactionRow>(
-        "WITH ordered AS (
-             SELECT event_id,
-                    event_time,
-                    event_category,
-                    event_type,
-                    source_stream,
-                    symbol,
-                    asset,
-                    fee_usdc,
-                    realized_pnl_usdc,
-                    usdc_delta,
-                    payload,
-                    SUM(COALESCE(usdc_delta, 0))
-                      OVER (ORDER BY event_time, event_id
-                            ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)
-                      AS running_balance
-               FROM hyperliquid.account_timeline
-              WHERE account_address = $1
-                AND environment = $2
-          )
-         SELECT event_id,
-                event_time,
-                event_category,
-                event_type,
-                source_stream,
-                symbol,
-                asset,
-                fee_usdc,
-                realized_pnl_usdc,
-                usdc_delta,
-                payload,
-                running_balance
-           FROM ordered
-          ORDER BY event_time DESC, event_id DESC",
-    )
-    .bind(account_address)
-    .bind(environment)
-    .fetch_all(pool)
-    .await
-    .context("failed to list all account transactions")?;
 
     Ok(rows)
 }
@@ -199,14 +134,11 @@ pub async fn list_account_transactions_page(
              SELECT event_id,
                     event_time,
                     event_category,
-                    event_type,
-                    source_stream,
                     symbol,
                     asset,
                     fee_usdc,
                     realized_pnl_usdc,
                     usdc_delta,
-                    payload,
                     SUM(COALESCE(usdc_delta, 0))
                       OVER (ORDER BY event_time, event_id
                             ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)
@@ -215,17 +147,13 @@ pub async fn list_account_transactions_page(
               WHERE account_address = $1
                 AND environment = $2
           )
-         SELECT event_id,
-                event_time,
-                event_category,
-                event_type,
-                source_stream,
+          SELECT event_time,
+                 event_category,
                 symbol,
                 asset,
                 fee_usdc,
                 realized_pnl_usdc,
                 usdc_delta,
-                payload,
                 running_balance
            FROM ordered
           ORDER BY event_time DESC, event_id DESC
@@ -256,7 +184,6 @@ pub struct BalancePoint {
 struct BalancePointQueryRow {
     pub bucket: DateTime<Utc>,
     pub balance: Decimal,
-    pub sort_time: DateTime<Utc>,
 }
 
 /// Whitelisted bucket units for [`fetch_balance_series`]. Passing any

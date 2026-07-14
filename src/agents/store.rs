@@ -146,14 +146,9 @@ pub async fn get_agent(pool: &DbPool, agent_key: &str) -> Result<Option<AgentDet
                 wallet_address,
                 environment,
                 api_key,
-                api_key_last_used_at,
                 agents.backend_kind,
-                agents.runtime_id,
-                agent_runtimes.name AS runtime_name,
                 agent_runtimes.base_url AS runtime_base_url,
-                agents.runtime_config,
-                agents.created_at,
-                agents.updated_at
+                agents.runtime_config
            FROM agents
            JOIN agent_runtimes
              ON agent_runtimes.id = agents.runtime_id
@@ -766,21 +761,27 @@ mod tests {
         let row = sample_agent(&key);
         insert_agent(&pool, &row).await.expect("insert agent");
 
-        let before = get_agent(&pool, &key)
-            .await
-            .expect("fetch")
-            .expect("present");
-        assert!(before.api_key_last_used_at.is_none());
+        let (before,): (Option<chrono::DateTime<Utc>>,) = sqlx::query_as(
+            "SELECT api_key_last_used_at FROM agents WHERE agent_key = $1",
+        )
+        .bind(&key)
+        .fetch_one(&pool)
+        .await
+        .expect("fetch");
+        assert!(before.is_none());
 
         touch_api_key_last_used(&pool, &row.api_key)
             .await
             .expect("touch");
 
-        let after = get_agent(&pool, &key)
-            .await
-            .expect("fetch")
-            .expect("present");
-        assert!(after.api_key_last_used_at.is_some());
+        let (after,): (Option<chrono::DateTime<Utc>>,) = sqlx::query_as(
+            "SELECT api_key_last_used_at FROM agents WHERE agent_key = $1",
+        )
+        .bind(&key)
+        .fetch_one(&pool)
+        .await
+        .expect("fetch");
+        assert!(after.is_some());
     }
 
     #[tokio::test]

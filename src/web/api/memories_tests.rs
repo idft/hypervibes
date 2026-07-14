@@ -7,7 +7,7 @@ use serde_json::json;
 use tower::util::ServiceExt;
 use uuid::Uuid;
 
-use crate::{agents::store::get_agent, web::ui_events::UiEvent};
+use crate::web::ui_events::UiEvent;
 
 use super::test_support::*;
 #[tokio::test]
@@ -303,11 +303,14 @@ async fn auth_touches_api_key_last_used_at() {
         .unwrap();
     assert_eq!(response.status(), StatusCode::CREATED);
 
-    let agent = get_agent(&state.db_pool, &agent_key)
-        .await
-        .unwrap()
-        .expect("present");
-    assert!(agent.api_key_last_used_at.is_some());
+    let (last_used_at,): (Option<chrono::DateTime<chrono::Utc>>,) = sqlx::query_as(
+        "SELECT api_key_last_used_at FROM agents WHERE agent_key = $1",
+    )
+    .bind(agent_key)
+    .fetch_one(&state.db_pool)
+    .await
+    .unwrap();
+    assert!(last_used_at.is_some());
 }
 
 #[tokio::test]

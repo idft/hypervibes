@@ -28,8 +28,6 @@ use hypersdk::{
 };
 use tokio::sync::watch;
 use tracing::{error, info, warn};
-#[cfg(test)]
-use crate::hyperliquid::raw_http::RawHttpConfig;
 
 use crate::{
     db::DbPool,
@@ -497,21 +495,6 @@ async fn run_reconnect_catchup(
     }
 
     Ok(())
-}
-
-/// Build a raw HTTP client suitable for catch-up sync.
-///
-/// This is exposed so the orchestrator can construct the client once and
-/// share it between the startup sync and the live WebSocket loop.
-#[cfg(test)]
-pub fn build_raw_http_client(
-    environment: HyperliquidEnvironment,
-    account_address: String,
-) -> RawHyperliquidHttpClient {
-    RawHyperliquidHttpClient::new(RawHttpConfig {
-        environment,
-        account_address,
-    })
 }
 
 #[cfg(test)]

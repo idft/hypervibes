@@ -224,29 +224,27 @@ pub async fn dispatch_with_timeout(
     match dispatch_result {
         Ok(Ok(result)) => {
             let _ = store::mark_run_succeeded(pool, run_id, Some(&result.backend_run_ref)).await;
-            Ok(DispatchOutcome::Succeeded {
-                backend_run_ref: result.backend_run_ref,
-            })
+            Ok(DispatchOutcome::Succeeded)
         }
         Ok(Err(error)) => {
             let summary = sanitize_error(&format!("{error:#}"));
             warn!(run_id, error = %summary, "agentic run failed");
             let _ = store::mark_run_failed(pool, run_id, &summary, None).await;
-            Ok(DispatchOutcome::Failed { summary })
+            Ok(DispatchOutcome::Failed)
         }
         Err(_elapsed) => {
             let summary = format!("run exceeded timeout of {}s", timeout_seconds);
             warn!(run_id, summary = %summary, "agentic run timed out");
             let _ = store::mark_run_failed(pool, run_id, &summary, None).await;
-            Ok(DispatchOutcome::Failed { summary })
+            Ok(DispatchOutcome::Failed)
         }
     }
 }
 
 #[derive(Debug, Clone)]
 pub enum DispatchOutcome {
-    Succeeded { backend_run_ref: String },
-    Failed { summary: String },
+    Succeeded,
+    Failed,
 }
 
 fn sanitize_error(input: &str) -> String {
@@ -419,9 +417,7 @@ mod tests {
             .await
             .expect("dispatch");
         match outcome {
-            DispatchOutcome::Succeeded { backend_run_ref } => {
-                assert_eq!(backend_run_ref, "ses_test");
-            }
+            DispatchOutcome::Succeeded => {}
             other => panic!("expected Succeeded, got {other:?}"),
         }
         let calls = backend.calls.lock().unwrap();
@@ -437,9 +433,7 @@ mod tests {
             .await
             .expect("dispatch");
         match outcome {
-            DispatchOutcome::Failed { summary } => {
-                assert!(summary.contains("simulated dispatch failure"));
-            }
+            DispatchOutcome::Failed => {}
             other => panic!("expected Failed, got {other:?}"),
         }
     }

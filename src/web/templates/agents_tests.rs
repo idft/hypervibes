@@ -223,17 +223,13 @@ fn jobs_page_renders_recent_runs_pagination_controls() {
 #[test]
 fn transactions_page_renders_pagination_controls() {
     let row = AccountTransactionRow {
-        event_id: "tx-page-005".to_string(),
         event_time: Utc::now(),
         event_category: "ledger".to_string(),
-        event_type: "ledger".to_string(),
-        source_stream: "test".to_string(),
         symbol: None,
         asset: None,
         fee_usdc: None,
         realized_pnl_usdc: None,
         usdc_delta: Some(rust_decimal::Decimal::new(1, 0)),
-        payload: serde_json::Value::Null,
         running_balance: Some(rust_decimal::Decimal::new(5, 0)),
     };
     let mut template =

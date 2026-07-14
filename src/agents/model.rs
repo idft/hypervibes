@@ -58,14 +58,9 @@ pub struct AgentDetailRow {
     pub wallet_address: String,
     pub environment: String,
     pub api_key: String,
-    pub api_key_last_used_at: Option<DateTime<Utc>>,
     pub backend_kind: String,
-    pub runtime_id: String,
-    pub runtime_name: String,
     pub runtime_base_url: Option<String>,
     pub runtime_config: serde_json::Value,
-    pub created_at: DateTime<Utc>,
-    pub updated_at: DateTime<Utc>,
 }
 
 /// Full registry row as stored in Postgres.

@@ -145,6 +145,7 @@ impl SparklineView {
         let mut min = first;
         let mut max = first;
         for p in points {
+            let _bucket = p.bucket;
             if p.balance < min {
                 min = p.balance;
             }

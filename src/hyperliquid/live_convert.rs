@@ -9,9 +9,6 @@
 use anyhow::Result;
 use chrono::Utc;
 use rust_decimal::Decimal;
-#[cfg(test)]
-use serde_json::Value;
-
 use crate::hyperliquid::{
     account_sync::InstrumentLookupMap,
     config::AccountSyncConfig,
@@ -20,9 +17,6 @@ use crate::hyperliquid::{
     },
     normalize::{FundingEventRow, TradeFillRow},
 };
-#[cfg(test)]
-use crate::hyperliquid::{normalize::{LedgerEventRow, parse_decimal}, raw_http::RawLedgerUpdate};
-
 /// Map a `hypersdk` [`ClearinghouseState`](hypersdk::hypercore::types::ClearinghouseState)
 /// into the app's [`AccountLiveState`] margin summary, returning a fully
 /// assembled live state for the account.
@@ -251,57 +245,6 @@ pub fn funding_event_row_from_hypersdk_funding(
         ingest_source: "ws".to_string(),
         inserted_at: now,
     }))
-}
-
-/// Convert a non-funding ledger update into a durable [`LedgerEventRow`].
-#[cfg(test)]
-pub fn ledger_event_row_from_value(
-    config: &AccountSyncConfig,
-    lookup: &InstrumentLookupMap,
-    update: &RawLedgerUpdate,
-) -> Result<LedgerEventRow> {
-    let now = Utc::now();
-    let payload = serde_json::to_value(update)?;
-    let ledger_type = update
-        .ledger_type
-        .clone()
-        .unwrap_or_else(|| "ledger_update".to_string());
-    let raw_coin = update
-        .delta
-        .get("coin")
-        .and_then(Value::as_str)
-        .unwrap_or_default();
-    let symbol_lookup = lookup.get(raw_coin);
-    let (instrument_id, base_asset) = match symbol_lookup {
-        Some((iid, _sym, base)) => (Some(iid.clone()), Some(base.clone())),
-        None => (None, None),
-    };
-
-    Ok(LedgerEventRow {
-        hash: update.hash.clone(),
-        account_address: config.account_address.clone(),
-        environment: config.environment.as_journal_str().to_string(),
-        event_time: crate::hyperliquid::normalize::ms_to_datetime(update.time),
-        event_type: ledger_type.clone(),
-        source_stream: "ledger".to_string(),
-        instrument_id,
-        asset: base_asset,
-        symbol: None,
-        fee_usdc: None,
-        realized_pnl_usdc: None,
-        ledger_type,
-        usdc: update.usdc.as_deref().map(parse_decimal).transpose()?,
-        token: update.token.clone(),
-        amount: update.amount.as_deref().map(parse_decimal).transpose()?,
-        fee: update.fee.as_deref().map(parse_decimal).transpose()?,
-        source_user: update.source_user.clone(),
-        destination_user: update.destination_user.clone(),
-        tx_hash: update.tx_hash.clone(),
-        details: update.delta.clone(),
-        payload,
-        ingest_source: "ws".to_string(),
-        inserted_at: now,
-    })
 }
 
 #[cfg(test)]

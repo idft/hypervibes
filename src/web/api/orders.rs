@@ -19,10 +19,7 @@ use crate::{
             CancelAllSummary, CancelOutcome, GatewayError, HyperliquidExchange, cancel_all,
             cancel_orders, place_orders,
         },
-        model::{
-            CancelOrdersRequest, OrderResult as GatewayOrderResult, PlaceOrdersRequest,
-            PlaceOrdersResponse,
-        },
+        model::{CancelOrdersRequest, PlaceOrdersRequest, PlaceOrdersResponse},
         store as orders_store,
     },
     web::AppState,
@@ -61,36 +58,6 @@ pub(super) async fn build_exchange_for_agent(
         .map_err(|e| ApiError::Internal(anyhow::anyhow!("invalid private key: {e}")))?;
     let client = hypersdk::hypercore::mainnet();
     Ok(HyperliquidExchange::new(signer, client))
-}
-
-/// Per-leg outcome as serialized to the agent.
-#[derive(Debug, serde::Serialize)]
-pub(super) struct OrderResultResponse {
-    id: Uuid,
-    cloid: String,
-    symbol: String,
-    side: String,
-    order_kind: String,
-    status: String,
-    exchange_oid: Option<String>,
-    group_id: Option<Uuid>,
-    error: Option<String>,
-}
-
-impl From<GatewayOrderResult> for OrderResultResponse {
-    fn from(r: GatewayOrderResult) -> Self {
-        Self {
-            id: r.id,
-            cloid: r.cloid,
-            symbol: r.symbol,
-            side: r.side,
-            order_kind: r.order_kind,
-            status: r.status,
-            exchange_oid: r.exchange_oid,
-            group_id: r.group_id,
-            error: r.error,
-        }
-    }
 }
 
 /// Per-row summary for `GET /api/v1/orders`.
@@ -243,7 +210,7 @@ pub(super) async fn place_orders_handler(
     .map_err(map_gateway_error)?;
 
     let body = PlaceOrdersResponse {
-        results: resp.results.into_iter().map(Into::into).collect(),
+        results: resp.results,
     };
     Ok((StatusCode::CREATED, Json(body)).into_response())
 }

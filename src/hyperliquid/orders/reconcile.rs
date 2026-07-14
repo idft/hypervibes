@@ -59,8 +59,10 @@ pub struct OpenOrderRow {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OpenOrderStatus {
     /// Order is filled (terminal).
+    #[cfg(test)]
     Filled,
     /// Order is cancelled (terminal).
+    #[cfg(test)]
     Canceled,
     /// Order is open on the book.
     Open,
@@ -200,7 +202,9 @@ pub fn merge_status(local_status: &str, exchange_status: OpenOrderStatus) -> (St
                 "resting".to_string()
             }
         }
+        #[cfg(test)]
         OpenOrderStatus::Filled => "filled".to_string(),
+        #[cfg(test)]
         OpenOrderStatus::Canceled => "canceled".to_string(),
     };
     let changed = new != local_status;
@@ -299,10 +303,8 @@ pub async fn reconcile_account(
 
     // Pull all local rows that are still in a non-terminal state.
     let local_rows = sqlx::query_as::<_, orders_store::OrderRow>(
-        "SELECT id, created_at, updated_at, agent_key, account_address, environment, \
-         group_id, parent_cloid, memory_record_ids, attribution_source, symbol, instrument_id, side, order_kind, \
-         reduce_only, requested_price, rounded_price, requested_size, rounded_size, trigger_price, \
-         time_in_force, cloid, exchange_oid, status, status_detail, filled_size, avg_fill_price \
+        "SELECT id, created_at, agent_key, group_id, memory_record_ids, attribution_source, symbol, side, order_kind, \
+         reduce_only, cloid, exchange_oid, status, filled_size, avg_fill_price \
          FROM hyperliquid.orders \
          WHERE account_address = $1 AND environment = $2 \
            AND status NOT IN ('filled','canceled','rejected','error')",
@@ -398,10 +400,8 @@ pub async fn reconcile_account(
     // Auto-cancel orphaned reduce-only TP/SL legs whose underlying
     // position is flat.
     let all_local: Vec<orders_store::OrderRow> = sqlx::query_as::<_, orders_store::OrderRow>(
-        "SELECT id, created_at, updated_at, agent_key, account_address, environment, \
-         group_id, parent_cloid, memory_record_ids, attribution_source, symbol, instrument_id, side, order_kind, \
-         reduce_only, requested_price, rounded_price, requested_size, rounded_size, trigger_price, \
-         time_in_force, cloid, exchange_oid, status, status_detail, filled_size, avg_fill_price \
+        "SELECT id, created_at, agent_key, group_id, memory_record_ids, attribution_source, symbol, side, order_kind, \
+         reduce_only, cloid, exchange_oid, status, filled_size, avg_fill_price \
          FROM hyperliquid.orders \
          WHERE account_address = $1 AND environment = $2 \
            AND status IN ('submitted','resting','partially_filled','unknown','pending_submission')",
@@ -666,29 +666,17 @@ mod tests {
         orders_store::OrderRow {
             id: Uuid::new_v4(),
             created_at: Utc::now(),
-            updated_at: Utc::now(),
             agent_key: "a".to_string(),
-            account_address: "0x".to_string(),
-            environment: "live".to_string(),
             group_id: None,
-            parent_cloid: None,
             memory_record_ids: json!([]),
             attribution_source: "agent".to_string(),
             symbol: symbol.to_string(),
-            instrument_id: None,
             side: "buy".to_string(),
             order_kind: order_kind.to_string(),
             reduce_only,
-            requested_price: None,
-            rounded_price: None,
-            requested_size: dec!(0),
-            rounded_size: None,
-            trigger_price: None,
-            time_in_force: None,
             cloid: "0x".to_string(),
             exchange_oid: exchange_oid.map(str::to_string),
             status: "resting".to_string(),
-            status_detail: None,
             filled_size: None,
             avg_fill_price: None,
         }

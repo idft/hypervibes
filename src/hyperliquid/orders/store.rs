@@ -20,29 +20,17 @@ use crate::db::DbPool;
 pub struct OrderRow {
     pub id: Uuid,
     pub created_at: DateTime<Utc>,
-    pub updated_at: DateTime<Utc>,
     pub agent_key: String,
-    pub account_address: String,
-    pub environment: String,
     pub group_id: Option<Uuid>,
-    pub parent_cloid: Option<String>,
     pub memory_record_ids: Value,
     pub attribution_source: String,
     pub symbol: String,
-    pub instrument_id: Option<String>,
     pub side: String,
     pub order_kind: String,
     pub reduce_only: bool,
-    pub requested_price: Option<Decimal>,
-    pub rounded_price: Option<Decimal>,
-    pub requested_size: Decimal,
-    pub rounded_size: Option<Decimal>,
-    pub trigger_price: Option<Decimal>,
-    pub time_in_force: Option<String>,
     pub cloid: String,
     pub exchange_oid: Option<String>,
     pub status: String,
-    pub status_detail: Option<String>,
     pub filled_size: Option<Decimal>,
     pub avg_fill_price: Option<Decimal>,
 }
@@ -94,10 +82,8 @@ pub struct OrderEventInsert {
     pub payload: Value,
 }
 
-const SELECT_ORDER: &str = "SELECT id, created_at, updated_at, agent_key, account_address, environment, \
-     group_id, parent_cloid, memory_record_ids, attribution_source, symbol, instrument_id, side, order_kind, \
-     reduce_only, requested_price, rounded_price, requested_size, rounded_size, trigger_price, \
-     time_in_force, cloid, exchange_oid, status, status_detail, filled_size, avg_fill_price \
+const SELECT_ORDER: &str = "SELECT id, created_at, agent_key, group_id, memory_record_ids, attribution_source, \
+     symbol, side, order_kind, reduce_only, cloid, exchange_oid, status, filled_size, avg_fill_price \
      FROM hyperliquid.orders";
 
 /// Insert a new `hyperliquid.orders` row.
@@ -548,8 +534,15 @@ mod tests {
             .expect("present");
         assert_eq!(fetched.cloid, "0xcloid_rt_1");
         assert_eq!(fetched.symbol, "BTC");
-        assert_eq!(fetched.requested_size, dec!(0.1));
         assert_eq!(fetched.status, "pending_submission");
+        let (requested_size,): (Decimal,) = sqlx::query_as(
+            "SELECT requested_size FROM hyperliquid.orders WHERE id = $1",
+        )
+        .bind(id)
+        .fetch_one(&pool)
+        .await
+        .expect("fetch requested size");
+        assert_eq!(requested_size, dec!(0.1));
     }
 
     #[tokio::test]
