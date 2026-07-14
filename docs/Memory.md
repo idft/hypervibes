@@ -9,7 +9,8 @@ Related docs:
 
 ## Goal
 
-The memory system stores time-ordered agent analysis so later runs can retrieve recent context and make decisions with continuity.
+The memory system stores time-ordered, agent-owned analysis and review context
+so later runs can make decisions with continuity.
 
 ## Core Model
 
@@ -48,7 +49,8 @@ Important `memory.links` fields:
 
 ## Retrieval
 
-Agents read memories through the Vibetrading API and MCP tools.
+Agents read memories through the authenticated Vibetrading API and workspace
+MCP tools. All reads and writes are scoped to the calling `agent_key`.
 
 Common retrieval patterns:
 
@@ -64,7 +66,9 @@ The backend keeps `metadata` flexible JSON, but some OpenCode flows rely on stab
 Current important contract:
 
 - `memory_type = "market_analysis"` is the primary execution handoff for trading
-- trading should not open new exposure when no fresh `market_analysis` memory exists
+- OpenCode trading instructions require a fresh `market_analysis` memory before
+  opening new exposure; this is a workflow contract, not an API-level order
+  validation rule today
 - `memory_type = "agent_learnings"` is the append-only durable learning stream for one agent
 - `memory_type = "daily_review"` records one review for an agent-scoped UTC window
 - market-analysis memories should link back to source analyses with `derived_from`

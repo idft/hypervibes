@@ -1,5 +1,6 @@
+# Testing
 
-### Test database
+## Test Database
 
 By default `cargo test` uses the dedicated `test-postgres` service from `podman-compose.yaml` via `TEST_DATABASE_URL=postgres://vibetrading:vibetrading@127.0.0.1:15433/postgres` from `.cargo/config.toml`.
 
@@ -20,10 +21,10 @@ The dedicated test Postgres service is intentionally speed-optimized and disposa
 - `shm_size=512m`
 - tmpfs-backed `PGDATA` so test data never persists across container restarts
 
-### Frontend build during tests
+## Frontend Build During Tests
 
 `build.rs` skips the automatic frontend `pnpm build` path during `cargo test`. Template and route tests render directly from source templates and do not need compiled assets. If you explicitly need the build-script asset step during a test invocation, run with `VIBETRADING_FORCE_FRONTEND_BUILD=1 cargo test`.
 
-### SSE tests
+## SSE Tests
 
 The SSE route tests in `src/web/routes.rs` run in the normal suite against the dedicated `test-postgres` service. The shared `read_sse_chunk` helper still only reads an initial slice of each long-lived stream, so keep those tests focused on the initial event payload and explicit follow-up updates triggered inside the test.

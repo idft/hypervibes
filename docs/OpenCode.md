@@ -11,6 +11,10 @@ Related docs:
 
 OpenCode is the only supported agent execution backend today.
 
+Each generated workspace starts a local stdio MCP server. It reads the
+workspace-scoped Vibetrading API credentials and adapts OpenCode tool calls to
+the authenticated agent API; it never receives a Hyperliquid private key.
+
 Vibetrading owns:
 
 - agent identity
@@ -90,7 +94,7 @@ The `AgenticScheduler` claims due work, dispatches runs through the OpenCode bac
 
 Before claiming new work for an agent lane, Vibetrading reconciles stale active runs left behind by app restarts. A `running` run whose OpenCode session is recorded as `idle` after a command was created is marked `succeeded`; queued or running orphan rows that have exceeded their configured timeout are marked `failed`, regardless of whether they ever reached an OpenCode session. The `AgenticScheduler` also runs a periodic global recovery sweep (throttled to once a minute) that applies the same reconciliation across every agent, so a `running` run whose dispatch worker has died does not block its lane until the next claim attempt. This prevents one interrupted process from causing all later runs in the same lane to be skipped forever.
 
-## Graceful shutdown
+## Shutdown And Maintenance
 
 A single signal handler in `main` watches for `SIGINT` (Ctrl-C) and `SIGTERM` and flips one shared `watch<bool>`. The web server, the `AgenticScheduler`, and the `HyperliquidAgentMonitor` all observe that flag and stop claiming new work. The web server's `axum::serve` `with_graceful_shutdown` future is driven by the same flag, so in-flight HTTP requests still finish.
 

@@ -1,25 +1,29 @@
-# Vibetrading V2
+# Vibetrading
 
-Vibetrading is a Rust application for running OpenCode-backed trading agents on Hyperliquid.
+Vibetrading runs OpenCode-backed crypto trading agents on Hyperliquid. It is a
+Rust application with an operator UI, a scoped agent API, Postgres persistence,
+and supervised background work for agent jobs and exchange monitoring.
 
-Current direction:
+## Documentation
 
-- one main application binary
-- Postgres as the primary database
-- one shared migrations directory
-- dedicated `agents`, `memory`, and `hyperliquid` database areas
-- a server-rendered operator UI plus internal agent APIs
-- supervised background tasks for account monitoring and OpenCode job dispatch
+- `Architecture.md`: runtime, subsystem boundaries, configuration, and UI
+- `Agents.md`: agent registry, credentials, prompts, instruments, and workspaces
+- `OpenCode.md`: OpenCode runtime, workspace, scheduling, and dispatch behavior
+- `Memory.md`: append-only agent memory and retrieval contracts
+- `Hyperliquid.md`: exchange synchronization, account journal, and order gateway
+- `Testing.md`: test database and frontend/SSE test behavior
 
-Current docs:
+## Source Map
 
-- `Agents.md` for agent registry, runtimes, prompts, and instruments
-- `OpenCode.md` for the supported agent backend
-- `Memory.md` for memory storage and retrieval
-- `Hyperliquid.md` for venue sync and execution ownership
-- `Architecture.md` for the current runtime shape
+- `src/main.rs`: application startup and shutdown
+- `src/web/`: operator UI, SSE, and `/api/v1` agent API
+- `src/agentic/`: schedules, hooks, run tracking, and dispatch
+- `src/agents/`: agent registry, credentials, and Hyperliquid monitor
+- `src/hyperliquid/`: exchange integration and execution gateway
+- `src/memory/`: memory persistence and queries
+- `agent-runtime/`: generated OpenCode workspace template and MCP adapter
+- `migrations/`: authoritative database schema
 
-Notes:
-
-- `agent_runtimes.backend_kind` remains in the schema even though only `opencode` is currently valid.
-- OpenCode jobs receive initial agent/job context through dispatched prompt text.
+When documentation and implementation disagree, treat the source and
+migrations as authoritative and update these documents with the confirmed
+behavior.

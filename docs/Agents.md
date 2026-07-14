@@ -17,6 +17,10 @@ The agents module is the system of record for:
 - which instruments each agent may trade
 - which strategy prompts and API credentials belong to the agent
 
+The agent API key is the ownership boundary for agent-facing account, memory,
+and order operations. Hyperliquid signing keys are encrypted at rest and remain
+server-owned.
+
 ## Current Data Model
 
 The current implementation keeps the registry intentionally small:
@@ -44,8 +48,6 @@ Strategy prompts are no longer stored directly on `agents`. They live in `agent_
 - `market_analysis`
 - `trading`
 - `daily_review`
-
-The Hyperliquid private key is encrypted before storage.
 
 ## Backend And Runtime Rules
 
@@ -110,4 +112,6 @@ Each agent may be linked to zero or more Hyperliquid perp instruments.
 - empty selection means the agent should not analyze markets or place new trades
 - `POST /api/v1/orders` rejects orders for symbols not currently selected for that agent
 
-OpenCode jobs receive the job-specific strategy prompt, the latest agent-level learnings memory, selected instruments, and job metadata through the dispatched prompt text.
+OpenCode jobs receive the job-specific strategy prompt, the latest agent-level
+learnings memory, selected instruments, and job metadata through the dispatched
+prompt text. Trading jobs also receive a live account snapshot.
