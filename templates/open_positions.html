@@ -25,7 +25,10 @@
                 {% for pos in view.positions %}
                 <tr class="hover:bg-zinc-900/50">
                     <td class="px-4 py-3 align-top font-medium text-zinc-100">
-                        <a href="{{ pos.market_url }}" target="_blank" rel="noopener noreferrer" class="hover:text-violet-300 hover:underline">{{ pos.coin }}</a>
+                        <span class="inline-flex items-center gap-2">
+                            <img src="{{ pos.logo_url }}" alt="" aria-hidden="true" class="h-5 w-5 rounded-sm">
+                            <a href="{{ pos.market_url }}" target="_blank" rel="noopener noreferrer" class="hover:text-violet-300 hover:underline">{{ pos.coin }}</a>
+                        </span>
                     </td>
                     <td class="px-4 py-3 align-top">
                         {% if !pos.has_position %}

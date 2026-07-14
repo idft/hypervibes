@@ -9,7 +9,7 @@ mod orders;
 mod positions;
 mod runs;
 mod settings;
-mod shared;
+pub(crate) mod shared;
 
 #[cfg(test)]
 use self::shared::*;

@@ -1,6 +1,10 @@
 use chrono::{DateTime, Utc};
 use rust_decimal::Decimal;
 
+pub fn currency_logo_url(coin: &str) -> String {
+    format!("/currency/{coin}.svg")
+}
+
 #[derive(Debug, Clone)]
 pub struct LocalTimestampView {
     pub iso: String,

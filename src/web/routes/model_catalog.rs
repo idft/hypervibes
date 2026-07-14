@@ -55,9 +55,32 @@ pub(in crate::web::routes) async fn model_catalog_logo(
         .into_response()
 }
 pub(in crate::web::routes) fn body_looks_like_svg(body: &[u8]) -> bool {
-    let text = String::from_utf8_lossy(body);
-    let trimmed = text.trim_start();
-    trimmed.starts_with("<svg") || (trimmed.starts_with("<?xml") && trimmed.contains("<svg"))
+    let Ok(text) = std::str::from_utf8(body) else {
+        return false;
+    };
+    let Ok(document) = roxmltree::Document::parse(text) else {
+        return false;
+    };
+    let root = document.root_element();
+    if root.tag_name().name() != "svg"
+        || root.tag_name().namespace() != Some("http://www.w3.org/2000/svg")
+    {
+        return false;
+    }
+
+    document.descendants().filter(|node| node.is_element()).all(|element| {
+        let name = element.tag_name().name();
+        name != "script"
+            && name != "foreignObject"
+            && element.attributes().all(|attribute| {
+                let local_name = attribute.name();
+                !local_name
+                    .get(..2)
+                    .is_some_and(|prefix| prefix.eq_ignore_ascii_case("on"))
+                    && (!local_name.eq_ignore_ascii_case("href")
+                        || attribute.value().starts_with('#'))
+            })
+    })
 }
 pub(in crate::web::routes) fn fallback_logo_svg(provider: &str) -> String {
     let initial = provider.chars().next().unwrap_or('M').to_ascii_uppercase();

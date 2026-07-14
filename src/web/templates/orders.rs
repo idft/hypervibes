@@ -7,13 +7,14 @@ use crate::hyperliquid::live_state::{AccountLiveState, LiveConnectionStatus, Liv
 
 use super::shared::{
     MoneyCell, format_money_cell, format_neutral_money_cell_with_decimals, format_timestamp_iso,
-    format_timestamp_utc,
+    format_timestamp_utc, currency_logo_url,
 };
 
 /// Per-row view of an open resting order for the agent detail page.
 #[derive(Debug, Clone)]
 pub struct OpenOrderView {
     pub coin: String,
+    pub logo_url: String,
     pub side: String,
     pub order_type: String,
     pub size: String,
@@ -86,6 +87,7 @@ pub(super) fn order_view(order: &LiveOpenOrder) -> OpenOrderView {
     let age = format_order_age(order.timestamp);
     OpenOrderView {
         coin: order.coin.clone(),
+        logo_url: currency_logo_url(&order.coin),
         side,
         order_type,
         size,

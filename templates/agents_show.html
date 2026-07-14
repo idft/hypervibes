@@ -225,11 +225,12 @@
                             <label for="instrument-search" class="sr-only">Search currencies</label>
                             <input id="instrument-search" type="search" placeholder="Filter currencies" autocomplete="off" data-instrument-search class="w-full rounded-xl border border-zinc-800 bg-[#0d0d10] px-4 py-2.5 text-sm text-zinc-200 outline-none placeholder:text-zinc-600 focus:border-zinc-700">
                         </div>
-                        <div class="mt-4 max-h-48 overflow-y-auto rounded-xl border border-zinc-800 bg-[#0d0d10] p-2">
+                        <div data-instrument-scroll-container class="mt-4 max-h-48 overflow-y-auto rounded-xl border border-zinc-800 bg-[#0d0d10] p-2">
                             <div class="space-y-2">
                                 {% for option in instrument_options %}
-                                <label data-instrument-row data-instrument-label="{{ option.instrument_id }}" class="flex cursor-pointer items-center gap-3 rounded-xl border border-zinc-900 bg-zinc-950/70 px-4 py-3 text-sm text-zinc-200 transition hover:border-zinc-700 has-[:checked]:border-emerald-900/60 has-[:checked]:bg-emerald-950/20">
+                                <label data-instrument-row data-instrument-label="{{ option.instrument_id }}" data-instrument-logo-url="{{ option.logo_url }}" class="flex cursor-pointer items-center gap-3 rounded-xl border border-zinc-900 bg-zinc-950/70 px-4 py-3 text-sm text-zinc-200 transition hover:border-zinc-700 has-[:checked]:border-emerald-900/60 has-[:checked]:bg-emerald-950/20">
                                     <input type="checkbox" name="instrument_id" value="{{ option.instrument_id }}" {% if option.selected %}checked{% endif %} class="h-4 w-4 rounded border-zinc-700 bg-zinc-950 text-white">
+                                    <img alt="" aria-hidden="true" data-instrument-logo class="h-5 w-5 rounded-sm bg-zinc-800">
                                     <span class="font-medium">{{ option.instrument_id }}</span>
                                 </label>
                                 {% endfor %}
@@ -771,6 +772,7 @@
             const warning = container.querySelector('[data-no-currencies-warning]');
             const count = container.querySelector('[data-selected-instrument-count]');
             const searchEmpty = container.querySelector('[data-instrument-search-empty]');
+            const scrollContainer = container.querySelector('[data-instrument-scroll-container]');
             const rows = Array.from(container.querySelectorAll('[data-instrument-row]'));
 
             if (!selectedList || !selectedEmpty || !warning || !count || rows.length === 0) {
@@ -778,6 +780,10 @@
             }
 
             container.dataset.agentInstrumentSelectorBound = 'true';
+
+            const maxConcurrentLogoLoads = 4;
+            const logoQueue = [];
+            let activeLogoLoads = 0;
 
             function rowInput(row) {
                 return row.querySelector('input[name="instrument_id"]');
@@ -805,6 +811,15 @@
                     name.className = 'font-medium text-zinc-200';
                     name.textContent = label;
 
+                    const logo = document.createElement('img');
+                    logo.alt = '';
+                    logo.setAttribute('aria-hidden', 'true');
+                    logo.className = 'h-5 w-5 rounded-sm bg-zinc-800';
+                    const logoUrl = row.getAttribute('data-instrument-logo-url');
+                    if (logoUrl) {
+                        logo.src = logoUrl;
+                    }
+
                     const remove = document.createElement('button');
                     remove.type = 'button';
                     remove.className = 'inline-flex h-7 w-7 items-center justify-center rounded-full border border-zinc-800 text-sm text-zinc-400 hover:border-zinc-700 hover:text-white';
@@ -812,6 +827,7 @@
                     remove.dataset.removeInstrument = label;
                     remove.textContent = 'x';
 
+                    item.appendChild(logo);
                     item.appendChild(name);
                     item.appendChild(remove);
                     selectedList.appendChild(item);
@@ -820,6 +836,31 @@
                 count.textContent = selectedRows.length === 1 ? '1 selected' : selectedRows.length + ' selected';
                 selectedEmpty.classList.toggle('hidden', selectedRows.length > 0);
                 warning.classList.toggle('hidden', selectedRows.length > 0);
+            }
+
+            function drainLogoQueue() {
+                while (activeLogoLoads < maxConcurrentLogoLoads && logoQueue.length > 0) {
+                    const item = logoQueue.shift();
+                    activeLogoLoads += 1;
+                    const finish = function () {
+                        activeLogoLoads -= 1;
+                        drainLogoQueue();
+                    };
+                    item.image.addEventListener('load', finish, { once: true });
+                    item.image.addEventListener('error', finish, { once: true });
+                    item.image.src = item.url;
+                }
+            }
+
+            function enqueueLogo(row) {
+                const url = row.getAttribute('data-instrument-logo-url');
+                const image = row.querySelector('[data-instrument-logo]');
+                if (!url || !image || image.hasAttribute('src') || row.dataset.instrumentLogoQueued === 'true') {
+                    return;
+                }
+                row.dataset.instrumentLogoQueued = 'true';
+                logoQueue.push({ image: image, url: url });
+                drainLogoQueue();
             }
 
             function applySearchFilter() {
@@ -870,6 +911,18 @@
 
             if (searchInput instanceof HTMLInputElement) {
                 searchInput.addEventListener('input', applySearchFilter);
+            }
+
+            if (scrollContainer && 'IntersectionObserver' in window) {
+                const observer = new IntersectionObserver(function (entries) {
+                    entries.forEach(function (entry) {
+                        if (entry.isIntersecting) {
+                            enqueueLogo(entry.target);
+                            observer.unobserve(entry.target);
+                        }
+                    });
+                }, { root: scrollContainer, rootMargin: '80px 0px', threshold: 0 });
+                rows.forEach(function (row) { observer.observe(row); });
             }
 
             syncSelectedList();

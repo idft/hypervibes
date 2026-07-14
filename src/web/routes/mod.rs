@@ -2,6 +2,7 @@ mod agents;
 mod backends;
 #[cfg(test)]
 mod backends_tests;
+mod currency;
 mod model_catalog;
 mod root;
 mod settings;
@@ -9,7 +10,7 @@ mod shared;
 #[cfg(test)]
 pub(in crate::web::routes) mod test_support;
 
-use self::{agents::*, backends::*, model_catalog::*, root::*, settings::*};
+use self::{agents::*, backends::*, currency::*, model_catalog::*, root::*, settings::*};
 
 use std::sync::Arc;
 
@@ -25,6 +26,7 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/", get(root))
         .route("/healthz", get(healthz))
         .route("/model-catalog/logos/{provider}", get(model_catalog_logo))
+        .route("/currency/{file}", get(currency_logo))
         .route("/agents/navigation", get(agent_selector_items))
         .route("/agents", get(agents_index).post(create_agent))
         .route("/agents/new", get(agents_new))

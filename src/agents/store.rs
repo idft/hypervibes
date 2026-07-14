@@ -8,12 +8,20 @@ use crate::{
         AgentDetailRow, AgentListRow, AgentRegistryRow, AgentRuntimeRow, CreateAgentRuntimeForm,
     },
     db::DbPool,
+    web::templates::shared::currency_logo_url,
 };
 
 #[derive(Debug, Clone, sqlx::FromRow)]
 pub struct AgentInstrumentOptionRow {
     pub instrument_id: String,
     pub selected: bool,
+    pub logo_url: String,
+}
+
+#[derive(Debug, sqlx::FromRow)]
+struct AgentInstrumentOptionRawRow {
+    instrument_id: String,
+    selected: bool,
 }
 
 /// List all agents ordered by creation time, newest first.
@@ -185,7 +193,7 @@ pub async fn list_agent_instrument_options(
     pool: &DbPool,
     agent_key: &str,
 ) -> Result<Vec<AgentInstrumentOptionRow>> {
-    let rows = query_as::<_, AgentInstrumentOptionRow>(
+    let rows = query_as::<_, AgentInstrumentOptionRawRow>(
         "SELECT instruments.instrument_id,
                 (agent_instruments.instrument_id IS NOT NULL) AS selected
            FROM hyperliquid.instruments AS instruments
@@ -201,7 +209,14 @@ pub async fn list_agent_instrument_options(
     .await
     .context("failed to list agent instrument options")?;
 
-    Ok(rows)
+    Ok(rows
+        .into_iter()
+        .map(|row| AgentInstrumentOptionRow {
+            logo_url: currency_logo_url(&row.instrument_id),
+            instrument_id: row.instrument_id,
+            selected: row.selected,
+        })
+        .collect())
 }
 
 pub async fn replace_agent_instruments(

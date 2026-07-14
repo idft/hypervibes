@@ -1,9 +1,12 @@
 use std::{
+    collections::HashMap,
     path::{Path, PathBuf},
+    sync::Arc,
     time::{Duration, SystemTime},
 };
 
 use anyhow::{Context, Result, anyhow, bail};
+use tokio::sync::{Mutex, Semaphore};
 
 #[derive(Debug, Clone)]
 pub struct AssetCachePolicy {
@@ -21,14 +24,22 @@ pub struct CachedAsset {
 pub struct AssetCache {
     root: PathBuf,
     http: reqwest::Client,
+    fetch_slots: Arc<Semaphore>,
+    key_locks: Arc<Mutex<HashMap<PathBuf, Arc<Mutex<()>>>>>,
 }
 
 impl AssetCache {
     pub fn new(root: PathBuf) -> Result<Self> {
         let http = reqwest::Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
             .build()
             .context("failed to build asset cache HTTP client")?;
-        Ok(Self { root, http })
+        Ok(Self {
+            root,
+            http,
+            fetch_slots: Arc::new(Semaphore::new(4)),
+            key_locks: Arc::new(Mutex::new(HashMap::new())),
+        })
     }
 
     pub async fn get_or_fetch(
@@ -52,7 +63,26 @@ impl AssetCache {
             }
         }
 
-        match self.fetch_and_store(&path, url, &policy).await {
+        let key_lock = {
+            let mut key_locks = self.key_locks.lock().await;
+            key_locks
+                .entry(path.clone())
+                .or_insert_with(|| Arc::new(Mutex::new(())))
+                .clone()
+        };
+        let _key_guard = key_lock.lock().await;
+
+        let stale_bytes = read_if_exists(&path).await?;
+        if let Some(bytes) = stale_bytes.as_ref()
+            && is_fresh(&path, policy.ttl).await?
+        {
+            return Ok(CachedAsset {
+                bytes: bytes.clone(),
+            });
+        }
+
+        let fetch_result = self.fetch_with_slot(&path, url, &policy).await;
+        match fetch_result {
             Ok(bytes) => Ok(CachedAsset { bytes }),
             Err(error) => {
                 if let Some(bytes) = stale_bytes {
@@ -62,6 +92,21 @@ impl AssetCache {
                 }
             }
         }
+    }
+
+    async fn fetch_with_slot(
+        &self,
+        path: &Path,
+        url: &str,
+        policy: &AssetCachePolicy,
+    ) -> Result<Vec<u8>> {
+        let _permit = self
+            .fetch_slots
+            .clone()
+            .acquire_owned()
+            .await
+            .context("asset fetch semaphore closed")?;
+        self.fetch_and_store(path, url, policy).await
     }
 
     async fn fetch_and_store(
@@ -292,5 +337,66 @@ mod tests {
             .unwrap();
 
         assert_eq!(asset.bytes, b"stale");
+    }
+
+    #[tokio::test]
+    async fn fresh_cache_hits_do_not_wait_for_fetch_slots() {
+        let root = temp_dir("asset-cache-fresh-concurrent");
+        let path = root.join("models-dev/logos/anthropic.svg");
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(&path, b"cached").unwrap();
+        let cache = AssetCache::new(root).unwrap();
+        let mut calls = Vec::new();
+        for _ in 0..8 {
+            let cache = cache.clone();
+            calls.push(tokio::spawn(async move {
+                cache
+                    .get_or_fetch(
+                        "models-dev/logos",
+                        "anthropic.svg",
+                        "http://127.0.0.1:9/logo.svg",
+                        AssetCachePolicy {
+                            ttl: Duration::from_secs(3600),
+                            max_bytes: 64,
+                            allowed_content_types: Vec::new(),
+                        },
+                    )
+                    .await
+                    .unwrap()
+                    .bytes
+            }));
+        }
+        for call in calls {
+            assert_eq!(call.await.unwrap(), b"cached");
+        }
+    }
+
+    #[tokio::test]
+    async fn same_key_stale_fetches_are_coalesced_without_deadlock() {
+        let root = temp_dir("asset-cache-stale-concurrent");
+        let path = root.join("models-dev/logos/anthropic.svg");
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(&path, b"stale").unwrap();
+        let cache = AssetCache::new(root).unwrap();
+        let policy = AssetCachePolicy {
+            ttl: Duration::ZERO,
+            max_bytes: 64,
+            allowed_content_types: Vec::new(),
+        };
+        let first = cache.get_or_fetch(
+            "models-dev/logos",
+            "anthropic.svg",
+            "http://127.0.0.1:9/logo.svg",
+            policy.clone(),
+        );
+        let second = cache.get_or_fetch(
+            "models-dev/logos",
+            "anthropic.svg",
+            "http://127.0.0.1:9/logo.svg",
+            policy,
+        );
+        let (first, second) = tokio::join!(first, second);
+        assert_eq!(first.unwrap().bytes, b"stale");
+        assert_eq!(second.unwrap().bytes, b"stale");
     }
 }

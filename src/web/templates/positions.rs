@@ -6,13 +6,14 @@ use crate::hyperliquid::live_state::{AccountLiveState, LiveConnectionStatus, Liv
 
 use super::shared::{
     MoneyCell, dash_cell, format_decimal_with_commas, format_money_text_with_decimals,
-    format_neutral_money_cell_with_decimals,
+    format_neutral_money_cell_with_decimals, currency_logo_url,
 };
 
 /// Per-row view of an open perpetual position for the agent detail page.
 #[derive(Debug, Clone)]
 pub struct OpenPositionView {
     pub coin: String,
+    pub logo_url: String,
     pub market_url: String,
     pub has_position: bool,
     pub side: &'static str,
@@ -118,6 +119,7 @@ pub(super) fn position_view(pos: &LivePosition) -> OpenPositionView {
 
     OpenPositionView {
         coin: pos.coin.clone(),
+        logo_url: currency_logo_url(&pos.coin),
         market_url: hyperliquid_market_url(&pos.coin),
         has_position: true,
         side,
@@ -135,6 +137,7 @@ pub(super) fn position_view(pos: &LivePosition) -> OpenPositionView {
 fn empty_position_view(coin: &str) -> OpenPositionView {
     OpenPositionView {
         coin: coin.to_string(),
+        logo_url: currency_logo_url(coin),
         market_url: hyperliquid_market_url(coin),
         has_position: false,
         side: "No position",

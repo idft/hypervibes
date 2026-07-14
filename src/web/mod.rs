@@ -2,7 +2,7 @@ mod api;
 mod error;
 mod routes;
 mod state;
-mod templates;
+pub(crate) mod templates;
 pub(crate) mod ui_events;
 
 pub use state::AppState;
