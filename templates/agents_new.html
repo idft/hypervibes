@@ -6,9 +6,6 @@
 <div class="mx-auto max-w-3xl">
     <header class="border-b border-zinc-800 pb-6">
         <h1 class="text-3xl font-semibold tracking-tight text-white">Create agent</h1>
-        <p class="mt-2 text-sm leading-6 text-zinc-400">
-            Add an agent to the registry. The wallet address and app API key are generated automatically.
-        </p>
     </header>
 
     {% if !errors.is_empty() %}
@@ -24,44 +21,33 @@
 
     <form method="post" action="/agents" class="mt-6 space-y-6">
         <div>
-            <label for="display_name" class="block text-sm font-medium text-zinc-300">Display name</label>
-            <input type="text" id="display_name" name="display_name" value="{{ form.display_name }}" required
+            <label for="display_name" class="block text-sm font-medium text-zinc-300">Name</label>
+            <input type="text" id="display_name" name="display_name" value="{{ form.display_name }}" required autofocus
                 placeholder="BTC Momentum"
                 class="mt-2 block w-full rounded-xl border border-zinc-800 bg-zinc-950 px-3 py-2 text-sm text-white placeholder-zinc-600 focus:border-zinc-600 focus:outline-none">
-            <p class="mt-1 text-xs text-zinc-500">
-                The agent key is derived from this name (e.g. "BTC Momentum" becomes <code class="text-zinc-400">btc-momentum</code>).
-            </p>
         </div>
 
         <div>
-            <label for="hyperliquid_private_key" class="block text-sm font-medium text-zinc-300">Hyperliquid private key</label>
+            <label for="hyperliquid_private_key" class="block text-sm font-medium text-zinc-300">Wallet Private Key</label>
             <input type="password" id="hyperliquid_private_key" name="hyperliquid_private_key" required
                 class="mt-2 block w-full rounded-xl border border-zinc-800 bg-zinc-950 px-3 py-2 text-sm text-white placeholder-zinc-600 focus:border-zinc-600 focus:outline-none">
-            <p class="mt-1 text-xs text-zinc-500">The wallet address is derived from this key and the key is encrypted before storage.</p>
-        </div>
-
-        <div>
-            <label for="runtime_id" class="block text-sm font-medium text-zinc-300">Runtime instance</label>
-                <select id="runtime_id" name="runtime_id" required
-                    class="mt-2 block w-full rounded-xl border border-zinc-800 bg-zinc-950 px-3 py-2 text-sm text-white focus:border-zinc-600 focus:outline-none">
-                    <option value="" {% if form.runtime_id.is_empty() %}selected{% endif %}>Select a runtime</option>
-                    {% for runtime in runtimes %}
-                    <option value="{{ runtime.id }}" {% if form.runtime_id == runtime.id %}selected{% endif %}>
-                        OpenCode - {{ runtime.name }} ({{ runtime.id }})
-                    </option>
-                    {% endfor %}
-                </select>
-        </div>
-
-        <div class="flex items-center gap-3">
-            <input type="checkbox" id="enabled" name="enabled" {% if form.enabled.is_some() %}checked{% endif %}
-                class="h-4 w-4 rounded border-zinc-700 bg-zinc-950 text-zinc-100 focus:ring-zinc-600">
-            <label for="enabled" class="text-sm text-zinc-300">Enabled</label>
+            <div class="mt-3 rounded-xl border border-amber-900/60 bg-amber-950/20 p-4 text-sm text-amber-200">
+                <div class="flex items-center gap-2 font-medium">
+                    <svg class="h-4 w-4 shrink-0" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="M10 3 2.5 16h15L10 3Z"></path><path stroke-linecap="round" d="M10 8v4"></path><path stroke-linecap="round" d="M10 14h.01"></path></svg>
+                    Warning
+                </div>
+                <ul class="mt-2 list-inside list-disc space-y-1 text-amber-300">
+                    <li>Each agent should have its own wallet.</li>
+                    <li>Do not reuse an existing wallet address.</li>
+                    <li>Never share this private key.</li>
+                    <li>Private keys are stored encrypted at rest.</li>
+                </ul>
+            </div>
         </div>
 
         <div class="flex items-center gap-3 border-t border-zinc-800 pt-6">
-            <button type="submit" class="rounded-full bg-zinc-100 px-5 py-2 text-sm font-medium text-zinc-950 hover:bg-white">Create agent</button>
-            <a href="/agents" class="rounded-full border border-zinc-800 px-5 py-2 text-sm font-medium text-zinc-300 hover:border-zinc-700 hover:text-white">Cancel</a>
+            <button type="submit" class="cursor-pointer rounded-full bg-violet-600 px-5 py-2 text-sm font-medium text-white hover:bg-violet-500">Create agent</button>
+            <a href="/agents" class="rounded-full border border-zinc-700 px-5 py-2 text-sm font-medium text-zinc-500 hover:border-zinc-600 hover:text-zinc-300">Cancel</a>
         </div>
     </form>
 </div>

@@ -200,10 +200,9 @@ async fn settings_page_and_partial_render_workspace_maintenance_status() {
     assert!(!completed_text.contains("hx-trigger=\"every 2s\""));
 }
 #[tokio::test]
-async fn agent_settings_route_renders_sync_state() {
+async fn agent_settings_route_renders_currency_controls() {
     let state = test_state().await;
-    let (agent_key, wallet_address) = insert_test_agent(&state).await.expect("insert agent");
-    seed_sync_state(&state, &wallet_address).await;
+    let (agent_key, _) = insert_test_agent(&state).await.expect("insert agent");
     seed_instrument(&state, "BTC", true).await;
     seed_instrument(&state, "ETH", true).await;
     replace_agent_instruments(&state.db_pool, &agent_key, &["BTC".to_string()])
@@ -223,14 +222,15 @@ async fn agent_settings_route_renders_sync_state() {
     assert_eq!(response.status(), StatusCode::OK);
     let text = response_text(response).await;
     assert!(text.contains("Currencies"));
-    assert!(text.contains("Select the Hyperliquid perps this agent should analyze and trade."));
+    assert!(!text.contains("Select the Hyperliquid perps this agent should analyze and trade."));
     assert!(text.contains("name=\"instrument_id\""));
     assert!(text.contains("value=\"BTC\""));
     assert!(text.contains("value=\"ETH\""));
     assert!(text.contains("value=\"BTC\" checked"));
-    assert!(text.contains("Sync status"));
-    assert!(text.contains("fills"));
-    assert!(text.contains("abc123"));
+    assert!(!text.contains("Sync status"));
+    assert!(!text.contains("abc123"));
+    assert!(text.contains("data-save-currencies"));
+    assert!(text.contains("hidden cursor-pointer rounded-full bg-violet-600"));
 }
 #[tokio::test]
 async fn opencode_agent_settings_route_renders_workspace_state() {
@@ -271,10 +271,10 @@ async fn opencode_agent_settings_route_renders_workspace_state() {
 
     assert_eq!(response.status(), StatusCode::OK);
     let text = response_text(response).await;
-    assert!(text.contains("OpenCode workspace"));
-    assert!(text.contains("Container workspace path"));
-    assert!(text.contains("Profile source"));
-    assert!(text.contains("Workspace .env"));
+    assert!(text.contains(">Workspace</h2>"));
+    assert!(!text.contains("Container workspace path"));
+    assert!(!text.contains("Profile source"));
+    assert!(!text.contains("Workspace .env"));
     assert!(text.contains("In sync"));
 }
 #[tokio::test]

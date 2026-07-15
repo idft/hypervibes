@@ -339,6 +339,10 @@ impl CreateAgentScheduleForm {
             }
         };
 
+        if self.enabled() && model_selection.is_none() {
+            errors.push("A model is required to enable a job.".to_string());
+        }
+
         if errors.is_empty() {
             Ok(ValidatedCreateAgentSchedule {
                 job_kind: job_kind.to_string(),
@@ -481,6 +485,16 @@ pub(in crate::web::routes) async fn agents_toggle_job(
     // enabled. Otherwise (only `enabled=off` was submitted), the new state
     // is disabled. This is the same shape used by the agent create form.
     let enable = matches!(form.enabled.as_deref(), Some("on"));
+    if enable {
+        let Some(job) =
+            crate::agentic::store::get_agent_schedule(&state.db_pool, &agent_key, job_id).await?
+        else {
+            return Ok((StatusCode::NOT_FOUND, "job not found").into_response());
+        };
+        if job.model_provider_id.is_none() || job.model_id.is_none() {
+            return Ok(jobs_warning_redirect(&agent_key, "No model set"));
+        }
+    }
     let updated =
         crate::agentic::store::set_schedule_enabled(&state.db_pool, &agent_key, job_id, enable)
             .await?;
@@ -559,6 +573,9 @@ pub(in crate::web::routes) async fn agents_run_job_now(
     else {
         return Ok((StatusCode::NOT_FOUND, "job not found").into_response());
     };
+    if schedule.model_provider_id.is_none() || schedule.model_id.is_none() {
+        return Ok(jobs_warning_redirect(&agent_key, "No model set"));
+    }
 
     match crate::agentic::store::insert_queued_run(&state.db_pool, &agent_key, job_id).await? {
         QueuedScheduleRun::Dispatch {

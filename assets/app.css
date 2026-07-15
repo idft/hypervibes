@@ -6,6 +6,13 @@ body {
   overflow: hidden;
 }
 
+.github-icon {
+  display: block;
+  background-color: currentColor;
+  mask: url("/static/github.svg") center / contain no-repeat;
+  -webkit-mask: url("/static/github.svg") center / contain no-repeat;
+}
+
 .app-shell {
   scrollbar-gutter: stable;
 }

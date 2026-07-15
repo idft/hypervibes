@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use rust_decimal::Decimal;
 
-use crate::{db::DbPool, hyperliquid::sync_state::SyncStateRow};
+use crate::db::DbPool;
 
 /// A single USDC balance-impacting event from the account timeline.
 #[derive(Debug, Clone, sqlx::FromRow)]
@@ -272,35 +272,6 @@ pub async fn fetch_balance_series(
         .collect())
 }
 
-/// Return sync_state rows for an account/environment.
-pub async fn list_account_sync_state(
-    pool: &DbPool,
-    account_address: &str,
-    environment: &str,
-) -> Result<Vec<SyncStateRow>> {
-    let rows = sqlx::query_as::<_, SyncStateRow>(
-        "SELECT account_address,
-                environment,
-                stream_name,
-                last_event_time,
-                last_event_key,
-                last_synced_at,
-                status,
-                metadata
-           FROM hyperliquid.sync_state
-          WHERE account_address = $1
-            AND environment = $2
-          ORDER BY stream_name",
-    )
-    .bind(account_address)
-    .bind(environment)
-    .fetch_all(pool)
-    .await
-    .context("failed to list account sync state")?;
-
-    Ok(rows)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -416,29 +387,6 @@ mod tests {
         )
         .await
         .expect("insert agent account");
-    }
-
-    #[tokio::test]
-    async fn list_account_sync_state_returns_rows_for_account() {
-        let pool = test_db::pool().await;
-
-        let suffix = chrono::Utc::now().timestamp_millis().to_string();
-        let account = format!("0xqueries{suffix}");
-        seed_agent_account(&pool, &account, &suffix).await;
-        sqlx::query(
-            "INSERT INTO hyperliquid.sync_state (account_address, environment, stream_name, status, metadata) VALUES ($1, 'live', 'fills', $2, '{}')",
-        )
-        .bind(&account)
-        .bind(crate::hyperliquid::sync_state::SyncStatus::Healthy.as_str())
-        .execute(&pool)
-        .await
-        .expect("insert sync state");
-
-        let rows = list_account_sync_state(&pool, &account, "live")
-            .await
-            .expect("list sync state");
-        assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0].stream_name, "fills");
     }
 
     #[tokio::test]

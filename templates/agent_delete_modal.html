@@ -1,0 +1,40 @@
+<button type="button" data-detail-delete-trigger data-delete-action="{{ delete_action }}" data-delete-label="{{ delete_label }}" data-delete-kind="{{ delete_kind }}" aria-label="Delete {{ delete_kind }}" title="Delete {{ delete_kind }}" class="inline-flex h-10 w-10 cursor-pointer items-center justify-center rounded-lg border border-red-900/60 text-red-300 hover:border-red-500 hover:bg-red-600 hover:text-white">
+    <svg class="h-4 w-4" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true"><path d="M7.5 2.75A1.75 1.75 0 0 0 5.75 4.5V5H3.5a.75.75 0 0 0 0 1.5h.5v8A2.5 2.5 0 0 0 6.5 17h7a2.5 2.5 0 0 0 2.5-2.5v-8h.5a.75.75 0 0 0 0-1.5h-2.25v-.5A1.75 1.75 0 0 0 12.5 2.75h-5Zm5.25 2.25v-.5a.25.25 0 0 0-.25-.25h-5a.25.25 0 0 0-.25.25V5h5.5ZM7.75 8a.75.75 0 0 1 .75.75v4.5a.75.75 0 0 1-1.5 0v-4.5A.75.75 0 0 1 7.75 8Zm4.5 0a.75.75 0 0 1 .75.75v4.5a.75.75 0 0 1-1.5 0v-4.5a.75.75 0 0 1 .75-.75Z"></path></svg>
+</button>
+
+<div id="detail-delete-modal" class="fixed inset-0 z-50 hidden items-center justify-center bg-black/70 px-4 backdrop-blur-sm" aria-modal="true" role="dialog">
+    <div class="w-full max-w-md rounded-2xl border border-zinc-800 bg-[#0d0d10] p-6 shadow-2xl">
+        <h3 id="detail-delete-modal-title" class="text-lg font-semibold text-white">Delete</h3>
+        <p id="detail-delete-modal-body" class="mt-2 text-sm leading-6 text-zinc-400"></p>
+        <div class="mt-6 flex flex-col-reverse gap-3 sm:flex-row sm:justify-end">
+            <button type="button" id="cancel-detail-delete-btn" class="w-full cursor-pointer rounded-full border border-zinc-800 px-4 py-2 text-sm font-medium text-zinc-300 hover:border-zinc-700 hover:text-white sm:w-auto">Cancel</button>
+            <form id="detail-delete-form" action="" method="post" class="w-full sm:w-auto">
+                <button type="submit" id="confirm-detail-delete-btn" class="w-full cursor-pointer rounded-full bg-red-600 px-4 py-2 text-sm font-medium text-white hover:bg-red-500 sm:w-auto">Delete</button>
+            </form>
+        </div>
+    </div>
+</div>
+
+<script>
+    (() => {
+        const modal = document.getElementById('detail-delete-modal');
+        const form = document.getElementById('detail-delete-form');
+        const title = document.getElementById('detail-delete-modal-title');
+        const body = document.getElementById('detail-delete-modal-body');
+        const confirm = document.getElementById('confirm-detail-delete-btn');
+        const close = () => { modal.classList.add('hidden'); modal.classList.remove('flex'); };
+        document.querySelector('[data-detail-delete-trigger]')?.addEventListener('click', (event) => {
+            const button = event.currentTarget;
+            const kind = button.dataset.deleteKind || 'job';
+            const label = button.dataset.deleteLabel || kind;
+            form.action = button.dataset.deleteAction || '';
+            title.textContent = `Delete ${kind}`;
+            confirm.textContent = `Delete ${kind}`;
+            body.textContent = `Are you sure you want to delete ${label}? This action cannot be undone.`;
+            modal.classList.remove('hidden'); modal.classList.add('flex');
+        });
+        document.getElementById('cancel-detail-delete-btn')?.addEventListener('click', close);
+        modal?.addEventListener('click', (event) => { if (event.target === modal) close(); });
+        document.addEventListener('keydown', (event) => { if (event.key === 'Escape' && modal?.classList.contains('flex')) close(); });
+    })();
+</script>

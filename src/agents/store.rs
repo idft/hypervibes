@@ -33,11 +33,10 @@ pub async fn list_agents(pool: &DbPool) -> Result<Vec<AgentListRow>> {
                 wallet_address,
                 environment,
                 api_key,
-                api_key_last_used_at,
-                agents.backend_kind,
-                agents.runtime_id,
-                agent_runtimes.name AS runtime_name,
-                agent_runtimes.base_url AS runtime_base_url
+                 api_key_last_used_at,
+                 agents.backend_kind,
+                 agents.runtime_id,
+                 agent_runtimes.base_url AS runtime_base_url
            FROM agents
            JOIN agent_runtimes
              ON agent_runtimes.id = agents.runtime_id

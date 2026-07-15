@@ -521,7 +521,7 @@ async fn post_job_creates_new_schedule_and_redirects() {
                 .uri(format!("/agents/{agent_key}/jobs"))
                 .header("content-type", "application/x-www-form-urlencoded")
                 .body(Body::from(
-                    "job_kind=analysis&timeframe=4h&timeout_seconds=600&enabled=on&model_selection=&operator_prompt=Check+higher+timeframe+structure",
+                    "job_kind=analysis&timeframe=4h&timeout_seconds=600&model_selection=&operator_prompt=Check+higher+timeframe+structure",
                 ))
                 .unwrap(),
         )
@@ -545,7 +545,7 @@ async fn post_job_creates_new_schedule_and_redirects() {
         .find(|row| row.job_key == "analysis-4h")
         .expect("custom schedule present");
     assert_eq!(schedule.job_kind, JOB_KIND_ANALYSIS);
-    assert!(schedule.enabled);
+    assert!(!schedule.enabled);
     assert_eq!(schedule.timeframe, "4h");
     assert_eq!(schedule.timeout_seconds, 600);
     assert_eq!(schedule.model_provider_id.as_deref(), None);
@@ -630,7 +630,7 @@ async fn post_job_with_duplicate_job_kind_timeframe_returns_validation_error() {
                 .uri(format!("/agents/{agent_key}/jobs"))
                 .header("content-type", "application/x-www-form-urlencoded")
                 .body(Body::from(
-                    "job_kind=analysis&timeframe=15m&timeout_seconds=600&enabled=on",
+                    "job_kind=analysis&timeframe=15m&timeout_seconds=600&model_selection=",
                 ))
                 .unwrap(),
         )
@@ -679,6 +679,8 @@ async fn job_detail_page_renders_job_specific_runs() {
         "/agents/{agent_key}/jobs/{schedule_id}/model-picker"
     )));
     assert!(text.contains(&format!("/agents/{agent_key}/jobs/{schedule_id}/timeframe")));
+    assert!(text.contains("data-detail-delete-trigger"));
+    assert!(text.contains(&format!("/agents/{agent_key}/jobs/{schedule_id}/delete")));
     assert!(text.contains("cursor-pointer"));
     assert!(text.contains("data-model-picker-lazy-open"));
     assert!(!text.contains("data-model-picker-mode=\"modal\""));

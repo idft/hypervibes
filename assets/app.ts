@@ -533,6 +533,7 @@ function syncAgentSelector() {
   }
 
   label.textContent = selected.dataset.currentAgentName ?? selected.dataset.agentName ?? agentKey ?? "";
+  status.classList.remove("hidden");
   status.classList.remove("bg-zinc-600", "bg-emerald-400", "bg-red-400");
   status.classList.add(
     (selected.dataset.currentAgentEnabled ?? selected.dataset.agentEnabled) === "true"

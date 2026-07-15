@@ -30,9 +30,9 @@ async fn set_all_agent_jobs_enabled_toggles_schedules_and_hooks_together() {
     let schedules = list_agent_schedules(&pool, &key)
         .await
         .expect("list schedules");
-    assert!(schedules.iter().all(|row| row.enabled));
+    assert!(schedules.iter().all(|row| !row.enabled));
     let hooks = list_agent_hooks(&pool, &key).await.expect("list hooks");
-    assert!(hooks.iter().all(|row| row.enabled));
+    assert!(hooks.iter().all(|row| !row.enabled));
 
     set_all_agent_jobs_enabled(&pool, &key, false)
         .await

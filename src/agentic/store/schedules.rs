@@ -336,7 +336,8 @@ pub async fn set_schedule_enabled(
             SET enabled = $3,
                 updated_at = now()
           WHERE agent_key = $1
-            AND id = $2",
+            AND id = $2
+            AND ($3 = false OR (model_provider_id IS NOT NULL AND model_id IS NOT NULL))",
     )
     .bind(agent_key)
     .bind(schedule_id)
@@ -501,9 +502,9 @@ pub async fn list_due_opencode_schedules(
              ON agents.agent_key = schedules.agent_key
            JOIN agent_runtimes AS runtimes
              ON runtimes.id = agents.runtime_id
-          WHERE schedules.enabled = true
-            AND schedules.next_run_at <= $1
-            AND agents.enabled = true
+           WHERE schedules.enabled = true
+             AND schedules.next_run_at <= $1
+             AND agents.enabled = true
             AND agents.backend_kind = 'opencode'
             AND runtimes.enabled = true
             AND runtimes.base_url IS NOT NULL
@@ -551,9 +552,9 @@ pub async fn get_opencode_schedule_for_dispatch(
              ON agents.agent_key = schedules.agent_key
            JOIN agent_runtimes AS runtimes
              ON runtimes.id = agents.runtime_id
-          WHERE schedules.agent_key = $1
-            AND schedules.id = $2
-            AND agents.backend_kind = 'opencode'
+            WHERE schedules.agent_key = $1
+              AND schedules.id = $2
+              AND agents.backend_kind = 'opencode'
             AND runtimes.enabled = true
             AND runtimes.base_url IS NOT NULL
             AND length(runtimes.base_url) > 0",

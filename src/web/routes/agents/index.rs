@@ -17,12 +17,13 @@ use crate::{
         crypto::{encrypt, generate_api_key},
         keys::derive_wallet_address,
         model::{
-            AgentRegistryRow, AgentRuntimeRow, BACKEND_KIND_OPENCODE, CreateAgentForm,
+            AgentRegistryRow, BACKEND_KIND_OPENCODE, CreateAgentForm, DEFAULT_RUNTIME_ID,
             slugify_agent_key,
         },
         store::{
-            delete_agent as delete_agent_in_store, get_agent, insert_agent, list_agents,
-            list_enabled_agent_runtimes,
+            delete_agent as delete_agent_in_store, get_agent, insert_agent,
+            list_agent_instrument_options, list_agents, list_enabled_agent_runtimes,
+            replace_agent_instruments,
         },
         strategy_prompts::insert_default_strategy_prompts_for_agent,
     },
@@ -84,15 +85,10 @@ pub(in crate::web::routes) async fn agent_selector_items(
     Ok(Html(AgentSelectorItemsTemplate { agents }.render()?))
 }
 pub(in crate::web::routes) async fn agents_new(
-    State(state): State<Arc<AppState>>,
+    State(_state): State<Arc<AppState>>,
 ) -> Result<Html<String>, AppError> {
-    let runtimes = list_enabled_agent_runtimes(&state.db_pool).await?;
     let template = AgentsNewPageTemplate {
-        form: CreateAgentForm {
-            enabled: Some("on".to_string()),
-            ..Default::default()
-        },
-        runtimes,
+        form: CreateAgentForm::default(),
         errors: Vec::new(),
         current_path: "/agents/new".to_string(),
     };
@@ -130,7 +126,7 @@ pub(in crate::web::routes) async fn create_agent(
     let runtimes = list_enabled_agent_runtimes(&state.db_pool).await?;
 
     if let Err(errors) = form.validate() {
-        return Ok(render_new_form(form, runtimes, errors));
+        return Ok(render_new_form(form, errors));
     }
 
     let wallet_address = match derive_wallet_address(&form.hyperliquid_private_key) {
@@ -138,8 +134,7 @@ pub(in crate::web::routes) async fn create_agent(
         Err(e) => {
             return Ok(render_new_form(
                 form,
-                runtimes,
-                vec![format!("Hyperliquid private key is invalid: {e}")],
+                vec![format!("Private key is invalid: {e}")],
             ));
         }
     };
@@ -149,7 +144,6 @@ pub(in crate::web::routes) async fn create_agent(
         Err(e) => {
             return Ok(render_new_form(
                 form,
-                runtimes,
                 vec![format!("Failed to encrypt private key: {e}")],
             ));
         }
@@ -157,12 +151,11 @@ pub(in crate::web::routes) async fn create_agent(
 
     let Some(runtime) = runtimes
         .iter()
-        .find(|runtime| runtime.id == form.runtime_id.trim())
+        .find(|runtime| runtime.id == DEFAULT_RUNTIME_ID)
         .cloned()
     else {
         return Ok(render_new_form(
             form,
-            runtimes,
             vec!["Selected runtime must exist and be enabled.".to_string()],
         ));
     };
@@ -191,7 +184,6 @@ pub(in crate::web::routes) async fn create_agent(
             Err(error) => {
                 return Ok(render_new_form(
                     form,
-                    runtimes,
                     vec![format!("Failed to create OpenCode workspace: {error}")],
                 ));
             }
@@ -204,7 +196,7 @@ pub(in crate::web::routes) async fn create_agent(
         agent_key: agent_key.clone(),
         created_at: now,
         updated_at: now,
-        enabled: form.enabled(),
+        enabled: true,
         display_name: form.display_name.trim().to_string(),
         wallet_address,
         environment: "live".to_string(),
@@ -231,7 +223,15 @@ pub(in crate::web::routes) async fn create_agent(
                 return Err(AppError(e));
             }
         };
-        return Ok(render_new_form(form, runtimes, errors));
+        return Ok(render_new_form(form, errors));
+    }
+
+    let instrument_options = list_agent_instrument_options(&state.db_pool, &row.agent_key).await?;
+    if instrument_options
+        .iter()
+        .any(|instrument| instrument.instrument_id == "BTC")
+    {
+        replace_agent_instruments(&state.db_pool, &row.agent_key, &["BTC".to_string()]).await?;
     }
 
     if let Err(error) =
@@ -258,12 +258,10 @@ pub(in crate::web::routes) async fn create_agent(
 }
 pub(in crate::web::routes) fn render_new_form(
     form: CreateAgentForm,
-    runtimes: Vec<AgentRuntimeRow>,
     errors: Vec<String>,
 ) -> Response {
     let template = AgentsNewPageTemplate {
         form,
-        runtimes,
         errors,
         current_path: "/agents/new".to_string(),
     };

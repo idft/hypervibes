@@ -9,7 +9,7 @@
     {% include "agent_tabs.html" %}
 
     {% if !has_selected_instruments %}
-    <a href="/agents/{{ agent.agent_key }}/settings" class="mt-2 flex items-center justify-center gap-2 rounded-2xl border border-amber-900/60 bg-amber-950/30 px-4 py-2 text-sm text-amber-200 hover:border-amber-800 hover:bg-amber-950/40">
+    <a href="/agents/{{ agent.agent_key }}/settings" class="mb-2 flex items-center justify-center gap-2 rounded-2xl border border-amber-900/60 bg-amber-950/30 px-4 py-2 text-sm text-amber-200 hover:border-amber-800 hover:bg-amber-950/40">
         <svg class="h-4 w-4 shrink-0 text-amber-300" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
             <path fill-rule="evenodd" d="M8.485 2.495c.673-1.167 2.357-1.167 3.03 0l6.28 10.875c.673 1.167-.17 2.625-1.516 2.625H3.72c-1.347 0-2.189-1.458-1.515-2.625L8.485 2.495ZM10 5a.75.75 0 0 1 .75.75v3.5a.75.75 0 0 1-1.5 0v-3.5A.75.75 0 0 1 10 5Zm0 9a1 1 0 1 0 0-2 1 1 0 0 0 0 2Z" clip-rule="evenodd"></path>
         </svg>
@@ -48,6 +48,7 @@
         <section id="agent-transactions" class="rounded-2xl border border-zinc-800 bg-[#0d0d10] p-6">
             <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                 <h2 class="text-lg font-medium text-white">Transactions</h2>
+                {% if !transactions.is_empty() %}
                 <div class="flex items-center gap-2">
                     {% if let Some(previous_page_url) = transactions_previous_page_url %}
                     <a href="{{ previous_page_url }}" hx-get="{{ previous_page_url }}" hx-select="#agent-transactions" hx-target="#agent-transactions" hx-swap="outerHTML" hx-push-url="true" class="inline-flex items-center rounded-full border border-zinc-800 px-3 py-1.5 text-xs font-medium text-zinc-300 hover:border-zinc-700 hover:text-white">Previous</a>
@@ -57,6 +58,7 @@
                     <a href="{{ next_page_url }}" hx-get="{{ next_page_url }}" hx-select="#agent-transactions" hx-target="#agent-transactions" hx-swap="outerHTML" hx-push-url="true" class="inline-flex items-center rounded-full border border-zinc-800 px-3 py-1.5 text-xs font-medium text-zinc-300 hover:border-zinc-700 hover:text-white">Next</a>
                     {% endif %}
                 </div>
+                {% endif %}
             </div>
             {% if transactions.is_empty() %}
             <div class="mt-4 rounded-xl border border-zinc-800 bg-zinc-950/70 p-6 text-center">
@@ -204,7 +206,6 @@
             <div class="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                 <div>
                     <h2 class="text-lg font-medium text-white">Currencies</h2>
-                    <p class="mt-1 max-w-3xl text-sm leading-6 text-zinc-400">Select the Hyperliquid perps this agent should analyze and trade.</p>
                 </div>
             </div>
             <form action="/agents/{{ agent.agent_key }}/settings/instruments" method="post" class="mt-6 space-y-5">
@@ -218,7 +219,6 @@
                         <div class="flex items-center justify-between gap-3">
                             <div>
                                 <h3 class="text-sm font-medium text-white">Available currencies</h3>
-                                <p class="mt-1 text-xs text-zinc-500">Search and toggle active perp markets.</p>
                             </div>
                         </div>
                         <div class="mt-4">
@@ -245,9 +245,7 @@
                         <div class="flex items-center justify-between gap-3">
                             <div>
                                 <h3 class="text-sm font-medium text-white">Enabled currencies</h3>
-                                <p class="mt-1 text-xs text-zinc-500">These are the only markets this agent may analyze and trade.</p>
                             </div>
-                            <span data-selected-instrument-count class="rounded-full border border-zinc-800 px-2.5 py-1 text-xs font-medium text-zinc-400">0 selected</span>
                         </div>
                         <div data-no-currencies-warning class="mt-4 rounded-xl border border-amber-900/60 bg-amber-950/30 px-4 py-3 text-sm text-amber-200{% if has_selected_instruments %} hidden{% endif %}">No currencies are selected. This agent will not analyze markets or place new trades until at least one currency is selected.</div>
                         <div class="mt-4 rounded-xl border border-zinc-800 bg-[#0d0d10] p-2">
@@ -260,7 +258,7 @@
                 </div>
                 {% endif %}
                 <div class="flex justify-end">
-                    <button type="submit" class="rounded-full bg-white px-4 py-2 text-sm font-medium text-black hover:bg-zinc-200">Save currencies</button>
+                    <button type="submit" data-save-currencies class="hidden cursor-pointer rounded-full bg-violet-600 px-4 py-2 text-sm font-medium text-white hover:bg-violet-500">Save currencies</button>
                 </div>
             </form>
         </section>
@@ -269,59 +267,11 @@
         {% include "agent_workspace_section.html" %}
         {% endif %}
 
-        <section class="rounded-2xl border border-zinc-800 bg-[#0d0d10] p-6">
-            <h2 class="text-lg font-medium text-white">Sync status</h2>
-            {% if sync_state.is_empty() %}
-            <div class="mt-4 rounded-xl border border-zinc-800 bg-zinc-950/70 p-6 text-center">
-                <p class="text-sm text-zinc-400">No sync state rows have been recorded yet.</p>
-            </div>
-            {% else %}
-            <div class="mt-4 overflow-x-auto">
-                <table class="min-w-full divide-y divide-zinc-800 text-sm">
-                    <thead class="bg-zinc-950/60 text-left text-xs uppercase tracking-[0.16em] text-zinc-500">
-                        <tr>
-                            <th class="px-4 py-3 font-medium">Stream</th>
-                            <th class="px-4 py-3 font-medium">Status</th>
-                            <th class="px-4 py-3 font-medium">Last event time</th>
-                            <th class="px-4 py-3 font-medium">Last event key</th>
-                            <th class="px-4 py-3 font-medium">Last synced</th>
-                        </tr>
-                    </thead>
-                    <tbody class="divide-y divide-zinc-800">
-                        {% for row in sync_state %}
-                        <tr class="hover:bg-zinc-900/50">
-                            <td class="px-4 py-3 align-top font-mono text-xs text-zinc-300">{{ row.stream_name }}</td>
-                            <td class="px-4 py-3 align-top">
-                                <span class="inline-flex rounded-full border px-2 py-0.5 text-xs font-medium {{ row.status_class }}">{{ row.status_text }}</span>
-                            </td>
-                            <td class="px-4 py-3 align-top font-mono text-xs text-zinc-300">
-                                {% if let Some(last_event_time) = row.last_event_time %}
-                                <time class="local-datetime" data-local-format="datetime" datetime="{{ last_event_time.iso }}" title="{{ last_event_time.fallback_text }}">{{ last_event_time.fallback_text }}</time>
-                                {% else %}
-                                <span class="text-zinc-500">—</span>
-                                {% endif %}
-                            </td>
-                            <td class="px-4 py-3 align-top font-mono text-xs text-zinc-300">{{ row.last_event_key_text }}</td>
-                            <td class="px-4 py-3 align-top font-mono text-xs text-zinc-300">
-                                {% if let Some(last_synced_at) = row.last_synced_at %}
-                                <time class="local-datetime" data-local-format="datetime" datetime="{{ last_synced_at.iso }}" title="{{ last_synced_at.fallback_text }}">{{ last_synced_at.fallback_text }}</time>
-                                {% else %}
-                                <span class="text-zinc-500">—</span>
-                                {% endif %}
-                            </td>
-                        </tr>
-                        {% endfor %}
-                    </tbody>
-                </table>
-            </div>
-            {% endif %}
-        </section>
-
         <section class="rounded-2xl border border-red-900/60 bg-red-950/20 p-6">
             <h2 class="text-lg font-medium text-white">Delete agent</h2>
             <p class="mt-2 max-w-3xl text-sm leading-6 text-zinc-400">Delete this agent, its related database records, Hyperliquid history for this account, and its OpenCode workspace files. This cannot be undone.</p>
             <div class="mt-6 flex justify-end">
-                <button type="button" id="delete-agent-btn" data-delete-agent-trigger class="rounded-full border border-red-900/60 bg-red-950/30 px-4 py-2 text-sm font-medium text-red-300 hover:border-red-800 hover:bg-red-950/50">
+                <button type="button" id="delete-agent-btn" data-delete-agent-trigger class="cursor-pointer rounded-full border border-red-900/60 bg-red-950/30 px-4 py-2 text-sm font-medium text-red-300 hover:border-red-800 hover:bg-red-950/50">
                     Delete agent
                 </button>
             </div>
@@ -422,7 +372,7 @@
                                 <td class="px-4 py-3 align-top">
                                     <div class="flex flex-wrap items-center gap-2">
                                         <form action="{{ row.run_now_action }}" method="post">
-                                            <button type="submit" class="inline-flex cursor-pointer items-center gap-1.5 rounded-full border border-sky-900/60 bg-sky-950/30 px-3 py-1.5 text-xs font-medium text-sky-300 hover:border-sky-800 hover:bg-sky-950/50 hover:text-sky-200">
+                                            <button type="submit" {% if !row.has_model %}disabled title="No model set"{% endif %} class="inline-flex items-center gap-1.5 rounded-full border border-sky-900/60 bg-sky-950/30 px-3 py-1.5 text-xs font-medium text-sky-300 hover:border-sky-800 hover:bg-sky-950/50 hover:text-sky-200 {% if row.has_model %}cursor-pointer{% else %}cursor-not-allowed opacity-50{% endif %}">
                                                 <svg class="h-3.5 w-3.5" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
                                                     <path d="M11.25 1.5 4.5 10h4.25L7.75 18.5 14.5 10h-4.25l1-8.5Z"></path>
                                                 </svg>
@@ -431,7 +381,7 @@
                                         </form>
                                         <form action="{{ row.toggle_action }}" method="post">
                                             <input type="hidden" name="enabled" value="{{ row.hidden_enabled_value }}">
-                                            <button type="submit" class="inline-flex cursor-pointer items-center gap-1.5 rounded-full border border-zinc-800 px-3 py-1.5 text-xs font-medium text-zinc-300 hover:border-zinc-700 hover:text-white">
+                                            <button type="submit" {% if !row.enabled && !row.has_model %}disabled title="No model set"{% endif %} class="inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs font-medium {% if row.enabled %}border-zinc-800 text-zinc-300 hover:border-zinc-700 hover:text-white{% else if row.has_model %}border-emerald-900/60 bg-emerald-950/20 text-emerald-300 hover:border-emerald-800 hover:bg-emerald-950/40 hover:text-emerald-200{% else %}border-zinc-800 text-zinc-500 cursor-not-allowed opacity-50{% endif %}">
                                                 {% if row.enabled %}
                                                 <svg class="h-3.5 w-3.5" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
                                                     <path d="M5.5 4h3v12h-3V4Zm6 0h3v12h-3V4Z"></path>
@@ -445,12 +395,6 @@
                                                 {% endif %}
                                             </button>
                                         </form>
-                                        <button type="button" data-agent-job-delete-trigger data-delete-action="{{ row.delete_action }}" data-delete-label="{{ row.job_key }}" data-delete-kind="job" class="inline-flex cursor-pointer items-center gap-1.5 rounded-full border border-red-900/60 bg-red-950/20 px-3 py-1.5 text-xs font-medium text-red-300 hover:border-red-800 hover:bg-red-950/40">
-                                            <svg class="h-3.5 w-3.5" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
-                                                <path d="M7.5 2.75A1.75 1.75 0 0 0 5.75 4.5V5H3.5a.75.75 0 0 0 0 1.5h.5v8A2.5 2.5 0 0 0 6.5 17h7a2.5 2.5 0 0 0 2.5-2.5v-8h.5a.75.75 0 0 0 0-1.5h-2.25v-.5A1.75 1.75 0 0 0 12.5 2.75h-5Zm5.25 2.25v-.5a.25.25 0 0 0-.25-.25h-5a.25.25 0 0 0-.25.25V5h5.5ZM7.75 8a.75.75 0 0 1 .75.75v4.5a.75.75 0 0 1-1.5 0v-4.5A.75.75 0 0 1 7.75 8Zm4.5 0a.75.75 0 0 1 .75.75v4.5a.75.75 0 0 1-1.5 0v-4.5a.75.75 0 0 1 .75-.75Z"></path>
-                                            </svg>
-                                            Delete
-                                        </button>
                                     </div>
                                 </td>
                             </tr>
@@ -504,7 +448,7 @@
                                 <td class="px-4 py-3 align-top">
                                     <div class="flex flex-wrap items-center gap-2">
                                         <form action="{{ row.run_now_action }}" method="post">
-                                            <button type="submit" class="inline-flex cursor-pointer items-center gap-1.5 rounded-full border border-sky-900/60 bg-sky-950/30 px-3 py-1.5 text-xs font-medium text-sky-300 hover:border-sky-800 hover:bg-sky-950/50 hover:text-sky-200">
+                                            <button type="submit" {% if !row.has_model %}disabled title="No model set"{% endif %} class="inline-flex items-center gap-1.5 rounded-full border border-sky-900/60 bg-sky-950/30 px-3 py-1.5 text-xs font-medium text-sky-300 hover:border-sky-800 hover:bg-sky-950/50 hover:text-sky-200 {% if row.has_model %}cursor-pointer{% else %}cursor-not-allowed opacity-50{% endif %}">
                                                 <svg class="h-3.5 w-3.5" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
                                                     <path d="M11.25 1.5 4.5 10h4.25L7.75 18.5 14.5 10h-4.25l1-8.5Z"></path>
                                                 </svg>
@@ -513,7 +457,7 @@
                                         </form>
                                         <form action="{{ row.toggle_action }}" method="post">
                                             <input type="hidden" name="enabled" value="{{ row.hidden_enabled_value }}">
-                                            <button type="submit" class="inline-flex cursor-pointer items-center gap-1.5 rounded-full border border-zinc-800 px-3 py-1.5 text-xs font-medium text-zinc-300 hover:border-zinc-700 hover:text-white">
+                                            <button type="submit" {% if !row.enabled && !row.has_model %}disabled title="No model set"{% endif %} class="inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs font-medium {% if row.enabled %}border-zinc-800 text-zinc-300 hover:border-zinc-700 hover:text-white{% else if row.has_model %}border-emerald-900/60 bg-emerald-950/20 text-emerald-300 hover:border-emerald-800 hover:bg-emerald-950/40 hover:text-emerald-200{% else %}border-zinc-800 text-zinc-500 cursor-not-allowed opacity-50{% endif %}">
                                                 {% if row.enabled %}
                                                 <svg class="h-3.5 w-3.5" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
                                                     <path d="M5.5 4h3v12h-3V4Zm6 0h3v12h-3V4Z"></path>
@@ -527,12 +471,6 @@
                                                 {% endif %}
                                             </button>
                                         </form>
-                                        <button type="button" data-agent-job-delete-trigger data-delete-action="{{ row.delete_action }}" data-delete-label="{{ row.job_key }}" data-delete-kind="hook" class="inline-flex cursor-pointer items-center gap-1.5 rounded-full border border-red-900/60 bg-red-950/20 px-3 py-1.5 text-xs font-medium text-red-300 hover:border-red-800 hover:bg-red-950/40">
-                                            <svg class="h-3.5 w-3.5" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
-                                                <path d="M7.5 2.75A1.75 1.75 0 0 0 5.75 4.5V5H3.5a.75.75 0 0 0 0 1.5h.5v8A2.5 2.5 0 0 0 6.5 17h7a2.5 2.5 0 0 0 2.5-2.5v-8h.5a.75.75 0 0 0 0-1.5h-2.25v-.5A1.75 1.75 0 0 0 12.5 2.75h-5Zm5.25 2.25v-.5a.25.25 0 0 0-.25-.25h-5a.25.25 0 0 0-.25.25V5h5.5ZM7.75 8a.75.75 0 0 1 .75.75v4.5a.75.75 0 0 1-1.5 0v-4.5A.75.75 0 0 1 7.75 8Zm4.5 0a.75.75 0 0 1 .75.75v4.5a.75.75 0 0 1-1.5 0v-4.5a.75.75 0 0 1 .75-.75Z"></path>
-                                            </svg>
-                                            Delete
-                                        </button>
                                     </div>
                                 </td>
                             </tr>
@@ -680,7 +618,7 @@
                 Cancel
             </button>
             <form id="regenerate-workspace-form" action="/agents/{{ agent.agent_key }}/settings/regenerate-workspace" method="post" class="w-full sm:w-auto">
-                <button type="submit" class="w-full rounded-full bg-violet-600 px-4 py-2 text-sm font-medium text-white hover:bg-violet-500 sm:w-auto">
+                    <button type="submit" class="w-full cursor-pointer rounded-full bg-violet-600 px-4 py-2 text-sm font-medium text-white hover:bg-violet-500 sm:w-auto">
                     Queue maintenance
                 </button>
             </form>
@@ -770,12 +708,12 @@
             const selectedList = container.querySelector('[data-selected-instrument-list]');
             const selectedEmpty = container.querySelector('[data-selected-instrument-empty]');
             const warning = container.querySelector('[data-no-currencies-warning]');
-            const count = container.querySelector('[data-selected-instrument-count]');
+            const saveButton = container.querySelector('[data-save-currencies]');
             const searchEmpty = container.querySelector('[data-instrument-search-empty]');
             const scrollContainer = container.querySelector('[data-instrument-scroll-container]');
             const rows = Array.from(container.querySelectorAll('[data-instrument-row]'));
 
-            if (!selectedList || !selectedEmpty || !warning || !count || rows.length === 0) {
+            if (!selectedList || !selectedEmpty || !warning || !saveButton || rows.length === 0) {
                 return;
             }
 
@@ -794,6 +732,21 @@
                 return input ? input.value : '';
             }
 
+            const initialSelection = rows
+                .filter(function (row) { return !!(rowInput(row) && rowInput(row).checked); })
+                .map(rowLabel)
+                .sort()
+                .join(',');
+
+            function updateSaveButton() {
+                const currentSelection = rows
+                    .filter(function (row) { return !!(rowInput(row) && rowInput(row).checked); })
+                    .map(rowLabel)
+                    .sort()
+                    .join(',');
+                saveButton.classList.toggle('hidden', currentSelection === initialSelection);
+            }
+
             function syncSelectedList() {
                 const selectedRows = rows.filter(function (row) {
                     const input = rowInput(row);
@@ -802,10 +755,13 @@
 
                 selectedList.innerHTML = '';
 
-                selectedRows.forEach(function (row) {
-                    const label = rowLabel(row);
-                    const item = document.createElement('div');
-                    item.className = 'flex items-center justify-between gap-3 rounded-xl border border-zinc-800 bg-zinc-950/70 px-4 py-3';
+                    selectedRows.forEach(function (row) {
+                        const label = rowLabel(row);
+                        const item = document.createElement('div');
+                        item.className = 'flex items-center justify-between gap-3 rounded-xl border border-zinc-800 bg-zinc-950/70 px-4 py-3';
+
+                        const identity = document.createElement('div');
+                        identity.className = 'flex min-w-0 items-center gap-3';
 
                     const name = document.createElement('span');
                     name.className = 'font-medium text-zinc-200';
@@ -827,15 +783,16 @@
                     remove.dataset.removeInstrument = label;
                     remove.textContent = 'x';
 
-                    item.appendChild(logo);
-                    item.appendChild(name);
-                    item.appendChild(remove);
+                        identity.appendChild(logo);
+                        identity.appendChild(name);
+                        item.appendChild(identity);
+                        item.appendChild(remove);
                     selectedList.appendChild(item);
                 });
 
-                count.textContent = selectedRows.length === 1 ? '1 selected' : selectedRows.length + ' selected';
                 selectedEmpty.classList.toggle('hidden', selectedRows.length > 0);
                 warning.classList.toggle('hidden', selectedRows.length > 0);
+                updateSaveButton();
             }
 
             function drainLogoQueue() {

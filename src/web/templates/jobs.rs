@@ -18,11 +18,11 @@ pub struct AgenticJobScheduleView {
     pub timeout_text: String,
     pub next_run_at: LocalTimestampView,
     pub model_text: String,
+    pub has_model: bool,
     pub model_logo_url: Option<String>,
     pub detail_url: String,
     pub run_now_action: String,
     pub toggle_action: String,
-    pub delete_action: String,
     pub hidden_enabled_value: &'static str,
 }
 
@@ -33,6 +33,7 @@ pub struct AgenticJobDetailView {
     pub enabled: bool,
     pub enabled_label: &'static str,
     pub enabled_class: &'static str,
+    pub has_model: bool,
     pub timeframe_editor: TimeframeEditorView,
     pub timeout_editor: TimeoutEditorView,
     pub next_run_at: LocalTimestampView,
@@ -43,6 +44,7 @@ pub struct AgenticJobDetailView {
     pub model_update_action: String,
     pub run_now_action: String,
     pub toggle_action: String,
+    pub delete_action: String,
     pub hidden_enabled_value: &'static str,
 }
 
@@ -64,6 +66,7 @@ impl AgenticJobScheduleView {
             .model_provider_id
             .as_ref()
             .map(|provider| format!("/model-catalog/logos/{provider}"));
+        let has_model = row.model_provider_id.is_some() && row.model_id.is_some();
 
         let (enabled_label, enabled_class) = if row.enabled {
             (
@@ -86,11 +89,11 @@ impl AgenticJobScheduleView {
             timeout_text: format_duration(row.timeout_seconds),
             next_run_at: local_timestamp_view(row.next_run_at),
             model_text,
+            has_model,
             model_logo_url,
             detail_url: format!("/agents/{}/jobs/{}", row.agent_key, row.id),
             run_now_action: format!("/agents/{}/jobs/{}/run", row.agent_key, row.id),
             toggle_action: format!("/agents/{}/jobs/{}/toggle", row.agent_key, row.id),
-            delete_action: format!("/agents/{}/jobs/{}/delete", row.agent_key, row.id),
             hidden_enabled_value: if row.enabled { "off" } else { "on" },
         }
     }
@@ -106,6 +109,7 @@ impl AgenticJobDetailView {
             enabled: row.enabled,
             enabled_label: summary.enabled_label,
             enabled_class: summary.enabled_class,
+            has_model: summary.has_model,
             timeframe_editor: TimeframeEditorView {
                 display_text: summary.timeframe_text,
                 edit_text: row.timeframe.clone(),
@@ -133,6 +137,7 @@ impl AgenticJobDetailView {
             model_update_action: format!("/agents/{}/jobs/{}/model", row.agent_key, row.id),
             run_now_action: summary.run_now_action,
             toggle_action: summary.toggle_action,
+            delete_action: format!("/agents/{}/jobs/{}/delete", row.agent_key, row.id),
             hidden_enabled_value: summary.hidden_enabled_value,
         }
     }

@@ -3,14 +3,13 @@ use serde::Deserialize;
 
 use crate::{
     agents::{
-        model::{AgentDetailRow, AgentListRow, AgentRuntimeRow, CreateAgentForm},
+        model::{AgentDetailRow, AgentListRow, CreateAgentForm},
         store::AgentInstrumentOptionRow,
         strategy_prompts::{
             PROMPT_KIND_ANALYSIS, PROMPT_KIND_DAILY_REVIEW, PROMPT_KIND_MARKET_ANALYSIS,
             PROMPT_KIND_TRADING,
         },
     },
-    hyperliquid::sync_state::SyncStateRow,
     memory::MemoryRecord,
     model_catalog::options::ModelPickerOption,
 };
@@ -24,49 +23,6 @@ use super::memories::{
 };
 use super::opencode::OpenCodeWorkspaceSettingsView;
 use super::runs::AgenticRunView;
-use super::shared::{LocalTimestampView, optional_local_timestamp_view};
-
-#[derive(Debug, Clone)]
-pub struct SyncStateView {
-    pub stream_name: String,
-    pub status_text: String,
-    pub status_class: &'static str,
-    pub last_event_time: Option<LocalTimestampView>,
-    pub last_event_key_text: String,
-    pub last_synced_at: Option<LocalTimestampView>,
-}
-
-impl SyncStateView {
-    pub fn from_row(row: SyncStateRow) -> Self {
-        let (status_text, status_class) = match row.status {
-            crate::hyperliquid::sync_state::SyncStatus::Healthy => (
-                "healthy".to_string(),
-                "border-emerald-900/60 bg-emerald-950/30 text-emerald-300",
-            ),
-            crate::hyperliquid::sync_state::SyncStatus::Running => (
-                "running".to_string(),
-                "border-sky-900/60 bg-sky-950/30 text-sky-300",
-            ),
-            crate::hyperliquid::sync_state::SyncStatus::Pending => (
-                "pending".to_string(),
-                "border-amber-900/60 bg-amber-950/30 text-amber-300",
-            ),
-            crate::hyperliquid::sync_state::SyncStatus::Failed => (
-                "failed".to_string(),
-                "border-red-900/60 bg-red-950/30 text-red-300",
-            ),
-        };
-
-        Self {
-            stream_name: row.stream_name,
-            status_text,
-            status_class,
-            last_event_time: optional_local_timestamp_view(row.last_event_time),
-            last_event_key_text: row.last_event_key.unwrap_or_else(|| "-".to_string()),
-            last_synced_at: optional_local_timestamp_view(row.last_synced_at),
-        }
-    }
-}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AgentShowTab {
@@ -157,7 +113,6 @@ pub struct AgentSelectorItemsTemplate {
 #[template(path = "agents_new.html")]
 pub struct AgentsNewPageTemplate {
     pub form: CreateAgentForm,
-    pub runtimes: Vec<AgentRuntimeRow>,
     pub errors: Vec<String>,
     pub current_path: String,
 }
@@ -302,7 +257,6 @@ pub struct AgentsShowPageTemplate {
     pub memory_timeline_html: String,
     pub has_memory_date_filter: bool,
     pub memory_count: usize,
-    pub sync_state: Vec<SyncStateView>,
     pub instrument_options: Vec<AgentInstrumentOptionRow>,
     pub instrument_options_loaded: bool,
     pub has_selected_instruments: bool,
@@ -371,7 +325,6 @@ impl AgentsShowPageTemplate {
             memory_timeline_html: String::new(),
             has_memory_date_filter: false,
             memory_count: 0,
-            sync_state: Vec::new(),
             instrument_options: Vec::new(),
             instrument_options_loaded: false,
             has_selected_instruments: false,

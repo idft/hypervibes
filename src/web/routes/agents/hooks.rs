@@ -184,6 +184,10 @@ impl CreateAgentHookForm {
             }
         };
 
+        if self.enabled() && model_selection.is_none() {
+            errors.push("A model is required to enable a hook job.".to_string());
+        }
+
         if errors.is_empty() {
             Ok(ValidatedCreateAgentHook {
                 timeout_seconds: timeout_seconds.expect("validated timeout seconds"),
@@ -327,6 +331,9 @@ pub(in crate::web::routes) async fn agents_run_hook_now(
     else {
         return Ok((StatusCode::NOT_FOUND, "hook not found").into_response());
     };
+    if hook.model_provider_id.is_none() || hook.model_id.is_none() {
+        return Ok(jobs_warning_redirect(&agent_key, "No model set"));
+    }
 
     match crate::agentic::store::insert_queued_hook_run(&state.db_pool, &agent_key, hook_id).await?
     {
@@ -389,6 +396,16 @@ pub(in crate::web::routes) async fn agents_toggle_hook(
     }
 
     let enable = matches!(form.enabled.as_deref(), Some("on"));
+    if enable {
+        let Some(hook) =
+            crate::agentic::store::get_agent_hook(&state.db_pool, &agent_key, hook_id).await?
+        else {
+            return Ok((StatusCode::NOT_FOUND, "hook not found").into_response());
+        };
+        if hook.model_provider_id.is_none() || hook.model_id.is_none() {
+            return Ok(jobs_warning_redirect(&agent_key, "No model set"));
+        }
+    }
     let updated =
         crate::agentic::store::set_hook_enabled(&state.db_pool, &agent_key, hook_id, enable)
             .await?;

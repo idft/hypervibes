@@ -1,7 +1,7 @@
 <div class="relative flex h-full items-center">
     <details class="relative h-full" data-agent-selector>
         <summary hx-get="/agents/navigation" hx-trigger="click once" hx-target="#agent-selector-items" hx-swap="innerHTML" class="flex h-full cursor-pointer list-none items-center gap-2 px-4 text-sm text-zinc-300 hover:bg-zinc-800 hover:text-white [&::-webkit-details-marker]:hidden">
-            <span data-agent-selector-status class="h-2 w-2 rounded-full bg-zinc-600"></span>
+            <span data-agent-selector-status class="hidden h-2 w-2 rounded-full bg-zinc-600"></span>
             <span data-agent-selector-label>Agents</span>
             <svg class="h-4 w-4 text-zinc-500" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true"><path fill-rule="evenodd" d="M5.23 7.21a.75.75 0 0 1 1.06.02L10 11.17l3.71-3.94a.75.75 0 1 1 1.09 1.04l-4.25 4.5a.75.75 0 0 1-1.09 0l-4.25-4.5a.75.75 0 0 1 .02-1.06Z" clip-rule="evenodd"></path></svg>
         </summary>
@@ -15,7 +15,10 @@
         <img src="/static/apple-touch-icon.png" alt="" class="h-7 w-7 rounded-md object-cover">
         <span>Vibetrading</span>
     </a>
-    <a href="/settings" title="Settings" class="ml-auto mr-2 inline-flex h-9 w-9 items-center justify-center rounded-lg text-zinc-400 hover:bg-zinc-800 hover:text-white">
+    <a href="https://github.com/johnkozan/vibetrading" target="_blank" rel="noopener noreferrer" title="Vibetrading on GitHub" aria-label="Vibetrading on GitHub" class="ml-auto inline-flex h-9 w-9 items-center justify-center rounded-lg text-zinc-400 hover:bg-zinc-800 hover:text-white">
+        <span class="github-icon h-5 w-5" aria-hidden="true"></span>
+    </a>
+    <a href="/settings" title="Settings" class="mr-2 inline-flex h-9 w-9 items-center justify-center rounded-lg text-zinc-400 hover:bg-zinc-800 hover:text-white">
         <svg class="h-5 w-5" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="M8.7 2.4a1.5 1.5 0 0 1 2.6 0l.35.69a1.5 1.5 0 0 0 1.4.82l.77-.1a1.5 1.5 0 0 1 1.84 1.84l-.1.77a1.5 1.5 0 0 0 .82 1.4l.69.35a1.5 1.5 0 0 1 0 2.6l-.69.35a1.5 1.5 0 0 0-.82 1.4l.1.77a1.5 1.5 0 0 1-1.84 1.84l-.77-.1a1.5 1.5 0 0 0-1.4.82l-.35.69a1.5 1.5 0 0 1-2.6 0l-.35-.69a1.5 1.5 0 0 0-1.4-.82l-.77.1a1.5 1.5 0 0 1-1.84-1.84l.1-.77a1.5 1.5 0 0 0-.82-1.4l-.69-.35a1.5 1.5 0 0 1 0-2.6l.69-.35a1.5 1.5 0 0 0 .82-1.4l-.1-.77A1.5 1.5 0 0 1 6.6 3.8l.77.1a1.5 1.5 0 0 0 1.4-.82l.35-.69Z"></path><circle cx="10" cy="10" r="2.5"></circle></svg>
     </a>
 </div>

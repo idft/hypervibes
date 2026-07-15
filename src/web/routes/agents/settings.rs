@@ -17,8 +17,7 @@ use crate::{
         store::{get_agent, replace_agent_instruments},
     },
     opencode::workspace::{
-        OpenCodeWorkspaceAgent, OpenCodeWorkspaceRuntimeConfig, agent_workspace_host_path,
-        diff_agent_workspace_from_template,
+        OpenCodeWorkspaceAgent, OpenCodeWorkspaceRuntimeConfig, diff_agent_workspace_from_template,
     },
     web::{
         AppState,
@@ -147,14 +146,6 @@ pub(in crate::web::routes) async fn build_opencode_workspace_settings_view(
         display_name: agent.display_name.clone(),
         api_key: agent.api_key.clone(),
     };
-    let workspace_host_path = agent_workspace_host_path(
-        &state.opencode_workspace_config,
-        &agent.agent_key,
-    )
-    .inspect_err(|error| {
-        warn!(agent_key = %agent.agent_key, error = ?error, "failed to derive OpenCode workspace path for settings page");
-    })
-    .ok();
     let template_drift = diff_agent_workspace_from_template(
         &state.opencode_workspace_config,
         &workspace_agent,
@@ -179,15 +170,8 @@ pub(in crate::web::routes) async fn build_opencode_workspace_settings_view(
     })
     .unwrap_or_default();
 
-    OpenCodeWorkspaceRuntimeConfig::from_value(&agent.runtime_config).map(|workspace| {
+    OpenCodeWorkspaceRuntimeConfig::from_value(&agent.runtime_config).map(|_| {
         OpenCodeWorkspaceSettingsView {
-            env_exists: workspace_host_path
-                .as_deref()
-                .map(|path| path.join(".env").is_file())
-                .unwrap_or(false),
-            workspace_host_path: workspace.workspace_host_path,
-            workspace_container_path: workspace.workspace_container_path,
-            profile_source: workspace.profile_source,
             template_drift,
             maintenance_html,
             maintenance,

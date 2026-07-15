@@ -2,7 +2,7 @@ use askama::Template;
 
 use crate::{
     agents::model::CreateAgentForm, hyperliquid::live_state::AccountLiveState,
-    hyperliquid::queries::AccountTransactionRow, hyperliquid::sync_state::SyncStateRow,
+    hyperliquid::queries::AccountTransactionRow,
 };
 
 use super::*;
@@ -31,8 +31,10 @@ fn agents_page_renders_base_layout_and_status_box() {
     assert!(rendered.contains("Account balance"));
     assert!(rendered.contains("232.6800"));
     assert!(!rendered.contains("USDC"));
-    assert!(rendered.contains("OpenCode local"));
-    assert!(rendered.contains("opencode"));
+    assert!(!rendered.contains("OpenCode local"));
+    assert!(!rendered.contains(">opencode<"));
+    assert!(rendered.contains("<th class=\"px-5 py-3 font-medium\"></th>"));
+    assert!(rendered.contains("M10 4v12m-6-6h12"));
 }
 
 #[test]
@@ -315,19 +317,12 @@ fn memories_tab_renders_timeline_date_filter_and_markdown_content() {
 }
 
 #[test]
-fn settings_tab_renders_sync_status_table() {
-    let mut template =
-        AgentsShowPageTemplate::new(sample_agent_detail_row(), AgentShowTab::Settings);
-    template.sync_state = vec![SyncStateView::from_row(SyncStateRow::new(
-        "0x1234567890abcdef".to_string(),
-        "live".to_string(),
-        crate::hyperliquid::sync_state::SyncStream::Fills,
-    ))];
+fn settings_tab_omits_sync_status_section() {
+    let template = AgentsShowPageTemplate::new(sample_agent_detail_row(), AgentShowTab::Settings);
 
     let rendered = template.render().unwrap();
     assert!(rendered.contains("Settings"));
-    assert!(rendered.contains("Sync status"));
-    assert!(rendered.contains("fills"));
+    assert!(!rendered.contains("Sync status"));
 }
 
 #[test]
@@ -351,10 +346,6 @@ fn settings_tab_renders_workspace_template_drift() {
     let mut template =
         AgentsShowPageTemplate::new(sample_opencode_detail_row(), AgentShowTab::Settings);
     template.opencode_workspace = Some(OpenCodeWorkspaceSettingsView {
-        workspace_host_path: "workspaces/agents/test-agent".to_string(),
-        workspace_container_path: "/workspaces/agents/test-agent".to_string(),
-        profile_source: "agent-runtime/workspace-template".to_string(),
-        env_exists: true,
         template_drift: OpenCodeWorkspaceTemplateDriftView {
             status_text: "Template drift",
             status_class: "border-amber-900/60 bg-amber-950/30 text-amber-300",
@@ -437,18 +428,28 @@ fn prompts_tab_renders_strategy_copy_and_reset_defaults_ui() {
 fn agents_new_page_renders_base_layout_and_form() {
     let template = AgentsNewPageTemplate {
         form: CreateAgentForm::default(),
-        runtimes: vec![sample_runtime_row()],
         errors: vec![],
         current_path: "/agents/new".to_string(),
     };
     let rendered = template.render().unwrap();
     assert!(rendered.contains("<!DOCTYPE html>"));
     assert!(rendered.contains("Create agent · Vibetrading"));
+    assert!(!rendered.contains("The wallet address and app API key"));
+    assert!(rendered.contains(">Name</label>"));
+    assert!(!rendered.contains("The agent key is derived"));
+    assert!(rendered.contains(">Wallet Private Key</label>"));
+    assert!(
+        rendered
+            .contains("id=\"display_name\" name=\"display_name\" value=\"\" required autofocus")
+    );
+    assert!(rendered.contains("Each agent should have its own wallet."));
+    assert!(rendered.contains("Do not reuse an existing wallet address."));
+    assert!(rendered.contains("Private keys are stored encrypted at rest."));
     assert!(rendered.contains("display_name"));
     assert!(!rendered.contains("name=\"backend_kind\""));
-    assert!(rendered.contains("name=\"runtime_id\""));
-    assert!(rendered.contains("Runtime instance"));
-    assert!(rendered.contains("OpenCode local"));
+    assert!(!rendered.contains("name=\"runtime_id\""));
+    assert!(!rendered.contains("Runtime instance"));
+    assert!(!rendered.contains("name=\"enabled\""));
 }
 
 #[test]

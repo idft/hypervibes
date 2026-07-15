@@ -185,18 +185,6 @@ pub(in crate::web::routes) async fn seed_memory_with_type(
     .await
     .expect("insert memory")
 }
-pub(in crate::web::routes) async fn seed_sync_state(state: &Arc<AppState>, wallet_address: &str) {
-    sqlx::query(
-        "INSERT INTO hyperliquid.sync_state
-            (account_address, environment, stream_name, status, metadata, last_event_key, last_synced_at)
-         VALUES ($1, 'live', 'fills', $2, '{}'::jsonb, 'abc123', NOW())",
-    )
-    .bind(wallet_address)
-    .bind(crate::hyperliquid::sync_state::SyncStatus::Healthy.as_str())
-    .execute(&state.db_pool)
-    .await
-    .expect("insert sync state");
-}
 pub(in crate::web::routes) async fn seed_instrument(
     state: &Arc<AppState>,
     instrument_id: &str,
@@ -284,6 +272,24 @@ pub(in crate::web::routes) async fn insert_test_opencode_agent(
     crate::agentic::store::insert_default_opencode_schedules(&state.db_pool, &agent_key)
         .await
         .expect("insert default schedules");
+    sqlx::query(
+        "UPDATE agentic_job_schedules
+            SET model_provider_id = 'anthropic', model_id = 'claude-sonnet-test'
+          WHERE agent_key = $1",
+    )
+    .bind(&agent_key)
+    .execute(&state.db_pool)
+    .await
+    .expect("set test schedule models");
+    sqlx::query(
+        "UPDATE agentic_job_hooks
+            SET model_provider_id = 'anthropic', model_id = 'claude-sonnet-test'
+          WHERE agent_key = $1",
+    )
+    .bind(&agent_key)
+    .execute(&state.db_pool)
+    .await
+    .expect("set test hook models");
     Some((agent_key, wallet_address))
 }
 pub(in crate::web::routes) async fn ensure_test_runtime(

@@ -7,10 +7,6 @@ use crate::agentic::model::{
 
 #[derive(Debug, Clone)]
 pub struct OpenCodeWorkspaceSettingsView {
-    pub workspace_host_path: String,
-    pub workspace_container_path: String,
-    pub profile_source: String,
-    pub env_exists: bool,
     pub template_drift: OpenCodeWorkspaceTemplateDriftView,
     pub maintenance_html: String,
     pub maintenance: OpenCodeWorkspaceMaintenanceView,

@@ -102,7 +102,7 @@ async fn post_hook_create_inserts_hook_and_redirects() {
                 .uri(format!("/agents/{agent_key}/hooks"))
                 .header("content-type", "application/x-www-form-urlencoded")
                 .body(Body::from(
-                    "timeout_seconds=600&enabled=on&model_selection=&operator_prompt=Summarize+multi-timeframe+agreement",
+                    "timeout_seconds=600&model_selection=&operator_prompt=Summarize+multi-timeframe+agreement",
                 ))
                 .unwrap(),
         )
@@ -116,6 +116,7 @@ async fn post_hook_create_inserts_hook_and_redirects() {
     let hook = hooks.first().expect("hook present");
     assert_eq!(hook.job_key, "market-analysis");
     assert_eq!(hook.job_kind, JOB_KIND_MARKET_ANALYSIS);
+    assert!(!hook.enabled);
 }
 #[tokio::test]
 async fn post_hook_run_now_queues_and_dispatches_run() {
@@ -286,6 +287,8 @@ async fn hook_detail_page_renders_hook_specific_runs() {
     assert!(text.contains("analysis_batch_completed"));
     assert!(text.contains("ses_hook_detail"));
     assert!(text.contains(&format!("/agents/{agent_key}/runs/{run_id}")));
+    assert!(text.contains("data-detail-delete-trigger"));
+    assert!(text.contains(&format!("/agents/{agent_key}/hooks/{hook_id}/delete")));
 }
 #[tokio::test]
 async fn post_hook_timeout_updates_and_redirects() {

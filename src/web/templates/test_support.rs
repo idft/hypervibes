@@ -19,7 +19,6 @@ pub fn sample_agent_list_row() -> AgentListRow {
         wallet_address: "0x1234567890abcdef".to_string(),
         environment: "live".to_string(),
         api_key_last_used_at: None,
-        runtime_name: "OpenCode local".to_string(),
     }
 }
 

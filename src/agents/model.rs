@@ -2,6 +2,7 @@ use chrono::{DateTime, Utc};
 use serde::Deserialize;
 
 pub const BACKEND_KIND_OPENCODE: &str = "opencode";
+pub const DEFAULT_RUNTIME_ID: &str = "opencode-local";
 
 pub fn is_valid_backend_kind(value: &str) -> bool {
     matches!(value, BACKEND_KIND_OPENCODE)
@@ -46,7 +47,6 @@ pub struct AgentListRow {
     pub wallet_address: String,
     pub environment: String,
     pub api_key_last_used_at: Option<DateTime<Utc>>,
-    pub runtime_name: String,
 }
 
 /// Row shape returned by the single-agent detail query.
@@ -139,40 +139,28 @@ impl CreateAgentRuntimeForm {
 pub struct CreateAgentForm {
     pub display_name: String,
     pub hyperliquid_private_key: String,
-    pub runtime_id: String,
-    /// HTML checkboxes only send a value when checked, so this is optional.
-    pub enabled: Option<String>,
 }
 
 impl CreateAgentForm {
-    /// Whether the operator left the enabled checkbox checked.
-    pub fn enabled(&self) -> bool {
-        self.enabled.is_some()
-    }
-
     /// Validate the form and return a list of user-facing errors.
     pub fn validate(&self) -> Result<(), Vec<String>> {
         let mut errors = Vec::new();
 
         let display_name = self.display_name.trim();
         if display_name.is_empty() {
-            errors.push("Display name is required.".to_string());
+            errors.push("Name is required.".to_string());
         } else {
             let key = slugify_agent_key(display_name);
             if key.is_empty() {
-                errors.push("Display name must contain some letters or digits.".to_string());
+                errors.push("Name must contain some letters or digits.".to_string());
             }
         }
 
         let private_key = self.hyperliquid_private_key.trim();
         if private_key.is_empty() {
-            errors.push("Hyperliquid private key is required.".to_string());
+            errors.push("Private key is required.".to_string());
         } else if crate::agents::keys::derive_wallet_address(private_key).is_err() {
-            errors.push("Hyperliquid private key is invalid.".to_string());
-        }
-
-        if self.runtime_id.trim().is_empty() {
-            errors.push("Runtime is required.".to_string());
+            errors.push("Private key is invalid.".to_string());
         }
 
         if errors.is_empty() {
@@ -299,20 +287,13 @@ mod tests {
     }
 
     #[test]
-    fn create_agent_form_requires_runtime() {
+    fn create_agent_form_does_not_require_runtime_or_enabled_fields() {
         let form = CreateAgentForm {
             display_name: "Test Agent".to_string(),
             hyperliquid_private_key:
                 "0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d".to_string(),
-            runtime_id: String::new(),
-            enabled: Some("on".to_string()),
         };
 
-        let errors = form.validate().expect_err("validation should fail");
-        assert!(
-            errors
-                .iter()
-                .any(|error| error.contains("Runtime is required"))
-        );
+        assert!(form.validate().is_ok());
     }
 }

@@ -24,9 +24,10 @@ pub async fn set_all_agent_jobs_enabled(
 
     sqlx::query(
         "UPDATE agentic_job_schedules
-            SET enabled = $2,
+           SET enabled = $2,
                 updated_at = now()
-          WHERE agent_key = $1",
+          WHERE agent_key = $1
+            AND ($2 = false OR (model_provider_id IS NOT NULL AND model_id IS NOT NULL))",
     )
     .bind(agent_key)
     .bind(enabled)
@@ -38,7 +39,8 @@ pub async fn set_all_agent_jobs_enabled(
         "UPDATE agentic_job_hooks
             SET enabled = $2,
                 updated_at = now()
-          WHERE agent_key = $1",
+          WHERE agent_key = $1
+            AND ($2 = false OR (model_provider_id IS NOT NULL AND model_id IS NOT NULL))",
     )
     .bind(agent_key)
     .bind(enabled)

@@ -16,11 +16,11 @@ pub struct AgenticJobHookView {
     pub enabled_class: &'static str,
     pub timeout_text: String,
     pub model_text: String,
+    pub has_model: bool,
     pub model_logo_url: Option<String>,
     pub detail_url: String,
     pub run_now_action: String,
     pub toggle_action: String,
-    pub delete_action: String,
     pub hidden_enabled_value: &'static str,
 }
 
@@ -33,6 +33,7 @@ pub struct AgenticHookDetailView {
     pub enabled: bool,
     pub enabled_label: &'static str,
     pub enabled_class: &'static str,
+    pub has_model: bool,
     pub timeout_editor: TimeoutEditorView,
     pub created_at: LocalTimestampView,
     pub updated_at: LocalTimestampView,
@@ -43,6 +44,7 @@ pub struct AgenticHookDetailView {
     pub model_update_action: String,
     pub run_now_action: String,
     pub toggle_action: String,
+    pub delete_action: String,
     pub hidden_enabled_value: &'static str,
 }
 
@@ -56,6 +58,7 @@ impl AgenticJobHookView {
             .model_provider_id
             .as_ref()
             .map(|provider| format!("/model-catalog/logos/{provider}"));
+        let has_model = row.model_provider_id.is_some() && row.model_id.is_some();
 
         let (enabled_label, enabled_class) = if row.enabled {
             (
@@ -75,11 +78,11 @@ impl AgenticJobHookView {
             enabled_class,
             timeout_text: format_duration(row.timeout_seconds),
             model_text,
+            has_model,
             model_logo_url,
             detail_url: format!("/agents/{}/hooks/{}", row.agent_key, row.id),
             run_now_action: format!("/agents/{}/hooks/{}/run", row.agent_key, row.id),
             toggle_action: format!("/agents/{}/hooks/{}/toggle", row.agent_key, row.id),
-            delete_action: format!("/agents/{}/hooks/{}/delete", row.agent_key, row.id),
             hidden_enabled_value: if row.enabled { "off" } else { "on" },
         }
     }
@@ -97,6 +100,7 @@ impl AgenticHookDetailView {
             enabled: row.enabled,
             enabled_label: summary.enabled_label,
             enabled_class: summary.enabled_class,
+            has_model: summary.has_model,
             timeout_editor: TimeoutEditorView {
                 display_text: summary.timeout_text,
                 edit_text: format_duration(row.timeout_seconds),
@@ -119,6 +123,7 @@ impl AgenticHookDetailView {
             model_update_action: format!("/agents/{}/hooks/{}/model", row.agent_key, row.id),
             run_now_action: summary.run_now_action,
             toggle_action: summary.toggle_action,
+            delete_action: format!("/agents/{}/hooks/{}/delete", row.agent_key, row.id),
             hidden_enabled_value: summary.hidden_enabled_value,
         }
     }

@@ -26,8 +26,7 @@ use crate::{
         live_state::{AccountKey, AccountLiveState, LiveConnectionStatus},
         queries::{
             BalanceSeriesBucket, count_account_transactions, fetch_balance_series,
-            latest_account_running_balance, list_account_sync_state,
-            list_account_transactions_page,
+            latest_account_running_balance, list_account_transactions_page,
         },
     },
     memory::{
@@ -41,7 +40,7 @@ use crate::{
             AgentsShowPageTemplate, BalanceSparklinesPartialTemplate,
             LatestAnalysisSummaryPartialTemplate, LatestTradeExecutionSummaryPartialTemplate,
             OpenOrdersPartialTemplate, OpenOrdersView, OpenPositionsPartialTemplate,
-            OpenPositionsView, SparklineView, SyncStateView, TransactionView,
+            OpenPositionsView, SparklineView, TransactionView,
         },
     },
 };
@@ -217,25 +216,6 @@ pub(in crate::web::routes) async fn render_agent_show_page(
                 template.opencode_workspace =
                     build_opencode_workspace_settings_view(state, &agent).await;
             }
-            template.sync_state = match list_account_sync_state(
-                &state.db_pool,
-                &agent.wallet_address,
-                &agent.environment,
-            )
-            .await
-            {
-                Ok(rows) => rows.into_iter().map(SyncStateView::from_row).collect(),
-                Err(error) => {
-                    warn!(
-                        agent_key = %agent.agent_key,
-                        wallet_address = %agent.wallet_address,
-                        environment = %agent.environment,
-                        error = ?error,
-                        "failed to list account sync state for agent settings page"
-                    );
-                    Vec::new()
-                }
-            };
             if let Some(rows) = instrument_options {
                 template.instrument_options = rows;
             }

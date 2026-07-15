@@ -10,10 +10,9 @@ use tower::util::ServiceExt;
 
 use crate::{
     agents::{
-        model::CreateAgentRuntimeForm,
         model::slugify_agent_key,
         prompts::{DEFAULT_ANALYSIS_STRATEGY_PROMPT, DEFAULT_TRADING_STRATEGY_PROMPT},
-        store::{get_agent, insert_agent_runtime},
+        store::get_agent,
     },
     hyperliquid::live_state::{AccountKey, AccountLiveState, LiveConnectionStatus},
     opencode::workspace::OpenCodeWorkspaceRuntimeConfig,
@@ -59,7 +58,7 @@ async fn post_agents_with_invalid_private_key_returns_validation_error() {
     assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
 }
 #[tokio::test]
-async fn agents_new_page_renders_runtime_control() {
+async fn agents_new_page_renders_simplified_form() {
     let state = test_state().await;
 
     let response = router(state.clone())
@@ -75,52 +74,15 @@ async fn agents_new_page_renders_runtime_control() {
     assert_eq!(response.status(), StatusCode::OK);
     let text = response_text(response).await;
     assert!(!text.contains("name=\"backend_kind\""));
-    assert!(text.contains("name=\"runtime_id\""));
-    assert!(text.contains("Runtime instance"));
-    assert!(text.contains("OpenCode local"));
-}
-#[tokio::test]
-async fn post_agents_rejects_disabled_runtime() {
-    let state = test_state().await;
-    let runtime_id = format!("disabled-runtime-{}", chrono::Utc::now().timestamp_millis());
-    insert_agent_runtime(
-        &state.db_pool,
-        &CreateAgentRuntimeForm {
-            id: runtime_id.clone(),
-            name: "Disabled runtime".to_string(),
-            backend_kind: crate::agents::model::BACKEND_KIND_OPENCODE.to_string(),
-            base_url: "http://localhost:14096".to_string(),
-            enabled: None,
-        },
-    )
-    .await
-    .expect("insert disabled runtime");
-
-    let app = router(state.clone());
-    let private_key = random_private_key();
-    let body = format!(
-        "display_name=DisabledRuntimeTest&hyperliquid_private_key={private_key}&runtime_id={runtime_id}"
-    );
-    let response = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri("/agents")
-                .header("content-type", "application/x-www-form-urlencoded")
-                .body(Body::from(body))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-
-    assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
-    let text = response_text(response).await;
-    assert!(text.contains("Selected runtime must exist and be enabled."));
+    assert!(!text.contains("name=\"runtime_id\""));
+    assert!(!text.contains("Runtime instance"));
+    assert!(!text.contains("name=\"enabled\""));
+    assert!(text.contains("Each agent should have its own wallet."));
 }
 #[tokio::test]
 async fn post_agents_creates_agent_with_default_strategy_prompts() {
     let state = test_state().await;
+    seed_instrument(&state, "BTC", true).await;
     let pool = state.db_pool.clone();
     let guard = state
         ._test_db_guard
@@ -167,6 +129,12 @@ async fn post_agents_creates_agent_with_default_strategy_prompts() {
     assert_eq!(
         stored.backend_kind,
         crate::agents::model::BACKEND_KIND_OPENCODE
+    );
+    assert_eq!(
+        crate::agents::store::list_agent_instrument_ids(&pool, &agent_key)
+            .await
+            .expect("list selected instruments"),
+        vec!["BTC".to_string()]
     );
     assert_eq!(
         stored.runtime_config["workspace_container_path"],

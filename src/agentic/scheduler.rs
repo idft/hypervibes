@@ -1151,6 +1151,15 @@ mod tests {
         replace_agent_instruments(pool, key, &["BTC".to_string()])
             .await
             .expect("seed agent instruments");
+        sqlx::query(
+            "UPDATE agentic_job_hooks
+                SET model_provider_id = 'anthropic', model_id = 'claude-sonnet-test'
+              WHERE agent_key = $1",
+        )
+        .bind(key)
+        .execute(pool)
+        .await
+        .expect("seed hook model");
     }
 
     async fn run_until<F, Fut>(predicate: F)
