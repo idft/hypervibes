@@ -6,3 +6,4 @@ pub mod prompt;
 pub mod scheduler;
 pub mod store;
 pub mod timeframe;
+pub mod workspace_lease;

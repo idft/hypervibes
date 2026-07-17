@@ -48,7 +48,7 @@
                             <h3 class="text-base font-medium text-white">Select model</h3>
                             <p class="text-sm text-zinc-500">Choose a provider, then pick one of its models.</p>
                         </div>
-                        <button type="button" class="rounded-full p-2 text-zinc-500 hover:bg-zinc-900 hover:text-zinc-200" aria-label="Close model selector" data-model-picker-close>
+                         <button type="button" class="cursor-pointer rounded-full p-2 text-zinc-500 hover:bg-zinc-900 hover:text-zinc-200" aria-label="Close model selector" data-model-picker-close>
                             <svg class="h-4 w-4" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
                                 <path fill-rule="evenodd" d="M4.22 4.22a.75.75 0 0 1 1.06 0L10 8.94l4.72-4.72a.75.75 0 1 1 1.06 1.06L11.06 10l4.72 4.72a.75.75 0 1 1-1.06 1.06L10 11.06l-4.72 4.72a.75.75 0 1 1-1.06-1.06L8.94 10 4.22 5.28a.75.75 0 0 1 0-1.06Z" clip-rule="evenodd"></path>
                             </svg>
@@ -58,12 +58,12 @@
                 </div>
                 <div class="grid h-[32rem] min-h-[32rem] grid-cols-1 divide-y divide-zinc-800 md:grid-cols-[17rem_minmax(0,1fr)] md:divide-x md:divide-y-0">
                     <div class="max-h-[55vh] overflow-y-auto p-3" data-model-picker-providers>
-                        <button type="button" class="flex w-full items-center gap-3 rounded-2xl px-3 py-3 text-left text-sm text-zinc-200 hover:bg-zinc-900" data-model-picker-provider data-provider-id="__none__" data-search-text="{{ model_picker.empty_label }}">
+                         <button type="button" class="flex w-full cursor-pointer items-center gap-3 rounded-2xl px-3 py-3 text-left text-sm text-zinc-200 hover:bg-zinc-900" data-model-picker-provider data-provider-id="__none__" data-search-text="{{ model_picker.empty_label }}">
                             <span class="flex h-9 w-9 items-center justify-center rounded-lg border border-zinc-700 bg-zinc-900 text-xs text-zinc-400">OC</span>
                             <span>{{ model_picker.empty_label }}</span>
                         </button>
                         {% for provider in model_picker.provider_groups %}
-                        <button type="button" class="mt-1 flex w-full items-center gap-3 rounded-2xl px-3 py-3 text-left text-sm text-zinc-200 hover:bg-zinc-900" data-model-picker-provider data-provider-id="{{ provider.provider_id }}" data-search-text="{{ provider.provider_name }}">
+                         <button type="button" class="mt-1 flex w-full cursor-pointer items-center gap-3 rounded-2xl px-3 py-3 text-left text-sm text-zinc-200 hover:bg-zinc-900" data-model-picker-provider data-provider-id="{{ provider.provider_id }}" data-search-text="{{ provider.provider_name }}">
                             {% if let Some(logo_url) = provider.provider_logo_url %}
                             <img src="{{ logo_url }}" alt="{{ provider.provider_name }} logo" class="h-9 w-9 rounded-lg border border-zinc-800 bg-white p-1">
                             {% else %}
@@ -74,12 +74,12 @@
                         {% endfor %}
                     </div>
                     <div class="max-h-[55vh] overflow-y-auto p-3" data-model-picker-options>
-                        <button type="button" class="flex w-full items-center gap-3 rounded-2xl px-3 py-3 text-left text-sm text-zinc-200 hover:bg-zinc-900" data-model-picker-option data-provider-id="__none__" data-value="" data-label="{{ model_picker.empty_label }}" data-search-text="{{ model_picker.empty_label }}">
+                         <button type="button" class="flex w-full cursor-pointer items-center gap-3 rounded-2xl px-3 py-3 text-left text-sm text-zinc-200 hover:bg-zinc-900" data-model-picker-option data-provider-id="__none__" data-value="" data-label="{{ model_picker.empty_label }}" data-search-text="{{ model_picker.empty_label }}">
                             <span class="flex h-9 w-9 items-center justify-center rounded-lg border border-zinc-700 bg-zinc-900 text-xs text-zinc-400">OC</span>
                             <span>{{ model_picker.empty_label }}</span>
                         </button>
                         {% for option in model_picker.options %}
-                        <button type="button" class="mt-1 flex w-full items-start gap-3 rounded-2xl px-3 py-3 text-left text-sm text-zinc-200 hover:bg-zinc-900" data-model-picker-option data-provider-id="{{ option.provider_id }}" data-value="{{ option.value }}" data-label="{{ option.provider_name }} / {{ option.model_name }}" data-logo-url="{{ option.provider_logo_url }}" data-search-text="{{ option.provider_name }} {{ option.model_name }} {{ option.metadata_text }}">
+                         <button type="button" class="mt-1 flex w-full cursor-pointer items-start gap-3 rounded-2xl px-3 py-3 text-left text-sm text-zinc-200 hover:bg-zinc-900" data-model-picker-option data-provider-id="{{ option.provider_id }}" data-value="{{ option.value }}" data-label="{{ option.provider_name }} / {{ option.model_name }}" data-logo-url="{{ option.provider_logo_url }}" data-search-text="{{ option.provider_name }} {{ option.model_name }} {{ option.metadata_text }}">
                             <img src="{{ option.provider_logo_url }}" alt="{{ option.provider_name }} logo" class="mt-0.5 h-9 w-9 rounded-lg border border-zinc-800 bg-white p-1">
                             <span>
                                 <span class="block">{{ option.model_name }}</span>
@@ -92,8 +92,8 @@
                     </div>
                 </div>
                 <div class="flex items-center justify-end gap-3 border-t border-zinc-800 px-6 py-4">
-                    <button type="button" class="rounded-full border border-zinc-800 px-4 py-2 text-sm font-medium text-zinc-300 hover:border-zinc-700 hover:text-white" data-model-picker-cancel>Cancel</button>
-                    <button type="button" class="rounded-full border border-sky-900/60 bg-sky-950/30 px-4 py-2 text-sm font-medium text-sky-300 hover:border-sky-800 hover:bg-sky-950/50 hover:text-sky-200" data-model-picker-save>Save</button>
+                     <button type="button" class="cursor-pointer rounded-full border border-zinc-800 px-4 py-2 text-sm font-medium text-zinc-300 hover:border-zinc-700 hover:text-white" data-model-picker-cancel>Cancel</button>
+                     <button type="button" class="cursor-pointer rounded-full border border-sky-900/60 bg-sky-950/30 px-4 py-2 text-sm font-medium text-sky-300 hover:border-sky-800 hover:bg-sky-950/50 hover:text-sky-200" data-model-picker-save>Save</button>
                 </div>
             </div>
         </div>
@@ -112,12 +112,12 @@
         </summary>
         <div class="absolute top-full right-0 left-0 z-30 mt-2 rounded-2xl border border-zinc-800 bg-zinc-950/95 p-2 shadow-2xl shadow-black/40">
             <input type="text" placeholder="Filter models" class="mb-2 block w-full rounded-xl border border-zinc-800 bg-zinc-950 px-3 py-2 text-sm text-white placeholder-zinc-600 focus:border-zinc-600 focus:outline-none" data-model-picker-search>
-            <button type="button" class="flex w-full items-center gap-3 rounded-xl px-3 py-2 text-left text-sm text-zinc-200 hover:bg-zinc-900" data-model-picker-option data-value="" data-label="{{ model_picker.empty_label }}" data-search-text="{{ model_picker.empty_label }}">
+             <button type="button" class="flex w-full cursor-pointer items-center gap-3 rounded-xl px-3 py-2 text-left text-sm text-zinc-200 hover:bg-zinc-900" data-model-picker-option data-value="" data-label="{{ model_picker.empty_label }}" data-search-text="{{ model_picker.empty_label }}">
                 <span class="flex h-8 w-8 items-center justify-center rounded-lg border border-zinc-700 bg-zinc-900 text-xs text-zinc-400">OC</span>
                 <span>{{ model_picker.empty_label }}</span>
             </button>
             {% for option in model_picker.options %}
-            <button type="button" class="mt-1 flex w-full items-start gap-3 rounded-xl px-3 py-2 text-left text-sm text-zinc-200 hover:bg-zinc-900" data-model-picker-option data-value="{{ option.value }}" data-label="{{ option.provider_name }} / {{ option.model_name }}" data-logo-url="{{ option.provider_logo_url }}" data-search-text="{{ option.provider_name }} {{ option.model_name }} {{ option.metadata_text }}">
+             <button type="button" class="mt-1 flex w-full cursor-pointer items-start gap-3 rounded-xl px-3 py-2 text-left text-sm text-zinc-200 hover:bg-zinc-900" data-model-picker-option data-value="{{ option.value }}" data-label="{{ option.provider_name }} / {{ option.model_name }}" data-logo-url="{{ option.provider_logo_url }}" data-search-text="{{ option.provider_name }} {{ option.model_name }} {{ option.metadata_text }}">
                 <img src="{{ option.provider_logo_url }}" alt="{{ option.provider_name }} logo" class="mt-0.5 h-8 w-8 rounded-lg border border-zinc-800 bg-white p-1">
                 <span>
                     <span class="block">{{ option.provider_name }} / {{ option.model_name }}</span>

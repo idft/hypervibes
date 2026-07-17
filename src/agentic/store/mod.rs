@@ -33,10 +33,16 @@ pub use schedules::{
 };
 #[cfg(test)]
 pub use workspace::agent_has_blocking_workspace_maintenance;
+#[cfg(test)]
+pub use workspace::get_latest_workspace_regenerate_task;
 #[allow(unused_imports)]
 pub use workspace::{
-    InsertWorkspaceMaintenanceTaskOutcome, get_latest_workspace_regenerate_task,
-    get_next_queued_workspace_regenerate_task, insert_workspace_regenerate_task,
+    CodingTriggerMode, InsertAnalysisCodingTaskOutcome,
+    InsertWorkspaceMaintenanceTaskOutcome, agent_has_active_live_runs,
+    compare_and_set_maintenance_phase, get_latest_maintenance_task,
+    get_next_queued_workspace_regenerate_task, heartbeat_maintenance_task,
+    insert_analysis_coding_task_and_run, insert_workspace_regenerate_task,
+    list_queued_maintenance_candidates, list_stale_running_maintenance_tasks,
     mark_maintenance_task_failed, mark_maintenance_task_running, mark_maintenance_task_succeeded,
 };
 

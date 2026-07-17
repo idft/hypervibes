@@ -98,6 +98,7 @@ pub(in crate::web::routes) async fn test_state_with_backend_and_shutdown(
         .unwrap(),
         asset_cache: Arc::new(crate::cache::asset::AssetCache::new(cache_dir).unwrap()),
         in_flight: crate::agentic::in_flight::InFlightTracker::new(),
+        workspace_leases: crate::agentic::workspace_lease::WorkspaceLeaseManager::new(),
         shutdown_rx,
     })
 }

@@ -49,6 +49,7 @@ different agents to run concurrently. Built-in work includes:
 
 - scheduled `analysis`, `trading`, and `daily_review` jobs
 - an `analysis_batch_completed` hook that can dispatch `market_analysis`
+- request-gated `analysis_coding` follow-up work after a daily review
 - queued workspace regeneration or hard reset
 
 For a dispatch, the OpenCode backend creates a session in the agent workspace
@@ -74,6 +75,27 @@ is the data-ownership boundary for account, memory, and order operations.
 Only the `opencode` backend is currently supported. Backend and runtime fields
 remain in the registry schema to leave room for a future backend without
 changing agent ownership or orchestration concepts.
+
+## Engineering Isolation
+
+Analysis coding runs in a candidate workspace under the configured
+workspace root. The model receives path-scoped native OpenCode filesystem
+permissions that can edit only approved files under candidate `scripts/user`.
+Pyright supplies Python diagnostics for those native reads and edits. Normal analysis, trading, and review jobs hold read
+leases on the live workspace; coding holds a write lease only while
+promoting a validated candidate and verifying that the promoted tree has the
+same hash.
+
+Candidate validation runs through a fixed local MCP tool in the OpenCode
+analysis runtime, not through a Vibetrading HTTP endpoint. The tool accepts no
+executable or path arguments and records a task-scoped result bound to the
+candidate tree hash. The worker recomputes that hash after generation, so any
+write after validation fails promotion closed.
+
+Promotion swaps directories, never individual files. A JSON journal records
+each swap phase, and startup recovery restores the previous tree when a process
+stops before a verified completion. The maintenance task and linked agentic
+run remain the durable lifecycle record in Postgres.
 
 ## Configuration
 

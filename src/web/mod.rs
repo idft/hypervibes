@@ -19,6 +19,7 @@ use crate::{
     agentic::{
         backend::AgenticBackend,
         in_flight::{InFlightTracker, SHUTDOWN_IN_FLIGHT_GRACE},
+        workspace_lease::WorkspaceLeaseManager,
     },
     agents::crypto::EncryptionKey,
     cache::asset::AssetCache,
@@ -44,6 +45,7 @@ pub async fn serve(
     shutdown_rx: watch::Receiver<bool>,
     force_shutdown_rx: watch::Receiver<bool>,
     in_flight: InFlightTracker,
+    workspace_leases: WorkspaceLeaseManager,
 ) -> Result<()> {
     let shutdown_rx_for_state = shutdown_rx.clone();
     let in_flight_for_state = in_flight.clone();
@@ -60,6 +62,7 @@ pub async fn serve(
         model_catalog,
         asset_cache,
         in_flight: in_flight_for_state,
+        workspace_leases,
         shutdown_rx: shutdown_rx_for_state,
     });
     let app = router(state);

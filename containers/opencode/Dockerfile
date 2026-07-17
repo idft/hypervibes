@@ -1,4 +1,4 @@
-ARG OPENCODE_TAG=1.17.11
+ARG OPENCODE_TAG=latest
 FROM ghcr.io/anomalyco/opencode:${OPENCODE_TAG}
 
 # `uv` is a single static binary copied from the official image so the
@@ -31,9 +31,15 @@ COPY agent-runtime/analysis/requirements.txt /opt/vibetrading/analysis/requireme
 RUN uv venv --python 3.13 /opt/vibetrading/analysis/.venv \
     && uv pip install --python /opt/vibetrading/analysis/.venv/bin/python \
         --no-cache \
-        --requirement /opt/vibetrading/analysis/requirements.txt
+        --requirement /opt/vibetrading/analysis/requirements.txt \
+    && /opt/vibetrading/analysis/.venv/bin/pyright --version
 
 ENV PATH="/opt/vibetrading/analysis/.venv/bin:${PATH}"
+
+# Fixed coding MCP validator. Candidate reports may request validation,
+# but the model cannot select a different executable or command.
+COPY agent-runtime/coding_validate.py /opt/vibetrading/coding/coding_validate.py
+COPY agent-runtime/coding_fixture.json /opt/vibetrading/coding/coding_fixture.json
 
 # Bake the Vibetrading MCP server source into a fixed image path so the
 # generated per-workspace `opencode.json` can launch it directly without

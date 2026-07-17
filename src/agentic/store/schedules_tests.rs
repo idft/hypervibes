@@ -95,15 +95,35 @@ async fn default_schedules_insert_expected_rows_with_disabled_defaults() {
     assert_eq!(daily_review.timeframe, "1d");
 
     let hooks = list_agent_hooks(&pool, &key).await.expect("list hooks");
-    assert_eq!(hooks.len(), 1);
-    let hook = hooks.first().expect("default hook present");
-    assert_eq!(hook.job_key, "market-analysis");
-    assert_eq!(hook.job_kind, JOB_KIND_MARKET_ANALYSIS);
+    // Two default hooks are now seeded: the market-analysis hook and
+    // the analysis-coding hook. Both remain disabled by default.
+    assert_eq!(hooks.len(), 2);
+
+    let market_hook = hooks
+        .iter()
+        .find(|hook| hook.job_kind == JOB_KIND_MARKET_ANALYSIS)
+        .expect("market-analysis hook present");
+    assert_eq!(market_hook.job_key, "market-analysis");
     assert_eq!(
-        hook.hook_event,
+        market_hook.hook_event,
         crate::agentic::model::HOOK_EVENT_ANALYSIS_BATCH_COMPLETED
     );
-    assert!(!hook.enabled);
+    assert!(!market_hook.enabled);
+
+    let coding_hook = hooks
+        .iter()
+        .find(|hook| hook.job_kind == crate::agentic::model::JOB_KIND_ANALYSIS_CODING)
+        .expect("analysis-coding hook present");
+    assert_eq!(coding_hook.job_key, "analysis-coding");
+    assert_eq!(
+        coding_hook.hook_event,
+        crate::agentic::model::HOOK_EVENT_DAILY_REVIEW_COMPLETED
+    );
+    assert!(!coding_hook.enabled);
+    assert!(
+        coding_hook.model_provider_id.is_none() && coding_hook.model_id.is_none(),
+        "coding hook must be seeded without a model so it cannot fire until operator pins one"
+    );
 }
 
 #[tokio::test]
@@ -137,7 +157,8 @@ async fn default_schedules_are_idempotent() {
             .fetch_one(&pool)
             .await
             .expect("hook count");
-    assert_eq!(hook_count.0, 1);
+    // market_analysis + analysis_coding.
+    assert_eq!(hook_count.0, 2);
 }
 
 #[tokio::test]

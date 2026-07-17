@@ -14,14 +14,17 @@ use tracing::warn;
 use super::shared::{
     ModelPickerContext, ModelSelectionForm, TimeoutErrorQuery, TimeoutForm,
     WORKSPACE_MAINTENANCE_ACTIVE_WARNING, build_model_picker_view, jobs_warning_redirect,
-    load_model_picker_context, parse_positive_schedule_seconds, timeout_error_redirect,
-    validate_model_selection_for_agent,
+    load_model_picker_context, load_model_picker_context_cached, parse_positive_schedule_seconds,
+    timeout_error_redirect, validate_model_selection_for_agent,
 };
 use crate::web::error::AppError;
 use crate::{
     agentic::{
-        model::{HOOK_EVENT_ANALYSIS_BATCH_COMPLETED, JOB_KIND_MARKET_ANALYSIS},
-        scheduler::{build_hook_dispatch_request, dispatch_run},
+        model::{
+            HOOK_EVENT_ANALYSIS_BATCH_COMPLETED, JOB_KIND_ANALYSIS_CODING,
+            JOB_KIND_MARKET_ANALYSIS,
+        },
+        scheduler::{build_hook_dispatch_request, dispatch_run_with_workspace_lease},
         store::QueuedHookRun,
         timeframe::parse_timeout_seconds,
     },
@@ -31,7 +34,7 @@ use crate::{
         AppState,
         templates::{
             AgentHookDetailPageTemplate, AgentHookNewPageTemplate, AgentShowTab,
-            CreateAgentHookFormValues, build_agent_show_tabs,
+            CreateAgentHookFormValues, ModelPickerPartialTemplate, build_agent_show_tabs,
         },
     },
 };
@@ -101,11 +104,18 @@ pub(in crate::web::routes) async fn agents_show_hook_detail(
         }
     }
 
-    let picker = load_model_picker_context(&state, &agent).await;
-    let mut model_picker =
-        build_model_picker_view("hook-model-selection", &hook_view.model_selection, picker);
+    let mut model_picker = build_model_picker_view(
+        "hook-model-selection",
+        &hook_view.model_selection,
+        ModelPickerContext {
+            options: Vec::new(),
+            warning: None,
+        },
+    );
     model_picker.show_label = false;
     model_picker.use_modal = true;
+    model_picker.lazy_options_url =
+        Some(format!("/agents/{agent_key}/hooks/{hook_id}/model-picker"));
     let html = AgentHookDetailPageTemplate::render_view(
         agent.clone(),
         hook_view,
@@ -113,6 +123,33 @@ pub(in crate::web::routes) async fn agents_show_hook_detail(
         hook_runs,
         hook_runs_loaded,
     )?;
+    Ok(Html(html).into_response())
+}
+pub(in crate::web::routes) async fn agents_hook_model_picker(
+    State(state): State<Arc<AppState>>,
+    Path((agent_key, hook_id)): Path<(String, i64)>,
+) -> Result<Response, AppError> {
+    let Some(agent) = get_agent(&state.db_pool, &agent_key).await? else {
+        return Ok((StatusCode::NOT_FOUND, "agent not found").into_response());
+    };
+    if agent.backend_kind != BACKEND_KIND_OPENCODE {
+        return Ok((StatusCode::NOT_FOUND, "hook not found").into_response());
+    }
+    let Some(hook) =
+        crate::agentic::store::get_agent_hook(&state.db_pool, &agent_key, hook_id).await?
+    else {
+        return Ok((StatusCode::NOT_FOUND, "hook not found").into_response());
+    };
+
+    let selected = match (hook.model_provider_id.as_deref(), hook.model_id.as_deref()) {
+        (Some(provider), Some(model)) => format!("{provider}/{model}"),
+        _ => String::new(),
+    };
+    let picker = load_model_picker_context_cached(&state, &agent).await;
+    let mut model_picker = build_model_picker_view("hook-model-selection", &selected, picker);
+    model_picker.show_label = false;
+    model_picker.use_modal = true;
+    let html = ModelPickerPartialTemplate::render_view(model_picker)?;
     Ok(Html(html).into_response())
 }
 pub(in crate::web::routes) async fn build_hook_prompt_preview(
@@ -331,8 +368,32 @@ pub(in crate::web::routes) async fn agents_run_hook_now(
     else {
         return Ok((StatusCode::NOT_FOUND, "hook not found").into_response());
     };
+
     if hook.model_provider_id.is_none() || hook.model_id.is_none() {
         return Ok(jobs_warning_redirect(&agent_key, "No model set"));
+    }
+
+    if hook.job_kind == JOB_KIND_ANALYSIS_CODING {
+        let outcome = crate::agentic::store::insert_analysis_coding_task_and_run(
+            &state.db_pool,
+            &agent_key,
+            hook_id,
+            crate::agentic::store::CodingTriggerMode::Manual,
+            None,
+            None,
+            Some(&hook.operator_prompt),
+            None,
+        )
+        .await
+        .map_err(AppError)?;
+        if let crate::agentic::store::InsertAnalysisCodingTaskOutcome::Inserted {
+            run_id,
+            ..
+        } = outcome
+        {
+            return Ok(Redirect::to(&format!("/agents/{agent_key}/runs/{run_id}")).into_response());
+        }
+        return Ok(Redirect::to(&format!("/agents/{agent_key}/jobs")).into_response());
     }
 
     match crate::agentic::store::insert_queued_hook_run(&state.db_pool, &agent_key, hook_id).await?
@@ -345,6 +406,7 @@ pub(in crate::web::routes) async fn agents_run_hook_now(
             Some(request) => {
                 let pool = state.db_pool.clone();
                 let backend = state.agentic_backend.clone();
+                let workspace_leases = state.workspace_leases.clone();
                 // Hook jobs are intentionally allowed to start after
                 // shutdown has been initiated; the tracker guard below
                 // makes sure the dispatch is awaited on the way out so
@@ -352,8 +414,17 @@ pub(in crate::web::routes) async fn agents_run_hook_now(
                 let in_flight = state.in_flight.clone();
                 tokio::spawn(async move {
                     let _guard = in_flight.track();
-                    let _ = dispatch_run(pool, backend, request).await;
+                    let _ = dispatch_run_with_workspace_lease(
+                        pool,
+                        backend,
+                        request,
+                        &workspace_leases,
+                    )
+                    .await;
                 });
+                return Ok(
+                    Redirect::to(&format!("/agents/{agent_key}/runs/{run_id}")).into_response()
+                );
             }
             None => {
                 let _ = crate::agentic::store::mark_run_failed(
@@ -365,7 +436,9 @@ pub(in crate::web::routes) async fn agents_run_hook_now(
                 .await;
             }
         },
-        QueuedHookRun::Skipped { .. } => {}
+        QueuedHookRun::Skipped { run_id } => {
+            return Ok(Redirect::to(&format!("/agents/{agent_key}/runs/{run_id}")).into_response());
+        }
         QueuedHookRun::Missing => {
             return Ok((StatusCode::NOT_FOUND, "hook not found").into_response());
         }
@@ -375,10 +448,11 @@ pub(in crate::web::routes) async fn agents_run_hook_now(
                 WORKSPACE_MAINTENANCE_ACTIVE_WARNING,
             ));
         }
-    }
+    };
 
     Ok(Redirect::to(&format!("/agents/{agent_key}/jobs")).into_response())
 }
+
 pub(in crate::web::routes) async fn agents_toggle_hook(
     State(state): State<Arc<AppState>>,
     Path((agent_key, hook_id)): Path<(String, i64)>,
@@ -396,15 +470,18 @@ pub(in crate::web::routes) async fn agents_toggle_hook(
     }
 
     let enable = matches!(form.enabled.as_deref(), Some("on"));
-    if enable {
-        let Some(hook) =
-            crate::agentic::store::get_agent_hook(&state.db_pool, &agent_key, hook_id).await?
-        else {
-            return Ok((StatusCode::NOT_FOUND, "hook not found").into_response());
+    let Some(hook) =
+        crate::agentic::store::get_agent_hook(&state.db_pool, &agent_key, hook_id).await?
+    else {
+        return Ok((StatusCode::NOT_FOUND, "hook not found").into_response());
+    };
+    if enable && (hook.model_provider_id.is_none() || hook.model_id.is_none()) {
+        let message = if hook.job_kind == JOB_KIND_ANALYSIS_CODING {
+            "Select an explicit provider and model before enabling analysis coding."
+        } else {
+            "No model set"
         };
-        if hook.model_provider_id.is_none() || hook.model_id.is_none() {
-            return Ok(jobs_warning_redirect(&agent_key, "No model set"));
-        }
+        return Ok(jobs_warning_redirect(&agent_key, message));
     }
     let updated =
         crate::agentic::store::set_hook_enabled(&state.db_pool, &agent_key, hook_id, enable)

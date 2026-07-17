@@ -90,6 +90,10 @@ pub fn router(state: Arc<AppState>) -> Router {
             get(agents_show_hook_detail),
         )
         .route(
+            "/agents/{agent_key}/hooks/{hook_id}/model-picker",
+            get(agents_hook_model_picker),
+        )
+        .route(
             "/agents/{agent_key}/jobs/{job_id}/toggle",
             post(agents_toggle_job),
         )

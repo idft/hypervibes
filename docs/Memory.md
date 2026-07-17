@@ -73,3 +73,14 @@ Current important contract:
 - `memory_type = "daily_review"` records one review for an agent-scoped UTC window
 - market-analysis memories should link back to source analyses with `derived_from`
 - daily-review memories should link to reviewed memories with `reviews` and to new learnings with `updates_learnings`
+
+Engineering result memories use:
+
+- `memory_type = "analysis_coding"`
+- `symbol = "__agent__"`
+- no timeframe
+- metadata containing task/run IDs, mode, outcome, manifest hashes, changed paths, and validation results
+
+The application writes these memories only after no-change completion or
+successful promotion. Engineering results link to the requesting review with
+`responds_to` and to validated same-agent evidence with `derived_from`.

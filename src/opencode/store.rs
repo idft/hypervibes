@@ -3,7 +3,6 @@ use chrono::{DateTime, Utc};
 use rust_decimal::Decimal;
 use serde_json::Value;
 use sqlx::query_as;
-use uuid::Uuid;
 
 use crate::db::DbPool;
 
@@ -47,7 +46,7 @@ pub struct OpenCodeMessageRow {
 
 #[derive(Debug, Clone, sqlx::FromRow)]
 pub struct OpenCodeToolExecutionRow {
-    pub id: Uuid,
+    pub id: String,
     pub created_at: DateTime<Utc>,
     pub started_at: Option<DateTime<Utc>>,
     pub tool_name: String,
@@ -56,6 +55,14 @@ pub struct OpenCodeToolExecutionRow {
     pub duration_ms: Option<i32>,
     pub success: Option<bool>,
     pub error: Option<String>,
+}
+
+#[derive(Debug, sqlx::FromRow)]
+struct OpenCodeToolMessagePartRow {
+    id: String,
+    created_at: DateTime<Utc>,
+    tool_name: Option<String>,
+    content: Option<Value>,
 }
 
 #[derive(Debug, Clone, sqlx::FromRow)]
@@ -115,26 +122,55 @@ pub async fn get_session_detail(
     .await
     .with_context(|| format!("failed to fetch OpenCode messages for session {session_id}"))?;
 
-    let tool_executions = query_as::<_, OpenCodeToolExecutionRow>(
-        "SELECT id,
-                created_at,
-                started_at,
-                tool_name,
-                args,
-                result,
-                duration_ms,
-                success,
-                error
-           FROM opencode.tool_executions
-          WHERE session_id = $1
-          ORDER BY COALESCE(started_at, created_at) ASC, id ASC",
+    let tool_message_parts = query_as::<_, OpenCodeToolMessagePartRow>(
+        "SELECT parts.id,
+                parts.created_at,
+                parts.tool_name,
+                parts.content
+           FROM opencode.message_parts AS parts
+           JOIN opencode.messages AS messages ON messages.id = parts.message_id
+          WHERE messages.session_id = $1
+            AND parts.part_type = 'tool'
+          ORDER BY parts.created_at ASC, parts.id ASC",
     )
     .bind(session_id)
     .fetch_all(pool)
     .await
-    .with_context(|| {
-        format!("failed to fetch OpenCode tool executions for session {session_id}")
-    })?;
+    .with_context(|| format!("failed to fetch OpenCode tool parts for session {session_id}"))?;
+
+    let mut tool_executions = if tool_message_parts.is_empty() {
+        query_as::<_, OpenCodeToolExecutionRow>(
+            "SELECT id::text AS id,
+                    created_at,
+                    started_at,
+                    tool_name,
+                    args,
+                    result,
+                    duration_ms,
+                    success,
+                    error
+               FROM opencode.tool_executions
+              WHERE session_id = $1
+              ORDER BY COALESCE(started_at, created_at) ASC, id ASC",
+        )
+        .bind(session_id)
+        .fetch_all(pool)
+        .await
+        .with_context(|| {
+            format!("failed to fetch OpenCode tool executions for session {session_id}")
+        })?
+    } else {
+        tool_message_parts
+            .into_iter()
+            .map(tool_execution_from_message_part)
+            .collect()
+    };
+    tool_executions.sort_by(|a, b| {
+        a.started_at
+            .unwrap_or(a.created_at)
+            .cmp(&b.started_at.unwrap_or(b.created_at))
+            .then_with(|| a.id.cmp(&b.id))
+    });
 
     let session_errors = query_as::<_, OpenCodeSessionErrorRow>(
         "SELECT created_at,
@@ -156,6 +192,64 @@ pub async fn get_session_detail(
         tool_executions,
         session_errors,
     }))
+}
+
+fn tool_execution_from_message_part(part: OpenCodeToolMessagePartRow) -> OpenCodeToolExecutionRow {
+    let content = part.content.as_ref();
+    let state = content.and_then(|content| content.get("state"));
+    let started_at = state
+        .and_then(|state| state.pointer("/time/start"))
+        .and_then(json_millis);
+    let ended_at = state
+        .and_then(|state| state.pointer("/time/end"))
+        .and_then(json_millis);
+    let duration_ms = started_at
+        .zip(ended_at)
+        .and_then(|(start, end)| (end - start).num_milliseconds().try_into().ok());
+    let status = state
+        .and_then(|state| state.get("status"))
+        .and_then(Value::as_str);
+
+    OpenCodeToolExecutionRow {
+        id: part.id,
+        created_at: part.created_at,
+        started_at,
+        tool_name: content
+            .and_then(|content| content.get("tool"))
+            .and_then(Value::as_str)
+            .map(str::to_owned)
+            .or(part.tool_name)
+            .unwrap_or_default(),
+        args: state.and_then(|state| state.get("input")).cloned(),
+        result: state
+            .and_then(|state| state.get("output"))
+            .cloned()
+            .map(parse_json_string),
+        duration_ms,
+        success: match status {
+            Some("completed") => Some(true),
+            Some("error") => Some(false),
+            _ => None,
+        },
+        error: state
+            .and_then(|state| state.get("error"))
+            .and_then(Value::as_str)
+            .map(str::to_owned),
+    }
+}
+
+fn json_millis(value: &Value) -> Option<DateTime<Utc>> {
+    let millis = value
+        .as_i64()
+        .or_else(|| value.as_u64().and_then(|millis| millis.try_into().ok()))?;
+    DateTime::from_timestamp_millis(millis)
+}
+
+fn parse_json_string(value: Value) -> Value {
+    let Value::String(text) = &value else {
+        return value;
+    };
+    serde_json::from_str(text).unwrap_or(value)
 }
 
 pub async fn list_sessions_for_directory(
@@ -190,4 +284,121 @@ pub async fn list_sessions_for_directory(
     .with_context(|| format!("failed to list OpenCode sessions for directory {directory}"))?;
 
     Ok(rows)
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+    use sqlx::query;
+
+    use super::*;
+
+    #[tokio::test]
+    async fn session_detail_uses_canonical_tool_parts_without_legacy_duplicates() {
+        let pool = crate::test_db::pool().await;
+        query("INSERT INTO opencode.sessions (id) VALUES ('session-modern')")
+            .execute(&pool)
+            .await
+            .expect("insert session");
+        query(
+            "INSERT INTO opencode.messages (id, session_id, role)
+             VALUES ('message-1', 'session-modern', 'assistant')",
+        )
+        .execute(&pool)
+        .await
+        .expect("insert message");
+        query(
+            "INSERT INTO opencode.message_parts
+                (id, message_id, part_type, tool_name, content, created_at)
+             VALUES
+                ('part-error', 'message-1', 'tool', 'wrong-name', $1, '2023-11-14 22:13:22Z'),
+                ('part-completed', 'message-1', 'tool', 'wrong-name', $2, '2023-11-14 22:13:21Z')",
+        )
+        .bind(json!({
+            "tool": "bash",
+            "state": {
+                "status": "error",
+                "input": {"command": "false"},
+                "error": "command failed",
+                "time": {"start": 1_700_000_002_000_i64, "end": 1_700_000_002_010_i64}
+            }
+        }))
+        .bind(json!({
+            "tool": "read",
+            "state": {
+                "status": "completed",
+                "input": {"filePath": "/tmp/example"},
+                "output": "{\"matches\":2}",
+                "time": {"start": 1_700_000_001_000_i64, "end": 1_700_000_001_125_i64}
+            }
+        }))
+        .execute(&pool)
+        .await
+        .expect("insert tool parts");
+        query(
+            "INSERT INTO opencode.tool_executions
+                (session_id, correlation_id, tool_name, success)
+             VALUES ('session-modern', 'duplicate', 'legacy-duplicate', true)",
+        )
+        .execute(&pool)
+        .await
+        .expect("insert legacy duplicate");
+
+        let detail = get_session_detail(&pool, "session-modern")
+            .await
+            .expect("fetch session detail")
+            .expect("session exists");
+
+        assert_eq!(detail.tool_executions.len(), 2);
+        let completed = &detail.tool_executions[0];
+        assert_eq!(completed.id, "part-completed");
+        assert_eq!(completed.tool_name, "read");
+        assert_eq!(completed.args, Some(json!({"filePath": "/tmp/example"})));
+        assert_eq!(completed.result, Some(json!({"matches": 2})));
+        assert_eq!(completed.duration_ms, Some(125));
+        assert_eq!(completed.success, Some(true));
+        assert_eq!(
+            completed.started_at,
+            DateTime::from_timestamp_millis(1_700_000_001_000)
+        );
+
+        let failed = &detail.tool_executions[1];
+        assert_eq!(failed.id, "part-error");
+        assert_eq!(failed.success, Some(false));
+        assert_eq!(failed.error.as_deref(), Some("command failed"));
+        assert_eq!(failed.duration_ms, Some(10));
+    }
+
+    #[tokio::test]
+    async fn session_detail_falls_back_to_legacy_tool_executions() {
+        let pool = crate::test_db::pool().await;
+        query("INSERT INTO opencode.sessions (id) VALUES ('session-legacy')")
+            .execute(&pool)
+            .await
+            .expect("insert session");
+        query(
+            "INSERT INTO opencode.tool_executions
+                (session_id, correlation_id, tool_name, args, result, duration_ms, success)
+             VALUES ('session-legacy', 'legacy', 'bash', $1, $2, 25, true)",
+        )
+        .bind(json!({"command": "pwd"}))
+        .bind(json!("/tmp"))
+        .execute(&pool)
+        .await
+        .expect("insert legacy tool execution");
+
+        let detail = get_session_detail(&pool, "session-legacy")
+            .await
+            .expect("fetch session detail")
+            .expect("session exists");
+
+        assert_eq!(detail.tool_executions.len(), 1);
+        let tool = &detail.tool_executions[0];
+        assert!(!tool.id.is_empty());
+        assert_eq!(tool.tool_name, "bash");
+        assert_eq!(tool.args, Some(json!({"command": "pwd"})));
+        assert_eq!(tool.result, Some(json!("/tmp")));
+        assert_eq!(tool.duration_ms, Some(25));
+        assert_eq!(tool.success, Some(true));
+    }
 }

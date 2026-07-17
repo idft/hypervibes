@@ -184,10 +184,19 @@ async fn post_agents_creates_agent_with_default_strategy_prompts() {
     let hooks = crate::agentic::store::list_agent_hooks(&pool, &agent_key)
         .await
         .expect("list hooks");
-    assert_eq!(hooks.len(), 1);
-    let hook = hooks.first().expect("default hook present");
-    assert_eq!(hook.job_key, "market-analysis");
-    assert!(!hook.enabled);
+    // Two default hooks are now seeded for new agents: the
+    // market-analysis hook and the analysis-coding hook.
+    assert_eq!(hooks.len(), 2);
+    let market_hook = hooks
+        .iter()
+        .find(|h| h.job_key == "market-analysis")
+        .expect("market-analysis hook present");
+    assert!(!market_hook.enabled);
+    let coding_hook = hooks
+        .iter()
+        .find(|h| h.job_key == "analysis-coding")
+        .expect("analysis-coding hook present");
+    assert!(!coding_hook.enabled);
     drop(guard);
 }
 #[tokio::test]

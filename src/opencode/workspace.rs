@@ -103,7 +103,6 @@ pub fn generate_agent_workspace(
         &workspace_host_path.join(".opencode/commands"),
         &workspace_host_path.join(".opencode/agents"),
         &workspace_host_path.join(".opencode/skills"),
-        &workspace_host_path.join("scripts/generated"),
         &workspace_host_path.join("scripts/user"),
         &workspace_host_path.join("data"),
         &workspace_host_path.join("scratch"),
@@ -141,10 +140,6 @@ pub fn generate_agent_workspace(
     copy_tree(
         &config.source_root.join(".opencode/skills"),
         &workspace_host_path.join(".opencode/skills"),
-    )?;
-    copy_tree(
-        &config.source_root.join("scripts/generated"),
-        &workspace_host_path.join("scripts/generated"),
     )?;
 
     fs::write(
@@ -340,7 +335,6 @@ fn expected_workspace_template_files(
         Path::new(".opencode/commands"),
         Path::new(".opencode/agents"),
         Path::new(".opencode/skills"),
-        Path::new("scripts/generated"),
     ] {
         collect_expected_workspace_files(&config.source_root, relative_root, &mut files)?;
     }
@@ -362,6 +356,9 @@ fn collect_expected_workspace_files(
         let entry =
             entry.with_context(|| format!("failed to read entry in {}", source_path.display()))?;
         let file_name = entry.file_name();
+        if is_workspace_excluded_artifact(&file_name) {
+            continue;
+        }
         let relative_path = relative_root.join(&file_name);
         let entry_path = source_root.join(&relative_path);
         let metadata = entry
@@ -455,6 +452,9 @@ fn copy_tree(source_root: &Path, destination_root: &Path) -> Result<()> {
     for entry in entries {
         let entry =
             entry.with_context(|| format!("failed to read entry in {}", source_root.display()))?;
+        if is_workspace_excluded_artifact(&entry.file_name()) {
+            continue;
+        }
         let source_path = entry.path();
         let destination_path = destination_root.join(entry.file_name());
         let metadata = entry
@@ -476,6 +476,13 @@ fn copy_tree(source_root: &Path, destination_root: &Path) -> Result<()> {
     }
 
     Ok(())
+}
+
+fn is_workspace_excluded_artifact(name: &std::ffi::OsStr) -> bool {
+    let name = name.to_string_lossy();
+    name == "__pycache__"
+        || name.ends_with(".pyc")
+        || (name.starts_with("test_") && name.ends_with(".py"))
 }
 
 fn display_workspace_host_path(path: &Path) -> String {
@@ -840,7 +847,7 @@ mod tests {
         assert!(
             regenerated
                 .workspace_host_path
-                .join("scripts/generated")
+                .join(".opencode/skills/analysis-coding/SKILL.md")
                 .exists()
         );
     }
@@ -932,6 +939,49 @@ mod tests {
     }
 
     #[test]
+    fn workspace_template_cache_artifacts_are_not_copied_or_collected() {
+        let temp = TempDir::new("opencode-cache-artifacts");
+        let source = temp.path.join("source");
+        let destination = temp.path.join("destination");
+        let skills = source.join("skills");
+        fs::create_dir_all(skills.join("__pycache__")).expect("create cache directory");
+        fs::create_dir_all(&destination).expect("create destination directory");
+        fs::write(skills.join("SKILL.md"), "skill\n").expect("write skill");
+        fs::write(skills.join("test_skill.py"), "test\n").expect("write test");
+        fs::write(skills.join("fetch_ohlcv.cpython-314.pyc"), "cache").expect("write cache file");
+        fs::write(
+            skills.join("__pycache__/test_fetch_ohlcv.cpython-314.pyc"),
+            "cache",
+        )
+        .expect("write nested cache file");
+
+        copy_tree(&skills, &destination).expect("copy template tree");
+        assert!(destination.join("SKILL.md").exists());
+        assert!(!destination.join("test_skill.py").exists());
+        assert!(!destination.join("fetch_ohlcv.cpython-314.pyc").exists());
+        assert!(!destination.join("__pycache__").exists());
+
+        let mut files = Vec::new();
+        collect_expected_workspace_files(&source, Path::new("skills"), &mut files)
+            .expect("collect template files");
+        assert_eq!(files.len(), 1);
+        assert_eq!(files[0].relative_path, PathBuf::from("skills/SKILL.md"));
+
+        assert!(is_workspace_excluded_artifact(std::ffi::OsStr::new(
+            "__pycache__"
+        )));
+        assert!(is_workspace_excluded_artifact(std::ffi::OsStr::new(
+            "fetch_ohlcv.cpython-314.pyc"
+        )));
+        assert!(is_workspace_excluded_artifact(std::ffi::OsStr::new(
+            "test_fetch_ohlcv.py"
+        )));
+        assert!(!is_workspace_excluded_artifact(std::ffi::OsStr::new(
+            "fetch_ohlcv.py"
+        )));
+    }
+
+    #[test]
     fn rejects_unsafe_agent_keys() {
         let temp = TempDir::new("opencode-unsafe");
         let config = sample_config(&temp.path);
@@ -958,8 +1008,6 @@ mod tests {
         fs::create_dir_all(source_root.join(".opencode/commands")).expect("create commands");
         fs::create_dir_all(source_root.join(".opencode/agents")).expect("create agents");
         fs::create_dir_all(source_root.join(".opencode/skills")).expect("create skills");
-        fs::create_dir_all(source_root.join("scripts/generated"))
-            .expect("create scripts/generated");
         fs::write(
             source_root.join("opencode.json.template"),
             "{\"plugin\": [\"x\"]}\n",

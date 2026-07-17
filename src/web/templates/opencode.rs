@@ -3,6 +3,7 @@ use askama::Template;
 use crate::agentic::model::{
     AgentMaintenanceTaskRow, MAINTENANCE_STATUS_ABORTED, MAINTENANCE_STATUS_FAILED,
     MAINTENANCE_STATUS_QUEUED, MAINTENANCE_STATUS_RUNNING, MAINTENANCE_STATUS_SUCCEEDED,
+    MAINTENANCE_TASK_KIND_ANALYSIS_CODING,
 };
 
 #[derive(Debug, Clone)]
@@ -35,6 +36,7 @@ impl OpenCodeWorkspaceMaintenanceView {
         }
     }
 
+    #[cfg(test)]
     pub fn from_task(agent_key: &str, task: AgentMaintenanceTaskRow) -> Self {
         let status = OpenCodeWorkspaceMaintenanceStatusView::from_task(task);
         Self {
@@ -57,6 +59,10 @@ pub struct OpenCodeWorkspaceMaintenanceStatusView {
     pub should_poll: bool,
     pub show_spinner: bool,
     pub error_text: Option<String>,
+    pub phase: String,
+    pub is_coding: bool,
+    pub report_summary: Option<String>,
+    pub changed_paths: Vec<String>,
 }
 
 impl OpenCodeWorkspaceMaintenanceStatusView {
@@ -64,9 +70,69 @@ impl OpenCodeWorkspaceMaintenanceStatusView {
         self.is_visible
     }
 
+    #[cfg(test)]
     pub fn from_task(task: AgentMaintenanceTaskRow) -> Self {
+        Self::from_task_with_report(task, None, Vec::new())
+    }
+
+    pub fn from_task_with_report(
+        task: AgentMaintenanceTaskRow,
+        report_summary: Option<String>,
+        changed_paths: Vec<String>,
+    ) -> Self {
         let hard_reset = task.parameter_bool("hard_reset");
         let reset_memories = task.parameter_bool("reset_memories");
+        let phase = task.phase.clone();
+        let is_coding = task.task_kind == MAINTENANCE_TASK_KIND_ANALYSIS_CODING;
+        if is_coding {
+            let running = matches!(
+                task.status.as_str(),
+                MAINTENANCE_STATUS_QUEUED | MAINTENANCE_STATUS_RUNNING
+            );
+            let (status_label, status_class, detail_text, is_visible, should_poll, show_spinner) =
+                match task.status.as_str() {
+                    MAINTENANCE_STATUS_SUCCEEDED => (
+                        "Engineering succeeded".to_string(),
+                        "border-emerald-900/60 bg-emerald-950/30 text-emerald-300".to_string(),
+                        "Candidate validation and promotion completed".to_string(),
+                        false,
+                        false,
+                        false,
+                    ),
+                    MAINTENANCE_STATUS_FAILED => (
+                        "Engineering failed".to_string(),
+                        "border-red-900/60 bg-red-950/30 text-red-300".to_string(),
+                        format!("Engineering task failed during {}", task.phase),
+                        true,
+                        false,
+                        false,
+                    ),
+                    _ => (
+                        format!("Engineering {}", task.phase.replace('_', " ")),
+                        "border-sky-900/60 bg-sky-950/30 text-sky-300".to_string(),
+                        "Candidate workspace is being processed".to_string(),
+                        true,
+                        running,
+                        running,
+                    ),
+                };
+            return Self {
+                task_id: task.id,
+                hard_reset,
+                reset_memories,
+                status_label,
+                status_class,
+                detail_text,
+                is_visible,
+                should_poll,
+                show_spinner,
+                error_text: task.error_summary,
+                phase,
+                is_coding,
+                report_summary,
+                changed_paths,
+            };
+        }
         let (status_label, status_class, detail_text, is_visible, should_poll, show_spinner) =
             match task.status.as_str() {
                 MAINTENANCE_STATUS_QUEUED => (
@@ -138,6 +204,10 @@ impl OpenCodeWorkspaceMaintenanceStatusView {
             should_poll,
             show_spinner,
             error_text: task.error_summary,
+            phase,
+            is_coding,
+            report_summary,
+            changed_paths,
         }
     }
 }

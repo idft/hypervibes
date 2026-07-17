@@ -8,7 +8,7 @@
 
     {% include "agent_tabs.html" %}
 
-    <section class="mt-2 rounded-2xl border border-zinc-800 bg-[#0d0d10] p-6">
+    <section class="rounded-2xl border border-zinc-800 bg-[#0d0d10] p-6">
         <header class="flex flex-col gap-2 pb-6">
         <div class="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
             <div>
@@ -151,7 +151,16 @@
 
     <section class="mt-6 border-t border-zinc-800 pt-6">
         {% if session.transcript.is_empty() %}
+        {% if run.status == "running" %}
+        <div class="flex items-center justify-center bg-zinc-950/70 p-6" role="status" aria-label="Run is still processing">
+            <svg class="h-5 w-5 animate-spin text-sky-400" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 0 1 8-8V1C6.477 1 2 5.477 2 12h2Zm8 8a8 8 0 0 1-8-8H1c0 6.627 5.373 12 12 12v-4Z"></path>
+            </svg>
+        </div>
+        {% else %}
         <div class="bg-zinc-950/70 p-4 text-center text-sm text-zinc-400">No mirrored messages or tool executions yet.</div>
+        {% endif %}
         {% else %}
         <div class="space-y-2">
             {% for item in session.transcript %}
@@ -217,10 +226,27 @@
             {% endfor %}
         </div>
         {% endif %}
+        {% if run.status == "running" && !session.transcript.is_empty() %}
+        <div class="flex items-center justify-center p-4" role="status" aria-label="Run is still processing">
+            <svg class="h-5 w-5 animate-spin text-sky-400" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 0 1 8-8V1C6.477 1 2 5.477 2 12h2Zm8 8a8 8 0 0 1-8-8H1c0 6.627 5.373 12 12 12v-4Z"></path>
+            </svg>
+        </div>
+        {% endif %}
     </section>
     {% else %}
-    <section class="mt-6 border-t border-zinc-800 {% if session_lookup_attempted %}bg-amber-950/20{% else %}bg-zinc-950/50{% endif %} p-4">
-        <p class="text-sm leading-6 {% if session_lookup_attempted %}text-amber-100/80{% else %}text-zinc-400{% endif %}">{% if session_lookup_attempted %}This run has a backend session id, but no matching row was found yet in the <code class="font-mono text-xs {% if session_lookup_attempted %}text-amber-100{% else %}text-zinc-300{% endif %}">opencode.sessions</code> mirror. The plugin may still be writing, or the session mirror may have failed.{% else %}This run does not have an OpenCode backend session id, so there is no mirrored session detail to display.{% endif %}</p>
+     <section class="mt-6 border-t border-zinc-800 {% if run.status == "running" %}bg-zinc-950/50{% else if session_lookup_attempted %}bg-amber-950/20{% else %}bg-zinc-950/50{% endif %} p-4">
+        {% if run.status == "running" %}
+        <div class="flex items-center justify-center" role="status" aria-label="Run is still processing">
+            <svg class="h-5 w-5 animate-spin text-sky-400" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 0 1 8-8V1C6.477 1 2 5.477 2 12h2Zm8 8a8 8 0 0 1-8-8H1c0 6.627 5.373 12 12 12v-4Z"></path>
+            </svg>
+        </div>
+        {% else %}
+        <p class="text-sm leading-6 {% if session_lookup_attempted %}text-amber-100/80{% else %}text-zinc-400{% endif %}">{% if session_lookup_attempted %}This run has a backend session id, but no matching row was found yet in the <code class="font-mono text-xs {% if session_lookup_attempted %}text-amber-100{% else %}text-zinc-300{% endif %}">opencode.sessions</code> mirror. The plugin may still be writing, or the session mirror may have failed.{% else %}Waiting to start{% endif %}</p>
+        {% endif %}
     </section>
     {% endif %}
     </section>

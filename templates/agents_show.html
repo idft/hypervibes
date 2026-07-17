@@ -167,6 +167,10 @@
                     <label for="{{ editor.textarea_id }}" class="text-xs uppercase tracking-[0.16em] text-zinc-500">{{ editor.label }}</label>
                     <textarea id="{{ editor.textarea_id }}" name="prompt" rows="8" placeholder="{{ editor.placeholder }}" class="mt-2 w-full rounded-xl border border-zinc-800 bg-zinc-950/70 px-4 py-3 text-sm leading-6 text-zinc-200 outline-none placeholder:text-zinc-600 focus:border-zinc-700">{{ editor.prompt }}</textarea>
                     <div class="mt-3 flex flex-col-reverse gap-3 sm:flex-row sm:justify-end">
+                        <input type="file" data-agent-prompt-file-input="{{ editor.prompt_kind }}" class="hidden" aria-hidden="true" tabindex="-1">
+                        <button type="button" data-agent-prompt-import="{{ editor.prompt_kind }}" class="rounded-md border border-zinc-800 p-2 text-zinc-300 hover:border-zinc-700 hover:text-white" aria-label="Import prompt from file" title="Import prompt from file">
+                            <svg class="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="M14 3H6.75A1.75 1.75 0 0 0 5 4.75v14.5A1.75 1.75 0 0 0 6.75 21h10.5A1.75 1.75 0 0 0 19 19.25V8l-5-5Z"></path><path stroke-linecap="round" stroke-linejoin="round" d="M14 3v5h5M8 14h8M8 17h5"></path></svg>
+                        </button>
                         <button type="button" data-agent-prompt-reset="{{ editor.prompt_kind }}" class="rounded-full border border-zinc-800 px-4 py-2 text-sm font-medium text-zinc-300 hover:border-zinc-700 hover:text-white">Reset to default</button>
                         <button type="submit" data-agent-prompt-save="{{ editor.prompt_kind }}" disabled class="hidden rounded-full bg-white px-4 py-2 text-sm font-medium text-black hover:bg-zinc-200 disabled:cursor-not-allowed disabled:bg-zinc-700 disabled:text-zinc-300">Save</button>
                     </div>
@@ -664,13 +668,15 @@
                     key: key,
                     textarea: form.querySelector('textarea[name="prompt"]'),
                     saveBtn: container.querySelector('[data-agent-prompt-save="' + key + '"]'),
+                    importBtn: container.querySelector('[data-agent-prompt-import="' + key + '"]'),
+                    fileInput: container.querySelector('[data-agent-prompt-file-input="' + key + '"]'),
                     resetBtn: container.querySelector('[data-agent-prompt-reset="' + key + '"]'),
                     defaultTextarea: container.querySelector('#default-' + key + '-strategy-prompt-value'),
                 };
             });
 
             const ready = fields.length > 0 && fields.every(function (field) {
-                return field.key && field.textarea && field.saveBtn && field.resetBtn && field.defaultTextarea;
+                return field.key && field.textarea && field.saveBtn && field.importBtn && field.fileInput && field.resetBtn && field.defaultTextarea;
             });
 
             if (!ready) {
@@ -693,7 +699,24 @@
                     updateSaveState();
                 });
 
-                field.textarea.addEventListener('input', updateSaveState);
+                field.importBtn.addEventListener('click', function () {
+                    field.fileInput.click();
+                });
+
+                field.fileInput.addEventListener('change', function () {
+                    const file = field.fileInput.files && field.fileInput.files[0];
+                    field.fileInput.value = '';
+                    if (!file) {
+                        return;
+                    }
+
+                    file.text().then(function (contents) {
+                        field.textarea.value = contents;
+                        field.textarea.dispatchEvent(new Event('input', { bubbles: true }));
+                    });
+                });
+
+                 field.textarea.addEventListener('input', updateSaveState);
                 updateSaveState();
             });
         }

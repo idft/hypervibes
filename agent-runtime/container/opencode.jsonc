@@ -6,5 +6,17 @@
   "plugin": [
     "@aeondave/opencode-dotenv@latest",
     "opencode-database-plugin@1.0.12"
-  ]
+  ],
+  "lsp": {
+    "pyright": {
+      "command": [
+        "/opt/vibetrading/analysis/.venv/bin/pyright-langserver",
+        "--stdio"
+      ],
+      "extensions": [".py", ".pyi"],
+      "env": {
+        "VIRTUAL_ENV": "/opt/vibetrading/analysis/.venv"
+      }
+    }
+  }
 }

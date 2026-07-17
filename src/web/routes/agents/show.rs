@@ -18,8 +18,9 @@ use crate::{
         model::BACKEND_KIND_OPENCODE,
         store::{get_agent, list_agent_instrument_ids, list_agent_instrument_options},
         strategy_prompts::{
-            PROMPT_KIND_ANALYSIS, PROMPT_KIND_DAILY_REVIEW, PROMPT_KIND_MARKET_ANALYSIS,
-            PROMPT_KIND_TRADING, default_prompt_for_kind, list_agent_strategy_prompts,
+            PROMPT_KIND_ANALYSIS, PROMPT_KIND_ANALYSIS_CODING, PROMPT_KIND_DAILY_REVIEW,
+            PROMPT_KIND_MARKET_ANALYSIS, PROMPT_KIND_TRADING, default_prompt_for_kind,
+            list_agent_strategy_prompts,
         },
     },
     hyperliquid::{
@@ -197,6 +198,18 @@ pub(in crate::web::routes) async fn render_agent_show_page(
                                 .unwrap_or_default(),
                             default_prompt_for_kind(PROMPT_KIND_DAILY_REVIEW),
                         ),
+                        crate::web::templates::PromptEditorView::new(
+                            PROMPT_KIND_ANALYSIS_CODING,
+                            prompt_map
+                                .get(PROMPT_KIND_ANALYSIS_CODING)
+                                .filter(|prompt| !prompt.trim().is_empty())
+                                .cloned()
+                                .unwrap_or_else(|| {
+                                    default_prompt_for_kind(PROMPT_KIND_ANALYSIS_CODING)
+                                        .to_string()
+                                }),
+                            default_prompt_for_kind(PROMPT_KIND_ANALYSIS_CODING),
+                        ),
                     ]);
                 }
                 Err(error) => {
@@ -216,8 +229,11 @@ pub(in crate::web::routes) async fn render_agent_show_page(
                 template.opencode_workspace =
                     build_opencode_workspace_settings_view(state, &agent).await;
             }
-            if let Some(rows) = instrument_options {
-                template.instrument_options = rows;
+            match instrument_options {
+                Some(rows) => {
+                    template.instrument_options = rows;
+                }
+                None => {}
             }
         }
         AgentShowTab::Jobs => {
@@ -294,7 +310,7 @@ pub(in crate::web::routes) async fn populate_jobs_tab(
             let total_pages = if total_count == 0 {
                 0
             } else {
-                total_count.div_ceil(RUNS_PER_PAGE)
+                (total_count + RUNS_PER_PAGE - 1) / RUNS_PER_PAGE
             };
             let current_page = if total_pages == 0 {
                 1
@@ -375,7 +391,7 @@ pub(in crate::web::routes) async fn populate_transactions_tab(
             let total_pages = if total_count == 0 {
                 0
             } else {
-                total_count.div_ceil(TRANSACTIONS_PER_PAGE)
+                (total_count + TRANSACTIONS_PER_PAGE - 1) / TRANSACTIONS_PER_PAGE
             };
             let current_page = if total_pages == 0 {
                 1

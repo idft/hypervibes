@@ -13,6 +13,7 @@ from __future__ import annotations
 import importlib
 import importlib.util
 import os
+import subprocess
 import sys
 import tempfile
 import types
@@ -106,6 +107,26 @@ class VibetradingMcpServerTests(unittest.TestCase):
         self.assertEqual(base_url, "http://example.test")  # trailing slash stripped
         self.assertEqual(api_key, "vta_test_xyz")
         self.assertEqual(agent_key, "btc-2")
+
+    def test_server_registers_the_full_tool_set(self) -> None:
+        registered = set(self.server.mcp.tools)
+        self.assertTrue(
+            {
+                "get_account",
+                "get_latest_analysis",
+                "get_market_analysis",
+                "get_memory_detail",
+                "list_memories",
+                "list_orders",
+                "get_order",
+                "write_memory",
+                "submit_orders",
+                "cancel_orders",
+                "cancel_all_orders",
+                "coding_validate_candidate",
+                "coding_submit_report",
+            }.issubset(registered)
+        )
 
     def test_missing_env_raises_with_clear_message(self) -> None:
         with mock.patch.dict(os.environ, {}, clear=True):
@@ -272,6 +293,106 @@ class VibetradingMcpServerTests(unittest.TestCase):
             self.server.submit_orders([])
         with self.assertRaises(ValueError):
             self.server.submit_orders("not-a-list")  # type: ignore[arg-type]
+
+    def test_memory_detail_requests_links(self) -> None:
+        captured: dict[str, object] = {}
+
+        def fake_request(method, path, **kwargs):
+            captured.update(method=method, path=path, **kwargs)
+            return {"id": "memory", "links_from": [], "links_to": []}
+
+        with mock.patch.object(self.server, "_request", side_effect=fake_request):
+            result = self.server.get_memory_detail("memory-id")
+        self.assertEqual(result["id"], "memory")
+        self.assertEqual(captured["path"], "/api/v1/memories/memory-id")
+        self.assertEqual(captured["params"], {"include": "links"})
+
+    def test_coding_validation_runs_fixed_local_validator(self) -> None:
+        coding = _load_server(
+            {
+                "VIBETRADING_API_BASE_URL": "http://example.test",
+                "VIBETRADING_API_KEY": "k",
+                "VIBETRADING_AGENT_KEY": "a",
+                "VIBETRADING_ENGINEERING_TASK_ID": "42",
+            }
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp) / "workspace"
+            (workspace / "scripts/user").mkdir(parents=True)
+            (workspace / "scripts/user/analyze.py").write_text("print(1)")
+            completed = subprocess.CompletedProcess(
+                args=[],
+                returncode=0,
+                stdout='{"ok": true, "checks": ["compile", "contract"]}',
+                stderr="",
+            )
+            prior = os.getcwd()
+            os.chdir(workspace)
+            try:
+                with mock.patch.dict(
+                    os.environ,
+                    {"VIBETRADING_ENGINEERING_TASK_ID": "42"},
+                ):
+                    with mock.patch.object(
+                        coding.subprocess, "run", return_value=completed
+                    ) as run:
+                        result = coding.coding_validate_candidate()
+                self.assertTrue(result["ok"])
+                self.assertEqual(result["task_id"], 42)
+                self.assertEqual(len(result["candidate_manifest_sha256"]), 64)
+                self.assertTrue(
+                    (workspace.parent / "coding-validation.json").is_file()
+                )
+                command = run.call_args.args[0]
+                self.assertEqual(command[0], coding.ENGINEERING_VALIDATOR_PYTHON)
+                self.assertEqual(command[1], coding.ENGINEERING_VALIDATOR_SCRIPT)
+            finally:
+                os.chdir(prior)
+
+    def test_coding_manifest_rejects_unapproved_extension(self) -> None:
+        coding = _load_server(
+            {
+                "VIBETRADING_API_BASE_URL": "http://example.test",
+                "VIBETRADING_API_KEY": "k",
+                "VIBETRADING_AGENT_KEY": "a",
+            }
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp)
+            user = workspace / "scripts/user"
+            user.mkdir(parents=True)
+            (user / "notes.txt").write_text("not approved")
+            prior = os.getcwd()
+            os.chdir(workspace)
+            try:
+                with self.assertRaisesRegex(RuntimeError, "extension is not allowed"):
+                    coding._coding_manifest_hash()
+            finally:
+                os.chdir(prior)
+
+    def test_coding_report_uses_task_id_from_environment(self) -> None:
+        coding = _load_server(
+            {
+                "VIBETRADING_API_BASE_URL": "http://example.test",
+                "VIBETRADING_API_KEY": "k",
+                "VIBETRADING_AGENT_KEY": "a",
+                "VIBETRADING_ENGINEERING_TASK_ID": "42",
+            }
+        )
+        captured: dict[str, object] = {}
+
+        def fake_request(method, path, **kwargs):
+            captured.update(method=method, path=path, **kwargs)
+            return {"submitted": True}
+
+        with mock.patch.dict(os.environ, {"VIBETRADING_ENGINEERING_TASK_ID": "42"}):
+            with mock.patch.object(coding, "_request", side_effect=fake_request):
+                result = coding.coding_submit_report(
+                    "no_change", "none", "no evidence", [], [], "tests passed"
+                )
+        self.assertEqual(result, {"submitted": True})
+        self.assertEqual(captured["path"], "/api/v1/coding/report")
+        self.assertEqual(captured["json_body"]["task_id"], 42)  # type: ignore[index]
 
     def test_error_message_redacts_api_key(self) -> None:
         with mock.patch.dict(

@@ -86,6 +86,19 @@ async fn insert_memory_link_in_tx(
     source_memory_id: Uuid,
     link: &crate::memory::model::CreateMemoryLink,
 ) -> Result<()> {
+    let owned: (bool,) = sqlx::query_as(
+        "SELECT EXISTS (
+             SELECT 1 FROM memory.records WHERE id = $1 AND agent_key = $2
+         )",
+    )
+    .bind(link.target_memory_id)
+    .bind(agent_key)
+    .fetch_one(&mut **tx)
+    .await
+    .context("failed to validate memory link ownership")?;
+    if !owned.0 {
+        anyhow::bail!("memory link target is not owned by agent");
+    }
     let metadata = link
         .metadata
         .clone()
@@ -233,6 +246,33 @@ pub async fn get_latest_agent_memory_by_type(
     .context("failed to fetch latest agent memory by type")?;
 
     Ok(row)
+}
+
+pub async fn get_daily_review_memory_for_run(
+    pool: &DbPool,
+    agent_key: &str,
+    run_id: i64,
+) -> Result<Option<MemoryRecord>> {
+    let rows = sqlx::query_as::<_, MemoryRecord>(
+        "SELECT id, created_at, agent_key, symbol, timeframe, memory_type,
+                summary, content, metadata
+           FROM memory.records
+          WHERE agent_key = $1
+            AND symbol = '__agent__'
+            AND memory_type = 'daily_review'
+            AND metadata->>'source_agentic_run_id' = $2
+          ORDER BY created_at DESC, id DESC
+          LIMIT 2",
+    )
+    .bind(agent_key)
+    .bind(run_id.to_string())
+    .fetch_all(pool)
+    .await
+    .context("failed to fetch daily review memory for run")?;
+    if rows.len() > 1 {
+        anyhow::bail!("multiple daily review memories match agentic run {run_id}");
+    }
+    Ok(rows.into_iter().next())
 }
 
 /// List newest-first candidates for the latest-per-timeframe endpoint.

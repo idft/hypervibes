@@ -53,7 +53,6 @@ The generated workspace includes:
 - `opencode.json`
 - `AGENTS.md`
 - `.opencode/`
-- `scripts/generated/`
 - writable `scripts/user/`, `data/`, and `scratch/` paths
 
 The generated workspace template now includes dedicated OpenCode agent/command files for:
@@ -75,7 +74,7 @@ Only one queued/running workspace maintenance task is allowed per agent. Duplica
 
 The agent settings page shows whether the on-disk workspace has drifted from `agent-runtime/workspace-template/` and lists changed template-managed files with per-file line counts.
 
-That drift check only compares template-derived files such as `AGENTS.md`, `opencode.json`, `.opencode/...`, and `scripts/generated/...`. It does not inspect agent-created files under `scripts/user/`, `data/`, or `scratch/`.
+That drift check only compares template-derived files such as `AGENTS.md`, `opencode.json`, and `.opencode/...`. It does not inspect agent-created files under `scripts/user/`, `data/`, or `scratch/`.
 
 Deleting an OpenCode agent deletes its generated workspace directory after the database delete succeeds.
 
@@ -89,6 +88,7 @@ Current built-in job kinds are:
 - `market_analysis` hook
 - `trading`
 - `daily_review`
+- `analysis_coding` hook
 
 The `AgenticScheduler` claims due work, dispatches runs through the OpenCode backend adapter, and stores run state in Postgres.
 
@@ -126,4 +126,59 @@ The agent detail page exposes `Jobs` and `Prompts` tabs for OpenCode agents.
 
 When a job is dispatched, Vibetrading builds the initial OpenCode command prompt with the agent metadata, selected instruments, the job-specific strategy prompt, the latest `agent_learnings` memory, operator prompt, and trading account snapshot when applicable.
 
+The OpenCode database plugin's `tool_executions` completion fields can be
+incomplete because plugin writes are asynchronous. Run-detail transcripts use
+completed tool state from `opencode.message_parts` when available and retain
+`tool_executions` as a fallback for older sessions.
+
 Scheduled jobs and hooks must have an explicit model selected before they can be enabled from the operator UI.
+
+## Analysis Engineering
+
+Analysis coding is a strong-model, request-gated maintenance job. It is
+disabled by default and must have an explicit provider/model selection. Manual
+runs are permitted even while the hook is disabled.
+
+The worker copies `scripts/user/` into an isolated candidate workspace and
+never lets the model edit the live workspace. Candidate changes are validated
+by a fixed local MCP tool in the OpenCode analysis runtime. The validation
+result is bound to the candidate tree hash, and the worker promotes only when
+the final candidate still matches it. Successful promotion uses an exclusive
+per-agent workspace write lease and an atomic JSON promotion journal; an
+incomplete journal is reconciled at startup by restoring the last known-good
+backup. Successful backups are retained as rollback versions, with the five
+most recent versions kept per agent.
+
+Analysis and trading sessions hold shared read leases for their full lane.
+Engineering generation does not hold the live write lease; only the final
+promotion and promoted-tree hash verification do. Native OpenCode read, edit,
+and glob permissions include workspace-relative rules plus an exact generated
+candidate scope because non-Git OpenCode projects authorize file tools relative
+to `/`. Both forms are limited to the current candidate's `scripts/user/` tree.
+Pyright is installed with its bundled Node.js runtime so Python LSP diagnostics
+do not depend on a writable runtime cache. The coding profile cannot place
+orders or write ordinary memories.
+
+Native focused edits avoid resending complete large files. The only dedicated
+coding MCP tools are the privileged fixed validator and structured report
+submission. Validation failures return bounded subprocess diagnostics.
+Validation checks deterministic output,
+non-empty finite measurements, strict open/future-candle rejection, sensitivity
+to eligible candles, CLI/input context agreement, and every canonical
+Hyperliquid interval. Python bytecode is redirected outside the candidate and
+ignored artifacts are removed before promotion.
+
+The canonical output requires `source_range.count` to equal the number of
+eligible candles used. Bootstrap jobs are instructed to establish a minimal
+one-candle-safe baseline before adding broader strategy indicators. Fixed
+validation is local and fixture-based. It also verifies missing output-parent
+creation, candle-order invariance, and known signal semantics such as deriving
+last-candle body direction from close versus open. Invariance failures identify
+the first changed output path. The agent must resolve every failed check and
+receive `ok: true` before submitting its report.
+
+The `analysis-coding` OpenCode agent explicitly invokes its dedicated
+`analysis-coding` skill. The skill defines the canonical analysis CLI,
+quantitative output envelope, optional indicator signals, closed-candle rule,
+and focused optional-test policy. The fixed validator and its deterministic fixture are container-global assets at
+`/opt/vibetrading/coding/`; they are not copied into agent workspaces.

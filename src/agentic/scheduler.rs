@@ -2,30 +2,47 @@ use std::{collections::BTreeMap, sync::Arc, time::Duration};
 
 use anyhow::{Context, Result, anyhow};
 use chrono::Utc;
-use tokio::sync::watch;
+use tokio::sync::{Semaphore, watch};
+#[cfg(test)]
+use tokio::task::JoinHandle;
 use tracing::{debug, error, info, warn};
 
 use crate::{
     agentic::{
-        backend::{AgenticBackend, DispatchRequest, dispatch_with_timeout},
+        backend::{
+            AgenticBackend, DispatchOutcome, DispatchRequest, dispatch_with_timeout,
+            dispatch_with_timeout_for_coding,
+        },
         in_flight::{InFlightTracker, SHUTDOWN_IN_FLIGHT_GRACE},
         model::{
             DueOpenCodeHookRow, DueOpenCodeScheduleRow, HOOK_EVENT_ANALYSIS_BATCH_COMPLETED,
-            JOB_KIND_ANALYSIS, JOB_KIND_DAILY_REVIEW, JOB_KIND_TRADING, MAINTENANCE_STATUS_QUEUED,
+            JOB_KIND_ANALYSIS, JOB_KIND_DAILY_REVIEW, JOB_KIND_MARKET_ANALYSIS, JOB_KIND_TRADING,
+            MAINTENANCE_STATUS_QUEUED,
         },
         store,
         timeframe::{boundary_for_due_at, parse_timeframe_seconds},
+        workspace_lease::WorkspaceLeaseManager,
     },
     agents::{
         model::BACKEND_KIND_OPENCODE,
         store::{get_agent, list_agent_instrument_ids, update_agent_runtime_config},
-        strategy_prompts::{get_agent_strategy_prompt, prompt_kind_for_job_kind},
+        strategy_prompts::{
+            PROMPT_KIND_ANALYSIS, PROMPT_KIND_ANALYSIS_CODING, default_prompt_for_kind,
+            get_agent_strategy_prompt, prompt_kind_for_job_kind,
+        },
     },
     db::DbPool,
     hyperliquid::live_state::{LiveAccountStore, live_agent_snapshot_for_dispatch},
     memory::{delete_memories_for_agent, get_latest_agent_memory_by_type},
     opencode::{
         client::OpenCodeClient,
+        coding_workspace::{
+            PromotionJournalPhase, candidate_container_root, changed_paths,
+            list_promotion_journals, live_user_root, manifest_hash, manifest_tree,
+            prepare_coding_candidate, promote_user_tree, recover_promotion_journal,
+            retain_successful_version, rollback_user_tree, set_promotion_journal_retained_version,
+            update_promotion_journal_phase,
+        },
         workspace::{
             OpenCodeWorkspaceAgent, OpenCodeWorkspaceConfig, OpenCodeWorkspaceRuntimeConfig,
             WorkspaceGenerationMode, delete_agent_workspace, generate_agent_workspace,
@@ -61,10 +78,12 @@ pub struct AgenticScheduler {
     opencode_client: Arc<OpenCodeClient>,
     last_orphan_recovery_at: Option<chrono::DateTime<Utc>>,
     in_flight: InFlightTracker,
+    workspace_leases: WorkspaceLeaseManager,
+    coding_semaphore: Arc<Semaphore>,
 }
 
 impl AgenticScheduler {
-    #[allow(clippy::too_many_arguments)]
+    #[cfg(test)]
     pub fn new(
         pool: DbPool,
         shutdown_rx: watch::Receiver<bool>,
@@ -74,6 +93,30 @@ impl AgenticScheduler {
         opencode_workspace_config: OpenCodeWorkspaceConfig,
         opencode_client: Arc<OpenCodeClient>,
         in_flight: InFlightTracker,
+    ) -> Self {
+        Self::new_with_workspace_leases(
+            pool,
+            shutdown_rx,
+            force_shutdown_rx,
+            backend,
+            live_accounts,
+            opencode_workspace_config,
+            opencode_client,
+            in_flight,
+            WorkspaceLeaseManager::new(),
+        )
+    }
+
+    pub fn new_with_workspace_leases(
+        pool: DbPool,
+        shutdown_rx: watch::Receiver<bool>,
+        force_shutdown_rx: watch::Receiver<bool>,
+        backend: Arc<dyn AgenticBackend>,
+        live_accounts: Arc<LiveAccountStore>,
+        opencode_workspace_config: OpenCodeWorkspaceConfig,
+        opencode_client: Arc<OpenCodeClient>,
+        in_flight: InFlightTracker,
+        workspace_leases: WorkspaceLeaseManager,
     ) -> Self {
         Self {
             pool,
@@ -85,6 +128,8 @@ impl AgenticScheduler {
             opencode_client,
             last_orphan_recovery_at: None,
             in_flight,
+            workspace_leases,
+            coding_semaphore: Arc::new(Semaphore::new(1)),
         }
     }
 
@@ -100,6 +145,38 @@ impl AgenticScheduler {
     /// instead of waiting for the 30-minute grace to elapse.
     pub async fn run(mut self) -> Result<()> {
         info!("agentic scheduler starting");
+        match list_promotion_journals(&self.opencode_workspace_config) {
+            Ok(journals) => {
+                let mut recovered = 0;
+                for journal in journals {
+                    match recover_promotion_journal(&self.opencode_workspace_config, &journal) {
+                        Ok(PromotionJournalPhase::Completed) => {
+                            let _ =
+                                store::mark_maintenance_task_succeeded(&self.pool, journal.task_id)
+                                    .await;
+                            recovered += 1;
+                        }
+                        Ok(PromotionJournalPhase::RolledBack) => {
+                            let _ = store::mark_maintenance_task_failed(
+                                &self.pool,
+                                journal.task_id,
+                                "promotion was rolled back during startup recovery",
+                            )
+                            .await;
+                            recovered += 1;
+                        }
+                        Ok(_) => {}
+                        Err(error) => {
+                            warn!(error = ?error, task_id = journal.task_id, "promotion journal recovery failed")
+                        }
+                    }
+                }
+                if recovered > 0 {
+                    info!(recovered, "reconciled promotion journals at startup");
+                }
+            }
+            Err(error) => warn!(error = ?error, "promotion journal recovery failed"),
+        }
         loop {
             if *self.shutdown_rx.borrow() {
                 break;
@@ -163,6 +240,17 @@ impl AgenticScheduler {
             &self.pool,
             &self.opencode_workspace_config,
             &self.opencode_client,
+            &self.workspace_leases,
+        )
+        .await?;
+
+        spawn_coding_workers(
+            &self.pool,
+            &self.backend,
+            &self.opencode_workspace_config,
+            &self.in_flight,
+            &self.coding_semaphore,
+            &self.workspace_leases,
         )
         .await?;
 
@@ -205,6 +293,7 @@ impl AgenticScheduler {
                 let live_accounts = self.live_accounts.clone();
                 let agent_key = agent_key.clone();
                 let in_flight = self.in_flight.clone();
+                let workspace_leases = self.workspace_leases.clone();
                 tokio::spawn(async move {
                     let _guard = in_flight.track();
                     process_analysis_lane_for_agent(
@@ -214,6 +303,7 @@ impl AgenticScheduler {
                         &agent_key,
                         sort_analysis_schedules_for_dispatch(analysis_schedules),
                         sort_analysis_schedules_for_dispatch(daily_review_schedules),
+                        &workspace_leases,
                     )
                     .await;
                 });
@@ -225,6 +315,7 @@ impl AgenticScheduler {
                 let live_accounts = self.live_accounts.clone();
                 let agent_key = agent_key.clone();
                 let in_flight = self.in_flight.clone();
+                let workspace_leases = self.workspace_leases.clone();
                 tokio::spawn(async move {
                     let _guard = in_flight.track();
                     process_trading_lane_for_agent(
@@ -233,6 +324,7 @@ impl AgenticScheduler {
                         &live_accounts,
                         &agent_key,
                         sort_trading_schedules_for_dispatch(trading_schedules),
+                        &workspace_leases,
                     )
                     .await;
                 });
@@ -269,6 +361,63 @@ impl AgenticScheduler {
                 "recovered inactive agentic runs during periodic sweep"
             );
         }
+        let stale_before = now - chrono::Duration::minutes(2);
+        for task in
+            store::list_stale_running_maintenance_tasks(&self.pool, stale_before, 20).await?
+        {
+            if task.task_kind != crate::agentic::model::MAINTENANCE_TASK_KIND_ANALYSIS_CODING {
+                continue;
+            }
+            if task.phase == crate::agentic::model::MAINTENANCE_PHASE_GENERATING
+                && let Some(run_id) = task.run_id
+                && let Some(run) = store::get_run(&self.pool, run_id).await?
+                && let Some(session_id) = run.backend_run_ref
+                && let Some(hook_id) = task.parameter_i64("hook_id")
+                && let Some(hook) =
+                    store::get_opencode_hook_for_dispatch(&self.pool, &task.agent_key, hook_id)
+                        .await?
+                && let Some(status) = self
+                    .backend
+                    .get_session_status(&hook.runtime_base_url, &session_id)
+                    .await?
+                && status.is_active()
+            {
+                debug!(task_id = task.id, session_id = %session_id, "coding session remains active during stale-task sweep");
+                continue;
+            }
+            warn!(task_id = task.id, phase = %task.phase, "recovering stale coding task");
+            if task.is_in_promotion_window()
+                && let Some(journal) =
+                    crate::opencode::coding_workspace::read_promotion_journal(
+                        &self.opencode_workspace_config,
+                        &task.agent_key,
+                        task.id,
+                    )?
+            {
+                match recover_promotion_journal(&self.opencode_workspace_config, &journal)? {
+                    PromotionJournalPhase::Completed => {
+                        store::mark_maintenance_task_succeeded(&self.pool, task.id).await?;
+                        if let Some(run_id) = task.run_id {
+                            store::mark_run_succeeded(&self.pool, run_id, None).await?;
+                        }
+                        continue;
+                    }
+                    PromotionJournalPhase::RolledBack => {
+                        // Fall through to terminal failure after restoring the
+                        // previous live tree.
+                    }
+                    _ => {}
+                }
+            }
+            let summary = format!(
+                "stale coding task recovered during {} phase",
+                task.phase
+            );
+            store::mark_maintenance_task_failed(&self.pool, task.id, &summary).await?;
+            if let Some(run_id) = task.run_id {
+                store::mark_run_failed(&self.pool, run_id, &summary, None).await?;
+            }
+        }
         self.last_orphan_recovery_at = Some(now);
         Ok(())
     }
@@ -278,6 +427,7 @@ async fn process_workspace_maintenance_tasks(
     pool: &DbPool,
     workspace_config: &OpenCodeWorkspaceConfig,
     _opencode_client: &Arc<OpenCodeClient>,
+    workspace_leases: &WorkspaceLeaseManager,
 ) -> Result<()> {
     let Some(task) = store::get_next_queued_workspace_regenerate_task(pool).await? else {
         return Ok(());
@@ -357,6 +507,7 @@ async fn process_workspace_maintenance_tasks(
     let hard_reset = task.parameter_bool("hard_reset");
     let reset_memories = task.parameter_bool("reset_memories");
     let maintenance_result = async {
+        let _lease = workspace_leases.acquire_live_write(&agent.agent_key).await;
         let workspace_agent = OpenCodeWorkspaceAgent {
             agent_key: agent.agent_key.clone(),
             display_name: agent.display_name.clone(),
@@ -412,6 +563,586 @@ async fn process_workspace_maintenance_tasks(
     Ok(())
 }
 
+const CODING_QUEUE_LIMIT: i64 = 4;
+
+async fn spawn_coding_workers(
+    pool: &DbPool,
+    backend: &Arc<dyn AgenticBackend>,
+    workspace_config: &OpenCodeWorkspaceConfig,
+    in_flight: &InFlightTracker,
+    semaphore: &Arc<Semaphore>,
+    workspace_leases: &WorkspaceLeaseManager,
+) -> Result<()> {
+    let tasks = store::list_queued_maintenance_candidates(pool, CODING_QUEUE_LIMIT).await?;
+    for task in tasks {
+        if task.task_kind != crate::agentic::model::MAINTENANCE_TASK_KIND_ANALYSIS_CODING {
+            continue;
+        }
+        let pool = pool.clone();
+        let backend = backend.clone();
+        let workspace_config = workspace_config.clone();
+        let in_flight = in_flight.clone();
+        let semaphore = semaphore.clone();
+        let workspace_leases = workspace_leases.clone();
+        tokio::spawn(async move {
+            let Ok(_permit) = semaphore.acquire_owned().await else {
+                return;
+            };
+            let _guard = in_flight.track();
+            if let Err(error) =
+                run_coding_task(&pool, &backend, &workspace_config, &workspace_leases, task)
+                    .await
+            {
+                warn!(error = ?error, "coding task worker failed");
+            }
+        });
+    }
+    Ok(())
+}
+
+async fn run_coding_task(
+    pool: &DbPool,
+    backend: &Arc<dyn AgenticBackend>,
+    workspace_config: &OpenCodeWorkspaceConfig,
+    workspace_leases: &WorkspaceLeaseManager,
+    task: crate::agentic::model::AgentMaintenanceTaskRow,
+) -> Result<()> {
+    let Some(run_id) = task.run_id else {
+        store::mark_maintenance_task_failed(pool, task.id, "coding task has no run").await?;
+        return Ok(());
+    };
+    if !store::mark_maintenance_task_running(pool, task.id).await? {
+        return Ok(());
+    }
+    let Some(agent) = get_agent(pool, &task.agent_key).await? else {
+        fail_coding_task(
+            pool,
+            task.id,
+            run_id,
+            "agent disappeared before coding",
+        )
+        .await?;
+        return Ok(());
+    };
+    let Some(hook_id) = task.parameter_i64("hook_id") else {
+        fail_coding_task(pool, task.id, run_id, "coding task has no hook").await?;
+        return Ok(());
+    };
+    let Some(hook) = store::get_opencode_hook_for_dispatch(pool, &task.agent_key, hook_id).await?
+    else {
+        fail_coding_task(pool, task.id, run_id, "coding hook disappeared").await?;
+        return Ok(());
+    };
+
+    let live_root = live_user_root(workspace_config, &task.agent_key)?;
+    let canonical_exists = live_root.join("analyze.py").is_file();
+    let requested_mode = task
+        .parameters
+        .get("mode")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("auto");
+    let effective_mode = match requested_mode {
+        "auto" if canonical_exists => "manual_improvement",
+        "auto" => "bootstrap",
+        "bootstrap" => "bootstrap",
+        "manual_improvement" if canonical_exists => "manual_improvement",
+        "manual_improvement" => {
+            fail_coding_task(
+                pool,
+                task.id,
+                run_id,
+                "manual improvement requires scripts/user/analyze.py",
+            )
+            .await?;
+            return Ok(());
+        }
+        _ => {
+            fail_coding_task(pool, task.id, run_id, "invalid coding mode").await?;
+            return Ok(());
+        }
+    };
+
+    let candidate = match prepare_coding_candidate(
+        workspace_config,
+        &task.agent_key,
+        task.id,
+        &agent.display_name,
+        &agent.api_key,
+    ) {
+        Ok(candidate) => candidate,
+        Err(error) => {
+            fail_coding_task(pool, task.id, run_id, &error.to_string()).await?;
+            return Ok(());
+        }
+    };
+    store::compare_and_set_maintenance_phase(
+        pool,
+        task.id,
+        crate::agentic::model::MAINTENANCE_PHASE_PREPARING,
+        crate::agentic::model::MAINTENANCE_PHASE_GENERATING,
+    )
+    .await?;
+
+    let Some(mut request) = build_hook_dispatch_request(pool, &hook, run_id, Utc::now()).await?
+    else {
+        fail_coding_task(
+            pool,
+            task.id,
+            run_id,
+            "coding request could not be built",
+        )
+        .await?;
+        return Ok(());
+    };
+    let analysis_strategy_prompt =
+        get_agent_strategy_prompt(pool, &task.agent_key, PROMPT_KIND_ANALYSIS)
+            .await?
+            .map(|row| row.prompt);
+    request.runtime_config = serde_json::json!({
+        "workspace_host_path": candidate.root.to_string_lossy(),
+        "workspace_container_path": candidate_container_root(workspace_config, &task.agent_key, task.id)?,
+        "profile_source": "agent-runtime/workspace-template",
+        "coding_task_id": task.id,
+        "coding_mode": effective_mode,
+        "analysis_strategy_prompt": analysis_strategy_prompt,
+    });
+    let outcome = dispatch_coding_model(pool, backend.clone(), request, task.id).await?;
+    if !outcome.succeeded {
+        fail_coding_task(pool, task.id, run_id, "coding model dispatch failed").await?;
+        return Ok(());
+    }
+
+    let candidate_manifest = manifest_tree(&candidate.user_root)?;
+    let actual_changes = changed_paths(&candidate.base_manifest, &candidate_manifest);
+    let report = match validate_coding_report(&candidate.root, &actual_changes) {
+        Ok(outcome) => outcome,
+        Err(error) => {
+            fail_coding_task(pool, task.id, run_id, &error.to_string()).await?;
+            return Ok(());
+        }
+    };
+    if report.outcome == "no_change" && !actual_changes.is_empty()
+        || report.outcome == "changed" && actual_changes.is_empty()
+    {
+        fail_coding_task(
+            pool,
+            task.id,
+            run_id,
+            "coding report outcome does not match candidate diff",
+        )
+        .await?;
+        return Ok(());
+    }
+    if report.outcome == "no_change" {
+        store::mark_maintenance_task_succeeded(pool, task.id).await?;
+        if let Err(error) = write_coding_result_memory(
+            pool,
+            &task,
+            "no_change",
+            "Candidate produced no reusable code changes",
+            &actual_changes,
+            &report,
+            &manifest_hash(&candidate.base_manifest),
+            &manifest_hash(&candidate_manifest),
+        )
+        .await
+        {
+            fail_coding_task(
+                pool,
+                task.id,
+                run_id,
+                &format!("result memory failed: {error:#}"),
+            )
+            .await?;
+            return Ok(());
+        }
+        store::mark_run_succeeded(pool, run_id, None).await?;
+        let _ = std::fs::remove_dir_all(&candidate.root);
+    } else {
+        store::compare_and_set_maintenance_phase(
+            pool,
+            task.id,
+            crate::agentic::model::MAINTENANCE_PHASE_GENERATING,
+            crate::agentic::model::MAINTENANCE_PHASE_VALIDATING,
+        )
+        .await?;
+        let candidate_manifest_hash = manifest_hash(&candidate_manifest);
+        if let Err(error) =
+            require_coding_validation(&candidate.root, task.id, &candidate_manifest_hash)
+        {
+            fail_coding_task(pool, task.id, run_id, &error.to_string()).await?;
+            return Ok(());
+        }
+        store::compare_and_set_maintenance_phase(
+            pool,
+            task.id,
+            crate::agentic::model::MAINTENANCE_PHASE_VALIDATING,
+            crate::agentic::model::MAINTENANCE_PHASE_WAITING_FOR_PROMOTION,
+        )
+        .await?;
+        if store::agent_has_active_live_runs(pool, &task.agent_key).await? {
+            fail_coding_task(pool, task.id, run_id, "live runs remain active").await?;
+            return Ok(());
+        }
+        let _lease = workspace_leases.acquire_live_write(&task.agent_key).await;
+        if store::agent_has_active_live_runs(pool, &task.agent_key).await? {
+            fail_coding_task(pool, task.id, run_id, "live runs started before promotion")
+                .await?;
+            return Ok(());
+        }
+        store::compare_and_set_maintenance_phase(
+            pool,
+            task.id,
+            crate::agentic::model::MAINTENANCE_PHASE_WAITING_FOR_PROMOTION,
+            crate::agentic::model::MAINTENANCE_PHASE_PROMOTING,
+        )
+        .await?;
+        let _backup = match promote_user_tree(
+            workspace_config,
+            &task.agent_key,
+            task.id,
+            &candidate.base_manifest,
+        ) {
+            Ok(backup) => backup,
+            Err(error) => {
+                fail_coding_task(pool, task.id, run_id, &error.to_string()).await?;
+                return Ok(());
+            }
+        };
+        store::compare_and_set_maintenance_phase(
+            pool,
+            task.id,
+            crate::agentic::model::MAINTENANCE_PHASE_PROMOTING,
+            crate::agentic::model::MAINTENANCE_PHASE_SMOKE_TESTING,
+        )
+        .await?;
+        let live_workspace = workspace_config
+            .host_workspaces_root
+            .join("agents")
+            .join(&task.agent_key);
+        let promoted_manifest_hash = manifest_tree(&live_workspace.join("scripts/user"))
+            .map(|manifest| manifest_hash(&manifest));
+        let promoted_matches = matches!(
+            &promoted_manifest_hash,
+            Ok(hash) if hash == &candidate_manifest_hash
+        );
+        if !promoted_matches {
+            let _ = rollback_user_tree(workspace_config, &task.agent_key, task.id);
+            let _ = update_promotion_journal_phase(
+                workspace_config,
+                &task.agent_key,
+                task.id,
+                PromotionJournalPhase::RolledBack,
+            );
+            let summary = match promoted_manifest_hash {
+                Ok(_) => "promoted analysis tree does not match validated candidate".to_string(),
+                Err(error) => format!("failed to hash promoted analysis tree: {error}"),
+            };
+            fail_coding_task(pool, task.id, run_id, &summary).await?;
+            return Ok(());
+        }
+        update_promotion_journal_phase(
+            workspace_config,
+            &task.agent_key,
+            task.id,
+            PromotionJournalPhase::SmokeTestPassed,
+        )?;
+        let retained = retain_successful_version(workspace_config, &task.agent_key, task.id)?;
+        set_promotion_journal_retained_version(
+            workspace_config,
+            &task.agent_key,
+            task.id,
+            retained,
+        )?;
+        update_promotion_journal_phase(
+            workspace_config,
+            &task.agent_key,
+            task.id,
+            PromotionJournalPhase::Completed,
+        )?;
+        store::mark_maintenance_task_succeeded(pool, task.id).await?;
+        if let Err(error) = write_coding_result_memory(
+            pool,
+            &task,
+            "changed",
+            "Candidate validated and was promoted",
+            &actual_changes,
+            &report,
+            &manifest_hash(&candidate.base_manifest),
+            &manifest_hash(&candidate_manifest),
+        )
+        .await
+        {
+            fail_coding_task(
+                pool,
+                task.id,
+                run_id,
+                &format!("result memory failed: {error:#}"),
+            )
+            .await?;
+            return Ok(());
+        }
+        store::mark_run_succeeded(pool, run_id, None).await?;
+        let _ = std::fs::remove_dir_all(&candidate.root);
+    }
+    Ok(())
+}
+
+async fn fail_coding_task(
+    pool: &DbPool,
+    task_id: i64,
+    run_id: i64,
+    summary: &str,
+) -> Result<()> {
+    store::mark_maintenance_task_failed(pool, task_id, summary).await?;
+    store::mark_run_failed(pool, run_id, summary, None).await?;
+    Ok(())
+}
+
+async fn dispatch_coding_model(
+    pool: &DbPool,
+    backend: Arc<dyn AgenticBackend>,
+    request: DispatchRequest,
+    task_id: i64,
+) -> Result<DispatchRunResult> {
+    if let Err(error) = store::mark_run_running(pool, request.run_id, None).await {
+        return Err(error);
+    }
+    let dispatch = dispatch_with_timeout_for_coding(pool, backend, request);
+    tokio::pin!(dispatch);
+    let mut heartbeat = tokio::time::interval(Duration::from_secs(15));
+    let outcome = loop {
+        tokio::select! {
+            result = &mut dispatch => break result?,
+            _ = heartbeat.tick() => {
+                let _ = store::heartbeat_maintenance_task(pool, task_id).await;
+            }
+        }
+    };
+    match outcome {
+        DispatchOutcome::Succeeded { backend_run_ref } => {
+            debug!(
+                task_id,
+                backend_run_ref, "coding model dispatch finished"
+            );
+            Ok(DispatchRunResult { succeeded: true })
+        }
+        DispatchOutcome::Failed { summary } => {
+            debug!(task_id, summary, "coding model dispatch failed");
+            Ok(DispatchRunResult { succeeded: false })
+        }
+    }
+}
+
+struct EngineeringReport {
+    outcome: String,
+    summary: String,
+    rationale: String,
+    validation_notes: String,
+    evidence_memory_ids: Vec<uuid::Uuid>,
+}
+
+fn require_coding_validation(
+    candidate_root: &std::path::Path,
+    task_id: i64,
+    candidate_manifest_hash: &str,
+) -> Result<()> {
+    let path = candidate_root
+        .parent()
+        .context("candidate task path has no parent")?
+        .join("coding-validation.json");
+    let validation = std::fs::read_to_string(path)
+        .context("coding model did not run fixed candidate validation")?;
+    let validation: serde_json::Value = serde_json::from_str(&validation)
+        .context("coding validation result is not valid JSON")?;
+    if validation
+        .get("schema_version")
+        .and_then(serde_json::Value::as_u64)
+        != Some(1)
+        || validation
+            .get("task_id")
+            .and_then(serde_json::Value::as_i64)
+            != Some(task_id)
+    {
+        anyhow::bail!("coding validation identity is invalid");
+    }
+    if validation.get("ok").and_then(serde_json::Value::as_bool) != Some(true) {
+        anyhow::bail!("coding candidate failed fixed validation");
+    }
+    if validation
+        .get("candidate_manifest_sha256")
+        .and_then(serde_json::Value::as_str)
+        != Some(candidate_manifest_hash)
+    {
+        anyhow::bail!("coding candidate changed after fixed validation");
+    }
+    Ok(())
+}
+
+fn validate_coding_report(
+    candidate_root: &std::path::Path,
+    actual_changes: &[String],
+) -> Result<EngineeringReport> {
+    let report_path = candidate_root
+        .parent()
+        .context("candidate task path has no parent")?
+        .join("coding-report.json");
+    let report = std::fs::read_to_string(&report_path)
+        .context("coding model did not submit a report")?;
+    let report: serde_json::Value =
+        serde_json::from_str(&report).context("coding report is not valid JSON")?;
+    if report
+        .get("schema_version")
+        .and_then(serde_json::Value::as_u64)
+        != Some(1)
+    {
+        anyhow::bail!("coding report schema version is invalid");
+    }
+    let outcome = report
+        .get("outcome")
+        .and_then(serde_json::Value::as_str)
+        .context("coding report has no outcome")?;
+    if !matches!(outcome, "changed" | "no_change") {
+        anyhow::bail!("coding report outcome is invalid");
+    }
+    let mut reported_changes: Vec<String> = report
+        .get("changed_paths")
+        .and_then(serde_json::Value::as_array)
+        .context("coding report has no changed_paths")?
+        .iter()
+        .map(|path| path.as_str().map(ToString::to_string))
+        .collect::<Option<Vec<_>>>()
+        .context("coding report changed_paths are invalid")?;
+    reported_changes.sort();
+    if reported_changes != actual_changes {
+        anyhow::bail!("coding report paths do not match candidate diff");
+    }
+    let evidence_memory_ids = report
+        .get("evidence_memory_ids")
+        .and_then(serde_json::Value::as_array)
+        .context("coding report has no evidence_memory_ids")?
+        .iter()
+        .map(|id| {
+            let value = id
+                .as_str()
+                .context("coding evidence memory id is not a string")?;
+            uuid::Uuid::parse_str(value).context("coding evidence memory id is invalid")
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let summary = report
+        .get("summary")
+        .and_then(serde_json::Value::as_str)
+        .context("coding report has no summary")?;
+    let rationale = report
+        .get("rationale")
+        .and_then(serde_json::Value::as_str)
+        .context("coding report has no rationale")?;
+    let validation_notes = report
+        .get("validation_notes")
+        .and_then(serde_json::Value::as_str)
+        .context("coding report has no validation_notes")?;
+    for (name, value) in [
+        ("summary", summary),
+        ("rationale", rationale),
+        ("validation_notes", validation_notes),
+    ] {
+        if value.chars().count() > 4_000 {
+            anyhow::bail!("coding report {name} is too long");
+        }
+    }
+    Ok(EngineeringReport {
+        outcome: outcome.to_string(),
+        summary: summary.to_string(),
+        rationale: rationale.to_string(),
+        validation_notes: validation_notes.to_string(),
+        evidence_memory_ids,
+    })
+}
+
+async fn write_coding_result_memory(
+    pool: &DbPool,
+    task: &crate::agentic::model::AgentMaintenanceTaskRow,
+    outcome: &str,
+    summary: &str,
+    changed_paths: &[String],
+    report: &EngineeringReport,
+    base_manifest_hash: &str,
+    promoted_manifest_hash: &str,
+) -> Result<()> {
+    let existing: (bool,) = sqlx::query_as(
+        "SELECT EXISTS (
+             SELECT 1 FROM memory.records
+              WHERE agent_key = $1
+                AND memory_type = 'analysis_coding'
+                AND metadata->>'task_id' = $2
+         )",
+    )
+    .bind(&task.agent_key)
+    .bind(task.id.to_string())
+    .fetch_one(pool)
+    .await
+    .context("failed to check coding result memory idempotency")?;
+    if existing.0 {
+        return Ok(());
+    }
+    let mut links = task
+        .source_memory_id
+        .map(|id| {
+            vec![crate::memory::CreateMemoryLink {
+                target_memory_id: id,
+                link_type: "responds_to".to_string(),
+                metadata: Some(serde_json::json!({ "task_id": task.id })),
+            }]
+        })
+        .unwrap_or_default();
+    links.extend(
+        report
+            .evidence_memory_ids
+            .iter()
+            .map(|id| crate::memory::CreateMemoryLink {
+                target_memory_id: *id,
+                link_type: "derived_from".to_string(),
+                metadata: Some(serde_json::json!({ "task_id": task.id })),
+            }),
+    );
+    let input = crate::memory::CreateMemory {
+        symbol: "__agent__".to_string(),
+        timeframe: None,
+        memory_type: "analysis_coding".to_string(),
+        summary: summary.to_string(),
+        content: format!(
+            "Engineering task {} finished with outcome {outcome}.\n\nModel summary: {}\n\nRationale: {}\n\nValidation notes: {}",
+            task.id, report.summary, report.rationale, report.validation_notes
+        ),
+        metadata: Some(serde_json::json!({
+            "schema_version": 1,
+            "task_id": task.id,
+            "run_id": task.run_id,
+            "source_run_id": task.source_run_id,
+            "source_memory_id": task.source_memory_id,
+            "source_daily_review_run_id": task.source_run_id,
+            "source_daily_review_memory_id": task.source_memory_id,
+            "outcome": outcome,
+            "mode": task.parameters.get("mode"),
+            "changed_paths": changed_paths,
+            "base_manifest_sha256": base_manifest_hash,
+            "promoted_manifest_sha256": promoted_manifest_hash,
+            "validation": if outcome == "changed" {
+                serde_json::json!({
+                    "fixed_contract": "passed",
+                    "candidate_tests": "optional",
+                    "promotion_hash": "passed"
+                })
+            } else {
+                serde_json::json!({ "fixed_contract": "not_run" })
+            },
+        })),
+        links: Some(links),
+    };
+    crate::memory::insert_memory(pool, &task.agent_key, &input).await?;
+    Ok(())
+}
+
 fn maintenance_error_summary(error: &anyhow::Error) -> String {
     let summary = error.root_cause().to_string();
     if summary.trim().is_empty() {
@@ -428,23 +1159,62 @@ async fn process_analysis_lane_for_agent(
     agent_key: &str,
     schedules: Vec<DueOpenCodeScheduleRow>,
     daily_review_schedules: Vec<DueOpenCodeScheduleRow>,
+    workspace_leases: &WorkspaceLeaseManager,
 ) {
+    let _lease = workspace_leases.acquire_live_read(agent_key).await;
     let mut any_succeeded = false;
     for schedule in schedules {
-        if process_schedule_for_agent(pool, backend, live_accounts, agent_key, schedule).await {
+        if process_schedule_for_agent(
+            pool,
+            backend,
+            live_accounts,
+            agent_key,
+            schedule,
+            workspace_leases,
+        )
+        .await
+        .is_some()
+        {
             any_succeeded = true;
         }
     }
 
     if any_succeeded
-        && let Err(error) =
-            dispatch_analysis_batch_completed_hook(pool, backend, live_accounts, agent_key).await
+        && let Err(error) = dispatch_analysis_batch_completed_hook(
+            pool,
+            backend,
+            live_accounts,
+            agent_key,
+            workspace_leases,
+        )
+        .await
     {
         warn!(agent_key, error = ?error, "failed to dispatch analysis batch completed hook");
     }
 
     for schedule in daily_review_schedules {
-        let _ = process_schedule_for_agent(pool, backend, live_accounts, agent_key, schedule).await;
+        if let Some(run_id) = process_schedule_for_agent(
+            pool,
+            backend,
+            live_accounts,
+            agent_key,
+            schedule,
+            workspace_leases,
+        )
+        .await
+        {
+            if let Err(error) = dispatch_daily_review_coding_hook(
+                pool,
+                backend,
+                agent_key,
+                run_id,
+                workspace_leases,
+            )
+            .await
+            {
+                warn!(agent_key, error = ?error, "failed to process daily-review coding request");
+            }
+        }
     }
 }
 
@@ -454,9 +1224,19 @@ async fn process_trading_lane_for_agent(
     live_accounts: &Arc<LiveAccountStore>,
     agent_key: &str,
     schedules: Vec<DueOpenCodeScheduleRow>,
+    workspace_leases: &WorkspaceLeaseManager,
 ) {
+    let _lease = workspace_leases.acquire_live_read(agent_key).await;
     for schedule in schedules {
-        let _ = process_schedule_for_agent(pool, backend, live_accounts, agent_key, schedule).await;
+        let _ = process_schedule_for_agent(
+            pool,
+            backend,
+            live_accounts,
+            agent_key,
+            schedule,
+            workspace_leases,
+        )
+        .await;
     }
 }
 
@@ -466,7 +1246,8 @@ async fn process_schedule_for_agent(
     live_accounts: &Arc<LiveAccountStore>,
     agent_key: &str,
     schedule: DueOpenCodeScheduleRow,
-) -> bool {
+    _workspace_leases: &WorkspaceLeaseManager,
+) -> Option<i64> {
     let schedule_id = schedule.schedule_id;
     let job_key = schedule.job_key.clone();
     let scheduled_for = boundary_for_due_at(schedule.next_run_at, schedule.trigger_delay_seconds);
@@ -481,7 +1262,7 @@ async fn process_schedule_for_agent(
                 error = ?error,
                 "failed to claim due schedule"
             );
-            return false;
+            return None;
         }
     };
 
@@ -491,7 +1272,7 @@ async fn process_schedule_for_agent(
                 schedule_id,
                 agent_key, "schedule no longer due at claim time"
             );
-            false
+            None
         }
         store::ClaimedScheduleRun::BlockedByMaintenance => {
             info!(
@@ -500,7 +1281,7 @@ async fn process_schedule_for_agent(
                 job_key = %job_key,
                 "scheduled dispatch held because workspace maintenance is queued or running"
             );
-            false
+            None
         }
         store::ClaimedScheduleRun::Skipped { run_id } => {
             info!(
@@ -510,17 +1291,16 @@ async fn process_schedule_for_agent(
                 job_key = %job_key,
                 "agentic run skipped because previous run still active"
             );
-            false
+            None
         }
         store::ClaimedScheduleRun::Dispatch { run_id } => {
             match build_dispatch_request(pool, live_accounts, &schedule, run_id, scheduled_for)
                 .await
             {
-                Ok(Some(request)) => {
-                    dispatch_run(pool.clone(), backend.clone(), request)
-                        .await
-                        .succeeded
-                }
+                Ok(Some(request)) => dispatch_run(pool.clone(), backend.clone(), request)
+                    .await
+                    .succeeded
+                    .then_some(run_id),
                 Ok(None) => {
                     warn!(
                         run_id,
@@ -535,7 +1315,7 @@ async fn process_schedule_for_agent(
                         None,
                     )
                     .await;
-                    false
+                    None
                 }
                 Err(error) => {
                     error!(
@@ -547,14 +1327,13 @@ async fn process_schedule_for_agent(
                     );
                     let _ = store::mark_run_failed(pool, run_id, "dispatch request errored", None)
                         .await;
-                    false
+                    None
                 }
             }
         }
     }
 }
 
-#[allow(clippy::too_many_arguments)]
 pub fn dispatch_request_from_schedule(
     schedule: &DueOpenCodeScheduleRow,
     run_id: i64,
@@ -593,7 +1372,6 @@ pub fn dispatch_request_from_schedule(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
 pub fn dispatch_request_from_hook(
     hook: &DueOpenCodeHookRow,
     run_id: i64,
@@ -644,7 +1422,7 @@ async fn build_dispatch_request(
 
     let selected_instruments = list_agent_instrument_ids(pool, &schedule.agent_key).await?;
 
-    if selected_instruments.is_empty() {
+    if selected_instruments.is_empty() && requires_selected_instruments(&schedule.job_kind) {
         return Ok(None);
     }
 
@@ -680,6 +1458,57 @@ async fn build_dispatch_request(
     )))
 }
 
+async fn dispatch_daily_review_coding_hook(
+    pool: &DbPool,
+    _backend: &Arc<dyn AgenticBackend>,
+    agent_key: &str,
+    source_run_id: i64,
+    _workspace_leases: &WorkspaceLeaseManager,
+) -> Result<()> {
+    let Some(memory) =
+        crate::memory::get_daily_review_memory_for_run(pool, agent_key, source_run_id).await?
+    else {
+        debug!(
+            agent_key,
+            source_run_id, "daily review wrote no linked memory"
+        );
+        return Ok(());
+    };
+    let requested = memory
+        .metadata
+        .get("analysis_coding_requested")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false);
+    if !requested {
+        return Ok(());
+    }
+    let Some(hook) = store::get_enabled_hook_for_event(
+        pool,
+        agent_key,
+        crate::agentic::model::HOOK_EVENT_DAILY_REVIEW_COMPLETED,
+    )
+    .await?
+    else {
+        debug!(agent_key, "coding hook is disabled or missing");
+        return Ok(());
+    };
+    store::insert_analysis_coding_task_and_run(
+        pool,
+        agent_key,
+        hook.id,
+        store::CodingTriggerMode::Automatic,
+        Some(source_run_id),
+        Some(memory.id),
+        memory
+            .metadata
+            .get("analysis_coding_reason")
+            .and_then(serde_json::Value::as_str),
+        Some("auto"),
+    )
+    .await
+    .map(|_| ())
+}
+
 pub async fn build_hook_dispatch_request(
     pool: &DbPool,
     hook: &DueOpenCodeHookRow,
@@ -691,7 +1520,7 @@ pub async fn build_hook_dispatch_request(
         .context("agent not found while building hook dispatch request")?;
 
     let selected_instruments = list_agent_instrument_ids(pool, &hook.agent_key).await?;
-    if selected_instruments.is_empty() {
+    if selected_instruments.is_empty() && requires_selected_instruments(&hook.job_kind) {
         return Ok(None);
     }
 
@@ -715,13 +1544,28 @@ pub async fn build_hook_dispatch_request(
     )))
 }
 
+fn requires_selected_instruments(job_kind: &str) -> bool {
+    matches!(
+        job_kind,
+        JOB_KIND_ANALYSIS | JOB_KIND_MARKET_ANALYSIS | JOB_KIND_TRADING
+    )
+}
+
 async fn load_strategy_prompt(pool: &DbPool, agent_key: &str, job_kind: &str) -> Result<String> {
     let prompt_kind = prompt_kind_for_job_kind(job_kind)
         .ok_or_else(|| anyhow!("unknown prompt kind for job kind {job_kind}"))?;
-    Ok(get_agent_strategy_prompt(pool, agent_key, prompt_kind)
+    let stored = get_agent_strategy_prompt(pool, agent_key, prompt_kind)
         .await?
         .map(|row| row.prompt)
-        .unwrap_or_default())
+        .unwrap_or_default();
+    Ok(effective_strategy_prompt(prompt_kind, stored))
+}
+
+fn effective_strategy_prompt(prompt_kind: &str, stored: String) -> String {
+    if prompt_kind == PROMPT_KIND_ANALYSIS_CODING && stored.trim().is_empty() {
+        return default_prompt_for_kind(prompt_kind).to_string();
+    }
+    stored
 }
 
 async fn load_accumulated_learnings(pool: &DbPool, agent_key: &str) -> Result<Option<String>> {
@@ -746,6 +1590,7 @@ pub async fn dispatch_analysis_batch_completed_hook(
     backend: &Arc<dyn AgenticBackend>,
     _live_accounts: &Arc<LiveAccountStore>,
     agent_key: &str,
+    workspace_leases: &WorkspaceLeaseManager,
 ) -> Result<()> {
     let Some(hook) =
         store::get_enabled_hook_for_event(pool, agent_key, HOOK_EVENT_ANALYSIS_BATCH_COMPLETED)
@@ -774,7 +1619,13 @@ pub async fn dispatch_analysis_batch_completed_hook(
 
             match build_hook_dispatch_request(pool, &hook_dispatch, run_id, scheduled_for).await {
                 Ok(Some(request)) => {
-                    let _ = dispatch_run(pool.clone(), backend.clone(), request).await;
+                    let _ = dispatch_run_with_workspace_lease(
+                        pool.clone(),
+                        backend.clone(),
+                        request,
+                        workspace_leases,
+                    )
+                    .await;
                 }
                 Ok(None) => {
                     let _ = store::mark_run_failed(
@@ -847,14 +1698,29 @@ pub async fn dispatch_run(
     }
 
     match dispatch_with_timeout(&pool, backend, request).await {
-        Ok(_) => {
+        Ok(DispatchOutcome::Succeeded { backend_run_ref }) => {
             debug!(
                 run_id,
                 agent_key = %agent_key,
                 job_key = %job_key,
+                backend_run_ref,
                 "agentic dispatch finished"
             );
             DispatchRunResult { succeeded: true }
+        }
+        Ok(DispatchOutcome::Failed { summary }) => {
+            // `dispatch_with_timeout` already persisted the terminal
+            // failure row with a sanitized summary. Treat this as a
+            // non-success so follow-up hooks (e.g. market analysis)
+            // are not triggered by a failed analysis run.
+            debug!(
+                run_id,
+                agent_key = %agent_key,
+                job_key = %job_key,
+                summary,
+                "agentic dispatch failed; follow-up hooks will not fire"
+            );
+            DispatchRunResult { succeeded: false }
         }
         Err(error) => {
             error!(
@@ -870,8 +1736,21 @@ pub async fn dispatch_run(
     }
 }
 
+/// Dispatch a live-workspace job while holding its agent's shared read lease.
+/// The lease spans the complete OpenCode session, so promotion or regeneration
+/// cannot expose a tree swap to an active session.
+pub async fn dispatch_run_with_workspace_lease(
+    pool: DbPool,
+    backend: Arc<dyn AgenticBackend>,
+    request: DispatchRequest,
+    workspace_leases: &WorkspaceLeaseManager,
+) -> DispatchRunResult {
+    let _lease = workspace_leases.acquire_live_read(&request.agent_key).await;
+    dispatch_run(pool, backend, request).await
+}
+
 fn timeframe_duration_for_sort(schedule: &DueOpenCodeScheduleRow) -> i64 {
-    match parse_timeframe_seconds(&schedule.timeframe) {
+    let duration_seconds = match parse_timeframe_seconds(&schedule.timeframe) {
         Ok(seconds) => seconds,
         Err(error) => {
             warn!(
@@ -882,14 +1761,14 @@ fn timeframe_duration_for_sort(schedule: &DueOpenCodeScheduleRow) -> i64 {
             );
             i64::MAX
         }
-    }
+    };
+    duration_seconds
 }
 
 fn sort_analysis_schedules_for_dispatch(
     due: Vec<DueOpenCodeScheduleRow>,
 ) -> Vec<DueOpenCodeScheduleRow> {
-    type AnalysisSortKey = (i64, chrono::DateTime<Utc>, i64);
-    let mut indexed: Vec<(AnalysisSortKey, DueOpenCodeScheduleRow)> = due
+    let mut indexed: Vec<((i64, chrono::DateTime<Utc>, i64), DueOpenCodeScheduleRow)> = due
         .into_iter()
         .map(|schedule| {
             (
@@ -909,8 +1788,7 @@ fn sort_analysis_schedules_for_dispatch(
 fn sort_trading_schedules_for_dispatch(
     due: Vec<DueOpenCodeScheduleRow>,
 ) -> Vec<DueOpenCodeScheduleRow> {
-    type TradingSortKey = (chrono::DateTime<Utc>, i64, i64);
-    let mut indexed: Vec<(TradingSortKey, DueOpenCodeScheduleRow)> = due
+    let mut indexed: Vec<((chrono::DateTime<Utc>, i64, i64), DueOpenCodeScheduleRow)> = due
         .into_iter()
         .map(|schedule| {
             (
@@ -927,6 +1805,35 @@ fn sort_trading_schedules_for_dispatch(
     indexed.into_iter().map(|(_, row)| row).collect()
 }
 
+/// Convenience: spawn the scheduler on the current Tokio runtime and
+/// return the join handle. The handle aborts when the runtime drops.
+#[cfg(test)]
+pub fn spawn(
+    pool: DbPool,
+    shutdown_rx: watch::Receiver<bool>,
+    force_shutdown_rx: watch::Receiver<bool>,
+    backend: Arc<dyn AgenticBackend>,
+    live_accounts: Arc<LiveAccountStore>,
+    opencode_workspace_config: OpenCodeWorkspaceConfig,
+    opencode_client: Arc<OpenCodeClient>,
+    in_flight: InFlightTracker,
+) -> JoinHandle<Result<()>> {
+    tokio::spawn(async move {
+        AgenticScheduler::new(
+            pool,
+            shutdown_rx,
+            force_shutdown_rx,
+            backend,
+            live_accounts,
+            opencode_workspace_config,
+            opencode_client,
+            in_flight,
+        )
+        .run()
+        .await
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -935,8 +1842,10 @@ mod tests {
 
     use std::{
         collections::BTreeSet,
+        fs,
         path::PathBuf,
         sync::{Arc, Mutex},
+        time::{SystemTime, UNIX_EPOCH},
     };
 
     use async_trait::async_trait;
@@ -965,6 +1874,52 @@ mod tests {
         },
         test_db,
     };
+
+    #[test]
+    fn blank_coding_strategy_uses_safe_default() {
+        assert_eq!(
+            effective_strategy_prompt(PROMPT_KIND_ANALYSIS_CODING, String::new()),
+            default_prompt_for_kind(PROMPT_KIND_ANALYSIS_CODING)
+        );
+        assert_eq!(
+            effective_strategy_prompt(PROMPT_KIND_ANALYSIS, String::new()),
+            ""
+        );
+    }
+
+    #[test]
+    fn coding_validation_is_bound_to_task_and_candidate_hash() {
+        let root = std::env::temp_dir().join(format!(
+            "coding-validation-{}",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("system clock")
+                .as_nanos()
+        ));
+        let candidate = root.join("workspace");
+        let user = candidate.join("scripts/user");
+        fs::create_dir_all(&user).expect("create candidate user tree");
+        fs::write(user.join("analyze.py"), "print('ok')\n").expect("write candidate");
+        let candidate_hash = manifest_hash(&manifest_tree(&user).expect("candidate manifest"));
+        fs::write(
+            root.join("coding-validation.json"),
+            serde_json::to_vec(&json!({
+                "schema_version": 1,
+                "task_id": 42,
+                "ok": true,
+                "candidate_manifest_sha256": candidate_hash,
+            }))
+            .expect("serialize validation"),
+        )
+        .expect("write validation");
+
+        require_coding_validation(&candidate, 42, &candidate_hash)
+            .expect("matching validation");
+        assert!(require_coding_validation(&candidate, 43, &candidate_hash).is_err());
+        assert!(require_coding_validation(&candidate, 42, "stale").is_err());
+
+        fs::remove_dir_all(root).expect("remove validation fixture");
+    }
 
     struct FakeBackend {
         calls: Arc<Mutex<Vec<DispatchRequest>>>,
@@ -1064,6 +2019,17 @@ mod tests {
 
         fn max_active_calls(&self) -> usize {
             self.max_active_calls.load(Ordering::SeqCst)
+        }
+    }
+
+    /// Backend whose `dispatch` always returns an error, simulating a
+    /// failed OpenCode invocation such as a 5xx from the model API.
+    struct FailingBackend;
+
+    #[async_trait]
+    impl AgenticBackend for FailingBackend {
+        async fn dispatch(&self, _request: DispatchRequest) -> Result<DispatchResult> {
+            Err(anyhow!("simulated dispatch failure"))
         }
     }
 
@@ -1248,21 +2214,20 @@ mod tests {
 
         run_until(|| async { calls.lock().map(|guard| !guard.is_empty()).unwrap_or(false) }).await;
 
-        {
-            let guard = calls.lock().unwrap();
-            assert_eq!(guard.len(), 1);
-            let request = &guard[0];
-            assert_eq!(request.agent_key, key);
-            assert_eq!(request.job_key, "analysis-15m");
-            assert_eq!(request.timeframe.as_deref(), Some("15m"));
-            assert_eq!(
-                request.scheduled_for,
-                crate::agentic::timeframe::boundary_for_due_at(
-                    due,
-                    crate::agentic::timeframe::DEFAULT_TRIGGER_DELAY_SECONDS,
-                )
-            );
-        }
+        let guard = calls.lock().unwrap();
+        assert_eq!(guard.len(), 1);
+        let request = &guard[0];
+        assert_eq!(request.agent_key, key);
+        assert_eq!(request.job_key, "analysis-15m");
+        assert_eq!(request.timeframe.as_deref(), Some("15m"));
+        assert_eq!(
+            request.scheduled_for,
+            crate::agentic::timeframe::boundary_for_due_at(
+                due,
+                crate::agentic::timeframe::DEFAULT_TRIGGER_DELAY_SECONDS,
+            )
+        );
+        drop(guard);
 
         run_until(|| async {
             list_run_statuses(&pool, &key)
@@ -2044,17 +3009,15 @@ mod tests {
 
         // If the drain logic works, `run` returns only after the
         // dispatch (200ms total) finishes. Generous bound: 2s.
-        tokio::time::timeout(Duration::from_secs(2), run_handle)
+        let joined = tokio::time::timeout(Duration::from_secs(2), run_handle)
             .await
             .expect("run should return within 2s of shutdown signal")
             .expect("join")
             .expect("run result");
 
         assert_eq!(in_flight.in_flight(), 0, "tracker should be empty");
-        assert!(
-            !calls.lock().unwrap().is_empty(),
-            "dispatch should have run"
-        );
+        assert!(calls.lock().unwrap().len() >= 1, "dispatch should have run");
+        let _ = joined;
     }
 
     #[tokio::test]
@@ -2170,5 +3133,88 @@ mod tests {
             started.elapsed().as_millis()
         );
         let _ = pool;
+    }
+
+    /// Regression test for the dispatch-outcome handling: a failed
+    /// analysis dispatch must not be reported as success, and the
+    /// `analysis_batch_completed` market-analysis follow-up hook must
+    /// not fire when the analysis batch itself failed.
+    #[tokio::test]
+    async fn tick_failed_dispatch_does_not_trigger_analysis_batch_completed_hook() {
+        let pool = test_db::pool().await;
+        let key = format!(
+            "sched-fail-{}",
+            Utc::now().timestamp_nanos_opt().unwrap_or(0)
+        );
+        seed_test_agent(&pool, &key).await;
+
+        // Enable the default market-analysis hook so we can verify it
+        // is NOT triggered by a failed analysis batch.
+        let hook_id = store::list_agent_hooks(&pool, &key)
+            .await
+            .expect("list hooks")
+            .first()
+            .expect("default hook present")
+            .id;
+        store::set_hook_enabled(&pool, &key, hook_id, true)
+            .await
+            .expect("enable default hook");
+
+        let (schedule_id,): (i64,) = sqlx::query_as(
+            "SELECT id FROM agentic_job_schedules
+              WHERE agent_key = $1 AND job_key = 'analysis-15m'",
+        )
+        .bind(&key)
+        .fetch_one(&pool)
+        .await
+        .expect("fetch analysis id");
+        pin_schedule_due(&pool, schedule_id, "15m").await;
+
+        let calls: Arc<Mutex<Vec<DispatchRequest>>> = Arc::new(Mutex::new(Vec::new()));
+        let failing: Arc<dyn AgenticBackend> = Arc::new(FailingBackend);
+        let live_accounts = Arc::new(crate::hyperliquid::live_state::LiveAccountStore::new());
+        let (_tx, rx) = watch::channel(false);
+        let (_force_tx, force_rx) = watch::channel(false);
+        let mut scheduler = AgenticScheduler::new(
+            pool.clone(),
+            rx,
+            force_rx,
+            failing,
+            live_accounts,
+            sample_workspace_config(),
+            sample_opencode_client(),
+            InFlightTracker::new(),
+        );
+        scheduler.tick().await.expect("tick");
+
+        // The failing backend records nothing; let the spawned task finish.
+        run_until(|| async {
+            list_run_statuses(&pool, &key)
+                .await
+                .iter()
+                .any(|status| status == crate::agentic::model::RUN_STATUS_FAILED)
+        })
+        .await;
+
+        // No dispatch should have succeeded and no follow-up hook call
+        // should have been issued.
+        assert!(
+            calls.lock().unwrap().is_empty(),
+            "failing backend must not produce successful dispatches or hook calls"
+        );
+
+        // Only the failed analysis run should exist; no market-analysis run.
+        let runs = store::list_agent_runs(&pool, &key, 20)
+            .await
+            .expect("list runs");
+        let job_keys: Vec<String> = runs.iter().map(|r| r.job_key.clone()).collect();
+        assert!(
+            !job_keys.iter().any(|k| k == "market-analysis"),
+            "market-analysis hook must not fire after a failed analysis batch, got {job_keys:?}"
+        );
+        assert!(
+            job_keys.iter().any(|k| k == "analysis-15m"),
+            "analysis run should be present, got {job_keys:?}"
+        );
     }
 }

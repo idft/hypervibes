@@ -9,13 +9,14 @@ use tracing::{info, warn};
 use crate::{
     agentic::{
         model::{
-            JOB_KIND_ANALYSIS, JOB_KIND_DAILY_REVIEW, JOB_KIND_MARKET_ANALYSIS, JOB_KIND_TRADING,
+            JOB_KIND_ANALYSIS, JOB_KIND_ANALYSIS_CODING, JOB_KIND_DAILY_REVIEW,
+            JOB_KIND_MARKET_ANALYSIS, JOB_KIND_TRADING,
         },
         store,
     },
     db::DbPool,
     opencode::{
-        client::{OpenCodeClient, OpenCodeCommandRequest},
+        client::{OpenCodeClient, OpenCodeCommandRequest, SessionStatusKind},
         workspace::OpenCodeWorkspaceRuntimeConfig,
     },
 };
@@ -27,6 +28,8 @@ const DEFAULT_MARKET_ANALYSIS_AGENT: &str = "market-analysis";
 const DEFAULT_MARKET_ANALYSIS_COMMAND: &str = "vibetrading-market-analysis";
 const DEFAULT_DAILY_REVIEW_AGENT: &str = "daily-review";
 const DEFAULT_DAILY_REVIEW_COMMAND: &str = "vibetrading-daily-review";
+const DEFAULT_ANALYSIS_CODING_AGENT: &str = "analysis-coding";
+const DEFAULT_ANALYSIS_CODING_COMMAND: &str = "vibetrading-analysis-coding";
 const DEFAULT_TRADING_AGENT: &str = "trading";
 const DEFAULT_TRADING_COMMAND: &str = "vibetrading-trading";
 
@@ -76,9 +79,36 @@ impl DispatchRequest {
 /// Trait implemented by anything that can execute a single scheduled
 /// run. The production wiring uses `OpenCodeBackend`; tests can
 /// substitute a fake.
+///
+/// The optional `abort_session` and `get_session_status` methods have
+/// safe default implementations (returning `Ok(false)` / `Ok(None)`)
+/// so test fakes can opt in only when they need to exercise
+/// cancellation behaviour.
 #[async_trait]
 pub trait AgenticBackend: Send + Sync {
     async fn dispatch(&self, request: DispatchRequest) -> Result<DispatchResult>;
+
+    /// Abort an in-flight OpenCode session. Returns `Ok(true)` if the
+    /// server accepted the abort signal. Returns `Ok(false)` if the
+    /// backend does not implement cancel (e.g. test fakes that never
+    /// produce a real session). Errors are reserved for genuine
+    /// transport/server failures.
+    async fn abort_session(&self, _base_url: &str, _session_id: &str) -> Result<bool> {
+        Ok(false)
+    }
+
+    /// Probe the live status of a previously-created OpenCode session.
+    /// Returns `Ok(None)` when the backend / server does not know about
+    /// the session (treated as terminal). Errors are reserved for
+    /// transport/server failures; "session not found" is a probe, not
+    /// an error.
+    async fn get_session_status(
+        &self,
+        _base_url: &str,
+        _session_id: &str,
+    ) -> Result<Option<SessionStatusKind>> {
+        Ok(None)
+    }
 }
 
 #[derive(Clone)]
@@ -183,6 +213,18 @@ impl AgenticBackend for OpenCodeBackend {
             backend_run_ref: session.id,
         })
     }
+
+    async fn abort_session(&self, base_url: &str, session_id: &str) -> Result<bool> {
+        self.client.abort_session(base_url, session_id).await
+    }
+
+    async fn get_session_status(
+        &self,
+        base_url: &str,
+        session_id: &str,
+    ) -> Result<Option<SessionStatusKind>> {
+        self.client.get_session_status(base_url, session_id).await
+    }
 }
 
 fn resolve_opencode_job(job_kind: &str) -> Result<(&'static str, &'static str)> {
@@ -193,6 +235,10 @@ fn resolve_opencode_job(job_kind: &str) -> Result<(&'static str, &'static str)> 
             DEFAULT_MARKET_ANALYSIS_COMMAND,
         )),
         JOB_KIND_DAILY_REVIEW => Ok((DEFAULT_DAILY_REVIEW_AGENT, DEFAULT_DAILY_REVIEW_COMMAND)),
+        JOB_KIND_ANALYSIS_CODING => Ok((
+            DEFAULT_ANALYSIS_CODING_AGENT,
+            DEFAULT_ANALYSIS_CODING_COMMAND,
+        )),
         JOB_KIND_TRADING => Ok((DEFAULT_TRADING_AGENT, DEFAULT_TRADING_COMMAND)),
         other => Err(anyhow!("unknown job kind: {other}")),
     }
@@ -210,43 +256,183 @@ fn build_command_model(model_provider_id: Option<&str>, model_id: Option<&str>) 
 }
 
 /// Run a single dispatch through the backend, applying the schedule's
-/// timeout. On timeout, the run is marked failed and a sanitized error
-/// is returned.
+/// timeout. On timeout, the backend's `abort_session` /
+/// `get_session_status` capabilities are used to confirm that the
+/// previously-created OpenCode session is no longer executing before
+/// marking the run `failed`. If cancellation cannot be confirmed (e.g.
+/// the abort endpoint is unavailable or the session is reported as
+/// `Busy` after abort), the run is left in `running` so recovery can
+/// retry the probe later; in that case `Err` is returned so callers
+/// do not trigger success-path follow-up hooks.
 pub async fn dispatch_with_timeout(
     pool: &crate::db::DbPool,
     backend: Arc<dyn AgenticBackend>,
     request: DispatchRequest,
 ) -> Result<DispatchOutcome> {
+    dispatch_with_timeout_mode(pool, backend, request, true).await
+}
+
+/// Execute an coding model session without terminalizing success. The
+/// coding worker owns final success/failure after report validation and
+/// promotion; timeout and backend failures still become terminal immediately.
+pub async fn dispatch_with_timeout_for_coding(
+    pool: &crate::db::DbPool,
+    backend: Arc<dyn AgenticBackend>,
+    request: DispatchRequest,
+) -> Result<DispatchOutcome> {
+    dispatch_with_timeout_mode(pool, backend, request, false).await
+}
+
+async fn dispatch_with_timeout_mode(
+    pool: &crate::db::DbPool,
+    backend: Arc<dyn AgenticBackend>,
+    request: DispatchRequest,
+    finalize_success: bool,
+) -> Result<DispatchOutcome> {
     let run_id = request.run_id;
     let timeout_seconds = request.timeout_seconds;
     let timeout = std::time::Duration::from_secs(timeout_seconds.max(0) as u64);
+    let runtime_base_url = request.runtime_base_url.clone();
 
     let dispatch_result = tokio::time::timeout(timeout, backend.dispatch(request)).await;
 
     match dispatch_result {
         Ok(Ok(result)) => {
-            let _ = store::mark_run_succeeded(pool, run_id, Some(&result.backend_run_ref)).await;
-            Ok(DispatchOutcome::Succeeded)
+            if finalize_success {
+                let _ =
+                    store::mark_run_succeeded(pool, run_id, Some(&result.backend_run_ref)).await;
+            }
+            Ok(DispatchOutcome::Succeeded {
+                backend_run_ref: result.backend_run_ref,
+            })
         }
         Ok(Err(error)) => {
             let summary = sanitize_error(&format!("{error:#}"));
             warn!(run_id, error = %summary, "agentic run failed");
             let _ = store::mark_run_failed(pool, run_id, &summary, None).await;
-            Ok(DispatchOutcome::Failed)
+            Ok(DispatchOutcome::Failed { summary })
         }
         Err(_elapsed) => {
-            let summary = format!("run exceeded timeout of {}s", timeout_seconds);
-            warn!(run_id, summary = %summary, "agentic run timed out");
-            let _ = store::mark_run_failed(pool, run_id, &summary, None).await;
-            Ok(DispatchOutcome::Failed)
+            // The backend future was dropped without producing a
+            // `DispatchResult`. The backend may already have persisted
+            // a `backend_run_ref` (session id) into the run row before
+            // the command itself blocked. Load it so we can confirm
+            // cancellation before terminalizing.
+            let session_id = store::get_run(pool, run_id)
+                .await?
+                .and_then(|row| row.backend_run_ref);
+
+            let Some(session_id) = session_id else {
+                // No session id was persisted: the dispatch was stuck
+                // during session creation. Safe to mark failed.
+                let summary = format!("run exceeded timeout of {timeout_seconds}s");
+                warn!(
+                    run_id,
+                    summary = %summary,
+                    "agentic run timed out before session was created"
+                );
+                let _ = store::mark_run_failed(pool, run_id, &summary, None).await;
+                return Ok(DispatchOutcome::Failed { summary });
+            };
+
+            match confirm_session_terminated(&backend, &runtime_base_url, &session_id).await {
+                Ok(TerminationOutcome::AlreadyTerminal) => {
+                    let summary = format!(
+                        "run exceeded timeout of {timeout_seconds}s; \
+                         OpenCode session already terminal"
+                    );
+                    warn!(run_id, summary = %summary, "agentic run timed out; session terminal");
+                    let _ = store::mark_run_failed(pool, run_id, &summary, None).await;
+                    Ok(DispatchOutcome::Failed { summary })
+                }
+                Ok(TerminationOutcome::Aborted) => {
+                    let summary = format!(
+                        "run exceeded timeout of {timeout_seconds}s; \
+                         OpenCode session aborted"
+                    );
+                    warn!(run_id, summary = %summary, "agentic run timed out; session aborted");
+                    let _ = store::mark_run_failed(pool, run_id, &summary, None).await;
+                    Ok(DispatchOutcome::Failed { summary })
+                }
+                Ok(TerminationOutcome::StillActive) => {
+                    warn!(
+                        run_id,
+                        session_id = %session_id,
+                        "could not terminate OpenCode session after \
+                         timeout; leaving run running for recovery"
+                    );
+                    Err(anyhow!(
+                        "timeout cancellation unconfirmed for session {session_id}"
+                    ))
+                }
+                Err(error) => {
+                    warn!(
+                        run_id,
+                        session_id = %session_id,
+                        error = ?error,
+                        "session termination probe failed; leaving run \
+                         running for recovery"
+                    );
+                    Err(error)
+                }
+            }
         }
     }
 }
 
+#[derive(Debug)]
+enum TerminationOutcome {
+    AlreadyTerminal,
+    Aborted,
+    StillActive,
+}
+
+const POST_ABORT_PROBE_ATTEMPTS: usize = 3;
+const POST_ABORT_PROBE_DELAY: std::time::Duration = std::time::Duration::from_secs(1);
+
+/// Probe `get_session_status`. If the session is already `Idle` (or
+/// the server does not know about it), return `AlreadyTerminal`.
+/// Otherwise call `abort_session`; if the server accepts the abort,
+/// probe the status a handful of times to wait for the session to
+/// drain. If the abort is reported unsupported or the session remains
+/// `Busy`/`Retry` afterwards, return `StillActive`.
+async fn confirm_session_terminated(
+    backend: &Arc<dyn AgenticBackend>,
+    base_url: &str,
+    session_id: &str,
+) -> Result<TerminationOutcome> {
+    let initial = backend.get_session_status(base_url, session_id).await?;
+    if !matches!(
+        initial,
+        Some(SessionStatusKind::Busy) | Some(SessionStatusKind::Retry)
+    ) {
+        // Either Idle, None (unknown), or no status known. All are
+        // treated as terminal for our purposes.
+        return Ok(TerminationOutcome::AlreadyTerminal);
+    }
+
+    let aborted = backend.abort_session(base_url, session_id).await?;
+    if !aborted {
+        return Ok(TerminationOutcome::StillActive);
+    }
+
+    for _ in 0..POST_ABORT_PROBE_ATTEMPTS {
+        tokio::time::sleep(POST_ABORT_PROBE_DELAY).await;
+        let status = backend.get_session_status(base_url, session_id).await?;
+        if !matches!(
+            status,
+            Some(SessionStatusKind::Busy) | Some(SessionStatusKind::Retry)
+        ) {
+            return Ok(TerminationOutcome::Aborted);
+        }
+    }
+    Ok(TerminationOutcome::StillActive)
+}
+
 #[derive(Debug, Clone)]
 pub enum DispatchOutcome {
-    Succeeded,
-    Failed,
+    Succeeded { backend_run_ref: String },
+    Failed { summary: String },
 }
 
 fn sanitize_error(input: &str) -> String {
@@ -360,6 +546,13 @@ mod tests {
                 DEFAULT_MARKET_ANALYSIS_COMMAND,
             )
         );
+        assert_eq!(
+            resolve_opencode_job(JOB_KIND_ANALYSIS_CODING).unwrap(),
+            (
+                DEFAULT_ANALYSIS_CODING_AGENT,
+                DEFAULT_ANALYSIS_CODING_COMMAND,
+            )
+        );
         assert!(resolve_opencode_job("unknown").is_err());
     }
 
@@ -419,7 +612,9 @@ mod tests {
             .await
             .expect("dispatch");
         match outcome {
-            DispatchOutcome::Succeeded => {}
+            DispatchOutcome::Succeeded { backend_run_ref } => {
+                assert_eq!(backend_run_ref, "ses_test");
+            }
             other => panic!("expected Succeeded, got {other:?}"),
         }
         let calls = backend.calls.lock().unwrap();
@@ -435,8 +630,366 @@ mod tests {
             .await
             .expect("dispatch");
         match outcome {
-            DispatchOutcome::Failed => {}
+            DispatchOutcome::Failed { summary } => {
+                assert!(summary.contains("simulated dispatch failure"));
+            }
             other => panic!("expected Failed, got {other:?}"),
         }
+    }
+
+    /// Fake backend that simulates an OpenCode dispatch that:
+    /// 1. persists a `backend_run_ref` immediately (so the run row has
+    ///    a session id before the command blocks), then
+    /// 2. blocks forever until the dispatch future is cancelled by the
+    ///    timeout algorithm.
+    ///
+    /// Its `abort_session` and `get_session_status` overrides let each
+    /// test fixture drive the cancellation outcome deterministically
+    /// without touching a real OpenCode server.
+    struct BlockingBackend {
+        pool: DbPool,
+        session_id: String,
+        initial_status: SessionStatusKind,
+        post_abort_status: SessionStatusKind,
+        abort_returns: bool,
+        abort_calls: Arc<std::sync::Mutex<Vec<String>>>,
+        status_calls: Arc<std::sync::Mutex<usize>>,
+    }
+
+    #[async_trait]
+    impl AgenticBackend for BlockingBackend {
+        async fn dispatch(&self, request: DispatchRequest) -> Result<DispatchResult> {
+            let _ =
+                store::mark_run_running(&self.pool, request.run_id, Some(&self.session_id)).await;
+            std::future::pending::<()>().await;
+            unreachable!("dispatch should never return; timeout cancels it");
+        }
+
+        async fn abort_session(&self, _base_url: &str, session_id: &str) -> Result<bool> {
+            self.abort_calls
+                .lock()
+                .expect("lock abort calls")
+                .push(session_id.to_string());
+            Ok(self.abort_returns)
+        }
+
+        async fn get_session_status(
+            &self,
+            _base_url: &str,
+            session_id: &str,
+        ) -> Result<Option<SessionStatusKind>> {
+            *self.status_calls.lock().expect("lock status calls") += 1;
+            assert_eq!(session_id, self.session_id);
+            let aborts = self.abort_calls.lock().expect("count aborts").len();
+            Ok(Some(if aborts > 0 {
+                self.post_abort_status
+            } else {
+                self.initial_status
+            }))
+        }
+    }
+
+    /// Helper: seed an agent + schedule + queued run row, returning both
+    /// the schedule id and the run row's id plus an `agent_key` for
+    /// verification.
+    async fn seed_run_for_timeout_test(pool: &DbPool, key: &str) -> (i64, i64, String) {
+        use crate::agentic::store::insert_default_opencode_schedules;
+        use crate::agents::{
+            crypto::EncryptionKey,
+            keys::derive_wallet_address,
+            model::{AgentRegistryRow, BACKEND_KIND_OPENCODE},
+            store::insert_agent,
+        };
+        let enc = EncryptionKey::new(
+            "test",
+            [
+                0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22,
+                23, 24, 25, 26, 27, 28, 29, 30, 31,
+            ],
+        );
+        // Seed a deterministic private key.
+        fn deterministic_private_key(key: &str) -> String {
+            use rand::rngs::StdRng;
+            use rand::{RngExt, SeedableRng};
+            let seed = key
+                .bytes()
+                .fold(0u64, |acc, b| acc.wrapping_mul(31).wrapping_add(b as u64));
+            let mut rng = StdRng::seed_from_u64(seed);
+            let bytes: [u8; 32] = rng.random();
+            format!("0x{}", hex::encode(bytes))
+        }
+        let private_key = deterministic_private_key(key);
+        let ciphertext = crate::agents::crypto::encrypt(&enc, &private_key).expect("encrypt");
+        let wallet = derive_wallet_address(&private_key).expect("wallet");
+        let now = Utc::now();
+        insert_agent(
+            pool,
+            &AgentRegistryRow {
+                agent_key: key.to_string(),
+                created_at: now,
+                updated_at: now,
+                enabled: true,
+                display_name: format!("Test {key}"),
+                wallet_address: wallet,
+                environment: "live".to_string(),
+                api_key: format!("vta_{key}"),
+                api_key_last_used_at: None,
+                backend_kind: BACKEND_KIND_OPENCODE.to_string(),
+                runtime_id: "opencode-local".to_string(),
+                runtime_config: serde_json::json!({
+                    "workspace_host_path": format!("workspaces/agents/{key}"),
+                    "workspace_container_path": format!("/workspaces/agents/{key}"),
+                    "profile_source": "agent-runtime/workspace-template",
+                }),
+                hyperliquid_private_key_ciphertext: ciphertext,
+                hyperliquid_private_key_key_id: "test".to_string(),
+            },
+        )
+        .await
+        .expect("insert agent");
+        insert_default_opencode_schedules(pool, key)
+            .await
+            .expect("insert default schedules");
+
+        let (schedule_id,): (i64,) = sqlx::query_as(
+            "SELECT id FROM agentic_job_schedules
+              WHERE agent_key = $1 AND job_key = 'analysis-15m'",
+        )
+        .bind(key)
+        .fetch_one(pool)
+        .await
+        .expect("fetch schedule id");
+
+        // Insert a queued run row directly so dispatch_with_timeout has
+        // something to load and persist into.
+        let (run_id,): (i64,) = sqlx::query_as(
+            "INSERT INTO agentic_runs (
+                 schedule_id, agent_key, job_key, job_kind, timeframe,
+                 status, scheduled_for, timeout_seconds
+             ) VALUES ($1, $2, 'analysis-15m', 'analysis', '15m',
+                       'queued', now(), $3)
+             RETURNING id",
+        )
+        .bind(schedule_id)
+        .bind(key)
+        .bind(2_i32) // 2 second timeout for the test
+        .fetch_one(pool)
+        .await
+        .expect("insert queued run");
+
+        (schedule_id, run_id, key.to_string())
+    }
+
+    #[tokio::test]
+    async fn dispatch_with_timeout_aborts_when_session_already_terminal() {
+        let pool = crate::test_db::pool().await;
+        let key = format!(
+            "abort-terminal-{}",
+            Utc::now().timestamp_nanos_opt().unwrap_or(0)
+        );
+        let (schedule_id, run_id, agent_key) = seed_run_for_timeout_test(&pool, &key).await;
+        let session_id = format!("ses_terminal_{}", run_id);
+
+        let backend = Arc::new(BlockingBackend {
+            pool: pool.clone(),
+            session_id: session_id.clone(),
+            initial_status: SessionStatusKind::Idle,
+            post_abort_status: SessionStatusKind::Idle,
+            abort_returns: true,
+            abort_calls: Arc::new(std::sync::Mutex::new(Vec::new())),
+            status_calls: Arc::new(std::sync::Mutex::new(0)),
+        });
+        let backend_arc: Arc<dyn AgenticBackend> = backend.clone();
+
+        let request = DispatchRequest {
+            run_id,
+            schedule_id: Some(schedule_id),
+            hook_id: None,
+            agent_key,
+            display_name: key.clone(),
+            job_key: "analysis-15m".to_string(),
+            job_kind: JOB_KIND_ANALYSIS.to_string(),
+            timeframe: Some("15m".to_string()),
+            operator_prompt: String::new(),
+            strategy_prompt: String::new(),
+            accumulated_learnings: None,
+            system_prompt: String::new(),
+            environment: "live".to_string(),
+            selected_instruments: Vec::new(),
+            account_snapshot: None,
+            model_provider_id: None,
+            model_id: None,
+            timeout_seconds: 1,
+            runtime_base_url: "http://localhost:14096".to_string(),
+            runtime_config: serde_json::json!({}),
+            scheduled_for: Utc::now(),
+            review_window_start: None,
+            review_window_end: None,
+        };
+
+        let outcome = dispatch_with_timeout(&pool, backend_arc, request)
+            .await
+            .expect("dispatch returned outcome");
+
+        match outcome {
+            DispatchOutcome::Failed { summary } => {
+                assert!(
+                    summary.contains("already terminal"),
+                    "expected 'already terminal' summary, got {summary:?}"
+                );
+            }
+            other => panic!("expected Failed, got {other:?}"),
+        }
+
+        let run = store::get_run(&pool, run_id)
+            .await
+            .expect("fetch run")
+            .expect("run row");
+        assert_eq!(run.status, crate::agentic::model::RUN_STATUS_FAILED);
+        assert_eq!(run.backend_run_ref.as_deref(), Some(session_id.as_str()));
+        // The session was already idle so no abort should be issued.
+        assert!(
+            backend.abort_calls.lock().expect("abort calls").is_empty(),
+            "abort should not be called for already-terminal session"
+        );
+    }
+
+    #[tokio::test]
+    async fn dispatch_with_timeout_aborts_active_session_and_marks_failed() {
+        let pool = crate::test_db::pool().await;
+        let key = format!("abort-ok-{}", Utc::now().timestamp_nanos_opt().unwrap_or(0));
+        let (schedule_id, run_id, agent_key) = seed_run_for_timeout_test(&pool, &key).await;
+        let session_id = format!("ses_abort_{}", run_id);
+
+        let backend = Arc::new(BlockingBackend {
+            pool: pool.clone(),
+            session_id: session_id.clone(),
+            initial_status: SessionStatusKind::Busy,
+            post_abort_status: SessionStatusKind::Idle,
+            abort_returns: true,
+            abort_calls: Arc::new(std::sync::Mutex::new(Vec::new())),
+            status_calls: Arc::new(std::sync::Mutex::new(0)),
+        });
+        let backend_arc: Arc<dyn AgenticBackend> = backend.clone();
+
+        let request = DispatchRequest {
+            run_id,
+            schedule_id: Some(schedule_id),
+            hook_id: None,
+            agent_key,
+            display_name: key.clone(),
+            job_key: "analysis-15m".to_string(),
+            job_kind: JOB_KIND_ANALYSIS.to_string(),
+            timeframe: Some("15m".to_string()),
+            operator_prompt: String::new(),
+            strategy_prompt: String::new(),
+            accumulated_learnings: None,
+            system_prompt: String::new(),
+            environment: "live".to_string(),
+            selected_instruments: Vec::new(),
+            account_snapshot: None,
+            model_provider_id: None,
+            model_id: None,
+            timeout_seconds: 1,
+            runtime_base_url: "http://localhost:14096".to_string(),
+            runtime_config: serde_json::json!({}),
+            scheduled_for: Utc::now(),
+            review_window_start: None,
+            review_window_end: None,
+        };
+
+        let outcome = dispatch_with_timeout(&pool, backend_arc, request)
+            .await
+            .expect("dispatch returned outcome");
+
+        match outcome {
+            DispatchOutcome::Failed { summary } => {
+                assert!(
+                    summary.contains("aborted"),
+                    "expected aborted summary, got {summary:?}"
+                );
+            }
+            other => panic!("expected Failed, got {other:?}"),
+        }
+
+        assert_eq!(
+            backend.abort_calls.lock().expect("abort calls").len(),
+            1,
+            "abort should fire exactly once"
+        );
+        let run = store::get_run(&pool, run_id)
+            .await
+            .expect("fetch run")
+            .expect("run row");
+        assert_eq!(run.status, crate::agentic::model::RUN_STATUS_FAILED);
+    }
+
+    #[tokio::test]
+    async fn dispatch_with_timeout_keeps_run_running_when_abort_unconfirmed() {
+        let pool = crate::test_db::pool().await;
+        let key = format!(
+            "abort-fail-{}",
+            Utc::now().timestamp_nanos_opt().unwrap_or(0)
+        );
+        let (schedule_id, run_id, agent_key) = seed_run_for_timeout_test(&pool, &key).await;
+        let session_id = format!("ses_active_{}", run_id);
+
+        let backend = Arc::new(BlockingBackend {
+            pool: pool.clone(),
+            session_id: session_id.clone(),
+            initial_status: SessionStatusKind::Busy,
+            // After "abort" the session stays busy (abort signals
+            // unsupported or refused) -- the post-abort probe loop
+            // should still report Busy and dispatch_with_timeout must
+            // leave the run running.
+            post_abort_status: SessionStatusKind::Busy,
+            abort_returns: false,
+            abort_calls: Arc::new(std::sync::Mutex::new(Vec::new())),
+            status_calls: Arc::new(std::sync::Mutex::new(0)),
+        });
+        let backend_arc: Arc<dyn AgenticBackend> = backend.clone();
+
+        let request = DispatchRequest {
+            run_id,
+            schedule_id: Some(schedule_id),
+            hook_id: None,
+            agent_key,
+            display_name: key.clone(),
+            job_key: "analysis-15m".to_string(),
+            job_kind: JOB_KIND_ANALYSIS.to_string(),
+            timeframe: Some("15m".to_string()),
+            operator_prompt: String::new(),
+            strategy_prompt: String::new(),
+            accumulated_learnings: None,
+            system_prompt: String::new(),
+            environment: "live".to_string(),
+            selected_instruments: Vec::new(),
+            account_snapshot: None,
+            model_provider_id: None,
+            model_id: None,
+            timeout_seconds: 1,
+            runtime_base_url: "http://localhost:14096".to_string(),
+            runtime_config: serde_json::json!({}),
+            scheduled_for: Utc::now(),
+            review_window_start: None,
+            review_window_end: None,
+        };
+
+        let outcome = dispatch_with_timeout(&pool, backend_arc, request).await;
+
+        assert!(
+            outcome.is_err(),
+            "expected dispatch_with_timeout to surface Err when abort cannot be confirmed, got {outcome:?}"
+        );
+
+        let run = store::get_run(&pool, run_id)
+            .await
+            .expect("fetch run")
+            .expect("run row");
+        assert_eq!(
+            run.status,
+            crate::agentic::model::RUN_STATUS_RUNNING,
+            "run should remain running while session cancellation is unconfirmed"
+        );
     }
 }

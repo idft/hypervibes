@@ -3,8 +3,9 @@ use sqlx::query_as;
 
 use crate::{
     agents::prompts::{
-        DEFAULT_ANALYSIS_STRATEGY_PROMPT, DEFAULT_DAILY_REVIEW_STRATEGY_PROMPT,
-        DEFAULT_MARKET_ANALYSIS_STRATEGY_PROMPT, DEFAULT_TRADING_STRATEGY_PROMPT,
+        DEFAULT_ANALYSIS_CODING_STRATEGY_PROMPT, DEFAULT_ANALYSIS_STRATEGY_PROMPT,
+        DEFAULT_DAILY_REVIEW_STRATEGY_PROMPT, DEFAULT_MARKET_ANALYSIS_STRATEGY_PROMPT,
+        DEFAULT_TRADING_STRATEGY_PROMPT,
     },
     db::DbPool,
 };
@@ -13,6 +14,7 @@ pub const PROMPT_KIND_ANALYSIS: &str = "analysis";
 pub const PROMPT_KIND_MARKET_ANALYSIS: &str = "market_analysis";
 pub const PROMPT_KIND_TRADING: &str = "trading";
 pub const PROMPT_KIND_DAILY_REVIEW: &str = "daily_review";
+pub const PROMPT_KIND_ANALYSIS_CODING: &str = "analysis_coding";
 
 #[derive(Debug, Clone, sqlx::FromRow)]
 pub struct AgentStrategyPromptRow {
@@ -26,6 +28,9 @@ pub fn prompt_kind_for_job_kind(job_kind: &str) -> Option<&'static str> {
         crate::agentic::model::JOB_KIND_MARKET_ANALYSIS => Some(PROMPT_KIND_MARKET_ANALYSIS),
         crate::agentic::model::JOB_KIND_TRADING => Some(PROMPT_KIND_TRADING),
         crate::agentic::model::JOB_KIND_DAILY_REVIEW => Some(PROMPT_KIND_DAILY_REVIEW),
+        crate::agentic::model::JOB_KIND_ANALYSIS_CODING => {
+            Some(PROMPT_KIND_ANALYSIS_CODING)
+        }
         _ => None,
     }
 }
@@ -37,6 +42,7 @@ pub fn is_valid_prompt_kind(value: &str) -> bool {
             | PROMPT_KIND_MARKET_ANALYSIS
             | PROMPT_KIND_TRADING
             | PROMPT_KIND_DAILY_REVIEW
+            | PROMPT_KIND_ANALYSIS_CODING
     )
 }
 
@@ -46,16 +52,18 @@ pub fn default_prompt_for_kind(prompt_kind: &str) -> &'static str {
         PROMPT_KIND_MARKET_ANALYSIS => DEFAULT_MARKET_ANALYSIS_STRATEGY_PROMPT,
         PROMPT_KIND_TRADING => DEFAULT_TRADING_STRATEGY_PROMPT,
         PROMPT_KIND_DAILY_REVIEW => DEFAULT_DAILY_REVIEW_STRATEGY_PROMPT,
+        PROMPT_KIND_ANALYSIS_CODING => DEFAULT_ANALYSIS_CODING_STRATEGY_PROMPT,
         _ => "",
     }
 }
 
-pub fn all_prompt_kinds() -> [&'static str; 4] {
+pub fn all_prompt_kinds() -> [&'static str; 5] {
     [
         PROMPT_KIND_ANALYSIS,
         PROMPT_KIND_MARKET_ANALYSIS,
         PROMPT_KIND_TRADING,
         PROMPT_KIND_DAILY_REVIEW,
+        PROMPT_KIND_ANALYSIS_CODING,
     ]
 }
 
@@ -144,4 +152,20 @@ pub async fn insert_default_strategy_prompts_for_agent(
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn coding_migration_backfill_matches_rust_default() {
+        let migration = include_str!("../../migrations/0013_analysis_coding_job.sql");
+        let marker = "$analysis_coding_prompt$";
+        let mut parts = migration.split(marker);
+        let _before = parts.next().expect("migration prefix");
+        let backfill = parts.next().expect("coding prompt backfill");
+
+        assert_eq!(backfill, DEFAULT_ANALYSIS_CODING_STRATEGY_PROMPT);
+    }
 }

@@ -200,7 +200,7 @@ async fn post_job_run_now_queues_and_dispatches_run() {
             .headers()
             .get("location")
             .and_then(|value| value.to_str().ok()),
-        Some(format!("/agents/{agent_key}/jobs").as_str())
+        Some(format!("/agents/{agent_key}/runs/1").as_str())
     );
 
     let deadline = tokio::time::Instant::now() + tokio::time::Duration::from_secs(1);
@@ -580,13 +580,26 @@ async fn post_toggle_all_jobs_updates_schedules_and_hooks() {
             .iter()
             .all(|row| row.enabled)
     );
-    assert!(
-        crate::agentic::store::list_agent_hooks(&pool, &agent_key)
-            .await
-            .expect("list hooks")
-            .iter()
-            .all(|row| row.enabled)
-    );
+    // Bulk-enable must NOT enable the autonomous analysis-coding
+    // hook; the operator must enable it explicitly with a pinned model.
+    let hooks = crate::agentic::store::list_agent_hooks(&pool, &agent_key)
+        .await
+        .expect("list hooks");
+    for hook in &hooks {
+        if hook.job_kind == crate::agentic::model::JOB_KIND_ANALYSIS_CODING {
+            assert!(
+                !hook.enabled,
+                "coding hook {} must remain disabled after bulk enable",
+                hook.id
+            );
+        } else {
+            assert!(
+                hook.enabled,
+                "non-coding hook {} ({}) should be enabled after bulk enable",
+                hook.id, hook.job_kind
+            );
+        }
+    }
 
     let response = router(state.clone())
         .oneshot(

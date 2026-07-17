@@ -24,8 +24,8 @@ use crate::{
         error::AppError,
         templates::{
             AgentShowTab, OpenCodeWorkspaceMaintenanceStatusTemplate,
-            OpenCodeWorkspaceMaintenanceView, OpenCodeWorkspaceSectionTemplate,
-            OpenCodeWorkspaceSettingsView,
+            OpenCodeWorkspaceMaintenanceStatusView, OpenCodeWorkspaceMaintenanceView,
+            OpenCodeWorkspaceSectionTemplate, OpenCodeWorkspaceSettingsView,
         },
     },
 };
@@ -131,11 +131,57 @@ pub(in crate::web::routes) async fn agents_update_instruments(
 pub(in crate::web::routes) async fn load_workspace_maintenance_view(
     pool: &crate::db::DbPool,
     agent_key: &str,
+    workspace_config: &crate::opencode::workspace::OpenCodeWorkspaceConfig,
 ) -> Result<OpenCodeWorkspaceMaintenanceView, AppError> {
-    let task = crate::agentic::store::get_latest_workspace_regenerate_task(pool, agent_key).await?;
-    Ok(task
-        .map(|task| OpenCodeWorkspaceMaintenanceView::from_task(agent_key, task))
-        .unwrap_or_else(|| OpenCodeWorkspaceMaintenanceView::idle(agent_key)))
+    let task = crate::agentic::store::get_latest_maintenance_task(pool, agent_key).await?;
+    let Some(task) = task else {
+        return Ok(OpenCodeWorkspaceMaintenanceView::idle(agent_key));
+    };
+    let (report_summary, changed_paths) =
+        if task.task_kind == crate::agentic::model::MAINTENANCE_TASK_KIND_ANALYSIS_CODING {
+            let report = crate::opencode::coding_workspace::candidate_root(
+                workspace_config,
+                agent_key,
+                task.id,
+            )
+            .ok()
+            .and_then(|root| {
+                root.parent()
+                    .map(|parent| parent.join("coding-report.json"))
+            })
+            .and_then(|path| std::fs::read_to_string(path).ok())
+            .and_then(|content| serde_json::from_str::<serde_json::Value>(&content).ok());
+            (
+                report
+                    .as_ref()
+                    .and_then(|value| value.get("summary"))
+                    .and_then(serde_json::Value::as_str)
+                    .map(ToString::to_string),
+                report
+                    .as_ref()
+                    .and_then(|value| value.get("changed_paths"))
+                    .and_then(serde_json::Value::as_array)
+                    .map(|paths| {
+                        paths
+                            .iter()
+                            .filter_map(|path| path.as_str().map(ToString::to_string))
+                            .collect()
+                    })
+                    .unwrap_or_default(),
+            )
+        } else {
+            (None, Vec::new())
+        };
+    let status = OpenCodeWorkspaceMaintenanceStatusView::from_task_with_report(
+        task,
+        report_summary,
+        changed_paths,
+    );
+    Ok(OpenCodeWorkspaceMaintenanceView {
+        poll_url: format!("/agents/{agent_key}/settings/workspace-maintenance-status"),
+        should_poll: status.should_poll,
+        status: Some(status),
+    })
 }
 pub(in crate::web::routes) async fn build_opencode_workspace_settings_view(
     state: &Arc<AppState>,
@@ -156,7 +202,11 @@ pub(in crate::web::routes) async fn build_opencode_workspace_settings_view(
     .ok()
     .map(crate::web::templates::OpenCodeWorkspaceTemplateDriftView::from_diff)
     .unwrap_or_else(crate::web::templates::OpenCodeWorkspaceTemplateDriftView::unavailable);
-    let maintenance = load_workspace_maintenance_view(&state.db_pool, &agent.agent_key)
+    let maintenance = load_workspace_maintenance_view(
+        &state.db_pool,
+        &agent.agent_key,
+        &state.opencode_workspace_config,
+    )
         .await
         .inspect_err(|error| {
             warn!(agent_key = %agent.agent_key, error = ?error, "failed to load workspace maintenance state for settings page");

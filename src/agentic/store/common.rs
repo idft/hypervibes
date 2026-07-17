@@ -3,7 +3,7 @@ use chrono::Utc;
 use sqlx::query_as;
 
 use crate::{
-    agentic::model::{RUN_STATUS_QUEUED, RUN_STATUS_RUNNING},
+    agentic::model::{JOB_KIND_ANALYSIS_CODING, RUN_STATUS_QUEUED, RUN_STATUS_RUNNING},
     db::DbPool,
 };
 
@@ -11,7 +11,40 @@ pub(crate) const ACTIVE_STATUSES: [&str; 2] = [RUN_STATUS_QUEUED, RUN_STATUS_RUN
 
 pub(crate) const ERROR_SUMMARY_MAX_CHARS: usize = 500;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum HookRunInsertMode {
+    Manual,
+    AnalysisContinuation,
+    CodingTrigger,
+}
+
+/// Serialize state transitions that can start work or activate maintenance
+/// for one agent. Callers must acquire this before locking a schedule, hook,
+/// or maintenance task row.
+pub(crate) async fn lock_agent_coordination_tx(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    agent_key: &str,
+) -> Result<()> {
+    let exists: Option<(String,)> =
+        query_as("SELECT agent_key FROM agents WHERE agent_key = $1 FOR UPDATE")
+            .bind(agent_key)
+            .fetch_optional(&mut **tx)
+            .await
+            .with_context(|| format!("failed to lock agent coordination row for {agent_key}"))?;
+    if exists.is_none() {
+        anyhow::bail!("agent {agent_key} not found")
+    }
+    Ok(())
+}
+
 /// Toggle every schedule and hook for an agent to the same enabled state.
+///
+/// Bulk enable is intentionally conservative with respect to autonomous
+/// code modification: enabling the schedule + market-analysis hook must
+/// NOT enable the `analysis_coding` hook. That hook has to be
+/// enabled by hand and pinned to an explicit strong provider/model
+/// before any automatic code coding can fire. Bulk disable still
+/// turns every hook (including coding) off.
 pub async fn set_all_agent_jobs_enabled(
     pool: &DbPool,
     agent_key: &str,
@@ -21,10 +54,11 @@ pub async fn set_all_agent_jobs_enabled(
         .begin()
         .await
         .context("failed to start jobs toggle transaction")?;
+    lock_agent_coordination_tx(&mut tx, agent_key).await?;
 
     sqlx::query(
         "UPDATE agentic_job_schedules
-           SET enabled = $2,
+            SET enabled = $2,
                 updated_at = now()
           WHERE agent_key = $1
             AND ($2 = false OR (model_provider_id IS NOT NULL AND model_id IS NOT NULL))",
@@ -35,18 +69,36 @@ pub async fn set_all_agent_jobs_enabled(
     .await
     .with_context(|| format!("failed to toggle schedules for agent {agent_key}"))?;
 
-    sqlx::query(
-        "UPDATE agentic_job_hooks
-            SET enabled = $2,
-                updated_at = now()
-          WHERE agent_key = $1
-            AND ($2 = false OR (model_provider_id IS NOT NULL AND model_id IS NOT NULL))",
-    )
-    .bind(agent_key)
-    .bind(enabled)
-    .execute(&mut *tx)
-    .await
-    .with_context(|| format!("failed to toggle hooks for agent {agent_key}"))?;
+    if enabled {
+        // Bulk enable turns on every hook EXCEPT autonomous analysis
+        // coding. Operators must enable coding by hand and
+        // pin a model to it before any code changes can fire.
+        sqlx::query(
+            "UPDATE agentic_job_hooks
+                SET enabled = true,
+                    updated_at = now()
+              WHERE agent_key = $1
+                AND job_kind <> $2
+                AND model_provider_id IS NOT NULL
+                AND model_id IS NOT NULL",
+        )
+        .bind(agent_key)
+        .bind(JOB_KIND_ANALYSIS_CODING)
+        .execute(&mut *tx)
+        .await
+        .with_context(|| format!("failed to bulk-enable hooks for agent {agent_key}"))?;
+    } else {
+        sqlx::query(
+            "UPDATE agentic_job_hooks
+                SET enabled = false,
+                    updated_at = now()
+              WHERE agent_key = $1",
+        )
+        .bind(agent_key)
+        .execute(&mut *tx)
+        .await
+        .with_context(|| format!("failed to toggle hooks for agent {agent_key}"))?;
+    }
 
     tx.commit()
         .await

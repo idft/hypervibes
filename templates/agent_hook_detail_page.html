@@ -35,7 +35,7 @@
                 <div class="flex flex-wrap items-center gap-2" data-timeout-display-row>
                     <span class="font-mono text-sm text-zinc-200">{{ hook.timeout_editor.display_text }}</span>
                     <button type="button" data-timeout-edit-trigger
-                        class="inline-flex items-center justify-center rounded-full p-1 text-zinc-500 transition hover:text-zinc-200"
+                         class="inline-flex cursor-pointer items-center justify-center rounded-full p-1 text-zinc-500 transition hover:text-zinc-200"
                         aria-label="Edit timeout">
                         <svg class="h-3.5 w-3.5" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
                             <path d="M2.695 14.763l-1.262 3.155a.5.5 0 0 0 .65.65l3.155-1.262a4 4 0 0 0 1.343-.886L17.5 6.5a2.121 2.121 0 0 0-3-3L3.818 14.182a4 4 0 0 0-.885 1.343Z"></path>
@@ -81,15 +81,28 @@
                 <h2 class="text-lg font-medium text-white">Hook details</h2>
             </div>
             <div class="flex flex-wrap items-center gap-2">
-                <form action="{{ hook.run_now_action }}" method="post">
-                    <button type="submit" {% if !hook.has_model %}disabled title="No model set"{% endif %} class="rounded-full border border-sky-900/60 bg-sky-950/30 px-4 py-2 text-sm font-medium text-sky-300 hover:border-sky-800 hover:bg-sky-950/50 hover:text-sky-200 {% if hook.has_model %}cursor-pointer{% else %}cursor-not-allowed opacity-50{% endif %}">
+                <form action="{{ hook.run_now_action }}" method="post" class="flex flex-wrap items-center gap-2">
+                    <button type="submit" {% if !hook.has_model %}disabled title="No model set"{% endif %} class="inline-flex items-center gap-2 rounded-full border border-sky-900/60 bg-sky-950/30 px-4 py-2 text-sm font-medium text-sky-300 hover:border-sky-800 hover:bg-sky-950/50 hover:text-sky-200 {% if hook.has_model %}cursor-pointer{% else %}cursor-not-allowed opacity-50{% endif %}">
+                        <svg class="h-4 w-4" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
+                            <path d="M11.536 2.232a.75.75 0 0 1 .95.46l.478 1.434a.75.75 0 0 0 .475.475l1.434.478a.75.75 0 0 1 0 1.422l-1.434.478a.75.75 0 0 0-.475.475l-.478 1.434a.75.75 0 0 1-1.422 0l-.478-1.434a.75.75 0 0 0-.475-.475l-1.434-.478a.75.75 0 0 1 0-1.422l1.434-.478a.75.75 0 0 0 .475-.475l.478-1.434a.75.75 0 0 1 .472-.46Zm-5.78 6.91a.75.75 0 0 1 .987-.383l1.355.581a.75.75 0 0 0 .987-.987l-.581-1.355a.75.75 0 0 1 1.37-.588l.582 1.355a.75.75 0 0 0 .394.394l1.355.582a.75.75 0 0 1-.588 1.37l-1.355-.581a.75.75 0 0 0-.987.987l.581 1.355a.75.75 0 0 1-1.37.588l-.582-1.355a.75.75 0 0 0-.394-.394l-1.355-.582a.75.75 0 0 1-.383-.987Zm-.006 5.151A.75.75 0 0 1 7 14.75h4a.75.75 0 0 1 .53 1.28l-2 2a.75.75 0 0 1-1.06 0l-2-2a.75.75 0 0 1-.22-.53.75.75 0 0 1 .22-.53.75.75 0 0 1 .53-.22h4-4Z"></path>
+                        </svg>
                         Run now
                     </button>
                 </form>
                 <form action="{{ hook.toggle_action }}" method="post">
                     <input type="hidden" name="enabled" value="{{ hook.hidden_enabled_value }}">
-                    <button type="submit" {% if !hook.enabled && !hook.has_model %}disabled title="No model set"{% endif %} class="rounded-full border px-4 py-2 text-sm font-medium {% if hook.enabled %}border-zinc-800 text-zinc-300 hover:border-zinc-700 hover:text-white{% else if hook.has_model %}border-emerald-900/60 bg-emerald-950/20 text-emerald-300 hover:border-emerald-800 hover:bg-emerald-950/40 hover:text-emerald-200{% else %}border-zinc-800 text-zinc-500 cursor-not-allowed opacity-50{% endif %}">
-                        {% if hook.enabled %}Disable{% else %}Enable{% endif %}
+                     <button type="submit" {% if !hook.enabled && !hook.has_model %}disabled title="No model set"{% endif %} class="inline-flex cursor-pointer items-center gap-2 rounded-full border px-4 py-2 text-sm font-medium {% if hook.enabled %}border-zinc-800 text-zinc-300 hover:border-zinc-700 hover:text-white{% else if hook.has_model %}border-emerald-900/60 bg-emerald-950/20 text-emerald-300 hover:border-emerald-800 hover:bg-emerald-950/40 hover:text-emerald-200{% else %}border-zinc-800 text-zinc-500 cursor-not-allowed opacity-50{% endif %}">
+                         {% if hook.enabled %}
+                         <svg class="h-4 w-4" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
+                             <path d="M5.75 4A1.75 1.75 0 0 0 4 5.75v8.5C4 15.216 4.784 16 5.75 16h1.5A1.75 1.75 0 0 0 9 14.25v-8.5A1.75 1.75 0 0 0 7.25 4h-1.5Zm7 0A1.75 1.75 0 0 0 11 5.75v8.5c0 .966.784 1.75 1.75 1.75h1.5A1.75 1.75 0 0 0 16 14.25v-8.5A1.75 1.75 0 0 0 14.25 4h-1.5Z"></path>
+                         </svg>
+                         Disable
+                         {% else %}
+                         <svg class="h-4 w-4" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
+                             <path d="M6.5 5.5a1.5 1.5 0 0 1 2.28-1.28l6 3.75a1.5 1.5 0 0 1 0 2.56l-6 3.75A1.5 1.5 0 0 1 6.5 13V5.5Z"></path>
+                         </svg>
+                         Enable
+                         {% endif %}
                     </button>
                 </form>
                 {% set delete_action = hook.delete_action %}
@@ -147,7 +160,6 @@
     <section class="mt-6 border-t border-zinc-800 pt-6">
         <div>
             <h2 class="text-lg font-medium text-white">Runs</h2>
-            <p class="mt-1 max-w-3xl text-sm leading-6 text-zinc-400">Most recent runs recorded for this hook. Click any row for full run details and mirrored OpenCode session data.</p>
         </div>
         {% if !hook_runs_loaded %}
         <div class="mt-4 rounded-xl border border-amber-900/60 bg-amber-950/30 px-4 py-3 text-sm text-amber-200">Runs could not be loaded.</div>
@@ -165,8 +177,7 @@
                         <th class="px-4 py-3 font-medium">Started</th>
                         <th class="px-4 py-3 font-medium">Finished</th>
                         <th class="px-4 py-3 font-medium">Duration</th>
-                        <th class="px-4 py-3 font-medium">Backend ref</th>
-                        <th class="px-4 py-3 font-medium">Error</th>
+                        <th class="px-4 py-3 font-medium"></th>
                     </tr>
                 </thead>
                 <tbody class="divide-y divide-zinc-800">
@@ -193,13 +204,6 @@
                             {% endif %}
                         </td>
                         <td class="px-4 py-3 align-top font-mono text-xs text-zinc-300">{{ run.duration_text }}</td>
-                        <td class="px-4 py-3 align-top break-all font-mono text-xs text-zinc-300">
-                            {% if run.backend_run_ref.is_empty() %}
-                            <span class="text-zinc-500">—</span>
-                            {% else %}
-                            {{ run.backend_run_ref }}
-                            {% endif %}
-                        </td>
                         <td class="px-4 py-3 align-top text-xs text-zinc-300">
                             {% if run.error_summary.is_empty() %}
                             <span class="text-zinc-500">—</span>

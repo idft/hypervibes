@@ -51,6 +51,7 @@ async fn main() -> Result<()> {
         config.agents_encryption_key,
     );
     let in_flight = InFlightTracker::new();
+    let workspace_leases = agentic::workspace_lease::WorkspaceLeaseManager::new();
     let in_flight_for_scheduler = in_flight.clone();
     let in_flight_for_web = in_flight.clone();
 
@@ -82,6 +83,60 @@ async fn main() -> Result<()> {
             warn!(error = ?error, "models.dev catalog warmup failed");
         }
     });
+    let warm_provider_pool = pool.clone();
+    let warm_provider_client = Arc::clone(&opencode_client);
+    tokio::spawn(async move {
+        let agents = match agents::store::list_agents(&warm_provider_pool).await {
+            Ok(agents) => agents,
+            Err(error) => {
+                warn!(error = ?error, "OpenCode provider warmup could not list agents");
+                return;
+            }
+        };
+        for agent in agents {
+            let Some(agent) = (match agents::store::get_agent(&warm_provider_pool, &agent.agent_key)
+                .await
+            {
+                Ok(agent) => agent,
+                Err(error) => {
+                    warn!(agent_key = %agent.agent_key, error = ?error, "OpenCode provider warmup could not load agent");
+                    continue;
+                }
+            }) else {
+                continue;
+            };
+            if agent.backend_kind != agents::model::BACKEND_KIND_OPENCODE {
+                continue;
+            }
+            let Some(base_url) = agent.runtime_base_url.as_deref() else {
+                warn!(agent_key = %agent.agent_key, "OpenCode provider warmup skipped agent without runtime URL");
+                continue;
+            };
+            let Some(workspace) = opencode::workspace::OpenCodeWorkspaceRuntimeConfig::from_value(
+                &agent.runtime_config,
+            ) else {
+                warn!(agent_key = %agent.agent_key, "OpenCode provider warmup skipped agent without workspace metadata");
+                continue;
+            };
+            info!(agent_key = %agent.agent_key, "warming OpenCode provider cache");
+            match warm_provider_client
+                .list_providers(base_url, &workspace.workspace_container_path)
+                .await
+            {
+                Ok(response) => info!(
+                    agent_key = %agent.agent_key,
+                    providers = response.all.len(),
+                    connected = response.connected.len(),
+                    "OpenCode provider cache warmed"
+                ),
+                Err(error) => warn!(
+                    agent_key = %agent.agent_key,
+                    error = ?error,
+                    "OpenCode provider warmup failed"
+                ),
+            }
+        }
+    });
 
     info!("starting Hyperliquid agent monitor");
     let hyperliquid_monitor = agents::HyperliquidAgentMonitor::new(
@@ -97,7 +152,7 @@ async fn main() -> Result<()> {
     });
 
     info!("starting agentic scheduler");
-    let agentic_scheduler = agentic::scheduler::AgenticScheduler::new(
+    let agentic_scheduler = agentic::scheduler::AgenticScheduler::new_with_workspace_leases(
         pool.clone(),
         shutdown_rx.clone(),
         force_shutdown_rx.clone(),
@@ -106,6 +161,7 @@ async fn main() -> Result<()> {
         opencode_workspace_config.clone(),
         Arc::clone(&opencode_client),
         in_flight_for_scheduler,
+        workspace_leases.clone(),
     );
     let mut agentic_scheduler_handle = tokio::spawn(async move {
         if let Err(e) = agentic_scheduler.run().await {
@@ -128,6 +184,7 @@ async fn main() -> Result<()> {
         shutdown_rx.clone(),
         force_shutdown_rx.clone(),
         in_flight_for_web,
+        workspace_leases,
     );
     tokio::pin!(server_future);
 

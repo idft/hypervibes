@@ -6,8 +6,8 @@ use crate::{
         model::{AgentDetailRow, AgentListRow, CreateAgentForm},
         store::AgentInstrumentOptionRow,
         strategy_prompts::{
-            PROMPT_KIND_ANALYSIS, PROMPT_KIND_DAILY_REVIEW, PROMPT_KIND_MARKET_ANALYSIS,
-            PROMPT_KIND_TRADING,
+            PROMPT_KIND_ANALYSIS, PROMPT_KIND_ANALYSIS_CODING, PROMPT_KIND_DAILY_REVIEW,
+            PROMPT_KIND_MARKET_ANALYSIS, PROMPT_KIND_TRADING,
         },
     },
     memory::MemoryRecord,
@@ -191,6 +191,11 @@ impl PromptEditorView {
                 "Daily Review Strategy Prompt",
                 "daily_review_prompt",
                 "What the daily review should inspect, how it should record learnings, and what patterns to emphasize.",
+            ),
+            PROMPT_KIND_ANALYSIS_CODING => (
+                "Analysis Engineering Strategy Prompt",
+                "analysis_coding_prompt",
+                "How the coding job should improve reusable analysis code, what constraints it must obey, and how to report changes.",
             ),
             _ => ("Strategy Prompt", "strategy_prompt", ""),
         };

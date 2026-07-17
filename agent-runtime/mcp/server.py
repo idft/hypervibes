@@ -15,7 +15,11 @@ The server:
 
 from __future__ import annotations
 
+import hashlib
+import json
 import os
+import secrets
+import subprocess
 import sys
 from pathlib import Path
 from typing import Any
@@ -28,7 +32,6 @@ from mcp.server.fastmcp import FastMCP
 HTTP_TIMEOUT_SECONDS = 30.0
 
 mcp = FastMCP("vibetrading")
-
 
 def _load_config() -> tuple[str, str, str]:
     """Read required env vars, failing fast with a clear message.
@@ -135,6 +138,170 @@ def _require_limit(limit: int | None) -> int | None:
     return limit
 
 
+ENGINEERING_ALLOWED_SUFFIXES = {".py", ".json", ".md"}
+ENGINEERING_MAX_FILE_BYTES = 1024 * 1024
+ENGINEERING_MAX_TOTAL_BYTES = 20 * 1024 * 1024
+ENGINEERING_VALIDATOR_PYTHON = "/opt/vibetrading/analysis/.venv/bin/python"
+ENGINEERING_VALIDATOR_SCRIPT = "/opt/vibetrading/coding/coding_validate.py"
+ENGINEERING_VALIDATOR_TIMEOUT_SECONDS = 65
+
+
+def _coding_user_root() -> Path:
+    root = (Path.cwd() / "scripts" / "user").resolve()
+    root.mkdir(parents=True, exist_ok=True)
+    return root
+
+
+def _coding_task_id() -> int:
+    value = os.getenv("VIBETRADING_ENGINEERING_TASK_ID", "").strip()
+    try:
+        task_id = int(value)
+    except ValueError as exc:
+        raise RuntimeError("coding task id is missing or invalid") from exc
+    if task_id <= 0:
+        raise RuntimeError("coding task id must be positive")
+    return task_id
+
+
+def _coding_hash(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _coding_manifest_hash() -> str:
+    root = _coding_user_root()
+    files: list[tuple[str, str]] = []
+    total = 0
+    for path in sorted(root.rglob("*")):
+        if path.name == "__pycache__" or path.name.endswith((".pyc", "~")):
+            continue
+        if path.is_symlink():
+            raise RuntimeError("candidate symlinks are not allowed")
+        if not path.is_file():
+            continue
+        if path.suffix.lower() not in ENGINEERING_ALLOWED_SUFFIXES:
+            raise RuntimeError(f"candidate file extension is not allowed: {path.name}")
+        size = path.stat().st_size
+        if size > ENGINEERING_MAX_FILE_BYTES:
+            raise RuntimeError("candidate file exceeds size limit")
+        total += size
+        if total > ENGINEERING_MAX_TOTAL_BYTES:
+            raise RuntimeError("candidate tree exceeds size limit")
+        files.append((path.relative_to(root).as_posix(), _coding_hash(path)))
+    digest = hashlib.sha256()
+    for relative, file_hash in files:
+        digest.update(relative.encode())
+        digest.update(b"\0")
+        digest.update(file_hash.encode())
+        digest.update(b"\0")
+    return digest.hexdigest()
+
+
+def _coding_validation_path() -> Path:
+    return Path.cwd().resolve().parent / "coding-validation.json"
+
+
+def _invalidate_coding_validation() -> None:
+    _coding_validation_path().unlink(missing_ok=True)
+
+
+@mcp.tool()
+def coding_validate_candidate() -> dict[str, Any]:
+    """Run the fixed validator and bind its result to the candidate tree."""
+    task_id = _coding_task_id()
+    workspace = Path.cwd().resolve()
+    _invalidate_coding_validation()
+    before = _coding_manifest_hash()
+    environment = {
+        "HOME": "/tmp",
+        "PATH": str(Path(ENGINEERING_VALIDATOR_PYTHON).parent),
+        "PYTHONHASHSEED": "0",
+    }
+    try:
+        completed = subprocess.run(
+            [
+                ENGINEERING_VALIDATOR_PYTHON,
+                ENGINEERING_VALIDATOR_SCRIPT,
+                "--workspace",
+                str(workspace),
+            ],
+            cwd=workspace,
+            capture_output=True,
+            text=True,
+            timeout=ENGINEERING_VALIDATOR_TIMEOUT_SECONDS,
+            env=environment,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise RuntimeError(f"fixed coding validator could not run: {exc}") from exc
+    try:
+        result = json.loads(completed.stdout.strip())
+    except json.JSONDecodeError as exc:
+        raise RuntimeError("fixed coding validator returned invalid JSON") from exc
+    if not isinstance(result, dict) or not isinstance(result.get("ok"), bool):
+        raise RuntimeError("fixed coding validator returned unexpected output")
+    after = _coding_manifest_hash()
+    if before != after:
+        result = {
+            "ok": False,
+            "checks": list(result.get("checks", [])) + ["candidate changed during validation"],
+        }
+    if completed.returncode == 0 and not result["ok"]:
+        raise RuntimeError("fixed coding validator status disagrees with its report")
+    if completed.returncode != 0 and result["ok"]:
+        raise RuntimeError("fixed coding validator status disagrees with its report")
+    validation = {
+        **result,
+        "schema_version": 1,
+        "task_id": task_id,
+        "validation_id": secrets.token_hex(16),
+        "candidate_manifest_sha256": after,
+    }
+    path = _coding_validation_path()
+    temporary = path.with_suffix(".json.tmp")
+    temporary.write_text(json.dumps(validation, sort_keys=True, indent=2) + "\n")
+    os.replace(temporary, path)
+    return validation
+
+
+@mcp.tool()
+def coding_submit_report(
+    outcome: str,
+    summary: str,
+    rationale: str,
+    changed_paths: list[str],
+    evidence_memory_ids: list[str],
+    validation_notes: str,
+) -> dict[str, Any]:
+    """Submit one report after validation; paths are relative to scripts/user."""
+    if outcome not in {"changed", "no_change"}:
+        raise ValueError("outcome must be changed or no_change")
+    if any(
+        not isinstance(path, str)
+        or path.startswith("/")
+        or ".." in Path(path).parts
+        or Path(path).parts[:2] == ("scripts", "user")
+        for path in changed_paths
+    ):
+        raise ValueError(
+            "changed paths must be relative to scripts/user "
+            "(for example analyze.py, not scripts/user/analyze.py)"
+        )
+    result = _request(
+        "POST",
+        "/api/v1/coding/report",
+        json_body={
+            "task_id": _coding_task_id(),
+            "schema_version": 1,
+            "outcome": outcome,
+            "summary": summary,
+            "rationale": rationale,
+            "changed_paths": changed_paths,
+            "evidence_memory_ids": evidence_memory_ids,
+            "validation_notes": validation_notes,
+        },
+    )
+    return result if isinstance(result, dict) else {"submitted": True}
+
+
 @mcp.tool()
 def get_account() -> dict[str, Any]:
     """Return this agent's current Hyperliquid account snapshot."""
@@ -181,6 +348,20 @@ def get_market_analysis(symbol: str) -> dict[str, Any] | None:
     if not isinstance(first, dict):
         raise RuntimeError("Vibetrading /memories returned unexpected shape")
     return first
+
+
+@mcp.tool()
+def get_memory_detail(memory_id: str) -> dict[str, Any]:
+    """Return one agent-owned memory and its links."""
+    memory_id = _require_nonblank("memory_id", memory_id)
+    result = _request(
+        "GET",
+        f"/api/v1/memories/{memory_id}",
+        params={"include": "links"},
+    )
+    if not isinstance(result, dict):
+        raise RuntimeError("Vibetrading memory detail returned unexpected shape")
+    return result
 
 
 @mcp.tool()

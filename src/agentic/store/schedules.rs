@@ -17,8 +17,8 @@ use crate::{
     db::DbPool,
 };
 
-use super::common::insert_run_in_tx;
-use super::hooks::insert_default_opencode_hook;
+use super::common::{insert_run_in_tx, lock_agent_coordination_tx};
+use super::hooks::insert_default_opencode_hooks;
 use super::recovery::has_active_run_in_lane_tx;
 use super::workspace::agent_has_blocking_workspace_maintenance_tx;
 
@@ -81,7 +81,7 @@ pub async fn insert_default_opencode_schedules(pool: &DbPool, agent_key: &str) -
     )
     .await?;
 
-    insert_default_opencode_hook(pool, agent_key).await?;
+    insert_default_opencode_hooks(pool, agent_key).await?;
 
     Ok(())
 }
@@ -422,6 +422,7 @@ pub async fn set_schedule_timeframe(
         .begin()
         .await
         .context("failed to begin schedule timeframe update transaction")?;
+    lock_agent_coordination_tx(&mut tx, agent_key).await?;
     let schedule: Option<(String, i32)> = query_as(
         "SELECT job_kind, trigger_delay_seconds
            FROM agentic_job_schedules
@@ -606,6 +607,20 @@ pub async fn claim_due_schedule(
         .await
         .context("failed to begin claim transaction")?;
 
+    let agent_key: Option<(String,)> =
+        query_as("SELECT agent_key FROM agentic_job_schedules WHERE id = $1")
+            .bind(schedule_id)
+            .fetch_optional(&mut *tx)
+            .await
+            .context("failed to load schedule agent for claim")?;
+    let Some((agent_key,)) = agent_key else {
+        tx.rollback()
+            .await
+            .context("failed to roll back missing-schedule claim")?;
+        return Ok(ClaimedScheduleRun::NotDue);
+    };
+    lock_agent_coordination_tx(&mut tx, &agent_key).await?;
+
     let schedule: Option<ScheduleForUpdate> = query_as(
         "SELECT id,
                 agent_key,
@@ -615,6 +630,8 @@ pub async fn claim_due_schedule(
                 timeframe,
                 trigger_delay_seconds,
                 next_run_at,
+                model_provider_id,
+                model_id,
                 timeout_seconds
            FROM agentic_job_schedules
           WHERE id = $1
@@ -687,7 +704,6 @@ pub async fn claim_due_schedule(
     )
     .await?
     {
-        let error_summary = "previous run still active";
         let run_id = insert_run_in_tx(
             &mut tx,
             Some(schedule.id),
@@ -698,13 +714,13 @@ pub async fn claim_due_schedule(
             Some(&timeframe),
             RUN_STATUS_SKIPPED,
             None,
-            None,
-            None,
+            schedule.model_provider_id.as_deref(),
+            schedule.model_id.as_deref(),
             scheduled_for,
             None,
             Some(now),
             schedule.timeout_seconds,
-            Some(error_summary),
+            Some("previous run still active"),
         )
         .await?;
         ClaimedScheduleRun::Skipped { run_id }
@@ -719,8 +735,8 @@ pub async fn claim_due_schedule(
             Some(&timeframe),
             RUN_STATUS_QUEUED,
             None,
-            None,
-            None,
+            schedule.model_provider_id.as_deref(),
+            schedule.model_id.as_deref(),
             scheduled_for,
             None,
             None,
@@ -776,5 +792,7 @@ pub(crate) struct ScheduleForUpdate {
     pub(crate) timeframe: String,
     pub(crate) trigger_delay_seconds: i32,
     pub(crate) next_run_at: DateTime<Utc>,
+    pub(crate) model_provider_id: Option<String>,
+    pub(crate) model_id: Option<String>,
     pub(crate) timeout_seconds: i32,
 }

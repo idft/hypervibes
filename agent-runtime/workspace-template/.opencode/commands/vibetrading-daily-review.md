@@ -8,4 +8,6 @@ If the durable agent-level learnings changed, write a new `agent_learnings` memo
 
 Do not place or cancel orders.
 
-Only edit files under `scripts/user/`, `data/`, and `scratch/` when that materially improves future review quality.
+Do not edit `scripts/user/`, `data/`, or `scratch/`. If reusable analysis
+code should improve, record `analysis_coding_requested` and its reason
+in the daily-review metadata for the separate coding job.

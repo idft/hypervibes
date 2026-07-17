@@ -3,8 +3,9 @@ use chrono::{DateTime, Utc};
 use sqlx::{PgPool, Postgres, Transaction, query_as};
 
 use crate::agentic::model::{
-    JOB_KIND_ANALYSIS, JOB_KIND_DAILY_REVIEW, JOB_KIND_MARKET_ANALYSIS, JOB_KIND_TRADING,
-    RUN_STATUS_FAILED, RUN_STATUS_QUEUED, RUN_STATUS_RUNNING, RUN_STATUS_SUCCEEDED,
+    JOB_KIND_ANALYSIS, JOB_KIND_ANALYSIS_CODING, JOB_KIND_DAILY_REVIEW,
+    JOB_KIND_MARKET_ANALYSIS, JOB_KIND_TRADING, RUN_STATUS_FAILED, RUN_STATUS_QUEUED,
+    RUN_STATUS_RUNNING, RUN_STATUS_SUCCEEDED,
 };
 
 use super::common::ACTIVE_STATUSES;
@@ -23,6 +24,7 @@ fn active_job_kinds_for_lane(job_kind: &str) -> &'static [&'static str] {
             JOB_KIND_MARKET_ANALYSIS,
             JOB_KIND_DAILY_REVIEW,
         ],
+        JOB_KIND_ANALYSIS_CODING => &[],
         _ => &[],
     }
 }
@@ -52,7 +54,7 @@ pub(crate) async fn has_active_run_in_lane_tx(
           LIMIT 1",
     )
     .bind(agent_key)
-    .bind(ACTIVE_STATUSES)
+    .bind(&ACTIVE_STATUSES)
     .bind(lane_job_kinds)
     .fetch_optional(&mut **tx)
     .await
@@ -79,8 +81,9 @@ pub(crate) async fn recover_inactive_runs_in_lane_tx(
                 error_summary = NULL,
                 updated_at = now()
            FROM opencode.sessions AS sessions
-          WHERE runs.agent_key = $1
-            AND runs.job_kind = ANY($2)
+           WHERE runs.agent_key = $1
+             AND runs.job_kind = ANY($2)
+             AND runs.job_kind <> 'analysis_coding'
             AND runs.status = $4
             AND runs.backend_run_ref IS NOT NULL
             AND sessions.id = runs.backend_run_ref
@@ -107,8 +110,9 @@ pub(crate) async fn recover_inactive_runs_in_lane_tx(
                 finished_at = $4,
                 error_summary = $5,
                 updated_at = now()
-          WHERE agent_key = $1
-            AND job_kind = ANY($2)
+           WHERE agent_key = $1
+             AND job_kind = ANY($2)
+             AND job_kind <> 'analysis_coding'
             AND status = $6
             AND started_at IS NULL
             AND finished_at IS NULL
@@ -131,8 +135,9 @@ pub(crate) async fn recover_inactive_runs_in_lane_tx(
                 finished_at = $4,
                 error_summary = $5,
                 updated_at = now()
-          WHERE agent_key = $1
-            AND job_kind = ANY($2)
+           WHERE agent_key = $1
+             AND job_kind = ANY($2)
+             AND job_kind <> 'analysis_coding'
             AND status = $6
             AND finished_at IS NULL
             AND COALESCE(started_at, created_at) + (timeout_seconds * interval '1 second') <= $4",
@@ -174,6 +179,7 @@ pub async fn recover_inactive_runs_all(pool: &PgPool, now: DateTime<Utc>) -> Res
                 updated_at = now()
            FROM opencode.sessions AS sessions
           WHERE runs.status = $2
+            AND runs.job_kind <> 'analysis_coding'
             AND runs.backend_run_ref IS NOT NULL
             AND sessions.id = runs.backend_run_ref
             AND sessions.status = $3
@@ -198,6 +204,7 @@ pub async fn recover_inactive_runs_all(pool: &PgPool, now: DateTime<Utc>) -> Res
                 error_summary = $3,
                 updated_at = $2
           WHERE status = $4
+            AND job_kind <> 'analysis_coding'
             AND started_at IS NULL
             AND finished_at IS NULL
             AND created_at + (timeout_seconds * interval '1 second') <= $2",
@@ -218,6 +225,7 @@ pub async fn recover_inactive_runs_all(pool: &PgPool, now: DateTime<Utc>) -> Res
                 error_summary = $3,
                 updated_at = $2
           WHERE status = $4
+            AND job_kind <> 'analysis_coding'
             AND finished_at IS NULL
             AND COALESCE(started_at, created_at) + (timeout_seconds * interval '1 second') <= $2",
     )
@@ -249,8 +257,9 @@ pub(crate) async fn recover_inactive_agent_runs_tx(
                 error_summary = NULL,
                 updated_at = now()
            FROM opencode.sessions AS sessions
-          WHERE runs.agent_key = $1
-            AND runs.status = $3
+           WHERE runs.agent_key = $1
+             AND runs.status = $3
+             AND runs.job_kind <> 'analysis_coding'
             AND runs.backend_run_ref IS NOT NULL
             AND sessions.id = runs.backend_run_ref
             AND sessions.status = $4
@@ -275,8 +284,9 @@ pub(crate) async fn recover_inactive_agent_runs_tx(
                 finished_at = $3,
                 error_summary = $4,
                 updated_at = now()
-          WHERE agent_key = $1
-            AND status = $5
+           WHERE agent_key = $1
+             AND status = $5
+             AND job_kind <> 'analysis_coding'
             AND started_at IS NULL
             AND finished_at IS NULL
             AND created_at + (timeout_seconds * interval '1 second') <= $3",
@@ -297,8 +307,9 @@ pub(crate) async fn recover_inactive_agent_runs_tx(
                 finished_at = $3,
                 error_summary = $4,
                 updated_at = now()
-          WHERE agent_key = $1
-            AND status = $5
+           WHERE agent_key = $1
+             AND status = $5
+             AND job_kind <> 'analysis_coding'
             AND finished_at IS NULL
             AND COALESCE(started_at, created_at) + (timeout_seconds * interval '1 second') <= $3",
     )

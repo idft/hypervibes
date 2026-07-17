@@ -13,8 +13,8 @@ use tracing::warn;
 use super::shared::{
     ModelPickerContext, ModelSelectionForm, SERVER_SHUTTING_DOWN_WARNING, TimeoutForm,
     ToggleScheduleForm, WORKSPACE_MAINTENANCE_ACTIVE_WARNING, build_model_picker_view,
-    jobs_warning_redirect, load_model_picker_context, parse_positive_schedule_seconds,
-    timeout_error_redirect, validate_model_selection_for_agent,
+    jobs_warning_redirect, load_model_picker_context, load_model_picker_context_cached,
+    parse_positive_schedule_seconds, timeout_error_redirect, validate_model_selection_for_agent,
 };
 use super::show::{AgentJobsQuery, render_agent_show_page};
 use crate::web::error::AppError;
@@ -22,7 +22,8 @@ use crate::{
     agentic::{
         model::{JOB_KIND_ANALYSIS, JOB_KIND_TRADING},
         scheduler::{
-            dispatch_analysis_batch_completed_hook, dispatch_request_from_schedule, dispatch_run,
+            dispatch_analysis_batch_completed_hook, dispatch_request_from_schedule,
+            dispatch_run_with_workspace_lease,
         },
         store::{self, QueuedScheduleRun},
         timeframe::{parse_timeframe_seconds, parse_timeout_seconds},
@@ -166,7 +167,7 @@ pub(in crate::web::routes) async fn agents_job_model_picker(
         (Some(provider), Some(model)) => format!("{provider}/{model}"),
         _ => String::new(),
     };
-    let picker = load_model_picker_context(&state, &agent).await;
+    let picker = load_model_picker_context_cached(&state, &agent).await;
     let mut model_picker = build_model_picker_view("job-model-selection", &selected, picker);
     model_picker.show_label = false;
     model_picker.use_modal = true;
@@ -634,22 +635,32 @@ pub(in crate::web::routes) async fn agents_run_job_now(
             let pool = state.db_pool.clone();
             let backend = state.agentic_backend.clone();
             let live_accounts = state.live_accounts.clone();
+            let workspace_leases = state.workspace_leases.clone();
             let trigger_hook = schedule.job_kind == JOB_KIND_ANALYSIS;
             let hook_agent_key = agent_key.clone();
             let in_flight = state.in_flight.clone();
             tokio::spawn(async move {
                 let _guard = in_flight.track();
-                let result = dispatch_run(pool.clone(), backend.clone(), request).await;
+                let _workspace_lease = workspace_leases.acquire_live_read(&hook_agent_key).await;
+                let result = dispatch_run_with_workspace_lease(
+                    pool.clone(),
+                    backend.clone(),
+                    request,
+                    &workspace_leases,
+                )
+                .await;
                 if trigger_hook && result.succeeded {
                     let _ = dispatch_analysis_batch_completed_hook(
                         &pool,
                         &backend,
                         &live_accounts,
                         &hook_agent_key,
+                        &workspace_leases,
                     )
                     .await;
                 }
             });
+            return Ok(Redirect::to(&format!("/agents/{agent_key}/runs/{run_id}")).into_response());
         }
         QueuedScheduleRun::Skipped => {}
         QueuedScheduleRun::Missing => {
@@ -661,7 +672,7 @@ pub(in crate::web::routes) async fn agents_run_job_now(
                 WORKSPACE_MAINTENANCE_ACTIVE_WARNING,
             ));
         }
-    }
+    };
 
     Ok(Redirect::to(&format!("/agents/{agent_key}/jobs")).into_response())
 }

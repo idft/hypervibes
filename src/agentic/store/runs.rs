@@ -15,11 +15,17 @@ use crate::{
     db::DbPool,
 };
 
-use super::common::{ACTIVE_STATUSES, insert_run_in_tx, truncate_error_summary};
+use super::common::{
+    ACTIVE_STATUSES, HookRunInsertMode, insert_run_in_tx, lock_agent_coordination_tx,
+    truncate_error_summary,
+};
 use super::hooks::HookForUpdate;
 use super::recovery::{has_active_run_in_lane_tx, recover_inactive_agent_runs_tx};
 use super::schedules::ScheduleForUpdate;
-use super::workspace::agent_has_blocking_workspace_maintenance_tx;
+use super::workspace::{
+    agent_has_blocking_workspace_maintenance_for_mode_tx,
+    agent_has_blocking_workspace_maintenance_tx,
+};
 
 pub async fn list_active_agent_runs(pool: &DbPool, agent_key: &str) -> Result<Vec<AgenticRunRow>> {
     let mut tx = pool
@@ -292,6 +298,7 @@ pub async fn insert_queued_run(
         .begin()
         .await
         .context("failed to begin manual queued run insert")?;
+    lock_agent_coordination_tx(&mut tx, agent_key).await?;
 
     let schedule: Option<ScheduleForUpdate> = query_as(
         "SELECT id,
@@ -302,6 +309,8 @@ pub async fn insert_queued_run(
                 timeframe,
                 trigger_delay_seconds,
                 next_run_at,
+                model_provider_id,
+                model_id,
                 timeout_seconds
            FROM agentic_job_schedules
           WHERE agent_key = $1
@@ -351,8 +360,8 @@ pub async fn insert_queued_run(
             Some(&schedule.timeframe),
             RUN_STATUS_SKIPPED,
             None,
-            None,
-            None,
+            schedule.model_provider_id.as_deref(),
+            schedule.model_id.as_deref(),
             scheduled_for,
             None,
             Some(now),
@@ -373,8 +382,8 @@ pub async fn insert_queued_run(
             Some(&schedule.timeframe),
             RUN_STATUS_QUEUED,
             None,
-            None,
-            None,
+            schedule.model_provider_id.as_deref(),
+            schedule.model_id.as_deref(),
             scheduled_for,
             None,
             None,
@@ -411,7 +420,7 @@ pub async fn insert_queued_hook_run(
     agent_key: &str,
     hook_id: i64,
 ) -> Result<QueuedHookRun> {
-    insert_queued_hook_run_with_mode(pool, agent_key, hook_id, true).await
+    insert_queued_hook_run_with_mode(pool, agent_key, hook_id, HookRunInsertMode::Manual).await
 }
 
 pub async fn insert_queued_hook_run_for_automatic_dispatch(
@@ -419,19 +428,26 @@ pub async fn insert_queued_hook_run_for_automatic_dispatch(
     agent_key: &str,
     hook_id: i64,
 ) -> Result<QueuedHookRun> {
-    insert_queued_hook_run_with_mode(pool, agent_key, hook_id, false).await
+    insert_queued_hook_run_with_mode(
+        pool,
+        agent_key,
+        hook_id,
+        HookRunInsertMode::AnalysisContinuation,
+    )
+    .await
 }
 
 pub(crate) async fn insert_queued_hook_run_with_mode(
     pool: &DbPool,
     agent_key: &str,
     hook_id: i64,
-    block_on_maintenance: bool,
+    mode: HookRunInsertMode,
 ) -> Result<QueuedHookRun> {
     let mut tx = pool
         .begin()
         .await
         .context("failed to begin manual queued hook run insert")?;
+    lock_agent_coordination_tx(&mut tx, agent_key).await?;
 
     let hook: Option<HookForUpdate> = query_as(
         "SELECT id,
@@ -440,6 +456,8 @@ pub(crate) async fn insert_queued_hook_run_with_mode(
                 job_kind,
                 hook_event,
                 enabled,
+                model_provider_id,
+                model_id,
                 timeout_seconds
            FROM agentic_job_hooks
           WHERE agent_key = $1
@@ -459,9 +477,7 @@ pub(crate) async fn insert_queued_hook_run_with_mode(
         return Ok(QueuedHookRun::Missing);
     };
 
-    if block_on_maintenance
-        && agent_has_blocking_workspace_maintenance_tx(&mut tx, &hook.agent_key).await?
-    {
+    if agent_has_blocking_workspace_maintenance_for_mode_tx(&mut tx, &hook.agent_key, mode).await? {
         tx.rollback()
             .await
             .context("failed to roll back maintenance-blocked manual hook run")?;
@@ -481,8 +497,8 @@ pub(crate) async fn insert_queued_hook_run_with_mode(
                 None,
                 RUN_STATUS_SKIPPED,
                 None,
-                None,
-                None,
+                hook.model_provider_id.as_deref(),
+                hook.model_id.as_deref(),
                 now,
                 None,
                 Some(now),
@@ -502,8 +518,8 @@ pub(crate) async fn insert_queued_hook_run_with_mode(
                 None,
                 RUN_STATUS_QUEUED,
                 None,
-                None,
-                None,
+                hook.model_provider_id.as_deref(),
+                hook.model_id.as_deref(),
                 now,
                 None,
                 None,
@@ -549,6 +565,8 @@ pub async fn insert_test_run(pool: &PgPool, schedule_id: i64, status: &str) -> R
                 timeframe,
                 trigger_delay_seconds,
                 next_run_at,
+                model_provider_id,
+                model_id,
                 timeout_seconds
            FROM agentic_job_schedules
           WHERE id = $1",

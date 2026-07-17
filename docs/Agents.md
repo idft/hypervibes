@@ -80,6 +80,33 @@ The generated workspace `.env` receives the agent-scoped Vibetrading API key. Th
 
 For OpenCode agents, the settings page also reports whether the generated workspace has drifted from `agent-runtime/workspace-template/`. The comparison is limited to template-managed files and ignores agent-authored files.
 
+Analysis code ownership is separate from job execution. Analysis, market
+analysis, trading, and daily review jobs may execute reusable analysis code but
+must not modify `scripts/user/`. The disabled-by-default `analysis_coding`
+hook is the only job allowed to change that tree, and it requires an explicit
+strong provider/model selection.
+
+Engineering supports bootstrap and improvement runs. Generation occurs in an
+isolated candidate workspace. A fixed MCP tool validates the candidate in the
+shared analysis runtime and binds the result to its deterministic tree hash;
+the worker promotes only those validated bytes. Failed validation or promotion
+verification leaves the live analysis tree unchanged and can be rolled back
+from retained versions.
+
+The canonical entrypoint is `scripts/user/analyze.py`; supporting Python modules
+are allowed and no model-owned manifest file is required. Reusable code produces
+quantitative measurements and may produce calculation-derived indicator
+signals. Analysis jobs combine those outputs with qualitative evidence and own
+all final bias, confidence, actionability, and setup decisions. Candidate tests
+are optional and should be focused on demonstrated bugs or nontrivial custom
+math rather than duplicating the fixed contract validator.
+
+The Hyperliquid fetch helper writes the analyzer's canonical input envelope
+directly: `symbol`, `timeframe`, authoritative positive `interval_ms`, and
+normalized OHLCV candles. Candle timestamps are open times. Analyzer code must
+apply `timestamp_ms + interval_ms < boundary_ms`; candles closing exactly at the
+boundary are excluded. Context mismatches and invalid intervals fail closed.
+
 Workspace regeneration is queued as agent-scoped maintenance work:
 
 - regular re-generation preserves `scripts/user/`, `data/`, and `scratch/`

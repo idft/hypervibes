@@ -6,16 +6,27 @@ use crate::{
         job_key::build_generated_hook_job_key,
         model::{
             AgenticJobHookRow, AgenticRunRow, DueOpenCodeHookRow,
-            HOOK_EVENT_ANALYSIS_BATCH_COMPLETED, JOB_KIND_MARKET_ANALYSIS,
+            HOOK_EVENT_ANALYSIS_BATCH_COMPLETED, HOOK_EVENT_DAILY_REVIEW_COMPLETED,
+            JOB_KIND_ANALYSIS_CODING, JOB_KIND_MARKET_ANALYSIS,
         },
     },
     db::DbPool,
 };
 
 const DEFAULT_MARKET_ANALYSIS_TIMEOUT_SECONDS: i32 = 900;
+const DEFAULT_CODING_TIMEOUT_SECONDS: i32 = 1800;
 
-pub(crate) async fn insert_default_opencode_hook(pool: &DbPool, agent_key: &str) -> Result<()> {
-    let job_key = build_generated_hook_job_key(JOB_KIND_MARKET_ANALYSIS);
+/// Seed the default OpenCode agent hooks. Both the market-analysis hook
+/// (used after a successful analysis batch) and the
+/// analysis-coding hook (used after a successful daily-review that
+/// requests code work) are seeded disabled and without a model. The
+/// operator must explicitly enable them; analysis-coding also
+/// requires the operator to pick a strong provider/model before it
+/// will queue automatically. This single insert is called both by the
+/// default-schedule seeding path for new agents and by the migration
+/// backfill for existing agents.
+pub(crate) async fn insert_default_opencode_hooks(pool: &DbPool, agent_key: &str) -> Result<()> {
+    let market_job_key = build_generated_hook_job_key(JOB_KIND_MARKET_ANALYSIS);
 
     sqlx::query(
         "INSERT INTO agentic_job_hooks (
@@ -30,7 +41,7 @@ pub(crate) async fn insert_default_opencode_hook(pool: &DbPool, agent_key: &str)
          ON CONFLICT (agent_key, job_kind, hook_event) DO NOTHING",
     )
     .bind(agent_key)
-    .bind(&job_key)
+    .bind(&market_job_key)
     .bind(JOB_KIND_MARKET_ANALYSIS)
     .bind(HOOK_EVENT_ANALYSIS_BATCH_COMPLETED)
     .bind(false)
@@ -38,9 +49,49 @@ pub(crate) async fn insert_default_opencode_hook(pool: &DbPool, agent_key: &str)
     .bind("")
     .execute(pool)
     .await
-    .with_context(|| format!("failed to insert default {job_key} hook for agent {agent_key}"))?;
+    .with_context(|| {
+        format!("failed to insert default {market_job_key} hook for agent {agent_key}")
+    })?;
+
+    let coding_job_key = build_generated_hook_job_key(JOB_KIND_ANALYSIS_CODING);
+
+    sqlx::query(
+        "INSERT INTO agentic_job_hooks (
+            agent_key,
+            job_key,
+            job_kind,
+            hook_event,
+            enabled,
+            model_provider_id,
+            model_id,
+            timeout_seconds,
+            operator_prompt
+         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+         ON CONFLICT (agent_key, job_kind, hook_event) DO NOTHING",
+    )
+    .bind(agent_key)
+    .bind(&coding_job_key)
+    .bind(JOB_KIND_ANALYSIS_CODING)
+    .bind(HOOK_EVENT_DAILY_REVIEW_COMPLETED)
+    .bind(false)
+    .bind(None::<&str>)
+    .bind(None::<&str>)
+    .bind(DEFAULT_CODING_TIMEOUT_SECONDS)
+    .bind("")
+    .execute(pool)
+    .await
+    .with_context(|| {
+        format!("failed to insert default {coding_job_key} hook for agent {agent_key}")
+    })?;
 
     Ok(())
+}
+
+/// Backwards-compatible alias retained for tests that still call the
+/// singular-named helper. It just delegates to the plural seeder.
+#[cfg(test)]
+pub(crate) async fn insert_default_opencode_hook(pool: &DbPool, agent_key: &str) -> Result<()> {
+    insert_default_opencode_hooks(pool, agent_key).await
 }
 
 pub async fn list_agent_hooks(pool: &DbPool, agent_key: &str) -> Result<Vec<AgenticJobHookRow>> {
@@ -358,4 +409,6 @@ pub(crate) struct HookForUpdate {
     pub(crate) job_key: String,
     pub(crate) job_kind: String,
     pub(crate) timeout_seconds: i32,
+    pub(crate) model_provider_id: Option<String>,
+    pub(crate) model_id: Option<String>,
 }

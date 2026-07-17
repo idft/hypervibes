@@ -1,11 +1,12 @@
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, anyhow};
 use reqwest::StatusCode;
 use serde::{Deserialize, Serialize};
-use tokio::sync::RwLock;
+use tokio::sync::{Mutex, RwLock};
+use tracing::{info, warn};
 
 const RESPONSE_SNIPPET_MAX_CHARS: usize = 200;
 const PROVIDER_CACHE_TTL: Duration = Duration::from_secs(5 * 60);
@@ -33,12 +34,53 @@ impl OpenCodeClientConfig {
 pub struct OpenCodeClient {
     http: reqwest::Client,
     config: OpenCodeClientConfig,
-    provider_cache: Arc<RwLock<HashMap<(String, String), CachedProvidersResponse>>>,
+    provider_cache: Arc<RwLock<HashMap<String, CachedProvidersResponse>>>,
+    provider_refresh_in_flight: Arc<Mutex<HashSet<String>>>,
 }
 
 struct CachedProvidersResponse {
     fetched_at: Instant,
     response: OpenCodeProvidersResponse,
+}
+
+/// Session lifecycle status returned by OpenCode's
+/// `/session/status` endpoint. The value reflects whether the session
+/// is actively executing (`Busy`/`Retry`) or idle (`Idle`).
+///
+/// Vibetrading treats `Idle` as terminal for the purposes of run
+/// cancellation; a dispatch that has timed out keeps the underlying
+/// `agentic_runs` row in `running` until a probe confirms `Idle`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SessionStatusKind {
+    Idle,
+    Busy,
+    Retry,
+}
+
+impl SessionStatusKind {
+    pub fn is_active(self) -> bool {
+        matches!(self, SessionStatusKind::Busy | SessionStatusKind::Retry)
+    }
+}
+
+/// Deserialized entry from `/session/status` -- a tagged union with the
+/// kind string (`idle`/`busy`/`retry`) at `type`. Only the `type` field
+/// is consulted; retry-specific details are dropped.
+#[derive(Debug, Clone, Deserialize)]
+struct SessionStatusResponse {
+    #[serde(rename = "type")]
+    kind: String,
+}
+
+impl SessionStatusResponse {
+    fn into_kind(self) -> Result<SessionStatusKind> {
+        match self.kind.as_str() {
+            "idle" => Ok(SessionStatusKind::Idle),
+            "busy" => Ok(SessionStatusKind::Busy),
+            "retry" => Ok(SessionStatusKind::Retry),
+            other => Err(anyhow!("unknown session status: {other}")),
+        }
+    }
 }
 
 impl OpenCodeClient {
@@ -50,6 +92,7 @@ impl OpenCodeClient {
             http,
             config,
             provider_cache: Arc::new(RwLock::new(HashMap::new())),
+            provider_refresh_in_flight: Arc::new(Mutex::new(HashSet::new())),
         })
     }
 
@@ -110,15 +153,67 @@ impl OpenCodeClient {
         Ok(())
     }
 
+    /// Abort an in-flight OpenCode session. The OpenCode `1.17.11`
+    /// HTTP API is `POST /session/{sessionID}/abort` which returns a
+    /// boolean indicating that the abort signal was accepted. We
+    /// additionally surface `false` for HTTP 4xx/5xx responses (which
+    /// are reported via [`parse_opencode_response`] errors).
+    pub async fn abort_session(&self, base_url: &str, session_id: &str) -> Result<bool> {
+        let url = build_url(base_url, &format!("session/{}/abort", session_id), &[]);
+        let response = self
+            .http
+            .post(url)
+            .timeout(self.config.status_timeout)
+            .apply_basic_auth(&self.config)
+            .json(&serde_json::json!({}))
+            .send()
+            .await
+            .map_err(|error| anyhow!("OpenCode abort_session request failed: {error}"))?;
+        let response = parse_opencode_response(response).await?;
+        let aborted: bool = response
+            .json()
+            .await
+            .context("failed to decode OpenCode abort_session response")?;
+        Ok(aborted)
+    }
+
+    /// Probe the live status of a single OpenCode session by querying
+    /// `/session/status` (which returns a map keyed by session ID) and
+    /// looking up `session_id`. Returns `Ok(None)` when the session is
+    /// not present in the response -- typically because it has been
+    /// forgotten by OpenCode and should be treated as terminal.
+    pub async fn get_session_status(
+        &self,
+        base_url: &str,
+        session_id: &str,
+    ) -> Result<Option<SessionStatusKind>> {
+        let url = build_url(base_url, "session/status", &[]);
+        let response = self
+            .http
+            .get(url)
+            .timeout(self.config.status_timeout)
+            .apply_basic_auth(&self.config)
+            .send()
+            .await
+            .map_err(|error| anyhow!("OpenCode get_session_status request failed: {error}"))?;
+        let response = parse_opencode_response(response).await?;
+        let statuses: HashMap<String, SessionStatusResponse> = response
+            .json()
+            .await
+            .context("failed to decode OpenCode session status response")?;
+        Ok(statuses
+            .get(session_id)
+            .cloned()
+            .map(SessionStatusResponse::into_kind)
+            .transpose()?)
+    }
+
     pub async fn list_providers(
         &self,
         base_url: &str,
         workspace_container_path: &str,
     ) -> Result<OpenCodeProvidersResponse> {
-        let cache_key = (
-            base_url.trim_end_matches('/').to_string(),
-            workspace_container_path.to_string(),
-        );
+        let cache_key = base_url.trim_end_matches('/').to_string();
         if let Some(response) = self
             .provider_cache
             .read()
@@ -158,6 +253,66 @@ impl OpenCodeClient {
             },
         );
         Ok(response)
+    }
+
+    pub async fn list_providers_cached_or_refresh(
+        &self,
+        base_url: &str,
+        workspace_container_path: &str,
+    ) -> Option<OpenCodeProvidersResponse> {
+        let cache_key = base_url.trim_end_matches('/').to_string();
+        let cached = self
+            .provider_cache
+            .read()
+            .await
+            .get(&cache_key)
+            .map(|entry| {
+                (
+                    entry.fetched_at.elapsed() < PROVIDER_CACHE_TTL,
+                    entry.response.clone(),
+                )
+            });
+
+        if let Some((fresh, response)) = cached {
+            if !fresh {
+                self.spawn_provider_refresh(base_url, workspace_container_path);
+            }
+            return Some(response);
+        }
+
+        self.spawn_provider_refresh(base_url, workspace_container_path);
+        None
+    }
+
+    fn spawn_provider_refresh(&self, base_url: &str, workspace_container_path: &str) {
+        let key = base_url.trim_end_matches('/').to_string();
+        let Ok(mut in_flight) = self.provider_refresh_in_flight.try_lock() else {
+            return;
+        };
+        if !in_flight.insert(key.clone()) {
+            return;
+        }
+        drop(in_flight);
+
+        let client = self.clone();
+        let base_url = base_url.to_string();
+        let workspace_container_path = workspace_container_path.to_string();
+        tokio::spawn(async move {
+            match client
+                .list_providers(&base_url, &workspace_container_path)
+                .await
+            {
+                Ok(response) => info!(
+                    providers = response.all.len(),
+                    connected = response.connected.len(),
+                    "background OpenCode provider refresh completed"
+                ),
+                Err(error) => {
+                    warn!(error = ?error, "background OpenCode provider refresh failed");
+                }
+            }
+            client.provider_refresh_in_flight.lock().await.remove(&key);
+        });
     }
 }
 
@@ -326,13 +481,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn list_providers_reuses_cached_workspace_response() {
+    async fn list_providers_reuses_cached_runtime_response() {
         let client = OpenCodeClient::new(OpenCodeClientConfig::new("opencode".to_string(), None))
             .expect("client");
-        let cache_key = (
-            "http://127.0.0.1:1".to_string(),
-            "/workspaces/agents/btc-1".to_string(),
-        );
+        let cache_key = "http://127.0.0.1:1".to_string();
         client.provider_cache.write().await.insert(
             cache_key,
             CachedProvidersResponse {

@@ -210,6 +210,57 @@ async fn post_hook_toggle_updates_enabled_state() {
         .expect("hook present");
     assert!(!hook.enabled);
 }
+
+#[tokio::test]
+async fn post_coding_hook_toggle_requires_explicit_model() {
+    let state = test_state().await;
+    let pool = state.db_pool.clone();
+    let (agent_key, _wallet_address) = insert_test_opencode_agent(&state)
+        .await
+        .expect("insert opencode agent");
+    let hook_id = crate::agentic::store::list_agent_hooks(&pool, &agent_key)
+        .await
+        .expect("list hooks")
+        .into_iter()
+        .find(|hook| hook.job_kind == crate::agentic::model::JOB_KIND_ANALYSIS_CODING)
+        .expect("coding hook present")
+        .id;
+    sqlx::query(
+        "UPDATE agentic_job_hooks
+            SET model_provider_id = NULL, model_id = NULL
+          WHERE id = $1",
+    )
+    .bind(hook_id)
+    .execute(&pool)
+    .await
+    .expect("clear coding hook model");
+
+    let response = router(state.clone())
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/agents/{agent_key}/hooks/{hook_id}/toggle"))
+                .header("content-type", "application/x-www-form-urlencoded")
+                .body(Body::from("enabled=on"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+    let location = response
+        .headers()
+        .get("location")
+        .and_then(|value| value.to_str().ok())
+        .expect("warning redirect");
+    assert!(location.contains("warning="));
+    let hook = crate::agentic::store::get_agent_hook(&pool, &agent_key, hook_id)
+        .await
+        .expect("get hook")
+        .expect("hook present");
+    assert!(!hook.enabled);
+}
+
 #[tokio::test]
 async fn post_hook_delete_removes_hook() {
     let state = test_state().await;
@@ -271,7 +322,7 @@ async fn hook_detail_page_renders_hook_specific_runs() {
         .await
         .expect("mark succeeded");
 
-    let response = router(state)
+    let response = router(state.clone())
         .oneshot(
             Request::builder()
                 .uri(format!("/agents/{agent_key}/hooks/{hook_id}"))
@@ -285,10 +336,25 @@ async fn hook_detail_page_renders_hook_specific_runs() {
     let text = response_text(response).await;
     assert!(text.contains("Hook details"));
     assert!(text.contains("analysis_batch_completed"));
-    assert!(text.contains("ses_hook_detail"));
     assert!(text.contains(&format!("/agents/{agent_key}/runs/{run_id}")));
     assert!(text.contains("data-detail-delete-trigger"));
     assert!(text.contains(&format!("/agents/{agent_key}/hooks/{hook_id}/delete")));
+    assert!(text.contains(&format!("/agents/{agent_key}/hooks/{hook_id}/model-picker")));
+    assert!(text.contains("data-model-picker-lazy-open"));
+    assert!(!text.contains("data-model-picker-mode=\"modal\""));
+
+    let response = router(state)
+        .oneshot(
+            Request::builder()
+                .uri(format!("/agents/{agent_key}/hooks/{hook_id}/model-picker"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let text = response_text(response).await;
+    assert!(text.contains("data-model-picker-mode=\"modal\""));
 }
 #[tokio::test]
 async fn post_hook_timeout_updates_and_redirects() {

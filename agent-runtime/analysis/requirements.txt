@@ -5,6 +5,7 @@ pandas
 scipy
 statsmodels
 pandas-ta-classic
+pyright[nodejs]==1.1.411
 polars
 matplotlib
 seaborn
