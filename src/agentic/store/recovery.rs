@@ -16,7 +16,7 @@ pub(crate) const ORPHANED_QUEUED_RUN_SUMMARY: &str =
 pub(crate) const ORPHANED_RUNNING_RUN_SUMMARY: &str =
     "running run orphaned by app restart after timeout";
 
-fn active_job_kinds_for_lane(job_kind: &str) -> &'static [&'static str] {
+pub(crate) fn active_job_kinds_for_lane(job_kind: &str) -> &'static [&'static str] {
     match job_kind {
         JOB_KIND_TRADING => &[JOB_KIND_TRADING],
         JOB_KIND_ANALYSIS | JOB_KIND_MARKET_ANALYSIS | JOB_KIND_DAILY_REVIEW => &[

@@ -607,6 +607,70 @@ function initCopyButtons() {
   });
 }
 
+// Delegated wiring for agent_delete_modal.html. The modal markup is included
+// on full pages (job/hook detail) and inside the memory detail partial, which
+// is swapped in dynamically — so listeners must live on `document`, not on the
+// included nodes (inline scripts do not run for swapped-in content).
+function initDetailDeleteModal() {
+  const closeModal = (modal: HTMLElement) => {
+    modal.classList.add("hidden");
+    modal.classList.remove("flex");
+  };
+
+  document.addEventListener("click", (event) => {
+    const target = event.target as Element | null;
+    if (!target) {
+      return;
+    }
+
+    const trigger = target.closest<HTMLElement>("[data-detail-delete-trigger]");
+    if (trigger) {
+      const modal = document.getElementById("detail-delete-modal");
+      const form = document.getElementById(
+        "detail-delete-form",
+      ) as HTMLFormElement | null;
+      const title = document.getElementById("detail-delete-modal-title");
+      const body = document.getElementById("detail-delete-modal-body");
+      const confirm = document.getElementById("confirm-detail-delete-btn");
+      if (!modal || !form || !title || !body || !confirm) {
+        return;
+      }
+      const kind = trigger.dataset.deleteKind || "job";
+      const label = trigger.dataset.deleteLabel || kind;
+      form.action = trigger.dataset.deleteAction || "";
+      title.textContent = `Delete ${kind}`;
+      confirm.textContent = `Delete ${kind}`;
+      body.textContent = `Are you sure you want to delete ${label}? This action cannot be undone.`;
+      modal.classList.remove("hidden");
+      modal.classList.add("flex");
+      return;
+    }
+
+    if (target.closest("#cancel-detail-delete-btn")) {
+      const modal = document.getElementById("detail-delete-modal");
+      if (modal) {
+        closeModal(modal);
+      }
+      return;
+    }
+
+    // Backdrop click: the modal root is the click target itself.
+    if (target.id === "detail-delete-modal" && target instanceof HTMLElement) {
+      closeModal(target);
+    }
+  });
+
+  document.addEventListener("keydown", (event) => {
+    if (event.key !== "Escape") {
+      return;
+    }
+    const modal = document.getElementById("detail-delete-modal");
+    if (modal?.classList.contains("flex")) {
+      closeModal(modal);
+    }
+  });
+}
+
 function init() {
   renderTimeago();
   renderLocalDateTimes();
@@ -617,6 +681,7 @@ function init() {
   syncAgentSelector();
   initAgentSelectorDismissal();
   initCopyButtons();
+  initDetailDeleteModal();
   seedSelectedMemoryTimelineItems();
   restoreSelectedMemoryTimelineItem();
   startRunningDurationTicker();

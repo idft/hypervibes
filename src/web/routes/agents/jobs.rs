@@ -7,6 +7,7 @@ use axum::{
     http::StatusCode,
     response::{Html, IntoResponse, Redirect, Response},
 };
+use chrono::{TimeZone, Utc};
 use serde::Deserialize;
 use tracing::warn;
 
@@ -22,7 +23,8 @@ use crate::{
     agentic::{
         model::{JOB_KIND_ANALYSIS, JOB_KIND_TRADING},
         scheduler::{
-            dispatch_analysis_batch_completed_hook, dispatch_request_from_schedule,
+            dispatch_analysis_batch_completed_hook, dispatch_daily_review_coding_hook,
+            dispatch_request_from_schedule,
             dispatch_run_with_workspace_lease,
         },
         store::{self, QueuedScheduleRun},
@@ -582,6 +584,7 @@ pub(in crate::web::routes) async fn agents_run_job_now(
         QueuedScheduleRun::Dispatch {
             run_id,
             scheduled_for,
+            wait_for_lane,
         } => {
             // Scheduled Run now is not allowed once the server has
             // begun shutting down: new work would either be killed
@@ -621,7 +624,7 @@ pub(in crate::web::routes) async fn agents_run_job_now(
             } else {
                 None
             };
-            let request = dispatch_request_from_schedule(
+            let mut request = dispatch_request_from_schedule(
                 &schedule,
                 run_id,
                 scheduled_for,
@@ -632,15 +635,47 @@ pub(in crate::web::routes) async fn agents_run_job_now(
                 system_prompt,
                 account_snapshot,
             );
+            if schedule.job_kind == crate::agentic::model::JOB_KIND_DAILY_REVIEW {
+                let review_window_end = Utc::now();
+                let review_window_start = Utc.from_utc_datetime(
+                    &review_window_end
+                        .date_naive()
+                        .and_hms_opt(0, 0, 0)
+                        .expect("UTC midnight is valid"),
+                );
+                request.review_window_start = Some(review_window_start);
+                request.review_window_end = Some(review_window_end);
+            }
             let pool = state.db_pool.clone();
             let backend = state.agentic_backend.clone();
             let live_accounts = state.live_accounts.clone();
             let workspace_leases = state.workspace_leases.clone();
             let trigger_hook = schedule.job_kind == JOB_KIND_ANALYSIS;
+            let trigger_coding_hook =
+                schedule.job_kind == crate::agentic::model::JOB_KIND_DAILY_REVIEW;
             let hook_agent_key = agent_key.clone();
             let in_flight = state.in_flight.clone();
             tokio::spawn(async move {
                 let _guard = in_flight.track();
+                while wait_for_lane {
+                    match store::has_prior_active_run_in_lane(
+                        &pool,
+                        &hook_agent_key,
+                        &schedule.job_kind,
+                        run_id,
+                    )
+                    .await
+                    {
+                        Ok(false) => break,
+                        Ok(true) => {}
+                        Err(error) => {
+                            let summary = format!("manual run queue check failed: {error:#}");
+                            let _ = store::mark_run_failed(&pool, run_id, &summary, None).await;
+                            return;
+                        }
+                    }
+                    tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+                }
                 let _workspace_lease = workspace_leases.acquire_live_read(&hook_agent_key).await;
                 let result = dispatch_run_with_workspace_lease(
                     pool.clone(),
@@ -659,10 +694,12 @@ pub(in crate::web::routes) async fn agents_run_job_now(
                     )
                     .await;
                 }
+                if trigger_coding_hook && result.succeeded {
+                    let _ = dispatch_daily_review_coding_hook(&pool, &hook_agent_key, run_id).await;
+                }
             });
             return Ok(Redirect::to(&format!("/agents/{agent_key}/runs/{run_id}")).into_response());
         }
-        QueuedScheduleRun::Skipped => {}
         QueuedScheduleRun::Missing => {
             return Ok((StatusCode::NOT_FOUND, "job not found").into_response());
         }
@@ -674,7 +711,6 @@ pub(in crate::web::routes) async fn agents_run_job_now(
         }
     };
 
-    Ok(Redirect::to(&format!("/agents/{agent_key}/jobs")).into_response())
 }
 pub(in crate::web::routes) async fn agents_update_job_model(
     State(state): State<Arc<AppState>>,

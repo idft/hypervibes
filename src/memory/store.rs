@@ -70,6 +70,21 @@ pub async fn insert_memory(
     Ok(row)
 }
 
+/// Delete a single memory, scoped to the owning `agent_key` (mirrors
+/// `get_memory` scoping so existence does not leak across agents).
+/// Returns `true` when a row was deleted. Linked rows in `memory.links`
+/// are removed via `ON DELETE CASCADE`.
+pub async fn delete_memory(pool: &DbPool, agent_key: &str, id: Uuid) -> Result<bool> {
+    let result = sqlx::query("DELETE FROM memory.records WHERE id = $1 AND agent_key = $2")
+        .bind(id)
+        .bind(agent_key)
+        .execute(pool)
+        .await
+        .with_context(|| format!("failed to delete memory record {id}"))?;
+
+    Ok(result.rows_affected() > 0)
+}
+
 pub async fn delete_memories_for_agent(pool: &DbPool, agent_key: &str) -> Result<u64> {
     let result = sqlx::query("DELETE FROM memory.records WHERE agent_key = $1")
         .bind(agent_key)

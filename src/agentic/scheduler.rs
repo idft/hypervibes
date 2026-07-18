@@ -1,8 +1,12 @@
-use std::{collections::BTreeMap, sync::Arc, time::Duration};
+use std::{
+    collections::{BTreeMap, HashMap},
+    sync::{Arc, Mutex, Weak},
+    time::Duration,
+};
 
 use anyhow::{Context, Result, anyhow};
 use chrono::Utc;
-use tokio::sync::{Semaphore, watch};
+use tokio::sync::{Mutex as AsyncMutex, OwnedMutexGuard, Semaphore, watch};
 #[cfg(test)]
 use tokio::task::JoinHandle;
 use tracing::{debug, error, info, warn};
@@ -80,6 +84,39 @@ pub struct AgenticScheduler {
     in_flight: InFlightTracker,
     workspace_leases: WorkspaceLeaseManager,
     coding_semaphore: Arc<Semaphore>,
+    lane_locks: SchedulerLaneLockManager,
+}
+
+/// Serializes repeated scheduler ticks for one agent and lane. The run store
+/// serializes individual claims, but a later tick must not claim a second due
+/// schedule while the earlier tick is still executing the first one.
+#[derive(Clone, Default)]
+struct SchedulerLaneLockManager {
+    locks: Arc<Mutex<HashMap<(String, SchedulerLane), Weak<AsyncMutex<()>>>>>,
+}
+
+#[derive(Clone, Copy, Hash, PartialEq, Eq)]
+enum SchedulerLane {
+    Analysis,
+    Trading,
+}
+
+impl SchedulerLaneLockManager {
+    fn lock_for(&self, agent_key: &str, lane: SchedulerLane) -> Arc<AsyncMutex<()>> {
+        let mut locks = self.locks.lock().expect("scheduler lane lock map poisoned");
+        let key = (agent_key.to_string(), lane);
+        if let Some(lock) = locks.get(&key).and_then(Weak::upgrade) {
+            return lock;
+        }
+
+        let lock = Arc::new(AsyncMutex::new(()));
+        locks.insert(key, Arc::downgrade(&lock));
+        lock
+    }
+
+    fn try_acquire(&self, agent_key: &str, lane: SchedulerLane) -> Option<OwnedMutexGuard<()>> {
+        self.lock_for(agent_key, lane).try_lock_owned().ok()
+    }
 }
 
 impl AgenticScheduler {
@@ -130,6 +167,7 @@ impl AgenticScheduler {
             in_flight,
             workspace_leases,
             coding_semaphore: Arc::new(Semaphore::new(1)),
+            lane_locks: SchedulerLaneLockManager::default(),
         }
     }
 
@@ -288,28 +326,40 @@ impl AgenticScheduler {
             }
 
             if !analysis_schedules.is_empty() || !daily_review_schedules.is_empty() {
-                let pool = self.pool.clone();
-                let backend = self.backend.clone();
-                let live_accounts = self.live_accounts.clone();
-                let agent_key = agent_key.clone();
-                let in_flight = self.in_flight.clone();
-                let workspace_leases = self.workspace_leases.clone();
-                tokio::spawn(async move {
-                    let _guard = in_flight.track();
-                    process_analysis_lane_for_agent(
-                        &pool,
-                        &backend,
-                        &live_accounts,
-                        &agent_key,
-                        sort_analysis_schedules_for_dispatch(analysis_schedules),
-                        sort_analysis_schedules_for_dispatch(daily_review_schedules),
-                        &workspace_leases,
-                    )
-                    .await;
-                });
+                if let Some(lane_guard) = self
+                    .lane_locks
+                    .try_acquire(&agent_key, SchedulerLane::Analysis)
+                {
+                    let pool = self.pool.clone();
+                    let backend = self.backend.clone();
+                    let live_accounts = self.live_accounts.clone();
+                    let agent_key = agent_key.clone();
+                    let in_flight = self.in_flight.clone();
+                    let workspace_leases = self.workspace_leases.clone();
+                    tokio::spawn(async move {
+                        let _guard = in_flight.track();
+                        let _lane_guard = lane_guard;
+                        process_analysis_lane_for_agent(
+                            &pool,
+                            &backend,
+                            &live_accounts,
+                            &agent_key,
+                            sort_analysis_schedules_for_dispatch(analysis_schedules),
+                            sort_analysis_schedules_for_dispatch(daily_review_schedules),
+                            &workspace_leases,
+                        )
+                        .await;
+                    });
+                }
             }
 
             if !trading_schedules.is_empty() {
+                let Some(lane_guard) = self
+                    .lane_locks
+                    .try_acquire(&agent_key, SchedulerLane::Trading)
+                else {
+                    continue;
+                };
                 let pool = self.pool.clone();
                 let backend = self.backend.clone();
                 let live_accounts = self.live_accounts.clone();
@@ -318,6 +368,7 @@ impl AgenticScheduler {
                 let workspace_leases = self.workspace_leases.clone();
                 tokio::spawn(async move {
                     let _guard = in_flight.track();
+                    let _lane_guard = lane_guard;
                     process_trading_lane_for_agent(
                         &pool,
                         &backend,
@@ -1203,14 +1254,7 @@ async fn process_analysis_lane_for_agent(
         )
         .await
         {
-            if let Err(error) = dispatch_daily_review_coding_hook(
-                pool,
-                backend,
-                agent_key,
-                run_id,
-                workspace_leases,
-            )
-            .await
+            if let Err(error) = dispatch_daily_review_coding_hook(pool, agent_key, run_id).await
             {
                 warn!(agent_key, error = ?error, "failed to process daily-review coding request");
             }
@@ -1458,12 +1502,10 @@ async fn build_dispatch_request(
     )))
 }
 
-async fn dispatch_daily_review_coding_hook(
+pub(crate) async fn dispatch_daily_review_coding_hook(
     pool: &DbPool,
-    _backend: &Arc<dyn AgenticBackend>,
     agent_key: &str,
     source_run_id: i64,
-    _workspace_leases: &WorkspaceLeaseManager,
 ) -> Result<()> {
     let Some(memory) =
         crate::memory::get_daily_review_memory_for_run(pool, agent_key, source_run_id).await?
@@ -2248,7 +2290,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn tick_dispatches_same_agent_schedules_sequentially() {
+    async fn overlapping_ticks_do_not_skip_same_agent_analysis_schedules() {
         let pool = test_db::pool().await;
         let key = format!(
             "sched-seq-{}",
@@ -2315,6 +2357,9 @@ mod tests {
         );
         scheduler.tick().await.expect("tick");
 
+        run_until(|| async { calls.lock().map(|guard| !guard.is_empty()).unwrap_or(false) }).await;
+        scheduler.tick().await.expect("overlapping tick");
+
         run_until(|| async { calls.lock().map(|guard| guard.len() >= 2).unwrap_or(false) }).await;
 
         let guard = calls.lock().unwrap();
@@ -2322,6 +2367,12 @@ mod tests {
         let order: Vec<&str> = guard.iter().map(|r| r.job_key.as_str()).collect();
         // 15m is shorter than 1h, so it should dispatch first.
         assert_eq!(order, vec!["analysis-15m", "analysis-1h"]);
+        drop(guard);
+
+        let runs = store::list_agent_runs(&pool, &key, 10)
+            .await
+            .expect("list runs");
+        assert!(runs.iter().all(|run| run.status != RUN_STATUS_SKIPPED));
     }
 
     #[tokio::test]

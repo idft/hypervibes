@@ -234,6 +234,7 @@ async fn insert_queued_run_inserts_manual_dispatch_run_and_does_not_advance_sche
         QueuedScheduleRun::Dispatch {
             run_id,
             scheduled_for,
+            ..
         } => (run_id, scheduled_for),
         other => panic!("expected Dispatch, got {other:?}"),
     };
@@ -275,7 +276,7 @@ async fn insert_queued_run_inserts_manual_dispatch_run_and_does_not_advance_sche
 }
 
 #[tokio::test]
-async fn insert_queued_run_inserts_skipped_run_when_previous_run_is_active() {
+async fn insert_queued_run_waits_when_previous_run_is_active() {
     let pool = test_db::pool().await;
     let key = format!(
         "manual-skip-{}",
@@ -290,8 +291,19 @@ async fn insert_queued_run_inserts_skipped_run_when_previous_run_is_active() {
         .await
         .expect("manual run");
     match outcome {
-        QueuedScheduleRun::Skipped => {}
-        other => panic!("expected Skipped, got {other:?}"),
+        QueuedScheduleRun::Dispatch {
+            run_id,
+            wait_for_lane,
+            ..
+        } => {
+            assert!(wait_for_lane);
+            let run = get_run(&pool, run_id)
+                .await
+                .expect("fetch run")
+                .expect("run present");
+            assert_eq!(run.status, RUN_STATUS_QUEUED);
+        }
+        other => panic!("expected queued dispatch, got {other:?}"),
     }
 }
 

@@ -187,7 +187,6 @@
                         <th class="px-4 py-3 font-medium">Started</th>
                         <th class="px-4 py-3 font-medium">Finished</th>
                         <th class="px-4 py-3 font-medium">Duration</th>
-                        <th class="px-4 py-3 font-medium">Backend ref</th>
                         <th class="px-4 py-3 font-medium">Error</th>
                     </tr>
                 </thead>
@@ -215,13 +214,6 @@
                             {% endif %}
                         </td>
                         <td class="px-4 py-3 align-top font-mono text-xs text-zinc-300">{{ run.duration_text }}</td>
-                        <td class="px-4 py-3 align-top break-all font-mono text-xs text-zinc-300">
-                            {% if run.backend_run_ref.is_empty() %}
-                            <span class="text-zinc-500">—</span>
-                            {% else %}
-                            {{ run.backend_run_ref }}
-                            {% endif %}
-                        </td>
                         <td class="px-4 py-3 align-top text-xs text-zinc-300">
                             {% if run.error_summary.is_empty() %}
                             <span class="text-zinc-500">—</span>

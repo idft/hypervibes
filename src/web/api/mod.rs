@@ -3,6 +3,7 @@ mod coding;
 mod error;
 mod memories;
 mod orders;
+mod transactions;
 
 #[cfg(test)]
 mod test_support;
@@ -15,10 +16,12 @@ mod coding_tests;
 mod memories_tests;
 #[cfg(test)]
 mod orders_tests;
+#[cfg(test)]
+mod transactions_tests;
 
 // Re-export so handlers are reachable by bare name from `router()` below,
 // and so test code can reference them via `super::*` if needed.
-use self::{account::*, coding::*, memories::*, orders::*};
+use self::{account::*, coding::*, memories::*, orders::*, transactions::*};
 
 use std::sync::Arc;
 
@@ -36,6 +39,7 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/memories/latest", get(list_latest_memories))
         .route("/memories/{id}", get(get_memory_by_id))
         .route("/account", get(get_account))
+        .route("/account/transactions", get(list_account_transactions))
         .route("/coding/report", post(submit_coding_report))
         .route(
             "/orders",

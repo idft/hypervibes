@@ -2,7 +2,7 @@ use axum::{
     extract::{Path, Query, State},
     http::{HeaderMap, StatusCode},
     response::{
-        Html, IntoResponse, Response,
+        Html, IntoResponse, Redirect, Response,
         sse::{Event, KeepAlive, Sse},
     },
 };
@@ -82,6 +82,21 @@ pub(in crate::web::routes) async fn agents_show_memory_detail(
     let html =
         AgentMemoryDetailPageTemplate::render_view(agent.clone(), memory_view, memory_detail_html)?;
     Ok(Html(html).into_response())
+}
+pub(in crate::web::routes) async fn agents_delete_memory(
+    State(state): State<Arc<AppState>>,
+    Path((agent_key, memory_id)): Path<(String, uuid::Uuid)>,
+) -> Result<Response, AppError> {
+    let Some(agent) = get_agent(&state.db_pool, &agent_key).await? else {
+        return Ok((StatusCode::NOT_FOUND, "agent not found").into_response());
+    };
+
+    let deleted = crate::memory::delete_memory(&state.db_pool, &agent.agent_key, memory_id).await?;
+    if !deleted {
+        return Ok((StatusCode::NOT_FOUND, "memory not found").into_response());
+    }
+
+    Ok(Redirect::to(&format!("/agents/{agent_key}/memories")).into_response())
 }
 pub(in crate::web::routes) async fn agent_memory_timeline_page(
     State(state): State<Arc<AppState>>,

@@ -50,6 +50,10 @@ pub fn router(state: Arc<AppState>) -> Router {
             "/agents/{agent_key}/memories/{memory_id}",
             get(agents_show_memory_detail),
         )
+        .route(
+            "/agents/{agent_key}/memories/{memory_id}/delete",
+            post(agents_delete_memory),
+        )
         .route("/agents/{agent_key}/prompts", get(agents_show_prompts))
         .route(
             "/agents/{agent_key}/prompts/update",

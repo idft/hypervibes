@@ -32,8 +32,8 @@ async fn agent_prompts_route_renders_prompt_fields() {
     let text = response_text(response).await;
     assert!(text.contains("Wait for analysis confirmation first."));
     assert!(text.contains("Trade breakouts only after confirmation."));
-    assert!(text.contains("Market Analysis Strategy Prompt"));
-    assert!(text.contains("Daily Review Strategy Prompt"));
+    assert!(text.contains("Market Analysis"));
+    assert!(text.contains("Daily Review"));
 }
 #[tokio::test]
 async fn post_agent_analysis_prompt_updates_only_analysis() {

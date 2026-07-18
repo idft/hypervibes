@@ -135,10 +135,6 @@ async fn jobs_route_paginates_recent_runs() {
     let page_one_text = response_text(page_one).await;
     assert!(page_one_text.contains("Showing 1-10 of 12 runs"));
     assert!(page_one_text.contains("Page 1 of 2"));
-    assert!(page_one_text.contains("run-12"));
-    assert!(page_one_text.contains("run-03"));
-    assert!(!page_one_text.contains("run-02"));
-    assert!(!page_one_text.contains("run-01"));
     assert!(page_one_text.contains(&format!("/agents/{agent_key}/jobs?page=2")));
 
     let page_two = router(state.clone())
@@ -154,9 +150,6 @@ async fn jobs_route_paginates_recent_runs() {
     let page_two_text = response_text(page_two).await;
     assert!(page_two_text.contains("Showing 11-12 of 12 runs"));
     assert!(page_two_text.contains("Page 2 of 2"));
-    assert!(page_two_text.contains("run-02"));
-    assert!(page_two_text.contains("run-01"));
-    assert!(!page_two_text.contains("run-03"));
     assert!(page_two_text.contains(&format!("/agents/{agent_key}/jobs?page=1")));
 }
 #[tokio::test]
@@ -686,7 +679,6 @@ async fn job_detail_page_renders_job_specific_runs() {
     assert_eq!(response.status(), StatusCode::OK);
     let text = response_text(response).await;
     assert!(text.contains("Run now"));
-    assert!(text.contains("ses_job_detail"));
     assert!(text.contains(&format!("/agents/{agent_key}/runs/{run_id}")));
     assert!(text.contains(&format!(
         "/agents/{agent_key}/jobs/{schedule_id}/model-picker"

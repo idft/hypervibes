@@ -106,6 +106,126 @@ async fn agent_memory_detail_route_renders_full_page_for_direct_navigation() {
     assert!(text.contains(&format!("href=\"/agents/{agent_key}/memories\"")));
 }
 #[tokio::test]
+async fn agent_memory_detail_partial_renders_delete_button() {
+    let state = test_state().await;
+    let (agent_key, _wallet_address) = insert_test_agent(&state).await.expect("insert agent");
+    let memory = seed_memory(
+        &state,
+        &agent_key,
+        "Remember the breakout",
+        "### Plan\n\nBTC reclaimed support.",
+    )
+    .await;
+
+    let response = router(state.clone())
+        .oneshot(
+            Request::builder()
+                .uri(format!("/agents/{agent_key}/memories/{}", memory.id))
+                .header("HX-Request", "true")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let text = response_text(response).await;
+    assert!(text.contains("data-detail-delete-trigger"));
+    assert!(text.contains("data-delete-kind=\"memory\""));
+    assert!(text.contains(&format!(
+        "data-delete-action=\"/agents/{agent_key}/memories/{}/delete\"",
+        memory.id
+    )));
+}
+#[tokio::test]
+async fn agents_delete_memory_removes_memory_and_redirects() {
+    let state = test_state().await;
+    let (agent_key, _wallet_address) = insert_test_agent(&state).await.expect("insert agent");
+    let memory = seed_memory(
+        &state,
+        &agent_key,
+        "Remember the breakout",
+        "### Plan\n\nBTC reclaimed support.",
+    )
+    .await;
+
+    let response = router(state.clone())
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/agents/{agent_key}/memories/{}/delete", memory.id))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+    assert_eq!(
+        response
+            .headers()
+            .get("location")
+            .and_then(|value| value.to_str().ok()),
+        Some(format!("/agents/{agent_key}/memories").as_str())
+    );
+    let deleted = crate::memory::get_memory(&state.db_pool, &agent_key, memory.id)
+        .await
+        .expect("get memory");
+    assert!(deleted.is_none());
+}
+#[tokio::test]
+async fn agents_delete_memory_returns_404_for_unknown_memory() {
+    let state = test_state().await;
+    let (agent_key, _wallet_address) = insert_test_agent(&state).await.expect("insert agent");
+
+    let response = router(state.clone())
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!(
+                    "/agents/{agent_key}/memories/{}/delete",
+                    uuid::Uuid::new_v4()
+                ))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
+#[tokio::test]
+async fn agents_delete_memory_scoped_to_owning_agent() {
+    let state = test_state().await;
+    let (agent_key, _wallet_address) = insert_test_agent(&state).await.expect("insert agent");
+    let (other_key, _other_wallet) = insert_test_agent(&state).await.expect("insert agent");
+    let memory = seed_memory(
+        &state,
+        &agent_key,
+        "Remember the breakout",
+        "### Plan\n\nBTC reclaimed support.",
+    )
+    .await;
+
+    // Another agent's key in the path must not delete the memory.
+    let response = router(state.clone())
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/agents/{other_key}/memories/{}/delete", memory.id))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    let still_there = crate::memory::get_memory(&state.db_pool, &agent_key, memory.id)
+        .await
+        .expect("get memory");
+    assert!(still_there.is_some());
+}
+#[tokio::test]
 async fn agent_memory_detail_route_returns_404_for_unknown_memory() {
     let state = test_state().await;
     let (agent_key, _wallet_address) = insert_test_agent(&state).await.expect("insert agent");

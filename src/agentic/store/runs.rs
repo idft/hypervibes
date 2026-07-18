@@ -342,59 +342,36 @@ pub async fn insert_queued_run(
         latest_due_at_or_before(now, &schedule.timeframe, schedule.trigger_delay_seconds)?
             .map(|due| boundary_for_due_at(due, schedule.trigger_delay_seconds))
             .unwrap_or(now);
-    let outcome = if has_active_run_in_lane_tx(
+    let wait_for_lane = has_active_run_in_lane_tx(
         &mut tx,
         &schedule.agent_key,
         &schedule.job_kind,
         now,
     )
-    .await?
-    {
-        let run_id = insert_run_in_tx(
-            &mut tx,
-            Some(schedule.id),
-            None,
-            &schedule.agent_key,
-            &schedule.job_key,
-            &schedule.job_kind,
-            Some(&schedule.timeframe),
-            RUN_STATUS_SKIPPED,
-            None,
-            schedule.model_provider_id.as_deref(),
-            schedule.model_id.as_deref(),
-            scheduled_for,
-            None,
-            Some(now),
-            schedule.timeout_seconds,
-            Some("previous run still active"),
-        )
-        .await?;
-        let _ = run_id;
-        QueuedScheduleRun::Skipped
-    } else {
-        let run_id = insert_run_in_tx(
-            &mut tx,
-            Some(schedule.id),
-            None,
-            &schedule.agent_key,
-            &schedule.job_key,
-            &schedule.job_kind,
-            Some(&schedule.timeframe),
-            RUN_STATUS_QUEUED,
-            None,
-            schedule.model_provider_id.as_deref(),
-            schedule.model_id.as_deref(),
-            scheduled_for,
-            None,
-            None,
-            schedule.timeout_seconds,
-            None,
-        )
-        .await?;
-        QueuedScheduleRun::Dispatch {
-            run_id,
-            scheduled_for,
-        }
+    .await?;
+    let run_id = insert_run_in_tx(
+        &mut tx,
+        Some(schedule.id),
+        None,
+        &schedule.agent_key,
+        &schedule.job_key,
+        &schedule.job_kind,
+        Some(&schedule.timeframe),
+        RUN_STATUS_QUEUED,
+        None,
+        schedule.model_provider_id.as_deref(),
+        schedule.model_id.as_deref(),
+        scheduled_for,
+        None,
+        None,
+        schedule.timeout_seconds,
+        None,
+    )
+    .await?;
+    let outcome = QueuedScheduleRun::Dispatch {
+        run_id,
+        scheduled_for,
+        wait_for_lane,
     };
 
     tx.commit()
@@ -409,10 +386,36 @@ pub enum QueuedScheduleRun {
     Dispatch {
         run_id: i64,
         scheduled_for: DateTime<Utc>,
+        wait_for_lane: bool,
     },
-    Skipped,
     Missing,
     BlockedByMaintenance,
+}
+
+/// Whether a manual queued run must wait for an earlier run in its lane.
+pub async fn has_prior_active_run_in_lane(
+    pool: &DbPool,
+    agent_key: &str,
+    job_kind: &str,
+    run_id: i64,
+) -> Result<bool> {
+    let lane_job_kinds = super::recovery::active_job_kinds_for_lane(job_kind);
+    let active: Option<(i32,)> = query_as(
+        "SELECT 1 FROM agentic_runs
+          WHERE agent_key = $1
+            AND job_kind = ANY($2)
+            AND (status = $3 OR (status = $4 AND id < $5))
+          LIMIT 1",
+    )
+    .bind(agent_key)
+    .bind(lane_job_kinds)
+    .bind(RUN_STATUS_RUNNING)
+    .bind(RUN_STATUS_QUEUED)
+    .bind(run_id)
+    .fetch_optional(pool)
+    .await
+    .context("failed to check for prior active run in lane")?;
+    Ok(active.is_some())
 }
 
 pub async fn insert_queued_hook_run(

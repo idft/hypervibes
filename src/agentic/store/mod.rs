@@ -18,6 +18,7 @@ pub use recovery::recover_inactive_runs_all;
 #[allow(unused_imports)]
 pub use runs::{
     QueuedHookRun, QueuedScheduleRun, agent_has_active_runs, count_agent_runs, get_run,
+    has_prior_active_run_in_lane,
     insert_queued_hook_run, insert_queued_hook_run_for_automatic_dispatch, insert_queued_run,
     list_active_agent_runs, list_agent_runs_page, mark_run_failed, mark_run_running,
     mark_run_succeeded,

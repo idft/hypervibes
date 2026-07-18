@@ -244,7 +244,7 @@
                 <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 0 1 8-8V1C6.477 1 2 5.477 2 12h2Zm8 8a8 8 0 0 1-8-8H1c0 6.627 5.373 12 12 12v-4Z"></path>
             </svg>
         </div>
-        {% else %}
+        {% else if run.status != "skipped" %}
         <p class="text-sm leading-6 {% if session_lookup_attempted %}text-amber-100/80{% else %}text-zinc-400{% endif %}">{% if session_lookup_attempted %}This run has a backend session id, but no matching row was found yet in the <code class="font-mono text-xs {% if session_lookup_attempted %}text-amber-100{% else %}text-zinc-300{% endif %}">opencode.sessions</code> mirror. The plugin may still be writing, or the session mirror may have failed.{% else %}Waiting to start{% endif %}</p>
         {% endif %}
     </section>

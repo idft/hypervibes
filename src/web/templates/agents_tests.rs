@@ -182,7 +182,6 @@ fn jobs_page_renders_recent_run_rows() {
     template.recent_runs_range_start = 1;
     template.recent_runs_range_end = 2;
     let rendered = template.render().expect("render jobs page runs section");
-    assert!(rendered.contains("ses_abc123"));
     assert!(rendered.contains(">succeeded<"));
     assert!(rendered.contains(">failed<"));
     assert!(rendered.contains("15m"));
@@ -402,10 +401,10 @@ fn prompts_tab_renders_strategy_copy_and_reset_defaults_ui() {
 
     let rendered = template.render().unwrap();
     assert!(rendered.contains("Strategy Prompts"));
-    assert!(rendered.contains("Analysis Strategy Prompt"));
-    assert!(rendered.contains("Market Analysis Strategy Prompt"));
-    assert!(rendered.contains("Trading Strategy Prompt"));
-    assert!(rendered.contains("Daily Review Strategy Prompt"));
+    assert!(rendered.contains("Analysis"));
+    assert!(rendered.contains("Market Analysis"));
+    assert!(rendered.contains("Trading"));
+    assert!(rendered.contains("Daily Review"));
     assert!(rendered.contains("data-agent-prompt-form=\"analysis\""));
     assert!(rendered.contains("data-agent-prompt-form=\"market_analysis\""));
     assert!(rendered.contains("data-agent-prompt-form=\"trading\""));

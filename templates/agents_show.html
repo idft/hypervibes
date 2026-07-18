@@ -154,30 +154,45 @@
     </section>
     {% else if show_prompts_tab %}
     <section class="mt-2 space-y-2" data-agent-prompts>
-        <section class="rounded-2xl border border-zinc-800 bg-[#0d0d10] p-6">
+        <section class="rounded-2xl border border-zinc-800 bg-[#0d0d10] p-6 flex flex-col" style="height: calc(100vh - 12rem)">
             <div class="flex items-start justify-between gap-4">
                 <div>
                     <h2 class="text-lg font-medium text-white">Strategy Prompts</h2>
                 </div>
             </div>
-            {% for editor in prompt_editors %}
-            <form action="/agents/{{ agent.agent_key }}/prompts/update" method="post" class="mt-6 space-y-5" data-agent-prompt-form="{{ editor.prompt_kind }}">
-                <input type="hidden" name="prompt_kind" value="{{ editor.prompt_kind }}">
-                <div>
-                    <label for="{{ editor.textarea_id }}" class="text-xs uppercase tracking-[0.16em] text-zinc-500">{{ editor.label }}</label>
-                    <textarea id="{{ editor.textarea_id }}" name="prompt" rows="8" placeholder="{{ editor.placeholder }}" class="mt-2 w-full rounded-xl border border-zinc-800 bg-zinc-950/70 px-4 py-3 text-sm leading-6 text-zinc-200 outline-none placeholder:text-zinc-600 focus:border-zinc-700">{{ editor.prompt }}</textarea>
-                    <div class="mt-3 flex flex-col-reverse gap-3 sm:flex-row sm:justify-end">
-                        <input type="file" data-agent-prompt-file-input="{{ editor.prompt_kind }}" class="hidden" aria-hidden="true" tabindex="-1">
-                        <button type="button" data-agent-prompt-import="{{ editor.prompt_kind }}" class="rounded-md border border-zinc-800 p-2 text-zinc-300 hover:border-zinc-700 hover:text-white" aria-label="Import prompt from file" title="Import prompt from file">
-                            <svg class="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="M14 3H6.75A1.75 1.75 0 0 0 5 4.75v14.5A1.75 1.75 0 0 0 6.75 21h10.5A1.75 1.75 0 0 0 19 19.25V8l-5-5Z"></path><path stroke-linecap="round" stroke-linejoin="round" d="M14 3v5h5M8 14h8M8 17h5"></path></svg>
-                        </button>
-                        <button type="button" data-agent-prompt-reset="{{ editor.prompt_kind }}" class="rounded-full border border-zinc-800 px-4 py-2 text-sm font-medium text-zinc-300 hover:border-zinc-700 hover:text-white">Reset to default</button>
-                        <button type="submit" data-agent-prompt-save="{{ editor.prompt_kind }}" disabled class="hidden rounded-full bg-white px-4 py-2 text-sm font-medium text-black hover:bg-zinc-200 disabled:cursor-not-allowed disabled:bg-zinc-700 disabled:text-zinc-300">Save</button>
-                    </div>
+            <div class="mt-6 grid gap-4 grid-cols-[minmax(14rem,0.6fr)_minmax(0,1.4fr)] flex-1 min-h-0">
+                <nav aria-label="Prompt types" class="rounded-xl border border-zinc-800 bg-zinc-950/60 p-2 overflow-y-auto">
+                    <ul class="space-y-1" data-agent-prompt-nav>
+                        {% for editor in prompt_editors %}
+                        <li>
+                            <button type="button" data-agent-prompt-nav-item="{{ editor.prompt_kind }}" class="w-full cursor-pointer rounded-lg border border-transparent px-3 py-2 text-left text-sm text-zinc-300 transition hover:border-zinc-700 hover:bg-zinc-900 hover:text-white">
+                                {{ editor.label }}
+                            </button>
+                        </li>
+                        {% endfor %}
+                    </ul>
+                </nav>
+                <div class="min-h-0">
+                    {% for editor in prompt_editors %}
+                    <form action="/agents/{{ agent.agent_key }}/prompts/update" method="post" class="space-y-5 hidden h-full flex flex-col" data-agent-prompt-form="{{ editor.prompt_kind }}">
+                        <input type="hidden" name="prompt_kind" value="{{ editor.prompt_kind }}">
+                        <div class="flex flex-col min-h-0 flex-1">
+                            <label for="{{ editor.textarea_id }}" class="text-xs uppercase tracking-[0.16em] text-zinc-500">{{ editor.label }}</label>
+                            <textarea id="{{ editor.textarea_id }}" name="prompt" placeholder="{{ editor.placeholder }}" class="mt-2 w-full flex-1 min-h-0 rounded-xl border border-zinc-800 bg-zinc-950/70 px-4 py-3 text-sm leading-6 text-zinc-200 outline-none placeholder:text-zinc-600 focus:border-zinc-700">{{ editor.prompt }}</textarea>
+                            <div class="mt-3 flex flex-col-reverse gap-3 sm:flex-row sm:justify-end">
+                                <input type="file" data-agent-prompt-file-input="{{ editor.prompt_kind }}" class="hidden" aria-hidden="true" tabindex="-1">
+                                <button type="button" data-agent-prompt-import="{{ editor.prompt_kind }}" class="rounded-md border border-zinc-800 p-2 text-zinc-300 hover:border-zinc-700 hover:text-white" aria-label="Import prompt from file" title="Import prompt from file">
+                                    <svg class="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="M14 3H6.75A1.75 1.75 0 0 0 5 4.75v14.5A1.75 1.75 0 0 0 6.75 21h10.5A1.75 1.75 0 0 0 19 19.25V8l-5-5Z"></path><path stroke-linecap="round" stroke-linejoin="round" d="M14 3v5h5M8 14h8M8 17h5"></path></svg>
+                                </button>
+                                <button type="button" data-agent-prompt-reset="{{ editor.prompt_kind }}" class="rounded-full border border-zinc-800 px-4 py-2 text-sm font-medium text-zinc-300 hover:border-zinc-700 hover:text-white">Reset to default</button>
+                                <button type="submit" data-agent-prompt-save="{{ editor.prompt_kind }}" disabled class="hidden rounded-full bg-white px-4 py-2 text-sm font-medium text-black hover:bg-zinc-200 disabled:cursor-not-allowed disabled:bg-zinc-700 disabled:text-zinc-300">Save</button>
+                            </div>
+                        </div>
+                    </form>
+                    <textarea id="default-{{ editor.prompt_kind }}-strategy-prompt-value" class="hidden" aria-hidden="true" tabindex="-1">{{ editor.default_prompt }}</textarea>
+                    {% endfor %}
                 </div>
-            </form>
-            <textarea id="default-{{ editor.prompt_kind }}-strategy-prompt-value" class="hidden" aria-hidden="true" tabindex="-1">{{ editor.default_prompt }}</textarea>
-            {% endfor %}
+            </div>
         </section>
     </section>
     {% else if show_settings_tab %}
@@ -508,7 +523,6 @@
                             <th class="px-4 py-3 font-medium">Started</th>
                             <th class="px-4 py-3 font-medium">Finished</th>
                             <th class="px-4 py-3 font-medium">Duration</th>
-                            <th class="px-4 py-3 font-medium">Backend ref</th>
                         </tr>
                     </thead>
                     <tbody class="divide-y divide-zinc-800">
@@ -537,13 +551,6 @@
                                 {% endif %}
                             </td>
                             <td class="px-4 py-3 align-top font-mono text-xs text-zinc-300">{{ run.duration_text }}</td>
-                            <td class="px-4 py-3 align-top break-all font-mono text-xs text-zinc-300">
-                                {% if run.backend_run_ref.is_empty() %}
-                                <span class="text-zinc-500">—</span>
-                                {% else %}
-                                {{ run.backend_run_ref }}
-                                {% endif %}
-                            </td>
                         </tr>
                         {% endfor %}
                     </tbody>
@@ -684,6 +691,34 @@
             }
 
             container.dataset.agentPromptsBound = 'true';
+
+            const navItems = Array.from(container.querySelectorAll('[data-agent-prompt-nav-item]'));
+            const formByKey = new Map(forms.map(function (form) {
+                return [form.getAttribute('data-agent-prompt-form'), form];
+            }));
+
+            function selectPrompt(key) {
+                if (!formByKey.has(key)) {
+                    return;
+                }
+                navItems.forEach(function (item) {
+                    const active = item.getAttribute('data-agent-prompt-nav-item') === key;
+                    item.classList.toggle('border-zinc-700', active);
+                    item.classList.toggle('bg-zinc-900', active);
+                    item.classList.toggle('text-white', active);
+                });
+                forms.forEach(function (form) {
+                    form.classList.toggle('hidden', form.getAttribute('data-agent-prompt-form') !== key);
+                });
+            }
+
+            navItems.forEach(function (item) {
+                item.addEventListener('click', function () {
+                    selectPrompt(item.getAttribute('data-agent-prompt-nav-item'));
+                });
+            });
+
+            selectPrompt(fields[0].key);
 
             fields.forEach(function (field) {
                 const original = field.textarea.value;

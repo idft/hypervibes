@@ -5,7 +5,7 @@ use rust_decimal::Decimal;
 use crate::db::DbPool;
 
 /// A single USDC balance-impacting event from the account timeline.
-#[derive(Debug, Clone, sqlx::FromRow)]
+#[derive(Debug, Clone, serde::Serialize, sqlx::FromRow)]
 pub struct AccountTransactionRow {
     pub event_time: DateTime<Utc>,
     pub event_category: String,
@@ -19,6 +19,73 @@ pub struct AccountTransactionRow {
     /// event. This is realized cash flow only — unrealized PnL is not
     /// included.
     pub running_balance: Option<Decimal>,
+}
+
+pub struct AccountTransactionWindow<'a> {
+    pub since: DateTime<Utc>,
+    pub until: DateTime<Utc>,
+    pub symbol: Option<&'a str>,
+    pub event_category: Option<&'a str>,
+    pub limit: i64,
+    pub offset: i64,
+}
+
+/// List durable account-journal events in a bounded UTC window for an agent's
+/// account. The running balance intentionally covers the full account history.
+pub async fn list_account_transactions_in_window(
+    pool: &DbPool,
+    account_address: &str,
+    environment: &str,
+    window: AccountTransactionWindow<'_>,
+) -> Result<Vec<AccountTransactionRow>> {
+    let rows = sqlx::query_as::<_, AccountTransactionRow>(
+        "WITH ordered AS (
+             SELECT event_id,
+                    event_time,
+                    event_category,
+                    symbol,
+                    asset,
+                    fee_usdc,
+                    realized_pnl_usdc,
+                    usdc_delta,
+                    SUM(COALESCE(usdc_delta, 0))
+                      OVER (ORDER BY event_time, event_id
+                            ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)
+                      AS running_balance
+               FROM hyperliquid.account_timeline
+              WHERE account_address = $1
+                AND environment = $2
+        )
+        SELECT event_time,
+               event_category,
+               symbol,
+               asset,
+               fee_usdc,
+               realized_pnl_usdc,
+               usdc_delta,
+               running_balance
+          FROM ordered
+         WHERE event_time >= $3
+           AND event_time < $4
+           AND ($5::text IS NULL OR symbol = $5)
+           AND ($6::text IS NULL OR event_category = $6)
+          ORDER BY event_time DESC, event_id DESC
+          LIMIT $7
+         OFFSET $8",
+    )
+    .bind(account_address)
+    .bind(environment)
+    .bind(window.since)
+    .bind(window.until)
+    .bind(window.symbol)
+    .bind(window.event_category)
+    .bind(window.limit.clamp(1, 500))
+    .bind(window.offset.max(0))
+    .fetch_all(pool)
+    .await
+    .context("failed to list account transactions in window")?;
+
+    Ok(rows)
 }
 
 /// Return the most recent USDC balance-impacting events for an account,

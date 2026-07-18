@@ -53,6 +53,7 @@ pub struct MemoryView {
     pub content_html: String,
     pub metadata_key_count: usize,
     pub metadata_text: Option<String>,
+    pub delete_action: String,
 }
 
 impl MemoryView {
@@ -75,6 +76,7 @@ impl MemoryView {
             content_html: render_memory_markdown_html(&row.content),
             metadata_key_count,
             metadata_text,
+            delete_action: format!("/agents/{}/memories/{}/delete", row.agent_key, row.id),
         }
     }
 }

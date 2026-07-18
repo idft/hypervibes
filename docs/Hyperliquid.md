@@ -47,6 +47,11 @@ Journal rows are keyed so overlapping HTTP windows and WebSocket catch-up are
 idempotent. The current journal supports only the `live` environment. Testnet
 or sandbox support requires a schema and integration change.
 
+Agents can read their own bounded journal windows through the read-only
+`vibetrading_list_account_transactions` MCP tool. It returns normalized fill,
+funding, and ledger events from `account_timeline`; it never sends an
+agent-initiated request to Hyperliquid.
+
 Live account state is intentionally in memory. It supports the operator UI and
 trading dispatch context; the journal remains the durable source for history.
 

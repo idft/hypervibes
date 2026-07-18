@@ -1,7 +1,7 @@
 use crate::agentic::backend::DispatchRequest;
 use crate::agentic::model::{
-    JOB_KIND_ANALYSIS, JOB_KIND_ANALYSIS_CODING, JOB_KIND_DAILY_REVIEW,
-    JOB_KIND_MARKET_ANALYSIS, JOB_KIND_TRADING,
+    JOB_KIND_ANALYSIS, JOB_KIND_ANALYSIS_CODING, JOB_KIND_DAILY_REVIEW, JOB_KIND_MARKET_ANALYSIS,
+    JOB_KIND_TRADING,
 };
 use crate::agentic::timeframe::parse_timeframe_seconds;
 use anyhow::{Result, anyhow};
@@ -151,6 +151,9 @@ fn build_daily_review_prompt(request: &DispatchRequest) -> Result<String> {
         .review_window_start
         .unwrap_or_else(|| request.scheduled_for - Duration::days(1));
     let review_window_end = request.review_window_end.unwrap_or(request.scheduled_for);
+    let is_partial_day = request
+        .review_window_end
+        .is_some_and(|end| end != request.scheduled_for);
 
     let mut body = String::new();
     body.push_str(&request.system_prompt);
@@ -162,9 +165,13 @@ fn build_daily_review_prompt(request: &DispatchRequest) -> Result<String> {
     body.push_str(&format!("- Display name: {}\n", request.display_name));
     body.push_str(&format!("- Environment: {}\n", request.environment));
     body.push_str(&format!("- Job key: {}\n", request.job_key));
+    body.push_str(&format!("- Agentic run ID: {}\n", request.run_id));
     body.push_str("\n## Review window\n");
     body.push_str(&format!("- Start: {}\n", format_utc(review_window_start)));
     body.push_str(&format!("- End: {}\n", format_utc(review_window_end)));
+    if is_partial_day {
+        body.push_str("- Scope: Partial UTC day through the end time above; this is a manual interim review, not the completed daily review.\n");
+    }
     body.push_str("\n## Accumulated learnings\n");
     body.push_str(&accumulated_learnings_section(request));
     body.push_str("\n## Daily-review strategy\n");
@@ -174,8 +181,9 @@ fn build_daily_review_prompt(request: &DispatchRequest) -> Result<String> {
     body.push_str("\n\n## Selected instruments\n");
     body.push_str(&selected_instruments_section(&request.selected_instruments));
     body.push_str("\n\n## Instructions\n");
-    body.push_str("- List recent `analysis`, `market_analysis`, `daily_review`, and `agent_learnings` memories for the review window.\n");
-    body.push_str("- List recent orders for the review window, including unfilled, rejected, canceled, open, and filled orders.\n");
+    body.push_str("- List `analysis`, `market_analysis`, and `daily_review` memories using this review window's exact start and end. The Accumulated learnings section above is the canonical prior learning set; do not query historical `agent_learnings` outside this review window.\n");
+    body.push_str("- List orders and account transactions using this review window's exact start and end. Include unfilled, rejected, canceled, open, and filled orders plus fills, fees, realized PnL, funding, and ledger events. Page `list_account_transactions` with a fixed limit and increasing offset until a page returns fewer rows than the limit.\n");
+    body.push_str("- Do not make unbounded or out-of-window memory, order, or transaction queries. Do not mention or assess records outside this review window; the injected Accumulated learnings are the sole exception and must be carried forward when updated.\n");
     body.push_str("- Connect orders to `market_analysis` using `memory_record_ids`, and follow `memory.links` from market analysis back to analysis when those links exist.\n");
     body.push_str("- Identify failures, good patterns, stale assumptions, and prompt improvement suggestions. Keep prompt-edit suggestions inside the `daily_review` memory content.\n");
     body.push_str(
@@ -183,8 +191,8 @@ fn build_daily_review_prompt(request: &DispatchRequest) -> Result<String> {
     );
     body.push_str("- If reusable analysis code should change, set `analysis_coding_requested` to true in the required review metadata and explain why. Set it to false when no code work is justified.\n");
     body.push_str("- Write exactly one `daily_review` memory with `symbol = \"__agent__\"`, no timeframe, and `links` of type `reviews` to the memories you reviewed.\n");
-    body.push_str("- If learnings changed, write a new `agent_learnings` memory with `symbol = \"__agent__\"`, no timeframe, then link the daily review memory to it with `link_type = \"updates_learnings\"`.\n");
-    body.push_str("- The daily-review memory metadata must include `schema_version`, `source_agentic_run_id`, `analysis_coding_requested` (always present as true or false), `analysis_coding_reason`, `candidate_components`, and `evidence_memory_ids`.\n");
+    body.push_str("- If learnings changed, write a new `agent_learnings` memory with `symbol = \"__agent__\"`, no timeframe, and summary exactly `Accumulated agent learnings`. Its content must be a complete replacement snapshot: retain every still-valid learning from the Accumulated learnings section, add new learnings, and explicitly mark any superseded rules as removed or replaced. Then link the daily review memory to it with `link_type = \"updates_learnings\"`.\n");
+    body.push_str("- The daily-review memory metadata must include `schema_version`, `source_agentic_run_id` set exactly to the Agentic run ID above, `review_window_start`, `review_window_end`, `analysis_coding_requested` (always present as true or false), `analysis_coding_reason`, `candidate_components`, and `evidence_memory_ids`.\n");
     body.push_str("- Do not place or cancel orders.\n");
     body.push_str("- Do not edit strategy prompts directly.\n");
     Ok(body)
@@ -484,6 +492,30 @@ mod tests {
     }
 
     #[test]
+    fn manual_daily_review_prompt_marks_day_to_date_window_as_partial() {
+        let mut request = sample_request(JOB_KIND_DAILY_REVIEW);
+        request.scheduled_for = Utc
+            .with_ymd_and_hms(2026, 7, 18, 0, 0, 0)
+            .single()
+            .expect("valid scheduled time");
+        request.review_window_start = Some(
+            Utc.with_ymd_and_hms(2026, 7, 17, 0, 0, 0)
+                .single()
+                .expect("valid start"),
+        );
+        request.review_window_end = Some(
+            Utc.with_ymd_and_hms(2026, 7, 17, 20, 0, 0)
+                .single()
+                .expect("valid end"),
+        );
+
+        let prompt = build_prompt(&request).expect("build daily review prompt");
+        assert!(prompt.contains("Start: 2026-07-17T00:00:00Z"));
+        assert!(prompt.contains("End: 2026-07-17T20:00:00Z"));
+        assert!(prompt.contains("Partial UTC day"));
+    }
+
+    #[test]
     fn daily_review_prompt_contains_expected_sections() {
         let mut request = sample_request(JOB_KIND_DAILY_REVIEW);
         request.job_key = "daily-review-1d".to_string();
@@ -500,10 +532,14 @@ mod tests {
         );
         let prompt = build_prompt(&request).expect("build daily review prompt");
         assert!(prompt.contains("daily-review job"));
+        assert!(prompt.contains("Agentic run ID: 1"));
         assert!(prompt.contains("Start: 2026-07-02T00:00:00Z"));
         assert!(prompt.contains("End: 2026-07-03T00:00:00Z"));
         assert!(prompt.contains("`daily_review` memory"));
         assert!(prompt.contains("`agent_learnings` memory"));
+        assert!(prompt.contains("summary exactly `Accumulated agent learnings`"));
+        assert!(prompt.contains("increasing offset"));
+        assert!(prompt.contains("Do not make unbounded or out-of-window"));
         assert!(prompt.contains("scripts/user/`"));
         assert!(prompt.contains("Do not place or cancel orders."));
     }

@@ -21,7 +21,6 @@ pub struct AgenticRunView {
     pub started_at: Option<LocalTimestampView>,
     pub finished_at: Option<LocalTimestampView>,
     pub duration_text: String,
-    pub backend_run_ref: String,
     pub detail_url: String,
     pub error_summary: String,
 }
@@ -114,7 +113,6 @@ impl AgenticRunView {
             started_at: optional_local_timestamp_view(row.started_at),
             finished_at: optional_local_timestamp_view(row.finished_at),
             duration_text,
-            backend_run_ref: row.backend_run_ref.clone().unwrap_or_default(),
             detail_url: format!("/agents/{}/runs/{}", row.agent_key, row.id),
             error_summary: row.error_summary.clone().unwrap_or_default(),
         }

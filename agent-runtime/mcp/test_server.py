@@ -118,6 +118,7 @@ class VibetradingMcpServerTests(unittest.TestCase):
                 "get_memory_detail",
                 "list_memories",
                 "list_orders",
+                "list_account_transactions",
                 "get_order",
                 "write_memory",
                 "submit_orders",
@@ -229,6 +230,46 @@ class VibetradingMcpServerTests(unittest.TestCase):
     def test_validation_rejects_zero_limit(self) -> None:
         with self.assertRaises(ValueError):
             self.server.get_latest_analysis("BTC", limit=0)
+
+    def test_list_account_transactions_query_construction(self) -> None:
+        captured: dict[str, object] = {}
+
+        def fake_request(method, path, *, params=None, json_body=None):
+            captured["method"] = method
+            captured["path"] = path
+            captured["params"] = params
+            return []
+
+        with mock.patch.object(self.server, "_request", side_effect=fake_request):
+            self.server.list_account_transactions(
+                "2026-07-16T00:00:00Z",
+                "2026-07-17T00:00:00Z",
+                symbol="BTC",
+                event_category="fill",
+                limit=100,
+                offset=200,
+            )
+        self.assertEqual(captured["method"], "GET")
+        self.assertEqual(captured["path"], "/api/v1/account/transactions")
+        self.assertEqual(
+            captured["params"],
+            {
+                "since": "2026-07-16T00:00:00Z",
+                "until": "2026-07-17T00:00:00Z",
+                "symbol": "BTC",
+                "event_category": "fill",
+                "limit": 100,
+                "offset": 200,
+            },
+        )
+
+    def test_list_account_transactions_rejects_negative_offset(self) -> None:
+        with self.assertRaises(ValueError):
+            self.server.list_account_transactions(
+                "2026-07-16T00:00:00Z",
+                "2026-07-17T00:00:00Z",
+                offset=-1,
+            )
 
     def test_write_memory_defaults_metadata_to_empty_object(self) -> None:
         captured: dict[str, object] = {}

@@ -138,6 +138,14 @@ def _require_limit(limit: int | None) -> int | None:
     return limit
 
 
+def _require_offset(offset: int | None) -> int | None:
+    if offset is None:
+        return None
+    if offset < 0:
+        raise ValueError("offset must be >= 0")
+    return offset
+
+
 ENGINEERING_ALLOWED_SUFFIXES = {".py", ".json", ".md"}
 ENGINEERING_MAX_FILE_BYTES = 1024 * 1024
 ENGINEERING_MAX_TOTAL_BYTES = 20 * 1024 * 1024
@@ -427,6 +435,44 @@ def list_orders(
     result = _request("GET", "/api/v1/orders", params=params or None)
     if not isinstance(result, list):
         raise RuntimeError("Vibetrading /orders returned unexpected shape")
+    return result
+
+
+@mcp.tool()
+def list_account_transactions(
+    since: str,
+    until: str,
+    symbol: str | None = None,
+    event_category: str | None = None,
+    limit: int | None = None,
+    offset: int | None = None,
+) -> list[dict[str, Any]]:
+    """List durable Hyperliquid fills, funding, and ledger events for this agent.
+
+    ``since`` and ``until`` are required RFC 3339 bounds. Results come from
+    Vibetrading's account journal, not a direct exchange request. Use
+    ``offset`` with a fixed ``limit`` to page through a review window until a
+    page returns fewer rows than the requested limit.
+    """
+    params: dict[str, Any] = {
+        "since": _require_nonblank("since", since),
+        "until": _require_nonblank("until", until),
+    }
+    if symbol is not None:
+        params["symbol"] = _require_nonblank("symbol", symbol)
+    if event_category is not None:
+        params["event_category"] = _require_nonblank(
+            "event_category", event_category
+        )
+    if limit is not None:
+        params["limit"] = _require_limit(limit)
+    if offset is not None:
+        params["offset"] = _require_offset(offset)
+    result = _request("GET", "/api/v1/account/transactions", params=params)
+    if not isinstance(result, list):
+        raise RuntimeError(
+            "Vibetrading /account/transactions returned unexpected shape"
+        )
     return result
 
 

@@ -173,31 +173,31 @@ impl PromptEditorView {
     pub fn new(prompt_kind: &str, prompt: String, default_prompt: &'static str) -> Self {
         let (label, textarea_id, placeholder) = match prompt_kind {
             PROMPT_KIND_ANALYSIS => (
-                "Analysis Strategy Prompt",
+                "Analysis",
                 "analysis_prompt",
                 "Assets, timeframes, analysis methods, confidence thresholds, validity, and trade blockers.",
             ),
             PROMPT_KIND_MARKET_ANALYSIS => (
-                "Market Analysis Strategy Prompt",
+                "Market Analysis",
                 "market_analysis_prompt",
                 "How timeframe analyses should be synthesized into one execution-facing market view.",
             ),
             PROMPT_KIND_TRADING => (
-                "Trading Strategy Prompt",
+                "Trading",
                 "trading_prompt",
                 "Sizing, laddering, time-in-force preference, max orders, stale-order policy, and scaling rules.",
             ),
             PROMPT_KIND_DAILY_REVIEW => (
-                "Daily Review Strategy Prompt",
+                "Daily Review",
                 "daily_review_prompt",
                 "What the daily review should inspect, how it should record learnings, and what patterns to emphasize.",
             ),
             PROMPT_KIND_ANALYSIS_CODING => (
-                "Analysis Engineering Strategy Prompt",
+                "Analysis Engineering",
                 "analysis_coding_prompt",
                 "How the coding job should improve reusable analysis code, what constraints it must obey, and how to report changes.",
             ),
-            _ => ("Strategy Prompt", "strategy_prompt", ""),
+            _ => ("Strategy", "strategy_prompt", ""),
         };
         Self {
             prompt_kind: prompt_kind.to_string(),
