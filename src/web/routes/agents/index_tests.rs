@@ -9,7 +9,10 @@ use std::fs;
 use tower::util::ServiceExt;
 
 use crate::{
-    agents::{model::slugify_agent_key, store::get_agent},
+    agents::{
+        model::slugify_agent_key,
+        store::{get_agent, list_agent_instrument_ids},
+    },
     hyperliquid::live_state::{AccountKey, AccountLiveState, LiveConnectionStatus},
     opencode::workspace::{OpenCodeWorkspaceRuntimeConfig, delete_agent_workspace},
 };
@@ -182,6 +185,12 @@ async fn post_agents_creates_agent_active_with_default_prompts_and_schedules() {
     assert_eq!(
         agent.trading_account_address.as_deref(),
         Some("0x0000000000000000000000000000000000000000")
+    );
+    assert_eq!(
+        list_agent_instrument_ids(&state.db_pool, &agent_key)
+            .await
+            .expect("list default instruments"),
+        vec!["BTC".to_string()]
     );
     assert!(
         !agent

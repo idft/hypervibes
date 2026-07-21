@@ -20,7 +20,8 @@ use crate::{
         crypto::generate_api_key,
         model::{AGENT_LIFECYCLE_ACTIVE, AgentRegistryRow, CreateAgentForm, slugify_agent_key},
         store::{
-            delete_agent as delete_agent_in_store, get_agent, insert_agent, list_agents_for_user,
+            delete_agent as delete_agent_in_store, get_agent, insert_agent,
+            list_agent_instrument_options, list_agents_for_user, replace_agent_instruments,
         },
     },
     hyperliquid::live_state::{AccountKey, AccountLiveState, LiveConnectionStatus},
@@ -261,6 +262,13 @@ pub(in crate::web::routes) async fn create_agent(
 }
 
 async fn activate_new_agent(state: &Arc<AppState>, agent_key: &str) -> Result<(), anyhow::Error> {
+    let instrument_options = list_agent_instrument_options(&state.db_pool, agent_key).await?;
+    if instrument_options
+        .iter()
+        .any(|instrument| instrument.instrument_id == "BTC")
+    {
+        replace_agent_instruments(&state.db_pool, agent_key, &["BTC".to_string()]).await?;
+    }
     crate::agents::strategy_prompts::insert_default_strategy_prompts_for_agent(
         &state.db_pool,
         agent_key,
