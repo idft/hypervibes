@@ -21,7 +21,6 @@ use crate::{
         model::{AGENT_LIFECYCLE_ACTIVE, AgentRegistryRow, CreateAgentForm, slugify_agent_key},
         store::{
             delete_agent as delete_agent_in_store, get_agent, insert_agent, list_agents_for_user,
-            update_agent_runtime_config,
         },
     },
     hyperliquid::live_state::{AccountKey, AccountLiveState, LiveConnectionStatus},
@@ -218,9 +217,21 @@ pub(in crate::web::routes) async fn create_agent(
         runtime_config: serde_json::json!({}),
     };
 
+    let generated = generate_agent_workspace(
+        &state.opencode_workspace_config,
+        &OpenCodeWorkspaceAgent {
+            agent_key: agent_key.clone(),
+            display_name: row.display_name.clone(),
+            api_key: api_key.clone(),
+        },
+        WorkspaceGenerationMode::CreateNew,
+    )?;
+    let mut row = row;
+    row.runtime_config = runtime_config_for_generated_workspace(&generated).into_value();
+
     if let Err(e) = insert_agent(&state.db_pool, &row).await {
-        if let Err(error) = delete_agent_workspace(&state.opencode_workspace_config, &row.agent_key)
-        {
+        let workspace_config = &state.opencode_workspace_config;
+        if let Err(error) = delete_agent_workspace(workspace_config, &row.agent_key) {
             error!(agent_key = %row.agent_key, error = ?error, "failed to clean up newly created workspace after agent insert failure");
         }
 
@@ -233,35 +244,23 @@ pub(in crate::web::routes) async fn create_agent(
         return Ok(render_new_form(form, choices.into(), errors));
     }
 
-    if let Err(error) = activate_new_agent(&state, &agent_key, &api_key, &row.display_name).await {
+    if let Err(error) = activate_new_agent(&state, &agent_key).await {
         error!(agent_key = %agent_key, error = ?error, "failed to activate newly created agent");
+        if let Err(cleanup_error) = delete_agent_in_store(&state.db_pool, &agent_key).await {
+            error!(agent_key = %agent_key, error = ?cleanup_error, "failed to clean up newly created agent after activation failure");
+        }
+        if let Err(cleanup_error) =
+            delete_agent_workspace(&state.opencode_workspace_config, &agent_key)
+        {
+            error!(agent_key = %agent_key, error = ?cleanup_error, "failed to clean up newly created workspace after activation failure");
+        }
         return Err(AppError(error));
     }
 
     Ok(Redirect::to(&format!("/agents/{agent_key}")).into_response())
 }
 
-async fn activate_new_agent(
-    state: &Arc<AppState>,
-    agent_key: &str,
-    api_key: &str,
-    display_name: &str,
-) -> Result<(), anyhow::Error> {
-    let generated = generate_agent_workspace(
-        &state.opencode_workspace_config,
-        &OpenCodeWorkspaceAgent {
-            agent_key: agent_key.to_string(),
-            display_name: display_name.to_string(),
-            api_key: api_key.to_string(),
-        },
-        WorkspaceGenerationMode::CreateNew,
-    )?;
-    update_agent_runtime_config(
-        &state.db_pool,
-        agent_key,
-        runtime_config_for_generated_workspace(&generated).into_value(),
-    )
-    .await?;
+async fn activate_new_agent(state: &Arc<AppState>, agent_key: &str) -> Result<(), anyhow::Error> {
     crate::agents::strategy_prompts::insert_default_strategy_prompts_for_agent(
         &state.db_pool,
         agent_key,

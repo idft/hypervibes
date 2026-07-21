@@ -11,7 +11,7 @@ use tower::util::ServiceExt;
 use crate::{
     agents::{model::slugify_agent_key, store::get_agent},
     hyperliquid::live_state::{AccountKey, AccountLiveState, LiveConnectionStatus},
-    opencode::workspace::OpenCodeWorkspaceRuntimeConfig,
+    opencode::workspace::{OpenCodeWorkspaceRuntimeConfig, delete_agent_workspace},
 };
 
 #[tokio::test]
@@ -334,4 +334,51 @@ async fn post_agents_creates_the_opencode_workspace() {
         workspace_path.exists(),
         "create_agent should generate the workspace"
     );
+}
+
+#[tokio::test]
+async fn post_agents_does_not_persist_agent_when_workspace_already_exists() {
+    let state = test_state().await;
+    let pool = state.db_pool.clone();
+    let app = router(state.clone());
+    let timestamp = chrono::Utc::now().timestamp_millis();
+    let display_name = format!("ExistingWorkspace{}", timestamp);
+    let agent_key = slugify_agent_key(&display_name);
+    let workspace_path = state
+        .opencode_workspace_config
+        .host_workspaces_root
+        .join("agents")
+        .join(&agent_key);
+    fs::create_dir_all(&workspace_path).expect("create existing workspace");
+    let sentinel_path = workspace_path.join("sentinel.txt");
+    fs::write(&sentinel_path, "keep").expect("write workspace sentinel");
+
+    let body = format!("display_name={display_name}&trading_account_selection=main");
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/agents")
+                .header("content-type", "application/x-www-form-urlencoded")
+                .body(Body::from(body))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    assert!(
+        get_agent(&pool, &agent_key)
+            .await
+            .expect("get failed agent")
+            .is_none(),
+        "agent row must not survive workspace creation failure"
+    );
+    assert!(
+        sentinel_path.exists(),
+        "existing workspace must be preserved"
+    );
+
+    delete_agent_workspace(&state.opencode_workspace_config, &agent_key)
+        .expect("clean up existing workspace");
 }

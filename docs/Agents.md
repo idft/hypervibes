@@ -59,6 +59,10 @@ or select an OpenCode server.
 
 Creating an OpenCode agent also generates a per-agent workspace.
 
+Workspace generation completes before the agent registry row is inserted. If
+workspace generation fails, no agent is persisted. Later initialization failures
+also remove the newly created registry row and workspace.
+
 Non-secret metadata is stored in `agents.runtime_config`, including:
 
 - `workspace_host_path`
