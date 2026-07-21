@@ -1,1 +1,0 @@
--- The runtime table is created and dropped with agents in migration 0003.

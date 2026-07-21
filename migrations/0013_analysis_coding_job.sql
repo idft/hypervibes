@@ -95,7 +95,6 @@ SELECT
     1800,
     ''
 FROM agents
-WHERE backend_kind = 'opencode'
 ON CONFLICT (agent_key, job_kind, hook_event) DO NOTHING;
 
 -- 2.3 Add analysis_coding to the run-kind allowlist.

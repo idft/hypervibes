@@ -321,6 +321,7 @@ pub async fn get_opencode_hook_for_dispatch(
     pool: &DbPool,
     agent_key: &str,
     hook_id: i64,
+    opencode_base_url: &str,
 ) -> Result<Option<DueOpenCodeHookRow>> {
     let row = query_as::<_, DueOpenCodeHookRow>(
         "SELECT hooks.id AS hook_id,
@@ -333,25 +334,18 @@ pub async fn get_opencode_hook_for_dispatch(
                 hooks.model_id,
                 hooks.timeout_seconds,
                 hooks.operator_prompt,
-                agents.runtime_id,
-                runtimes.name AS runtime_name,
-                runtimes.base_url AS runtime_base_url,
+                $3::text AS opencode_base_url,
                 agents.runtime_config
            FROM agentic_job_hooks AS hooks
            JOIN agents
              ON agents.agent_key = hooks.agent_key
-           JOIN agent_runtimes AS runtimes
-             ON runtimes.id = agents.runtime_id
-          WHERE hooks.agent_key = $1
-             AND hooks.id = $2
-              AND agents.backend_kind = 'opencode'
-              AND agents.lifecycle = 'active'
-             AND runtimes.enabled = true
-            AND runtimes.base_url IS NOT NULL
-            AND length(runtimes.base_url) > 0",
+           WHERE hooks.agent_key = $1
+              AND hooks.id = $2
+                AND agents.lifecycle = 'active'",
     )
     .bind(agent_key)
     .bind(hook_id)
+    .bind(opencode_base_url)
     .fetch_optional(pool)
     .await
     .with_context(|| {

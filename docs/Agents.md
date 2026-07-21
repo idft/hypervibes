@@ -12,7 +12,7 @@ Related docs:
 The agents module is the system of record for:
 
 - which trading agents exist
-- which runtime each agent uses
+- which OpenCode workspace each agent owns
 - which Hyperliquid account each agent controls
 - which instruments each agent may trade
 - which strategy prompts and API credentials belong to the agent
@@ -26,7 +26,6 @@ server-owned.
 The current implementation keeps the registry intentionally small:
 
 - one `agents` row per trading agent
-- one `agent_runtimes` row per reusable runtime instance
 - one `agent_instruments` mapping table for selected markets
 - one `agent_strategy_prompts` row per `(agent_key, prompt_kind)`
 
@@ -38,8 +37,6 @@ Important `agents` fields:
 - `environment`
 - `wallet_address`
 - `api_key`
-- `backend_kind`
-- `runtime_id`
 - `runtime_config`
 
 Strategy prompts are no longer stored directly on `agents`. They live in `agent_strategy_prompts` with prompt kinds:
@@ -49,22 +46,14 @@ Strategy prompts are no longer stored directly on `agents`. They live in `agent_
 - `trading`
 - `daily_review`
 
-## Backend And Runtime Rules
+## OpenCode Execution
 
-Only `opencode` is currently valid for `backend_kind`.
+OpenCode is the only execution backend. Every agent uses the local OpenCode
+server configured by `OPENCODE_BASE_URL`, which defaults to
+`http://localhost:14096`.
 
-The generic backend seam remains in place:
-
-- `agent_runtimes.backend_kind`
-- `agents.backend_kind`
-- `agents.runtime_id`
-- `agents.runtime_config`
-
-This is intentional future-proofing in case another backend type is added later.
-
-The initial seeded runtime is:
-
-- `opencode-local` -> `OpenCode local` -> `http://localhost:14096`
+`agents.runtime_config` stores per-agent workspace metadata. It does not store
+or select an OpenCode server.
 
 ## Workspace Generation
 

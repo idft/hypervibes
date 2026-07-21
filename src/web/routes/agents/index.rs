@@ -18,13 +18,10 @@ use crate::web::error::AppError;
 use crate::{
     agents::{
         crypto::generate_api_key,
-        model::{
-            AGENT_LIFECYCLE_ACTIVE, AgentRegistryRow, BACKEND_KIND_OPENCODE, CreateAgentForm,
-            DEFAULT_RUNTIME_ID, slugify_agent_key,
-        },
+        model::{AGENT_LIFECYCLE_ACTIVE, AgentRegistryRow, CreateAgentForm, slugify_agent_key},
         store::{
             delete_agent as delete_agent_in_store, get_agent, insert_agent, list_agents_for_user,
-            list_enabled_agent_runtimes, update_agent_runtime_config,
+            update_agent_runtime_config,
         },
     },
     hyperliquid::live_state::{AccountKey, AccountLiveState, LiveConnectionStatus},
@@ -165,12 +162,11 @@ pub(in crate::web::routes) async fn delete_agent(
 
     state.live_accounts.remove(&account_key);
 
-    if agent.backend_kind == BACKEND_KIND_OPENCODE {
-        delete_agent_workspace(&state.opencode_workspace_config, &agent.agent_key)
-            .inspect_err(|error| {
-                error!(agent_key = %agent.agent_key, error = ?error, "failed to delete OpenCode workspace after deleting agent");
-            })?;
-    }
+    delete_agent_workspace(&state.opencode_workspace_config, &agent.agent_key).inspect_err(
+        |error| {
+            error!(agent_key = %agent.agent_key, error = ?error, "failed to delete OpenCode workspace after deleting agent");
+        },
+    )?;
 
     Ok(Redirect::to("/agents").into_response())
 }
@@ -186,23 +182,10 @@ pub(in crate::web::routes) async fn create_agent(
         return Ok(Redirect::to("/wallet").into_response());
     }
     let choices = load_trading_account_choices(&state, &user).await;
-    let runtimes = list_enabled_agent_runtimes(&state.db_pool).await?;
 
     if let Err(errors) = form.validate() {
         return Ok(render_new_form(form, choices.into(), errors));
     }
-
-    let Some(runtime) = runtimes
-        .iter()
-        .find(|runtime| runtime.id == DEFAULT_RUNTIME_ID)
-        .cloned()
-    else {
-        return Ok(render_new_form(
-            form,
-            choices.into(),
-            vec!["Selected runtime must exist and be enabled.".to_string()],
-        ));
-    };
 
     let trading_account_address =
         match selected_trading_account(&form.trading_account_selection, &choices) {
@@ -232,15 +215,11 @@ pub(in crate::web::routes) async fn create_agent(
         environment: "live".to_string(),
         api_key: api_key.clone(),
         api_key_last_used_at: None,
-        backend_kind: runtime.backend_kind.clone(),
-        runtime_id: runtime.id.clone(),
         runtime_config: serde_json::json!({}),
     };
 
     if let Err(e) = insert_agent(&state.db_pool, &row).await {
-        if row.backend_kind == BACKEND_KIND_OPENCODE
-            && let Err(error) =
-                delete_agent_workspace(&state.opencode_workspace_config, &row.agent_key)
+        if let Err(error) = delete_agent_workspace(&state.opencode_workspace_config, &row.agent_key)
         {
             error!(agent_key = %row.agent_key, error = ?error, "failed to clean up newly created workspace after agent insert failure");
         }

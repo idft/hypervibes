@@ -16,7 +16,6 @@ use super::settings::build_opencode_workspace_settings_view;
 use super::transactions::apply_live_cash_balance_anchor;
 use crate::{
     agents::{
-        model::BACKEND_KIND_OPENCODE,
         store::{get_agent, list_agent_instrument_ids, list_agent_instrument_options},
         strategy_prompts::{
             PROMPT_KIND_ANALYSIS, PROMPT_KIND_ANALYSIS_CODING, PROMPT_KIND_DAILY_REVIEW,
@@ -234,25 +233,16 @@ pub(in crate::web::routes) async fn render_agent_show_page(
             }
         }
         AgentShowTab::Settings => {
-            if agent.backend_kind == BACKEND_KIND_OPENCODE {
-                template.settings_workspace_warning = settings_query
-                    .as_ref()
-                    .and_then(|query| query.workspace_warning.clone());
-                template.opencode_workspace =
-                    build_opencode_workspace_settings_view(state, &agent).await;
-            }
+            template.settings_workspace_warning = settings_query
+                .as_ref()
+                .and_then(|query| query.workspace_warning.clone());
+            template.opencode_workspace =
+                build_opencode_workspace_settings_view(state, &agent).await;
             if let Some(rows) = instrument_options {
                 template.instrument_options = rows;
             }
         }
         AgentShowTab::Jobs => {
-            if agent.backend_kind != BACKEND_KIND_OPENCODE {
-                return Ok((
-                    StatusCode::NOT_FOUND,
-                    "jobs are only available for OpenCode agents",
-                )
-                    .into_response());
-            }
             let requested_page = jobs_query
                 .as_ref()
                 .map(|query| parse_positive_page(&query.page))

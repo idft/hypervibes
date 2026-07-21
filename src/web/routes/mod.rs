@@ -1,7 +1,4 @@
 mod agents;
-mod backends;
-#[cfg(test)]
-mod backends_tests;
 mod currency;
 mod model_catalog;
 mod root;
@@ -11,9 +8,7 @@ mod shared;
 pub(in crate::web::routes) mod test_support;
 mod wallet;
 
-use self::{
-    agents::*, backends::*, currency::*, model_catalog::*, root::*, settings::*, wallet::*,
-};
+use self::{agents::*, currency::*, model_catalog::*, root::*, settings::*, wallet::*};
 use crate::web::auth::{login, login_challenge, login_verify, logout};
 
 use std::sync::Arc;
@@ -44,8 +39,6 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/agents/new", get(agents_new))
         .route("/agents/new/account-choices", get(agent_account_choices))
         .route("/wallet/subaccounts", post(create_user_subaccount))
-        .route("/backends", get(backends_index).post(create_backend))
-        .route("/backends/new", get(backends_new))
         .route("/agents/{agent_key}", get(agents_show))
         .route(
             "/agents/{agent_key}/transactions",

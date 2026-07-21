@@ -30,17 +30,15 @@ OpenCode owns:
 
 ## Runtime Model
 
-The runtime model is:
+OpenCode is a single application-level dependency rather than a database-
+managed runtime assignment. The endpoint is configured with
+`OPENCODE_BASE_URL`, defaulting to `http://localhost:14096` for a host-running
+Vibetrading process. An application container on the Compose network should
+use `http://opencode:14096`.
 
-- one `agent_runtimes` row per OpenCode server instance
-- one `agents.runtime_id` link from each agent to its runtime
-- one generated workspace per agent
-
-The seeded runtime is:
-
-- `opencode-local` -> `OpenCode local` -> `http://localhost:14096`
-
-`backend_kind` remains part of the schema even though only `opencode` is currently valid.
+Each agent has one generated workspace. Workspace paths and generation
+metadata are stored in `agents.runtime_config`; no OpenCode endpoint or runtime
+identity is stored on the agent row.
 
 ## Agent Workspaces
 

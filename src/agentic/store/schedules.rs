@@ -473,13 +473,13 @@ pub async fn set_schedule_timeframe(
 
 /// List OpenCode schedules that are due and dispatchable.
 ///
-/// The join is intentionally strict: disabled agents, disabled runtimes,
-/// and missing `base_url` values are excluded so the scheduler only sees
-/// runs that can succeed.
+/// Disabled agents and schedules are excluded so the scheduler only sees
+/// runs that can be claimed.
 pub async fn list_due_opencode_schedules(
     pool: &DbPool,
     now: DateTime<Utc>,
     limit: i64,
+    opencode_base_url: &str,
 ) -> Result<Vec<DueOpenCodeScheduleRow>> {
     let rows = query_as::<_, DueOpenCodeScheduleRow>(
         "SELECT schedules.id AS schedule_id,
@@ -494,29 +494,21 @@ pub async fn list_due_opencode_schedules(
                 schedules.model_id,
                 schedules.timeout_seconds,
                 schedules.operator_prompt,
-                agents.runtime_id,
-                runtimes.name AS runtime_name,
-                runtimes.base_url AS runtime_base_url,
+                $3::text AS opencode_base_url,
                 agents.runtime_config
            FROM agentic_job_schedules AS schedules
            JOIN agents
              ON agents.agent_key = schedules.agent_key
-           JOIN agent_runtimes AS runtimes
-             ON runtimes.id = agents.runtime_id
-           WHERE schedules.enabled = true
+            WHERE schedules.enabled = true
              AND schedules.next_run_at <= $1
               AND agents.enabled = true
-              AND agents.lifecycle = 'active'
-               AND agents.backend_kind = 'opencode'
                AND agents.lifecycle = 'active'
-            AND runtimes.enabled = true
-            AND runtimes.base_url IS NOT NULL
-            AND length(runtimes.base_url) > 0
           ORDER BY schedules.next_run_at ASC, schedules.id ASC
           LIMIT $2",
     )
     .bind(now)
     .bind(limit)
+    .bind(opencode_base_url)
     .fetch_all(pool)
     .await
     .context("failed to list due OpenCode schedules")?;
@@ -532,6 +524,7 @@ pub async fn get_opencode_schedule_for_dispatch(
     pool: &DbPool,
     agent_key: &str,
     schedule_id: i64,
+    opencode_base_url: &str,
 ) -> Result<Option<DueOpenCodeScheduleRow>> {
     let row = query_as::<_, DueOpenCodeScheduleRow>(
         "SELECT schedules.id AS schedule_id,
@@ -546,24 +539,18 @@ pub async fn get_opencode_schedule_for_dispatch(
                 schedules.model_id,
                 schedules.timeout_seconds,
                 schedules.operator_prompt,
-                agents.runtime_id,
-                runtimes.name AS runtime_name,
-                runtimes.base_url AS runtime_base_url,
+                $3::text AS opencode_base_url,
                 agents.runtime_config
            FROM agentic_job_schedules AS schedules
            JOIN agents
              ON agents.agent_key = schedules.agent_key
-           JOIN agent_runtimes AS runtimes
-             ON runtimes.id = agents.runtime_id
             WHERE schedules.agent_key = $1
-              AND schedules.id = $2
-              AND agents.backend_kind = 'opencode'
-            AND runtimes.enabled = true
-            AND runtimes.base_url IS NOT NULL
-            AND length(runtimes.base_url) > 0",
+               AND schedules.id = $2
+               AND agents.lifecycle = 'active'",
     )
     .bind(agent_key)
     .bind(schedule_id)
+    .bind(opencode_base_url)
     .fetch_optional(pool)
     .await
     .with_context(|| {

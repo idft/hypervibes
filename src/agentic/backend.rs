@@ -53,7 +53,7 @@ pub struct DispatchRequest {
     pub model_provider_id: Option<String>,
     pub model_id: Option<String>,
     pub timeout_seconds: i32,
-    pub runtime_base_url: String,
+    pub opencode_base_url: String,
     pub runtime_config: Value,
     pub scheduled_for: DateTime<Utc>,
     pub review_window_start: Option<DateTime<Utc>>,
@@ -144,7 +144,7 @@ impl AgenticBackend for OpenCodeBackend {
         let session = self
             .client
             .create_session(
-                &request.runtime_base_url,
+                &request.opencode_base_url,
                 &workspace_container_path,
                 Some(&title),
             )
@@ -189,7 +189,7 @@ impl AgenticBackend for OpenCodeBackend {
         };
 
         self.client
-            .run_command(&request.runtime_base_url, &session.id, command_request)
+            .run_command(&request.opencode_base_url, &session.id, command_request)
             .await
             .with_context(|| {
                 format!(
@@ -292,7 +292,7 @@ async fn dispatch_with_timeout_mode(
     let run_id = request.run_id;
     let timeout_seconds = request.timeout_seconds;
     let timeout = std::time::Duration::from_secs(timeout_seconds.max(0) as u64);
-    let runtime_base_url = request.runtime_base_url.clone();
+    let opencode_base_url = request.opencode_base_url.clone();
 
     let dispatch_result = tokio::time::timeout(timeout, backend.dispatch(request)).await;
 
@@ -335,7 +335,7 @@ async fn dispatch_with_timeout_mode(
                 return Ok(DispatchOutcome::Failed { summary });
             };
 
-            match confirm_session_terminated(&backend, &runtime_base_url, &session_id).await {
+            match confirm_session_terminated(&backend, &opencode_base_url, &session_id).await {
                 Ok(TerminationOutcome::AlreadyTerminal) => {
                     let summary = format!(
                         "run exceeded timeout of {timeout_seconds}s; \
@@ -517,7 +517,7 @@ mod tests {
             model_provider_id: None,
             model_id: None,
             timeout_seconds: 10,
-            runtime_base_url: "http://localhost:14096".to_string(),
+            opencode_base_url: "http://localhost:14096".to_string(),
             runtime_config: serde_json::json!({
                 "workspace_host_path": "workspaces/agents/btc-2",
                 "workspace_container_path": "/workspaces/agents/btc-2",
@@ -695,9 +695,7 @@ mod tests {
     async fn seed_run_for_timeout_test(pool: &DbPool, key: &str) -> (i64, i64, String) {
         use crate::agentic::store::insert_default_opencode_schedules;
         use crate::agents::{
-            keys::derive_wallet_address,
-            model::{AgentRegistryRow, BACKEND_KIND_OPENCODE},
-            store::insert_agent,
+            keys::derive_wallet_address, model::AgentRegistryRow, store::insert_agent,
         };
         // Seed a deterministic private key.
         fn deterministic_private_key(key: &str) -> String {
@@ -727,8 +725,6 @@ mod tests {
                 environment: "live".to_string(),
                 api_key: format!("vta_{key}"),
                 api_key_last_used_at: None,
-                backend_kind: BACKEND_KIND_OPENCODE.to_string(),
-                runtime_id: "opencode-local".to_string(),
                 runtime_config: serde_json::json!({
                     "workspace_host_path": format!("workspaces/agents/{key}"),
                     "workspace_container_path": format!("/workspaces/agents/{key}"),
@@ -811,7 +807,7 @@ mod tests {
             model_provider_id: None,
             model_id: None,
             timeout_seconds: 1,
-            runtime_base_url: "http://localhost:14096".to_string(),
+            opencode_base_url: "http://localhost:14096".to_string(),
             runtime_config: serde_json::json!({}),
             scheduled_for: Utc::now(),
             review_window_start: None,
@@ -882,7 +878,7 @@ mod tests {
             model_provider_id: None,
             model_id: None,
             timeout_seconds: 1,
-            runtime_base_url: "http://localhost:14096".to_string(),
+            opencode_base_url: "http://localhost:14096".to_string(),
             runtime_config: serde_json::json!({}),
             scheduled_for: Utc::now(),
             review_window_start: None,
@@ -959,7 +955,7 @@ mod tests {
             model_provider_id: None,
             model_id: None,
             timeout_seconds: 1,
-            runtime_base_url: "http://localhost:14096".to_string(),
+            opencode_base_url: "http://localhost:14096".to_string(),
             runtime_config: serde_json::json!({}),
             scheduled_for: Utc::now(),
             review_window_start: None,

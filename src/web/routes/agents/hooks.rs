@@ -27,7 +27,7 @@ use crate::{
         store::QueuedHookRun,
         timeframe::parse_timeout_seconds,
     },
-    agents::{model::BACKEND_KIND_OPENCODE, store::get_agent},
+    agents::store::get_agent,
     model_catalog::options::parse_model_selection,
     web::{
         AppState,
@@ -45,14 +45,6 @@ pub(in crate::web::routes) async fn agents_show_hook_detail(
     let Some(agent) = get_agent(&state.db_pool, &agent_key).await? else {
         return Ok((StatusCode::NOT_FOUND, "agent not found").into_response());
     };
-    if agent.backend_kind != BACKEND_KIND_OPENCODE {
-        return Ok((
-            StatusCode::NOT_FOUND,
-            "jobs are only available for OpenCode agents",
-        )
-            .into_response());
-    }
-
     let Some(hook) =
         crate::agentic::store::get_agent_hook(&state.db_pool, &agent_key, hook_id).await?
     else {
@@ -131,9 +123,6 @@ pub(in crate::web::routes) async fn agents_hook_model_picker(
     let Some(agent) = get_agent(&state.db_pool, &agent_key).await? else {
         return Ok((StatusCode::NOT_FOUND, "agent not found").into_response());
     };
-    if agent.backend_kind != BACKEND_KIND_OPENCODE {
-        return Ok((StatusCode::NOT_FOUND, "hook not found").into_response());
-    }
     let Some(hook) =
         crate::agentic::store::get_agent_hook(&state.db_pool, &agent_key, hook_id).await?
     else {
@@ -156,10 +145,14 @@ pub(in crate::web::routes) async fn build_hook_prompt_preview(
     agent_key: &str,
     hook_id: i64,
 ) -> anyhow::Result<String> {
-    let hook =
-        crate::agentic::store::get_opencode_hook_for_dispatch(&state.db_pool, agent_key, hook_id)
-            .await?
-            .ok_or_else(|| anyhow::anyhow!("hook dispatch metadata unavailable"))?;
+    let hook = crate::agentic::store::get_opencode_hook_for_dispatch(
+        &state.db_pool,
+        agent_key,
+        hook_id,
+        &state.opencode_base_url,
+    )
+    .await?
+    .ok_or_else(|| anyhow::anyhow!("hook dispatch metadata unavailable"))?;
 
     let request = build_hook_dispatch_request(&state.db_pool, &hook, 0, Utc::now())
         .await?
@@ -244,14 +237,6 @@ pub(in crate::web::routes) async fn agents_new_hook(
     let Some(agent) = get_agent(&state.db_pool, &agent_key).await? else {
         return Ok((StatusCode::NOT_FOUND, "agent not found").into_response());
     };
-    if agent.backend_kind != BACKEND_KIND_OPENCODE {
-        return Ok((
-            StatusCode::NOT_FOUND,
-            "jobs are only available for OpenCode agents",
-        )
-            .into_response());
-    }
-
     let picker = load_model_picker_context(&state, &agent).await;
     let navbar = crate::web::templates::load_navbar(&state.db_pool, user.id)
         .await
@@ -278,14 +263,6 @@ pub(in crate::web::routes) async fn agents_create_hook(
     let Some(agent) = get_agent(&state.db_pool, &agent_key).await? else {
         return Ok((StatusCode::NOT_FOUND, "agent not found").into_response());
     };
-    if agent.backend_kind != BACKEND_KIND_OPENCODE {
-        return Ok((
-            StatusCode::NOT_FOUND,
-            "jobs are only available for OpenCode agents",
-        )
-            .into_response());
-    }
-
     let navbar = || async {
         crate::web::templates::load_navbar(&state.db_pool, user.id)
             .await
@@ -365,20 +342,16 @@ pub(in crate::web::routes) async fn agents_run_hook_now(
     State(state): State<Arc<AppState>>,
     Path((agent_key, hook_id)): Path<(String, i64)>,
 ) -> Result<Response, AppError> {
-    let Some(agent) = get_agent(&state.db_pool, &agent_key).await? else {
+    let Some(_agent) = get_agent(&state.db_pool, &agent_key).await? else {
         return Ok((StatusCode::NOT_FOUND, "agent not found").into_response());
     };
-    if agent.backend_kind != BACKEND_KIND_OPENCODE {
-        return Ok((
-            StatusCode::NOT_FOUND,
-            "jobs are only available for OpenCode agents",
-        )
-            .into_response());
-    }
-
-    let Some(hook) =
-        crate::agentic::store::get_opencode_hook_for_dispatch(&state.db_pool, &agent_key, hook_id)
-            .await?
+    let Some(hook) = crate::agentic::store::get_opencode_hook_for_dispatch(
+        &state.db_pool,
+        &agent_key,
+        hook_id,
+        &state.opencode_base_url,
+    )
+    .await?
     else {
         return Ok((StatusCode::NOT_FOUND, "hook not found").into_response());
     };
@@ -470,17 +443,9 @@ pub(in crate::web::routes) async fn agents_toggle_hook(
     Path((agent_key, hook_id)): Path<(String, i64)>,
     Form(form): Form<ToggleHookForm>,
 ) -> Result<Response, AppError> {
-    let Some(agent) = get_agent(&state.db_pool, &agent_key).await? else {
+    let Some(_agent) = get_agent(&state.db_pool, &agent_key).await? else {
         return Ok((StatusCode::NOT_FOUND, "agent not found").into_response());
     };
-    if agent.backend_kind != BACKEND_KIND_OPENCODE {
-        return Ok((
-            StatusCode::NOT_FOUND,
-            "jobs are only available for OpenCode agents",
-        )
-            .into_response());
-    }
-
     let enable = matches!(form.enabled.as_deref(), Some("on"));
     let Some(hook) =
         crate::agentic::store::get_agent_hook(&state.db_pool, &agent_key, hook_id).await?
@@ -508,17 +473,9 @@ pub(in crate::web::routes) async fn agents_delete_hook(
     State(state): State<Arc<AppState>>,
     Path((agent_key, hook_id)): Path<(String, i64)>,
 ) -> Result<Response, AppError> {
-    let Some(agent) = get_agent(&state.db_pool, &agent_key).await? else {
+    let Some(_agent) = get_agent(&state.db_pool, &agent_key).await? else {
         return Ok((StatusCode::NOT_FOUND, "agent not found").into_response());
     };
-    if agent.backend_kind != BACKEND_KIND_OPENCODE {
-        return Ok((
-            StatusCode::NOT_FOUND,
-            "jobs are only available for OpenCode agents",
-        )
-            .into_response());
-    }
-
     let deleted =
         crate::agentic::store::delete_agent_hook(&state.db_pool, &agent_key, hook_id).await?;
     if !deleted {

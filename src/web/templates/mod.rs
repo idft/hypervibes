@@ -1,5 +1,4 @@
 mod agents;
-mod backends;
 mod balance;
 mod hooks;
 mod jobs;
@@ -17,7 +16,6 @@ mod wallet;
 use self::shared::*;
 
 pub use agents::*;
-pub use backends::*;
 pub use balance::*;
 pub use hooks::*;
 pub use jobs::*;
@@ -40,10 +38,6 @@ mod shared_tests;
 #[cfg(test)]
 #[path = "agents_tests.rs"]
 mod agents_tests;
-
-#[cfg(test)]
-#[path = "backends_tests.rs"]
-mod backends_tests;
 
 #[cfg(test)]
 #[path = "opencode_tests.rs"]

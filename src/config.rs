@@ -12,6 +12,7 @@ pub struct AppConfig {
     pub opencode_workspaces_root: PathBuf,
     pub opencode_container_workspaces_root: String,
     pub vibetrading_agent_api_base_url: String,
+    pub opencode_base_url: String,
     pub opencode_server_username: String,
     pub opencode_server_password: Option<String>,
 }
@@ -27,6 +28,7 @@ impl AppConfig {
             opencode_workspaces_root: opencode_workspaces_root_from_env()?,
             opencode_container_workspaces_root: opencode_container_workspaces_root_from_env()?,
             vibetrading_agent_api_base_url: vibetrading_agent_api_base_url_from_env()?,
+            opencode_base_url: opencode_base_url_from_env()?,
             opencode_server_username: opencode_server_username_from_env(),
             opencode_server_password: opencode_server_password_from_env(),
         })
@@ -154,6 +156,17 @@ fn vibetrading_agent_api_base_url_from_env() -> Result<String> {
     }
     validate_absolute_url("VIBETRADING_AGENT_API_BASE_URL", url)?;
     Ok(url.to_string())
+}
+
+fn opencode_base_url_from_env() -> Result<String> {
+    let url =
+        env::var("OPENCODE_BASE_URL").unwrap_or_else(|_| "http://localhost:14096".to_string());
+    let url = url.trim();
+    if url.is_empty() {
+        bail!("OPENCODE_BASE_URL must not be empty");
+    }
+    validate_absolute_url("OPENCODE_BASE_URL", url)?;
+    Ok(url.trim_end_matches('/').to_string())
 }
 
 fn validate_absolute_url(name: &str, value: &str) -> Result<()> {

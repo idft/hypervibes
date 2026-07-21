@@ -3,7 +3,7 @@ use rust_decimal::Decimal;
 use uuid::Uuid;
 
 use crate::{
-    agents::model::{AgentDetailRow, AgentListRow, AgentRuntimeRow},
+    agents::model::{AgentDetailRow, AgentListRow},
     hyperliquid::queries::BalancePoint,
     memory::MemoryRecord,
     model_catalog::options::ModelPickerOption,
@@ -32,8 +32,6 @@ pub fn sample_agent_detail_row() -> AgentDetailRow {
         trading_account_address: Some("0x1234567890abcdef".to_string()),
         environment: "live".to_string(),
         api_key: "vt_test_key".to_string(),
-        backend_kind: "opencode".to_string(),
-        runtime_base_url: Some("http://localhost:14096".to_string()),
         runtime_config: serde_json::json!({}),
     }
 }
@@ -42,18 +40,6 @@ pub fn sample_account_balance_view() -> AccountBalanceView {
     AccountBalanceView {
         total_balance: Some(rust_decimal::Decimal::new(232_6800, 4)),
         total_u_pnl: AnimatedNumber::for_pnl(rust_decimal::Decimal::new(12_3400, 4)),
-    }
-}
-
-pub fn sample_runtime_row() -> AgentRuntimeRow {
-    let now = Utc::now();
-    AgentRuntimeRow {
-        id: "opencode-local".to_string(),
-        created_at: now,
-        name: "OpenCode local".to_string(),
-        backend_kind: "opencode".to_string(),
-        enabled: true,
-        base_url: Some("http://localhost:14096".to_string()),
     }
 }
 
@@ -82,7 +68,6 @@ pub fn sample_memory_record(
 
 pub fn sample_opencode_detail_row() -> AgentDetailRow {
     let mut row = sample_agent_detail_row();
-    row.backend_kind = crate::agents::model::BACKEND_KIND_OPENCODE.to_string();
     row.runtime_config = serde_json::json!({
         "workspace_host_path": "workspaces/agents/test-agent",
         "workspace_container_path": "/workspaces/agents/test-agent",

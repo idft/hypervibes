@@ -81,7 +81,6 @@ SELECT
     900,
     ''
 FROM agents
-WHERE backend_kind = 'opencode'
 ON CONFLICT (agent_key, job_kind, timeframe) DO NOTHING;
 
 ALTER TABLE hyperliquid.orders

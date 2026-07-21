@@ -59,6 +59,7 @@ pub async fn test_state() -> Arc<AppState> {
             container_workspaces_root: "/workspaces".to_string(),
             api_base_url: "http://host.containers.internal:3003".to_string(),
         },
+        opencode_base_url: "http://localhost:14096".to_string(),
         opencode_client: Arc::new(
             crate::opencode::client::OpenCodeClient::new(
                 crate::opencode::client::OpenCodeClientConfig::new("opencode".to_string(), None),
@@ -110,8 +111,6 @@ pub async fn seed_agent_with_prompts(
         environment: "live".to_string(),
         api_key: api_key.clone(),
         api_key_last_used_at: None,
-        backend_kind: crate::agents::model::BACKEND_KIND_OPENCODE.to_string(),
-        runtime_id: "opencode-local".to_string(),
         runtime_config: serde_json::json!({}),
     };
     insert_agent(&state.db_pool, &row)

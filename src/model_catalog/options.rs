@@ -22,18 +22,14 @@ pub struct ModelPickerOption {
 
 pub async fn build_model_picker_options(
     agent: &AgentDetailRow,
+    opencode_base_url: &str,
     opencode_client: &OpenCodeClient,
     model_catalog: &ModelsDevCatalog,
 ) -> Result<Vec<ModelPickerOption>> {
-    let runtime_base_url = agent
-        .runtime_base_url
-        .as_deref()
-        .filter(|value| !value.trim().is_empty())
-        .ok_or_else(|| anyhow!("OpenCode runtime base URL is not configured for this agent"))?;
     let workspace = OpenCodeWorkspaceRuntimeConfig::from_value(&agent.runtime_config)
         .ok_or_else(|| anyhow!("OpenCode workspace metadata is missing for this agent"))?;
     let response = opencode_client
-        .list_providers(runtime_base_url, &workspace.workspace_container_path)
+        .list_providers(opencode_base_url, &workspace.workspace_container_path)
         .await?;
     let snapshot = model_catalog.snapshot().await.ok();
     Ok(build_model_picker_options_from_response(
@@ -44,18 +40,14 @@ pub async fn build_model_picker_options(
 
 pub async fn build_model_picker_options_cached(
     agent: &AgentDetailRow,
+    opencode_base_url: &str,
     opencode_client: &OpenCodeClient,
     model_catalog: &ModelsDevCatalog,
 ) -> Result<Option<Vec<ModelPickerOption>>> {
-    let runtime_base_url = agent
-        .runtime_base_url
-        .as_deref()
-        .filter(|value| !value.trim().is_empty())
-        .ok_or_else(|| anyhow!("OpenCode runtime base URL is not configured for this agent"))?;
     let workspace = OpenCodeWorkspaceRuntimeConfig::from_value(&agent.runtime_config)
         .ok_or_else(|| anyhow!("OpenCode workspace metadata is missing for this agent"))?;
     let Some(response) = opencode_client
-        .list_providers_cached_or_refresh(runtime_base_url, &workspace.workspace_container_path)
+        .list_providers_cached_or_refresh(opencode_base_url, &workspace.workspace_container_path)
         .await
     else {
         return Ok(None);

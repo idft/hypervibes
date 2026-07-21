@@ -23,7 +23,7 @@ in-flight OpenCode MCP server can finish its API calls.
 
 | Subsystem | Responsibility |
 | --- | --- |
-| `agents` | Agent registry, API keys, runtime assignment, selected instruments, and strategy prompts. User-owned encrypted Hyperliquid signing material lives with authentication records. |
+| `agents` | Agent registry, API keys, OpenCode workspaces, selected instruments, and strategy prompts. User-owned encrypted Hyperliquid signing material lives with authentication records. |
 | `agentic` | Persisted schedules, hooks, runs, workspace maintenance, recovery of orphaned runs, and OpenCode dispatch. |
 | `opencode` | OpenCode HTTP client, session persistence access, and generated agent workspaces. |
 | `memory` | Append-only, agent-owned analysis and review records plus links between records. |
@@ -73,9 +73,9 @@ the owner's trading signer and target the agent's stored trading account.
 The agent API is authenticated with a Bearer API key. The resolved `agent_key`
 is the data-ownership boundary for account, memory, and order operations.
 
-Only the `opencode` backend is currently supported. Backend and runtime fields
-remain in the registry schema to leave room for a future backend without
-changing agent ownership or orchestration concepts.
+OpenCode is the sole execution backend. Its HTTP endpoint is configured at the
+application level with `OPENCODE_BASE_URL`, rather than being assigned through
+database runtime rows.
 
 ## Engineering Isolation
 
@@ -108,7 +108,7 @@ Required configuration:
 
 Operational configuration includes `APP_BIND_ADDR` or `APP_HOST` and
 `APP_PORT`, `APP_CACHE_DIR`, workspace root settings, the API base URL visible
-inside OpenCode workspaces, and OpenCode Basic Auth credentials. See
+inside OpenCode workspaces, `OPENCODE_BASE_URL`, and OpenCode Basic Auth credentials. See
 `.env.example` for the complete local-development configuration.
 
 The application defaults to `127.0.0.1:3000`. The workspace-facing API URL is

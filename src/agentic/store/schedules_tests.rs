@@ -391,7 +391,7 @@ async fn list_due_opencode_schedules_excludes_disabled_and_other_backends() {
         .expect("enable trading");
 
     let now = Utc::now();
-    let due = list_due_opencode_schedules(&pool, now, 20)
+    let due = list_due_opencode_schedules(&pool, now, 20, "http://localhost:14096")
         .await
         .expect("list due");
 
@@ -406,14 +406,14 @@ async fn list_due_opencode_schedules_excludes_disabled_and_other_backends() {
         .execute(&pool)
         .await
         .expect("re-enable analysis due");
-    let due = list_due_opencode_schedules(&pool, now, 20)
+    let due = list_due_opencode_schedules(&pool, now, 20, "http://localhost:14096")
         .await
         .expect("list due again");
     let analysis_due = due
         .iter()
         .find(|row| row.agent_key == key && row.job_key == default_analysis_job_key())
         .expect("analysis row should be due");
-    assert!(analysis_due.runtime_base_url.contains("14096"));
+    assert!(analysis_due.opencode_base_url.contains("14096"));
     assert_eq!(analysis_due.timeframe, DEFAULT_ANALYSIS_TIMEFRAME);
 }
 
@@ -445,7 +445,7 @@ async fn list_due_opencode_schedules_filters_by_agent_enabled_flag() {
         .expect("disable agent");
 
     let now = Utc::now();
-    let due = list_due_opencode_schedules(&pool, now, 20)
+    let due = list_due_opencode_schedules(&pool, now, 20, "http://localhost:14096")
         .await
         .expect("list due");
     assert!(

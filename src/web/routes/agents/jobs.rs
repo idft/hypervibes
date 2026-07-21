@@ -30,7 +30,6 @@ use crate::{
         timeframe::{parse_timeframe_seconds, parse_timeout_seconds},
     },
     agents::{
-        model::BACKEND_KIND_OPENCODE,
         store::get_agent,
         strategy_prompts::{get_agent_strategy_prompt, prompt_kind_for_job_kind},
     },
@@ -72,14 +71,6 @@ pub(in crate::web::routes) async fn agents_show_job_detail(
     let Some(agent) = get_agent(&state.db_pool, &agent_key).await? else {
         return Ok((StatusCode::NOT_FOUND, "agent not found").into_response());
     };
-    if agent.backend_kind != BACKEND_KIND_OPENCODE {
-        return Ok((
-            StatusCode::NOT_FOUND,
-            "jobs are only available for OpenCode agents",
-        )
-            .into_response());
-    }
-
     let Some(job) =
         crate::agentic::store::get_agent_schedule(&state.db_pool, &agent_key, job_id).await?
     else {
@@ -160,9 +151,6 @@ pub(in crate::web::routes) async fn agents_job_model_picker(
     let Some(agent) = get_agent(&state.db_pool, &agent_key).await? else {
         return Ok((StatusCode::NOT_FOUND, "agent not found").into_response());
     };
-    if agent.backend_kind != BACKEND_KIND_OPENCODE {
-        return Ok((StatusCode::NOT_FOUND, "job not found").into_response());
-    }
     let Some(job) = store::get_agent_schedule(&state.db_pool, &agent_key, job_id).await? else {
         return Ok((StatusCode::NOT_FOUND, "job not found").into_response());
     };
@@ -223,7 +211,7 @@ pub(in crate::web::routes) async fn build_job_prompt_preview(
         model_provider_id: job.model_provider_id.clone(),
         model_id: job.model_id.clone(),
         timeout_seconds: job.timeout_seconds,
-        runtime_base_url: String::new(),
+        opencode_base_url: String::new(),
         runtime_config: serde_json::json!({}),
         scheduled_for: job.next_run_at,
         review_window_start: None,
@@ -370,14 +358,6 @@ pub(in crate::web::routes) async fn agents_new_job(
     let Some(agent) = get_agent(&state.db_pool, &agent_key).await? else {
         return Ok((StatusCode::NOT_FOUND, "agent not found").into_response());
     };
-    if agent.backend_kind != BACKEND_KIND_OPENCODE {
-        return Ok((
-            StatusCode::NOT_FOUND,
-            "jobs are only available for OpenCode agents",
-        )
-            .into_response());
-    }
-
     let picker = load_model_picker_context(&state, &agent).await;
     Ok(render_new_job_form(
         agent,
@@ -395,14 +375,6 @@ pub(in crate::web::routes) async fn agents_create_job(
     let Some(agent) = get_agent(&state.db_pool, &agent_key).await? else {
         return Ok((StatusCode::NOT_FOUND, "agent not found").into_response());
     };
-    if agent.backend_kind != BACKEND_KIND_OPENCODE {
-        return Ok((
-            StatusCode::NOT_FOUND,
-            "jobs are only available for OpenCode agents",
-        )
-            .into_response());
-    }
-
     let validated = match form.validate() {
         Ok(validated) => validated,
         Err(errors) => {
@@ -475,17 +447,9 @@ pub(in crate::web::routes) async fn agents_toggle_job(
     Path((agent_key, job_id)): Path<(String, i64)>,
     Form(form): Form<ToggleScheduleForm>,
 ) -> Result<Response, AppError> {
-    let Some(agent) = get_agent(&state.db_pool, &agent_key).await? else {
+    let Some(_agent) = get_agent(&state.db_pool, &agent_key).await? else {
         return Ok((StatusCode::NOT_FOUND, "agent not found").into_response());
     };
-    if agent.backend_kind != BACKEND_KIND_OPENCODE {
-        return Ok((
-            StatusCode::NOT_FOUND,
-            "jobs are only available for OpenCode agents",
-        )
-            .into_response());
-    }
-
     // Checkbox presence: if `enabled=on` was submitted, the new state is
     // enabled. Otherwise (only `enabled=off` was submitted), the new state
     // is disabled. This is the same shape used by the agent create form.
@@ -515,17 +479,9 @@ pub(in crate::web::routes) async fn agents_toggle_all_jobs(
     Path(agent_key): Path<String>,
     Form(form): Form<ToggleScheduleForm>,
 ) -> Result<Response, AppError> {
-    let Some(agent) = get_agent(&state.db_pool, &agent_key).await? else {
+    let Some(_agent) = get_agent(&state.db_pool, &agent_key).await? else {
         return Ok((StatusCode::NOT_FOUND, "agent not found").into_response());
     };
-    if agent.backend_kind != BACKEND_KIND_OPENCODE {
-        return Ok((
-            StatusCode::NOT_FOUND,
-            "jobs are only available for OpenCode agents",
-        )
-            .into_response());
-    }
-
     let enable = matches!(form.enabled.as_deref(), Some("on"));
     crate::agentic::store::set_all_agent_jobs_enabled(&state.db_pool, &agent_key, enable).await?;
 
@@ -535,17 +491,9 @@ pub(in crate::web::routes) async fn agents_delete_job(
     State(state): State<Arc<AppState>>,
     Path((agent_key, job_id)): Path<(String, i64)>,
 ) -> Result<Response, AppError> {
-    let Some(agent) = get_agent(&state.db_pool, &agent_key).await? else {
+    let Some(_agent) = get_agent(&state.db_pool, &agent_key).await? else {
         return Ok((StatusCode::NOT_FOUND, "agent not found").into_response());
     };
-    if agent.backend_kind != BACKEND_KIND_OPENCODE {
-        return Ok((
-            StatusCode::NOT_FOUND,
-            "jobs are only available for OpenCode agents",
-        )
-            .into_response());
-    }
-
     let deleted =
         crate::agentic::store::delete_agent_schedule(&state.db_pool, &agent_key, job_id).await?;
     if !deleted {
@@ -558,21 +506,14 @@ pub(in crate::web::routes) async fn agents_run_job_now(
     State(state): State<Arc<AppState>>,
     Path((agent_key, job_id)): Path<(String, i64)>,
 ) -> Result<Response, AppError> {
-    let Some(agent) = get_agent(&state.db_pool, &agent_key).await? else {
+    let Some(_agent) = get_agent(&state.db_pool, &agent_key).await? else {
         return Ok((StatusCode::NOT_FOUND, "agent not found").into_response());
     };
-    if agent.backend_kind != BACKEND_KIND_OPENCODE {
-        return Ok((
-            StatusCode::NOT_FOUND,
-            "jobs are only available for OpenCode agents",
-        )
-            .into_response());
-    }
-
     let Some(schedule) = crate::agentic::store::get_opencode_schedule_for_dispatch(
         &state.db_pool,
         &agent_key,
         job_id,
+        &state.opencode_base_url,
     )
     .await?
     else {
@@ -692,6 +633,7 @@ pub(in crate::web::routes) async fn agents_run_job_now(
                         &live_accounts,
                         &hook_agent_key,
                         &workspace_leases,
+                        &state.opencode_base_url,
                     )
                     .await;
                 }

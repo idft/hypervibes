@@ -463,8 +463,6 @@ mod tests {
             environment: "live".to_string(),
             api_key: format!("vta_ord-{suffix}-{ts}"),
             api_key_last_used_at: None,
-            backend_kind: crate::agents::model::BACKEND_KIND_OPENCODE.to_string(),
-            runtime_id: "opencode-local".to_string(),
             runtime_config: serde_json::json!({}),
         }
     }

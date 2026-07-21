@@ -343,10 +343,7 @@ pub async fn fetch_balance_series(
 mod tests {
     use super::*;
     use crate::{
-        agents::{
-            model::{AgentRegistryRow, BACKEND_KIND_OPENCODE},
-            store::insert_agent,
-        },
+        agents::{model::AgentRegistryRow, store::insert_agent},
         test_db,
     };
     use chrono::Duration;
@@ -447,8 +444,6 @@ mod tests {
                 environment: "live".to_string(),
                 api_key: format!("queries-api-{suffix}"),
                 api_key_last_used_at: None,
-                backend_kind: BACKEND_KIND_OPENCODE.to_string(),
-                runtime_id: "opencode-local".to_string(),
                 runtime_config: serde_json::json!({}),
             },
         )

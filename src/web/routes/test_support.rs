@@ -16,8 +16,7 @@ use crate::{
     agentic::backend::{AgenticBackend, DispatchRequest, DispatchResult},
     agents::{
         crypto::EncryptionKey,
-        model::CreateAgentRuntimeForm,
-        store::{insert_agent_runtime, update_agent_runtime_config},
+        store::update_agent_runtime_config,
         strategy_prompts::{
             PROMPT_KIND_ANALYSIS, PROMPT_KIND_TRADING, insert_default_strategy_prompts_for_agent,
             upsert_agent_strategy_prompt,
@@ -94,6 +93,7 @@ pub(in crate::web::routes) async fn test_state_with_backend_and_shutdown(
             container_workspaces_root: "/workspaces".to_string(),
             api_base_url: "http://host.containers.internal:3003".to_string(),
         },
+        opencode_base_url: "http://localhost:14096".to_string(),
         opencode_client: Arc::new(
             crate::opencode::client::OpenCodeClient::new(
                 crate::opencode::client::OpenCodeClientConfig::new("opencode".to_string(), None),
@@ -240,13 +240,6 @@ pub(in crate::web::routes) async fn insert_test_agent(
 pub(in crate::web::routes) async fn insert_test_opencode_agent(
     state: &Arc<AppState>,
 ) -> Option<(String, String)> {
-    ensure_test_runtime(
-        state,
-        "opencode-local",
-        crate::agents::model::BACKEND_KIND_OPENCODE,
-    )
-    .await;
-
     let timestamp = chrono::Utc::now().timestamp_millis();
     let display_name = format!("OpenCodeScheduleTest{}", timestamp);
     let agent_key = slugify_agent_key(&display_name);
@@ -268,8 +261,6 @@ pub(in crate::web::routes) async fn insert_test_opencode_agent(
         environment: "live".to_string(),
         api_key: format!("opencode-schedule-test-{timestamp}"),
         api_key_last_used_at: None,
-        backend_kind: crate::agents::model::BACKEND_KIND_OPENCODE.to_string(),
-        runtime_id: "opencode-local".to_string(),
         runtime_config: serde_json::json!({}),
     };
     if insert_agent(&state.db_pool, &row).await.is_err() {
@@ -300,21 +291,6 @@ pub(in crate::web::routes) async fn insert_test_opencode_agent(
     .await
     .expect("set test hook models");
     Some((agent_key, wallet_address))
-}
-pub(in crate::web::routes) async fn ensure_test_runtime(
-    state: &Arc<AppState>,
-    id: &str,
-    backend_kind: &str,
-) {
-    let form = CreateAgentRuntimeForm {
-        id: id.to_string(),
-        name: format!("{backend_kind}-{id}"),
-        backend_kind: backend_kind.to_string(),
-        base_url: "http://localhost:14096".to_string(),
-        enabled: Some("on".to_string()),
-    };
-
-    let _ = insert_agent_runtime(&state.db_pool, &form).await;
 }
 pub(in crate::web::routes) async fn seed_workspace_runtime_config(
     state: &Arc<AppState>,
@@ -364,13 +340,6 @@ pub(in crate::web::routes) async fn insert_test_agent_with_text(
     analysis_prompt: String,
     trading_prompt: String,
 ) -> Option<(String, String)> {
-    ensure_test_runtime(
-        state,
-        "opencode-local-balance-stream",
-        crate::agents::model::BACKEND_KIND_OPENCODE,
-    )
-    .await;
-
     let timestamp = chrono::Utc::now().timestamp_millis();
     let display_name = format!("BalanceStreamTest{}", timestamp);
     let agent_key = slugify_agent_key(&display_name);
@@ -392,8 +361,6 @@ pub(in crate::web::routes) async fn insert_test_agent_with_text(
         environment: "live".to_string(),
         api_key: format!("balance-stream-test-{timestamp}"),
         api_key_last_used_at: None,
-        backend_kind: crate::agents::model::BACKEND_KIND_OPENCODE.to_string(),
-        runtime_id: "opencode-local-balance-stream".to_string(),
         runtime_config: serde_json::json!({}),
     };
     if insert_agent(&state.db_pool, &row).await.is_err() {

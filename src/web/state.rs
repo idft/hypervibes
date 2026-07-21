@@ -24,6 +24,7 @@ pub struct AppState {
     pub live_accounts: Arc<LiveAccountStore>,
     pub ui_events: Arc<UiEventHub>,
     pub opencode_workspace_config: OpenCodeWorkspaceConfig,
+    pub opencode_base_url: String,
     pub opencode_client: Arc<OpenCodeClient>,
     pub model_catalog: Arc<ModelsDevCatalog>,
     pub asset_cache: Arc<AssetCache>,

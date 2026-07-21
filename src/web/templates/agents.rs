@@ -60,16 +60,13 @@ pub fn build_agent_show_tabs(
     active_tab: AgentShowTab,
 ) -> Vec<AgentShowTabLink> {
     let agent_key = agent.agent_key.as_str();
-    let uses_opencode_runtime = agent.backend_kind == crate::agents::model::BACKEND_KIND_OPENCODE;
     let mut tab_entries: Vec<(&'static str, AgentShowTab)> = vec![
         ("Positions", AgentShowTab::Positions),
         ("Transactions", AgentShowTab::Transactions),
         ("Memories", AgentShowTab::Memories),
         ("Prompts", AgentShowTab::Prompts),
     ];
-    if uses_opencode_runtime {
-        tab_entries.push(("Jobs", AgentShowTab::Jobs));
-    }
+    tab_entries.push(("Jobs", AgentShowTab::Jobs));
     tab_entries.push(("Settings", AgentShowTab::Settings));
 
     tab_entries
@@ -318,8 +315,6 @@ pub struct AgentsShowPageTemplate {
 impl AgentsShowPageTemplate {
     pub fn new(agent: AgentDetailRow, active_tab: AgentShowTab) -> Self {
         let agent_key = agent.agent_key.clone();
-        let uses_opencode_runtime =
-            agent.backend_kind == crate::agents::model::BACKEND_KIND_OPENCODE;
         let tabs = build_agent_show_tabs(&agent, active_tab);
 
         Self {
@@ -335,7 +330,7 @@ impl AgentsShowPageTemplate {
             show_memories_tab: active_tab == AgentShowTab::Memories,
             show_prompts_tab: active_tab == AgentShowTab::Prompts,
             show_settings_tab: active_tab == AgentShowTab::Settings,
-            show_jobs_tab: uses_opencode_runtime && active_tab == AgentShowTab::Jobs,
+            show_jobs_tab: active_tab == AgentShowTab::Jobs,
             agent,
             transactions: Vec::new(),
             transactions_page: 1,

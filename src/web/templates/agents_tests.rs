@@ -478,8 +478,6 @@ fn agents_new_page_renders_base_layout_and_form() {
     assert!(rendered.contains("data-create-new-agent-subaccount"));
     assert!(rendered.contains("/agents/new/account-choices"));
     assert!(rendered.contains("Sub-account capacity"));
-    assert!(!rendered.contains("name=\"backend_kind\""));
-    assert!(!rendered.contains("name=\"runtime_id\""));
     assert!(!rendered.contains("Runtime instance"));
     assert!(!rendered.contains("name=\"enabled\""));
 }

@@ -28,7 +28,6 @@ use crate::{
         workspace_lease::WorkspaceLeaseManager,
     },
     agents::{
-        model::BACKEND_KIND_OPENCODE,
         store::{get_agent, list_agent_instrument_ids, update_agent_runtime_config},
         strategy_prompts::{
             PROMPT_KIND_ANALYSIS, PROMPT_KIND_ANALYSIS_CODING, default_prompt_for_kind,
@@ -289,11 +288,18 @@ impl AgenticScheduler {
             &self.in_flight,
             &self.coding_semaphore,
             &self.workspace_leases,
+            self.opencode_client.base_url(),
         )
         .await?;
 
         let now = Utc::now();
-        let due = store::list_due_opencode_schedules(&self.pool, now, DUE_SCHEDULE_LIMIT).await?;
+        let due = store::list_due_opencode_schedules(
+            &self.pool,
+            now,
+            DUE_SCHEDULE_LIMIT,
+            self.opencode_client.base_url(),
+        )
+        .await?;
         debug!(count = due.len(), "due opencode schedules loaded");
 
         if due.is_empty() {
@@ -423,12 +429,16 @@ impl AgenticScheduler {
                 && let Some(run) = store::get_run(&self.pool, run_id).await?
                 && let Some(session_id) = run.backend_run_ref
                 && let Some(hook_id) = task.parameter_i64("hook_id")
-                && let Some(hook) =
-                    store::get_opencode_hook_for_dispatch(&self.pool, &task.agent_key, hook_id)
-                        .await?
+                && let Some(hook) = store::get_opencode_hook_for_dispatch(
+                    &self.pool,
+                    &task.agent_key,
+                    hook_id,
+                    self.opencode_client.base_url(),
+                )
+                .await?
                 && let Some(status) = self
                     .backend
-                    .get_session_status(&hook.runtime_base_url, &session_id)
+                    .get_session_status(&hook.opencode_base_url, &session_id)
                     .await?
                 && status.is_active()
             {
@@ -488,16 +498,6 @@ async fn process_workspace_maintenance_tasks(
         .await;
         return Ok(());
     };
-
-    if agent.backend_kind != BACKEND_KIND_OPENCODE {
-        let _ = store::mark_maintenance_task_failed(
-            pool,
-            task.id,
-            "workspace maintenance is only supported for OpenCode agents",
-        )
-        .await;
-        return Ok(());
-    }
 
     if store::agent_has_active_runs(pool, &task.agent_key).await? {
         debug!(
@@ -618,6 +618,7 @@ async fn spawn_coding_workers(
     in_flight: &InFlightTracker,
     semaphore: &Arc<Semaphore>,
     workspace_leases: &WorkspaceLeaseManager,
+    opencode_base_url: &str,
 ) -> Result<()> {
     let tasks = store::list_queued_maintenance_candidates(pool, CODING_QUEUE_LIMIT).await?;
     for task in tasks {
@@ -630,13 +631,21 @@ async fn spawn_coding_workers(
         let in_flight = in_flight.clone();
         let semaphore = semaphore.clone();
         let workspace_leases = workspace_leases.clone();
+        let opencode_base_url = opencode_base_url.to_string();
         tokio::spawn(async move {
             let Ok(_permit) = semaphore.acquire_owned().await else {
                 return;
             };
             let _guard = in_flight.track();
-            if let Err(error) =
-                run_coding_task(&pool, &backend, &workspace_config, &workspace_leases, task).await
+            if let Err(error) = run_coding_task(
+                &pool,
+                &backend,
+                &workspace_config,
+                &workspace_leases,
+                &opencode_base_url,
+                task,
+            )
+            .await
             {
                 warn!(error = ?error, "coding task worker failed");
             }
@@ -650,6 +659,7 @@ async fn run_coding_task(
     backend: &Arc<dyn AgenticBackend>,
     workspace_config: &OpenCodeWorkspaceConfig,
     workspace_leases: &WorkspaceLeaseManager,
+    opencode_base_url: &str,
     task: crate::agentic::model::AgentMaintenanceTaskRow,
 ) -> Result<()> {
     let Some(run_id) = task.run_id else {
@@ -667,7 +677,9 @@ async fn run_coding_task(
         fail_coding_task(pool, task.id, run_id, "coding task has no hook").await?;
         return Ok(());
     };
-    let Some(hook) = store::get_opencode_hook_for_dispatch(pool, &task.agent_key, hook_id).await?
+    let Some(hook) =
+        store::get_opencode_hook_for_dispatch(pool, &task.agent_key, hook_id, opencode_base_url)
+            .await?
     else {
         fail_coding_task(pool, task.id, run_id, "coding hook disappeared").await?;
         return Ok(());
@@ -1183,6 +1195,11 @@ async fn process_analysis_lane_for_agent(
     daily_review_schedules: Vec<DueOpenCodeScheduleRow>,
     workspace_leases: &WorkspaceLeaseManager,
 ) {
+    let opencode_base_url = schedules
+        .first()
+        .or_else(|| daily_review_schedules.first())
+        .map(|schedule| schedule.opencode_base_url.clone())
+        .unwrap_or_else(|| "http://localhost:14096".to_string());
     let _lease = workspace_leases.acquire_live_read(agent_key).await;
     let mut any_succeeded = false;
     for schedule in schedules {
@@ -1208,6 +1225,7 @@ async fn process_analysis_lane_for_agent(
             live_accounts,
             agent_key,
             workspace_leases,
+            &opencode_base_url,
         )
         .await
     {
@@ -1377,7 +1395,7 @@ pub fn dispatch_request_from_schedule(
         model_provider_id: schedule.model_provider_id.clone(),
         model_id: schedule.model_id.clone(),
         timeout_seconds: schedule.timeout_seconds,
-        runtime_base_url: schedule.runtime_base_url.clone(),
+        opencode_base_url: schedule.opencode_base_url.clone(),
         runtime_config: schedule.runtime_config.clone(),
         scheduled_for,
         review_window_start: None,
@@ -1414,7 +1432,7 @@ pub fn dispatch_request_from_hook(
         model_provider_id: hook.model_provider_id.clone(),
         model_id: hook.model_id.clone(),
         timeout_seconds: hook.timeout_seconds,
-        runtime_base_url: hook.runtime_base_url.clone(),
+        opencode_base_url: hook.opencode_base_url.clone(),
         runtime_config: hook.runtime_config.clone(),
         scheduled_for,
         review_window_start: None,
@@ -1608,6 +1626,7 @@ pub async fn dispatch_analysis_batch_completed_hook(
     _live_accounts: &Arc<LiveAccountStore>,
     agent_key: &str,
     workspace_leases: &WorkspaceLeaseManager,
+    opencode_base_url: &str,
 ) -> Result<()> {
     let Some(hook) =
         store::get_enabled_hook_for_event(pool, agent_key, HOOK_EVENT_ANALYSIS_BATCH_COMPLETED)
@@ -1626,7 +1645,8 @@ pub async fn dispatch_analysis_batch_completed_hook(
             scheduled_for,
         } => {
             let Some(hook_dispatch) =
-                store::get_opencode_hook_for_dispatch(pool, agent_key, hook.id).await?
+                store::get_opencode_hook_for_dispatch(pool, agent_key, hook.id, opencode_base_url)
+                    .await?
             else {
                 let _ =
                     store::mark_run_failed(pool, run_id, "hook disappeared before dispatch", None)
@@ -1857,7 +1877,6 @@ mod tests {
     use super::*;
 
     use std::{
-        collections::BTreeSet,
         fs,
         path::PathBuf,
         sync::{Arc, Mutex},
@@ -1865,15 +1884,8 @@ mod tests {
     };
 
     use async_trait::async_trait;
-    use axum::{
-        Router,
-        extract::{Path as AxumPath, State as AxumState},
-        http::StatusCode,
-        routing::get,
-    };
     use chrono::Utc;
     use serde_json::json;
-    use tokio::net::TcpListener;
 
     use crate::{
         agentic::{
@@ -1884,7 +1896,7 @@ mod tests {
         },
         agents::{
             keys::derive_wallet_address,
-            model::{AgentRegistryRow, BACKEND_KIND_OPENCODE},
+            model::AgentRegistryRow,
             store::{insert_agent, replace_agent_instruments},
         },
         test_db,
@@ -1982,36 +1994,6 @@ mod tests {
         )
     }
 
-    async fn spawn_session_status_server(active_session_ids: &[String]) -> String {
-        async fn session_status(
-            AxumState(active_session_ids): AxumState<Arc<BTreeSet<String>>>,
-            AxumPath(session_id): AxumPath<String>,
-        ) -> StatusCode {
-            if active_session_ids.contains(&session_id) {
-                StatusCode::OK
-            } else {
-                StatusCode::NOT_FOUND
-            }
-        }
-
-        let active_session_ids =
-            Arc::new(active_session_ids.iter().cloned().collect::<BTreeSet<_>>());
-        let app = Router::new()
-            .route("/session/{session_id}/status", get(session_status))
-            .with_state(active_session_ids);
-        let listener = TcpListener::bind("127.0.0.1:0")
-            .await
-            .expect("bind test session status server");
-        let address = listener.local_addr().expect("read listener address");
-        tokio::spawn(async move {
-            axum::serve(listener, app)
-                .await
-                .expect("serve test session status server");
-        });
-
-        format!("http://{address}")
-    }
-
     impl FakeBackend {
         fn success(calls: Arc<Mutex<Vec<DispatchRequest>>>) -> Self {
             Self {
@@ -2076,8 +2058,6 @@ mod tests {
             environment: "live".to_string(),
             api_key: format!("vta_{key}"),
             api_key_last_used_at: None,
-            backend_kind: BACKEND_KIND_OPENCODE.to_string(),
-            runtime_id: "opencode-local".to_string(),
             runtime_config: json!({
                 "workspace_host_path": format!("workspaces/agents/{key}"),
                 "workspace_container_path": format!("/workspaces/agents/{key}"),
@@ -2664,14 +2644,6 @@ mod tests {
         .await
         .expect("insert active session row");
 
-        let base_url = spawn_session_status_server(std::slice::from_ref(&session_id)).await;
-        sqlx::query("UPDATE agent_runtimes SET base_url = $2 WHERE id = $1")
-            .bind("opencode-local")
-            .bind(&base_url)
-            .execute(&pool)
-            .await
-            .expect("update runtime base url");
-
         let backend: Arc<dyn AgenticBackend> =
             Arc::new(FakeBackend::success(Arc::new(Mutex::new(Vec::new()))));
         let live_accounts = Arc::new(crate::hyperliquid::live_state::LiveAccountStore::new());
@@ -2792,14 +2764,6 @@ mod tests {
         .execute(&pool)
         .await
         .expect("insert idle session row");
-
-        let base_url = spawn_session_status_server(std::slice::from_ref(&session_id)).await;
-        sqlx::query("UPDATE agent_runtimes SET base_url = $2 WHERE id = $1")
-            .bind("opencode-local")
-            .bind(&base_url)
-            .execute(&pool)
-            .await
-            .expect("update runtime base url");
 
         let backend: Arc<dyn AgenticBackend> =
             Arc::new(FakeBackend::success(Arc::new(Mutex::new(Vec::new()))));

@@ -65,10 +65,13 @@ async fn main() -> Result<()> {
     };
 
     let opencode_client = Arc::new(
-        opencode::client::OpenCodeClient::new(opencode::client::OpenCodeClientConfig::new(
-            config.opencode_server_username.clone(),
-            config.opencode_server_password.clone(),
-        ))
+        opencode::client::OpenCodeClient::new(
+            opencode::client::OpenCodeClientConfig::new_with_base_url(
+                config.opencode_server_username.clone(),
+                config.opencode_server_password.clone(),
+                config.opencode_base_url.clone(),
+            ),
+        )
         .context("failed to build OpenCode HTTP client")?,
     );
     let opencode_backend: Arc<dyn agentic::backend::AgenticBackend> = Arc::new(
@@ -85,6 +88,7 @@ async fn main() -> Result<()> {
     });
     let warm_provider_pool = pool.clone();
     let warm_provider_client = Arc::clone(&opencode_client);
+    let warm_opencode_base_url = config.opencode_base_url.clone();
     tokio::spawn(async move {
         let agents = match agents::store::list_agents(&warm_provider_pool).await {
             Ok(agents) => agents,
@@ -105,13 +109,6 @@ async fn main() -> Result<()> {
             }) else {
                 continue;
             };
-            if agent.backend_kind != agents::model::BACKEND_KIND_OPENCODE {
-                continue;
-            }
-            let Some(base_url) = agent.runtime_base_url.as_deref() else {
-                warn!(agent_key = %agent.agent_key, "OpenCode provider warmup skipped agent without runtime URL");
-                continue;
-            };
             let Some(workspace) = opencode::workspace::OpenCodeWorkspaceRuntimeConfig::from_value(
                 &agent.runtime_config,
             ) else {
@@ -120,7 +117,7 @@ async fn main() -> Result<()> {
             };
             info!(agent_key = %agent.agent_key, "warming OpenCode provider cache");
             match warm_provider_client
-                .list_providers(base_url, &workspace.workspace_container_path)
+                .list_providers(&warm_opencode_base_url, &workspace.workspace_container_path)
                 .await
             {
                 Ok(response) => info!(
@@ -178,6 +175,7 @@ async fn main() -> Result<()> {
         encryption_key,
         Arc::clone(&live_accounts),
         opencode_workspace_config,
+        config.opencode_base_url,
         opencode_client,
         model_catalog,
         Arc::new(asset_cache),

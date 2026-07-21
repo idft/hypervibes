@@ -2,43 +2,7 @@ use chrono::{DateTime, Utc};
 use serde::Deserialize;
 use uuid::Uuid;
 
-pub const BACKEND_KIND_OPENCODE: &str = "opencode";
-pub const DEFAULT_RUNTIME_ID: &str = "opencode-local";
 pub const AGENT_LIFECYCLE_ACTIVE: &str = "active";
-
-pub fn is_valid_backend_kind(value: &str) -> bool {
-    matches!(value, BACKEND_KIND_OPENCODE)
-}
-
-pub fn is_valid_runtime_id(value: &str) -> bool {
-    let mut chars = value.chars();
-    let Some(first) = chars.next() else {
-        return false;
-    };
-    if !first.is_ascii_lowercase() && !first.is_ascii_digit() {
-        return false;
-    }
-
-    let mut last = first;
-    for ch in chars {
-        if !ch.is_ascii_lowercase() && !ch.is_ascii_digit() && ch != '-' {
-            return false;
-        }
-        last = ch;
-    }
-
-    last.is_ascii_lowercase() || last.is_ascii_digit()
-}
-
-#[derive(Debug, Clone, sqlx::FromRow)]
-pub struct AgentRuntimeRow {
-    pub id: String,
-    pub created_at: DateTime<Utc>,
-    pub name: String,
-    pub backend_kind: String,
-    pub enabled: bool,
-    pub base_url: Option<String>,
-}
 
 /// Row shape returned by the registry list query.
 #[derive(Debug, Clone, sqlx::FromRow)]
@@ -62,8 +26,6 @@ pub struct AgentDetailRow {
     pub trading_account_address: Option<String>,
     pub environment: String,
     pub api_key: String,
-    pub backend_kind: String,
-    pub runtime_base_url: Option<String>,
     pub runtime_config: serde_json::Value,
 }
 
@@ -87,61 +49,7 @@ pub struct AgentRegistryRow {
     pub environment: String,
     pub api_key: String,
     pub api_key_last_used_at: Option<DateTime<Utc>>,
-    pub backend_kind: String,
-    pub runtime_id: String,
     pub runtime_config: serde_json::Value,
-}
-
-#[derive(Debug, Clone, Default, Deserialize)]
-pub struct CreateAgentRuntimeForm {
-    pub id: String,
-    pub name: String,
-    pub backend_kind: String,
-    pub base_url: String,
-    pub enabled: Option<String>,
-}
-
-impl CreateAgentRuntimeForm {
-    pub fn enabled(&self) -> bool {
-        self.enabled.is_some()
-    }
-
-    pub fn validate(&self) -> Result<(), Vec<String>> {
-        let mut errors = Vec::new();
-
-        let id = self.id.trim();
-        if id.is_empty() {
-            errors.push("Runtime ID is required.".to_string());
-        } else if !is_valid_runtime_id(id) {
-            errors.push(
-                "Runtime ID must use lowercase letters, digits, or hyphens, and start/end with a letter or digit."
-                    .to_string(),
-            );
-        }
-
-        if self.name.trim().is_empty() {
-            errors.push("Name is required.".to_string());
-        }
-
-        let backend_kind = self.backend_kind.trim();
-        if !is_valid_backend_kind(backend_kind) {
-            errors.push("Backend kind must be opencode.".to_string());
-        }
-
-        let base_url = self.base_url.trim();
-        if backend_kind == BACKEND_KIND_OPENCODE && base_url.is_empty() {
-            errors.push("Base URL is required for OpenCode runtimes.".to_string());
-        }
-        if !base_url.is_empty() && reqwest::Url::parse(base_url).is_err() {
-            errors.push("Base URL must be a valid URL.".to_string());
-        }
-
-        if errors.is_empty() {
-            Ok(())
-        } else {
-            Err(errors)
-        }
-    }
 }
 
 /// Operator input when creating an agent.
@@ -208,10 +116,7 @@ pub fn slugify_agent_key(name: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        BACKEND_KIND_OPENCODE, CreateAgentForm, CreateAgentRuntimeForm, is_valid_backend_kind,
-        is_valid_runtime_id, slugify_agent_key,
-    };
+    use super::{CreateAgentForm, slugify_agent_key};
 
     #[test]
     fn slugifies_display_name() {
@@ -227,71 +132,6 @@ mod tests {
     #[test]
     fn slugify_rejects_only_special_chars() {
         assert!(slugify_agent_key("!!!").is_empty());
-    }
-
-    #[test]
-    fn backend_kind_validation_accepts_known_values() {
-        assert!(is_valid_backend_kind(BACKEND_KIND_OPENCODE));
-        assert!(!is_valid_backend_kind("OpenCode"));
-        assert!(!is_valid_backend_kind("other"));
-    }
-
-    #[test]
-    fn runtime_id_validation_rejects_invalid_shapes() {
-        assert!(is_valid_runtime_id("opencode-local"));
-        assert!(is_valid_runtime_id("a1"));
-        assert!(!is_valid_runtime_id(""));
-        assert!(!is_valid_runtime_id("-bad"));
-        assert!(!is_valid_runtime_id("bad-"));
-        assert!(!is_valid_runtime_id("Bad"));
-        assert!(!is_valid_runtime_id("bad_id"));
-    }
-
-    #[test]
-    fn create_agent_runtime_form_rejects_invalid_backend_and_runtime_id() {
-        let form = CreateAgentRuntimeForm {
-            id: "Bad_Runtime".to_string(),
-            name: "".to_string(),
-            backend_kind: "other".to_string(),
-            base_url: "not-a-url".to_string(),
-            enabled: Some("on".to_string()),
-        };
-
-        let errors = form.validate().expect_err("validation should fail");
-        assert!(errors.iter().any(|error| error.contains("Runtime ID")));
-        assert!(
-            errors
-                .iter()
-                .any(|error| error.contains("Name is required"))
-        );
-        assert!(
-            errors
-                .iter()
-                .any(|error| error.contains("Backend kind must be opencode"))
-        );
-        assert!(
-            errors
-                .iter()
-                .any(|error| error.contains("Base URL must be a valid URL"))
-        );
-    }
-
-    #[test]
-    fn create_agent_runtime_form_requires_base_url_for_opencode() {
-        let form = CreateAgentRuntimeForm {
-            id: "opencode-local".to_string(),
-            name: "OpenCode local".to_string(),
-            backend_kind: BACKEND_KIND_OPENCODE.to_string(),
-            base_url: String::new(),
-            enabled: Some("on".to_string()),
-        };
-
-        let errors = form.validate().expect_err("validation should fail");
-        assert!(
-            errors
-                .iter()
-                .any(|error| error.contains("Base URL is required for OpenCode runtimes"))
-        );
     }
 
     #[test]

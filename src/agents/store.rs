@@ -4,9 +4,7 @@ use anyhow::{Context, Result, anyhow};
 use sqlx::query_as;
 
 use crate::{
-    agents::model::{
-        AgentDetailRow, AgentListRow, AgentRegistryRow, AgentRuntimeRow, CreateAgentRuntimeForm,
-    },
+    agents::model::{AgentDetailRow, AgentListRow, AgentRegistryRow},
     db::DbPool,
     web::templates::shared::currency_logo_url,
 };
@@ -33,13 +31,8 @@ pub async fn list_agents(pool: &DbPool) -> Result<Vec<AgentListRow>> {
                  trading_account_address,
                  environment,
                 api_key,
-                 api_key_last_used_at,
-                 agents.backend_kind,
-                 agents.runtime_id,
-                 agent_runtimes.base_url AS runtime_base_url
+                 api_key_last_used_at
            FROM agents
-           JOIN agent_runtimes
-             ON agent_runtimes.id = agents.runtime_id
            WHERE agents.lifecycle = 'active'
            ORDER BY agents.created_at DESC",
     )
@@ -54,9 +47,8 @@ pub async fn list_agents(pool: &DbPool) -> Result<Vec<AgentListRow>> {
 pub async fn list_agents_for_user(pool: &DbPool, user_id: uuid::Uuid) -> Result<Vec<AgentListRow>> {
     let rows = query_as::<_, AgentListRow>(
      "SELECT display_name, agents.agent_key, agents.enabled, trading_account_address, environment,
-                api_key, api_key_last_used_at, agents.backend_kind, agents.runtime_id,
-                agent_runtimes.base_url AS runtime_base_url
-           FROM agents JOIN agent_runtimes ON agent_runtimes.id = agents.runtime_id
+                api_key, api_key_last_used_at
+           FROM agents
           WHERE agents.lifecycle = 'active' AND agents.user_id = $1
           ORDER BY agents.created_at DESC",
     )
@@ -83,93 +75,6 @@ pub async fn agent_belongs_to_user(
     Ok(found.is_some())
 }
 
-pub async fn list_agent_runtimes(pool: &DbPool) -> Result<Vec<AgentRuntimeRow>> {
-    let rows = query_as::<_, AgentRuntimeRow>(
-        "SELECT id,
-                created_at,
-                updated_at,
-                name,
-                backend_kind,
-                enabled,
-                base_url,
-                runtime_config
-           FROM agent_runtimes
-          ORDER BY backend_kind, name",
-    )
-    .fetch_all(pool)
-    .await
-    .context("failed to list agent runtimes")?;
-
-    Ok(rows)
-}
-
-pub async fn list_enabled_agent_runtimes(pool: &DbPool) -> Result<Vec<AgentRuntimeRow>> {
-    let rows = query_as::<_, AgentRuntimeRow>(
-        "SELECT id,
-                created_at,
-                updated_at,
-                name,
-                backend_kind,
-                enabled,
-                base_url,
-                runtime_config
-           FROM agent_runtimes
-          WHERE enabled = true
-          ORDER BY backend_kind, name",
-    )
-    .fetch_all(pool)
-    .await
-    .context("failed to list enabled agent runtimes")?;
-
-    Ok(rows)
-}
-
-#[cfg(test)]
-pub async fn get_agent_runtime(pool: &DbPool, id: &str) -> Result<Option<AgentRuntimeRow>> {
-    let row = query_as::<_, AgentRuntimeRow>(
-        "SELECT id,
-                created_at,
-                updated_at,
-                name,
-                backend_kind,
-                enabled,
-                base_url,
-                runtime_config
-           FROM agent_runtimes
-          WHERE id = $1",
-    )
-    .bind(id)
-    .fetch_optional(pool)
-    .await
-    .context("failed to fetch agent runtime")?;
-
-    Ok(row)
-}
-
-pub async fn insert_agent_runtime(pool: &DbPool, form: &CreateAgentRuntimeForm) -> Result<()> {
-    let base_url = form.base_url.trim();
-    sqlx::query(
-        "INSERT INTO agent_runtimes (
-            id,
-            name,
-            backend_kind,
-            enabled,
-            base_url,
-            runtime_config
-        ) VALUES ($1, $2, $3, $4, $5, '{}'::jsonb)",
-    )
-    .bind(form.id.trim())
-    .bind(form.name.trim())
-    .bind(form.backend_kind.trim())
-    .bind(form.enabled())
-    .bind((!base_url.is_empty()).then_some(base_url))
-    .execute(pool)
-    .await
-    .context("failed to insert agent runtime")?;
-
-    Ok(())
-}
-
 /// Fetch a single agent by its unique agent key.
 pub async fn get_agent(pool: &DbPool, agent_key: &str) -> Result<Option<AgentDetailRow>> {
     let row = query_as::<_, AgentDetailRow>(
@@ -180,14 +85,10 @@ pub async fn get_agent(pool: &DbPool, agent_key: &str) -> Result<Option<AgentDet
                  agents.lifecycle,
                    trading_account_address,
                  environment,
-                api_key,
-                agents.backend_kind,
-                 agent_runtimes.base_url AS runtime_base_url,
+                 api_key,
                  agents.runtime_config
            FROM agents
-           JOIN agent_runtimes
-             ON agent_runtimes.id = agents.runtime_id
-          WHERE agents.agent_key = $1",
+           WHERE agents.agent_key = $1",
     )
     .bind(agent_key)
     .fetch_optional(pool)
@@ -352,11 +253,9 @@ pub async fn insert_agent(pool: &DbPool, row: &AgentRegistryRow) -> Result<()> {
                  trading_account_address,
              environment,
             api_key,
-            api_key_last_used_at,
-            backend_kind,
-            runtime_id,
+             api_key_last_used_at,
              runtime_config
-         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)",
+         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)",
     )
     .bind(&row.agent_key)
     .bind(row.user_id)
@@ -369,8 +268,6 @@ pub async fn insert_agent(pool: &DbPool, row: &AgentRegistryRow) -> Result<()> {
     .bind(&row.environment)
     .bind(&row.api_key)
     .bind(row.api_key_last_used_at)
-    .bind(&row.backend_kind)
-    .bind(&row.runtime_id)
     .bind(&row.runtime_config)
     .execute(pool)
     .await
@@ -469,28 +366,6 @@ pub async fn touch_api_key_last_used(pool: &DbPool, api_key: &str) -> Result<()>
 }
 
 #[cfg(test)]
-pub async fn runtime_matches_backend(
-    pool: &DbPool,
-    runtime_id: &str,
-    backend_kind: &str,
-) -> Result<bool> {
-    let row: Option<(i32,)> = query_as(
-        "SELECT 1
-           FROM agent_runtimes
-          WHERE id = $1
-            AND enabled = true
-            AND backend_kind = $2",
-    )
-    .bind(runtime_id)
-    .bind(backend_kind)
-    .fetch_optional(pool)
-    .await
-    .context("failed to validate agent runtime/backend match")?;
-
-    Ok(row.is_some())
-}
-
-#[cfg(test)]
 mod tests {
     use super::*;
     use chrono::Utc;
@@ -512,8 +387,6 @@ mod tests {
             environment: "live".to_string(),
             api_key: format!("vta_{key}"),
             api_key_last_used_at: None,
-            backend_kind: crate::agents::model::BACKEND_KIND_OPENCODE.to_string(),
-            runtime_id: "opencode-local".to_string(),
             runtime_config: serde_json::json!({}),
         }
     }
@@ -604,76 +477,6 @@ mod tests {
                 .await
                 .expect("reject foreign owner")
         );
-    }
-
-    #[tokio::test]
-    async fn list_agent_runtimes_includes_seeded_opencode_runtime() {
-        let pool = test_db::pool().await;
-
-        let runtimes = list_agent_runtimes(&pool).await.expect("list runtimes");
-        let runtime = runtimes
-            .iter()
-            .find(|runtime| runtime.id == "opencode-local")
-            .expect("seeded runtime present");
-        assert_eq!(runtime.backend_kind, "opencode");
-        assert_eq!(runtime.base_url.as_deref(), Some("http://localhost:14096"));
-    }
-
-    #[tokio::test]
-    async fn insert_agent_runtime_and_runtime_match_round_trip() {
-        let pool = test_db::pool().await;
-        let id = format!("opencode-local-{}", Utc::now().timestamp_millis());
-        let form = CreateAgentRuntimeForm {
-            id: id.clone(),
-            name: format!("OpenCode local {id}"),
-            backend_kind: crate::agents::model::BACKEND_KIND_OPENCODE.to_string(),
-            base_url: "http://localhost:14096".to_string(),
-            enabled: Some("on".to_string()),
-        };
-
-        insert_agent_runtime(&pool, &form)
-            .await
-            .expect("insert agent runtime");
-
-        let stored = get_agent_runtime(&pool, &id)
-            .await
-            .expect("get runtime")
-            .expect("runtime present");
-        assert_eq!(stored.name, form.name);
-        assert_eq!(stored.base_url.as_deref(), Some("http://localhost:14096"));
-        assert!(
-            runtime_matches_backend(&pool, &id, crate::agents::model::BACKEND_KIND_OPENCODE)
-                .await
-                .expect("match runtime")
-        );
-        assert!(
-            !runtime_matches_backend(&pool, &id, "other")
-                .await
-                .expect("mismatch runtime")
-        );
-    }
-
-    #[tokio::test]
-    async fn list_enabled_agent_runtimes_filters_disabled_rows() {
-        let pool = test_db::pool().await;
-        let id = format!("disabled-runtime-{}", Utc::now().timestamp_millis());
-        let form = CreateAgentRuntimeForm {
-            id: id.clone(),
-            name: format!("Disabled runtime {id}"),
-            backend_kind: crate::agents::model::BACKEND_KIND_OPENCODE.to_string(),
-            base_url: "http://localhost:14096".to_string(),
-            enabled: None,
-        };
-
-        insert_agent_runtime(&pool, &form)
-            .await
-            .expect("insert disabled runtime");
-
-        let runtimes = list_enabled_agent_runtimes(&pool)
-            .await
-            .expect("list enabled runtimes");
-        assert!(runtimes.iter().all(|runtime| runtime.enabled));
-        assert!(runtimes.iter().all(|runtime| runtime.id != id));
     }
 
     #[tokio::test]

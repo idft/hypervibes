@@ -1,11 +1,7 @@
 use chrono::Utc;
 use sqlx::{query, query_as};
 
-use crate::agents::{
-    keys::derive_wallet_address,
-    model::{AgentRegistryRow, BACKEND_KIND_OPENCODE},
-    store::insert_agent,
-};
+use crate::agents::{keys::derive_wallet_address, model::AgentRegistryRow, store::insert_agent};
 use crate::db::DbPool;
 
 pub fn deterministic_private_key(key: &str) -> String {
@@ -37,8 +33,6 @@ pub fn sample_agent(key: &str) -> AgentRegistryRow {
         environment: "live".to_string(),
         api_key: format!("vta_{key}"),
         api_key_last_used_at: None,
-        backend_kind: BACKEND_KIND_OPENCODE.to_string(),
-        runtime_id: "opencode-local".to_string(),
         runtime_config: serde_json::json!({}),
     }
 }

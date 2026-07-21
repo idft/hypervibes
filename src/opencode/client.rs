@@ -13,6 +13,7 @@ const PROVIDER_CACHE_TTL: Duration = Duration::from_secs(5 * 60);
 
 #[derive(Debug, Clone)]
 pub struct OpenCodeClientConfig {
+    pub base_url: String,
     pub username: String,
     pub password: Option<String>,
     pub create_session_timeout: Duration,
@@ -20,8 +21,14 @@ pub struct OpenCodeClientConfig {
 }
 
 impl OpenCodeClientConfig {
+    #[cfg(test)]
     pub fn new(username: String, password: Option<String>) -> Self {
+        Self::new_with_base_url(username, password, "http://localhost:14096".to_string())
+    }
+
+    pub fn new_with_base_url(username: String, password: Option<String>, base_url: String) -> Self {
         Self {
+            base_url,
             username,
             password,
             create_session_timeout: Duration::from_secs(15),
@@ -94,6 +101,10 @@ impl OpenCodeClient {
             provider_cache: Arc::new(RwLock::new(HashMap::new())),
             provider_refresh_in_flight: Arc::new(Mutex::new(HashSet::new())),
         })
+    }
+
+    pub fn base_url(&self) -> &str {
+        &self.config.base_url
     }
 
     /// Create a new session bound to the given workspace container path.

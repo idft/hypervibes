@@ -12,10 +12,7 @@ use super::shared::{WORKSPACE_MAINTENANCE_DUPLICATE_WARNING, urlencode};
 use super::show::{AgentSettingsQuery, render_agent_show_page};
 use crate::{
     agentic::store::InsertWorkspaceMaintenanceTaskOutcome,
-    agents::{
-        model::BACKEND_KIND_OPENCODE,
-        store::{get_agent, replace_agent_instruments},
-    },
+    agents::store::{get_agent, replace_agent_instruments},
     opencode::workspace::{
         OpenCodeWorkspaceAgent, OpenCodeWorkspaceRuntimeConfig, diff_agent_workspace_from_template,
     },
@@ -72,14 +69,6 @@ pub(in crate::web::routes) async fn agents_regenerate_workspace(
     let Some(agent) = get_agent(&state.db_pool, &agent_key).await? else {
         return Ok((StatusCode::NOT_FOUND, "agent not found").into_response());
     };
-    if agent.backend_kind != BACKEND_KIND_OPENCODE {
-        return Ok((
-            StatusCode::NOT_FOUND,
-            "workspace regeneration is only available for OpenCode agents",
-        )
-            .into_response());
-    }
-
     let redirect_url = format!("/agents/{agent_key}/settings");
     match crate::agentic::store::insert_workspace_regenerate_task(
         &state.db_pool,
@@ -106,10 +95,6 @@ pub(in crate::web::routes) async fn agents_workspace_maintenance_status(
     let Some(agent) = get_agent(&state.db_pool, &agent_key).await? else {
         return Ok((StatusCode::NOT_FOUND, "agent not found").into_response());
     };
-    if agent.backend_kind != BACKEND_KIND_OPENCODE {
-        return Ok((StatusCode::NOT_FOUND, "agent not found").into_response());
-    }
-
     let opencode_workspace = build_opencode_workspace_settings_view(&state, &agent).await;
     let html = OpenCodeWorkspaceSectionTemplate::render_view(opencode_workspace, None)?;
     Ok(Html(html).into_response())

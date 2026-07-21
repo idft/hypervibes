@@ -69,8 +69,6 @@ async fn agents_new_page_renders_simplified_form() {
 
     assert_eq!(response.status(), StatusCode::OK);
     let text = response_text(response).await;
-    assert!(!text.contains("name=\"backend_kind\""));
-    assert!(!text.contains("name=\"runtime_id\""));
     assert!(!text.contains("Runtime instance"));
     assert!(!text.contains("name=\"enabled\""));
     assert!(!text.contains("Generate new Agent wallet"));

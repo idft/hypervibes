@@ -4,10 +4,6 @@ pub(in crate::web::routes) fn unique_violation_message(error: &anyhow::Error) ->
         let constraint = db_err.constraint().unwrap_or("unknown");
         if constraint.contains("agent_key") || constraint.contains("agents_pkey") {
             Some("An agent with this agent key already exists.".to_string())
-        } else if constraint.contains("agent_runtimes_pkey") {
-            Some("A backend with this runtime ID already exists.".to_string())
-        } else if constraint.contains("agent_runtimes_name") {
-            Some("A backend with this name already exists.".to_string())
         } else if constraint.contains("wallet") {
             Some("An agent with this wallet address and environment already exists.".to_string())
         } else if constraint.contains("api_key") {

@@ -81,7 +81,14 @@ pub(in crate::web::routes) async fn load_model_picker_context(
     state: &Arc<AppState>,
     agent: &crate::agents::model::AgentDetailRow,
 ) -> ModelPickerContext {
-    match build_model_picker_options(agent, &state.opencode_client, &state.model_catalog).await {
+    match build_model_picker_options(
+        agent,
+        &state.opencode_base_url,
+        &state.opencode_client,
+        &state.model_catalog,
+    )
+    .await
+    {
         Ok(options) => ModelPickerContext {
             options,
             warning: None,
@@ -103,8 +110,13 @@ pub(in crate::web::routes) async fn load_model_picker_context_cached(
     state: &Arc<AppState>,
     agent: &crate::agents::model::AgentDetailRow,
 ) -> ModelPickerContext {
-    match build_model_picker_options_cached(agent, &state.opencode_client, &state.model_catalog)
-        .await
+    match build_model_picker_options_cached(
+        agent,
+        &state.opencode_base_url,
+        &state.opencode_client,
+        &state.model_catalog,
+    )
+    .await
     {
         Ok(Some(options)) => ModelPickerContext {
             options,
@@ -196,12 +208,16 @@ pub(in crate::web::routes) async fn validate_model_selection_for_agent(
         return Ok(None);
     };
 
-    let options = build_model_picker_options(agent, &state.opencode_client, &state.model_catalog)
-        .await
-        .map_err(|_| {
-            "Could not load configured OpenCode models. Try again or use OpenCode default."
-                .to_string()
-        })?;
+    let options = build_model_picker_options(
+        agent,
+        &state.opencode_base_url,
+        &state.opencode_client,
+        &state.model_catalog,
+    )
+    .await
+    .map_err(|_| {
+        "Could not load configured OpenCode models. Try again or use OpenCode default.".to_string()
+    })?;
     if selection_exists_in_options(&options, &selection) {
         Ok(Some(selection))
     } else {

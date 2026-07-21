@@ -158,7 +158,7 @@ mod tests {
 
     #[test]
     fn coding_migration_backfill_matches_rust_default() {
-        let migration = include_str!("../../migrations/0014_analysis_coding_job.sql");
+        let migration = include_str!("../../migrations/0013_analysis_coding_job.sql");
         let marker = "$analysis_coding_prompt$";
         let mut parts = migration.split(marker);
         let _before = parts.next().expect("migration prefix");

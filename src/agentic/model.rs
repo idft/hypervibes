@@ -144,7 +144,7 @@ pub struct DueOpenCodeScheduleRow {
     pub model_id: Option<String>,
     pub timeout_seconds: i32,
     pub operator_prompt: String,
-    pub runtime_base_url: String,
+    pub opencode_base_url: String,
     pub runtime_config: Value,
 }
 
@@ -159,6 +159,6 @@ pub struct DueOpenCodeHookRow {
     pub model_id: Option<String>,
     pub timeout_seconds: i32,
     pub operator_prompt: String,
-    pub runtime_base_url: String,
+    pub opencode_base_url: String,
     pub runtime_config: Value,
 }

@@ -368,7 +368,7 @@ mod tests {
             model_provider_id: None,
             model_id: None,
             timeout_seconds: 10,
-            runtime_base_url: "http://localhost:14096".to_string(),
+            opencode_base_url: "http://localhost:14096".to_string(),
             runtime_config: serde_json::json!({}),
             scheduled_for: Utc::now(),
             review_window_start: None,
