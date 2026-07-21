@@ -9,7 +9,7 @@ use std::sync::Arc;
 use tracing::warn;
 
 use super::shared::{WORKSPACE_MAINTENANCE_DUPLICATE_WARNING, urlencode};
-use super::show::{AgentSettingsQuery, render_agent_show_page};
+use super::show::{AgentSettingsQuery, AgentShowQueries, render_agent_show_page};
 use crate::{
     agentic::store::InsertWorkspaceMaintenanceTaskOutcome,
     agents::store::{get_agent, replace_agent_instruments},
@@ -54,10 +54,10 @@ pub(in crate::web::routes) async fn agents_show_settings(
         &user,
         &agent_key,
         AgentShowTab::Settings,
-        None,
-        None,
-        Some(query),
-        None,
+        AgentShowQueries {
+            settings: Some(query),
+            ..Default::default()
+        },
     )
     .await
 }

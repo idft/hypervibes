@@ -363,13 +363,15 @@ pub(in crate::web::routes) async fn agents_run_hook_now(
     if hook.job_kind == JOB_KIND_ANALYSIS_CODING {
         let outcome = crate::agentic::store::insert_analysis_coding_task_and_run(
             &state.db_pool,
-            &agent_key,
-            hook_id,
-            crate::agentic::store::CodingTriggerMode::Manual,
-            None,
-            None,
-            Some(&hook.operator_prompt),
-            None,
+            crate::agentic::store::AnalysisCodingTaskRequest {
+                agent_key: &agent_key,
+                hook_id,
+                trigger_mode: crate::agentic::store::CodingTriggerMode::Manual,
+                source_run_id: None,
+                source_memory_id: None,
+                operator_prompt: Some(&hook.operator_prompt),
+                requested_mode: None,
+            },
         )
         .await
         .map_err(AppError)?;

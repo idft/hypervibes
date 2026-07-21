@@ -5,10 +5,11 @@ use uuid::Uuid;
 
 use super::test_support::seed_agent_and_schedule;
 use super::{
-    CodingTriggerMode, InsertAnalysisCodingTaskOutcome, InsertWorkspaceMaintenanceTaskOutcome,
-    agent_has_blocking_workspace_maintenance, get_latest_workspace_regenerate_task,
-    insert_analysis_coding_task_and_run, insert_workspace_regenerate_task,
-    mark_maintenance_task_running, mark_maintenance_task_succeeded,
+    AnalysisCodingTaskRequest, CodingTriggerMode, InsertAnalysisCodingTaskOutcome,
+    InsertWorkspaceMaintenanceTaskOutcome, agent_has_blocking_workspace_maintenance,
+    get_latest_workspace_regenerate_task, insert_analysis_coding_task_and_run,
+    insert_workspace_regenerate_task, mark_maintenance_task_running,
+    mark_maintenance_task_succeeded,
 };
 
 #[tokio::test]
@@ -73,13 +74,15 @@ async fn coding_queue_requires_model_and_deduplicates_source_memory() {
     assert!(
         insert_analysis_coding_task_and_run(
             &pool,
-            &key,
-            hook_id.0,
-            CodingTriggerMode::Automatic,
-            None,
-            None,
-            None,
-            Some("auto")
+            AnalysisCodingTaskRequest {
+                agent_key: &key,
+                hook_id: hook_id.0,
+                trigger_mode: CodingTriggerMode::Automatic,
+                source_run_id: None,
+                source_memory_id: None,
+                operator_prompt: None,
+                requested_mode: Some("auto"),
+            },
         )
         .await
         .is_err()
@@ -101,13 +104,15 @@ async fn coding_queue_requires_model_and_deduplicates_source_memory() {
     .expect("seed source memory");
     let inserted = insert_analysis_coding_task_and_run(
         &pool,
-        &key,
-        hook_id.0,
-        CodingTriggerMode::Automatic,
-        None,
-        Some(source_memory),
-        Some("review"),
-        Some("auto"),
+        AnalysisCodingTaskRequest {
+            agent_key: &key,
+            hook_id: hook_id.0,
+            trigger_mode: CodingTriggerMode::Automatic,
+            source_run_id: None,
+            source_memory_id: Some(source_memory),
+            operator_prompt: Some("review"),
+            requested_mode: Some("auto"),
+        },
     )
     .await
     .expect("queue coding task");
@@ -117,13 +122,15 @@ async fn coding_queue_requires_model_and_deduplicates_source_memory() {
     ));
     let duplicate = insert_analysis_coding_task_and_run(
         &pool,
-        &key,
-        hook_id.0,
-        CodingTriggerMode::Automatic,
-        None,
-        Some(source_memory),
-        Some("review"),
-        Some("auto"),
+        AnalysisCodingTaskRequest {
+            agent_key: &key,
+            hook_id: hook_id.0,
+            trigger_mode: CodingTriggerMode::Automatic,
+            source_run_id: None,
+            source_memory_id: Some(source_memory),
+            operator_prompt: Some("review"),
+            requested_mode: Some("auto"),
+        },
     )
     .await;
     assert!(matches!(

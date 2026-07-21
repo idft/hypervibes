@@ -7,7 +7,7 @@ use axum::{
 use serde::Deserialize;
 use std::sync::Arc;
 
-use super::show::render_agent_show_page;
+use super::show::{AgentShowQueries, render_agent_show_page};
 use crate::web::error::AppError;
 use crate::{
     agents::strategy_prompts::{is_valid_prompt_kind, upsert_agent_strategy_prompt},
@@ -23,10 +23,7 @@ pub(in crate::web::routes) async fn agents_show_prompts(
         &user,
         &agent_key,
         AgentShowTab::Prompts,
-        None,
-        None,
-        None,
-        None,
+        AgentShowQueries::default(),
     )
     .await
 }

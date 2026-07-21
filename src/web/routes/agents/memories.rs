@@ -14,7 +14,7 @@ use tokio_stream::wrappers::BroadcastStream;
 use tracing::warn;
 
 use super::shared::is_htmx_request;
-use super::show::render_agent_show_page;
+use super::show::{AgentShowQueries, render_agent_show_page};
 use crate::web::error::AppError;
 use crate::{
     agents::store::get_agent,
@@ -52,10 +52,10 @@ pub(in crate::web::routes) async fn agents_show_memories(
         &user,
         &agent_key,
         AgentShowTab::Memories,
-        None,
-        Some(query),
-        None,
-        None,
+        AgentShowQueries {
+            memories: Some(query),
+            ..Default::default()
+        },
     )
     .await
 }

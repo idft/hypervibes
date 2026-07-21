@@ -129,12 +129,8 @@ pub(in crate::web::routes) async fn wallet_index(
         })
         .collect();
     let navbar = crate::web::templates::load_navbar(&state.db_pool, user.id).await?;
-    let fee_bps = if row.1.is_some()
-        && row.0 > 0
-        && row.0 % BUILDER_FEE_BPS_TO_TENTHS == 0
-    {
-        (row.0 / BUILDER_FEE_BPS_TO_TENTHS)
-            .clamp(MIN_BUILDER_FEE_BPS, MAX_BUILDER_FEE_BPS)
+    let fee_bps = if row.1.is_some() && row.0 > 0 && row.0 % BUILDER_FEE_BPS_TO_TENTHS == 0 {
+        (row.0 / BUILDER_FEE_BPS_TO_TENTHS).clamp(MIN_BUILDER_FEE_BPS, MAX_BUILDER_FEE_BPS)
     } else {
         DEFAULT_BUILDER_FEE_BPS
     };
@@ -156,7 +152,9 @@ pub(in crate::web::routes) async fn wallet_index(
                 .as_ref()
                 .and_then(|wallet| wallet.api_wallet_expires_at),
             api_wallet_expiry_class: api_wallet_expiry_class(
-                api_wallet.as_ref().and_then(|wallet| wallet.api_wallet_expires_at),
+                api_wallet
+                    .as_ref()
+                    .and_then(|wallet| wallet.api_wallet_expires_at),
             ),
             api_wallet_show_expired: api_wallet_show_expired(api_wallet.as_ref()),
             navbar,
@@ -186,7 +184,9 @@ fn api_wallet_expiry_class(expires_at: Option<chrono::DateTime<chrono::Utc>>) ->
 /// past. The wallet page uses this to render the address with an "Expired"
 /// label in red, instead of treating the key as fully missing.
 fn api_wallet_show_expired(wallet: Option<&crate::web::auth::UserApiWalletRow>) -> bool {
-    let Some(wallet) = wallet else { return false; };
+    let Some(wallet) = wallet else {
+        return false;
+    };
     if wallet.api_wallet_address.is_none() || wallet.api_wallet_approved_at.is_none() {
         return false;
     }

@@ -5,7 +5,7 @@ use axum::{
 use rust_decimal::Decimal;
 use std::sync::Arc;
 
-use super::show::{AgentTransactionsQuery, render_agent_show_page};
+use super::show::{AgentShowQueries, AgentTransactionsQuery, render_agent_show_page};
 use crate::{
     hyperliquid::{
         live_state::{AccountKey, AccountLiveState},
@@ -24,10 +24,10 @@ pub(in crate::web::routes) async fn agents_show_transactions(
         &user,
         &agent_key,
         AgentShowTab::Transactions,
-        Some(query),
-        None,
-        None,
-        None,
+        AgentShowQueries {
+            transactions: Some(query),
+            ..Default::default()
+        },
     )
     .await
 }

@@ -87,13 +87,6 @@ pub(crate) async fn insert_default_opencode_hooks(pool: &DbPool, agent_key: &str
     Ok(())
 }
 
-/// Backwards-compatible alias retained for tests that still call the
-/// singular-named helper. It just delegates to the plural seeder.
-#[cfg(test)]
-pub(crate) async fn insert_default_opencode_hook(pool: &DbPool, agent_key: &str) -> Result<()> {
-    insert_default_opencode_hooks(pool, agent_key).await
-}
-
 pub async fn list_agent_hooks(pool: &DbPool, agent_key: &str) -> Result<Vec<AgenticJobHookRow>> {
     let rows = query_as::<_, AgenticJobHookRow>(
         "SELECT id,

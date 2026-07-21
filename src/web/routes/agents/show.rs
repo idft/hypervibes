@@ -56,10 +56,7 @@ pub(in crate::web::routes) async fn agents_show(
         &user,
         &agent_key,
         AgentShowTab::Positions,
-        None,
-        None,
-        None,
-        None,
+        AgentShowQueries::default(),
     )
     .await
 }
@@ -80,16 +77,28 @@ pub(in crate::web::routes) struct AgentSettingsQuery {
     #[serde(default)]
     pub workspace_warning: Option<String>,
 }
+
+#[derive(Debug, Default)]
+pub(in crate::web::routes) struct AgentShowQueries {
+    pub transactions: Option<AgentTransactionsQuery>,
+    pub memories: Option<AgentMemoriesQuery>,
+    pub settings: Option<AgentSettingsQuery>,
+    pub jobs: Option<AgentJobsQuery>,
+}
+
 pub(in crate::web::routes) async fn render_agent_show_page(
     state: &Arc<AppState>,
     user: &AuthenticatedUser,
     agent_key: &str,
     active_tab: AgentShowTab,
-    transactions_query: Option<AgentTransactionsQuery>,
-    memories_query: Option<AgentMemoriesQuery>,
-    settings_query: Option<AgentSettingsQuery>,
-    jobs_query: Option<AgentJobsQuery>,
+    queries: AgentShowQueries,
 ) -> Result<Response, AppError> {
+    let AgentShowQueries {
+        transactions: transactions_query,
+        memories: memories_query,
+        settings: settings_query,
+        jobs: jobs_query,
+    } = queries;
     let Some(agent) = get_agent(&state.db_pool, agent_key).await? else {
         return Ok((StatusCode::NOT_FOUND, "agent not found").into_response());
     };

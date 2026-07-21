@@ -52,35 +52,50 @@ impl CodingTriggerMode {
     }
 }
 
+pub struct AnalysisCodingTaskRequest<'a> {
+    pub agent_key: &'a str,
+    pub hook_id: i64,
+    pub trigger_mode: CodingTriggerMode,
+    pub source_run_id: Option<i64>,
+    pub source_memory_id: Option<Uuid>,
+    pub operator_prompt: Option<&'a str>,
+    pub requested_mode: Option<&'a str>,
+}
+
+type CodingHookRow = (
+    i64,
+    String,
+    String,
+    String,
+    bool,
+    Option<String>,
+    Option<String>,
+    i32,
+    String,
+);
+
 /// Queue an coding run and its durable maintenance task atomically.
 /// The agent row is locked before the hook row and all active-task checks.
 pub async fn insert_analysis_coding_task_and_run(
     pool: &DbPool,
-    agent_key: &str,
-    hook_id: i64,
-    trigger_mode: CodingTriggerMode,
-    source_run_id: Option<i64>,
-    source_memory_id: Option<Uuid>,
-    operator_prompt: Option<&str>,
-    requested_mode: Option<&str>,
+    request: AnalysisCodingTaskRequest<'_>,
 ) -> Result<InsertAnalysisCodingTaskOutcome> {
+    let AnalysisCodingTaskRequest {
+        agent_key,
+        hook_id,
+        trigger_mode,
+        source_run_id,
+        source_memory_id,
+        operator_prompt,
+        requested_mode,
+    } = request;
     let mut tx = pool
         .begin()
         .await
         .context("failed to begin coding queue transaction")?;
     lock_agent_coordination_tx(&mut tx, agent_key).await?;
 
-    let hook: Option<(
-        i64,
-        String,
-        String,
-        String,
-        bool,
-        Option<String>,
-        Option<String>,
-        i32,
-        String,
-    )> = query_as(
+    let hook: Option<CodingHookRow> = query_as(
         "SELECT id, agent_key, job_key, job_kind, enabled,
                     model_provider_id, model_id, timeout_seconds, operator_prompt
                FROM agentic_job_hooks

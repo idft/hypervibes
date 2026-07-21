@@ -34,13 +34,15 @@ async fn coding_report_is_scoped_to_the_authenticated_agent() {
         .unwrap();
     let queued = crate::agentic::store::insert_analysis_coding_task_and_run(
         &state.db_pool,
-        &agent_key,
-        hook_id,
-        crate::agentic::store::CodingTriggerMode::Manual,
-        None,
-        None,
-        None,
-        Some("auto"),
+        crate::agentic::store::AnalysisCodingTaskRequest {
+            agent_key: &agent_key,
+            hook_id,
+            trigger_mode: crate::agentic::store::CodingTriggerMode::Manual,
+            source_run_id: None,
+            source_memory_id: None,
+            operator_prompt: None,
+            requested_mode: Some("auto"),
+        },
     )
     .await
     .unwrap();

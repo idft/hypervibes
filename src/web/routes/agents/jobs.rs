@@ -17,14 +17,15 @@ use super::shared::{
     jobs_warning_redirect, load_model_picker_context, load_model_picker_context_cached,
     parse_positive_schedule_seconds, timeout_error_redirect, validate_model_selection_for_agent,
 };
-use super::show::{AgentJobsQuery, render_agent_show_page};
+use super::show::{AgentJobsQuery, AgentShowQueries, render_agent_show_page};
 use crate::web::error::AppError;
 use crate::{
     agentic::{
         model::{JOB_KIND_ANALYSIS, JOB_KIND_TRADING},
         scheduler::{
-            dispatch_analysis_batch_completed_hook, dispatch_daily_review_coding_hook,
-            dispatch_request_from_schedule, dispatch_run_with_workspace_lease,
+            DispatchRequestInputs, dispatch_analysis_batch_completed_hook,
+            dispatch_daily_review_coding_hook, dispatch_request_from_schedule,
+            dispatch_run_with_workspace_lease,
         },
         store::{self, QueuedScheduleRun},
         timeframe::{parse_timeframe_seconds, parse_timeout_seconds},
@@ -56,10 +57,10 @@ pub(in crate::web::routes) async fn agents_show_jobs(
         &user,
         &agent_key,
         AgentShowTab::Jobs,
-        None,
-        None,
-        None,
-        Some(query),
+        AgentShowQueries {
+            jobs: Some(query),
+            ..Default::default()
+        },
     )
     .await
 }
@@ -568,13 +569,16 @@ pub(in crate::web::routes) async fn agents_run_job_now(
             };
             let mut request = dispatch_request_from_schedule(
                 &schedule,
-                run_id,
-                scheduled_for,
-                &agent,
-                selected_instruments,
-                load_strategy_prompt(&state, &agent_key, &schedule.job_kind).await?,
-                load_accumulated_learnings(&state, &agent_key).await?,
-                system_prompt,
+                DispatchRequestInputs {
+                    run_id,
+                    scheduled_for,
+                    agent,
+                    selected_instruments,
+                    strategy_prompt: load_strategy_prompt(&state, &agent_key, &schedule.job_kind)
+                        .await?,
+                    accumulated_learnings: load_accumulated_learnings(&state, &agent_key).await?,
+                    system_prompt,
+                },
                 account_snapshot,
             );
             if schedule.job_kind == crate::agentic::model::JOB_KIND_DAILY_REVIEW {
@@ -599,24 +603,26 @@ pub(in crate::web::routes) async fn agents_run_job_now(
             let in_flight = state.in_flight.clone();
             tokio::spawn(async move {
                 let _guard = in_flight.track();
-                while wait_for_lane {
-                    match store::has_prior_active_run_in_lane(
-                        &pool,
-                        &hook_agent_key,
-                        &schedule.job_kind,
-                        run_id,
-                    )
-                    .await
-                    {
-                        Ok(false) => break,
-                        Ok(true) => {}
-                        Err(error) => {
-                            let summary = format!("manual run queue check failed: {error:#}");
-                            let _ = store::mark_run_failed(&pool, run_id, &summary, None).await;
-                            return;
+                if wait_for_lane {
+                    loop {
+                        match store::has_prior_active_run_in_lane(
+                            &pool,
+                            &hook_agent_key,
+                            &schedule.job_kind,
+                            run_id,
+                        )
+                        .await
+                        {
+                            Ok(false) => break,
+                            Ok(true) => {}
+                            Err(error) => {
+                                let summary = format!("manual run queue check failed: {error:#}");
+                                let _ = store::mark_run_failed(&pool, run_id, &summary, None).await;
+                                return;
+                            }
                         }
+                        tokio::time::sleep(std::time::Duration::from_millis(250)).await;
                     }
-                    tokio::time::sleep(std::time::Duration::from_millis(250)).await;
                 }
                 let _workspace_lease = workspace_leases.acquire_live_read(&hook_agent_key).await;
                 let result = dispatch_run_with_workspace_lease(
@@ -641,11 +647,9 @@ pub(in crate::web::routes) async fn agents_run_job_now(
                     let _ = dispatch_daily_review_coding_hook(&pool, &hook_agent_key, run_id).await;
                 }
             });
-            return Ok(Redirect::to(&format!("/agents/{agent_key}/runs/{run_id}")).into_response());
+            Ok(Redirect::to(&format!("/agents/{agent_key}/runs/{run_id}")).into_response())
         }
-        QueuedScheduleRun::Missing => {
-            return Ok((StatusCode::NOT_FOUND, "job not found").into_response());
-        }
+        QueuedScheduleRun::Missing => Ok((StatusCode::NOT_FOUND, "job not found").into_response()),
         QueuedScheduleRun::BlockedByMaintenance => Ok(jobs_warning_redirect(
             &agent_key,
             WORKSPACE_MAINTENANCE_ACTIVE_WARNING,

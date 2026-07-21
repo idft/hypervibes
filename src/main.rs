@@ -155,9 +155,11 @@ async fn main() -> Result<()> {
         force_shutdown_rx.clone(),
         opencode_backend.clone(),
         Arc::clone(&live_accounts),
-        opencode_workspace_config.clone(),
-        Arc::clone(&opencode_client),
-        in_flight_for_scheduler,
+        agentic::scheduler::AgenticSchedulerRuntime {
+            opencode_workspace_config: opencode_workspace_config.clone(),
+            opencode_client: Arc::clone(&opencode_client),
+            in_flight: in_flight_for_scheduler,
+        },
         workspace_leases.clone(),
     );
     let mut agentic_scheduler_handle = tokio::spawn(async move {

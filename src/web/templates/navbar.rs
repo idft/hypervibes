@@ -10,17 +10,9 @@ use crate::db::DbPool;
 /// The fragment is rendered by askama's `{% include %}` mechanism: pages that
 /// extend `base.html` declare a `navbar: Navbar` field and the included
 /// template reads the warnings through the parent's context.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct Navbar {
     pub warnings: Vec<NavbarWarning>,
-}
-
-impl Default for Navbar {
-    fn default() -> Self {
-        Self {
-            warnings: Vec::new(),
-        }
-    }
 }
 
 impl Navbar {

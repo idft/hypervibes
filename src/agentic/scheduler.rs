@@ -7,8 +7,6 @@ use std::{
 use anyhow::{Context, Result, anyhow};
 use chrono::Utc;
 use tokio::sync::{Mutex as AsyncMutex, OwnedMutexGuard, Semaphore, watch};
-#[cfg(test)]
-use tokio::task::JoinHandle;
 use tracing::{debug, error, info, warn};
 
 use crate::{
@@ -86,18 +84,41 @@ pub struct AgenticScheduler {
     lane_locks: SchedulerLaneLockManager,
 }
 
+pub struct AgenticSchedulerRuntime {
+    pub opencode_workspace_config: OpenCodeWorkspaceConfig,
+    pub opencode_client: Arc<OpenCodeClient>,
+    pub in_flight: InFlightTracker,
+}
+
 /// Serializes repeated scheduler ticks for one agent and lane. The run store
 /// serializes individual claims, but a later tick must not claim a second due
 /// schedule while the earlier tick is still executing the first one.
 #[derive(Clone, Default)]
 struct SchedulerLaneLockManager {
-    locks: Arc<Mutex<HashMap<(String, SchedulerLane), Weak<AsyncMutex<()>>>>>,
+    locks: LaneLockMap,
 }
+
+type LaneLockMap = Arc<Mutex<HashMap<(String, SchedulerLane), Weak<AsyncMutex<()>>>>>;
 
 #[derive(Clone, Copy, Hash, PartialEq, Eq)]
 enum SchedulerLane {
     Analysis,
     Trading,
+}
+
+type AnalysisScheduleSortKey = (i64, chrono::DateTime<Utc>, i64);
+type TradingScheduleSortKey = (chrono::DateTime<Utc>, i64, i64);
+type IndexedAnalysisSchedule = (AnalysisScheduleSortKey, DueOpenCodeScheduleRow);
+type IndexedTradingSchedule = (TradingScheduleSortKey, DueOpenCodeScheduleRow);
+
+pub struct DispatchRequestInputs {
+    pub run_id: i64,
+    pub scheduled_for: chrono::DateTime<Utc>,
+    pub agent: crate::agents::model::AgentDetailRow,
+    pub selected_instruments: Vec<String>,
+    pub strategy_prompt: String,
+    pub accumulated_learnings: Option<String>,
+    pub system_prompt: String,
 }
 
 impl SchedulerLaneLockManager {
@@ -126,9 +147,7 @@ impl AgenticScheduler {
         force_shutdown_rx: watch::Receiver<bool>,
         backend: Arc<dyn AgenticBackend>,
         live_accounts: Arc<LiveAccountStore>,
-        opencode_workspace_config: OpenCodeWorkspaceConfig,
-        opencode_client: Arc<OpenCodeClient>,
-        in_flight: InFlightTracker,
+        runtime: AgenticSchedulerRuntime,
     ) -> Self {
         Self::new_with_workspace_leases(
             pool,
@@ -136,9 +155,7 @@ impl AgenticScheduler {
             force_shutdown_rx,
             backend,
             live_accounts,
-            opencode_workspace_config,
-            opencode_client,
-            in_flight,
+            runtime,
             WorkspaceLeaseManager::new(),
         )
     }
@@ -149,9 +166,7 @@ impl AgenticScheduler {
         force_shutdown_rx: watch::Receiver<bool>,
         backend: Arc<dyn AgenticBackend>,
         live_accounts: Arc<LiveAccountStore>,
-        opencode_workspace_config: OpenCodeWorkspaceConfig,
-        opencode_client: Arc<OpenCodeClient>,
-        in_flight: InFlightTracker,
+        runtime: AgenticSchedulerRuntime,
         workspace_leases: WorkspaceLeaseManager,
     ) -> Self {
         Self {
@@ -160,10 +175,10 @@ impl AgenticScheduler {
             force_shutdown_rx,
             backend,
             live_accounts,
-            opencode_workspace_config,
-            opencode_client,
+            opencode_workspace_config: runtime.opencode_workspace_config,
+            opencode_client: runtime.opencode_client,
             last_orphan_recovery_at: None,
-            in_flight,
+            in_flight: runtime.in_flight,
             workspace_leases,
             coding_semaphore: Arc::new(Semaphore::new(1)),
             lane_locks: SchedulerLaneLockManager::default(),
@@ -783,12 +798,14 @@ async fn run_coding_task(
         if let Err(error) = write_coding_result_memory(
             pool,
             &task,
-            "no_change",
-            "Candidate produced no reusable code changes",
-            &actual_changes,
-            &report,
-            &manifest_hash(&candidate.base_manifest),
-            &manifest_hash(&candidate_manifest),
+            CodingResultMemory {
+                outcome: "no_change",
+                summary: "Candidate produced no reusable code changes",
+                changed_paths: &actual_changes,
+                report: &report,
+                base_manifest_hash: &manifest_hash(&candidate.base_manifest),
+                promoted_manifest_hash: &manifest_hash(&candidate_manifest),
+            },
         )
         .await
         {
@@ -908,12 +925,14 @@ async fn run_coding_task(
         if let Err(error) = write_coding_result_memory(
             pool,
             &task,
-            "changed",
-            "Candidate validated and was promoted",
-            &actual_changes,
-            &report,
-            &manifest_hash(&candidate.base_manifest),
-            &manifest_hash(&candidate_manifest),
+            CodingResultMemory {
+                outcome: "changed",
+                summary: "Candidate validated and was promoted",
+                changed_paths: &actual_changes,
+                report: &report,
+                base_manifest_hash: &manifest_hash(&candidate.base_manifest),
+                promoted_manifest_hash: &manifest_hash(&candidate_manifest),
+            },
         )
         .await
         {
@@ -1093,15 +1112,19 @@ fn validate_coding_report(
     })
 }
 
+struct CodingResultMemory<'a> {
+    outcome: &'a str,
+    summary: &'a str,
+    changed_paths: &'a [String],
+    report: &'a EngineeringReport,
+    base_manifest_hash: &'a str,
+    promoted_manifest_hash: &'a str,
+}
+
 async fn write_coding_result_memory(
     pool: &DbPool,
     task: &crate::agentic::model::AgentMaintenanceTaskRow,
-    outcome: &str,
-    summary: &str,
-    changed_paths: &[String],
-    report: &EngineeringReport,
-    base_manifest_hash: &str,
-    promoted_manifest_hash: &str,
+    result: CodingResultMemory<'_>,
 ) -> Result<()> {
     let existing: (bool,) = sqlx::query_as(
         "SELECT EXISTS (
@@ -1129,24 +1152,25 @@ async fn write_coding_result_memory(
             }]
         })
         .unwrap_or_default();
-    links.extend(
-        report
-            .evidence_memory_ids
-            .iter()
-            .map(|id| crate::memory::CreateMemoryLink {
-                target_memory_id: *id,
-                link_type: "derived_from".to_string(),
-                metadata: Some(serde_json::json!({ "task_id": task.id })),
-            }),
-    );
+    links.extend(result.report.evidence_memory_ids.iter().map(|id| {
+        crate::memory::CreateMemoryLink {
+            target_memory_id: *id,
+            link_type: "derived_from".to_string(),
+            metadata: Some(serde_json::json!({ "task_id": task.id })),
+        }
+    }));
     let input = crate::memory::CreateMemory {
         symbol: "__agent__".to_string(),
         timeframe: None,
         memory_type: "analysis_coding".to_string(),
-        summary: summary.to_string(),
+        summary: result.summary.to_string(),
         content: format!(
-            "Engineering task {} finished with outcome {outcome}.\n\nModel summary: {}\n\nRationale: {}\n\nValidation notes: {}",
-            task.id, report.summary, report.rationale, report.validation_notes
+            "Engineering task {} finished with outcome {}.\n\nModel summary: {}\n\nRationale: {}\n\nValidation notes: {}",
+            task.id,
+            result.outcome,
+            result.report.summary,
+            result.report.rationale,
+            result.report.validation_notes
         ),
         metadata: Some(serde_json::json!({
             "schema_version": 1,
@@ -1156,12 +1180,12 @@ async fn write_coding_result_memory(
             "source_memory_id": task.source_memory_id,
             "source_daily_review_run_id": task.source_run_id,
             "source_daily_review_memory_id": task.source_memory_id,
-            "outcome": outcome,
+            "outcome": result.outcome,
             "mode": task.parameters.get("mode"),
-            "changed_paths": changed_paths,
-            "base_manifest_sha256": base_manifest_hash,
-            "promoted_manifest_sha256": promoted_manifest_hash,
-            "validation": if outcome == "changed" {
+            "changed_paths": result.changed_paths,
+            "base_manifest_sha256": result.base_manifest_hash,
+            "promoted_manifest_sha256": result.promoted_manifest_hash,
+            "validation": if result.outcome == "changed" {
                 serde_json::json!({
                     "fixed_contract": "passed",
                     "candidate_tests": "optional",
@@ -1367,17 +1391,11 @@ async fn process_schedule_for_agent(
 
 pub fn dispatch_request_from_schedule(
     schedule: &DueOpenCodeScheduleRow,
-    run_id: i64,
-    scheduled_for: chrono::DateTime<Utc>,
-    agent: &crate::agents::model::AgentDetailRow,
-    selected_instruments: Vec<String>,
-    strategy_prompt: String,
-    accumulated_learnings: Option<String>,
-    system_prompt: String,
+    inputs: DispatchRequestInputs,
     account_snapshot: Option<crate::hyperliquid::live_state::LiveAgentSnapshot>,
 ) -> DispatchRequest {
     DispatchRequest {
-        run_id,
+        run_id: inputs.run_id,
         schedule_id: Some(schedule.schedule_id),
         hook_id: None,
         agent_key: schedule.agent_key.clone(),
@@ -1386,18 +1404,18 @@ pub fn dispatch_request_from_schedule(
         job_kind: schedule.job_kind.clone(),
         timeframe: Some(schedule.timeframe.clone()),
         operator_prompt: schedule.operator_prompt.clone(),
-        strategy_prompt,
-        accumulated_learnings,
-        system_prompt,
-        environment: agent.environment.clone(),
-        selected_instruments,
+        strategy_prompt: inputs.strategy_prompt,
+        accumulated_learnings: inputs.accumulated_learnings,
+        system_prompt: inputs.system_prompt,
+        environment: inputs.agent.environment.clone(),
+        selected_instruments: inputs.selected_instruments,
         account_snapshot,
         model_provider_id: schedule.model_provider_id.clone(),
         model_id: schedule.model_id.clone(),
         timeout_seconds: schedule.timeout_seconds,
         opencode_base_url: schedule.opencode_base_url.clone(),
         runtime_config: schedule.runtime_config.clone(),
-        scheduled_for,
+        scheduled_for: inputs.scheduled_for,
         review_window_start: None,
         review_window_end: None,
     }
@@ -1405,16 +1423,10 @@ pub fn dispatch_request_from_schedule(
 
 pub fn dispatch_request_from_hook(
     hook: &DueOpenCodeHookRow,
-    run_id: i64,
-    scheduled_for: chrono::DateTime<Utc>,
-    agent: &crate::agents::model::AgentDetailRow,
-    selected_instruments: Vec<String>,
-    strategy_prompt: String,
-    accumulated_learnings: Option<String>,
-    system_prompt: String,
+    inputs: DispatchRequestInputs,
 ) -> DispatchRequest {
     DispatchRequest {
-        run_id,
+        run_id: inputs.run_id,
         schedule_id: None,
         hook_id: Some(hook.hook_id),
         agent_key: hook.agent_key.clone(),
@@ -1423,18 +1435,18 @@ pub fn dispatch_request_from_hook(
         job_kind: hook.job_kind.clone(),
         timeframe: None,
         operator_prompt: hook.operator_prompt.clone(),
-        strategy_prompt,
-        accumulated_learnings,
-        system_prompt,
-        environment: agent.environment.clone(),
-        selected_instruments,
+        strategy_prompt: inputs.strategy_prompt,
+        accumulated_learnings: inputs.accumulated_learnings,
+        system_prompt: inputs.system_prompt,
+        environment: inputs.agent.environment.clone(),
+        selected_instruments: inputs.selected_instruments,
         account_snapshot: None,
         model_provider_id: hook.model_provider_id.clone(),
         model_id: hook.model_id.clone(),
         timeout_seconds: hook.timeout_seconds,
         opencode_base_url: hook.opencode_base_url.clone(),
         runtime_config: hook.runtime_config.clone(),
-        scheduled_for,
+        scheduled_for: inputs.scheduled_for,
         review_window_start: None,
         review_window_end: None,
     }
@@ -1481,13 +1493,15 @@ async fn build_dispatch_request(
 
     Ok(Some(dispatch_request_from_schedule(
         schedule,
-        run_id,
-        scheduled_for,
-        &agent,
-        selected_instruments,
-        strategy_prompt,
-        accumulated_learnings,
-        system_prompt,
+        DispatchRequestInputs {
+            run_id,
+            scheduled_for,
+            agent,
+            selected_instruments,
+            strategy_prompt,
+            accumulated_learnings,
+            system_prompt,
+        },
         account_snapshot,
     )))
 }
@@ -1526,16 +1540,18 @@ pub(crate) async fn dispatch_daily_review_coding_hook(
     };
     store::insert_analysis_coding_task_and_run(
         pool,
-        agent_key,
-        hook.id,
-        store::CodingTriggerMode::Automatic,
-        Some(source_run_id),
-        Some(memory.id),
-        memory
-            .metadata
-            .get("analysis_coding_reason")
-            .and_then(serde_json::Value::as_str),
-        Some("auto"),
+        store::AnalysisCodingTaskRequest {
+            agent_key,
+            hook_id: hook.id,
+            trigger_mode: store::CodingTriggerMode::Automatic,
+            source_run_id: Some(source_run_id),
+            source_memory_id: Some(memory.id),
+            operator_prompt: memory
+                .metadata
+                .get("analysis_coding_reason")
+                .and_then(serde_json::Value::as_str),
+            requested_mode: Some("auto"),
+        },
     )
     .await
     .map(|_| ())
@@ -1569,13 +1585,15 @@ pub async fn build_hook_dispatch_request(
 
     Ok(Some(dispatch_request_from_hook(
         hook,
-        run_id,
-        scheduled_for,
-        &agent,
-        selected_instruments,
-        strategy_prompt,
-        accumulated_learnings,
-        system_prompt,
+        DispatchRequestInputs {
+            run_id,
+            scheduled_for,
+            agent,
+            selected_instruments,
+            strategy_prompt,
+            accumulated_learnings,
+            system_prompt,
+        },
     )))
 }
 
@@ -1804,7 +1822,7 @@ fn timeframe_duration_for_sort(schedule: &DueOpenCodeScheduleRow) -> i64 {
 fn sort_analysis_schedules_for_dispatch(
     due: Vec<DueOpenCodeScheduleRow>,
 ) -> Vec<DueOpenCodeScheduleRow> {
-    let mut indexed: Vec<((i64, chrono::DateTime<Utc>, i64), DueOpenCodeScheduleRow)> = due
+    let mut indexed: Vec<IndexedAnalysisSchedule> = due
         .into_iter()
         .map(|schedule| {
             (
@@ -1824,7 +1842,7 @@ fn sort_analysis_schedules_for_dispatch(
 fn sort_trading_schedules_for_dispatch(
     due: Vec<DueOpenCodeScheduleRow>,
 ) -> Vec<DueOpenCodeScheduleRow> {
-    let mut indexed: Vec<((chrono::DateTime<Utc>, i64, i64), DueOpenCodeScheduleRow)> = due
+    let mut indexed: Vec<IndexedTradingSchedule> = due
         .into_iter()
         .map(|schedule| {
             (
@@ -1839,35 +1857,6 @@ fn sort_trading_schedules_for_dispatch(
         .collect();
     indexed.sort_by_key(|(key, _)| *key);
     indexed.into_iter().map(|(_, row)| row).collect()
-}
-
-/// Convenience: spawn the scheduler on the current Tokio runtime and
-/// return the join handle. The handle aborts when the runtime drops.
-#[cfg(test)]
-pub fn spawn(
-    pool: DbPool,
-    shutdown_rx: watch::Receiver<bool>,
-    force_shutdown_rx: watch::Receiver<bool>,
-    backend: Arc<dyn AgenticBackend>,
-    live_accounts: Arc<LiveAccountStore>,
-    opencode_workspace_config: OpenCodeWorkspaceConfig,
-    opencode_client: Arc<OpenCodeClient>,
-    in_flight: InFlightTracker,
-) -> JoinHandle<Result<()>> {
-    tokio::spawn(async move {
-        AgenticScheduler::new(
-            pool,
-            shutdown_rx,
-            force_shutdown_rx,
-            backend,
-            live_accounts,
-            opencode_workspace_config,
-            opencode_client,
-            in_flight,
-        )
-        .run()
-        .await
-    })
 }
 
 #[cfg(test)]
@@ -1992,6 +1981,14 @@ mod tests {
             ))
             .expect("build OpenCode client"),
         )
+    }
+
+    fn scheduler_runtime(in_flight: InFlightTracker) -> AgenticSchedulerRuntime {
+        AgenticSchedulerRuntime {
+            opencode_workspace_config: sample_workspace_config(),
+            opencode_client: sample_opencode_client(),
+            in_flight,
+        }
     }
 
     impl FakeBackend {
@@ -2192,28 +2189,27 @@ mod tests {
             force_rx,
             backend,
             live_accounts,
-            sample_workspace_config(),
-            sample_opencode_client(),
-            InFlightTracker::new(),
+            scheduler_runtime(InFlightTracker::new()),
         );
         scheduler.tick().await.expect("tick");
 
         run_until(|| async { calls.lock().map(|guard| !guard.is_empty()).unwrap_or(false) }).await;
 
-        let guard = calls.lock().unwrap();
-        assert_eq!(guard.len(), 1);
-        let request = &guard[0];
-        assert_eq!(request.agent_key, key);
-        assert_eq!(request.job_key, "analysis-15m");
-        assert_eq!(request.timeframe.as_deref(), Some("15m"));
-        assert_eq!(
-            request.scheduled_for,
-            crate::agentic::timeframe::boundary_for_due_at(
-                due,
-                crate::agentic::timeframe::DEFAULT_TRIGGER_DELAY_SECONDS,
-            )
-        );
-        drop(guard);
+        {
+            let guard = calls.lock().unwrap();
+            assert_eq!(guard.len(), 1);
+            let request = &guard[0];
+            assert_eq!(request.agent_key, key);
+            assert_eq!(request.job_key, "analysis-15m");
+            assert_eq!(request.timeframe.as_deref(), Some("15m"));
+            assert_eq!(
+                request.scheduled_for,
+                crate::agentic::timeframe::boundary_for_due_at(
+                    due,
+                    crate::agentic::timeframe::DEFAULT_TRIGGER_DELAY_SECONDS,
+                )
+            );
+        }
 
         run_until(|| async {
             list_run_statuses(&pool, &key)
@@ -2295,9 +2291,7 @@ mod tests {
             force_rx,
             backend,
             live_accounts,
-            sample_workspace_config(),
-            sample_opencode_client(),
-            InFlightTracker::new(),
+            scheduler_runtime(InFlightTracker::new()),
         );
         scheduler.tick().await.expect("tick");
 
@@ -2306,12 +2300,16 @@ mod tests {
 
         run_until(|| async { calls.lock().map(|guard| guard.len() >= 2).unwrap_or(false) }).await;
 
-        let guard = calls.lock().unwrap();
-        assert_eq!(guard.len(), 2);
-        let order: Vec<&str> = guard.iter().map(|r| r.job_key.as_str()).collect();
+        let order: Vec<String> = {
+            let guard = calls.lock().unwrap();
+            assert_eq!(guard.len(), 2);
+            guard
+                .iter()
+                .map(|request| request.job_key.clone())
+                .collect()
+        };
         // 15m is shorter than 1h, so it should dispatch first.
         assert_eq!(order, vec!["analysis-15m", "analysis-1h"]);
-        drop(guard);
 
         let runs = store::list_agent_runs(&pool, &key, 10)
             .await
@@ -2363,9 +2361,7 @@ mod tests {
             force_rx,
             backend,
             live_accounts,
-            sample_workspace_config(),
-            sample_opencode_client(),
-            InFlightTracker::new(),
+            scheduler_runtime(InFlightTracker::new()),
         );
         scheduler.tick().await.expect("tick");
 
@@ -2425,9 +2421,7 @@ mod tests {
             force_rx,
             backend,
             live_accounts,
-            sample_workspace_config(),
-            sample_opencode_client(),
-            InFlightTracker::new(),
+            scheduler_runtime(InFlightTracker::new()),
         );
         scheduler.tick().await.expect("tick");
 
@@ -2490,9 +2484,7 @@ mod tests {
             force_rx,
             backend,
             live_accounts,
-            sample_workspace_config(),
-            sample_opencode_client(),
-            InFlightTracker::new(),
+            scheduler_runtime(InFlightTracker::new()),
         );
         scheduler.tick().await.expect("tick");
 
@@ -2544,9 +2536,7 @@ mod tests {
             force_rx,
             backend,
             live_accounts,
-            sample_workspace_config(),
-            sample_opencode_client(),
-            InFlightTracker::new(),
+            scheduler_runtime(InFlightTracker::new()),
         );
         scheduler.tick().await.expect("tick");
 
@@ -2601,9 +2591,7 @@ mod tests {
             force_rx,
             backend,
             live_accounts,
-            sample_workspace_config(),
-            sample_opencode_client(),
-            InFlightTracker::new(),
+            scheduler_runtime(InFlightTracker::new()),
         );
         scheduler.tick().await.expect("tick");
 
@@ -2655,9 +2643,7 @@ mod tests {
             force_rx,
             backend,
             live_accounts,
-            sample_workspace_config(),
-            sample_opencode_client(),
-            InFlightTracker::new(),
+            scheduler_runtime(InFlightTracker::new()),
         );
         scheduler.tick().await.expect("tick");
 
@@ -2704,9 +2690,7 @@ mod tests {
             force_rx,
             backend,
             live_accounts,
-            sample_workspace_config(),
-            sample_opencode_client(),
-            InFlightTracker::new(),
+            scheduler_runtime(InFlightTracker::new()),
         );
         scheduler.tick().await.expect("tick");
 
@@ -2776,9 +2760,7 @@ mod tests {
             force_rx,
             backend,
             live_accounts,
-            sample_workspace_config(),
-            sample_opencode_client(),
-            InFlightTracker::new(),
+            scheduler_runtime(InFlightTracker::new()),
         );
         scheduler.tick().await.expect("tick");
 
@@ -2829,9 +2811,7 @@ mod tests {
             force_rx,
             backend,
             live_accounts,
-            sample_workspace_config(),
-            sample_opencode_client(),
-            InFlightTracker::new(),
+            scheduler_runtime(InFlightTracker::new()),
         );
         scheduler.tick().await.expect("tick");
 
@@ -2914,9 +2894,7 @@ mod tests {
             force_rx,
             backend,
             live_accounts,
-            sample_workspace_config(),
-            sample_opencode_client(),
-            InFlightTracker::new(),
+            scheduler_runtime(InFlightTracker::new()),
         );
         scheduler.tick().await.expect("tick");
 
@@ -2967,9 +2945,7 @@ mod tests {
             force_rx,
             backend,
             live_accounts,
-            sample_workspace_config(),
-            sample_opencode_client(),
-            in_flight_for_run,
+            scheduler_runtime(in_flight_for_run),
         );
 
         // Drive the first tick manually so the spawn happens before we
@@ -2988,15 +2964,17 @@ mod tests {
 
         // If the drain logic works, `run` returns only after the
         // dispatch (200ms total) finishes. Generous bound: 2s.
-        let joined = tokio::time::timeout(Duration::from_secs(2), run_handle)
+        tokio::time::timeout(Duration::from_secs(2), run_handle)
             .await
             .expect("run should return within 2s of shutdown signal")
             .expect("join")
             .expect("run result");
 
         assert_eq!(in_flight.in_flight(), 0, "tracker should be empty");
-        assert!(calls.lock().unwrap().len() >= 1, "dispatch should have run");
-        let _ = joined;
+        assert!(
+            !calls.lock().unwrap().is_empty(),
+            "dispatch should have run"
+        );
     }
 
     #[tokio::test]
@@ -3038,9 +3016,7 @@ mod tests {
             force_rx,
             backend,
             live_accounts,
-            sample_workspace_config(),
-            sample_opencode_client(),
-            in_flight_for_run,
+            scheduler_runtime(in_flight_for_run),
         );
 
         scheduler.tick().await.expect("first tick");
@@ -3094,9 +3070,7 @@ mod tests {
             force_rx,
             backend,
             live_accounts,
-            sample_workspace_config(),
-            sample_opencode_client(),
-            in_flight,
+            scheduler_runtime(in_flight),
         );
 
         // Pre-set shutdown so the loop exits immediately, then assert
@@ -3160,9 +3134,7 @@ mod tests {
             force_rx,
             failing,
             live_accounts,
-            sample_workspace_config(),
-            sample_opencode_client(),
-            InFlightTracker::new(),
+            scheduler_runtime(InFlightTracker::new()),
         );
         scheduler.tick().await.expect("tick");
 
