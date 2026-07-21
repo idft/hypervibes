@@ -12,7 +12,7 @@ use crate::{
     agents::crypto as agent_crypto,
     agents::{
         AuthenticatedAgent,
-        store::{get_agent, get_agent_private_key_ciphertext, list_agent_instrument_ids},
+        store::{get_agent, list_agent_instrument_ids},
     },
     hyperliquid::orders::{
         gateway::{
@@ -22,7 +22,7 @@ use crate::{
         model::{CancelOrdersRequest, PlaceOrdersRequest, PlaceOrdersResponse},
         store as orders_store,
     },
-    web::AppState,
+    web::{AppState, auth::get_user_api_wallet_for_agent},
 };
 
 use super::error::ApiError;
@@ -33,10 +33,21 @@ pub(super) async fn build_exchange_for_agent(
     state: &AppState,
     agent_key: &str,
 ) -> Result<HyperliquidExchange, ApiError> {
-    let (ciphertext, key_id) = get_agent_private_key_ciphertext(&state.db_pool, agent_key)
+    let wallet = get_user_api_wallet_for_agent(&state.db_pool, agent_key)
         .await
         .map_err(ApiError::Internal)?
         .ok_or(ApiError::NotFound("agent not found"))?;
+    if !wallet.is_ready() {
+        return Err(ApiError::Validation(
+            "the user's trading signer needs attention".to_string(),
+        ));
+    }
+    let ciphertext = wallet.hyperliquid_private_key_ciphertext.ok_or_else(|| {
+        ApiError::Validation("the user's trading signer needs attention".to_string())
+    })?;
+    let key_id = wallet.hyperliquid_private_key_key_id.ok_or_else(|| {
+        ApiError::Validation("the user's trading signer needs attention".to_string())
+    })?;
 
     if state.encryption_key.key_id != key_id {
         return Err(ApiError::Internal(anyhow::anyhow!(
@@ -56,6 +67,15 @@ pub(super) async fn build_exchange_for_agent(
     let signer: hypersdk::hypercore::PrivateKeySigner = pk_string
         .parse()
         .map_err(|e| ApiError::Internal(anyhow::anyhow!("invalid private key: {e}")))?;
+    let expected_address = wallet
+        .api_wallet_address
+        .as_deref()
+        .ok_or_else(|| ApiError::Validation("the user's trading signer needs attention".into()))?;
+    if signer.address().to_string().to_ascii_lowercase() != expected_address {
+        return Err(ApiError::Internal(anyhow::anyhow!(
+            "stored user trading signer address does not match its database address"
+        )));
+    }
     let client = hypersdk::hypercore::mainnet();
     Ok(HyperliquidExchange::new(signer, client))
 }
@@ -194,7 +214,9 @@ pub(super) async fn place_orders_handler(
             )));
         }
     }
-    let account_address = agent_row.wallet_address.clone();
+    let Some(account_address) = agent_row.trading_account_address.clone() else {
+        return Ok((StatusCode::CONFLICT, "agent has no trading account").into_response());
+    };
     let environment = agent_row.environment.clone();
 
     let exchange = build_exchange_for_agent(&state, &agent.agent_key).await?;
@@ -286,12 +308,15 @@ pub(super) async fn cancel_orders_handler(
         .await
         .map_err(ApiError::Internal)?
         .ok_or(ApiError::NotFound("agent not found"))?;
+    let Some(account_address) = agent_row.trading_account_address.clone() else {
+        return Ok((StatusCode::CONFLICT, "agent has no trading account").into_response());
+    };
     let exchange = build_exchange_for_agent(&state, &agent.agent_key).await?;
     let outcomes = cancel_orders(
         &state.db_pool,
         &exchange,
         &agent.agent_key,
-        &agent_row.wallet_address,
+        &account_address,
         &agent_row.environment,
         &input,
     )
@@ -311,12 +336,15 @@ pub(super) async fn cancel_all_handler(
         .await
         .map_err(ApiError::Internal)?
         .ok_or(ApiError::NotFound("agent not found"))?;
+    let Some(account_address) = agent_row.trading_account_address.clone() else {
+        return Ok((StatusCode::CONFLICT, "agent has no trading account").into_response());
+    };
     let exchange = build_exchange_for_agent(&state, &agent.agent_key).await?;
     let summary = cancel_all(
         &state.db_pool,
         &exchange,
         &agent.agent_key,
-        &agent_row.wallet_address,
+        &account_address,
         &agent_row.environment,
         filter.symbol.as_deref(),
     )

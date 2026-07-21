@@ -201,13 +201,14 @@
             <h2 class="text-lg font-medium text-white">Settings</h2>
             <dl class="mt-4 grid gap-4 sm:grid-cols-2">
                 <div>
-                    <dt class="text-xs uppercase tracking-[0.16em] text-zinc-500">Wallet address</dt>
+                    <dt class="text-xs uppercase tracking-[0.16em] text-zinc-500">Account address</dt>
                     <dd class="mt-1 flex items-center gap-2 font-mono text-xs">
-                        <a href="https://arbiscan.io/address/{{ agent.wallet_address }}" target="_blank" rel="noopener noreferrer" class="break-all text-zinc-300 hover:text-white hover:underline">{{ agent.wallet_address }}</a>
-                        <button type="button" data-copy-button data-copy-value="{{ agent.wallet_address }}" class="shrink-0 cursor-pointer rounded-md p-1.5 text-zinc-400 hover:bg-zinc-800 hover:text-white" aria-label="Copy wallet address" title="Copy wallet address">
+                        <a href="https://arbiscan.io/address/{{ agent.trading_account_address_display() }}" target="_blank" rel="noopener noreferrer" class="break-all text-zinc-300 hover:text-white hover:underline">{{ agent.trading_account_address_display() }}</a>
+                        <button type="button" data-copy-button data-copy-value="{{ agent.trading_account_address_display() }}" class="shrink-0 cursor-pointer rounded-md p-1.5 text-zinc-400 hover:bg-zinc-800 hover:text-white" aria-label="Copy trading account address" title="Copy trading account address">
                             <svg class="h-3.5 w-3.5" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><rect x="7" y="7" width="10" height="10" rx="1.5"></rect><path stroke-linecap="round" stroke-linejoin="round" d="M13 7V5.5A2.5 2.5 0 0 0 10.5 3h-5A2.5 2.5 0 0 0 3 5.5v5A2.5 2.5 0 0 0 5.5 13H7"></path></svg>
                         </button>
                     </dd>
+                    {% if !is_main_account %}{% if let Some(name) = subaccount_name %}<dd class="mt-1 text-xs text-zinc-500">Sub-account: {{ name }}</dd>{% endif %}{% endif %}
                 </div>
                 <div>
                     <dt class="text-xs uppercase tracking-[0.16em] text-zinc-500">API key</dt>

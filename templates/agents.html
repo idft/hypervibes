@@ -44,7 +44,7 @@
                                 <span class="inline-flex rounded-full border border-zinc-700 px-2.5 py-1 text-xs text-zinc-300">Disabled</span>
                                 {% endif %}
                             </td>
-                            <td class="px-5 py-4 align-top font-mono text-xs text-zinc-300">{{ entry.row.wallet_address }}</td>
+                            <td class="px-5 py-4 align-top font-mono text-xs text-zinc-300">{{ entry.row.trading_account_address }}</td>
                             <td class="px-5 py-4 align-top text-zinc-300">
                                 {% if let Some(iso) = entry.api_key_last_used_iso %}
                                 <time class="timeago" title="{{ iso }}" datetime="{{ iso }}">{{ iso }}</time>

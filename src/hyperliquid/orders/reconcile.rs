@@ -516,23 +516,11 @@ mod tests {
 
     use super::*;
     use crate::{
-        agents::{
-            crypto::{EncryptionKey, encrypt},
-            keys::derive_wallet_address,
-            model::AgentRegistryRow,
-            store::insert_agent,
-        },
+        agents::{keys::derive_wallet_address, model::AgentRegistryRow, store::insert_agent},
         test_db,
     };
 
     fn sample_agent(suffix: &str) -> AgentRegistryRow {
-        let enc = EncryptionKey::new(
-            "test",
-            [
-                0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22,
-                23, 24, 25, 26, 27, 28, 29, 30, 31,
-            ],
-        );
         let private_key_raw = format!("reconcile-{suffix}");
         let mut bytes = [0u8; 32];
         let raw = private_key_raw.as_bytes();
@@ -543,32 +531,34 @@ mod tests {
             bytes[i] = *b;
         }
         let private_key = format!("0x{}", hex::encode(bytes));
-        let ciphertext = encrypt(&enc, &private_key).unwrap();
         let wallet = derive_wallet_address(&private_key).unwrap();
         let now = Utc::now();
         let ts = now.timestamp_millis();
         AgentRegistryRow {
             agent_key: format!("rec-test-{suffix}-{ts}"),
+            user_id: crate::test_db::test_user_id(),
             created_at: now,
             updated_at: now,
             enabled: true,
+            lifecycle: crate::agents::model::AGENT_LIFECYCLE_ACTIVE.to_string(),
             display_name: format!("RecTest {suffix}"),
-            wallet_address: wallet,
+            trading_account_address: Some(wallet),
             environment: "live".to_string(),
             api_key: format!("vta_rec-{suffix}-{ts}"),
             api_key_last_used_at: None,
             backend_kind: crate::agents::model::BACKEND_KIND_OPENCODE.to_string(),
             runtime_id: "opencode-local".to_string(),
             runtime_config: serde_json::json!({}),
-            hyperliquid_private_key_ciphertext: ciphertext,
-            hyperliquid_private_key_key_id: "test".to_string(),
         }
     }
 
     async fn seed_agent(pool: &DbPool, suffix: &str) -> (String, String) {
         let row = sample_agent(suffix);
         let key = row.agent_key.clone();
-        let acct = row.wallet_address.clone();
+        let acct = row
+            .trading_account_address
+            .clone()
+            .expect("trading account");
         insert_agent(pool, &row).await.expect("insert agent");
         (key, acct)
     }
@@ -795,6 +785,7 @@ mod tests {
             &'a self,
             _batch: hypersdk::hypercore::types::BatchOrder,
             _nonce: u64,
+            _trading_account: &'a str,
         ) -> BoxFuture<'a, Result<Vec<hypersdk::hypercore::types::OrderResponseStatus>, String>>
         {
             Box::pin(async { Ok(Vec::new()) })
@@ -803,6 +794,7 @@ mod tests {
             &'a self,
             batch: hypersdk::hypercore::types::BatchCancel,
             _nonce: u64,
+            _trading_account: &'a str,
         ) -> BoxFuture<'a, Result<Vec<hypersdk::hypercore::types::OrderResponseStatus>, String>>
         {
             Box::pin(async move {
@@ -823,6 +815,13 @@ mod tests {
         ) -> BoxFuture<'a, Result<std::collections::HashMap<String, rust_decimal::Decimal>, String>>
         {
             Box::pin(async { Ok(Default::default()) })
+        }
+        fn max_builder_fee<'a>(
+            &'a self,
+            _user: &'a str,
+            _builder: &'a str,
+        ) -> BoxFuture<'a, Result<u32, String>> {
+            Box::pin(async { Ok(10) })
         }
     }
 

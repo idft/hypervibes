@@ -1,8 +1,10 @@
 use chrono::{DateTime, Utc};
 use serde::Deserialize;
+use uuid::Uuid;
 
 pub const BACKEND_KIND_OPENCODE: &str = "opencode";
 pub const DEFAULT_RUNTIME_ID: &str = "opencode-local";
+pub const AGENT_LIFECYCLE_ACTIVE: &str = "active";
 
 pub fn is_valid_backend_kind(value: &str) -> bool {
     matches!(value, BACKEND_KIND_OPENCODE)
@@ -44,7 +46,7 @@ pub struct AgentListRow {
     pub display_name: String,
     pub agent_key: String,
     pub enabled: bool,
-    pub wallet_address: String,
+    pub trading_account_address: String,
     pub environment: String,
     pub api_key_last_used_at: Option<DateTime<Utc>>,
 }
@@ -52,10 +54,12 @@ pub struct AgentListRow {
 /// Row shape returned by the single-agent detail query.
 #[derive(Debug, Clone, sqlx::FromRow)]
 pub struct AgentDetailRow {
+    pub user_id: Uuid,
     pub display_name: String,
     pub agent_key: String,
     pub enabled: bool,
-    pub wallet_address: String,
+    pub lifecycle: String,
+    pub trading_account_address: Option<String>,
     pub environment: String,
     pub api_key: String,
     pub backend_kind: String,
@@ -63,23 +67,29 @@ pub struct AgentDetailRow {
     pub runtime_config: serde_json::Value,
 }
 
+impl AgentDetailRow {
+    pub fn trading_account_address_display(&self) -> &str {
+        self.trading_account_address.as_deref().unwrap_or("Pending")
+    }
+}
+
 /// Full registry row as stored in Postgres.
 #[derive(Debug, Clone)]
 pub struct AgentRegistryRow {
     pub agent_key: String,
+    pub user_id: Uuid,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
     pub enabled: bool,
+    pub lifecycle: String,
     pub display_name: String,
-    pub wallet_address: String,
+    pub trading_account_address: Option<String>,
     pub environment: String,
     pub api_key: String,
     pub api_key_last_used_at: Option<DateTime<Utc>>,
     pub backend_kind: String,
     pub runtime_id: String,
     pub runtime_config: serde_json::Value,
-    pub hyperliquid_private_key_ciphertext: Vec<u8>,
-    pub hyperliquid_private_key_key_id: String,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -136,9 +146,10 @@ impl CreateAgentRuntimeForm {
 
 /// Operator input when creating an agent.
 #[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
 pub struct CreateAgentForm {
     pub display_name: String,
-    pub hyperliquid_private_key: String,
+    pub trading_account_selection: String,
 }
 
 impl CreateAgentForm {
@@ -156,11 +167,8 @@ impl CreateAgentForm {
             }
         }
 
-        let private_key = self.hyperliquid_private_key.trim();
-        if private_key.is_empty() {
-            errors.push("Private key is required.".to_string());
-        } else if crate::agents::keys::derive_wallet_address(private_key).is_err() {
-            errors.push("Private key is invalid.".to_string());
+        if self.trading_account_selection.trim().is_empty() {
+            errors.push("Select a trading account.".to_string());
         }
 
         if errors.is_empty() {
@@ -287,13 +295,21 @@ mod tests {
     }
 
     #[test]
-    fn create_agent_form_does_not_require_runtime_or_enabled_fields() {
+    fn create_agent_form_requires_a_name_and_trading_account_selection() {
         let form = CreateAgentForm {
             display_name: "Test Agent".to_string(),
-            hyperliquid_private_key:
-                "0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d".to_string(),
+            trading_account_selection: "main".to_string(),
         };
 
         assert!(form.validate().is_ok());
+
+        assert!(
+            CreateAgentForm {
+                display_name: "Test Agent".to_string(),
+                trading_account_selection: String::new(),
+            }
+            .validate()
+            .is_err()
+        );
     }
 }

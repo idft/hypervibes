@@ -1,6 +1,30 @@
 import * as htmx from "htmx.org";
+import { createWalletClient, custom } from "viem";
 (window as unknown as { htmx: typeof htmx }).htmx = htmx;
 import "htmx-ext-sse";
+
+function csrfToken(): string | undefined {
+  return document.cookie.split("; ").find((cookie) => cookie.startsWith("vt_csrf="))?.split("=", 2)[1];
+}
+
+document.addEventListener("htmx:configRequest", (event) => {
+  const token = csrfToken();
+  if (token) (event as CustomEvent).detail.headers["X-CSRF-Token"] = token;
+});
+
+document.addEventListener("submit", (event) => {
+  const form = event.target;
+  const token = csrfToken();
+  if (!(form instanceof HTMLFormElement) || !token || form.method.toLowerCase() === "get") return;
+  let input = form.querySelector<HTMLInputElement>('input[name="csrf_token"]');
+  if (!input) {
+    input = document.createElement("input");
+    input.type = "hidden";
+    input.name = "csrf_token";
+    form.append(input);
+  }
+  input.value = token;
+}, true);
 
 import { render } from "timeago.js";
 
@@ -671,10 +695,231 @@ function initDetailDeleteModal() {
   });
 }
 
+const HYPERLIQUID_SIGNATURE_CHAIN_ID = 42161;
+const HYPERLIQUID_SIGNATURE_CHAIN_HEX = "0xa4b1";
+
+function walletClient() {
+  const provider = (window as Window & { ethereum?: Parameters<typeof custom>[0] }).ethereum;
+  if (!provider) throw new Error("No Ethereum wallet found.");
+  return { client: createWalletClient({ transport: custom(provider) }), provider };
+}
+
+async function selectHyperliquidSignatureChain(provider: Parameters<typeof custom>[0]) {
+  try {
+    await provider.request({ method: "wallet_switchEthereumChain", params: [{ chainId: HYPERLIQUID_SIGNATURE_CHAIN_HEX }] });
+  } catch (error: unknown) {
+    if (!(typeof error === "object" && error !== null && "code" in error && error.code === 4902)) {
+      throw new Error("Switch your wallet to Arbitrum Mainnet to sign Hyperliquid approvals.", { cause: error });
+    }
+    await provider.request({
+      method: "wallet_addEthereumChain",
+      params: [{
+        chainId: HYPERLIQUID_SIGNATURE_CHAIN_HEX,
+        chainName: "Arbitrum One",
+        nativeCurrency: { name: "Ether", symbol: "ETH", decimals: 18 },
+        rpcUrls: ["https://arb1.arbitrum.io/rpc"],
+        blockExplorerUrls: ["https://arbiscan.io"],
+      }],
+    });
+    await provider.request({ method: "wallet_switchEthereumChain", params: [{ chainId: HYPERLIQUID_SIGNATURE_CHAIN_HEX }] });
+  }
+}
+
+async function signWalletAction(primaryType: string, types: Record<string, readonly { name: string; type: string }[]>, action: Record<string, string | number | boolean>) {
+  const { client, provider } = walletClient();
+  await selectHyperliquidSignatureChain(provider);
+  const [account] = await client.requestAddresses();
+  if (!account) throw new Error("No wallet account selected.");
+  const signature = await client.signTypedData({
+    account,
+    domain: { name: "HyperliquidSignTransaction", version: "1", chainId: HYPERLIQUID_SIGNATURE_CHAIN_ID, verifyingContract: "0x0000000000000000000000000000000000000000" },
+    types,
+    primaryType,
+    message: action,
+  });
+  return { action, signature };
+}
+
+function hyperliquidActionBase() {
+  return { hyperliquidChain: "Mainnet", signatureChainId: "0xa4b1", nonce: Date.now() };
+}
+
+function initApiWalletSetup() {
+  const form = document.querySelector<HTMLFormElement>("[data-api-wallet-form]");
+  if (!form) return;
+  const source = form.querySelector<HTMLInputElement>("[data-api-wallet-source]");
+  const submit = form.querySelector<HTMLButtonElement>("[data-api-wallet-submit]");
+  const toggle = form.querySelector<HTMLButtonElement>("[data-api-wallet-import-toggle]");
+  const importSection = form.querySelector<HTMLElement>("[data-api-wallet-import]");
+  const privateKey = importSection?.querySelector<HTMLInputElement>('input[name="hyperliquid_private_key"]');
+  if (!source || !submit || !toggle || !importSection || !privateKey) return;
+  toggle.addEventListener("click", () => {
+    const importing = !importSection.classList.toggle("hidden");
+    source.value = importing ? "import" : "generate";
+    submit.textContent = importing ? "Import API Key" : "Generate API Key";
+    toggle.textContent = importing ? "Generate a new API key instead" : "Import existing API key...";
+    toggle.setAttribute("aria-expanded", importing ? "true" : "false");
+    privateKey.required = importing;
+    if (importing) {
+      privateKey.focus();
+    } else {
+      privateKey.value = "";
+    }
+  });
+}
+
+async function approveTradingSigner(page: HTMLElement) {
+  const approvalStatus = page.querySelector<HTMLElement>("[data-api-wallet-status]");
+  const address = page.dataset.apiWalletAddress;
+  if (!approvalStatus || !address) throw new Error("Set up a trading signer first.");
+  approvalStatus.textContent = "Awaiting wallet signature...";
+  const action = { type: "approveAgent", ...hyperliquidActionBase(), agentAddress: address, agentName: "Vibetrading" };
+  const signed = await signWalletAction("HyperliquidTransaction:ApproveAgent", {
+    "HyperliquidTransaction:ApproveAgent": [{ name: "hyperliquidChain", type: "string" }, { name: "agentAddress", type: "address" }, { name: "agentName", type: "string" }, { name: "nonce", type: "uint64" }],
+  }, action);
+  const response = await fetch("/wallet/approve-api-wallet", { method: "POST", headers: { "content-type": "application/json", "X-CSRF-Token": csrfToken() ?? "" }, body: JSON.stringify(signed) });
+  if (!response.ok) throw new Error("Hyperliquid did not approve the trading signer.");
+  window.location.reload();
+}
+
+function reportTradingSignerApprovalError(page: HTMLElement, error: unknown) {
+  const approvalStatus = page.querySelector<HTMLElement>("[data-api-wallet-status]");
+  if (approvalStatus) approvalStatus.textContent = error instanceof Error ? error.message : "Approval failed.";
+}
+
+function initWalletPage() {
+  const page = document.querySelector<HTMLElement>("[data-wallet-page]");
+  if (!page) return;
+  const slider = page.querySelector<HTMLInputElement>("[data-builder-fee]");
+  const output = page.querySelector<HTMLOutputElement>("[data-builder-fee-output]");
+  const status = page.querySelector<HTMLElement>("[data-builder-fee-status]");
+  const max = page.querySelector<HTMLElement>("[data-max-builder-fee]");
+  const update = () => { if (slider && output) output.value = `${(Number(slider.value) / 10).toFixed(1)} bps`; };
+  slider?.addEventListener("input", update);
+  void fetch("/wallet/max-builder-fee").then((response) => response.ok ? response.json() : null).then((data: { max_builder_fee?: string } | null) => {
+    if (max && data?.max_builder_fee) max.textContent = `Hyperliquid approved maximum: ${data.max_builder_fee}`;
+  });
+  page.querySelector("[data-approve-builder-fee]")?.addEventListener("click", () => {
+    if (!slider || !status) return;
+    void (async () => {
+      status.textContent = "Awaiting wallet signature...";
+      const fee = Number(slider.value);
+      const action = { type: "approveBuilderFee", ...hyperliquidActionBase(), maxFeeRate: `${(fee / 1000).toFixed(3)}%`, builder: page.dataset.builderRecipient ?? "" };
+      const signed = await signWalletAction("HyperliquidTransaction:ApproveBuilderFee", {
+        "HyperliquidTransaction:ApproveBuilderFee": [{ name: "hyperliquidChain", type: "string" }, { name: "maxFeeRate", type: "string" }, { name: "builder", type: "address" }, { name: "nonce", type: "uint64" }],
+      }, action);
+      const response = await fetch("/wallet/approve-builder-fee", { method: "POST", headers: { "content-type": "application/json", "X-CSRF-Token": csrfToken() ?? "" }, body: JSON.stringify({ ...signed, feeTenthsOfBp: fee }) });
+      if (!response.ok) throw new Error("Hyperliquid did not approve the fee.");
+      status.textContent = "Approved on Hyperliquid.";
+      const result = await response.json().catch(() => null) as { redirect?: string } | null;
+      window.location.assign(result?.redirect ?? "/agents/new");
+    })().catch((error: unknown) => { if (status) status.textContent = error instanceof Error ? error.message : "Approval failed."; });
+  });
+  const approveApiWalletButton = page.querySelector<HTMLButtonElement>("[data-approve-api-wallet]");
+  approveApiWalletButton?.addEventListener("click", () => {
+    void approveTradingSigner(page).catch((error: unknown) => reportTradingSignerApprovalError(page, error));
+  });
+  const params = new URLSearchParams(window.location.search);
+  if (params.has("approve-signer")) {
+    params.delete("approve-signer");
+    const query = params.toString();
+    window.history.replaceState(null, "", `${window.location.pathname}${query ? `?${query}` : ""}`);
+    if (approveApiWalletButton) {
+      void approveTradingSigner(page).catch((error: unknown) => reportTradingSignerApprovalError(page, error));
+    }
+  }
+}
+
+function initAgentCreation() {
+  const page = document.querySelector<HTMLElement>("[data-agent-creation]");
+  if (!page) return;
+  const button = page.querySelector<HTMLButtonElement>("[data-create-new-agent-subaccount]");
+  const status = page.querySelector<HTMLElement>("[data-new-agent-subaccount-status]");
+  const refresh = page.querySelector<HTMLElement>("[data-new-agent-subaccount-refresh]");
+  button?.addEventListener("click", () => {
+    void (async () => {
+      const nameInput = page.querySelector<HTMLInputElement>("#display_name");
+      const displayName = nameInput?.value.trim() ?? "";
+      if (!displayName) {
+        nameInput?.focus();
+        throw new Error("Enter an agent name first.");
+      }
+      if (!status || !button) return;
+      button.disabled = true;
+      status.textContent = "Creating Sub-Account with the server trading signer...";
+      const response = await fetch("/wallet/subaccounts", {
+        method: "POST",
+        headers: { "content-type": "application/json", "X-CSRF-Token": csrfToken() ?? "" },
+        body: JSON.stringify({ displayName }),
+      });
+      const result = (await response.json().catch(() => null)) as { name?: string; created?: boolean; error?: string } | null;
+      if (!response.ok || !result?.name) throw new Error(result?.error ?? "Sub-Account creation failed.");
+      status.textContent = result.created ? "Sub-Account created and selected below." : "Existing Sub-Account selected below.";
+      refresh?.dispatchEvent(new CustomEvent("newAgentSubaccountCreated", { detail: { name: result.name } }));
+    })().catch((error: unknown) => {
+      if (status) status.textContent = error instanceof Error ? error.message : "Sub-Account creation failed.";
+    }).finally(() => {
+      if (button) button.disabled = false;
+    });
+  });
+}
+
+function blockieDataUri(address: string): string {
+  let seed = 0;
+  for (let index = 0; index < address.length; index += 1) {
+    seed = ((seed << 5) - seed + address.charCodeAt(index)) >>> 0;
+  }
+
+  const random = () => {
+    seed = (seed * 9301 + 49297) % 233280;
+    return seed / 233280;
+  };
+  const color = () => `hsl(${Math.floor(random() * 360)} ${Math.floor(random() * 60 + 40)}% ${Math.floor((random() + random() + random() + random()) * 25)}%)`;
+  const foreground = color();
+  const background = color();
+  const spot = color();
+  const squares: string[] = [];
+
+  for (let row = 0; row < 8; row += 1) {
+    const values: number[] = [];
+    for (let column = 0; column < 4; column += 1) {
+      values.push(Math.floor(random() * 2.3));
+    }
+    values.push(...values.slice(0, 4).reverse());
+    values.forEach((value, column) => {
+      if (value !== 0) {
+        squares.push(`<rect x="${column}" y="${row}" width="1" height="1" fill="${value === 1 ? foreground : spot}"/>`);
+      }
+    });
+  }
+
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 8 8"><rect width="8" height="8" fill="${background}"/>${squares.join("")}</svg>`;
+  return `data:image/svg+xml,${encodeURIComponent(svg)}`;
+}
+
+function initWalletNavbar() {
+  const link = document.querySelector<HTMLElement>("[data-wallet-navbar]");
+  const label = link?.querySelector<HTMLElement>("[data-wallet-navbar-label]");
+  const identicons = document.querySelectorAll<HTMLImageElement>("[data-wallet-identicon]");
+  const address = document.querySelector<HTMLElement>("[data-wallet-page]")?.dataset.walletAddress;
+  const setAddress = (value: string) => {
+    identicons.forEach((identicon) => {
+      identicon.src = blockieDataUri(value);
+      identicon.classList.remove("hidden");
+    });
+    if (label && value.length > 10) label.textContent = `${value.slice(0, 6)}...${value.slice(-4)}`;
+  };
+  if (address) { setAddress(address); return; }
+  void fetch("/wallet/address").then((response) => response.ok ? response.json() : null).then((data: { wallet_address?: string } | null) => {
+    if (data?.wallet_address) setAddress(data.wallet_address);
+  });
+}
+
 function init() {
   renderTimeago();
   renderLocalDateTimes();
   initMemoryTimelineDragScroll();
+  initApiWalletSetup();
   initAgentRailTransition();
   initAgentRailEntryNavigation();
   initAgentRailNavigation();
@@ -682,6 +927,9 @@ function init() {
   initAgentSelectorDismissal();
   initCopyButtons();
   initDetailDeleteModal();
+  initWalletPage();
+  initAgentCreation();
+  initWalletNavbar();
   seedSelectedMemoryTimelineItems();
   restoreSelectedMemoryTimelineItem();
   startRunningDurationTicker();

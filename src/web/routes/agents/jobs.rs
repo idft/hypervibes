@@ -24,8 +24,7 @@ use crate::{
         model::{JOB_KIND_ANALYSIS, JOB_KIND_TRADING},
         scheduler::{
             dispatch_analysis_batch_completed_hook, dispatch_daily_review_coding_hook,
-            dispatch_request_from_schedule,
-            dispatch_run_with_workspace_lease,
+            dispatch_request_from_schedule, dispatch_run_with_workspace_lease,
         },
         store::{self, QueuedScheduleRun},
         timeframe::{parse_timeframe_seconds, parse_timeout_seconds},
@@ -40,6 +39,7 @@ use crate::{
     model_catalog::options::parse_model_selection,
     web::{
         AppState,
+        auth::AuthenticatedUser,
         templates::{
             AgentJobDetailPageTemplate, AgentScheduleNewPageTemplate, AgentShowTab,
             CreateAgentScheduleFormValues, ModelPickerPartialTemplate, build_agent_show_tabs,
@@ -48,11 +48,13 @@ use crate::{
 };
 pub(in crate::web::routes) async fn agents_show_jobs(
     State(state): State<Arc<AppState>>,
+    user: AuthenticatedUser,
     Path(agent_key): Path<String>,
     Query(query): Query<AgentJobsQuery>,
 ) -> Result<Response, AppError> {
     render_agent_show_page(
         &state,
+        &user,
         &agent_key,
         AgentShowTab::Jobs,
         None,
@@ -186,15 +188,15 @@ pub(in crate::web::routes) async fn build_job_prompt_preview(
     let selected_instruments =
         crate::agents::store::list_agent_instrument_ids(&state.db_pool, &agent.agent_key).await?;
     let system_setting =
-        crate::settings::store::get_setting(&state.db_pool, "opencode_system_prompt").await?;
+        crate::settings::store::get_user_settings(&state.db_pool, agent.user_id).await?;
     let system_prompt = system_setting
-        .map(|s| s.value)
+        .map(|s| s.opencode_system_prompt)
         .filter(|v| !v.trim().is_empty())
         .unwrap_or_else(|| crate::agents::prompts::DEFAULT_SYSTEM_PROMPT.to_string());
 
     let account_snapshot = if job.job_kind == crate::agentic::model::JOB_KIND_TRADING {
         Some(live_agent_snapshot_for_dispatch(
-            &agent.wallet_address,
+            agent.trading_account_address.as_deref().unwrap_or_default(),
             &agent.environment,
             &state.live_accounts,
         ))
@@ -609,15 +611,14 @@ pub(in crate::web::routes) async fn agents_run_job_now(
             let selected_instruments =
                 crate::agents::store::list_agent_instrument_ids(&state.db_pool, &agent_key).await?;
             let system_setting =
-                crate::settings::store::get_setting(&state.db_pool, "opencode_system_prompt")
-                    .await?;
+                crate::settings::store::get_user_settings(&state.db_pool, agent.user_id).await?;
             let system_prompt = system_setting
-                .map(|s| s.value)
+                .map(|s| s.opencode_system_prompt)
                 .filter(|v| !v.trim().is_empty())
                 .unwrap_or_else(|| crate::agents::prompts::DEFAULT_SYSTEM_PROMPT.to_string());
             let account_snapshot = if schedule.job_kind == crate::agentic::model::JOB_KIND_TRADING {
                 Some(live_agent_snapshot_for_dispatch(
-                    &agent.wallet_address,
+                    agent.trading_account_address.as_deref().unwrap_or_default(),
                     &agent.environment,
                     &state.live_accounts,
                 ))
@@ -703,14 +704,11 @@ pub(in crate::web::routes) async fn agents_run_job_now(
         QueuedScheduleRun::Missing => {
             return Ok((StatusCode::NOT_FOUND, "job not found").into_response());
         }
-        QueuedScheduleRun::BlockedByMaintenance => {
-            return Ok(jobs_warning_redirect(
-                &agent_key,
-                WORKSPACE_MAINTENANCE_ACTIVE_WARNING,
-            ));
-        }
-    };
-
+        QueuedScheduleRun::BlockedByMaintenance => Ok(jobs_warning_redirect(
+            &agent_key,
+            WORKSPACE_MAINTENANCE_ACTIVE_WARNING,
+        )),
+    }
 }
 pub(in crate::web::routes) async fn agents_update_job_model(
     State(state): State<Arc<AppState>>,

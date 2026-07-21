@@ -68,11 +68,19 @@ impl InFlightTracker {
 
     /// Wait until every guard has been dropped.
     pub async fn wait_idle(&self) {
-        while self.inner.count.load(Ordering::SeqCst) > 0 {
-            // Re-check inside the loop: a guard may have dropped
-            // between the load and the await, in which case the
-            // `notified()` future would otherwise miss the wakeup.
-            self.inner.idle.notified().await;
+        let notified = self.inner.idle.notified();
+        tokio::pin!(notified);
+
+        loop {
+            // Register before checking the count so the last guard cannot
+            // notify between the check and the await.
+            notified.as_mut().enable();
+            if self.inner.count.load(Ordering::SeqCst) == 0 {
+                return;
+            }
+
+            notified.as_mut().await;
+            notified.set(self.inner.idle.notified());
         }
     }
 

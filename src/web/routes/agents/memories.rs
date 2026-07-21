@@ -24,6 +24,7 @@ use crate::{
     },
     web::{
         AppState,
+        auth::AuthenticatedUser,
         templates::{
             AgentMemoryDetailPageTemplate, AgentMemoryDetailPartialTemplate,
             AgentMemoryTimelinePartialTemplate, AgentShowTab, MemoryView,
@@ -42,11 +43,13 @@ pub(in crate::web::routes) struct AgentMemoriesQuery {
 }
 pub(in crate::web::routes) async fn agents_show_memories(
     State(state): State<Arc<AppState>>,
+    user: AuthenticatedUser,
     Path(agent_key): Path<String>,
     Query(query): Query<AgentMemoriesQuery>,
 ) -> Result<Response, AppError> {
     render_agent_show_page(
         &state,
+        &user,
         &agent_key,
         AgentShowTab::Memories,
         None,

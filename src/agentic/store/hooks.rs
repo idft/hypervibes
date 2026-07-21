@@ -344,7 +344,8 @@ pub async fn get_opencode_hook_for_dispatch(
              ON runtimes.id = agents.runtime_id
           WHERE hooks.agent_key = $1
              AND hooks.id = $2
-             AND agents.backend_kind = 'opencode'
+              AND agents.backend_kind = 'opencode'
+              AND agents.lifecycle = 'active'
              AND runtimes.enabled = true
             AND runtimes.base_url IS NOT NULL
             AND length(runtimes.base_url) > 0",

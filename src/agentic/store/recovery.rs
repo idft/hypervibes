@@ -3,9 +3,9 @@ use chrono::{DateTime, Utc};
 use sqlx::{PgPool, Postgres, Transaction, query_as};
 
 use crate::agentic::model::{
-    JOB_KIND_ANALYSIS, JOB_KIND_ANALYSIS_CODING, JOB_KIND_DAILY_REVIEW,
-    JOB_KIND_MARKET_ANALYSIS, JOB_KIND_TRADING, RUN_STATUS_FAILED, RUN_STATUS_QUEUED,
-    RUN_STATUS_RUNNING, RUN_STATUS_SUCCEEDED,
+    JOB_KIND_ANALYSIS, JOB_KIND_ANALYSIS_CODING, JOB_KIND_DAILY_REVIEW, JOB_KIND_MARKET_ANALYSIS,
+    JOB_KIND_TRADING, RUN_STATUS_FAILED, RUN_STATUS_QUEUED, RUN_STATUS_RUNNING,
+    RUN_STATUS_SUCCEEDED,
 };
 
 use super::common::ACTIVE_STATUSES;
@@ -54,7 +54,7 @@ pub(crate) async fn has_active_run_in_lane_tx(
           LIMIT 1",
     )
     .bind(agent_key)
-    .bind(&ACTIVE_STATUSES)
+    .bind(ACTIVE_STATUSES)
     .bind(lane_job_kinds)
     .fetch_optional(&mut **tx)
     .await

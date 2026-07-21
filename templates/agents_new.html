@@ -1,11 +1,11 @@
 {% extends "base.html" %}
 
-{% block title %}Create agent · Vibetrading{% endblock %}
+{% block title %}Create New Agent · Vibetrading{% endblock %}
 
 {% block content %}
-<div class="mx-auto max-w-3xl">
+<div class="mx-auto max-w-3xl" data-agent-creation>
     <header class="border-b border-zinc-800 pb-6">
-        <h1 class="text-3xl font-semibold tracking-tight text-white">Create agent</h1>
+        <h1 class="text-3xl font-semibold tracking-tight text-white">Create New Agent</h1>
     </header>
 
     {% if !errors.is_empty() %}
@@ -27,23 +27,18 @@
                 class="mt-2 block w-full rounded-xl border border-zinc-800 bg-zinc-950 px-3 py-2 text-sm text-white placeholder-zinc-600 focus:border-zinc-600 focus:outline-none">
         </div>
 
-        <div>
-            <label for="hyperliquid_private_key" class="block text-sm font-medium text-zinc-300">Wallet Private Key</label>
-            <input type="password" id="hyperliquid_private_key" name="hyperliquid_private_key" required
-                class="mt-2 block w-full rounded-xl border border-zinc-800 bg-zinc-950 px-3 py-2 text-sm text-white placeholder-zinc-600 focus:border-zinc-600 focus:outline-none">
-            <div class="mt-3 rounded-xl border border-amber-900/60 bg-amber-950/20 p-4 text-sm text-amber-200">
-                <div class="flex items-center gap-2 font-medium">
-                    <svg class="h-4 w-4 shrink-0" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="M10 3 2.5 16h15L10 3Z"></path><path stroke-linecap="round" d="M10 8v4"></path><path stroke-linecap="round" d="M10 14h.01"></path></svg>
-                    Warning
-                </div>
-                <ul class="mt-2 list-inside list-disc space-y-1 text-amber-300">
-                    <li>Each agent should have its own wallet.</li>
-                    <li>Do not reuse an existing wallet address.</li>
-                    <li>Never share this private key.</li>
-                    <li>Private keys are stored encrypted at rest.</li>
-                </ul>
+        <fieldset>
+            <legend class="text-sm font-medium text-zinc-300">Trading account</legend>
+            {% if let Some(capacity) = choices.subaccount_capacity %}<p class="mt-1 text-xs text-zinc-500">Sub-account capacity: {{ capacity }}.</p>{% endif %}
+            <div class="mt-3 overflow-hidden rounded-xl border border-zinc-700 divide-y divide-zinc-800">
+                {% include "agent_trading_account_choices.html" %}
+            <div class="p-4">
+                <button type="button" data-create-new-agent-subaccount class="cursor-pointer rounded-full border border-violet-500 px-5 py-2 text-sm font-medium text-violet-200 hover:border-violet-400 hover:bg-violet-950/40 hover:text-white">Create Sub-Account</button>
+                <p data-new-agent-subaccount-status class="mt-3 text-sm text-zinc-400"></p>
             </div>
-        </div>
+            </div>
+            <div data-new-agent-subaccount-refresh hx-get="/agents/new/account-choices" hx-trigger="newAgentSubaccountCreated" hx-vals='js:{createdName: event.detail.name}' hx-target="#trading-account-choices" hx-swap="outerHTML"></div>
+        </fieldset>
 
         <div class="flex items-center gap-3 border-t border-zinc-800 pt-6">
             <button type="submit" class="cursor-pointer rounded-full bg-violet-600 px-5 py-2 text-sm font-medium text-white hover:bg-violet-500">Create agent</button>

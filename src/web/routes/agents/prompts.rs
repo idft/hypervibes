@@ -11,14 +11,16 @@ use super::show::render_agent_show_page;
 use crate::web::error::AppError;
 use crate::{
     agents::strategy_prompts::{is_valid_prompt_kind, upsert_agent_strategy_prompt},
-    web::{AppState, templates::AgentShowTab},
+    web::{AppState, auth::AuthenticatedUser, templates::AgentShowTab},
 };
 pub(in crate::web::routes) async fn agents_show_prompts(
     State(state): State<Arc<AppState>>,
+    user: AuthenticatedUser,
     Path(agent_key): Path<String>,
 ) -> Result<Response, AppError> {
     render_agent_show_page(
         &state,
+        &user,
         &agent_key,
         AgentShowTab::Prompts,
         None,

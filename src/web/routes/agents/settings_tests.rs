@@ -8,10 +8,7 @@ use std::{fs, sync::Arc};
 use tower::util::ServiceExt;
 
 use crate::{
-    agents::{
-        model::slugify_agent_key,
-        store::{list_agent_instrument_ids, replace_agent_instruments},
-    },
+    agents::store::{list_agent_instrument_ids, replace_agent_instruments},
     opencode::workspace::agent_workspace_host_path,
 };
 
@@ -22,6 +19,7 @@ async fn post_regenerate_workspace_queues_regular_maintenance_task() {
     let (agent_key, _) = insert_test_opencode_agent(&state)
         .await
         .expect("insert agent");
+    generate_test_agent_workspace(&state, &agent_key).await;
 
     let response = app
         .oneshot(
@@ -62,6 +60,7 @@ async fn post_regenerate_workspace_with_hard_reset_and_memory_reset_queues_both_
     let (agent_key, _) = insert_test_opencode_agent(&state)
         .await
         .expect("insert agent");
+    generate_test_agent_workspace(&state, &agent_key).await;
 
     let response = app
         .oneshot(
@@ -236,28 +235,10 @@ async fn agent_settings_route_renders_currency_controls() {
 async fn opencode_agent_settings_route_renders_workspace_state() {
     let state = test_state().await;
     let app = router(Arc::clone(&state));
-    let timestamp = chrono::Utc::now().timestamp_millis();
-    let display_name = format!("OpenCodeSettings{}", timestamp);
-    let agent_key = slugify_agent_key(&display_name);
-    let private_key = random_private_key();
-    let body = format!(
-        "display_name={}&hyperliquid_private_key={}&runtime_id=opencode-local",
-        display_name, private_key
-    );
-
-    let create_response = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri("/agents")
-                .header("content-type", "application/x-www-form-urlencoded")
-                .body(Body::from(body))
-                .unwrap(),
-        )
+    let (agent_key, _) = insert_test_opencode_agent(&state)
         .await
-        .unwrap();
-    assert_eq!(create_response.status(), StatusCode::SEE_OTHER);
+        .expect("insert agent");
+    generate_test_agent_workspace(&state, &agent_key).await;
 
     let response = app
         .oneshot(
@@ -281,28 +262,10 @@ async fn opencode_agent_settings_route_renders_workspace_state() {
 async fn opencode_agent_settings_route_renders_workspace_template_drift() {
     let state = test_state().await;
     let app = router(Arc::clone(&state));
-    let timestamp = chrono::Utc::now().timestamp_millis();
-    let display_name = format!("OpenCodeDrift{}", timestamp);
-    let agent_key = slugify_agent_key(&display_name);
-    let private_key = random_private_key();
-    let body = format!(
-        "display_name={}&hyperliquid_private_key={}&runtime_id=opencode-local",
-        display_name, private_key
-    );
-
-    let create_response = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri("/agents")
-                .header("content-type", "application/x-www-form-urlencoded")
-                .body(Body::from(body))
-                .unwrap(),
-        )
+    let (agent_key, _) = insert_test_opencode_agent(&state)
         .await
-        .unwrap();
-    assert_eq!(create_response.status(), StatusCode::SEE_OTHER);
+        .expect("insert agent");
+    generate_test_agent_workspace(&state, &agent_key).await;
 
     let workspace_path = agent_workspace_host_path(&state.opencode_workspace_config, &agent_key)
         .expect("workspace path");

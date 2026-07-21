@@ -326,18 +326,37 @@ fn settings_tab_omits_sync_status_section() {
 
 #[test]
 fn settings_tab_renders_masked_api_key_with_wallet_actions() {
-    let template = AgentsShowPageTemplate::new(sample_agent_detail_row(), AgentShowTab::Settings);
+    let mut template =
+        AgentsShowPageTemplate::new(sample_agent_detail_row(), AgentShowTab::Settings);
+    template.is_main_account = false;
+    template.subaccount_name = Some("vt-Test Agent".to_string());
 
     let rendered = template.render().unwrap();
 
     assert!(rendered.contains("https://arbiscan.io/address/0x1234567890abcdef"));
     assert!(rendered.contains("data-copy-value=\"0x1234567890abcdef\""));
     assert!(rendered.contains("data-copy-value=\"vt_test_key\""));
-    assert!(rendered.contains("aria-label=\"Copy wallet address\""));
+    assert!(rendered.contains("aria-label=\"Copy trading account address\""));
     assert!(rendered.contains("aria-label=\"Copy API key\""));
     assert!(rendered.contains(">****<"));
     assert!(!rendered.contains("API key last used"));
     assert!(!rendered.contains("Runtime base URL"));
+    assert!(rendered.contains("Account address"));
+    assert!(!rendered.contains("Wallet address"));
+    assert!(rendered.contains("Sub-account: vt-Test Agent"));
+    assert!(!rendered.contains("Agent API wallet"));
+    assert!(!rendered.contains("API wallet expiry"));
+}
+
+#[test]
+fn settings_tab_omits_subaccount_label_for_main_account() {
+    let mut template =
+        AgentsShowPageTemplate::new(sample_agent_detail_row(), AgentShowTab::Settings);
+    template.is_main_account = true;
+
+    let rendered = template.render().unwrap();
+
+    assert!(!rendered.contains("Sub-account:"));
 }
 
 #[test]
@@ -427,28 +446,83 @@ fn prompts_tab_renders_strategy_copy_and_reset_defaults_ui() {
 fn agents_new_page_renders_base_layout_and_form() {
     let template = AgentsNewPageTemplate {
         form: CreateAgentForm::default(),
+        choices: TradingAccountChoicesView {
+            main_address: "0x0000000000000000000000000000000000000001".to_string(),
+            main_assigned_to: None,
+            subaccounts: Vec::new(),
+            subaccount_capacity: Some("10 remaining of 10 total".to_string()),
+            lookup_error: None,
+        },
+        selected_account: String::new(),
         errors: vec![],
         current_path: "/agents/new".to_string(),
     };
     let rendered = template.render().unwrap();
     assert!(rendered.contains("<!DOCTYPE html>"));
-    assert!(rendered.contains("Create agent · Vibetrading"));
+    assert!(rendered.contains("Create New Agent · Vibetrading"));
     assert!(!rendered.contains("The wallet address and app API key"));
     assert!(rendered.contains(">Name</label>"));
     assert!(!rendered.contains("The agent key is derived"));
-    assert!(rendered.contains(">Wallet Private Key</label>"));
+    assert!(!rendered.contains("Generate new Agent wallet"));
+    assert!(!rendered.contains("Import existing Private Key"));
     assert!(
         rendered
             .contains("id=\"display_name\" name=\"display_name\" value=\"\" required autofocus")
     );
-    assert!(rendered.contains("Each agent should have its own wallet."));
-    assert!(rendered.contains("Do not reuse an existing wallet address."));
-    assert!(rendered.contains("Private keys are stored encrypted at rest."));
     assert!(rendered.contains("display_name"));
+    assert!(rendered.contains("trading_account_selection"));
+    assert!(!rendered.contains("Create new Sub-Account"));
+    assert!(rendered.contains("data-create-new-agent-subaccount"));
+    assert!(rendered.contains("/agents/new/account-choices"));
+    assert!(rendered.contains("Sub-account capacity"));
     assert!(!rendered.contains("name=\"backend_kind\""));
     assert!(!rendered.contains("name=\"runtime_id\""));
     assert!(!rendered.contains("Runtime instance"));
     assert!(!rendered.contains("name=\"enabled\""));
+}
+
+#[test]
+fn trading_account_choices_render_subaccount_names() {
+    let template = AgentTradingAccountChoicesTemplate {
+        choices: TradingAccountChoicesView {
+            main_address: "0x0000000000000000000000000000000000000001".to_string(),
+            main_assigned_to: None,
+            subaccounts: vec![
+                crate::web::templates::SubaccountChoiceView {
+                    name: Some("vt-BTC".to_string()),
+                    address: "0x0000000000000000000000000000000000000002".to_string(),
+                    balance: None,
+                    assigned_to: None,
+                },
+                crate::web::templates::SubaccountChoiceView {
+                    name: None,
+                    address: "0x0000000000000000000000000000000000000003".to_string(),
+                    balance: None,
+                    assigned_to: None,
+                },
+                crate::web::templates::SubaccountChoiceView {
+                    name: Some("vt-ETH".to_string()),
+                    address: "0x0000000000000000000000000000000000000004".to_string(),
+                    balance: None,
+                    assigned_to: Some(crate::web::templates::SubaccountAssignmentView {
+                        agent_key: "eth-agent".to_string(),
+                        display_name: "ETH Agent".to_string(),
+                    }),
+                },
+            ],
+            subaccount_capacity: None,
+            lookup_error: None,
+        },
+        selected_account: "0x0000000000000000000000000000000000000002".to_string(),
+    };
+    let rendered = template.render().unwrap();
+    assert!(rendered.contains("Sub-account: vt-BTC"));
+    assert!(rendered.contains(">Sub-account</span>"));
+    assert!(rendered.contains("checked"));
+    assert!(rendered.contains("value=\"0x0000000000000000000000000000000000000004\"  disabled"));
+    assert!(rendered.contains(
+        "In use by <a href=\"/agents/eth-agent\" class=\"underline hover:text-amber-100\">ETH Agent</a>"
+    ));
 }
 
 #[test]

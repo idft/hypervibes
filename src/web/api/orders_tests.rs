@@ -202,12 +202,12 @@ async fn post_orders_selected_symbol_proceeds_past_selection_validation() {
         .oneshot(builder.body(body).unwrap())
         .await
         .unwrap();
-    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
     let body_bytes = axum::body::to_bytes(response.into_body(), 16 * 1024)
         .await
         .unwrap();
     let body: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
-    assert_eq!(body["error"], json!("internal server error"));
+    assert_eq!(body["error"], json!("builder fee has not been approved"));
 }
 
 #[tokio::test]

@@ -12,9 +12,10 @@ signed order placement and cancellation. Vibetrading owns raw Hyperliquid
 `/info` HTTP calls for account history, including fills, funding, non-user
 funding ledger updates, and historical orders.
 
-The application, not an agent, owns signing. An agent's private key is
-encrypted at rest, decrypted only server-side for a signed exchange request,
-and never written into its workspace or returned through the agent API.
+The application, not an agent, owns signing. One encrypted user trading signer
+is decrypted only server-side for signed exchange requests and is never written
+into an agent workspace or returned through the agent API. Agent accounts are
+tracked independently from that signer.
 
 ## Monitoring And Journal
 
@@ -66,7 +67,8 @@ surface and the workspace MCP adapter. The gateway:
    instrument precision.
 3. Generates a client order ID and writes a local pending order before calling
    the exchange.
-4. Decrypts the server-held agent key and submits or cancels with signed HTTP.
+4. Loads and decrypts the owner's user trading signer and submits or cancels
+   against the agent's stored trading account.
 5. Records the immediate result and later WebSocket or reconciliation updates.
 
 `hyperliquid.orders` holds the current, agent-attributed order state.

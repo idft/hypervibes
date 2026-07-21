@@ -11,23 +11,8 @@ CREATE TABLE agent_strategy_prompts (
 );
 
 INSERT INTO agent_strategy_prompts (agent_key, prompt_kind, prompt)
-SELECT agent_key, 'analysis', analysis_prompt
-FROM agents;
-
-INSERT INTO agent_strategy_prompts (agent_key, prompt_kind, prompt)
-SELECT agent_key, 'market_analysis', analysis_prompt
-FROM agents;
-
-INSERT INTO agent_strategy_prompts (agent_key, prompt_kind, prompt)
-SELECT agent_key, 'trading', trading_prompt
-FROM agents;
-
-INSERT INTO agent_strategy_prompts (agent_key, prompt_kind, prompt)
 SELECT agent_key, 'daily_review', ''
 FROM agents;
-
-ALTER TABLE agents DROP COLUMN analysis_prompt;
-ALTER TABLE agents DROP COLUMN trading_prompt;
 
 ALTER TABLE memory.records
     ADD CONSTRAINT records_id_agent_key_unique UNIQUE (id, agent_key);

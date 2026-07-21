@@ -1,4 +1,5 @@
 mod api;
+pub(crate) mod auth;
 mod error;
 mod routes;
 mod state;

@@ -767,8 +767,7 @@ mod tests {
         )
         .unwrap();
 
-        add_candidate_permission_scope(&root, "/workspaces/coding/btc-1/18/workspace")
-            .unwrap();
+        add_candidate_permission_scope(&root, "/workspaces/coding/btc-1/18/workspace").unwrap();
 
         let profile = fs::read_to_string(profile_path).unwrap();
         assert_eq!(

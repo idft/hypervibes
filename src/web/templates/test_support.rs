@@ -16,7 +16,7 @@ pub fn sample_agent_list_row() -> AgentListRow {
         display_name: "Test Agent".to_string(),
         agent_key: "test-agent".to_string(),
         enabled: true,
-        wallet_address: "0x1234567890abcdef".to_string(),
+        trading_account_address: "0x1234567890abcdef".to_string(),
         environment: "live".to_string(),
         api_key_last_used_at: None,
     }
@@ -24,10 +24,12 @@ pub fn sample_agent_list_row() -> AgentListRow {
 
 pub fn sample_agent_detail_row() -> AgentDetailRow {
     AgentDetailRow {
+        user_id: crate::test_db::test_user_id(),
         display_name: "Test Agent".to_string(),
         agent_key: "test-agent".to_string(),
         enabled: true,
-        wallet_address: "0x1234567890abcdef".to_string(),
+        lifecycle: crate::agents::model::AGENT_LIFECYCLE_ACTIVE.to_string(),
+        trading_account_address: Some("0x1234567890abcdef".to_string()),
         environment: "live".to_string(),
         api_key: "vt_test_key".to_string(),
         backend_kind: "opencode".to_string(),

@@ -45,9 +45,7 @@ async fn coding_report_is_scoped_to_the_authenticated_agent() {
     .await
     .unwrap();
     let task_id = match queued {
-        crate::agentic::store::InsertAnalysisCodingTaskOutcome::Inserted {
-            task_id, ..
-        } => task_id,
+        crate::agentic::store::InsertAnalysisCodingTaskOutcome::Inserted { task_id, .. } => task_id,
         crate::agentic::store::InsertAnalysisCodingTaskOutcome::AlreadyQueued => {
             panic!("unexpected duplicate")
         }

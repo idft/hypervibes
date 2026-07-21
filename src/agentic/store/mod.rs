@@ -18,10 +18,9 @@ pub use recovery::recover_inactive_runs_all;
 #[allow(unused_imports)]
 pub use runs::{
     QueuedHookRun, QueuedScheduleRun, agent_has_active_runs, count_agent_runs, get_run,
-    has_prior_active_run_in_lane,
-    insert_queued_hook_run, insert_queued_hook_run_for_automatic_dispatch, insert_queued_run,
-    list_active_agent_runs, list_agent_runs_page, mark_run_failed, mark_run_running,
-    mark_run_succeeded,
+    has_prior_active_run_in_lane, insert_queued_hook_run,
+    insert_queued_hook_run_for_automatic_dispatch, insert_queued_run, list_active_agent_runs,
+    list_agent_runs_page, mark_run_failed, mark_run_running, mark_run_succeeded,
 };
 #[cfg(test)]
 pub use runs::{insert_test_run, list_agent_runs, mark_run_aborted};
@@ -38,9 +37,8 @@ pub use workspace::agent_has_blocking_workspace_maintenance;
 pub use workspace::get_latest_workspace_regenerate_task;
 #[allow(unused_imports)]
 pub use workspace::{
-    CodingTriggerMode, InsertAnalysisCodingTaskOutcome,
-    InsertWorkspaceMaintenanceTaskOutcome, agent_has_active_live_runs,
-    compare_and_set_maintenance_phase, get_latest_maintenance_task,
+    CodingTriggerMode, InsertAnalysisCodingTaskOutcome, InsertWorkspaceMaintenanceTaskOutcome,
+    agent_has_active_live_runs, compare_and_set_maintenance_phase, get_latest_maintenance_task,
     get_next_queued_workspace_regenerate_task, heartbeat_maintenance_task,
     insert_analysis_coding_task_and_run, insert_workspace_regenerate_task,
     list_queued_maintenance_candidates, list_stale_running_maintenance_tasks,

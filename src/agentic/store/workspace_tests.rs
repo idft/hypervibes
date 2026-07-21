@@ -5,11 +5,10 @@ use uuid::Uuid;
 
 use super::test_support::seed_agent_and_schedule;
 use super::{
-    CodingTriggerMode, InsertAnalysisCodingTaskOutcome,
-    InsertWorkspaceMaintenanceTaskOutcome, agent_has_blocking_workspace_maintenance,
-    get_latest_workspace_regenerate_task, insert_analysis_coding_task_and_run,
-    insert_workspace_regenerate_task, mark_maintenance_task_running,
-    mark_maintenance_task_succeeded,
+    CodingTriggerMode, InsertAnalysisCodingTaskOutcome, InsertWorkspaceMaintenanceTaskOutcome,
+    agent_has_blocking_workspace_maintenance, get_latest_workspace_regenerate_task,
+    insert_analysis_coding_task_and_run, insert_workspace_regenerate_task,
+    mark_maintenance_task_running, mark_maintenance_task_succeeded,
 };
 
 #[tokio::test]

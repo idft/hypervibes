@@ -28,10 +28,10 @@ struct AgentInstrumentOptionRawRow {
 pub async fn list_agents(pool: &DbPool) -> Result<Vec<AgentListRow>> {
     let rows = query_as::<_, AgentListRow>(
         "SELECT display_name,
-                agents.agent_key,
-                agents.enabled,
-                wallet_address,
-                environment,
+                 agents.agent_key,
+                 agents.enabled,
+                 trading_account_address,
+                 environment,
                 api_key,
                  api_key_last_used_at,
                  agents.backend_kind,
@@ -40,13 +40,47 @@ pub async fn list_agents(pool: &DbPool) -> Result<Vec<AgentListRow>> {
            FROM agents
            JOIN agent_runtimes
              ON agent_runtimes.id = agents.runtime_id
-          ORDER BY agents.created_at DESC",
+           WHERE agents.lifecycle = 'active'
+           ORDER BY agents.created_at DESC",
     )
     .fetch_all(pool)
     .await
     .context("failed to list agents")?;
 
     Ok(rows)
+}
+
+/// List only the active agents owned by an operator.
+pub async fn list_agents_for_user(pool: &DbPool, user_id: uuid::Uuid) -> Result<Vec<AgentListRow>> {
+    let rows = query_as::<_, AgentListRow>(
+     "SELECT display_name, agents.agent_key, agents.enabled, trading_account_address, environment,
+                api_key, api_key_last_used_at, agents.backend_kind, agents.runtime_id,
+                agent_runtimes.base_url AS runtime_base_url
+           FROM agents JOIN agent_runtimes ON agent_runtimes.id = agents.runtime_id
+          WHERE agents.lifecycle = 'active' AND agents.user_id = $1
+          ORDER BY agents.created_at DESC",
+    )
+    .bind(user_id)
+    .fetch_all(pool)
+    .await
+    .context("failed to list user agents")?;
+    Ok(rows)
+}
+
+/// Checks the ownership boundary before an operator route resolves child resources.
+pub async fn agent_belongs_to_user(
+    pool: &DbPool,
+    agent_key: &str,
+    user_id: uuid::Uuid,
+) -> Result<bool> {
+    let found: Option<(i32,)> =
+        query_as("SELECT 1 FROM agents WHERE agent_key = $1 AND user_id = $2")
+            .bind(agent_key)
+            .bind(user_id)
+            .fetch_optional(pool)
+            .await
+            .context("failed to check agent ownership")?;
+    Ok(found.is_some())
 }
 
 pub async fn list_agent_runtimes(pool: &DbPool) -> Result<Vec<AgentRuntimeRow>> {
@@ -139,15 +173,17 @@ pub async fn insert_agent_runtime(pool: &DbPool, form: &CreateAgentRuntimeForm) 
 /// Fetch a single agent by its unique agent key.
 pub async fn get_agent(pool: &DbPool, agent_key: &str) -> Result<Option<AgentDetailRow>> {
     let row = query_as::<_, AgentDetailRow>(
-        "SELECT display_name,
-                agents.agent_key,
-                agents.enabled,
-                wallet_address,
-                environment,
+        "SELECT agents.user_id,
+                display_name,
+                 agents.agent_key,
+                 agents.enabled,
+                 agents.lifecycle,
+                   trading_account_address,
+                 environment,
                 api_key,
                 agents.backend_kind,
-                agent_runtimes.base_url AS runtime_base_url,
-                agents.runtime_config
+                 agent_runtimes.base_url AS runtime_base_url,
+                 agents.runtime_config
            FROM agents
            JOIN agent_runtimes
              ON agent_runtimes.id = agents.runtime_id
@@ -302,41 +338,40 @@ pub async fn replace_agent_instruments(
     Ok(true)
 }
 
-/// Insert a full registry row. The caller is responsible for encrypting the
-/// private key and deriving the wallet address before this call.
+/// Insert a full registry row.
 pub async fn insert_agent(pool: &DbPool, row: &AgentRegistryRow) -> Result<()> {
     sqlx::query(
         "INSERT INTO agents (
-            agent_key,
-            created_at,
-            updated_at,
-            enabled,
-            display_name,
-            wallet_address,
-            environment,
+             agent_key,
+             user_id,
+             created_at,
+             updated_at,
+             enabled,
+             lifecycle,
+             display_name,
+                 trading_account_address,
+             environment,
             api_key,
             api_key_last_used_at,
             backend_kind,
             runtime_id,
-            runtime_config,
-            hyperliquid_private_key_ciphertext,
-            hyperliquid_private_key_key_id
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)",
+             runtime_config
+         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)",
     )
     .bind(&row.agent_key)
+    .bind(row.user_id)
     .bind(row.created_at)
     .bind(row.updated_at)
     .bind(row.enabled)
+    .bind(&row.lifecycle)
     .bind(&row.display_name)
-    .bind(&row.wallet_address)
+    .bind(&row.trading_account_address)
     .bind(&row.environment)
     .bind(&row.api_key)
     .bind(row.api_key_last_used_at)
     .bind(&row.backend_kind)
     .bind(&row.runtime_id)
     .bind(&row.runtime_config)
-    .bind(&row.hyperliquid_private_key_ciphertext)
-    .bind(&row.hyperliquid_private_key_key_id)
     .execute(pool)
     .await
     .context("failed to insert agent")?;
@@ -353,8 +388,8 @@ pub async fn delete_agent(pool: &DbPool, agent_key: &str) -> Result<bool> {
         .await
         .context("failed to start delete-agent transaction")?;
 
-    let agent: Option<(String, String, String)> = query_as(
-        "SELECT agent_key, wallet_address, environment
+    let agent: Option<(String, String)> = query_as(
+        "SELECT agent_key, environment
            FROM agents
           WHERE agent_key = $1
           FOR UPDATE",
@@ -417,25 +452,6 @@ pub async fn resolve_agent_key_by_api_key(pool: &DbPool, api_key: &str) -> Resul
     Ok(row.map(|(k,)| k))
 }
 
-/// Load the encrypted Hyperliquid private key + the key id used to
-/// encrypt it. Used by the order submission gateway to build a
-/// [`PrivateKeySigner`] for signing.
-pub async fn get_agent_private_key_ciphertext(
-    pool: &DbPool,
-    agent_key: &str,
-) -> Result<Option<(Vec<u8>, String)>> {
-    let row: Option<(Vec<u8>, String)> = query_as(
-        "SELECT hyperliquid_private_key_ciphertext, hyperliquid_private_key_key_id
-           FROM agents
-          WHERE agent_key = $1",
-    )
-    .bind(agent_key)
-    .fetch_optional(pool)
-    .await
-    .context("failed to load agent private key ciphertext")?;
-    Ok(row)
-}
-
 /// Best-effort update of `api_key_last_used_at` for an authenticated agent.
 ///
 /// Called by the API-key auth extractor on every successful authentication
@@ -480,16 +496,26 @@ mod tests {
     use chrono::Utc;
     use uuid::Uuid;
 
-    use crate::{
-        agents::{
-            crypto::{EncryptionKey, encrypt},
-            keys::derive_wallet_address,
-        },
-        test_db,
-    };
+    use crate::test_db;
 
     fn sample_agent(key: &str) -> AgentRegistryRow {
-        sample_agent_with_private_key(key, &deterministic_private_key(key))
+        let now = Utc::now();
+        AgentRegistryRow {
+            agent_key: key.to_string(),
+            user_id: crate::test_db::test_user_id(),
+            created_at: now,
+            updated_at: now,
+            enabled: true,
+            lifecycle: crate::agents::model::AGENT_LIFECYCLE_ACTIVE.to_string(),
+            display_name: format!("Test {key}"),
+            trading_account_address: Some(format!("0x{:040x}", key.len() as u64 + 1)),
+            environment: "live".to_string(),
+            api_key: format!("vta_{key}"),
+            api_key_last_used_at: None,
+            backend_kind: crate::agents::model::BACKEND_KIND_OPENCODE.to_string(),
+            runtime_id: "opencode-local".to_string(),
+            runtime_config: serde_json::json!({}),
+        }
     }
 
     async fn seed_instrument(pool: &DbPool, instrument_id: &str, market_type: &str, active: bool) {
@@ -529,49 +555,6 @@ mod tests {
         .expect("insert instrument");
     }
 
-    fn sample_agent_with_private_key(key: &str, private_key: &str) -> AgentRegistryRow {
-        let enc = EncryptionKey::new(
-            "test",
-            [
-                0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22,
-                23, 24, 25, 26, 27, 28, 29, 30, 31,
-            ],
-        );
-        let ciphertext = encrypt(&enc, private_key).unwrap();
-        let wallet = derive_wallet_address(private_key).unwrap();
-        let now = Utc::now();
-
-        AgentRegistryRow {
-            agent_key: key.to_string(),
-            created_at: now,
-            updated_at: now,
-            enabled: true,
-            display_name: format!("Test {}", key),
-            wallet_address: wallet,
-            environment: "live".to_string(),
-            api_key: format!("vta_{}", key),
-            api_key_last_used_at: None,
-            backend_kind: crate::agents::model::BACKEND_KIND_OPENCODE.to_string(),
-            runtime_id: "opencode-local".to_string(),
-            runtime_config: serde_json::json!({}),
-            hyperliquid_private_key_ciphertext: ciphertext,
-            hyperliquid_private_key_key_id: "test".to_string(),
-        }
-    }
-
-    /// Derive a deterministic, unique private key for a test key string.
-    fn deterministic_private_key(key: &str) -> String {
-        use rand::rngs::StdRng;
-        use rand::{RngExt, SeedableRng};
-
-        let seed = key
-            .bytes()
-            .fold(0u64, |acc, b| acc.wrapping_mul(31).wrapping_add(b as u64));
-        let mut rng = StdRng::seed_from_u64(seed);
-        let bytes: [u8; 32] = rng.random();
-        format!("0x{}", hex::encode(bytes))
-    }
-
     #[tokio::test]
     async fn list_agents_returns_inserted_rows() {
         let pool = test_db::pool().await;
@@ -582,6 +565,45 @@ mod tests {
 
         let agents = list_agents(&pool).await.expect("list agents");
         assert!(agents.iter().any(|a| a.agent_key == key));
+    }
+
+    #[tokio::test]
+    async fn user_agent_queries_do_not_cross_the_ownership_boundary() {
+        let pool = test_db::pool().await;
+        let owner = crate::test_db::test_user_id();
+        let other_user = uuid::Uuid::new_v4();
+        sqlx::query("INSERT INTO users (id, wallet_address) VALUES ($1, $2)")
+            .bind(other_user)
+            .bind(format!("0x{:040x}", other_user.as_u128()))
+            .execute(&pool)
+            .await
+            .expect("insert second user");
+
+        let own_key = format!("owned-agent-{}", Utc::now().timestamp_millis());
+        let foreign_key = format!("foreign-agent-{}", Utc::now().timestamp_millis());
+        let own = sample_agent(&own_key);
+        let mut foreign = sample_agent(&foreign_key);
+        foreign.user_id = other_user;
+        insert_agent(&pool, &own).await.expect("insert owned agent");
+        insert_agent(&pool, &foreign)
+            .await
+            .expect("insert foreign agent");
+
+        let agents = list_agents_for_user(&pool, owner)
+            .await
+            .expect("list owned agents");
+        assert!(agents.iter().any(|agent| agent.agent_key == own_key));
+        assert!(!agents.iter().any(|agent| agent.agent_key == foreign_key));
+        assert!(
+            agent_belongs_to_user(&pool, &own_key, owner)
+                .await
+                .expect("check owner")
+        );
+        assert!(
+            !agent_belongs_to_user(&pool, &foreign_key, owner)
+                .await
+                .expect("reject foreign owner")
+        );
     }
 
     #[tokio::test]
@@ -713,11 +735,7 @@ mod tests {
         let row = sample_agent(&key);
         insert_agent(&pool, &row).await.expect("first insert");
 
-        // Use a different private key so the second row only conflicts on agent_key.
-        let other_private_key =
-            "0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d";
-        let mut second =
-            sample_agent_with_private_key(&format!("{}-second", key), other_private_key);
+        let mut second = sample_agent(&format!("{}-second", key));
         second.agent_key = key.clone();
         let err = insert_agent(&pool, &second).await.unwrap_err();
 
@@ -878,7 +896,10 @@ mod tests {
         let pool = test_db::pool().await;
         let key = format!("agent-hl-cascade-{}", Utc::now().timestamp_millis());
         let agent = sample_agent(&key);
-        let wallet_address = agent.wallet_address.clone();
+        let trading_account_address = agent
+            .trading_account_address
+            .clone()
+            .expect("trading account");
         let environment = agent.environment.clone();
         insert_agent(&pool, &agent).await.expect("insert agent");
 
@@ -889,7 +910,7 @@ mod tests {
                 (account_address, environment, stream_name, status, metadata)
              VALUES ($1, $2, 'fills', 'healthy', '{}'::jsonb)",
         )
-        .bind(&wallet_address)
+        .bind(&trading_account_address)
         .bind(&environment)
         .execute(&pool)
         .await
@@ -902,7 +923,7 @@ mod tests {
              VALUES ($1, $2, $3, now(), 'fills', 'BTC', now(), 'open_long', 'buy', 1, 1, $4, '{}'::jsonb, 'test', now())",
         )
         .bind(format!("fill-hash-{key}"))
-        .bind(&wallet_address)
+        .bind(&trading_account_address)
         .bind(&environment)
         .bind(format!("trade-{key}"))
         .execute(&pool)
@@ -915,7 +936,7 @@ mod tests {
                  usdc, payload, ingest_source, inserted_at)
              VALUES ($1, $2, 'BTC', now(), 'funding', 1, '{}'::jsonb, 'test', now())",
         )
-        .bind(&wallet_address)
+        .bind(&trading_account_address)
         .bind(&environment)
         .execute(&pool)
         .await
@@ -928,7 +949,7 @@ mod tests {
              VALUES ($1, $2, $3, now(), 'ledger', 'ledger', 'deposit', '{}'::jsonb, 'test', now())",
         )
         .bind(format!("ledger-hash-{key}"))
-        .bind(&wallet_address)
+        .bind(&trading_account_address)
         .bind(&environment)
         .execute(&pool)
         .await
@@ -939,7 +960,7 @@ mod tests {
                 (account_address, environment, order_id, event_time, instrument_id, payload, ingest_source, inserted_at)
              VALUES ($1, $2, $3, now(), 'BTC', '{}'::jsonb, 'test', now())",
         )
-        .bind(&wallet_address)
+        .bind(&trading_account_address)
         .bind(&environment)
         .bind(format!("historical-{key}"))
         .execute(&pool)
@@ -955,7 +976,7 @@ mod tests {
         )
         .bind(order_id)
         .bind(&key)
-        .bind(&wallet_address)
+        .bind(&trading_account_address)
         .bind(&environment)
         .bind(format!("cloid-{key}"))
         .execute(&pool)
@@ -969,7 +990,7 @@ mod tests {
         )
         .bind(Uuid::new_v4())
         .bind(order_id)
-        .bind(&wallet_address)
+        .bind(&trading_account_address)
         .bind(&environment)
         .execute(&pool)
         .await
@@ -986,7 +1007,7 @@ mod tests {
         let sync_state_count: (i64,) = query_as(
             "SELECT COUNT(*) FROM hyperliquid.sync_state WHERE account_address = $1 AND environment = $2",
         )
-        .bind(&wallet_address)
+        .bind(&trading_account_address)
         .bind(&environment)
         .fetch_one(&pool)
         .await
@@ -994,7 +1015,7 @@ mod tests {
         let trade_fills_count: (i64,) = query_as(
             "SELECT COUNT(*) FROM hyperliquid.trade_fills WHERE account_address = $1 AND environment = $2",
         )
-        .bind(&wallet_address)
+        .bind(&trading_account_address)
         .bind(&environment)
         .fetch_one(&pool)
         .await
@@ -1002,7 +1023,7 @@ mod tests {
         let funding_count: (i64,) = query_as(
             "SELECT COUNT(*) FROM hyperliquid.funding_events WHERE account_address = $1 AND environment = $2",
         )
-        .bind(&wallet_address)
+        .bind(&trading_account_address)
         .bind(&environment)
         .fetch_one(&pool)
         .await
@@ -1010,7 +1031,7 @@ mod tests {
         let ledger_count: (i64,) = query_as(
             "SELECT COUNT(*) FROM hyperliquid.ledger_events WHERE account_address = $1 AND environment = $2",
         )
-        .bind(&wallet_address)
+        .bind(&trading_account_address)
         .bind(&environment)
         .fetch_one(&pool)
         .await
@@ -1018,7 +1039,7 @@ mod tests {
         let historical_count: (i64,) = query_as(
             "SELECT COUNT(*) FROM hyperliquid.historical_orders WHERE account_address = $1 AND environment = $2",
         )
-        .bind(&wallet_address)
+        .bind(&trading_account_address)
         .bind(&environment)
         .fetch_one(&pool)
         .await

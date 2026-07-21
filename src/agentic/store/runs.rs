@@ -342,13 +342,8 @@ pub async fn insert_queued_run(
         latest_due_at_or_before(now, &schedule.timeframe, schedule.trigger_delay_seconds)?
             .map(|due| boundary_for_due_at(due, schedule.trigger_delay_seconds))
             .unwrap_or(now);
-    let wait_for_lane = has_active_run_in_lane_tx(
-        &mut tx,
-        &schedule.agent_key,
-        &schedule.job_kind,
-        now,
-    )
-    .await?;
+    let wait_for_lane =
+        has_active_run_in_lane_tx(&mut tx, &schedule.agent_key, &schedule.job_kind, now).await?;
     let run_id = insert_run_in_tx(
         &mut tx,
         Some(schedule.id),

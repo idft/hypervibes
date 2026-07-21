@@ -1,4 +1,4 @@
 #[derive(Debug, Clone, sqlx::FromRow)]
-pub struct SystemSettingRow {
-    pub value: String,
+pub struct UserSettingsRow {
+    pub opencode_system_prompt: String,
 }

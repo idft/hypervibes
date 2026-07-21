@@ -13,7 +13,8 @@
   "dependencies": {
     "htmx-ext-sse": "2.2.4",
     "htmx.org": "2.0.10",
-    "timeago.js": "4.0.2"
+    "timeago.js": "4.0.2",
+    "viem": "^2.55.2"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",

@@ -9,11 +9,16 @@ mod settings;
 mod shared;
 #[cfg(test)]
 pub(in crate::web::routes) mod test_support;
+mod wallet;
 
-use self::{agents::*, backends::*, currency::*, model_catalog::*, root::*, settings::*};
+use self::{
+    agents::*, backends::*, currency::*, model_catalog::*, root::*, settings::*, wallet::*,
+};
+use crate::web::auth::{login, login_challenge, login_verify, logout};
 
 use std::sync::Arc;
 
+use axum::middleware;
 use axum::{
     Router,
     routing::{get, post},
@@ -22,14 +27,23 @@ use axum::{
 use crate::web::AppState;
 
 pub fn router(state: Arc<AppState>) -> Router {
-    Router::new()
-        .route("/", get(root))
+    let public = Router::new()
         .route("/healthz", get(healthz))
+        .route("/login", get(login))
+        .route("/auth/challenge", post(login_challenge))
+        .route("/auth/verify", post(login_verify))
+        .route("/auth/logout", post(logout))
+        .with_state(Arc::clone(&state));
+
+    let protected = Router::new()
+        .route("/", get(root))
         .route("/model-catalog/logos/{provider}", get(model_catalog_logo))
         .route("/currency/{file}", get(currency_logo))
         .route("/agents/navigation", get(agent_selector_items))
         .route("/agents", get(agents_index).post(create_agent))
         .route("/agents/new", get(agents_new))
+        .route("/agents/new/account-choices", get(agent_account_choices))
+        .route("/wallet/subaccounts", post(create_user_subaccount))
         .route("/backends", get(backends_index).post(create_backend))
         .route("/backends/new", get(backends_new))
         .route("/agents/{agent_key}", get(agents_show))
@@ -150,5 +164,17 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/agents/{agent_key}/delete", post(delete_agent))
         .route("/agents/{agent_key}/live/stream", get(agent_live_stream))
         .route("/settings", get(settings_index).post(settings_update))
-        .with_state(state)
+        .route("/wallet", get(wallet_index))
+        .route("/wallet/address", get(wallet_address))
+        .route("/wallet/max-builder-fee", get(wallet_max_builder_fee))
+        .route("/wallet/approve-builder-fee", post(approve_builder_fee))
+        .route("/wallet/api-wallet", post(setup_user_api_wallet))
+        .route("/wallet/approve-api-wallet", post(approve_user_api_wallet))
+        .with_state(Arc::clone(&state))
+        .layer(middleware::from_fn_with_state(
+            state,
+            crate::web::auth::require_operator,
+        ));
+
+    public.merge(protected)
 }

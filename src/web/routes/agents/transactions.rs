@@ -11,15 +11,17 @@ use crate::{
         live_state::{AccountKey, AccountLiveState},
         queries::AccountTransactionRow,
     },
-    web::{AppState, error::AppError, templates::AgentShowTab},
+    web::{AppState, auth::AuthenticatedUser, error::AppError, templates::AgentShowTab},
 };
 pub(in crate::web::routes) async fn agents_show_transactions(
     State(state): State<Arc<AppState>>,
+    user: AuthenticatedUser,
     Path(agent_key): Path<String>,
     Query(query): Query<AgentTransactionsQuery>,
 ) -> Result<Response, AppError> {
     render_agent_show_page(
         &state,
+        &user,
         &agent_key,
         AgentShowTab::Transactions,
         Some(query),
@@ -47,7 +49,10 @@ pub(in crate::web::routes) fn apply_live_cash_balance_anchor(
     let Some(latest_running_balance) = latest_running_balance else {
         return;
     };
-    let account_key = AccountKey::new(&agent.wallet_address, &agent.environment);
+    let Some(trading_account_address) = agent.trading_account_address.as_deref() else {
+        return;
+    };
+    let account_key = AccountKey::new(trading_account_address, &agent.environment);
     let Some(snapshot) = state.live_accounts.get(&account_key) else {
         return;
     };

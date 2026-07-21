@@ -201,11 +201,11 @@ impl OpenCodeClient {
             .json()
             .await
             .context("failed to decode OpenCode session status response")?;
-        Ok(statuses
+        statuses
             .get(session_id)
             .cloned()
             .map(SessionStatusResponse::into_kind)
-            .transpose()?)
+            .transpose()
     }
 
     pub async fn list_providers(

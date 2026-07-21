@@ -80,7 +80,10 @@ pub(super) fn live_agent_snapshot(
     state: &AppState,
     row: &crate::agents::model::AgentDetailRow,
 ) -> LiveAgentSnapshot {
-    let key = AccountKey::new(&row.wallet_address, &row.environment);
+    let Some(trading_account_address) = row.trading_account_address.as_deref() else {
+        return unavailable_live_agent_snapshot(row);
+    };
+    let key = AccountKey::new(trading_account_address, &row.environment);
     let snapshot = state.live_accounts.get(&key);
     let Some(snapshot) = snapshot else {
         return unavailable_live_agent_snapshot(row);
@@ -94,7 +97,7 @@ pub(super) fn live_agent_snapshot(
 
     LiveAgentSnapshot {
         agent_key: row.agent_key.clone(),
-        account_address: row.wallet_address.clone(),
+        account_address: trading_account_address.to_string(),
         environment: row.environment.clone(),
         account_data: AccountDataStatus {
             available: true,
@@ -112,7 +115,7 @@ pub(super) fn unavailable_live_agent_snapshot(
 ) -> LiveAgentSnapshot {
     LiveAgentSnapshot {
         agent_key: row.agent_key.clone(),
-        account_address: row.wallet_address.clone(),
+        account_address: row.trading_account_address.clone().unwrap_or_default(),
         environment: row.environment.clone(),
         account_data: AccountDataStatus {
             available: false,

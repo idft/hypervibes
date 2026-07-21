@@ -21,6 +21,7 @@ use crate::{
     },
     web::{
         AppState,
+        auth::AuthenticatedUser,
         error::AppError,
         templates::{
             AgentShowTab, OpenCodeWorkspaceMaintenanceStatusTemplate,
@@ -47,11 +48,13 @@ impl RegenerateWorkspaceForm {
 }
 pub(in crate::web::routes) async fn agents_show_settings(
     State(state): State<Arc<AppState>>,
+    user: AuthenticatedUser,
     Path(agent_key): Path<String>,
     Query(query): Query<AgentSettingsQuery>,
 ) -> Result<Response, AppError> {
     render_agent_show_page(
         &state,
+        &user,
         &agent_key,
         AgentShowTab::Settings,
         None,
@@ -137,41 +140,39 @@ pub(in crate::web::routes) async fn load_workspace_maintenance_view(
     let Some(task) = task else {
         return Ok(OpenCodeWorkspaceMaintenanceView::idle(agent_key));
     };
-    let (report_summary, changed_paths) =
-        if task.task_kind == crate::agentic::model::MAINTENANCE_TASK_KIND_ANALYSIS_CODING {
-            let report = crate::opencode::coding_workspace::candidate_root(
-                workspace_config,
-                agent_key,
-                task.id,
-            )
-            .ok()
-            .and_then(|root| {
-                root.parent()
-                    .map(|parent| parent.join("coding-report.json"))
-            })
-            .and_then(|path| std::fs::read_to_string(path).ok())
-            .and_then(|content| serde_json::from_str::<serde_json::Value>(&content).ok());
-            (
-                report
-                    .as_ref()
-                    .and_then(|value| value.get("summary"))
-                    .and_then(serde_json::Value::as_str)
-                    .map(ToString::to_string),
-                report
-                    .as_ref()
-                    .and_then(|value| value.get("changed_paths"))
-                    .and_then(serde_json::Value::as_array)
-                    .map(|paths| {
-                        paths
-                            .iter()
-                            .filter_map(|path| path.as_str().map(ToString::to_string))
-                            .collect()
-                    })
-                    .unwrap_or_default(),
-            )
-        } else {
-            (None, Vec::new())
-        };
+    let (report_summary, changed_paths) = if task.task_kind
+        == crate::agentic::model::MAINTENANCE_TASK_KIND_ANALYSIS_CODING
+    {
+        let report =
+            crate::opencode::coding_workspace::candidate_root(workspace_config, agent_key, task.id)
+                .ok()
+                .and_then(|root| {
+                    root.parent()
+                        .map(|parent| parent.join("coding-report.json"))
+                })
+                .and_then(|path| std::fs::read_to_string(path).ok())
+                .and_then(|content| serde_json::from_str::<serde_json::Value>(&content).ok());
+        (
+            report
+                .as_ref()
+                .and_then(|value| value.get("summary"))
+                .and_then(serde_json::Value::as_str)
+                .map(ToString::to_string),
+            report
+                .as_ref()
+                .and_then(|value| value.get("changed_paths"))
+                .and_then(serde_json::Value::as_array)
+                .map(|paths| {
+                    paths
+                        .iter()
+                        .filter_map(|path| path.as_str().map(ToString::to_string))
+                        .collect()
+                })
+                .unwrap_or_default(),
+        )
+    } else {
+        (None, Vec::new())
+    };
     let status = OpenCodeWorkspaceMaintenanceStatusView::from_task_with_report(
         task,
         report_summary,

@@ -7,13 +7,13 @@ use std::collections::HashMap;
 use std::future::Future;
 use std::pin::Pin;
 
-use alloy::primitives::B128;
+use alloy::primitives::{Address, B128};
 use anyhow::{Context, Result};
 use chrono::Utc;
 use hypersdk::hypercore::{
     self, Cloid, PrivateKeySigner,
     types::{
-        BatchCancel, BatchOrder, Cancel, OrderGrouping, OrderRequest, OrderResponseStatus,
+        BatchCancel, BatchOrder, Builder, Cancel, OrderGrouping, OrderRequest, OrderResponseStatus,
         OrderTypePlacement, TimeInForce, TpSl,
     },
 };
@@ -40,6 +40,10 @@ use crate::{
 /// lifetimes and break borrows in tests).
 pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
+/// Hyperliquid builder fee recipient. All submitted perp batches use this
+/// exact address only after the account owner has approved the requested fee.
+pub const BUILDER_RECIPIENT: &str = "0x2ebba955c61116e1c249efb1e39d25cb4a79ea05";
+
 // ---- exchange trait -------------------------------------------------------
 
 /// Abstraction over the live Hyperliquid exchange. The gateway takes
@@ -50,13 +54,20 @@ pub trait ExchangeClient: Send + Sync {
         &'a self,
         batch: BatchOrder,
         nonce: u64,
+        trading_account: &'a str,
     ) -> BoxFuture<'a, Result<Vec<OrderResponseStatus>, String>>;
     fn cancel<'a>(
         &'a self,
         batch: BatchCancel,
         nonce: u64,
+        trading_account: &'a str,
     ) -> BoxFuture<'a, Result<Vec<OrderResponseStatus>, String>>;
     fn all_mids<'a>(&'a self) -> BoxFuture<'a, Result<HashMap<String, Decimal>, String>>;
+    fn max_builder_fee<'a>(
+        &'a self,
+        user: &'a str,
+        builder: &'a str,
+    ) -> BoxFuture<'a, Result<u32, String>>;
 }
 
 // ---- real implementation --------------------------------------------------
@@ -80,10 +91,21 @@ impl ExchangeClient for HyperliquidExchange {
         &'a self,
         batch: BatchOrder,
         nonce: u64,
+        trading_account: &'a str,
     ) -> BoxFuture<'a, Result<Vec<OrderResponseStatus>, String>> {
         Box::pin(async move {
             self.client
-                .place(&self.signer, batch, nonce, None, None)
+                .place(
+                    &self.signer,
+                    batch,
+                    nonce,
+                    Some(
+                        trading_account
+                            .parse::<Address>()
+                            .map_err(|e| e.to_string())?,
+                    ),
+                    None,
+                )
                 .await
                 .map_err(|e| e.to_string())
         })
@@ -93,10 +115,21 @@ impl ExchangeClient for HyperliquidExchange {
         &'a self,
         batch: BatchCancel,
         nonce: u64,
+        trading_account: &'a str,
     ) -> BoxFuture<'a, Result<Vec<OrderResponseStatus>, String>> {
         Box::pin(async move {
             self.client
-                .cancel(&self.signer, batch, nonce, None, None)
+                .cancel(
+                    &self.signer,
+                    batch,
+                    nonce,
+                    Some(
+                        trading_account
+                            .parse::<Address>()
+                            .map_err(|e| e.to_string())?,
+                    ),
+                    None,
+                )
                 .await
                 .map_err(|e| e.to_string())
         })
@@ -104,6 +137,21 @@ impl ExchangeClient for HyperliquidExchange {
 
     fn all_mids<'a>(&'a self) -> BoxFuture<'a, Result<HashMap<String, Decimal>, String>> {
         Box::pin(async move { self.client.all_mids(None).await.map_err(|e| e.to_string()) })
+    }
+
+    fn max_builder_fee<'a>(
+        &'a self,
+        user: &'a str,
+        builder: &'a str,
+    ) -> BoxFuture<'a, Result<u32, String>> {
+        Box::pin(async move {
+            let user = user.parse::<Address>().map_err(|e| e.to_string())?;
+            let builder = builder.parse::<Address>().map_err(|e| e.to_string())?;
+            self.client
+                .max_builder_fee(user, builder)
+                .await
+                .map_err(|e| e.to_string())
+        })
     }
 }
 
@@ -124,7 +172,7 @@ pub async fn load_instrument_meta(pool: &DbPool, symbol: &str) -> Result<Option<
     let row: Option<(i32, i32, i32)> = sqlx::query_as(
         "SELECT asset_index, price_decimals, size_decimals \
            FROM hyperliquid.instruments \
-          WHERE instrument_id = $1 AND active = true",
+           WHERE instrument_id = $1 AND market_type = 'perp' AND active = true",
     )
     .bind(symbol)
     .fetch_optional(pool)
@@ -224,6 +272,8 @@ async fn place_one(
     input: &PlaceOrderInput,
 ) -> Result<Vec<OrderResult>, GatewayError> {
     input.validate().map_err(GatewayError::Validation)?;
+
+    let builder_fee = load_builder_fee(pool, exchange, agent_key).await?;
 
     let meta = load_instrument_meta(pool, &input.symbol)
         .await
@@ -430,7 +480,7 @@ async fn place_one(
             cloid: leg.cloid_str.clone(),
             status: "pending_submission".to_string(),
             status_detail: None,
-            request_payload: place_order_input_to_json(input),
+            request_payload: place_order_input_to_json(input, builder_fee),
         };
         insert_order(pool, &new)
             .await
@@ -441,11 +491,16 @@ async fn place_one(
     let batch = BatchOrder {
         orders: batch_orders,
         grouping: OrderGrouping::Na,
-        builder: None,
+        builder: Some(Builder {
+            builder_address: BUILDER_RECIPIENT
+                .parse()
+                .expect("builder recipient must be a valid address"),
+            fee: builder_fee,
+        }),
     };
     let nonce = Utc::now().timestamp_millis() as u64;
 
-    let statuses = match exchange.place(batch, nonce).await {
+    let statuses = match exchange.place(batch, nonce, account_address).await {
         Ok(statuses) => statuses,
         Err(e) => {
             // Whole-batch failure: mark every leg 'error' and append one
@@ -608,7 +663,7 @@ fn response_status_to_json(status: &OrderResponseStatus) -> Value {
 /// `request_payload`. The input type is `Deserialize`-only by design
 /// (we don't want to echo arbitrary fields back to clients), so we map
 /// explicitly.
-fn place_order_input_to_json(input: &PlaceOrderInput) -> Value {
+fn place_order_input_to_json(input: &PlaceOrderInput, builder_fee: u32) -> Value {
     json!({
         "symbol": input.symbol,
         "side": input.side,
@@ -620,7 +675,85 @@ fn place_order_input_to_json(input: &PlaceOrderInput) -> Value {
         "take_profits": input.take_profits.iter().map(trigger_input_to_json).collect::<Vec<_>>(),
         "stop_losses": input.stop_losses.iter().map(trigger_input_to_json).collect::<Vec<_>>(),
         "memory_record_ids": input.memory_record_ids,
+        "builder": {"b": BUILDER_RECIPIENT, "f": builder_fee},
     })
+}
+
+/// Load the owner-scoped saved approval and re-check it with Hyperliquid for
+/// every outgoing batch. Missing, stale, malformed, or insufficient approval
+/// is deliberately a validation failure so no exchange call can occur.
+#[derive(Debug, sqlx::FromRow)]
+struct BuilderFeeOwnerRow {
+    wallet_address: String,
+    builder_fee_tenths_of_bp: i16,
+    builder_fee_approved_at: Option<chrono::DateTime<Utc>>,
+    lifecycle: String,
+    api_wallet_expires_at: Option<chrono::DateTime<Utc>>,
+    api_wallet_expiry_checked_at: Option<chrono::DateTime<Utc>>,
+    private_key_ciphertext: Option<Vec<u8>>,
+    private_key_key_id: Option<String>,
+}
+
+async fn load_builder_fee(
+    pool: &DbPool,
+    exchange: &dyn ExchangeClient,
+    agent_key: &str,
+) -> Result<u32, GatewayError> {
+    let row = sqlx::query_as::<_, BuilderFeeOwnerRow>(
+        "SELECT users.wallet_address, users.builder_fee_tenths_of_bp,
+                users.builder_fee_approved_at, agents.lifecycle,
+                users.api_wallet_expires_at, users.api_wallet_expiry_checked_at,
+                users.hyperliquid_private_key_ciphertext AS private_key_ciphertext,
+                users.hyperliquid_private_key_key_id AS private_key_key_id
+           FROM agents
+           JOIN users ON users.id = agents.user_id
+          WHERE agents.agent_key = $1",
+    )
+    .bind(agent_key)
+    .fetch_optional(pool)
+    .await
+    .map_err(|error| GatewayError::Internal(error.into()))?;
+    let Some(owner_row) = row else {
+        return Err(GatewayError::Validation(
+            "agent owner is unavailable".into(),
+        ));
+    };
+    if owner_row.lifecycle != crate::agents::model::AGENT_LIFECYCLE_ACTIVE {
+        return Err(GatewayError::Validation("agent is not active".into()));
+    }
+    if owner_row.private_key_ciphertext.is_none()
+        || owner_row.private_key_key_id.is_none()
+        || owner_row
+            .api_wallet_expires_at
+            .is_some_and(|expires_at| expires_at <= Utc::now())
+    {
+        return Err(GatewayError::Validation(
+            "the user's trading signer needs attention".into(),
+        ));
+    }
+    if owner_row.api_wallet_expires_at.is_some() && owner_row.api_wallet_expiry_checked_at.is_none()
+    {
+        return Err(GatewayError::Validation(
+            "the user's trading signer needs attention".into(),
+        ));
+    }
+    if owner_row.builder_fee_approved_at.is_none() || owner_row.builder_fee_tenths_of_bp <= 0 {
+        return Err(GatewayError::Validation(
+            "builder fee has not been approved".into(),
+        ));
+    }
+    let saved_fee = u32::try_from(owner_row.builder_fee_tenths_of_bp)
+        .map_err(|_| GatewayError::Validation("builder fee has not been approved".into()))?;
+    let approved_fee = exchange
+        .max_builder_fee(&owner_row.wallet_address, BUILDER_RECIPIENT)
+        .await
+        .map_err(|_| GatewayError::Validation("unable to verify builder fee approval".into()))?;
+    if approved_fee == 0 || approved_fee < saved_fee {
+        return Err(GatewayError::Validation(
+            "builder fee approval is insufficient".into(),
+        ));
+    }
+    Ok(saved_fee)
 }
 
 fn trigger_input_to_json(t: &super::model::TriggerInput) -> Value {
@@ -788,6 +921,7 @@ pub async fn cancel_orders(
                     cancels: batch_cancels.clone(),
                 },
                 nonce,
+                account_address,
             )
             .await
             .map_err(|e| GatewayError::Internal(anyhow::anyhow!("cancel failed: {e}")))?
@@ -969,6 +1103,7 @@ mod tests {
         last_place_batch: Mutex<Option<BatchOrder>>,
         last_cancel_batch: Mutex<Option<BatchCancel>>,
         place_call_count: Mutex<usize>,
+        max_builder_fee: Mutex<Option<Result<u32, String>>>,
     }
 
     impl FakeExchange {
@@ -993,6 +1128,12 @@ mod tests {
             *me.place_err.lock().await = Some(msg.to_string());
             me
         }
+
+        async fn with_max_builder_fee(result: Result<u32, &str>) -> Self {
+            let me = Self::new().await;
+            *me.max_builder_fee.lock().await = Some(result.map_err(str::to_string));
+            me
+        }
     }
 
     impl ExchangeClient for FakeExchange {
@@ -1000,6 +1141,7 @@ mod tests {
             &'a self,
             batch: BatchOrder,
             _nonce: u64,
+            _trading_account: &'a str,
         ) -> BoxFuture<'a, Result<Vec<OrderResponseStatus>, String>> {
             Box::pin(async move {
                 *self.place_call_count.lock().await += 1;
@@ -1015,6 +1157,7 @@ mod tests {
             &'a self,
             batch: BatchCancel,
             _nonce: u64,
+            _trading_account: &'a str,
         ) -> BoxFuture<'a, Result<Vec<OrderResponseStatus>, String>> {
             Box::pin(async move {
                 *self.last_cancel_batch.lock().await = Some(batch);
@@ -1028,18 +1171,19 @@ mod tests {
         fn all_mids<'a>(&'a self) -> BoxFuture<'a, Result<HashMap<String, Decimal>, String>> {
             Box::pin(async move { Ok(self.mids.lock().await.clone()) })
         }
+
+        fn max_builder_fee<'a>(
+            &'a self,
+            _user: &'a str,
+            _builder: &'a str,
+        ) -> BoxFuture<'a, Result<u32, String>> {
+            Box::pin(async move { self.max_builder_fee.lock().await.clone().unwrap_or(Ok(10)) })
+        }
     }
 
     // ---- test helpers -----------------------------------------------------
 
     fn sample_agent(suffix: &str) -> AgentRegistryRow {
-        let enc = EncryptionKey::new(
-            "test",
-            [
-                0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22,
-                23, 24, 25, 26, 27, 28, 29, 30, 31,
-            ],
-        );
         let private_key_raw = format!("deterministic-{suffix}");
         let mut bytes = [0u8; 32];
         let raw = private_key_raw.as_bytes();
@@ -1050,33 +1194,42 @@ mod tests {
             bytes[i] = *b;
         }
         let private_key = format!("0x{}", hex::encode(bytes));
-        let ciphertext = encrypt(&enc, &private_key).unwrap();
         let wallet = derive_wallet_address(&private_key).unwrap();
         let now = Utc::now();
         let ts = now.timestamp_millis();
         AgentRegistryRow {
             agent_key: format!("gw-test-{suffix}-{ts}"),
+            user_id: crate::test_db::test_user_id(),
             created_at: now,
             updated_at: now,
             enabled: true,
+            lifecycle: crate::agents::model::AGENT_LIFECYCLE_ACTIVE.to_string(),
             display_name: format!("GW Test {suffix}"),
-            wallet_address: wallet,
+            trading_account_address: Some(wallet),
             environment: "live".to_string(),
             api_key: format!("vta_gw-{suffix}-{ts}"),
             api_key_last_used_at: None,
             backend_kind: crate::agents::model::BACKEND_KIND_OPENCODE.to_string(),
             runtime_id: "opencode-local".to_string(),
             runtime_config: serde_json::json!({}),
-            hyperliquid_private_key_ciphertext: ciphertext,
-            hyperliquid_private_key_key_id: "test".to_string(),
         }
     }
 
     async fn seed(pool: &DbPool, suffix: &str) -> (String, String) {
         let row = sample_agent(suffix);
         let key = row.agent_key.clone();
-        let acct = row.wallet_address.clone();
+        let acct = row
+            .trading_account_address
+            .clone()
+            .expect("trading account");
         insert_agent(pool, &row).await.expect("insert agent");
+        sqlx::query(
+            "UPDATE users SET builder_fee_tenths_of_bp = 10, builder_fee_approved_at = now() WHERE id = $1",
+        )
+        .bind(crate::test_db::test_user_id())
+        .execute(pool)
+        .await
+        .expect("approve builder fee");
         (key, acct)
     }
 
@@ -1158,6 +1311,25 @@ mod tests {
                 .await
                 .expect("fetch rounded size");
         assert_eq!(rounded_size, Some(dec!(0.1)));
+        let batch = exchange
+            .last_place_batch
+            .lock()
+            .await
+            .take()
+            .expect("batch");
+        let builder = batch.builder.expect("builder fee");
+        assert_eq!(
+            builder.builder_address.to_string().to_ascii_lowercase(),
+            BUILDER_RECIPIENT
+        );
+        assert_eq!(builder.fee, 10);
+        let (payload,): (Value,) =
+            sqlx::query_as("SELECT request_payload FROM hyperliquid.orders WHERE id = $1")
+                .bind(stored[0].id)
+                .fetch_one(&pool)
+                .await
+                .expect("fetch request payload");
+        assert_eq!(payload["builder"], json!({"b": BUILDER_RECIPIENT, "f": 10}));
     }
 
     #[tokio::test]
@@ -1234,6 +1406,177 @@ mod tests {
         .await
         .expect("fetch stop prices");
         assert_eq!(rounded_price, trigger_price);
+        let batch = exchange
+            .last_place_batch
+            .lock()
+            .await
+            .take()
+            .expect("batch");
+        assert_eq!(batch.orders.len(), 3);
+        assert_eq!(batch.builder.expect("builder fee").fee, 10);
+    }
+
+    #[tokio::test]
+    async fn builder_fee_validation_failures_do_not_call_the_exchange() {
+        let pool = test_db::pool().await;
+        let (agent_key, account) = seed(&pool, "fee-invalid").await;
+        seed_instrument(&pool, "BTC", 0, 5).await;
+        let req = PlaceOrdersRequest {
+            orders: vec![limit_buy("BTC", dec!(0.1), dec!(50000))],
+        };
+
+        sqlx::query("UPDATE users SET builder_fee_approved_at = NULL WHERE id = $1")
+            .bind(crate::test_db::test_user_id())
+            .execute(&pool)
+            .await
+            .expect("clear saved approval");
+        let absent = FakeExchange::new().await;
+        assert!(
+            place_orders(&pool, &absent, &agent_key, &account, "live", &req)
+                .await
+                .is_err()
+        );
+        assert_eq!(*absent.place_call_count.lock().await, 0);
+
+        sqlx::query("UPDATE users SET builder_fee_approved_at = now() WHERE id = $1")
+            .bind(crate::test_db::test_user_id())
+            .execute(&pool)
+            .await
+            .expect("restore saved approval");
+        for approval in [Ok(0), Ok(9), Err("info unavailable")] {
+            let exchange = FakeExchange::with_max_builder_fee(approval).await;
+            assert!(
+                place_orders(&pool, &exchange, &agent_key, &account, "live", &req)
+                    .await
+                    .is_err()
+            );
+            assert_eq!(*exchange.place_call_count.lock().await, 0);
+        }
+
+        sqlx::query("UPDATE agents SET lifecycle = 'pending_funding' WHERE agent_key = $1")
+            .bind(&agent_key)
+            .execute(&pool)
+            .await
+            .expect("deactivate agent");
+        let inactive = FakeExchange::new().await;
+        assert!(
+            place_orders(&pool, &inactive, &agent_key, &account, "live", &req)
+                .await
+                .is_err()
+        );
+        assert_eq!(*inactive.place_call_count.lock().await, 0);
+    }
+
+    #[tokio::test]
+    async fn builder_fee_is_scoped_to_the_agent_owner() {
+        let pool = test_db::pool().await;
+        let (a_key, a_account) = seed(&pool, "fee-owner-a").await;
+        let (b_key, b_account) = seed(&pool, "fee-owner-b").await;
+        seed_instrument(&pool, "BTC", 0, 5).await;
+        let other_user = Uuid::new_v4();
+        let other_private_key = "59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d";
+        let other_signer_address =
+            derive_wallet_address(other_private_key).expect("signer address");
+        let other_encryption_key = EncryptionKey::new(
+            "test",
+            [
+                0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22,
+                23, 24, 25, 26, 27, 28, 29, 30, 31,
+            ],
+        );
+        let other_ciphertext =
+            encrypt(&other_encryption_key, other_private_key).expect("encrypt signer");
+        sqlx::query(
+            "INSERT INTO users (id, wallet_address, api_wallet_address,
+                                hyperliquid_private_key_ciphertext, hyperliquid_private_key_key_id,
+                                api_wallet_approved_at, builder_fee_tenths_of_bp, builder_fee_approved_at)
+             VALUES ($1, $2, $3, $4, 'test', now(), 17, now())",
+        )
+        .bind(other_user)
+        .bind("0x0000000000000000000000000000000000000017")
+        .bind(other_signer_address)
+        .bind(other_ciphertext)
+        .execute(&pool)
+        .await
+        .expect("insert second owner");
+        sqlx::query("UPDATE agents SET user_id = $2 WHERE agent_key = $1")
+            .bind(&b_key)
+            .bind(other_user)
+            .execute(&pool)
+            .await
+            .expect("assign second owner");
+        let req = PlaceOrdersRequest {
+            orders: vec![limit_buy("BTC", dec!(0.1), dec!(50000))],
+        };
+        let a_exchange = FakeExchange::with_place_statuses(vec![OrderResponseStatus::Resting {
+            oid: 1,
+            cloid: None,
+        }])
+        .await;
+        let b_exchange = FakeExchange::with_place_statuses(vec![OrderResponseStatus::Resting {
+            oid: 2,
+            cloid: None,
+        }])
+        .await;
+        *b_exchange.max_builder_fee.lock().await = Some(Ok(17));
+        place_orders(&pool, &a_exchange, &a_key, &a_account, "live", &req)
+            .await
+            .expect("first owner order");
+        place_orders(&pool, &b_exchange, &b_key, &b_account, "live", &req)
+            .await
+            .expect("second owner order");
+        assert_eq!(
+            a_exchange
+                .last_place_batch
+                .lock()
+                .await
+                .as_ref()
+                .unwrap()
+                .builder
+                .as_ref()
+                .unwrap()
+                .fee,
+            10
+        );
+        assert_eq!(
+            b_exchange
+                .last_place_batch
+                .lock()
+                .await
+                .as_ref()
+                .unwrap()
+                .builder
+                .as_ref()
+                .unwrap()
+                .fee,
+            17
+        );
+    }
+
+    #[tokio::test]
+    async fn spot_orders_are_rejected_without_an_exchange_call() {
+        let pool = test_db::pool().await;
+        let (agent_key, account) = seed(&pool, "spot-fee").await;
+        sqlx::query(
+            "INSERT INTO hyperliquid.instruments
+                (instrument_id, name, market_type, base_asset, quote_asset, settlement_asset,
+                 asset_index, price_decimals, size_decimals, lot_size, max_leverage, is_hip3,
+                 active, created_at, updated_at)
+             VALUES ('PURR/USDC', 'PURR/USDC', 'spot', 'PURR', 'USDC', 'USDC',
+                     10, 2, 3, 0.001, 1, false, true, now(), now())",
+        )
+        .execute(&pool)
+        .await
+        .expect("seed spot instrument");
+        let exchange = FakeExchange::new().await;
+        let req = PlaceOrdersRequest {
+            orders: vec![limit_buy("PURR/USDC", dec!(1), dec!(1))],
+        };
+        let error = place_orders(&pool, &exchange, &agent_key, &account, "live", &req)
+            .await
+            .expect_err("spot order must be rejected");
+        assert!(error.to_string().contains("unsupported"));
+        assert_eq!(*exchange.place_call_count.lock().await, 0);
     }
 
     #[tokio::test]

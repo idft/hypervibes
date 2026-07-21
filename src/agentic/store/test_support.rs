@@ -2,7 +2,6 @@ use chrono::Utc;
 use sqlx::{query, query_as};
 
 use crate::agents::{
-    crypto::{EncryptionKey, encrypt},
     keys::derive_wallet_address,
     model::{AgentRegistryRow, BACKEND_KIND_OPENCODE},
     store::insert_agent,
@@ -22,33 +21,25 @@ pub fn deterministic_private_key(key: &str) -> String {
 }
 
 pub fn sample_agent(key: &str) -> AgentRegistryRow {
-    let enc = EncryptionKey::new(
-        "test",
-        [
-            0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23,
-            24, 25, 26, 27, 28, 29, 30, 31,
-        ],
-    );
     let private_key = deterministic_private_key(key);
-    let ciphertext = encrypt(&enc, &private_key).unwrap();
     let wallet = derive_wallet_address(&private_key).unwrap();
     let now = Utc::now();
 
     AgentRegistryRow {
         agent_key: key.to_string(),
+        user_id: crate::test_db::test_user_id(),
         created_at: now,
         updated_at: now,
         enabled: true,
+        lifecycle: crate::agents::model::AGENT_LIFECYCLE_ACTIVE.to_string(),
         display_name: format!("Test {key}"),
-        wallet_address: wallet,
+        trading_account_address: Some(wallet),
         environment: "live".to_string(),
         api_key: format!("vta_{key}"),
         api_key_last_used_at: None,
         backend_kind: BACKEND_KIND_OPENCODE.to_string(),
         runtime_id: "opencode-local".to_string(),
         runtime_config: serde_json::json!({}),
-        hyperliquid_private_key_ciphertext: ciphertext,
-        hyperliquid_private_key_key_id: "test".to_string(),
     }
 }
 

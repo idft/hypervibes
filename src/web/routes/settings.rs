@@ -8,37 +8,37 @@ use axum::{
 };
 use serde::Deserialize;
 
-use crate::web::{AppState, error::AppError, templates::SettingsPageTemplate};
-#[derive(Debug, Clone, Default, Deserialize)]
-pub(in crate::web::routes) struct SettingsUpdateForm {
-    #[serde(default)]
-    pub system_prompt: String,
-}
+use crate::{
+    settings::store::{get_user_settings, upsert_user_system_prompt},
+    web::{AppState, auth::AuthenticatedUser, error::AppError, templates::SettingsPageTemplate},
+};
 pub(in crate::web::routes) async fn settings_index(
     State(state): State<Arc<AppState>>,
+    user: AuthenticatedUser,
 ) -> Result<Response, AppError> {
-    let row = crate::settings::store::get_setting(&state.db_pool, "opencode_system_prompt").await?;
-    let system_prompt = row
-        .map(|r| r.value)
-        .filter(|v| !v.trim().is_empty())
-        .unwrap_or_else(|| crate::agents::prompts::DEFAULT_SYSTEM_PROMPT.to_string());
-    let html = SettingsPageTemplate {
-        system_prompt,
-        current_path: "/settings".to_string(),
-    }
-    .render()?;
-    Ok(Html(html).into_response())
+    let system_prompt = get_user_settings(&state.db_pool, user.id)
+        .await?
+        .map(|settings| settings.opencode_system_prompt)
+        .unwrap_or_default();
+    Ok(Html(
+        SettingsPageTemplate {
+            system_prompt,
+            current_path: "/settings".to_string(),
+        }
+        .render()?,
+    )
+    .into_response())
+}
+
+#[derive(Deserialize)]
+pub(in crate::web::routes) struct SettingsForm {
+    system_prompt: String,
 }
 pub(in crate::web::routes) async fn settings_update(
     State(state): State<Arc<AppState>>,
-    Form(form): Form<SettingsUpdateForm>,
+    user: AuthenticatedUser,
+    Form(form): Form<SettingsForm>,
 ) -> Result<Response, AppError> {
-    crate::settings::store::upsert_setting(
-        &state.db_pool,
-        "opencode_system_prompt",
-        &form.system_prompt,
-        Some("Base system prompt prepended to every OpenCode agent job prompt."),
-    )
-    .await?;
+    upsert_user_system_prompt(&state.db_pool, user.id, form.system_prompt.trim()).await?;
     Ok(Redirect::to("/settings").into_response())
 }

@@ -695,18 +695,10 @@ mod tests {
     async fn seed_run_for_timeout_test(pool: &DbPool, key: &str) -> (i64, i64, String) {
         use crate::agentic::store::insert_default_opencode_schedules;
         use crate::agents::{
-            crypto::EncryptionKey,
             keys::derive_wallet_address,
             model::{AgentRegistryRow, BACKEND_KIND_OPENCODE},
             store::insert_agent,
         };
-        let enc = EncryptionKey::new(
-            "test",
-            [
-                0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22,
-                23, 24, 25, 26, 27, 28, 29, 30, 31,
-            ],
-        );
         // Seed a deterministic private key.
         fn deterministic_private_key(key: &str) -> String {
             use rand::rngs::StdRng;
@@ -719,18 +711,19 @@ mod tests {
             format!("0x{}", hex::encode(bytes))
         }
         let private_key = deterministic_private_key(key);
-        let ciphertext = crate::agents::crypto::encrypt(&enc, &private_key).expect("encrypt");
         let wallet = derive_wallet_address(&private_key).expect("wallet");
         let now = Utc::now();
         insert_agent(
             pool,
             &AgentRegistryRow {
                 agent_key: key.to_string(),
+                user_id: crate::test_db::test_user_id(),
                 created_at: now,
                 updated_at: now,
                 enabled: true,
+                lifecycle: crate::agents::model::AGENT_LIFECYCLE_ACTIVE.to_string(),
                 display_name: format!("Test {key}"),
-                wallet_address: wallet,
+                trading_account_address: Some(wallet),
                 environment: "live".to_string(),
                 api_key: format!("vta_{key}"),
                 api_key_last_used_at: None,
@@ -741,8 +734,6 @@ mod tests {
                     "workspace_container_path": format!("/workspaces/agents/{key}"),
                     "profile_source": "agent-runtime/workspace-template",
                 }),
-                hyperliquid_private_key_ciphertext: ciphertext,
-                hyperliquid_private_key_key_id: "test".to_string(),
             },
         )
         .await

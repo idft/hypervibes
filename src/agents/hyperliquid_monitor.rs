@@ -5,10 +5,7 @@ use tokio::{sync::watch, task::JoinHandle};
 use tracing::{error, info, warn};
 
 use crate::{
-    agents::{
-        crypto::{EncryptionKey, decrypt},
-        store::get_agent_private_key_ciphertext,
-    },
+    agents::crypto::{EncryptionKey, decrypt},
     db::DbPool,
     hyperliquid::{
         account_sync::{
@@ -25,6 +22,7 @@ use crate::{
         },
         raw_http::{RawHttpConfig, RawHyperliquidHttpClient},
     },
+    web::auth::get_user_api_wallet_for_agent,
 };
 
 const REGISTRY_REFRESH_INTERVAL: Duration = Duration::from_secs(30);
@@ -35,13 +33,13 @@ const DEFAULT_OVERLAP_MS: u64 = 300_000;
 #[derive(Debug, Clone)]
 struct EnabledAgent {
     agent_key: String,
-    wallet_address: String,
+    trading_account_address: String,
     environment: String,
     history_start_ms: u64,
 }
 
 struct AgentTaskHandle {
-    wallet_address: String,
+    trading_account_address: String,
     environment: String,
     task: JoinHandle<()>,
 }
@@ -112,7 +110,7 @@ impl HyperliquidAgentMonitor {
         let mut to_stop = Vec::new();
         for (key, handle) in &self.tasks {
             if let Some(agent) = agents.iter().find(|a| a.agent_key == *key) {
-                if handle.wallet_address != agent.wallet_address
+                if handle.trading_account_address != agent.trading_account_address
                     || handle.environment != agent.environment
                 {
                     to_stop.push(key.clone());
@@ -133,7 +131,7 @@ impl HyperliquidAgentMonitor {
             if !self.tasks.contains_key(&agent.agent_key) {
                 info!(
                     agent_key = %agent.agent_key,
-                    wallet_address = %agent.wallet_address,
+                    trading_account_address = %agent.trading_account_address,
                     environment = %agent.environment,
                     "starting agent sync task"
                 );
@@ -165,7 +163,7 @@ fn spawn_agent_task(
     live_accounts: Arc<LiveAccountStore>,
     encryption_key: EncryptionKey,
 ) -> (String, AgentTaskHandle) {
-    let wallet_address = agent.wallet_address.clone();
+    let trading_account_address = agent.trading_account_address.clone();
     let environment = agent.environment.clone();
     let agent_key = agent.agent_key.clone();
 
@@ -184,7 +182,7 @@ fn spawn_agent_task(
     (
         agent_key,
         AgentTaskHandle {
-            wallet_address,
+            trading_account_address,
             environment,
             task,
         },
@@ -213,7 +211,7 @@ async fn run_agent_task(
     };
 
     let config = AccountSyncConfig {
-        account_address: agent.wallet_address.clone(),
+        account_address: agent.trading_account_address.clone(),
         environment,
         history_start_ms: agent.history_start_ms,
         overlap_ms: DEFAULT_OVERLAP_MS,
@@ -221,7 +219,7 @@ async fn run_agent_task(
 
     let raw_http = Arc::new(RawHyperliquidHttpClient::new(RawHttpConfig {
         environment,
-        account_address: agent.wallet_address.clone(),
+        account_address: agent.trading_account_address.clone(),
     }));
 
     let reconcile_handle = match build_order_reconcile_clients(&pool, &agent, &encryption_key).await
@@ -230,7 +228,7 @@ async fn run_agent_task(
             pool.clone(),
             reader,
             exchange,
-            agent.wallet_address.clone(),
+            agent.trading_account_address.clone(),
             environment.as_journal_str().to_string(),
             shutdown_rx.clone(),
             ORDER_RECONCILE_INTERVAL,
@@ -238,7 +236,7 @@ async fn run_agent_task(
         Err(e) => {
             error!(
                 agent_key = %agent.agent_key,
-                wallet_address = %agent.wallet_address,
+                trading_account_address = %agent.trading_account_address,
                 error = ?e,
                 "order reconcile loop disabled for agent"
             );
@@ -248,7 +246,7 @@ async fn run_agent_task(
 
     info!(
         agent_key = %agent.agent_key,
-        wallet_address = %agent.wallet_address,
+        trading_account_address = %agent.trading_account_address,
         environment = %config.environment.as_journal_str(),
         "agent live loop starting (startup HTTP sync + WebSocket)"
     );
@@ -330,9 +328,18 @@ async fn build_order_reconcile_clients(
     Arc<dyn crate::hyperliquid::orders::reconcile::ExchangeReader>,
     Arc<dyn crate::hyperliquid::orders::gateway::ExchangeClient>,
 )> {
-    let (ciphertext, key_id) = get_agent_private_key_ciphertext(pool, &agent.agent_key)
+    let wallet = get_user_api_wallet_for_agent(pool, &agent.agent_key)
         .await?
         .with_context(|| format!("agent '{}' not found", agent.agent_key))?;
+    if !wallet.is_ready() {
+        anyhow::bail!("the user's trading signer needs attention");
+    }
+    let ciphertext = wallet
+        .hyperliquid_private_key_ciphertext
+        .with_context(|| format!("user signer for '{}' has no ciphertext", agent.agent_key))?;
+    let key_id = wallet
+        .hyperliquid_private_key_key_id
+        .with_context(|| format!("user signer for '{}' has no key id", agent.agent_key))?;
 
     if encryption_key.key_id != key_id {
         anyhow::bail!(
@@ -350,6 +357,16 @@ async fn build_order_reconcile_clients(
     let signer: hypersdk::hypercore::PrivateKeySigner = private_key
         .parse()
         .with_context(|| format!("invalid private key for agent '{}'", agent.agent_key))?;
+    let expected_address = wallet
+        .api_wallet_address
+        .as_deref()
+        .with_context(|| format!("user signer for '{}' has no address", agent.agent_key))?;
+    if signer.address().to_string().to_ascii_lowercase() != expected_address {
+        anyhow::bail!(
+            "stored user signer address does not match database for '{}'",
+            agent.agent_key
+        );
+    }
 
     Ok((
         Arc::new(RealExchangeReader::new(hypersdk::hypercore::mainnet())),
@@ -391,7 +408,10 @@ async fn load_instruments_with_retry(
 
 async fn load_enabled_agents(pool: &DbPool) -> Result<Vec<EnabledAgent>> {
     let rows = sqlx::query_as::<_, EnabledAgentRow>(
-        "SELECT agent_key, wallet_address, environment FROM agents WHERE enabled = true",
+        "SELECT agent_key, trading_account_address, environment
+           FROM agents
+          WHERE enabled = true
+            AND lifecycle = 'active'",
     )
     .fetch_all(pool)
     .await
@@ -401,7 +421,7 @@ async fn load_enabled_agents(pool: &DbPool) -> Result<Vec<EnabledAgent>> {
         .into_iter()
         .map(|r| EnabledAgent {
             agent_key: r.agent_key,
-            wallet_address: r.wallet_address,
+            trading_account_address: r.trading_account_address,
             environment: r.environment,
             history_start_ms: 0,
         })
@@ -411,6 +431,6 @@ async fn load_enabled_agents(pool: &DbPool) -> Result<Vec<EnabledAgent>> {
 #[derive(Debug, Clone, sqlx::FromRow)]
 struct EnabledAgentRow {
     agent_key: String,
-    wallet_address: String,
+    trading_account_address: String,
     environment: String,
 }

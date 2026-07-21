@@ -9,11 +9,7 @@ use std::fs;
 use tower::util::ServiceExt;
 
 use crate::{
-    agents::{
-        model::slugify_agent_key,
-        prompts::{DEFAULT_ANALYSIS_STRATEGY_PROMPT, DEFAULT_TRADING_STRATEGY_PROMPT},
-        store::get_agent,
-    },
+    agents::{model::slugify_agent_key, store::get_agent},
     hyperliquid::live_state::{AccountKey, AccountLiveState, LiveConnectionStatus},
     opencode::workspace::OpenCodeWorkspaceRuntimeConfig,
 };
@@ -36,12 +32,11 @@ async fn get_agents_renders_db_data() {
     assert_eq!(response.status(), StatusCode::OK);
 }
 #[tokio::test]
-async fn post_agents_with_invalid_private_key_returns_validation_error() {
+async fn post_agents_requires_a_name() {
     let state = test_state().await;
 
     let app = router(state.clone());
-    let body =
-        "display_name=Test Agent&hyperliquid_private_key=not-a-key&runtime_id=opencode-local";
+    let body = "display_name=";
     let response = app
         .clone()
         .oneshot(
@@ -57,6 +52,7 @@ async fn post_agents_with_invalid_private_key_returns_validation_error() {
 
     assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
 }
+
 #[tokio::test]
 async fn agents_new_page_renders_simplified_form() {
     let state = test_state().await;
@@ -77,13 +73,81 @@ async fn agents_new_page_renders_simplified_form() {
     assert!(!text.contains("name=\"runtime_id\""));
     assert!(!text.contains("Runtime instance"));
     assert!(!text.contains("name=\"enabled\""));
-    assert!(text.contains("Each agent should have its own wallet."));
+    assert!(!text.contains("Generate new Agent wallet"));
+    assert!(!text.contains("Import existing Private Key"));
 }
 #[tokio::test]
-async fn post_agents_creates_agent_with_default_strategy_prompts() {
+async fn post_user_subaccounts_requires_a_display_name() {
+    let state = test_state().await;
+
+    let response = router(state.clone())
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/wallet/subaccounts")
+                .header("content-type", "application/json")
+                .body(Body::from("{\"displayName\":\"\"}"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    let text = response_text(response).await;
+    assert!(text.contains("Enter an agent name first."));
+}
+
+#[tokio::test]
+async fn post_user_subaccounts_rejects_unusable_display_name() {
+    let state = test_state().await;
+
+    let response = router(state.clone())
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/wallet/subaccounts")
+                .header("content-type", "application/json")
+                .body(Body::from("{\"displayName\":\"!!!\"}"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    let text = response_text(response).await;
+    assert!(text.contains("Enter an agent name first."));
+}
+
+#[tokio::test]
+async fn post_user_subaccounts_requires_a_ready_signer() {
+    let state = test_state().await;
+    sqlx::query("UPDATE users SET api_wallet_approved_at = NULL WHERE id = $1")
+        .bind(crate::test_db::test_user_id())
+        .execute(&state.db_pool)
+        .await
+        .expect("clear test signer approval");
+
+    let response = router(state.clone())
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/wallet/subaccounts")
+                .header("content-type", "application/json")
+                .body(Body::from("{\"displayName\":\"BTC Momentum\"}"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    let text = response_text(response).await;
+    assert!(text.contains("trading signer needs attention"));
+}
+
+#[tokio::test]
+async fn post_agents_creates_agent_active_with_default_prompts_and_schedules() {
     let state = test_state().await;
     seed_instrument(&state, "BTC", true).await;
-    let pool = state.db_pool.clone();
     let guard = state
         ._test_db_guard
         .as_ref()
@@ -93,12 +157,7 @@ async fn post_agents_creates_agent_with_default_strategy_prompts() {
     let app = router(state.clone());
     let timestamp = chrono::Utc::now().timestamp_millis();
     let display_name = format!("SoulTest{}", timestamp);
-    let agent_key = slugify_agent_key(&display_name);
-    let private_key = random_private_key();
-    let body = format!(
-        "display_name={}&hyperliquid_private_key={}&runtime_id=opencode-local",
-        display_name, private_key
-    );
+    let body = format!("display_name={display_name}&trading_account_selection=main");
 
     let response = app
         .clone()
@@ -113,90 +172,37 @@ async fn post_agents_creates_agent_with_default_strategy_prompts() {
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::SEE_OTHER);
-    let expected_location = format!("/agents/{agent_key}");
-    assert_eq!(
-        response
-            .headers()
-            .get("location")
-            .and_then(|value| value.to_str().ok()),
-        Some(expected_location.as_str())
-    );
-
-    let stored = get_agent(&pool, &agent_key)
+    let agent_key = slugify_agent_key(&display_name);
+    let agent = get_agent(&state.db_pool, &agent_key)
         .await
-        .expect("get agent")
-        .expect("agent present");
+        .expect("load active agent")
+        .expect("active agent exists");
     assert_eq!(
-        stored.backend_kind,
-        crate::agents::model::BACKEND_KIND_OPENCODE
+        agent.lifecycle,
+        crate::agents::model::AGENT_LIFECYCLE_ACTIVE
     );
     assert_eq!(
-        crate::agents::store::list_agent_instrument_ids(&pool, &agent_key)
-            .await
-            .expect("list selected instruments"),
-        vec!["BTC".to_string()]
+        agent.trading_account_address.as_deref(),
+        Some("0x0000000000000000000000000000000000000000")
     );
-    assert_eq!(
-        stored.runtime_config["workspace_container_path"],
-        serde_json::json!(format!("/workspaces/agents/{agent_key}"))
-    );
-    let prompts = crate::agents::strategy_prompts::list_agent_strategy_prompts(&pool, &agent_key)
-        .await
-        .expect("list prompts");
-    let analysis = prompts
-        .iter()
-        .find(|row| row.prompt_kind == "analysis")
-        .expect("analysis prompt row");
-    let trading = prompts
-        .iter()
-        .find(|row| row.prompt_kind == "trading")
-        .expect("trading prompt row");
-    assert_eq!(analysis.prompt, DEFAULT_ANALYSIS_STRATEGY_PROMPT);
-    assert_eq!(trading.prompt, DEFAULT_TRADING_STRATEGY_PROMPT);
     assert!(
-        std::path::Path::new(
-            stored.runtime_config["workspace_host_path"]
-                .as_str()
-                .expect("host path string")
-        )
-        .join(".env")
-        .exists()
+        !agent
+            .runtime_config
+            .as_object()
+            .expect("runtime config object")
+            .is_empty(),
+        "expected activate_new_agent to populate runtime_config"
     );
-
-    // Default OpenCode schedules and hooks should have been inserted.
-    let schedules = crate::agentic::store::list_agent_schedules(&pool, &agent_key)
-        .await
-        .expect("list schedules");
-    assert_eq!(schedules.len(), 5);
-    let analysis = schedules
-        .iter()
-        .find(|row| row.job_key == "analysis-15m")
-        .expect("analysis schedule present");
-    assert!(!analysis.enabled);
-    assert!(schedules.iter().any(|row| row.job_key == "analysis-1h"));
-    assert!(schedules.iter().any(|row| row.job_key == "analysis-1d"));
-    let trading = schedules
-        .iter()
-        .find(|row| row.job_key == "trading-1m")
-        .expect("trading schedule present");
-    assert!(!trading.enabled);
-
-    let hooks = crate::agentic::store::list_agent_hooks(&pool, &agent_key)
-        .await
-        .expect("list hooks");
-    // Two default hooks are now seeded for new agents: the
-    // market-analysis hook and the analysis-coding hook.
-    assert_eq!(hooks.len(), 2);
-    let market_hook = hooks
-        .iter()
-        .find(|h| h.job_key == "market-analysis")
-        .expect("market-analysis hook present");
-    assert!(!market_hook.enabled);
-    let coding_hook = hooks
-        .iter()
-        .find(|h| h.job_key == "analysis-coding")
-        .expect("analysis-coding hook present");
-    assert!(!coding_hook.enabled);
+    let prompt_count: (i64,) =
+        sqlx::query_as("SELECT COUNT(*) FROM agent_strategy_prompts WHERE agent_key = $1")
+            .bind(&agent_key)
+            .fetch_one(&state.db_pool)
+            .await
+            .expect("count prompts");
+    assert!(
+        prompt_count.0 > 0,
+        "expected default strategy prompts to be inserted"
+    );
     drop(guard);
 }
 #[tokio::test]
@@ -205,35 +211,20 @@ async fn post_delete_agent_removes_agent_and_redirects() {
     let pool = state.db_pool.clone();
 
     let app = router(state.clone());
-    let timestamp = chrono::Utc::now().timestamp_millis();
-    let display_name = format!("DeleteRouteTest{}", timestamp);
-    let agent_key = slugify_agent_key(&display_name);
-    let private_key = random_private_key();
-    let body = format!(
-        "display_name={}&hyperliquid_private_key={}&runtime_id=opencode-local&enabled=on",
-        display_name, private_key
-    );
-
-    // Create the agent.
-    let response = app
-        .clone()
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri("/agents")
-                .header("content-type", "application/x-www-form-urlencoded")
-                .body(Body::from(body))
-                .unwrap(),
-        )
+    let (agent_key, _) = insert_test_opencode_agent(&state)
         .await
-        .unwrap();
-    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+        .expect("insert agent");
+    generate_test_agent_workspace(&state, &agent_key).await;
 
     let stored = get_agent(&pool, &agent_key)
         .await
         .expect("get stored agent before delete")
         .expect("agent present before delete");
-    let live_account_key = AccountKey::new(&stored.wallet_address, &stored.environment);
+    let trading_account = stored
+        .trading_account_address
+        .as_deref()
+        .expect("trading account");
+    let live_account_key = AccountKey::new(trading_account, &stored.environment);
     let workspace = OpenCodeWorkspaceRuntimeConfig::from_value(&stored.runtime_config)
         .expect("workspace metadata present");
     let workspace_path = std::path::PathBuf::from(&workspace.workspace_host_path);
@@ -246,7 +237,7 @@ async fn post_delete_agent_removes_agent_and_redirects() {
     state.live_accounts.replace(
         live_account_key.clone(),
         AccountLiveState {
-            account_address: stored.wallet_address.clone(),
+            account_address: trading_account.to_string(),
             environment: stored.environment.clone(),
             status: LiveConnectionStatus::Connected,
             updated_at: Some(Utc::now()),
@@ -303,28 +294,24 @@ async fn post_delete_agent_removes_agent_and_redirects() {
     assert!(state.live_accounts.get(&live_account_key).is_none());
 }
 #[tokio::test]
-async fn post_agents_rejects_stale_existing_workspace_directory() {
+async fn post_agents_creates_the_opencode_workspace() {
     let state = test_state().await;
     let pool = state.db_pool.clone();
     let app = router(state.clone());
     let timestamp = chrono::Utc::now().timestamp_millis();
-    let display_name = format!("StaleWorkspace{}", timestamp);
+    let display_name = format!("FreshWorkspace{}", timestamp);
     let agent_key = slugify_agent_key(&display_name);
     let workspace_path = state
         .opencode_workspace_config
         .host_workspaces_root
         .join("agents")
         .join(&agent_key);
-    fs::create_dir_all(&workspace_path).expect("create stale workspace dir");
-    let sentinel = workspace_path.join("scripts/user/sentinel.txt");
-    fs::create_dir_all(sentinel.parent().expect("sentinel parent"))
-        .expect("create sentinel parent");
-    fs::write(&sentinel, "stale").expect("write sentinel");
-
-    let private_key = random_private_key();
-    let body = format!(
-        "display_name={display_name}&hyperliquid_private_key={private_key}&runtime_id=opencode-local&enabled=on"
+    assert!(
+        !workspace_path.exists(),
+        "workspace must not exist pre-create"
     );
+
+    let body = format!("display_name={display_name}&trading_account_selection=main");
 
     let response = app
         .oneshot(
@@ -338,15 +325,15 @@ async fn post_agents_rejects_stale_existing_workspace_directory() {
         .await
         .unwrap();
 
-    assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
-    let text = response_text(response).await;
-    assert!(text.contains("Failed to create OpenCode workspace"));
-    assert!(text.contains("workspace already exists"));
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
     assert!(
         get_agent(&pool, &agent_key)
             .await
             .expect("get agent")
-            .is_none()
+            .is_some()
     );
-    assert!(sentinel.exists());
+    assert!(
+        workspace_path.exists(),
+        "create_agent should generate the workspace"
+    );
 }

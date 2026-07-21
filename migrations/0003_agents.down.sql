@@ -14,3 +14,4 @@ ALTER TABLE hyperliquid.historical_orders
     DROP CONSTRAINT IF EXISTS historical_orders_agent_account_fkey;
 
 DROP TABLE IF EXISTS agents;
+DROP TABLE IF EXISTS agent_runtimes;

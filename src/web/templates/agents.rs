@@ -14,7 +14,6 @@ use crate::{
     model_catalog::options::ModelPickerOption,
 };
 
-use super::balance::AccountBalanceView;
 use super::hooks::AgenticJobHookView;
 use super::jobs::AgenticJobScheduleView;
 use super::memories::{
@@ -23,6 +22,7 @@ use super::memories::{
 };
 use super::opencode::OpenCodeWorkspaceSettingsView;
 use super::runs::AgenticRunView;
+use super::{balance::AccountBalanceView, wallet::TradingAccountChoicesView};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AgentShowTab {
@@ -113,8 +113,17 @@ pub struct AgentSelectorItemsTemplate {
 #[template(path = "agents_new.html")]
 pub struct AgentsNewPageTemplate {
     pub form: CreateAgentForm,
+    pub choices: TradingAccountChoicesView,
+    pub selected_account: String,
     pub errors: Vec<String>,
     pub current_path: String,
+}
+
+#[derive(Template)]
+#[template(path = "agent_trading_account_choices.html")]
+pub struct AgentTradingAccountChoicesTemplate {
+    pub choices: TradingAccountChoicesView,
+    pub selected_account: String,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -276,6 +285,8 @@ pub struct AgentsShowPageTemplate {
     pub api_key_masked: String,
     pub prompt_editors: Vec<PromptEditorView>,
     pub current_path: String,
+    pub is_main_account: bool,
+    pub subaccount_name: Option<String>,
     pub jobs: Vec<AgenticJobScheduleView>,
     pub hooks: Vec<AgenticJobHookView>,
     pub recent_runs: Vec<AgenticRunView>,
@@ -305,6 +316,8 @@ impl AgentsShowPageTemplate {
             api_key_masked: mask_api_key(&agent.api_key),
             prompt_editors: Vec::new(),
             current_path: active_tab.path(&agent_key),
+            is_main_account: false,
+            subaccount_name: None,
             tabs,
             agent_tabs_use_htmx: true,
             show_positions_tab: active_tab == AgentShowTab::Positions,

@@ -28,9 +28,7 @@ pub fn prompt_kind_for_job_kind(job_kind: &str) -> Option<&'static str> {
         crate::agentic::model::JOB_KIND_MARKET_ANALYSIS => Some(PROMPT_KIND_MARKET_ANALYSIS),
         crate::agentic::model::JOB_KIND_TRADING => Some(PROMPT_KIND_TRADING),
         crate::agentic::model::JOB_KIND_DAILY_REVIEW => Some(PROMPT_KIND_DAILY_REVIEW),
-        crate::agentic::model::JOB_KIND_ANALYSIS_CODING => {
-            Some(PROMPT_KIND_ANALYSIS_CODING)
-        }
+        crate::agentic::model::JOB_KIND_ANALYSIS_CODING => Some(PROMPT_KIND_ANALYSIS_CODING),
         _ => None,
     }
 }
@@ -160,7 +158,7 @@ mod tests {
 
     #[test]
     fn coding_migration_backfill_matches_rust_default() {
-        let migration = include_str!("../../migrations/0013_analysis_coding_job.sql");
+        let migration = include_str!("../../migrations/0014_analysis_coding_job.sql");
         let marker = "$analysis_coding_prompt$";
         let mut parts = migration.split(marker);
         let _before = parts.next().expect("migration prefix");

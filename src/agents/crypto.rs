@@ -9,7 +9,7 @@ use rand::RngExt;
 const KEY_LEN: usize = 32;
 const NONCE_LEN: usize = 12;
 
-/// Master encryption key used to protect agent Hyperliquid private keys.
+/// Master encryption key used to protect user Hyperliquid trading signers.
 #[derive(Debug, Clone)]
 pub struct EncryptionKey {
     pub key_id: String,
@@ -49,7 +49,7 @@ impl EncryptionKey {
 ///
 /// The returned bytes contain the 12-byte nonce followed by the AEAD ciphertext
 /// (which includes the authentication tag). This single blob is what should be
-/// stored in `hyperliquid_private_key_ciphertext`.
+/// stored in `users.hyperliquid_private_key_ciphertext`.
 pub fn encrypt(key: &EncryptionKey, plaintext: &str) -> Result<Vec<u8>> {
     let cipher =
         Aes256Gcm::new_from_slice(&key.bytes).context("failed to initialize AES-256-GCM cipher")?;

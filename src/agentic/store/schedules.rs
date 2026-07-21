@@ -505,8 +505,10 @@ pub async fn list_due_opencode_schedules(
              ON runtimes.id = agents.runtime_id
            WHERE schedules.enabled = true
              AND schedules.next_run_at <= $1
-             AND agents.enabled = true
-            AND agents.backend_kind = 'opencode'
+              AND agents.enabled = true
+              AND agents.lifecycle = 'active'
+               AND agents.backend_kind = 'opencode'
+               AND agents.lifecycle = 'active'
             AND runtimes.enabled = true
             AND runtimes.base_url IS NOT NULL
             AND length(runtimes.base_url) > 0

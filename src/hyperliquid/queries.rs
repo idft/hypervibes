@@ -437,19 +437,19 @@ mod tests {
             pool,
             &AgentRegistryRow {
                 agent_key: format!("queries-agent-{suffix}"),
+                user_id: crate::test_db::test_user_id(),
                 created_at: now,
                 updated_at: now,
                 enabled: true,
+                lifecycle: crate::agents::model::AGENT_LIFECYCLE_ACTIVE.to_string(),
                 display_name: format!("Queries Agent {suffix}"),
-                wallet_address: account.to_string(),
+                trading_account_address: Some(account.to_string()),
                 environment: "live".to_string(),
                 api_key: format!("queries-api-{suffix}"),
                 api_key_last_used_at: None,
                 backend_kind: BACKEND_KIND_OPENCODE.to_string(),
                 runtime_id: "opencode-local".to_string(),
                 runtime_config: serde_json::json!({}),
-                hyperliquid_private_key_ciphertext: Vec::new(),
-                hyperliquid_private_key_key_id: "test".to_string(),
             },
         )
         .await

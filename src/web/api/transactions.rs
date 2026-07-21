@@ -54,7 +54,7 @@ pub(super) async fn list_account_transactions(
         .ok_or(ApiError::NotFound("agent not found"))?;
     let body = list_account_transactions_in_window(
         &state.db_pool,
-        &row.wallet_address,
+        row.trading_account_address.as_deref().unwrap_or_default(),
         &row.environment,
         AccountTransactionWindow {
             since: query.since,

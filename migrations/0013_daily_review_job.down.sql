@@ -33,22 +33,4 @@ DROP TABLE IF EXISTS memory.links;
 ALTER TABLE memory.records
     DROP CONSTRAINT IF EXISTS records_id_agent_key_unique;
 
-ALTER TABLE agents
-    ADD COLUMN analysis_prompt TEXT NOT NULL DEFAULT '';
-
-ALTER TABLE agents
-    ADD COLUMN trading_prompt TEXT NOT NULL DEFAULT '';
-
-UPDATE agents
-SET analysis_prompt = prompts.prompt
-FROM agent_strategy_prompts AS prompts
-WHERE prompts.agent_key = agents.agent_key
-  AND prompts.prompt_kind = 'analysis';
-
-UPDATE agents
-SET trading_prompt = prompts.prompt
-FROM agent_strategy_prompts AS prompts
-WHERE prompts.agent_key = agents.agent_key
-  AND prompts.prompt_kind = 'trading';
-
 DROP TABLE IF EXISTS agent_strategy_prompts;

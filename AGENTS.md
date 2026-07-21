@@ -31,7 +31,10 @@ Frontend assets are managed with `pnpm` and built via `esbuild` and Tailwind CSS
 ## Testing
 
 * Run `cargo test` from the repo root. Tests use the dedicated `test-postgres` service from `podman-compose.yaml` via `TEST_DATABASE_URL=postgres://vibetrading:vibetrading@127.0.0.1:15433/postgres`. `src/test_db.rs` creates isolated databases for test helper calls against that service and runs migrations in each one so database setup can happen concurrently. The dev server's container Postgres at `localhost:15432` (u: vibetrading, p: vibetrading, db: vibetrading) is never touched by tests.
-* Run `cargo fix --allow-dirty` to properly format files
+
+## UI Rules
+
+* Buttons should change the cursor on mouseover
 
 ## Coding agent Rules:
 

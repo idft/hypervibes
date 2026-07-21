@@ -7,7 +7,11 @@ use axum::body::Body;
 use chrono::Utc;
 use rust_decimal::Decimal;
 
-use crate::agents::{keys::derive_wallet_address, model::slugify_agent_key, store::insert_agent};
+use crate::agents::{
+    keys::derive_wallet_address,
+    model::slugify_agent_key,
+    store::{get_agent, insert_agent},
+};
 use crate::{
     agentic::backend::{AgenticBackend, DispatchRequest, DispatchResult},
     agents::{
@@ -20,6 +24,10 @@ use crate::{
         },
     },
     memory::CreateMemory,
+    opencode::workspace::{
+        OpenCodeWorkspaceAgent, WorkspaceGenerationMode, generate_agent_workspace,
+        runtime_config_for_generated_workspace,
+    },
     test_db,
     web::{AppState, ui_events::UiEventHub},
 };
@@ -250,19 +258,19 @@ pub(in crate::web::routes) async fn insert_test_opencode_agent(
     let now = Utc::now();
     let row = crate::agents::model::AgentRegistryRow {
         agent_key: agent_key.clone(),
+        user_id: crate::test_db::test_user_id(),
         created_at: now,
         updated_at: now,
         enabled: true,
+        lifecycle: crate::agents::model::AGENT_LIFECYCLE_ACTIVE.to_string(),
         display_name,
-        wallet_address: wallet_address.clone(),
+        trading_account_address: Some(wallet_address.clone()),
         environment: "live".to_string(),
         api_key: format!("opencode-schedule-test-{timestamp}"),
         api_key_last_used_at: None,
         backend_kind: crate::agents::model::BACKEND_KIND_OPENCODE.to_string(),
         runtime_id: "opencode-local".to_string(),
         runtime_config: serde_json::json!({}),
-        hyperliquid_private_key_ciphertext: Vec::new(),
-        hyperliquid_private_key_key_id: "test".to_string(),
     };
     if insert_agent(&state.db_pool, &row).await.is_err() {
         return None;
@@ -324,6 +332,33 @@ pub(in crate::web::routes) async fn seed_workspace_runtime_config(
     .await
     .expect("seed workspace runtime config");
 }
+
+pub(in crate::web::routes) async fn generate_test_agent_workspace(
+    state: &Arc<AppState>,
+    agent_key: &str,
+) {
+    let agent = get_agent(&state.db_pool, agent_key)
+        .await
+        .expect("load test agent")
+        .expect("test agent exists");
+    let generated = generate_agent_workspace(
+        &state.opencode_workspace_config,
+        &OpenCodeWorkspaceAgent {
+            agent_key: agent.agent_key,
+            display_name: agent.display_name,
+            api_key: agent.api_key,
+        },
+        WorkspaceGenerationMode::CreateNew,
+    )
+    .expect("generate test workspace");
+    update_agent_runtime_config(
+        &state.db_pool,
+        agent_key,
+        runtime_config_for_generated_workspace(&generated).into_value(),
+    )
+    .await
+    .expect("store test workspace metadata");
+}
 pub(in crate::web::routes) async fn insert_test_agent_with_text(
     state: &Arc<AppState>,
     analysis_prompt: String,
@@ -347,19 +382,19 @@ pub(in crate::web::routes) async fn insert_test_agent_with_text(
     let now = Utc::now();
     let row = crate::agents::model::AgentRegistryRow {
         agent_key: agent_key.clone(),
+        user_id: crate::test_db::test_user_id(),
         created_at: now,
         updated_at: now,
         enabled: true,
+        lifecycle: crate::agents::model::AGENT_LIFECYCLE_ACTIVE.to_string(),
         display_name,
-        wallet_address: wallet_address.clone(),
+        trading_account_address: Some(wallet_address.clone()),
         environment: "live".to_string(),
         api_key: format!("balance-stream-test-{timestamp}"),
         api_key_last_used_at: None,
         backend_kind: crate::agents::model::BACKEND_KIND_OPENCODE.to_string(),
         runtime_id: "opencode-local-balance-stream".to_string(),
         runtime_config: serde_json::json!({}),
-        hyperliquid_private_key_ciphertext: Vec::new(),
-        hyperliquid_private_key_key_id: "test".to_string(),
     };
     if insert_agent(&state.db_pool, &row).await.is_err() {
         return None;

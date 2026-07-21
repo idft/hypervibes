@@ -10,6 +10,7 @@ use chrono::Utc;
 use serde::Deserialize;
 use tracing::warn;
 
+use super::super::wallet::agent_subaccount_name;
 use super::memories::{AgentMemoriesQuery, parse_memory_date_filter, prepare_memory_timeline_page};
 use super::settings::build_opencode_workspace_settings_view;
 use super::transactions::apply_live_cash_balance_anchor;
@@ -35,6 +36,7 @@ use crate::{
     },
     web::{
         AppState,
+        auth::AuthenticatedUser,
         error::AppError,
         templates::{
             AccountBalancePartialTemplate, AccountBalanceView, AgentShowTab,
@@ -47,10 +49,12 @@ use crate::{
 };
 pub(in crate::web::routes) async fn agents_show(
     State(state): State<Arc<AppState>>,
+    user: AuthenticatedUser,
     Path(agent_key): Path<String>,
 ) -> Result<Response, AppError> {
     render_agent_show_page(
         &state,
+        &user,
         &agent_key,
         AgentShowTab::Positions,
         None,
@@ -79,6 +83,7 @@ pub(in crate::web::routes) struct AgentSettingsQuery {
 }
 pub(in crate::web::routes) async fn render_agent_show_page(
     state: &Arc<AppState>,
+    user: &AuthenticatedUser,
     agent_key: &str,
     active_tab: AgentShowTab,
     transactions_query: Option<AgentTransactionsQuery>,
@@ -91,6 +96,13 @@ pub(in crate::web::routes) async fn render_agent_show_page(
     };
 
     let mut template = AgentsShowPageTemplate::new(agent.clone(), active_tab);
+    if let Some(address) = agent.trading_account_address.as_deref() {
+        let is_main = address.eq_ignore_ascii_case(&user.wallet_address);
+        template.is_main_account = is_main;
+        if !is_main {
+            template.subaccount_name = Some(agent_subaccount_name(&agent.display_name));
+        }
+    }
 
     let instrument_options =
         match list_agent_instrument_options(&state.db_pool, &agent.agent_key).await {
@@ -205,8 +217,7 @@ pub(in crate::web::routes) async fn render_agent_show_page(
                                 .filter(|prompt| !prompt.trim().is_empty())
                                 .cloned()
                                 .unwrap_or_else(|| {
-                                    default_prompt_for_kind(PROMPT_KIND_ANALYSIS_CODING)
-                                        .to_string()
+                                    default_prompt_for_kind(PROMPT_KIND_ANALYSIS_CODING).to_string()
                                 }),
                             default_prompt_for_kind(PROMPT_KIND_ANALYSIS_CODING),
                         ),
@@ -229,11 +240,8 @@ pub(in crate::web::routes) async fn render_agent_show_page(
                 template.opencode_workspace =
                     build_opencode_workspace_settings_view(state, &agent).await;
             }
-            match instrument_options {
-                Some(rows) => {
-                    template.instrument_options = rows;
-                }
-                None => {}
+            if let Some(rows) = instrument_options {
+                template.instrument_options = rows;
             }
         }
         AgentShowTab::Jobs => {
@@ -310,7 +318,7 @@ pub(in crate::web::routes) async fn populate_jobs_tab(
             let total_pages = if total_count == 0 {
                 0
             } else {
-                (total_count + RUNS_PER_PAGE - 1) / RUNS_PER_PAGE
+                total_count.div_ceil(RUNS_PER_PAGE)
             };
             let current_page = if total_pages == 0 {
                 1
@@ -382,16 +390,17 @@ pub(in crate::web::routes) async fn populate_transactions_tab(
     requested_transactions_page: usize,
 ) {
     const TRANSACTIONS_PER_PAGE: usize = 25;
+    let Some(account_address) = agent.trading_account_address.as_deref() else {
+        return;
+    };
 
-    match count_account_transactions(&state.db_pool, &agent.wallet_address, &agent.environment)
-        .await
-    {
+    match count_account_transactions(&state.db_pool, account_address, &agent.environment).await {
         Ok(total_count) => {
             let total_count = total_count as usize;
             let total_pages = if total_count == 0 {
                 0
             } else {
-                (total_count + TRANSACTIONS_PER_PAGE - 1) / TRANSACTIONS_PER_PAGE
+                total_count.div_ceil(TRANSACTIONS_PER_PAGE)
             };
             let current_page = if total_pages == 0 {
                 1
@@ -425,7 +434,7 @@ pub(in crate::web::routes) async fn populate_transactions_tab(
             let offset = ((current_page - 1) * TRANSACTIONS_PER_PAGE) as i64;
             let latest_running_balance = match latest_account_running_balance(
                 &state.db_pool,
-                &agent.wallet_address,
+                account_address,
                 &agent.environment,
             )
             .await
@@ -434,7 +443,7 @@ pub(in crate::web::routes) async fn populate_transactions_tab(
                 Err(error) => {
                     warn!(
                         agent_key = %agent.agent_key,
-                        wallet_address = %agent.wallet_address,
+                        trading_account_address = %account_address,
                         environment = %agent.environment,
                         error = ?error,
                         "failed to fetch latest account running balance for transactions page"
@@ -445,7 +454,7 @@ pub(in crate::web::routes) async fn populate_transactions_tab(
 
             match list_account_transactions_page(
                 &state.db_pool,
-                &agent.wallet_address,
+                account_address,
                 &agent.environment,
                 TRANSACTIONS_PER_PAGE as i64,
                 offset,
@@ -463,7 +472,7 @@ pub(in crate::web::routes) async fn populate_transactions_tab(
                 Err(error) => {
                     warn!(
                         agent_key = %agent.agent_key,
-                        wallet_address = %agent.wallet_address,
+                        trading_account_address = %account_address,
                         environment = %agent.environment,
                         error = ?error,
                         "failed to list account transactions page for agent page"
@@ -474,7 +483,7 @@ pub(in crate::web::routes) async fn populate_transactions_tab(
         Err(error) => {
             warn!(
                 agent_key = %agent.agent_key,
-                wallet_address = %agent.wallet_address,
+                trading_account_address = %account_address,
                 environment = %agent.environment,
                 error = ?error,
                 "failed to count account transactions for agent page"
@@ -499,7 +508,10 @@ pub(in crate::web::routes) async fn populate_positions_tab(
         }
     };
 
-    let account_key = AccountKey::new(&agent.wallet_address, &agent.environment);
+    let Some(account_address) = agent.trading_account_address.as_deref() else {
+        return Ok(());
+    };
+    let account_key = AccountKey::new(account_address, &agent.environment);
     let live_snapshot = state
         .live_accounts
         .get(&account_key)
@@ -563,7 +575,7 @@ pub(in crate::web::routes) async fn populate_positions_tab(
     let since_30d = now - chrono::Duration::days(30);
     let series_24h = match fetch_balance_series(
         &state.db_pool,
-        &agent.wallet_address,
+        account_address,
         &agent.environment,
         since_24h,
         BalanceSeriesBucket::Hour,
@@ -574,7 +586,7 @@ pub(in crate::web::routes) async fn populate_positions_tab(
         Err(error) => {
             warn!(
                 agent_key = %agent.agent_key,
-                wallet_address = %agent.wallet_address,
+                trading_account_address = %account_address,
                 environment = %agent.environment,
                 error = ?error,
                 "failed to fetch 24h balance series for agent page"
@@ -584,7 +596,7 @@ pub(in crate::web::routes) async fn populate_positions_tab(
     };
     let series_30d = match fetch_balance_series(
         &state.db_pool,
-        &agent.wallet_address,
+        account_address,
         &agent.environment,
         since_30d,
         BalanceSeriesBucket::Day,
@@ -595,7 +607,7 @@ pub(in crate::web::routes) async fn populate_positions_tab(
         Err(error) => {
             warn!(
                 agent_key = %agent.agent_key,
-                wallet_address = %agent.wallet_address,
+                trading_account_address = %account_address,
                 environment = %agent.environment,
                 error = ?error,
                 "failed to fetch 30d balance series for agent page"

@@ -29,7 +29,12 @@ async fn list_account_transactions_returns_only_the_callers_windowed_journal_eve
          ) VALUES ($1, $2, $3, $4, 'deposit', 'ledger', 'deposit', 25, '{}', '{}', 'test', $4)",
     )
     .bind("transaction-api-test-event")
-    .bind(&agent.wallet_address)
+    .bind(
+        agent
+            .trading_account_address
+            .as_deref()
+            .expect("trading account"),
+    )
     .bind(&agent.environment)
     .bind(event_time)
     .execute(&state.db_pool)
@@ -43,7 +48,12 @@ async fn list_account_transactions_returns_only_the_callers_windowed_journal_eve
          ) VALUES ($1, $2, $3, $4, 'deposit', 'ledger', 'deposit', 30, '{}', '{}', 'test', $4)",
     )
     .bind("transaction-api-test-event-newer")
-    .bind(&agent.wallet_address)
+    .bind(
+        agent
+            .trading_account_address
+            .as_deref()
+            .expect("trading account"),
+    )
     .bind(&agent.environment)
     .bind(Utc.with_ymd_and_hms(2026, 7, 16, 13, 0, 0).unwrap())
     .execute(&state.db_pool)

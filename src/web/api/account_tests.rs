@@ -50,11 +50,15 @@ async fn get_account_returns_fresh_account_contract_after_live_state_seeded() {
         .await
         .unwrap()
         .expect("present");
-    let key = AccountKey::new(&row.wallet_address, &row.environment);
+    let trading_account = row
+        .trading_account_address
+        .as_deref()
+        .expect("trading account");
+    let key = AccountKey::new(trading_account, &row.environment);
     state.live_accounts.replace(
         key,
         AccountLiveState {
-            account_address: row.wallet_address.clone(),
+            account_address: trading_account.to_string(),
             environment: row.environment.clone(),
             updated_at: Some(Utc::now()),
             margin: Some(LiveMarginState {
@@ -81,7 +85,7 @@ async fn get_account_returns_fresh_account_contract_after_live_state_seeded() {
     assert_eq!(body["agent_key"], serde_json::Value::from(agent_key));
     assert_eq!(
         body["account_address"],
-        serde_json::Value::from(row.wallet_address)
+        serde_json::Value::from(trading_account)
     );
     assert_eq!(
         body["environment"],

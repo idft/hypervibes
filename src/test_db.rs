@@ -9,7 +9,19 @@ use tokio::runtime::Builder;
 use tokio::sync::OnceCell;
 use uuid::Uuid;
 
+use crate::agents::{
+    crypto::{EncryptionKey, encrypt},
+    keys::derive_wallet_address,
+};
+
 static STALE_DB_CLEANUP: OnceCell<()> = OnceCell::const_new();
+const TEST_USER_ID: Uuid = Uuid::from_u128(1);
+const TEST_API_WALLET_PRIVATE_KEY: &str =
+    "4c0883a69102937d6231471b5dbb6204fe5129617082795f9d3d2c7e2f9f3f5b";
+
+pub fn test_user_id() -> Uuid {
+    TEST_USER_ID
+}
 
 #[derive(Debug)]
 pub struct TestDb {
@@ -133,6 +145,30 @@ pub async fn pool() -> TestDb {
         .run(&pool)
         .await
         .expect("run migrations on test database");
+    let encryption_key = EncryptionKey::new(
+        "test",
+        [
+            0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23,
+            24, 25, 26, 27, 28, 29, 30, 31,
+        ],
+    );
+    let api_wallet_address =
+        derive_wallet_address(TEST_API_WALLET_PRIVATE_KEY).expect("test API wallet address");
+    let ciphertext =
+        encrypt(&encryption_key, TEST_API_WALLET_PRIVATE_KEY).expect("encrypt test API wallet");
+    sqlx::query(
+        "INSERT INTO users (
+             id, wallet_address, api_wallet_address,
+             hyperliquid_private_key_ciphertext, hyperliquid_private_key_key_id,
+             api_wallet_approved_at
+         ) VALUES ($1, '0x0000000000000000000000000000000000000001', $2, $3, 'test', now())",
+    )
+    .bind(TEST_USER_ID)
+    .bind(api_wallet_address)
+    .bind(ciphertext)
+    .execute(&pool)
+    .await
+    .expect("seed test user");
 
     TestDb {
         pool,

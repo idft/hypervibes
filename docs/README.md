@@ -11,6 +11,7 @@ and supervised background work for agent jobs and exchange monitoring.
 - `OpenCode.md`: OpenCode runtime, workspace, scheduling, and dispatch behavior
 - `Memory.md`: append-only agent memory and retrieval contracts
 - `Hyperliquid.md`: exchange synchronization, account journal, and order gateway
+- `WalletSecurity.md`: wallet-login, agent-wallet, approval, and session security model
 - `Testing.md`: test database and frontend/SSE test behavior
 
 ## Source Map

@@ -429,23 +429,11 @@ mod tests {
 
     use super::*;
     use crate::{
-        agents::{
-            crypto::{EncryptionKey, encrypt},
-            keys::derive_wallet_address,
-            model::AgentRegistryRow,
-            store::insert_agent,
-        },
+        agents::{keys::derive_wallet_address, model::AgentRegistryRow, store::insert_agent},
         test_db,
     };
 
     fn sample_agent(suffix: &str) -> AgentRegistryRow {
-        let enc = EncryptionKey::new(
-            "test",
-            [
-                0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22,
-                23, 24, 25, 26, 27, 28, 29, 30, 31,
-            ],
-        );
         let private_key = format!(
             "0x{}",
             hex::encode(format!("deterministic-{suffix}").as_bytes())
@@ -460,25 +448,24 @@ mod tests {
         } else {
             private_key_padded
         };
-        let ciphertext = encrypt(&enc, &private_key_trimmed).unwrap();
         let wallet = derive_wallet_address(&private_key_trimmed).unwrap();
         let now = Utc::now();
         let ts = now.timestamp_millis();
         AgentRegistryRow {
             agent_key: format!("ord-test-{suffix}-{ts}"),
+            user_id: crate::test_db::test_user_id(),
             created_at: now,
             updated_at: now,
             enabled: true,
+            lifecycle: crate::agents::model::AGENT_LIFECYCLE_ACTIVE.to_string(),
             display_name: format!("OrderTest {suffix}"),
-            wallet_address: wallet,
+            trading_account_address: Some(wallet),
             environment: "live".to_string(),
             api_key: format!("vta_ord-{suffix}-{ts}"),
             api_key_last_used_at: None,
             backend_kind: crate::agents::model::BACKEND_KIND_OPENCODE.to_string(),
             runtime_id: "opencode-local".to_string(),
             runtime_config: serde_json::json!({}),
-            hyperliquid_private_key_ciphertext: ciphertext,
-            hyperliquid_private_key_key_id: "test".to_string(),
         }
     }
 
@@ -515,7 +502,10 @@ mod tests {
     async fn seed(pool: &DbPool, suffix: &str) -> (String, String) {
         let row = sample_agent(suffix);
         let key = row.agent_key.clone();
-        let acct = row.wallet_address.clone();
+        let acct = row
+            .trading_account_address
+            .clone()
+            .expect("trading account");
         insert_agent(pool, &row).await.expect("insert agent");
         (key, acct)
     }

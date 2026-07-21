@@ -53,7 +53,10 @@ pub(in crate::web::routes) async fn agent_live_stream(
         }
     };
 
-    let account_key = AccountKey::new(&agent.wallet_address, &agent.environment);
+    let Some(trading_account_address) = agent.trading_account_address.as_deref() else {
+        return Ok(StatusCode::NOT_FOUND.into_response());
+    };
+    let account_key = AccountKey::new(trading_account_address, &agent.environment);
     let live_accounts = Arc::clone(&state.live_accounts);
 
     // Emit a snapshot up-front so the UI never sits on the initial-render

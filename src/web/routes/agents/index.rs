@@ -3,7 +3,7 @@ use std::sync::Arc;
 use askama::Template;
 use axum::{
     Form,
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::StatusCode,
     response::{Html, IntoResponse, Redirect, Response},
 };
@@ -11,21 +11,21 @@ use chrono::Utc;
 use tracing::error;
 
 use super::super::shared::unique_violation_message;
+use super::super::wallet::{
+    created_subaccount_address, load_trading_account_choices, selected_trading_account,
+};
 use crate::web::error::AppError;
 use crate::{
     agents::{
-        crypto::{encrypt, generate_api_key},
-        keys::derive_wallet_address,
+        crypto::generate_api_key,
         model::{
-            AgentRegistryRow, BACKEND_KIND_OPENCODE, CreateAgentForm, DEFAULT_RUNTIME_ID,
-            slugify_agent_key,
+            AGENT_LIFECYCLE_ACTIVE, AgentRegistryRow, BACKEND_KIND_OPENCODE, CreateAgentForm,
+            DEFAULT_RUNTIME_ID, slugify_agent_key,
         },
         store::{
-            delete_agent as delete_agent_in_store, get_agent, insert_agent,
-            list_agent_instrument_options, list_agents, list_enabled_agent_runtimes,
-            replace_agent_instruments,
+            delete_agent as delete_agent_in_store, get_agent, insert_agent, list_agents_for_user,
+            list_enabled_agent_runtimes, update_agent_runtime_config,
         },
-        strategy_prompts::insert_default_strategy_prompts_for_agent,
     },
     hyperliquid::live_state::{AccountKey, AccountLiveState, LiveConnectionStatus},
     opencode::workspace::{
@@ -34,21 +34,23 @@ use crate::{
     },
     web::{
         AppState,
+        auth::{AuthenticatedUser, get_user_api_wallet},
         templates::{
-            AccountBalanceView, AgentListEntry, AgentSelectorItemsTemplate, AgentsNewPageTemplate,
-            AgentsPageTemplate,
+            AccountBalanceView, AgentListEntry, AgentSelectorItemsTemplate,
+            AgentTradingAccountChoicesTemplate, AgentsNewPageTemplate, AgentsPageTemplate,
         },
     },
 };
 pub(in crate::web::routes) async fn agents_index(
     State(state): State<Arc<AppState>>,
-) -> Result<Html<String>, AppError> {
-    let agents = list_agents(&state.db_pool).await?;
+    user: AuthenticatedUser,
+) -> Result<Response, AppError> {
+    let agents = list_agents_for_user(&state.db_pool, user.id).await?;
 
     let entries: Vec<AgentListEntry> = agents
         .into_iter()
         .map(|row| {
-            let account_key = AccountKey::new(&row.wallet_address, &row.environment);
+            let account_key = AccountKey::new(&row.trading_account_address, &row.environment);
             let snapshot =
                 state
                     .live_accounts
@@ -76,23 +78,61 @@ pub(in crate::web::routes) async fn agents_index(
         current_path: "/agents".to_string(),
     };
 
-    Ok(Html(template.render()?))
+    Ok(Html(template.render()?).into_response())
 }
 pub(in crate::web::routes) async fn agent_selector_items(
     State(state): State<Arc<AppState>>,
+    user: AuthenticatedUser,
 ) -> Result<Html<String>, AppError> {
-    let agents = list_agents(&state.db_pool).await?;
+    let agents = list_agents_for_user(&state.db_pool, user.id).await?;
     Ok(Html(AgentSelectorItemsTemplate { agents }.render()?))
 }
 pub(in crate::web::routes) async fn agents_new(
-    State(_state): State<Arc<AppState>>,
-) -> Result<Html<String>, AppError> {
+    State(state): State<Arc<AppState>>,
+    user: AuthenticatedUser,
+) -> Result<Response, AppError> {
+    let Some(wallet) = get_user_api_wallet(&state.db_pool, user.id).await? else {
+        return Ok(Redirect::to("/wallet").into_response());
+    };
+    if !wallet.is_ready() {
+        return Ok(Redirect::to("/wallet").into_response());
+    }
     let template = AgentsNewPageTemplate {
         form: CreateAgentForm::default(),
+        choices: load_trading_account_choices(&state, &user).await.into(),
+        selected_account: String::new(),
         errors: Vec::new(),
         current_path: "/agents/new".to_string(),
     };
-    Ok(Html(template.render()?))
+    Ok(Html(template.render()?).into_response())
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(in crate::web::routes) struct AgentAccountChoicesQuery {
+    selected: Option<String>,
+    created_name: Option<String>,
+}
+
+pub(in crate::web::routes) async fn agent_account_choices(
+    State(state): State<Arc<AppState>>,
+    user: AuthenticatedUser,
+    Query(query): Query<AgentAccountChoicesQuery>,
+) -> Result<Html<String>, AppError> {
+    let choices = load_trading_account_choices(&state, &user).await;
+    let selected_account = query.selected.or_else(|| {
+        query
+            .created_name
+            .as_deref()
+            .and_then(|created_name| created_subaccount_address(created_name, &choices))
+    });
+    Ok(Html(
+        AgentTradingAccountChoicesTemplate {
+            choices: choices.into(),
+            selected_account: selected_account.unwrap_or_default(),
+        }
+        .render()?,
+    ))
 }
 pub(in crate::web::routes) async fn delete_agent(
     State(state): State<Arc<AppState>>,
@@ -101,8 +141,10 @@ pub(in crate::web::routes) async fn delete_agent(
     let Some(agent) = get_agent(&state.db_pool, &agent_key).await? else {
         return Ok((StatusCode::NOT_FOUND, "agent not found").into_response());
     };
-
-    let account_key = AccountKey::new(&agent.wallet_address, &agent.environment);
+    let Some(trading_account_address) = agent.trading_account_address.as_deref() else {
+        return Ok((StatusCode::CONFLICT, "agent has no trading account").into_response());
+    };
+    let account_key = AccountKey::new(trading_account_address, &agent.environment);
     let deleted = delete_agent_in_store(&state.db_pool, &agent_key).await?;
     if !deleted {
         return Ok((StatusCode::NOT_FOUND, "agent not found").into_response());
@@ -121,33 +163,21 @@ pub(in crate::web::routes) async fn delete_agent(
 }
 pub(in crate::web::routes) async fn create_agent(
     State(state): State<Arc<AppState>>,
+    user: AuthenticatedUser,
     Form(form): Form<CreateAgentForm>,
 ) -> Result<Response, AppError> {
+    let Some(wallet) = get_user_api_wallet(&state.db_pool, user.id).await? else {
+        return Ok(Redirect::to("/wallet").into_response());
+    };
+    if !wallet.is_ready() {
+        return Ok(Redirect::to("/wallet").into_response());
+    }
+    let choices = load_trading_account_choices(&state, &user).await;
     let runtimes = list_enabled_agent_runtimes(&state.db_pool).await?;
 
     if let Err(errors) = form.validate() {
-        return Ok(render_new_form(form, errors));
+        return Ok(render_new_form(form, choices.into(), errors));
     }
-
-    let wallet_address = match derive_wallet_address(&form.hyperliquid_private_key) {
-        Ok(addr) => addr,
-        Err(e) => {
-            return Ok(render_new_form(
-                form,
-                vec![format!("Private key is invalid: {e}")],
-            ));
-        }
-    };
-
-    let ciphertext = match encrypt(&state.encryption_key, &form.hyperliquid_private_key) {
-        Ok(ct) => ct,
-        Err(e) => {
-            return Ok(render_new_form(
-                form,
-                vec![format!("Failed to encrypt private key: {e}")],
-            ));
-        }
-    };
 
     let Some(runtime) = runtimes
         .iter()
@@ -156,57 +186,42 @@ pub(in crate::web::routes) async fn create_agent(
     else {
         return Ok(render_new_form(
             form,
+            choices.into(),
             vec!["Selected runtime must exist and be enabled.".to_string()],
         ));
     };
+
+    let trading_account_address =
+        match selected_trading_account(&form.trading_account_selection, &choices) {
+            Ok(address) => address,
+            Err(message) => {
+                return Ok(render_new_form(
+                    form,
+                    choices.into(),
+                    vec![message.to_string()],
+                ));
+            }
+        };
 
     let now = Utc::now();
     let agent_key = slugify_agent_key(&form.display_name);
     let api_key = generate_api_key();
 
-    let opencode_workspace_runtime_config = if runtime.backend_kind == BACKEND_KIND_OPENCODE {
-        let generated = generate_agent_workspace(
-            &state.opencode_workspace_config,
-            &OpenCodeWorkspaceAgent {
-                agent_key: agent_key.clone(),
-                display_name: form.display_name.trim().to_string(),
-                api_key: api_key.clone(),
-            },
-            WorkspaceGenerationMode::CreateNew,
-        )
-        .map_err(|error| {
-            error!(agent_key = %agent_key, error = ?error, "failed to create OpenCode workspace for new agent");
-            error
-        });
-
-        match generated {
-            Ok(generated) => Some(runtime_config_for_generated_workspace(&generated).into_value()),
-            Err(error) => {
-                return Ok(render_new_form(
-                    form,
-                    vec![format!("Failed to create OpenCode workspace: {error}")],
-                ));
-            }
-        }
-    } else {
-        None
-    };
-
     let row = AgentRegistryRow {
         agent_key: agent_key.clone(),
+        user_id: user.id,
         created_at: now,
         updated_at: now,
         enabled: true,
+        lifecycle: AGENT_LIFECYCLE_ACTIVE.to_string(),
         display_name: form.display_name.trim().to_string(),
-        wallet_address,
+        trading_account_address: Some(trading_account_address),
         environment: "live".to_string(),
         api_key: api_key.clone(),
         api_key_last_used_at: None,
         backend_kind: runtime.backend_kind.clone(),
         runtime_id: runtime.id.clone(),
-        runtime_config: opencode_workspace_runtime_config.unwrap_or_else(|| serde_json::json!({})),
-        hyperliquid_private_key_ciphertext: ciphertext,
-        hyperliquid_private_key_key_id: state.encryption_key.key_id.clone(),
+        runtime_config: serde_json::json!({}),
     };
 
     if let Err(e) = insert_agent(&state.db_pool, &row).await {
@@ -223,45 +238,55 @@ pub(in crate::web::routes) async fn create_agent(
                 return Err(AppError(e));
             }
         };
-        return Ok(render_new_form(form, errors));
+        return Ok(render_new_form(form, choices.into(), errors));
     }
 
-    let instrument_options = list_agent_instrument_options(&state.db_pool, &row.agent_key).await?;
-    if instrument_options
-        .iter()
-        .any(|instrument| instrument.instrument_id == "BTC")
-    {
-        replace_agent_instruments(&state.db_pool, &row.agent_key, &["BTC".to_string()]).await?;
-    }
-
-    if let Err(error) =
-        insert_default_strategy_prompts_for_agent(&state.db_pool, &row.agent_key).await
-    {
-        error!(agent_key = %row.agent_key, error = ?error, "failed to insert default strategy prompts");
-        return Err(AppError(error));
-    }
-
-    if row.backend_kind == BACKEND_KIND_OPENCODE
-        && let Err(error) =
-            crate::agentic::store::insert_default_opencode_schedules(&state.db_pool, &row.agent_key)
-                .await
-    {
-        error!(
-            agent_key = %row.agent_key,
-            error = ?error,
-            "failed to insert default OpenCode schedules"
-        );
+    if let Err(error) = activate_new_agent(&state, &agent_key, &api_key, &row.display_name).await {
+        error!(agent_key = %agent_key, error = ?error, "failed to activate newly created agent");
         return Err(AppError(error));
     }
 
     Ok(Redirect::to(&format!("/agents/{agent_key}")).into_response())
 }
+
+async fn activate_new_agent(
+    state: &Arc<AppState>,
+    agent_key: &str,
+    api_key: &str,
+    display_name: &str,
+) -> Result<(), anyhow::Error> {
+    let generated = generate_agent_workspace(
+        &state.opencode_workspace_config,
+        &OpenCodeWorkspaceAgent {
+            agent_key: agent_key.to_string(),
+            display_name: display_name.to_string(),
+            api_key: api_key.to_string(),
+        },
+        WorkspaceGenerationMode::CreateNew,
+    )?;
+    update_agent_runtime_config(
+        &state.db_pool,
+        agent_key,
+        runtime_config_for_generated_workspace(&generated).into_value(),
+    )
+    .await?;
+    crate::agents::strategy_prompts::insert_default_strategy_prompts_for_agent(
+        &state.db_pool,
+        agent_key,
+    )
+    .await?;
+    crate::agentic::store::insert_default_opencode_schedules(&state.db_pool, agent_key).await?;
+    Ok(())
+}
 pub(in crate::web::routes) fn render_new_form(
     form: CreateAgentForm,
+    choices: crate::web::templates::TradingAccountChoicesView,
     errors: Vec<String>,
 ) -> Response {
     let template = AgentsNewPageTemplate {
+        selected_account: form.trading_account_selection.clone(),
         form,
+        choices,
         errors,
         current_path: "/agents/new".to_string(),
     };

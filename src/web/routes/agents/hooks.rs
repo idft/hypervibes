@@ -21,8 +21,7 @@ use crate::web::error::AppError;
 use crate::{
     agentic::{
         model::{
-            HOOK_EVENT_ANALYSIS_BATCH_COMPLETED, JOB_KIND_ANALYSIS_CODING,
-            JOB_KIND_MARKET_ANALYSIS,
+            HOOK_EVENT_ANALYSIS_BATCH_COMPLETED, JOB_KIND_ANALYSIS_CODING, JOB_KIND_MARKET_ANALYSIS,
         },
         scheduler::{build_hook_dispatch_request, dispatch_run_with_workspace_lease},
         store::QueuedHookRun,
@@ -386,10 +385,8 @@ pub(in crate::web::routes) async fn agents_run_hook_now(
         )
         .await
         .map_err(AppError)?;
-        if let crate::agentic::store::InsertAnalysisCodingTaskOutcome::Inserted {
-            run_id,
-            ..
-        } = outcome
+        if let crate::agentic::store::InsertAnalysisCodingTaskOutcome::Inserted { run_id, .. } =
+            outcome
         {
             return Ok(Redirect::to(&format!("/agents/{agent_key}/runs/{run_id}")).into_response());
         }

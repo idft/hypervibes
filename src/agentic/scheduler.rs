@@ -325,32 +325,31 @@ impl AgenticScheduler {
                 }
             }
 
-            if !analysis_schedules.is_empty() || !daily_review_schedules.is_empty() {
-                if let Some(lane_guard) = self
+            if (!analysis_schedules.is_empty() || !daily_review_schedules.is_empty())
+                && let Some(lane_guard) = self
                     .lane_locks
                     .try_acquire(&agent_key, SchedulerLane::Analysis)
-                {
-                    let pool = self.pool.clone();
-                    let backend = self.backend.clone();
-                    let live_accounts = self.live_accounts.clone();
-                    let agent_key = agent_key.clone();
-                    let in_flight = self.in_flight.clone();
-                    let workspace_leases = self.workspace_leases.clone();
-                    tokio::spawn(async move {
-                        let _guard = in_flight.track();
-                        let _lane_guard = lane_guard;
-                        process_analysis_lane_for_agent(
-                            &pool,
-                            &backend,
-                            &live_accounts,
-                            &agent_key,
-                            sort_analysis_schedules_for_dispatch(analysis_schedules),
-                            sort_analysis_schedules_for_dispatch(daily_review_schedules),
-                            &workspace_leases,
-                        )
-                        .await;
-                    });
-                }
+            {
+                let pool = self.pool.clone();
+                let backend = self.backend.clone();
+                let live_accounts = self.live_accounts.clone();
+                let agent_key = agent_key.clone();
+                let in_flight = self.in_flight.clone();
+                let workspace_leases = self.workspace_leases.clone();
+                tokio::spawn(async move {
+                    let _guard = in_flight.track();
+                    let _lane_guard = lane_guard;
+                    process_analysis_lane_for_agent(
+                        &pool,
+                        &backend,
+                        &live_accounts,
+                        &agent_key,
+                        sort_analysis_schedules_for_dispatch(analysis_schedules),
+                        sort_analysis_schedules_for_dispatch(daily_review_schedules),
+                        &workspace_leases,
+                    )
+                    .await;
+                });
             }
 
             if !trading_schedules.is_empty() {
@@ -438,12 +437,11 @@ impl AgenticScheduler {
             }
             warn!(task_id = task.id, phase = %task.phase, "recovering stale coding task");
             if task.is_in_promotion_window()
-                && let Some(journal) =
-                    crate::opencode::coding_workspace::read_promotion_journal(
-                        &self.opencode_workspace_config,
-                        &task.agent_key,
-                        task.id,
-                    )?
+                && let Some(journal) = crate::opencode::coding_workspace::read_promotion_journal(
+                    &self.opencode_workspace_config,
+                    &task.agent_key,
+                    task.id,
+                )?
             {
                 match recover_promotion_journal(&self.opencode_workspace_config, &journal)? {
                     PromotionJournalPhase::Completed => {
@@ -460,10 +458,7 @@ impl AgenticScheduler {
                     _ => {}
                 }
             }
-            let summary = format!(
-                "stale coding task recovered during {} phase",
-                task.phase
-            );
+            let summary = format!("stale coding task recovered during {} phase", task.phase);
             store::mark_maintenance_task_failed(&self.pool, task.id, &summary).await?;
             if let Some(run_id) = task.run_id {
                 store::mark_run_failed(&self.pool, run_id, &summary, None).await?;
@@ -641,8 +636,7 @@ async fn spawn_coding_workers(
             };
             let _guard = in_flight.track();
             if let Err(error) =
-                run_coding_task(&pool, &backend, &workspace_config, &workspace_leases, task)
-                    .await
+                run_coding_task(&pool, &backend, &workspace_config, &workspace_leases, task).await
             {
                 warn!(error = ?error, "coding task worker failed");
             }
@@ -666,13 +660,7 @@ async fn run_coding_task(
         return Ok(());
     }
     let Some(agent) = get_agent(pool, &task.agent_key).await? else {
-        fail_coding_task(
-            pool,
-            task.id,
-            run_id,
-            "agent disappeared before coding",
-        )
-        .await?;
+        fail_coding_task(pool, task.id, run_id, "agent disappeared before coding").await?;
         return Ok(());
     };
     let Some(hook_id) = task.parameter_i64("hook_id") else {
@@ -736,13 +724,7 @@ async fn run_coding_task(
 
     let Some(mut request) = build_hook_dispatch_request(pool, &hook, run_id, Utc::now()).await?
     else {
-        fail_coding_task(
-            pool,
-            task.id,
-            run_id,
-            "coding request could not be built",
-        )
-        .await?;
+        fail_coding_task(pool, task.id, run_id, "coding request could not be built").await?;
         return Ok(());
     };
     let analysis_strategy_prompt =
@@ -837,8 +819,7 @@ async fn run_coding_task(
         }
         let _lease = workspace_leases.acquire_live_write(&task.agent_key).await;
         if store::agent_has_active_live_runs(pool, &task.agent_key).await? {
-            fail_coding_task(pool, task.id, run_id, "live runs started before promotion")
-                .await?;
+            fail_coding_task(pool, task.id, run_id, "live runs started before promotion").await?;
             return Ok(());
         }
         store::compare_and_set_maintenance_phase(
@@ -939,12 +920,7 @@ async fn run_coding_task(
     Ok(())
 }
 
-async fn fail_coding_task(
-    pool: &DbPool,
-    task_id: i64,
-    run_id: i64,
-    summary: &str,
-) -> Result<()> {
+async fn fail_coding_task(pool: &DbPool, task_id: i64, run_id: i64, summary: &str) -> Result<()> {
     store::mark_maintenance_task_failed(pool, task_id, summary).await?;
     store::mark_run_failed(pool, run_id, summary, None).await?;
     Ok(())
@@ -956,9 +932,7 @@ async fn dispatch_coding_model(
     request: DispatchRequest,
     task_id: i64,
 ) -> Result<DispatchRunResult> {
-    if let Err(error) = store::mark_run_running(pool, request.run_id, None).await {
-        return Err(error);
-    }
+    store::mark_run_running(pool, request.run_id, None).await?;
     let dispatch = dispatch_with_timeout_for_coding(pool, backend, request);
     tokio::pin!(dispatch);
     let mut heartbeat = tokio::time::interval(Duration::from_secs(15));
@@ -972,10 +946,7 @@ async fn dispatch_coding_model(
     };
     match outcome {
         DispatchOutcome::Succeeded { backend_run_ref } => {
-            debug!(
-                task_id,
-                backend_run_ref, "coding model dispatch finished"
-            );
+            debug!(task_id, backend_run_ref, "coding model dispatch finished");
             Ok(DispatchRunResult { succeeded: true })
         }
         DispatchOutcome::Failed { summary } => {
@@ -1004,8 +975,8 @@ fn require_coding_validation(
         .join("coding-validation.json");
     let validation = std::fs::read_to_string(path)
         .context("coding model did not run fixed candidate validation")?;
-    let validation: serde_json::Value = serde_json::from_str(&validation)
-        .context("coding validation result is not valid JSON")?;
+    let validation: serde_json::Value =
+        serde_json::from_str(&validation).context("coding validation result is not valid JSON")?;
     if validation
         .get("schema_version")
         .and_then(serde_json::Value::as_u64)
@@ -1038,8 +1009,8 @@ fn validate_coding_report(
         .parent()
         .context("candidate task path has no parent")?
         .join("coding-report.json");
-    let report = std::fs::read_to_string(&report_path)
-        .context("coding model did not submit a report")?;
+    let report =
+        std::fs::read_to_string(&report_path).context("coding model did not submit a report")?;
     let report: serde_json::Value =
         serde_json::from_str(&report).context("coding report is not valid JSON")?;
     if report
@@ -1253,11 +1224,9 @@ async fn process_analysis_lane_for_agent(
             workspace_leases,
         )
         .await
+            && let Err(error) = dispatch_daily_review_coding_hook(pool, agent_key, run_id).await
         {
-            if let Err(error) = dispatch_daily_review_coding_hook(pool, agent_key, run_id).await
-            {
-                warn!(agent_key, error = ?error, "failed to process daily-review coding request");
-            }
+            warn!(agent_key, error = ?error, "failed to process daily-review coding request");
         }
     }
 }
@@ -1463,6 +1432,9 @@ async fn build_dispatch_request(
     let agent = get_agent(pool, &schedule.agent_key)
         .await?
         .context("agent not found while building dispatch request")?;
+    if agent.lifecycle != crate::agents::model::AGENT_LIFECYCLE_ACTIVE {
+        return Ok(None);
+    }
 
     let selected_instruments = list_agent_instrument_ids(pool, &schedule.agent_key).await?;
 
@@ -1470,9 +1442,9 @@ async fn build_dispatch_request(
         return Ok(None);
     }
 
-    let system_setting = settings::store::get_setting(pool, "opencode_system_prompt").await?;
+    let system_setting = settings::store::get_user_settings(pool, agent.user_id).await?;
     let system_prompt = system_setting
-        .map(|s| s.value)
+        .map(|s| s.opencode_system_prompt)
         .filter(|v| !v.trim().is_empty())
         .unwrap_or_else(|| crate::agents::prompts::DEFAULT_SYSTEM_PROMPT.to_string());
     let strategy_prompt =
@@ -1481,7 +1453,7 @@ async fn build_dispatch_request(
 
     let account_snapshot = if schedule.job_kind == JOB_KIND_TRADING {
         Some(live_agent_snapshot_for_dispatch(
-            &agent.wallet_address,
+            agent.trading_account_address.as_deref().unwrap_or_default(),
             &agent.environment,
             live_accounts,
         ))
@@ -1560,15 +1532,18 @@ pub async fn build_hook_dispatch_request(
     let agent = get_agent(pool, &hook.agent_key)
         .await?
         .context("agent not found while building hook dispatch request")?;
+    if agent.lifecycle != crate::agents::model::AGENT_LIFECYCLE_ACTIVE {
+        return Ok(None);
+    }
 
     let selected_instruments = list_agent_instrument_ids(pool, &hook.agent_key).await?;
     if selected_instruments.is_empty() && requires_selected_instruments(&hook.job_kind) {
         return Ok(None);
     }
 
-    let system_setting = settings::store::get_setting(pool, "opencode_system_prompt").await?;
+    let system_setting = settings::store::get_user_settings(pool, agent.user_id).await?;
     let system_prompt = system_setting
-        .map(|s| s.value)
+        .map(|s| s.opencode_system_prompt)
         .filter(|v| !v.trim().is_empty())
         .unwrap_or_else(|| crate::agents::prompts::DEFAULT_SYSTEM_PROMPT.to_string());
     let strategy_prompt = load_strategy_prompt(pool, &hook.agent_key, &hook.job_kind).await?;
@@ -1792,7 +1767,7 @@ pub async fn dispatch_run_with_workspace_lease(
 }
 
 fn timeframe_duration_for_sort(schedule: &DueOpenCodeScheduleRow) -> i64 {
-    let duration_seconds = match parse_timeframe_seconds(&schedule.timeframe) {
+    match parse_timeframe_seconds(&schedule.timeframe) {
         Ok(seconds) => seconds,
         Err(error) => {
             warn!(
@@ -1803,8 +1778,7 @@ fn timeframe_duration_for_sort(schedule: &DueOpenCodeScheduleRow) -> i64 {
             );
             i64::MAX
         }
-    };
-    duration_seconds
+    }
 }
 
 fn sort_analysis_schedules_for_dispatch(
@@ -1909,7 +1883,6 @@ mod tests {
             store::{self, ClaimedScheduleRun, insert_default_opencode_schedules, insert_test_run},
         },
         agents::{
-            crypto::{EncryptionKey, encrypt},
             keys::derive_wallet_address,
             model::{AgentRegistryRow, BACKEND_KIND_OPENCODE},
             store::{insert_agent, replace_agent_instruments},
@@ -1955,8 +1928,7 @@ mod tests {
         )
         .expect("write validation");
 
-        require_coding_validation(&candidate, 42, &candidate_hash)
-            .expect("matching validation");
+        require_coding_validation(&candidate, 42, &candidate_hash).expect("matching validation");
         assert!(require_coding_validation(&candidate, 43, &candidate_hash).is_err());
         assert!(require_coding_validation(&candidate, 42, "stale").is_err());
 
@@ -2088,25 +2060,19 @@ mod tests {
     }
 
     fn sample_agent(key: &str) -> AgentRegistryRow {
-        let enc = EncryptionKey::new(
-            "test",
-            [
-                0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22,
-                23, 24, 25, 26, 27, 28, 29, 30, 31,
-            ],
-        );
         let private_key = deterministic_private_key(key);
-        let ciphertext = encrypt(&enc, &private_key).unwrap();
         let wallet = derive_wallet_address(&private_key).unwrap();
         let now = Utc::now();
 
         AgentRegistryRow {
             agent_key: key.to_string(),
+            user_id: crate::test_db::test_user_id(),
             created_at: now,
             updated_at: now,
             enabled: true,
+            lifecycle: crate::agents::model::AGENT_LIFECYCLE_ACTIVE.to_string(),
             display_name: format!("Test {key}"),
-            wallet_address: wallet,
+            trading_account_address: Some(wallet.clone()),
             environment: "live".to_string(),
             api_key: format!("vta_{key}"),
             api_key_last_used_at: None,
@@ -2117,8 +2083,6 @@ mod tests {
                 "workspace_container_path": format!("/workspaces/agents/{key}"),
                 "profile_source": "agent-runtime/workspace-template"
             }),
-            hyperliquid_private_key_ciphertext: ciphertext,
-            hyperliquid_private_key_key_id: "test".to_string(),
         }
     }
 

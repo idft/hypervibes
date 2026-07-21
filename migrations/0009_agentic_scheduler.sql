@@ -1,4 +1,4 @@
--- Migration 0007 (`opencode_database_plugin`) sets
+-- Migration 0008 (`opencode_database_plugin`) sets
 -- `search_path TO opencode, public;` and does not restore it. Pin the
 -- search path back to `public` for this migration so the new tables
 -- land in the same schema as the rest of the agent registry.

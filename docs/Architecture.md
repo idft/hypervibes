@@ -23,7 +23,7 @@ in-flight OpenCode MCP server can finish its API calls.
 
 | Subsystem | Responsibility |
 | --- | --- |
-| `agents` | Agent registry, encrypted Hyperliquid signing keys, API keys, runtime assignment, selected instruments, and strategy prompts. |
+| `agents` | Agent registry, API keys, runtime assignment, selected instruments, and strategy prompts. User-owned encrypted Hyperliquid signing material lives with authentication records. |
 | `agentic` | Persisted schedules, hooks, runs, workspace maintenance, recovery of orphaned runs, and OpenCode dispatch. |
 | `opencode` | OpenCode HTTP client, session persistence access, and generated agent workspaces. |
 | `memory` | Append-only, agent-owned analysis and review records plus links between records. |
@@ -38,10 +38,10 @@ schema for registry and orchestration tables, and `memory`, `hyperliquid`, and
 
 ## Agent Execution
 
-An operator creates an agent by selecting an enabled OpenCode runtime and
-providing a Hyperliquid private key. The application derives the wallet
-address, encrypts the key before storing it, creates an agent API key, creates
-default prompts and schedules, and generates the agent workspace.
+An operator first configures and approves one user-owned Hyperliquid trading
+signer on the Wallet page. Agent creation then selects an exclusive main or
+sub-account, creates an agent API key, creates default prompts and schedules,
+and generates the agent workspace after funding is completed or skipped.
 
 The scheduler polls every 10 seconds. It claims due work transactionally and
 uses independent analysis and trading lanes per agent, while allowing work for
@@ -67,7 +67,8 @@ agent lane indefinitely.
 OpenCode performs LLM and tool execution. Vibetrading retains authority over
 agent identity, scheduling, memory, account state, and exchange execution.
 The workspace MCP server uses the agent API key to call Vibetrading; it does
-not receive the agent's Hyperliquid private key.
+not receive the user's Hyperliquid private key. Exchange orders are signed by
+the owner's trading signer and target the agent's stored trading account.
 
 The agent API is authenticated with a Bearer API key. The resolved `agent_key`
 is the data-ownership boundary for account, memory, and order operations.

@@ -72,9 +72,7 @@ pub(super) async fn submit_coding_report(
             || path.contains("..")
             || path.contains('\0')
     }) {
-        return Err(ApiError::Validation(
-            "invalid coding report path".into(),
-        ));
+        return Err(ApiError::Validation("invalid coding report path".into()));
     }
     let candidate = candidate_root(
         &state.opencode_workspace_config,

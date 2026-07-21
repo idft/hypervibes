@@ -465,7 +465,7 @@ pub async fn agent_has_active_live_runs(pool: &DbPool, agent_key: &str) -> Resul
          )",
     )
     .bind(agent_key)
-    .bind(&crate::agentic::store::common::ACTIVE_STATUSES)
+    .bind(crate::agentic::store::common::ACTIVE_STATUSES)
     .bind(crate::agentic::model::JOB_KIND_ANALYSIS_CODING)
     .fetch_one(pool)
     .await
@@ -534,7 +534,7 @@ pub(crate) async fn agent_has_blocking_workspace_maintenance_tx(
     )
     .bind(agent_key)
     .bind(MAINTENANCE_TASK_KIND_WORKSPACE_REGENERATE)
-    .bind(&ACTIVE_MAINTENANCE_STATUSES)
+    .bind(ACTIVE_MAINTENANCE_STATUSES)
     .bind(MAINTENANCE_TASK_KIND_ANALYSIS_CODING)
     .bind(CODING_PROMOTION_PHASES)
     .fetch_optional(&mut **tx)
@@ -560,7 +560,7 @@ pub(crate) async fn agent_has_blocking_workspace_maintenance_for_mode_tx(
             )
             .bind(agent_key)
             .bind(MAINTENANCE_TASK_KIND_WORKSPACE_REGENERATE)
-            .bind(&ACTIVE_MAINTENANCE_STATUSES)
+            .bind(ACTIVE_MAINTENANCE_STATUSES)
             .bind(MAINTENANCE_TASK_KIND_ANALYSIS_CODING)
             .bind(CODING_PROMOTION_PHASES)
             .fetch_optional(&mut **tx)
@@ -575,12 +575,12 @@ pub(crate) async fn agent_has_blocking_workspace_maintenance_for_mode_tx(
             )
             .bind(agent_key)
             .bind(MAINTENANCE_TASK_KIND_ANALYSIS_CODING)
-            .bind(&[
+            .bind([
                 crate::agentic::model::MAINTENANCE_PHASE_PROMOTING,
                 crate::agentic::model::MAINTENANCE_PHASE_SMOKE_TESTING,
                 crate::agentic::model::MAINTENANCE_PHASE_ROLLING_BACK,
             ])
-            .bind(&ACTIVE_MAINTENANCE_STATUSES)
+            .bind(ACTIVE_MAINTENANCE_STATUSES)
             .fetch_optional(&mut **tx)
             .await?
         }
@@ -591,7 +591,7 @@ pub(crate) async fn agent_has_blocking_workspace_maintenance_for_mode_tx(
               LIMIT 1",
             )
             .bind(agent_key)
-            .bind(&ACTIVE_MAINTENANCE_STATUSES)
+            .bind(ACTIVE_MAINTENANCE_STATUSES)
             .fetch_optional(&mut **tx)
             .await?
         }
