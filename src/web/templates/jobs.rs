@@ -3,6 +3,7 @@ use askama::Template;
 use crate::agents::model::AgentDetailRow;
 
 use super::agents::{AgentShowTab, AgentShowTabLink, ModelPickerView, build_agent_show_tabs};
+use super::navbar::Navbar;
 use super::runs::AgenticRunView;
 use super::shared::{LocalTimestampView, TimeoutEditorView, format_duration, local_timestamp_view};
 
@@ -154,6 +155,7 @@ pub struct AgentJobDetailPageTemplate {
     pub job_runs: Vec<AgenticRunView>,
     pub job_runs_loaded: bool,
     pub current_path: String,
+    pub navbar: Navbar,
 }
 
 impl AgentJobDetailPageTemplate {
@@ -174,6 +176,7 @@ impl AgentJobDetailPageTemplate {
             job_runs,
             job_runs_loaded,
             current_path,
+            navbar: Navbar::default(),
         }
         .render()
     }

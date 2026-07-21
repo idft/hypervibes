@@ -5,6 +5,7 @@ use serde_json::Value;
 use crate::agents::model::AgentDetailRow;
 
 use super::agents::{AgentShowTab, AgentShowTabLink, build_agent_show_tabs};
+use super::navbar::Navbar;
 use super::shared::{
     LocalTimestampView, add_thousands_separators, format_decimal_with_commas, format_duration,
     local_timestamp_view, optional_local_timestamp_view,
@@ -285,6 +286,7 @@ pub struct AgentRunDetailPageTemplate {
     pub session: Option<OpenCodeSessionView>,
     pub session_lookup_attempted: bool,
     pub current_path: String,
+    pub navbar: Navbar,
 }
 
 impl AgentRunDetailPageTemplate {
@@ -303,6 +305,7 @@ impl AgentRunDetailPageTemplate {
             session,
             session_lookup_attempted,
             current_path,
+            navbar: Navbar::default(),
         }
         .render()
     }

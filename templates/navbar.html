@@ -15,11 +15,19 @@
         <img src="/static/apple-touch-icon.png" alt="" class="h-7 w-7 rounded-md object-cover">
         <span>Vibetrading</span>
     </a>
-    <a href="https://github.com/johnkozan/vibetrading" target="_blank" rel="noopener noreferrer" title="Vibetrading on GitHub" aria-label="Vibetrading on GitHub" class="ml-auto inline-flex h-9 w-9 items-center justify-center rounded-lg text-zinc-400 hover:bg-zinc-800 hover:text-white">
+    {% if navbar.has_warnings() %}
+    <a href="/wallet" title="{{ navbar.tooltip() }}" data-navbar-warning class="ml-auto inline-flex h-9 items-center gap-1.5 rounded-lg px-2 text-amber-400 hover:bg-zinc-800 hover:text-amber-300" aria-label="Configuration warnings: {{ navbar.aria_label() }}">
+        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="h-5 w-5"><path stroke-linecap="round" stroke-linejoin="round" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126ZM12 15.75h.007v.008H12v-.008Z"/></svg>
+        <span class="text-sm font-semibold">{{ navbar.warnings.len() }}</span>
+    </a>
+    {% else %}
+    <span data-navbar-warning-placeholder class="ml-auto"></span>
+    {% endif %}
+    <a href="https://github.com/johnkozan/vibetrading" target="_blank" rel="noopener noreferrer" title="Vibetrading on GitHub" aria-label="Vibetrading on GitHub" class="{% if navbar.has_warnings() %}ml-0{% else %}ml-auto{% endif %} inline-flex h-9 w-9 items-center justify-center rounded-lg text-zinc-400 hover:bg-zinc-800 hover:text-white">
         <span class="github-icon h-5 w-5" aria-hidden="true"></span>
     </a>
-    <a href="/settings" title="Settings" class="mr-2 inline-flex h-9 w-9 items-center justify-center rounded-lg text-zinc-400 hover:bg-zinc-800 hover:text-white">
+    <a href="/settings" title="Settings" class="inline-flex h-9 w-9 items-center justify-center rounded-lg text-zinc-400 hover:bg-zinc-800 hover:text-white">
         <svg class="h-5 w-5" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="M8.7 2.4a1.5 1.5 0 0 1 2.6 0l.35.69a1.5 1.5 0 0 0 1.4.82l.77-.1a1.5 1.5 0 0 1 1.84 1.84l-.1.77a1.5 1.5 0 0 0 .82 1.4l.69.35a1.5 1.5 0 0 1 0 2.6l-.69.35a1.5 1.5 0 0 0-.82 1.4l.1.77a1.5 1.5 0 0 1-1.84 1.84l-.77-.1a1.5 1.5 0 0 0-1.4.82l-.35.69a1.5 1.5 0 0 1-2.6 0l-.35-.69a1.5 1.5 0 0 0-1.4-.82l-.77.1a1.5 1.5 0 0 1-1.84-1.84l.1-.77a1.5 1.5 0 0 0-.82-1.4l-.69-.35a1.5 1.5 0 0 1 0-2.6l.69-.35a1.5 1.5 0 0 0 .82-1.4l-.1-.77A1.5 1.5 0 0 1 6.6 3.8l.77.1a1.5 1.5 0 0 0 1.4-.82l.35-.69Z"></path><circle cx="10" cy="10" r="2.5"></circle></svg>
     </a>
-    <a href="/wallet" data-wallet-navbar title="Wallet" class="mr-3 flex items-center gap-1.5 rounded-lg px-2 py-1 text-xs text-zinc-400 hover:bg-zinc-800 hover:text-white"><img data-wallet-identicon alt="" class="hidden h-5 w-5 rounded-full"><span data-wallet-navbar-label class="font-mono">Wallet</span></a>
+    <a href="/wallet" data-wallet-navbar title="Wallet" class="flex items-center gap-1.5 rounded-lg px-2 py-1 text-xs text-zinc-400 hover:bg-zinc-800 hover:text-white"><img data-wallet-identicon alt="" class="hidden h-5 w-5 rounded-full"><span data-wallet-navbar-label class="font-mono">Wallet</span></a>
 </div>

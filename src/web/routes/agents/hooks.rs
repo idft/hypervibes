@@ -238,6 +238,7 @@ impl CreateAgentHookForm {
 }
 pub(in crate::web::routes) async fn agents_new_hook(
     State(state): State<Arc<AppState>>,
+    user: crate::web::auth::AuthenticatedUser,
     Path(agent_key): Path<String>,
 ) -> Result<Response, AppError> {
     let Some(agent) = get_agent(&state.db_pool, &agent_key).await? else {
@@ -252,12 +253,16 @@ pub(in crate::web::routes) async fn agents_new_hook(
     }
 
     let picker = load_model_picker_context(&state, &agent).await;
+    let navbar = crate::web::templates::load_navbar(&state.db_pool, user.id)
+        .await
+        .unwrap_or_default();
     Ok(render_new_hook_form(
         agent,
         CreateAgentHookForm::defaults().as_template_values(),
         picker,
         Vec::new(),
         StatusCode::OK,
+        navbar,
     ))
 }
 #[derive(Debug, Default, Deserialize)]
@@ -266,6 +271,7 @@ pub(in crate::web::routes) struct ToggleHookForm {
 }
 pub(in crate::web::routes) async fn agents_create_hook(
     State(state): State<Arc<AppState>>,
+    user: crate::web::auth::AuthenticatedUser,
     Path(agent_key): Path<String>,
     Form(form): Form<CreateAgentHookForm>,
 ) -> Result<Response, AppError> {
@@ -280,6 +286,12 @@ pub(in crate::web::routes) async fn agents_create_hook(
             .into_response());
     }
 
+    let navbar = || async {
+        crate::web::templates::load_navbar(&state.db_pool, user.id)
+            .await
+            .unwrap_or_default()
+    };
+
     let validated = match form.validate() {
         Ok(validated) => validated,
         Err(errors) => {
@@ -290,6 +302,7 @@ pub(in crate::web::routes) async fn agents_create_hook(
                 picker,
                 errors,
                 StatusCode::UNPROCESSABLE_ENTITY,
+                navbar().await,
             ));
         }
     };
@@ -307,6 +320,7 @@ pub(in crate::web::routes) async fn agents_create_hook(
                     picker,
                     vec![error],
                     StatusCode::UNPROCESSABLE_ENTITY,
+                    navbar().await,
                 ));
             }
         };
@@ -341,6 +355,7 @@ pub(in crate::web::routes) async fn agents_create_hook(
             picker,
             errors,
             StatusCode::UNPROCESSABLE_ENTITY,
+            navbar().await,
         ));
     }
 
@@ -597,6 +612,7 @@ pub(in crate::web::routes) fn render_new_hook_form(
     picker: ModelPickerContext,
     errors: Vec<String>,
     status: StatusCode,
+    navbar: crate::web::templates::Navbar,
 ) -> Response {
     let current_path = format!("/agents/{}/hooks/new", agent.agent_key);
     let model_picker =
@@ -609,6 +625,7 @@ pub(in crate::web::routes) fn render_new_hook_form(
         model_picker,
         errors,
         current_path,
+        navbar,
     };
     match template.render() {
         Ok(body) => (status, Html(body)).into_response(),

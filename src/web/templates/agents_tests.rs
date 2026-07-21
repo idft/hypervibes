@@ -22,6 +22,7 @@ fn agents_page_renders_base_layout_and_status_box() {
     let template = AgentsPageTemplate {
         agents: vec![entry],
         current_path: "/agents".to_string(),
+        navbar: Navbar::default(),
     };
     let rendered = template.render().unwrap();
     assert!(rendered.contains("<!DOCTYPE html>"));
@@ -50,6 +51,7 @@ fn agents_page_renders_loading_placeholder_when_no_balance() {
     let template = AgentsPageTemplate {
         agents: vec![entry],
         current_path: "/agents".to_string(),
+        navbar: Navbar::default(),
     };
     let rendered = template.render().unwrap();
     assert!(rendered.contains("Loading"));
@@ -456,6 +458,7 @@ fn agents_new_page_renders_base_layout_and_form() {
         selected_account: String::new(),
         errors: vec![],
         current_path: "/agents/new".to_string(),
+        navbar: Navbar::default(),
     };
     let rendered = template.render().unwrap();
     assert!(rendered.contains("<!DOCTYPE html>"));
@@ -561,6 +564,7 @@ fn new_job_page_renders_agent_navbar_with_jobs_active() {
         },
         errors: Vec::new(),
         current_path: "/agents/test-agent/jobs/new".to_string(),
+        navbar: Navbar::default(),
     };
 
     let rendered = template.render().expect("render new job page");

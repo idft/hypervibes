@@ -38,6 +38,7 @@ use crate::{
         templates::{
             AccountBalanceView, AgentListEntry, AgentSelectorItemsTemplate,
             AgentTradingAccountChoicesTemplate, AgentsNewPageTemplate, AgentsPageTemplate,
+            load_navbar,
         },
     },
 };
@@ -73,9 +74,11 @@ pub(in crate::web::routes) async fn agents_index(
         })
         .collect();
 
+    let navbar = load_navbar(&state.db_pool, user.id).await?;
     let template = AgentsPageTemplate {
         agents: entries,
         current_path: "/agents".to_string(),
+        navbar,
     };
 
     Ok(Html(template.render()?).into_response())
@@ -85,7 +88,15 @@ pub(in crate::web::routes) async fn agent_selector_items(
     user: AuthenticatedUser,
 ) -> Result<Html<String>, AppError> {
     let agents = list_agents_for_user(&state.db_pool, user.id).await?;
-    Ok(Html(AgentSelectorItemsTemplate { agents }.render()?))
+    let wallet = get_user_api_wallet(&state.db_pool, user.id).await?;
+    let can_create_agent = wallet.as_ref().is_some_and(|w| w.is_ready());
+    Ok(Html(
+        AgentSelectorItemsTemplate {
+            agents,
+            can_create_agent,
+        }
+        .render()?,
+    ))
 }
 pub(in crate::web::routes) async fn agents_new(
     State(state): State<Arc<AppState>>,
@@ -97,12 +108,14 @@ pub(in crate::web::routes) async fn agents_new(
     if !wallet.is_ready() {
         return Ok(Redirect::to("/wallet").into_response());
     }
+    let navbar = load_navbar(&state.db_pool, user.id).await?;
     let template = AgentsNewPageTemplate {
         form: CreateAgentForm::default(),
         choices: load_trading_account_choices(&state, &user).await.into(),
         selected_account: String::new(),
         errors: Vec::new(),
         current_path: "/agents/new".to_string(),
+        navbar,
     };
     Ok(Html(template.render()?).into_response())
 }
@@ -289,6 +302,7 @@ pub(in crate::web::routes) fn render_new_form(
         choices,
         errors,
         current_path: "/agents/new".to_string(),
+        navbar: crate::web::templates::Navbar::default(),
     };
     match template.render() {
         Ok(body) => (StatusCode::UNPROCESSABLE_ENTITY, Html(body)).into_response(),

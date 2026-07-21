@@ -3,10 +3,10 @@ use std::{str::FromStr, sync::Arc};
 use alloy::primitives::{Address, Signature, keccak256};
 use askama::Template;
 use axum::{
-    Form, Json,
+    Json,
     extract::State,
     http::StatusCode,
-    response::{Html, IntoResponse, Redirect, Response},
+    response::{Html, IntoResponse, Response},
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -35,7 +35,10 @@ use crate::agents::{
 
 const ZERO_ADDRESS: &str = "0x0000000000000000000000000000000000000000";
 const SIGNATURE_CHAIN_ID: u64 = 42_161;
-const MAX_BUILDER_FEE: i16 = 100;
+const MIN_BUILDER_FEE_BPS: i16 = 1;
+const MAX_BUILDER_FEE_BPS: i16 = 10;
+const DEFAULT_BUILDER_FEE_BPS: i16 = 5;
+const BUILDER_FEE_BPS_TO_TENTHS: i16 = 10;
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -45,7 +48,7 @@ pub(in crate::web::routes) struct SignedAction {
 }
 
 #[derive(Debug, Default, Deserialize)]
-#[serde(default)]
+#[serde(default, rename_all = "camelCase")]
 pub(in crate::web::routes) struct ApiWalletForm {
     wallet_source: String,
     hyperliquid_private_key: String,
@@ -79,12 +82,9 @@ impl From<TradingAccountChoices> for TradingAccountChoicesView {
 pub(in crate::web::routes) struct BuilderFeeRequest {
     action: Value,
     signature: String,
-    fee_tenths_of_bp: i16,
-}
-
-#[derive(Serialize)]
-pub(in crate::web::routes) struct MaxBuilderFeeResponse {
-    max_builder_fee: Option<String>,
+    /// Builder fee in whole basis points (1–10 bps). Stored as
+    /// `fee_bps * 10` in the `users.builder_fee_tenths_of_bp` column.
+    fee_bps: i16,
 }
 
 #[derive(Serialize)]
@@ -128,10 +128,22 @@ pub(in crate::web::routes) async fn wallet_index(
             expiry: "Expiry unavailable".to_string(),
         })
         .collect();
+    let navbar = crate::web::templates::load_navbar(&state.db_pool, user.id).await?;
+    let fee_bps = if row.1.is_some()
+        && row.0 > 0
+        && row.0 % BUILDER_FEE_BPS_TO_TENTHS == 0
+    {
+        (row.0 / BUILDER_FEE_BPS_TO_TENTHS)
+            .clamp(MIN_BUILDER_FEE_BPS, MAX_BUILDER_FEE_BPS)
+    } else {
+        DEFAULT_BUILDER_FEE_BPS
+    };
     Ok(Html(
         WalletPageTemplate {
             wallet_address,
-            fee_tenths_of_bp: row.0,
+            fee_bps,
+            min_fee_bps: MIN_BUILDER_FEE_BPS,
+            max_fee_bps: MAX_BUILDER_FEE_BPS,
             builder_fee_approved: row.1.is_some(),
             builder_recipient: BUILDER_RECIPIENT,
             current_path: "/wallet".to_string(),
@@ -140,9 +152,49 @@ pub(in crate::web::routes) async fn wallet_index(
                 .as_ref()
                 .and_then(|wallet| wallet.api_wallet_address.clone()),
             api_wallet_state: api_wallet_state(api_wallet.as_ref()),
+            api_wallet_expires_at: api_wallet
+                .as_ref()
+                .and_then(|wallet| wallet.api_wallet_expires_at),
+            api_wallet_expiry_class: api_wallet_expiry_class(
+                api_wallet.as_ref().and_then(|wallet| wallet.api_wallet_expires_at),
+            ),
+            api_wallet_show_expired: api_wallet_show_expired(api_wallet.as_ref()),
+            navbar,
         }
         .render()?,
     ))
+}
+
+/// Tailwind text color class for the API wallet expiry line, based on how
+/// far the expiry is from now. > 5 months: emerald. < 1 month: amber.
+/// Anything in between (or no expiry): zinc.
+fn api_wallet_expiry_class(expires_at: Option<chrono::DateTime<chrono::Utc>>) -> &'static str {
+    let Some(expires_at) = expires_at else {
+        return "text-zinc-400";
+    };
+    let days = (expires_at - chrono::Utc::now()).num_days();
+    if days >= 150 {
+        "text-emerald-400"
+    } else if days < 30 {
+        "text-amber-400"
+    } else {
+        "text-zinc-400"
+    }
+}
+
+/// True when the API key exists and is approved but its expiry is in the
+/// past. The wallet page uses this to render the address with an "Expired"
+/// label in red, instead of treating the key as fully missing.
+fn api_wallet_show_expired(wallet: Option<&crate::web::auth::UserApiWalletRow>) -> bool {
+    let Some(wallet) = wallet else { return false; };
+    if wallet.api_wallet_address.is_none() || wallet.api_wallet_approved_at.is_none() {
+        return false;
+    }
+    if let Some(expires_at) = wallet.api_wallet_expires_at {
+        expires_at <= chrono::Utc::now()
+    } else {
+        false
+    }
 }
 
 fn api_wallet_state(wallet: Option<&crate::web::auth::UserApiWalletRow>) -> String {
@@ -160,40 +212,14 @@ fn api_wallet_state(wallet: Option<&crate::web::auth::UserApiWalletRow>) -> Stri
     }
 }
 
-pub(in crate::web::routes) async fn wallet_max_builder_fee(
-    user: AuthenticatedUser,
-) -> Result<Json<MaxBuilderFeeResponse>, StatusCode> {
-    let response = reqwest::Client::new().post("https://api.hyperliquid.xyz/info")
-        .json(&json!({"type": "maxBuilderFee", "user": user.wallet_address, "builder": BUILDER_RECIPIENT}))
-        .send().await.map_err(|_| StatusCode::BAD_GATEWAY)?
-        .error_for_status().map_err(|_| StatusCode::BAD_GATEWAY)?
-        .json::<Value>().await.map_err(|_| StatusCode::BAD_GATEWAY)?;
-    let max_builder_fee = response
-        .as_str()
-        .map(ToOwned::to_owned)
-        .or_else(|| response.as_u64().map(|fee| fee.to_string()))
-        .or_else(|| {
-            response
-                .get("maxBuilderFee")
-                .and_then(Value::as_str)
-                .map(ToOwned::to_owned)
-        })
-        .or_else(|| {
-            response
-                .get("maxBuilderFee")
-                .and_then(Value::as_u64)
-                .map(|fee| fee.to_string())
-        });
-    Ok(Json(MaxBuilderFeeResponse { max_builder_fee }))
-}
-
 pub(in crate::web::routes) async fn approve_builder_fee(
     State(state): State<Arc<AppState>>,
     user: AuthenticatedUser,
     Json(request): Json<BuilderFeeRequest>,
 ) -> Result<Response, AppError> {
-    if !(1..=MAX_BUILDER_FEE).contains(&request.fee_tenths_of_bp)
-        || !valid_builder_fee_action(&request.action, request.fee_tenths_of_bp)
+    let fee_tenths_of_bp = request.fee_bps.checked_mul(BUILDER_FEE_BPS_TO_TENTHS);
+    if !(MIN_BUILDER_FEE_BPS..=MAX_BUILDER_FEE_BPS).contains(&request.fee_bps)
+        || !valid_builder_fee_action(&request.action, request.fee_bps)
         || !signature_matches(
             &request.action,
             &request.signature,
@@ -207,15 +233,18 @@ pub(in crate::web::routes) async fn approve_builder_fee(
     if !exchange_success(&exchange) {
         return Ok((StatusCode::BAD_GATEWAY, Json(exchange)).into_response());
     }
+    let Some(fee_tenths_of_bp) = fee_tenths_of_bp else {
+        return Ok(StatusCode::BAD_REQUEST.into_response());
+    };
     sqlx::query("UPDATE users SET builder_fee_tenths_of_bp = $2, builder_fee_approved_at = now(), updated_at = now() WHERE id = $1")
-        .bind(user.id).bind(request.fee_tenths_of_bp).execute(&state.db_pool).await?;
+        .bind(user.id).bind(fee_tenths_of_bp).execute(&state.db_pool).await?;
     Ok(Json(json!({"status":"ok", "redirect":"/agents/new"})).into_response())
 }
 
 pub(in crate::web::routes) async fn setup_user_api_wallet(
     State(state): State<Arc<AppState>>,
     user: AuthenticatedUser,
-    Form(form): Form<ApiWalletForm>,
+    Json(form): Json<ApiWalletForm>,
 ) -> Result<Response, AppError> {
     let private_key = match form.wallet_source.as_str() {
         "generate" => generate_wallet_private_key(),
@@ -223,24 +252,16 @@ pub(in crate::web::routes) async fn setup_user_api_wallet(
             form.hyperliquid_private_key.trim().to_string()
         }
         "import" => {
-            return Ok(
-                (StatusCode::UNPROCESSABLE_ENTITY, "Private key is required.").into_response(),
-            );
+            return Ok(Json(json!({"error":"Private key is required."})).into_response());
         }
         _ => {
-            return Ok((
-                StatusCode::UNPROCESSABLE_ENTITY,
-                "Select an API wallet option.",
-            )
-                .into_response());
+            return Ok(Json(json!({"error":"Select an API wallet option."})).into_response());
         }
     };
     let api_wallet_address = match derive_wallet_address(&private_key) {
         Ok(address) => address,
         Err(_) => {
-            return Ok(
-                (StatusCode::UNPROCESSABLE_ENTITY, "Private key is invalid.").into_response(),
-            );
+            return Ok(Json(json!({"error":"Private key is invalid."})).into_response());
         }
     };
     let ciphertext = encrypt(&state.encryption_key, &private_key)?;
@@ -253,12 +274,9 @@ pub(in crate::web::routes) async fn setup_user_api_wallet(
     )
     .await?
     {
-        return Ok((StatusCode::CONFLICT, "Use a fresh trading signer address.").into_response());
+        return Ok(Json(json!({"error":"Use a fresh trading signer address."})).into_response());
     }
-    // The approve-signer marker lets the wallet page immediately ask the
-    // browser wallet for the Hyperliquid approval signature, keeping signer
-    // setup a one-button flow.
-    Ok(Redirect::to("/wallet?approve-signer=1").into_response())
+    Ok(Json(json!({"status":"ok","api_wallet_address":api_wallet_address})).into_response())
 }
 
 pub(in crate::web::routes) async fn load_trading_account_choices(
@@ -665,12 +683,12 @@ fn valid_user_api_wallet_action(action: &Value, expected_address: &str) -> bool 
             .and_then(Value::as_str)
             .is_some_and(|address| valid_lowercase_address(address) && address == expected_address)
 }
-fn valid_builder_fee_action(action: &Value, fee: i16) -> bool {
+fn valid_builder_fee_action(action: &Value, fee_bps: i16) -> bool {
     valid_common(action)
         && action.get("type").and_then(Value::as_str) == Some("approveBuilderFee")
         && action.get("builder").and_then(Value::as_str) == Some(BUILDER_RECIPIENT)
         && action.get("maxFeeRate").and_then(Value::as_str)
-            == Some(&format!("{:.3}%", fee as f64 / 1000.0))
+            == Some(&format!("{:.2}%", fee_bps as f64 / 100.0))
 }
 
 #[derive(Clone, Copy)]

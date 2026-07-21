@@ -10,7 +10,12 @@ use serde::Deserialize;
 
 use crate::{
     settings::store::{get_user_settings, upsert_user_system_prompt},
-    web::{AppState, auth::AuthenticatedUser, error::AppError, templates::SettingsPageTemplate},
+    web::{
+        AppState,
+        auth::AuthenticatedUser,
+        error::AppError,
+        templates::{SettingsPageTemplate, load_navbar},
+    },
 };
 pub(in crate::web::routes) async fn settings_index(
     State(state): State<Arc<AppState>>,
@@ -20,10 +25,12 @@ pub(in crate::web::routes) async fn settings_index(
         .await?
         .map(|settings| settings.opencode_system_prompt)
         .unwrap_or_default();
+    let navbar = load_navbar(&state.db_pool, user.id).await?;
     Ok(Html(
         SettingsPageTemplate {
             system_prompt,
             current_path: "/settings".to_string(),
+            navbar,
         }
         .render()?,
     )

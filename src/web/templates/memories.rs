@@ -9,6 +9,7 @@ use crate::{
 };
 
 use super::agents::{AgentShowTab, AgentShowTabLink, build_agent_show_tabs};
+use super::navbar::Navbar;
 use super::shared::{
     LocalTimestampView, MoneyCell, format_money_cell, format_money_text, format_timestamp_iso,
     format_timestamp_utc, local_timestamp_view,
@@ -208,6 +209,7 @@ pub struct AgentMemoryDetailPageTemplate {
     pub memory: MemoryView,
     pub memory_detail_html: String,
     pub current_path: String,
+    pub navbar: Navbar,
 }
 
 impl AgentMemoryDetailPageTemplate {
@@ -224,6 +226,7 @@ impl AgentMemoryDetailPageTemplate {
             memory,
             memory_detail_html,
             current_path,
+            navbar: Navbar::default(),
         }
         .render()
     }

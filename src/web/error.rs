@@ -3,7 +3,7 @@ use axum::http::StatusCode;
 use axum::response::{Html, IntoResponse, Response};
 use tracing::error;
 
-use crate::web::templates::ServerErrorPageTemplate;
+use crate::web::templates::{Navbar, ServerErrorPageTemplate};
 
 #[derive(Debug)]
 pub(crate) struct AppError(pub anyhow::Error);
@@ -24,6 +24,7 @@ impl IntoResponse for AppError {
         let template = ServerErrorPageTemplate {
             message: format!("Internal server error: {}", self.0),
             current_path: String::new(),
+            navbar: Navbar::default(),
         };
 
         match template.render() {

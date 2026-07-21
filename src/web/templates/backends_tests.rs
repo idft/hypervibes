@@ -10,6 +10,7 @@ fn backends_page_renders_runtime_row() {
     let template = BackendsPageTemplate {
         runtimes: vec![AgentRuntimeView::from_row(sample_runtime_row())],
         current_path: "/backends".to_string(),
+        navbar: Navbar::default(),
     };
 
     let rendered = template.render().unwrap();
@@ -29,6 +30,7 @@ fn backends_new_page_renders_create_form() {
         },
         errors: Vec::new(),
         current_path: "/backends/new".to_string(),
+        navbar: Navbar::default(),
     };
 
     let rendered = template.render().unwrap();

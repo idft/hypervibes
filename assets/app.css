@@ -212,3 +212,9 @@ body {
   text-decoration: underline;
   text-underline-offset: 0.18em;
 }
+
+/* Hide time.timeago content until timeago.js has rendered the relative time
+   on the client, to avoid flashing the raw ISO timestamp on initial load. */
+time.timeago:not(.timeago-ready) {
+  visibility: hidden;
+}

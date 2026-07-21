@@ -859,6 +859,7 @@ pub(in crate::web::routes) fn render_new_job_form(
         model_picker,
         errors,
         current_path,
+        navbar: crate::web::templates::Navbar::default(),
     };
     match template.render() {
         Ok(body) => (status, Html(body)).into_response(),

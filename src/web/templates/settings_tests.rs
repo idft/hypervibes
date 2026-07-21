@@ -7,6 +7,7 @@ fn server_error_page_renders_base_layout() {
     let template = ServerErrorPageTemplate {
         message: "Internal server error: boom".to_string(),
         current_path: String::new(),
+        navbar: Navbar::default(),
     };
     let rendered = template.render().unwrap();
     assert!(rendered.contains("<!DOCTYPE html>"));

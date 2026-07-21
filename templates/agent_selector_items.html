@@ -4,4 +4,8 @@
 {% if !agents.is_empty() %}
 <div class="my-1 border-t border-zinc-700"></div>
 {% endif %}
+{% if can_create_agent %}
 <a href="/agents/new" class="block rounded-md px-3 py-2 text-sm font-medium text-sky-300 hover:bg-zinc-800 hover:text-sky-200">Create new agent</a>
+{% else %}
+<span title="Hyperliquid API Key required" class="block cursor-not-allowed rounded-md px-3 py-2 text-sm font-medium text-zinc-600" data-agent-selector-create-disabled>Create new agent</span>
+{% endif %}

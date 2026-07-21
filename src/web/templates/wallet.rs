@@ -1,16 +1,24 @@
 use askama::Template;
 
+use super::navbar::Navbar;
+
 #[derive(Template)]
 #[template(path = "wallet.html")]
 pub struct WalletPageTemplate {
     pub wallet_address: String,
-    pub fee_tenths_of_bp: i16,
+    pub fee_bps: i16,
+    pub min_fee_bps: i16,
+    pub max_fee_bps: i16,
     pub builder_fee_approved: bool,
     pub builder_recipient: &'static str,
     pub current_path: String,
     pub agents: Vec<WalletAgentView>,
     pub api_wallet_address: Option<String>,
     pub api_wallet_state: String,
+    pub api_wallet_expires_at: Option<chrono::DateTime<chrono::Utc>>,
+    pub api_wallet_expiry_class: &'static str,
+    pub api_wallet_show_expired: bool,
+    pub navbar: Navbar,
 }
 
 #[derive(Debug, Clone)]

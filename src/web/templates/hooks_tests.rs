@@ -91,6 +91,7 @@ fn new_hook_page_renders_form() {
         },
         errors: Vec::new(),
         current_path: "/agents/test-agent/hooks/new".to_string(),
+        navbar: Navbar::default(),
     };
 
     let rendered = template.render().expect("render new hook page");

@@ -121,7 +121,10 @@ pub async fn store_user_api_wallet(
 pub async fn record_user_api_wallet_approval(pool: &DbPool, user_id: Uuid) -> anyhow::Result<bool> {
     let result = sqlx::query(
         "UPDATE users
-            SET api_wallet_approved_at = now(), updated_at = now()
+            SET api_wallet_approved_at = now(),
+                api_wallet_expires_at = now() + INTERVAL '6 months',
+                api_wallet_expiry_checked_at = now(),
+                updated_at = now()
           WHERE id = $1
             AND api_wallet_address IS NOT NULL
             AND hyperliquid_private_key_ciphertext IS NOT NULL

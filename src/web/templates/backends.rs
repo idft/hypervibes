@@ -2,6 +2,7 @@ use askama::Template;
 
 use crate::agents::model::{AgentRuntimeRow, CreateAgentRuntimeForm};
 
+use super::navbar::Navbar;
 use super::shared::LocalTimestampView;
 
 #[derive(Debug, Clone)]
@@ -30,6 +31,7 @@ impl AgentRuntimeView {
 pub struct BackendsPageTemplate {
     pub runtimes: Vec<AgentRuntimeView>,
     pub current_path: String,
+    pub navbar: Navbar,
 }
 
 #[derive(Template)]
@@ -38,4 +40,5 @@ pub struct BackendsNewPageTemplate {
     pub form: CreateAgentRuntimeForm,
     pub errors: Vec<String>,
     pub current_path: String,
+    pub navbar: Navbar,
 }

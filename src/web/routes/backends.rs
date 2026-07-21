@@ -16,12 +16,14 @@ use crate::{
     },
     web::{
         AppState,
+        auth::AuthenticatedUser,
         error::AppError,
-        templates::{AgentRuntimeView, BackendsNewPageTemplate, BackendsPageTemplate},
+        templates::{AgentRuntimeView, BackendsNewPageTemplate, BackendsPageTemplate, load_navbar},
     },
 };
 pub(in crate::web::routes) async fn backends_index(
     State(state): State<Arc<AppState>>,
+    user: AuthenticatedUser,
 ) -> Result<Html<String>, AppError> {
     let template = BackendsPageTemplate {
         runtimes: list_agent_runtimes(&state.db_pool)
@@ -30,10 +32,14 @@ pub(in crate::web::routes) async fn backends_index(
             .map(AgentRuntimeView::from_row)
             .collect(),
         current_path: "/backends".to_string(),
+        navbar: load_navbar(&state.db_pool, user.id).await?,
     };
     Ok(Html(template.render()?))
 }
-pub(in crate::web::routes) async fn backends_new() -> Result<Html<String>, AppError> {
+pub(in crate::web::routes) async fn backends_new(
+    State(state): State<Arc<AppState>>,
+    user: AuthenticatedUser,
+) -> Result<Html<String>, AppError> {
     let template = BackendsNewPageTemplate {
         form: CreateAgentRuntimeForm {
             backend_kind: crate::agents::model::BACKEND_KIND_OPENCODE.to_string(),
@@ -42,15 +48,17 @@ pub(in crate::web::routes) async fn backends_new() -> Result<Html<String>, AppEr
         },
         errors: Vec::new(),
         current_path: "/backends/new".to_string(),
+        navbar: load_navbar(&state.db_pool, user.id).await?,
     };
     Ok(Html(template.render()?))
 }
 pub(in crate::web::routes) async fn create_backend(
     State(state): State<Arc<AppState>>,
+    user: AuthenticatedUser,
     Form(form): Form<CreateAgentRuntimeForm>,
 ) -> Result<Response, AppError> {
     if let Err(errors) = form.validate() {
-        return Ok(render_backend_form(form, errors));
+        return Ok(render_backend_form(&state, user, form, errors).await);
     }
 
     if let Err(error) = insert_agent_runtime(&state.db_pool, &form).await {
@@ -58,19 +66,25 @@ pub(in crate::web::routes) async fn create_backend(
             Some(message) => vec![message],
             None => return Err(AppError(error)),
         };
-        return Ok(render_backend_form(form, errors));
+        return Ok(render_backend_form(&state, user, form, errors).await);
     }
 
     Ok(Redirect::to("/backends").into_response())
 }
-pub(in crate::web::routes) fn render_backend_form(
+pub(in crate::web::routes) async fn render_backend_form(
+    state: &Arc<AppState>,
+    user: AuthenticatedUser,
     form: CreateAgentRuntimeForm,
     errors: Vec<String>,
 ) -> Response {
+    let navbar = load_navbar(&state.db_pool, user.id)
+        .await
+        .unwrap_or_default();
     let template = BackendsNewPageTemplate {
         form,
         errors,
         current_path: "/backends/new".to_string(),
+        navbar,
     };
     match template.render() {
         Ok(body) => (StatusCode::UNPROCESSABLE_ENTITY, Html(body)).into_response(),

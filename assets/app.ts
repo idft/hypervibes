@@ -32,6 +32,7 @@ function renderTimeago(root: ParentNode = document) {
   const nodes = root.querySelectorAll("time.timeago");
   if (nodes.length > 0) {
     render(nodes);
+    nodes.forEach((node) => node.classList.add("timeago-ready"));
   }
 }
 
@@ -746,26 +747,61 @@ function hyperliquidActionBase() {
 
 function initApiWalletSetup() {
   const form = document.querySelector<HTMLFormElement>("[data-api-wallet-form]");
-  if (!form) return;
-  const source = form.querySelector<HTMLInputElement>("[data-api-wallet-source]");
-  const submit = form.querySelector<HTMLButtonElement>("[data-api-wallet-submit]");
-  const toggle = form.querySelector<HTMLButtonElement>("[data-api-wallet-import-toggle]");
-  const importSection = form.querySelector<HTMLElement>("[data-api-wallet-import]");
+  const submit = form?.querySelector<HTMLButtonElement>("[data-api-wallet-submit]");
+  const toggle = form?.querySelector<HTMLButtonElement>("[data-api-wallet-import-toggle]");
+  const importSection = document.querySelector<HTMLElement>("[data-api-wallet-import]");
   const privateKey = importSection?.querySelector<HTMLInputElement>('input[name="hyperliquid_private_key"]');
-  if (!source || !submit || !toggle || !importSection || !privateKey) return;
-  toggle.addEventListener("click", () => {
-    const importing = !importSection.classList.toggle("hidden");
-    source.value = importing ? "import" : "generate";
-    submit.textContent = importing ? "Import API Key" : "Generate API Key";
-    toggle.textContent = importing ? "Generate a new API key instead" : "Import existing API key...";
-    toggle.setAttribute("aria-expanded", importing ? "true" : "false");
-    privateKey.required = importing;
-    if (importing) {
-      privateKey.focus();
-    } else {
-      privateKey.value = "";
-    }
+  if (submit && toggle && importSection && privateKey) {
+    let walletSource: "generate" | "import" = "generate";
+    toggle.addEventListener("click", () => {
+      const isHidden = importSection.classList.contains("hidden");
+      importSection.classList.toggle("hidden", !isHidden);
+      walletSource = isHidden ? "import" : "generate";
+      submit.textContent = isHidden ? "Import API Key" : "Generate API Key";
+      toggle.textContent = isHidden ? "Generate API key" : "Import existing API key";
+      toggle.setAttribute("aria-expanded", isHidden ? "true" : "false");
+      privateKey.required = isHidden;
+      if (isHidden) {
+        privateKey.focus();
+      } else {
+        privateKey.value = "";
+      }
+    });
+    submit.addEventListener("click", () => {
+      void generateAndApproveSigner(walletSource, privateKey, false);
+    });
+  }
+  const regenerate = document.querySelector<HTMLButtonElement>("[data-api-wallet-regenerate]");
+  regenerate?.addEventListener("click", () => {
+    void generateAndApproveSigner("generate", null, true);
   });
+}
+
+async function generateAndApproveSigner(walletSource: "generate" | "import", privateKey: HTMLInputElement | null, force: boolean) {
+  const page = document.querySelector<HTMLElement>("[data-wallet-page]");
+  if (!page) return;
+  const status = page.querySelector<HTMLElement>("[data-api-wallet-status]");
+  const setStatus = (text: string) => { if (status) status.textContent = text; };
+  const existingAddress = page.dataset.apiWalletAddress;
+  try {
+    if (force || !existingAddress) {
+      setStatus(force ? "Re-generating trading signer..." : "Generating trading signer...");
+      const privateKeyValue = walletSource === "import" ? privateKey?.value ?? "" : "";
+      const response = await fetch("/wallet/api-wallet", {
+        method: "POST",
+        headers: { "content-type": "application/json", "X-CSRF-Token": csrfToken() ?? "" },
+        body: JSON.stringify({ walletSource, hyperliquidPrivateKey: privateKeyValue }),
+      });
+      const result = (await response.json().catch(() => null)) as { status?: string; api_wallet_address?: string; error?: string } | null;
+      if (!response.ok || !result?.api_wallet_address) {
+        throw new Error(result?.error ?? "Could not generate trading signer.");
+      }
+      page.dataset.apiWalletAddress = result.api_wallet_address;
+    }
+    await approveTradingSigner(page);
+  } catch (error) {
+    setStatus(error instanceof Error ? error.message : "Trading signer setup failed.");
+  }
 }
 
 async function approveTradingSigner(page: HTMLElement) {
@@ -778,56 +814,53 @@ async function approveTradingSigner(page: HTMLElement) {
     "HyperliquidTransaction:ApproveAgent": [{ name: "hyperliquidChain", type: "string" }, { name: "agentAddress", type: "address" }, { name: "agentName", type: "string" }, { name: "nonce", type: "uint64" }],
   }, action);
   const response = await fetch("/wallet/approve-api-wallet", { method: "POST", headers: { "content-type": "application/json", "X-CSRF-Token": csrfToken() ?? "" }, body: JSON.stringify(signed) });
-  if (!response.ok) throw new Error("Hyperliquid did not approve the trading signer.");
+  if (!response.ok) {
+    const body = await response.json().catch(() => null) as { response?: string; message?: string; status?: string } | null;
+    const detail = body?.response ?? body?.message ?? body?.status ?? response.statusText;
+    throw new Error(`Hyperliquid did not approve the trading signer: ${detail}`);
+  }
   window.location.reload();
-}
-
-function reportTradingSignerApprovalError(page: HTMLElement, error: unknown) {
-  const approvalStatus = page.querySelector<HTMLElement>("[data-api-wallet-status]");
-  if (approvalStatus) approvalStatus.textContent = error instanceof Error ? error.message : "Approval failed.";
 }
 
 function initWalletPage() {
   const page = document.querySelector<HTMLElement>("[data-wallet-page]");
   if (!page) return;
   const slider = page.querySelector<HTMLInputElement>("[data-builder-fee]");
-  const output = page.querySelector<HTMLOutputElement>("[data-builder-fee-output]");
+  const input = page.querySelector<HTMLInputElement>("[data-builder-fee-input]");
   const status = page.querySelector<HTMLElement>("[data-builder-fee-status]");
-  const max = page.querySelector<HTMLElement>("[data-max-builder-fee]");
-  const update = () => { if (slider && output) output.value = `${(Number(slider.value) / 10).toFixed(1)} bps`; };
-  slider?.addEventListener("input", update);
-  void fetch("/wallet/max-builder-fee").then((response) => response.ok ? response.json() : null).then((data: { max_builder_fee?: string } | null) => {
-    if (max && data?.max_builder_fee) max.textContent = `Hyperliquid approved maximum: ${data.max_builder_fee}`;
-  });
+  if (!slider || !input) return;
+  const minBps = Number(slider.min);
+  const maxBps = Number(slider.max);
+  const clampBps = (value: number) => Math.max(minBps, Math.min(maxBps, Math.round(value)));
+  const bpsToPercent = (bps: number) => (bps / 100).toFixed(2);
+  const syncFromSlider = () => { input.value = bpsToPercent(Number(slider.value)); };
+  const syncFromInput = () => {
+    const percent = Number(input.value);
+    if (!Number.isFinite(percent)) return;
+    slider.value = String(clampBps(Math.round(percent * 100)));
+  };
+  slider.addEventListener("input", syncFromSlider);
+  input.addEventListener("input", syncFromInput);
+  input.addEventListener("blur", () => { input.value = bpsToPercent(Number(slider.value)); });
   page.querySelector("[data-approve-builder-fee]")?.addEventListener("click", () => {
-    if (!slider || !status) return;
+    if (!status) return;
     void (async () => {
       status.textContent = "Awaiting wallet signature...";
-      const fee = Number(slider.value);
-      const action = { type: "approveBuilderFee", ...hyperliquidActionBase(), maxFeeRate: `${(fee / 1000).toFixed(3)}%`, builder: page.dataset.builderRecipient ?? "" };
+      const feeBps = clampBps(Math.round(Number(input.value) * 100));
+      slider.value = String(feeBps);
+      input.value = bpsToPercent(feeBps);
+      const maxFeeRate = `${(feeBps / 100).toFixed(2)}%`;
+      const action = { type: "approveBuilderFee", ...hyperliquidActionBase(), maxFeeRate, builder: page.dataset.builderRecipient ?? "" };
       const signed = await signWalletAction("HyperliquidTransaction:ApproveBuilderFee", {
         "HyperliquidTransaction:ApproveBuilderFee": [{ name: "hyperliquidChain", type: "string" }, { name: "maxFeeRate", type: "string" }, { name: "builder", type: "address" }, { name: "nonce", type: "uint64" }],
       }, action);
-      const response = await fetch("/wallet/approve-builder-fee", { method: "POST", headers: { "content-type": "application/json", "X-CSRF-Token": csrfToken() ?? "" }, body: JSON.stringify({ ...signed, feeTenthsOfBp: fee }) });
+      const response = await fetch("/wallet/approve-builder-fee", { method: "POST", headers: { "content-type": "application/json", "X-CSRF-Token": csrfToken() ?? "" }, body: JSON.stringify({ ...signed, feeBps }) });
       if (!response.ok) throw new Error("Hyperliquid did not approve the fee.");
       status.textContent = "Approved on Hyperliquid.";
       const result = await response.json().catch(() => null) as { redirect?: string } | null;
       window.location.assign(result?.redirect ?? "/agents/new");
     })().catch((error: unknown) => { if (status) status.textContent = error instanceof Error ? error.message : "Approval failed."; });
   });
-  const approveApiWalletButton = page.querySelector<HTMLButtonElement>("[data-approve-api-wallet]");
-  approveApiWalletButton?.addEventListener("click", () => {
-    void approveTradingSigner(page).catch((error: unknown) => reportTradingSignerApprovalError(page, error));
-  });
-  const params = new URLSearchParams(window.location.search);
-  if (params.has("approve-signer")) {
-    params.delete("approve-signer");
-    const query = params.toString();
-    window.history.replaceState(null, "", `${window.location.pathname}${query ? `?${query}` : ""}`);
-    if (approveApiWalletButton) {
-      void approveTradingSigner(page).catch((error: unknown) => reportTradingSignerApprovalError(page, error));
-    }
-  }
 }
 
 function initAgentCreation() {
@@ -1012,6 +1045,7 @@ function init() {
         }
         if (node.matches("time.timeago")) {
           render([node as HTMLElement]);
+          (node as HTMLElement).classList.add("timeago-ready");
         }
         if (node.matches("time.local-datetime")) {
           renderLocalDateTimeNode(node);
