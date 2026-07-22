@@ -13,7 +13,7 @@ use axum::{
     response::{Html, IntoResponse, Response},
 };
 use rust_decimal::Decimal;
-use serde::{Deserialize, Serialize, de::DeserializeOwned};
+use serde::{Deserialize, de::DeserializeOwned};
 use serde_json::{Value, json};
 use tracing::warn;
 
@@ -501,19 +501,6 @@ pub(in crate::web::routes) struct BuilderFeeRequest {
     /// Builder fee in whole basis points (1–10 bps). Stored as
     /// `fee_bps * 10` in the `users.builder_fee_tenths_of_bp` column.
     fee_bps: i16,
-}
-
-#[derive(Serialize)]
-pub(in crate::web::routes) struct AccountAddressResponse {
-    wallet_address: String,
-}
-
-pub(in crate::web::routes) async fn account_address(
-    user: AuthenticatedUser,
-) -> Json<AccountAddressResponse> {
-    Json(AccountAddressResponse {
-        wallet_address: user.wallet_address,
-    })
 }
 
 pub(in crate::web::routes) async fn account_index(

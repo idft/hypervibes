@@ -4,14 +4,15 @@ use uuid::Uuid;
 use crate::db::DbPool;
 
 /// Server-rendered fragment included by every page via `{% include "navbar.html" %}`. Holds
-/// the user-visible warning state (Hyperliquid API key, builder fee approval) used by the
-/// top bar so it can render a status icon without an extra round trip.
+/// the authenticated wallet address and user-visible warning state (Hyperliquid API key,
+/// builder fee approval) used by the top bar without an extra round trip.
 ///
 /// The fragment is rendered by askama's `{% include %}` mechanism: pages that
 /// extend `base.html` declare a `navbar: Navbar` field and the included
 /// template reads the warnings through the parent's context.
 #[derive(Debug, Clone, Default)]
 pub struct Navbar {
+    pub wallet_address: String,
     pub warnings: Vec<NavbarWarning>,
 }
 
@@ -70,9 +71,9 @@ fn days_until_expiry(expires_at: Option<chrono::DateTime<Utc>>) -> Option<i64> {
 /// status icon with one DB hit per request.
 pub async fn load_navbar(pool: &DbPool, user_id: Uuid) -> Result<Navbar, sqlx::Error> {
     let row: NavbarRow = sqlx::query_as(
-        "SELECT api_wallet_address, api_wallet_approved_at,
-                api_wallet_expires_at, api_wallet_expiry_checked_at,
-                builder_fee_approved_at
+        "SELECT wallet_address, api_wallet_address, api_wallet_approved_at,
+                 api_wallet_expires_at, api_wallet_expiry_checked_at,
+                 builder_fee_approved_at
            FROM users WHERE id = $1",
     )
     .bind(user_id)
@@ -96,11 +97,15 @@ pub async fn load_navbar(pool: &DbPool, user_id: Uuid) -> Result<Navbar, sqlx::E
     if row.builder_fee_approved_at.is_none() {
         warnings.push(NavbarWarning::BuilderFeeNotApproved);
     }
-    Ok(Navbar { warnings })
+    Ok(Navbar {
+        wallet_address: row.wallet_address,
+        warnings,
+    })
 }
 
 #[derive(sqlx::FromRow)]
 struct NavbarRow {
+    wallet_address: String,
     api_wallet_address: Option<String>,
     api_wallet_approved_at: Option<chrono::DateTime<chrono::Utc>>,
     api_wallet_expires_at: Option<chrono::DateTime<chrono::Utc>>,

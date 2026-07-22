@@ -158,7 +158,6 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/agents/{agent_key}/live/stream", get(agent_live_stream))
         .route("/settings", get(settings_index).post(settings_update))
         .route("/account", get(account_index))
-        .route("/account/address", get(account_address))
         .route("/account/approve-builder-fee", post(approve_builder_fee))
         .route("/account/api-wallet", post(setup_user_api_wallet))
         .route("/account/approve-api-wallet", post(approve_user_api_wallet))

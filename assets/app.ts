@@ -1030,7 +1030,7 @@ function initAccountNavbar() {
   const link = document.querySelector<HTMLElement>("[data-account-navbar]");
   const label = link?.querySelector<HTMLElement>("[data-account-navbar-label]");
   const identicons = document.querySelectorAll<HTMLImageElement>("[data-account-identicon]");
-  const address = document.querySelector<HTMLElement>("[data-account-page]")?.dataset.accountAddress;
+  const address = link?.dataset.accountAddress ?? document.querySelector<HTMLElement>("[data-account-page]")?.dataset.accountAddress;
   const setAddress = (value: string) => {
     identicons.forEach((identicon) => {
       identicon.src = blockieDataUri(value);
@@ -1038,10 +1038,7 @@ function initAccountNavbar() {
     });
     if (label && value.length > 10) label.textContent = `${value.slice(0, 6)}...${value.slice(-4)}`;
   };
-  if (address) { setAddress(address); return; }
-  void fetch("/account/address").then((response) => response.ok ? response.json() : null).then((data: { wallet_address?: string } | null) => {
-    if (data?.wallet_address) setAddress(data.wallet_address);
-  });
+  if (address) setAddress(address);
 }
 
 function init() {
