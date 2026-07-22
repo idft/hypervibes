@@ -59,6 +59,23 @@ fn agents_page_renders_loading_placeholder_when_no_balance() {
 }
 
 #[test]
+fn agents_page_renders_empty_state_without_table_or_header_action() {
+    let template = AgentsPageTemplate {
+        agents: vec![],
+        current_path: "/agents".to_string(),
+        navbar: Navbar::default(),
+    };
+    let rendered = template.render().unwrap();
+
+    assert!(rendered.contains("No Agents yet"));
+    assert!(rendered.contains("Create your first Agent to get started."));
+    assert!(rendered.contains("Create a new Agent"));
+    assert!(rendered.contains("href=\"/agents/new\""));
+    assert!(!rendered.contains("<table"));
+    assert!(!rendered.contains("Create agent"));
+}
+
+#[test]
 fn agents_show_page_renders_base_layout_and_delete_modal() {
     let view = sample_account_balance_view();
     let account_balance_html = AccountBalancePartialTemplate::render_view(view).unwrap();
@@ -140,7 +157,16 @@ fn opencode_agent_shows_jobs_tab_with_recent_runs() {
     assert!(rendered.contains("market-analysis"));
     assert!(rendered.contains("15m"));
     assert!(rendered.contains("1m"));
-    assert!(rendered.contains("10m"));
+    assert!(!rendered.contains(">10m<"));
+    assert!(!rendered.contains(">Timeout<"));
+    let disabled_job_row = rendered
+        .split_once("data-row-href=\"/agents/test-agent/jobs/2\"")
+        .and_then(|(_, remainder)| remainder.split_once("</tr>"))
+        .map(|(row, _)| row)
+        .expect("render disabled scheduled job row");
+    assert!(disabled_job_row.contains("Disabled"));
+    assert!(disabled_job_row.contains("—"));
+    assert!(!disabled_job_row.contains("local-datetime"));
     assert!(rendered.contains("anthropic/claude-3-5-sonnet"));
     assert!(rendered.contains("Run now"));
     assert!(!rendered.contains("Operator prompt</th>"));
@@ -450,6 +476,7 @@ fn agents_new_page_renders_base_layout_and_form() {
         form: CreateAgentForm::default(),
         choices: TradingAccountChoicesView {
             main_address: "0x0000000000000000000000000000000000000001".to_string(),
+            main_balance: Some("100.0000".to_string()),
             main_assigned_to: None,
             subaccounts: Vec::new(),
             subaccount_capacity: Some("10 remaining of 10 total".to_string()),
@@ -474,6 +501,7 @@ fn agents_new_page_renders_base_layout_and_form() {
     );
     assert!(rendered.contains("display_name"));
     assert!(rendered.contains("trading_account_selection"));
+    assert!(rendered.contains("0x0000000000000000000000000000000000000001 · 100.0000"));
     assert!(!rendered.contains("Create new Sub-Account"));
     assert!(rendered.contains("data-create-new-agent-subaccount"));
     assert!(rendered.contains("/agents/new/account-choices"));
@@ -487,6 +515,7 @@ fn trading_account_choices_render_subaccount_names() {
     let template = AgentTradingAccountChoicesTemplate {
         choices: TradingAccountChoicesView {
             main_address: "0x0000000000000000000000000000000000000001".to_string(),
+            main_balance: Some("100.0000".to_string()),
             main_assigned_to: None,
             subaccounts: vec![
                 crate::web::templates::SubaccountChoiceView {

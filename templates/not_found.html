@@ -1,0 +1,14 @@
+{% extends "base.html" %}
+
+{% block title %}Page Not Found · Vibetrading{% endblock %}
+
+{% block content %}
+<section class="mx-auto max-w-3xl rounded-2xl border border-amber-950/60 bg-[#0d0d10] p-8">
+    <span class="inline-flex rounded-full border border-amber-900/60 bg-amber-950/30 px-3 py-1 text-xs font-medium uppercase tracking-[0.16em] text-amber-300">404 Page Not Found</span>
+    <h1 class="mt-4 text-3xl font-semibold tracking-tight text-white">We couldn't find that page.</h1>
+    <p class="mt-3 text-sm leading-6 text-zinc-400">The page at <span class="font-mono text-zinc-300">{{ current_path }}</span> doesn't exist or may have moved.</p>
+    <div class="mt-6 flex flex-wrap gap-3">
+        <a href="/agents" class="cursor-pointer rounded-full bg-white px-4 py-2 text-sm font-medium text-black hover:bg-zinc-200">Back to agents</a>
+    </div>
+</section>
+{% endblock %}

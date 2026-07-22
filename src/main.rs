@@ -86,52 +86,21 @@ async fn main() -> Result<()> {
             warn!(error = ?error, "models.dev catalog warmup failed");
         }
     });
-    let warm_provider_pool = pool.clone();
     let warm_provider_client = Arc::clone(&opencode_client);
     let warm_opencode_base_url = config.opencode_base_url.clone();
+    let warm_provider_workspace = config.opencode_container_workspaces_root.clone();
     tokio::spawn(async move {
-        let agents = match agents::store::list_agents(&warm_provider_pool).await {
-            Ok(agents) => agents,
-            Err(error) => {
-                warn!(error = ?error, "OpenCode provider warmup could not list agents");
-                return;
-            }
-        };
-        for agent in agents {
-            let Some(agent) = (match agents::store::get_agent(&warm_provider_pool, &agent.agent_key)
-                .await
-            {
-                Ok(agent) => agent,
-                Err(error) => {
-                    warn!(agent_key = %agent.agent_key, error = ?error, "OpenCode provider warmup could not load agent");
-                    continue;
-                }
-            }) else {
-                continue;
-            };
-            let Some(workspace) = opencode::workspace::OpenCodeWorkspaceRuntimeConfig::from_value(
-                &agent.runtime_config,
-            ) else {
-                warn!(agent_key = %agent.agent_key, "OpenCode provider warmup skipped agent without workspace metadata");
-                continue;
-            };
-            info!(agent_key = %agent.agent_key, "warming OpenCode provider cache");
-            match warm_provider_client
-                .list_providers(&warm_opencode_base_url, &workspace.workspace_container_path)
-                .await
-            {
-                Ok(response) => info!(
-                    agent_key = %agent.agent_key,
-                    providers = response.all.len(),
-                    connected = response.connected.len(),
-                    "OpenCode provider cache warmed"
-                ),
-                Err(error) => warn!(
-                    agent_key = %agent.agent_key,
-                    error = ?error,
-                    "OpenCode provider warmup failed"
-                ),
-            }
+        info!(workspace = %warm_provider_workspace, "warming shared OpenCode provider cache");
+        match warm_provider_client
+            .list_providers(&warm_opencode_base_url, &warm_provider_workspace)
+            .await
+        {
+            Ok(response) => info!(
+                providers = response.all.len(),
+                connected = response.connected.len(),
+                "OpenCode provider cache warmed"
+            ),
+            Err(error) => warn!(error = ?error, "OpenCode provider warmup failed"),
         }
     });
 

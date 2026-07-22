@@ -1,7 +1,6 @@
 use crate::{
     model_catalog::options::{
-        ModelPickerOption, build_model_picker_options, build_model_picker_options_cached,
-        selection_exists_in_options,
+        ModelPickerOption, build_model_picker_options, selection_exists_in_options,
     },
     web::{
         AppState,
@@ -106,40 +105,6 @@ pub(in crate::web::routes) async fn load_model_picker_context(
     }
 }
 
-pub(in crate::web::routes) async fn load_model_picker_context_cached(
-    state: &Arc<AppState>,
-    agent: &crate::agents::model::AgentDetailRow,
-) -> ModelPickerContext {
-    match build_model_picker_options_cached(
-        agent,
-        &state.opencode_base_url,
-        &state.opencode_client,
-        &state.model_catalog,
-    )
-    .await
-    {
-        Ok(Some(options)) => ModelPickerContext {
-            options,
-            warning: None,
-        },
-        Ok(None) => ModelPickerContext {
-            options: Vec::new(),
-            warning: Some(
-                "Model list is still loading. Open the picker again shortly.".to_string(),
-            ),
-        },
-        Err(error) => {
-            warn!(agent_key = %agent.agent_key, error = ?error, "failed to load cached model picker options");
-            ModelPickerContext {
-                options: Vec::new(),
-                warning: Some(
-                    "Could not load configured OpenCode models. You can still use OpenCode default."
-                        .to_string(),
-                ),
-            }
-        }
-    }
-}
 pub(in crate::web::routes) fn selected_model_label(
     selected: &str,
     options: &[ModelPickerOption],

@@ -21,6 +21,11 @@ async fn agent_chat_route_is_not_registered() {
         .unwrap();
 
     assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    assert_eq!(
+        response.headers()["content-type"],
+        "text/html; charset=utf-8"
+    );
+    assert!(response_text(response).await.contains("404 Page Not Found"));
 }
 #[tokio::test]
 async fn unknown_agent_subroute_returns_404() {

@@ -339,11 +339,10 @@ async fn hook_detail_page_renders_hook_specific_runs() {
     assert!(text.contains(&format!("/agents/{agent_key}/runs/{run_id}")));
     assert!(text.contains("data-detail-delete-trigger"));
     assert!(text.contains(&format!("/agents/{agent_key}/hooks/{hook_id}/delete")));
-    assert!(text.contains(&format!("/agents/{agent_key}/hooks/{hook_id}/model-picker")));
-    assert!(text.contains("data-model-picker-lazy-open"));
-    assert!(!text.contains("data-model-picker-mode=\"modal\""));
+    assert!(text.contains("data-model-picker-mode=\"modal\""));
+    assert!(!text.contains("data-model-picker-lazy-open data-model-picker-url"));
 
-    let response = router(state)
+    let response = router(state.clone())
         .oneshot(
             Request::builder()
                 .uri(format!("/agents/{agent_key}/hooks/{hook_id}/model-picker"))
@@ -355,6 +354,41 @@ async fn hook_detail_page_renders_hook_specific_runs() {
     assert_eq!(response.status(), StatusCode::OK);
     let text = response_text(response).await;
     assert!(text.contains("data-model-picker-mode=\"modal\""));
+}
+#[tokio::test]
+async fn post_hook_model_htmx_updates_without_redirect() {
+    let state = test_state().await;
+    let pool = state.db_pool.clone();
+    let (agent_key, _wallet_address) = insert_test_opencode_agent(&state)
+        .await
+        .expect("insert opencode agent");
+    let hook_id = crate::agentic::store::list_agent_hooks(&pool, &agent_key)
+        .await
+        .expect("list hooks")
+        .first()
+        .expect("default hook present")
+        .id;
+
+    let response = router(state.clone())
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/agents/{agent_key}/hooks/{hook_id}/model"))
+                .header("content-type", "application/x-www-form-urlencoded")
+                .header("HX-Request", "true")
+                .body(Body::from("model_selection="))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::NO_CONTENT);
+    let hook = crate::agentic::store::get_agent_hook(&pool, &agent_key, hook_id)
+        .await
+        .expect("get hook")
+        .expect("hook present");
+    assert!(hook.model_provider_id.is_none());
+    assert!(hook.model_id.is_none());
 }
 #[tokio::test]
 async fn post_hook_timeout_updates_and_redirects() {

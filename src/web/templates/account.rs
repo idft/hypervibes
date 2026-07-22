@@ -47,6 +47,7 @@ pub struct AccountTableBalanceView {
 #[derive(Debug, Clone)]
 pub struct TradingAccountChoicesView {
     pub main_address: String,
+    pub main_balance: Option<String>,
     pub main_assigned_to: Option<String>,
     pub subaccounts: Vec<SubaccountChoiceView>,
     pub subaccount_capacity: Option<String>,

@@ -360,7 +360,6 @@
                                 <th class="px-4 py-3 font-medium">Kind</th>
                                 <th class="px-4 py-3 font-medium">Status</th>
                                 <th class="px-4 py-3 font-medium">Timeframe</th>
-                                <th class="px-4 py-3 font-medium">Timeout</th>
                                 <th class="px-4 py-3 font-medium">Next run</th>
                                 <th class="px-4 py-3 font-medium">Model</th>
                                 <th class="px-4 py-3 font-medium"></th>
@@ -375,9 +374,12 @@
                                     <span class="inline-flex rounded-full border px-2 py-0.5 text-xs font-medium {{ row.enabled_class }}">{{ row.enabled_label }}</span>
                                 </td>
                                 <td class="px-4 py-3 align-top font-mono text-xs tabular-nums text-zinc-300">{{ row.timeframe_text }}</td>
-                                <td class="px-4 py-3 align-top font-mono text-xs tabular-nums text-zinc-300">{{ row.timeout_text }}</td>
                                 <td class="px-4 py-3 align-top font-mono text-xs text-zinc-300">
+                                    {% if !row.enabled %}
+                                    —
+                                    {% else %}
                                     <time class="local-datetime" data-local-format="datetime" datetime="{{ row.next_run_at.iso }}" title="{{ row.next_run_at.fallback_text }}">{{ row.next_run_at.fallback_text }}</time>
+                                    {% endif %}
                                 </td>
                                 <td class="px-4 py-3 align-top text-xs text-zinc-300">
                                     <span class="inline-flex items-center gap-2">
@@ -440,7 +442,6 @@
                                 <th class="px-4 py-3 font-medium">Kind</th>
                                 <th class="px-4 py-3 font-medium">Trigger</th>
                                 <th class="px-4 py-3 font-medium">Status</th>
-                                <th class="px-4 py-3 font-medium">Timeout</th>
                                 <th class="px-4 py-3 font-medium">Model</th>
                                 <th class="px-4 py-3 font-medium"></th>
                             </tr>
@@ -454,7 +455,6 @@
                                 <td class="px-4 py-3 align-top">
                                     <span class="inline-flex rounded-full border px-2 py-0.5 text-xs font-medium {{ row.enabled_class }}">{{ row.enabled_label }}</span>
                                 </td>
-                                <td class="px-4 py-3 align-top font-mono text-xs text-zinc-300">{{ row.timeout_text }}</td>
                                 <td class="px-4 py-3 align-top text-xs text-zinc-300">
                                     <span class="inline-flex items-center gap-2">
                                         {% if let Some(logo_url) = row.model_logo_url %}
@@ -579,14 +579,14 @@
     <div class="w-full max-w-md rounded-2xl border border-zinc-800 bg-[#0d0d10] p-6 shadow-2xl">
         <h3 class="text-lg font-semibold text-white">Delete agent</h3>
         <p class="mt-2 text-sm leading-6 text-zinc-400">
-            Are you sure you want to delete <span class="font-medium text-zinc-200">{{ agent.display_name }}</span>? This removes the agent, related database records, Hyperliquid history for this account, and its OpenCode workspace files. This cannot be undone.
+            Are you sure you want to delete <span class="font-medium text-zinc-200">{{ agent.display_name }}</span>? This removes the agent and its workspace files. The Hyperliquid account will remain.
         </p>
         <div class="mt-6 flex flex-col-reverse gap-3 sm:flex-row sm:justify-end">
-            <button type="button" id="cancel-delete-btn" class="w-full rounded-full border border-zinc-800 px-4 py-2 text-sm font-medium text-zinc-300 hover:border-zinc-700 hover:text-white sm:w-auto">
+            <button type="button" id="cancel-delete-btn" class="w-full cursor-pointer rounded-full border border-zinc-800 px-4 py-2 text-sm font-medium text-zinc-300 hover:border-zinc-700 hover:text-white sm:w-auto">
                 Cancel
             </button>
             <form action="/agents/{{ agent.agent_key }}/delete" method="post" class="w-full sm:w-auto">
-                <button type="submit" class="w-full rounded-full bg-red-600 px-4 py-2 text-sm font-medium text-white hover:bg-red-500 sm:w-auto">
+                <button type="submit" class="w-full cursor-pointer rounded-full bg-red-600 px-4 py-2 text-sm font-medium text-white hover:bg-red-500 sm:w-auto">
                     Delete agent
                 </button>
             </form>

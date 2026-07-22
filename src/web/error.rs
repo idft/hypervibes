@@ -1,9 +1,10 @@
 use askama::Template;
+use axum::extract::OriginalUri;
 use axum::http::StatusCode;
 use axum::response::{Html, IntoResponse, Response};
 use tracing::error;
 
-use crate::web::templates::{Navbar, ServerErrorPageTemplate};
+use crate::web::templates::{Navbar, NotFoundPageTemplate, ServerErrorPageTemplate};
 
 #[derive(Debug)]
 pub(crate) struct AppError(pub anyhow::Error);
@@ -37,6 +38,25 @@ impl IntoResponse for AppError {
                 )
                     .into_response()
             }
+        }
+    }
+}
+
+pub(crate) async fn not_found(OriginalUri(uri): OriginalUri) -> Response {
+    not_found_response(uri.path())
+}
+
+pub(crate) fn not_found_response(path: &str) -> Response {
+    let template = NotFoundPageTemplate {
+        current_path: path.to_string(),
+        navbar: Navbar::default(),
+    };
+
+    match template.render() {
+        Ok(body) => (StatusCode::NOT_FOUND, Html(body)).into_response(),
+        Err(render_error) => {
+            error!(error = ?render_error, "failed to render not found page");
+            StatusCode::NOT_FOUND.into_response()
         }
     }
 }

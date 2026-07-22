@@ -38,27 +38,6 @@ pub async fn build_model_picker_options(
     ))
 }
 
-pub async fn build_model_picker_options_cached(
-    agent: &AgentDetailRow,
-    opencode_base_url: &str,
-    opencode_client: &OpenCodeClient,
-    model_catalog: &ModelsDevCatalog,
-) -> Result<Option<Vec<ModelPickerOption>>> {
-    let workspace = OpenCodeWorkspaceRuntimeConfig::from_value(&agent.runtime_config)
-        .ok_or_else(|| anyhow!("OpenCode workspace metadata is missing for this agent"))?;
-    let Some(response) = opencode_client
-        .list_providers_cached_or_refresh(opencode_base_url, &workspace.workspace_container_path)
-        .await
-    else {
-        return Ok(None);
-    };
-    let snapshot = model_catalog.snapshot().await.ok();
-    Ok(Some(build_model_picker_options_from_response(
-        &response,
-        snapshot.as_ref(),
-    )))
-}
-
 pub fn build_model_picker_options_from_response(
     response: &OpenCodeProvidersResponse,
     catalog: Option<&crate::model_catalog::models_dev::ModelsDevCatalogSnapshot>,

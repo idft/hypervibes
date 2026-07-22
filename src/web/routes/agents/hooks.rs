@@ -4,7 +4,7 @@ use askama::Template;
 use axum::{
     Form,
     extract::{Path, Query, State},
-    http::StatusCode,
+    http::{HeaderMap, StatusCode},
     response::{Html, IntoResponse, Redirect, Response},
 };
 use chrono::Utc;
@@ -13,8 +13,8 @@ use tracing::warn;
 
 use super::shared::{
     ModelPickerContext, ModelSelectionForm, TimeoutErrorQuery, TimeoutForm,
-    WORKSPACE_MAINTENANCE_ACTIVE_WARNING, build_model_picker_view, jobs_warning_redirect,
-    load_model_picker_context, load_model_picker_context_cached, parse_positive_schedule_seconds,
+    WORKSPACE_MAINTENANCE_ACTIVE_WARNING, build_model_picker_view, is_htmx_request,
+    jobs_warning_redirect, load_model_picker_context, parse_positive_schedule_seconds,
     timeout_error_redirect, validate_model_selection_for_agent,
 };
 use crate::web::error::AppError;
@@ -95,18 +95,11 @@ pub(in crate::web::routes) async fn agents_show_hook_detail(
         }
     }
 
-    let mut model_picker = build_model_picker_view(
-        "hook-model-selection",
-        &hook_view.model_selection,
-        ModelPickerContext {
-            options: Vec::new(),
-            warning: None,
-        },
-    );
+    let picker = load_model_picker_context(&state, &agent).await;
+    let mut model_picker =
+        build_model_picker_view("hook-model-selection", &hook_view.model_selection, picker);
     model_picker.show_label = false;
     model_picker.use_modal = true;
-    model_picker.lazy_options_url =
-        Some(format!("/agents/{agent_key}/hooks/{hook_id}/model-picker"));
     let html = AgentHookDetailPageTemplate::render_view(
         agent.clone(),
         hook_view,
@@ -133,7 +126,7 @@ pub(in crate::web::routes) async fn agents_hook_model_picker(
         (Some(provider), Some(model)) => format!("{provider}/{model}"),
         _ => String::new(),
     };
-    let picker = load_model_picker_context_cached(&state, &agent).await;
+    let picker = load_model_picker_context(&state, &agent).await;
     let mut model_picker = build_model_picker_view("hook-model-selection", &selected, picker);
     model_picker.show_label = false;
     model_picker.use_modal = true;
@@ -489,6 +482,7 @@ pub(in crate::web::routes) async fn agents_delete_hook(
 pub(in crate::web::routes) async fn agents_update_hook_model(
     State(state): State<Arc<AppState>>,
     Path((agent_key, hook_id)): Path<(String, i64)>,
+    headers: HeaderMap,
     Form(form): Form<ModelSelectionForm>,
 ) -> Result<Response, AppError> {
     let Some(agent) = get_agent(&state.db_pool, &agent_key).await? else {
@@ -518,6 +512,10 @@ pub(in crate::web::routes) async fn agents_update_hook_model(
     .await?
     {
         return Ok((StatusCode::NOT_FOUND, "hook not found").into_response());
+    }
+
+    if is_htmx_request(&headers) {
+        return Ok(StatusCode::NO_CONTENT.into_response());
     }
 
     Ok(Redirect::to(&format!("/agents/{agent_key}/hooks/{hook_id}")).into_response())

@@ -680,17 +680,14 @@ async fn job_detail_page_renders_job_specific_runs() {
     let text = response_text(response).await;
     assert!(text.contains("Run now"));
     assert!(text.contains(&format!("/agents/{agent_key}/runs/{run_id}")));
-    assert!(text.contains(&format!(
-        "/agents/{agent_key}/jobs/{schedule_id}/model-picker"
-    )));
     assert!(text.contains(&format!("/agents/{agent_key}/jobs/{schedule_id}/timeframe")));
     assert!(text.contains("data-detail-delete-trigger"));
     assert!(text.contains(&format!("/agents/{agent_key}/jobs/{schedule_id}/delete")));
     assert!(text.contains("cursor-pointer"));
-    assert!(text.contains("data-model-picker-lazy-open"));
-    assert!(!text.contains("data-model-picker-mode=\"modal\""));
+    assert!(text.contains("data-model-picker-mode=\"modal\""));
+    assert!(!text.contains("data-model-picker-lazy-open data-model-picker-url"));
 
-    let response = router(state)
+    let response = router(state.clone())
         .oneshot(
             Request::builder()
                 .uri(format!(
@@ -705,6 +702,75 @@ async fn job_detail_page_renders_job_specific_runs() {
     let text = response_text(response).await;
     assert!(text.contains("data-model-picker-mode=\"modal\""));
     assert!(text.contains("Could not load configured OpenCode models"));
+}
+#[tokio::test]
+async fn post_job_model_htmx_updates_without_redirect() {
+    let state = test_state().await;
+    let pool = state.db_pool.clone();
+    let (agent_key, _wallet_address) = insert_test_opencode_agent(&state)
+        .await
+        .expect("insert opencode agent");
+    let schedule_id = crate::agentic::store::list_agent_schedules(&pool, &agent_key)
+        .await
+        .expect("list schedules")
+        .first()
+        .expect("default schedule present")
+        .id;
+
+    let response = router(state.clone())
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/agents/{agent_key}/jobs/{schedule_id}/model"))
+                .header("content-type", "application/x-www-form-urlencoded")
+                .header("HX-Request", "true")
+                .body(Body::from("model_selection="))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::NO_CONTENT);
+    let schedule = crate::agentic::store::get_agent_schedule(&pool, &agent_key, schedule_id)
+        .await
+        .expect("get schedule")
+        .expect("schedule present");
+    assert!(schedule.model_provider_id.is_none());
+    assert!(schedule.model_id.is_none());
+}
+#[tokio::test]
+async fn post_job_model_without_htmx_redirects_to_detail() {
+    let state = test_state().await;
+    let (agent_key, _wallet_address) = insert_test_opencode_agent(&state)
+        .await
+        .expect("insert opencode agent");
+    let schedule_id = crate::agentic::store::list_agent_schedules(&state.db_pool, &agent_key)
+        .await
+        .expect("list schedules")
+        .first()
+        .expect("default schedule present")
+        .id;
+
+    let response = router(state)
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/agents/{agent_key}/jobs/{schedule_id}/model"))
+                .header("content-type", "application/x-www-form-urlencoded")
+                .body(Body::from("model_selection="))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+    assert_eq!(
+        response
+            .headers()
+            .get("location")
+            .and_then(|value| value.to_str().ok()),
+        Some(format!("/agents/{agent_key}/jobs/{schedule_id}").as_str())
+    );
 }
 #[tokio::test]
 async fn post_job_timeout_updates_and_redirects() {

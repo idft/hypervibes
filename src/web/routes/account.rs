@@ -70,6 +70,7 @@ pub(in crate::web::routes) const USER_API_WALLET_NAME: &str = "Vibetrading";
 #[derive(Debug, Clone)]
 pub(in crate::web::routes) struct TradingAccountChoices {
     main_address: String,
+    main_balance: Option<String>,
     main_assigned_to: Option<String>,
     subaccounts: Vec<SubaccountChoiceView>,
     subaccount_capacity: Option<String>,
@@ -485,6 +486,7 @@ impl From<TradingAccountChoices> for TradingAccountChoicesView {
     fn from(value: TradingAccountChoices) -> Self {
         Self {
             main_address: value.main_address,
+            main_balance: value.main_balance,
             main_assigned_to: value.main_assigned_to,
             subaccounts: value.subaccounts,
             subaccount_capacity: value.subaccount_capacity,
@@ -649,7 +651,7 @@ pub(in crate::web::routes) async fn approve_builder_fee(
     };
     sqlx::query("UPDATE users SET builder_fee_tenths_of_bp = $2, builder_fee_approved_at = now(), updated_at = now() WHERE id = $1")
         .bind(user.id).bind(fee_tenths_of_bp).execute(&state.db_pool).await?;
-    Ok(Json(json!({"status":"ok", "redirect":"/agents/new"})).into_response())
+    Ok(Json(json!({"status":"ok", "redirect":"/account"})).into_response())
 }
 
 pub(in crate::web::routes) async fn setup_user_api_wallet(
@@ -727,6 +729,9 @@ pub(in crate::web::routes) async fn load_trading_account_choices(
         .collect();
     TradingAccountChoices {
         main_address,
+        main_balance: accounts
+            .main_balance
+            .map(|value| crate::web::templates::shared::format_money_text(Some(value))),
         main_assigned_to,
         subaccounts,
         subaccount_capacity: accounts.subaccount_capacity,
@@ -1371,6 +1376,7 @@ mod tests {
         };
         let choices = TradingAccountChoices {
             main_address: "0xmain".to_string(),
+            main_balance: None,
             main_assigned_to: None,
             subaccounts: vec![
                 subaccount("0xfree", None),

@@ -10,6 +10,7 @@ pub(in crate::web::routes) mod test_support;
 
 use self::{account::*, agents::*, currency::*, model_catalog::*, root::*, settings::*};
 use crate::web::auth::{login, login_challenge, login_verify, logout};
+use crate::web::error::not_found;
 
 use std::sync::Arc;
 
@@ -168,5 +169,5 @@ pub fn router(state: Arc<AppState>) -> Router {
             crate::web::auth::require_operator,
         ));
 
-    public.merge(protected)
+    public.merge(protected).fallback(not_found)
 }

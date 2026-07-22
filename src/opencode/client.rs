@@ -1,12 +1,11 @@
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, anyhow};
 use reqwest::StatusCode;
 use serde::{Deserialize, Serialize};
-use tokio::sync::{Mutex, RwLock};
-use tracing::{info, warn};
+use tokio::sync::RwLock;
 
 const RESPONSE_SNIPPET_MAX_CHARS: usize = 200;
 const PROVIDER_CACHE_TTL: Duration = Duration::from_secs(5 * 60);
@@ -41,8 +40,10 @@ impl OpenCodeClientConfig {
 pub struct OpenCodeClient {
     http: reqwest::Client,
     config: OpenCodeClientConfig,
+    // OpenCode provider configuration belongs to the shared backend, not to an
+    // individual agent workspace. The workspace directory is only required to
+    // make the initial API request.
     provider_cache: Arc<RwLock<HashMap<String, CachedProvidersResponse>>>,
-    provider_refresh_in_flight: Arc<Mutex<HashSet<String>>>,
 }
 
 struct CachedProvidersResponse {
@@ -99,7 +100,6 @@ impl OpenCodeClient {
             http,
             config,
             provider_cache: Arc::new(RwLock::new(HashMap::new())),
-            provider_refresh_in_flight: Arc::new(Mutex::new(HashSet::new())),
         })
     }
 
@@ -264,66 +264,6 @@ impl OpenCodeClient {
             },
         );
         Ok(response)
-    }
-
-    pub async fn list_providers_cached_or_refresh(
-        &self,
-        base_url: &str,
-        workspace_container_path: &str,
-    ) -> Option<OpenCodeProvidersResponse> {
-        let cache_key = base_url.trim_end_matches('/').to_string();
-        let cached = self
-            .provider_cache
-            .read()
-            .await
-            .get(&cache_key)
-            .map(|entry| {
-                (
-                    entry.fetched_at.elapsed() < PROVIDER_CACHE_TTL,
-                    entry.response.clone(),
-                )
-            });
-
-        if let Some((fresh, response)) = cached {
-            if !fresh {
-                self.spawn_provider_refresh(base_url, workspace_container_path);
-            }
-            return Some(response);
-        }
-
-        self.spawn_provider_refresh(base_url, workspace_container_path);
-        None
-    }
-
-    fn spawn_provider_refresh(&self, base_url: &str, workspace_container_path: &str) {
-        let key = base_url.trim_end_matches('/').to_string();
-        let Ok(mut in_flight) = self.provider_refresh_in_flight.try_lock() else {
-            return;
-        };
-        if !in_flight.insert(key.clone()) {
-            return;
-        }
-        drop(in_flight);
-
-        let client = self.clone();
-        let base_url = base_url.to_string();
-        let workspace_container_path = workspace_container_path.to_string();
-        tokio::spawn(async move {
-            match client
-                .list_providers(&base_url, &workspace_container_path)
-                .await
-            {
-                Ok(response) => info!(
-                    providers = response.all.len(),
-                    connected = response.connected.len(),
-                    "background OpenCode provider refresh completed"
-                ),
-                Err(error) => {
-                    warn!(error = ?error, "background OpenCode provider refresh failed");
-                }
-            }
-            client.provider_refresh_in_flight.lock().await.remove(&key);
-        });
     }
 }
 
@@ -517,6 +457,54 @@ mod tests {
             .expect("cached response");
 
         assert_eq!(response.connected, vec!["anthropic"]);
+    }
+
+    #[tokio::test]
+    async fn list_providers_shares_one_cache_across_workspaces() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        use axum::{Json, Router, routing::get};
+
+        let requests = Arc::new(AtomicUsize::new(0));
+        let app = Router::new().route(
+            "/provider",
+            get({
+                let requests = Arc::clone(&requests);
+                move || {
+                    let requests = Arc::clone(&requests);
+                    async move {
+                        requests.fetch_add(1, Ordering::Relaxed);
+                        Json(serde_json::json!({
+                            "all": [],
+                            "connected": []
+                        }))
+                    }
+                }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind provider test server");
+        let base_url = format!("http://{}", listener.local_addr().expect("local address"));
+        let server = tokio::spawn(async move {
+            axum::serve(listener, app)
+                .await
+                .expect("serve provider test server");
+        });
+        let client = OpenCodeClient::new(OpenCodeClientConfig::new("opencode".to_string(), None))
+            .expect("client");
+
+        client
+            .list_providers(&base_url, "/workspaces/agents/btc")
+            .await
+            .expect("first provider request");
+        client
+            .list_providers(&base_url, "/workspaces/agents/eth")
+            .await
+            .expect("cached provider request");
+
+        assert_eq!(requests.load(Ordering::Relaxed), 1);
+        server.abort();
     }
 
     #[test]

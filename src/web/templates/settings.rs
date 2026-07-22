@@ -11,6 +11,13 @@ pub struct ServerErrorPageTemplate {
 }
 
 #[derive(Template)]
+#[template(path = "not_found.html")]
+pub struct NotFoundPageTemplate {
+    pub current_path: String,
+    pub navbar: Navbar,
+}
+
+#[derive(Template)]
 #[template(path = "settings.html")]
 pub struct SettingsPageTemplate {
     pub system_prompt: String,

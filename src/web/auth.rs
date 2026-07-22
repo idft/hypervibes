@@ -374,7 +374,14 @@ pub async fn require_operator(
     {
         match agent_belongs_to_user(&state.db_pool, agent_key, session.user_id).await {
             Ok(true) => {}
-            Ok(false) => return StatusCode::NOT_FOUND.into_response(),
+            Ok(false) => {
+                if request.method() == axum::http::Method::GET
+                    || request.method() == axum::http::Method::HEAD
+                {
+                    return crate::web::error::not_found_response(request.uri().path());
+                }
+                return StatusCode::NOT_FOUND.into_response();
+            }
             Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
         }
     }

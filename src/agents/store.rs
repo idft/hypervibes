@@ -9,6 +9,28 @@ use crate::{
     web::templates::shared::currency_logo_url,
 };
 
+#[cfg(test)]
+/// List all active agents for store-level tests.
+pub async fn list_agents(pool: &DbPool) -> Result<Vec<AgentListRow>> {
+    let rows = query_as::<_, AgentListRow>(
+        "SELECT display_name,
+                 agents.agent_key,
+                 agents.enabled,
+                 trading_account_address,
+                 environment,
+                 api_key,
+                 api_key_last_used_at
+           FROM agents
+           WHERE agents.lifecycle = 'active'
+           ORDER BY agents.created_at DESC",
+    )
+    .fetch_all(pool)
+    .await
+    .context("failed to list agents")?;
+
+    Ok(rows)
+}
+
 #[derive(Debug, Clone, sqlx::FromRow)]
 pub struct AgentInstrumentOptionRow {
     pub instrument_id: String,
@@ -20,27 +42,6 @@ pub struct AgentInstrumentOptionRow {
 struct AgentInstrumentOptionRawRow {
     instrument_id: String,
     selected: bool,
-}
-
-/// List all agents ordered by creation time, newest first.
-pub async fn list_agents(pool: &DbPool) -> Result<Vec<AgentListRow>> {
-    let rows = query_as::<_, AgentListRow>(
-        "SELECT display_name,
-                 agents.agent_key,
-                 agents.enabled,
-                 trading_account_address,
-                 environment,
-                api_key,
-                 api_key_last_used_at
-           FROM agents
-           WHERE agents.lifecycle = 'active'
-           ORDER BY agents.created_at DESC",
-    )
-    .fetch_all(pool)
-    .await
-    .context("failed to list agents")?;
-
-    Ok(rows)
 }
 
 /// List only the active agents owned by an operator.

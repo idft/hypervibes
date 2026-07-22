@@ -28,6 +28,26 @@ document.addEventListener("submit", (event) => {
 
 import { render } from "timeago.js";
 
+const AGENT_JOBS_REFRESH_KEY = "agent-jobs-refresh-required";
+
+function markAgentJobsRefreshRequired(form: HTMLFormElement) {
+  const action = form.getAttribute("action");
+  if (!action) {
+    return;
+  }
+
+  let pathname: string;
+  try {
+    pathname = new URL(action, window.location.href).pathname;
+  } catch {
+    return;
+  }
+
+  if (/^\/agents\/[^/]+\/(?:jobs|hooks)\/\d+\/model$/.test(pathname)) {
+    window.sessionStorage.setItem(AGENT_JOBS_REFRESH_KEY, "true");
+  }
+}
+
 function renderTimeago(root: ParentNode = document) {
   const nodes = root.querySelectorAll("time.timeago");
   if (nodes.length > 0) {
@@ -858,7 +878,7 @@ function initAccountPage() {
       if (!response.ok) throw new Error("Hyperliquid did not approve the fee.");
       status.textContent = "Approved on Hyperliquid.";
       const result = await response.json().catch(() => null) as { redirect?: string } | null;
-      window.location.assign(result?.redirect ?? "/agents/new");
+       window.location.assign(result?.redirect ?? "/account");
     })().catch((error: unknown) => { if (status) status.textContent = error instanceof Error ? error.message : "Approval failed."; });
   });
 }
@@ -1100,6 +1120,18 @@ function init() {
   window.addEventListener("pageshow", (event) => {
     const rail = document.querySelector(".agent-rail");
     rail?.classList.remove("agent-rail-exit");
+
+    const jobsNeedRefresh =
+      document.querySelector("[data-agent-jobs]") &&
+      window.sessionStorage.getItem(AGENT_JOBS_REFRESH_KEY) === "true";
+    if (jobsNeedRefresh) {
+      window.sessionStorage.removeItem(AGENT_JOBS_REFRESH_KEY);
+      if (event.persisted) {
+        window.location.reload();
+        return;
+      }
+    }
+
     if (event.persisted) {
       rail?.classList.add("agent-rail-enter");
     }
@@ -1122,6 +1154,10 @@ function init() {
     }
 
     const elt = detail.elt;
+    if (elt instanceof HTMLFormElement) {
+      markAgentJobsRefreshRequired(elt);
+    }
+
     if (elt instanceof HTMLElement && elt.matches("[data-memory-timeline-item]")) {
       setActiveMemoryTimelineItem(elt);
     }

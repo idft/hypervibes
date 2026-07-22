@@ -44,12 +44,19 @@ fn job_detail_page_renders_job_metadata_and_runs() {
             .contains("href=\"/agents/test-agent/jobs\" data-agent-tab-link aria-current=\"page\"")
     );
     assert!(!rendered.contains("hx-target=\"#agent-show-tab-content\""));
-    assert!(!rendered.contains("Back to jobs"));
+    assert!(
+        rendered.contains("href=\"/agents/test-agent/jobs\" aria-label=\"Back\" title=\"Back\"")
+    );
+    assert!(rendered.contains("d=\"M10.5 19.5 3 12m0 0 7.5-7.5M3 12h18\""));
+    assert!(!rendered.contains(">Back<"));
     assert!(rendered.contains("analysis-15m"));
     assert!(rendered.contains("Operator prompt"));
     assert!(rendered.contains("/agents/test-agent/jobs/1/run"));
     assert!(rendered.contains("Disable"));
     assert!(rendered.contains("/agents/test-agent/runs/1"));
+    assert!(rendered.contains(
+        "action=\"/agents/test-agent/jobs/1/model\" method=\"post\" hx-post=\"/agents/test-agent/jobs/1/model\" hx-swap=\"none\""
+    ));
     assert!(rendered.contains("Select model"));
     assert!(rendered.contains("data-model-picker-mode="));
     assert!(rendered.contains("Cancel"));

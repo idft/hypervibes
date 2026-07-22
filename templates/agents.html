@@ -10,15 +10,27 @@
         <div>
             <h1 class="text-3xl font-semibold tracking-tight text-white">Agents</h1>
         </div>
+        {% if !agents.is_empty() %}
         <div class="flex items-center gap-3">
             <a href="/agents/new" class="rounded-full bg-violet-600 px-4 py-2 text-sm font-medium text-white hover:bg-violet-500">
                 <svg class="mr-1.5 inline-block h-4 w-4" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path stroke-linecap="round" d="M10 4v12m-6-6h12"></path></svg>
                 Create agent
             </a>
         </div>
+        {% endif %}
     </header>
 
     <section class="mt-6">
+        {% if agents.is_empty() %}
+        <div class="flex min-h-72 flex-col items-center justify-center rounded-2xl border border-dashed border-zinc-800 bg-[#0d0d10] px-6 py-12 text-center">
+            <h2 class="text-xl font-semibold text-white">No Agents yet</h2>
+            <p class="mt-2 text-sm text-zinc-400">Create your first Agent to get started.</p>
+            <a href="/agents/new" class="mt-6 inline-flex cursor-pointer items-center gap-2 rounded-full bg-violet-600 px-4 py-2 text-sm font-medium text-white hover:bg-violet-500">
+                <svg class="h-4 w-4" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path stroke-linecap="round" d="M10 4v12m-6-6h12"></path></svg>
+                Create a new Agent
+            </a>
+        </div>
+        {% else %}
         <div class="rounded-2xl border border-zinc-800 bg-[#0d0d10]">
             <div class="overflow-x-auto overflow-y-hidden">
                 <table class="min-w-full divide-y divide-zinc-800 text-sm">
@@ -65,6 +77,7 @@
                 </table>
             </div>
         </div>
+        {% endif %}
     </section>
 </div>
 {% endblock %}

@@ -4,7 +4,7 @@ use askama::Template;
 use axum::{
     Form,
     extract::{Path, Query, State},
-    http::StatusCode,
+    http::{HeaderMap, StatusCode},
     response::{Html, IntoResponse, Redirect, Response},
 };
 use chrono::{TimeZone, Utc};
@@ -14,7 +14,7 @@ use tracing::warn;
 use super::shared::{
     ModelPickerContext, ModelSelectionForm, SERVER_SHUTTING_DOWN_WARNING, TimeoutForm,
     ToggleScheduleForm, WORKSPACE_MAINTENANCE_ACTIVE_WARNING, build_model_picker_view,
-    jobs_warning_redirect, load_model_picker_context, load_model_picker_context_cached,
+    is_htmx_request, jobs_warning_redirect, load_model_picker_context,
     parse_positive_schedule_seconds, timeout_error_redirect, validate_model_selection_for_agent,
 };
 use super::show::{AgentJobsQuery, AgentShowQueries, render_agent_show_page};
@@ -125,17 +125,11 @@ pub(in crate::web::routes) async fn agents_show_job_detail(
         }
     }
 
-    let mut model_picker = build_model_picker_view(
-        "job-model-selection",
-        &job_view.model_selection,
-        ModelPickerContext {
-            options: Vec::new(),
-            warning: None,
-        },
-    );
+    let picker = load_model_picker_context(&state, &agent).await;
+    let mut model_picker =
+        build_model_picker_view("job-model-selection", &job_view.model_selection, picker);
     model_picker.show_label = false;
     model_picker.use_modal = true;
-    model_picker.lazy_options_url = Some(format!("/agents/{agent_key}/jobs/{job_id}/model-picker"));
     let html = AgentJobDetailPageTemplate::render_view(
         agent.clone(),
         job_view,
@@ -160,7 +154,7 @@ pub(in crate::web::routes) async fn agents_job_model_picker(
         (Some(provider), Some(model)) => format!("{provider}/{model}"),
         _ => String::new(),
     };
-    let picker = load_model_picker_context_cached(&state, &agent).await;
+    let picker = load_model_picker_context(&state, &agent).await;
     let mut model_picker = build_model_picker_view("job-model-selection", &selected, picker);
     model_picker.show_label = false;
     model_picker.use_modal = true;
@@ -659,6 +653,7 @@ pub(in crate::web::routes) async fn agents_run_job_now(
 pub(in crate::web::routes) async fn agents_update_job_model(
     State(state): State<Arc<AppState>>,
     Path((agent_key, job_id)): Path<(String, i64)>,
+    headers: HeaderMap,
     Form(form): Form<ModelSelectionForm>,
 ) -> Result<Response, AppError> {
     let Some(agent) = get_agent(&state.db_pool, &agent_key).await? else {
@@ -688,6 +683,10 @@ pub(in crate::web::routes) async fn agents_update_job_model(
     .await?
     {
         return Ok((StatusCode::NOT_FOUND, "job not found").into_response());
+    }
+
+    if is_htmx_request(&headers) {
+        return Ok(StatusCode::NO_CONTENT.into_response());
     }
 
     Ok(Redirect::to(&format!("/agents/{agent_key}/jobs/{job_id}")).into_response())

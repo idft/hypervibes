@@ -2,7 +2,7 @@
     <label class="flex cursor-pointer gap-3 p-4 transition hover:bg-zinc-900/60 {% if choices.main_assigned_to.is_some() %}opacity-50{% endif %}">
         <input class="peer sr-only" type="radio" name="trading_account_selection" value="main" {% if selected_account == "main" %}checked{% endif %} {% if choices.main_assigned_to.is_some() %}disabled{% endif %}>
         <span class="mt-0.5 flex size-4 shrink-0 items-center justify-center rounded-full border-2 border-zinc-600 bg-zinc-950 transition peer-checked:border-violet-500 peer-checked:bg-violet-500 peer-focus-visible:ring-2 peer-focus-visible:ring-violet-400 after:size-1.5 after:rounded-full after:bg-white after:opacity-0 after:content-[''] peer-checked:after:opacity-100"></span>
-        <span class="min-w-0"><span class="text-sm text-white">Main account</span><span class="mt-1 block break-all font-mono text-xs text-zinc-500">{{ choices.main_address }}</span>{% if let Some(agent_name) = choices.main_assigned_to %}<span class="mt-1 block text-xs text-amber-300">Already assigned to {{ agent_name }}</span>{% endif %}</span>
+        <span class="min-w-0"><span class="text-sm text-white">Main account</span><span class="mt-1 block break-all font-mono text-xs text-zinc-500">{{ choices.main_address }}{% if let Some(balance) = choices.main_balance %} · {{ balance }}{% endif %}</span>{% if let Some(agent_name) = choices.main_assigned_to %}<span class="mt-1 block text-xs text-amber-300">Already assigned to {{ agent_name }}</span>{% endif %}</span>
     </label>
     {% for subaccount in choices.subaccounts %}
     <label class="flex cursor-pointer gap-3 p-4 transition hover:bg-zinc-900/60 {% if subaccount.assigned_to.is_some() %}opacity-50{% endif %}">

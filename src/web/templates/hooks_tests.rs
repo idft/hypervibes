@@ -46,13 +46,20 @@ fn hook_detail_page_renders_hook_metadata_and_runs() {
             .contains("href=\"/agents/test-agent/jobs\" data-agent-tab-link aria-current=\"page\"")
     );
     assert!(!rendered.contains("hx-target=\"#agent-show-tab-content\""));
-    assert!(rendered.contains("Back to jobs"));
+    assert!(
+        rendered.contains("href=\"/agents/test-agent/jobs\" aria-label=\"Back\" title=\"Back\"")
+    );
+    assert!(rendered.contains("d=\"M10.5 19.5 3 12m0 0 7.5-7.5M3 12h18\""));
+    assert!(!rendered.contains(">Back<"));
     assert!(rendered.contains("Hook details"));
     assert!(rendered.contains("analysis_batch_completed"));
     assert!(rendered.contains("Created"));
     assert!(rendered.contains("Updated"));
     assert!(rendered.contains("/agents/test-agent/hooks/3/run"));
     assert!(rendered.contains("/agents/test-agent/runs/1"));
+    assert!(rendered.contains(
+        "action=\"/agents/test-agent/hooks/3/model\" method=\"post\" hx-post=\"/agents/test-agent/hooks/3/model\" hx-swap=\"none\""
+    ));
     assert!(rendered.contains("Select model"));
     assert!(rendered.contains("data-model-picker-mode="));
     assert!(!rendered.contains("Save model"));

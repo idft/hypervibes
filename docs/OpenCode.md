@@ -40,6 +40,13 @@ Each agent has one generated workspace. Workspace paths and generation
 metadata are stored in `agents.runtime_config`; no OpenCode endpoint or runtime
 identity is stored on the agent row.
 
+OpenCode's provider discovery request requires a workspace directory, but model
+providers and models are configured by the shared OpenCode backend. Vibetrading
+uses the configured container workspace root to warm one application-wide,
+backend-URL-keyed provider cache at startup, including before any agents exist.
+Model pickers wait for an initial discovery instead of rendering an empty
+selector; later pickers reuse that cache for its five-minute lifetime.
+
 ## Agent Workspaces
 
 Creating an agent generates a workspace under the configured host workspace root.
