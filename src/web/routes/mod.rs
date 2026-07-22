@@ -1,3 +1,4 @@
+mod account;
 mod agents;
 mod currency;
 mod model_catalog;
@@ -6,9 +7,8 @@ mod settings;
 mod shared;
 #[cfg(test)]
 pub(in crate::web::routes) mod test_support;
-mod wallet;
 
-use self::{agents::*, currency::*, model_catalog::*, root::*, settings::*, wallet::*};
+use self::{account::*, agents::*, currency::*, model_catalog::*, root::*, settings::*};
 use crate::web::auth::{login, login_challenge, login_verify, logout};
 
 use std::sync::Arc;
@@ -38,7 +38,7 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/agents", get(agents_index).post(create_agent))
         .route("/agents/new", get(agents_new))
         .route("/agents/new/account-choices", get(agent_account_choices))
-        .route("/wallet/subaccounts", post(create_user_subaccount))
+        .route("/account/subaccounts", post(create_user_subaccount))
         .route("/agents/{agent_key}", get(agents_show))
         .route(
             "/agents/{agent_key}/transactions",
@@ -157,11 +157,12 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/agents/{agent_key}/delete", post(delete_agent))
         .route("/agents/{agent_key}/live/stream", get(agent_live_stream))
         .route("/settings", get(settings_index).post(settings_update))
-        .route("/wallet", get(wallet_index))
-        .route("/wallet/address", get(wallet_address))
-        .route("/wallet/approve-builder-fee", post(approve_builder_fee))
-        .route("/wallet/api-wallet", post(setup_user_api_wallet))
-        .route("/wallet/approve-api-wallet", post(approve_user_api_wallet))
+        .route("/account", get(account_index))
+        .route("/account/address", get(account_address))
+        .route("/account/approve-builder-fee", post(approve_builder_fee))
+        .route("/account/api-wallet", post(setup_user_api_wallet))
+        .route("/account/approve-api-wallet", post(approve_user_api_wallet))
+        .route("/account/transfers", post(transfer_between_accounts))
         .with_state(Arc::clone(&state))
         .layer(middleware::from_fn_with_state(
             state,

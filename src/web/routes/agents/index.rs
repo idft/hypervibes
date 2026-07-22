@@ -10,10 +10,10 @@ use axum::{
 use chrono::Utc;
 use tracing::error;
 
-use super::super::shared::unique_violation_message;
-use super::super::wallet::{
+use super::super::account::{
     created_subaccount_address, load_trading_account_choices, selected_trading_account,
 };
+use super::super::shared::unique_violation_message;
 use crate::web::error::AppError;
 use crate::{
     agents::{
@@ -100,10 +100,10 @@ pub(in crate::web::routes) async fn agents_new(
     user: AuthenticatedUser,
 ) -> Result<Response, AppError> {
     let Some(wallet) = get_user_api_wallet(&state.db_pool, user.id).await? else {
-        return Ok(Redirect::to("/wallet").into_response());
+        return Ok(Redirect::to("/account").into_response());
     };
     if !wallet.is_ready() {
-        return Ok(Redirect::to("/wallet").into_response());
+        return Ok(Redirect::to("/account").into_response());
     }
     let navbar = load_navbar(&state.db_pool, user.id).await?;
     let template = AgentsNewPageTemplate {
@@ -176,10 +176,10 @@ pub(in crate::web::routes) async fn create_agent(
     Form(form): Form<CreateAgentForm>,
 ) -> Result<Response, AppError> {
     let Some(wallet) = get_user_api_wallet(&state.db_pool, user.id).await? else {
-        return Ok(Redirect::to("/wallet").into_response());
+        return Ok(Redirect::to("/account").into_response());
     };
     if !wallet.is_ready() {
-        return Ok(Redirect::to("/wallet").into_response());
+        return Ok(Redirect::to("/account").into_response());
     }
     let choices = load_trading_account_choices(&state, &user).await;
 

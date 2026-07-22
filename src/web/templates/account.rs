@@ -3,32 +3,45 @@ use askama::Template;
 use super::navbar::Navbar;
 
 #[derive(Template)]
-#[template(path = "wallet.html")]
-pub struct WalletPageTemplate {
+#[template(path = "account.html")]
+pub struct AccountPageTemplate {
     pub wallet_address: String,
     pub fee_bps: i16,
     pub min_fee_bps: i16,
     pub max_fee_bps: i16,
-    pub builder_fee_approved: bool,
     pub builder_recipient: &'static str,
     pub current_path: String,
-    pub agents: Vec<WalletAgentView>,
+    pub accounts: Vec<AccountRowView>,
+    pub total_balance: Option<AccountTableBalanceView>,
+    pub account_lookup_error: Option<String>,
+    pub account_mode_error: Option<String>,
+    pub transfers_enabled: bool,
     pub api_wallet_address: Option<String>,
     pub api_wallet_state: String,
     pub api_wallet_expires_at: Option<chrono::DateTime<chrono::Utc>>,
     pub api_wallet_expiry_class: &'static str,
     pub api_wallet_show_expired: bool,
+    pub builder_fee_approved: bool,
     pub navbar: Navbar,
 }
 
 #[derive(Debug, Clone)]
-pub struct WalletAgentView {
-    pub agent_key: String,
-    pub display_name: String,
-    pub lifecycle: String,
-    pub trading_account_address: String,
+pub struct AccountRowView {
+    pub name: String,
+    pub address: String,
+    pub agent_key: Option<String>,
+    pub agent_display_name: Option<String>,
     pub balance: String,
-    pub expiry: String,
+    pub balance_view: AccountTableBalanceView,
+    pub transfer_value: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct AccountTableBalanceView {
+    pub formatted: String,
+    pub whole: String,
+    pub decimals: Option<String>,
+    pub is_zero: bool,
 }
 
 #[derive(Debug, Clone)]

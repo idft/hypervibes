@@ -20,7 +20,7 @@
 
 ## Signer Lifecycle
 
-The Wallet page handles signer setup, replacement, and approval. A replacement
+The Account page handles signer setup, replacement, and approval. A replacement
 must be explicit and must derive a fresh address; the old deregistered address
 is never silently reused. Approval timestamps are recorded only after
 Hyperliquid accepts the relay. Exchange-provided expiry is stored only when an
@@ -40,9 +40,20 @@ not switch to or configure a fake chain-1337 network and does not sign this
 action.
 
 The main wallet continues to sign browser-only actions such as `approveAgent`,
-builder-fee approval, and transfers on Arbitrum mainnet. All protected routes
+builder-fee approval, and `sendAsset` transfers on Arbitrum mainnet. The
+`/account` page displays fresh Hyperliquid Unified Account Spot USDC totals for
+the main account and every discovered owned sub-account. Vibetrading
+currently supports Unified Accounts only. Transfers use Hyperliquid's `spot`
+route for the shared Unified USDC balance, are limited to those accounts and
+canonical USDC, and are rejected when the account mode cannot be verified or
+is not Unified. The server re-fetches ownership and validates the recovered
+signer before relay. All protected routes
 require the session CSRF token and validate the authenticated owner, exact
 action fields, recovered signer, and target account.
+
+The API-wallet signer never custodies or transfers funds. It is used for
+agent trading and server-signed sub-account creation only; account transfers
+are always user-main-wallet signatures.
 
 ## Agent Bootstrap
 

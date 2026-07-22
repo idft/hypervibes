@@ -778,7 +778,7 @@ function initApiWalletSetup() {
 }
 
 async function generateAndApproveSigner(walletSource: "generate" | "import", privateKey: HTMLInputElement | null, force: boolean) {
-  const page = document.querySelector<HTMLElement>("[data-wallet-page]");
+  const page = document.querySelector<HTMLElement>("[data-account-page]");
   if (!page) return;
   const status = page.querySelector<HTMLElement>("[data-api-wallet-status]");
   const setStatus = (text: string) => { if (status) status.textContent = text; };
@@ -787,7 +787,7 @@ async function generateAndApproveSigner(walletSource: "generate" | "import", pri
     if (force || !existingAddress) {
       setStatus(force ? "Re-generating trading signer..." : "Generating trading signer...");
       const privateKeyValue = walletSource === "import" ? privateKey?.value ?? "" : "";
-      const response = await fetch("/wallet/api-wallet", {
+      const response = await fetch("/account/api-wallet", {
         method: "POST",
         headers: { "content-type": "application/json", "X-CSRF-Token": csrfToken() ?? "" },
         body: JSON.stringify({ walletSource, hyperliquidPrivateKey: privateKeyValue }),
@@ -813,7 +813,7 @@ async function approveTradingSigner(page: HTMLElement) {
   const signed = await signWalletAction("HyperliquidTransaction:ApproveAgent", {
     "HyperliquidTransaction:ApproveAgent": [{ name: "hyperliquidChain", type: "string" }, { name: "agentAddress", type: "address" }, { name: "agentName", type: "string" }, { name: "nonce", type: "uint64" }],
   }, action);
-  const response = await fetch("/wallet/approve-api-wallet", { method: "POST", headers: { "content-type": "application/json", "X-CSRF-Token": csrfToken() ?? "" }, body: JSON.stringify(signed) });
+  const response = await fetch("/account/approve-api-wallet", { method: "POST", headers: { "content-type": "application/json", "X-CSRF-Token": csrfToken() ?? "" }, body: JSON.stringify(signed) });
   if (!response.ok) {
     const body = await response.json().catch(() => null) as { response?: string; message?: string; status?: string } | null;
     const detail = body?.response ?? body?.message ?? body?.status ?? response.statusText;
@@ -822,8 +822,8 @@ async function approveTradingSigner(page: HTMLElement) {
   window.location.reload();
 }
 
-function initWalletPage() {
-  const page = document.querySelector<HTMLElement>("[data-wallet-page]");
+function initAccountPage() {
+  const page = document.querySelector<HTMLElement>("[data-account-page]");
   if (!page) return;
   const slider = page.querySelector<HTMLInputElement>("[data-builder-fee]");
   const input = page.querySelector<HTMLInputElement>("[data-builder-fee-input]");
@@ -854,12 +854,108 @@ function initWalletPage() {
       const signed = await signWalletAction("HyperliquidTransaction:ApproveBuilderFee", {
         "HyperliquidTransaction:ApproveBuilderFee": [{ name: "hyperliquidChain", type: "string" }, { name: "maxFeeRate", type: "string" }, { name: "builder", type: "address" }, { name: "nonce", type: "uint64" }],
       }, action);
-      const response = await fetch("/wallet/approve-builder-fee", { method: "POST", headers: { "content-type": "application/json", "X-CSRF-Token": csrfToken() ?? "" }, body: JSON.stringify({ ...signed, feeBps }) });
+      const response = await fetch("/account/approve-builder-fee", { method: "POST", headers: { "content-type": "application/json", "X-CSRF-Token": csrfToken() ?? "" }, body: JSON.stringify({ ...signed, feeBps }) });
       if (!response.ok) throw new Error("Hyperliquid did not approve the fee.");
       status.textContent = "Approved on Hyperliquid.";
       const result = await response.json().catch(() => null) as { redirect?: string } | null;
       window.location.assign(result?.redirect ?? "/agents/new");
     })().catch((error: unknown) => { if (status) status.textContent = error instanceof Error ? error.message : "Approval failed."; });
+  });
+}
+
+function canonicalTransferAmount(value: string): string | null {
+  if (!/^\d+(?:\.\d+)?$/.test(value) || value.includes("e") || value.includes("E")) {
+    return null;
+  }
+  const [integer, fraction = ""] = value.split(".");
+  if (fraction.length > 8) return null;
+  const normalizedInteger = integer.replace(/^0+(?=\d)/, "");
+  const normalizedFraction = fraction.replace(/0+$/, "");
+  if (BigInt(normalizedInteger) === 0n && normalizedFraction.length === 0) return null;
+  return normalizedFraction.length > 0
+    ? `${normalizedInteger}.${normalizedFraction}`
+    : normalizedInteger;
+}
+
+function initAccountTransfers() {
+  const form = document.querySelector<HTMLFormElement>("[data-transfer-form]");
+  const from = form?.querySelector<HTMLSelectElement>("[data-transfer-from]");
+  const to = form?.querySelector<HTMLSelectElement>("[data-transfer-to]");
+  const amount = form?.querySelector<HTMLInputElement>("[data-transfer-amount]");
+  const submit = form?.querySelector<HTMLButtonElement>("[data-transfer-submit]");
+  const status = form?.querySelector<HTMLElement>("[data-transfer-status]");
+  const page = document.querySelector<HTMLElement>("[data-account-page]");
+  if (!form || !from || !to || !amount || !submit || !status || !page) return;
+
+  const updateState = () => {
+    const validPair = from.value !== "" && to.value !== "" && from.value !== to.value;
+    const transfersEnabled = page.dataset.transfersEnabled === "true";
+    submit.disabled = !transfersEnabled || !validPair || canonicalTransferAmount(amount.value) === null;
+    if (!transfersEnabled && status.textContent === "") {
+      status.textContent = "Transfers require a verified Unified Account and at least two accounts.";
+    }
+  };
+  const repairPair = (changed: HTMLSelectElement, other: HTMLSelectElement) => {
+    if (changed.value !== other.value) return;
+    const different = Array.from(other.options).find((option) => option.value !== changed.value);
+    if (different) other.value = different.value;
+  };
+  from.addEventListener("change", () => { repairPair(from, to); updateState(); });
+  to.addEventListener("change", () => { repairPair(to, from); updateState(); });
+  amount.addEventListener("input", updateState);
+  updateState();
+
+  form.addEventListener("submit", (event) => {
+    event.preventDefault();
+    const canonicalAmount = canonicalTransferAmount(amount.value);
+    if (!canonicalAmount || from.value === to.value) {
+      updateState();
+      status.textContent = "Choose two different accounts and enter a positive USDC amount with up to 8 decimals.";
+      return;
+    }
+    const mainAddress = page.dataset.mainAddress ?? "";
+    const action = {
+      type: "sendAsset",
+      hyperliquidChain: "Mainnet",
+      signatureChainId: "0xa4b1",
+      destination: to.value,
+      sourceDex: "spot",
+      destinationDex: "spot",
+      // Canonical USDC tokenId from Hyperliquid mainnet spotMeta.
+      token: "USDC:0x6d1e7cde53ba9467b783cb7c530ce054",
+      amount: canonicalAmount,
+      fromSubAccount: from.value === mainAddress ? "" : from.value,
+      nonce: Date.now(),
+    };
+    submit.disabled = true;
+    status.textContent = "Awaiting wallet signature...";
+    void signWalletAction("HyperliquidTransaction:SendAsset", {
+      "HyperliquidTransaction:SendAsset": [
+        { name: "hyperliquidChain", type: "string" },
+        { name: "destination", type: "string" },
+        { name: "sourceDex", type: "string" },
+        { name: "destinationDex", type: "string" },
+        { name: "token", type: "string" },
+        { name: "amount", type: "string" },
+        { name: "fromSubAccount", type: "string" },
+        { name: "nonce", type: "uint64" },
+      ],
+    }, action)
+      .then(async (signed) => {
+        status.textContent = "Submitting transfer...";
+        const response = await fetch("/account/transfers", {
+          method: "POST",
+          headers: { "content-type": "application/json", "X-CSRF-Token": csrfToken() ?? "" },
+          body: JSON.stringify(signed),
+        });
+        const body = await response.json().catch(() => null) as { error?: string; response?: string; message?: string; status?: string } | null;
+        if (!response.ok) throw new Error(body?.error ?? body?.response ?? body?.message ?? body?.status ?? "Transfer failed.");
+        window.location.reload();
+      })
+      .catch((error: unknown) => {
+        status.textContent = error instanceof Error ? error.message : "Transfer failed.";
+        updateState();
+      });
   });
 }
 
@@ -880,7 +976,7 @@ function initAgentCreation() {
       if (!status || !button) return;
       button.disabled = true;
       status.textContent = "Creating Sub-Account with the server trading signer...";
-      const response = await fetch("/wallet/subaccounts", {
+      const response = await fetch("/account/subaccounts", {
         method: "POST",
         headers: { "content-type": "application/json", "X-CSRF-Token": csrfToken() ?? "" },
         body: JSON.stringify({ displayName }),
@@ -930,11 +1026,11 @@ function blockieDataUri(address: string): string {
   return `data:image/svg+xml,${encodeURIComponent(svg)}`;
 }
 
-function initWalletNavbar() {
-  const link = document.querySelector<HTMLElement>("[data-wallet-navbar]");
-  const label = link?.querySelector<HTMLElement>("[data-wallet-navbar-label]");
-  const identicons = document.querySelectorAll<HTMLImageElement>("[data-wallet-identicon]");
-  const address = document.querySelector<HTMLElement>("[data-wallet-page]")?.dataset.walletAddress;
+function initAccountNavbar() {
+  const link = document.querySelector<HTMLElement>("[data-account-navbar]");
+  const label = link?.querySelector<HTMLElement>("[data-account-navbar-label]");
+  const identicons = document.querySelectorAll<HTMLImageElement>("[data-account-identicon]");
+  const address = document.querySelector<HTMLElement>("[data-account-page]")?.dataset.accountAddress;
   const setAddress = (value: string) => {
     identicons.forEach((identicon) => {
       identicon.src = blockieDataUri(value);
@@ -943,7 +1039,7 @@ function initWalletNavbar() {
     if (label && value.length > 10) label.textContent = `${value.slice(0, 6)}...${value.slice(-4)}`;
   };
   if (address) { setAddress(address); return; }
-  void fetch("/wallet/address").then((response) => response.ok ? response.json() : null).then((data: { wallet_address?: string } | null) => {
+  void fetch("/account/address").then((response) => response.ok ? response.json() : null).then((data: { wallet_address?: string } | null) => {
     if (data?.wallet_address) setAddress(data.wallet_address);
   });
 }
@@ -960,9 +1056,10 @@ function init() {
   initAgentSelectorDismissal();
   initCopyButtons();
   initDetailDeleteModal();
-  initWalletPage();
+  initAccountPage();
+  initAccountTransfers();
   initAgentCreation();
-  initWalletNavbar();
+  initAccountNavbar();
   seedSelectedMemoryTimelineItems();
   restoreSelectedMemoryTimelineItem();
   startRunningDurationTicker();

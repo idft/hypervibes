@@ -34,6 +34,22 @@ async fn get_agents_renders_db_data() {
 
     assert_eq!(response.status(), StatusCode::OK);
 }
+
+#[tokio::test]
+async fn wallet_route_is_not_registered() {
+    let state = test_state().await;
+    let response = router(state)
+        .oneshot(
+            Request::builder()
+                .uri("/wallet")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
 #[tokio::test]
 async fn post_agents_requires_a_name() {
     let state = test_state().await;
@@ -85,7 +101,7 @@ async fn post_user_subaccounts_requires_a_display_name() {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri("/wallet/subaccounts")
+                .uri("/account/subaccounts")
                 .header("content-type", "application/json")
                 .body(Body::from("{\"displayName\":\"\"}"))
                 .unwrap(),
@@ -106,7 +122,7 @@ async fn post_user_subaccounts_rejects_unusable_display_name() {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri("/wallet/subaccounts")
+                .uri("/account/subaccounts")
                 .header("content-type", "application/json")
                 .body(Body::from("{\"displayName\":\"!!!\"}"))
                 .unwrap(),
@@ -132,7 +148,7 @@ async fn post_user_subaccounts_requires_a_ready_signer() {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri("/wallet/subaccounts")
+                .uri("/account/subaccounts")
                 .header("content-type", "application/json")
                 .body(Body::from("{\"displayName\":\"BTC Momentum\"}"))
                 .unwrap(),

@@ -12,4 +12,4 @@
     </label>
     {% endfor %}
 </div>
-{% if let Some(error) = choices.lookup_error %}<p class="mt-3 text-sm text-red-300">Existing Sub-Accounts could not be loaded: {{ error }}</p>{% endif %}
+{% if let Some(error) = choices.lookup_error %}<p class="mt-3 text-sm text-red-300">Trading accounts could not be loaded or are unsupported: {{ error }}</p>{% endif %}

@@ -291,7 +291,7 @@ pub(crate) async fn login_verify(
     let target = if has_agents.is_some() {
         "/agents"
     } else {
-        "/wallet"
+        "/account"
     };
 
     let body = serde_json::json!({ "status": "ok", "redirect": target });

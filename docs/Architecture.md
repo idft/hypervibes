@@ -39,7 +39,7 @@ schema for registry and orchestration tables, and `memory`, `hyperliquid`, and
 ## Agent Execution
 
 An operator first configures and approves one user-owned Hyperliquid trading
-signer on the Wallet page. Agent creation then selects an exclusive main or
+signer on the Account page. Agent creation then selects an exclusive main or
 sub-account, creates an agent API key, creates default prompts and schedules,
 and generates the agent workspace after funding is completed or skipped.
 

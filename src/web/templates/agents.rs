@@ -23,7 +23,7 @@ use super::memories::{
 use super::navbar::Navbar;
 use super::opencode::OpenCodeWorkspaceSettingsView;
 use super::runs::AgenticRunView;
-use super::{balance::AccountBalanceView, wallet::TradingAccountChoicesView};
+use super::{account::TradingAccountChoicesView, balance::AccountBalanceView};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AgentShowTab {

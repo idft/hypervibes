@@ -1,3 +1,4 @@
+mod account;
 mod agents;
 mod balance;
 mod hooks;
@@ -10,11 +11,11 @@ mod positions;
 mod runs;
 mod settings;
 pub(crate) mod shared;
-mod wallet;
 
 #[cfg(test)]
 use self::shared::*;
 
+pub use account::*;
 pub use agents::*;
 pub use balance::*;
 pub use hooks::*;
@@ -26,7 +27,6 @@ pub use orders::*;
 pub use positions::*;
 pub use runs::*;
 pub use settings::*;
-pub use wallet::*;
 
 #[cfg(test)]
 mod test_support;

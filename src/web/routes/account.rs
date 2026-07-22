@@ -1,4 +1,8 @@
-use std::{str::FromStr, sync::Arc};
+use std::{
+    collections::{HashMap, HashSet},
+    str::FromStr,
+    sync::Arc,
+};
 
 use alloy::primitives::{Address, Signature, keccak256};
 use askama::Template;
@@ -8,7 +12,8 @@ use axum::{
     http::StatusCode,
     response::{Html, IntoResponse, Response},
 };
-use serde::{Deserialize, Serialize};
+use rust_decimal::Decimal;
+use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_json::{Value, json};
 use tracing::warn;
 
@@ -23,7 +28,8 @@ use crate::{
         },
         error::AppError,
         templates::{
-            SubaccountChoiceView, TradingAccountChoicesView, WalletAgentView, WalletPageTemplate,
+            AccountPageTemplate, AccountRowView, AccountTableBalanceView, SubaccountChoiceView,
+            TradingAccountChoicesView,
         },
     },
 };
@@ -39,8 +45,13 @@ const MIN_BUILDER_FEE_BPS: i16 = 1;
 const MAX_BUILDER_FEE_BPS: i16 = 10;
 const DEFAULT_BUILDER_FEE_BPS: i16 = 5;
 const BUILDER_FEE_BPS_TO_TENTHS: i16 = 10;
+/// Hyperliquid's canonical mainnet USDC token from the `spotMeta` response.
+const PERPETUAL_USDC_TOKEN: &str = "USDC:0x6d1e7cde53ba9467b783cb7c530ce054";
+const UNIFIED_ACCOUNT_DEX: &str = "spot";
+const MAX_TRANSFER_DECIMAL_PLACES: u32 = 8;
 
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 #[serde(rename_all = "camelCase")]
 pub(in crate::web::routes) struct SignedAction {
     action: Value,
@@ -63,6 +74,411 @@ pub(in crate::web::routes) struct TradingAccountChoices {
     subaccounts: Vec<SubaccountChoiceView>,
     subaccount_capacity: Option<String>,
     lookup_error: Option<String>,
+    account_mode_supported: bool,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SpotClearinghouseStateResponse {
+    #[serde(default)]
+    balances: Vec<SpotBalance>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SpotState {
+    #[serde(default)]
+    balances: Vec<SpotBalance>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SpotBalance {
+    coin: String,
+    total: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SubaccountResponse {
+    #[serde(alias = "address")]
+    sub_account_user: Option<String>,
+    name: Option<String>,
+    spot_state: Option<SpotState>,
+}
+
+#[derive(Debug, Clone)]
+struct OwnedSubaccount {
+    name: Option<String>,
+    address: String,
+    balance: Option<Decimal>,
+}
+
+#[derive(Debug, Clone)]
+struct OwnedTradingAccounts {
+    main_address: String,
+    main_balance: Option<Decimal>,
+    subaccounts: Vec<OwnedSubaccount>,
+    subaccount_capacity: Option<String>,
+    lookup_error: Option<String>,
+    account_mode: AccountMode,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AccountMode {
+    Unified,
+    Unsupported,
+    Unavailable,
+}
+
+fn parse_spot_usdc_balance(balances: &[SpotBalance]) -> Option<Decimal> {
+    let Some(balance) = balances
+        .iter()
+        .find(|balance| balance.coin.eq_ignore_ascii_case("USDC"))
+    else {
+        return Some(Decimal::ZERO);
+    };
+    let total = balance.total.as_deref()?;
+    let value: Decimal = total.parse().ok()?;
+    (!value.is_sign_negative()).then_some(value)
+}
+
+fn parse_subaccounts(response: Vec<SubaccountResponse>) -> Vec<OwnedSubaccount> {
+    response
+        .into_iter()
+        .filter_map(|subaccount| {
+            let address = subaccount.sub_account_user?.to_ascii_lowercase();
+            Address::from_str(&address).ok()?;
+            Some(OwnedSubaccount {
+                name: subaccount.name.filter(|name| !name.trim().is_empty()),
+                address,
+                balance: subaccount
+                    .spot_state
+                    .as_ref()
+                    .map(|state| parse_spot_usdc_balance(&state.balances))
+                    .unwrap_or(Some(Decimal::ZERO)),
+            })
+        })
+        .collect()
+}
+
+async fn post_info<T: DeserializeOwned>(payload: Value) -> Result<T, String> {
+    reqwest::Client::new()
+        .post("https://api.hyperliquid.xyz/info")
+        .json(&payload)
+        .send()
+        .await
+        .map_err(|_| "Hyperliquid account data is temporarily unavailable.".to_string())?
+        .error_for_status()
+        .map_err(|_| "Hyperliquid account data is temporarily unavailable.".to_string())?
+        .json()
+        .await
+        .map_err(|_| "Hyperliquid account data is temporarily unavailable.".to_string())
+}
+
+async fn load_owned_trading_accounts(
+    owner: &str,
+    include_capacity: bool,
+    check_mode: bool,
+) -> OwnedTradingAccounts {
+    let main_address = owner.to_ascii_lowercase();
+    let abstraction_request = async {
+        if check_mode {
+            post_info::<String>(json!({"type": "userAbstraction", "user": main_address})).await
+        } else {
+            Ok("unifiedAccount".to_string())
+        }
+    };
+    let (main_result, subaccounts_result, abstraction_result) = tokio::join!(
+        post_info::<SpotClearinghouseStateResponse>(
+            json!({"type": "spotClearinghouseState", "user": main_address}),
+        ),
+        post_info::<Vec<SubaccountResponse>>(json!({"type": "subAccounts", "user": main_address}),),
+        abstraction_request,
+    );
+
+    let main_balance = main_result
+        .ok()
+        .and_then(|response| parse_spot_usdc_balance(&response.balances));
+    let main_lookup_failed = main_balance.is_none();
+    let (subaccounts, subaccount_lookup_error) = match subaccounts_result {
+        Ok(response) => (parse_subaccounts(response), None),
+        Err(error) => (Vec::new(), Some(error)),
+    };
+    let lookup_error = if main_lookup_failed {
+        Some("Hyperliquid account data is temporarily unavailable.".to_string())
+    } else {
+        subaccount_lookup_error
+    };
+    let account_mode = match abstraction_result {
+        Ok(mode) if mode == "unifiedAccount" => AccountMode::Unified,
+        Ok(_) => AccountMode::Unsupported,
+        Err(_) => AccountMode::Unavailable,
+    };
+    let subaccount_capacity = if include_capacity {
+        load_subaccount_capacity(&main_address, subaccounts.len()).await
+    } else {
+        None
+    };
+    OwnedTradingAccounts {
+        main_address,
+        main_balance,
+        subaccounts,
+        subaccount_capacity,
+        lookup_error,
+        account_mode,
+    }
+}
+
+fn account_rows(
+    accounts: &OwnedTradingAccounts,
+    assignments: &HashMap<String, (String, String)>,
+) -> Vec<AccountRowView> {
+    let row = |name: String, address: String, balance: Option<Decimal>| {
+        let assignment = assignments.get(&address);
+        let balance_view = account_balance_view(balance);
+        AccountRowView {
+            name,
+            address: address.clone(),
+            agent_key: assignment.map(|value| value.0.clone()),
+            agent_display_name: assignment.map(|value| value.1.clone()),
+            balance: balance_view.formatted.clone(),
+            balance_view,
+            transfer_value: address,
+        }
+    };
+    let mut rows = vec![row(
+        "Main Account".to_string(),
+        accounts.main_address.clone(),
+        accounts.main_balance,
+    )];
+    rows.extend(accounts.subaccounts.iter().map(|subaccount| {
+        row(
+            subaccount
+                .name
+                .clone()
+                .unwrap_or_else(|| "Unnamed subaccount".to_string()),
+            subaccount.address.clone(),
+            subaccount.balance,
+        )
+    }));
+    rows
+}
+
+fn account_balance_view(balance: Option<Decimal>) -> AccountTableBalanceView {
+    let Some(balance) = balance else {
+        return AccountTableBalanceView {
+            formatted: "Unavailable".to_string(),
+            whole: "Unavailable".to_string(),
+            decimals: None,
+            is_zero: false,
+        };
+    };
+    let formatted = crate::web::templates::shared::format_money_text(Some(balance));
+    let (whole, decimals) = match formatted.split_once('.') {
+        Some((whole, decimals)) => (whole.to_string(), Some(decimals.to_string())),
+        None => (formatted.clone(), None),
+    };
+    AccountTableBalanceView {
+        formatted,
+        whole,
+        decimals,
+        is_zero: balance.is_zero(),
+    }
+}
+
+fn total_account_balance_value(accounts: &OwnedTradingAccounts) -> Option<Decimal> {
+    std::iter::once(accounts.main_balance)
+        .chain(
+            accounts
+                .subaccounts
+                .iter()
+                .map(|subaccount| subaccount.balance),
+        )
+        .try_fold(Decimal::ZERO, |total, balance| {
+            balance.map(|balance| total + balance)
+        })
+}
+
+fn account_mode_error(mode: AccountMode) -> Option<String> {
+    (mode != AccountMode::Unified).then(|| account_mode_message(mode).to_string())
+}
+
+fn account_mode_message(mode: AccountMode) -> &'static str {
+    match mode {
+        AccountMode::Unified => "",
+        AccountMode::Unsupported => {
+            "Vibetrading currently supports Unified Accounts only. Enable Unified Account in Hyperliquid before transferring or creating agents."
+        }
+        AccountMode::Unavailable => {
+            "Hyperliquid account mode could not be verified. Transfers are temporarily unavailable."
+        }
+    }
+}
+
+fn canonical_transfer_amount(value: &str) -> Option<String> {
+    if value.is_empty() || value.trim() != value || value.contains('e') || value.contains('E') {
+        return None;
+    }
+    let (integer, fraction) = value.split_once('.').unwrap_or((value, ""));
+    if integer.is_empty() || !integer.chars().all(|character| character.is_ascii_digit()) {
+        return None;
+    }
+    if (value.contains('.') && fraction.is_empty())
+        || (!fraction.is_empty() && !fraction.chars().all(|character| character.is_ascii_digit()))
+    {
+        return None;
+    }
+    let amount = Decimal::from_str(value).ok()?;
+    if amount.is_zero() || amount.is_sign_negative() || amount.scale() > MAX_TRANSFER_DECIMAL_PLACES
+    {
+        return None;
+    }
+    Some(amount.normalize().to_string())
+}
+
+fn valid_send_asset_action(
+    action: &Value,
+    main_address: &str,
+    owned_addresses: &HashSet<String>,
+) -> bool {
+    let Some(action_object) = action.as_object() else {
+        return false;
+    };
+    let expected_fields = [
+        "type",
+        "hyperliquidChain",
+        "signatureChainId",
+        "destination",
+        "sourceDex",
+        "destinationDex",
+        "token",
+        "amount",
+        "fromSubAccount",
+        "nonce",
+    ];
+    if action_object.len() != expected_fields.len()
+        || expected_fields
+            .iter()
+            .any(|field| !action_object.contains_key(*field))
+    {
+        return false;
+    }
+    if action.get("type").and_then(Value::as_str) != Some("sendAsset")
+        || !valid_common(action)
+        || action.get("sourceDex").and_then(Value::as_str) != Some(UNIFIED_ACCOUNT_DEX)
+        || action.get("destinationDex").and_then(Value::as_str) != Some(UNIFIED_ACCOUNT_DEX)
+        || action.get("token").and_then(Value::as_str) != Some(PERPETUAL_USDC_TOKEN)
+    {
+        return false;
+    }
+    let Some(destination) = action.get("destination").and_then(Value::as_str) else {
+        return false;
+    };
+    let Some(from_subaccount) = action.get("fromSubAccount").and_then(Value::as_str) else {
+        return false;
+    };
+    let Some(amount) = action.get("amount").and_then(Value::as_str) else {
+        return false;
+    };
+    if !valid_lowercase_address(destination)
+        || !owned_addresses.contains(destination)
+        || canonical_transfer_amount(amount).as_deref() != Some(amount)
+    {
+        return false;
+    }
+    let source = if from_subaccount.is_empty() {
+        main_address
+    } else {
+        if !valid_lowercase_address(from_subaccount)
+            || from_subaccount == main_address
+            || !owned_addresses.contains(from_subaccount)
+        {
+            return false;
+        }
+        from_subaccount
+    };
+    source != destination
+}
+
+async fn relay_transfer(action: &Value, signature: &str) -> Result<Value, ()> {
+    let signature = signature_parts(signature).ok_or(())?;
+    reqwest::Client::new()
+        .post("https://api.hyperliquid.xyz/exchange")
+        .json(&json!({
+            "action": action,
+            "nonce": action.get("nonce").and_then(Value::as_u64).ok_or(())?,
+            "signature": signature,
+        }))
+        .send()
+        .await
+        .map_err(|_| ())?
+        .error_for_status()
+        .map_err(|_| ())?
+        .json()
+        .await
+        .map_err(|_| ())
+}
+
+pub(in crate::web::routes) async fn transfer_between_accounts(
+    State(_state): State<Arc<AppState>>,
+    user: AuthenticatedUser,
+    Json(request): Json<SignedAction>,
+) -> Result<Response, AppError> {
+    let accounts = load_owned_trading_accounts(&user.wallet_address, false, true).await;
+    let owned_addresses: HashSet<String> = std::iter::once(accounts.main_address.clone())
+        .chain(
+            accounts
+                .subaccounts
+                .iter()
+                .map(|subaccount| subaccount.address.clone()),
+        )
+        .collect();
+    match accounts.account_mode {
+        AccountMode::Unified => {}
+        AccountMode::Unsupported => {
+            return Ok((
+                StatusCode::UNPROCESSABLE_ENTITY,
+                Json(json!({"error": account_mode_message(accounts.account_mode)})),
+            )
+                .into_response());
+        }
+        AccountMode::Unavailable => {
+            return Ok((
+                StatusCode::BAD_GATEWAY,
+                Json(json!({"error": account_mode_message(accounts.account_mode)})),
+            )
+                .into_response());
+        }
+    }
+    if !valid_send_asset_action(&request.action, &accounts.main_address, &owned_addresses)
+        || !signature_matches(
+            &request.action,
+            &request.signature,
+            &accounts.main_address,
+            ActionKind::SendAsset,
+        )
+    {
+        return Ok(StatusCode::BAD_REQUEST.into_response());
+    }
+    let exchange = match relay_transfer(&request.action, &request.signature).await {
+        Ok(response) => response,
+        Err(()) => {
+            return Ok((
+                StatusCode::BAD_GATEWAY,
+                Json(json!({"message": "Hyperliquid exchange unavailable."})),
+            )
+                .into_response());
+        }
+    };
+    if !exchange_success(&exchange) {
+        return Ok((
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Json(json!({"error": transfer_error_message(&exchange)})),
+        )
+            .into_response());
+    }
+    Ok(Json(json!({"status": "ok"})).into_response())
 }
 
 impl From<TradingAccountChoices> for TradingAccountChoicesView {
@@ -88,19 +504,19 @@ pub(in crate::web::routes) struct BuilderFeeRequest {
 }
 
 #[derive(Serialize)]
-pub(in crate::web::routes) struct WalletAddressResponse {
+pub(in crate::web::routes) struct AccountAddressResponse {
     wallet_address: String,
 }
 
-pub(in crate::web::routes) async fn wallet_address(
+pub(in crate::web::routes) async fn account_address(
     user: AuthenticatedUser,
-) -> Json<WalletAddressResponse> {
-    Json(WalletAddressResponse {
+) -> Json<AccountAddressResponse> {
+    Json(AccountAddressResponse {
         wallet_address: user.wallet_address,
     })
 }
 
-pub(in crate::web::routes) async fn wallet_index(
+pub(in crate::web::routes) async fn account_index(
     State(state): State<Arc<AppState>>,
     user: AuthenticatedUser,
 ) -> Result<Html<String>, AppError> {
@@ -115,19 +531,23 @@ pub(in crate::web::routes) async fn wallet_index(
         .as_ref()
         .filter(|wallet| wallet.user_id == user.id)
         .map(|wallet| wallet.main_wallet_address.clone())
-        .unwrap_or(user.wallet_address);
-    let agents = list_agents_for_user(&state.db_pool, user.id)
-        .await?
-        .into_iter()
-        .map(|agent| WalletAgentView {
-            agent_key: agent.agent_key,
-            display_name: agent.display_name,
-            lifecycle: "active".to_string(),
-            trading_account_address: agent.trading_account_address,
-            balance: "Balance unavailable".to_string(),
-            expiry: "Expiry unavailable".to_string(),
+        .unwrap_or_else(|| user.wallet_address.clone());
+    let agents = list_agents_for_user(&state.db_pool, user.id).await?;
+    let assignments: HashMap<String, (String, String)> = agents
+        .iter()
+        .map(|agent| {
+            (
+                agent.trading_account_address.to_ascii_lowercase(),
+                (agent.agent_key.clone(), agent.display_name.clone()),
+            )
         })
         .collect();
+    let owned_accounts = load_owned_trading_accounts(&user.wallet_address, false, true).await;
+    let accounts = account_rows(&owned_accounts, &assignments);
+    let total_balance = (accounts.len() > 1)
+        .then(|| account_balance_view(total_account_balance_value(&owned_accounts)));
+    let transfers_enabled =
+        owned_accounts.account_mode == AccountMode::Unified && accounts.len() >= 2;
     let navbar = crate::web::templates::load_navbar(&state.db_pool, user.id).await?;
     let fee_bps = if row.1.is_some() && row.0 > 0 && row.0 % BUILDER_FEE_BPS_TO_TENTHS == 0 {
         (row.0 / BUILDER_FEE_BPS_TO_TENTHS).clamp(MIN_BUILDER_FEE_BPS, MAX_BUILDER_FEE_BPS)
@@ -135,15 +555,18 @@ pub(in crate::web::routes) async fn wallet_index(
         DEFAULT_BUILDER_FEE_BPS
     };
     Ok(Html(
-        WalletPageTemplate {
+        AccountPageTemplate {
             wallet_address,
             fee_bps,
             min_fee_bps: MIN_BUILDER_FEE_BPS,
             max_fee_bps: MAX_BUILDER_FEE_BPS,
-            builder_fee_approved: row.1.is_some(),
             builder_recipient: BUILDER_RECIPIENT,
-            current_path: "/wallet".to_string(),
-            agents,
+            current_path: "/account".to_string(),
+            accounts,
+            total_balance,
+            account_lookup_error: owned_accounts.lookup_error,
+            account_mode_error: account_mode_error(owned_accounts.account_mode),
+            transfers_enabled,
             api_wallet_address: api_wallet
                 .as_ref()
                 .and_then(|wallet| wallet.api_wallet_address.clone()),
@@ -157,6 +580,7 @@ pub(in crate::web::routes) async fn wallet_index(
                     .and_then(|wallet| wallet.api_wallet_expires_at),
             ),
             api_wallet_show_expired: api_wallet_show_expired(api_wallet.as_ref()),
+            builder_fee_approved: row.1.is_some(),
             navbar,
         }
         .render()?,
@@ -301,74 +725,28 @@ pub(in crate::web::routes) async fn load_trading_account_choices(
             })
     };
     let main_assigned_to = assignment_for(&main_address).map(|assigned| assigned.display_name);
-    let result = reqwest::Client::new()
-        .post("https://api.hyperliquid.xyz/info")
-        .json(&json!({"type":"subAccounts", "user": main_address}))
-        .send()
-        .await;
-    let response = match result {
-        Ok(response) => response.error_for_status(),
-        Err(error) => {
-            return TradingAccountChoices {
-                main_address,
-                main_assigned_to,
-                subaccounts: Vec::new(),
-                subaccount_capacity: None,
-                lookup_error: Some(error.to_string()),
-            };
-        }
-    };
-    let value = match response {
-        Ok(response) => response.json::<Value>().await,
-        Err(error) => Err(error),
-    };
-    match value {
-        Ok(value) => {
-            let subaccounts: Vec<SubaccountChoiceView> = value
-                .as_array()
-                .map(|rows| {
-                    rows.iter()
-                        .filter_map(|row| {
-                            let address = row
-                                .get("subAccountUser")
-                                .or_else(|| row.get("address"))?
-                                .as_str()?
-                                .to_ascii_lowercase();
-                            Some(SubaccountChoiceView {
-                                name: row
-                                    .get("name")
-                                    .and_then(Value::as_str)
-                                    .map(ToOwned::to_owned),
-                                assigned_to: assignment_for(&address),
-                                address,
-                                balance: row
-                                    .get("clearinghouseState")
-                                    .and_then(|state| state.get("marginSummary"))
-                                    .and_then(|summary| summary.get("accountValue"))
-                                    .and_then(Value::as_str)
-                                    .map(ToOwned::to_owned),
-                            })
-                        })
-                        .collect()
-                })
-                .unwrap_or_default();
-            let subaccount_capacity =
-                load_subaccount_capacity(&main_address, subaccounts.len()).await;
-            TradingAccountChoices {
-                main_address,
-                main_assigned_to,
-                subaccounts,
-                subaccount_capacity,
-                lookup_error: None,
-            }
-        }
-        Err(error) => TradingAccountChoices {
-            main_address,
-            main_assigned_to,
-            subaccounts: Vec::new(),
-            subaccount_capacity: None,
-            lookup_error: Some(error.to_string()),
-        },
+    let accounts = load_owned_trading_accounts(&main_address, true, !cfg!(test)).await;
+    let subaccounts = accounts
+        .subaccounts
+        .iter()
+        .map(|subaccount| SubaccountChoiceView {
+            name: subaccount.name.clone(),
+            assigned_to: assignment_for(&subaccount.address),
+            address: subaccount.address.clone(),
+            balance: subaccount
+                .balance
+                .map(|value| crate::web::templates::shared::format_money_text(Some(value))),
+        })
+        .collect();
+    TradingAccountChoices {
+        main_address,
+        main_assigned_to,
+        subaccounts,
+        subaccount_capacity: accounts.subaccount_capacity,
+        lookup_error: accounts
+            .lookup_error
+            .or_else(|| account_mode_error(accounts.account_mode)),
+        account_mode_supported: accounts.account_mode == AccountMode::Unified,
     }
 }
 
@@ -403,6 +781,9 @@ pub(in crate::web::routes) fn selected_trading_account(
     selection: &str,
     choices: &TradingAccountChoices,
 ) -> Result<String, &'static str> {
+    if !choices.account_mode_supported {
+        return Err("Vibetrading currently supports Unified Accounts only.");
+    }
     if selection == "main" && choices.main_assigned_to.is_none() {
         return Ok(choices.main_address.clone());
     }
@@ -456,7 +837,7 @@ pub(in crate::web::routes) async fn approve_user_api_wallet(
     if !record_user_api_wallet_approval(&state.db_pool, user.id).await? {
         return Ok(StatusCode::CONFLICT.into_response());
     }
-    Ok(Json(json!({"status":"ok", "redirect":"/wallet"})).into_response())
+    Ok(Json(json!({"status":"ok", "redirect":"/account"})).into_response())
 }
 
 #[derive(Deserialize)]
@@ -653,6 +1034,15 @@ fn exchange_error_message(response: &Value) -> String {
         .unwrap_or("Hyperliquid rejected Sub-Account creation.")
         .to_string()
 }
+
+fn transfer_error_message(response: &Value) -> String {
+    response
+        .get("response")
+        .and_then(Value::as_str)
+        .or_else(|| response.get("message").and_then(Value::as_str))
+        .unwrap_or("Hyperliquid rejected the transfer.")
+        .to_string()
+}
 fn signature_parts(signature: &str) -> Option<Value> {
     let raw = hex::decode(signature.strip_prefix("0x")?).ok()?;
     if raw.len() != 65 {
@@ -695,6 +1085,7 @@ fn valid_builder_fee_action(action: &Value, fee_bps: i16) -> bool {
 enum ActionKind {
     Agent,
     BuilderFee,
+    SendAsset,
 }
 fn signature_matches(action: &Value, signature: &str, expected: &str, kind: ActionKind) -> bool {
     let Some(digest) = typed_action_hash(action, kind) else {
@@ -716,6 +1107,9 @@ fn typed_action_hash(action: &Value, kind: ActionKind) -> Option<alloy::primitiv
         ActionKind::BuilderFee => keccak256(
             "HyperliquidTransaction:ApproveBuilderFee(string hyperliquidChain,string maxFeeRate,address builder,uint64 nonce)",
         ),
+        ActionKind::SendAsset => keccak256(
+            "HyperliquidTransaction:SendAsset(string hyperliquidChain,string destination,string sourceDex,string destinationDex,string token,string amount,string fromSubAccount,uint64 nonce)",
+        ),
     };
     let mut encoded = Vec::with_capacity(128);
     encoded.extend_from_slice(type_hash.as_slice());
@@ -728,6 +1122,18 @@ fn typed_action_hash(action: &Value, kind: ActionKind) -> Option<alloy::primitiv
         ActionKind::BuilderFee => {
             encoded.extend_from_slice(keccak256(action.get("maxFeeRate")?.as_str()?).as_slice());
             encoded.extend_from_slice(&address_word(action.get("builder")?.as_str()?));
+        }
+        ActionKind::SendAsset => {
+            for field in [
+                "destination",
+                "sourceDex",
+                "destinationDex",
+                "token",
+                "amount",
+                "fromSubAccount",
+            ] {
+                encoded.extend_from_slice(keccak256(action.get(field)?.as_str()?).as_slice());
+            }
         }
     }
     encoded.extend_from_slice(&uint_word(nonce));
@@ -790,6 +1196,180 @@ mod tests {
     }
 
     #[test]
+    fn parses_unified_spot_balances_without_fabricating_values() {
+        let response: SpotClearinghouseStateResponse = serde_json::from_value(json!({
+            "balances": [{"coin": "USDC", "total": "12.50"}]
+        }))
+        .expect("spot clearinghouse response");
+        assert_eq!(
+            parse_spot_usdc_balance(&response.balances),
+            Some(Decimal::new(1250, 2))
+        );
+
+        assert_eq!(parse_spot_usdc_balance(&[]), Some(Decimal::ZERO));
+        assert_eq!(
+            parse_spot_usdc_balance(&[SpotBalance {
+                coin: "USDT".to_string(),
+                total: Some("12.50".to_string()),
+            }]),
+            Some(Decimal::ZERO)
+        );
+        for balances in [
+            vec![SpotBalance {
+                coin: "USDC".to_string(),
+                total: Some("not-a-number".to_string()),
+            }],
+            vec![SpotBalance {
+                coin: "USDC".to_string(),
+                total: Some("-1".to_string()),
+            }],
+        ] {
+            assert_eq!(parse_spot_usdc_balance(&balances), None);
+        }
+    }
+
+    #[test]
+    fn parses_named_and_unnamed_subaccounts_in_exchange_order() {
+        let response: Vec<SubaccountResponse> = serde_json::from_value(json!([
+            {
+                "name": "Alpha",
+                "subAccountUser": "0x2222222222222222222222222222222222222222",
+                "spotState": {"balances": [{"coin": "USDC", "total": "3.5"}]}
+            },
+            {
+                "subAccountUser": "0x3333333333333333333333333333333333333333",
+                "spotState": {"balances": [{"coin": "USDC", "total": "bad"}]}
+            },
+            {
+                "subAccountUser": "0x4444444444444444444444444444444444444444"
+            }
+        ]))
+        .expect("subaccount response");
+        let subaccounts = parse_subaccounts(response);
+        assert_eq!(subaccounts.len(), 3);
+        assert_eq!(subaccounts[0].name.as_deref(), Some("Alpha"));
+        assert_eq!(subaccounts[0].balance, Some(Decimal::new(35, 1)));
+        assert!(subaccounts[1].name.is_none());
+        assert_eq!(subaccounts[1].balance, None);
+        assert_eq!(subaccounts[2].balance, Some(Decimal::ZERO));
+    }
+
+    #[test]
+    fn account_rows_keep_main_first_and_only_use_supplied_assignments() {
+        let main = "0x1111111111111111111111111111111111111111".to_string();
+        let named = "0x2222222222222222222222222222222222222222".to_string();
+        let unnamed = "0x3333333333333333333333333333333333333333".to_string();
+        let mut accounts = OwnedTradingAccounts {
+            main_address: main.clone(),
+            main_balance: Some(Decimal::new(100, 0)),
+            subaccounts: vec![
+                OwnedSubaccount {
+                    name: Some("Trading subaccount".to_string()),
+                    address: named.clone(),
+                    balance: None,
+                },
+                OwnedSubaccount {
+                    name: None,
+                    address: unnamed.clone(),
+                    balance: Some(Decimal::new(2, 0)),
+                },
+            ],
+            subaccount_capacity: None,
+            lookup_error: None,
+            account_mode: AccountMode::Unified,
+        };
+        let assignments = HashMap::from([(
+            named.clone(),
+            ("named-agent".to_string(), "Named Agent".to_string()),
+        )]);
+
+        let rows = account_rows(&accounts, &assignments);
+        assert_eq!(rows[0].name, "Main Account");
+        assert_eq!(rows[0].address, main);
+        assert_eq!(rows[0].balance, "100.0000");
+        assert_eq!(rows[1].name, "Trading subaccount");
+        assert_eq!(rows[1].agent_key.as_deref(), Some("named-agent"));
+        assert_eq!(rows[1].balance, "Unavailable");
+        assert_eq!(rows[2].name, "Unnamed subaccount");
+        assert!(rows[2].agent_key.is_none());
+        assert_eq!(rows[2].balance, "2.0000");
+        assert_eq!(total_account_balance_value(&accounts), None);
+        accounts.subaccounts[0].balance = Some(Decimal::ZERO);
+        assert_eq!(
+            account_balance_view(total_account_balance_value(&accounts)).formatted,
+            "102.0000"
+        );
+    }
+
+    #[tokio::test]
+    async fn send_asset_signature_and_account_directions_are_valid() {
+        let signer = PrivateKeySigner::from_str(
+            "4c0883a69102937d6231471b5dbb6204fe5129617082795f9d3d2c7e2f9f3f5b",
+        )
+        .expect("signer");
+        let main = signer.address().to_string().to_ascii_lowercase();
+        let first = "0x1111111111111111111111111111111111111111";
+        let second = "0x2222222222222222222222222222222222222222";
+        let owned = HashSet::from([main.clone(), first.to_string(), second.to_string()]);
+
+        for (source, destination) in [("", first), (first, main.as_str()), (first, second)] {
+            let action = json!({
+                "type": "sendAsset",
+                "hyperliquidChain": "Mainnet",
+                "signatureChainId": "0xa4b1",
+                "destination": destination,
+                "sourceDex": "spot",
+                "destinationDex": "spot",
+                "token": PERPETUAL_USDC_TOKEN,
+                "amount": "1.25",
+                "fromSubAccount": source,
+                "nonce": 42,
+            });
+            let signature = signer
+                .sign_hash(&typed_action_hash(&action, ActionKind::SendAsset).expect("hash"))
+                .await
+                .expect("sign");
+            assert!(valid_send_asset_action(&action, &main, &owned));
+            assert!(signature_matches(
+                &action,
+                &signature.to_string(),
+                &main,
+                ActionKind::SendAsset
+            ));
+        }
+    }
+
+    #[test]
+    fn send_asset_validation_rejects_unsafe_fields_and_amounts() {
+        let main = "0x1111111111111111111111111111111111111111";
+        let sub = "0x2222222222222222222222222222222222222222";
+        let owned = HashSet::from([main.to_string(), sub.to_string()]);
+        let mut action = json!({
+            "type": "sendAsset",
+            "hyperliquidChain": "Mainnet",
+            "signatureChainId": "0xa4b1",
+            "destination": sub,
+            "sourceDex": "spot",
+            "destinationDex": "spot",
+            "token": PERPETUAL_USDC_TOKEN,
+            "amount": "1.25",
+            "fromSubAccount": "",
+            "nonce": 42,
+        });
+        assert!(valid_send_asset_action(&action, main, &owned));
+        for amount in ["0", "-1", "1.", "1e-2", "1.123456789", "01.25", "1.250"] {
+            action["amount"] = json!(amount);
+            assert!(!valid_send_asset_action(&action, main, &owned));
+        }
+        action["amount"] = json!("1.25");
+        action["fromSubAccount"] = json!(main);
+        assert!(!valid_send_asset_action(&action, main, &owned));
+        action["fromSubAccount"] = json!(sub);
+        action["destination"] = json!(sub);
+        assert!(!valid_send_asset_action(&action, main, &owned));
+    }
+
+    #[test]
     fn selected_trading_account_rejects_assigned_accounts() {
         let subaccount = |address: &str, assigned_to: Option<&str>| SubaccountChoiceView {
             name: None,
@@ -811,6 +1391,7 @@ mod tests {
             ],
             subaccount_capacity: None,
             lookup_error: None,
+            account_mode_supported: true,
         };
         assert_eq!(
             selected_trading_account("main", &choices).expect("main selectable"),

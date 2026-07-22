@@ -12,6 +12,17 @@ signed order placement and cancellation. Vibetrading owns raw Hyperliquid
 `/info` HTTP calls for account history, including fills, funding, non-user
 funding ledger updates, and historical orders.
 
+The authenticated `/account` page reads `spotClearinghouseState`, `subAccounts`,
+and `userAbstraction` concurrently from `/info` on each load. Its account table
+shows the Unified Account's Spot-state USDC `total` in USDC, with unavailable
+values shown explicitly rather than using cached or fabricated balances.
+Vibetrading currently supports Unified Accounts only. User-signed `sendAsset`
+transfers are restricted to the authenticated main account and its currently
+discovered sub-accounts, use `spot` for both DEX fields because Unified mode
+shares the collateral balance with Spot, and use canonical mainnet USDC.
+Hyperliquid account mode is checked again before relay. API-wallet signers
+never custody or transfer account funds.
+
 The application, not an agent, owns signing. One encrypted user trading signer
 is decrypted only server-side for signed exchange requests and is never written
 into an agent workspace or returned through the agent API. Agent accounts are

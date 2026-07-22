@@ -10,7 +10,7 @@ use chrono::Utc;
 use serde::Deserialize;
 use tracing::warn;
 
-use super::super::wallet::agent_subaccount_name;
+use super::super::account::agent_subaccount_name;
 use super::memories::{AgentMemoriesQuery, parse_memory_date_filter, prepare_memory_timeline_page};
 use super::settings::build_opencode_workspace_settings_view;
 use super::transactions::apply_live_cash_balance_anchor;
