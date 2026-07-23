@@ -682,6 +682,32 @@ mod tests {
     }
 
     #[test]
+    fn generated_trading_profile_allows_only_conditional_confirmation_commands() {
+        let temp = TempDir::new("opencode-trading-permissions");
+        let generated = generate_agent_workspace(
+            &sample_config(&temp.path),
+            &sample_agent(),
+            WorkspaceGenerationMode::CreateNew,
+        )
+        .expect("generate workspace");
+        let profile = fs::read_to_string(
+            generated
+                .workspace_host_path
+                .join(".opencode/agents/trading.md"),
+        )
+        .expect("read trading profile");
+
+        assert!(profile.contains(
+            "\"*\": deny\n    \"python .opencode/skills/hyperliquid-data/fetch_ohlcv.py *\": allow"
+        ));
+        assert!(profile.contains("\"python scripts/user/analyze.py *\": allow"));
+        assert!(profile.contains("scratch/trading-confirmation/**\": allow"));
+        assert!(profile.contains("hyperliquid-data: allow"));
+        assert!(profile.contains("webfetch: deny"));
+        assert!(profile.contains("task: deny"));
+    }
+
+    #[test]
     fn renders_agents_template_placeholders() {
         let temp = TempDir::new("opencode-agents-template");
         let generated = generate_agent_workspace(

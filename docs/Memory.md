@@ -69,6 +69,14 @@ Current important contract:
 - OpenCode trading instructions require a fresh `market_analysis` memory before
   opening new exposure; this is a workflow contract, not an API-level order
   validation rule today
+- market-analysis metadata declares `execution_state` as `execute`,
+  `conditional`, `wait`, `manage_existing`, or `cancel_entries`
+- `conditional` memories declare a finite `confirmation_timeframes` list and
+  machine-readable `confirmation_rules`; trading may fetch only those closed
+  candles and run the canonical analyzer solely to verify those rules
+- trading treats the selected memory's thesis, direction, levels, confidence,
+  and risk parameters as immutable; it must stand down when confirmation data,
+  analyzer output, or a declared rule is unavailable or fails
 - `memory_type = "agent_learnings"` is the append-only durable learning stream for one agent
 - `memory_type = "daily_review"` records one review for an agent-scoped UTC window
 - market-analysis memories should link back to source analyses with `derived_from`

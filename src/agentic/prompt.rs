@@ -98,6 +98,8 @@ fn build_market_analysis_prompt(request: &DispatchRequest) -> String {
     body.push_str("- Include metadata with `schema_version = 1`, `analysis_kind = \"market_analysis\"`, `valid_for_seconds = 1800` unless the operator prompt explicitly requires a different validity, plus `source_memory_ids` and `source_timeframes`.\n");
     body.push_str("- When you write a market-analysis memory, attach `links` with `link_type = \"derived_from\"` to the source analysis memory IDs used for the synthesis.\n");
     body.push_str("- Include actionable entries, exits, invalidation, confidence, and risk notes in the memory content and metadata.\n");
+    body.push_str("- Set metadata `execution_state` to exactly one of `execute`, `conditional`, `wait`, `manage_existing`, or `cancel_entries`. Use `execute` only when the latest source analyses already establish every required entry condition. Use `conditional` only when trading may verify a finite set of stated quantitative conditions against fresh closed candles. Use `wait` when later analysis is required before opening exposure.\n");
+    body.push_str("- For `conditional`, include metadata `confirmation_timeframes` as the exact timeframes trading may fetch and `confirmation_rules` as an array of machine-readable rules. Each rule must name its timeframe, a stable analyzer `measurement` or `signal`, its comparison or expected value, and `minimum_candles` needed for that calculation. Trading must be able to verify the rules without creating indicators, changing parameters, or inferring additional conditions.\n");
     body.push_str("- If the source analyses conflict, are stale, or are insufficiently actionable, write a neutral market analysis that explicitly tells trading not to open new exposure.\n");
     body.push_str("- Do not place or cancel orders.\n");
     body
@@ -129,6 +131,14 @@ fn build_trading_prompt(request: &DispatchRequest) -> String {
     body.push_str(&account_state_section(request.account_snapshot.as_ref()));
     body.push_str("\n\n## Selected instruments\n");
     body.push_str(&selected_instruments_section(&request.selected_instruments));
+    body.push_str("\n\n## Conditional-confirmation candle cutoff\n");
+    body.push_str(&format!(
+        "- If and only if the selected market analysis has `execution_state = \"conditional\"`, confirmation data is anchored to {} ({} milliseconds).\n",
+        format_utc(request.scheduled_for),
+        request.scheduled_for.timestamp_millis()
+    ));
+    body.push_str("- For every permitted confirmation timeframe, a candle is eligible only when `start_ms + interval_ms < boundary_ms`; a candle closing exactly at the boundary is excluded.\n");
+    body.push_str("- Fetch confirmation candles with `--closed-before <boundary_ms>` and never use `--stdout` or an open candle.\n");
     body.push_str("\n\n## Instructions\n");
     body.push_str("- Call `vibetrading_get_market_analysis(symbol)` for each selected symbol before placing any trades.\n");
     body.push_str(
@@ -140,7 +150,11 @@ fn build_trading_prompt(request: &DispatchRequest) -> String {
         "- Agent-submitted orders should use the default `attribution_source = \"agent\"`.\n",
     );
     body.push_str("- Do not fall back to raw timeframe `analysis` memories for execution decisions. Raw analysis can be consulted only for diagnostics when the operator prompt explicitly asks for it.\n");
-    body.push_str("- Fetch current OHLCV and public market data from Hyperliquid for the selected instruments using the `hyperliquid-data` skill.\n");
+    body.push_str("- Treat the selected market analysis's direction, confidence, entry zone, invalidation, targets, and execution state as immutable. Do not discover a setup, alter the thesis, or add a condition.\n");
+    body.push_str("- If `execution_state` is missing or unrecognized, do not fetch market data, run the analyzer, or open new exposure.\n");
+    body.push_str("- For `execution_state = \"execute\"`, do not fetch market data or run the analyzer; reconcile and execute only the stated plan. For `wait`, `manage_existing`, or `cancel_entries`, do not fetch market data or run the analyzer; take only the stated non-opening action.\n");
+    body.push_str("- Only for `execution_state = \"conditional\"`, load the `hyperliquid-data` skill and fetch only the selected symbol, exact `confirmation_timeframes`, and declared `minimum_candles` using the cutoff above. Run only `python scripts/user/analyze.py` against each fetched canonical input, writing output beneath `scratch/trading-confirmation/`.\n");
+    body.push_str("- For conditional execution, compare only the analyzer measurements and signals named in `confirmation_rules` to their declared values. If a rule, analyzer, input, output, or required measurement is missing or fails, do not open new exposure. Do not derive a new indicator, use another timeframe, or reinterpret a failed condition.\n");
     body.push_str("- Submit and cancel orders only through the `vibetrading` MCP trading tools.\n");
     body.push_str("- Do not trade instruments that are not in the selected list.\n");
     body
@@ -422,6 +436,10 @@ mod tests {
         let mut request = sample_request(JOB_KIND_TRADING);
         request.job_key = "trading-15m".to_string();
         request.strategy_prompt = "Trade breakouts.".to_string();
+        request.scheduled_for = Utc
+            .with_ymd_and_hms(2026, 7, 3, 21, 30, 0)
+            .single()
+            .expect("valid timestamp");
         request.account_snapshot = Some(LiveAgentSnapshot {
             account_address: "0xabc".to_string(),
             environment: "live".to_string(),
@@ -462,6 +480,14 @@ mod tests {
         assert!(prompt.contains("- Available to trade USD: 750"));
         assert!(prompt.contains("vibetrading_get_market_analysis(symbol)"));
         assert!(prompt.contains("Do not fall back to raw timeframe `analysis` memories"));
+        assert!(prompt.contains("## Conditional-confirmation candle cutoff"));
+        assert!(prompt.contains("2026-07-03T21:30:00Z (1783114200000 milliseconds)"));
+        assert!(prompt.contains("`execution_state = \"conditional\"`"));
+        assert!(prompt.contains("`confirmation_timeframes`"));
+        assert!(prompt.contains("python scripts/user/analyze.py"));
+        assert!(prompt.contains("If `execution_state` is missing or unrecognized"));
+        assert!(prompt.contains("never use `--stdout` or an open candle"));
+        assert!(!prompt.contains("Fetch current OHLCV and public market data"));
         assert!(prompt.contains("Job-specific strategy is additive"));
     }
 
@@ -482,6 +508,9 @@ mod tests {
         assert!(prompt.contains("source_memory_ids"));
         assert!(prompt.contains("memory_type = \"market_analysis\""));
         assert!(prompt.contains("link_type = \"derived_from\""));
+        assert!(prompt.contains("metadata `execution_state`"));
+        assert!(prompt.contains("`confirmation_timeframes`"));
+        assert!(prompt.contains("`confirmation_rules`"));
         assert!(
             prompt.contains("Do not pass a `timeframe` argument at all; leave it out entirely")
         );

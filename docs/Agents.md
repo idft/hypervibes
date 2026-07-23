@@ -100,6 +100,13 @@ normalized OHLCV candles. Candle timestamps are open times. Analyzer code must
 apply `timestamp_ms + interval_ms < boundary_ms`; candles closing exactly at the
 boundary are excluded. Context mismatches and invalid intervals fail closed.
 
+Trading normally consumes the latest `market_analysis` memory without market
+data access. A memory may instead declare a finite conditional-execution
+contract: selected confirmation timeframes and machine-readable analyzer rules.
+Only then may trading fetch those closed candles and run the canonical analyzer.
+It uses the resulting measurements only to verify the declared rules; it cannot
+change the market-analysis thesis, levels, indicators, or execution plan.
+
 Workspace regeneration is queued as agent-scoped maintenance work:
 
 - regular re-generation preserves `scripts/user/`, `data/`, and `scratch/`
