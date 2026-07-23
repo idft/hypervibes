@@ -23,6 +23,7 @@ use uuid::Uuid;
 
 use crate::{
     db::DbPool,
+    hyperliquid::builder_fee::{BuilderFeeCache, MAX_BUILDER_FEE_TENTHS_OF_BP},
     hyperliquid::orders::{
         model::{
             CancelInput, CancelOrdersRequest, OrderResult, PlaceOrderInput, PlaceOrdersRequest,
@@ -40,9 +41,7 @@ use crate::{
 /// lifetimes and break borrows in tests).
 pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
-/// Hyperliquid builder fee recipient. All submitted perp batches use this
-/// exact address only after the account owner has approved the requested fee.
-pub const BUILDER_RECIPIENT: &str = "0x2ebba955c61116e1c249efb1e39d25cb4a79ea05";
+pub use crate::hyperliquid::builder_fee::BUILDER_RECIPIENT;
 
 // ---- exchange trait -------------------------------------------------------
 
@@ -63,11 +62,6 @@ pub trait ExchangeClient: Send + Sync {
         trading_account: &'a str,
     ) -> BoxFuture<'a, Result<Vec<OrderResponseStatus>, String>>;
     fn all_mids<'a>(&'a self) -> BoxFuture<'a, Result<HashMap<String, Decimal>, String>>;
-    fn max_builder_fee<'a>(
-        &'a self,
-        user: &'a str,
-        builder: &'a str,
-    ) -> BoxFuture<'a, Result<u32, String>>;
 }
 
 // ---- real implementation --------------------------------------------------
@@ -137,21 +131,6 @@ impl ExchangeClient for HyperliquidExchange {
 
     fn all_mids<'a>(&'a self) -> BoxFuture<'a, Result<HashMap<String, Decimal>, String>> {
         Box::pin(async move { self.client.all_mids(None).await.map_err(|e| e.to_string()) })
-    }
-
-    fn max_builder_fee<'a>(
-        &'a self,
-        user: &'a str,
-        builder: &'a str,
-    ) -> BoxFuture<'a, Result<u32, String>> {
-        Box::pin(async move {
-            let user = user.parse::<Address>().map_err(|e| e.to_string())?;
-            let builder = builder.parse::<Address>().map_err(|e| e.to_string())?;
-            self.client
-                .max_builder_fee(user, builder)
-                .await
-                .map_err(|e| e.to_string())
-        })
     }
 }
 
@@ -237,6 +216,7 @@ impl From<anyhow::Error> for GatewayError {
 pub async fn place_orders(
     pool: &DbPool,
     exchange: &dyn ExchangeClient,
+    builder_fee_cache: &BuilderFeeCache,
     agent_key: &str,
     account_address: &str,
     environment: &str,
@@ -250,6 +230,7 @@ pub async fn place_orders(
         let group_result = place_one(
             pool,
             exchange,
+            builder_fee_cache,
             agent_key,
             account_address,
             environment,
@@ -266,6 +247,7 @@ pub async fn place_orders(
 async fn place_one(
     pool: &DbPool,
     exchange: &dyn ExchangeClient,
+    builder_fee_cache: &BuilderFeeCache,
     agent_key: &str,
     account_address: &str,
     environment: &str,
@@ -273,7 +255,8 @@ async fn place_one(
 ) -> Result<Vec<OrderResult>, GatewayError> {
     input.validate().map_err(GatewayError::Validation)?;
 
-    let builder_fee = load_builder_fee(pool, exchange, agent_key).await?;
+    let owner = load_builder_fee(pool, agent_key).await?;
+    let builder_fee = owner.saved_fee;
 
     let meta = load_instrument_meta(pool, &input.symbol)
         .await
@@ -526,6 +509,9 @@ async fn place_one(
                     .await
                     .map_err(GatewayError::Internal)?;
             }
+            let _ =
+                reconcile_builder_fee_rejection(pool, builder_fee_cache, &owner, builder_fee, &e)
+                    .await;
             return Ok(legs
                 .into_iter()
                 .map(|leg| OrderResult {
@@ -545,6 +531,18 @@ async fn place_one(
 
     // ---- Map the response back to each leg ----
     let now = Utc::now();
+    let builder_fee_rejected = statuses.iter().any(|status| {
+        matches!(status, OrderResponseStatus::Error(message) if is_builder_fee_rejection(message))
+    });
+    let builder_fee_rejection_message = statuses.iter().find_map(|status| match status {
+        OrderResponseStatus::Error(message) if is_builder_fee_rejection(message) => {
+            Some(message.clone())
+        }
+        _ => None,
+    });
+    let has_success = statuses
+        .iter()
+        .any(|status| !matches!(status, OrderResponseStatus::Error(_)));
     let mut out: Vec<OrderResult> = Vec::with_capacity(legs.len());
     for (leg, status) in legs.into_iter().zip(statuses) {
         let (db_status, oid_opt, filled, avg_px, status_detail) = map_response_status(&status);
@@ -575,6 +573,26 @@ async fn place_one(
             group_id: leg.group_id,
             error: status_detail,
         });
+    }
+
+    if builder_fee_rejected {
+        if let Some(message) = builder_fee_rejection_message
+            && let Some(remote_max) = reconcile_builder_fee_rejection(
+                pool,
+                builder_fee_cache,
+                &owner,
+                builder_fee,
+                &message,
+            )
+            .await
+            && has_success
+            && !owner.approval_recorded
+            && remote_max >= builder_fee
+        {
+            record_order_evidence(pool, builder_fee_cache, &owner, builder_fee).await;
+        }
+    } else if has_success {
+        record_order_evidence(pool, builder_fee_cache, &owner, builder_fee).await;
     }
 
     // Silence "unused" warnings for the JSON helper we keep around for
@@ -679,11 +697,12 @@ fn place_order_input_to_json(input: &PlaceOrderInput, builder_fee: u32) -> Value
     })
 }
 
-/// Load the owner-scoped saved approval and re-check it with Hyperliquid for
-/// every outgoing batch. Missing, stale, malformed, or insufficient approval
-/// is deliberately a validation failure so no exchange call can occur.
+/// Load the owner-scoped saved fee and the owner context needed for post-order
+/// approval reconciliation. Hyperliquid approval is intentionally not checked
+/// here; orders submit optimistically with the saved fee.
 #[derive(Debug, sqlx::FromRow)]
 struct BuilderFeeOwnerRow {
+    user_id: Uuid,
     wallet_address: String,
     builder_fee_tenths_of_bp: i16,
     builder_fee_approved_at: Option<chrono::DateTime<Utc>>,
@@ -694,13 +713,17 @@ struct BuilderFeeOwnerRow {
     private_key_key_id: Option<String>,
 }
 
-async fn load_builder_fee(
-    pool: &DbPool,
-    exchange: &dyn ExchangeClient,
-    agent_key: &str,
-) -> Result<u32, GatewayError> {
+#[derive(Debug)]
+struct BuilderFeeOwner {
+    user_id: Uuid,
+    wallet_address: String,
+    saved_fee: u32,
+    approval_recorded: bool,
+}
+
+async fn load_builder_fee(pool: &DbPool, agent_key: &str) -> Result<BuilderFeeOwner, GatewayError> {
     let row = sqlx::query_as::<_, BuilderFeeOwnerRow>(
-        "SELECT users.wallet_address, users.builder_fee_tenths_of_bp,
+        "SELECT users.id AS user_id, users.wallet_address, users.builder_fee_tenths_of_bp,
                 users.builder_fee_approved_at, agents.lifecycle,
                 users.api_wallet_expires_at, users.api_wallet_expiry_checked_at,
                 users.hyperliquid_private_key_ciphertext AS private_key_ciphertext,
@@ -737,23 +760,120 @@ async fn load_builder_fee(
             "the user's trading signer needs attention".into(),
         ));
     }
-    if owner_row.builder_fee_approved_at.is_none() || owner_row.builder_fee_tenths_of_bp <= 0 {
+    if owner_row.builder_fee_tenths_of_bp <= 0 {
         return Err(GatewayError::Validation(
-            "builder fee has not been approved".into(),
+            "builder fee must be positive".into(),
         ));
     }
     let saved_fee = u32::try_from(owner_row.builder_fee_tenths_of_bp)
-        .map_err(|_| GatewayError::Validation("builder fee has not been approved".into()))?;
-    let approved_fee = exchange
-        .max_builder_fee(&owner_row.wallet_address, BUILDER_RECIPIENT)
-        .await
-        .map_err(|_| GatewayError::Validation("unable to verify builder fee approval".into()))?;
-    if approved_fee == 0 || approved_fee < saved_fee {
-        return Err(GatewayError::Validation(
-            "builder fee approval is insufficient".into(),
-        ));
+        .map_err(|_| GatewayError::Validation("builder fee must be positive".into()))?;
+    Ok(BuilderFeeOwner {
+        user_id: owner_row.user_id,
+        wallet_address: owner_row.wallet_address,
+        saved_fee,
+        approval_recorded: owner_row.builder_fee_approved_at.is_some(),
+    })
+}
+
+/// Hyperliquid has no stable numeric code for this rejection, so keep the
+/// compatibility heuristic narrow and isolated from order handling.
+fn is_builder_fee_rejection(message: &str) -> bool {
+    let message = message.to_ascii_lowercase();
+    message.contains("builder")
+        && message.contains("fee")
+        && (message.contains("approval")
+            || message.contains("approved")
+            || message.contains("permission"))
+}
+
+async fn reconcile_builder_fee_rejection(
+    pool: &DbPool,
+    cache: &BuilderFeeCache,
+    owner: &BuilderFeeOwner,
+    saved_fee: u32,
+    message: &str,
+) -> Option<u32> {
+    if !is_builder_fee_rejection(message) {
+        return None;
     }
-    Ok(saved_fee)
+    let remote_max = match cache
+        .refresh(&owner.wallet_address, BUILDER_RECIPIENT)
+        .await
+    {
+        Ok(maximum) => maximum,
+        Err(error) => {
+            tracing::warn!(
+                user_id = %owner.user_id,
+                error = %error,
+                "builder fee rejection follow-up lookup failed"
+            );
+            return None;
+        }
+    };
+    if let Some(remote_fee) = remote_max
+        .min(MAX_BUILDER_FEE_TENTHS_OF_BP)
+        .try_into()
+        .ok()
+        .filter(|fee: &i16| *fee > 0)
+        && let Err(error) = sqlx::query(
+            "UPDATE users SET builder_fee_tenths_of_bp = $2, updated_at = now()
+               WHERE id = $1",
+        )
+        .bind(owner.user_id)
+        .bind(remote_fee)
+        .execute(pool)
+        .await
+    {
+        tracing::warn!(
+            user_id = %owner.user_id,
+            error = %error,
+            "failed to persist remote builder fee maximum"
+        );
+    }
+    if remote_max < saved_fee
+        && let Err(error) = sqlx::query(
+            "UPDATE users SET builder_fee_approved_at = NULL, updated_at = now()
+               WHERE id = $1 AND builder_fee_approved_at IS NOT NULL",
+        )
+        .bind(owner.user_id)
+        .execute(pool)
+        .await
+    {
+        tracing::warn!(
+            user_id = %owner.user_id,
+            error = %error,
+            "failed to clear insufficient builder fee approval"
+        );
+    }
+    Some(remote_max)
+}
+
+async fn record_order_evidence(
+    pool: &DbPool,
+    cache: &BuilderFeeCache,
+    owner: &BuilderFeeOwner,
+    saved_fee: u32,
+) {
+    cache
+        .record_order_evidence(&owner.wallet_address, BUILDER_RECIPIENT, saved_fee)
+        .await;
+    if owner.approval_recorded {
+        return;
+    }
+    if let Err(error) = sqlx::query(
+        "UPDATE users SET builder_fee_approved_at = now(), updated_at = now()
+           WHERE id = $1 AND builder_fee_approved_at IS NULL",
+    )
+    .bind(owner.user_id)
+    .execute(pool)
+    .await
+    {
+        tracing::warn!(
+            user_id = %owner.user_id,
+            error = %error,
+            "failed to record successful builder fee order evidence"
+        );
+    }
 }
 
 fn trigger_input_to_json(t: &super::model::TriggerInput) -> Value {
@@ -1072,11 +1192,15 @@ pub struct CancelAllSummary {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
     use super::super::model;
     use rust_decimal_macros::dec;
     use tokio::sync::Mutex;
 
     use super::*;
+    use crate::hyperliquid::builder_fee::{BuilderFeeLookup, LookupFuture};
     use crate::{
         agents::{
             crypto::{EncryptionKey, encrypt},
@@ -1103,7 +1227,32 @@ mod tests {
         last_place_batch: Mutex<Option<BatchOrder>>,
         last_cancel_batch: Mutex<Option<BatchCancel>>,
         place_call_count: Mutex<usize>,
-        max_builder_fee: Mutex<Option<Result<u32, String>>>,
+    }
+
+    struct TestBuilderFeeLookup {
+        result: Mutex<Result<u32, String>>,
+        calls: AtomicUsize,
+    }
+
+    impl BuilderFeeLookup for TestBuilderFeeLookup {
+        fn max_builder_fee<'a>(&'a self, _user: &'a str, _builder: &'a str) -> LookupFuture<'a> {
+            Box::pin(async move {
+                self.calls.fetch_add(1, Ordering::SeqCst);
+                self.result.lock().await.clone()
+            })
+        }
+    }
+
+    fn test_cache() -> BuilderFeeCache {
+        configured_cache(Ok(10)).0
+    }
+
+    fn configured_cache(result: Result<u32, &str>) -> (BuilderFeeCache, Arc<TestBuilderFeeLookup>) {
+        let lookup = Arc::new(TestBuilderFeeLookup {
+            result: Mutex::new(result.map_err(str::to_string)),
+            calls: AtomicUsize::new(0),
+        });
+        (BuilderFeeCache::new(lookup.clone()), lookup)
     }
 
     impl FakeExchange {
@@ -1126,12 +1275,6 @@ mod tests {
         async fn with_place_error(msg: &str) -> Self {
             let me = Self::new().await;
             *me.place_err.lock().await = Some(msg.to_string());
-            me
-        }
-
-        async fn with_max_builder_fee(result: Result<u32, &str>) -> Self {
-            let me = Self::new().await;
-            *me.max_builder_fee.lock().await = Some(result.map_err(str::to_string));
             me
         }
     }
@@ -1170,14 +1313,6 @@ mod tests {
 
         fn all_mids<'a>(&'a self) -> BoxFuture<'a, Result<HashMap<String, Decimal>, String>> {
             Box::pin(async move { Ok(self.mids.lock().await.clone()) })
-        }
-
-        fn max_builder_fee<'a>(
-            &'a self,
-            _user: &'a str,
-            _builder: &'a str,
-        ) -> BoxFuture<'a, Result<u32, String>> {
-            Box::pin(async move { self.max_builder_fee.lock().await.clone().unwrap_or(Ok(10)) })
         }
     }
 
@@ -1283,9 +1418,17 @@ mod tests {
         let req = PlaceOrdersRequest {
             orders: vec![limit_buy("BTC", dec!(0.1), dec!(50000))],
         };
-        let resp = place_orders(&pool, &exchange, &agent_key, &account, "live", &req)
-            .await
-            .expect("place_orders ok");
+        let resp = place_orders(
+            &pool,
+            &exchange,
+            &test_cache(),
+            &agent_key,
+            &account,
+            "live",
+            &req,
+        )
+        .await
+        .expect("place_orders ok");
 
         assert_eq!(resp.results.len(), 1);
         let r = &resp.results[0];
@@ -1367,9 +1510,17 @@ mod tests {
         let req = PlaceOrdersRequest {
             orders: vec![input],
         };
-        let resp = place_orders(&pool, &exchange, &agent_key, &account, "live", &req)
-            .await
-            .expect("place ok");
+        let resp = place_orders(
+            &pool,
+            &exchange,
+            &test_cache(),
+            &agent_key,
+            &account,
+            "live",
+            &req,
+        )
+        .await
+        .expect("place ok");
         assert_eq!(resp.results.len(), 3);
 
         let stored = store::list_orders(&pool, &agent_key, None, None, None, None, None)
@@ -1415,7 +1566,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn builder_fee_validation_failures_do_not_call_the_exchange() {
+    async fn missing_approval_marker_does_not_block_order_submission() {
         let pool = test_db::pool().await;
         let (agent_key, account) = seed(&pool, "fee-invalid").await;
         seed_instrument(&pool, "BTC", 0, 5).await;
@@ -1428,28 +1579,31 @@ mod tests {
             .execute(&pool)
             .await
             .expect("clear saved approval");
-        let absent = FakeExchange::new().await;
-        assert!(
-            place_orders(&pool, &absent, &agent_key, &account, "live", &req)
+        let exchange = FakeExchange::with_place_statuses(vec![OrderResponseStatus::Resting {
+            oid: 1,
+            cloid: None,
+        }])
+        .await;
+        let response = place_orders(
+            &pool,
+            &exchange,
+            &test_cache(),
+            &agent_key,
+            &account,
+            "live",
+            &req,
+        )
+        .await
+        .expect("saved fee is submitted without local approval marker");
+        assert_eq!(response.results[0].status, "resting");
+        assert_eq!(*exchange.place_call_count.lock().await, 1);
+        let (approved_at,): (Option<chrono::DateTime<Utc>>,) =
+            sqlx::query_as("SELECT builder_fee_approved_at FROM users WHERE id = $1")
+                .bind(crate::test_db::test_user_id())
+                .fetch_one(&pool)
                 .await
-                .is_err()
-        );
-        assert_eq!(*absent.place_call_count.lock().await, 0);
-
-        sqlx::query("UPDATE users SET builder_fee_approved_at = now() WHERE id = $1")
-            .bind(crate::test_db::test_user_id())
-            .execute(&pool)
-            .await
-            .expect("restore saved approval");
-        for approval in [Ok(0), Ok(9), Err("info unavailable")] {
-            let exchange = FakeExchange::with_max_builder_fee(approval).await;
-            assert!(
-                place_orders(&pool, &exchange, &agent_key, &account, "live", &req)
-                    .await
-                    .is_err()
-            );
-            assert_eq!(*exchange.place_call_count.lock().await, 0);
-        }
+                .expect("read approval evidence");
+        assert!(approved_at.is_some());
 
         sqlx::query("UPDATE agents SET lifecycle = 'pending_funding' WHERE agent_key = $1")
             .bind(&agent_key)
@@ -1458,11 +1612,175 @@ mod tests {
             .expect("deactivate agent");
         let inactive = FakeExchange::new().await;
         assert!(
-            place_orders(&pool, &inactive, &agent_key, &account, "live", &req)
-                .await
-                .is_err()
+            place_orders(
+                &pool,
+                &inactive,
+                &test_cache(),
+                &agent_key,
+                &account,
+                "live",
+                &req
+            )
+            .await
+            .is_err()
         );
         assert_eq!(*inactive.place_call_count.lock().await, 0);
+    }
+
+    #[tokio::test]
+    async fn builder_rejection_refreshes_once_and_clears_insufficient_approval() {
+        let pool = test_db::pool().await;
+        let (agent_key, account) = seed(&pool, "fee-rejected").await;
+        seed_instrument(&pool, "BTC", 0, 5).await;
+        let exchange = FakeExchange::with_place_statuses(vec![OrderResponseStatus::Error(
+            "builder fee approval rejected".to_string(),
+        )])
+        .await;
+        let (cache, lookup) = configured_cache(Ok(9));
+        let req = PlaceOrdersRequest {
+            orders: vec![limit_buy("BTC", dec!(0.1), dec!(50000))],
+        };
+
+        let response = place_orders(&pool, &exchange, &cache, &agent_key, &account, "live", &req)
+            .await
+            .expect("rejection is returned as an order result");
+        assert_eq!(response.results[0].status, "rejected");
+        assert_eq!(*exchange.place_call_count.lock().await, 1);
+        assert_eq!(lookup.calls.load(Ordering::SeqCst), 1);
+        let (approved_at,): (Option<chrono::DateTime<Utc>>,) =
+            sqlx::query_as("SELECT builder_fee_approved_at FROM users WHERE id = $1")
+                .bind(crate::test_db::test_user_id())
+                .fetch_one(&pool)
+                .await
+                .expect("read approval");
+        assert!(approved_at.is_none());
+        let (saved_fee,): (i16,) =
+            sqlx::query_as("SELECT builder_fee_tenths_of_bp FROM users WHERE id = $1")
+                .bind(crate::test_db::test_user_id())
+                .fetch_one(&pool)
+                .await
+                .expect("read synchronized fee");
+        assert_eq!(saved_fee, 9);
+    }
+
+    #[tokio::test]
+    async fn multiple_builder_rejections_and_whole_call_rejection_refresh_once() {
+        let pool = test_db::pool().await;
+        let (agent_key, account) = seed(&pool, "fee-many-rejected").await;
+        seed_instrument(&pool, "BTC", 0, 5).await;
+        let mut input = limit_buy("BTC", dec!(0.1), dec!(50000));
+        input.take_profits = vec![model::TriggerInput {
+            trigger_price: dec!(55000),
+            limit_price: Some(dec!(55100)),
+            size: None,
+        }];
+        input.stop_losses = vec![model::TriggerInput {
+            trigger_price: dec!(48000),
+            limit_price: None,
+            size: None,
+        }];
+        let req = PlaceOrdersRequest {
+            orders: vec![input],
+        };
+        let exchange = FakeExchange::with_place_statuses(vec![
+            OrderResponseStatus::Error("builder fee approval denied".to_string()),
+            OrderResponseStatus::Error("BUILDER FEE permission denied".to_string()),
+            OrderResponseStatus::Error("builder fee not approved".to_string()),
+        ])
+        .await;
+        let (cache, lookup) = configured_cache(Ok(9));
+        let response = place_orders(&pool, &exchange, &cache, &agent_key, &account, "live", &req)
+            .await
+            .expect("per-leg rejection response");
+        assert_eq!(response.results.len(), 3);
+        assert!(
+            response
+                .results
+                .iter()
+                .all(|result| result.status == "rejected")
+        );
+        assert_eq!(lookup.calls.load(Ordering::SeqCst), 1);
+
+        let whole_error = FakeExchange::with_place_error("builder fee approval rejected").await;
+        let (whole_cache, whole_lookup) = configured_cache(Ok(9));
+        let whole_response = place_orders(
+            &pool,
+            &whole_error,
+            &whole_cache,
+            &agent_key,
+            &account,
+            "live",
+            &PlaceOrdersRequest {
+                orders: vec![limit_buy("BTC", dec!(0.1), dec!(50000))],
+            },
+        )
+        .await
+        .expect("whole-call rejection response");
+        assert_eq!(
+            whole_response.results[0].error.as_deref(),
+            Some("builder fee approval rejected")
+        );
+        assert_eq!(whole_lookup.calls.load(Ordering::SeqCst), 1);
+        assert_eq!(*whole_error.place_call_count.lock().await, 1);
+    }
+
+    #[tokio::test]
+    async fn unrelated_rejection_and_failed_follow_up_preserve_local_state() {
+        let pool = test_db::pool().await;
+        let (agent_key, account) = seed(&pool, "fee-unrelated").await;
+        seed_instrument(&pool, "BTC", 0, 5).await;
+        let unrelated = FakeExchange::with_place_statuses(vec![OrderResponseStatus::Error(
+            "insufficient margin".to_string(),
+        )])
+        .await;
+        let (unrelated_cache, unrelated_lookup) = configured_cache(Ok(9));
+        let req = PlaceOrdersRequest {
+            orders: vec![limit_buy("BTC", dec!(0.1), dec!(50000))],
+        };
+        place_orders(
+            &pool,
+            &unrelated,
+            &unrelated_cache,
+            &agent_key,
+            &account,
+            "live",
+            &req,
+        )
+        .await
+        .expect("unrelated rejection response");
+        assert_eq!(unrelated_lookup.calls.load(Ordering::SeqCst), 0);
+
+        let failed_follow_up =
+            FakeExchange::with_place_error("builder fee approval rejected").await;
+        let (failed_cache, failed_lookup) = configured_cache(Err("info unavailable"));
+        place_orders(
+            &pool,
+            &failed_follow_up,
+            &failed_cache,
+            &agent_key,
+            &account,
+            "live",
+            &req,
+        )
+        .await
+        .expect("original whole-call error response");
+        assert_eq!(failed_lookup.calls.load(Ordering::SeqCst), 1);
+        let (approved_at,): (Option<chrono::DateTime<Utc>>,) =
+            sqlx::query_as("SELECT builder_fee_approved_at FROM users WHERE id = $1")
+                .bind(crate::test_db::test_user_id())
+                .fetch_one(&pool)
+                .await
+                .expect("read approval");
+        assert!(approved_at.is_some());
+        assert_eq!(*failed_follow_up.place_call_count.lock().await, 1);
+    }
+
+    #[test]
+    fn builder_fee_rejection_matcher_requires_approval_language() {
+        assert!(is_builder_fee_rejection("Builder fee approval rejected"));
+        assert!(is_builder_fee_rejection("builder fee permission denied"));
+        assert!(!is_builder_fee_rejection("builder fee too high"));
+        assert!(!is_builder_fee_rejection("insufficient margin"));
     }
 
     #[tokio::test]
@@ -1516,13 +1834,28 @@ mod tests {
             cloid: None,
         }])
         .await;
-        *b_exchange.max_builder_fee.lock().await = Some(Ok(17));
-        place_orders(&pool, &a_exchange, &a_key, &a_account, "live", &req)
-            .await
-            .expect("first owner order");
-        place_orders(&pool, &b_exchange, &b_key, &b_account, "live", &req)
-            .await
-            .expect("second owner order");
+        place_orders(
+            &pool,
+            &a_exchange,
+            &test_cache(),
+            &a_key,
+            &a_account,
+            "live",
+            &req,
+        )
+        .await
+        .expect("first owner order");
+        place_orders(
+            &pool,
+            &b_exchange,
+            &test_cache(),
+            &b_key,
+            &b_account,
+            "live",
+            &req,
+        )
+        .await
+        .expect("second owner order");
         assert_eq!(
             a_exchange
                 .last_place_batch
@@ -1570,9 +1903,17 @@ mod tests {
         let req = PlaceOrdersRequest {
             orders: vec![limit_buy("PURR/USDC", dec!(1), dec!(1))],
         };
-        let error = place_orders(&pool, &exchange, &agent_key, &account, "live", &req)
-            .await
-            .expect_err("spot order must be rejected");
+        let error = place_orders(
+            &pool,
+            &exchange,
+            &test_cache(),
+            &agent_key,
+            &account,
+            "live",
+            &req,
+        )
+        .await
+        .expect_err("spot order must be rejected");
         assert!(error.to_string().contains("unsupported"));
         assert_eq!(*exchange.place_call_count.lock().await, 0);
     }
@@ -1598,9 +1939,17 @@ mod tests {
         let req = PlaceOrdersRequest {
             orders: vec![input],
         };
-        let resp = place_orders(&pool, &ex, &agent_key, &account, "live", &req)
-            .await
-            .expect("place ok");
+        let resp = place_orders(
+            &pool,
+            &ex,
+            &test_cache(),
+            &agent_key,
+            &account,
+            "live",
+            &req,
+        )
+        .await
+        .expect("place ok");
 
         assert_eq!(resp.results.len(), 1);
         assert_eq!(resp.results[0].status, "filled");
@@ -1627,9 +1976,17 @@ mod tests {
         let req = PlaceOrdersRequest {
             orders: vec![limit_buy("NOPE", dec!(0.1), dec!(100))],
         };
-        let err = place_orders(&pool, &exchange, &agent_key, &account, "live", &req)
-            .await
-            .expect_err("validation error");
+        let err = place_orders(
+            &pool,
+            &exchange,
+            &test_cache(),
+            &agent_key,
+            &account,
+            "live",
+            &req,
+        )
+        .await
+        .expect_err("validation error");
         match err {
             GatewayError::Validation(s) => assert!(s.contains("NOPE")),
             other => panic!("expected Validation, got {other:?}"),
@@ -1654,9 +2011,17 @@ mod tests {
             orders: vec![input],
         };
 
-        let resp = place_orders(&pool, &exchange, &agent_key, &account, "live", &req)
-            .await
-            .expect("error path returns Ok with per-leg errors");
+        let resp = place_orders(
+            &pool,
+            &exchange,
+            &test_cache(),
+            &agent_key,
+            &account,
+            "live",
+            &req,
+        )
+        .await
+        .expect("error path returns Ok with per-leg errors");
         assert_eq!(resp.results.len(), 2);
         for r in &resp.results {
             assert_eq!(r.status, "error");
@@ -1685,9 +2050,17 @@ mod tests {
         let req = PlaceOrdersRequest {
             orders: vec![limit_buy("BTC", dec!(0.1), dec!(50000))],
         };
-        place_orders(&pool, &place_ex, &agent_key, &account, "live", &req)
-            .await
-            .expect("place ok");
+        place_orders(
+            &pool,
+            &place_ex,
+            &test_cache(),
+            &agent_key,
+            &account,
+            "live",
+            &req,
+        )
+        .await
+        .expect("place ok");
 
         // Now cancel it.
         let cancel_ex =
@@ -1729,9 +2102,17 @@ mod tests {
         let req = PlaceOrdersRequest {
             orders: vec![limit_buy("BTC", dec!(0.1), dec!(50000))],
         };
-        place_orders(&pool, &place_ex, &a_key, &a_acct, "live", &req)
-            .await
-            .expect("place ok");
+        place_orders(
+            &pool,
+            &place_ex,
+            &test_cache(),
+            &a_key,
+            &a_acct,
+            "live",
+            &req,
+        )
+        .await
+        .expect("place ok");
 
         // Agent B tries to cancel it.
         let cancel_ex =
@@ -1802,9 +2183,17 @@ mod tests {
         let req = PlaceOrdersRequest {
             orders: vec![limit_buy("BTC", dec!(0.1), dec!(50000))],
         };
-        place_orders(&pool, &place_ex, &agent_key, &account, "live", &req)
-            .await
-            .expect("place ok");
+        place_orders(
+            &pool,
+            &place_ex,
+            &test_cache(),
+            &agent_key,
+            &account,
+            "live",
+            &req,
+        )
+        .await
+        .expect("place ok");
 
         // Cancel: the FakeExchange returns an empty status vec
         // (no `with_cancel_statuses` was called). Previously this
@@ -1837,9 +2226,17 @@ mod tests {
         let (agent_key, account) = seed(&pool, "vempty").await;
         let ex = FakeExchange::new().await;
         let req = PlaceOrdersRequest { orders: vec![] };
-        let err = place_orders(&pool, &ex, &agent_key, &account, "live", &req)
-            .await
-            .expect_err("validation");
+        let err = place_orders(
+            &pool,
+            &ex,
+            &test_cache(),
+            &agent_key,
+            &account,
+            "live",
+            &req,
+        )
+        .await
+        .expect_err("validation");
         match err {
             GatewayError::Validation(s) => assert!(s.contains("empty")),
             other => panic!("expected Validation, got {other:?}"),
@@ -1854,9 +2251,17 @@ mod tests {
         let mut bad = limit_buy("BTC", dec!(-1), dec!(50000));
         bad.symbol = "BTC".to_string();
         let req = PlaceOrdersRequest { orders: vec![bad] };
-        let err = place_orders(&pool, &ex, &agent_key, &account, "live", &req)
-            .await
-            .expect_err("validation");
+        let err = place_orders(
+            &pool,
+            &ex,
+            &test_cache(),
+            &agent_key,
+            &account,
+            "live",
+            &req,
+        )
+        .await
+        .expect_err("validation");
         match err {
             GatewayError::Validation(s) => assert!(s.contains("size")),
             other => panic!("expected Validation, got {other:?}"),

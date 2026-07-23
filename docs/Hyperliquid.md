@@ -93,6 +93,23 @@ Market orders use the configured conservative slippage limit before rounding.
 The gateway stores both requested and rounded values, which preserves the
 execution audit trail.
 
+### Builder Fees
+
+Eligible perp orders submit the per-user builder fee and the server-side
+builder address on every batch. The application does not preflight
+`maxBuilderFee` before each order or on every account-page request. Instead,
+the current remote maximum is looked up lazily on the first account-page
+request for a user and builder, then cached in process memory and synchronized
+back to the local fee setting. A builder-fee-specific order rejection forces
+one targeted refresh. The in-process cache is cleared when the process
+restarts, while the database remains synchronized by successful lookups.
+
+The builder address is part of the lookup key and comes from the server-side
+constant; Hyperliquid returns only the numeric maximum. A successful signed
+approval and a successful order update the local cache without another lookup.
+Orders are never automatically retried after a builder-fee rejection; the
+original exchange result is retained for the agent and user to resolve.
+
 ## Deferred Work
 
 The following remain intentional future work:

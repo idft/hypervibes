@@ -223,6 +223,7 @@ pub(super) async fn place_orders_handler(
     let resp = place_orders(
         &state.db_pool,
         &exchange,
+        &state.builder_fee_cache,
         &agent.agent_key,
         &account_address,
         &environment,

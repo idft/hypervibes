@@ -1,4 +1,5 @@
 pub mod account_sync;
+pub mod builder_fee;
 pub mod config;
 pub mod historical;
 pub mod instruments;

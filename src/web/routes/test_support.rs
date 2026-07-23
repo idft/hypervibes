@@ -22,6 +22,7 @@ use crate::{
             upsert_agent_strategy_prompt,
         },
     },
+    hyperliquid::builder_fee::{BuilderFeeCache, BuilderFeeLookup, LookupFuture},
     memory::CreateMemory,
     opencode::workspace::{
         OpenCodeWorkspaceAgent, WorkspaceGenerationMode, generate_agent_workspace,
@@ -34,6 +35,14 @@ use axum::response::Response;
 use http_body_util::BodyExt as _;
 
 pub(in crate::web::routes) struct NoopAgenticBackend;
+
+struct TestBuilderFeeLookup;
+
+impl BuilderFeeLookup for TestBuilderFeeLookup {
+    fn max_builder_fee<'a>(&'a self, _user: &'a str, _builder: &'a str) -> LookupFuture<'a> {
+        Box::pin(async { Ok(10) })
+    }
+}
 #[async_trait]
 impl AgenticBackend for NoopAgenticBackend {
     async fn dispatch(&self, _request: DispatchRequest) -> Result<DispatchResult> {
@@ -106,6 +115,7 @@ pub(in crate::web::routes) async fn test_state_with_backend_and_shutdown(
         )
         .unwrap(),
         asset_cache: Arc::new(crate::cache::asset::AssetCache::new(cache_dir).unwrap()),
+        builder_fee_cache: Arc::new(BuilderFeeCache::new(Arc::new(TestBuilderFeeLookup))),
         in_flight: crate::agentic::in_flight::InFlightTracker::new(),
         workspace_leases: crate::agentic::workspace_lease::WorkspaceLeaseManager::new(),
         shutdown_rx,

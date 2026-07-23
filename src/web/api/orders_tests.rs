@@ -175,7 +175,7 @@ async fn post_orders_rejects_symbol_not_selected_for_agent() {
 }
 
 #[tokio::test]
-async fn post_orders_selected_symbol_proceeds_past_selection_validation() {
+async fn post_orders_selected_symbol_submits_saved_builder_fee() {
     let state = test_state().await;
     let (agent_key, api_key) = seed_agent(&state, "ord-symbol-enabled").await;
     seed_instrument(&state, "BTC", true).await;
@@ -202,12 +202,12 @@ async fn post_orders_selected_symbol_proceeds_past_selection_validation() {
         .oneshot(builder.body(body).unwrap())
         .await
         .unwrap();
-    assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(response.status(), StatusCode::CREATED);
     let body_bytes = axum::body::to_bytes(response.into_body(), 16 * 1024)
         .await
         .unwrap();
     let body: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
-    assert_eq!(body["error"], json!("builder fee has not been approved"));
+    assert!(body["results"].is_array());
 }
 
 #[tokio::test]

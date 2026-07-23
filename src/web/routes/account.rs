@@ -19,7 +19,7 @@ use tracing::warn;
 
 use crate::{
     agents::store::list_agents_for_user,
-    hyperliquid::orders::gateway::BUILDER_RECIPIENT,
+    hyperliquid::builder_fee::{BUILDER_RECIPIENT, MAX_BUILDER_FEE_TENTHS_OF_BP},
     web::{
         AppState,
         auth::{
@@ -509,12 +509,64 @@ pub(in crate::web::routes) async fn account_index(
     State(state): State<Arc<AppState>>,
     user: AuthenticatedUser,
 ) -> Result<Html<String>, AppError> {
-    let row: (i16, Option<chrono::DateTime<chrono::Utc>>) = sqlx::query_as(
+    let mut row: (i16, Option<chrono::DateTime<chrono::Utc>>) = sqlx::query_as(
         "SELECT builder_fee_tenths_of_bp, builder_fee_approved_at FROM users WHERE id = $1",
     )
     .bind(user.id)
     .fetch_one(&state.db_pool)
     .await?;
+    let builder_fee_approved = match state
+        .builder_fee_cache
+        .max_builder_fee(&user.wallet_address, BUILDER_RECIPIENT)
+        .await
+    {
+        Ok(remote_max) => {
+            let covered = u32::try_from(row.0)
+                .ok()
+                .is_some_and(|saved_fee| saved_fee > 0 && remote_max >= saved_fee);
+            if let Some(remote_fee) = remote_max
+                .min(MAX_BUILDER_FEE_TENTHS_OF_BP)
+                .try_into()
+                .ok()
+                .filter(|fee: &i16| *fee > 0)
+                && row.0 != remote_fee
+            {
+                sqlx::query(
+                    "UPDATE users SET builder_fee_tenths_of_bp = $2, updated_at = now()
+                       WHERE id = $1",
+                )
+                .bind(user.id)
+                .bind(remote_fee)
+                .execute(&state.db_pool)
+                .await?;
+                row.0 = remote_fee;
+            }
+            if covered && row.1.is_none() {
+                sqlx::query(
+                    "UPDATE users SET builder_fee_approved_at = now(), updated_at = now()
+                       WHERE id = $1 AND builder_fee_approved_at IS NULL",
+                )
+                .bind(user.id)
+                .execute(&state.db_pool)
+                .await?;
+                row.1 = Some(chrono::Utc::now());
+            } else if !covered && row.1.is_some() {
+                sqlx::query(
+                    "UPDATE users SET builder_fee_approved_at = NULL, updated_at = now()
+                       WHERE id = $1 AND builder_fee_approved_at IS NOT NULL",
+                )
+                .bind(user.id)
+                .execute(&state.db_pool)
+                .await?;
+                row.1 = None;
+            }
+            covered
+        }
+        Err(error) => {
+            warn!(user_id = %user.id, error = %error, "builder fee approval lookup failed");
+            row.1.is_some()
+        }
+    };
     let api_wallet = get_user_api_wallet(&state.db_pool, user.id).await?;
     let wallet_address = api_wallet
         .as_ref()
@@ -538,7 +590,7 @@ pub(in crate::web::routes) async fn account_index(
     let transfers_enabled =
         owned_accounts.account_mode == AccountMode::Unified && accounts.len() >= 2;
     let navbar = crate::web::templates::load_navbar(&state.db_pool, user.id).await?;
-    let fee_bps = if row.1.is_some() && row.0 > 0 && row.0 % BUILDER_FEE_BPS_TO_TENTHS == 0 {
+    let fee_bps = if row.0 > 0 && row.0 % BUILDER_FEE_BPS_TO_TENTHS == 0 {
         (row.0 / BUILDER_FEE_BPS_TO_TENTHS).clamp(MIN_BUILDER_FEE_BPS, MAX_BUILDER_FEE_BPS)
     } else {
         DEFAULT_BUILDER_FEE_BPS
@@ -569,7 +621,7 @@ pub(in crate::web::routes) async fn account_index(
                     .and_then(|wallet| wallet.api_wallet_expires_at),
             ),
             api_wallet_show_expired: api_wallet_show_expired(api_wallet.as_ref()),
-            builder_fee_approved: row.1.is_some(),
+            builder_fee_approved,
             navbar,
         }
         .render()?,
@@ -651,6 +703,14 @@ pub(in crate::web::routes) async fn approve_builder_fee(
     };
     sqlx::query("UPDATE users SET builder_fee_tenths_of_bp = $2, builder_fee_approved_at = now(), updated_at = now() WHERE id = $1")
         .bind(user.id).bind(fee_tenths_of_bp).execute(&state.db_pool).await?;
+    state
+        .builder_fee_cache
+        .record_approval(
+            &user.wallet_address,
+            BUILDER_RECIPIENT,
+            u32::try_from(fee_tenths_of_bp).expect("validated builder fee fits u32"),
+        )
+        .await;
     Ok(Json(json!({"status":"ok", "redirect":"/account"})).into_response())
 }
 

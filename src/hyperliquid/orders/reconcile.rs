@@ -814,13 +814,6 @@ mod tests {
         {
             Box::pin(async { Ok(Default::default()) })
         }
-        fn max_builder_fee<'a>(
-            &'a self,
-            _user: &'a str,
-            _builder: &'a str,
-        ) -> BoxFuture<'a, Result<u32, String>> {
-            Box::pin(async { Ok(10) })
-        }
     }
 
     #[tokio::test]

@@ -20,11 +20,20 @@ use crate::{
             upsert_agent_strategy_prompt,
         },
     },
+    hyperliquid::builder_fee::{BuilderFeeCache, BuilderFeeLookup, LookupFuture},
     test_db,
     web::{AppState, api, run_detail_events::RunDetailEventHub, ui_events::UiEventHub},
 };
 
 pub struct NoopAgenticBackend;
+
+struct TestBuilderFeeLookup;
+
+impl BuilderFeeLookup for TestBuilderFeeLookup {
+    fn max_builder_fee<'a>(&'a self, _user: &'a str, _builder: &'a str) -> LookupFuture<'a> {
+        Box::pin(async { Ok(10) })
+    }
+}
 
 #[async_trait]
 impl AgenticBackend for NoopAgenticBackend {
@@ -72,6 +81,7 @@ pub async fn test_state() -> Arc<AppState> {
         )
         .unwrap(),
         asset_cache: Arc::new(crate::cache::asset::AssetCache::new(cache_dir).unwrap()),
+        builder_fee_cache: Arc::new(BuilderFeeCache::new(Arc::new(TestBuilderFeeLookup))),
         in_flight: crate::agentic::in_flight::InFlightTracker::new(),
         workspace_leases: crate::agentic::workspace_lease::WorkspaceLeaseManager::new(),
         shutdown_rx,
