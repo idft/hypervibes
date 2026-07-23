@@ -36,7 +36,7 @@ use crate::{
     hyperliquid::live_state::{LiveAccountStore, live_agent_snapshot_for_dispatch},
     memory::{delete_memories_for_agent, get_latest_agent_memory_by_type},
     opencode::{
-        client::OpenCodeClient,
+        client::{OpenCodeClient, SessionStatusKind},
         coding_workspace::{
             PromotionJournalPhase, candidate_container_root, changed_paths,
             list_promotion_journals, live_user_root, manifest_hash, manifest_tree,
@@ -438,6 +438,45 @@ impl AgenticScheduler {
             if task.task_kind != crate::agentic::model::MAINTENANCE_TASK_KIND_ANALYSIS_CODING {
                 continue;
             }
+            let candidate_directory = candidate_container_root(
+                &self.opencode_workspace_config,
+                &task.agent_key,
+                task.id,
+            )?;
+            if let Some(run_id) = task.run_id
+                && let Some(run) = store::get_run(&self.pool, run_id).await?
+                && coding_run_exceeded_timeout(run.started_at, run.timeout_seconds, now)
+            {
+                let mut summary =
+                    format!("coding run exceeded timeout of {}s", run.timeout_seconds);
+                if let Some(session_id) = run.backend_run_ref
+                    && let Some(hook_id) = task.parameter_i64("hook_id")
+                    && let Some(hook) = store::get_opencode_hook_for_dispatch(
+                        &self.pool,
+                        &task.agent_key,
+                        hook_id,
+                        self.opencode_client.base_url(),
+                    )
+                    .await?
+                {
+                    match self
+                        .backend
+                        .abort_session(&hook.opencode_base_url, &session_id)
+                        .await
+                    {
+                        Ok(true) => summary.push_str("; OpenCode session aborted"),
+                        Ok(false) => summary.push_str("; OpenCode declined session abort"),
+                        Err(error) => {
+                            warn!(task_id = task.id, session_id, error = ?error, "failed to abort overdue coding session");
+                            summary.push_str("; failed to abort OpenCode session");
+                        }
+                    }
+                }
+                warn!(task_id = task.id, run_id, summary = %summary, "recovering overdue coding task");
+                store::mark_maintenance_task_failed(&self.pool, task.id, &summary).await?;
+                store::mark_run_failed(&self.pool, run_id, &summary, None).await?;
+                continue;
+            }
             if task.phase == crate::agentic::model::MAINTENANCE_PHASE_GENERATING
                 && let Some(run_id) = task.run_id
                 && let Some(run) = store::get_run(&self.pool, run_id).await?
@@ -452,7 +491,11 @@ impl AgenticScheduler {
                 .await?
                 && let Some(status) = self
                     .backend
-                    .get_session_status(&hook.opencode_base_url, &session_id)
+                    .get_session_status_in_directory(
+                        &hook.opencode_base_url,
+                        &session_id,
+                        Some(&candidate_directory),
+                    )
                     .await?
                 && status.is_active()
             {
@@ -624,6 +667,7 @@ async fn process_workspace_maintenance_tasks(
 }
 
 const CODING_QUEUE_LIMIT: i64 = 4;
+const CODING_DISPATCH_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(5);
 
 async fn spawn_coding_workers(
     pool: &DbPool,
@@ -767,7 +811,16 @@ async fn run_coding_task(
     });
     let outcome = dispatch_coding_model(pool, backend.clone(), request, task.id).await?;
     if !outcome.succeeded {
-        fail_coding_task(pool, task.id, run_id, "coding model dispatch failed").await?;
+        fail_coding_task(
+            pool,
+            task.id,
+            run_id,
+            outcome
+                .failure_summary
+                .as_deref()
+                .unwrap_or("coding model dispatch failed"),
+        )
+        .await?;
         return Ok(());
     }
 
@@ -961,29 +1014,98 @@ async fn dispatch_coding_model(
     backend: Arc<dyn AgenticBackend>,
     request: DispatchRequest,
     task_id: i64,
-) -> Result<DispatchRunResult> {
+) -> Result<CodingDispatchResult> {
     store::mark_run_running(pool, request.run_id, None).await?;
-    let dispatch = dispatch_with_timeout_for_coding(pool, backend, request);
+    let run_id = request.run_id;
+    let opencode_base_url = request.opencode_base_url.clone();
+    let workspace_container_path =
+        OpenCodeWorkspaceRuntimeConfig::from_value(&request.runtime_config)
+            .map(|workspace| workspace.workspace_container_path);
+    let dispatch = dispatch_with_timeout_for_coding(pool, Arc::clone(&backend), request);
     tokio::pin!(dispatch);
-    let mut heartbeat = tokio::time::interval(Duration::from_secs(15));
+    let mut heartbeat = tokio::time::interval(CODING_DISPATCH_HEARTBEAT_INTERVAL);
     let outcome = loop {
         tokio::select! {
             result = &mut dispatch => break result?,
             _ = heartbeat.tick() => {
                 let _ = store::heartbeat_maintenance_task(pool, task_id).await;
+                if let Some(session_id) = store::get_run(pool, run_id)
+                    .await?
+                    .and_then(|run| run.backend_run_ref)
+                {
+                    match backend
+                        .get_session_status_in_directory(
+                            &opencode_base_url,
+                            &session_id,
+                            workspace_container_path.as_deref(),
+                        )
+                        .await
+                    {
+                        Ok(Some(SessionStatusKind::Retry { message })) => {
+                            if let Some(summary) = permanent_provider_retry_failure(&message) {
+                                match backend.abort_session(&opencode_base_url, &session_id).await {
+                                    Ok(true) => {}
+                                    Ok(false) => warn!(task_id, session_id, "OpenCode declined provider-failure abort"),
+                                    Err(error) => warn!(task_id, session_id, error = ?error, "failed to abort OpenCode provider retry"),
+                                }
+                                break DispatchOutcome::Failed { summary };
+                            }
+                        }
+                        Ok(Some(SessionStatusKind::Idle | SessionStatusKind::Busy)) | Ok(None) => {}
+                        Err(error) => warn!(task_id, session_id, error = ?error, "failed to probe OpenCode coding status"),
+                    }
+                }
             }
         }
     };
     match outcome {
         DispatchOutcome::Succeeded { backend_run_ref } => {
             debug!(task_id, backend_run_ref, "coding model dispatch finished");
-            Ok(DispatchRunResult { succeeded: true })
+            Ok(CodingDispatchResult {
+                succeeded: true,
+                failure_summary: None,
+            })
         }
         DispatchOutcome::Failed { summary } => {
             debug!(task_id, summary, "coding model dispatch failed");
-            Ok(DispatchRunResult { succeeded: false })
+            Ok(CodingDispatchResult {
+                succeeded: false,
+                failure_summary: Some(summary),
+            })
         }
     }
+}
+
+struct CodingDispatchResult {
+    succeeded: bool,
+    failure_summary: Option<String>,
+}
+
+fn permanent_provider_retry_failure(message: &str) -> Option<String> {
+    let normalized = message.to_ascii_lowercase();
+    let permanent = [
+        "exceeded your current quota",
+        "insufficient_quota",
+        "insufficient quota",
+        "billing details",
+        "invalid api key",
+        "incorrect api key",
+        "api key revoked",
+    ];
+    permanent
+        .iter()
+        .any(|needle| normalized.contains(needle))
+        .then(|| format!("OpenCode provider failure: {message}"))
+}
+
+fn coding_run_exceeded_timeout(
+    started_at: Option<chrono::DateTime<Utc>>,
+    timeout_seconds: i32,
+    now: chrono::DateTime<Utc>,
+) -> bool {
+    started_at.is_some_and(|started_at| {
+        started_at + chrono::Duration::seconds(i64::from(timeout_seconds.max(0))) <= now
+    })
 }
 
 struct CodingReport {
@@ -1881,6 +2003,32 @@ mod tests {
         },
         test_db,
     };
+
+    #[test]
+    fn permanent_provider_retry_failure_detects_quota_errors() {
+        let summary = permanent_provider_retry_failure(
+            "You exceeded your current quota, please check your plan and billing details.",
+        )
+        .expect("quota error should be terminal");
+        assert!(summary.contains("exceeded your current quota"));
+        assert!(permanent_provider_retry_failure("Provider is overloaded").is_none());
+    }
+
+    #[test]
+    fn coding_run_timeout_uses_the_run_deadline() {
+        let now = Utc::now();
+        assert!(coding_run_exceeded_timeout(
+            Some(now - chrono::Duration::seconds(601)),
+            600,
+            now,
+        ));
+        assert!(!coding_run_exceeded_timeout(
+            Some(now - chrono::Duration::seconds(599)),
+            600,
+            now,
+        ));
+        assert!(!coding_run_exceeded_timeout(None, 600, now));
+    }
 
     #[test]
     fn blank_coding_strategy_uses_safe_default() {

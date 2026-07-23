@@ -1,6 +1,9 @@
 use chrono::Utc;
 
-use crate::{agentic::model::MAINTENANCE_STATUS_QUEUED, test_db};
+use crate::{
+    agentic::model::{MAINTENANCE_STATUS_FAILED, MAINTENANCE_STATUS_QUEUED},
+    test_db,
+};
 use uuid::Uuid;
 
 use super::test_support::seed_agent_and_schedule;
@@ -8,7 +11,7 @@ use super::{
     AnalysisCodingTaskRequest, CodingTriggerMode, InsertAnalysisCodingTaskOutcome,
     InsertWorkspaceMaintenanceTaskOutcome, agent_has_blocking_workspace_maintenance,
     get_latest_workspace_regenerate_task, insert_analysis_coding_task_and_run,
-    insert_workspace_regenerate_task, mark_maintenance_task_running,
+    insert_workspace_regenerate_task, mark_maintenance_task_failed, mark_maintenance_task_running,
     mark_maintenance_task_succeeded,
 };
 
@@ -120,6 +123,24 @@ async fn coding_queue_requires_model_and_deduplicates_source_memory() {
         inserted,
         InsertAnalysisCodingTaskOutcome::Inserted { .. }
     ));
+    let blocked = insert_analysis_coding_task_and_run(
+        &pool,
+        AnalysisCodingTaskRequest {
+            agent_key: &key,
+            hook_id: hook_id.0,
+            trigger_mode: CodingTriggerMode::Manual,
+            source_run_id: None,
+            source_memory_id: None,
+            operator_prompt: Some("review"),
+            requested_mode: Some("auto"),
+        },
+    )
+    .await
+    .expect("blocked coding task outcome");
+    assert_eq!(
+        blocked,
+        InsertAnalysisCodingTaskOutcome::BlockedByMaintenance
+    );
     let duplicate = insert_analysis_coding_task_and_run(
         &pool,
         AnalysisCodingTaskRequest {
@@ -184,4 +205,34 @@ async fn agent_has_blocking_workspace_maintenance_only_for_queued_or_running_tas
             .await
             .expect("terminal maintenance state")
     );
+}
+
+#[tokio::test]
+async fn mark_maintenance_task_failed_preserves_error_summary() {
+    let pool = test_db::pool().await;
+    let key = format!(
+        "maintenance-failure-{}",
+        Utc::now().timestamp_nanos_opt().unwrap_or(0)
+    );
+    let _schedule_id = seed_agent_and_schedule(&pool, &key, 0).await;
+    let task_id = match insert_workspace_regenerate_task(&pool, &key, false, false)
+        .await
+        .expect("insert maintenance task")
+    {
+        InsertWorkspaceMaintenanceTaskOutcome::Inserted { task_id } => task_id,
+        other => panic!("expected Inserted, got {other:?}"),
+    };
+
+    mark_maintenance_task_failed(&pool, task_id, "OpenCode command timed out")
+        .await
+        .expect("mark failed");
+
+    let (status, error_summary): (String, Option<String>) =
+        sqlx::query_as("SELECT status, error_summary FROM agentic_maintenance_tasks WHERE id = $1")
+            .bind(task_id)
+            .fetch_one(&pool)
+            .await
+            .expect("load failed maintenance task");
+    assert_eq!(status, MAINTENANCE_STATUS_FAILED);
+    assert_eq!(error_summary.as_deref(), Some("OpenCode command timed out"));
 }

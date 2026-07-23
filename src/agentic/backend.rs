@@ -109,6 +109,18 @@ pub trait AgenticBackend: Send + Sync {
     ) -> Result<Option<SessionStatusKind>> {
         Ok(None)
     }
+
+    /// Probe a session within its workspace-scoped OpenCode instance. The
+    /// default preserves compatibility with fakes that only implement the
+    /// unscoped probe.
+    async fn get_session_status_in_directory(
+        &self,
+        base_url: &str,
+        session_id: &str,
+        _workspace_container_path: Option<&str>,
+    ) -> Result<Option<SessionStatusKind>> {
+        self.get_session_status(base_url, session_id).await
+    }
 }
 
 #[derive(Clone)]
@@ -225,6 +237,17 @@ impl AgenticBackend for OpenCodeBackend {
     ) -> Result<Option<SessionStatusKind>> {
         self.client.get_session_status(base_url, session_id).await
     }
+
+    async fn get_session_status_in_directory(
+        &self,
+        base_url: &str,
+        session_id: &str,
+        workspace_container_path: Option<&str>,
+    ) -> Result<Option<SessionStatusKind>> {
+        self.client
+            .get_session_status_in_directory(base_url, session_id, workspace_container_path)
+            .await
+    }
 }
 
 fn resolve_opencode_job(job_kind: &str) -> Result<(&'static str, &'static str)> {
@@ -293,6 +316,9 @@ async fn dispatch_with_timeout_mode(
     let timeout_seconds = request.timeout_seconds;
     let timeout = std::time::Duration::from_secs(timeout_seconds.max(0) as u64);
     let opencode_base_url = request.opencode_base_url.clone();
+    let workspace_container_path =
+        OpenCodeWorkspaceRuntimeConfig::from_value(&request.runtime_config)
+            .map(|workspace| workspace.workspace_container_path);
 
     let dispatch_result = tokio::time::timeout(timeout, backend.dispatch(request)).await;
 
@@ -335,7 +361,14 @@ async fn dispatch_with_timeout_mode(
                 return Ok(DispatchOutcome::Failed { summary });
             };
 
-            match confirm_session_terminated(&backend, &opencode_base_url, &session_id).await {
+            match confirm_session_terminated(
+                &backend,
+                &opencode_base_url,
+                &session_id,
+                workspace_container_path.as_deref(),
+            )
+            .await
+            {
                 Ok(TerminationOutcome::AlreadyTerminal) => {
                     let summary = format!(
                         "run exceeded timeout of {timeout_seconds}s; \
@@ -400,12 +433,12 @@ async fn confirm_session_terminated(
     backend: &Arc<dyn AgenticBackend>,
     base_url: &str,
     session_id: &str,
+    workspace_container_path: Option<&str>,
 ) -> Result<TerminationOutcome> {
-    let initial = backend.get_session_status(base_url, session_id).await?;
-    if !matches!(
-        initial,
-        Some(SessionStatusKind::Busy) | Some(SessionStatusKind::Retry)
-    ) {
+    let initial = backend
+        .get_session_status_in_directory(base_url, session_id, workspace_container_path)
+        .await?;
+    if !initial.is_some_and(|status| status.is_active()) {
         // Either Idle, None (unknown), or no status known. All are
         // treated as terminal for our purposes.
         return Ok(TerminationOutcome::AlreadyTerminal);
@@ -418,11 +451,10 @@ async fn confirm_session_terminated(
 
     for _ in 0..POST_ABORT_PROBE_ATTEMPTS {
         tokio::time::sleep(POST_ABORT_PROBE_DELAY).await;
-        let status = backend.get_session_status(base_url, session_id).await?;
-        if !matches!(
-            status,
-            Some(SessionStatusKind::Busy) | Some(SessionStatusKind::Retry)
-        ) {
+        let status = backend
+            .get_session_status_in_directory(base_url, session_id, workspace_container_path)
+            .await?;
+        if !status.is_some_and(|status| status.is_active()) {
             return Ok(TerminationOutcome::Aborted);
         }
     }
@@ -682,9 +714,9 @@ mod tests {
             assert_eq!(session_id, self.session_id);
             let aborts = self.abort_calls.lock().expect("count aborts").len();
             Ok(Some(if aborts > 0 {
-                self.post_abort_status
+                self.post_abort_status.clone()
             } else {
-                self.initial_status
+                self.initial_status.clone()
             }))
         }
     }

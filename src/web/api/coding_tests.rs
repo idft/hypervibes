@@ -51,6 +51,9 @@ async fn coding_report_is_scoped_to_the_authenticated_agent() {
         crate::agentic::store::InsertAnalysisCodingTaskOutcome::AlreadyQueued => {
             panic!("unexpected duplicate")
         }
+        crate::agentic::store::InsertAnalysisCodingTaskOutcome::BlockedByMaintenance => {
+            panic!("unexpected maintenance block")
+        }
     };
     let body = json!({
         "task_id": task_id,

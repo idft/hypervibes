@@ -140,6 +140,7 @@ pub struct AgentHookDetailPageTemplate {
     pub model_picker: ModelPickerView,
     pub hook_runs: Vec<AgenticRunView>,
     pub hook_runs_loaded: bool,
+    pub run_now_warning: Option<String>,
     pub current_path: String,
     pub navbar: Navbar,
 }
@@ -151,6 +152,7 @@ impl AgentHookDetailPageTemplate {
         model_picker: ModelPickerView,
         hook_runs: Vec<AgenticRunView>,
         hook_runs_loaded: bool,
+        run_now_warning: Option<String>,
     ) -> Result<String, askama::Error> {
         let current_path = format!("/agents/{}/hooks/{}", agent.agent_key, hook.id);
         Self {
@@ -161,6 +163,7 @@ impl AgentHookDetailPageTemplate {
             model_picker,
             hook_runs,
             hook_runs_loaded,
+            run_now_warning,
             current_path,
             navbar: Navbar::default(),
         }

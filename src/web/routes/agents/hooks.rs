@@ -82,6 +82,7 @@ pub(in crate::web::routes) async fn agents_show_hook_detail(
     if let Some(error) = query.timeout_error {
         hook_view.timeout_editor.error = Some(error);
     }
+    let run_now_warning = query.warning;
     match build_hook_prompt_preview(&state, &agent_key, hook_id).await {
         Ok(text) => hook_view.prompt_preview_text = text,
         Err(error) => {
@@ -106,6 +107,7 @@ pub(in crate::web::routes) async fn agents_show_hook_detail(
         model_picker,
         hook_runs,
         hook_runs_loaded,
+        run_now_warning,
     )?;
     Ok(Html(html).into_response())
 }
@@ -366,14 +368,23 @@ pub(in crate::web::routes) async fn agents_run_hook_now(
                 requested_mode: None,
             },
         )
-        .await
-        .map_err(AppError)?;
-        if let crate::agentic::store::InsertAnalysisCodingTaskOutcome::Inserted { run_id, .. } =
-            outcome
-        {
-            return Ok(Redirect::to(&format!("/agents/{agent_key}/runs/{run_id}")).into_response());
-        }
-        return Ok(Redirect::to(&format!("/agents/{agent_key}/jobs")).into_response());
+        .await?;
+        return Ok(match outcome {
+            crate::agentic::store::InsertAnalysisCodingTaskOutcome::Inserted { run_id, .. } => {
+                Redirect::to(&format!("/agents/{agent_key}/runs/{run_id}")).into_response()
+            }
+            crate::agentic::store::InsertAnalysisCodingTaskOutcome::AlreadyQueued => {
+                Redirect::to(&format!("/agents/{agent_key}/jobs")).into_response()
+            }
+            crate::agentic::store::InsertAnalysisCodingTaskOutcome::BlockedByMaintenance => {
+                let detail_url = format!("/agents/{agent_key}/hooks/{hook_id}");
+                Redirect::to(&format!(
+                    "{detail_url}?warning={}",
+                    super::shared::urlencode(WORKSPACE_MAINTENANCE_ACTIVE_WARNING)
+                ))
+                .into_response()
+            }
+        });
     }
 
     match crate::agentic::store::insert_queued_hook_run(&state.db_pool, &agent_key, hook_id).await?

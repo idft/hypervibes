@@ -58,16 +58,19 @@ struct CachedProvidersResponse {
 /// Vibetrading treats `Idle` as terminal for the purposes of run
 /// cancellation; a dispatch that has timed out keeps the underlying
 /// `agentic_runs` row in `running` until a probe confirms `Idle`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SessionStatusKind {
     Idle,
     Busy,
-    Retry,
+    Retry { message: String },
 }
 
 impl SessionStatusKind {
-    pub fn is_active(self) -> bool {
-        matches!(self, SessionStatusKind::Busy | SessionStatusKind::Retry)
+    pub fn is_active(&self) -> bool {
+        matches!(
+            self,
+            SessionStatusKind::Busy | SessionStatusKind::Retry { .. }
+        )
     }
 }
 
@@ -78,6 +81,8 @@ impl SessionStatusKind {
 struct SessionStatusResponse {
     #[serde(rename = "type")]
     kind: String,
+    #[serde(default)]
+    message: String,
 }
 
 impl SessionStatusResponse {
@@ -85,7 +90,9 @@ impl SessionStatusResponse {
         match self.kind.as_str() {
             "idle" => Ok(SessionStatusKind::Idle),
             "busy" => Ok(SessionStatusKind::Busy),
-            "retry" => Ok(SessionStatusKind::Retry),
+            "retry" => Ok(SessionStatusKind::Retry {
+                message: self.message,
+            }),
             other => Err(anyhow!("unknown session status: {other}")),
         }
     }
@@ -198,7 +205,20 @@ impl OpenCodeClient {
         base_url: &str,
         session_id: &str,
     ) -> Result<Option<SessionStatusKind>> {
-        let url = build_url(base_url, "session/status", &[]);
+        self.get_session_status_in_directory(base_url, session_id, None)
+            .await
+    }
+
+    pub async fn get_session_status_in_directory(
+        &self,
+        base_url: &str,
+        session_id: &str,
+        workspace_container_path: Option<&str>,
+    ) -> Result<Option<SessionStatusKind>> {
+        let query = workspace_container_path
+            .map(|directory| vec![("directory", directory)])
+            .unwrap_or_default();
+        let url = build_url(base_url, "session/status", &query);
         let response = self
             .http
             .get(url)
@@ -386,6 +406,79 @@ async fn snippet_from_response(response: reqwest::Response) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn session_status_retry_retains_provider_message() {
+        let status: SessionStatusResponse =
+            serde_json::from_str(r#"{"type":"retry","message":"You exceeded your current quota"}"#)
+                .expect("parse retry status");
+        assert_eq!(
+            status.into_kind().expect("status kind"),
+            SessionStatusKind::Retry {
+                message: "You exceeded your current quota".to_string(),
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn session_status_uses_workspace_directory() {
+        use std::sync::Mutex;
+
+        use axum::{Json, Router, extract::Query, routing::get};
+
+        let directory = Arc::new(Mutex::new(None));
+        let app = Router::new().route(
+            "/session/status",
+            get({
+                let directory = Arc::clone(&directory);
+                move |Query(query): Query<HashMap<String, String>>| {
+                    let directory = Arc::clone(&directory);
+                    async move {
+                        *directory.lock().expect("lock directory") =
+                            query.get("directory").cloned();
+                        Json(serde_json::json!({
+                            "ses_test": {
+                                "type": "retry",
+                                "message": "You exceeded your current quota"
+                            }
+                        }))
+                    }
+                }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind status test server");
+        let base_url = format!("http://{}", listener.local_addr().expect("local address"));
+        let server = tokio::spawn(async move {
+            axum::serve(listener, app)
+                .await
+                .expect("serve status test server");
+        });
+        let client = OpenCodeClient::new(OpenCodeClientConfig::new("opencode".to_string(), None))
+            .expect("client");
+
+        let status = client
+            .get_session_status_in_directory(
+                &base_url,
+                "ses_test",
+                Some("/workspaces/coding/btc-1/7/workspace"),
+            )
+            .await
+            .expect("get status");
+
+        assert_eq!(
+            status,
+            Some(SessionStatusKind::Retry {
+                message: "You exceeded your current quota".to_string(),
+            })
+        );
+        assert_eq!(
+            directory.lock().expect("lock directory").as_deref(),
+            Some("/workspaces/coding/btc-1/7/workspace")
+        );
+        server.abort();
+    }
 
     #[test]
     fn build_url_trims_trailing_slash_and_encodes_directory() {

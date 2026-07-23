@@ -53,6 +53,74 @@ async fn manual_hook_run_redirects_with_warning_during_workspace_maintenance() {
         .expect("redirect location");
     assert!(location.contains("/jobs?warning="));
 }
+
+#[tokio::test]
+async fn manual_analysis_coding_hook_run_redirects_to_detail_with_warning() {
+    let state = test_state().await;
+    let (agent_key, _) = insert_test_opencode_agent(&state)
+        .await
+        .expect("insert agent");
+    let hook = crate::agentic::store::list_agent_hooks(&state.db_pool, &agent_key)
+        .await
+        .expect("list hooks")
+        .into_iter()
+        .find(|hook| hook.job_kind == crate::agentic::model::JOB_KIND_ANALYSIS_CODING)
+        .expect("default coding hook present");
+    sqlx::query(
+        "UPDATE agentic_job_hooks
+            SET model_provider_id = 'test', model_id = 'strong'
+          WHERE id = $1",
+    )
+    .bind(hook.id)
+    .execute(&state.db_pool)
+    .await
+    .expect("set coding hook model");
+    crate::agentic::store::insert_workspace_regenerate_task(
+        &state.db_pool,
+        &agent_key,
+        false,
+        false,
+    )
+    .await
+    .expect("seed maintenance task");
+
+    let response = router(Arc::clone(&state))
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/agents/{agent_key}/hooks/{}/run", hook.id))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+    let location = response
+        .headers()
+        .get("location")
+        .and_then(|value| value.to_str().ok())
+        .expect("redirect location")
+        .to_string();
+    assert!(location.starts_with(&format!("/agents/{agent_key}/hooks/{}?warning=", hook.id)));
+
+    let detail = router(state)
+        .oneshot(
+            Request::builder()
+                .uri(location)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(detail.status(), StatusCode::OK);
+    assert!(
+        response_text(detail)
+            .await
+            .contains("Workspace maintenance is queued or running for this agent")
+    );
+}
+
 #[tokio::test]
 async fn new_hook_page_renders_for_opencode_agent() {
     let state = test_state().await;

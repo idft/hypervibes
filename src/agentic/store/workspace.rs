@@ -35,6 +35,7 @@ pub enum InsertAnalysisCodingTaskOutcome {
         scheduled_for: DateTime<Utc>,
     },
     AlreadyQueued,
+    BlockedByMaintenance,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -162,7 +163,10 @@ pub async fn insert_analysis_coding_task_and_run(
     )
     .await?
     {
-        anyhow::bail!("another maintenance task is already active for this agent")
+        tx.rollback()
+            .await
+            .context("failed to roll back blocked coding task")?;
+        return Ok(InsertAnalysisCodingTaskOutcome::BlockedByMaintenance);
     }
 
     let now = Utc::now();
@@ -515,11 +519,11 @@ pub async fn mark_maintenance_task_failed(
 ) -> Result<bool> {
     let result = sqlx::query(
         "UPDATE agentic_maintenance_tasks
-            SET status = $2,
-                phase = $3,
-                finished_at = now(),
-                error_summary = $3,
-                updated_at = now()
+             SET status = $2,
+                 phase = $3,
+                 finished_at = now(),
+                 error_summary = $4,
+                 updated_at = now()
           WHERE id = $1",
     )
     .bind(task_id)

@@ -48,6 +48,8 @@ pub(in crate::web::routes) struct ModelSelectionForm {
 pub(in crate::web::routes) struct TimeoutErrorQuery {
     #[serde(default)]
     pub timeout_error: Option<String>,
+    #[serde(default)]
+    pub warning: Option<String>,
 }
 pub(in crate::web::routes) fn timeout_error_redirect(
     detail_url: &str,

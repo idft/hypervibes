@@ -48,7 +48,7 @@ pub(in crate::web::routes) async fn model_catalog_logo(
         StatusCode::OK,
         [
             ("Content-Type", "image/svg+xml; charset=utf-8"),
-            ("Cache-Control", "public, max-age=86400"),
+            ("Cache-Control", "public, max-age=2592000"),
         ],
         body,
     )
