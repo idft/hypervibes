@@ -24,7 +24,6 @@ pub fn sample_agent_list_row() -> AgentListRow {
 
 pub fn sample_agent_detail_row() -> AgentDetailRow {
     AgentDetailRow {
-        user_id: crate::test_db::test_user_id(),
         display_name: "Test Agent".to_string(),
         agent_key: "test-agent".to_string(),
         enabled: true,

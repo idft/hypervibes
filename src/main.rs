@@ -7,7 +7,6 @@ mod hyperliquid;
 mod memory;
 mod model_catalog;
 mod opencode;
-mod settings;
 mod web;
 
 #[cfg(test)]

@@ -18,7 +18,6 @@ pub struct AgentListRow {
 /// Row shape returned by the single-agent detail query.
 #[derive(Debug, Clone, sqlx::FromRow)]
 pub struct AgentDetailRow {
-    pub user_id: Uuid,
     pub display_name: String,
     pub agent_key: String,
     pub enabled: bool,

@@ -170,12 +170,7 @@ pub(in crate::web::routes) async fn build_job_prompt_preview(
 
     let selected_instruments =
         crate::agents::store::list_agent_instrument_ids(&state.db_pool, &agent.agent_key).await?;
-    let system_setting =
-        crate::settings::store::get_user_settings(&state.db_pool, agent.user_id).await?;
-    let system_prompt = system_setting
-        .map(|s| s.opencode_system_prompt)
-        .filter(|v| !v.trim().is_empty())
-        .unwrap_or_else(|| crate::agents::prompts::DEFAULT_SYSTEM_PROMPT.to_string());
+    let system_prompt = crate::agents::prompts::SYSTEM_PROMPT.to_string();
 
     let account_snapshot = if job.job_kind == crate::agentic::model::JOB_KIND_TRADING {
         Some(live_agent_snapshot_for_dispatch(
@@ -546,12 +541,7 @@ pub(in crate::web::routes) async fn agents_run_job_now(
                 .ok_or_else(|| AppError(anyhow::anyhow!("agent not found")))?;
             let selected_instruments =
                 crate::agents::store::list_agent_instrument_ids(&state.db_pool, &agent_key).await?;
-            let system_setting =
-                crate::settings::store::get_user_settings(&state.db_pool, agent.user_id).await?;
-            let system_prompt = system_setting
-                .map(|s| s.opencode_system_prompt)
-                .filter(|v| !v.trim().is_empty())
-                .unwrap_or_else(|| crate::agents::prompts::DEFAULT_SYSTEM_PROMPT.to_string());
+            let system_prompt = crate::agents::prompts::SYSTEM_PROMPT.to_string();
             let account_snapshot = if schedule.job_kind == crate::agentic::model::JOB_KIND_TRADING {
                 Some(live_agent_snapshot_for_dispatch(
                     agent.trading_account_address.as_deref().unwrap_or_default(),

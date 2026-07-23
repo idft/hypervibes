@@ -79,8 +79,7 @@ pub async fn agent_belongs_to_user(
 /// Fetch a single agent by its unique agent key.
 pub async fn get_agent(pool: &DbPool, agent_key: &str) -> Result<Option<AgentDetailRow>> {
     let row = query_as::<_, AgentDetailRow>(
-        "SELECT agents.user_id,
-                display_name,
+        "SELECT display_name,
                  agents.agent_key,
                  agents.enabled,
                  agents.lifecycle,

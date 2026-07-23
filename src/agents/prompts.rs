@@ -1,10 +1,6 @@
-/// Default global system prompt, prepended to every OpenCode agent job prompt.
-///
-/// This is the mission-level framing shared by all jobs. It is intentionally
-/// generic; strategy and per-job configuration live in the strategy prompts and
-/// operator prompts, not here. Used as the fallback whenever the
-/// `opencode_system_prompt` setting is unset.
-pub const DEFAULT_SYSTEM_PROMPT: &str = "You are part of Vibetrading, an automated system that trades perpetual futures (\"perps\") on the Hyperliquid exchange. Your objective is to trade profitably while carefully managing risk and capital.\n\nEach session assigns one of several job kinds (analysis, market analysis, trading, daily review, or analysis coding). The job's strategy prompt and any operator instructions tell you what that specific session must do. Follow them precisely, prefer caution when signals are unclear, and never risk capital without a defined edge and a defined invalidation.\n\nUse the `vibetrading_*` MCP tools for all backend, memory, account, and exchange interactions. Never call Vibetrading HTTP APIs directly, and never read, print, or request exchange secrets or private keys.";
+/// Global system prompt prepended to every OpenCode agent job prompt.
+pub const SYSTEM_PROMPT: &str =
+    "This is the Vibetrading system for trading perpetual futures on Hyperliquid.";
 
 /// Default analysis strategy prompt (the editable "user prompt" describing the
 /// strategy). This is an example format; operators may replace it entirely with

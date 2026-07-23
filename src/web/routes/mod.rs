@@ -3,12 +3,11 @@ mod agents;
 mod currency;
 mod model_catalog;
 mod root;
-mod settings;
 mod shared;
 #[cfg(test)]
 pub(in crate::web::routes) mod test_support;
 
-use self::{account::*, agents::*, currency::*, model_catalog::*, root::*, settings::*};
+use self::{account::*, agents::*, currency::*, model_catalog::*, root::*};
 use crate::web::auth::{login, login_challenge, login_verify, logout};
 use crate::web::error::not_found;
 
@@ -161,7 +160,6 @@ pub fn router(state: Arc<AppState>) -> Router {
         )
         .route("/agents/{agent_key}/delete", post(delete_agent))
         .route("/agents/{agent_key}/live/stream", get(agent_live_stream))
-        .route("/settings", get(settings_index).post(settings_update))
         .route("/account", get(account_index))
         .route("/account/approve-builder-fee", post(approve_builder_fee))
         .route("/account/cancel-builder-fee", post(cancel_builder_fee))

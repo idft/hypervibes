@@ -50,7 +50,6 @@ use crate::{
             runtime_config_for_generated_workspace,
         },
     },
-    settings,
 };
 
 const SCHEDULER_POLL_INTERVAL: Duration = Duration::from_secs(10);
@@ -1472,11 +1471,7 @@ async fn build_dispatch_request(
         return Ok(None);
     }
 
-    let system_setting = settings::store::get_user_settings(pool, agent.user_id).await?;
-    let system_prompt = system_setting
-        .map(|s| s.opencode_system_prompt)
-        .filter(|v| !v.trim().is_empty())
-        .unwrap_or_else(|| crate::agents::prompts::DEFAULT_SYSTEM_PROMPT.to_string());
+    let system_prompt = crate::agents::prompts::SYSTEM_PROMPT.to_string();
     let strategy_prompt =
         load_strategy_prompt(pool, &schedule.agent_key, &schedule.job_kind).await?;
     let accumulated_learnings = load_accumulated_learnings(pool, &schedule.agent_key).await?;
@@ -1575,11 +1570,7 @@ pub async fn build_hook_dispatch_request(
         return Ok(None);
     }
 
-    let system_setting = settings::store::get_user_settings(pool, agent.user_id).await?;
-    let system_prompt = system_setting
-        .map(|s| s.opencode_system_prompt)
-        .filter(|v| !v.trim().is_empty())
-        .unwrap_or_else(|| crate::agents::prompts::DEFAULT_SYSTEM_PROMPT.to_string());
+    let system_prompt = crate::agents::prompts::SYSTEM_PROMPT.to_string();
     let strategy_prompt = load_strategy_prompt(pool, &hook.agent_key, &hook.job_kind).await?;
     let accumulated_learnings = load_accumulated_learnings(pool, &hook.agent_key).await?;
 
