@@ -354,7 +354,7 @@ class VibetradingMcpServerTests(unittest.TestCase):
                 "VIBETRADING_API_BASE_URL": "http://example.test",
                 "VIBETRADING_API_KEY": "k",
                 "VIBETRADING_AGENT_KEY": "a",
-                "VIBETRADING_ENGINEERING_TASK_ID": "42",
+                "VIBETRADING_CODING_TASK_ID": "42",
             }
         )
         with tempfile.TemporaryDirectory() as tmp:
@@ -372,7 +372,7 @@ class VibetradingMcpServerTests(unittest.TestCase):
             try:
                 with mock.patch.dict(
                     os.environ,
-                    {"VIBETRADING_ENGINEERING_TASK_ID": "42"},
+                    {"VIBETRADING_CODING_TASK_ID": "42"},
                 ):
                     with mock.patch.object(
                         coding.subprocess, "run", return_value=completed
@@ -385,8 +385,8 @@ class VibetradingMcpServerTests(unittest.TestCase):
                     (workspace.parent / "coding-validation.json").is_file()
                 )
                 command = run.call_args.args[0]
-                self.assertEqual(command[0], coding.ENGINEERING_VALIDATOR_PYTHON)
-                self.assertEqual(command[1], coding.ENGINEERING_VALIDATOR_SCRIPT)
+                self.assertEqual(command[0], coding.CODING_VALIDATOR_PYTHON)
+                self.assertEqual(command[1], coding.CODING_VALIDATOR_SCRIPT)
             finally:
                 os.chdir(prior)
 
@@ -417,7 +417,7 @@ class VibetradingMcpServerTests(unittest.TestCase):
                 "VIBETRADING_API_BASE_URL": "http://example.test",
                 "VIBETRADING_API_KEY": "k",
                 "VIBETRADING_AGENT_KEY": "a",
-                "VIBETRADING_ENGINEERING_TASK_ID": "42",
+                "VIBETRADING_CODING_TASK_ID": "42",
             }
         )
         captured: dict[str, object] = {}
@@ -426,7 +426,7 @@ class VibetradingMcpServerTests(unittest.TestCase):
             captured.update(method=method, path=path, **kwargs)
             return {"submitted": True}
 
-        with mock.patch.dict(os.environ, {"VIBETRADING_ENGINEERING_TASK_ID": "42"}):
+        with mock.patch.dict(os.environ, {"VIBETRADING_CODING_TASK_ID": "42"}):
             with mock.patch.object(coding, "_request", side_effect=fake_request):
                 result = coding.coding_submit_report(
                     "no_change", "none", "no evidence", [], [], "tests passed"

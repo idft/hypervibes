@@ -110,6 +110,12 @@ impl BuilderFeeCache {
         self.values.lock().await.insert(key, fee);
     }
 
+    /// Record a successful user-signed revocation without another lookup.
+    pub async fn record_revocation(&self, user: &str, builder: &str) {
+        let key = BuilderFeeKey::new(user, builder);
+        self.values.lock().await.insert(key, 0);
+    }
+
     /// Record a successful order as lower-bound evidence without reducing a
     /// larger maximum learned from Hyperliquid.
     pub async fn record_order_evidence(&self, user: &str, builder: &str, fee: u32) {
@@ -208,6 +214,8 @@ mod tests {
         assert_eq!(cache.max_builder_fee("user", "builder").await, Ok(10));
         cache.record_order_evidence("user", "builder", 12).await;
         assert_eq!(cache.max_builder_fee("user", "builder").await, Ok(12));
+        cache.record_revocation("user", "builder").await;
+        assert_eq!(cache.max_builder_fee("user", "builder").await, Ok(0));
         assert_eq!(cache.refresh("user", "builder").await, Ok(21));
         assert_eq!(cache.max_builder_fee("user", "builder").await, Ok(21));
     }

@@ -987,7 +987,7 @@ async fn dispatch_coding_model(
     }
 }
 
-struct EngineeringReport {
+struct CodingReport {
     outcome: String,
     summary: String,
     rationale: String,
@@ -1035,7 +1035,7 @@ fn require_coding_validation(
 fn validate_coding_report(
     candidate_root: &std::path::Path,
     actual_changes: &[String],
-) -> Result<EngineeringReport> {
+) -> Result<CodingReport> {
     let report_path = candidate_root
         .parent()
         .context("candidate task path has no parent")?
@@ -1103,7 +1103,7 @@ fn validate_coding_report(
             anyhow::bail!("coding report {name} is too long");
         }
     }
-    Ok(EngineeringReport {
+    Ok(CodingReport {
         outcome: outcome.to_string(),
         summary: summary.to_string(),
         rationale: rationale.to_string(),
@@ -1116,7 +1116,7 @@ struct CodingResultMemory<'a> {
     outcome: &'a str,
     summary: &'a str,
     changed_paths: &'a [String],
-    report: &'a EngineeringReport,
+    report: &'a CodingReport,
     base_manifest_hash: &'a str,
     promoted_manifest_hash: &'a str,
 }
@@ -1165,7 +1165,7 @@ async fn write_coding_result_memory(
         memory_type: "analysis_coding".to_string(),
         summary: result.summary.to_string(),
         content: format!(
-            "Engineering task {} finished with outcome {}.\n\nModel summary: {}\n\nRationale: {}\n\nValidation notes: {}",
+            "Coding task {} finished with outcome {}.\n\nModel summary: {}\n\nRationale: {}\n\nValidation notes: {}",
             task.id,
             result.outcome,
             result.report.summary,

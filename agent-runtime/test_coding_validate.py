@@ -49,7 +49,7 @@ open(args.output, "w").write(json.dumps(result, sort_keys=True))
 '''
 
 
-class EngineeringValidatorTests(unittest.TestCase):
+class CodingValidatorTests(unittest.TestCase):
     def test_canonical_fixture_passes_open_candle_and_causality(self):
         with tempfile.TemporaryDirectory() as temporary:
             workspace = Path(temporary)

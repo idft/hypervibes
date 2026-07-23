@@ -92,7 +92,7 @@ impl OpenCodeWorkspaceMaintenanceStatusView {
             let (status_label, status_class, detail_text, is_visible, should_poll, show_spinner) =
                 match task.status.as_str() {
                     MAINTENANCE_STATUS_SUCCEEDED => (
-                        "Engineering succeeded".to_string(),
+                        "Coding succeeded".to_string(),
                         "border-emerald-900/60 bg-emerald-950/30 text-emerald-300".to_string(),
                         "Candidate validation and promotion completed".to_string(),
                         false,
@@ -100,15 +100,15 @@ impl OpenCodeWorkspaceMaintenanceStatusView {
                         false,
                     ),
                     MAINTENANCE_STATUS_FAILED => (
-                        "Engineering failed".to_string(),
+                        "Coding failed".to_string(),
                         "border-red-900/60 bg-red-950/30 text-red-300".to_string(),
-                        format!("Engineering task failed during {}", task.phase),
+                        format!("Coding task failed during {}", task.phase),
                         true,
                         false,
                         false,
                     ),
                     _ => (
-                        format!("Engineering {}", task.phase.replace('_', " ")),
+                        format!("Coding {}", task.phase.replace('_', " ")),
                         "border-sky-900/60 bg-sky-950/30 text-sky-300".to_string(),
                         "Candidate workspace is being processed".to_string(),
                         true,

@@ -245,7 +245,7 @@
                             <label for="instrument-search" class="sr-only">Search currencies</label>
                             <input id="instrument-search" type="search" placeholder="Filter currencies" autocomplete="off" data-instrument-search class="w-full rounded-xl border border-zinc-800 bg-[#0d0d10] px-4 py-2.5 text-sm text-zinc-200 outline-none placeholder:text-zinc-600 focus:border-zinc-700">
                         </div>
-                        <div data-instrument-scroll-container class="mt-4 max-h-48 overflow-y-auto rounded-xl border border-zinc-800 bg-[#0d0d10] p-2">
+                        <div data-instrument-scroll-container class="dark-scrollbar mt-4 max-h-48 overflow-y-auto rounded-xl border border-zinc-800 bg-[#0d0d10] p-2">
                             <div class="space-y-2">
                                 {% for option in instrument_options %}
                                 <label data-instrument-row data-instrument-label="{{ option.instrument_id }}" data-instrument-logo-url="{{ option.logo_url }}" class="flex cursor-pointer items-center gap-3 rounded-xl border border-zinc-900 bg-zinc-950/70 px-4 py-3 text-sm text-zinc-200 transition hover:border-zinc-700 has-[:checked]:border-emerald-900/60 has-[:checked]:bg-emerald-950/20">
@@ -401,7 +401,7 @@
                                         </form>
                                         <form action="{{ row.toggle_action }}" method="post">
                                             <input type="hidden" name="enabled" value="{{ row.hidden_enabled_value }}">
-                                            <button type="submit" {% if !row.enabled && !row.has_model %}disabled title="No model set"{% endif %} class="inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs font-medium {% if row.enabled %}border-zinc-800 text-zinc-300 hover:border-zinc-700 hover:text-white{% else if row.has_model %}border-emerald-900/60 bg-emerald-950/20 text-emerald-300 hover:border-emerald-800 hover:bg-emerald-950/40 hover:text-emerald-200{% else %}border-zinc-800 text-zinc-500 cursor-not-allowed opacity-50{% endif %}">
+                                            <button type="submit" {% if !row.enabled && !row.has_model %}disabled title="No model set"{% endif %} class="inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs font-medium {% if row.enabled %}cursor-pointer border-zinc-800 text-zinc-300 hover:border-zinc-700 hover:text-white{% else if row.has_model %}cursor-pointer border-emerald-900/60 bg-emerald-950/20 text-emerald-300 hover:border-emerald-800 hover:bg-emerald-950/40 hover:text-emerald-200{% else %}border-zinc-800 text-zinc-500 cursor-not-allowed opacity-50{% endif %}">
                                                 {% if row.enabled %}
                                                 <svg class="h-3.5 w-3.5" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
                                                     <path d="M5.5 4h3v12h-3V4Zm6 0h3v12h-3V4Z"></path>
@@ -475,7 +475,7 @@
                                         </form>
                                         <form action="{{ row.toggle_action }}" method="post">
                                             <input type="hidden" name="enabled" value="{{ row.hidden_enabled_value }}">
-                                            <button type="submit" {% if !row.enabled && !row.has_model %}disabled title="No model set"{% endif %} class="inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs font-medium {% if row.enabled %}border-zinc-800 text-zinc-300 hover:border-zinc-700 hover:text-white{% else if row.has_model %}border-emerald-900/60 bg-emerald-950/20 text-emerald-300 hover:border-emerald-800 hover:bg-emerald-950/40 hover:text-emerald-200{% else %}border-zinc-800 text-zinc-500 cursor-not-allowed opacity-50{% endif %}">
+                                            <button type="submit" {% if !row.enabled && !row.has_model %}disabled title="No model set"{% endif %} class="inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs font-medium {% if row.enabled %}cursor-pointer border-zinc-800 text-zinc-300 hover:border-zinc-700 hover:text-white{% else if row.has_model %}cursor-pointer border-emerald-900/60 bg-emerald-950/20 text-emerald-300 hover:border-emerald-800 hover:bg-emerald-950/40 hover:text-emerald-200{% else %}border-zinc-800 text-zinc-500 cursor-not-allowed opacity-50{% endif %}">
                                                 {% if row.enabled %}
                                                 <svg class="h-3.5 w-3.5" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
                                                     <path d="M5.5 4h3v12h-3V4Zm6 0h3v12h-3V4Z"></path>

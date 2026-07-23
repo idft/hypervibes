@@ -24,7 +24,7 @@ pub const DEFAULT_TRADING_STRATEGY_PROMPT: &str = "## Position sizing\nOpen smal
 /// Default daily-review strategy prompt.
 pub const DEFAULT_DAILY_REVIEW_STRATEGY_PROMPT: &str = "## Review goal\nReview the agent's recent analyses, market analyses, orders, and learnings for one UTC day. Focus on whether decisions matched the evidence available at the time.\n\n## What to look for\nIdentify good patterns, repeated mistakes, stale assumptions, execution failures, risk-control failures, and places where prompts should be improved.\n\n## Learning standard\nOnly write new agent-level learnings when something materially changed in what the agent should remember going forward. Each new `agent_learnings` memory is the complete current canonical learning set: carry forward still-valid prior learnings, add the new learning, and explicitly remove or replace superseded rules. Use the fixed summary `Accumulated agent learnings`. Keep learnings durable, concise, and general enough to reuse across future sessions.\n\n## Workspace edits\nDaily review is a diagnosis job. Never modify `scripts/user/`, `data/`, `scratch/`, or analysis helper code in any way. If review evidence suggests the analysis code should change, surface that request in your review metadata under `analysis_coding_requested` and explain specifically what improvement would help; the separate analysis-coding job owns all such code changes.";
 
-/// Default analysis-coding strategy prompt. Engineering owns reusable
+/// Default analysis-coding strategy prompt. Coding owns reusable
 /// quantitative code, while analysis jobs retain responsibility for market
 /// interpretation and trading conclusions.
 pub const DEFAULT_ANALYSIS_CODING_STRATEGY_PROMPT: &str = r#"## Role
@@ -60,4 +60,4 @@ Every candle path must exclude candles whose complete close time is not strictly
 The exact eligibility rule is `timestamp_ms + interval_ms < boundary_ms`; a candle closing exactly at the boundary is excluded. Reject invalid context, missing intervals, unsupported input, and calculation failures with a non-zero exit rather than emitting a successful empty measurement set.
 
 ## Safety
-Use native OpenCode filesystem tools only under the isolated candidate `scripts/user` tree, with workspace-relative paths such as `scripts/user/analyze.py`. Use Pyright LSP diagnostics for Python. Never call Vibetrading APIs, place or cancel orders, edit prompts, access another workspace, or hard-code agent-specific paths. Run fixed validation and submit exactly one structured report."#;
+Use Pyright LSP diagnostics for Python. Never call Vibetrading APIs, place or cancel orders, edit prompts, access another workspace, or hard-code agent-specific paths. Run fixed validation and submit exactly one structured report."#;

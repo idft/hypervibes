@@ -45,6 +45,7 @@ const MIN_BUILDER_FEE_BPS: i16 = 1;
 const MAX_BUILDER_FEE_BPS: i16 = 10;
 const DEFAULT_BUILDER_FEE_BPS: i16 = 5;
 const BUILDER_FEE_BPS_TO_TENTHS: i16 = 10;
+const REVOKED_BUILDER_FEE_RATE: &str = "0.00%";
 /// Hyperliquid's canonical mainnet USDC token from the `spotMeta` response.
 const PERPETUAL_USDC_TOKEN: &str = "USDC:0x6d1e7cde53ba9467b783cb7c530ce054";
 const UNIFIED_ACCOUNT_DEX: &str = "spot";
@@ -684,7 +685,10 @@ pub(in crate::web::routes) async fn approve_builder_fee(
 ) -> Result<Response, AppError> {
     let fee_tenths_of_bp = request.fee_bps.checked_mul(BUILDER_FEE_BPS_TO_TENTHS);
     if !(MIN_BUILDER_FEE_BPS..=MAX_BUILDER_FEE_BPS).contains(&request.fee_bps)
-        || !valid_builder_fee_action(&request.action, request.fee_bps)
+        || !valid_builder_fee_action(
+            &request.action,
+            &format!("{:.2}%", request.fee_bps as f64 / 100.0),
+        )
         || !signature_matches(
             &request.action,
             &request.signature,
@@ -710,6 +714,38 @@ pub(in crate::web::routes) async fn approve_builder_fee(
             BUILDER_RECIPIENT,
             u32::try_from(fee_tenths_of_bp).expect("validated builder fee fits u32"),
         )
+        .await;
+    Ok(Json(json!({"status":"ok", "redirect":"/account"})).into_response())
+}
+
+pub(in crate::web::routes) async fn cancel_builder_fee(
+    State(state): State<Arc<AppState>>,
+    user: AuthenticatedUser,
+    Json(request): Json<SignedAction>,
+) -> Result<Response, AppError> {
+    if !valid_builder_fee_action(&request.action, REVOKED_BUILDER_FEE_RATE)
+        || !signature_matches(
+            &request.action,
+            &request.signature,
+            &user.wallet_address,
+            ActionKind::BuilderFee,
+        )
+    {
+        return Ok(StatusCode::BAD_REQUEST.into_response());
+    }
+    let exchange = relay(&request.action, &request.signature).await;
+    if !exchange_success(&exchange) {
+        return Ok((StatusCode::BAD_GATEWAY, Json(exchange)).into_response());
+    }
+    sqlx::query(
+        "UPDATE users SET builder_fee_approved_at = NULL, updated_at = now() WHERE id = $1",
+    )
+    .bind(user.id)
+    .execute(&state.db_pool)
+    .await?;
+    state
+        .builder_fee_cache
+        .record_revocation(&user.wallet_address, BUILDER_RECIPIENT)
         .await;
     Ok(Json(json!({"status":"ok", "redirect":"/account"})).into_response())
 }
@@ -1125,12 +1161,11 @@ fn valid_user_api_wallet_action(action: &Value, expected_address: &str) -> bool 
             .and_then(Value::as_str)
             .is_some_and(|address| valid_lowercase_address(address) && address == expected_address)
 }
-fn valid_builder_fee_action(action: &Value, fee_bps: i16) -> bool {
+fn valid_builder_fee_action(action: &Value, max_fee_rate: &str) -> bool {
     valid_common(action)
         && action.get("type").and_then(Value::as_str) == Some("approveBuilderFee")
         && action.get("builder").and_then(Value::as_str) == Some(BUILDER_RECIPIENT)
-        && action.get("maxFeeRate").and_then(Value::as_str)
-            == Some(&format!("{:.2}%", fee_bps as f64 / 100.0))
+        && action.get("maxFeeRate").and_then(Value::as_str) == Some(max_fee_rate)
 }
 
 #[derive(Clone, Copy)]
@@ -1245,6 +1280,20 @@ mod tests {
             &signer.address().to_string().to_ascii_lowercase(),
             ActionKind::Agent
         ));
+    }
+
+    #[test]
+    fn validates_builder_fee_revocation_rate() {
+        let action = json!({
+            "type": "approveBuilderFee",
+            "hyperliquidChain": "Mainnet",
+            "signatureChainId": "0xa4b1",
+            "maxFeeRate": REVOKED_BUILDER_FEE_RATE,
+            "builder": BUILDER_RECIPIENT,
+            "nonce": 1,
+        });
+        assert!(valid_builder_fee_action(&action, REVOKED_BUILDER_FEE_RATE));
+        assert!(!valid_builder_fee_action(&action, "0"));
     }
 
     #[test]

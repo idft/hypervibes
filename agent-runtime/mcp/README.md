@@ -28,7 +28,7 @@ If you are an agent reading this file from inside a generated workspace:
 do not edit, import, or invoke this module directly. Use the `vibetrading`
 MCP tools instead.
 
-## Engineering Sessions
+## Coding Sessions
 
 The MCP server registers its full API for every workspace. OpenCode agent
 permissions select the MCP tools available to each job session. The
@@ -36,7 +36,7 @@ permissions select the MCP tools available to each job session. The
 filesystem operations through path-scoped native OpenCode tools, fixed local
 validation, and one structured report submission.
 
-Engineering candidate workspaces set only `VIBETRADING_ENGINEERING_TASK_ID`.
+Coding candidate workspaces set only `VIBETRADING_CODING_TASK_ID`.
 Candidate file operations are not MCP calls: generated OpenCode native
 read/edit/glob permissions restrict them to the current candidate's
 `scripts/user/` tree, including the root-relative path OpenCode uses for non-Git
@@ -49,6 +49,6 @@ model-supplied command or path, and records a task-scoped result bound to the
 candidate tree hash. Validation failures include bounded diagnostics. Any later
 candidate write, patch, or deletion invalidates that result.
 
-Engineering reports are accepted only after successful fixed validation.
+Coding reports are accepted only after successful fixed validation.
 Reported paths are relative to the candidate's `scripts/user` root, such as
 `analyze.py`, rather than workspace-relative `scripts/user/analyze.py`.

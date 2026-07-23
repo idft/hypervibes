@@ -74,7 +74,7 @@ Current important contract:
 - market-analysis memories should link back to source analyses with `derived_from`
 - daily-review memories should link to reviewed memories with `reviews` and to new learnings with `updates_learnings`
 
-Engineering result memories use:
+Coding result memories use:
 
 - `memory_type = "analysis_coding"`
 - `symbol = "__agent__"`
@@ -82,5 +82,5 @@ Engineering result memories use:
 - metadata containing task/run IDs, mode, outcome, manifest hashes, changed paths, and validation results
 
 The application writes these memories only after no-change completion or
-successful promotion. Engineering results link to the requesting review with
+successful promotion. Coding results link to the requesting review with
 `responds_to` and to validated same-agent evidence with `derived_from`.

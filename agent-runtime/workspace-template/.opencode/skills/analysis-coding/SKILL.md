@@ -3,7 +3,7 @@ name: analysis-coding
 description: Use only for the analysis-coding job to modify the canonical reusable analysis implementation.
 ---
 
-# Analysis Engineering
+# Analysis Coding
 
 This skill defines the stable interface for `scripts/user/`. Use it only in an
 isolated coding candidate workspace through the available MCP tools.
@@ -106,10 +106,8 @@ authoritative:
 - In bootstrap mode, create the canonical `analyze.py` if it is absent. A
   bootstrap run must not return `no_change` merely because the tree is empty.
 - Preserve this CLI and schema; extend fields without renaming required ones.
-- Supporting modules under `scripts/user` are allowed. Use native OpenCode
-  filesystem tools with workspace-relative paths such as
-  `scripts/user/analyze.py`; those tools are permission-limited to this tree.
-- Use focused native edits and Pyright LSP diagnostics; do not replace a whole
+- Supporting modules under `scripts/user` are allowed.
+- Use focused edits and Pyright LSP diagnostics; do not replace a whole
   large file when a local edit is enough. Resolve every reported Pyright error
   before final validation.
 - Production code may use NumPy, pandas, SciPy, statsmodels,
@@ -125,8 +123,5 @@ authoritative:
   orders.
 - Do not call Vibetrading APIs, place orders, install packages, or depend on
   agent-specific absolute paths.
-- The skill tool result is the complete contract. Do not directly read or glob
-  `.opencode`, skill directories, `scratch`, or paths outside `scripts/user`,
-  and do not call resource-listing tools to rediscover available tools.
 - Run the fixed validation tool until it returns `ok: true`, then submit exactly
   one structured coding report when finished.

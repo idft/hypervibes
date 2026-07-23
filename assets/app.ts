@@ -942,6 +942,21 @@ function initAccountPage() {
        window.location.assign(result?.redirect ?? "/account");
     })().catch((error: unknown) => { if (status) status.textContent = error instanceof Error ? error.message : "Approval failed."; });
   });
+  page.querySelector("[data-cancel-builder-fee]")?.addEventListener("click", () => {
+    if (!status) return;
+    void (async () => {
+      status.textContent = "Awaiting wallet signature...";
+      const action = { type: "approveBuilderFee", ...hyperliquidActionBase(), maxFeeRate: "0.00%", builder: page.dataset.builderRecipient ?? "" };
+      const signed = await signWalletAction("HyperliquidTransaction:ApproveBuilderFee", {
+        "HyperliquidTransaction:ApproveBuilderFee": [{ name: "hyperliquidChain", type: "string" }, { name: "maxFeeRate", type: "string" }, { name: "builder", type: "address" }, { name: "nonce", type: "uint64" }],
+      }, action);
+      const response = await fetch("/account/cancel-builder-fee", { method: "POST", headers: { "content-type": "application/json", "X-CSRF-Token": csrfToken() ?? "" }, body: JSON.stringify(signed) });
+      if (!response.ok) throw new Error("Hyperliquid did not cancel the fee approval.");
+      status.textContent = "Approval cancelled on Hyperliquid.";
+      const result = await response.json().catch(() => null) as { redirect?: string } | null;
+      window.location.assign(result?.redirect ?? "/account");
+    })().catch((error: unknown) => { if (status) status.textContent = error instanceof Error ? error.message : "Cancellation failed."; });
+  });
 }
 
 function canonicalTransferAmount(value: string): string | null {

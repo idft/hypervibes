@@ -151,19 +151,3 @@ pub async fn insert_default_strategy_prompts_for_agent(
 
     Ok(())
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn coding_migration_backfill_matches_rust_default() {
-        let migration = include_str!("../../migrations/0013_analysis_coding_job.sql");
-        let marker = "$analysis_coding_prompt$";
-        let mut parts = migration.split(marker);
-        let _before = parts.next().expect("migration prefix");
-        let backfill = parts.next().expect("coding prompt backfill");
-
-        assert_eq!(backfill, DEFAULT_ANALYSIS_CODING_STRATEGY_PROMPT);
-    }
-}

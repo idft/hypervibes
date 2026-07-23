@@ -206,7 +206,7 @@ impl PromptEditorView {
                 "What the daily review should inspect, how it should record learnings, and what patterns to emphasize.",
             ),
             PROMPT_KIND_ANALYSIS_CODING => (
-                "Analysis Engineering",
+                "Analysis Coding",
                 "analysis_coding_prompt",
                 "How the coding job should improve reusable analysis code, what constraints it must obey, and how to report changes.",
             ),

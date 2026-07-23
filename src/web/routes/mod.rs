@@ -164,6 +164,7 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/settings", get(settings_index).post(settings_update))
         .route("/account", get(account_index))
         .route("/account/approve-builder-fee", post(approve_builder_fee))
+        .route("/account/cancel-builder-fee", post(cancel_builder_fee))
         .route("/account/api-wallet", post(setup_user_api_wallet))
         .route("/account/approve-api-wallet", post(approve_user_api_wallet))
         .route("/account/transfers", post(transfer_between_accounts))

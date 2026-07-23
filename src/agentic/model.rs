@@ -40,7 +40,7 @@ pub const MAINTENANCE_PHASE_SMOKE_TESTING: &str = "smoke_testing";
 pub const MAINTENANCE_PHASE_ROLLING_BACK: &str = "rolling_back";
 pub const MAINTENANCE_PHASE_COMPLETED: &str = "completed";
 
-/// Engineering phases that hold an exclusive live-workspace lease and
+/// Coding phases that hold an exclusive live-workspace lease and
 /// therefore block normal scheduled/manual dispatch while they
 /// execute.
 pub const CODING_PROMOTION_PHASES: &[&str] = &[

@@ -146,12 +146,12 @@ def _require_offset(offset: int | None) -> int | None:
     return offset
 
 
-ENGINEERING_ALLOWED_SUFFIXES = {".py", ".json", ".md"}
-ENGINEERING_MAX_FILE_BYTES = 1024 * 1024
-ENGINEERING_MAX_TOTAL_BYTES = 20 * 1024 * 1024
-ENGINEERING_VALIDATOR_PYTHON = "/opt/vibetrading/analysis/.venv/bin/python"
-ENGINEERING_VALIDATOR_SCRIPT = "/opt/vibetrading/coding/coding_validate.py"
-ENGINEERING_VALIDATOR_TIMEOUT_SECONDS = 65
+CODING_ALLOWED_SUFFIXES = {".py", ".json", ".md"}
+CODING_MAX_FILE_BYTES = 1024 * 1024
+CODING_MAX_TOTAL_BYTES = 20 * 1024 * 1024
+CODING_VALIDATOR_PYTHON = "/opt/vibetrading/analysis/.venv/bin/python"
+CODING_VALIDATOR_SCRIPT = "/opt/vibetrading/coding/coding_validate.py"
+CODING_VALIDATOR_TIMEOUT_SECONDS = 65
 
 
 def _coding_user_root() -> Path:
@@ -161,7 +161,7 @@ def _coding_user_root() -> Path:
 
 
 def _coding_task_id() -> int:
-    value = os.getenv("VIBETRADING_ENGINEERING_TASK_ID", "").strip()
+    value = os.getenv("VIBETRADING_CODING_TASK_ID", "").strip()
     try:
         task_id = int(value)
     except ValueError as exc:
@@ -186,13 +186,13 @@ def _coding_manifest_hash() -> str:
             raise RuntimeError("candidate symlinks are not allowed")
         if not path.is_file():
             continue
-        if path.suffix.lower() not in ENGINEERING_ALLOWED_SUFFIXES:
+        if path.suffix.lower() not in CODING_ALLOWED_SUFFIXES:
             raise RuntimeError(f"candidate file extension is not allowed: {path.name}")
         size = path.stat().st_size
-        if size > ENGINEERING_MAX_FILE_BYTES:
+        if size > CODING_MAX_FILE_BYTES:
             raise RuntimeError("candidate file exceeds size limit")
         total += size
-        if total > ENGINEERING_MAX_TOTAL_BYTES:
+        if total > CODING_MAX_TOTAL_BYTES:
             raise RuntimeError("candidate tree exceeds size limit")
         files.append((path.relative_to(root).as_posix(), _coding_hash(path)))
     digest = hashlib.sha256()
@@ -221,21 +221,21 @@ def coding_validate_candidate() -> dict[str, Any]:
     before = _coding_manifest_hash()
     environment = {
         "HOME": "/tmp",
-        "PATH": str(Path(ENGINEERING_VALIDATOR_PYTHON).parent),
+        "PATH": str(Path(CODING_VALIDATOR_PYTHON).parent),
         "PYTHONHASHSEED": "0",
     }
     try:
         completed = subprocess.run(
             [
-                ENGINEERING_VALIDATOR_PYTHON,
-                ENGINEERING_VALIDATOR_SCRIPT,
+                CODING_VALIDATOR_PYTHON,
+                CODING_VALIDATOR_SCRIPT,
                 "--workspace",
                 str(workspace),
             ],
             cwd=workspace,
             capture_output=True,
             text=True,
-            timeout=ENGINEERING_VALIDATOR_TIMEOUT_SECONDS,
+            timeout=CODING_VALIDATOR_TIMEOUT_SECONDS,
             env=environment,
         )
     except (OSError, subprocess.SubprocessError) as exc:

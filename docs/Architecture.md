@@ -77,7 +77,7 @@ OpenCode is the sole execution backend. Its HTTP endpoint is configured at the
 application level with `OPENCODE_BASE_URL`, rather than being assigned through
 database runtime rows.
 
-## Engineering Isolation
+## Coding Isolation
 
 Analysis coding runs in a candidate workspace under the configured
 workspace root. The model receives path-scoped native OpenCode filesystem

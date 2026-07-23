@@ -79,7 +79,7 @@ must not modify `scripts/user/`. The disabled-by-default `analysis_coding`
 hook is the only job allowed to change that tree, and it requires an explicit
 strong provider/model selection.
 
-Engineering supports bootstrap and improvement runs. Generation occurs in an
+Coding supports bootstrap and improvement runs. Generation occurs in an
 isolated candidate workspace. A fixed MCP tool validates the candidate in the
 shared analysis runtime and binds the result to its deterministic tree hash;
 the worker promotes only those validated bytes. Failed validation or promotion

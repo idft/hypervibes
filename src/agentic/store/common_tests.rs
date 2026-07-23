@@ -53,7 +53,7 @@ async fn set_all_agent_jobs_enabled_toggles_schedules_and_hooks_together() {
     assert!(schedules.iter().all(|row| row.enabled));
     let hooks = list_agent_hooks(&pool, &key).await.expect("list hooks");
     // Every hook *except* the autonomous analysis-coding hook is
-    // enabled by the bulk-enable helper. Engineering must be enabled
+    // enabled by the bulk-enable helper. Coding must be enabled
     // explicitly with a pinned strong model so operators cannot
     // accidentally enable autonomous code modification.
     for hook in &hooks {

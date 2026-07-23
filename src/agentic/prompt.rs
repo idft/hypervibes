@@ -214,14 +214,14 @@ fn build_analysis_coding_prompt(request: &DispatchRequest) -> String {
         .get("coding_task_id")
         .and_then(serde_json::Value::as_i64)
     {
-        body.push_str(&format!("- Engineering task ID: {task_id}\n"));
+        body.push_str(&format!("- Coding task ID: {task_id}\n"));
     }
     if let Some(mode) = request
         .runtime_config
         .get("coding_mode")
         .and_then(serde_json::Value::as_str)
     {
-        body.push_str(&format!("- Engineering mode: {mode}\n"));
+        body.push_str(&format!("- Coding mode: {mode}\n"));
     }
     body.push_str("- Selected instruments may be empty; this job is agent-scoped.\n");
     body.push_str("\n## Strategy contract\n");
@@ -248,15 +248,13 @@ fn build_analysis_coding_prompt(request: &DispatchRequest) -> String {
     body.push_str("- The output `source_range` object must contain integer `count`, exactly equal to the number of eligible candles used in calculations. The analyzer must produce finite, non-empty, candle-sensitive measurements with only one eligible candle and for every supported input interval.\n");
     body.push_str("- Sort eligible candles by `timestamp_ms` before calculations. Output must be unchanged when input order changes or when any ineligible open/future candle is appended; optional source metadata may describe eligible candles only.\n");
     body.push_str("- Create missing parent directories for the requested atomic output path. If a `last_candle_body` signal is emitted, calculate `up`/`down`/`flat` from that candle's close versus open, not from change versus the previous close.\n");
-    body.push_str("- Use native OpenCode filesystem tools only under candidate `scripts/user`, with workspace-relative paths such as `scripts/user/analyze.py` and `scripts/user/tests/test_example.py`.\n");
-    body.push_str("- Use focused native edits and Pyright LSP diagnostics instead of replacing a whole large file. Resolve every reported Pyright error before final validation.\n");
+    body.push_str("- Use focused edits and Pyright LSP diagnostics instead of replacing a whole large file. Resolve every reported Pyright error before final validation.\n");
     body.push_str("- Generate auditable quantitative measurements and calculation-derived signals, not final bias, actionability, trading confidence, entries, exits, stops, targets, sizing, or orders.\n");
     body.push_str("- The preinstalled analysis libraries may be used; the standard-library-only rule applies to the optional `unittest` framework, not production code.\n");
     body.push_str("- Add focused tests only for demonstrated bugs or nontrivial custom math. Do not generate a comprehensive suite by default.\n");
     body.push_str("- In bootstrap mode, create `scripts/user/analyze.py` when absent; an empty tree is not a no-change result.\n");
     body.push_str("- In bootstrap mode, implement the smallest validator-ready baseline first instead of every indicator in the analysis strategy. Simple eligible-count and last-close measurements are sufficient; do not add platform-contract tests, temporary diagnostics, or placeholder files.\n");
     body.push_str("- The fixed validator is entirely local and fixture-based. Treat every failed check as a candidate or contract defect, use its diagnostics, and rerun it. Never classify a failed validation as environmental.\n");
-    body.push_str("- Do not directly inspect `.opencode`, skill paths, `scratch`, broad globs, or MCP resource listings. The loaded skill and available tools are complete.\n");
     body.push_str("- Submit the coding report only after fixed validation returns `ok: true` for the final tree. Report changed paths relative to `scripts/user`, such as `analyze.py`, not `scripts/user/analyze.py`.\n");
     body.push_str("- Before ending the session, call the coding report tool exactly once.\n");
     body.push_str("- Submit exactly one structured changed/no_change report. `no_change` is correct when evidence does not justify a change.\n");
@@ -548,6 +546,7 @@ mod tests {
     fn coding_prompt_requires_bootstrap_and_includes_target_prompts() {
         let mut request = sample_request(JOB_KIND_ANALYSIS_CODING);
         request.runtime_config = serde_json::json!({
+            "coding_task_id": 1,
             "coding_mode": "bootstrap",
             "analysis_strategy_prompt": "Analyze structure."
         });
@@ -555,12 +554,14 @@ mod tests {
         let prompt = build_prompt(&request).expect("build coding prompt");
 
         assert!(prompt.contains("## Analysis strategy context"));
+        assert!(prompt.contains("Coding task ID: 1"));
+        assert!(prompt.contains("Coding mode: bootstrap"));
+        assert!(!prompt.contains("Engineering"));
         assert!(prompt.contains("Analyze structure."));
         assert!(!prompt.contains("Synthesize market context."));
         assert!(!prompt.contains("Require a stop loss."));
         assert!(prompt.contains("an empty tree is not a no-change result"));
         assert!(prompt.contains("quantitative measurements"));
-        assert!(prompt.contains("workspace-relative paths"));
         assert!(prompt.contains("Pyright LSP diagnostics"));
         assert!(prompt.contains("`source_range` object must contain integer `count`"));
         assert!(prompt.contains("smallest validator-ready baseline"));

@@ -56,7 +56,7 @@ fn coding_maintenance_partial_shows_generation_phase() {
     assert!(view.is_visible());
     assert!(view.should_poll);
     let status = view.status.unwrap();
-    assert!(status.status_label.contains("Engineering"));
+    assert!(status.status_label.contains("Coding"));
     assert_eq!(
         status.report_summary.as_deref(),
         Some("Improved volatility regime analysis")

@@ -148,7 +148,7 @@ as append-only rows.
 
 Scheduled jobs and hooks must have an explicit model selected before they can be enabled from the operator UI.
 
-## Analysis Engineering
+## Analysis Coding
 
 Analysis coding is a strong-model, request-gated maintenance job. It is
 disabled by default and must have an explicit provider/model selection. Manual
@@ -165,7 +165,7 @@ backup. Successful backups are retained as rollback versions, with the five
 most recent versions kept per agent.
 
 Analysis and trading sessions hold shared read leases for their full lane.
-Engineering generation does not hold the live write lease; only the final
+Coding generation does not hold the live write lease; only the final
 promotion and promoted-tree hash verification do. Native OpenCode read, edit,
 and glob permissions include workspace-relative rules plus an exact generated
 candidate scope because non-Git OpenCode projects authorize file tools relative
