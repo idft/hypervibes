@@ -142,9 +142,13 @@ Run-detail pages display `opencode.sessions`, `opencode.messages`,
 Vibetrading run through `agentic_runs.backend_run_ref`. Plugin writes and
 Vibetrading run updates issue Postgres notifications after their transactions
 commit; the web process fans those notifications out to the run-detail SSE
-stream. Each update re-renders the complete summary and transcript partial,
-because plugin records are mutable and may arrive asynchronously rather than
-as append-only rows.
+stream and the Jobs tab's Recent Runs SSE section. Each Recent Runs update
+re-queries and re-renders the complete section so inserts, status transitions,
+backend references, errors, and pagination changes are reflected. Run-detail
+updates re-render the complete summary and transcript partial, because plugin
+records are mutable and may arrive asynchronously rather than as append-only
+rows. OpenCode session notifications remain relevant only to the run-detail
+transcript and summary.
 
 Scheduled jobs and hooks must have an explicit model selected before they can be enabled from the operator UI.
 

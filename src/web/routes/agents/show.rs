@@ -38,7 +38,7 @@ use crate::{
         auth::AuthenticatedUser,
         error::AppError,
         templates::{
-            AccountBalancePartialTemplate, AccountBalanceView, AgentShowTab,
+            AccountBalancePartialTemplate, AccountBalanceView, AgentRecentRunsView, AgentShowTab,
             AgentsShowPageTemplate, BalanceSparklinesPartialTemplate,
             LatestAnalysisSummaryPartialTemplate, LatestTradeExecutionSummaryPartialTemplate,
             OpenOrdersPartialTemplate, OpenOrdersView, OpenPositionsPartialTemplate,
@@ -263,14 +263,90 @@ pub(in crate::web::routes) async fn render_agent_show_page(
 
     Ok(Html(template.render()?).into_response())
 }
+const RUNS_PER_PAGE: usize = 10;
+
+pub(in crate::web::routes) async fn build_agent_recent_runs_view(
+    state: &Arc<AppState>,
+    agent_key: &str,
+    requested_runs_page: usize,
+) -> AgentRecentRunsView {
+    let mut view = AgentRecentRunsView::new(agent_key, requested_runs_page);
+
+    match crate::agentic::store::count_agent_runs(&state.db_pool, agent_key).await {
+        Ok(total_count) => {
+            let total_count = total_count as usize;
+            let total_pages = if total_count == 0 {
+                0
+            } else {
+                total_count.div_ceil(RUNS_PER_PAGE)
+            };
+            let current_page = if total_pages == 0 {
+                1
+            } else {
+                requested_runs_page.min(total_pages)
+            };
+
+            view.recent_runs_page = current_page;
+            view.recent_runs_total_pages = total_pages;
+            view.recent_runs_total_count = total_count;
+            view.recent_runs_previous_page_url = (current_page > 1)
+                .then(|| format!("/agents/{agent_key}/jobs?page={}", current_page - 1));
+            view.recent_runs_next_page_url = (total_pages > 0 && current_page < total_pages)
+                .then(|| format!("/agents/{agent_key}/jobs?page={}", current_page + 1));
+            view.stream_url =
+                format!("/agents/{agent_key}/jobs/recent-runs/stream?page={current_page}");
+
+            if total_count == 0 {
+                view.recent_runs_loaded = true;
+                return view;
+            }
+
+            let offset = ((current_page - 1) * RUNS_PER_PAGE) as i64;
+            match crate::agentic::store::list_agent_runs_page(
+                &state.db_pool,
+                agent_key,
+                RUNS_PER_PAGE as i64,
+                offset,
+            )
+            .await
+            {
+                Ok(rows) => {
+                    let run_count = rows.len();
+                    view.recent_runs_loaded = true;
+                    view.recent_runs = rows
+                        .iter()
+                        .map(crate::web::templates::AgenticRunView::from_row)
+                        .collect();
+                    view.recent_runs_range_start = offset as usize + 1;
+                    view.recent_runs_range_end = offset as usize + run_count;
+                }
+                Err(error) => {
+                    warn!(
+                        agent_key,
+                        error = ?error,
+                        "failed to list recent agent runs for jobs page"
+                    );
+                }
+            }
+        }
+        Err(error) => {
+            warn!(
+                agent_key,
+                error = ?error,
+                "failed to count recent agent runs for jobs page"
+            );
+        }
+    }
+
+    view
+}
+
 pub(in crate::web::routes) async fn populate_jobs_tab(
     state: &Arc<AppState>,
     agent: &crate::agents::model::AgentDetailRow,
     template: &mut AgentsShowPageTemplate,
     requested_runs_page: usize,
 ) {
-    const RUNS_PER_PAGE: usize = 10;
-
     match crate::agentic::store::list_agent_schedules(&state.db_pool, &agent.agent_key).await {
         Ok(rows) => {
             template.jobs_loaded = true;
@@ -312,69 +388,8 @@ pub(in crate::web::routes) async fn populate_jobs_tab(
             || template.hooks.iter().any(|hook| hook.enabled);
     }
 
-    match crate::agentic::store::count_agent_runs(&state.db_pool, &agent.agent_key).await {
-        Ok(total_count) => {
-            let total_count = total_count as usize;
-            let total_pages = if total_count == 0 {
-                0
-            } else {
-                total_count.div_ceil(RUNS_PER_PAGE)
-            };
-            let current_page = if total_pages == 0 {
-                1
-            } else {
-                requested_runs_page.min(total_pages)
-            };
-
-            template.recent_runs_page = current_page;
-            template.recent_runs_total_pages = total_pages;
-            template.recent_runs_total_count = total_count;
-            template.recent_runs_previous_page_url = (current_page > 1)
-                .then(|| format!("/agents/{}/jobs?page={}", agent.agent_key, current_page - 1));
-            template.recent_runs_next_page_url = (total_pages > 0 && current_page < total_pages)
-                .then(|| format!("/agents/{}/jobs?page={}", agent.agent_key, current_page + 1));
-
-            if total_count == 0 {
-                template.recent_runs_loaded = true;
-                return;
-            }
-
-            let offset = ((current_page - 1) * RUNS_PER_PAGE) as i64;
-            match crate::agentic::store::list_agent_runs_page(
-                &state.db_pool,
-                &agent.agent_key,
-                RUNS_PER_PAGE as i64,
-                offset,
-            )
-            .await
-            {
-                Ok(rows) => {
-                    let run_count = rows.len();
-                    template.recent_runs_loaded = true;
-                    template.recent_runs = rows
-                        .iter()
-                        .map(crate::web::templates::AgenticRunView::from_row)
-                        .collect();
-                    template.recent_runs_range_start = offset as usize + 1;
-                    template.recent_runs_range_end = offset as usize + run_count;
-                }
-                Err(error) => {
-                    warn!(
-                        agent_key = %agent.agent_key,
-                        error = ?error,
-                        "failed to list recent agent runs for jobs page"
-                    );
-                }
-            }
-        }
-        Err(error) => {
-            warn!(
-                agent_key = %agent.agent_key,
-                error = ?error,
-                "failed to count recent agent runs for jobs page"
-            );
-        }
-    }
+    template.recent_runs_section =
+        build_agent_recent_runs_view(state, &agent.agent_key, requested_runs_page).await;
 }
 pub(in crate::web::routes) fn parse_positive_page(raw: &str) -> usize {
     raw.trim()

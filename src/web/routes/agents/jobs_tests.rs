@@ -152,6 +152,191 @@ async fn jobs_route_paginates_recent_runs() {
     assert!(page_two_text.contains("Page 2 of 2"));
     assert!(page_two_text.contains(&format!("/agents/{agent_key}/jobs?page=1")));
 }
+
+#[tokio::test]
+async fn recent_runs_stream_emits_initial_snapshot_and_matching_update() {
+    let state = test_state().await;
+    let pool = state.db_pool.clone();
+    let (agent_key, _) = insert_test_opencode_agent(&state)
+        .await
+        .expect("insert agent");
+    let schedule_id = crate::agentic::store::list_agent_schedules(&pool, &agent_key)
+        .await
+        .expect("list schedules")
+        .first()
+        .expect("default schedule")
+        .id;
+    let run_id = crate::agentic::store::insert_test_run(&pool, schedule_id, "queued")
+        .await
+        .expect("insert run");
+
+    let response = router(Arc::clone(&state))
+        .oneshot(
+            Request::builder()
+                .uri(format!(
+                    "/agents/{agent_key}/jobs/recent-runs/stream?page=1"
+                ))
+                .body(Body::empty())
+                .expect("build stream request"),
+        )
+        .await
+        .expect("request stream");
+    assert_eq!(response.status(), StatusCode::OK);
+    let reader = tokio::spawn(read_sse_chunk(response.into_body(), 1_000));
+
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    sqlx::query(
+        "UPDATE agentic_runs
+            SET status = 'running', started_at = now(), backend_run_ref = 'stream-session'
+          WHERE id = $1",
+    )
+    .bind(run_id)
+    .execute(&pool)
+    .await
+    .expect("transition run");
+    state
+        .run_detail_events
+        .publish(crate::web::run_detail_events::RunDetailDbEvent::RunChanged { run_id });
+
+    let body = reader.await.expect("read stream");
+    assert!(body.contains("event: recent-runs"));
+    assert!(body.matches("event: recent-runs").count() >= 2);
+    assert!(body.contains(">running<"));
+    assert!(body.contains("data-running-duration"));
+    assert!(body.contains("data-started-at=\""));
+}
+
+#[tokio::test]
+async fn recent_runs_stream_ignores_other_agents_and_sessions() {
+    let state = test_state().await;
+    let (agent_key, _) = insert_test_opencode_agent(&state)
+        .await
+        .expect("insert agent");
+    let (other_agent_key, _) = insert_test_opencode_agent(&state)
+        .await
+        .expect("insert other agent");
+    let other_schedule_id =
+        crate::agentic::store::list_agent_schedules(&state.db_pool, &other_agent_key)
+            .await
+            .expect("list other schedules")
+            .first()
+            .expect("other default schedule")
+            .id;
+    let other_run_id =
+        crate::agentic::store::insert_test_run(&state.db_pool, other_schedule_id, "running")
+            .await
+            .expect("insert other run");
+
+    let response = router(Arc::clone(&state))
+        .oneshot(
+            Request::builder()
+                .uri(format!(
+                    "/agents/{agent_key}/jobs/recent-runs/stream?page=1"
+                ))
+                .body(Body::empty())
+                .expect("build stream request"),
+        )
+        .await
+        .expect("request stream");
+    let reader = tokio::spawn(read_sse_chunk(response.into_body(), 250));
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    state.run_detail_events.publish(
+        crate::web::run_detail_events::RunDetailDbEvent::RunChanged {
+            run_id: other_run_id,
+        },
+    );
+    state.run_detail_events.publish(
+        crate::web::run_detail_events::RunDetailDbEvent::SessionChanged {
+            session_id: "ignored-session".to_string(),
+        },
+    );
+
+    let body = reader.await.expect("read stream");
+    assert_eq!(body.matches("event: recent-runs").count(), 1);
+}
+
+#[tokio::test]
+async fn recent_runs_stream_resync_preserves_page_and_refreshes_pagination() {
+    let state = test_state().await;
+    let pool = state.db_pool.clone();
+    let (agent_key, _) = insert_test_opencode_agent(&state)
+        .await
+        .expect("insert agent");
+    let schedule_id = crate::agentic::store::list_agent_schedules(&pool, &agent_key)
+        .await
+        .expect("list schedules")
+        .first()
+        .expect("default schedule")
+        .id;
+    for _ in 0..12 {
+        crate::agentic::store::insert_test_run(&pool, schedule_id, "succeeded")
+            .await
+            .expect("insert run");
+    }
+
+    let response = router(Arc::clone(&state))
+        .oneshot(
+            Request::builder()
+                .uri(format!(
+                    "/agents/{agent_key}/jobs/recent-runs/stream?page=2"
+                ))
+                .body(Body::empty())
+                .expect("build stream request"),
+        )
+        .await
+        .expect("request stream");
+    let reader = tokio::spawn(read_sse_chunk(response.into_body(), 1_000));
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    crate::agentic::store::insert_test_run(&pool, schedule_id, "queued")
+        .await
+        .expect("insert new run");
+    state
+        .run_detail_events
+        .publish(crate::web::run_detail_events::RunDetailDbEvent::Resync);
+
+    let body = reader.await.expect("read stream");
+    assert!(body.matches("event: recent-runs").count() >= 2);
+    assert!(body.contains("Page 2 of 2"));
+    assert!(body.contains("Showing 11-13 of 13 runs"));
+    assert!(body.contains("sse-swap=\"recent-runs\" hx-swap=\"outerHTML\""));
+    assert!(!body.contains("id=\"agent-recent-runs-stream\""));
+}
+
+#[tokio::test]
+async fn recent_runs_stream_returns_not_found_for_unknown_agent() {
+    let state = test_state().await;
+    let response = router(state)
+        .oneshot(
+            Request::builder()
+                .uri("/agents/not-an-agent/jobs/recent-runs/stream")
+                .body(Body::empty())
+                .expect("build stream request"),
+        )
+        .await
+        .expect("request stream");
+
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn recent_runs_stream_ends_after_shutdown_signal() {
+    let state = test_state_with_backend_and_shutdown(Arc::new(NoopAgenticBackend), true).await;
+    let (agent_key, _) = insert_test_opencode_agent(&state)
+        .await
+        .expect("insert agent");
+    let response = router(state)
+        .oneshot(
+            Request::builder()
+                .uri(format!("/agents/{agent_key}/jobs/recent-runs/stream"))
+                .body(Body::empty())
+                .expect("build stream request"),
+        )
+        .await
+        .expect("request stream");
+
+    let body = read_sse_chunk(response.into_body(), 250).await;
+    assert_eq!(body.matches("event: recent-runs").count(), 1);
+}
 #[tokio::test]
 async fn post_job_run_now_queues_and_dispatches_run() {
     let calls = Arc::new(Mutex::new(Vec::new()));

@@ -14,6 +14,7 @@ use super::shared::{
 /// View-model for a single row in a Runs table.
 #[derive(Debug, Clone)]
 pub struct AgenticRunView {
+    pub is_running: bool,
     pub status_label: String,
     pub status_class: String,
     pub job_key: String,
@@ -107,6 +108,7 @@ impl AgenticRunView {
         let duration_text = run_duration_text(row.started_at, row.finished_at);
 
         Self {
+            is_running: row.status == "running",
             status_label,
             status_class,
             job_key: row.job_key.clone(),

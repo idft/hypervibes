@@ -118,6 +118,9 @@ from the OpenCode container or runtime.
 ## Frontend
 
 The operator interface is server-rendered with Askama. HTMX handles partial
-updates and SSE publishes live account, memory, and database-notified OpenCode
-run-detail changes. Frontend source is in `assets/`; `build.rs` builds the
-Tailwind and esbuild output when application assets or templates change.
+updates and SSE publishes live account, memory, and database-notified agent run
+changes. The shared Postgres notification listener fans `agentic_runs` changes
+out to both run-detail streams and the Jobs tab's Recent Runs section; session
+notifications are used only by run-detail transcript and summary streams.
+Frontend source is in `assets/`; `build.rs` builds the Tailwind and esbuild
+output when application assets or templates change.

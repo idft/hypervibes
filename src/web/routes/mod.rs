@@ -83,6 +83,10 @@ pub fn router(state: Arc<AppState>) -> Router {
             "/agents/{agent_key}/jobs",
             get(agents_show_jobs).post(agents_create_job),
         )
+        .route(
+            "/agents/{agent_key}/jobs/recent-runs/stream",
+            get(agent_recent_runs_stream),
+        )
         .route("/agents/{agent_key}/jobs/new", get(agents_new_job))
         .route(
             "/agents/{agent_key}/jobs/toggle-all",

@@ -5,10 +5,16 @@ use axum::{
     Form,
     extract::{Path, Query, State},
     http::{HeaderMap, StatusCode},
-    response::{Html, IntoResponse, Redirect, Response},
+    response::{
+        Html, IntoResponse, Redirect, Response,
+        sse::{Event, KeepAlive, Sse},
+    },
 };
 use chrono::{TimeZone, Utc};
+use futures::{StreamExt, stream::unfold};
 use serde::Deserialize;
+use std::convert::Infallible;
+use tokio::sync::broadcast;
 use tracing::warn;
 
 use super::shared::{
@@ -17,7 +23,10 @@ use super::shared::{
     is_htmx_request, jobs_warning_redirect, load_model_picker_context,
     parse_positive_schedule_seconds, timeout_error_redirect, validate_model_selection_for_agent,
 };
-use super::show::{AgentJobsQuery, AgentShowQueries, render_agent_show_page};
+use super::show::{
+    AgentJobsQuery, AgentShowQueries, build_agent_recent_runs_view, parse_positive_page,
+    render_agent_show_page,
+};
 use crate::web::error::AppError;
 use crate::{
     agentic::{
@@ -40,9 +49,11 @@ use crate::{
     web::{
         AppState,
         auth::AuthenticatedUser,
+        run_detail_events::RunDetailDbEvent,
         templates::{
-            AgentJobDetailPageTemplate, AgentScheduleNewPageTemplate, AgentShowTab,
-            CreateAgentScheduleFormValues, ModelPickerPartialTemplate, build_agent_show_tabs,
+            AgentJobDetailPageTemplate, AgentRecentRunsPartialTemplate,
+            AgentScheduleNewPageTemplate, AgentShowTab, CreateAgentScheduleFormValues,
+            ModelPickerPartialTemplate, build_agent_show_tabs,
         },
     },
 };
@@ -64,6 +75,119 @@ pub(in crate::web::routes) async fn agents_show_jobs(
     )
     .await
 }
+
+pub(in crate::web::routes) async fn agent_recent_runs_stream(
+    State(state): State<Arc<AppState>>,
+    Path(agent_key): Path<String>,
+    Query(query): Query<AgentJobsQuery>,
+) -> Result<Response, AppError> {
+    let requested_page = parse_positive_page(&query.page);
+    let receiver = state.run_detail_events.subscribe();
+    if get_agent(&state.db_pool, &agent_key).await?.is_none() {
+        return Ok((StatusCode::NOT_FOUND, "agent not found").into_response());
+    }
+
+    let shutdown_rx = state.shutdown_rx.clone();
+    let recent_runs_section =
+        build_agent_recent_runs_view(&state, &agent_key, requested_page).await;
+    let initial_html = AgentRecentRunsPartialTemplate::render_view(recent_runs_section)?;
+    let stream_state = AgentRecentRunsStreamState {
+        state,
+        agent_key,
+        requested_page,
+        receiver,
+        shutdown_rx,
+    };
+    let updates = unfold(stream_state, next_agent_recent_runs_event);
+    let stream = tokio_stream::iter(vec![Ok::<Event, Infallible>(
+        Event::default().event("recent-runs").data(initial_html),
+    )])
+    .chain(updates);
+
+    Ok(Sse::new(stream)
+        .keep_alive(KeepAlive::new().interval(std::time::Duration::from_secs(15)))
+        .into_response())
+}
+
+struct AgentRecentRunsStreamState {
+    state: Arc<AppState>,
+    agent_key: String,
+    requested_page: usize,
+    receiver: broadcast::Receiver<RunDetailDbEvent>,
+    shutdown_rx: tokio::sync::watch::Receiver<bool>,
+}
+
+async fn next_agent_recent_runs_event(
+    stream_state: AgentRecentRunsStreamState,
+) -> Option<(Result<Event, Infallible>, AgentRecentRunsStreamState)> {
+    let mut stream_state = stream_state;
+    loop {
+        if *stream_state.shutdown_rx.borrow() {
+            return None;
+        }
+
+        let notification = tokio::select! {
+            result = stream_state.receiver.recv() => result,
+            changed = stream_state.shutdown_rx.changed() => {
+                if changed.is_err() || *stream_state.shutdown_rx.borrow() {
+                    return None;
+                }
+                continue;
+            }
+        };
+        let event = match notification {
+            Ok(event) => event,
+            Err(broadcast::error::RecvError::Lagged(_)) => RunDetailDbEvent::Resync,
+            Err(broadcast::error::RecvError::Closed) => return None,
+        };
+
+        let matches = match event {
+            RunDetailDbEvent::RunChanged { run_id } => {
+                match crate::agentic::store::get_run(&stream_state.state.db_pool, run_id).await {
+                    Ok(Some(run)) => run.agent_key == stream_state.agent_key,
+                    Ok(None) => false,
+                    Err(error) => {
+                        warn!(
+                            agent_key = %stream_state.agent_key,
+                            run_id,
+                            error = ?error,
+                            "failed to inspect agent run for recent-runs SSE update"
+                        );
+                        false
+                    }
+                }
+            }
+            RunDetailDbEvent::SessionChanged { .. } => false,
+            RunDetailDbEvent::Resync => true,
+        };
+        if !matches {
+            continue;
+        }
+
+        let recent_runs_section = build_agent_recent_runs_view(
+            &stream_state.state,
+            &stream_state.agent_key,
+            stream_state.requested_page,
+        )
+        .await;
+        match AgentRecentRunsPartialTemplate::render_view(recent_runs_section) {
+            Ok(html) => {
+                return Some((
+                    Ok(Event::default().event("recent-runs").data(html)),
+                    stream_state,
+                ));
+            }
+            Err(error) => {
+                warn!(
+                    agent_key = %stream_state.agent_key,
+                    error = ?error,
+                    "failed to render recent-runs SSE snapshot"
+                );
+            }
+        }
+    }
+}
+
 pub(in crate::web::routes) async fn agents_show_job_detail(
     State(state): State<Arc<AppState>>,
     Path((agent_key, job_id)): Path<(String, i64)>,

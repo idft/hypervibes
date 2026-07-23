@@ -249,6 +249,52 @@ pub struct AgentHookNewPageTemplate {
     pub navbar: Navbar,
 }
 
+#[derive(Debug, Clone)]
+pub struct AgentRecentRunsView {
+    pub recent_runs: Vec<AgenticRunView>,
+    pub recent_runs_loaded: bool,
+    pub recent_runs_page: usize,
+    pub recent_runs_total_pages: usize,
+    pub recent_runs_total_count: usize,
+    pub recent_runs_range_start: usize,
+    pub recent_runs_range_end: usize,
+    pub recent_runs_previous_page_url: Option<String>,
+    pub recent_runs_next_page_url: Option<String>,
+    pub stream_url: String,
+}
+
+impl AgentRecentRunsView {
+    pub fn new(agent_key: &str, page: usize) -> Self {
+        Self {
+            recent_runs: Vec::new(),
+            recent_runs_loaded: false,
+            recent_runs_page: page,
+            recent_runs_total_pages: 0,
+            recent_runs_total_count: 0,
+            recent_runs_range_start: 0,
+            recent_runs_range_end: 0,
+            recent_runs_previous_page_url: None,
+            recent_runs_next_page_url: None,
+            stream_url: format!("/agents/{agent_key}/jobs/recent-runs/stream?page={page}"),
+        }
+    }
+}
+
+#[derive(Template)]
+#[template(path = "agent_recent_runs.html")]
+pub struct AgentRecentRunsPartialTemplate {
+    pub recent_runs_section: AgentRecentRunsView,
+}
+
+impl AgentRecentRunsPartialTemplate {
+    pub fn render_view(recent_runs_section: AgentRecentRunsView) -> Result<String, askama::Error> {
+        Self {
+            recent_runs_section,
+        }
+        .render()
+    }
+}
+
 #[derive(Template)]
 #[template(path = "agents_show.html")]
 pub struct AgentsShowPageTemplate {
@@ -295,19 +341,11 @@ pub struct AgentsShowPageTemplate {
     pub subaccount_name: Option<String>,
     pub jobs: Vec<AgenticJobScheduleView>,
     pub hooks: Vec<AgenticJobHookView>,
-    pub recent_runs: Vec<AgenticRunView>,
     pub jobs_loaded: bool,
     pub hooks_loaded: bool,
     pub can_enable_all_jobs: bool,
     pub can_disable_all_jobs: bool,
-    pub recent_runs_loaded: bool,
-    pub recent_runs_page: usize,
-    pub recent_runs_total_pages: usize,
-    pub recent_runs_total_count: usize,
-    pub recent_runs_range_start: usize,
-    pub recent_runs_range_end: usize,
-    pub recent_runs_previous_page_url: Option<String>,
-    pub recent_runs_next_page_url: Option<String>,
+    pub recent_runs_section: AgentRecentRunsView,
     pub jobs_warning: Option<String>,
     pub navbar: Navbar,
 }
@@ -361,19 +399,11 @@ impl AgentsShowPageTemplate {
             sparklines_html: String::new(),
             jobs: Vec::new(),
             hooks: Vec::new(),
-            recent_runs: Vec::new(),
             jobs_loaded: false,
             hooks_loaded: false,
             can_enable_all_jobs: false,
             can_disable_all_jobs: false,
-            recent_runs_loaded: false,
-            recent_runs_page: 1,
-            recent_runs_total_pages: 0,
-            recent_runs_total_count: 0,
-            recent_runs_range_start: 0,
-            recent_runs_range_end: 0,
-            recent_runs_previous_page_url: None,
-            recent_runs_next_page_url: None,
+            recent_runs_section: AgentRecentRunsView::new(&agent_key, 1),
             jobs_warning: None,
             navbar: Navbar::default(),
         }
