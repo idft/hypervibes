@@ -1,5 +1,6 @@
 use super::*;
 use crate::web::templates::test_support::*;
+use chrono::Utc;
 use serde_json::json;
 
 #[test]
@@ -70,6 +71,14 @@ fn hook_run_detail_view_uses_dash_timeframe_and_hook_job_url() {
     assert_eq!(run.timeframe_text, "—");
     assert_eq!(run.job_url, Some("/agents/test-agent/hooks/3".to_string()));
     assert_eq!(run.job_label, "hook");
+}
+
+#[test]
+fn run_duration_text_counts_active_runs() {
+    let duration = run_duration_text(Some(Utc::now() - chrono::Duration::seconds(5)), None);
+
+    assert_ne!(duration, "—");
+    assert!(duration.ends_with('s'));
 }
 
 #[test]

@@ -144,6 +144,9 @@
             providers.forEach(function (provider) {
                 provider.addEventListener('click', function () {
                     activeProviderId = provider.dataset.providerId || '__none__';
+                    if (activeProviderId === '__none__') {
+                        draftValue = '';
+                    }
                     applyFilters();
                 });
             });

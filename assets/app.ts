@@ -48,6 +48,67 @@ function markAgentJobsRefreshRequired(form: HTMLFormElement) {
   }
 }
 
+function syncModelDependentRunNowButtons(form: HTMLFormElement) {
+  const action = form.getAttribute("action");
+  const input = form.querySelector<HTMLInputElement>('input[name="model_selection"]');
+  if (!action || !input) {
+    return;
+  }
+
+  let pathname: string;
+  try {
+    pathname = new URL(action, window.location.href).pathname;
+  } catch {
+    return;
+  }
+
+  if (!/^\/agents\/[^/]+\/(?:jobs|hooks)\/\d+\/model$/.test(pathname)) {
+    return;
+  }
+
+  const hasModel = input.value.trim() !== "";
+  document.querySelectorAll<HTMLButtonElement>("[data-model-dependent-run-now]").forEach((button) => {
+    button.disabled = !hasModel;
+    button.classList.toggle("cursor-pointer", hasModel);
+    button.classList.toggle("cursor-not-allowed", !hasModel);
+    button.classList.toggle("opacity-50", !hasModel);
+    if (hasModel) {
+      button.removeAttribute("title");
+    } else {
+      button.title = "No model set";
+    }
+  });
+
+  const unavailableClasses = ["border-zinc-800", "text-zinc-500"];
+  const availableClasses = [
+    "border-emerald-900/60",
+    "bg-emerald-950/20",
+    "text-emerald-300",
+    "hover:border-emerald-800",
+    "hover:bg-emerald-950/40",
+    "hover:text-emerald-200",
+  ];
+  document.querySelectorAll<HTMLButtonElement>("[data-model-dependent-enable]").forEach((button) => {
+    const isEnabled = button.dataset.enabled === "true";
+    const shouldDisable = !isEnabled && !hasModel;
+    button.disabled = shouldDisable;
+    button.classList.toggle("cursor-pointer", !shouldDisable);
+    button.classList.toggle("cursor-not-allowed", shouldDisable);
+    button.classList.toggle("opacity-50", shouldDisable);
+    if (isEnabled) {
+      return;
+    }
+
+    button.classList.remove(...unavailableClasses, ...availableClasses);
+    button.classList.add(...(hasModel ? availableClasses : unavailableClasses));
+    if (shouldDisable) {
+      button.title = "No model set";
+    } else {
+      button.removeAttribute("title");
+    }
+  });
+}
+
 function renderTimeago(root: ParentNode = document) {
   const nodes = root.querySelectorAll("time.timeago");
   if (nodes.length > 0) {
@@ -1062,8 +1123,34 @@ function initAccountNavbar() {
 }
 
 function scrollRunTranscriptToBottom() {
-  document.querySelectorAll<HTMLElement>('[data-run-transcript-scroll]').forEach((scroll) => {
-    scroll.scrollTop = scroll.scrollHeight;
+  const scrollToBottom = () => {
+    document.querySelectorAll<HTMLElement>('[data-run-transcript-scroll]').forEach((scroll) => {
+      scroll.scrollTop = scroll.scrollHeight;
+    });
+  };
+
+  scrollToBottom();
+  window.requestAnimationFrame(() => {
+    scrollToBottom();
+    window.requestAnimationFrame(scrollToBottom);
+  });
+}
+
+function initRunTranscriptAutoScroll() {
+  if (typeof ResizeObserver === "undefined") {
+    return;
+  }
+
+  document.querySelectorAll<HTMLElement>("[data-run-transcript-scroll]").forEach((scroll) => {
+    const transcript = scroll.querySelector<HTMLElement>('[sse-swap="run-transcript"]');
+    if (!transcript || scroll.dataset.runTranscriptScrollBound === "true") {
+      return;
+    }
+
+    scroll.dataset.runTranscriptScrollBound = "true";
+    const observer = new ResizeObserver(() => scrollRunTranscriptToBottom());
+    observer.observe(scroll);
+    observer.observe(transcript);
   });
 }
 
@@ -1086,6 +1173,7 @@ function init() {
   seedSelectedMemoryTimelineItems();
   restoreSelectedMemoryTimelineItem();
   startRunningDurationTicker();
+  initRunTranscriptAutoScroll();
   scrollRunTranscriptToBottom();
 
   document.querySelectorAll<HTMLElement>(".number-roll").forEach(seedNumberRoll);
@@ -1115,6 +1203,10 @@ function init() {
       syncAgentSelector();
     }
 
+    if (target.matches('[sse-swap="run-summary"]')) {
+      tickRunningDurations();
+    }
+
     if (
       target.matches('[sse-swap="memories-timeline"]') ||
       target.querySelector('[sse-swap="memories-timeline"]')
@@ -1126,6 +1218,18 @@ function init() {
     if (
       target.matches('[sse-swap="run-transcript"]') ||
       target.querySelector('[sse-swap="run-transcript"]')
+    ) {
+      scrollRunTranscriptToBottom();
+    }
+  });
+
+  document.addEventListener("htmx:afterSettle", (e: Event) => {
+    const detail = (e as CustomEvent).detail;
+    const target = detail?.target;
+    if (
+      target instanceof Element &&
+      (target.matches('[sse-swap="run-transcript"]') ||
+        target.querySelector('[sse-swap="run-transcript"]'))
     ) {
       scrollRunTranscriptToBottom();
     }
@@ -1170,6 +1274,7 @@ function init() {
     const elt = detail.elt;
     if (elt instanceof HTMLFormElement) {
       markAgentJobsRefreshRequired(elt);
+      syncModelDependentRunNowButtons(elt);
     }
 
     if (elt instanceof HTMLElement && elt.matches("[data-memory-timeline-item]")) {

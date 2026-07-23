@@ -76,6 +76,10 @@ body {
   scrollbar-color: rgba(113, 113, 122, 0.9) rgba(24, 24, 27, 0.9);
 }
 
+[data-run-transcript-scroll] {
+  overflow-anchor: none;
+}
+
 .memory-timeline-scroll {
   cursor: grab;
 }

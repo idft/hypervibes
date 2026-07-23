@@ -1,15 +1,10 @@
 <header class="flex shrink-0 flex-col gap-2 pb-6">
-    <div class="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
-        <div>
-            <div class="flex items-center gap-3">
-                <h2 class="text-lg font-medium text-white">{{ run.job_key }} · Run {{ run.id }}</h2>
-                <span class="inline-flex rounded-full border px-2 py-0.5 text-xs font-medium {{ run.status_class }}">{{ run.status_label }}</span>
-            </div>
-        </div>
-        <a href="{% if let Some(job_url) = run.job_url %}{{ job_url }}{% else %}/agents/{{ run.agent_key }}/jobs{% endif %}" class="inline-flex w-fit cursor-pointer items-center gap-2 rounded-full border border-zinc-800 px-4 py-2 text-sm font-medium text-zinc-300 hover:border-zinc-700 hover:text-white">
-            <span aria-hidden="true">&larr;</span>
-            {% if let Some(_job_url) = run.job_url %}Back to {{ run.job_label }}{% else %}Back to jobs{% endif %}
+    <div class="flex items-center gap-3">
+        <a href="{% if let Some(job_url) = run.job_url %}{{ job_url }}{% else %}/agents/{{ run.agent_key }}/jobs{% endif %}" class="inline-flex h-9 w-9 shrink-0 cursor-pointer items-center justify-center rounded-full border border-zinc-800 text-zinc-300 hover:border-zinc-700 hover:text-white" aria-label="{% if let Some(_job_url) = run.job_url %}Back to {{ run.job_label }}{% else %}Back to jobs{% endif %}" title="{% if let Some(_job_url) = run.job_url %}Back to {{ run.job_label }}{% else %}Back to jobs{% endif %}">
+            <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="M10 19l-7-7m0 0l7-7m-7 7h18"></path></svg>
         </a>
+        <h2 class="text-lg font-medium text-white">{{ run.job_key }} · Run {{ run.id }}</h2>
+        <span class="inline-flex rounded-full border px-2 py-0.5 text-xs font-medium {{ run.status_class }}">{{ run.status_label }}</span>
     </div>
 </header>
 

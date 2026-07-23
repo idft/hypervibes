@@ -401,6 +401,10 @@ pub(super) fn run_duration_text(
             let secs = (end - start).num_seconds().max(0);
             format!("{secs}s")
         }
+        (Some(start), None) => {
+            let secs = (Utc::now() - start).num_seconds().max(0);
+            format!("{secs}s")
+        }
         _ => "—".to_string(),
     }
 }
