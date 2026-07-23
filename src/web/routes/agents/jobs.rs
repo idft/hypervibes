@@ -53,7 +53,7 @@ use crate::{
         templates::{
             AgentJobDetailPageTemplate, AgentRecentRunsPartialTemplate,
             AgentScheduleNewPageTemplate, AgentShowTab, CreateAgentScheduleFormValues,
-            ModelPickerPartialTemplate, build_agent_show_tabs,
+            ModelPickerPartialTemplate, build_agent_show_tabs, load_navbar,
         },
     },
 };
@@ -190,6 +190,7 @@ async fn next_agent_recent_runs_event(
 
 pub(in crate::web::routes) async fn agents_show_job_detail(
     State(state): State<Arc<AppState>>,
+    user: AuthenticatedUser,
     Path((agent_key, job_id)): Path<(String, i64)>,
     Query(query): Query<JobDetailQuery>,
 ) -> Result<Response, AppError> {
@@ -254,12 +255,14 @@ pub(in crate::web::routes) async fn agents_show_job_detail(
         build_model_picker_view("job-model-selection", &job_view.model_selection, picker);
     model_picker.show_label = false;
     model_picker.use_modal = true;
+    let navbar = load_navbar(&state.db_pool, user.id).await?;
     let html = AgentJobDetailPageTemplate::render_view(
         agent.clone(),
         job_view,
         model_picker,
         job_runs,
         job_runs_loaded,
+        navbar,
     )?;
     Ok(Html(html).into_response())
 }
@@ -467,28 +470,33 @@ impl CreateAgentScheduleForm {
 }
 pub(in crate::web::routes) async fn agents_new_job(
     State(state): State<Arc<AppState>>,
+    user: AuthenticatedUser,
     Path(agent_key): Path<String>,
 ) -> Result<Response, AppError> {
     let Some(agent) = get_agent(&state.db_pool, &agent_key).await? else {
         return Ok((StatusCode::NOT_FOUND, "agent not found").into_response());
     };
     let picker = load_model_picker_context(&state, &agent).await;
+    let navbar = load_navbar(&state.db_pool, user.id).await?;
     Ok(render_new_job_form(
         agent,
         CreateAgentScheduleForm::defaults().as_template_values(),
         picker,
         Vec::new(),
         StatusCode::OK,
+        navbar,
     ))
 }
 pub(in crate::web::routes) async fn agents_create_job(
     State(state): State<Arc<AppState>>,
+    user: AuthenticatedUser,
     Path(agent_key): Path<String>,
     Form(form): Form<CreateAgentScheduleForm>,
 ) -> Result<Response, AppError> {
     let Some(agent) = get_agent(&state.db_pool, &agent_key).await? else {
         return Ok((StatusCode::NOT_FOUND, "agent not found").into_response());
     };
+    let navbar = load_navbar(&state.db_pool, user.id).await?;
     let validated = match form.validate() {
         Ok(validated) => validated,
         Err(errors) => {
@@ -499,6 +507,7 @@ pub(in crate::web::routes) async fn agents_create_job(
                 picker,
                 errors,
                 StatusCode::UNPROCESSABLE_ENTITY,
+                navbar.clone(),
             ));
         }
     };
@@ -516,6 +525,7 @@ pub(in crate::web::routes) async fn agents_create_job(
                     picker,
                     vec![error],
                     StatusCode::UNPROCESSABLE_ENTITY,
+                    navbar.clone(),
                 ));
             }
         };
@@ -551,6 +561,7 @@ pub(in crate::web::routes) async fn agents_create_job(
             picker,
             errors,
             StatusCode::UNPROCESSABLE_ENTITY,
+            navbar,
         ));
     }
 
@@ -906,6 +917,7 @@ pub(in crate::web::routes) fn render_new_job_form(
     picker: ModelPickerContext,
     errors: Vec<String>,
     status: StatusCode,
+    navbar: crate::web::templates::Navbar,
 ) -> Response {
     let current_path = format!("/agents/{}/jobs/new", agent.agent_key);
     let model_picker =
@@ -918,7 +930,7 @@ pub(in crate::web::routes) fn render_new_job_form(
         model_picker,
         errors,
         current_path,
-        navbar: crate::web::templates::Navbar::default(),
+        navbar,
     };
     match template.render() {
         Ok(body) => (status, Html(body)).into_response(),

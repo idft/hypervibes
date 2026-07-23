@@ -27,7 +27,7 @@ use crate::{
         auth::AuthenticatedUser,
         templates::{
             AgentMemoryDetailPageTemplate, AgentMemoryDetailPartialTemplate,
-            AgentMemoryTimelinePartialTemplate, AgentShowTab, MemoryView,
+            AgentMemoryTimelinePartialTemplate, AgentShowTab, MemoryView, load_navbar,
         },
         ui_events::UiEvent,
     },
@@ -63,6 +63,7 @@ pub(in crate::web::routes) async fn agents_show_memory_detail(
     State(state): State<Arc<AppState>>,
     Path((agent_key, memory_id)): Path<(String, uuid::Uuid)>,
     headers: HeaderMap,
+    user: AuthenticatedUser,
 ) -> Result<Response, AppError> {
     let Some(agent) = get_agent(&state.db_pool, &agent_key).await? else {
         return Ok((StatusCode::NOT_FOUND, "agent not found").into_response());
@@ -81,9 +82,17 @@ pub(in crate::web::routes) async fn agents_show_memory_detail(
         return Ok(Html(html).into_response());
     }
 
-    let memory_detail_html = AgentMemoryDetailPartialTemplate::render_view(memory_view.clone())?;
-    let html =
-        AgentMemoryDetailPageTemplate::render_view(agent.clone(), memory_view, memory_detail_html)?;
+    let memory_detail_html = AgentMemoryDetailPartialTemplate::render_page_view(
+        memory_view.clone(),
+        format!("/agents/{}/memories", agent.agent_key),
+    )?;
+    let navbar = load_navbar(&state.db_pool, user.id).await?;
+    let html = AgentMemoryDetailPageTemplate::render_view(
+        agent.clone(),
+        memory_view,
+        memory_detail_html,
+        navbar,
+    )?;
     Ok(Html(html).into_response())
 }
 pub(in crate::web::routes) async fn agents_delete_memory(

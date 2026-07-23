@@ -35,6 +35,7 @@ fn job_detail_page_renders_job_metadata_and_runs() {
         },
         runs,
         true,
+        Navbar::default(),
     )
     .expect("render job detail page");
 

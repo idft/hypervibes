@@ -192,11 +192,24 @@ impl AgentMemoryTimelineItemsPartialTemplate {
 #[template(path = "agent_memory_detail.html")]
 pub struct AgentMemoryDetailPartialTemplate {
     pub memory: MemoryView,
+    pub back_url: Option<String>,
 }
 
 impl AgentMemoryDetailPartialTemplate {
     pub fn render_view(memory: MemoryView) -> Result<String, askama::Error> {
-        Self { memory }.render()
+        Self {
+            memory,
+            back_url: None,
+        }
+        .render()
+    }
+
+    pub fn render_page_view(memory: MemoryView, back_url: String) -> Result<String, askama::Error> {
+        Self {
+            memory,
+            back_url: Some(back_url),
+        }
+        .render()
     }
 }
 
@@ -217,6 +230,7 @@ impl AgentMemoryDetailPageTemplate {
         agent: AgentDetailRow,
         memory: MemoryView,
         memory_detail_html: String,
+        navbar: Navbar,
     ) -> Result<String, askama::Error> {
         let current_path = format!("/agents/{}/memories/{}", agent.agent_key, memory.memory_id);
         Self {
@@ -226,7 +240,7 @@ impl AgentMemoryDetailPageTemplate {
             memory,
             memory_detail_html,
             current_path,
-            navbar: Navbar::default(),
+            navbar,
         }
         .render()
     }

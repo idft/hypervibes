@@ -165,6 +165,7 @@ impl AgentJobDetailPageTemplate {
         model_picker: ModelPickerView,
         job_runs: Vec<AgenticRunView>,
         job_runs_loaded: bool,
+        navbar: Navbar,
     ) -> Result<String, askama::Error> {
         let current_path = format!("/agents/{}/jobs/{}", agent.agent_key, job.id);
         Self {
@@ -176,7 +177,7 @@ impl AgentJobDetailPageTemplate {
             job_runs,
             job_runs_loaded,
             current_path,
-            navbar: Navbar::default(),
+            navbar,
         }
         .render()
     }

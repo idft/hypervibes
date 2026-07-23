@@ -184,7 +184,12 @@ pub(in crate::web::routes) async fn create_agent(
     let choices = load_trading_account_choices(&state, &user).await;
 
     if let Err(errors) = form.validate() {
-        return Ok(render_new_form(form, choices.into(), errors));
+        return Ok(render_new_form(
+            form,
+            choices.into(),
+            errors,
+            load_navbar(&state.db_pool, user.id).await?,
+        ));
     }
 
     let trading_account_address =
@@ -195,6 +200,7 @@ pub(in crate::web::routes) async fn create_agent(
                     form,
                     choices.into(),
                     vec![message.to_string()],
+                    load_navbar(&state.db_pool, user.id).await?,
                 ));
             }
         };
@@ -242,7 +248,12 @@ pub(in crate::web::routes) async fn create_agent(
                 return Err(AppError(e));
             }
         };
-        return Ok(render_new_form(form, choices.into(), errors));
+        return Ok(render_new_form(
+            form,
+            choices.into(),
+            errors,
+            load_navbar(&state.db_pool, user.id).await?,
+        ));
     }
 
     if let Err(error) = activate_new_agent(&state, &agent_key).await {
@@ -281,6 +292,7 @@ pub(in crate::web::routes) fn render_new_form(
     form: CreateAgentForm,
     choices: crate::web::templates::TradingAccountChoicesView,
     errors: Vec<String>,
+    navbar: crate::web::templates::Navbar,
 ) -> Response {
     let template = AgentsNewPageTemplate {
         selected_account: form.trading_account_selection.clone(),
@@ -288,7 +300,7 @@ pub(in crate::web::routes) fn render_new_form(
         choices,
         errors,
         current_path: "/agents/new".to_string(),
-        navbar: crate::web::templates::Navbar::default(),
+        navbar,
     };
     match template.render() {
         Ok(body) => (StatusCode::UNPROCESSABLE_ENTITY, Html(body)).into_response(),

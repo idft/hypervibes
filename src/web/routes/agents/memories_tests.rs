@@ -99,6 +99,7 @@ async fn agent_memory_detail_route_renders_full_page_for_direct_navigation() {
     assert!(text.contains("<!DOCTYPE html>"));
     assert!(text.contains("/static/dist/app.css"));
     assert!(text.contains("Vibetrading"));
+    assert!(text.contains("data-account-address=\"0x0000000000000000000000000000000000000001\""));
     assert!(text.contains("id=\"memory-detail\""));
     assert!(text.contains("Remember the breakout"));
     assert!(text.contains("<h3>Plan</h3>"));
