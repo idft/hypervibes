@@ -1061,6 +1061,12 @@ function initAccountNavbar() {
   if (address) setAddress(address);
 }
 
+function scrollRunTranscriptToBottom() {
+  document.querySelectorAll<HTMLElement>('[data-run-transcript-scroll]').forEach((scroll) => {
+    scroll.scrollTop = scroll.scrollHeight;
+  });
+}
+
 function init() {
   renderTimeago();
   renderLocalDateTimes();
@@ -1080,6 +1086,7 @@ function init() {
   seedSelectedMemoryTimelineItems();
   restoreSelectedMemoryTimelineItem();
   startRunningDurationTicker();
+  scrollRunTranscriptToBottom();
 
   document.querySelectorAll<HTMLElement>(".number-roll").forEach(seedNumberRoll);
 
@@ -1114,6 +1121,13 @@ function init() {
     ) {
       seedSelectedMemoryTimelineItems();
       restoreSelectedMemoryTimelineItem();
+    }
+
+    if (
+      target.matches('[sse-swap="run-transcript"]') ||
+      target.querySelector('[sse-swap="run-transcript"]')
+    ) {
+      scrollRunTranscriptToBottom();
     }
   });
 

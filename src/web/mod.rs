@@ -2,6 +2,7 @@ mod api;
 pub(crate) mod auth;
 mod error;
 mod routes;
+pub(crate) mod run_detail_events;
 mod state;
 pub(crate) mod templates;
 pub(crate) mod ui_events;
@@ -30,6 +31,7 @@ use crate::{
     opencode::{client::OpenCodeClient, workspace::OpenCodeWorkspaceConfig},
 };
 
+use self::run_detail_events::{RunDetailEventHub, run_listener};
 use self::ui_events::UiEventHub;
 
 #[allow(clippy::too_many_arguments)]
@@ -50,6 +52,12 @@ pub async fn serve(
     workspace_leases: WorkspaceLeaseManager,
 ) -> Result<()> {
     let shutdown_rx_for_state = shutdown_rx.clone();
+    let run_detail_events = Arc::new(RunDetailEventHub::new());
+    let _run_detail_listener = tokio::spawn(run_listener(
+        db_pool.clone(),
+        Arc::clone(&run_detail_events),
+        shutdown_rx.clone(),
+    ));
     let in_flight_for_state = in_flight.clone();
     let state = Arc::new(AppState {
         db_pool,
@@ -59,6 +67,7 @@ pub async fn serve(
         encryption_key,
         live_accounts,
         ui_events: Arc::new(UiEventHub::new()),
+        run_detail_events,
         opencode_workspace_config,
         opencode_base_url,
         opencode_client,

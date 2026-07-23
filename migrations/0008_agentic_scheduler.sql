@@ -68,3 +68,18 @@ CREATE INDEX IF NOT EXISTS agentic_runs_status_idx
 CREATE INDEX IF NOT EXISTS agentic_runs_backend_run_ref_idx
     ON agentic_runs (backend_run_ref)
     WHERE backend_run_ref IS NOT NULL;
+
+CREATE OR REPLACE FUNCTION public.notify_agentic_run_detail_changed()
+RETURNS TRIGGER AS $$
+BEGIN
+    PERFORM pg_notify('agent_run_detail_run_changed', NEW.id::text);
+    RETURN NULL;
+END;
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS notify_agentic_runs_run_detail_changed ON agentic_runs;
+CREATE TRIGGER notify_agentic_runs_run_detail_changed
+    AFTER INSERT OR UPDATE OF status, backend_run_ref, started_at, finished_at, error_summary
+    ON agentic_runs
+    FOR EACH ROW
+    EXECUTE FUNCTION public.notify_agentic_run_detail_changed();

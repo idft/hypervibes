@@ -12,6 +12,7 @@ use crate::{
     opencode::{client::OpenCodeClient, workspace::OpenCodeWorkspaceConfig},
 };
 
+use super::run_detail_events::RunDetailEventHub;
 use super::ui_events::UiEventHub;
 
 #[derive(Clone)]
@@ -23,6 +24,7 @@ pub struct AppState {
     pub encryption_key: EncryptionKey,
     pub live_accounts: Arc<LiveAccountStore>,
     pub ui_events: Arc<UiEventHub>,
+    pub run_detail_events: Arc<RunDetailEventHub>,
     pub opencode_workspace_config: OpenCodeWorkspaceConfig,
     pub opencode_base_url: String,
     pub opencode_client: Arc<OpenCodeClient>,

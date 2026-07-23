@@ -155,6 +155,10 @@ pub fn router(state: Arc<AppState>) -> Router {
             "/agents/{agent_key}/runs/{run_id}",
             get(agents_show_run_detail),
         )
+        .route(
+            "/agents/{agent_key}/runs/{run_id}/stream",
+            get(agent_run_detail_stream),
+        )
         .route("/agents/{agent_key}/delete", post(delete_agent))
         .route("/agents/{agent_key}/live/stream", get(agent_live_stream))
         .route("/settings", get(settings_index).post(settings_update))

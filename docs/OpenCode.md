@@ -136,6 +136,16 @@ incomplete because plugin writes are asynchronous. Run-detail transcripts use
 completed tool state from `opencode.message_parts` when available and retain
 `tool_executions` as a fallback for older sessions.
 
+Run-detail pages display `opencode.sessions`, `opencode.messages`,
+`opencode.message_parts`, `opencode.tool_executions`, and
+`opencode.session_errors`. The displayed session is associated with a
+Vibetrading run through `agentic_runs.backend_run_ref`. Plugin writes and
+Vibetrading run updates issue Postgres notifications after their transactions
+commit; the web process fans those notifications out to the run-detail SSE
+stream. Each update re-renders the complete summary and transcript partial,
+because plugin records are mutable and may arrive asynchronously rather than
+as append-only rows.
+
 Scheduled jobs and hooks must have an explicit model selected before they can be enabled from the operator UI.
 
 ## Analysis Engineering

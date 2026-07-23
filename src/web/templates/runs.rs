@@ -29,6 +29,7 @@ pub struct AgenticRunView {
 #[derive(Debug, Clone)]
 pub struct AgenticRunDetailView {
     pub id: i64,
+    pub agent_key: String,
     pub status: String,
     pub status_label: String,
     pub status_class: String,
@@ -126,6 +127,7 @@ impl AgenticRunDetailView {
 
         Self {
             id: row.id,
+            agent_key: row.agent_key.clone(),
             status: row.status.clone(),
             status_label,
             status_class,
@@ -283,10 +285,49 @@ pub struct AgentRunDetailPageTemplate {
     pub tabs: Vec<AgentShowTabLink>,
     pub agent_tabs_use_htmx: bool,
     pub run: AgenticRunDetailView,
-    pub session: Option<OpenCodeSessionView>,
-    pub session_lookup_attempted: bool,
+    pub summary_html: String,
+    pub transcript_html: String,
     pub current_path: String,
     pub navbar: Navbar,
+}
+
+#[derive(Template)]
+#[template(path = "agent_run_detail_summary.html")]
+pub struct AgentRunDetailSummaryPartialTemplate {
+    pub run: AgenticRunDetailView,
+    pub session: Option<OpenCodeSessionView>,
+}
+
+#[derive(Template)]
+#[template(path = "agent_run_detail_transcript.html")]
+pub struct AgentRunDetailTranscriptPartialTemplate {
+    pub run: AgenticRunDetailView,
+    pub session: Option<OpenCodeSessionView>,
+    pub session_lookup_attempted: bool,
+}
+
+impl AgentRunDetailSummaryPartialTemplate {
+    pub fn render_view(
+        run: AgenticRunDetailView,
+        session: Option<OpenCodeSessionView>,
+    ) -> Result<String, askama::Error> {
+        Self { run, session }.render()
+    }
+}
+
+impl AgentRunDetailTranscriptPartialTemplate {
+    pub fn render_view(
+        run: AgenticRunDetailView,
+        session: Option<OpenCodeSessionView>,
+        session_lookup_attempted: bool,
+    ) -> Result<String, askama::Error> {
+        Self {
+            run,
+            session,
+            session_lookup_attempted,
+        }
+        .render()
+    }
 }
 
 impl AgentRunDetailPageTemplate {
@@ -297,13 +338,20 @@ impl AgentRunDetailPageTemplate {
         session_lookup_attempted: bool,
     ) -> Result<String, askama::Error> {
         let current_path = format!("/agents/{}/runs/{}", agent.agent_key, run.id);
+        let summary_html =
+            AgentRunDetailSummaryPartialTemplate::render_view(run.clone(), session.clone())?;
+        let transcript_html = AgentRunDetailTranscriptPartialTemplate::render_view(
+            run.clone(),
+            session.clone(),
+            session_lookup_attempted,
+        )?;
         Self {
             tabs: build_agent_show_tabs(&agent, AgentShowTab::Jobs),
             agent_tabs_use_htmx: false,
             agent,
             run,
-            session,
-            session_lookup_attempted,
+            summary_html,
+            transcript_html,
             current_path,
             navbar: Navbar::default(),
         }

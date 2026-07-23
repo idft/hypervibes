@@ -21,7 +21,7 @@ use crate::{
         },
     },
     test_db,
-    web::{AppState, api, ui_events::UiEventHub},
+    web::{AppState, api, run_detail_events::RunDetailEventHub, ui_events::UiEventHub},
 };
 
 pub struct NoopAgenticBackend;
@@ -52,6 +52,7 @@ pub async fn test_state() -> Arc<AppState> {
         ),
         live_accounts: Arc::new(crate::hyperliquid::live_state::LiveAccountStore::new()),
         ui_events: Arc::new(UiEventHub::new()),
+        run_detail_events: Arc::new(RunDetailEventHub::new()),
         opencode_workspace_config: crate::opencode::workspace::OpenCodeWorkspaceConfig {
             source_root: std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
                 .join(crate::opencode::workspace::PROFILE_SOURCE_RELATIVE_PATH),

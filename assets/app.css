@@ -70,32 +70,37 @@ body {
   }
 }
 
-.memory-timeline-scroll {
+.dark-scrollbar {
   cursor: grab;
   scrollbar-width: thin;
   scrollbar-color: rgba(113, 113, 122, 0.9) rgba(24, 24, 27, 0.9);
+}
+
+.memory-timeline-scroll {
+  cursor: grab;
 }
 
 .memory-timeline-scroll[data-dragging="true"] {
   cursor: grabbing;
 }
 
-.memory-timeline-scroll::-webkit-scrollbar {
+.dark-scrollbar::-webkit-scrollbar {
+  width: 12px;
   height: 12px;
 }
 
-.memory-timeline-scroll::-webkit-scrollbar-track {
+.dark-scrollbar::-webkit-scrollbar-track {
   border-radius: 9999px;
   background: rgba(24, 24, 27, 0.9);
 }
 
-.memory-timeline-scroll::-webkit-scrollbar-thumb {
+.dark-scrollbar::-webkit-scrollbar-thumb {
   border: 3px solid rgba(24, 24, 27, 0.9);
   border-radius: 9999px;
   background: linear-gradient(90deg, rgba(82, 82, 91, 0.95), rgba(113, 113, 122, 0.95));
 }
 
-.memory-timeline-scroll::-webkit-scrollbar-thumb:hover {
+.dark-scrollbar::-webkit-scrollbar-thumb:hover {
   background: linear-gradient(90deg, rgba(113, 113, 122, 0.98), rgba(161, 161, 170, 0.98));
 }
 

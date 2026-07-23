@@ -1,0 +1,85 @@
+<header class="flex shrink-0 flex-col gap-2 pb-6">
+    <div class="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+        <div>
+            <div class="flex items-center gap-3">
+                <h2 class="text-lg font-medium text-white">{{ run.job_key }} · Run {{ run.id }}</h2>
+                <span class="inline-flex rounded-full border px-2 py-0.5 text-xs font-medium {{ run.status_class }}">{{ run.status_label }}</span>
+            </div>
+        </div>
+        <a href="{% if let Some(job_url) = run.job_url %}{{ job_url }}{% else %}/agents/{{ run.agent_key }}/jobs{% endif %}" class="inline-flex w-fit cursor-pointer items-center gap-2 rounded-full border border-zinc-800 px-4 py-2 text-sm font-medium text-zinc-300 hover:border-zinc-700 hover:text-white">
+            <span aria-hidden="true">&larr;</span>
+            {% if let Some(_job_url) = run.job_url %}Back to {{ run.job_label }}{% else %}Back to jobs{% endif %}
+        </a>
+    </div>
+</header>
+
+<div>
+    <dl class="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
+        <div>
+            <dt class="text-xs uppercase tracking-[0.16em] text-zinc-500">Scheduled for</dt>
+            <dd class="mt-2 font-mono text-sm text-zinc-200">
+                <time class="local-datetime" data-local-format="datetime" datetime="{{ run.scheduled_for.iso }}" title="{{ run.scheduled_for.fallback_text }}">{{ run.scheduled_for.fallback_text }}</time>
+            </dd>
+        </div>
+        <div>
+            <dt class="text-xs uppercase tracking-[0.16em] text-zinc-500">Timeframe</dt>
+            <dd class="mt-2 font-mono text-sm text-zinc-200">{{ run.timeframe_text }}</dd>
+        </div>
+        <div>
+            <dt class="text-xs uppercase tracking-[0.16em] text-zinc-500">Duration</dt>
+            <dd class="mt-2 font-mono text-sm text-zinc-200">{% if run.status == "running" %}{% if let Some(started_at) = run.started_at %}<span data-running-duration data-started-at="{{ started_at.iso }}">{{ run.duration_text }}</span>{% else %}{{ run.duration_text }}{% endif %}{% else %}{{ run.duration_text }}{% endif %}</dd>
+        </div>
+        <div>
+            <dt class="text-xs uppercase tracking-[0.16em] text-zinc-500">Timeout</dt>
+            <dd class="mt-2 font-mono text-sm text-zinc-200">{{ run.timeout_text }}</dd>
+        </div>
+        <div>
+            <dt class="text-xs uppercase tracking-[0.16em] text-zinc-500">Started</dt>
+            <dd class="mt-2 font-mono text-sm text-zinc-200">
+                {% if let Some(started_at) = run.started_at %}
+                <time class="local-datetime" data-local-format="datetime" datetime="{{ started_at.iso }}" title="{{ started_at.fallback_text }}">{{ started_at.fallback_text }}</time>
+                {% else %}
+                <span class="text-zinc-500">—</span>
+                {% endif %}
+            </dd>
+        </div>
+        <div>
+            <dt class="text-xs uppercase tracking-[0.16em] text-zinc-500">Finished</dt>
+            <dd class="mt-2 font-mono text-sm text-zinc-200">
+                {% if let Some(finished_at) = run.finished_at %}
+                <time class="local-datetime" data-local-format="datetime" datetime="{{ finished_at.iso }}" title="{{ finished_at.fallback_text }}">{{ finished_at.fallback_text }}</time>
+                {% else %}
+                <span class="text-zinc-500">—</span>
+                {% endif %}
+            </dd>
+        </div>
+        {% if let Some(session) = session %}
+        <div>
+            <dt class="text-xs uppercase tracking-[0.16em] text-zinc-500">Model</dt>
+            <dd class="mt-2 break-all font-mono text-sm text-zinc-200">
+                {{ session.model_text }}
+                {% if !session.share_url.is_empty() %}
+                <a href="{{ session.share_url }}" class="ml-2 cursor-pointer text-xs text-zinc-400 hover:text-zinc-200">share</a>
+                {% endif %}
+            </dd>
+        </div>
+        <div>
+            <dt class="text-xs uppercase tracking-[0.16em] text-zinc-500">Estimated cost</dt>
+            <dd class="mt-2 font-mono text-sm text-zinc-200">{{ session.estimated_cost_text }}</dd>
+        </div>
+        {% endif %}
+    </dl>
+
+    {% if let Some(session) = session %}
+    <div class="mt-4 grid grid-cols-2 gap-4 md:grid-cols-4 xl:grid-cols-8">
+        <div class="bg-zinc-950/50 p-4"><p class="text-xs uppercase tracking-[0.16em] text-zinc-500">Input</p><p class="mt-2 font-mono text-sm text-zinc-200">{{ session.input_tokens_text }}</p></div>
+        <div class="bg-zinc-950/50 p-4"><p class="text-xs uppercase tracking-[0.16em] text-zinc-500">Output</p><p class="mt-2 font-mono text-sm text-zinc-200">{{ session.output_tokens_text }}</p></div>
+        <div class="bg-zinc-950/50 p-4"><p class="text-xs uppercase tracking-[0.16em] text-zinc-500">Reasoning</p><p class="mt-2 font-mono text-sm text-zinc-200">{{ session.reasoning_tokens_text }}</p></div>
+        <div class="bg-zinc-950/50 p-4"><p class="text-xs uppercase tracking-[0.16em] text-zinc-500">Context</p><p class="mt-2 font-mono text-sm text-zinc-200">{{ session.context_tokens_text }}</p></div>
+        <div class="bg-zinc-950/50 p-4"><p class="text-xs uppercase tracking-[0.16em] text-zinc-500">Peak context</p><p class="mt-2 font-mono text-sm text-zinc-200">{{ session.peak_context_tokens_text }}</p></div>
+        <div class="bg-zinc-950/50 p-4"><p class="text-xs uppercase tracking-[0.16em] text-zinc-500">Cache read</p><p class="mt-2 font-mono text-sm text-zinc-200">{{ session.cache_read_tokens_text }}</p></div>
+        <div class="bg-zinc-950/50 p-4"><p class="text-xs uppercase tracking-[0.16em] text-zinc-500">Cache write</p><p class="mt-2 font-mono text-sm text-zinc-200">{{ session.cache_write_tokens_text }}</p></div>
+        <div class="bg-zinc-950/50 p-4"><p class="text-xs uppercase tracking-[0.16em] text-zinc-500">Compactions</p><p class="mt-2 font-mono text-sm text-zinc-200">{{ session.compaction_count_text }}</p></div>
+    </div>
+    {% endif %}
+</div>

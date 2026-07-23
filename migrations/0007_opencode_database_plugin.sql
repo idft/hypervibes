@@ -192,6 +192,76 @@ CREATE TRIGGER update_commands_updated_at
     FOR EACH ROW
     EXECUTE FUNCTION update_updated_at_column();
 
+CREATE OR REPLACE FUNCTION opencode.notify_session_detail_changed()
+RETURNS TRIGGER AS $$
+DECLARE
+    affected_session_id TEXT;
+BEGIN
+    CASE TG_TABLE_NAME
+        WHEN 'sessions' THEN
+            affected_session_id := CASE WHEN TG_OP = 'DELETE' THEN OLD.id ELSE NEW.id END;
+        WHEN 'messages' THEN
+            affected_session_id := CASE
+                WHEN TG_OP = 'DELETE' THEN OLD.session_id
+                ELSE NEW.session_id
+            END;
+        WHEN 'message_parts' THEN
+            SELECT messages.session_id
+              INTO affected_session_id
+              FROM opencode.messages AS messages
+             WHERE messages.id = CASE
+                 WHEN TG_OP = 'DELETE' THEN OLD.message_id
+                 ELSE NEW.message_id
+             END;
+        WHEN 'tool_executions' THEN
+            affected_session_id := CASE
+                WHEN TG_OP = 'DELETE' THEN OLD.session_id
+                ELSE NEW.session_id
+            END;
+        WHEN 'session_errors' THEN
+            affected_session_id := CASE
+                WHEN TG_OP = 'DELETE' THEN OLD.session_id
+                ELSE NEW.session_id
+            END;
+    END CASE;
+
+    IF affected_session_id IS NOT NULL AND length(affected_session_id) > 0 THEN
+        PERFORM pg_notify('agent_run_detail_session_changed', affected_session_id);
+    END IF;
+    RETURN NULL;
+END;
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS notify_sessions_session_detail_changed ON sessions;
+CREATE TRIGGER notify_sessions_session_detail_changed
+    AFTER INSERT OR UPDATE OR DELETE ON sessions
+    FOR EACH ROW
+    EXECUTE FUNCTION opencode.notify_session_detail_changed();
+
+DROP TRIGGER IF EXISTS notify_messages_session_detail_changed ON messages;
+CREATE TRIGGER notify_messages_session_detail_changed
+    AFTER INSERT OR UPDATE OR DELETE ON messages
+    FOR EACH ROW
+    EXECUTE FUNCTION opencode.notify_session_detail_changed();
+
+DROP TRIGGER IF EXISTS notify_message_parts_session_detail_changed ON message_parts;
+CREATE TRIGGER notify_message_parts_session_detail_changed
+    AFTER INSERT OR UPDATE OR DELETE ON message_parts
+    FOR EACH ROW
+    EXECUTE FUNCTION opencode.notify_session_detail_changed();
+
+DROP TRIGGER IF EXISTS notify_tool_executions_session_detail_changed ON tool_executions;
+CREATE TRIGGER notify_tool_executions_session_detail_changed
+    AFTER INSERT OR UPDATE OR DELETE ON tool_executions
+    FOR EACH ROW
+    EXECUTE FUNCTION opencode.notify_session_detail_changed();
+
+DROP TRIGGER IF EXISTS notify_session_errors_session_detail_changed ON session_errors;
+CREATE TRIGGER notify_session_errors_session_detail_changed
+    AFTER INSERT OR UPDATE OR DELETE ON session_errors
+    FOR EACH ROW
+    EXECUTE FUNCTION opencode.notify_session_detail_changed();
+
 CREATE OR REPLACE VIEW conversation_view AS
 SELECT
     m.id as message_id,
