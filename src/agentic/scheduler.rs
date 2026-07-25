@@ -295,6 +295,13 @@ impl AgenticScheduler {
         )
         .await?;
 
+        process_provider_config_reload_tasks(
+            &self.pool,
+            &self.opencode_client,
+            self.opencode_client.base_url(),
+        )
+        .await?;
+
         spawn_coding_workers(
             &self.pool,
             &self.backend,
@@ -531,6 +538,11 @@ impl AgenticScheduler {
                 store::mark_run_failed(&self.pool, run_id, &summary, None).await?;
             }
         }
+        let requeued =
+            store::requeue_stale_provider_config_reload_tasks(&self.pool, stale_before).await?;
+        if requeued > 0 {
+            warn!(requeued, "requeued stale provider config reload tasks");
+        }
         self.last_orphan_recovery_at = Some(now);
         Ok(())
     }
@@ -658,6 +670,54 @@ async fn process_workspace_maintenance_tasks(
                 error = ?error,
                 "workspace maintenance failed"
             );
+            let summary = maintenance_error_summary(&error);
+            store::mark_maintenance_task_failed(pool, task.id, &summary).await?;
+        }
+    }
+
+    Ok(())
+}
+
+/// Process a queued `provider_config_reload` maintenance task. The task
+/// disposes all OpenCode instances so newly stored (or removed) provider
+/// credentials are reflected in the `/provider` response. It waits until
+/// no OpenCode sessions are active (`busy`/`retry`) to avoid interrupting
+/// in-flight agent work, then calls `POST /global/dispose`.
+async fn process_provider_config_reload_tasks(
+    pool: &DbPool,
+    opencode_client: &Arc<OpenCodeClient>,
+    opencode_base_url: &str,
+) -> Result<()> {
+    let Some(task) = store::get_next_queued_provider_config_reload_task(pool).await? else {
+        return Ok(());
+    };
+
+    let active = crate::opencode::store::count_active_opencode_sessions(pool).await?;
+    if active > 0 {
+        debug!(
+            task_id = task.id,
+            active_sessions = active,
+            "provider config reload remains queued while OpenCode sessions are active"
+        );
+        return Ok(());
+    }
+
+    if !store::mark_maintenance_task_running(pool, task.id).await? {
+        debug!(
+            task_id = task.id,
+            "provider config reload task was claimed concurrently before execution"
+        );
+        return Ok(());
+    }
+
+    match opencode_client.dispose_instances(opencode_base_url).await {
+        Ok(()) => {
+            opencode_client.invalidate_provider_cache().await;
+            store::mark_maintenance_task_succeeded(pool, task.id).await?;
+            info!(task_id = task.id, "provider config reload completed");
+        }
+        Err(error) => {
+            error!(task_id = task.id, error = ?error, "provider config reload failed");
             let summary = maintenance_error_summary(&error);
             store::mark_maintenance_task_failed(pool, task.id, &summary).await?;
         }

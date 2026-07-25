@@ -6,9 +6,10 @@ use uuid::Uuid;
 
 use crate::{
     agentic::model::{
-        AgentMaintenanceTaskRow, CODING_PROMOTION_PHASES, MAINTENANCE_PHASE_COMPLETED,
-        MAINTENANCE_STATUS_FAILED, MAINTENANCE_STATUS_QUEUED, MAINTENANCE_STATUS_RUNNING,
-        MAINTENANCE_STATUS_SUCCEEDED, MAINTENANCE_TASK_KIND_ANALYSIS_CODING,
+        AgentMaintenanceTaskRow, CODING_PROMOTION_PHASES, GlobalMaintenanceTaskRow,
+        MAINTENANCE_PHASE_COMPLETED, MAINTENANCE_STATUS_FAILED, MAINTENANCE_STATUS_QUEUED,
+        MAINTENANCE_STATUS_RUNNING, MAINTENANCE_STATUS_SUCCEEDED,
+        MAINTENANCE_TASK_KIND_ANALYSIS_CODING, MAINTENANCE_TASK_KIND_PROVIDER_CONFIG_RELOAD,
         MAINTENANCE_TASK_KIND_WORKSPACE_REGENERATE, RUN_STATUS_QUEUED,
     },
     db::DbPool,
@@ -337,6 +338,95 @@ pub async fn get_latest_maintenance_task(
     .with_context(|| format!("failed to load latest maintenance task for {agent_key}"))
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum InsertGlobalMaintenanceTaskOutcome {
+    Inserted { task_id: i64 },
+    DuplicateActiveTask,
+}
+
+pub async fn insert_provider_config_reload_task(
+    pool: &DbPool,
+) -> Result<InsertGlobalMaintenanceTaskOutcome> {
+    let row: Result<(i64,), SqlxError> = query_as(
+        "INSERT INTO agentic_maintenance_tasks (agent_key, task_kind, parameters, status)
+         VALUES (NULL, $1, '{}'::jsonb, $2)
+         RETURNING id",
+    )
+    .bind(MAINTENANCE_TASK_KIND_PROVIDER_CONFIG_RELOAD)
+    .bind(MAINTENANCE_STATUS_QUEUED)
+    .fetch_one(pool)
+    .await;
+    match row {
+        Ok((task_id,)) => Ok(InsertGlobalMaintenanceTaskOutcome::Inserted { task_id }),
+        Err(SqlxError::Database(db_err)) if db_err.is_unique_violation() => {
+            Ok(InsertGlobalMaintenanceTaskOutcome::DuplicateActiveTask)
+        }
+        Err(error) => Err(error).context("failed to insert provider config reload task"),
+    }
+}
+
+pub async fn get_latest_provider_config_reload_task(
+    pool: &DbPool,
+) -> Result<Option<GlobalMaintenanceTaskRow>> {
+    query_as::<_, GlobalMaintenanceTaskRow>(
+        "SELECT id, status, error_summary
+           FROM agentic_maintenance_tasks
+          WHERE task_kind = $1
+          ORDER BY created_at DESC, id DESC
+          LIMIT 1",
+    )
+    .bind(MAINTENANCE_TASK_KIND_PROVIDER_CONFIG_RELOAD)
+    .fetch_optional(pool)
+    .await
+    .context("failed to load latest provider config reload task")
+}
+
+pub async fn get_next_queued_provider_config_reload_task(
+    pool: &DbPool,
+) -> Result<Option<GlobalMaintenanceTaskRow>> {
+    query_as::<_, GlobalMaintenanceTaskRow>(
+        "SELECT id, status, error_summary
+           FROM agentic_maintenance_tasks
+          WHERE task_kind = $1
+            AND status = $2
+          ORDER BY created_at ASC, id ASC
+          LIMIT 1",
+    )
+    .bind(MAINTENANCE_TASK_KIND_PROVIDER_CONFIG_RELOAD)
+    .bind(MAINTENANCE_STATUS_QUEUED)
+    .fetch_optional(pool)
+    .await
+    .context("failed to load next queued provider config reload task")
+}
+
+/// Return stale global reload work to the queue after a scheduler process
+/// exits while a dispose request is in flight. Disposing twice is safe, while
+/// leaving the task running would prevent every later reload from being queued.
+pub async fn requeue_stale_provider_config_reload_tasks(
+    pool: &DbPool,
+    before: DateTime<Utc>,
+) -> Result<u64> {
+    let result = sqlx::query(
+        "UPDATE agentic_maintenance_tasks
+            SET status = $2,
+                phase = $2,
+                heartbeat_at = NULL,
+                updated_at = now()
+          WHERE task_kind = $1
+            AND status = $3
+            AND COALESCE(heartbeat_at, started_at, updated_at) < $4",
+    )
+    .bind(MAINTENANCE_TASK_KIND_PROVIDER_CONFIG_RELOAD)
+    .bind(MAINTENANCE_STATUS_QUEUED)
+    .bind(MAINTENANCE_STATUS_RUNNING)
+    .bind(before)
+    .execute(pool)
+    .await
+    .context("failed to requeue stale provider config reload tasks")?;
+
+    Ok(result.rows_affected())
+}
+
 pub async fn get_next_queued_workspace_regenerate_task(
     pool: &DbPool,
 ) -> Result<Option<AgentMaintenanceTaskRow>> {
@@ -383,6 +473,7 @@ pub async fn list_queued_maintenance_candidates(
                 started_at, finished_at
            FROM agentic_maintenance_tasks
           WHERE status = $1
+            AND agent_key IS NOT NULL
           ORDER BY created_at ASC, id ASC
           LIMIT $2",
     )
@@ -462,6 +553,7 @@ pub async fn list_stale_running_maintenance_tasks(
                 started_at, finished_at
            FROM agentic_maintenance_tasks
           WHERE status = $1
+            AND agent_key IS NOT NULL
             AND COALESCE(heartbeat_at, started_at, updated_at) < $2
           ORDER BY updated_at ASC, id ASC
           LIMIT $3",

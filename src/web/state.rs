@@ -13,6 +13,7 @@ use crate::{
     opencode::{client::OpenCodeClient, workspace::OpenCodeWorkspaceConfig},
 };
 
+use super::provider_connections::ProviderConnectionsState;
 use super::run_detail_events::RunDetailEventHub;
 use super::ui_events::UiEventHub;
 
@@ -35,4 +36,5 @@ pub struct AppState {
     pub in_flight: InFlightTracker,
     pub workspace_leases: WorkspaceLeaseManager,
     pub shutdown_rx: tokio::sync::watch::Receiver<bool>,
+    pub provider_connections: ProviderConnectionsState,
 }

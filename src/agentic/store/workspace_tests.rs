@@ -10,9 +10,10 @@ use super::test_support::seed_agent_and_schedule;
 use super::{
     AnalysisCodingTaskRequest, CodingTriggerMode, InsertAnalysisCodingTaskOutcome,
     InsertWorkspaceMaintenanceTaskOutcome, agent_has_blocking_workspace_maintenance,
-    get_latest_workspace_regenerate_task, insert_analysis_coding_task_and_run,
+    get_latest_provider_config_reload_task, get_latest_workspace_regenerate_task,
+    insert_analysis_coding_task_and_run, insert_provider_config_reload_task,
     insert_workspace_regenerate_task, mark_maintenance_task_failed, mark_maintenance_task_running,
-    mark_maintenance_task_succeeded,
+    mark_maintenance_task_succeeded, requeue_stale_provider_config_reload_tasks,
 };
 
 #[tokio::test]
@@ -235,4 +236,43 @@ async fn mark_maintenance_task_failed_preserves_error_summary() {
             .expect("load failed maintenance task");
     assert_eq!(status, MAINTENANCE_STATUS_FAILED);
     assert_eq!(error_summary.as_deref(), Some("OpenCode command timed out"));
+}
+
+#[tokio::test]
+async fn stale_running_provider_reload_is_requeued() {
+    let pool = test_db::pool().await;
+    let task_id = match insert_provider_config_reload_task(&pool)
+        .await
+        .expect("insert provider reload task")
+    {
+        super::InsertGlobalMaintenanceTaskOutcome::Inserted { task_id } => task_id,
+        other => panic!("expected Inserted, got {other:?}"),
+    };
+    mark_maintenance_task_running(&pool, task_id)
+        .await
+        .expect("mark provider reload running");
+    sqlx::query(
+        "UPDATE agentic_maintenance_tasks
+            SET heartbeat_at = now() - interval '3 minutes'
+          WHERE id = $1",
+    )
+    .bind(task_id)
+    .execute(&pool)
+    .await
+    .expect("age provider reload task");
+
+    let requeued = requeue_stale_provider_config_reload_tasks(
+        &pool,
+        Utc::now() - chrono::Duration::minutes(2),
+    )
+    .await
+    .expect("requeue stale provider reload task");
+    assert_eq!(requeued, 1);
+
+    let task = get_latest_provider_config_reload_task(&pool)
+        .await
+        .expect("load provider reload task")
+        .expect("provider reload task present");
+    assert_eq!(task.id, task_id);
+    assert_eq!(task.status, MAINTENANCE_STATUS_QUEUED);
 }

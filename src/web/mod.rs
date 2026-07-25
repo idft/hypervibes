@@ -1,6 +1,7 @@
 mod api;
 pub(crate) mod auth;
 mod error;
+pub(crate) mod provider_connections;
 mod routes;
 pub(crate) mod run_detail_events;
 mod state;
@@ -78,6 +79,7 @@ pub async fn serve(
         in_flight: in_flight_for_state,
         workspace_leases,
         shutdown_rx: shutdown_rx_for_state,
+        provider_connections: provider_connections::ProviderConnectionsState::new(),
     });
     let app = router(state);
     let listener = tokio::net::TcpListener::bind(bind_addr)

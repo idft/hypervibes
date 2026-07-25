@@ -28,6 +28,54 @@ OpenCode owns:
 - tool execution
 - session lifecycle inside the runtime server
 
+## Provider Connections
+
+Provider credentials are global to the one shared OpenCode service. Operators
+manage API-key and OAuth connections at `/providers`; credentials are never
+stored on an agent or in Vibetrading's database. OpenCode persists its auth
+storage in the retained `opencode_data` volume.
+
+The page uses OpenCode's advertised authentication methods rather than a fixed
+provider list or hard-coded method indexes. For OpenAI, select
+`ChatGPT Pro/Plus (headless)`, open the displayed device URL, follow its
+instructions, and then submit the completion action in Vibetrading. The browser
+loopback method is disabled because it requires a local OpenCode TUI. Other
+providers may advertise API-key prompts, OAuth prompts, or both.
+
+Provider API-key environment variables are no longer part of the Compose
+runtime. During migration, connect and verify providers through `/providers`
+before recreating OpenCode without those fallback variables. Do not delete the
+`opencode_data` volume.
+
+Providers that declare an API-key environment variable but do not advertise
+auth methods through `/provider/auth` (such as `ollama-cloud`) are offered a
+generic "Manually enter API key" connection method in the UI.
+
+## Config Reload
+
+OpenCode caches its provider list in memory. After a provider is connected or
+disconnected through `/providers`, the cached `connected` list does not update
+until OpenCode's instance cache is disposed. Vibetrading handles this
+automatically by queuing a `provider_config_reload` maintenance task after
+every successful connect, OAuth callback, or disconnect.
+
+The reload task waits until no OpenCode sessions are active (`busy`/`retry`)
+and then calls `POST /global/dispose`, which clears OpenCode's in-memory
+instance cache. The next `/provider` request rebuilds the cache from the
+updated `auth.json`. This does not delete sessions from the database, but it
+does interrupt any in-flight inference, so the task only runs when all agents
+are idle. The `/providers` page shows a pending/running reload banner with a
+manual "Reload config now" button.
+
+Removing an auth record removes OpenCode's stored credential only. The config
+reload ensures the removal takes effect for new provider initialization.
+Provider configuration editing, custom base URLs, model allowlists, and
+default-model editing are intentionally out of scope.
+
+The OpenCode server password is required, is used for Basic authentication, and
+must be rotated if exposed. The web UI does not log or render Basic-auth values,
+API keys, OAuth codes, prompt answers, or provider token data.
+
 ## Runtime Model
 
 OpenCode is a single application-level dependency rather than a database-

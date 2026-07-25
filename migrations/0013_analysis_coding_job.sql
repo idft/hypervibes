@@ -121,9 +121,10 @@ ALTER TABLE agentic_runs
 ALTER TABLE agentic_maintenance_tasks
     DROP CONSTRAINT IF EXISTS agentic_maintenance_tasks_task_kind_check;
 
-ALTER TABLE agentic_maintenance_tasks
-    ADD CONSTRAINT agentic_maintenance_tasks_task_kind_check
-    CHECK (task_kind IN ('workspace_regenerate', 'analysis_coding'));
+-- `task_kind` is validated at the application layer so new global
+-- maintenance kinds (e.g. provider_config_reload) can be added
+-- without a migration. The original task_kind CHECK is intentionally
+-- not re-added.
 
 ALTER TABLE agentic_maintenance_tasks
     ADD COLUMN IF NOT EXISTS phase TEXT NOT NULL DEFAULT 'queued';

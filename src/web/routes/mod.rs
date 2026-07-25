@@ -2,12 +2,13 @@ mod account;
 mod agents;
 mod currency;
 mod model_catalog;
+mod providers;
 mod root;
 mod shared;
 #[cfg(test)]
 pub(in crate::web::routes) mod test_support;
 
-use self::{account::*, agents::*, currency::*, model_catalog::*, root::*};
+use self::{account::*, agents::*, currency::*, model_catalog::*, providers::*, root::*};
 use crate::web::auth::{login, login_challenge, login_verify, logout};
 use crate::web::error::not_found;
 
@@ -165,6 +166,25 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/agents/{agent_key}/delete", post(delete_agent))
         .route("/agents/{agent_key}/live/stream", get(agent_live_stream))
         .route("/account", get(account_index))
+        .route("/providers", get(providers_index))
+        .route(
+            "/providers/{provider_id}/connect",
+            get(provider_connect_form).post(provider_connect),
+        )
+        .route(
+            "/providers/{provider_id}/connect/pending",
+            get(provider_pending),
+        )
+        .route(
+            "/providers/{provider_id}/connect/callback",
+            post(provider_callback),
+        )
+        .route(
+            "/providers/{provider_id}/disconnect",
+            post(provider_disconnect),
+        )
+        .route("/providers/reload", post(provider_reload_config))
+        .route("/providers/reload-status", get(provider_reload_status))
         .route("/account/approve-builder-fee", post(approve_builder_fee))
         .route("/account/cancel-builder-fee", post(cancel_builder_fee))
         .route("/account/api-wallet", post(setup_user_api_wallet))

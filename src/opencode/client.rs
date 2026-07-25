@@ -17,6 +17,7 @@ pub struct OpenCodeClientConfig {
     pub password: Option<String>,
     pub create_session_timeout: Duration,
     pub status_timeout: Duration,
+    pub oauth_callback_timeout: Duration,
 }
 
 impl OpenCodeClientConfig {
@@ -32,6 +33,7 @@ impl OpenCodeClientConfig {
             password,
             create_session_timeout: Duration::from_secs(15),
             status_timeout: Duration::from_secs(15),
+            oauth_callback_timeout: Duration::from_secs(15 * 60),
         }
     }
 }
@@ -269,7 +271,7 @@ impl OpenCodeClient {
             .send()
             .await
             .map_err(|error| anyhow!("OpenCode list_providers request failed: {error}"))?;
-        let response = parse_opencode_response(response).await?;
+        let response = parse_status_response(response, "provider discovery").await?;
         let response: OpenCodeProvidersResponse = response
             .json()
             .await
@@ -284,6 +286,162 @@ impl OpenCodeClient {
             },
         );
         Ok(response)
+    }
+
+    pub async fn list_provider_auth_methods(
+        &self,
+        base_url: &str,
+        directory: &str,
+    ) -> Result<HashMap<String, Vec<OpenCodeProviderAuthMethod>>> {
+        let url = build_url(base_url, "provider/auth", &[("directory", directory)]);
+        let response = self
+            .http
+            .get(url)
+            .timeout(self.config.status_timeout)
+            .apply_basic_auth(&self.config)
+            .send()
+            .await
+            .map_err(|error| anyhow!("OpenCode provider auth discovery request failed: {error}"))?;
+        let response = parse_status_response(response, "provider auth discovery").await?;
+        response
+            .json()
+            .await
+            .context("failed to decode OpenCode provider auth methods response")
+    }
+
+    pub async fn authorize_provider_oauth(
+        &self,
+        base_url: &str,
+        directory: &str,
+        provider_id: &str,
+        method: usize,
+        inputs: BTreeMap<String, String>,
+    ) -> Result<OpenCodeOAuthAuthorization> {
+        let url = build_url(
+            base_url,
+            &format!("provider/{}/oauth/authorize", percent_encode(provider_id)),
+            &[("directory", directory)],
+        );
+        let body = OpenCodeOAuthAuthorizeRequest {
+            method,
+            inputs: (!inputs.is_empty()).then_some(inputs),
+        };
+        let response = self
+            .http
+            .post(url)
+            .timeout(self.config.status_timeout)
+            .apply_basic_auth(&self.config)
+            .json(&body)
+            .send()
+            .await
+            .map_err(|error| anyhow!("OpenCode OAuth authorization request failed: {error}"))?;
+        let response = parse_credential_response(response, "OAuth authorization").await?;
+        response
+            .json()
+            .await
+            .context("failed to decode OpenCode OAuth authorization response")
+    }
+
+    pub async fn complete_provider_oauth(
+        &self,
+        base_url: &str,
+        directory: &str,
+        provider_id: &str,
+        method: usize,
+        code: Option<&str>,
+    ) -> Result<()> {
+        let url = build_url(
+            base_url,
+            &format!("provider/{}/oauth/callback", percent_encode(provider_id)),
+            &[("directory", directory)],
+        );
+        let body = OpenCodeOAuthCallbackRequest {
+            method,
+            code: code.map(ToOwned::to_owned),
+        };
+        let response = self
+            .http
+            .post(url)
+            .timeout(self.config.oauth_callback_timeout)
+            .apply_basic_auth(&self.config)
+            .json(&body)
+            .send()
+            .await
+            .map_err(|error| anyhow!("OpenCode OAuth callback request failed: {error}"))?;
+        let _ = parse_credential_response(response, "OAuth callback").await?;
+        Ok(())
+    }
+
+    pub async fn set_provider_api_auth(
+        &self,
+        base_url: &str,
+        provider_id: &str,
+        api_key: &str,
+        metadata: BTreeMap<String, String>,
+    ) -> Result<()> {
+        let url = build_url(
+            base_url,
+            &format!("auth/{}", percent_encode(provider_id)),
+            &[],
+        );
+        let body = OpenCodeApiAuthRequest {
+            auth_type: "api",
+            key: api_key,
+            metadata: (!metadata.is_empty()).then_some(metadata),
+        };
+        let response = self
+            .http
+            .put(url)
+            .timeout(self.config.status_timeout)
+            .apply_basic_auth(&self.config)
+            .json(&body)
+            .send()
+            .await
+            .map_err(|error| anyhow!("OpenCode API credential request failed: {error}"))?;
+        let _ = parse_credential_response(response, "API credential storage").await?;
+        Ok(())
+    }
+
+    pub async fn remove_provider_auth(&self, base_url: &str, provider_id: &str) -> Result<()> {
+        let url = build_url(
+            base_url,
+            &format!("auth/{}", percent_encode(provider_id)),
+            &[],
+        );
+        let response = self
+            .http
+            .delete(url)
+            .timeout(self.config.status_timeout)
+            .apply_basic_auth(&self.config)
+            .send()
+            .await
+            .map_err(|error| anyhow!("OpenCode credential removal request failed: {error}"))?;
+        let _ = parse_credential_response(response, "credential removal").await?;
+        Ok(())
+    }
+
+    pub async fn invalidate_provider_cache(&self) {
+        self.provider_cache.write().await.clear();
+    }
+
+    /// Dispose all OpenCode instances, invalidating the in-memory
+    /// provider/runtime cache so newly stored credentials are reflected
+    /// in the next `/provider` response. This is the HTTP equivalent of
+    /// the TUI's `global.dispose` call after `auth.set`. It interrupts
+    /// in-flight OpenCode sessions, so callers should ensure no agent
+    /// work is active before invoking it.
+    pub async fn dispose_instances(&self, base_url: &str) -> Result<()> {
+        let url = build_url(base_url, "global/dispose", &[]);
+        let response = self
+            .http
+            .post(url)
+            .timeout(self.config.status_timeout)
+            .apply_basic_auth(&self.config)
+            .send()
+            .await
+            .map_err(|error| anyhow!("OpenCode dispose request failed: {error}"))?;
+        let _ = parse_credential_response(response, "instance dispose").await?;
+        Ok(())
     }
 }
 
@@ -321,6 +479,100 @@ pub struct OpenCodeProviderInfo {
     pub name: Option<String>,
     #[serde(default)]
     pub models: BTreeMap<String, OpenCodeModelInfo>,
+    #[serde(default)]
+    pub env: Vec<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct OpenCodeProviderAuthMethod {
+    #[serde(rename = "type")]
+    pub auth_type: String,
+    pub label: String,
+    #[serde(default)]
+    pub prompts: Vec<OpenCodeProviderAuthPrompt>,
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[serde(tag = "type")]
+pub enum OpenCodeProviderAuthPrompt {
+    #[serde(rename = "text")]
+    Text {
+        key: String,
+        message: String,
+        #[serde(default)]
+        placeholder: Option<String>,
+        #[serde(default)]
+        when: Option<OpenCodeProviderAuthWhen>,
+    },
+    #[serde(rename = "select")]
+    Select {
+        key: String,
+        message: String,
+        #[serde(default)]
+        options: Vec<OpenCodeProviderAuthOption>,
+        #[serde(default)]
+        when: Option<OpenCodeProviderAuthWhen>,
+    },
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+pub struct OpenCodeProviderAuthOption {
+    pub label: String,
+    pub value: String,
+    #[serde(default)]
+    pub hint: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+pub struct OpenCodeProviderAuthWhen {
+    pub key: String,
+    pub op: OpenCodeProviderAuthWhenOp,
+    pub value: String,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum OpenCodeProviderAuthWhenOp {
+    Eq,
+    Neq,
+}
+
+#[derive(Clone, Deserialize)]
+pub struct OpenCodeOAuthAuthorization {
+    pub url: String,
+    #[serde(rename = "method")]
+    pub completion_mode: OpenCodeOAuthCompletionMode,
+    pub instructions: String,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum OpenCodeOAuthCompletionMode {
+    Auto,
+    Code,
+}
+
+#[derive(Serialize)]
+struct OpenCodeOAuthAuthorizeRequest {
+    method: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    inputs: Option<BTreeMap<String, String>>,
+}
+
+#[derive(Serialize)]
+struct OpenCodeOAuthCallbackRequest {
+    method: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    code: Option<String>,
+}
+
+#[derive(Serialize)]
+struct OpenCodeApiAuthRequest<'a> {
+    #[serde(rename = "type")]
+    auth_type: &'static str,
+    key: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    metadata: Option<BTreeMap<String, String>>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -383,6 +635,34 @@ async fn parse_opencode_response(response: reqwest::Response) -> Result<reqwest:
         return Err(anyhow!("OpenCode authentication failed: {}", snippet));
     }
     Err(anyhow!("OpenCode request failed ({}): {}", status, snippet))
+}
+
+async fn parse_credential_response(
+    response: reqwest::Response,
+    operation: &str,
+) -> Result<reqwest::Response> {
+    if response.status().is_success() {
+        return Ok(response);
+    }
+    let status = response.status();
+    if status == StatusCode::UNAUTHORIZED || status == StatusCode::FORBIDDEN {
+        return Err(anyhow!("OpenCode authentication failed during {operation}"));
+    }
+    Err(anyhow!("OpenCode {operation} failed with status {status}"))
+}
+
+async fn parse_status_response(
+    response: reqwest::Response,
+    operation: &str,
+) -> Result<reqwest::Response> {
+    if response.status().is_success() {
+        return Ok(response);
+    }
+    let status = response.status();
+    if status == StatusCode::UNAUTHORIZED || status == StatusCode::FORBIDDEN {
+        return Err(anyhow!("OpenCode authentication failed during {operation}"));
+    }
+    Err(anyhow!("OpenCode {operation} failed with status {status}"))
 }
 
 async fn snippet_from_response(response: reqwest::Response) -> String {
@@ -538,6 +818,7 @@ mod tests {
                         id: "anthropic".to_string(),
                         name: Some("Anthropic".to_string()),
                         models: BTreeMap::new(),
+                        env: Vec::new(),
                     }],
                     connected: vec!["anthropic".to_string()],
                 },
@@ -638,5 +919,59 @@ mod tests {
             response.all[0].models["claude-sonnet-4"].name.as_deref(),
             Some("Claude Sonnet 4")
         );
+    }
+
+    #[test]
+    fn provider_auth_methods_deserialize_safe_dynamic_prompts() {
+        let methods: HashMap<String, Vec<OpenCodeProviderAuthMethod>> = serde_json::from_str(
+            r#"{
+                "provider": [{
+                    "type": "api",
+                    "label": "API key",
+                    "prompts": [
+                        {"type":"text","key":"account","message":"Account","when":{"key":"mode","op":"eq","value":"team"}},
+                        {"type":"select","key":"mode","message":"Mode","options":[{"label":"Team","value":"team","hint":"shared"}]}
+                    ],
+                    "secret": "must not be modeled"
+                }]
+            }"#,
+        )
+        .expect("provider auth methods");
+
+        assert_eq!(methods["provider"][0].auth_type, "api");
+        assert_eq!(methods["provider"][0].prompts.len(), 2);
+        assert_eq!(
+            methods["provider"][0].prompts[0],
+            OpenCodeProviderAuthPrompt::Text {
+                key: "account".to_string(),
+                message: "Account".to_string(),
+                placeholder: None,
+                when: Some(OpenCodeProviderAuthWhen {
+                    key: "mode".to_string(),
+                    op: OpenCodeProviderAuthWhenOp::Eq,
+                    value: "team".to_string(),
+                }),
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn invalidate_provider_cache_forces_the_next_discovery() {
+        let client = OpenCodeClient::new(OpenCodeClientConfig::new("opencode".to_string(), None))
+            .expect("client");
+        client.provider_cache.write().await.insert(
+            "http://example.test".to_string(),
+            CachedProvidersResponse {
+                fetched_at: Instant::now(),
+                response: OpenCodeProvidersResponse {
+                    all: Vec::new(),
+                    connected: Vec::new(),
+                },
+            },
+        );
+
+        client.invalidate_provider_cache().await;
+
+        assert!(client.provider_cache.read().await.is_empty());
     }
 }

@@ -191,6 +191,7 @@ mod tests {
                         name: Some("Runtime Sonnet".to_string()),
                     },
                 )]),
+                env: Vec::new(),
             }],
             connected: vec!["anthropic".to_string()],
         };

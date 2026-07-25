@@ -1,4 +1,4 @@
-import * as htmx from "htmx.org";
+import htmx from "htmx.org";
 import { createWalletClient, custom } from "viem";
 (window as unknown as { htmx: typeof htmx }).htmx = htmx;
 import "htmx-ext-sse";
@@ -11,6 +11,21 @@ document.addEventListener("htmx:configRequest", (event) => {
   const token = csrfToken();
   if (token) (event as CustomEvent).detail.headers["X-CSRF-Token"] = token;
 });
+
+function seedCsrfTokens() {
+  const token = csrfToken();
+  if (!token) return;
+  document.querySelectorAll<HTMLFormElement>("form[method=post], form[method=POST]").forEach((form) => {
+    let input = form.querySelector<HTMLInputElement>('input[name="csrf_token"]');
+    if (!input) {
+      input = document.createElement("input");
+      input.type = "hidden";
+      input.name = "csrf_token";
+      form.append(input);
+    }
+    input.value = token;
+  });
+}
 
 document.addEventListener("submit", (event) => {
   const form = event.target;
@@ -1055,6 +1070,160 @@ function initAccountTransfers() {
   });
 }
 
+function initProviderAuthPrompts() {
+  document.querySelectorAll<HTMLFormElement>('form[action$="/connect"]').forEach((form) => {
+    const prompts = Array.from(form.querySelectorAll<HTMLElement>("[data-provider-auth-prompt]"));
+    if (prompts.length === 0 || form.dataset.providerAuthBound === "true") return;
+    form.dataset.providerAuthBound = "true";
+
+    const answers = () => new Map(
+      prompts.map((prompt) => {
+        const control = prompt.querySelector<HTMLInputElement | HTMLSelectElement>("input, select");
+        return [prompt.dataset.providerAuthKey ?? "", control?.value ?? ""] as const;
+      }),
+    );
+    const sync = () => {
+      const values = answers();
+      prompts.forEach((prompt) => {
+        const key = prompt.dataset.providerAuthWhenKey;
+        const expected = prompt.dataset.providerAuthWhenValue;
+        const op = prompt.dataset.providerAuthWhenOp;
+        const active = !key || expected === undefined || (values.has(key) && (op === "neq" ? values.get(key) !== expected : values.get(key) === expected));
+        prompt.classList.toggle("hidden", !active);
+        prompt.querySelectorAll<HTMLInputElement | HTMLSelectElement>("input, select").forEach((control) => {
+          control.disabled = !active;
+        });
+      });
+    };
+    form.addEventListener("input", sync);
+    form.addEventListener("change", sync);
+    sync();
+  });
+}
+
+function initProviderConnectModal() {
+  const modal = document.querySelector<HTMLElement>("[data-provider-connect-modal]");
+  const open = document.querySelector<HTMLButtonElement>("[data-provider-connect-open]");
+  const selection = modal?.querySelector<HTMLElement>("[data-provider-connect-selection]");
+  const step = modal?.querySelector<HTMLElement>("[data-provider-connect-step]");
+  const form = modal?.querySelector<HTMLFormElement>("[data-provider-connect-form]");
+  const provider = modal?.querySelector<HTMLSelectElement>("[data-provider-connect-provider]");
+  const method = modal?.querySelector<HTMLSelectElement>("[data-provider-connect-method]");
+  const submit = modal?.querySelector<HTMLButtonElement>("[data-provider-connect-submit]");
+  const status = modal?.querySelector<HTMLElement>("[data-provider-connect-status]");
+  if (!modal || !open || !selection || !step || !form || !provider || !method || !submit || !status) return;
+
+  const reset = () => {
+    selection.classList.remove("hidden");
+    step.classList.add("hidden");
+    step.replaceChildren();
+    provider.value = "";
+    method.value = "";
+    sync();
+  };
+  const close = () => {
+    modal.classList.add("hidden");
+    modal.classList.remove("flex");
+    reset();
+  };
+  const loadStep = (providerId: string, methodIndex: string) => {
+    selection.classList.add("hidden");
+    step.classList.remove("hidden");
+    void htmx.ajax("get", `/providers/${encodeURIComponent(providerId)}/connect?method=${encodeURIComponent(methodIndex)}&modal=true`, {
+      target: step,
+      swap: "innerHTML",
+    });
+  };
+  const sync = () => {
+    const providerId = provider.value;
+    const options = Array.from(method.options).filter((option) => option.dataset.providerId);
+    options.forEach((option) => {
+      option.hidden = option.dataset.providerId !== providerId;
+    });
+    const available = options.filter((option) => option.dataset.providerId === providerId && option.dataset.disabledReason === undefined);
+    const selected = available[0];
+    if (!method.value || method.selectedOptions[0]?.hidden || method.selectedOptions[0]?.dataset.providerId !== providerId || method.selectedOptions[0]?.dataset.disabledReason !== undefined) {
+      method.value = selected?.value ?? "";
+    }
+    const unavailableReason = method.selectedOptions[0]?.dataset.disabledReason;
+    const valid = providerId !== "" && method.value !== "" && unavailableReason === undefined;
+    submit.disabled = !valid;
+    submit.classList.toggle("cursor-pointer", valid);
+    submit.classList.toggle("cursor-not-allowed", !valid);
+    submit.classList.toggle("opacity-50", !valid);
+    if (available.length <= 1) {
+      method.closest("label")?.classList.toggle("hidden", available.length <= 1);
+    } else {
+      method.closest("label")?.classList.remove("hidden");
+    }
+    status.textContent = unavailableReason ?? (valid ? (available.length === 1 ? "Continue to connect." : "Continue to choose a connection method.") : "");
+    if (valid && available.length === 1) {
+      loadStep(providerId, method.value);
+    }
+  };
+
+  open.addEventListener("click", () => {
+    modal.classList.remove("hidden");
+    modal.classList.add("flex");
+    provider.focus();
+    sync();
+  });
+  provider.addEventListener("change", () => {
+    selection.classList.remove("hidden");
+    step.classList.add("hidden");
+    step.replaceChildren();
+    sync();
+  });
+  method.addEventListener("change", sync);
+  form.addEventListener("submit", (event) => {
+    event.preventDefault();
+    if (submit.disabled || !provider.value || !method.value) return;
+    loadStep(provider.value, method.value);
+  });
+  modal.addEventListener("click", (event) => {
+    const target = event.target as Element | null;
+    if (target?.closest("[data-provider-connect-close]") || event.target === modal) {
+      close();
+      return;
+    }
+    if (target?.closest("[data-provider-connect-back]")) reset();
+  });
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && !modal.classList.contains("hidden")) close();
+  });
+  sync();
+}
+
+function initProviderDisconnectModal() {
+  const modal = document.querySelector<HTMLElement>('[data-provider-disconnect-modal]');
+  const form = modal?.querySelector<HTMLFormElement>('[data-provider-disconnect-form]');
+  const name = modal?.querySelector<HTMLElement>('[data-provider-disconnect-name]');
+  if (!modal || !form || !name || modal.dataset.providerDisconnectBound === "true") return;
+
+  modal.dataset.providerDisconnectBound = "true";
+  const close = () => {
+    modal.classList.add("hidden");
+    modal.classList.remove("flex");
+  };
+  document.querySelectorAll<HTMLElement>('[data-provider-disconnect-trigger]').forEach((trigger) => {
+    trigger.addEventListener("click", () => {
+      form.action = trigger.dataset.providerDisconnectAction ?? "";
+      name.textContent = trigger.dataset.providerDisconnectName ?? "this provider";
+      modal.classList.remove("hidden");
+      modal.classList.add("flex");
+    });
+  });
+  modal.querySelectorAll<HTMLElement>('[data-provider-disconnect-close]').forEach((button) => {
+    button.addEventListener("click", close);
+  });
+  modal.addEventListener("click", (event) => {
+    if (event.target === modal) close();
+  });
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && !modal.classList.contains("hidden")) close();
+  });
+}
+
 function initAgentCreation() {
   const page = document.querySelector<HTMLElement>("[data-agent-creation]");
   if (!page) return;
@@ -1172,6 +1341,7 @@ function initRunTranscriptAutoScroll() {
 function init() {
   renderTimeago();
   renderLocalDateTimes();
+  seedCsrfTokens();
   initMemoryTimelineDragScroll();
   initApiWalletSetup();
   initAgentRailTransition();
@@ -1183,6 +1353,9 @@ function init() {
   initDetailDeleteModal();
   initAccountPage();
   initAccountTransfers();
+  initProviderAuthPrompts();
+  initProviderConnectModal();
+  initProviderDisconnectModal();
   initAgentCreation();
   initAccountNavbar();
   seedSelectedMemoryTimelineItems();
@@ -1235,6 +1408,10 @@ function init() {
       target.querySelector('[sse-swap="run-transcript"]')
     ) {
       scrollRunTranscriptToBottom();
+    }
+
+    if (target.matches("[data-provider-connect-step]")) {
+      initProviderAuthPrompts();
     }
   });
 

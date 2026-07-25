@@ -8,6 +8,7 @@ mod navbar;
 mod opencode;
 mod orders;
 mod positions;
+mod providers;
 mod runs;
 mod settings;
 pub(crate) mod shared;
@@ -25,6 +26,7 @@ pub use navbar::*;
 pub use opencode::*;
 pub use orders::*;
 pub use positions::*;
+pub use providers::*;
 pub use runs::*;
 pub use settings::*;
 

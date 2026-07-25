@@ -119,6 +119,7 @@ pub(in crate::web::routes) async fn test_state_with_backend_and_shutdown(
         in_flight: crate::agentic::in_flight::InFlightTracker::new(),
         workspace_leases: crate::agentic::workspace_lease::WorkspaceLeaseManager::new(),
         shutdown_rx,
+        provider_connections: crate::web::provider_connections::ProviderConnectionsState::new(),
     })
 }
 pub(in crate::web::routes) async fn read_sse_chunk(body: Body, timeout_ms: u64) -> String {

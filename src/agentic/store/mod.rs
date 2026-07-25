@@ -38,12 +38,15 @@ pub use workspace::get_latest_workspace_regenerate_task;
 #[allow(unused_imports)]
 pub use workspace::{
     AnalysisCodingTaskRequest, CodingTriggerMode, InsertAnalysisCodingTaskOutcome,
-    InsertWorkspaceMaintenanceTaskOutcome, agent_has_active_live_runs,
-    compare_and_set_maintenance_phase, get_latest_maintenance_task,
+    InsertGlobalMaintenanceTaskOutcome, InsertWorkspaceMaintenanceTaskOutcome,
+    agent_has_active_live_runs, compare_and_set_maintenance_phase, get_latest_maintenance_task,
+    get_latest_provider_config_reload_task, get_next_queued_provider_config_reload_task,
     get_next_queued_workspace_regenerate_task, heartbeat_maintenance_task,
-    insert_analysis_coding_task_and_run, insert_workspace_regenerate_task,
-    list_queued_maintenance_candidates, list_stale_running_maintenance_tasks,
-    mark_maintenance_task_failed, mark_maintenance_task_running, mark_maintenance_task_succeeded,
+    insert_analysis_coding_task_and_run, insert_provider_config_reload_task,
+    insert_workspace_regenerate_task, list_queued_maintenance_candidates,
+    list_stale_running_maintenance_tasks, mark_maintenance_task_failed,
+    mark_maintenance_task_running, mark_maintenance_task_succeeded,
+    requeue_stale_provider_config_reload_tasks,
 };
 
 #[cfg(test)]

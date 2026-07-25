@@ -1,0 +1,19 @@
+<div class="space-y-5">
+  {% if let Some(error) = error %}<div class="rounded-xl border border-red-900/60 bg-red-950/30 px-4 py-3 text-sm text-red-300">{{ error }}</div>{% endif %}
+  <form hx-post="/providers/{{ provider_id }}/connect?modal=true" hx-target="[data-provider-connect-step]" hx-swap="innerHTML" class="space-y-5">
+    <input type="hidden" name="method" value="{{ method.index }}">
+    {% if method.auth_type == "api" %}
+    <label class="block text-sm text-zinc-300">API key<input required type="password" name="api_key" autocomplete="new-password" class="mt-2 block w-full rounded-xl border border-zinc-700 bg-zinc-950 px-3 py-2 text-white outline-none focus:border-violet-600" placeholder="Enter API key"></label>
+    {% endif %}
+    {% for prompt in method.prompts %}
+    <div data-provider-auth-prompt data-provider-auth-key="{{ prompt.key }}"{% if let Some(when) = prompt.when %} data-provider-auth-when-key="{{ when.key }}" data-provider-auth-when-op="{{ when.op }}" data-provider-auth-when-value="{{ when.value }}"{% endif %}>
+      {% if prompt.select %}
+      <label class="block text-sm text-zinc-300">{{ prompt.message }}<select required name="{{ prompt.key }}" class="mt-2 block w-full cursor-pointer rounded-xl border border-zinc-700 bg-zinc-950 px-3 py-2 text-white outline-none focus:border-violet-600"><option value="">Select an option</option>{% for option in prompt.options %}<option value="{{ option.value }}">{{ option.label }}{% if let Some(hint) = option.hint %} ({{ hint }}){% endif %}</option>{% endfor %}</select></label>
+      {% else %}
+      <label class="block text-sm text-zinc-300">{{ prompt.message }}<input required type="text" name="{{ prompt.key }}"{% if let Some(placeholder) = prompt.placeholder %} placeholder="{{ placeholder }}"{% endif %} class="mt-2 block w-full rounded-xl border border-zinc-700 bg-zinc-950 px-3 py-2 text-white outline-none focus:border-violet-600"></label>
+      {% endif %}
+    </div>
+    {% endfor %}
+    <div class="flex items-center justify-end gap-3 border-t border-zinc-800 pt-5"><button type="button" data-provider-connect-back class="cursor-pointer rounded-full border border-zinc-700 px-4 py-2 text-sm text-zinc-300 hover:bg-zinc-800">Back</button><button type="submit" class="cursor-pointer rounded-full bg-violet-600 px-5 py-2 text-sm font-medium text-white hover:bg-violet-500">{% if method.auth_type == "oauth" %}Begin connection{% else %}Save API key{% endif %}</button></div>
+  </form>
+</div>

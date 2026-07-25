@@ -286,6 +286,19 @@ pub async fn list_sessions_for_directory(
     Ok(rows)
 }
 
+/// Count OpenCode sessions in an active (`busy`/`retry`) status across
+/// all directories. Used by the provider-config-reload maintenance job
+/// to wait until it is safe to dispose OpenCode instances without
+/// interrupting in-flight agent work.
+pub async fn count_active_opencode_sessions(pool: &DbPool) -> Result<i64> {
+    let row: (i64,) = query_as("SELECT count(*) FROM opencode.sessions WHERE status = ANY($1)")
+        .bind(["busy", "retry"])
+        .fetch_one(pool)
+        .await
+        .context("failed to count active OpenCode sessions")?;
+    Ok(row.0)
+}
+
 #[cfg(test)]
 mod tests {
     use serde_json::json;

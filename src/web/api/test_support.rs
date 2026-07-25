@@ -85,6 +85,7 @@ pub async fn test_state() -> Arc<AppState> {
         in_flight: crate::agentic::in_flight::InFlightTracker::new(),
         workspace_leases: crate::agentic::workspace_lease::WorkspaceLeaseManager::new(),
         shutdown_rx,
+        provider_connections: crate::web::provider_connections::ProviderConnectionsState::new(),
     })
 }
 

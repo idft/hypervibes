@@ -56,24 +56,13 @@ services:
     restart: unless-stopped
     command: ["serve", "--hostname", "0.0.0.0", "--port", "14096"]
     environment:
-      OPENCODE_SERVER_PASSWORD: ${OPENCODE_SERVER_PASSWORD:-password}
+      OPENCODE_SERVER_PASSWORD: ${OPENCODE_SERVER_PASSWORD:?OPENCODE_SERVER_PASSWORD must be set}
       OPENCODE_SERVER_USERNAME: ${OPENCODE_SERVER_USERNAME:-opencode}
       OPENCODE_CONFIG: /opt/vibetrading/opencode/opencode.jsonc
       OPENCODE_CONFIG_DIR: /opencode-data
       XDG_DATA_HOME: /opencode-data
       OPENCODE_DISABLE_AUTOUPDATE: "true"
       OPENCODE_DISABLE_PRUNE: "true"
-      # Provider credentials are passed through to OpenCode. Uncomment the
-      # ones your agents use in .env; unset values become empty strings.
-      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
-      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
-      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
-      GOOGLE_API_KEY: ${GOOGLE_API_KEY:-}
-      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
-      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
-      XAI_API_KEY: ${XAI_API_KEY:-}
-      OPENCODE_GO_API_KEY: ${OPENCODE_GO_API_KEY:-}
-      OLLAMA_API_KEY: ${OLLAMA_API_KEY:-}
       # OpenCode database plugin. The plugin's SQL is unqualified, so the
       # Postgres connection must set `search_path=opencode,public`. The
       # compose hostname `postgres` resolves to the dev Postgres service
@@ -81,7 +70,7 @@ services:
       OPENCODE_DATABASE_URL: postgres://${POSTGRES_USER:-vibetrading}:${POSTGRES_PASSWORD:-vibetrading}@postgres:5432/${POSTGRES_DB:-vibetrading}?search_path=opencode,public
       OPENCODE_DB_QUERY_TIMEOUT: ${OPENCODE_DB_QUERY_TIMEOUT:-10000}
     ports:
-      - "${OPENCODE_PORT:-14096}:14096"
+      - "127.0.0.1:${OPENCODE_PORT:-14096}:14096"
     volumes:
       - opencode_data:/opencode-data
       - ./workspaces:/workspaces

@@ -1,0 +1,11 @@
+<div id="provider-reload-status"{% if reload_status.is_some() %} hx-get="/providers/reload-status" hx-trigger="every 3s" hx-select="#provider-reload-status" hx-target="#provider-reload-status" hx-swap="outerHTML"{% endif %}>
+  {% if let Some(status) = reload_status %}
+  <div class="rounded-xl border {% if status.failed %}border-red-900/60 bg-red-950/30 text-red-300{% else %}border-emerald-900/60 bg-emerald-950/20 text-emerald-200{% endif %} px-4 py-3 text-sm">
+    {% if status.failed %}
+    <p>Config reload failed.{% if let Some(error) = status.error_summary %} {{ error }}{% endif %}</p>
+    {% else %}
+    <div class="flex items-start gap-3"><svg class="mt-0.5 size-4 shrink-0 animate-spin" viewBox="0 0 24 24" fill="none" aria-hidden="true"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 0 1 8-8v4a4 4 0 0 0-4 4H4Z"></path></svg>{% if status.pending %}<p>Config reload pending. New providers take effect after OpenCode reloads. The reload runs automatically when all agent sessions are idle.</p>{% else if status.running %}<p>Config reload in progress…</p>{% endif %}</div>
+    {% endif %}
+  </div>
+  {% endif %}
+</div>

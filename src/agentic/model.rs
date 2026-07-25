@@ -20,6 +20,7 @@ pub const RUN_STATUS_SKIPPED: &str = "skipped";
 
 pub const MAINTENANCE_TASK_KIND_WORKSPACE_REGENERATE: &str = "workspace_regenerate";
 pub const MAINTENANCE_TASK_KIND_ANALYSIS_CODING: &str = "analysis_coding";
+pub const MAINTENANCE_TASK_KIND_PROVIDER_CONFIG_RELOAD: &str = "provider_config_reload";
 
 pub const MAINTENANCE_STATUS_QUEUED: &str = "queued";
 pub const MAINTENANCE_STATUS_RUNNING: &str = "running";
@@ -128,6 +129,15 @@ impl AgentMaintenanceTaskRow {
     pub fn is_in_promotion_window(&self) -> bool {
         CODING_PROMOTION_PHASES.contains(&self.phase.as_str())
     }
+}
+
+/// Row for a global (non-agent-scoped) maintenance task such as
+/// `provider_config_reload`.
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub struct GlobalMaintenanceTaskRow {
+    pub id: i64,
+    pub status: String,
+    pub error_summary: Option<String>,
 }
 
 #[derive(Debug, Clone, sqlx::FromRow)]
