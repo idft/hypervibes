@@ -1106,32 +1106,62 @@ function initProviderConnectModal() {
   const open = document.querySelector<HTMLButtonElement>("[data-provider-connect-open]");
   const selection = modal?.querySelector<HTMLElement>("[data-provider-connect-selection]");
   const step = modal?.querySelector<HTMLElement>("[data-provider-connect-step]");
+  const loading = modal?.querySelector<HTMLElement>("[data-provider-connect-loading]");
   const form = modal?.querySelector<HTMLFormElement>("[data-provider-connect-form]");
   const provider = modal?.querySelector<HTMLSelectElement>("[data-provider-connect-provider]");
   const method = modal?.querySelector<HTMLSelectElement>("[data-provider-connect-method]");
   const submit = modal?.querySelector<HTMLButtonElement>("[data-provider-connect-submit]");
   const status = modal?.querySelector<HTMLElement>("[data-provider-connect-status]");
-  if (!modal || !open || !selection || !step || !form || !provider || !method || !submit || !status) return;
+  if (!modal || !open || !selection || !step || !loading || !form || !provider || !method || !submit || !status) return;
+  let pendingOAuthProvider: string | undefined;
 
+  const cancelOAuth = (providerId: string) => {
+    void fetch(`/providers/${encodeURIComponent(providerId)}/connect/cancel`, {
+      method: "POST",
+      headers: { "X-CSRF-Token": csrfToken() ?? "" },
+    });
+  };
   const reset = () => {
     selection.classList.remove("hidden");
     step.classList.add("hidden");
+    loading.classList.add("hidden");
     step.replaceChildren();
     provider.value = "";
+    provider.disabled = false;
     method.value = "";
     sync();
   };
   const close = () => {
+    const providerId = pendingOAuthProvider;
+    pendingOAuthProvider = undefined;
+    step.dispatchEvent(new Event("htmx:abort", { bubbles: true }));
     modal.classList.add("hidden");
     modal.classList.remove("flex");
     reset();
+    if (providerId) {
+      cancelOAuth(providerId);
+    }
+  };
+  const startStep = () => {
+    selection.classList.add("hidden");
+    step.classList.add("hidden");
+    loading.classList.remove("hidden");
+    provider.disabled = true;
   };
   const loadStep = (providerId: string, methodIndex: string) => {
-    selection.classList.add("hidden");
-    step.classList.remove("hidden");
+    startStep();
     void htmx.ajax("get", `/providers/${encodeURIComponent(providerId)}/connect?method=${encodeURIComponent(methodIndex)}&modal=true`, {
       target: step,
       swap: "innerHTML",
+    });
+  };
+  const beginOAuth = (providerId: string, methodIndex: string) => {
+    pendingOAuthProvider = providerId;
+    startStep();
+    void htmx.ajax("post", `/providers/${encodeURIComponent(providerId)}/connect?modal=true`, {
+      target: step,
+      swap: "innerHTML",
+      values: { method: methodIndex },
     });
   };
   const sync = () => {
@@ -1141,11 +1171,11 @@ function initProviderConnectModal() {
       option.hidden = option.dataset.providerId !== providerId;
     });
     const available = options.filter((option) => option.dataset.providerId === providerId && option.dataset.disabledReason === undefined);
-    const selected = available[0];
-    if (!method.value || method.selectedOptions[0]?.hidden || method.selectedOptions[0]?.dataset.providerId !== providerId || method.selectedOptions[0]?.dataset.disabledReason !== undefined) {
-      method.value = selected?.value ?? "";
+    if (method.selectedOptions[0]?.hidden || method.selectedOptions[0]?.dataset.providerId !== providerId || method.selectedOptions[0]?.dataset.disabledReason !== undefined) {
+      method.value = available.length === 1 ? available[0]?.value ?? "" : "";
     }
-    const unavailableReason = method.selectedOptions[0]?.dataset.disabledReason;
+    const selectedMethod = method.selectedOptions[0];
+    const unavailableReason = selectedMethod?.dataset.disabledReason;
     const valid = providerId !== "" && method.value !== "" && unavailableReason === undefined;
     submit.disabled = !valid;
     submit.classList.toggle("cursor-pointer", valid);
@@ -1156,9 +1186,12 @@ function initProviderConnectModal() {
     } else {
       method.closest("label")?.classList.remove("hidden");
     }
-    status.textContent = unavailableReason ?? (valid ? (available.length === 1 ? "Continue to connect." : "Continue to choose a connection method.") : "");
-    if (valid && available.length === 1) {
-      loadStep(providerId, method.value);
+    if (unavailableReason) {
+      status.textContent = unavailableReason;
+    } else if (valid && selectedMethod?.dataset.providerAuthType === "api") {
+      status.textContent = "Use an API key from the provider, not a subscription sign-in.";
+    } else {
+      status.textContent = "";
     }
   };
 
@@ -1178,6 +1211,11 @@ function initProviderConnectModal() {
   form.addEventListener("submit", (event) => {
     event.preventDefault();
     if (submit.disabled || !provider.value || !method.value) return;
+    const selectedMethod = method.selectedOptions[0];
+    if (selectedMethod?.dataset.providerAuthType === "oauth" && selectedMethod.dataset.providerPromptCount === "0") {
+      beginOAuth(provider.value, method.value);
+      return;
+    }
     loadStep(provider.value, method.value);
   });
   modal.addEventListener("click", (event) => {
@@ -1190,6 +1228,17 @@ function initProviderConnectModal() {
   });
   document.addEventListener("keydown", (event) => {
     if (event.key === "Escape" && !modal.classList.contains("hidden")) close();
+  });
+  document.addEventListener("htmx:afterSwap", (event) => {
+    if ((event as CustomEvent).detail.target !== step) return;
+    loading.classList.add("hidden");
+    step.classList.remove("hidden");
+    const providerId = step.querySelector<HTMLElement>("[data-provider-oauth-pending]")?.dataset.providerId;
+    if (providerId && modal.classList.contains("hidden")) {
+      cancelOAuth(providerId);
+      return;
+    }
+    pendingOAuthProvider = providerId;
   });
   sync();
 }

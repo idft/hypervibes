@@ -180,6 +180,10 @@ pub fn router(state: Arc<AppState>) -> Router {
             post(provider_callback),
         )
         .route(
+            "/providers/{provider_id}/connect/cancel",
+            post(provider_cancel),
+        )
+        .route(
             "/providers/{provider_id}/disconnect",
             post(provider_disconnect),
         )

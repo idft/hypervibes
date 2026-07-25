@@ -99,7 +99,6 @@ pub struct ProviderConnectionFormTemplate {
 #[template(path = "provider_connect_modal_step.html")]
 pub struct ProviderConnectionModalStepTemplate {
     pub provider_id: String,
-    pub provider_name: String,
     pub method: ProviderAuthMethodView,
     pub error: Option<String>,
 }
@@ -122,11 +121,12 @@ pub struct ProviderOAuthPendingTemplate {
 #[template(path = "provider_pending_modal_step.html")]
 pub struct ProviderOAuthPendingModalStepTemplate {
     pub provider_id: String,
-    pub provider_name: String,
     pub method: usize,
     pub completion_mode: String,
     pub authorization_url: String,
     pub instructions: String,
+    pub device_code: Option<String>,
+    pub auto_detect: bool,
     pub error: Option<String>,
 }
 

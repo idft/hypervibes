@@ -96,6 +96,23 @@ impl ProviderConnectionsState {
         }
     }
 
+    pub async fn cancel_for_user(&self, provider_id: &str, user_id: Uuid) -> bool {
+        let mut attempts = self.attempts.lock().await;
+        prune_expired(&mut attempts);
+        let owned_by_user = match attempts.get(provider_id) {
+            Some(ProviderConnection::Reserving {
+                user_id: reserved_by,
+                ..
+            }) => *reserved_by == user_id,
+            Some(ProviderConnection::Pending(attempt)) => attempt.user_id == user_id,
+            None => false,
+        };
+        if owned_by_user {
+            attempts.remove(provider_id);
+        }
+        owned_by_user
+    }
+
     pub async fn remove(&self, provider_id: &str) {
         let mut attempts = self.attempts.lock().await;
         prune_expired(&mut attempts);
@@ -191,5 +208,45 @@ mod tests {
         state.release_reservation("openai", user).await;
 
         assert!(state.reserve("openai", Uuid::new_v4()).await);
+    }
+
+    #[tokio::test]
+    async fn cancelling_own_pending_attempt_allows_retry() {
+        let state = ProviderConnectionsState::new();
+        let user = Uuid::new_v4();
+        let attempt = OAuthAttempt::new(
+            user,
+            "openai".to_string(),
+            0,
+            "/workspaces".to_string(),
+            OpenCodeOAuthCompletionMode::Code,
+            "https://example.test/authorize".to_string(),
+            "Complete authorization".to_string(),
+        );
+
+        assert!(state.reserve("openai", user).await);
+        assert!(state.complete_reservation(attempt).await.is_ok());
+        assert!(state.cancel_for_user("openai", user).await);
+        assert!(state.reserve("openai", Uuid::new_v4()).await);
+    }
+
+    #[tokio::test]
+    async fn cancelling_another_users_attempt_is_rejected() {
+        let state = ProviderConnectionsState::new();
+        let owner = Uuid::new_v4();
+        let attempt = OAuthAttempt::new(
+            owner,
+            "openai".to_string(),
+            0,
+            "/workspaces".to_string(),
+            OpenCodeOAuthCompletionMode::Code,
+            "https://example.test/authorize".to_string(),
+            "Complete authorization".to_string(),
+        );
+
+        assert!(state.reserve("openai", owner).await);
+        assert!(state.complete_reservation(attempt.clone()).await.is_ok());
+        assert!(!state.cancel_for_user("openai", Uuid::new_v4()).await);
+        assert!(state.get("openai").await == Some(attempt));
     }
 }

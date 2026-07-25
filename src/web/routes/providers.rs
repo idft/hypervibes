@@ -442,6 +442,18 @@ pub(in crate::web::routes) async fn provider_callback(
     ))
 }
 
+pub(in crate::web::routes) async fn provider_cancel(
+    State(state): State<Arc<AppState>>,
+    user: AuthenticatedUser,
+    Path(provider_id): Path<String>,
+) -> StatusCode {
+    state
+        .provider_connections
+        .cancel_for_user(&provider_id, user.id)
+        .await;
+    StatusCode::NO_CONTENT
+}
+
 pub(in crate::web::routes) async fn provider_reload_config(
     State(state): State<Arc<AppState>>,
     _user: AuthenticatedUser,
@@ -735,7 +747,6 @@ fn render_connect_form(
     if modal {
         let view = ProviderConnectionModalStepTemplate {
             provider_id: provider_id.to_string(),
-            provider_name: provider_name.to_string(),
             method,
             error,
         };
@@ -773,13 +784,16 @@ fn render_pending(
     modal: bool,
 ) -> Response {
     if modal {
+        let auto_detect =
+            error.is_none() && matches!(attempt.completion_mode, OpenCodeOAuthCompletionMode::Auto);
         let view = ProviderOAuthPendingModalStepTemplate {
             provider_id: attempt.provider_id.clone(),
-            provider_name: provider_name.to_string(),
             method: attempt.method,
             completion_mode: completion_mode_name(attempt.completion_mode).to_string(),
             authorization_url: attempt.authorization_url.clone(),
             instructions: attempt.instructions.clone(),
+            device_code: device_code(&attempt.instructions).map(ToOwned::to_owned),
+            auto_detect,
             error,
         };
         return Html(
@@ -841,6 +855,11 @@ fn completion_mode_name(mode: OpenCodeOAuthCompletionMode) -> &'static str {
         OpenCodeOAuthCompletionMode::Auto => "auto",
         OpenCodeOAuthCompletionMode::Code => "code",
     }
+}
+
+fn device_code(instructions: &str) -> Option<&str> {
+    let code = instructions.strip_prefix("Enter code: ")?;
+    (!code.is_empty() && !code.contains('\n')).then_some(code)
 }
 
 #[cfg(test)]
@@ -970,5 +989,13 @@ mod tests {
         assert_eq!(views[0].methods.len(), 1);
         assert_eq!(views[0].methods[0].label, SYNTHETIC_API_KEY_LABEL);
         assert_eq!(views[0].methods[0].auth_type, "api");
+    }
+
+    #[test]
+    fn device_code_only_extracts_a_single_line_code_instruction() {
+        assert_eq!(device_code("Enter code: ABCD-1234"), Some("ABCD-1234"));
+        assert_eq!(device_code("Enter code: "), None);
+        assert_eq!(device_code("Use code: ABCD-1234"), None);
+        assert_eq!(device_code("Enter code: ABCD-1234\nThen continue"), None);
     }
 }
