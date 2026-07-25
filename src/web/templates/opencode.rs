@@ -289,7 +289,7 @@ impl OpenCodeWorkspaceTemplateFileChangeView {
 }
 
 #[derive(Template)]
-#[template(path = "agent_workspace_maintenance_status.html")]
+#[template(path = "agents/components/workspace-maintenance-status.html")]
 pub struct OpenCodeWorkspaceMaintenanceStatusTemplate {
     pub maintenance: OpenCodeWorkspaceMaintenanceView,
 }
@@ -303,7 +303,7 @@ impl OpenCodeWorkspaceMaintenanceStatusTemplate {
 }
 
 #[derive(Template)]
-#[template(path = "agent_workspace_section.html")]
+#[template(path = "agents/components/workspace-section.html")]
 pub struct OpenCodeWorkspaceSectionTemplate {
     pub opencode_workspace: Option<OpenCodeWorkspaceSettingsView>,
     pub settings_workspace_warning: Option<String>,

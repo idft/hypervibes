@@ -129,7 +129,7 @@ pub(super) fn format_order_age(timestamp_ms: Option<u64>) -> String {
 }
 
 #[derive(Template)]
-#[template(path = "open_orders.html")]
+#[template(path = "agents/fragments/open-orders.html")]
 pub struct OpenOrdersPartialTemplate {
     pub view: OpenOrdersView,
 }
@@ -141,7 +141,7 @@ impl OpenOrdersPartialTemplate {
 }
 
 #[derive(Template)]
-#[template(path = "latest_trade_execution_summary.html")]
+#[template(path = "agents/fragments/latest-trade-execution-summary.html")]
 pub struct LatestTradeExecutionSummaryPartialTemplate {
     pub summary: Option<String>,
     /// `created_at` of the latest `trade_execution` memory formatted as
@@ -171,7 +171,7 @@ impl LatestTradeExecutionSummaryPartialTemplate {
 }
 
 #[derive(Template)]
-#[template(path = "latest_analysis_summary.html")]
+#[template(path = "agents/fragments/latest-analysis-summary.html")]
 pub struct LatestAnalysisSummaryPartialTemplate {
     pub summary: Option<String>,
     pub detail_url: Option<String>,

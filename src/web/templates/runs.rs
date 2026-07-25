@@ -281,7 +281,7 @@ impl OpenCodeSessionErrorView {
 }
 
 #[derive(Template)]
-#[template(path = "agent_run_detail_page.html")]
+#[template(path = "agents/runs/detail-page.html")]
 pub struct AgentRunDetailPageTemplate {
     pub agent: AgentDetailRow,
     pub tabs: Vec<AgentShowTabLink>,
@@ -294,14 +294,14 @@ pub struct AgentRunDetailPageTemplate {
 }
 
 #[derive(Template)]
-#[template(path = "agent_run_detail_summary.html")]
+#[template(path = "agents/runs/detail-summary.html")]
 pub struct AgentRunDetailSummaryPartialTemplate {
     pub run: AgenticRunDetailView,
     pub session: Option<OpenCodeSessionView>,
 }
 
 #[derive(Template)]
-#[template(path = "agent_run_detail_transcript.html")]
+#[template(path = "agents/runs/detail-transcript.html")]
 pub struct AgentRunDetailTranscriptPartialTemplate {
     pub run: AgenticRunDetailView,
     pub session: Option<OpenCodeSessionView>,
@@ -338,6 +338,7 @@ impl AgentRunDetailPageTemplate {
         run: AgenticRunDetailView,
         session: Option<OpenCodeSessionView>,
         session_lookup_attempted: bool,
+        navbar: Navbar,
     ) -> Result<String, askama::Error> {
         let current_path = format!("/agents/{}/runs/{}", agent.agent_key, run.id);
         let summary_html =
@@ -355,7 +356,7 @@ impl AgentRunDetailPageTemplate {
             summary_html,
             transcript_html,
             current_path,
-            navbar: Navbar::default(),
+            navbar,
         }
         .render()
     }

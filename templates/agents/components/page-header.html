@@ -1,0 +1,12 @@
+<div class="hidden" data-current-agent-key="{{ agent.agent_key }}" data-current-agent-name="{{ agent.display_name }}" data-current-agent-enabled="{{ agent.enabled }}"></div>
+<template>
+    (function () {
+        var agent = document.querySelector('[data-current-agent-key]');
+        var label = document.querySelector('[data-agent-selector-label]');
+        var status = document.querySelector('[data-agent-selector-status]');
+        if (!agent || !label || !status) return;
+        label.textContent = agent.dataset.currentAgentName || agent.dataset.currentAgentKey || '';
+        status.classList.remove('bg-zinc-600', 'bg-emerald-400', 'bg-red-400');
+        status.classList.add(agent.dataset.currentAgentEnabled === 'true' ? 'bg-emerald-400' : 'bg-red-400');
+    })();
+</template>

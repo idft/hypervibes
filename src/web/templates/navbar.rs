@@ -3,7 +3,7 @@ use uuid::Uuid;
 
 use crate::db::DbPool;
 
-/// Server-rendered fragment included by every page via `{% include "navbar.html" %}`. Holds
+/// Server-rendered fragment included by every page via `{% include "layouts/navbar.html" %}`. Holds
 /// the authenticated wallet address and user-visible warning state (Hyperliquid API key,
 /// builder fee approval) used by the top bar without an extra round trip.
 ///

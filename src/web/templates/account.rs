@@ -3,7 +3,7 @@ use askama::Template;
 use super::navbar::Navbar;
 
 #[derive(Template)]
-#[template(path = "account.html")]
+#[template(path = "account/page.html")]
 pub struct AccountPageTemplate {
     pub wallet_address: String,
     pub fee_bps: i16,

@@ -77,7 +77,12 @@ pub(in crate::web::routes) async fn agents_show_memory_detail(
     // HTMX in-place swap (from the Memories tab) only needs the bare partial.
     // Direct browser navigation gets a full styled page so the user sees the
     // agent context and a back link instead of unstyled HTML.
-    if is_htmx_request(&headers) {
+    if is_htmx_request(&headers)
+        && !headers
+            .get("HX-Boosted")
+            .and_then(|value| value.to_str().ok())
+            .is_some_and(|value| value.eq_ignore_ascii_case("true"))
+    {
         let html = AgentMemoryDetailPartialTemplate::render_view(memory_view)?;
         return Ok(Html(html).into_response());
     }

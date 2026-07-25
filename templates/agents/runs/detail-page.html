@@ -1,0 +1,25 @@
+{% extends "layouts/base.html" %}
+
+{% block title %}Run {{ run.id }} · {{ agent.display_name }} · Vibetrading{% endblock %}
+
+{% block content %}
+<div class="mx-auto flex h-[calc(100dvh-3.5rem)] min-h-0 max-w-[1500px] flex-col overflow-hidden" hx-ext="sse" sse-connect="/agents/{{ agent.agent_key }}/runs/{{ run.id }}/stream">
+    {% include "agents/components/page-header.html" %}
+    {% include "agents/components/tabs.html" %}
+
+    <section class="flex min-h-0 flex-1 flex-col overflow-hidden rounded-2xl border border-zinc-800 bg-[#0d0d10] p-4 sm:p-6">
+        <div id="run-summary" sse-swap="run-summary" class="shrink-0">
+            {{ summary_html|safe }}
+        </div>
+        <div data-run-transcript-scroll class="dark-scrollbar min-h-0 flex-1 overflow-y-auto">
+            <div id="run-transcript" sse-swap="run-transcript">
+                {{ transcript_html|safe }}
+            </div>
+        </div>
+    </section>
+</div>
+{% endblock %}
+
+{% block scripts %}
+{% include "agents/components/tabs-script.html" %}
+{% endblock %}

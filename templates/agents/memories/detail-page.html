@@ -1,0 +1,19 @@
+{% extends "layouts/base.html" %}
+
+{% block title %}{{ memory.summary }} · {{ agent.display_name }} · Vibetrading{% endblock %}
+
+{% block content %}
+<div class="mx-auto max-w-[1400px]">
+    {% include "agents/components/page-header.html" %}
+
+    {% include "agents/components/tabs.html" %}
+
+    <section>
+        {{ memory_detail_html|safe }}
+    </section>
+</div>
+{% endblock %}
+
+{% block scripts %}
+{% include "agents/components/tabs-script.html" %}
+{% endblock %}

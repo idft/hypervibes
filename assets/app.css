@@ -1,5 +1,6 @@
 @import "tailwindcss";
 @source "../templates";
+@source ".";
 
 body {
   font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
@@ -226,4 +227,12 @@ body {
    on the client, to avoid flashing the raw ISO timestamp on initial load. */
 time.timeago:not(.timeago-ready) {
   visibility: hidden;
+}
+
+[data-memory-detail-loading].htmx-request {
+  display: flex;
+}
+
+[data-model-picker-lazy-loading].htmx-request {
+  display: block;
 }

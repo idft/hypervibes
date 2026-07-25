@@ -197,7 +197,7 @@ pub fn format_signed_percent(value: Decimal, decimals: usize) -> String {
 }
 
 #[derive(Template)]
-#[template(path = "open_positions.html")]
+#[template(path = "agents/fragments/open-positions.html")]
 pub struct OpenPositionsPartialTemplate {
     pub view: OpenPositionsView,
 }

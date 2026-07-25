@@ -73,7 +73,7 @@ impl ProviderReloadStatusView {
 }
 
 #[derive(Template)]
-#[template(path = "providers.html")]
+#[template(path = "providers/index.html")]
 pub struct ProvidersPageTemplate {
     pub current_path: String,
     pub providers: Vec<ProviderConnectionView>,
@@ -85,7 +85,7 @@ pub struct ProvidersPageTemplate {
 }
 
 #[derive(Template)]
-#[template(path = "provider_connect.html")]
+#[template(path = "providers/connect.html")]
 pub struct ProviderConnectionFormTemplate {
     pub current_path: String,
     pub provider_id: String,
@@ -96,7 +96,7 @@ pub struct ProviderConnectionFormTemplate {
 }
 
 #[derive(Template)]
-#[template(path = "provider_connect_modal_step.html")]
+#[template(path = "providers/connect-modal-step.html")]
 pub struct ProviderConnectionModalStepTemplate {
     pub provider_id: String,
     pub method: ProviderAuthMethodView,
@@ -104,7 +104,7 @@ pub struct ProviderConnectionModalStepTemplate {
 }
 
 #[derive(Template)]
-#[template(path = "provider_pending.html")]
+#[template(path = "providers/pending.html")]
 pub struct ProviderOAuthPendingTemplate {
     pub current_path: String,
     pub provider_id: String,
@@ -118,7 +118,7 @@ pub struct ProviderOAuthPendingTemplate {
 }
 
 #[derive(Template)]
-#[template(path = "provider_pending_modal_step.html")]
+#[template(path = "providers/pending-modal-step.html")]
 pub struct ProviderOAuthPendingModalStepTemplate {
     pub provider_id: String,
     pub method: usize,
@@ -131,7 +131,7 @@ pub struct ProviderOAuthPendingModalStepTemplate {
 }
 
 #[derive(Template)]
-#[template(path = "provider_reload_status.html")]
+#[template(path = "providers/reload-status.html")]
 pub struct ProviderReloadStatusTemplate {
     pub reload_status: Option<ProviderReloadStatusView>,
 }

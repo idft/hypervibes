@@ -1,0 +1,65 @@
+{% extends "layouts/base.html" %}
+{% block title %}Providers · Vibetrading{% endblock %}
+{% block content %}
+<div class="mx-auto max-w-5xl space-y-5">
+  <header class="flex flex-wrap items-start justify-between gap-4">
+    <div class="min-w-0 flex-1">
+      <h1 class="text-3xl font-semibold text-white">Connected providers</h1>
+    </div>
+    <div class="flex w-full shrink-0 flex-col gap-2 sm:w-auto sm:flex-row">
+      <form method="post" action="/providers/reload"><button type="submit" class="inline-flex w-full cursor-pointer items-center justify-center gap-2 rounded-full border border-zinc-700 px-4 py-2 text-sm font-medium text-zinc-200 hover:bg-zinc-800 sm:w-auto"><svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="size-6"><path stroke-linecap="round" stroke-linejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0 3.181 3.183a8.25 8.25 0 0 0 13.803-3.7M4.031 9.865a8.25 8.25 0 0 1 13.803-3.7l3.181 3.182m0-4.991v4.99" /></svg>Reload config</button></form>
+      <button type="button" data-provider-connect-open class="inline-flex w-full cursor-pointer items-center justify-center gap-2 rounded-full bg-violet-600 px-4 py-2 text-sm font-medium text-white hover:bg-violet-500 sm:w-auto">
+        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="size-5"><path stroke-linecap="round" stroke-linejoin="round" d="M12 4.5v15m7.5-7.5h-15" /></svg>
+        Connect provider
+      </button>
+    </div>
+  </header>
+  {% if let Some(notice) = notice %}<div class="rounded-xl border border-emerald-900/60 bg-emerald-950/30 px-4 py-3 text-sm text-emerald-300">{{ notice }}</div>{% endif %}
+  {% if let Some(error) = error %}<div class="rounded-xl border border-red-900/60 bg-red-950/30 px-4 py-3 text-sm text-red-300">{{ error }}</div>{% endif %}
+  {% include "providers/reload-status.html" %}
+
+  <section class="overflow-hidden rounded-2xl border border-zinc-800 bg-[#0d0d10]">
+    <div class="overflow-x-auto">
+      <table class="w-full min-w-[38rem] text-left text-sm">
+        <thead class="border-b border-zinc-800 text-xs uppercase tracking-wide text-zinc-500"><tr><th class="px-5 py-3 font-medium">Provider</th><th class="px-5 py-3 font-medium">Models</th><th></th></tr></thead>
+        <tbody class="divide-y divide-zinc-800">
+          {% if connected_count == 0 %}<tr><td colspan="3" class="px-5 py-10 text-center text-sm text-zinc-500">No providers connected yet. Use Connect provider to add one.</td></tr>{% endif %}
+          {% for provider in providers %}{% if provider.connected %}
+          <tr><td class="px-5 py-4"><p class="font-medium text-white">{{ provider.name }}</p><p class="mt-1 break-all font-mono text-xs text-zinc-500">{{ provider.id }}</p></td><td class="px-5 py-4 text-zinc-400">{{ provider.models.len() }} available model{% if provider.models.len() != 1 %}s{% endif %}</td><td class="px-5 py-4 text-right"><button type="button" data-provider-disconnect-trigger data-provider-disconnect-action="/providers/{{ provider.id }}/disconnect" data-provider-disconnect-name="{{ provider.name }}" class="cursor-pointer rounded-full border border-red-900/70 px-3 py-1.5 text-xs text-red-300 hover:border-red-700 hover:bg-red-950/30">Disconnect</button></td></tr>
+          {% endif %}{% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </section>
+</div>
+
+<div data-provider-disconnect-modal class="fixed inset-0 z-50 hidden items-center justify-center bg-black/70 px-4 backdrop-blur-sm" aria-modal="true" role="dialog">
+  <div class="w-full max-w-md rounded-2xl border border-zinc-800 bg-[#0d0d10] p-6 shadow-2xl">
+    <h3 class="text-lg font-semibold text-white">Disconnect provider</h3>
+    <p class="mt-2 text-sm leading-6 text-zinc-400">Disconnect <span data-provider-disconnect-name class="font-medium text-zinc-200"></span>? Its stored authentication will be removed from OpenCode. This cannot be undone.</p>
+    <div class="mt-6 flex flex-col-reverse gap-3 sm:flex-row sm:justify-end">
+      <button type="button" data-provider-disconnect-close class="w-full cursor-pointer rounded-full border border-zinc-800 px-4 py-2 text-sm font-medium text-zinc-300 hover:border-zinc-700 hover:text-white sm:w-auto">Cancel</button>
+      <form data-provider-disconnect-form method="post" class="w-full sm:w-auto"><button type="submit" class="w-full cursor-pointer rounded-full bg-red-600 px-4 py-2 text-sm font-medium text-white hover:bg-red-500 sm:w-auto">Disconnect provider</button></form>
+    </div>
+  </div>
+</div>
+
+<div class="fixed inset-0 z-50 hidden items-start justify-center overflow-y-auto p-4 sm:items-center" data-provider-connect-modal>
+  <button type="button" class="absolute inset-0 cursor-pointer bg-black/70" aria-label="Close provider connection dialog" data-provider-connect-close></button>
+  <div class="relative my-8 w-full max-w-lg rounded-3xl border border-zinc-800 bg-[#0d0d10] shadow-2xl shadow-black/50">
+    <div class="flex items-start justify-between gap-4 border-b border-zinc-800 px-6 py-5"><h2 class="text-lg font-medium text-white">Connect a provider</h2><button type="button" class="cursor-pointer rounded-full p-2 text-zinc-500 hover:bg-zinc-900 hover:text-zinc-200" aria-label="Close provider connection dialog" data-provider-connect-close><svg class="size-5" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true"><path fill-rule="evenodd" d="M4.22 4.22a.75.75 0 0 1 1.06 0L10 8.94l4.72-4.72a.75.75 0 1 1 1.06 1.06L11.06 10l4.72 4.72a.75.75 0 1 1-1.06 1.06L10 11.06l-4.72 4.72a.75.75 0 0 1-1.06-1.06L8.94 10 4.22 5.28a.75.75 0 0 1 0-1.06Z" clip-rule="evenodd" /></svg></button></div>
+    <div class="px-6 py-6">
+      <form method="get" data-provider-connect-form class="space-y-5">
+        <label class="block text-sm text-zinc-300">Provider<select data-provider-connect-provider class="mt-2 block w-full cursor-pointer rounded-xl border border-zinc-700 bg-zinc-950 px-3 py-2 text-white outline-none focus:border-violet-600 disabled:cursor-not-allowed disabled:opacity-50"><option value="">Select a provider</option>{% for provider in providers %}<option value="{{ provider.id }}">{{ provider.name }} ({{ provider.id }})</option>{% endfor %}</select></label>
+        <div data-provider-connect-selection>
+          <label class="block text-sm text-zinc-300">Connection method<select data-provider-connect-method class="mt-2 block w-full cursor-pointer rounded-xl border border-zinc-700 bg-zinc-950 px-3 py-2 text-white outline-none focus:border-violet-600"><option value="">Select a method</option>{% for provider in providers %}{% for method in provider.methods %}<option value="{{ method.index }}" data-provider-id="{{ provider.id }}" data-provider-auth-type="{{ method.auth_type }}" data-provider-prompt-count="{{ method.prompts.len() }}"{% if let Some(reason) = method.disabled_reason %} data-disabled-reason="{{ reason }}" disabled{% endif %}>{{ method.label }}{% if let Some(reason) = method.disabled_reason %} (unavailable){% endif %}</option>{% endfor %}{% endfor %}</select></label>
+          <p data-provider-connect-status class="min-h-5 text-sm text-zinc-500"></p>
+          <div class="flex justify-end gap-3 border-t border-zinc-800 pt-5"><button type="button" data-provider-connect-close class="cursor-pointer rounded-full border border-zinc-700 px-4 py-2 text-sm text-zinc-300 hover:bg-zinc-800">Cancel</button><button type="submit" data-provider-connect-submit disabled class="cursor-not-allowed rounded-full bg-violet-600 px-5 py-2 text-sm font-medium text-white opacity-50">Continue</button></div>
+        </div>
+      </form>
+      <div data-provider-connect-step class="hidden"></div>
+      <div data-provider-connect-loading class="hidden flex items-center justify-center gap-3 py-8 text-sm text-zinc-400" role="status"><span class="size-5 animate-spin rounded-full border-2 border-zinc-700 border-t-zinc-300" aria-hidden="true"></span>Starting connection…</div>
+    </div>
+  </div>
+</div>
+{% endblock %}

@@ -3,7 +3,7 @@ use askama::Template;
 use super::navbar::Navbar;
 
 #[derive(Template)]
-#[template(path = "server_error.html")]
+#[template(path = "errors/server-error.html")]
 pub struct ServerErrorPageTemplate {
     pub message: String,
     pub current_path: String,
@@ -11,7 +11,7 @@ pub struct ServerErrorPageTemplate {
 }
 
 #[derive(Template)]
-#[template(path = "not_found.html")]
+#[template(path = "errors/not-found.html")]
 pub struct NotFoundPageTemplate {
     pub current_path: String,
     pub navbar: Navbar,

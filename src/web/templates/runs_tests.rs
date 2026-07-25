@@ -34,8 +34,9 @@ fn run_detail_page_renders_opencode_session_sections() {
         session_errors: Vec::new(),
     };
 
-    let rendered = AgentRunDetailPageTemplate::render_view(agent, run, Some(session), true)
-        .expect("render run detail page");
+    let rendered =
+        AgentRunDetailPageTemplate::render_view(agent, run, Some(session), true, Navbar::default())
+            .expect("render run detail page");
 
     assert!(rendered.contains("Agent sections"));
     assert!(

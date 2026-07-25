@@ -131,7 +131,7 @@ impl AgenticHookDetailView {
 }
 
 #[derive(Template)]
-#[template(path = "agent_hook_detail_page.html")]
+#[template(path = "agents/hooks/detail.html")]
 pub struct AgentHookDetailPageTemplate {
     pub agent: AgentDetailRow,
     pub tabs: Vec<AgentShowTabLink>,

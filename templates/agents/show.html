@@ -1,0 +1,1211 @@
+{% extends "layouts/base.html" %}
+
+{% block title %}{{ agent.display_name }} · Vibetrading{% endblock %}
+
+{% block content %}
+<div class="mx-auto max-w-[1400px]">
+    {% include "agents/components/page-header.html" %}
+
+    {% include "agents/components/tabs.html" %}
+
+    {% if !has_selected_instruments %}
+    <a href="/agents/{{ agent.agent_key }}/settings" class="mb-2 flex items-center justify-center gap-2 rounded-2xl border border-amber-900/60 bg-amber-950/30 px-4 py-2 text-sm text-amber-200 hover:border-amber-800 hover:bg-amber-950/40">
+        <svg class="h-4 w-4 shrink-0 text-amber-300" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
+            <path fill-rule="evenodd" d="M8.485 2.495c.673-1.167 2.357-1.167 3.03 0l6.28 10.875c.673 1.167-.17 2.625-1.516 2.625H3.72c-1.347 0-2.189-1.458-1.515-2.625L8.485 2.495ZM10 5a.75.75 0 0 1 .75.75v3.5a.75.75 0 0 1-1.5 0v-3.5A.75.75 0 0 1 10 5Zm0 9a1 1 0 1 0 0-2 1 1 0 0 0 0 2Z" clip-rule="evenodd"></path>
+        </svg>
+        <span>No currencies selected — this agent will not analyze or trade until you choose at least one.</span>
+    </a>
+    {% endif %}
+
+    <div id="agent-show-tab-content">
+    {% if show_positions_tab %}
+    <section class="mt-2 space-y-2" hx-ext="sse" sse-connect="/agents/{{ agent.agent_key }}/live/stream">
+        <section class="rounded-2xl border border-zinc-800 bg-[#0d0d10] p-6">
+            <div class="grid grid-cols-1 gap-6 sm:grid-cols-4">
+                <div class="contents" sse-swap="balance">{{account_balance_html|safe}}</div>
+                {{ sparklines_html|safe }}
+            </div>
+        </section>
+
+        <section class="rounded-2xl border border-zinc-800 bg-[#0d0d10] p-6">
+            <h2 class="text-lg font-medium text-white">Positions</h2>
+            <div class="mt-4" sse-swap="positions">{{ open_positions_html|safe }}</div>
+        </section>
+
+        <section class="rounded-2xl border border-zinc-800 bg-[#0d0d10] p-6">
+            <h2 class="text-lg font-medium text-white">Open orders</h2>
+            <div data-latest-trade-execution-summary sse-swap="latest-trade-execution-summary">{{ latest_trade_execution_summary_html|safe }}</div>
+            <div class="mt-4" sse-swap="orders">{{ open_orders_html|safe }}</div>
+        </section>
+
+        <section class="rounded-2xl border border-zinc-800 bg-[#0d0d10] p-6">
+            <h2 class="text-lg font-medium text-white">Analysis</h2>
+            <div data-latest-analysis-summary sse-swap="latest-analysis-summary">{{ latest_analysis_summary_html|safe }}</div>
+        </section>
+    </section>
+    {% else if show_transactions_tab %}
+    <section class="mt-2 space-y-2">
+        <section id="agent-transactions" class="rounded-2xl border border-zinc-800 bg-[#0d0d10] p-6">
+            <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                <h2 class="text-lg font-medium text-white">Transactions</h2>
+                {% if !transactions.is_empty() %}
+                <div class="flex items-center gap-2">
+                    {% if let Some(previous_page_url) = transactions_previous_page_url %}
+                    <a href="{{ previous_page_url }}" hx-get="{{ previous_page_url }}" hx-select="#agent-transactions" hx-target="#agent-transactions" hx-swap="outerHTML" hx-push-url="true" class="inline-flex items-center rounded-full border border-zinc-800 px-3 py-1.5 text-xs font-medium text-zinc-300 hover:border-zinc-700 hover:text-white">Previous</a>
+                    {% endif %}
+                    <span class="px-2 text-xs uppercase tracking-[0.16em] text-zinc-500">Page {{ transactions_page }} of {{ transactions_total_pages }}</span>
+                    {% if let Some(next_page_url) = transactions_next_page_url %}
+                    <a href="{{ next_page_url }}" hx-get="{{ next_page_url }}" hx-select="#agent-transactions" hx-target="#agent-transactions" hx-swap="outerHTML" hx-push-url="true" class="inline-flex items-center rounded-full border border-zinc-800 px-3 py-1.5 text-xs font-medium text-zinc-300 hover:border-zinc-700 hover:text-white">Next</a>
+                    {% endif %}
+                </div>
+                {% endif %}
+            </div>
+            {% if transactions.is_empty() %}
+            <div class="mt-4 rounded-xl border border-zinc-800 bg-zinc-950/70 p-6 text-center">
+                <p class="text-sm text-zinc-400">No transactions have synced yet.</p>
+                <p class="mt-1 text-xs text-zinc-500">Enable the agent and wait for the orchestrator to reconcile the account history.</p>
+            </div>
+            {% else %}
+            <div class="mt-4 overflow-x-auto">
+                <table class="min-w-full divide-y divide-zinc-800 text-sm">
+                    <thead class="bg-zinc-950/60 text-left text-xs uppercase tracking-[0.16em] text-zinc-500">
+                        <tr>
+                            <th class="px-4 py-3 font-medium">Time</th>
+                            <th class="px-4 py-3 font-medium">Type</th>
+                            <th class="px-4 py-3 font-medium">Symbol/Asset</th>
+                            <th class="px-4 py-3 text-right font-medium">Fee USDC</th>
+                            <th class="px-4 py-3 text-right font-medium">Realized PnL USDC</th>
+                            <th class="px-4 py-3 text-right font-medium">USDC delta</th>
+                            <th class="px-4 py-3 text-right font-medium">Balance</th>
+                        </tr>
+                    </thead>
+                    <tbody class="divide-y divide-zinc-800">
+                        {% for tx in transactions %}
+                        <tr class="hover:bg-zinc-900/50">
+                            <td class="px-4 py-3 align-top font-mono text-xs tabular-nums text-zinc-300">
+                                <time class="local-datetime" data-local-format="datetime" datetime="{{ tx.event_time.iso }}" title="{{ tx.event_time.fallback_text }}">{{ tx.event_time.fallback_text }}</time>
+                            </td>
+                            <td class="px-4 py-3 align-top">
+                                <span class="inline-flex rounded border border-zinc-700 px-1.5 py-0.5 text-xs text-zinc-300">{{ tx.row.event_category }}</span>
+                            </td>
+                            <td class="px-4 py-3 align-top text-zinc-300">
+                                {% if let Some(symbol) = tx.row.symbol %}
+                                <span class="font-medium">{{ symbol }}</span>
+                                {% endif %}
+                                {% if let Some(asset) = tx.row.asset %}
+                                <div class="text-xs text-zinc-500">{{ asset }}</div>
+                                {% endif %}
+                            </td>
+                            <td class="px-4 py-3 text-right align-top font-mono text-xs tabular-nums text-zinc-300">{{ tx.fee_usdc }}</td>
+                            <td class="px-4 py-3 text-right align-top font-mono text-xs tabular-nums {{ tx.realized_pnl_usdc.color_class }}">{{ tx.realized_pnl_usdc.value }}</td>
+                            <td class="px-4 py-3 text-right align-top font-mono text-xs tabular-nums {{ tx.usdc_delta.color_class }}">{{ tx.usdc_delta.value }}</td>
+                            <td class="px-4 py-3 text-right align-top font-mono text-xs tabular-nums text-zinc-300">{{ tx.running_balance.value }}</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            <div class="mt-4 flex flex-col gap-3 border-t border-zinc-800 pt-4 text-sm text-zinc-400 sm:flex-row sm:items-center sm:justify-between">
+                <p>Showing {{ transactions_range_start }}-{{ transactions_range_end }} of {{ transactions_total_count }} transactions</p>
+                <div class="flex items-center gap-2">
+                    {% if let Some(previous_page_url) = transactions_previous_page_url %}
+                    <a href="{{ previous_page_url }}" hx-get="{{ previous_page_url }}" hx-select="#agent-transactions" hx-target="#agent-transactions" hx-swap="outerHTML" hx-push-url="true" class="inline-flex items-center rounded-full border border-zinc-800 px-3 py-1.5 text-xs font-medium text-zinc-300 hover:border-zinc-700 hover:text-white">Previous</a>
+                    {% endif %}
+                    <span class="px-2 text-xs uppercase tracking-[0.16em] text-zinc-500">Page {{ transactions_page }} of {{ transactions_total_pages }}</span>
+                    {% if let Some(next_page_url) = transactions_next_page_url %}
+                    <a href="{{ next_page_url }}" hx-get="{{ next_page_url }}" hx-select="#agent-transactions" hx-target="#agent-transactions" hx-swap="outerHTML" hx-push-url="true" class="inline-flex items-center rounded-full border border-zinc-800 px-3 py-1.5 text-xs font-medium text-zinc-300 hover:border-zinc-700 hover:text-white">Next</a>
+                    {% endif %}
+                </div>
+            </div>
+            {% endif %}
+        </section>
+    </section>
+    {% else if show_memories_tab %}
+    <section class="mt-2 space-y-2" data-agent-memories data-selected-memory-id="{% if let Some(item) = memory_timeline.first() %}{{ item.memory_id }}{% endif %}">
+        <section class="rounded-2xl border border-zinc-800 bg-[#0d0d10] p-6">
+            <div class="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
+                <h2 class="text-lg font-medium text-white">Memories</h2>
+                <form action="{{ current_path }}" method="get" class="flex flex-col gap-3 sm:flex-row sm:items-end">
+                    <div>
+                        <label for="memory_date" class="text-xs uppercase tracking-[0.16em] text-zinc-500">Date</label>
+                        <input id="memory_date" name="date" type="date" value="{{ memory_filter_date_value }}" class="mt-2 w-full rounded-xl border border-zinc-800 bg-zinc-950/70 px-4 py-2.5 text-sm text-zinc-200 outline-none focus:border-zinc-700 sm:w-auto">
+                    </div>
+                    <div class="flex items-center gap-2">
+                        <button type="submit" class="rounded-full bg-white px-4 py-2 text-sm font-medium text-black hover:bg-zinc-200">Apply</button>
+                        {% if has_memory_date_filter %}
+                        <a href="{{ current_path }}" class="rounded-full border border-zinc-800 px-4 py-2 text-sm font-medium text-zinc-300 hover:border-zinc-700 hover:text-white">Clear</a>
+                        {% endif %}
+                    </div>
+                </form>
+            </div>
+            {% if let Some(error_text) = memory_filter_error_text %}
+            <div class="mt-4 rounded-xl border border-amber-900/60 bg-amber-950/30 px-4 py-3 text-sm text-amber-200">{{ error_text }}</div>
+            {% endif %}
+            <div hx-ext="sse" sse-connect="/agents/{{ agent.agent_key }}/memories/stream?date={{ memory_filter_date_value }}" sse-swap="memories-timeline">{{ memory_timeline_html|safe }}</div>
+
+            <div class="relative mt-6 min-h-24">
+                <div data-memory-detail-loading class="pointer-events-none absolute inset-0 z-10 hidden items-center justify-center rounded-2xl bg-zinc-950/70 backdrop-blur-sm" role="status" aria-live="polite">
+                    <span class="size-7 animate-spin rounded-full border-2 border-zinc-700 border-t-white" aria-hidden="true"></span>
+                    <span class="sr-only">Loading memory</span>
+                </div>
+                {{ selected_memory_html|safe }}
+            </div>
+        </section>
+    </section>
+    {% else if show_prompts_tab %}
+    <section class="mt-2 space-y-2" data-agent-prompts>
+        <section class="rounded-2xl border border-zinc-800 bg-[#0d0d10] p-6 flex flex-col" style="height: calc(100vh - 12rem)">
+            <div class="flex items-start justify-between gap-4">
+                <div>
+                    <h2 class="text-lg font-medium text-white">Strategy Prompts</h2>
+                </div>
+            </div>
+            <div class="mt-6 grid gap-4 grid-cols-[minmax(14rem,0.6fr)_minmax(0,1.4fr)] flex-1 min-h-0">
+                <nav aria-label="Prompt types" class="rounded-xl border border-zinc-800 bg-zinc-950/60 p-2 overflow-y-auto">
+                    <ul class="space-y-1" data-agent-prompt-nav>
+                        {% for editor in prompt_editors %}
+                        <li>
+                            <button type="button" data-agent-prompt-nav-item="{{ editor.prompt_kind }}" class="w-full cursor-pointer rounded-lg border border-transparent px-3 py-2 text-left text-sm text-zinc-300 transition hover:border-zinc-700 hover:bg-zinc-900 hover:text-white{% if loop.first %} border-zinc-700 bg-zinc-900 text-white{% endif %}">
+                                {{ editor.label }}
+                            </button>
+                        </li>
+                        {% endfor %}
+                    </ul>
+                </nav>
+                <div class="min-h-0">
+                    {% for editor in prompt_editors %}
+                    <form action="/agents/{{ agent.agent_key }}/prompts/update" method="post" class="space-y-5 h-full flex flex-col{% if !loop.first %} hidden{% endif %}" data-agent-prompt-form="{{ editor.prompt_kind }}">
+                        <input type="hidden" name="prompt_kind" value="{{ editor.prompt_kind }}">
+                        <div class="flex flex-col min-h-0 flex-1">
+                            <label for="{{ editor.textarea_id }}" class="text-xs uppercase tracking-[0.16em] text-zinc-500">{{ editor.label }}</label>
+                            <textarea id="{{ editor.textarea_id }}" name="prompt" placeholder="{{ editor.placeholder }}" class="mt-2 w-full flex-1 min-h-0 rounded-xl border border-zinc-800 bg-zinc-950/70 px-4 py-3 text-sm leading-6 text-zinc-200 outline-none placeholder:text-zinc-600 focus:border-zinc-700">{{ editor.prompt }}</textarea>
+                            <div class="mt-3 flex flex-col-reverse gap-3 sm:flex-row sm:justify-end">
+                                <input type="file" data-agent-prompt-file-input="{{ editor.prompt_kind }}" class="hidden" aria-hidden="true" tabindex="-1">
+                                <button type="button" data-agent-prompt-import="{{ editor.prompt_kind }}" class="cursor-pointer rounded-md border border-zinc-800 p-2 text-zinc-300 hover:border-zinc-700 hover:text-white" aria-label="Import prompt from file" title="Import prompt from file">
+                                    <svg class="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="M14 3H6.75A1.75 1.75 0 0 0 5 4.75v14.5A1.75 1.75 0 0 0 6.75 21h10.5A1.75 1.75 0 0 0 19 19.25V8l-5-5Z"></path><path stroke-linecap="round" stroke-linejoin="round" d="M14 3v5h5M8 14h8M8 17h5"></path></svg>
+                                </button>
+                                <button type="button" data-agent-prompt-reset="{{ editor.prompt_kind }}" class="cursor-pointer rounded-full border border-zinc-800 px-4 py-2 text-sm font-medium text-zinc-300 hover:border-zinc-700 hover:text-white">Reset to default</button>
+                                <button type="submit" data-agent-prompt-save="{{ editor.prompt_kind }}" disabled class="hidden cursor-pointer rounded-full bg-white px-4 py-2 text-sm font-medium text-black hover:bg-zinc-200 disabled:cursor-not-allowed disabled:bg-zinc-700 disabled:text-zinc-300">Save</button>
+                            </div>
+                        </div>
+                    </form>
+                    <textarea id="default-{{ editor.prompt_kind }}-strategy-prompt-value" class="hidden" aria-hidden="true" tabindex="-1">{{ editor.default_prompt }}</textarea>
+                    {% endfor %}
+                </div>
+            </div>
+        </section>
+    </section>
+    {% else if show_settings_tab %}
+    <section class="mt-2 space-y-2">
+        <section class="rounded-2xl border border-zinc-800 bg-[#0d0d10] p-6">
+            <h2 class="text-lg font-medium text-white">Settings</h2>
+            <dl class="mt-4 grid gap-4 sm:grid-cols-2">
+                <div>
+                    <dt class="text-xs uppercase tracking-[0.16em] text-zinc-500">Account address</dt>
+                    <dd class="mt-1 flex items-center gap-2 font-mono text-xs">
+                        <a href="https://arbiscan.io/address/{{ agent.trading_account_address_display() }}" target="_blank" rel="noopener noreferrer" class="break-all text-zinc-300 hover:text-white hover:underline">{{ agent.trading_account_address_display() }}</a>
+                        <button type="button" data-copy-button data-copy-value="{{ agent.trading_account_address_display() }}" class="shrink-0 cursor-pointer rounded-md p-1.5 text-zinc-400 hover:bg-zinc-800 hover:text-white" aria-label="Copy trading account address" title="Copy trading account address">
+                            <svg class="h-3.5 w-3.5" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><rect x="7" y="7" width="10" height="10" rx="1.5"></rect><path stroke-linecap="round" stroke-linejoin="round" d="M13 7V5.5A2.5 2.5 0 0 0 10.5 3h-5A2.5 2.5 0 0 0 3 5.5v5A2.5 2.5 0 0 0 5.5 13H7"></path></svg>
+                        </button>
+                    </dd>
+                    {% if !is_main_account %}{% if let Some(name) = subaccount_name %}<dd class="mt-1 text-xs text-zinc-500">Sub-account: {{ name }}</dd>{% endif %}{% endif %}
+                </div>
+                <div>
+                    <dt class="text-xs uppercase tracking-[0.16em] text-zinc-500">API key</dt>
+                    <dd class="mt-1 flex items-center gap-2 font-mono text-xs">
+                        <span class="break-all text-zinc-300">{{ api_key_masked }}</span>
+                        <button type="button" data-copy-button data-copy-value="{{ agent.api_key }}" class="shrink-0 cursor-pointer rounded-md p-1.5 text-zinc-400 hover:bg-zinc-800 hover:text-white" aria-label="Copy API key" title="Copy API key">
+                            <svg class="h-3.5 w-3.5" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><rect x="7" y="7" width="10" height="10" rx="1.5"></rect><path stroke-linecap="round" stroke-linejoin="round" d="M13 7V5.5A2.5 2.5 0 0 0 10.5 3h-5A2.5 2.5 0 0 0 3 5.5v5A2.5 2.5 0 0 0 5.5 13H7"></path></svg>
+                        </button>
+                    </dd>
+                </div>
+            </dl>
+        </section>
+
+        <section class="rounded-2xl border border-zinc-800 bg-[#0d0d10] p-6" data-agent-instrument-selector>
+            <div class="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                <div>
+                    <h2 class="text-lg font-medium text-white">Currencies</h2>
+                </div>
+            </div>
+            <form action="/agents/{{ agent.agent_key }}/settings/instruments" method="post" class="mt-6 space-y-5">
+                {% if instrument_options_loaded && instrument_options.is_empty() %}
+                <div class="rounded-xl border border-zinc-800 bg-zinc-950/70 p-6 text-center">
+                    <p class="text-sm text-zinc-400">No active Hyperliquid perp instruments are available.</p>
+                </div>
+                {% else %}
+                <div class="grid gap-4 xl:grid-cols-[minmax(0,1.3fr)_minmax(20rem,0.9fr)]">
+                    <section class="rounded-2xl border border-zinc-800 bg-zinc-950/60 p-4">
+                        <div class="flex items-center justify-between gap-3">
+                            <div>
+                                <h3 class="text-sm font-medium text-white">Available currencies</h3>
+                            </div>
+                        </div>
+                        <div class="mt-4">
+                            <label for="instrument-search" class="sr-only">Search currencies</label>
+                            <input id="instrument-search" type="search" placeholder="Filter currencies" autocomplete="off" data-instrument-search class="w-full rounded-xl border border-zinc-800 bg-[#0d0d10] px-4 py-2.5 text-sm text-zinc-200 outline-none placeholder:text-zinc-600 focus:border-zinc-700">
+                        </div>
+                        <div data-instrument-scroll-container class="dark-scrollbar mt-4 max-h-48 overflow-y-auto rounded-xl border border-zinc-800 bg-[#0d0d10] p-2">
+                            <div class="space-y-2">
+                                {% for option in instrument_options %}
+                                <label data-instrument-row data-instrument-label="{{ option.instrument_id }}" data-instrument-logo-url="{{ option.logo_url }}" class="flex cursor-pointer items-center gap-3 rounded-xl border border-zinc-900 bg-zinc-950/70 px-4 py-3 text-sm text-zinc-200 transition hover:border-zinc-700 has-[:checked]:border-emerald-900/60 has-[:checked]:bg-emerald-950/20">
+                                    <input type="checkbox" name="instrument_id" value="{{ option.instrument_id }}" {% if option.selected %}checked{% endif %} class="h-4 w-4 rounded border-zinc-700 bg-zinc-950 text-white">
+                                    <img alt="" aria-hidden="true" data-instrument-logo class="h-5 w-5 rounded-sm bg-zinc-800">
+                                    <span class="font-medium">{{ option.instrument_id }}</span>
+                                </label>
+                                {% endfor %}
+                            </div>
+                            <div data-instrument-search-empty class="hidden rounded-xl border border-zinc-800 bg-zinc-950/70 px-4 py-6 text-center text-sm text-zinc-500">
+                                No currencies match this filter.
+                            </div>
+                        </div>
+                    </section>
+
+                    <section class="rounded-2xl border border-zinc-800 bg-zinc-950/60 p-4">
+                        <div class="flex items-center justify-between gap-3">
+                            <div>
+                                <h3 class="text-sm font-medium text-white">Enabled currencies</h3>
+                            </div>
+                        </div>
+                        <div data-no-currencies-warning class="mt-4 rounded-xl border border-amber-900/60 bg-amber-950/30 px-4 py-3 text-sm text-amber-200{% if has_selected_instruments %} hidden{% endif %}">No currencies are selected. This agent will not analyze markets or place new trades until at least one currency is selected.</div>
+                        <div class="mt-4 rounded-xl border border-zinc-800 bg-[#0d0d10] p-2">
+                            <div data-selected-instrument-list class="space-y-2"></div>
+                            <div data-selected-instrument-empty class="rounded-xl border border-dashed border-zinc-800 px-4 py-8 text-center text-sm text-zinc-500{% if has_selected_instruments %} hidden{% endif %}">
+                                No enabled currencies yet.
+                            </div>
+                        </div>
+                    </section>
+                </div>
+                {% endif %}
+                <div class="flex justify-end">
+                    <button type="submit" data-save-currencies class="hidden cursor-pointer rounded-full bg-violet-600 px-4 py-2 text-sm font-medium text-white hover:bg-violet-500">Save currencies</button>
+                </div>
+            </form>
+        </section>
+
+        {% include "agents/components/workspace-section.html" %}
+
+        <section class="rounded-2xl border border-red-900/60 bg-red-950/20 p-6">
+            <h2 class="text-lg font-medium text-white">Delete agent</h2>
+            <p class="mt-2 max-w-3xl text-sm leading-6 text-zinc-400">Delete this agent, its related database records, Hyperliquid history for this account, and its OpenCode workspace files. This cannot be undone.</p>
+            <div class="mt-6 flex justify-end">
+                <button type="button" id="delete-agent-btn" data-delete-agent-trigger class="cursor-pointer rounded-full border border-red-900/60 bg-red-950/30 px-4 py-2 text-sm font-medium text-red-300 hover:border-red-800 hover:bg-red-950/50">
+                    Delete agent
+                </button>
+            </div>
+        </section>
+    </section>
+    {% else if show_jobs_tab %}
+    <section class="mt-2" data-agent-jobs>
+        <section class="rounded-2xl border border-zinc-800 bg-[#0d0d10] p-6">
+            {% if let Some(warning) = jobs_warning %}
+            <div class="rounded-xl border border-amber-900/60 bg-amber-950/30 px-4 py-3 text-sm text-amber-200">
+                {{ warning }}
+            </div>
+            {% endif %}
+            <div class="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+                <h2 class="text-lg font-medium text-white">Jobs</h2>
+                <div class="flex flex-wrap items-center gap-2">
+                    {% if can_enable_all_jobs %}
+                    <form action="/agents/{{ agent.agent_key }}/jobs/toggle-all" method="post">
+                        <input type="hidden" name="enabled" value="on">
+                        <button type="submit" class="inline-flex cursor-pointer items-center justify-center gap-2 rounded-full border border-emerald-900/60 bg-emerald-950/20 px-4 py-2 text-sm font-medium text-emerald-300 hover:border-emerald-800 hover:bg-emerald-950/40 hover:text-emerald-200">
+                            <svg class="h-4 w-4" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
+                                <path d="M6 4.5v11l9-5.5-9-5.5Z"></path>
+                            </svg>
+                            Enable all
+                        </button>
+                    </form>
+                    {% endif %}
+                    {% if can_disable_all_jobs %}
+                    <form action="/agents/{{ agent.agent_key }}/jobs/toggle-all" method="post">
+                        <input type="hidden" name="enabled" value="off">
+                        <button type="submit" class="inline-flex cursor-pointer items-center justify-center gap-2 rounded-full border border-zinc-700 bg-zinc-900/70 px-4 py-2 text-sm font-medium text-zinc-300 hover:border-zinc-600 hover:bg-zinc-800 hover:text-white">
+                            <svg class="h-4 w-4" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
+                                <path d="M5.5 4h3v12h-3V4Zm6 0h3v12h-3V4Z"></path>
+                            </svg>
+                            Disable all
+                        </button>
+                    </form>
+                    {% endif %}
+                    <a href="/agents/{{ agent.agent_key }}/jobs/new" class="inline-flex items-center justify-center gap-2 rounded-full border border-zinc-700 bg-zinc-900/70 px-4 py-2 text-sm font-medium text-zinc-200 hover:border-zinc-600 hover:bg-zinc-800 hover:text-white">
+                        <svg class="h-4 w-4" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
+                            <path d="M10 4a1 1 0 0 1 1 1v4h4a1 1 0 1 1 0 2h-4v4a1 1 0 1 1-2 0v-4H5a1 1 0 1 1 0-2h4V5a1 1 0 0 1 1-1Z"></path>
+                        </svg>
+                        New job
+                    </a>
+                    <a href="/agents/{{ agent.agent_key }}/hooks/new" class="inline-flex items-center justify-center gap-2 rounded-full border border-zinc-700 bg-zinc-900/70 px-4 py-2 text-sm font-medium text-zinc-200 hover:border-zinc-600 hover:bg-zinc-800 hover:text-white">
+                        <svg class="h-4 w-4" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
+                            <path d="M10 4a1 1 0 0 1 1 1v4h4a1 1 0 1 1 0 2h-4v4a1 1 0 1 1-2 0v-4H5a1 1 0 1 1 0-2h4V5a1 1 0 0 1 1-1Z"></path>
+                        </svg>
+                        New hook
+                    </a>
+                </div>
+            </div>
+
+            <div class="mt-8">
+                <h3 class="text-base font-medium text-white">Scheduled</h3>
+                {% if !jobs_loaded %}
+                <div class="mt-4 rounded-xl border border-amber-900/60 bg-amber-950/30 px-4 py-3 text-sm text-amber-200">Jobs could not be loaded.</div>
+                {% else if jobs.is_empty() %}
+                <div class="mt-4 rounded-xl border border-zinc-800 bg-zinc-950/70 p-6 text-center">
+                    <p class="text-sm text-zinc-400">No jobs have been created for this agent yet.</p>
+                </div>
+                {% else %}
+                <div class="mt-4 overflow-x-auto">
+                    <table class="min-w-full divide-y divide-zinc-800 text-sm">
+                        <thead class="bg-zinc-950/60 text-left text-xs uppercase tracking-[0.16em] text-zinc-500">
+                            <tr>
+                                <th class="px-4 py-3 font-medium">Job key</th>
+                                <th class="px-4 py-3 font-medium">Kind</th>
+                                <th class="px-4 py-3 font-medium">Status</th>
+                                <th class="px-4 py-3 font-medium">Timeframe</th>
+                                <th class="px-4 py-3 font-medium">Next run</th>
+                                <th class="px-4 py-3 font-medium">Model</th>
+                                <th class="px-4 py-3 font-medium"></th>
+                            </tr>
+                        </thead>
+                        <tbody class="divide-y divide-zinc-800">
+                            {% for row in jobs %}
+                            <tr data-row-href="{{ row.detail_url }}" tabindex="0" role="link" class="cursor-pointer hover:bg-zinc-900/50">
+                                <td class="px-4 py-3 align-top font-mono text-xs text-zinc-200">{{ row.job_key }}</td>
+                                <td class="px-4 py-3 align-top text-zinc-300">{{ row.job_kind }}</td>
+                                <td class="px-4 py-3 align-top">
+                                    <span class="inline-flex rounded-full border px-2 py-0.5 text-xs font-medium {{ row.enabled_class }}">{{ row.enabled_label }}</span>
+                                </td>
+                                <td class="px-4 py-3 align-top font-mono text-xs tabular-nums text-zinc-300">{{ row.timeframe_text }}</td>
+                                <td class="px-4 py-3 align-top font-mono text-xs text-zinc-300">
+                                    {% if !row.enabled %}
+                                    —
+                                    {% else %}
+                                    <time class="local-datetime" data-local-format="datetime" datetime="{{ row.next_run_at.iso }}" title="{{ row.next_run_at.fallback_text }}">{{ row.next_run_at.fallback_text }}</time>
+                                    {% endif %}
+                                </td>
+                                <td class="px-4 py-3 align-top text-xs text-zinc-300">
+                                    <span class="inline-flex items-center gap-2">
+                                        {% if let Some(logo_url) = row.model_logo_url %}
+                                        <img src="{{ logo_url }}" alt="Model provider logo" class="h-4 w-4 rounded-sm border border-zinc-800 bg-white p-0.5">
+                                        {% endif %}
+                                        <span class="font-mono">{{ row.model_text }}</span>
+                                    </span>
+                                </td>
+                                <td class="px-4 py-3 align-top">
+                                    <div class="flex flex-wrap items-center gap-2">
+                                        <form action="{{ row.run_now_action }}" method="post">
+                                            <button type="submit" {% if !row.has_model %}disabled title="No model set"{% endif %} class="inline-flex items-center gap-1.5 rounded-full border border-sky-900/60 bg-sky-950/30 px-3 py-1.5 text-xs font-medium text-sky-300 hover:border-sky-800 hover:bg-sky-950/50 hover:text-sky-200 {% if row.has_model %}cursor-pointer{% else %}cursor-not-allowed opacity-50{% endif %}">
+                                                <svg class="h-3.5 w-3.5" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
+                                                    <path d="M11.25 1.5 4.5 10h4.25L7.75 18.5 14.5 10h-4.25l1-8.5Z"></path>
+                                                </svg>
+                                                Run now
+                                            </button>
+                                        </form>
+                                        <form action="{{ row.toggle_action }}" method="post">
+                                            <input type="hidden" name="enabled" value="{{ row.hidden_enabled_value }}">
+                                            <button type="submit" {% if !row.enabled && !row.has_model %}disabled title="No model set"{% endif %} class="inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs font-medium {% if row.enabled %}cursor-pointer border-zinc-800 text-zinc-300 hover:border-zinc-700 hover:text-white{% else if row.has_model %}cursor-pointer border-emerald-900/60 bg-emerald-950/20 text-emerald-300 hover:border-emerald-800 hover:bg-emerald-950/40 hover:text-emerald-200{% else %}border-zinc-800 text-zinc-500 cursor-not-allowed opacity-50{% endif %}">
+                                                {% if row.enabled %}
+                                                <svg class="h-3.5 w-3.5" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
+                                                    <path d="M5.5 4h3v12h-3V4Zm6 0h3v12h-3V4Z"></path>
+                                                </svg>
+                                                Disable
+                                                {% else %}
+                                                <svg class="h-3.5 w-3.5" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
+                                                    <path d="M6 4.5v11l9-5.5-9-5.5Z"></path>
+                                                </svg>
+                                                Enable
+                                                {% endif %}
+                                            </button>
+                                        </form>
+                                    </div>
+                                </td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+                {% endif %}
+            </div>
+
+            <div class="mt-8 border-t border-zinc-800 pt-8">
+                <h3 class="text-base font-medium text-white">Hooks</h3>
+                {% if !hooks_loaded %}
+                <div class="mt-4 rounded-xl border border-amber-900/60 bg-amber-950/30 px-4 py-3 text-sm text-amber-200">Hooks could not be loaded.</div>
+                {% else if hooks.is_empty() %}
+                <div class="mt-4 rounded-xl border border-zinc-800 bg-zinc-950/70 p-6 text-center">
+                    <p class="text-sm text-zinc-400">No hook jobs have been created for this agent yet.</p>
+                </div>
+                {% else %}
+                <div class="mt-4 overflow-x-auto">
+                    <table class="min-w-full divide-y divide-zinc-800 text-sm">
+                        <thead class="bg-zinc-950/60 text-left text-xs uppercase tracking-[0.16em] text-zinc-500">
+                            <tr>
+                                <th class="px-4 py-3 font-medium">Job key</th>
+                                <th class="px-4 py-3 font-medium">Kind</th>
+                                <th class="px-4 py-3 font-medium">Trigger</th>
+                                <th class="px-4 py-3 font-medium">Status</th>
+                                <th class="px-4 py-3 font-medium">Model</th>
+                                <th class="px-4 py-3 font-medium"></th>
+                            </tr>
+                        </thead>
+                        <tbody class="divide-y divide-zinc-800">
+                            {% for row in hooks %}
+                            <tr data-row-href="{{ row.detail_url }}" tabindex="0" role="link" class="cursor-pointer hover:bg-zinc-900/50">
+                                <td class="px-4 py-3 align-top font-mono text-xs text-zinc-200">{{ row.job_key }}</td>
+                                <td class="px-4 py-3 align-top text-zinc-300">{{ row.job_kind }}</td>
+                                <td class="px-4 py-3 align-top text-zinc-300">{{ row.hook_event }}</td>
+                                <td class="px-4 py-3 align-top">
+                                    <span class="inline-flex rounded-full border px-2 py-0.5 text-xs font-medium {{ row.enabled_class }}">{{ row.enabled_label }}</span>
+                                </td>
+                                <td class="px-4 py-3 align-top text-xs text-zinc-300">
+                                    <span class="inline-flex items-center gap-2">
+                                        {% if let Some(logo_url) = row.model_logo_url %}
+                                        <img src="{{ logo_url }}" alt="Model provider logo" class="h-4 w-4 rounded-sm border border-zinc-800 bg-white p-0.5">
+                                        {% endif %}
+                                        <span class="font-mono">{{ row.model_text }}</span>
+                                    </span>
+                                </td>
+                                <td class="px-4 py-3 align-top">
+                                    <div class="flex flex-wrap items-center gap-2">
+                                        <form action="{{ row.run_now_action }}" method="post">
+                                            <button type="submit" {% if !row.has_model %}disabled title="No model set"{% endif %} class="inline-flex items-center gap-1.5 rounded-full border border-sky-900/60 bg-sky-950/30 px-3 py-1.5 text-xs font-medium text-sky-300 hover:border-sky-800 hover:bg-sky-950/50 hover:text-sky-200 {% if row.has_model %}cursor-pointer{% else %}cursor-not-allowed opacity-50{% endif %}">
+                                                <svg class="h-3.5 w-3.5" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
+                                                    <path d="M11.25 1.5 4.5 10h4.25L7.75 18.5 14.5 10h-4.25l1-8.5Z"></path>
+                                                </svg>
+                                                Run now
+                                            </button>
+                                        </form>
+                                        <form action="{{ row.toggle_action }}" method="post">
+                                            <input type="hidden" name="enabled" value="{{ row.hidden_enabled_value }}">
+                                            <button type="submit" {% if !row.enabled && !row.has_model %}disabled title="No model set"{% endif %} class="inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs font-medium {% if row.enabled %}cursor-pointer border-zinc-800 text-zinc-300 hover:border-zinc-700 hover:text-white{% else if row.has_model %}cursor-pointer border-emerald-900/60 bg-emerald-950/20 text-emerald-300 hover:border-emerald-800 hover:bg-emerald-950/40 hover:text-emerald-200{% else %}border-zinc-800 text-zinc-500 cursor-not-allowed opacity-50{% endif %}">
+                                                {% if row.enabled %}
+                                                <svg class="h-3.5 w-3.5" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
+                                                    <path d="M5.5 4h3v12h-3V4Zm6 0h3v12h-3V4Z"></path>
+                                                </svg>
+                                                Disable
+                                                {% else %}
+                                                <svg class="h-3.5 w-3.5" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
+                                                    <path d="M6 4.5v11l9-5.5-9-5.5Z"></path>
+                                                </svg>
+                                                Enable
+                                                {% endif %}
+                                            </button>
+                                        </form>
+                                    </div>
+                                </td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+                {% endif %}
+            </div>
+        </section>
+
+        <div id="agent-recent-runs-stream" hx-ext="sse" sse-connect="{{ recent_runs_section.stream_url }}">
+            {% include "agents/components/recent-runs.html" %}
+        </div>
+    </section>
+    {% endif %}
+    </div>
+</div>
+
+<!-- Delete confirmation modal -->
+<div id="delete-modal" class="fixed inset-0 z-50 hidden items-center justify-center bg-black/70 backdrop-blur-sm px-4" aria-modal="true" role="dialog">
+    <div class="w-full max-w-md rounded-2xl border border-zinc-800 bg-[#0d0d10] p-6 shadow-2xl">
+        <h3 class="text-lg font-semibold text-white">Delete agent</h3>
+        <p class="mt-2 text-sm leading-6 text-zinc-400">
+            Are you sure you want to delete <span class="font-medium text-zinc-200">{{ agent.display_name }}</span>? This removes the agent and its workspace files. The Hyperliquid account will remain.
+        </p>
+        <div class="mt-6 flex flex-col-reverse gap-3 sm:flex-row sm:justify-end">
+            <button type="button" id="cancel-delete-btn" class="w-full cursor-pointer rounded-full border border-zinc-800 px-4 py-2 text-sm font-medium text-zinc-300 hover:border-zinc-700 hover:text-white sm:w-auto">
+                Cancel
+            </button>
+            <form action="/agents/{{ agent.agent_key }}/delete" method="post" class="w-full sm:w-auto">
+                <button type="submit" class="w-full cursor-pointer rounded-full bg-red-600 px-4 py-2 text-sm font-medium text-white hover:bg-red-500 sm:w-auto">
+                    Delete agent
+                </button>
+            </form>
+        </div>
+    </div>
+</div>
+
+<!-- Re-generate workspace confirmation modal -->
+<div id="regenerate-workspace-modal" class="fixed inset-0 z-50 hidden items-center justify-center bg-black/70 backdrop-blur-sm px-4" aria-modal="true" role="dialog">
+    <div class="w-full max-w-lg rounded-2xl border border-zinc-800 bg-[#0d0d10] p-6 shadow-2xl">
+        <h3 class="text-lg font-semibold text-white">Re-generate workspace</h3>
+        <p class="mt-2 text-sm leading-6 text-zinc-400">
+            Queue workspace maintenance for <span class="font-medium text-zinc-200">{{ agent.display_name }}</span>.
+        </p>
+        <p class="mt-3 text-sm leading-6 text-zinc-400">
+            Regular re-generation refreshes template-managed files and preserves <code class="font-mono text-xs text-zinc-300">scripts/user/</code>, <code class="font-mono text-xs text-zinc-300">data/</code>, and <code class="font-mono text-xs text-zinc-300">scratch/</code>.
+        </p>
+        <p class="mt-3 text-sm leading-6 text-zinc-400">
+            Hard reset deletes the full workspace first, including user-managed and agent-generated files, before recreating it from the template.
+        </p>
+        <div class="mt-4 rounded-xl border border-zinc-800 bg-zinc-950/70 p-4">
+            <label class="flex items-start gap-3 text-sm text-zinc-200">
+                <input id="hard-reset-workspace" type="checkbox" name="hard_reset" value="on" form="regenerate-workspace-form" class="mt-0.5 h-4 w-4 rounded border-zinc-700 bg-zinc-950 text-white">
+                <span>
+                    <span class="block font-medium text-white">Hard-reset workspace</span>
+                    <span class="mt-1 block text-xs leading-5 text-zinc-500">Delete the full workspace before recreating it from the template. This removes user-managed and agent-generated files.</span>
+                </span>
+            </label>
+            <label id="reset-memories-option" class="mt-3 ml-7 flex items-start gap-3 text-sm text-zinc-500">
+                <input id="reset-memories" type="checkbox" name="reset_memories" value="on" form="regenerate-workspace-form" disabled class="mt-0.5 h-4 w-4 rounded border-zinc-700 bg-zinc-950 text-white disabled:cursor-not-allowed disabled:opacity-50">
+                <span>
+                    <span id="reset-memories-title" class="block font-medium text-zinc-400">Reset memories</span>
+                    <span id="reset-memories-description" class="mt-1 block text-xs leading-5 text-zinc-600">Delete all memories stored for this agent.</span>
+                </span>
+            </label>
+        </div>
+        <div class="mt-6 flex flex-col-reverse gap-3 sm:flex-row sm:justify-end">
+            <button type="button" id="cancel-regenerate-workspace-btn" class="w-full rounded-full border border-zinc-800 px-4 py-2 text-sm font-medium text-zinc-300 hover:border-zinc-700 hover:text-white sm:w-auto">
+                Cancel
+            </button>
+            <form id="regenerate-workspace-form" action="/agents/{{ agent.agent_key }}/settings/regenerate-workspace" method="post" class="w-full sm:w-auto">
+                    <button type="submit" class="w-full cursor-pointer rounded-full bg-violet-600 px-4 py-2 text-sm font-medium text-white hover:bg-violet-500 sm:w-auto">
+                    Queue maintenance
+                </button>
+            </form>
+        </div>
+    </div>
+</div>
+
+<!-- Job and hook delete confirmation modal -->
+<div id="agent-job-delete-modal" class="fixed inset-0 z-50 hidden items-center justify-center bg-black/70 backdrop-blur-sm px-4" aria-modal="true" role="dialog">
+    <div class="w-full max-w-md rounded-2xl border border-zinc-800 bg-[#0d0d10] p-6 shadow-2xl">
+        <h3 id="agent-job-delete-modal-title" class="text-lg font-semibold text-white">Delete job</h3>
+        <p id="agent-job-delete-modal-body" class="mt-2 text-sm leading-6 text-zinc-400">
+            Are you sure you want to delete this job? This action cannot be undone.
+        </p>
+        <div class="mt-6 flex flex-col-reverse gap-3 sm:flex-row sm:justify-end">
+            <button type="button" id="cancel-agent-job-delete-btn" class="w-full rounded-full border border-zinc-800 px-4 py-2 text-sm font-medium text-zinc-300 hover:border-zinc-700 hover:text-white sm:w-auto">
+                Cancel
+            </button>
+            <form id="agent-job-delete-form" action="" method="post" class="w-full sm:w-auto">
+                <button type="submit" id="confirm-agent-job-delete-btn" class="w-full rounded-full bg-red-600 px-4 py-2 text-sm font-medium text-white hover:bg-red-500 sm:w-auto">
+                    Delete job
+                </button>
+            </form>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+{% include "agents/components/tabs-script.html" %}
+<template>
+    (function () {
+        function initPromptEditor() {
+            const container = document.querySelector('[data-agent-prompts]');
+            if (!container || container.dataset.agentPromptsBound === 'true') {
+                return;
+            }
+
+            const forms = Array.from(container.querySelectorAll('[data-agent-prompt-form]'));
+            const fields = forms.map(function (form) {
+                const key = form.getAttribute('data-agent-prompt-form');
+                return {
+                    key: key,
+                    textarea: form.querySelector('textarea[name="prompt"]'),
+                    saveBtn: container.querySelector('[data-agent-prompt-save="' + key + '"]'),
+                    importBtn: container.querySelector('[data-agent-prompt-import="' + key + '"]'),
+                    fileInput: container.querySelector('[data-agent-prompt-file-input="' + key + '"]'),
+                    resetBtn: container.querySelector('[data-agent-prompt-reset="' + key + '"]'),
+                    defaultTextarea: container.querySelector('#default-' + key + '-strategy-prompt-value'),
+                };
+            });
+
+            const ready = fields.length > 0 && fields.every(function (field) {
+                return field.key && field.textarea && field.saveBtn && field.importBtn && field.fileInput && field.resetBtn && field.defaultTextarea;
+            });
+
+            if (!ready) {
+                return;
+            }
+
+            container.dataset.agentPromptsBound = 'true';
+
+            const navItems = Array.from(container.querySelectorAll('[data-agent-prompt-nav-item]'));
+            const formByKey = new Map(forms.map(function (form) {
+                return [form.getAttribute('data-agent-prompt-form'), form];
+            }));
+
+            function selectPrompt(key) {
+                if (!formByKey.has(key)) {
+                    return;
+                }
+                navItems.forEach(function (item) {
+                    const active = item.getAttribute('data-agent-prompt-nav-item') === key;
+                    item.classList.toggle('border-zinc-700', active);
+                    item.classList.toggle('bg-zinc-900', active);
+                    item.classList.toggle('text-white', active);
+                });
+                forms.forEach(function (form) {
+                    form.classList.toggle('hidden', form.getAttribute('data-agent-prompt-form') !== key);
+                });
+            }
+
+            navItems.forEach(function (item) {
+                item.addEventListener('click', function () {
+                    selectPrompt(item.getAttribute('data-agent-prompt-nav-item'));
+                });
+            });
+
+            selectPrompt(fields[0].key);
+
+            fields.forEach(function (field) {
+                const original = field.textarea.value;
+
+                function updateSaveState() {
+                    const isDirty = field.textarea.value !== original;
+                    field.saveBtn.disabled = !isDirty;
+                    field.saveBtn.classList.toggle('hidden', !isDirty);
+                }
+
+                field.resetBtn.addEventListener('click', function () {
+                    field.textarea.value = field.defaultTextarea.value;
+                    updateSaveState();
+                });
+
+                field.importBtn.addEventListener('click', function () {
+                    field.fileInput.click();
+                });
+
+                field.fileInput.addEventListener('change', function () {
+                    const file = field.fileInput.files && field.fileInput.files[0];
+                    field.fileInput.value = '';
+                    if (!file) {
+                        return;
+                    }
+
+                    file.text().then(function (contents) {
+                        field.textarea.value = contents;
+                        field.textarea.dispatchEvent(new Event('input', { bubbles: true }));
+                    });
+                });
+
+                 field.textarea.addEventListener('input', updateSaveState);
+                updateSaveState();
+            });
+        }
+
+        function initAgentInstrumentSelector() {
+            const container = document.querySelector('[data-agent-instrument-selector]');
+            if (!container || container.dataset.agentInstrumentSelectorBound === 'true') {
+                return;
+            }
+
+            const searchInput = container.querySelector('[data-instrument-search]');
+            const selectedList = container.querySelector('[data-selected-instrument-list]');
+            const selectedEmpty = container.querySelector('[data-selected-instrument-empty]');
+            const warning = container.querySelector('[data-no-currencies-warning]');
+            const saveButton = container.querySelector('[data-save-currencies]');
+            const searchEmpty = container.querySelector('[data-instrument-search-empty]');
+            const scrollContainer = container.querySelector('[data-instrument-scroll-container]');
+            const rows = Array.from(container.querySelectorAll('[data-instrument-row]'));
+
+            if (!selectedList || !selectedEmpty || !warning || !saveButton || rows.length === 0) {
+                return;
+            }
+
+            container.dataset.agentInstrumentSelectorBound = 'true';
+
+            const maxConcurrentLogoLoads = 4;
+            const logoQueue = [];
+            let activeLogoLoads = 0;
+
+            function rowInput(row) {
+                return row.querySelector('input[name="instrument_id"]');
+            }
+
+            function rowLabel(row) {
+                const input = rowInput(row);
+                return input ? input.value : '';
+            }
+
+            const initialSelection = rows
+                .filter(function (row) { return !!(rowInput(row) && rowInput(row).checked); })
+                .map(rowLabel)
+                .sort()
+                .join(',');
+
+            function updateSaveButton() {
+                const currentSelection = rows
+                    .filter(function (row) { return !!(rowInput(row) && rowInput(row).checked); })
+                    .map(rowLabel)
+                    .sort()
+                    .join(',');
+                saveButton.classList.toggle('hidden', currentSelection === initialSelection);
+            }
+
+            function syncSelectedList() {
+                const selectedRows = rows.filter(function (row) {
+                    const input = rowInput(row);
+                    return !!(input && input.checked);
+                });
+
+                selectedList.innerHTML = '';
+
+                    selectedRows.forEach(function (row) {
+                        const label = rowLabel(row);
+                        const item = document.createElement('div');
+                        item.className = 'flex items-center justify-between gap-3 rounded-xl border border-zinc-800 bg-zinc-950/70 px-4 py-3';
+
+                        const identity = document.createElement('div');
+                        identity.className = 'flex min-w-0 items-center gap-3';
+
+                    const name = document.createElement('span');
+                    name.className = 'font-medium text-zinc-200';
+                    name.textContent = label;
+
+                    const logo = document.createElement('img');
+                    logo.alt = '';
+                    logo.setAttribute('aria-hidden', 'true');
+                    logo.className = 'h-5 w-5 rounded-sm bg-zinc-800';
+                    const logoUrl = row.getAttribute('data-instrument-logo-url');
+                    if (logoUrl) {
+                        logo.src = logoUrl;
+                    }
+
+                    const remove = document.createElement('button');
+                    remove.type = 'button';
+                    remove.className = 'inline-flex h-7 w-7 items-center justify-center rounded-full border border-zinc-800 text-sm text-zinc-400 hover:border-zinc-700 hover:text-white';
+                    remove.setAttribute('aria-label', 'Remove ' + label);
+                    remove.dataset.removeInstrument = label;
+                    remove.textContent = 'x';
+
+                        identity.appendChild(logo);
+                        identity.appendChild(name);
+                        item.appendChild(identity);
+                        item.appendChild(remove);
+                    selectedList.appendChild(item);
+                });
+
+                selectedEmpty.classList.toggle('hidden', selectedRows.length > 0);
+                warning.classList.toggle('hidden', selectedRows.length > 0);
+                updateSaveButton();
+            }
+
+            function drainLogoQueue() {
+                while (activeLogoLoads < maxConcurrentLogoLoads && logoQueue.length > 0) {
+                    const item = logoQueue.shift();
+                    activeLogoLoads += 1;
+                    const finish = function () {
+                        activeLogoLoads -= 1;
+                        drainLogoQueue();
+                    };
+                    item.image.addEventListener('load', finish, { once: true });
+                    item.image.addEventListener('error', finish, { once: true });
+                    item.image.src = item.url;
+                }
+            }
+
+            function enqueueLogo(row) {
+                const url = row.getAttribute('data-instrument-logo-url');
+                const image = row.querySelector('[data-instrument-logo]');
+                if (!url || !image || image.hasAttribute('src') || row.dataset.instrumentLogoQueued === 'true') {
+                    return;
+                }
+                row.dataset.instrumentLogoQueued = 'true';
+                logoQueue.push({ image: image, url: url });
+                drainLogoQueue();
+            }
+
+            function applySearchFilter() {
+                const query = searchInput instanceof HTMLInputElement ? searchInput.value.trim().toLowerCase() : '';
+                let visibleCount = 0;
+
+                rows.forEach(function (row) {
+                    const label = (row.getAttribute('data-instrument-label') || '').toLowerCase();
+                    const matches = !query || label.indexOf(query) !== -1;
+                    row.classList.toggle('hidden', !matches);
+                    if (matches) {
+                        visibleCount += 1;
+                    }
+                });
+
+                if (searchEmpty) {
+                    searchEmpty.classList.toggle('hidden', visibleCount > 0);
+                }
+            }
+
+            rows.forEach(function (row) {
+                const input = rowInput(row);
+                if (!input) {
+                    return;
+                }
+
+                input.addEventListener('change', syncSelectedList);
+            });
+
+            selectedList.addEventListener('click', function (event) {
+                const target = event.target.closest('[data-remove-instrument]');
+                if (!target) {
+                    return;
+                }
+
+                const instrumentId = target.getAttribute('data-remove-instrument');
+                const row = rows.find(function (candidate) {
+                    return rowLabel(candidate) === instrumentId;
+                });
+                const input = row ? rowInput(row) : null;
+                if (!(input instanceof HTMLInputElement)) {
+                    return;
+                }
+
+                input.checked = false;
+                syncSelectedList();
+            });
+
+            if (searchInput instanceof HTMLInputElement) {
+                searchInput.addEventListener('input', applySearchFilter);
+            }
+
+            if (scrollContainer && 'IntersectionObserver' in window) {
+                const observer = new IntersectionObserver(function (entries) {
+                    entries.forEach(function (entry) {
+                        if (entry.isIntersecting) {
+                            enqueueLogo(entry.target);
+                            observer.unobserve(entry.target);
+                        }
+                    });
+                }, { root: scrollContainer, rootMargin: '80px 0px', threshold: 0 });
+                rows.forEach(function (row) { observer.observe(row); });
+            }
+
+            syncSelectedList();
+            applySearchFilter();
+        }
+
+        function initClickableRows() {
+            document.querySelectorAll('[data-row-href]').forEach(function (row) {
+                if (row.dataset.rowHrefBound === 'true') {
+                    return;
+                }
+
+                row.dataset.rowHrefBound = 'true';
+
+                function navigate() {
+                    const href = row.getAttribute('data-row-href');
+                    if (href) {
+                        window.location.href = href;
+                    }
+                }
+
+                row.addEventListener('click', function (event) {
+                    if (event.target.closest('a, button, input, select, textarea, label, form, summary')) {
+                        return;
+                    }
+                    navigate();
+                });
+
+                row.addEventListener('keydown', function (event) {
+                    if (event.key !== 'Enter' && event.key !== ' ') {
+                        return;
+                    }
+                    event.preventDefault();
+                    navigate();
+                });
+            });
+        }
+
+        function closeDeleteModal() {
+            const modal = document.getElementById('delete-modal');
+            if (!modal) {
+                return;
+            }
+
+            modal.classList.add('hidden');
+            modal.classList.remove('flex');
+        }
+
+        function openDeleteModal() {
+            const modal = document.getElementById('delete-modal');
+            if (!modal) {
+                return;
+            }
+
+            modal.classList.remove('hidden');
+            modal.classList.add('flex');
+        }
+
+        function initDeleteModal() {
+            const modal = document.getElementById('delete-modal');
+            const cancelBtn = document.getElementById('cancel-delete-btn');
+
+            if (modal && modal.dataset.deleteModalBound !== 'true') {
+                modal.dataset.deleteModalBound = 'true';
+                modal.addEventListener('click', function (event) {
+                    if (event.target === modal) {
+                        closeDeleteModal();
+                    }
+                });
+
+                document.addEventListener('keydown', function (event) {
+                    if (event.key === 'Escape' && modal.classList.contains('flex')) {
+                        closeDeleteModal();
+                    }
+                });
+            }
+
+            if (cancelBtn && cancelBtn.dataset.deleteModalBound !== 'true') {
+                cancelBtn.dataset.deleteModalBound = 'true';
+                cancelBtn.addEventListener('click', closeDeleteModal);
+            }
+
+            document.querySelectorAll('[data-delete-agent-trigger]').forEach(function (button) {
+                if (button.dataset.deleteModalBound === 'true') {
+                    return;
+                }
+
+                button.dataset.deleteModalBound = 'true';
+                button.addEventListener('click', openDeleteModal);
+            });
+        }
+
+        function closeAgentJobDeleteModal() {
+            const modal = document.getElementById('agent-job-delete-modal');
+            if (!modal) {
+                return;
+            }
+
+            modal.classList.add('hidden');
+            modal.classList.remove('flex');
+        }
+
+        function openAgentJobDeleteModal(action, kind, label) {
+            const modal = document.getElementById('agent-job-delete-modal');
+            const form = document.getElementById('agent-job-delete-form');
+            const title = document.getElementById('agent-job-delete-modal-title');
+            const body = document.getElementById('agent-job-delete-modal-body');
+            const confirm = document.getElementById('confirm-agent-job-delete-btn');
+            if (!modal || !form || !title || !body || !confirm) {
+                return;
+            }
+
+            form.setAttribute('action', action);
+            title.textContent = 'Delete ' + kind;
+            confirm.textContent = 'Delete ' + kind;
+            const labelText = document.createElement('span');
+            labelText.className = 'font-medium text-zinc-200';
+            labelText.textContent = label;
+            body.replaceChildren(
+                document.createTextNode('Are you sure you want to delete '),
+                labelText,
+                document.createTextNode('? This action cannot be undone.')
+            );
+            modal.classList.remove('hidden');
+            modal.classList.add('flex');
+        }
+
+        function initAgentJobDeleteModal() {
+            const modal = document.getElementById('agent-job-delete-modal');
+            const cancelBtn = document.getElementById('cancel-agent-job-delete-btn');
+
+            if (modal && modal.dataset.agentJobDeleteModalBound !== 'true') {
+                modal.dataset.agentJobDeleteModalBound = 'true';
+                modal.addEventListener('click', function (event) {
+                    if (event.target === modal) {
+                        closeAgentJobDeleteModal();
+                    }
+                });
+
+                document.addEventListener('keydown', function (event) {
+                    if (event.key === 'Escape' && modal.classList.contains('flex')) {
+                        closeAgentJobDeleteModal();
+                    }
+                });
+            }
+
+            if (cancelBtn && cancelBtn.dataset.agentJobDeleteModalBound !== 'true') {
+                cancelBtn.dataset.agentJobDeleteModalBound = 'true';
+                cancelBtn.addEventListener('click', closeAgentJobDeleteModal);
+            }
+
+            document.querySelectorAll('[data-agent-job-delete-trigger]').forEach(function (button) {
+                if (button.dataset.agentJobDeleteModalBound === 'true') {
+                    return;
+                }
+
+                button.dataset.agentJobDeleteModalBound = 'true';
+                button.addEventListener('click', function () {
+                    const action = button.getAttribute('data-delete-action') || '';
+                    const kind = button.getAttribute('data-delete-kind') || 'job';
+                    const label = button.getAttribute('data-delete-label') || kind;
+                    openAgentJobDeleteModal(action, kind, label);
+                });
+            });
+        }
+
+        function closeRegenerateWorkspaceModal() {
+            const modal = document.getElementById('regenerate-workspace-modal');
+            if (!modal) {
+                return;
+            }
+
+            modal.classList.add('hidden');
+            modal.classList.remove('flex');
+        }
+
+        function openRegenerateWorkspaceModal() {
+            const modal = document.getElementById('regenerate-workspace-modal');
+            if (!modal) {
+                return;
+            }
+
+            modal.classList.remove('hidden');
+            modal.classList.add('flex');
+        }
+
+        function initRegenerateWorkspaceModal() {
+            const modal = document.getElementById('regenerate-workspace-modal');
+            const cancelBtn = document.getElementById('cancel-regenerate-workspace-btn');
+            const hardReset = document.getElementById('hard-reset-workspace');
+            const resetMemories = document.getElementById('reset-memories');
+            const resetMemoriesOption = document.getElementById('reset-memories-option');
+            const resetMemoriesTitle = document.getElementById('reset-memories-title');
+            const resetMemoriesDescription = document.getElementById('reset-memories-description');
+
+            function syncResetMemoriesOption() {
+                if (!hardReset || !resetMemories || !resetMemoriesOption || !resetMemoriesTitle || !resetMemoriesDescription) {
+                    return;
+                }
+
+                resetMemories.disabled = !hardReset.checked;
+                if (!hardReset.checked) {
+                    resetMemories.checked = false;
+                }
+                resetMemoriesOption.classList.toggle('text-zinc-500', !hardReset.checked);
+                resetMemoriesOption.classList.toggle('text-zinc-200', hardReset.checked);
+                resetMemoriesTitle.classList.toggle('text-zinc-400', !hardReset.checked);
+                resetMemoriesTitle.classList.toggle('text-white', hardReset.checked);
+                resetMemoriesDescription.classList.toggle('text-zinc-600', !hardReset.checked);
+                resetMemoriesDescription.classList.toggle('text-zinc-400', hardReset.checked);
+            }
+
+            if (hardReset && hardReset.dataset.resetMemoriesBound !== 'true') {
+                hardReset.dataset.resetMemoriesBound = 'true';
+                hardReset.addEventListener('change', syncResetMemoriesOption);
+            }
+            syncResetMemoriesOption();
+
+            if (modal && modal.dataset.regenerateWorkspaceModalBound !== 'true') {
+                modal.dataset.regenerateWorkspaceModalBound = 'true';
+                modal.addEventListener('click', function (event) {
+                    if (event.target === modal) {
+                        closeRegenerateWorkspaceModal();
+                    }
+                });
+
+                document.addEventListener('keydown', function (event) {
+                    if (event.key === 'Escape' && modal.classList.contains('flex')) {
+                        closeRegenerateWorkspaceModal();
+                    }
+                });
+            }
+
+            if (cancelBtn && cancelBtn.dataset.regenerateWorkspaceModalBound !== 'true') {
+                cancelBtn.dataset.regenerateWorkspaceModalBound = 'true';
+                cancelBtn.addEventListener('click', closeRegenerateWorkspaceModal);
+            }
+
+            document.querySelectorAll('[data-regenerate-workspace-trigger]').forEach(function (button) {
+                if (button.dataset.regenerateWorkspaceModalBound === 'true') {
+                    return;
+                }
+
+                button.dataset.regenerateWorkspaceModalBound = 'true';
+                button.addEventListener('click', openRegenerateWorkspaceModal);
+            });
+        }
+
+        function readLatestTradeExecutionSummaryValue(container) {
+            return container.innerHTML.trim();
+        }
+
+        function flashLatestTradeExecutionSummary(container) {
+            const target = container && container.firstElementChild instanceof HTMLElement ? container.firstElementChild : null;
+            if (!target || typeof target.animate !== 'function') {
+                return;
+            }
+
+            target.animate([
+                {
+                    color: 'rgb(251, 191, 36)'
+                },
+                {
+                    color: 'rgb(212, 212, 216)',
+                    offset: 0.7
+                },
+                {
+                    color: 'rgb(161, 161, 170)'
+                }
+            ], {
+                duration: 900,
+                easing: 'ease-out'
+            });
+        }
+
+        function seedLatestTradeExecutionSummary() {
+            document.querySelectorAll('[data-latest-trade-execution-summary]').forEach(function (container) {
+                container.dataset.latestTradeExecutionSummaryValue = readLatestTradeExecutionSummaryValue(container);
+                container.dataset.latestTradeExecutionSummarySeeded = 'true';
+            });
+        }
+
+        function initAgentShowPage() {
+            initPromptEditor();
+            initAgentInstrumentSelector();
+            initClickableRows();
+            initDeleteModal();
+            initAgentJobDeleteModal();
+            initRegenerateWorkspaceModal();
+            seedLatestTradeExecutionSummary();
+        }
+
+        if (document.readyState === 'loading') {
+            document.addEventListener('DOMContentLoaded', initAgentShowPage, { once: true });
+        } else {
+            initAgentShowPage();
+        }
+
+        document.addEventListener('htmx:sseMessage', function (event) {
+            const detail = event.detail;
+            const target = detail && detail.elt;
+            const eventType = detail && (detail.type || (detail.event && detail.event.type));
+            if (!(target instanceof HTMLElement) || eventType !== 'latest-trade-execution-summary') {
+                return;
+            }
+
+            if (!target.matches('[data-latest-trade-execution-summary]')) {
+                return;
+            }
+
+            const previousValue = target.dataset.latestTradeExecutionSummaryValue || readLatestTradeExecutionSummaryValue(target);
+            const wasSeeded = target.dataset.latestTradeExecutionSummarySeeded === 'true';
+
+            window.setTimeout(function () {
+                const nextValue = readLatestTradeExecutionSummaryValue(target);
+                target.dataset.latestTradeExecutionSummaryValue = nextValue;
+                target.dataset.latestTradeExecutionSummarySeeded = 'true';
+
+                if (wasSeeded && previousValue !== nextValue && nextValue) {
+                    flashLatestTradeExecutionSummary(target);
+                }
+            }, 50);
+        });
+
+        document.addEventListener('htmx:afterSwap', function (event) {
+            const detail = event.detail;
+            const target = detail && detail.target;
+            if (!(target instanceof Element)) {
+                return;
+            }
+
+            if (target.id === 'agent-show-tab-content' || target.querySelector('#agent-show-tab-content')) {
+                initAgentShowPage();
+            }
+        });
+    })();
+</template>
+{% endblock %}

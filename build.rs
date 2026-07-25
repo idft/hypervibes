@@ -34,7 +34,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             root.join("package.json"),
             root.join("pnpm-lock.yaml"),
             root.join("pnpm-workspace.yaml"),
-            root.join("assets/app.ts"),
             root.join("assets/app.css"),
         ];
         for dep in &deps {
@@ -42,6 +41,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 needs_rebuild = true;
                 break;
             }
+        }
+
+        if !needs_rebuild && let Ok(true) = any_newer_than(&root.join("assets"), "ts", out_modified)
+        {
+            needs_rebuild = true;
         }
 
         if !needs_rebuild {

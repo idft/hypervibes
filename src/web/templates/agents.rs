@@ -95,7 +95,7 @@ pub struct AgentListEntry {
 }
 
 #[derive(Template)]
-#[template(path = "agents.html")]
+#[template(path = "agents/index.html")]
 pub struct AgentsPageTemplate {
     pub agents: Vec<AgentListEntry>,
     pub current_path: String,
@@ -103,7 +103,7 @@ pub struct AgentsPageTemplate {
 }
 
 #[derive(Template)]
-#[template(path = "agent_selector_items.html")]
+#[template(path = "agents/selector-items.html")]
 pub struct AgentSelectorItemsTemplate {
     pub agents: Vec<AgentListRow>,
     /// `false` while the user still needs to set up their Hyperliquid
@@ -113,7 +113,7 @@ pub struct AgentSelectorItemsTemplate {
 }
 
 #[derive(Template)]
-#[template(path = "agents_new.html")]
+#[template(path = "agents/new.html")]
 pub struct AgentsNewPageTemplate {
     pub form: CreateAgentForm,
     pub choices: TradingAccountChoicesView,
@@ -124,7 +124,7 @@ pub struct AgentsNewPageTemplate {
 }
 
 #[derive(Template)]
-#[template(path = "agent_trading_account_choices.html")]
+#[template(path = "agents/trading-account-choices.html")]
 pub struct AgentTradingAccountChoicesTemplate {
     pub choices: TradingAccountChoicesView,
     pub selected_account: String,
@@ -224,7 +224,7 @@ impl PromptEditorView {
 }
 
 #[derive(Template)]
-#[template(path = "agent_schedule_new.html")]
+#[template(path = "agents/jobs/new.html")]
 pub struct AgentScheduleNewPageTemplate {
     pub agent: AgentDetailRow,
     pub tabs: Vec<AgentShowTabLink>,
@@ -237,7 +237,7 @@ pub struct AgentScheduleNewPageTemplate {
 }
 
 #[derive(Template)]
-#[template(path = "agent_hook_new.html")]
+#[template(path = "agents/hooks/new.html")]
 pub struct AgentHookNewPageTemplate {
     pub agent: AgentDetailRow,
     pub tabs: Vec<AgentShowTabLink>,
@@ -281,7 +281,7 @@ impl AgentRecentRunsView {
 }
 
 #[derive(Template)]
-#[template(path = "agent_recent_runs.html")]
+#[template(path = "agents/components/recent-runs.html")]
 pub struct AgentRecentRunsPartialTemplate {
     pub recent_runs_section: AgentRecentRunsView,
 }
@@ -296,7 +296,7 @@ impl AgentRecentRunsPartialTemplate {
 }
 
 #[derive(Template)]
-#[template(path = "agents_show.html")]
+#[template(path = "agents/show.html")]
 pub struct AgentsShowPageTemplate {
     pub agent: AgentDetailRow,
     pub tabs: Vec<AgentShowTabLink>,

@@ -192,7 +192,7 @@ struct SessionRow {
 pub(crate) async fn login() -> Html<&'static str> {
     Html(include_str!(concat!(
         env!("CARGO_MANIFEST_DIR"),
-        "/templates/login.html"
+        "/templates/auth/login.html"
     )))
 }
 

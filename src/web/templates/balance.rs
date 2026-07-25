@@ -71,7 +71,7 @@ impl AccountBalanceView {
 }
 
 #[derive(Template)]
-#[template(path = "account_balance.html")]
+#[template(path = "account/balance.html")]
 pub struct AccountBalancePartialTemplate {
     pub view: AccountBalanceView,
 }
@@ -210,7 +210,7 @@ impl SparklineView {
 }
 
 #[derive(Template)]
-#[template(path = "balance_sparklines.html")]
+#[template(path = "agents/fragments/balance-sparklines.html")]
 pub struct BalanceSparklinesPartialTemplate {
     pub sparklines: Vec<SparklineView>,
 }

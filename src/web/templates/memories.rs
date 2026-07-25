@@ -143,7 +143,7 @@ pub fn build_memory_timeline_for_sse(
 }
 
 #[derive(Template)]
-#[template(path = "agent_memory_timeline.html")]
+#[template(path = "agents/memories/timeline.html")]
 pub struct AgentMemoryTimelinePartialTemplate {
     pub memory_timeline: Vec<MemoryTimelineItem>,
     pub memory_count: usize,
@@ -169,7 +169,7 @@ impl AgentMemoryTimelinePartialTemplate {
 }
 
 #[derive(Template)]
-#[template(path = "agent_memory_timeline_items.html")]
+#[template(path = "agents/memories/timeline-items.html")]
 pub struct AgentMemoryTimelineItemsPartialTemplate {
     pub memory_timeline: Vec<MemoryTimelineItem>,
     pub next_page_url: Option<String>,
@@ -189,7 +189,7 @@ impl AgentMemoryTimelineItemsPartialTemplate {
 }
 
 #[derive(Template)]
-#[template(path = "agent_memory_detail.html")]
+#[template(path = "agents/memories/detail.html")]
 pub struct AgentMemoryDetailPartialTemplate {
     pub memory: MemoryView,
     pub back_url: Option<String>,
@@ -214,7 +214,7 @@ impl AgentMemoryDetailPartialTemplate {
 }
 
 #[derive(Template)]
-#[template(path = "agent_memory_detail_page.html")]
+#[template(path = "agents/memories/detail-page.html")]
 pub struct AgentMemoryDetailPageTemplate {
     pub agent: AgentDetailRow,
     pub tabs: Vec<AgentShowTabLink>,

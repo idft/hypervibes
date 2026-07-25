@@ -4,11 +4,13 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "build:js": "esbuild assets/app.ts --bundle --outfile=static/dist/app.js --minify",
+    "build:js": "esbuild assets/app.ts assets/login.ts --bundle --outdir=static/dist --minify",
     "build:css": "tailwindcss -i assets/app.css -o static/dist/app.css --minify",
     "build": "pnpm build:js && pnpm build:css",
     "lint": "eslint assets",
-    "lint:fix": "eslint assets --fix"
+    "lint:fix": "eslint assets --fix",
+    "typecheck": "tsc --noEmit",
+    "test:js": "vitest run --environment jsdom"
   },
   "dependencies": {
     "htmx-ext-sse": "2.2.4",
@@ -22,8 +24,10 @@
     "esbuild": "^0.25.0",
     "eslint": "^10.5.0",
     "globals": "^17.6.0",
+    "jsdom": "^29.1.1",
     "tailwindcss": "^4.1.0",
     "typescript": "^5.7.0",
-    "typescript-eslint": "^8.61.1"
+    "typescript-eslint": "^8.61.1",
+    "vitest": "^4.1.10"
   }
 }

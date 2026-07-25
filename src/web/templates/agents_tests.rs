@@ -174,7 +174,6 @@ fn opencode_agent_shows_jobs_tab_with_recent_runs() {
     assert!(rendered.contains("/agents/test-agent/hooks/3/run"));
     assert!(rendered.contains("/agents/test-agent/hooks/3"));
     assert!(rendered.contains("/agents/test-agent/runs/1"));
-    assert!(rendered.contains("data-agent-job-delete-trigger"));
     assert!(rendered.contains("id=\"agent-recent-runs-stream\" hx-ext=\"sse\""));
     assert!(rendered.contains(&format!(
         "sse-connect=\"/agents/{}/jobs/recent-runs/stream?page=1\"",

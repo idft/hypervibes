@@ -145,7 +145,7 @@ impl AgenticJobDetailView {
 }
 
 #[derive(Template)]
-#[template(path = "agent_job_detail_page.html")]
+#[template(path = "agents/jobs/detail.html")]
 pub struct AgentJobDetailPageTemplate {
     pub agent: AgentDetailRow,
     pub tabs: Vec<AgentShowTabLink>,
@@ -184,7 +184,7 @@ impl AgentJobDetailPageTemplate {
 }
 
 #[derive(Template)]
-#[template(path = "model_picker_partial.html")]
+#[template(path = "agents/components/model-picker-partial.html")]
 pub struct ModelPickerPartialTemplate {
     pub model_picker: ModelPickerView,
 }

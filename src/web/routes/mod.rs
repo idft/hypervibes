@@ -17,6 +17,7 @@ use std::sync::Arc;
 use axum::middleware;
 use axum::{
     Router,
+    response::Redirect,
     routing::{get, post},
 };
 
@@ -25,6 +26,10 @@ use crate::web::AppState;
 pub fn router(state: Arc<AppState>) -> Router {
     let public = Router::new()
         .route("/healthz", get(healthz))
+        .route(
+            "/favicon.ico",
+            get(|| async { Redirect::permanent("/static/favicon.ico") }),
+        )
         .route("/login", get(login))
         .route("/auth/challenge", post(login_challenge))
         .route("/auth/verify", post(login_verify))

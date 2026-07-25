@@ -16,11 +16,13 @@ use crate::{
     agents::store::get_agent,
     web::{
         AppState,
+        auth::AuthenticatedUser,
         error::AppError,
         run_detail_events::RunDetailDbEvent,
         templates::{
             AgentRunDetailPageTemplate, AgentRunDetailSummaryPartialTemplate,
             AgentRunDetailTranscriptPartialTemplate, AgenticRunDetailView, OpenCodeSessionView,
+            load_navbar,
         },
     },
 };
@@ -85,16 +87,19 @@ fn render_run_detail_events(snapshot: &RunDetailSnapshot) -> Result<Vec<Event>, 
 pub(in crate::web::routes) async fn agents_show_run_detail(
     State(state): State<Arc<AppState>>,
     Path((agent_key, run_id)): Path<(String, i64)>,
+    user: AuthenticatedUser,
 ) -> Result<Response, AppError> {
     let Some(snapshot) = load_run_detail_snapshot(&state, &agent_key, run_id).await? else {
         return Ok((StatusCode::NOT_FOUND, "run not found").into_response());
     };
 
+    let navbar = load_navbar(&state.db_pool, user.id).await?;
     let html = AgentRunDetailPageTemplate::render_view(
         snapshot.agent,
         snapshot.run,
         snapshot.session,
         snapshot.session_lookup_attempted,
+        navbar,
     )?;
     Ok(Html(html).into_response())
 }

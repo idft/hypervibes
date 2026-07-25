@@ -1,0 +1,81 @@
+{% extends "layouts/base.html" %}
+
+{% block title %}Create hook · {{ agent.display_name }} · Vibetrading{% endblock %}
+
+{% block content %}
+<div class="mx-auto max-w-3xl">
+    {% include "agents/components/page-header.html" %}
+
+    {% include "agents/components/tabs.html" %}
+
+    <header class="mt-4 border-b border-zinc-800 pb-6">
+        <div class="flex items-center gap-3 text-sm text-zinc-500">
+            <a href="/agents/{{ agent.agent_key }}/jobs" class="hover:text-zinc-300">Jobs</a>
+            <span>/</span>
+            <span>Create hook</span>
+        </div>
+        <h2 class="mt-4 text-3xl font-semibold tracking-tight text-white">Create market-analysis hook</h2>
+        <p class="mt-2 text-sm leading-6 text-zinc-400">
+            Add the <code class="font-mono text-xs text-zinc-300">market_analysis</code> hook for <span class="font-medium text-zinc-200">{{ agent.display_name }}</span>. This hook runs after successful analysis batches and uses the fixed trigger <code class="font-mono text-xs text-zinc-300">analysis_batch_completed</code>.
+        </p>
+    </header>
+
+    {% if !errors.is_empty() %}
+    <div class="mt-6 rounded-2xl border border-red-900/60 bg-red-950/20 p-4">
+        <div class="text-sm font-medium text-red-200">Please fix the following errors:</div>
+        <ul class="mt-2 list-inside list-disc space-y-1 text-sm text-red-300">
+            {% for error in errors %}
+            <li>{{ error }}</li>
+            {% endfor %}
+        </ul>
+    </div>
+    {% endif %}
+
+    <form method="post" action="/agents/{{ agent.agent_key }}/hooks" class="mt-6 space-y-6">
+        <div class="rounded-2xl border border-zinc-800 bg-zinc-950/40 p-4">
+            <div class="text-xs uppercase tracking-[0.16em] text-zinc-500">Trigger</div>
+            <div class="mt-2 font-mono text-sm text-zinc-200">analysis_batch_completed</div>
+            <p class="mt-2 text-sm text-zinc-400">Runs once after a successful analysis batch completes for this agent.</p>
+        </div>
+
+        <div class="grid gap-6 sm:grid-cols-2">
+            <div>
+                <label for="timeout_seconds" class="block text-sm font-medium text-zinc-300">Timeout seconds</label>
+                <input type="number" id="timeout_seconds" name="timeout_seconds" value="{{ form.timeout_seconds }}" min="1" step="1" required
+                    class="mt-2 block w-full rounded-xl border border-zinc-800 bg-zinc-950 px-3 py-2 text-sm text-white focus:border-zinc-600 focus:outline-none">
+            </div>
+
+            <div class="flex items-end">
+                <div class="flex items-center gap-3">
+                    <input type="checkbox" id="enabled" name="enabled" {% if form.enabled %}checked{% endif %}
+                        class="h-4 w-4 rounded border-zinc-700 bg-zinc-950 text-zinc-100 focus:ring-zinc-600">
+                    <label for="enabled" class="text-sm text-zinc-300">Enabled</label>
+                </div>
+            </div>
+        </div>
+
+        {% include "agents/components/model-picker.html" %}
+
+        <div>
+            <label for="operator_prompt" class="block text-sm font-medium text-zinc-300">Operator prompt</label>
+            <textarea id="operator_prompt" name="operator_prompt" rows="8" placeholder="Optional extra instructions for this hook."
+                class="mt-2 block w-full rounded-xl border border-zinc-800 bg-zinc-950 px-3 py-2 text-sm leading-6 text-white placeholder-zinc-600 focus:border-zinc-600 focus:outline-none">{{ form.operator_prompt }}</textarea>
+        </div>
+
+        <div class="flex items-center gap-3 border-t border-zinc-800 pt-6">
+            <button type="submit" class="inline-flex items-center gap-2 rounded-full border border-zinc-700 bg-zinc-900/70 px-5 py-2 text-sm font-medium text-zinc-200 hover:border-zinc-600 hover:bg-zinc-800 hover:text-white">
+                <svg class="h-4 w-4" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
+                    <path d="M10 4a1 1 0 0 1 1 1v4h4a1 1 0 1 1 0 2h-4v4a1 1 0 1 1-2 0v-4H5a1 1 0 1 1 0-2h4V5a1 1 0 0 1 1-1Z"></path>
+                </svg>
+                Create hook
+            </button>
+            <a href="/agents/{{ agent.agent_key }}/jobs" class="rounded-full border border-zinc-800 px-5 py-2 text-sm font-medium text-zinc-300 hover:border-zinc-700 hover:text-white">Cancel</a>
+        </div>
+    </form>
+</div>
+{% endblock %}
+
+{% block scripts %}
+{% include "agents/components/tabs-script.html" %}
+{% include "agents/components/model-picker-script.html" %}
+{% endblock %}

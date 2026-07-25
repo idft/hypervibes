@@ -1,0 +1,12 @@
+{% extends "layouts/base.html" %}
+
+{% block title %}Server Error · Vibetrading{% endblock %}
+
+{% block content %}
+<section class="mx-auto max-w-3xl rounded-2xl border border-red-950/60 bg-[#0d0d10] p-8">
+    <span class="inline-flex rounded-full border border-red-900/60 bg-red-950/30 px-3 py-1 text-xs font-medium uppercase tracking-[0.16em] text-red-300">500 Server Error</span>
+    <h1 class="mt-4 text-3xl font-semibold tracking-tight text-white">Something failed while rendering this page.</h1>
+    <p class="mt-3 text-sm leading-6 text-zinc-400">{{ message }}</p>
+    <p class="mt-2 text-sm leading-6 text-zinc-500">The failure has been logged on the server.</p>
+</section>
+{% endblock %}
