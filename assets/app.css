@@ -32,6 +32,15 @@ body {
 
 .app-content.has-agent-rail {
   padding-left: 4rem;
+  transition: padding-left 180ms ease-out;
+}
+
+.app-content.has-agent-rail.agent-rail-expanded {
+  padding-left: 14.5rem;
+}
+
+html.agent-rail-initially-collapsed .app-content.has-agent-rail {
+  padding-left: 4rem;
 }
 
 .app-content.has-agent-rail .agent-rail + header,
@@ -41,6 +50,54 @@ body {
 
 .agent-rail {
   transform: translateX(0);
+  transition: width 180ms ease-out;
+}
+
+.agent-rail-tab-label {
+  display: none;
+}
+
+.agent-rail.agent-rail-expanded {
+  width: 14rem;
+}
+
+.agent-rail.agent-rail-expanded .agent-rail-tab {
+  width: calc(100% - 1rem);
+  justify-content: flex-start;
+  gap: 0.75rem;
+  padding: 0 0.75rem;
+}
+
+.agent-rail.agent-rail-expanded .agent-rail-tab-label {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+html.agent-rail-initially-collapsed .agent-rail.agent-rail-expanded {
+  width: 3rem;
+}
+
+html.agent-rail-initially-collapsed .agent-rail.agent-rail-expanded .agent-rail-tab {
+  width: 2.25rem;
+  justify-content: center;
+  gap: 0;
+  padding: 0;
+}
+
+html.agent-rail-initially-collapsed .agent-rail.agent-rail-expanded .agent-rail-tab-label {
+  display: none;
+}
+
+@media (min-width: 640px) {
+  html.agent-rail-initially-collapsed .agent-rail.agent-rail-expanded {
+    width: 3.5rem;
+  }
+
+  html.agent-rail-initially-collapsed .agent-rail.agent-rail-expanded .agent-rail-tab {
+    width: 2.5rem;
+  }
 }
 
 .agent-rail.agent-rail-enter {
@@ -70,8 +127,11 @@ body {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .agent-rail {
+  .agent-rail,
+  .app-content.has-agent-rail,
+  html.agent-rail-initially-collapsed .agent-rail.agent-rail-expanded {
     animation: none;
+    transition: none;
   }
 }
 

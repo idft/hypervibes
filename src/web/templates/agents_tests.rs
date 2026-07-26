@@ -115,6 +115,12 @@ fn agents_show_page_renders_base_layout_and_delete_modal() {
     assert!(rendered.contains("Delete agent"));
     assert!(rendered.contains("Agent sections"));
     assert!(rendered.contains("data-agent-tabs"));
+    assert!(rendered.contains(
+        "href=\"/agents/test-agent/chat\" data-agent-tab-link title=\"Chat\""
+    ));
+    assert!(!rendered.contains(
+        "href=\"/agents/test-agent/chat\" data-agent-tab-link hx-get=\"/agents/test-agent/chat\""
+    ));
     assert!(rendered.contains("Transactions"));
     assert!(rendered.contains("Memories"));
     assert!(rendered.contains("Prompts"));
@@ -608,6 +614,10 @@ fn new_job_page_renders_agent_navbar_with_jobs_active() {
     let rendered = template.render().expect("render new job page");
 
     assert!(rendered.contains("Agent sections"));
+    assert!(rendered.contains("agent-rail-initially-collapsed"));
+    assert!(rendered.contains("agent-rail agent-rail-expanded"));
+    assert!(rendered.contains("data-agent-rail-toggle"));
+    assert!(rendered.contains("Expand agent navigation"));
     assert!(rendered.contains("Create job"));
     assert!(rendered.contains("action=\"/agents/test-agent/jobs\""));
 }

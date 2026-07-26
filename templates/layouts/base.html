@@ -9,6 +9,7 @@
     <link rel="icon" type="image/png" sizes="16x16" href="/static/favicon-16x16.png">
     <link rel="apple-touch-icon" href="/static/apple-touch-icon.png">
     <link rel="manifest" href="/static/site.webmanifest">
+    <script>try { if (localStorage.getItem("agent-rail-expanded") === "false") document.documentElement.classList.add("agent-rail-initially-collapsed"); } catch (_) {}</script>
     <link rel="stylesheet" href="/static/dist/app.css">
     <script src="/static/dist/app.js" type="module"></script>
 </head>
@@ -17,7 +18,7 @@
         {% include "layouts/navbar.html" %}
     </header>
     <div class="app-shell fixed inset-x-0 bottom-0 top-14 overflow-y-auto">
-        <main class="app-content min-w-0 {% if current_path.starts_with("/agents/") && current_path != "/agents/new" %}h-full p-2 has-agent-rail{% else %}px-4 py-6 sm:px-6 lg:px-8{% endif %}">
+        <main class="app-content min-w-0 {% if current_path.starts_with("/agents/") && current_path != "/agents/new" %}h-full p-2 has-agent-rail agent-rail-expanded{% else %}px-4 py-6 sm:px-6 lg:px-8{% endif %}">
             {% block content %}{% endblock %}
         </main>
     </div>
