@@ -1,6 +1,11 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { installAgentLiveLifecycle } from "./live";
+import { initModelPickers } from "./model-picker";
+
+afterEach(() => {
+  document.body.replaceChildren();
+});
 
 describe("conversation composer shortcut", () => {
   it("does not submit an empty message when Enter is pressed", () => {
@@ -17,5 +22,63 @@ describe("conversation composer shortcut", () => {
     textarea.dispatchEvent(event);
 
     expect(event.defaultPrevented).toBe(true);
+  });
+});
+
+describe("model-dependent buttons", () => {
+  it("enables a disabled job after its model selection changes", () => {
+    document.body.innerHTML = `
+      <form action="/agents/test-agent/jobs/1/model">
+        <input name="model_selection" value="">
+      </form>
+      <button class="border-zinc-800 text-zinc-500 cursor-not-allowed opacity-50" data-model-dependent-enable data-enabled="false" disabled></button>
+    `;
+    installAgentLiveLifecycle();
+
+    const input = document.querySelector<HTMLInputElement>('input[name="model_selection"]');
+    const button = document.querySelector<HTMLButtonElement>("[data-model-dependent-enable]");
+    if (!input || !button) throw new Error("Model selection controls were not rendered");
+    input.value = "openai/gpt-4o";
+    input.dispatchEvent(new Event("change", { bubbles: true }));
+
+    expect(button.disabled).toBe(false);
+    expect(button.classList.contains("cursor-pointer")).toBe(true);
+    expect(button.classList.contains("text-emerald-300")).toBe(true);
+    expect(button.classList.contains("text-zinc-500")).toBe(false);
+  });
+
+  it("enables a disabled job when a model picker modal is saved", () => {
+    document.body.innerHTML = `
+      <form action="/agents/test-agent/jobs/1/model">
+        <input name="model_selection" value="">
+        <div data-model-picker data-model-picker-mode="modal">
+          <button type="button" data-model-picker-open></button>
+          <span data-model-picker-label></span>
+          <img data-model-picker-logo>
+          <span data-model-picker-default-badge></span>
+          <div class="hidden" data-model-picker-modal>
+            <button type="button" data-model-picker-option data-provider-id="openai" data-value="openai/gpt-4o" data-label="GPT-4o"></button>
+            <button type="button" data-model-picker-save></button>
+          </div>
+        </div>
+      </form>
+      <button data-model-dependent-enable data-enabled="false" disabled></button>
+    `;
+    installAgentLiveLifecycle();
+    initModelPickers();
+
+    const form = document.querySelector<HTMLFormElement>("form");
+    const open = document.querySelector<HTMLElement>("[data-model-picker-open]");
+    const option = document.querySelector<HTMLElement>("[data-model-picker-option]");
+    const save = document.querySelector<HTMLElement>("[data-model-picker-save]");
+    const button = document.querySelector<HTMLButtonElement>("[data-model-dependent-enable]");
+    if (!form || !open || !option || !save || !button) throw new Error("Model picker controls were not rendered");
+    vi.spyOn(form, "requestSubmit").mockImplementation(() => {});
+
+    open.click();
+    option.click();
+    save.click();
+
+    expect(button.disabled).toBe(false);
   });
 });

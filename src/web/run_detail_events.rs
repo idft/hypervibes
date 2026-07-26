@@ -71,7 +71,6 @@ pub async fn run_listener(
     mut shutdown_rx: watch::Receiver<bool>,
 ) {
     let mut retry_delay = Duration::from_millis(100);
-    let mut reconnecting = false;
 
     loop {
         if *shutdown_rx.borrow() {
@@ -87,7 +86,6 @@ pub async fn run_listener(
                         return;
                     }
                     retry_delay = (retry_delay * 2).min(Duration::from_secs(5));
-                    reconnecting = true;
                     continue;
                 }
             },
@@ -106,7 +104,6 @@ pub async fn run_listener(
                 return;
             }
             retry_delay = (retry_delay * 2).min(Duration::from_secs(5));
-            reconnecting = true;
             continue;
         }
         if let Err(error) = listener.listen(RUN_CHANGED_CHANNEL).await {
@@ -115,7 +112,6 @@ pub async fn run_listener(
                 return;
             }
             retry_delay = (retry_delay * 2).min(Duration::from_secs(5));
-            reconnecting = true;
             continue;
         }
         if let Err(error) = listener.listen(AGENT_CONVERSATION_CHANGED_CHANNEL).await {
@@ -124,15 +120,14 @@ pub async fn run_listener(
                 return;
             }
             retry_delay = (retry_delay * 2).min(Duration::from_secs(5));
-            reconnecting = true;
             continue;
         }
 
         retry_delay = Duration::from_millis(100);
-        let was_reconnecting = reconnecting;
-        if was_reconnecting {
-            hub.publish(RunDetailDbEvent::Resync);
-        }
+        // The web server can accept SSE connections before this spawned
+        // listener has completed its first LISTEN. Refresh them once the
+        // subscription is active so changes from that startup window are not lost.
+        hub.publish(RunDetailDbEvent::Resync);
 
         loop {
             tokio::select! {
@@ -143,7 +138,6 @@ pub async fn run_listener(
                     },
                     Err(error) => {
                         tracing::error!(error = ?error, "run-detail Postgres listener failed");
-                        reconnecting = true;
                         break;
                     }
                 },
@@ -174,6 +168,7 @@ mod tests {
     use super::*;
     use serde_json::json;
     use sqlx::{Row, query};
+    use std::sync::Arc;
     use uuid::Uuid;
 
     async fn listener(pool: &DbPool) -> PgListener {
@@ -232,6 +227,33 @@ mod tests {
             receiver.recv().await.expect("event"),
             RunDetailDbEvent::Resync
         );
+    }
+
+    #[tokio::test]
+    async fn listener_resyncs_subscribers_after_initial_subscription() {
+        let pool = crate::test_db::pool().await;
+        let hub = Arc::new(RunDetailEventHub::new());
+        let mut receiver = hub.subscribe();
+        let (shutdown_tx, shutdown_rx) = watch::channel(false);
+        let listener_task = tokio::spawn(run_listener(
+            pool.as_ref().clone(),
+            Arc::clone(&hub),
+            shutdown_rx,
+        ));
+
+        assert_eq!(
+            tokio::time::timeout(Duration::from_secs(2), receiver.recv())
+                .await
+                .expect("listener should subscribe")
+                .expect("listener should publish resync"),
+            RunDetailDbEvent::Resync
+        );
+
+        shutdown_tx.send(true).expect("signal listener shutdown");
+        tokio::time::timeout(Duration::from_secs(2), listener_task)
+            .await
+            .expect("listener should stop")
+            .expect("listener task should not panic");
     }
 
     #[tokio::test]

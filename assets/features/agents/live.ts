@@ -23,7 +23,24 @@ function updateModelDependentButtons(form: HTMLFormElement) {
   if (!input || !/\/agents\/[^/]+\/(?:jobs|hooks)\/\d+\/model$/.test(new URL(form.action, window.location.href).pathname)) return;
   const hasModel = Boolean(input.value.trim());
   document.querySelectorAll<HTMLButtonElement>("[data-model-dependent-run-now]").forEach((button) => { button.disabled = !hasModel; button.classList.toggle("cursor-pointer", hasModel); button.classList.toggle("cursor-not-allowed", !hasModel); button.classList.toggle("opacity-50", !hasModel); button.title = hasModel ? "" : "No model set"; });
-  document.querySelectorAll<HTMLButtonElement>("[data-model-dependent-enable]").forEach((button) => { const disabled = button.dataset.enabled !== "true" && !hasModel; button.disabled = disabled; button.classList.toggle("cursor-pointer", !disabled); button.classList.toggle("cursor-not-allowed", disabled); button.classList.toggle("opacity-50", disabled); button.title = disabled ? "No model set" : ""; });
+  document.querySelectorAll<HTMLButtonElement>("[data-model-dependent-enable]").forEach((button) => {
+    const disabled = button.dataset.enabled !== "true" && !hasModel;
+    button.disabled = disabled;
+    button.classList.toggle("cursor-pointer", !disabled);
+    button.classList.toggle("cursor-not-allowed", disabled);
+    button.classList.toggle("opacity-50", disabled);
+    if (button.dataset.enabled !== "true") {
+      button.classList.toggle("border-zinc-800", disabled);
+      button.classList.toggle("text-zinc-500", disabled);
+      button.classList.toggle("border-emerald-900/60", !disabled);
+      button.classList.toggle("bg-emerald-950/20", !disabled);
+      button.classList.toggle("text-emerald-300", !disabled);
+      button.classList.toggle("hover:border-emerald-800", !disabled);
+      button.classList.toggle("hover:bg-emerald-950/40", !disabled);
+      button.classList.toggle("hover:text-emerald-200", !disabled);
+    }
+    button.title = disabled ? "No model set" : "";
+  });
 }
 
 function installDetailDeleteModal() {
@@ -59,6 +76,12 @@ function installConversationComposerShortcut() {
 export function installAgentLiveLifecycle() {
   installDetailDeleteModal();
   installConversationComposerShortcut();
+  document.addEventListener("change", (event) => {
+    const input = event.target;
+    if (!(input instanceof HTMLInputElement) || input.name !== "model_selection") return;
+    const form = input.closest<HTMLFormElement>("form");
+    if (form) updateModelDependentButtons(form);
+  });
   document.addEventListener("htmx:sseMessage", (event) => {
     const detail = (event as CustomEvent<{ type?: string; event?: Event }>).detail;
     if (detail.type === "balance" || detail.type === "positions") window.setTimeout(animateNumberRolls, 50);

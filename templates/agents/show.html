@@ -3,7 +3,7 @@
 {% block title %}{{ agent.display_name }} · Vibetrading{% endblock %}
 
 {% block content %}
-<div class="mx-auto max-w-[1400px]{% if show_transactions_tab %} flex h-full min-h-0 flex-col{% endif %}">
+<div class="mx-auto flex h-full min-h-0 max-w-[1400px] flex-col">
     {% include "agents/components/page-header.html" %}
 
     {% include "agents/components/tabs.html" %}
@@ -17,7 +17,7 @@
     </a>
     {% endif %}
 
-    <div id="agent-show-tab-content"{% if show_transactions_tab %} class="min-h-0 flex-1"{% endif %}>
+    <div id="agent-show-tab-content"{% if show_transactions_tab || show_jobs_tab %} class="min-h-0 flex-1"{% endif %}>
     {% if show_positions_tab %}
     <section class="mt-2 space-y-2" hx-ext="sse" sse-connect="/agents/{{ agent.agent_key }}/live/stream">
         <section class="rounded-2xl border border-zinc-800 bg-[#0d0d10] p-6">
@@ -296,14 +296,14 @@
         </section>
     </section>
     {% else if show_jobs_tab %}
-    <section class="mt-2" data-agent-jobs>
-        <section class="rounded-2xl border border-zinc-800 bg-[#0d0d10] p-6">
+    <section class="grid h-full min-h-0 grid-rows-2 gap-2 xl:grid-rows-[auto_minmax(0,1fr)]" data-agent-jobs>
+        <section class="flex min-h-0 flex-col overflow-hidden rounded-2xl border border-zinc-800 bg-[#0d0d10] p-6 xl:overflow-visible">
             {% if let Some(warning) = jobs_warning %}
             <div class="rounded-xl border border-amber-900/60 bg-amber-950/30 px-4 py-3 text-sm text-amber-200">
                 {{ warning }}
             </div>
             {% endif %}
-            <div class="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+            <div class="shrink-0 flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
                 <h2 class="text-lg font-medium text-white">Jobs</h2>
                 <div class="flex flex-wrap items-center gap-2">
                     {% if can_enable_all_jobs %}
@@ -343,7 +343,7 @@
                 </div>
             </div>
 
-            <div class="mt-8">
+            <div class="mt-8 flex min-h-0 flex-1 flex-col xl:flex-none">
                 <h3 class="text-base font-medium text-white">Scheduled</h3>
                 {% if !jobs_loaded %}
                 <div class="mt-4 rounded-xl border border-amber-900/60 bg-amber-950/30 px-4 py-3 text-sm text-amber-200">Jobs could not be loaded.</div>
@@ -352,7 +352,7 @@
                     <p class="text-sm text-zinc-400">No jobs have been created for this agent yet.</p>
                 </div>
                 {% else %}
-                <div class="mt-4 overflow-x-auto">
+                <div class="dark-scrollbar mt-4 min-h-0 flex-1 overflow-auto xl:flex-none xl:overflow-x-auto xl:overflow-y-visible">
                     <table class="min-w-full divide-y divide-zinc-800 text-sm">
                         <thead class="bg-zinc-950/60 text-left text-xs uppercase tracking-[0.16em] text-zinc-500">
                             <tr>
@@ -425,7 +425,7 @@
                 {% endif %}
             </div>
 
-            <div class="mt-8 border-t border-zinc-800 pt-8">
+            <div class="mt-8 flex min-h-0 flex-1 flex-col border-t border-zinc-800 pt-8 xl:flex-none">
                 <h3 class="text-base font-medium text-white">Hooks</h3>
                 {% if !hooks_loaded %}
                 <div class="mt-4 rounded-xl border border-amber-900/60 bg-amber-950/30 px-4 py-3 text-sm text-amber-200">Hooks could not be loaded.</div>
@@ -434,7 +434,7 @@
                     <p class="text-sm text-zinc-400">No hook jobs have been created for this agent yet.</p>
                 </div>
                 {% else %}
-                <div class="mt-4 overflow-x-auto">
+                <div class="dark-scrollbar mt-4 min-h-0 flex-1 overflow-auto xl:flex-none xl:overflow-x-auto xl:overflow-y-visible">
                     <table class="min-w-full divide-y divide-zinc-800 text-sm">
                         <thead class="bg-zinc-950/60 text-left text-xs uppercase tracking-[0.16em] text-zinc-500">
                             <tr>
@@ -500,7 +500,7 @@
             </div>
         </section>
 
-        <div id="agent-recent-runs-stream" hx-ext="sse" sse-connect="{{ recent_runs_section.stream_url }}">
+        <div id="agent-recent-runs-stream" hx-ext="sse" sse-connect="{{ recent_runs_section.stream_url }}" class="min-h-0 flex-1">
             {% include "agents/components/recent-runs.html" %}
         </div>
     </section>

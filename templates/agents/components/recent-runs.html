@@ -1,5 +1,5 @@
-<section id="agent-recent-runs" class="rounded-2xl border border-zinc-800 bg-[#0d0d10] p-6" data-agent-runs sse-swap="recent-runs" hx-swap="outerHTML">
-    <div>
+<section id="agent-recent-runs" class="flex h-full min-h-0 flex-col rounded-2xl border border-zinc-800 bg-[#0d0d10] p-6" data-agent-runs sse-swap="recent-runs" hx-swap="outerHTML">
+    <div class="shrink-0">
         <h2 class="text-lg font-medium text-white">Recent Runs</h2>
     </div>
     {% if !recent_runs_section.recent_runs_loaded %}
@@ -9,7 +9,7 @@
         <p class="text-sm text-zinc-400">No runs have been recorded for this agent yet.</p>
     </div>
     {% else %}
-    <div class="mt-4 overflow-x-auto">
+    <div class="dark-scrollbar mt-4 min-h-0 flex-1 overflow-auto">
         <table class="min-w-full divide-y divide-zinc-800 text-sm">
             <thead class="bg-zinc-950/60 text-left text-xs uppercase tracking-[0.16em] text-zinc-500">
                 <tr>
@@ -55,7 +55,7 @@
             </tbody>
         </table>
     </div>
-    <div class="mt-4 flex flex-col gap-3 border-t border-zinc-800 pt-4 text-sm text-zinc-400 sm:flex-row sm:items-center sm:justify-between">
+    <div class="mt-4 shrink-0 flex flex-col gap-3 border-t border-zinc-800 pt-4 text-sm text-zinc-400 sm:flex-row sm:items-center sm:justify-between">
         <p>Showing {{ recent_runs_section.recent_runs_range_start }}-{{ recent_runs_section.recent_runs_range_end }} of {{ recent_runs_section.recent_runs_total_count }} runs</p>
         <div class="flex items-center gap-2">
             {% if let Some(previous_page_url) = recent_runs_section.recent_runs_previous_page_url %}

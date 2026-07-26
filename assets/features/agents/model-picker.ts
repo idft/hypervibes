@@ -45,8 +45,8 @@ function initPicker(picker: HTMLElement) {
   picker.querySelectorAll<HTMLElement>("[data-model-picker-close], [data-model-picker-cancel]").forEach((button) => button.addEventListener("click", close));
   search?.addEventListener("input", filter);
   providers.forEach((provider) => provider.addEventListener("click", () => { activeProvider = provider.dataset.providerId ?? "__none__"; if (activeProvider === "__none__") draft = ""; filter(); }));
-  options.forEach((option) => option.addEventListener("click", () => { if (isModal) { draft = option.dataset.value ?? ""; activeProvider = option.dataset.providerId ?? "__none__"; filter(); return; } input.value = option.dataset.value ?? ""; updateSelected(option); if (search) search.value = ""; options.forEach((entry) => entry.classList.remove("hidden")); picker.removeAttribute("open"); if (picker.dataset.modelPickerAutoSubmit === "true") form?.requestSubmit(); }));
-  picker.querySelector<HTMLElement>("[data-model-picker-save]")?.addEventListener("click", () => { input.value = draft; const option = selectedOption(draft); if (option) updateSelected(option); close(); form?.requestSubmit(); });
+  options.forEach((option) => option.addEventListener("click", () => { if (isModal) { draft = option.dataset.value ?? ""; activeProvider = option.dataset.providerId ?? "__none__"; filter(); return; } input.value = option.dataset.value ?? ""; input.dispatchEvent(new Event("change", { bubbles: true })); updateSelected(option); if (search) search.value = ""; options.forEach((entry) => entry.classList.remove("hidden")); picker.removeAttribute("open"); if (picker.dataset.modelPickerAutoSubmit === "true") form?.requestSubmit(); }));
+  picker.querySelector<HTMLElement>("[data-model-picker-save]")?.addEventListener("click", () => { input.value = draft; input.dispatchEvent(new Event("change", { bubbles: true })); const option = selectedOption(draft); if (option) updateSelected(option); close(); form?.requestSubmit(); });
   const option = selectedOption(input.value); if (option) updateSelected(option);
 }
 
