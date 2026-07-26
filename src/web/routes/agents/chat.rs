@@ -1,10 +1,15 @@
-use std::{collections::VecDeque, convert::Infallible, sync::Arc, time::Duration};
+use std::{
+    collections::VecDeque,
+    convert::Infallible,
+    sync::Arc,
+    time::{Duration, SystemTime, UNIX_EPOCH},
+};
 
 use askama::Template;
 use axum::{
     Form,
     extract::{Path, State},
-    http::StatusCode,
+    http::{HeaderMap, HeaderValue, StatusCode},
     response::{
         Html, IntoResponse, Redirect, Response,
         sse::{Event, KeepAlive, Sse},
@@ -41,7 +46,8 @@ use crate::{
 };
 
 use super::shared::{
-    build_model_picker_view, load_model_picker_context, validate_model_selection_for_agent,
+    build_model_picker_view, is_htmx_request, load_model_picker_context,
+    validate_model_selection_for_agent,
 };
 
 #[derive(Default, Deserialize)]
@@ -76,7 +82,6 @@ struct ConversationSnapshot {
     conversation: AgentConversationRow,
     conversations: Vec<crate::agent_conversations::model::AgentConversationListRow>,
     session: Option<OpenCodeSessionView>,
-    status_text: String,
     busy: bool,
     settings: AgentConversationSettingsView,
     permissions: Vec<AgentConversationPermissionRequestView>,
@@ -121,7 +126,8 @@ async fn load_snapshot(
     let status_text = session_status(&state.db_pool, &conversation.opencode_session_id)
         .await
         .unwrap_or_else(|| "syncing".to_string());
-    let busy = matches!(status_text.as_str(), "busy" | "retry");
+    let busy = state.conversation_turns.is_active(conversation_id).await
+        || matches!(status_text.as_str(), "busy" | "retry");
     let picker = build_model_picker_view(
         "conversation-model-selection",
         &format!(
@@ -161,7 +167,6 @@ async fn load_snapshot(
         conversation,
         conversations,
         session,
-        status_text,
         busy,
         settings: AgentConversationSettingsView {
             model_picker: picker,
@@ -216,6 +221,10 @@ fn render_snapshot(
 ) -> Result<RenderedSnapshot, AppError> {
     let sidebar = AgentConversationSidebarPartialTemplate {
         agent_key: snapshot.agent.agent_key.clone(),
+        new_conversation_model_selection: format!(
+            "{}/{}",
+            snapshot.conversation.model_provider_id, snapshot.conversation.model_id
+        ),
         conversations: conversation_items(&snapshot.conversations, Some(snapshot.conversation.id)),
     }
     .render()?;
@@ -227,7 +236,6 @@ fn render_snapshot(
             "{}/{}",
             snapshot.conversation.model_provider_id, snapshot.conversation.model_id
         ),
-        status_text: snapshot.status_text.clone(),
         busy: snapshot.busy,
         session: snapshot.session.clone(),
         settings: snapshot.settings.clone(),
@@ -241,7 +249,7 @@ fn render_snapshot(
     let composer = AgentConversationComposerPartialTemplate {
         agent_key: snapshot.agent.agent_key.clone(),
         conversation_id: snapshot.conversation.id,
-        message_id: format!("msg_{}", Uuid::new_v4().simple()),
+        message_id: opencode_message_id(),
         busy: snapshot.busy,
         message,
         error,
@@ -260,6 +268,22 @@ fn render_snapshot(
         composer,
         permissions,
     })
+}
+
+fn opencode_message_id() -> String {
+    let now_millis = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("system clock is before the Unix epoch")
+        .as_millis() as u64;
+    opencode_message_id_at(now_millis, Uuid::new_v4())
+}
+
+pub(super) fn opencode_message_id_at(timestamp_millis: u64, random: Uuid) -> String {
+    // OpenCode compares message IDs lexically to determine the latest turn.
+    // Its IDs encode the current millisecond in the first 12 hexadecimal digits.
+    let timestamp = (timestamp_millis << 12) & 0x0000_ffff_ffff_ffff;
+    let random = random.simple().to_string();
+    format!("msg_{timestamp:012x}{}", &random[..14])
 }
 
 pub(in crate::web::routes) async fn agents_show_chat(
@@ -300,6 +324,14 @@ pub(in crate::web::routes) async fn agents_new_chat(
     let Some(agent) = get_agent(&state.db_pool, &agent_key).await? else {
         return Ok((StatusCode::NOT_FOUND, "agent not found").into_response());
     };
+    let conversations =
+        crate::agent_conversations::store::list_agent_conversations(&state.db_pool, &agent_key)
+            .await?;
+    if let Some(conversation) = conversations.first() {
+        return Ok(
+            Redirect::to(&format!("/agents/{agent_key}/chat/{}", conversation.id)).into_response(),
+        );
+    }
     let picker = build_model_picker_view(
         "conversation-model-selection",
         "",
@@ -347,12 +379,28 @@ pub(in crate::web::routes) async fn agents_create_conversation(
     let Some(agent) = get_agent(&state.db_pool, &agent_key).await? else {
         return Ok((StatusCode::NOT_FOUND, "agent not found").into_response());
     };
-    let selection = match parse_model_selection(&form.model_selection)
+    let conversations =
+        crate::agent_conversations::store::list_agent_conversations(&state.db_pool, &agent_key)
+            .await?;
+    let model_selection = if form.model_selection.trim().is_empty() {
+        conversations
+            .first()
+            .map(|conversation| {
+                format!(
+                    "{}/{}",
+                    conversation.model_provider_id, conversation.model_id
+                )
+            })
+            .unwrap_or_default()
+    } else {
+        form.model_selection
+    };
+    let selection = match parse_model_selection(&model_selection)
         .and_then(|selection| selection.ok_or_else(|| "Select a model.".to_string()))
     {
         Ok(selection) => selection,
         Err(error) => {
-            return render_empty_error(&state, agent, form.model_selection, error, user.id).await;
+            return render_empty_error(&state, agent, model_selection, error, user.id).await;
         }
     };
     let selection = match validate_model_selection_for_agent(&state, &agent, Some(selection)).await
@@ -362,7 +410,7 @@ pub(in crate::web::routes) async fn agents_create_conversation(
             return render_empty_error(
                 &state,
                 agent,
-                form.model_selection,
+                model_selection,
                 "Select a valid model.".to_string(),
                 user.id,
             )
@@ -399,6 +447,7 @@ async fn render_empty_error(
 pub(in crate::web::routes) async fn agents_send_conversation_message(
     State(state): State<Arc<AppState>>,
     Path((agent_key, conversation_id)): Path<(String, Uuid)>,
+    headers: HeaderMap,
     Form(form): Form<ConversationMessageForm>,
 ) -> Result<Response, AppError> {
     if form.message.trim().is_empty()
@@ -416,9 +465,7 @@ pub(in crate::web::routes) async fn agents_send_conversation_message(
         .submit_conversation_turn(&agent_key, conversation_id, &form.message_id, &form.message)
         .await
     {
-        Ok(()) => Ok(
-            Redirect::to(&format!("/agents/{agent_key}/chat/{conversation_id}")).into_response(),
-        ),
+        Ok(()) => chat_message_redirect(&agent_key, conversation_id, is_htmx_request(&headers)),
         Err(error) => {
             render_message_error(
                 &state,
@@ -430,6 +477,25 @@ pub(in crate::web::routes) async fn agents_send_conversation_message(
             .await
         }
     }
+}
+
+pub(super) fn chat_message_redirect(
+    agent_key: &str,
+    conversation_id: Uuid,
+    htmx: bool,
+) -> Result<Response, AppError> {
+    let location = format!("/agents/{agent_key}/chat/{conversation_id}");
+    if !htmx {
+        return Ok(Redirect::to(&location).into_response());
+    }
+    let mut response = StatusCode::OK.into_response();
+    response.headers_mut().insert(
+        "HX-Redirect",
+        HeaderValue::try_from(location).map_err(|error| {
+            AppError(anyhow::anyhow!("invalid chat redirect location: {error}"))
+        })?,
+    );
+    Ok(response)
 }
 
 async fn render_message_error(
@@ -596,11 +662,18 @@ async fn next_conversation_event(
             _ = stream.interval.tick(), if stream.busy => {
                 if let Ok(Some(snapshot)) = load_snapshot(&stream.state, &stream.agent_key, stream.conversation_id).await {
                     let next = signature(&snapshot.permissions);
-                    if next != stream.last_permissions {
-                        stream.last_permissions = next;
+                    let busy_changed = snapshot.busy != stream.busy;
+                    let permissions_changed = next != stream.last_permissions;
+                    stream.busy = snapshot.busy;
+                    stream.last_permissions = next;
+                    if busy_changed {
                         if let Ok(rendered) = render_snapshot(&snapshot, String::new(), None) {
-                            stream.pending.push_back(Event::default().event("conversation-permissions").data(rendered.permissions));
+                            stream.pending.extend(rendered.events());
                         }
+                    } else if permissions_changed
+                        && let Ok(rendered) = render_snapshot(&snapshot, String::new(), None)
+                    {
+                        stream.pending.push_back(Event::default().event("conversation-permissions").data(rendered.permissions));
                     }
                 }
             },

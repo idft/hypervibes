@@ -3,7 +3,9 @@ use crate::web::routes::router;
 use crate::web::routes::test_support::*;
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
+use sqlx::query;
 use tower::util::ServiceExt;
+use uuid::Uuid;
 
 #[tokio::test]
 async fn agent_chat_route_renders_empty_state() {
@@ -31,9 +33,21 @@ async fn agent_chat_route_renders_empty_state() {
 }
 
 #[tokio::test]
-async fn new_chat_route_renders_model_selection_even_with_existing_conversations() {
+async fn new_chat_route_redirects_to_the_latest_existing_conversation() {
     let state = test_state().await;
     let (agent_key, _wallet_address) = insert_test_agent(&state).await.expect("insert agent");
+    let conversation_id = Uuid::new_v4();
+    query(
+        "INSERT INTO agent_conversations (
+             id, agent_key, opencode_session_id, channel, title, model_provider_id, model_id
+         ) VALUES ($1, $2, $3, 'web', 'New conversation', 'ollama-cloud', 'glm-5.2')",
+    )
+    .bind(conversation_id)
+    .bind(&agent_key)
+    .bind(format!("ses_{conversation_id}"))
+    .execute(&state.db_pool)
+    .await
+    .expect("insert conversation");
 
     let response = router(state)
         .oneshot(
@@ -45,11 +59,13 @@ async fn new_chat_route_renders_model_selection_even_with_existing_conversations
         .await
         .expect("response");
 
-    assert_eq!(response.status(), StatusCode::OK);
-    assert!(
-        response_text(response)
-            .await
-            .contains("Start a conversation")
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+    assert_eq!(
+        response
+            .headers()
+            .get("location")
+            .and_then(|value| value.to_str().ok()),
+        Some(format!("/agents/{agent_key}/chat/{conversation_id}").as_str())
     );
 }
 #[tokio::test]

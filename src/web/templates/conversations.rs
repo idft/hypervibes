@@ -88,6 +88,7 @@ pub struct AgentConversationEmptyPageTemplate {
 #[template(path = "agents/chat/sidebar.html")]
 pub struct AgentConversationSidebarPartialTemplate {
     pub agent_key: String,
+    pub new_conversation_model_selection: String,
     pub conversations: Vec<AgentConversationListItemView>,
 }
 #[derive(Template)]
@@ -97,7 +98,6 @@ pub struct AgentConversationSummaryPartialTemplate {
     pub conversation_id: Uuid,
     pub title: String,
     pub model_text: String,
-    pub status_text: String,
     pub busy: bool,
     pub session: Option<OpenCodeSessionView>,
     pub settings: AgentConversationSettingsView,

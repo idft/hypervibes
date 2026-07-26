@@ -60,6 +60,10 @@ mod hooks_tests;
 mod runs_tests;
 
 #[cfg(test)]
+#[path = "conversations_tests.rs"]
+mod conversations_tests;
+
+#[cfg(test)]
 #[path = "balance_tests.rs"]
 mod balance_tests;
 

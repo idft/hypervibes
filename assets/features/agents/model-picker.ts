@@ -18,9 +18,27 @@ function initPicker(picker: HTMLElement) {
   const updateSelected = (option: HTMLElement) => { label.textContent = option.dataset.label ?? "None selected"; logo.src = option.dataset.logoUrl ?? ""; logo.classList.toggle("hidden", !option.dataset.logoUrl); defaultBadge.classList.toggle("hidden", Boolean(option.dataset.logoUrl)); };
   const filter = () => {
     const query = search?.value.trim().toLowerCase() ?? "";
-    const visibleProviders = new Set<string>();
-    options.forEach((option) => { const matches = !query || (option.dataset.searchText ?? option.dataset.label ?? "").toLowerCase().includes(query); const visible = matches && (!isModal || option.dataset.providerId === activeProvider); option.classList.toggle("hidden", !visible); if (matches) visibleProviders.add(option.dataset.providerId ?? "__none__"); option.classList.toggle("bg-zinc-900", option.dataset.value === draft); option.classList.toggle("text-white", option.dataset.value === draft); });
-    if (isModal) providers.forEach((provider) => { const visible = !query || (provider.dataset.searchText ?? "").toLowerCase().includes(query) || visibleProviders.has(provider.dataset.providerId ?? "__none__"); provider.classList.toggle("hidden", !visible); provider.classList.toggle("bg-zinc-900", provider.dataset.providerId === activeProvider); provider.classList.toggle("text-white", provider.dataset.providerId === activeProvider); });
+    const matchingProviders = new Set<string>();
+    options.forEach((option) => {
+      const matches = !query || (option.dataset.searchText ?? option.dataset.label ?? "").toLowerCase().includes(query);
+      if (matches) matchingProviders.add(option.dataset.providerId ?? "__none__");
+    });
+    if (isModal && query && !matchingProviders.has(activeProvider)) {
+      activeProvider = providers.find((provider) => matchingProviders.has(provider.dataset.providerId ?? "__none__"))?.dataset.providerId ?? "__none__";
+    }
+    options.forEach((option) => {
+      const matches = !query || (option.dataset.searchText ?? option.dataset.label ?? "").toLowerCase().includes(query);
+      const visible = matches && (!isModal || option.dataset.providerId === activeProvider);
+      option.classList.toggle("hidden", !visible);
+      option.classList.toggle("bg-zinc-900", option.dataset.value === draft);
+      option.classList.toggle("text-white", option.dataset.value === draft);
+    });
+    if (isModal) providers.forEach((provider) => {
+      const visible = !query || (provider.dataset.searchText ?? "").toLowerCase().includes(query) || matchingProviders.has(provider.dataset.providerId ?? "__none__");
+      provider.classList.toggle("hidden", !visible);
+      provider.classList.toggle("bg-zinc-900", provider.dataset.providerId === activeProvider);
+      provider.classList.toggle("text-white", provider.dataset.providerId === activeProvider);
+    });
   };
   const close = () => { modal?.classList.add("hidden"); document.body.classList.remove("overflow-hidden"); };
   picker.querySelector<HTMLElement>("[data-model-picker-open]")?.addEventListener("click", () => { draft = input.value; activeProvider = selectedOption(draft)?.dataset.providerId ?? "__none__"; if (search) search.value = ""; filter(); modal?.classList.remove("hidden"); document.body.classList.add("overflow-hidden"); search?.focus(); });

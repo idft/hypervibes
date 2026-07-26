@@ -47,6 +47,10 @@ impl ConversationTurnTracker {
                 conversation_id,
             })
     }
+
+    pub async fn is_active(&self, conversation_id: Uuid) -> bool {
+        self.active.lock().await.contains(&conversation_id)
+    }
 }
 
 pub struct ConversationTurnGuard {
@@ -483,4 +487,25 @@ fn permission_rules_for(orders: &str, memory_writes: &str) -> Result<Vec<OpenCod
 fn workspace_runtime(agent: &AgentDetailRow) -> Result<OpenCodeWorkspaceRuntimeConfig> {
     OpenCodeWorkspaceRuntimeConfig::from_value(&agent.runtime_config)
         .ok_or_else(|| anyhow!("Agent is missing OpenCode workspace metadata."))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn turn_tracker_reports_active_turns_until_the_guard_drops() {
+        let tracker = ConversationTurnTracker::default();
+        let conversation_id = Uuid::new_v4();
+
+        assert!(!tracker.is_active(conversation_id).await);
+        let guard = tracker
+            .try_acquire(conversation_id)
+            .await
+            .expect("acquire conversation turn");
+        assert!(tracker.is_active(conversation_id).await);
+        drop(guard);
+        tokio::task::yield_now().await;
+        assert!(!tracker.is_active(conversation_id).await);
+    }
 }

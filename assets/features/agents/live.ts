@@ -51,6 +51,7 @@ function installConversationComposerShortcut() {
     const form = textarea?.closest<HTMLFormElement>('form[action*="/chat/"][action$="/messages"]');
     if (!textarea || !form || textarea.disabled) return;
     event.preventDefault();
+    if (!textarea.value.trim()) return;
     form.requestSubmit();
   });
 }
