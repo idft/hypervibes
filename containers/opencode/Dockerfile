@@ -1,4 +1,15 @@
-ARG OPENCODE_TAG=latest
+ARG OPENCODE_TAG=1.18.5
+
+FROM docker.io/library/rust:1.96-alpine AS workspace-controller-builder
+
+RUN apk add --no-cache musl-dev
+WORKDIR /build
+COPY Cargo.toml Cargo.lock ./
+COPY src src
+COPY crates/workspace-store crates/workspace-store
+COPY crates/workspace-controller crates/workspace-controller
+RUN cargo build --release --package workspace-controller
+
 FROM ghcr.io/anomalyco/opencode:${OPENCODE_TAG}
 
 # `uv` is a single static binary copied from the official image so the
@@ -24,6 +35,10 @@ RUN uv python install 3.13
 # Bake the container-global OpenCode config into the image. Compose points
 # OPENCODE_CONFIG at this path while /opencode-data remains mutable state.
 COPY agent-runtime/container/opencode.jsonc /opt/vibetrading/opencode/opencode.jsonc
+COPY --from=workspace-controller-builder /build/target/release/workspace-controller /usr/local/bin/workspace-controller
+COPY agent-runtime/workspace-template /opt/vibetrading/workspace-template
+COPY containers/opencode/entrypoint.sh /usr/local/bin/vibetrading-opencode
+RUN chmod +x /usr/local/bin/vibetrading-opencode
 
 # Shared Python analysis runtime for generated agent workspaces. Keep this
 # separate from the MCP server venv so analysis dependencies do not affect MCP.
@@ -50,3 +65,5 @@ RUN uv venv --python 3.13 /opt/vibetrading/mcp/.venv \
     && uv pip install --python /opt/vibetrading/mcp/.venv/bin/python \
         --no-cache \
         --requirement /opt/vibetrading/mcp/requirements.txt
+
+ENTRYPOINT ["/usr/local/bin/vibetrading-opencode"]

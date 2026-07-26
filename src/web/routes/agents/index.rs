@@ -25,9 +25,8 @@ use crate::{
         },
     },
     hyperliquid::live_state::{AccountKey, AccountLiveState, LiveConnectionStatus},
-    opencode::workspace::{
-        OpenCodeWorkspaceAgent, WorkspaceGenerationMode, delete_agent_workspace,
-        generate_agent_workspace, runtime_config_for_generated_workspace,
+    opencode::{
+        workspace::OpenCodeWorkspaceRuntimeConfig, workspace_control_client::WorkspaceAgentInput,
     },
     web::{
         AppState,
@@ -162,7 +161,7 @@ pub(in crate::web::routes) async fn delete_agent(
 
     state.live_accounts.remove(&account_key);
 
-    delete_agent_workspace(&state.opencode_workspace_config, &agent.agent_key).inspect_err(
+    state.workspace_controller.delete_workspace(&agent.agent_key, &format!("delete-agent:{}", agent.agent_key)).await.inspect_err(
         |error| {
             error!(agent_key = %agent.agent_key, error = ?error, "failed to delete OpenCode workspace after deleting agent");
         },
@@ -224,21 +223,35 @@ pub(in crate::web::routes) async fn create_agent(
         runtime_config: serde_json::json!({}),
     };
 
-    let generated = generate_agent_workspace(
-        &state.opencode_workspace_config,
-        &OpenCodeWorkspaceAgent {
-            agent_key: agent_key.clone(),
-            display_name: row.display_name.clone(),
-            api_key: api_key.clone(),
-        },
-        WorkspaceGenerationMode::CreateNew,
-    )?;
+    let generated = state
+        .workspace_controller
+        .create_workspace(
+            WorkspaceAgentInput {
+                agent_key: agent_key.clone(),
+                display_name: row.display_name.clone(),
+                agent_api_key: api_key.clone(),
+                api_base_url: state.vibetrading_agent_api_base_url.clone(),
+            },
+            false,
+            &format!("create-agent:{agent_key}"),
+        )
+        .await?;
     let mut row = row;
-    row.runtime_config = runtime_config_for_generated_workspace(&generated).into_value();
+    row.runtime_config = OpenCodeWorkspaceRuntimeConfig {
+        workspace_container_path: generated.workspace_container_path,
+        profile_source: generated.profile_source,
+    }
+    .into_value();
 
     if let Err(e) = insert_agent(&state.db_pool, &row).await {
-        let workspace_config = &state.opencode_workspace_config;
-        if let Err(error) = delete_agent_workspace(workspace_config, &row.agent_key) {
+        if let Err(error) = state
+            .workspace_controller
+            .delete_workspace(
+                &row.agent_key,
+                &format!("create-agent:{}:db-cleanup", row.agent_key),
+            )
+            .await
+        {
             error!(agent_key = %row.agent_key, error = ?error, "failed to clean up newly created workspace after agent insert failure");
         }
 
@@ -261,8 +274,13 @@ pub(in crate::web::routes) async fn create_agent(
         if let Err(cleanup_error) = delete_agent_in_store(&state.db_pool, &agent_key).await {
             error!(agent_key = %agent_key, error = ?cleanup_error, "failed to clean up newly created agent after activation failure");
         }
-        if let Err(cleanup_error) =
-            delete_agent_workspace(&state.opencode_workspace_config, &agent_key)
+        if let Err(cleanup_error) = state
+            .workspace_controller
+            .delete_workspace(
+                &agent_key,
+                &format!("create-agent:{agent_key}:activation-cleanup"),
+            )
+            .await
         {
             error!(agent_key = %agent_key, error = ?cleanup_error, "failed to clean up newly created workspace after activation failure");
         }

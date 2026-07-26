@@ -37,18 +37,9 @@ use crate::{
     memory::{delete_memories_for_agent, get_latest_agent_memory_by_type},
     opencode::{
         client::{OpenCodeClient, SessionStatusKind},
-        coding_workspace::{
-            PromotionJournalPhase, candidate_container_root, changed_paths,
-            list_promotion_journals, live_user_root, manifest_hash, manifest_tree,
-            prepare_coding_candidate, promote_user_tree, recover_promotion_journal,
-            retain_successful_version, rollback_user_tree, set_promotion_journal_retained_version,
-            update_promotion_journal_phase,
-        },
-        workspace::{
-            OpenCodeWorkspaceAgent, OpenCodeWorkspaceConfig, OpenCodeWorkspaceRuntimeConfig,
-            WorkspaceGenerationMode, delete_agent_workspace, generate_agent_workspace,
-            runtime_config_for_generated_workspace,
-        },
+        coding_workspace::{changed_paths, manifest_hash},
+        workspace::OpenCodeWorkspaceRuntimeConfig,
+        workspace_control_client::{WorkspaceAgentInput, WorkspaceController},
     },
 };
 
@@ -74,7 +65,9 @@ pub struct AgenticScheduler {
     force_shutdown_rx: watch::Receiver<bool>,
     backend: Arc<dyn AgenticBackend>,
     live_accounts: Arc<LiveAccountStore>,
-    opencode_workspace_config: OpenCodeWorkspaceConfig,
+    workspace_controller: Arc<dyn WorkspaceController>,
+    agent_api_base_url: String,
+    container_workspaces_root: String,
     opencode_client: Arc<OpenCodeClient>,
     last_orphan_recovery_at: Option<chrono::DateTime<Utc>>,
     in_flight: InFlightTracker,
@@ -84,7 +77,9 @@ pub struct AgenticScheduler {
 }
 
 pub struct AgenticSchedulerRuntime {
-    pub opencode_workspace_config: OpenCodeWorkspaceConfig,
+    pub workspace_controller: Arc<dyn WorkspaceController>,
+    pub agent_api_base_url: String,
+    pub container_workspaces_root: String,
     pub opencode_client: Arc<OpenCodeClient>,
     pub in_flight: InFlightTracker,
 }
@@ -174,7 +169,9 @@ impl AgenticScheduler {
             force_shutdown_rx,
             backend,
             live_accounts,
-            opencode_workspace_config: runtime.opencode_workspace_config,
+            workspace_controller: runtime.workspace_controller,
+            agent_api_base_url: runtime.agent_api_base_url,
+            container_workspaces_root: runtime.container_workspaces_root,
             opencode_client: runtime.opencode_client,
             last_orphan_recovery_at: None,
             in_flight: runtime.in_flight,
@@ -196,18 +193,18 @@ impl AgenticScheduler {
     /// instead of waiting for the 30-minute grace to elapse.
     pub async fn run(mut self) -> Result<()> {
         info!("agentic scheduler starting");
-        match list_promotion_journals(&self.opencode_workspace_config) {
+        match self.workspace_controller.recover_promotions().await {
             Ok(journals) => {
                 let mut recovered = 0;
                 for journal in journals {
-                    match recover_promotion_journal(&self.opencode_workspace_config, &journal) {
-                        Ok(PromotionJournalPhase::Completed) => {
+                    match journal.phase {
+                        workspace_store::coding_workspace::PromotionJournalPhase::Completed => {
                             let _ =
                                 store::mark_maintenance_task_succeeded(&self.pool, journal.task_id)
                                     .await;
                             recovered += 1;
                         }
-                        Ok(PromotionJournalPhase::RolledBack) => {
+                        workspace_store::coding_workspace::PromotionJournalPhase::RolledBack => {
                             let _ = store::mark_maintenance_task_failed(
                                 &self.pool,
                                 journal.task_id,
@@ -216,10 +213,7 @@ impl AgenticScheduler {
                             .await;
                             recovered += 1;
                         }
-                        Ok(_) => {}
-                        Err(error) => {
-                            warn!(error = ?error, task_id = journal.task_id, "promotion journal recovery failed")
-                        }
+                        _ => {}
                     }
                 }
                 if recovered > 0 {
@@ -289,7 +283,8 @@ impl AgenticScheduler {
 
         process_workspace_maintenance_tasks(
             &self.pool,
-            &self.opencode_workspace_config,
+            &self.workspace_controller,
+            &self.agent_api_base_url,
             &self.opencode_client,
             &self.workspace_leases,
         )
@@ -305,7 +300,8 @@ impl AgenticScheduler {
         spawn_coding_workers(
             &self.pool,
             &self.backend,
-            &self.opencode_workspace_config,
+            &self.workspace_controller,
+            &self.agent_api_base_url,
             &self.in_flight,
             &self.coding_semaphore,
             &self.workspace_leases,
@@ -445,11 +441,12 @@ impl AgenticScheduler {
             if task.task_kind != crate::agentic::model::MAINTENANCE_TASK_KIND_ANALYSIS_CODING {
                 continue;
             }
-            let candidate_directory = candidate_container_root(
-                &self.opencode_workspace_config,
-                &task.agent_key,
-                task.id,
-            )?;
+            let candidate_directory = format!(
+                "{}/coding/{}/{}/workspace",
+                self.container_workspaces_root.trim_end_matches('/'),
+                task.agent_key,
+                task.id
+            );
             if let Some(run_id) = task.run_id
                 && let Some(run) = store::get_run(&self.pool, run_id).await?
                 && coding_run_exceeded_timeout(run.started_at, run.timeout_seconds, now)
@@ -510,26 +507,26 @@ impl AgenticScheduler {
                 continue;
             }
             warn!(task_id = task.id, phase = %task.phase, "recovering stale coding task");
-            if task.is_in_promotion_window()
-                && let Some(journal) = crate::opencode::coding_workspace::read_promotion_journal(
-                    &self.opencode_workspace_config,
-                    &task.agent_key,
-                    task.id,
-                )?
-            {
-                match recover_promotion_journal(&self.opencode_workspace_config, &journal)? {
-                    PromotionJournalPhase::Completed => {
-                        store::mark_maintenance_task_succeeded(&self.pool, task.id).await?;
-                        if let Some(run_id) = task.run_id {
-                            store::mark_run_succeeded(&self.pool, run_id, None).await?;
+            if task.is_in_promotion_window() {
+                let recovered = self.workspace_controller.recover_promotions().await?;
+                if let Some(journal) = recovered
+                    .into_iter()
+                    .find(|item| item.agent_key == task.agent_key && item.task_id == task.id)
+                {
+                    match journal.phase {
+                        workspace_store::coding_workspace::PromotionJournalPhase::Completed => {
+                            store::mark_maintenance_task_succeeded(&self.pool, task.id).await?;
+                            if let Some(run_id) = task.run_id {
+                                store::mark_run_succeeded(&self.pool, run_id, None).await?;
+                            }
+                            continue;
                         }
-                        continue;
+                        workspace_store::coding_workspace::PromotionJournalPhase::RolledBack => {
+                            // Fall through to terminal failure after restoring the
+                            // previous live tree.
+                        }
+                        _ => {}
                     }
-                    PromotionJournalPhase::RolledBack => {
-                        // Fall through to terminal failure after restoring the
-                        // previous live tree.
-                    }
-                    _ => {}
                 }
             }
             let summary = format!("stale coding task recovered during {} phase", task.phase);
@@ -550,7 +547,8 @@ impl AgenticScheduler {
 
 async fn process_workspace_maintenance_tasks(
     pool: &DbPool,
-    workspace_config: &OpenCodeWorkspaceConfig,
+    workspace_controller: &Arc<dyn WorkspaceController>,
+    agent_api_base_url: &str,
     _opencode_client: &Arc<OpenCodeClient>,
     workspace_leases: &WorkspaceLeaseManager,
 ) -> Result<()> {
@@ -623,22 +621,34 @@ async fn process_workspace_maintenance_tasks(
     let reset_memories = task.parameter_bool("reset_memories");
     let maintenance_result = async {
         let _lease = workspace_leases.acquire_live_write(&agent.agent_key).await;
-        let workspace_agent = OpenCodeWorkspaceAgent {
+        let workspace_agent = WorkspaceAgentInput {
             agent_key: agent.agent_key.clone(),
             display_name: agent.display_name.clone(),
-            api_key: agent.api_key.clone(),
+            agent_api_key: agent.api_key.clone(),
+            api_base_url: agent_api_base_url.to_string(),
         };
 
         if hard_reset {
-            let _ = delete_agent_workspace(workspace_config, &agent.agent_key)?;
+            let _ = workspace_controller
+                .delete_workspace(
+                    &agent.agent_key,
+                    &format!("maintenance:{}:hard-reset", task.id),
+                )
+                .await?;
         }
 
-        let generated = generate_agent_workspace(
-            workspace_config,
-            &workspace_agent,
-            WorkspaceGenerationMode::Regenerate,
-        )?;
-        let runtime_config = runtime_config_for_generated_workspace(&generated).into_value();
+        let generated = workspace_controller
+            .create_workspace(
+                workspace_agent,
+                true,
+                &format!("maintenance:{}:regenerate", task.id),
+            )
+            .await?;
+        let runtime_config = OpenCodeWorkspaceRuntimeConfig {
+            workspace_container_path: generated.workspace_container_path,
+            profile_source: generated.profile_source,
+        }
+        .into_value();
         if !update_agent_runtime_config(pool, &agent.agent_key, runtime_config).await? {
             anyhow::bail!("agent disappeared before workspace metadata update");
         }
@@ -729,10 +739,12 @@ async fn process_provider_config_reload_tasks(
 const CODING_QUEUE_LIMIT: i64 = 4;
 const CODING_DISPATCH_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(5);
 
+#[allow(clippy::too_many_arguments)]
 async fn spawn_coding_workers(
     pool: &DbPool,
     backend: &Arc<dyn AgenticBackend>,
-    workspace_config: &OpenCodeWorkspaceConfig,
+    workspace_controller: &Arc<dyn WorkspaceController>,
+    agent_api_base_url: &str,
     in_flight: &InFlightTracker,
     semaphore: &Arc<Semaphore>,
     workspace_leases: &WorkspaceLeaseManager,
@@ -745,7 +757,8 @@ async fn spawn_coding_workers(
         }
         let pool = pool.clone();
         let backend = backend.clone();
-        let workspace_config = workspace_config.clone();
+        let workspace_controller = workspace_controller.clone();
+        let agent_api_base_url = agent_api_base_url.to_string();
         let in_flight = in_flight.clone();
         let semaphore = semaphore.clone();
         let workspace_leases = workspace_leases.clone();
@@ -758,7 +771,8 @@ async fn spawn_coding_workers(
             if let Err(error) = run_coding_task(
                 &pool,
                 &backend,
-                &workspace_config,
+                &workspace_controller,
+                &agent_api_base_url,
                 &workspace_leases,
                 &opencode_base_url,
                 task,
@@ -775,7 +789,8 @@ async fn spawn_coding_workers(
 async fn run_coding_task(
     pool: &DbPool,
     backend: &Arc<dyn AgenticBackend>,
-    workspace_config: &OpenCodeWorkspaceConfig,
+    workspace_controller: &Arc<dyn WorkspaceController>,
+    agent_api_base_url: &str,
     workspace_leases: &WorkspaceLeaseManager,
     opencode_base_url: &str,
     task: crate::agentic::model::AgentMaintenanceTaskRow,
@@ -803,8 +818,13 @@ async fn run_coding_task(
         return Ok(());
     };
 
-    let live_root = live_user_root(workspace_config, &task.agent_key)?;
-    let canonical_exists = live_root.join("analyze.py").is_file();
+    let existing_candidate = workspace_controller
+        .inspect_candidate(&task.agent_key, task.id)
+        .await
+        .ok();
+    let canonical_exists = existing_candidate
+        .as_ref()
+        .is_some_and(|candidate| candidate.manifest.contains_key("analyze.py"));
     let requested_mode = task
         .parameters
         .get("mode")
@@ -831,13 +851,18 @@ async fn run_coding_task(
         }
     };
 
-    let candidate = match prepare_coding_candidate(
-        workspace_config,
-        &task.agent_key,
-        task.id,
-        &agent.display_name,
-        &agent.api_key,
-    ) {
+    let candidate = match workspace_controller
+        .create_candidate(
+            WorkspaceAgentInput {
+                agent_key: task.agent_key.clone(),
+                display_name: agent.display_name.clone(),
+                agent_api_key: agent.api_key.clone(),
+                api_base_url: agent_api_base_url.to_string(),
+            },
+            task.id,
+        )
+        .await
+    {
         Ok(candidate) => candidate,
         Err(error) => {
             fail_coding_task(pool, task.id, run_id, &error.to_string()).await?;
@@ -862,8 +887,7 @@ async fn run_coding_task(
             .await?
             .map(|row| row.prompt);
     request.runtime_config = serde_json::json!({
-        "workspace_host_path": candidate.root.to_string_lossy(),
-        "workspace_container_path": candidate_container_root(workspace_config, &task.agent_key, task.id)?,
+        "workspace_container_path": candidate.workspace_container_path,
         "profile_source": "agent-runtime/workspace-template",
         "coding_task_id": task.id,
         "coding_mode": effective_mode,
@@ -884,12 +908,27 @@ async fn run_coding_task(
         return Ok(());
     }
 
-    let candidate_manifest = manifest_tree(&candidate.user_root)?;
+    let inspection = workspace_controller
+        .inspect_candidate(&task.agent_key, task.id)
+        .await?;
+    let candidate_manifest = inspection.manifest;
     let actual_changes = changed_paths(&candidate.base_manifest, &candidate_manifest);
-    let report = match validate_coding_report(&candidate.root, &actual_changes) {
-        Ok(outcome) => outcome,
-        Err(error) => {
-            fail_coding_task(pool, task.id, run_id, &error.to_string()).await?;
+    let report = match inspection.report.as_ref() {
+        Some(report) => match validate_coding_report(report, &actual_changes) {
+            Ok(outcome) => outcome,
+            Err(error) => {
+                fail_coding_task(pool, task.id, run_id, &error.to_string()).await?;
+                return Ok(());
+            }
+        },
+        None => {
+            fail_coding_task(
+                pool,
+                task.id,
+                run_id,
+                "coding model did not submit a report",
+            )
+            .await?;
             return Ok(());
         }
     };
@@ -931,7 +970,9 @@ async fn run_coding_task(
             return Ok(());
         }
         store::mark_run_succeeded(pool, run_id, None).await?;
-        let _ = std::fs::remove_dir_all(&candidate.root);
+        let _ = workspace_controller
+            .delete_candidate(&task.agent_key, task.id)
+            .await;
     } else {
         store::compare_and_set_maintenance_phase(
             pool,
@@ -941,9 +982,18 @@ async fn run_coding_task(
         )
         .await?;
         let candidate_manifest_hash = manifest_hash(&candidate_manifest);
-        if let Err(error) =
-            require_coding_validation(&candidate.root, task.id, &candidate_manifest_hash)
-        {
+        let validation_result = inspection
+            .validation
+            .as_ref()
+            .map(|validation| {
+                require_coding_validation(validation, task.id, &candidate_manifest_hash)
+            })
+            .unwrap_or_else(|| {
+                Err(anyhow!(
+                    "coding model did not run fixed candidate validation"
+                ))
+            });
+        if let Err(error) = validation_result {
             fail_coding_task(pool, task.id, run_id, &error.to_string()).await?;
             return Ok(());
         }
@@ -970,13 +1020,16 @@ async fn run_coding_task(
             crate::agentic::model::MAINTENANCE_PHASE_PROMOTING,
         )
         .await?;
-        let _backup = match promote_user_tree(
-            workspace_config,
-            &task.agent_key,
-            task.id,
-            &candidate.base_manifest,
-        ) {
-            Ok(backup) => backup,
+        let promotion = match workspace_controller
+            .promote_candidate(
+                &task.agent_key,
+                task.id,
+                candidate.base_manifest.clone(),
+                candidate_manifest_hash.clone(),
+            )
+            .await
+        {
+            Ok(result) => result,
             Err(error) => {
                 fail_coding_task(pool, task.id, run_id, &error.to_string()).await?;
                 return Ok(());
@@ -989,50 +1042,7 @@ async fn run_coding_task(
             crate::agentic::model::MAINTENANCE_PHASE_SMOKE_TESTING,
         )
         .await?;
-        let live_workspace = workspace_config
-            .host_workspaces_root
-            .join("agents")
-            .join(&task.agent_key);
-        let promoted_manifest_hash = manifest_tree(&live_workspace.join("scripts/user"))
-            .map(|manifest| manifest_hash(&manifest));
-        let promoted_matches = matches!(
-            &promoted_manifest_hash,
-            Ok(hash) if hash == &candidate_manifest_hash
-        );
-        if !promoted_matches {
-            let _ = rollback_user_tree(workspace_config, &task.agent_key, task.id);
-            let _ = update_promotion_journal_phase(
-                workspace_config,
-                &task.agent_key,
-                task.id,
-                PromotionJournalPhase::RolledBack,
-            );
-            let summary = match promoted_manifest_hash {
-                Ok(_) => "promoted analysis tree does not match validated candidate".to_string(),
-                Err(error) => format!("failed to hash promoted analysis tree: {error}"),
-            };
-            fail_coding_task(pool, task.id, run_id, &summary).await?;
-            return Ok(());
-        }
-        update_promotion_journal_phase(
-            workspace_config,
-            &task.agent_key,
-            task.id,
-            PromotionJournalPhase::SmokeTestPassed,
-        )?;
-        let retained = retain_successful_version(workspace_config, &task.agent_key, task.id)?;
-        set_promotion_journal_retained_version(
-            workspace_config,
-            &task.agent_key,
-            task.id,
-            retained,
-        )?;
-        update_promotion_journal_phase(
-            workspace_config,
-            &task.agent_key,
-            task.id,
-            PromotionJournalPhase::Completed,
-        )?;
+        let promoted_manifest_hash = promotion.manifest_hash;
         store::mark_maintenance_task_succeeded(pool, task.id).await?;
         if let Err(error) = write_coding_result_memory(
             pool,
@@ -1043,7 +1053,7 @@ async fn run_coding_task(
                 changed_paths: &actual_changes,
                 report: &report,
                 base_manifest_hash: &manifest_hash(&candidate.base_manifest),
-                promoted_manifest_hash: &manifest_hash(&candidate_manifest),
+                promoted_manifest_hash: &promoted_manifest_hash,
             },
         )
         .await
@@ -1058,7 +1068,9 @@ async fn run_coding_task(
             return Ok(());
         }
         store::mark_run_succeeded(pool, run_id, None).await?;
-        let _ = std::fs::remove_dir_all(&candidate.root);
+        let _ = workspace_controller
+            .delete_candidate(&task.agent_key, task.id)
+            .await;
     }
     Ok(())
 }
@@ -1177,18 +1189,10 @@ struct CodingReport {
 }
 
 fn require_coding_validation(
-    candidate_root: &std::path::Path,
+    validation: &serde_json::Value,
     task_id: i64,
     candidate_manifest_hash: &str,
 ) -> Result<()> {
-    let path = candidate_root
-        .parent()
-        .context("candidate task path has no parent")?
-        .join("coding-validation.json");
-    let validation = std::fs::read_to_string(path)
-        .context("coding model did not run fixed candidate validation")?;
-    let validation: serde_json::Value =
-        serde_json::from_str(&validation).context("coding validation result is not valid JSON")?;
     if validation
         .get("schema_version")
         .and_then(serde_json::Value::as_u64)
@@ -1214,17 +1218,9 @@ fn require_coding_validation(
 }
 
 fn validate_coding_report(
-    candidate_root: &std::path::Path,
+    report: &serde_json::Value,
     actual_changes: &[String],
 ) -> Result<CodingReport> {
-    let report_path = candidate_root
-        .parent()
-        .context("candidate task path has no parent")?
-        .join("coding-report.json");
-    let report =
-        std::fs::read_to_string(&report_path).context("coding model did not submit a report")?;
-    let report: serde_json::Value =
-        serde_json::from_str(&report).context("coding report is not valid JSON")?;
     if report
         .get("schema_version")
         .and_then(serde_json::Value::as_u64)
@@ -2040,7 +2036,6 @@ mod tests {
 
     use std::{
         fs,
-        path::PathBuf,
         sync::{Arc, Mutex},
         time::{SystemTime, UNIX_EPOCH},
     };
@@ -2115,22 +2110,17 @@ mod tests {
         let user = candidate.join("scripts/user");
         fs::create_dir_all(&user).expect("create candidate user tree");
         fs::write(user.join("analyze.py"), "print('ok')\n").expect("write candidate");
-        let candidate_hash = manifest_hash(&manifest_tree(&user).expect("candidate manifest"));
-        fs::write(
-            root.join("coding-validation.json"),
-            serde_json::to_vec(&json!({
-                "schema_version": 1,
-                "task_id": 42,
-                "ok": true,
-                "candidate_manifest_sha256": candidate_hash,
-            }))
-            .expect("serialize validation"),
-        )
-        .expect("write validation");
+        let candidate_hash = "candidate-hash";
+        let validation = json!({
+            "schema_version": 1,
+            "task_id": 42,
+            "ok": true,
+            "candidate_manifest_sha256": candidate_hash,
+        });
 
-        require_coding_validation(&candidate, 42, &candidate_hash).expect("matching validation");
-        assert!(require_coding_validation(&candidate, 43, &candidate_hash).is_err());
-        assert!(require_coding_validation(&candidate, 42, "stale").is_err());
+        require_coding_validation(&validation, 42, candidate_hash).expect("matching validation");
+        assert!(require_coding_validation(&validation, 43, candidate_hash).is_err());
+        assert!(require_coding_validation(&validation, 42, "stale").is_err());
 
         fs::remove_dir_all(root).expect("remove validation fixture");
     }
@@ -2162,16 +2152,6 @@ mod tests {
         }
     }
 
-    fn sample_workspace_config() -> OpenCodeWorkspaceConfig {
-        OpenCodeWorkspaceConfig {
-            source_root: PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-                .join(crate::opencode::workspace::PROFILE_SOURCE_RELATIVE_PATH),
-            host_workspaces_root: PathBuf::from("/tmp/opencode/vibetrading-scheduler-tests"),
-            container_workspaces_root: "/workspaces".to_string(),
-            api_base_url: "http://host.containers.internal:3003".to_string(),
-        }
-    }
-
     fn sample_opencode_client() -> Arc<OpenCodeClient> {
         Arc::new(
             OpenCodeClient::new(crate::opencode::client::OpenCodeClientConfig::new(
@@ -2184,7 +2164,21 @@ mod tests {
 
     fn scheduler_runtime(in_flight: InFlightTracker) -> AgenticSchedulerRuntime {
         AgenticSchedulerRuntime {
-            opencode_workspace_config: sample_workspace_config(),
+            workspace_controller: Arc::new(
+                crate::opencode::workspace_control_client::LocalWorkspaceController::new(
+                    crate::opencode::workspace::OpenCodeWorkspaceConfig {
+                        source_root: std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                            .join(crate::opencode::workspace::PROFILE_SOURCE_RELATIVE_PATH),
+                        host_workspaces_root: std::path::PathBuf::from(
+                            "/tmp/opencode/vibetrading-scheduler-tests",
+                        ),
+                        container_workspaces_root: "/workspaces".to_string(),
+                        api_base_url: "http://host.containers.internal:3003".to_string(),
+                    },
+                ),
+            ),
+            agent_api_base_url: "http://host.containers.internal:3003".to_string(),
+            container_workspaces_root: "/workspaces".to_string(),
             opencode_client: sample_opencode_client(),
             in_flight,
         }
@@ -2908,9 +2902,10 @@ mod tests {
             .expect("agent present");
         let workspace = OpenCodeWorkspaceRuntimeConfig::from_value(&agent.runtime_config)
             .expect("updated workspace runtime config");
-        let workspace_path = PathBuf::from(&workspace.workspace_host_path);
-        assert!(workspace_path.join("AGENTS.md").exists());
-        assert!(workspace_path.join("scripts/user").exists());
+        assert_eq!(
+            workspace.workspace_container_path,
+            format!("/workspaces/agents/{key}")
+        );
 
         let (memory_count,): (i64,) =
             sqlx::query_as("SELECT COUNT(*) FROM memory.records WHERE agent_key = $1")

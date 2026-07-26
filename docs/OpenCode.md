@@ -249,3 +249,9 @@ The `analysis-coding` OpenCode agent explicitly invokes its dedicated
 quantitative output envelope, optional indicator signals, closed-candle rule,
 and focused optional-test policy. The fixed validator and its deterministic fixture are container-global assets at
 `/opt/vibetrading/coding/`; they are not copied into agent workspaces.
+# Workspace Lifecycle
+
+Agent workspaces live in the OpenCode container's named volume, not on a host bind mount.
+Vibetrading uses the authenticated workspace controller for generation, drift inspection,
+coding candidates, report storage, promotion, and recovery. `opencode_data` remains a separate
+named volume for global provider credentials and OAuth state.

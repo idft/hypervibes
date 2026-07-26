@@ -14,7 +14,7 @@ use crate::{
         store::{get_agent, list_agent_instrument_ids},
     },
     hyperliquid::live_state::{AccountKey, AccountLiveState, LiveConnectionStatus},
-    opencode::workspace::{OpenCodeWorkspaceRuntimeConfig, delete_agent_workspace},
+    opencode::workspace::delete_agent_workspace,
 };
 
 #[tokio::test]
@@ -248,9 +248,11 @@ async fn post_delete_agent_removes_agent_and_redirects() {
         .as_deref()
         .expect("trading account");
     let live_account_key = AccountKey::new(trading_account, &stored.environment);
-    let workspace = OpenCodeWorkspaceRuntimeConfig::from_value(&stored.runtime_config)
-        .expect("workspace metadata present");
-    let workspace_path = std::path::PathBuf::from(&workspace.workspace_host_path);
+    let workspace_path = crate::opencode::workspace::agent_workspace_host_path(
+        &state.opencode_workspace_config,
+        &agent_key,
+    )
+    .expect("workspace path");
     assert!(workspace_path.exists());
     fs::write(
         workspace_path.join("scratch/delete-sentinel.txt"),

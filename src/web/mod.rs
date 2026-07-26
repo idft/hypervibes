@@ -30,7 +30,7 @@ use crate::{
     hyperliquid::builder_fee::BuilderFeeCache,
     hyperliquid::live_state::LiveAccountStore,
     model_catalog::models_dev::ModelsDevCatalog,
-    opencode::{client::OpenCodeClient, workspace::OpenCodeWorkspaceConfig},
+    opencode::{client::OpenCodeClient, workspace_control_client::WorkspaceController},
 };
 
 use self::run_detail_events::{RunDetailEventHub, run_listener};
@@ -43,7 +43,9 @@ pub async fn serve(
     agentic_backend: Arc<dyn AgenticBackend>,
     encryption_key: EncryptionKey,
     live_accounts: Arc<LiveAccountStore>,
-    opencode_workspace_config: OpenCodeWorkspaceConfig,
+    workspace_controller: Arc<dyn WorkspaceController>,
+    vibetrading_agent_api_base_url: String,
+    opencode_container_workspaces_root: String,
     opencode_base_url: String,
     opencode_client: Arc<OpenCodeClient>,
     model_catalog: Arc<ModelsDevCatalog>,
@@ -65,12 +67,22 @@ pub async fn serve(
         db_pool,
         #[cfg(test)]
         _test_db_guard: None,
+        #[cfg(test)]
+        opencode_workspace_config: crate::opencode::workspace::OpenCodeWorkspaceConfig {
+            source_root: std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join(crate::opencode::workspace::PROFILE_SOURCE_RELATIVE_PATH),
+            host_workspaces_root: std::path::PathBuf::from("/tmp/opencode/vibetrading-web"),
+            container_workspaces_root: opencode_container_workspaces_root.clone(),
+            api_base_url: vibetrading_agent_api_base_url.clone(),
+        },
         agentic_backend,
         encryption_key,
         live_accounts,
         ui_events: Arc::new(UiEventHub::new()),
         run_detail_events,
-        opencode_workspace_config,
+        workspace_controller,
+        vibetrading_agent_api_base_url,
+        opencode_container_workspaces_root,
         opencode_base_url,
         opencode_client,
         model_catalog,

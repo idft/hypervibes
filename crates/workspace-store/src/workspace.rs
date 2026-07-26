@@ -1,6 +1,6 @@
 use std::{
     collections::BTreeMap,
-    env, fs,
+    fs,
     path::{Path, PathBuf},
 };
 
@@ -39,12 +39,11 @@ pub enum WorkspaceGenerationMode {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct OpenCodeWorkspaceRuntimeConfig {
-    pub workspace_host_path: String,
     pub workspace_container_path: String,
     pub profile_source: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WorkspaceTemplateDrift {
     pub workspace_exists: bool,
     pub changed_files: Vec<WorkspaceTemplateFileChange>,
@@ -56,7 +55,7 @@ impl WorkspaceTemplateDrift {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WorkspaceTemplateFileChange {
     pub path: String,
     pub status: WorkspaceTemplateFileStatus,
@@ -64,7 +63,8 @@ pub struct WorkspaceTemplateFileChange {
     pub removed_lines: usize,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum WorkspaceTemplateFileStatus {
     Modified,
     Deleted,
@@ -273,7 +273,6 @@ pub fn runtime_config_for_generated_workspace(
     generated: &GeneratedOpenCodeWorkspace,
 ) -> OpenCodeWorkspaceRuntimeConfig {
     OpenCodeWorkspaceRuntimeConfig {
-        workspace_host_path: display_workspace_host_path(&generated.workspace_host_path),
         workspace_container_path: generated.workspace_container_path.clone(),
         profile_source: PROFILE_SOURCE_RELATIVE_PATH.to_string(),
     }
@@ -485,16 +484,6 @@ fn is_workspace_excluded_artifact(name: &std::ffi::OsStr) -> bool {
         || (name.starts_with("test_") && name.ends_with(".py"))
 }
 
-fn display_workspace_host_path(path: &Path) -> String {
-    match env::current_dir() {
-        Ok(current_dir) => path
-            .strip_prefix(&current_dir)
-            .map(|relative| relative.to_string_lossy().replace('\\', "/"))
-            .unwrap_or_else(|_| path.to_string_lossy().into_owned()),
-        Err(_) => path.to_string_lossy().into_owned(),
-    }
-}
-
 fn display_relative_path(path: &Path) -> String {
     path.to_string_lossy().replace('\\', "/")
 }
@@ -528,7 +517,7 @@ fn line_change_counts(expected: &str, actual: &str) -> (usize, usize) {
 #[cfg(test)]
 mod tests {
     use std::{
-        process,
+        env, process,
         time::{SystemTime, UNIX_EPOCH},
     };
 
@@ -558,7 +547,9 @@ mod tests {
     }
 
     fn source_root() -> PathBuf {
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(PROFILE_SOURCE_RELATIVE_PATH)
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../")
+            .join(PROFILE_SOURCE_RELATIVE_PATH)
     }
 
     fn sample_config(root: &Path) -> OpenCodeWorkspaceConfig {

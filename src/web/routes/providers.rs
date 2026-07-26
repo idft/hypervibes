@@ -97,7 +97,7 @@ pub(in crate::web::routes) async fn providers_index(
         _ => (None, None),
     };
 
-    let directory = &state.opencode_workspace_config.container_workspaces_root;
+    let directory = &state.opencode_container_workspaces_root;
     let provider_result = state
         .opencode_client
         .list_providers(&state.opencode_base_url, directory)
@@ -240,10 +240,7 @@ pub(in crate::web::routes) async fn provider_connect(
                     modal,
                 ));
             }
-            let directory = state
-                .opencode_workspace_config
-                .container_workspaces_root
-                .clone();
+            let directory = state.opencode_container_workspaces_root.clone();
             let authorization = match state
                 .opencode_client
                 .authorize_provider_oauth(
@@ -355,7 +352,7 @@ pub(in crate::web::routes) async fn provider_callback(
     if attempt.user_id != user.id
         || attempt.provider_id != provider_id
         || attempt.method != method
-        || attempt.directory != state.opencode_workspace_config.container_workspaces_root
+        || attempt.directory != state.opencode_container_workspaces_root
         || completion_mode != completion_mode_name(attempt.completion_mode)
     {
         return Ok(Redirect::to("/providers?result=failed").into_response());
@@ -560,7 +557,7 @@ async fn load_selected_method(
     provider_id: &str,
     method_index: usize,
 ) -> Result<(String, OpenCodeProviderAuthMethod), AppError> {
-    let directory = &state.opencode_workspace_config.container_workspaces_root;
+    let directory = &state.opencode_container_workspaces_root;
     let providers = state
         .opencode_client
         .list_providers(&state.opencode_base_url, directory)
@@ -836,7 +833,7 @@ async fn provider_name(state: &Arc<AppState>, provider_id: &str) -> String {
         .opencode_client
         .list_providers(
             &state.opencode_base_url,
-            &state.opencode_workspace_config.container_workspaces_root,
+            &state.opencode_container_workspaces_root,
         )
         .await
         .ok()

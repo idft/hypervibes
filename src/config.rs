@@ -9,9 +9,10 @@ pub struct AppConfig {
     pub app_cache_dir: PathBuf,
     pub agents_encryption_key: [u8; 32],
     pub agents_encryption_key_id: String,
-    pub opencode_workspaces_root: PathBuf,
     pub opencode_container_workspaces_root: String,
     pub vibetrading_agent_api_base_url: String,
+    pub workspace_control_base_url: String,
+    pub workspace_control_api_key: String,
     pub opencode_base_url: String,
     pub opencode_server_username: String,
     pub opencode_server_password: Option<String>,
@@ -25,9 +26,10 @@ impl AppConfig {
             app_cache_dir: app_cache_dir_from_env()?,
             agents_encryption_key: agents_encryption_key_from_env()?,
             agents_encryption_key_id: agents_encryption_key_id_from_env()?,
-            opencode_workspaces_root: opencode_workspaces_root_from_env()?,
             opencode_container_workspaces_root: opencode_container_workspaces_root_from_env()?,
             vibetrading_agent_api_base_url: vibetrading_agent_api_base_url_from_env()?,
+            workspace_control_base_url: workspace_control_base_url_from_env()?,
+            workspace_control_api_key: workspace_control_api_key_from_env()?,
             opencode_base_url: opencode_base_url_from_env()?,
             opencode_server_username: opencode_server_username_from_env(),
             opencode_server_password: opencode_server_password_from_env(),
@@ -117,23 +119,6 @@ fn agents_encryption_key_id_from_env() -> Result<String> {
         .context("missing AGENTS_ENCRYPTION_KEY_ID environment variable")
 }
 
-fn opencode_workspaces_root_from_env() -> Result<PathBuf> {
-    let raw = env::var("OPENCODE_WORKSPACES_ROOT").unwrap_or_else(|_| "workspaces".to_string());
-    let raw = raw.trim();
-    if raw.is_empty() {
-        bail!("OPENCODE_WORKSPACES_ROOT must not be empty");
-    }
-
-    let path = PathBuf::from(raw);
-    if path.is_absolute() {
-        Ok(path)
-    } else {
-        Ok(env::current_dir()
-            .context("failed to resolve current working directory for OPENCODE_WORKSPACES_ROOT")?
-            .join(path))
-    }
-}
-
 fn opencode_container_workspaces_root_from_env() -> Result<String> {
     let root = env::var("OPENCODE_CONTAINER_WORKSPACES_ROOT")
         .unwrap_or_else(|_| "/workspaces".to_string());
@@ -156,6 +141,27 @@ fn vibetrading_agent_api_base_url_from_env() -> Result<String> {
     }
     validate_absolute_url("VIBETRADING_AGENT_API_BASE_URL", url)?;
     Ok(url.to_string())
+}
+
+fn workspace_control_base_url_from_env() -> Result<String> {
+    let url = env::var("WORKSPACE_CONTROL_BASE_URL")
+        .unwrap_or_else(|_| "http://127.0.0.1:14097".to_string());
+    let url = url.trim();
+    if url.is_empty() {
+        bail!("WORKSPACE_CONTROL_BASE_URL must not be empty");
+    }
+    validate_absolute_url("WORKSPACE_CONTROL_BASE_URL", url)?;
+    Ok(url.trim_end_matches('/').to_string())
+}
+
+fn workspace_control_api_key_from_env() -> Result<String> {
+    let key = env::var("WORKSPACE_CONTROL_API_KEY")
+        .context("missing WORKSPACE_CONTROL_API_KEY environment variable")?;
+    let key = key.trim();
+    if key.is_empty() {
+        bail!("WORKSPACE_CONTROL_API_KEY must not be empty");
+    }
+    Ok(key.to_string())
 }
 
 fn opencode_base_url_from_env() -> Result<String> {

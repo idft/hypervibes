@@ -142,3 +142,9 @@ Each agent may be linked to zero or more Hyperliquid perp instruments.
 OpenCode jobs receive the job-specific strategy prompt, the latest agent-level
 learnings memory, selected instruments, and job metadata through the dispatched
 prompt text. Trading jobs also receive a live account snapshot.
+# Workspace Storage
+
+Agent workspaces are controller-managed data in the OpenCode container volume. A rollout uses
+a fresh volume and requires operators to recreate agents; the application does not import or
+delete the legacy host `workspaces/` directory. Coding agents retain their fixed validation and
+report MCP tools but cannot promote their own changes.

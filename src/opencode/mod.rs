@@ -1,4 +1,5 @@
 pub mod client;
-pub mod coding_workspace;
 pub mod store;
-pub mod workspace;
+pub mod workspace_control_client;
+
+pub use workspace_store::{coding_workspace, workspace};

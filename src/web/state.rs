@@ -10,7 +10,7 @@ use crate::{
     hyperliquid::builder_fee::BuilderFeeCache,
     hyperliquid::live_state::LiveAccountStore,
     model_catalog::models_dev::ModelsDevCatalog,
-    opencode::{client::OpenCodeClient, workspace::OpenCodeWorkspaceConfig},
+    opencode::{client::OpenCodeClient, workspace_control_client::WorkspaceController},
 };
 
 use super::provider_connections::ProviderConnectionsState;
@@ -27,7 +27,11 @@ pub struct AppState {
     pub live_accounts: Arc<LiveAccountStore>,
     pub ui_events: Arc<UiEventHub>,
     pub run_detail_events: Arc<RunDetailEventHub>,
-    pub opencode_workspace_config: OpenCodeWorkspaceConfig,
+    pub workspace_controller: Arc<dyn WorkspaceController>,
+    pub vibetrading_agent_api_base_url: String,
+    pub opencode_container_workspaces_root: String,
+    #[cfg(test)]
+    pub opencode_workspace_config: crate::opencode::workspace::OpenCodeWorkspaceConfig,
     pub opencode_base_url: String,
     pub opencode_client: Arc<OpenCodeClient>,
     pub model_catalog: Arc<ModelsDevCatalog>,

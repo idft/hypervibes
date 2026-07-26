@@ -1,4 +1,4 @@
-use std::{fs, sync::Arc};
+use std::sync::Arc;
 
 use anyhow::Error as AnyhowError;
 use axum::{
@@ -10,9 +10,7 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::{
-    agents::AuthenticatedAgent, opencode::coding_workspace::candidate_root, web::AppState,
-};
+use crate::{agents::AuthenticatedAgent, web::AppState};
 
 use super::error::ApiError;
 
@@ -74,23 +72,19 @@ pub(super) async fn submit_coding_report(
     }) {
         return Err(ApiError::Validation("invalid coding report path".into()));
     }
-    let candidate = candidate_root(
-        &state.opencode_workspace_config,
-        &agent.agent_key,
-        input.task_id,
-    )
-    .map_err(ApiError::Internal)?;
-    let report_path = candidate
-        .parent()
-        .ok_or_else(|| ApiError::Internal(anyhow::anyhow!("invalid coding task path")))?
-        .join("coding-report.json");
-    let temporary = report_path.with_extension("json.tmp");
-    let bytes = serde_json::to_vec_pretty(&input)
+    let report = serde_json::to_value(input)
         .map_err(|error| ApiError::Internal(AnyhowError::from(error)))?;
-    fs::create_dir_all(report_path.parent().expect("report parent"))
-        .map_err(|error| ApiError::Internal(AnyhowError::from(error)))?;
-    fs::write(&temporary, bytes).map_err(|error| ApiError::Internal(AnyhowError::from(error)))?;
-    fs::rename(&temporary, &report_path)
-        .map_err(|error| ApiError::Internal(AnyhowError::from(error)))?;
+    state
+        .workspace_controller
+        .store_report(
+            &agent.agent_key,
+            report
+                .get("task_id")
+                .and_then(Value::as_i64)
+                .expect("report task_id was validated"),
+            report,
+        )
+        .await
+        .map_err(ApiError::Internal)?;
     Ok((StatusCode::CREATED, Json(Value::Bool(true))).into_response())
 }

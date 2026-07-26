@@ -142,7 +142,6 @@ impl AgenticBackend for OpenCodeBackend {
         let workspace = OpenCodeWorkspaceRuntimeConfig::from_value(&request.runtime_config)
             .ok_or_else(|| anyhow!("OpenCode workspace is not configured"))?;
         let workspace_container_path = workspace.workspace_container_path.clone();
-        let workspace_host_path = workspace.workspace_host_path.clone();
 
         let (agent_name, command_name) = resolve_opencode_job(&request.job_kind)?;
 
@@ -164,7 +163,7 @@ impl AgenticBackend for OpenCodeBackend {
             .with_context(|| {
                 format!(
                     "failed to create OpenCode session for agent {} (workspace {})",
-                    request.agent_key, workspace_host_path
+                    request.agent_key, workspace_container_path
                 )
             })?;
 

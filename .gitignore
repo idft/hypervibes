@@ -7,6 +7,5 @@ HANDOFF.md
 __pycache__/
 *.py[cod]
 TODO
-/workspaces/
 /cache/
 prompt-templates/

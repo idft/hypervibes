@@ -98,10 +98,7 @@ pub(in crate::web::routes) async fn load_model_picker_context(
             warn!(agent_key = %agent.agent_key, error = ?error, "failed to load model picker options");
             ModelPickerContext {
                 options: Vec::new(),
-                warning: Some(
-                    "Could not load configured OpenCode models. You can still use OpenCode default."
-                        .to_string(),
-                ),
+                warning: Some("Could not load configured OpenCode models.".to_string()),
             }
         }
     }
@@ -182,9 +179,7 @@ pub(in crate::web::routes) async fn validate_model_selection_for_agent(
         &state.model_catalog,
     )
     .await
-    .map_err(|_| {
-        "Could not load configured OpenCode models. Try again or use OpenCode default.".to_string()
-    })?;
+    .map_err(|_| "Could not load configured OpenCode models. Try again.".to_string())?;
     if selection_exists_in_options(&options, &selection) {
         Ok(Some(selection))
     } else {

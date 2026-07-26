@@ -54,14 +54,13 @@ async fn main() -> Result<()> {
     let in_flight_for_scheduler = in_flight.clone();
     let in_flight_for_web = in_flight.clone();
 
-    let repo_root =
-        std::env::current_dir().context("failed to resolve current working directory")?;
-    let opencode_workspace_config = opencode::workspace::OpenCodeWorkspaceConfig {
-        source_root: repo_root.join(opencode::workspace::PROFILE_SOURCE_RELATIVE_PATH),
-        host_workspaces_root: config.opencode_workspaces_root.clone(),
-        container_workspaces_root: config.opencode_container_workspaces_root.clone(),
-        api_base_url: config.vibetrading_agent_api_base_url.clone(),
-    };
+    let workspace_controller: Arc<dyn opencode::workspace_control_client::WorkspaceController> =
+        Arc::new(
+            opencode::workspace_control_client::HttpWorkspaceController::new(
+                &config.workspace_control_base_url,
+                config.workspace_control_api_key.clone(),
+            )?,
+        );
 
     let opencode_client = Arc::new(
         opencode::client::OpenCodeClient::new(
@@ -124,7 +123,9 @@ async fn main() -> Result<()> {
         opencode_backend.clone(),
         Arc::clone(&live_accounts),
         agentic::scheduler::AgenticSchedulerRuntime {
-            opencode_workspace_config: opencode_workspace_config.clone(),
+            workspace_controller: Arc::clone(&workspace_controller),
+            agent_api_base_url: config.vibetrading_agent_api_base_url.clone(),
+            container_workspaces_root: config.opencode_container_workspaces_root.clone(),
             opencode_client: Arc::clone(&opencode_client),
             in_flight: in_flight_for_scheduler,
         },
@@ -144,7 +145,9 @@ async fn main() -> Result<()> {
         opencode_backend,
         encryption_key,
         Arc::clone(&live_accounts),
-        opencode_workspace_config,
+        workspace_controller,
+        config.vibetrading_agent_api_base_url,
+        config.opencode_container_workspaces_root,
         config.opencode_base_url,
         opencode_client,
         model_catalog,

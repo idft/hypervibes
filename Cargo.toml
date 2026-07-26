@@ -1,3 +1,7 @@
+[workspace]
+members = [".", "crates/workspace-store", "crates/workspace-controller"]
+resolver = "2"
+
 [package]
 name = "vibetrading"
 version = "0.3.0"
@@ -36,6 +40,7 @@ tower = { version = "0.5", features = ["util"] }
 tower-http = { version = "0.6", features = ["fs", "trace"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+workspace-store = { path = "crates/workspace-store" }
 
 [dev-dependencies]
 http-body-util = "0.1"

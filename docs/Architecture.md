@@ -130,3 +130,10 @@ out to both run-detail streams and the Jobs tab's Recent Runs section; session
 notifications are used only by run-detail transcript and summary streams.
 Frontend source is in `assets/`; `build.rs` builds the Tailwind and esbuild
 output when application assets or templates change.
+# Workspace Volume Boundary
+
+The host-running Vibetrading application never mounts or accesses agent workspace files. The
+OpenCode container owns the `agent_workspaces` named volume at `/workspaces` and runs the
+`workspace-controller` HTTP process alongside OpenCode. The host calls its loopback-only `/v1`
+API with `WORKSPACE_CONTROL_API_KEY` for workspace lifecycle operations. This controller is not
+an agent MCP tool; agents cannot create, delete, inspect, or promote workspaces through it.

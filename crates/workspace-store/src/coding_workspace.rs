@@ -8,6 +8,7 @@ use std::{
 use anyhow::{Context, Result, bail};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use sha2::{Digest, Sha256};
 
 use super::workspace::OpenCodeWorkspaceConfig;
@@ -35,10 +36,7 @@ pub struct PromotionJournal {
     pub agent_key: String,
     pub base_manifest_hash: String,
     pub candidate_manifest_hash: String,
-    pub live_path: PathBuf,
-    pub candidate_path: PathBuf,
-    pub backup_path: PathBuf,
-    pub retained_version_path: Option<PathBuf>,
+    pub retained_version: Option<String>,
     pub phase: PromotionJournalPhase,
     pub updated_at: DateTime<Utc>,
 }
@@ -48,6 +46,20 @@ pub struct CodingCandidate {
     pub root: PathBuf,
     pub user_root: PathBuf,
     pub base_manifest: BTreeMap<String, String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CandidateInspection {
+    pub manifest: BTreeMap<String, String>,
+    pub manifest_hash: String,
+    pub validation: Option<Value>,
+    pub report: Option<Value>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PromotionResult {
+    pub manifest_hash: String,
+    pub retained_version: String,
 }
 
 pub fn live_user_root(config: &OpenCodeWorkspaceConfig, agent_key: &str) -> Result<PathBuf> {
@@ -165,7 +177,7 @@ pub fn set_promotion_journal_retained_version(
 ) -> Result<()> {
     let mut journal = read_promotion_journal(config, agent_key, task_id)?
         .context("promotion journal is missing")?;
-    journal.retained_version_path = Some(retained_version_path);
+    journal.retained_version = Some(retained_version_path.to_string_lossy().into_owned());
     journal.updated_at = Utc::now();
     write_promotion_journal(config, &journal)
 }
@@ -218,6 +230,120 @@ pub fn prepare_coding_candidate(
         user_root,
         base_manifest,
     })
+}
+
+pub fn store_coding_report(
+    config: &OpenCodeWorkspaceConfig,
+    agent_key: &str,
+    task_id: i64,
+    report: &Value,
+) -> Result<()> {
+    let root = candidate_root(config, agent_key, task_id)?;
+    let task_root = root.parent().context("coding candidate has no task root")?;
+    let report_path = task_root.join("coding-report.json");
+    write_json_atomic(&report_path, report)
+}
+
+pub fn inspect_coding_candidate(
+    config: &OpenCodeWorkspaceConfig,
+    agent_key: &str,
+    task_id: i64,
+) -> Result<CandidateInspection> {
+    let root = candidate_root(config, agent_key, task_id)?;
+    let task_root = root.parent().context("coding candidate has no task root")?;
+    let manifest = manifest_tree(&root.join("scripts/user"))?;
+    Ok(CandidateInspection {
+        manifest_hash: manifest_hash(&manifest),
+        manifest,
+        validation: read_json_sidecar(&task_root.join("coding-validation.json"))?,
+        report: read_json_sidecar(&task_root.join("coding-report.json"))?,
+    })
+}
+
+pub fn promote_coding_candidate(
+    config: &OpenCodeWorkspaceConfig,
+    agent_key: &str,
+    task_id: i64,
+    expected_base: &BTreeMap<String, String>,
+    expected_candidate_hash: &str,
+) -> Result<PromotionResult> {
+    let candidate = candidate_root(config, agent_key, task_id)?.join("scripts/user");
+    let candidate_hash = manifest_hash(&manifest_tree(&candidate)?);
+    if candidate_hash != expected_candidate_hash {
+        bail!("candidate scripts/user changed after validation");
+    }
+
+    promote_user_tree(config, agent_key, task_id, expected_base)?;
+    let live = live_user_root(config, agent_key)?;
+    let promoted_hash = manifest_hash(&manifest_tree(&live)?);
+    if promoted_hash != expected_candidate_hash {
+        rollback_user_tree(config, agent_key, task_id)?;
+        update_promotion_journal_phase(
+            config,
+            agent_key,
+            task_id,
+            PromotionJournalPhase::RolledBack,
+        )?;
+        bail!("promoted scripts/user does not match validated candidate");
+    }
+
+    update_promotion_journal_phase(
+        config,
+        agent_key,
+        task_id,
+        PromotionJournalPhase::SmokeTestPassed,
+    )?;
+    let retained = retain_successful_version(config, agent_key, task_id)?;
+    set_promotion_journal_retained_version(config, agent_key, task_id, retained.clone())?;
+    update_promotion_journal_phase(config, agent_key, task_id, PromotionJournalPhase::Completed)?;
+    Ok(PromotionResult {
+        manifest_hash: promoted_hash,
+        retained_version: retained.to_string_lossy().into_owned(),
+    })
+}
+
+pub fn delete_coding_candidate(
+    config: &OpenCodeWorkspaceConfig,
+    agent_key: &str,
+    task_id: i64,
+) -> Result<bool> {
+    let root = candidate_root(config, agent_key, task_id)?;
+    let task_root = root.parent().context("coding candidate has no task root")?;
+    match fs::symlink_metadata(task_root) {
+        Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_dir() => {
+            bail!("coding task root is not a regular directory")
+        }
+        Ok(_) => {
+            fs::remove_dir_all(task_root)?;
+            Ok(true)
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(error.into()),
+    }
+}
+
+fn read_json_sidecar(path: &Path) -> Result<Option<Value>> {
+    match fs::read(path) {
+        Ok(contents) => Ok(Some(serde_json::from_slice(&contents)?)),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(error.into()),
+    }
+}
+
+fn write_json_atomic(path: &Path, value: &Value) -> Result<()> {
+    let parent = path.parent().context("sidecar has no parent")?;
+    fs::create_dir_all(parent)?;
+    let temporary = parent.join(format!(
+        ".{}-{}.tmp",
+        path.file_name().unwrap_or_default().to_string_lossy(),
+        std::process::id()
+    ));
+    fs::write(&temporary, serde_json::to_vec_pretty(value)?)?;
+    if let Err(error) = fs::rename(&temporary, path) {
+        let _ = fs::remove_file(&temporary);
+        return Err(error.into());
+    }
+    Ok(())
 }
 
 fn add_candidate_permission_scope(root: &Path, container_root: &str) -> Result<()> {
@@ -311,10 +437,7 @@ pub fn promote_user_tree(
         agent_key: agent_key.to_string(),
         base_manifest_hash: manifest_hash(expected_base),
         candidate_manifest_hash: manifest_hash(&manifest_tree(&candidate)?),
-        live_path: live.clone(),
-        candidate_path: candidate.clone(),
-        backup_path: backup.clone(),
-        retained_version_path: None,
+        retained_version: None,
         phase: PromotionJournalPhase::Prepared,
         updated_at: Utc::now(),
     };
@@ -427,25 +550,26 @@ pub fn recover_promotion_journal(
         }
         PromotionJournalPhase::Prepared => return Ok(PromotionJournalPhase::Prepared),
         PromotionJournalPhase::SmokeTestPassed => {
-            if journal.retained_version_path.is_some() {
+            if journal.retained_version.is_some() {
                 return Ok(PromotionJournalPhase::Completed);
             }
         }
         PromotionJournalPhase::LiveBackedUp | PromotionJournalPhase::CandidatePromoted => {}
     }
 
-    if journal.backup_path.exists() {
-        if journal.live_path.exists() {
-            fs::remove_dir_all(&journal.live_path)
+    let live = live_user_root(config, &journal.agent_key)?;
+    let task_root = candidate_root(config, &journal.agent_key, journal.task_id)?;
+    let backup = task_root
+        .parent()
+        .context("coding task path has no parent")?
+        .join("backup-user");
+    if backup.exists() {
+        if live.exists() {
+            fs::remove_dir_all(&live)
                 .context("failed to remove unverified promoted tree during recovery")?;
         }
-        fs::create_dir_all(
-            journal
-                .live_path
-                .parent()
-                .context("live journal path has no parent")?,
-        )?;
-        fs::rename(&journal.backup_path, &journal.live_path)
+        fs::create_dir_all(live.parent().context("live workspace path has no parent")?)?;
+        fs::rename(&backup, &live)
             .context("failed to restore live tree during promotion recovery")?;
         update_promotion_journal_phase(
             config,
@@ -762,7 +886,7 @@ mod tests {
         fs::write(
             &profile_path,
             include_str!(
-                "../../agent-runtime/workspace-template/.opencode/agents/analysis-coding.md"
+                "../../../agent-runtime/workspace-template/.opencode/agents/analysis-coding.md"
             ),
         )
         .unwrap();
@@ -802,10 +926,7 @@ mod tests {
             agent_key: "agent".into(),
             base_manifest_hash: "base".into(),
             candidate_manifest_hash: "candidate".into(),
-            live_path: PathBuf::from("live"),
-            candidate_path: PathBuf::from("candidate"),
-            backup_path: PathBuf::from("backup"),
-            retained_version_path: None,
+            retained_version: None,
             phase: PromotionJournalPhase::Prepared,
             updated_at: Utc::now(),
         };
@@ -827,9 +948,18 @@ mod tests {
                 .as_nanos()
         ));
         let config = config(root.clone());
-        let live = root.join("live");
-        let candidate = root.join("candidate");
-        let backup = root.join("backup");
+        let live = live_user_root(&config, "agent").unwrap();
+        let candidate = candidate_root(&config, "agent", 9)
+            .unwrap()
+            .join("scripts/user");
+        let backup = candidate
+            .parent()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .join("backup-user");
         fs::create_dir_all(&live).unwrap();
         fs::create_dir_all(&candidate).unwrap();
         fs::write(live.join("old.py"), b"old").unwrap();
@@ -841,10 +971,7 @@ mod tests {
             agent_key: "agent".into(),
             base_manifest_hash: "base".into(),
             candidate_manifest_hash: "candidate".into(),
-            live_path: live.clone(),
-            candidate_path: candidate,
-            backup_path: backup,
-            retained_version_path: None,
+            retained_version: None,
             phase: PromotionJournalPhase::CandidatePromoted,
             updated_at: Utc::now(),
         };

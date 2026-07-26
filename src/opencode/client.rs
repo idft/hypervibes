@@ -261,7 +261,7 @@ impl OpenCodeClient {
         let url = build_url(
             base_url,
             "provider",
-            &[("directory", workspace_container_path)],
+            &[("location[directory]", workspace_container_path)],
         );
         let response = self
             .http
@@ -777,6 +777,19 @@ mod tests {
     fn build_url_with_no_query_drops_question_mark() {
         let url = build_url("http://localhost:14096", "session/abc/command", &[]);
         assert_eq!(url, "http://localhost:14096/session/abc/command");
+    }
+
+    #[test]
+    fn provider_location_uses_deep_object_query_syntax() {
+        let url = build_url(
+            "http://localhost:14096",
+            "provider",
+            &[("location[directory]", "/workspaces/agents/btc-2")],
+        );
+        assert_eq!(
+            url,
+            "http://localhost:14096/provider?location[directory]=%2Fworkspaces%2Fagents%2Fbtc-2"
+        );
     }
 
     #[test]

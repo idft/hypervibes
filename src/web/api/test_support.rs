@@ -69,6 +69,19 @@ pub async fn test_state() -> Arc<AppState> {
             container_workspaces_root: "/workspaces".to_string(),
             api_base_url: "http://host.containers.internal:3003".to_string(),
         },
+        workspace_controller: Arc::new(
+            crate::opencode::workspace_control_client::LocalWorkspaceController::new(
+                crate::opencode::workspace::OpenCodeWorkspaceConfig {
+                    source_root: std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                        .join(crate::opencode::workspace::PROFILE_SOURCE_RELATIVE_PATH),
+                    host_workspaces_root: std::path::PathBuf::from("/tmp/opencode/vibetrading-api"),
+                    container_workspaces_root: "/workspaces".to_string(),
+                    api_base_url: "http://host.containers.internal:3003".to_string(),
+                },
+            ),
+        ),
+        vibetrading_agent_api_base_url: "http://host.containers.internal:3003".to_string(),
+        opencode_container_workspaces_root: "/workspaces".to_string(),
         opencode_base_url: "http://localhost:14096".to_string(),
         opencode_client: Arc::new(
             crate::opencode::client::OpenCodeClient::new(
