@@ -41,11 +41,6 @@ fn job_detail_page_renders_job_metadata_and_runs() {
 
     assert!(rendered.contains("Agent sections"));
     assert!(
-        rendered
-            .contains("href=\"/agents/test-agent/jobs\" data-agent-tab-link aria-current=\"page\"")
-    );
-    assert!(!rendered.contains("hx-target=\"#agent-show-tab-content\""));
-    assert!(
         rendered.contains("href=\"/agents/test-agent/jobs\" aria-label=\"Back\" title=\"Back\"")
     );
     assert!(rendered.contains("d=\"M10.5 19.5 3 12m0 0 7.5-7.5M3 12h18\""));

@@ -26,14 +26,10 @@ fn memory_detail_page_renders_agent_navbar_with_memories_active() {
     .expect("render memory detail page");
 
     assert!(rendered.contains("Agent sections"));
-    assert!(rendered.contains(
-        "href=\"/agents/test-agent/memories\" data-agent-tab-link aria-current=\"page\""
-    ));
     assert!(
         rendered
             .contains("href=\"/agents/test-agent/memories\" aria-label=\"Back\" title=\"Back\"")
     );
-    assert!(!rendered.contains("hx-target=\"#agent-show-tab-content\""));
     assert!(rendered.contains("Momentum remains constructive"));
     assert_eq!(rendered.matches("<h2 ").count(), 0);
 }

@@ -1,7 +1,3 @@
-function isAgentDetailPath(pathname: string) {
-  return pathname.startsWith("/agents/") && pathname !== "/agents/new";
-}
-
 export function syncAgentSelector() {
   const currentAgent = document.querySelector<HTMLElement>("[data-current-agent-key]");
   const agentKey = currentAgent?.dataset.currentAgentKey ?? window.location.pathname.match(/^\/agents\/([^/]+)/)?.[1];
@@ -39,7 +35,7 @@ export function installAgentNavigation() {
     const link = (event.target as Element | null)?.closest<HTMLAnchorElement>("a[href]");
     if (!link || link.hasAttribute("hx-get")) return;
     const destination = new URL(link.href, window.location.href);
-    if (destination.origin === window.location.origin && isAgentDetailPath(destination.pathname) && !isAgentDetailPath(window.location.pathname)) {
+    if (destination.origin === window.location.origin && destination.pathname.startsWith("/agents/") && destination.pathname !== "/agents/new" && !window.location.pathname.startsWith("/agents/")) {
       window.sessionStorage.setItem("agent-rail-enter-destination", destination.pathname);
     }
   });
@@ -50,7 +46,7 @@ export function installAgentNavigation() {
     const currentRail = document.querySelector<HTMLElement>(".agent-rail");
     if (!link || !currentRail || link.hasAttribute("hx-get")) return;
     const destination = new URL(link.href, window.location.href);
-    if (destination.origin !== window.location.origin || isAgentDetailPath(destination.pathname)) return;
+    if (destination.origin !== window.location.origin || destination.pathname.startsWith("/agents/")) return;
     event.preventDefault();
     currentRail.classList.add("agent-rail-exit");
     window.setTimeout(() => window.location.assign(destination.href), 180);

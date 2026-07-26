@@ -3,7 +3,7 @@
 {% block title %}{{ agent.display_name }} · Vibetrading{% endblock %}
 
 {% block content %}
-<div class="mx-auto max-w-[1400px]">
+<div class="mx-auto max-w-[1400px]{% if show_transactions_tab %} flex h-full min-h-0 flex-col{% endif %}">
     {% include "agents/components/page-header.html" %}
 
     {% include "agents/components/tabs.html" %}
@@ -17,7 +17,7 @@
     </a>
     {% endif %}
 
-    <div id="agent-show-tab-content">
+    <div id="agent-show-tab-content"{% if show_transactions_tab %} class="min-h-0 flex-1"{% endif %}>
     {% if show_positions_tab %}
     <section class="mt-2 space-y-2" hx-ext="sse" sse-connect="/agents/{{ agent.agent_key }}/live/stream">
         <section class="rounded-2xl border border-zinc-800 bg-[#0d0d10] p-6">
@@ -44,9 +44,9 @@
         </section>
     </section>
     {% else if show_transactions_tab %}
-    <section class="mt-2 space-y-2">
-        <section id="agent-transactions" class="rounded-2xl border border-zinc-800 bg-[#0d0d10] p-6">
-            <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+    <section class="flex h-full min-h-0">
+        <section id="agent-transactions" class="flex min-h-0 flex-1 flex-col rounded-2xl border border-zinc-800 bg-[#0d0d10] p-6">
+            <div class="shrink-0 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                 <h2 class="text-lg font-medium text-white">Transactions</h2>
                 {% if !transactions.is_empty() %}
                 <div class="flex items-center gap-2">
@@ -66,7 +66,7 @@
                 <p class="mt-1 text-xs text-zinc-500">Enable the agent and wait for the orchestrator to reconcile the account history.</p>
             </div>
             {% else %}
-            <div class="mt-4 overflow-x-auto">
+            <div class="dark-scrollbar mt-4 min-h-0 flex-1 overflow-auto">
                 <table class="min-w-full divide-y divide-zinc-800 text-sm">
                     <thead class="bg-zinc-950/60 text-left text-xs uppercase tracking-[0.16em] text-zinc-500">
                         <tr>
@@ -105,7 +105,7 @@
                     </tbody>
                 </table>
             </div>
-            <div class="mt-4 flex flex-col gap-3 border-t border-zinc-800 pt-4 text-sm text-zinc-400 sm:flex-row sm:items-center sm:justify-between">
+            <div class="mt-4 shrink-0 flex flex-col gap-3 border-t border-zinc-800 pt-4 text-sm text-zinc-400 sm:flex-row sm:items-center sm:justify-between">
                 <p>Showing {{ transactions_range_start }}-{{ transactions_range_end }} of {{ transactions_total_count }} transactions</p>
                 <div class="flex items-center gap-2">
                     {% if let Some(previous_page_url) = transactions_previous_page_url %}
@@ -592,7 +592,6 @@
 {% endblock %}
 
 {% block scripts %}
-{% include "agents/components/tabs-script.html" %}
 <template>
     (function () {
         function initPromptEditor() {

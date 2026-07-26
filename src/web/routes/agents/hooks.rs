@@ -585,10 +585,11 @@ pub(in crate::web::routes) fn render_new_hook_form(
     let current_path = format!("/agents/{}/hooks/new", agent.agent_key);
     let model_picker =
         build_model_picker_view("hook-model-selection", &form.model_selection, picker);
+    let tabs = build_agent_show_tabs(&agent, AgentShowTab::Jobs);
     let template = AgentHookNewPageTemplate {
-        tabs: build_agent_show_tabs(&agent, AgentShowTab::Jobs),
-        agent_tabs_use_htmx: false,
         agent,
+        tabs,
+        agent_tabs_use_htmx: false,
         form,
         model_picker,
         errors,

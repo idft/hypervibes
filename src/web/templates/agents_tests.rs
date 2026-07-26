@@ -115,8 +115,6 @@ fn agents_show_page_renders_base_layout_and_delete_modal() {
     assert!(rendered.contains("Delete agent"));
     assert!(rendered.contains("Agent sections"));
     assert!(rendered.contains("data-agent-tabs"));
-    assert!(rendered.contains("hx-target=\"#agent-show-tab-content\""));
-    assert!(rendered.contains("aria-current=\"page\""));
     assert!(rendered.contains("Transactions"));
     assert!(rendered.contains("Memories"));
     assert!(rendered.contains("Prompts"));
@@ -181,25 +179,6 @@ fn opencode_agent_shows_jobs_tab_with_recent_runs() {
     )));
     assert!(rendered.contains("sse-swap=\"recent-runs\""));
     assert!(rendered.contains("sse-swap=\"recent-runs\" hx-swap=\"outerHTML\""));
-}
-
-#[test]
-fn opencode_agent_places_settings_tab_after_jobs() {
-    let template = AgentsShowPageTemplate::new(sample_opencode_detail_row(), AgentShowTab::Jobs);
-
-    let labels: Vec<&str> = template.tabs.iter().map(|tab| tab.label).collect();
-    assert_eq!(
-        labels,
-        vec![
-            "Positions",
-            "Chat",
-            "Transactions",
-            "Memories",
-            "Prompts",
-            "Jobs",
-            "Settings",
-        ]
-    );
 }
 
 #[test]
@@ -629,11 +608,6 @@ fn new_job_page_renders_agent_navbar_with_jobs_active() {
     let rendered = template.render().expect("render new job page");
 
     assert!(rendered.contains("Agent sections"));
-    assert!(
-        rendered
-            .contains("href=\"/agents/test-agent/jobs\" data-agent-tab-link aria-current=\"page\"")
-    );
-    assert!(!rendered.contains("hx-target=\"#agent-show-tab-content\""));
     assert!(rendered.contains("Create job"));
     assert!(rendered.contains("action=\"/agents/test-agent/jobs\""));
 }

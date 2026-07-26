@@ -1,7 +1,7 @@
 {% extends "layouts/base.html" %}
 {% block title %}Chat · {{ agent.display_name }} · Vibetrading{% endblock %}
 {% block content %}
-<div class="mx-auto flex h-[calc(100dvh-3.5rem)] min-h-0 max-w-[1500px] flex-col overflow-hidden">
+<div class="mx-auto flex h-full min-h-0 max-w-[1500px] flex-col overflow-hidden">
     {% include "agents/components/page-header.html" %}
     {% include "agents/components/tabs.html" %}
     <div id="agent-show-tab-content" class="flex min-h-0 flex-1" hx-ext="sse" sse-connect="/agents/{{ agent.agent_key }}/chat/{{ conversation_id }}/stream">

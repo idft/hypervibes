@@ -62,24 +62,22 @@ pub fn build_agent_show_tabs(
     active_tab: AgentShowTab,
 ) -> Vec<AgentShowTabLink> {
     let agent_key = agent.agent_key.as_str();
-    let mut tab_entries: Vec<(&'static str, AgentShowTab)> = vec![
+    [
         ("Positions", AgentShowTab::Positions),
         ("Chat", AgentShowTab::Chat),
         ("Transactions", AgentShowTab::Transactions),
         ("Memories", AgentShowTab::Memories),
         ("Prompts", AgentShowTab::Prompts),
-    ];
-    tab_entries.push(("Jobs", AgentShowTab::Jobs));
-    tab_entries.push(("Settings", AgentShowTab::Settings));
-
-    tab_entries
-        .into_iter()
-        .map(|(label, tab)| AgentShowTabLink {
-            label,
-            href: tab.path(agent_key),
-            active: tab == active_tab,
-        })
-        .collect()
+        ("Jobs", AgentShowTab::Jobs),
+        ("Settings", AgentShowTab::Settings),
+    ]
+    .into_iter()
+    .map(|(label, tab)| AgentShowTabLink {
+        label,
+        href: tab.path(agent_key),
+        active: tab == active_tab,
+    })
+    .collect()
 }
 
 /// Row entry shown on the agents index page. Combines the durable
@@ -357,7 +355,6 @@ impl AgentsShowPageTemplate {
     pub fn new(agent: AgentDetailRow, active_tab: AgentShowTab) -> Self {
         let agent_key = agent.agent_key.clone();
         let tabs = build_agent_show_tabs(&agent, active_tab);
-
         Self {
             api_key_masked: mask_api_key(&agent.api_key),
             prompt_editors: Vec::new(),

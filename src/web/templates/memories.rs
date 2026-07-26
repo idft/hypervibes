@@ -1,5 +1,7 @@
 use ammonia::Builder as HtmlSanitizer;
 use askama::Template;
+
+use super::agents::{AgentShowTab, AgentShowTabLink, build_agent_show_tabs};
 use pulldown_cmark::{Options as MarkdownOptions, Parser as MarkdownParser, html};
 
 use crate::{
@@ -8,7 +10,6 @@ use crate::{
     memory::{MemoryRecord, MemoryTimelineRecord},
 };
 
-use super::agents::{AgentShowTab, AgentShowTabLink, build_agent_show_tabs};
 use super::navbar::Navbar;
 use super::shared::{
     LocalTimestampView, MoneyCell, format_money_cell, format_money_text, format_timestamp_iso,

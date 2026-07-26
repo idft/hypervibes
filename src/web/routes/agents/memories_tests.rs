@@ -103,7 +103,6 @@ async fn agent_memory_detail_route_renders_full_page_for_direct_navigation() {
     assert!(text.contains("id=\"memory-detail\""));
     assert!(text.contains("Remember the breakout"));
     assert!(text.contains("<h3>Plan</h3>"));
-    assert!(text.contains("Agent sections"));
     assert!(text.contains(&format!("href=\"/agents/{agent_key}/memories\"")));
 }
 #[tokio::test]

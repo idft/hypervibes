@@ -15,7 +15,11 @@ body {
 }
 
 .app-shell {
-  scrollbar-gutter: stable;
+  scrollbar-width: none;
+}
+
+.app-shell::-webkit-scrollbar {
+  display: none;
 }
 
 /* The app shell owns horizontal sizing; individual legacy pages stay fluid. */

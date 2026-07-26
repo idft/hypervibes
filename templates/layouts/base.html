@@ -16,8 +16,8 @@
     <header class="fixed inset-x-0 top-0 z-40 h-14 border-b border-zinc-800 bg-[#17191c]">
         {% include "layouts/navbar.html" %}
     </header>
-    <div class="app-shell fixed inset-x-0 bottom-0 top-14 overflow-y-scroll">
-        <main class="app-content min-w-0 {% if current_path.starts_with("/agents/") && current_path != "/agents/new" %}p-2 has-agent-rail{% else %}px-4 py-6 sm:px-6 lg:px-8{% endif %}">
+    <div class="app-shell fixed inset-x-0 bottom-0 top-14 overflow-y-auto">
+        <main class="app-content min-w-0 {% if current_path.starts_with("/agents/") && current_path != "/agents/new" %}h-full p-2 has-agent-rail{% else %}px-4 py-6 sm:px-6 lg:px-8{% endif %}">
             {% block content %}{% endblock %}
         </main>
     </div>
