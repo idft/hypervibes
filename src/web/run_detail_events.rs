@@ -3,16 +3,19 @@ use std::time::Duration;
 
 use sqlx::postgres::PgListener;
 use tokio::sync::{broadcast, watch};
+use uuid::Uuid;
 
 use crate::db::DbPool;
 
 pub const SESSION_CHANGED_CHANNEL: &str = "agent_run_detail_session_changed";
 pub const RUN_CHANGED_CHANNEL: &str = "agent_run_detail_run_changed";
+pub const AGENT_CONVERSATION_CHANGED_CHANNEL: &str = "agent_conversation_changed";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RunDetailDbEvent {
     SessionChanged { session_id: String },
     RunChanged { run_id: i64 },
+    ConversationChanged { conversation_id: Uuid },
     Resync,
 }
 
@@ -54,6 +57,9 @@ pub fn event_from_notification(channel: &str, payload: &str) -> Result<RunDetail
             .parse::<i64>()
             .map(|run_id| RunDetailDbEvent::RunChanged { run_id })
             .map_err(|_| format!("invalid agentic run id payload: {payload:?}")),
+        AGENT_CONVERSATION_CHANGED_CHANNEL => Uuid::parse_str(payload.trim())
+            .map(|conversation_id| RunDetailDbEvent::ConversationChanged { conversation_id })
+            .map_err(|_| format!("invalid agent conversation id payload: {payload:?}")),
         SESSION_CHANGED_CHANNEL => Err("empty OpenCode session id payload".to_string()),
         _ => Err(format!("unexpected notification channel: {channel}")),
     }
@@ -104,6 +110,15 @@ pub async fn run_listener(
             continue;
         }
         if let Err(error) = listener.listen(RUN_CHANGED_CHANNEL).await {
+            tracing::error!(error = ?error, "run-detail Postgres listener subscription failed");
+            if wait_before_retry(&mut shutdown_rx, retry_delay).await {
+                return;
+            }
+            retry_delay = (retry_delay * 2).min(Duration::from_secs(5));
+            reconnecting = true;
+            continue;
+        }
+        if let Err(error) = listener.listen(AGENT_CONVERSATION_CHANGED_CHANNEL).await {
             tracing::error!(error = ?error, "run-detail Postgres listener subscription failed");
             if wait_before_retry(&mut shutdown_rx, retry_delay).await {
                 return;

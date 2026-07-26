@@ -35,6 +35,9 @@ mod transactions_tests;
 #[cfg(test)]
 use self::shared::*;
 pub(in crate::web::routes) use self::{
-    hooks::*, index::*, jobs::*, live_stream::*, memories::*, prompts::*, runs::*, settings::*,
-    show::*, transactions::*,
+    chat::*, hooks::*, index::*, jobs::*, live_stream::*, memories::*, prompts::*, runs::*,
+    settings::*, show::*, transactions::*,
 };
+mod chat;
+#[cfg(test)]
+mod chat_tests;

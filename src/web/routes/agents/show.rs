@@ -131,6 +131,7 @@ pub(in crate::web::routes) async fn render_agent_show_page(
         };
 
     match active_tab {
+        AgentShowTab::Chat => unreachable!("Chat has its own page route"),
         AgentShowTab::Positions => {
             populate_positions_tab(state, &agent, &mut template).await?;
         }

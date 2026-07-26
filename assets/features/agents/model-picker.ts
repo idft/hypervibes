@@ -39,10 +39,17 @@ export function initModelPickers(root: ParentNode = document) {
 
 export function installModelPickerLifecycle() {
   document.addEventListener("keydown", (event) => { if (event.key === "Escape") document.querySelectorAll<HTMLElement>("[data-model-picker-modal]:not(.hidden)").forEach((modal) => modal.classList.add("hidden")); });
+  document.addEventListener("htmx:load", (event) => {
+    const target = (event as CustomEvent<{ elt?: unknown }>).detail.elt;
+    if (target instanceof Element) initModelPickers(target);
+  });
   document.addEventListener("htmx:afterSwap", (event) => {
     const target = (event as CustomEvent<{ target?: unknown }>).detail.target;
     if (!(target instanceof Element)) return;
     initModelPickers(target);
+    // Outer swaps can fire before the newly selected subtree is connected.
+    // Retry on the next frame; the bound marker keeps this idempotent.
+    window.requestAnimationFrame(() => initModelPickers(target));
     const picker = target.querySelector<HTMLElement>("[data-model-picker-lazy-result] [data-model-picker]");
     picker?.querySelector<HTMLElement>("[data-model-picker-open]")?.click();
   });

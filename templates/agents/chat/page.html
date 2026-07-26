@@ -1,0 +1,19 @@
+{% extends "layouts/base.html" %}
+{% block title %}Chat · {{ agent.display_name }} · Vibetrading{% endblock %}
+{% block content %}
+<div class="mx-auto flex h-[calc(100dvh-3.5rem)] min-h-0 max-w-[1500px] flex-col overflow-hidden">
+    {% include "agents/components/page-header.html" %}
+    {% include "agents/components/tabs.html" %}
+    <div id="agent-show-tab-content" class="flex min-h-0 flex-1" hx-ext="sse" sse-connect="/agents/{{ agent.agent_key }}/chat/{{ conversation_id }}/stream">
+        <section class="flex min-h-0 flex-1 overflow-hidden rounded-2xl border border-zinc-800 bg-[#0d0d10]">
+            <aside id="conversation-sidebar" sse-swap="conversation-sidebar" class="hidden w-64 shrink-0 border-r border-zinc-800 md:block">{{ sidebar_html|safe }}</aside>
+            <main class="flex min-w-0 flex-1 flex-col">
+                <div id="conversation-summary" sse-swap="conversation-summary" class="shrink-0">{{ summary_html|safe }}</div>
+                <div data-conversation-transcript-scroll class="dark-scrollbar min-h-0 flex-1 overflow-y-auto px-4 py-5 sm:px-6"><div id="conversation-transcript" sse-swap="conversation-transcript">{{ transcript_html|safe }}</div></div>
+                <div id="conversation-permissions" sse-swap="conversation-permissions" class="shrink-0">{{ permissions_html|safe }}</div>
+                <div id="conversation-composer" sse-swap="conversation-composer" class="shrink-0">{{ composer_html|safe }}</div>
+            </main>
+        </section>
+    </div>
+</div>
+{% endblock %}

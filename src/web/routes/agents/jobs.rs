@@ -159,6 +159,7 @@ async fn next_agent_recent_runs_event(
             }
             RunDetailDbEvent::SessionChanged { .. } => false,
             RunDetailDbEvent::Resync => true,
+            RunDetailDbEvent::ConversationChanged { .. } => false,
         };
         if !matches {
             continue;

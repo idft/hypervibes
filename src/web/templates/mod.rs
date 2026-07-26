@@ -1,6 +1,7 @@
 mod account;
 mod agents;
 mod balance;
+mod conversations;
 mod hooks;
 mod jobs;
 mod memories;
@@ -19,6 +20,7 @@ use self::shared::*;
 pub use account::*;
 pub use agents::*;
 pub use balance::*;
+pub use conversations::*;
 pub use hooks::*;
 pub use jobs::*;
 pub use memories::*;

@@ -192,6 +192,7 @@ fn opencode_agent_places_settings_tab_after_jobs() {
         labels,
         vec![
             "Positions",
+            "Chat",
             "Transactions",
             "Memories",
             "Prompts",

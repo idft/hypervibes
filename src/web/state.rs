@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use crate::{
+    agent_conversations::service::ConversationTurnTracker,
     agentic::{
         backend::AgenticBackend, in_flight::InFlightTracker, workspace_lease::WorkspaceLeaseManager,
     },
@@ -39,6 +40,7 @@ pub struct AppState {
     pub builder_fee_cache: Arc<BuilderFeeCache>,
     pub in_flight: InFlightTracker,
     pub workspace_leases: WorkspaceLeaseManager,
+    pub conversation_turns: ConversationTurnTracker,
     pub shutdown_rx: tokio::sync::watch::Receiver<bool>,
     pub provider_connections: ProviderConnectionsState,
 }

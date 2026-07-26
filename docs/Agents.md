@@ -55,6 +55,12 @@ server configured by `OPENCODE_BASE_URL`, which defaults to
 `agents.runtime_config` stores per-agent workspace metadata. It does not store
 or select an OpenCode server.
 
+Persistent agent conversations are also agent-owned state. Each maps one web
+conversation today, or a future external messaging channel conversation, to a
+dedicated OpenCode session under the same agent ownership boundary. Deleting an
+agent first removes its idle mapped OpenCode conversations, then cascades the
+conversation records and policies with the agent row.
+
 ## Workspace Generation
 
 Creating an OpenCode agent also generates a per-agent workspace.

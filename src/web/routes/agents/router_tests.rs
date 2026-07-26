@@ -6,7 +6,7 @@ use axum::http::{Request, StatusCode};
 use tower::util::ServiceExt;
 
 #[tokio::test]
-async fn agent_chat_route_is_not_registered() {
+async fn agent_chat_route_renders_empty_state() {
     let state = test_state().await;
     let (agent_key, _wallet_address) = insert_test_agent(&state).await.expect("insert agent");
 
@@ -20,12 +20,37 @@ async fn agent_chat_route_is_not_registered() {
         .await
         .unwrap();
 
-    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    assert_eq!(response.status(), StatusCode::OK);
     assert_eq!(
         response.headers()["content-type"],
         "text/html; charset=utf-8"
     );
-    assert!(response_text(response).await.contains("404 Page Not Found"));
+    let body = response_text(response).await;
+    assert!(body.contains("Start a conversation"));
+    assert!(body.contains("id=\"agent-show-tab-content\""));
+}
+
+#[tokio::test]
+async fn new_chat_route_renders_model_selection_even_with_existing_conversations() {
+    let state = test_state().await;
+    let (agent_key, _wallet_address) = insert_test_agent(&state).await.expect("insert agent");
+
+    let response = router(state)
+        .oneshot(
+            Request::builder()
+                .uri(format!("/agents/{agent_key}/chat/new"))
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+
+    assert_eq!(response.status(), StatusCode::OK);
+    assert!(
+        response_text(response)
+            .await
+            .contains("Start a conversation")
+    );
 }
 #[tokio::test]
 async fn unknown_agent_subroute_returns_404() {

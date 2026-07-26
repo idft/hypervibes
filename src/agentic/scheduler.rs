@@ -46,8 +46,6 @@ use crate::{
 const SCHEDULER_POLL_INTERVAL: Duration = Duration::from_secs(10);
 const ORPHAN_RECOVERY_INTERVAL: Duration = Duration::from_secs(60);
 const DUE_SCHEDULE_LIMIT: i64 = 20;
-const WORKSPACE_MAINTENANCE_SESSION_PROBE_LIMIT: i64 = 20;
-const ACTIVE_OPENCODE_SESSION_STATUSES: [&str; 2] = ["busy", "retry"];
 
 /// Periodic background loop that claims due OpenCode schedules and
 /// dispatches them through an [`AgenticBackend`].
@@ -587,25 +585,19 @@ async fn process_workspace_maintenance_tasks(
         return Ok(());
     };
 
-    let sessions = crate::opencode::store::list_sessions_for_directory(
+    let active_sessions = crate::opencode::store::count_active_opencode_sessions_for_directory(
         pool,
         &workspace_runtime.workspace_container_path,
-        WORKSPACE_MAINTENANCE_SESSION_PROBE_LIMIT,
     )
     .await?;
-
-    for session in sessions {
-        if ACTIVE_OPENCODE_SESSION_STATUSES.contains(&session.status.as_deref().unwrap_or_default())
-        {
-            debug!(
-                task_id = task.id,
-                agent_key = %task.agent_key,
-                session_id = %session.id,
-                status = ?session.status,
-                "workspace maintenance remains queued while an OpenCode session is active"
-            );
-            return Ok(());
-        }
+    if active_sessions > 0 {
+        debug!(
+            task_id = task.id,
+            agent_key = %task.agent_key,
+            active_sessions,
+            "workspace maintenance remains queued while an OpenCode session is active"
+        );
+        return Ok(());
     }
 
     if !store::mark_maintenance_task_running(pool, task.id).await? {

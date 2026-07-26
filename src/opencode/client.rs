@@ -149,6 +149,245 @@ impl OpenCodeClient {
         Ok(session)
     }
 
+    /// Create the dedicated operator-conversation session. OpenCode stores
+    /// permissions on the session, so MCP confirmation happens in OpenCode.
+    pub async fn create_conversation_session(
+        &self,
+        base_url: &str,
+        workspace_container_path: &str,
+        provider_id: &str,
+        model_id: &str,
+        permissions: Vec<OpenCodePermissionRule>,
+    ) -> Result<OpenCodeSession> {
+        let url = build_url(
+            base_url,
+            "session",
+            &[("directory", workspace_container_path)],
+        );
+        let request = OpenCodeConversationSessionRequest {
+            title: "New conversation",
+            agent: "agent-conversations",
+            model: OpenCodeSessionModelRef::new(provider_id, model_id),
+            permission: permissions,
+        };
+        let response = self
+            .http
+            .post(url)
+            .timeout(self.config.create_session_timeout)
+            .apply_basic_auth(&self.config)
+            .json(&request)
+            .send()
+            .await
+            .map_err(|error| anyhow!("OpenCode conversation session request failed: {error}"))?;
+        let response = parse_opencode_response(response).await?;
+        response
+            .json()
+            .await
+            .context("failed to decode OpenCode conversation session response")
+    }
+
+    pub async fn send_conversation_prompt_async(
+        &self,
+        base_url: &str,
+        workspace_container_path: &str,
+        session_id: &str,
+        prompt: &OpenCodeConversationPrompt,
+    ) -> Result<()> {
+        let url = build_url(
+            base_url,
+            &format!("session/{}/prompt_async", percent_encode(session_id)),
+            &[("directory", workspace_container_path)],
+        );
+        let request = OpenCodeConversationPromptRequest {
+            message_id: &prompt.message_id,
+            agent: "agent-conversations",
+            model: OpenCodeModelRef::new(&prompt.provider_id, &prompt.model_id),
+            parts: vec![OpenCodeTextPart {
+                part_type: "text",
+                text: &prompt.text,
+            }],
+        };
+        let response = self
+            .http
+            .post(url)
+            .timeout(self.config.status_timeout)
+            .apply_basic_auth(&self.config)
+            .json(&request)
+            .send()
+            .await
+            .map_err(|error| anyhow!("OpenCode conversation prompt request failed: {error}"))?;
+        let _ = parse_opencode_response(response).await?;
+        Ok(())
+    }
+
+    pub async fn update_session_permissions(
+        &self,
+        base_url: &str,
+        workspace_container_path: &str,
+        session_id: &str,
+        permissions: Vec<OpenCodePermissionRule>,
+    ) -> Result<()> {
+        let url = build_url(
+            base_url,
+            &format!("session/{}", percent_encode(session_id)),
+            &[("directory", workspace_container_path)],
+        );
+        let response = self
+            .http
+            .patch(url)
+            .timeout(self.config.status_timeout)
+            .apply_basic_auth(&self.config)
+            .json(&OpenCodeSessionPermissionsRequest {
+                permission: permissions,
+            })
+            .send()
+            .await
+            .map_err(|error| anyhow!("OpenCode session permissions request failed: {error}"))?;
+        let _ = parse_opencode_response(response).await?;
+        Ok(())
+    }
+
+    pub async fn update_session_title(
+        &self,
+        base_url: &str,
+        workspace_container_path: &str,
+        session_id: &str,
+        title: &str,
+    ) -> Result<()> {
+        let url = build_url(
+            base_url,
+            &format!("session/{}", percent_encode(session_id)),
+            &[("directory", workspace_container_path)],
+        );
+        let response = self
+            .http
+            .patch(url)
+            .timeout(self.config.status_timeout)
+            .apply_basic_auth(&self.config)
+            .json(&serde_json::json!({ "title": title }))
+            .send()
+            .await
+            .map_err(|error| anyhow!("OpenCode session title request failed: {error}"))?;
+        let _ = parse_opencode_response(response).await?;
+        Ok(())
+    }
+
+    pub async fn list_pending_permissions(
+        &self,
+        base_url: &str,
+        workspace_container_path: &str,
+    ) -> Result<Vec<OpenCodePermissionRequest>> {
+        let url = build_url(
+            base_url,
+            "permission",
+            &[("directory", workspace_container_path)],
+        );
+        let response = self
+            .http
+            .get(url)
+            .timeout(self.config.status_timeout)
+            .apply_basic_auth(&self.config)
+            .send()
+            .await
+            .map_err(|error| anyhow!("OpenCode permission list request failed: {error}"))?;
+        let response = parse_opencode_response(response).await?;
+        response
+            .json()
+            .await
+            .context("failed to decode OpenCode pending permissions")
+    }
+
+    pub async fn reply_to_permission(
+        &self,
+        base_url: &str,
+        workspace_container_path: &str,
+        session_id: &str,
+        request_id: &str,
+        reply: OpenCodePermissionReply,
+    ) -> Result<bool> {
+        let pending = self
+            .list_pending_permissions(base_url, workspace_container_path)
+            .await?;
+        if !pending
+            .iter()
+            .any(|request| request.id == request_id && request.session_id == session_id)
+        {
+            return Ok(false);
+        }
+        let url = build_url(
+            base_url,
+            &format!("permission/{}/reply", percent_encode(request_id)),
+            &[("directory", workspace_container_path)],
+        );
+        let response = self
+            .http
+            .post(url)
+            .timeout(self.config.status_timeout)
+            .apply_basic_auth(&self.config)
+            .json(&serde_json::json!({ "reply": reply.as_str() }))
+            .send()
+            .await
+            .map_err(|error| anyhow!("OpenCode permission reply request failed: {error}"))?;
+        let _ = parse_opencode_response(response).await?;
+        Ok(true)
+    }
+
+    pub async fn compact_session(
+        &self,
+        base_url: &str,
+        workspace_container_path: &str,
+        session_id: &str,
+        provider_id: &str,
+        model_id: &str,
+    ) -> Result<()> {
+        let url = build_url(
+            base_url,
+            &format!("session/{}/summarize", percent_encode(session_id)),
+            &[("directory", workspace_container_path)],
+        );
+        let response = self
+            .http
+            .post(url)
+            .timeout(self.config.status_timeout)
+            .apply_basic_auth(&self.config)
+            .json(&OpenCodeSummarizeRequest {
+                provider_id,
+                model_id,
+                auto: false,
+            })
+            .send()
+            .await
+            .map_err(|error| anyhow!("OpenCode session compact request failed: {error}"))?;
+        let _ = parse_opencode_response(response).await?;
+        Ok(())
+    }
+
+    pub async fn delete_session(
+        &self,
+        base_url: &str,
+        workspace_container_path: &str,
+        session_id: &str,
+    ) -> Result<DeleteSessionResult> {
+        let url = build_url(
+            base_url,
+            &format!("session/{}", percent_encode(session_id)),
+            &[("directory", workspace_container_path)],
+        );
+        let response = self
+            .http
+            .delete(url)
+            .timeout(self.config.status_timeout)
+            .apply_basic_auth(&self.config)
+            .send()
+            .await
+            .map_err(|error| anyhow!("OpenCode session delete request failed: {error}"))?;
+        if response.status() == StatusCode::NOT_FOUND {
+            return Ok(DeleteSessionResult::NotFound);
+        }
+        let _ = parse_opencode_response(response).await?;
+        Ok(DeleteSessionResult::Deleted)
+    }
+
     /// Run a slash command against an existing session.
     ///
     /// For the current OpenCode integration, this HTTP request blocks until the
@@ -179,7 +418,24 @@ impl OpenCodeClient {
     /// additionally surface `false` for HTTP 4xx/5xx responses (which
     /// are reported via [`parse_opencode_response`] errors).
     pub async fn abort_session(&self, base_url: &str, session_id: &str) -> Result<bool> {
-        let url = build_url(base_url, &format!("session/{}/abort", session_id), &[]);
+        self.abort_session_in_directory(base_url, session_id, None)
+            .await
+    }
+
+    pub async fn abort_session_in_directory(
+        &self,
+        base_url: &str,
+        session_id: &str,
+        workspace_container_path: Option<&str>,
+    ) -> Result<bool> {
+        let query = workspace_container_path
+            .map(|directory| vec![("directory", directory)])
+            .unwrap_or_default();
+        let url = build_url(
+            base_url,
+            &format!("session/{}/abort", percent_encode(session_id)),
+            &query,
+        );
         let response = self
             .http
             .post(url)
@@ -462,6 +718,123 @@ pub struct OpenCodeCommandRequest {
     pub agent: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct OpenCodePermissionRule {
+    pub permission: String,
+    pub pattern: String,
+    pub action: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct OpenCodeConversationPrompt {
+    pub message_id: String,
+    pub provider_id: String,
+    pub model_id: String,
+    pub text: String,
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+pub struct OpenCodePermissionRequest {
+    pub id: String,
+    #[serde(rename = "sessionID")]
+    pub session_id: String,
+    pub permission: String,
+    #[serde(default)]
+    pub patterns: Vec<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OpenCodePermissionReply {
+    Once,
+    Reject,
+}
+
+impl OpenCodePermissionReply {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Once => "once",
+            Self::Reject => "reject",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DeleteSessionResult {
+    Deleted,
+    NotFound,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct OpenCodeModelRef<'a> {
+    #[serde(rename = "providerID")]
+    provider_id: &'a str,
+    #[serde(rename = "modelID")]
+    model_id: &'a str,
+}
+
+impl<'a> OpenCodeModelRef<'a> {
+    fn new(provider_id: &'a str, model_id: &'a str) -> Self {
+        Self {
+            provider_id,
+            model_id,
+        }
+    }
+}
+
+#[derive(Serialize)]
+struct OpenCodeConversationSessionRequest<'a> {
+    title: &'a str,
+    agent: &'a str,
+    model: OpenCodeSessionModelRef<'a>,
+    permission: Vec<OpenCodePermissionRule>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct OpenCodeSessionModelRef<'a> {
+    #[serde(rename = "providerID")]
+    provider_id: &'a str,
+    id: &'a str,
+}
+
+impl<'a> OpenCodeSessionModelRef<'a> {
+    fn new(provider_id: &'a str, model_id: &'a str) -> Self {
+        Self {
+            provider_id,
+            id: model_id,
+        }
+    }
+}
+
+#[derive(Serialize)]
+struct OpenCodeConversationPromptRequest<'a> {
+    #[serde(rename = "messageID")]
+    message_id: &'a str,
+    agent: &'a str,
+    model: OpenCodeModelRef<'a>,
+    parts: Vec<OpenCodeTextPart<'a>>,
+}
+
+#[derive(Serialize)]
+struct OpenCodeTextPart<'a> {
+    #[serde(rename = "type")]
+    part_type: &'a str,
+    text: &'a str,
+}
+
+#[derive(Serialize)]
+struct OpenCodeSessionPermissionsRequest {
+    permission: Vec<OpenCodePermissionRule>,
+}
+
+#[derive(Serialize)]
+struct OpenCodeSummarizeRequest<'a> {
+    #[serde(rename = "providerID")]
+    provider_id: &'a str,
+    #[serde(rename = "modelID")]
+    model_id: &'a str,
+    auto: bool,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -908,6 +1281,22 @@ mod tests {
         assert_eq!(json["model"], "anthropic/claude-sonnet-4");
         assert!(json.get("provider_id").is_none());
         assert!(json.get("model_id").is_none());
+    }
+
+    #[test]
+    fn conversation_session_uses_the_runtime_model_creation_shape() {
+        let request = OpenCodeConversationSessionRequest {
+            title: "New conversation",
+            agent: "agent-conversations",
+            model: OpenCodeSessionModelRef::new("anthropic", "claude-sonnet-4"),
+            permission: Vec::new(),
+        };
+
+        let json = serde_json::to_value(request).expect("serialize conversation session request");
+
+        assert_eq!(json["model"]["providerID"], "anthropic");
+        assert_eq!(json["model"]["id"], "claude-sonnet-4");
+        assert!(json["model"].get("modelID").is_none());
     }
 
     #[test]

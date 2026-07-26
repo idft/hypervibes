@@ -16,7 +16,6 @@ pub struct OpenCodeSessionDetail {
 
 #[derive(Debug, Clone, sqlx::FromRow)]
 pub struct OpenCodeSessionRow {
-    pub id: String,
     pub status: Option<String>,
     pub model_provider: String,
     pub model_id: String,
@@ -252,40 +251,6 @@ fn parse_json_string(value: Value) -> Value {
     serde_json::from_str(text).unwrap_or(value)
 }
 
-pub async fn list_sessions_for_directory(
-    pool: &DbPool,
-    directory: &str,
-    limit: i64,
-) -> Result<Vec<OpenCodeSessionRow>> {
-    let rows = query_as::<_, OpenCodeSessionRow>(
-        "SELECT id,
-                status,
-                COALESCE(model_provider, '') AS model_provider,
-                COALESCE(model_id, '') AS model_id,
-                share_url,
-                COALESCE(input_tokens, 0) AS input_tokens,
-                COALESCE(output_tokens, 0) AS output_tokens,
-                COALESCE(cache_read_tokens, 0) AS cache_read_tokens,
-                COALESCE(cache_write_tokens, 0) AS cache_write_tokens,
-                COALESCE(reasoning_tokens, 0) AS reasoning_tokens,
-                COALESCE(context_tokens, 0) AS context_tokens,
-                COALESCE(peak_context_tokens, 0) AS peak_context_tokens,
-                COALESCE(estimated_cost, 0)::numeric(10, 6) AS estimated_cost,
-                COALESCE(compaction_count, 0) AS compaction_count
-           FROM opencode.sessions
-          WHERE directory = $1
-          ORDER BY updated_at DESC, id DESC
-          LIMIT $2",
-    )
-    .bind(directory)
-    .bind(limit)
-    .fetch_all(pool)
-    .await
-    .with_context(|| format!("failed to list OpenCode sessions for directory {directory}"))?;
-
-    Ok(rows)
-}
-
 /// Count OpenCode sessions in an active (`busy`/`retry`) status across
 /// all directories. Used by the provider-config-reload maintenance job
 /// to wait until it is safe to dispose OpenCode instances without
@@ -296,6 +261,29 @@ pub async fn count_active_opencode_sessions(pool: &DbPool) -> Result<i64> {
         .fetch_one(pool)
         .await
         .context("failed to count active OpenCode sessions")?;
+    Ok(row.0)
+}
+
+/// Count every active session in one workspace. Unlike the sidebar-oriented
+/// session listing, this query has no limit so maintenance cannot miss an
+/// older active conversation.
+pub async fn count_active_opencode_sessions_for_directory(
+    pool: &DbPool,
+    directory: &str,
+) -> Result<i64> {
+    let row: (i64,) = query_as(
+        "SELECT count(*)
+           FROM opencode.sessions
+          WHERE directory = $1
+            AND status = ANY($2)",
+    )
+    .bind(directory)
+    .bind(["busy", "retry"])
+    .fetch_one(pool)
+    .await
+    .with_context(|| {
+        format!("failed to count active OpenCode sessions for directory {directory}")
+    })?;
     Ok(row.0)
 }
 

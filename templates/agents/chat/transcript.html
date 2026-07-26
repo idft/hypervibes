@@ -1,0 +1,29 @@
+{% if let Some(session) = session %}
+{% if !session.session_errors.is_empty() %}
+{% for error in session.session_errors %}
+<article class="mb-3 rounded-xl border border-red-900/60 bg-red-950/30 p-3 text-sm text-red-100">{{ error.error_type }} {{ error.error_message }}</article>
+{% endfor %}
+{% endif %}
+{% if session.transcript.is_empty() %}
+<p class="rounded-2xl border border-zinc-800 bg-zinc-950/50 p-5 text-center text-sm text-zinc-500">No mirrored messages or tool activity yet.</p>
+{% else %}
+<div class="space-y-3">
+{% for item in session.transcript %}
+{% match item %}
+{% when TranscriptItem::Message(message) %}
+<article class="max-w-[85%] rounded-2xl border border-zinc-800 p-3 {% if message.role_label == "user" %}ml-auto border-emerald-900/60 bg-emerald-950/30{% else %}bg-zinc-950/60{% endif %}">
+    <div class="flex gap-2 text-xs text-zinc-500"><span>{{ message.role_label }}</span>{% if message.role_label != "user" %}<span>{{ message.model_text }}</span>{% endif %}</div>
+    {% if !message.text.is_empty() %}<pre class="mt-2 whitespace-pre-wrap break-words text-sm text-zinc-200">{{ message.text }}</pre>{% endif %}
+    {% if !message.summary.is_empty() %}<p class="mt-2 text-sm text-zinc-300">{{ message.summary }}</p>{% endif %}
+    {% if !message.system_prompt.is_empty() %}<details class="mt-2"><summary class="cursor-pointer text-xs text-zinc-400">System prompt</summary><pre class="mt-2 whitespace-pre-wrap break-words text-xs text-zinc-300">{{ message.system_prompt }}</pre></details>{% endif %}
+</article>
+{% when TranscriptItem::Tool(tool) %}
+<article class="rounded-2xl border border-zinc-800 bg-zinc-950/60 p-3"><p class="font-mono text-sm text-zinc-200">{{ tool.tool_name }} <span class="text-xs {{ tool.success_class }}">{{ tool.success_label }}</span></p>{% if !tool.args_json.is_empty() %}<details class="mt-2"><summary class="cursor-pointer text-xs text-zinc-400">Arguments</summary><pre class="mt-2 whitespace-pre-wrap break-words text-xs text-zinc-300">{{ tool.args_json }}</pre></details>{% endif %}{% if !tool.result_json.is_empty() %}<details class="mt-2"><summary class="cursor-pointer text-xs text-zinc-400">Result</summary><pre class="mt-2 whitespace-pre-wrap break-words text-xs text-zinc-300">{{ tool.result_json }}</pre></details>{% endif %}</article>
+{% endmatch %}
+{% endfor %}
+</div>
+{% endif %}
+{% else %}
+<p class="rounded-2xl border border-amber-900/60 bg-amber-950/20 p-5 text-center text-sm text-amber-100/80">Waiting for the OpenCode session mirror.</p>
+{% endif %}
+{% if busy %}<div class="flex justify-center p-4"><span class="animate-pulse text-sm text-sky-300">Processing turn...</span></div>{% endif %}

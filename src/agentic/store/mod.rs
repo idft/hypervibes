@@ -31,7 +31,6 @@ pub use schedules::{
     list_agent_schedules, list_due_opencode_schedules, list_schedule_runs, set_schedule_enabled,
     set_schedule_model, set_schedule_timeframe, set_schedule_timeout,
 };
-#[cfg(test)]
 pub use workspace::agent_has_blocking_workspace_maintenance;
 #[cfg(test)]
 pub use workspace::get_latest_workspace_regenerate_task;

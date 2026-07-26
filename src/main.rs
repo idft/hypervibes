@@ -1,3 +1,4 @@
+pub mod agent_conversations;
 mod agentic;
 mod agents;
 mod cache;

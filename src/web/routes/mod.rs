@@ -73,6 +73,44 @@ pub fn router(state: Arc<AppState>) -> Router {
             post(agents_update_prompt),
         )
         .route("/agents/{agent_key}/settings", get(agents_show_settings))
+        .route("/agents/{agent_key}/chat", get(agents_show_chat))
+        .route("/agents/{agent_key}/chat/new", get(agents_new_chat))
+        .route(
+            "/agents/{agent_key}/chat/conversations",
+            post(agents_create_conversation),
+        )
+        .route(
+            "/agents/{agent_key}/chat/{conversation_id}",
+            get(agents_show_chat_detail),
+        )
+        .route(
+            "/agents/{agent_key}/chat/{conversation_id}/stream",
+            get(agent_conversation_stream),
+        )
+        .route(
+            "/agents/{agent_key}/chat/{conversation_id}/messages",
+            post(agents_send_conversation_message),
+        )
+        .route(
+            "/agents/{agent_key}/chat/{conversation_id}/stop",
+            post(agents_stop_conversation),
+        )
+        .route(
+            "/agents/{agent_key}/chat/{conversation_id}/compact",
+            post(agents_compact_conversation),
+        )
+        .route(
+            "/agents/{agent_key}/chat/{conversation_id}/delete",
+            post(agents_delete_conversation),
+        )
+        .route(
+            "/agents/{agent_key}/chat/{conversation_id}/settings",
+            post(agents_update_conversation_settings),
+        )
+        .route(
+            "/agents/{agent_key}/chat/{conversation_id}/permissions/{request_id}/reply",
+            post(agents_reply_to_conversation_permission),
+        )
         .route(
             "/agents/{agent_key}/settings/instruments",
             post(agents_update_instruments),

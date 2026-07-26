@@ -26,7 +26,9 @@ use crate::{
     },
     hyperliquid::live_state::{AccountKey, AccountLiveState, LiveConnectionStatus},
     opencode::{
-        workspace::OpenCodeWorkspaceRuntimeConfig, workspace_control_client::WorkspaceAgentInput,
+        client::{DeleteSessionResult, SessionStatusKind},
+        workspace::OpenCodeWorkspaceRuntimeConfig,
+        workspace_control_client::WorkspaceAgentInput,
     },
     web::{
         AppState,
@@ -153,6 +155,46 @@ pub(in crate::web::routes) async fn delete_agent(
     let Some(trading_account_address) = agent.trading_account_address.as_deref() else {
         return Ok((StatusCode::CONFLICT, "agent has no trading account").into_response());
     };
+    let workspace =
+        OpenCodeWorkspaceRuntimeConfig::from_value(&agent.runtime_config).ok_or_else(|| {
+            AppError(anyhow::anyhow!(
+                "agent is missing OpenCode workspace metadata"
+            ))
+        })?;
+    let conversation_sessions =
+        crate::agent_conversations::store::list_agent_conversation_opencode_session_ids(
+            &state.db_pool,
+            &agent_key,
+        )
+        .await?;
+    for session_id in conversation_sessions {
+        let status = state
+            .opencode_client
+            .get_session_status_in_directory(
+                &state.opencode_base_url,
+                &session_id,
+                Some(&workspace.workspace_container_path),
+            )
+            .await?;
+        if status.as_ref().is_some_and(SessionStatusKind::is_active) {
+            return Ok((
+                StatusCode::CONFLICT,
+                "stop active conversations before deleting this agent",
+            )
+                .into_response());
+        }
+        match state
+            .opencode_client
+            .delete_session(
+                &state.opencode_base_url,
+                &workspace.workspace_container_path,
+                &session_id,
+            )
+            .await?
+        {
+            DeleteSessionResult::Deleted | DeleteSessionResult::NotFound => {}
+        }
+    }
     let account_key = AccountKey::new(trading_account_address, &agent.environment);
     let deleted = delete_agent_in_store(&state.db_pool, &agent_key).await?;
     if !deleted {

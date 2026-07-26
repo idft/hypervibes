@@ -169,6 +169,7 @@ async fn next_run_detail_event(
             RunDetailDbEvent::SessionChanged { session_id } => {
                 session_id == &stream_state.backend_run_ref
             }
+            RunDetailDbEvent::ConversationChanged { .. } => false,
             RunDetailDbEvent::Resync => true,
         };
         if !matches {

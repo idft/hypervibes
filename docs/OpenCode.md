@@ -117,6 +117,26 @@ The generated workspace template now includes dedicated OpenCode agent/command f
 
 The workspace `.env` is backend-owned generated state and should not be read or modified by agents.
 
+## Agent Conversations
+
+The Chat tab creates persistent `agent_conversations` mappings to dedicated
+OpenCode sessions. They are independent of scheduled jobs and use the selected
+provider/model only for later turns; OpenCode keeps per-message model
+attribution. The UI mirrors transcript, tool, error, token/context, cost, and
+compaction telemetry through server-sent events. Compact and deletion are
+OpenCode-owned session operations and are available only when the session is
+idle.
+
+The `agent-conversations` profile is defined in the container-global
+`agent-runtime/container/opencode.jsonc` and duplicated in the workspace
+template. It uses Vibetrading MCP tools for data, denies native
+shell/filesystem access, and never reads `.env`. Once the OpenCode image is
+rolled out, existing workspaces can use the profile without regeneration.
+
+Order and memory-write permissions are saved per conversation as Deny, Confirm,
+or Allow. Confirm maps to an OpenCode permission request, so the MCP call waits
+for the operator's one-time approval rather than relying on an app-only toggle.
+
 Re-generating a workspace is now queued as per-agent maintenance work instead of running inline in the settings POST handler.
 
 Regular re-generation still refreshes generated files while preserving user-managed files under paths like `scripts/user/`, `data/`, and `scratch/`.

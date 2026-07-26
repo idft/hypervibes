@@ -3,13 +3,13 @@ import { animateNumberRolls, tickRunningDurations } from "../../shared/presentat
 const JOBS_REFRESH_KEY = "agent-jobs-refresh-required";
 
 export function scrollRunTranscriptToBottom() {
-  document.querySelectorAll<HTMLElement>("[data-run-transcript-scroll]").forEach((scroll) => { scroll.scrollTop = scroll.scrollHeight; });
+  document.querySelectorAll<HTMLElement>("[data-run-transcript-scroll], [data-conversation-transcript-scroll]").forEach((scroll) => { scroll.scrollTop = scroll.scrollHeight; });
 }
 
 export function initRunTranscripts(root: ParentNode = document) {
   if (typeof ResizeObserver === "undefined") return;
-  root.querySelectorAll<HTMLElement>("[data-run-transcript-scroll]").forEach((scroll) => {
-    const transcript = scroll.querySelector<HTMLElement>('[sse-swap="run-transcript"]');
+  root.querySelectorAll<HTMLElement>("[data-run-transcript-scroll], [data-conversation-transcript-scroll]").forEach((scroll) => {
+    const transcript = scroll.querySelector<HTMLElement>('[sse-swap="run-transcript"], [sse-swap="conversation-transcript"]');
     if (!transcript || scroll.dataset.bound === "true") return;
     scroll.dataset.bound = "true";
     const observer = new ResizeObserver(scrollRunTranscriptToBottom);
@@ -44,14 +44,26 @@ function installDetailDeleteModal() {
   document.addEventListener("keydown", (event) => { if (event.key === "Escape") { const modal = document.getElementById("detail-delete-modal"); if (modal?.classList.contains("flex")) close(modal); } });
 }
 
+function installConversationComposerShortcut() {
+  document.addEventListener("keydown", (event) => {
+    if (event.key !== "Enter" || event.shiftKey || event.isComposing) return;
+    const textarea = event.target instanceof HTMLTextAreaElement ? event.target : null;
+    const form = textarea?.closest<HTMLFormElement>('form[action*="/chat/"][action$="/messages"]');
+    if (!textarea || !form || textarea.disabled) return;
+    event.preventDefault();
+    form.requestSubmit();
+  });
+}
+
 export function installAgentLiveLifecycle() {
   installDetailDeleteModal();
+  installConversationComposerShortcut();
   document.addEventListener("htmx:sseMessage", (event) => {
     const detail = (event as CustomEvent<{ type?: string; event?: Event }>).detail;
     if (detail.type === "balance" || detail.type === "positions") window.setTimeout(animateNumberRolls, 50);
   });
-  document.addEventListener("htmx:afterSwap", (event) => { const target = (event as CustomEvent<{ target?: unknown }>).detail.target; if (!(target instanceof Element)) return; initRunTranscripts(target); if (target.matches('[sse-swap="run-summary"]')) tickRunningDurations(); if (target.matches('[sse-swap="run-transcript"]') || target.querySelector('[sse-swap="run-transcript"]')) scrollRunTranscriptToBottom(); });
-  document.addEventListener("htmx:afterSettle", (event) => { const target = (event as CustomEvent<{ target?: unknown }>).detail.target; if (!(target instanceof Element)) return; if (target.matches('[sse-swap="run-transcript"]') || target.querySelector('[sse-swap="run-transcript"]')) scrollRunTranscriptToBottom(); });
+  document.addEventListener("htmx:afterSwap", (event) => { const target = (event as CustomEvent<{ target?: unknown }>).detail.target; if (!(target instanceof Element)) return; initRunTranscripts(target); if (target.matches('[sse-swap="run-summary"]')) tickRunningDurations(); if (target.matches('[sse-swap="run-transcript"], [sse-swap="conversation-transcript"]') || target.querySelector('[sse-swap="run-transcript"], [sse-swap="conversation-transcript"]')) scrollRunTranscriptToBottom(); });
+  document.addEventListener("htmx:afterSettle", (event) => { const target = (event as CustomEvent<{ target?: unknown }>).detail.target; if (!(target instanceof Element)) return; if (target.matches('[sse-swap="run-transcript"], [sse-swap="conversation-transcript"]') || target.querySelector('[sse-swap="run-transcript"], [sse-swap="conversation-transcript"]')) scrollRunTranscriptToBottom(); });
   document.addEventListener("htmx:afterRequest", (event) => {
     const detail = (event as CustomEvent<{ successful?: boolean; elt?: Element }>).detail;
     if (!detail.successful || !(detail.elt instanceof HTMLFormElement)) return;

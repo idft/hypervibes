@@ -90,6 +90,7 @@ pub async fn serve(
         builder_fee_cache: Arc::new(BuilderFeeCache::mainnet()),
         in_flight: in_flight_for_state,
         workspace_leases,
+        conversation_turns: crate::agent_conversations::service::ConversationTurnTracker::default(),
         shutdown_rx: shutdown_rx_for_state,
         provider_connections: provider_connections::ProviderConnectionsState::new(),
     });

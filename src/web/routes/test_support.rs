@@ -133,6 +133,7 @@ pub(in crate::web::routes) async fn test_state_with_backend_and_shutdown(
         builder_fee_cache: Arc::new(BuilderFeeCache::new(Arc::new(TestBuilderFeeLookup))),
         in_flight: crate::agentic::in_flight::InFlightTracker::new(),
         workspace_leases: crate::agentic::workspace_lease::WorkspaceLeaseManager::new(),
+        conversation_turns: crate::agent_conversations::service::ConversationTurnTracker::default(),
         shutdown_rx,
         provider_connections: crate::web::provider_connections::ProviderConnectionsState::new(),
     })

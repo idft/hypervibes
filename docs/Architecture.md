@@ -68,6 +68,13 @@ Run state is persisted. On startup and periodically thereafter, the scheduler
 recovers stale queued or running runs so interrupted dispatches do not block an
 agent lane indefinitely.
 
+Agent conversations are separate from scheduled jobs and `agentic_runs`. Each
+`agent_conversations` row maps one operator or future-gateway conversation to
+one OpenCode session. Chat transcript, tool activity, errors, and context
+telemetry are mirrored from OpenCode and delivered to the browser as complete
+HTMX SSE partial snapshots. Future channels use the same mapping with their
+channel and external conversation key.
+
 ## Boundaries
 
 OpenCode performs LLM and tool execution. Vibetrading retains authority over

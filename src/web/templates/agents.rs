@@ -27,6 +27,7 @@ use super::{account::TradingAccountChoicesView, balance::AccountBalanceView};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AgentShowTab {
+    Chat,
     Positions,
     Transactions,
     Memories,
@@ -38,6 +39,7 @@ pub enum AgentShowTab {
 impl AgentShowTab {
     fn path(self, agent_key: &str) -> String {
         match self {
+            Self::Chat => format!("/agents/{agent_key}/chat"),
             Self::Positions => format!("/agents/{agent_key}"),
             Self::Transactions => format!("/agents/{agent_key}/transactions"),
             Self::Memories => format!("/agents/{agent_key}/memories"),
@@ -62,6 +64,7 @@ pub fn build_agent_show_tabs(
     let agent_key = agent.agent_key.as_str();
     let mut tab_entries: Vec<(&'static str, AgentShowTab)> = vec![
         ("Positions", AgentShowTab::Positions),
+        ("Chat", AgentShowTab::Chat),
         ("Transactions", AgentShowTab::Transactions),
         ("Memories", AgentShowTab::Memories),
         ("Prompts", AgentShowTab::Prompts),
