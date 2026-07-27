@@ -34,9 +34,8 @@ use crate::{
         AppState,
         auth::{AuthenticatedUser, get_user_api_wallet},
         templates::{
-            AccountBalanceView, AgentListEntry, AgentSelectorItemsTemplate,
-            AgentTradingAccountChoicesTemplate, AgentsNewPageTemplate, AgentsPageTemplate,
-            load_navbar,
+            AccountBalanceView, AgentListEntry, AgentTradingAccountChoicesTemplate,
+            AgentsNewPageTemplate, AgentsPageTemplate, load_navbar,
         },
     },
 };
@@ -80,21 +79,6 @@ pub(in crate::web::routes) async fn agents_index(
     };
 
     Ok(Html(template.render()?).into_response())
-}
-pub(in crate::web::routes) async fn agent_selector_items(
-    State(state): State<Arc<AppState>>,
-    user: AuthenticatedUser,
-) -> Result<Html<String>, AppError> {
-    let agents = list_agents_for_user(&state.db_pool, user.id).await?;
-    let wallet = get_user_api_wallet(&state.db_pool, user.id).await?;
-    let can_create_agent = wallet.as_ref().is_some_and(|w| w.is_ready());
-    Ok(Html(
-        AgentSelectorItemsTemplate {
-            agents,
-            can_create_agent,
-        }
-        .render()?,
-    ))
 }
 pub(in crate::web::routes) async fn agents_new(
     State(state): State<Arc<AppState>>,

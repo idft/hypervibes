@@ -143,6 +143,7 @@ impl AgentConversationPageTemplate {
             navbar,
         } = input;
         let current_path = format!("/agents/{}/chat/{conversation_id}", agent.agent_key);
+        let navbar = navbar.with_selected_agent(agent.display_name.clone(), agent.enabled);
         Self {
             tabs: build_agent_show_tabs(&agent, AgentShowTab::Chat),
             agent_tabs_use_htmx: false,
@@ -178,6 +179,7 @@ impl AgentConversationEmptyPageTemplate {
         navbar: Navbar,
     ) -> Result<String, askama::Error> {
         let current_path = format!("/agents/{}/chat", agent.agent_key);
+        let navbar = navbar.with_selected_agent(agent.display_name.clone(), agent.enabled);
         // The empty Chat view is viewport-bounded, so use the picker modal
         // rather than an inline option list that could extend off-screen.
         model_picker.use_modal = true;

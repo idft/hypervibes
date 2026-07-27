@@ -955,6 +955,7 @@ pub(in crate::web::routes) fn render_new_job_form(
         picker,
     );
     let tabs = build_agent_show_tabs(&agent, AgentShowTab::Jobs);
+    let navbar = navbar.with_selected_agent(agent.display_name.clone(), agent.enabled);
     let template = AgentScheduleNewPageTemplate {
         agent,
         tabs,

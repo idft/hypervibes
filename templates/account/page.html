@@ -4,7 +4,7 @@
 <div class="mx-auto max-w-3xl space-y-4" data-account-page data-account-address="{{ wallet_address }}" data-main-address="{{ wallet_address }}" data-transfers-enabled="{{ transfers_enabled }}" data-api-wallet-address="{% match api_wallet_address %}{% when Some with (address) %}{{ address }}{% when None %}{% endmatch %}" data-builder-recipient="{{ builder_recipient }}">
   <header class="flex items-start justify-between gap-4">
     <h1 class="flex min-w-0 items-center gap-3 text-3xl font-semibold text-white">
-      <img data-account-identicon alt="" class="h-8 w-8 shrink-0 rounded-full">
+       <img src="{{ navbar.identicon_data_uri() }}" alt="" class="h-8 w-8 shrink-0 rounded-full">
       <span class="min-w-0 break-all font-mono">{{ wallet_address }}</span>
       <a href="https://arbiscan.io/address/{{ wallet_address }}" target="_blank" rel="noopener noreferrer" title="View on Arbiscan" aria-label="View on Arbiscan" class="inline-flex h-6 w-6 shrink-0 cursor-pointer items-center justify-center rounded text-zinc-400 hover:text-zinc-200">
         <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="h-5 w-5"><path stroke-linecap="round" stroke-linejoin="round" d="M13.5 6H5.25A2.25 2.25 0 0 0 3 8.25v10.5A2.25 2.25 0 0 0 5.25 21h10.5A2.25 2.25 0 0 0 18 18.75V10.5m-10.5 6L21 3m0 0h-5.25M21 3v5.25"/></svg>

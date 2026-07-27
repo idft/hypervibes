@@ -1,13 +1,21 @@
 <div class="relative flex h-full items-center">
     <details class="relative h-full" data-agent-selector>
-        <summary hx-get="/agents/navigation" hx-trigger="click once" hx-target="#agent-selector-items" hx-swap="innerHTML" class="flex h-full cursor-pointer list-none items-center gap-2 px-4 text-sm text-zinc-300 hover:bg-zinc-800 hover:text-white [&::-webkit-details-marker]:hidden">
-            <span data-agent-selector-status class="hidden h-2 w-2 rounded-full bg-zinc-600"></span>
-            <span data-agent-selector-label>Agents</span>
+        <summary class="flex h-full cursor-pointer list-none items-center gap-2 px-4 text-sm text-zinc-300 hover:bg-zinc-800 hover:text-white [&::-webkit-details-marker]:hidden">
+            <span class="h-2 w-2 rounded-full {% if navbar.selected_agent_name.is_some() %}{% if navbar.selected_agent_enabled %}bg-emerald-400{% else %}bg-red-400{% endif %}{% else %}hidden bg-zinc-600{% endif %}"></span>
+            <span>{{ navbar.agent_selector_label() }}</span>
             <svg class="h-4 w-4 text-zinc-500" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true"><path fill-rule="evenodd" d="M5.23 7.21a.75.75 0 0 1 1.06.02L10 11.17l3.71-3.94a.75.75 0 1 1 1.09 1.04l-4.25 4.5a.75.75 0 0 1-1.09 0l-4.25-4.5a.75.75 0 0 1 .02-1.06Z" clip-rule="evenodd"></path></svg>
         </summary>
         <div class="absolute left-0 top-full mt-2 w-64 rounded-lg border border-zinc-700 bg-[#1b1d20] p-1 shadow-2xl">
             <div id="agent-selector-items">
-                <div class="px-3 py-2 text-sm text-zinc-500">Open to load agents…</div>
+                {% for agent in navbar.agents %}
+                <a href="/agents/{{ agent.agent_key }}" data-agent-key="{{ agent.agent_key }}" data-agent-name="{{ agent.display_name }}" data-agent-enabled="{{ agent.enabled }}" class="flex items-center gap-2 rounded-md px-3 py-2 text-sm text-zinc-300 hover:bg-zinc-800 hover:text-white"><span class="h-2 w-2 rounded-full {% if agent.enabled %}bg-emerald-400{% else %}bg-red-400{% endif %}"></span>{{ agent.display_name }}</a>
+                {% endfor %}
+                {% if !navbar.agents.is_empty() %}<div class="my-1 border-t border-zinc-700"></div>{% endif %}
+                {% if navbar.can_create_agent %}
+                <a href="/agents/new" class="block rounded-md px-3 py-2 text-sm font-medium text-sky-300 hover:bg-zinc-800 hover:text-sky-200">Create new agent</a>
+                {% else %}
+                <span title="Hyperliquid API Key required" class="block cursor-not-allowed rounded-md px-3 py-2 text-sm font-medium text-zinc-600" data-agent-selector-create-disabled>Create new agent</span>
+                {% endif %}
             </div>
         </div>
     </details>
@@ -31,5 +39,5 @@
             <path stroke-linecap="round" stroke-linejoin="round" d="M5.25 14.25h13.5m-13.5 0a3 3 0 0 1-3-3m3 3a3 3 0 1 0 0 6h13.5a3 3 0 1 0 0-6m-16.5-3a3 3 0 0 1 3-3h13.5a3 3 0 0 1 3 3m-19.5 0a4.5 4.5 0 0 1 .9-2.7L5.737 5.1a3.375 3.375 0 0 1 2.7-1.35h7.126c1.062 0 2.062.5 2.7 1.35l2.587 3.45a4.5 4.5 0 0 1 .9 2.7m0 0a3 3 0 0 1-3 3m0 3h.008v.008h-.008v-.008Zm0-6h.008v.008h-.008v-.008Zm-3 6h.008v.008h-.008v-.008Zm0-6h.008v.008h-.008v-.008Z" />
         </svg>
     </a>
-    <a href="/account" hx-boost="true" data-account-navbar data-account-address="{{ navbar.wallet_address }}" title="Account" class="flex items-center gap-1.5 rounded-lg px-2 py-1 text-xs text-zinc-400 hover:bg-zinc-800 hover:text-white"><img data-account-identicon alt="" class="hidden h-5 w-5 rounded-full"><span data-account-navbar-label class="font-mono">Account</span></a>
+    <a href="/account" hx-boost="true" data-account-address="{{ navbar.wallet_address }}" title="Account" class="flex items-center gap-1.5 rounded-lg px-2 py-1 text-xs text-zinc-400 hover:bg-zinc-800 hover:text-white"><img src="{{ navbar.identicon_data_uri() }}" alt="" class="h-5 w-5 rounded-full"><span class="font-mono">{{ navbar.short_wallet_address() }}</span></a>
 </div>

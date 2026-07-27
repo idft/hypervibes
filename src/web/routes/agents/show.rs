@@ -104,7 +104,9 @@ pub(in crate::web::routes) async fn render_agent_show_page(
     };
 
     let mut template = AgentsShowPageTemplate::new(agent.clone(), active_tab);
-    template.navbar = load_navbar(&state.db_pool, user.id).await?;
+    template.navbar = load_navbar(&state.db_pool, user.id)
+        .await?
+        .with_selected_agent(agent.display_name.clone(), agent.enabled);
     if let Some(address) = agent.trading_account_address.as_deref() {
         let is_main = address.eq_ignore_ascii_case(&user.wallet_address);
         template.is_main_account = is_main;

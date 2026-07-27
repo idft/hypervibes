@@ -41,6 +41,7 @@ fn hook_detail_page_renders_hook_metadata_and_runs() {
         runs,
         true,
         None,
+        Navbar::default(),
     )
     .expect("render hook detail page");
 

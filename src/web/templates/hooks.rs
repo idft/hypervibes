@@ -153,8 +153,10 @@ impl AgentHookDetailPageTemplate {
         hook_runs: Vec<AgenticRunView>,
         hook_runs_loaded: bool,
         run_now_warning: Option<String>,
+        navbar: Navbar,
     ) -> Result<String, askama::Error> {
         let current_path = format!("/agents/{}/hooks/{}", agent.agent_key, hook.id);
+        let navbar = navbar.with_selected_agent(agent.display_name.clone(), agent.enabled);
         Self {
             tabs: build_agent_show_tabs(&agent, AgentShowTab::Jobs),
             agent_tabs_use_htmx: false,
@@ -165,7 +167,7 @@ impl AgentHookDetailPageTemplate {
             hook_runs_loaded,
             run_now_warning,
             current_path,
-            navbar: Navbar::default(),
+            navbar,
         }
         .render()
     }

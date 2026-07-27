@@ -150,21 +150,6 @@ function initTransfers(page: HTMLElement) {
   });
 }
 
-function blockieDataUri(address: string): string {
-  let seed = 0;
-  for (const character of address) seed = ((seed << 5) - seed + character.charCodeAt(0)) >>> 0;
-  const random = () => { seed = (seed * 9301 + 49297) % 233280; return seed / 233280; };
-  const color = () => `hsl(${Math.floor(random() * 360)} ${Math.floor(random() * 60 + 40)}% ${Math.floor((random() + random() + random() + random()) * 25)}%)`;
-  const foreground = color(); const background = color(); const spot = color(); const squares: string[] = [];
-  for (let row = 0; row < 8; row += 1) { const values = Array.from({ length: 4 }, () => Math.floor(random() * 2.3)); values.push(...values.slice().reverse()); values.forEach((value, column) => { if (value) squares.push(`<rect x="${column}" y="${row}" width="1" height="1" fill="${value === 1 ? foreground : spot}"/>`); }); }
-  return `data:image/svg+xml,${encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 8 8"><rect width="8" height="8" fill="${background}"/>${squares.join("")}</svg>`)}`;
-}
-
 export function initAccount(root: ParentNode = document) {
   root.querySelectorAll<HTMLElement>("[data-account-page]").forEach((page) => { initApiWallet(page); initBuilderFee(page); initTransfers(page); });
-  const address = document.querySelector<HTMLElement>("[data-account-page]")?.dataset.accountAddress ?? document.querySelector<HTMLElement>("[data-account-navbar]")?.dataset.accountAddress;
-  if (!address) return;
-  document.querySelectorAll<HTMLImageElement>("[data-account-identicon]").forEach((image) => { image.src = blockieDataUri(address); image.classList.remove("hidden"); });
-  const label = document.querySelector<HTMLElement>("[data-account-navbar-label]");
-  if (label && address.length > 10) label.textContent = `${address.slice(0, 6)}...${address.slice(-4)}`;
 }

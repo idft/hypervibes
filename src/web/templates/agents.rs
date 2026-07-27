@@ -104,16 +104,6 @@ pub struct AgentsPageTemplate {
 }
 
 #[derive(Template)]
-#[template(path = "agents/selector-items.html")]
-pub struct AgentSelectorItemsTemplate {
-    pub agents: Vec<AgentListRow>,
-    /// `false` while the user still needs to set up their Hyperliquid
-    /// trading signer; the template disables the "Create new agent"
-    /// link and swaps the copy to an explainer.
-    pub can_create_agent: bool,
-}
-
-#[derive(Template)]
 #[template(path = "agents/new.html")]
 pub struct AgentsNewPageTemplate {
     pub form: CreateAgentForm,

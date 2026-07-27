@@ -1,15 +1,3 @@
-export function syncAgentSelector() {
-  const currentAgent = document.querySelector<HTMLElement>("[data-current-agent-key]");
-  const agentKey = currentAgent?.dataset.currentAgentKey ?? window.location.pathname.match(/^\/agents\/([^/]+)/)?.[1];
-  const selected = currentAgent ?? Array.from(document.querySelectorAll<HTMLElement>("[data-agent-key]")).find((agent) => agent.dataset.agentKey === agentKey);
-  const label = document.querySelector<HTMLElement>("[data-agent-selector-label]");
-  const status = document.querySelector<HTMLElement>("[data-agent-selector-status]");
-  if (!selected || !label || !status) return;
-  label.textContent = selected.dataset.currentAgentName ?? selected.dataset.agentName ?? agentKey ?? "";
-  status.classList.remove("hidden", "bg-zinc-600", "bg-emerald-400", "bg-red-400");
-  status.classList.add((selected.dataset.currentAgentEnabled ?? selected.dataset.agentEnabled) === "true" ? "bg-emerald-400" : "bg-red-400");
-}
-
 const AGENT_RAIL_EXPANDED_STORAGE_KEY = "agent-rail-expanded";
 
 function agentRailStartsExpanded() {
@@ -92,11 +80,9 @@ export function installAgentNavigation() {
     if (selector?.open && !selector.contains(event.target as Node)) selector.open = false;
   });
   document.addEventListener("htmx:afterSwap", () => {
-    syncAgentSelector();
     syncAgentTabs();
   });
   window.addEventListener("popstate", syncAgentTabs);
-  syncAgentSelector();
   syncAgentTabs();
   syncAgentRail();
 }

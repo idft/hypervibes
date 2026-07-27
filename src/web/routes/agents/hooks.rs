@@ -41,6 +41,7 @@ pub(in crate::web::routes) async fn agents_show_hook_detail(
     State(state): State<Arc<AppState>>,
     Path((agent_key, hook_id)): Path<(String, i64)>,
     Query(query): Query<TimeoutErrorQuery>,
+    user: crate::web::auth::AuthenticatedUser,
 ) -> Result<Response, AppError> {
     let Some(agent) = get_agent(&state.db_pool, &agent_key).await? else {
         return Ok((StatusCode::NOT_FOUND, "agent not found").into_response());
@@ -112,6 +113,7 @@ pub(in crate::web::routes) async fn agents_show_hook_detail(
         hook_runs,
         hook_runs_loaded,
         run_now_warning,
+        crate::web::templates::load_navbar(&state.db_pool, user.id).await?,
     )?;
     Ok(Html(html).into_response())
 }
@@ -616,6 +618,7 @@ pub(in crate::web::routes) fn render_new_hook_form(
         picker,
     );
     let tabs = build_agent_show_tabs(&agent, AgentShowTab::Jobs);
+    let navbar = navbar.with_selected_agent(agent.display_name.clone(), agent.enabled);
     let template = AgentHookNewPageTemplate {
         agent,
         tabs,
