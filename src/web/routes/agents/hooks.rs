@@ -97,8 +97,12 @@ pub(in crate::web::routes) async fn agents_show_hook_detail(
     }
 
     let picker = load_model_picker_context(&state, &agent).await;
-    let mut model_picker =
-        build_model_picker_view("hook-model-selection", &hook_view.model_selection, picker);
+    let mut model_picker = build_model_picker_view(
+        "hook-model-selection",
+        &hook_view.model_selection,
+        hook.model_variant.as_deref(),
+        picker,
+    );
     model_picker.show_label = false;
     model_picker.use_modal = true;
     let html = AgentHookDetailPageTemplate::render_view(
@@ -129,7 +133,12 @@ pub(in crate::web::routes) async fn agents_hook_model_picker(
         _ => String::new(),
     };
     let picker = load_model_picker_context(&state, &agent).await;
-    let mut model_picker = build_model_picker_view("hook-model-selection", &selected, picker);
+    let mut model_picker = build_model_picker_view(
+        "hook-model-selection",
+        &selected,
+        hook.model_variant.as_deref(),
+        picker,
+    );
     model_picker.show_label = false;
     model_picker.use_modal = true;
     let html = ModelPickerPartialTemplate::render_view(model_picker)?;
@@ -164,6 +173,8 @@ pub(in crate::web::routes) struct CreateAgentHookForm {
     #[serde(default)]
     pub model_selection: String,
     #[serde(default)]
+    pub model_variant: String,
+    #[serde(default)]
     pub operator_prompt: String,
     pub enabled: Option<String>,
 }
@@ -171,6 +182,7 @@ pub(in crate::web::routes) struct CreateAgentHookForm {
 pub(in crate::web::routes) struct ValidatedCreateAgentHook {
     pub timeout_seconds: i32,
     pub model_selection: Option<(String, String)>,
+    pub model_variant: String,
     pub operator_prompt: String,
     pub enabled: bool,
 }
@@ -191,6 +203,7 @@ impl CreateAgentHookForm {
         CreateAgentHookFormValues {
             timeout_seconds: self.timeout_seconds.clone(),
             model_selection: self.model_selection.clone(),
+            model_variant: self.model_variant.clone(),
             operator_prompt: self.operator_prompt.clone(),
             enabled: self.enabled(),
         }
@@ -216,6 +229,7 @@ impl CreateAgentHookForm {
             Ok(ValidatedCreateAgentHook {
                 timeout_seconds: timeout_seconds.expect("validated timeout seconds"),
                 model_selection,
+                model_variant: self.model_variant.clone(),
                 operator_prompt: self.operator_prompt.trim().to_string(),
                 enabled: self.enabled(),
             })
@@ -279,31 +293,38 @@ pub(in crate::web::routes) async fn agents_create_hook(
         }
     };
 
-    let validated_model_selection =
-        match validate_model_selection_for_agent(&state, &agent, validated.model_selection.clone())
-            .await
-        {
-            Ok(selection) => selection,
-            Err(error) => {
-                let picker = load_model_picker_context(&state, &agent).await;
-                return Ok(render_new_hook_form(
-                    agent,
-                    form.as_template_values(),
-                    picker,
-                    vec![error],
-                    StatusCode::UNPROCESSABLE_ENTITY,
-                    navbar().await,
-                ));
-            }
-        };
+    let validated_model_selection = match validate_model_selection_for_agent(
+        &state,
+        &agent,
+        validated.model_selection.clone(),
+        &validated.model_variant,
+    )
+    .await
+    {
+        Ok(selection) => selection,
+        Err(error) => {
+            let picker = load_model_picker_context(&state, &agent).await;
+            return Ok(render_new_hook_form(
+                agent,
+                form.as_template_values(),
+                picker,
+                vec![error],
+                StatusCode::UNPROCESSABLE_ENTITY,
+                navbar().await,
+            ));
+        }
+    };
 
     let model_provider_id = validated_model_selection
         .as_ref()
-        .map(|(provider, _)| provider.as_str());
+        .map(|(provider, _, _)| provider.as_str());
     let model_id = validated_model_selection
         .as_ref()
-        .map(|(_, model)| model.as_str());
-    if let Err(error) = crate::agentic::store::insert_agent_hook(
+        .map(|(_, model, _)| model.as_str());
+    let model_variant = validated_model_selection
+        .as_ref()
+        .and_then(|(_, _, variant)| variant.as_deref());
+    if let Err(error) = crate::agentic::store::insert_agent_hook_with_model_variant(
         &state.db_pool,
         &agent_key,
         JOB_KIND_MARKET_ANALYSIS,
@@ -311,6 +332,7 @@ pub(in crate::web::routes) async fn agents_create_hook(
         validated.enabled,
         model_provider_id,
         model_id,
+        model_variant,
         validated.timeout_seconds,
         &validated.operator_prompt,
     )
@@ -507,18 +529,22 @@ pub(in crate::web::routes) async fn agents_update_hook_model(
 
     let parsed = parse_model_selection(&form.model_selection)
         .map_err(|message| AppError(anyhow::anyhow!(message)))?;
-    let validated = validate_model_selection_for_agent(&state, &agent, parsed)
+    let validated = validate_model_selection_for_agent(&state, &agent, parsed, &form.model_variant)
         .await
         .map_err(|message| AppError(anyhow::anyhow!(message)))?;
-    let model_provider_id = validated.as_ref().map(|(provider, _)| provider.as_str());
-    let model_id = validated.as_ref().map(|(_, model)| model.as_str());
+    let model_provider_id = validated.as_ref().map(|(provider, _, _)| provider.as_str());
+    let model_id = validated.as_ref().map(|(_, model, _)| model.as_str());
+    let model_variant = validated
+        .as_ref()
+        .and_then(|(_, _, variant)| variant.as_deref());
 
-    if !crate::agentic::store::set_hook_model(
+    if !crate::agentic::store::set_hook_model_with_variant(
         &state.db_pool,
         &agent_key,
         hook_id,
         model_provider_id,
         model_id,
+        model_variant,
     )
     .await?
     {
@@ -583,8 +609,12 @@ pub(in crate::web::routes) fn render_new_hook_form(
     navbar: crate::web::templates::Navbar,
 ) -> Response {
     let current_path = format!("/agents/{}/hooks/new", agent.agent_key);
-    let model_picker =
-        build_model_picker_view("hook-model-selection", &form.model_selection, picker);
+    let model_picker = build_model_picker_view(
+        "hook-model-selection",
+        &form.model_selection,
+        (!form.model_variant.trim().is_empty()).then_some(form.model_variant.as_str()),
+        picker,
+    );
     let tabs = build_agent_show_tabs(&agent, AgentShowTab::Jobs);
     let template = AgentHookNewPageTemplate {
         agent,

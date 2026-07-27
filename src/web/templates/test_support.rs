@@ -93,6 +93,7 @@ pub fn sample_schedule_row(
         next_run_at: now,
         model_provider_id: Some("anthropic".to_string()),
         model_id: Some("claude-3-5-sonnet".to_string()),
+        model_variant: None,
         timeout_seconds: 600,
         operator_prompt: String::new(),
     }
@@ -109,6 +110,7 @@ pub fn sample_hook_row(id: i64, enabled: bool) -> crate::agentic::model::Agentic
         enabled,
         model_provider_id: Some("anthropic".to_string()),
         model_id: Some("claude-3-5-sonnet".to_string()),
+        model_variant: None,
         timeout_seconds: 600,
         operator_prompt: String::new(),
         created_at: now,
@@ -125,6 +127,7 @@ pub fn sample_model_options() -> Vec<ModelPickerOption> {
         model_id: "claude-sonnet-4".to_string(),
         model_name: "Claude Sonnet 4".to_string(),
         metadata_text: "1M ctx · tools".to_string(),
+        thinking_variants: vec!["high".to_string(), "low".to_string()],
     }]
 }
 
@@ -143,6 +146,9 @@ pub fn sample_run_row(
         timeframe: Some("15m".to_string()),
         status: status.to_string(),
         backend_run_ref: Some("ses_abc123".to_string()),
+        model_provider_id: Some("anthropic".to_string()),
+        model_id: Some("claude-3-5-sonnet".to_string()),
+        model_variant: None,
         scheduled_for: now,
         started_at: Some(now),
         finished_at: Some(now + chrono::Duration::seconds(42)),

@@ -1581,6 +1581,7 @@ pub fn dispatch_request_from_schedule(
         account_snapshot,
         model_provider_id: schedule.model_provider_id.clone(),
         model_id: schedule.model_id.clone(),
+        model_variant: schedule.model_variant.clone(),
         timeout_seconds: schedule.timeout_seconds,
         opencode_base_url: schedule.opencode_base_url.clone(),
         runtime_config: schedule.runtime_config.clone(),
@@ -1612,6 +1613,7 @@ pub fn dispatch_request_from_hook(
         account_snapshot: None,
         model_provider_id: hook.model_provider_id.clone(),
         model_id: hook.model_id.clone(),
+        model_variant: hook.model_variant.clone(),
         timeout_seconds: hook.timeout_seconds,
         opencode_base_url: hook.opencode_base_url.clone(),
         runtime_config: hook.runtime_config.clone(),
@@ -1656,7 +1658,7 @@ async fn build_dispatch_request(
         None
     };
 
-    Ok(Some(dispatch_request_from_schedule(
+    let mut request = dispatch_request_from_schedule(
         schedule,
         DispatchRequestInputs {
             run_id,
@@ -1668,7 +1670,9 @@ async fn build_dispatch_request(
             system_prompt,
         },
         account_snapshot,
-    )))
+    );
+    apply_run_model_snapshot(pool, &mut request).await?;
+    Ok(Some(request))
 }
 
 pub(crate) async fn dispatch_daily_review_coding_hook(
@@ -1744,7 +1748,7 @@ pub async fn build_hook_dispatch_request(
     let strategy_prompt = load_strategy_prompt(pool, &hook.agent_key, &hook.job_kind).await?;
     let accumulated_learnings = load_accumulated_learnings(pool, &hook.agent_key).await?;
 
-    Ok(Some(dispatch_request_from_hook(
+    let mut request = dispatch_request_from_hook(
         hook,
         DispatchRequestInputs {
             run_id,
@@ -1755,7 +1759,19 @@ pub async fn build_hook_dispatch_request(
             accumulated_learnings,
             system_prompt,
         },
-    )))
+    );
+    apply_run_model_snapshot(pool, &mut request).await?;
+    Ok(Some(request))
+}
+
+async fn apply_run_model_snapshot(pool: &DbPool, request: &mut DispatchRequest) -> Result<()> {
+    let run = store::get_run(pool, request.run_id)
+        .await?
+        .context("run disappeared before dispatch")?;
+    request.model_provider_id = run.model_provider_id;
+    request.model_id = run.model_id;
+    request.model_variant = run.model_variant;
+    Ok(())
 }
 
 fn requires_selected_instruments(job_kind: &str) -> bool {

@@ -16,7 +16,8 @@ use crate::{
 };
 
 use super::common::{
-    HookRunInsertMode, insert_run_in_tx, lock_agent_coordination_tx, truncate_error_summary,
+    HookRunInsertMode, insert_run_with_model_variant_in_tx, lock_agent_coordination_tx,
+    truncate_error_summary,
 };
 
 const ACTIVE_MAINTENANCE_STATUSES: [&str; 2] =
@@ -72,6 +73,7 @@ type CodingHookRow = (
     bool,
     Option<String>,
     Option<String>,
+    Option<String>,
     i32,
     String,
 );
@@ -99,7 +101,7 @@ pub async fn insert_analysis_coding_task_and_run(
 
     let hook: Option<CodingHookRow> = query_as(
         "SELECT id, agent_key, job_key, job_kind, enabled,
-                    model_provider_id, model_id, timeout_seconds, operator_prompt
+                    model_provider_id, model_id, model_variant, timeout_seconds, operator_prompt
                FROM agentic_job_hooks
               WHERE agent_key = $1 AND id = $2
               FOR UPDATE",
@@ -117,6 +119,7 @@ pub async fn insert_analysis_coding_task_and_run(
         enabled,
         provider,
         model,
+        model_variant,
         timeout_seconds,
         hook_prompt,
     )) = hook
@@ -171,7 +174,7 @@ pub async fn insert_analysis_coding_task_and_run(
     }
 
     let now = Utc::now();
-    let run_id = insert_run_in_tx(
+    let run_id = insert_run_with_model_variant_in_tx(
         &mut tx,
         None,
         Some(hook_id),
@@ -183,6 +186,7 @@ pub async fn insert_analysis_coding_task_and_run(
         None,
         Some(&provider),
         Some(&model),
+        model_variant.as_deref(),
         now,
         None,
         None,
@@ -199,6 +203,7 @@ pub async fn insert_analysis_coding_task_and_run(
         "timeout_seconds": timeout_seconds,
         "model_provider_id": provider,
         "model_id": model,
+        "model_variant": model_variant,
     });
     let task: (i64,) = query_as(
         "INSERT INTO agentic_maintenance_tasks

@@ -52,6 +52,7 @@ pub struct DispatchRequest {
     pub account_snapshot: Option<crate::hyperliquid::live_state::LiveAgentSnapshot>,
     pub model_provider_id: Option<String>,
     pub model_id: Option<String>,
+    pub model_variant: Option<String>,
     pub timeout_seconds: i32,
     pub opencode_base_url: String,
     pub runtime_config: Value,
@@ -197,6 +198,7 @@ impl AgenticBackend for OpenCodeBackend {
                 request.model_provider_id.as_deref(),
                 request.model_id.as_deref(),
             ),
+            variant: request.model_variant.clone(),
         };
 
         self.client
@@ -547,6 +549,7 @@ mod tests {
             account_snapshot: None,
             model_provider_id: None,
             model_id: None,
+            model_variant: None,
             timeout_seconds: 10,
             opencode_base_url: "http://localhost:14096".to_string(),
             runtime_config: serde_json::json!({
@@ -837,6 +840,7 @@ mod tests {
             account_snapshot: None,
             model_provider_id: None,
             model_id: None,
+            model_variant: None,
             timeout_seconds: 1,
             opencode_base_url: "http://localhost:14096".to_string(),
             runtime_config: serde_json::json!({}),
@@ -908,6 +912,7 @@ mod tests {
             account_snapshot: None,
             model_provider_id: None,
             model_id: None,
+            model_variant: None,
             timeout_seconds: 1,
             opencode_base_url: "http://localhost:14096".to_string(),
             runtime_config: serde_json::json!({}),
@@ -985,6 +990,7 @@ mod tests {
             account_snapshot: None,
             model_provider_id: None,
             model_id: None,
+            model_variant: None,
             timeout_seconds: 1,
             opencode_base_url: "http://localhost:14096".to_string(),
             runtime_config: serde_json::json!({}),

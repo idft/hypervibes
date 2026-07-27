@@ -23,6 +23,7 @@ struct AgentConversationDbRow {
     title: String,
     model_provider_id: String,
     model_id: String,
+    model_variant: Option<String>,
     created_at: DateTime<Utc>,
     updated_at: DateTime<Utc>,
 }
@@ -37,6 +38,7 @@ struct AgentConversationListDbRow {
     title: String,
     model_provider_id: String,
     model_id: String,
+    model_variant: Option<String>,
     created_at: DateTime<Utc>,
     updated_at: DateTime<Utc>,
     opencode_status: Option<String>,
@@ -66,12 +68,12 @@ pub async fn create_conversation_with_default_policies(
     let row = query_as::<_, AgentConversationDbRow>(
         "INSERT INTO agent_conversations (
              id, agent_key, opencode_session_id, channel, external_conversation_key,
-             title, model_provider_id, model_id, created_at, updated_at
+              title, model_provider_id, model_id, model_variant, created_at, updated_at
          )
-         SELECT gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7, now(), now()
+         SELECT gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7, $8, now(), now()
           WHERE EXISTS (SELECT 1 FROM agents WHERE agent_key = $1)
          RETURNING id, agent_key, opencode_session_id, channel, external_conversation_key,
-                   title, model_provider_id, model_id, created_at, updated_at",
+                    title, model_provider_id, model_id, model_variant, created_at, updated_at",
     )
     .bind(input.agent_key.trim())
     .bind(input.opencode_session_id.trim())
@@ -80,6 +82,7 @@ pub async fn create_conversation_with_default_policies(
     .bind(input.title.trim())
     .bind(input.model_provider_id.trim())
     .bind(input.model_id.trim())
+    .bind(input.model_variant.as_deref().map(str::trim))
     .fetch_optional(&mut *tx)
     .await
     .context("failed to insert agent conversation")?
@@ -117,9 +120,10 @@ pub async fn list_agent_conversations(
                 conversations.opencode_session_id,
                 conversations.channel,
                 conversations.external_conversation_key,
-                conversations.title,
-                conversations.model_provider_id,
-                conversations.model_id,
+                 conversations.title,
+                 conversations.model_provider_id,
+                 conversations.model_id,
+                 conversations.model_variant,
                 conversations.created_at,
                 conversations.updated_at,
                 sessions.status AS opencode_status,
@@ -157,6 +161,7 @@ pub async fn list_agent_conversations(
             title: row.title,
             model_provider_id: row.model_provider_id,
             model_id: row.model_id,
+            model_variant: row.model_variant,
             created_at: row.created_at,
             updated_at: row.updated_at,
             tool_policies,
@@ -183,7 +188,7 @@ pub async fn get_agent_conversation(
 ) -> Result<Option<AgentConversationRow>> {
     let row = query_as::<_, AgentConversationDbRow>(
         "SELECT id, agent_key, opencode_session_id, channel, external_conversation_key,
-                title, model_provider_id, model_id, created_at, updated_at
+                 title, model_provider_id, model_id, model_variant, created_at, updated_at
            FROM agent_conversations
           WHERE id = $1 AND agent_key = $2",
     )
@@ -207,7 +212,7 @@ pub async fn get_conversation_by_opencode_session_id(
 ) -> Result<Option<AgentConversationRow>> {
     let row = query_as::<_, AgentConversationDbRow>(
         "SELECT id, agent_key, opencode_session_id, channel, external_conversation_key,
-                title, model_provider_id, model_id, created_at, updated_at
+                 title, model_provider_id, model_id, model_variant, created_at, updated_at
            FROM agent_conversations
           WHERE opencode_session_id = $1",
     )
@@ -246,34 +251,40 @@ pub async fn update_conversation_title(
     Ok(result.rows_affected() > 0)
 }
 
+#[cfg(test)]
 pub async fn update_conversation_model(
     pool: &DbPool,
     agent_key: &str,
     conversation_id: Uuid,
     provider_id: &str,
     model_id: &str,
+    model_variant: Option<&str>,
 ) -> Result<bool> {
     let update = UpdateAgentConversationModel {
         model_provider_id: provider_id.to_string(),
         model_id: model_id.to_string(),
+        model_variant: model_variant.map(ToOwned::to_owned),
     };
     validate_input(update.validate())?;
     let result = sqlx::query(
         "UPDATE agent_conversations
-            SET model_provider_id = $3,
-                model_id = $4
+             SET model_provider_id = $3,
+                 model_id = $4,
+                 model_variant = $5
           WHERE id = $1 AND agent_key = $2",
     )
     .bind(conversation_id)
     .bind(agent_key)
     .bind(update.model_provider_id.trim())
     .bind(update.model_id.trim())
+    .bind(update.model_variant.as_deref().map(str::trim))
     .execute(pool)
     .await
     .context("failed to update agent conversation model")?;
     Ok(result.rows_affected() > 0)
 }
 
+#[cfg(test)]
 pub async fn replace_conversation_tool_policies(
     pool: &DbPool,
     agent_key: &str,
@@ -327,6 +338,75 @@ pub async fn replace_conversation_tool_policies(
     tx.commit()
         .await
         .context("failed to commit conversation policy replacement transaction")?;
+    Ok(true)
+}
+
+/// Persist model configuration and permissions together after OpenCode accepts
+/// the corresponding permission update, so database state cannot pair a new
+/// model variant with stale tool policies.
+pub async fn update_conversation_model_and_policies(
+    pool: &DbPool,
+    agent_key: &str,
+    conversation_id: Uuid,
+    provider_id: &str,
+    model_id: &str,
+    model_variant: Option<&str>,
+    policies: &[AgentConversationToolPolicyRow],
+) -> Result<bool> {
+    let update = UpdateAgentConversationModel {
+        model_provider_id: provider_id.to_string(),
+        model_id: model_id.to_string(),
+        model_variant: model_variant.map(ToOwned::to_owned),
+    };
+    validate_input(update.validate())?;
+    validate_tool_policies(policies)?;
+
+    let mut tx = pool
+        .begin()
+        .await
+        .context("failed to begin conversation settings update transaction")?;
+    let updated = sqlx::query(
+        "UPDATE agent_conversations
+            SET model_provider_id = $3,
+                model_id = $4,
+                model_variant = $5
+          WHERE id = $1 AND agent_key = $2",
+    )
+    .bind(conversation_id)
+    .bind(agent_key)
+    .bind(update.model_provider_id.trim())
+    .bind(update.model_id.trim())
+    .bind(update.model_variant.as_deref().map(str::trim))
+    .execute(&mut *tx)
+    .await
+    .context("failed to update agent conversation model")?;
+    if updated.rows_affected() == 0 {
+        tx.rollback()
+            .await
+            .context("failed to roll back missing conversation settings update")?;
+        return Ok(false);
+    }
+
+    sqlx::query("DELETE FROM agent_conversation_tool_policies WHERE conversation_id = $1")
+        .bind(conversation_id)
+        .execute(&mut *tx)
+        .await
+        .context("failed to clear agent conversation tool policies")?;
+    for policy in policies {
+        sqlx::query(
+            "INSERT INTO agent_conversation_tool_policies (conversation_id, tool_group, policy)
+             VALUES ($1, $2, $3)",
+        )
+        .bind(conversation_id)
+        .bind(policy.tool_group.trim())
+        .bind(policy.policy.trim())
+        .execute(&mut *tx)
+        .await
+        .context("failed to insert agent conversation tool policy")?;
+    }
+    tx.commit()
+        .await
+        .context("failed to commit conversation settings update transaction")?;
     Ok(true)
 }
 
@@ -401,6 +481,7 @@ fn agent_conversation_from_db(
         title: row.title,
         model_provider_id: row.model_provider_id,
         model_id: row.model_id,
+        model_variant: row.model_variant,
         created_at: row.created_at,
         updated_at: row.updated_at,
         tool_policies,
@@ -500,6 +581,7 @@ mod tests {
             title: "New conversation".to_string(),
             model_provider_id: "anthropic".to_string(),
             model_id: "claude-sonnet-4".to_string(),
+            model_variant: None,
         }
     }
 
@@ -514,7 +596,10 @@ mod tests {
 
         let created = create_conversation_with_default_policies(
             &pool,
-            &create_input(&key, "ses_conversation_default"),
+            &CreateAgentConversation {
+                model_variant: Some("high".to_string()),
+                ..create_input(&key, "ses_conversation_default")
+            },
         )
         .await
         .expect("create conversation");
@@ -531,15 +616,14 @@ mod tests {
             .expect("list conversations");
         assert_eq!(listed.len(), 1);
         assert_eq!(listed[0].id, created.id);
+        assert_eq!(listed[0].model_variant.as_deref(), Some("high"));
         assert!(listed[0].opencode_status.is_none());
-        assert_eq!(
-            get_conversation_by_opencode_session_id(&pool, "ses_conversation_default")
-                .await
-                .expect("get conversation")
-                .expect("conversation exists")
-                .id,
-            created.id
-        );
+        let loaded = get_conversation_by_opencode_session_id(&pool, "ses_conversation_default")
+            .await
+            .expect("get conversation")
+            .expect("conversation exists");
+        assert_eq!(loaded.id, created.id);
+        assert_eq!(loaded.model_variant.as_deref(), Some("high"));
     }
 
     #[tokio::test]
@@ -591,6 +675,18 @@ mod tests {
                 .await
                 .expect("replace policies")
         );
+        assert!(
+            update_conversation_model(
+                &pool,
+                &owner,
+                created.id,
+                "anthropic",
+                "claude-sonnet-4",
+                Some("high"),
+            )
+            .await
+            .expect("update model")
+        );
         let stored = get_agent_conversation(&pool, &owner, created.id)
             .await
             .expect("get owner conversation")
@@ -601,6 +697,7 @@ mod tests {
                 .iter()
                 .any(|policy| policy.policy == TOOL_POLICY_ALLOW)
         );
+        assert_eq!(stored.model_variant.as_deref(), Some("high"));
         assert!(
             !delete_conversation_mapping(&pool, &other, created.id)
                 .await

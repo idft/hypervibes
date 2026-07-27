@@ -24,9 +24,10 @@ use super::test_support::{
 };
 use super::{
     ClaimedScheduleRun, claim_due_schedule, count_agent_runs, delete_agent_schedule,
-    get_agent_schedule, get_run, insert_agent_schedule, insert_default_opencode_schedules,
-    insert_test_run, insert_workspace_regenerate_task, list_agent_hooks, list_agent_schedules,
-    list_due_opencode_schedules, set_schedule_timeframe, set_schedule_timeout,
+    get_agent_schedule, get_run, insert_agent_schedule, insert_agent_schedule_with_model_variant,
+    insert_default_opencode_schedules, insert_test_run, insert_workspace_regenerate_task,
+    list_agent_hooks, list_agent_schedules, list_due_opencode_schedules,
+    set_schedule_model_with_variant, set_schedule_timeframe, set_schedule_timeout,
 };
 
 #[tokio::test]
@@ -57,6 +58,7 @@ async fn default_schedules_insert_expected_rows_with_disabled_defaults() {
     assert_eq!(analysis.job_kind, JOB_KIND_ANALYSIS);
     assert_eq!(analysis.timeframe, DEFAULT_ANALYSIS_TIMEFRAME);
     assert_eq!(analysis.timeout_seconds, DEFAULT_ANALYSIS_TIMEOUT_SECONDS);
+    assert!(analysis.model_variant.is_none());
 
     let analysis_1h = rows
         .iter()
@@ -124,6 +126,7 @@ async fn default_schedules_insert_expected_rows_with_disabled_defaults() {
         coding_hook.model_provider_id.is_none() && coding_hook.model_id.is_none(),
         "coding hook must be seeded without a model so it cannot fire until operator pins one"
     );
+    assert!(coding_hook.model_variant.is_none());
 }
 
 #[tokio::test]
@@ -212,7 +215,7 @@ async fn insert_agent_schedule_persists_custom_schedule() {
         .await
         .expect("insert agent");
 
-    let schedule_id = insert_agent_schedule(
+    let schedule_id = insert_agent_schedule_with_model_variant(
         &pool,
         &key,
         JOB_KIND_ANALYSIS,
@@ -221,6 +224,7 @@ async fn insert_agent_schedule_persists_custom_schedule() {
         1,
         Some("anthropic"),
         Some("claude-sonnet-4"),
+        Some("high"),
         600,
         "Check higher timeframe structure.",
     )
@@ -241,6 +245,7 @@ async fn insert_agent_schedule_persists_custom_schedule() {
     assert_eq!(row.timeout_seconds, 600);
     assert_eq!(row.model_provider_id.as_deref(), Some("anthropic"));
     assert_eq!(row.model_id.as_deref(), Some("claude-sonnet-4"));
+    assert_eq!(row.model_variant.as_deref(), Some("high"));
     assert_eq!(row.operator_prompt, "Check higher timeframe structure.");
 }
 
@@ -459,6 +464,16 @@ async fn claim_due_schedule_inserts_queued_run_and_aligns_next_run_at() {
     let pool = test_db::pool().await;
     let key = format!("claim-{}", Utc::now().timestamp_nanos_opt().unwrap_or(0));
     let schedule_id = seed_agent_and_schedule(&pool, &key, 0).await;
+    set_schedule_model_with_variant(
+        &pool,
+        &key,
+        schedule_id,
+        Some("anthropic"),
+        Some("claude-sonnet-4"),
+        Some("high"),
+    )
+    .await
+    .expect("set schedule model variant");
 
     // Set the schedule to a previous 15m due boundary so it is
     // due "now" no matter when the test actually runs.
@@ -492,6 +507,13 @@ async fn claim_due_schedule_inserts_queued_run_and_aligns_next_run_at() {
     assert_eq!(run.status, RUN_STATUS_QUEUED);
     assert_eq!(run.agent_key, key);
     assert_eq!(run.timeframe.as_deref(), Some(DEFAULT_ANALYSIS_TIMEFRAME));
+    let (model_variant,): (Option<String>,) =
+        query_as("SELECT model_variant FROM agentic_runs WHERE id = $1")
+            .bind(run_id)
+            .fetch_one(&pool)
+            .await
+            .expect("load run model variant");
+    assert_eq!(model_variant.as_deref(), Some("high"));
     assert_eq!(
         run.scheduled_for,
         crate::agentic::timeframe::boundary_for_due_at(due_boundary, DEFAULT_TRIGGER_DELAY_SECONDS)

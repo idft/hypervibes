@@ -1,10 +1,10 @@
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, anyhow};
 use reqwest::StatusCode;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize, de::IgnoredAny};
 use tokio::sync::RwLock;
 
 const RESPONSE_SNIPPET_MAX_CHARS: usize = 200;
@@ -157,6 +157,7 @@ impl OpenCodeClient {
         workspace_container_path: &str,
         provider_id: &str,
         model_id: &str,
+        variant: Option<&str>,
         permissions: Vec<OpenCodePermissionRule>,
     ) -> Result<OpenCodeSession> {
         let url = build_url(
@@ -167,7 +168,7 @@ impl OpenCodeClient {
         let request = OpenCodeConversationSessionRequest {
             title: "New conversation",
             agent: "agent-conversations",
-            model: OpenCodeSessionModelRef::new(provider_id, model_id),
+            model: OpenCodeSessionModelRef::new(provider_id, model_id, variant),
             permission: permissions,
         };
         let response = self
@@ -202,6 +203,7 @@ impl OpenCodeClient {
             message_id: &prompt.message_id,
             agent: "agent-conversations",
             model: OpenCodeModelRef::new(&prompt.provider_id, &prompt.model_id),
+            variant: prompt.variant.as_deref(),
             parts: vec![OpenCodeTextPart {
                 part_type: "text",
                 text: &prompt.text,
@@ -718,6 +720,8 @@ pub struct OpenCodeCommandRequest {
     pub agent: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub variant: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -732,6 +736,7 @@ pub struct OpenCodeConversationPrompt {
     pub message_id: String,
     pub provider_id: String,
     pub model_id: String,
+    pub variant: Option<String>,
     pub text: String,
 }
 
@@ -796,13 +801,16 @@ struct OpenCodeSessionModelRef<'a> {
     #[serde(rename = "providerID")]
     provider_id: &'a str,
     id: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    variant: Option<&'a str>,
 }
 
 impl<'a> OpenCodeSessionModelRef<'a> {
-    fn new(provider_id: &'a str, model_id: &'a str) -> Self {
+    fn new(provider_id: &'a str, model_id: &'a str, variant: Option<&'a str>) -> Self {
         Self {
             provider_id,
             id: model_id,
+            variant,
         }
     }
 }
@@ -813,6 +821,8 @@ struct OpenCodeConversationPromptRequest<'a> {
     message_id: &'a str,
     agent: &'a str,
     model: OpenCodeModelRef<'a>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    variant: Option<&'a str>,
     parts: Vec<OpenCodeTextPart<'a>>,
 }
 
@@ -954,6 +964,20 @@ pub struct OpenCodeModelInfo {
     pub id: Option<String>,
     #[serde(default)]
     pub name: Option<String>,
+    #[serde(
+        rename = "variants",
+        default,
+        deserialize_with = "deserialize_variant_names"
+    )]
+    pub variant_names: BTreeSet<String>,
+}
+
+fn deserialize_variant_names<'de, D>(deserializer: D) -> Result<BTreeSet<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let variants = BTreeMap::<String, IgnoredAny>::deserialize(deserializer)?;
+    Ok(variants.into_keys().collect())
 }
 
 trait ApplyBasicAuth {
@@ -1274,13 +1298,30 @@ mod tests {
             arguments: "Agent key: btc-2".to_string(),
             agent: Some("analysis".to_string()),
             model: Some("anthropic/claude-sonnet-4".to_string()),
+            variant: Some("high".to_string()),
         };
 
         let json = serde_json::to_value(&request).expect("serialize command request");
 
         assert_eq!(json["model"], "anthropic/claude-sonnet-4");
+        assert_eq!(json["variant"], "high");
         assert!(json.get("provider_id").is_none());
         assert!(json.get("model_id").is_none());
+    }
+
+    #[test]
+    fn command_request_omits_absent_variant() {
+        let request = OpenCodeCommandRequest {
+            command: "vibetrading-analysis".to_string(),
+            arguments: "Agent key: btc-2".to_string(),
+            agent: None,
+            model: None,
+            variant: None,
+        };
+
+        let json = serde_json::to_value(request).expect("serialize command request");
+
+        assert!(json.get("variant").is_none());
     }
 
     #[test]
@@ -1288,7 +1329,7 @@ mod tests {
         let request = OpenCodeConversationSessionRequest {
             title: "New conversation",
             agent: "agent-conversations",
-            model: OpenCodeSessionModelRef::new("anthropic", "claude-sonnet-4"),
+            model: OpenCodeSessionModelRef::new("anthropic", "claude-sonnet-4", Some("high")),
             permission: Vec::new(),
         };
 
@@ -1296,7 +1337,59 @@ mod tests {
 
         assert_eq!(json["model"]["providerID"], "anthropic");
         assert_eq!(json["model"]["id"], "claude-sonnet-4");
+        assert_eq!(json["model"]["variant"], "high");
         assert!(json["model"].get("modelID").is_none());
+
+        let without_variant = OpenCodeConversationSessionRequest {
+            title: "New conversation",
+            agent: "agent-conversations",
+            model: OpenCodeSessionModelRef::new("anthropic", "claude-sonnet-4", None),
+            permission: Vec::new(),
+        };
+        let json = serde_json::to_value(without_variant).expect("serialize conversation session");
+        assert!(json["model"].get("variant").is_none());
+    }
+
+    #[test]
+    fn conversation_prompt_serializes_variant_at_the_top_level() {
+        let request = OpenCodeConversationPromptRequest {
+            message_id: "msg_123",
+            agent: "agent-conversations",
+            model: OpenCodeModelRef::new("anthropic", "claude-sonnet-4"),
+            variant: Some("high"),
+            parts: vec![OpenCodeTextPart {
+                part_type: "text",
+                text: "Hello",
+            }],
+        };
+
+        let json = serde_json::to_value(request).expect("serialize conversation prompt");
+
+        assert_eq!(json["variant"], "high");
+        assert!(json["model"].get("variant").is_none());
+
+        let without_variant = OpenCodeConversationPromptRequest {
+            message_id: "msg_123",
+            agent: "agent-conversations",
+            model: OpenCodeModelRef::new("anthropic", "claude-sonnet-4"),
+            variant: None,
+            parts: Vec::new(),
+        };
+        let json = serde_json::to_value(without_variant).expect("serialize conversation prompt");
+        assert!(json.get("variant").is_none());
+    }
+
+    #[test]
+    fn summarize_request_does_not_include_a_variant() {
+        let request = OpenCodeSummarizeRequest {
+            provider_id: "anthropic",
+            model_id: "claude-sonnet-4",
+            auto: false,
+        };
+
+        let json = serde_json::to_value(request).expect("serialize summarize request");
+
+        assert!(json.get("variant").is_none());
     }
 
     #[test]
@@ -1307,7 +1400,11 @@ mod tests {
                     "id": "anthropic",
                     "name": "Anthropic",
                     "models": {
-                        "claude-sonnet-4": { "name": "Claude Sonnet 4" }
+                        "claude-sonnet-4": {
+                            "name": "Claude Sonnet 4",
+                            "variants": { "high": { "unused": true }, "low": null }
+                        },
+                        "claude-haiku-4": { "name": "Claude Haiku 4" }
                     }
                 }],
                 "connected": ["anthropic"],
@@ -1320,6 +1417,15 @@ mod tests {
         assert_eq!(
             response.all[0].models["claude-sonnet-4"].name.as_deref(),
             Some("Claude Sonnet 4")
+        );
+        assert_eq!(
+            response.all[0].models["claude-sonnet-4"].variant_names,
+            BTreeSet::from(["high".to_string(), "low".to_string()])
+        );
+        assert!(
+            response.all[0].models["claude-haiku-4"]
+                .variant_names
+                .is_empty()
         );
     }
 

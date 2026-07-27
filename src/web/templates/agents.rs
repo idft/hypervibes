@@ -137,6 +137,7 @@ pub struct CreateAgentScheduleFormValues {
     pub timeframe: String,
     pub timeout_seconds: String,
     pub model_selection: String,
+    pub model_variant: String,
     pub operator_prompt: String,
     pub enabled: bool,
 }
@@ -145,6 +146,7 @@ pub struct CreateAgentScheduleFormValues {
 pub struct CreateAgentHookFormValues {
     pub timeout_seconds: String,
     pub model_selection: String,
+    pub model_variant: String,
     pub operator_prompt: String,
     pub enabled: bool,
 }
@@ -161,7 +163,10 @@ pub struct ModelPickerProviderGroup {
 pub struct ModelPickerView {
     pub input_id: String,
     pub input_name: String,
+    pub variant_input_id: String,
+    pub variant_input_name: String,
     pub selected_value: String,
+    pub selected_variant: String,
     pub selected_label: String,
     pub empty_label: String,
     pub provider_groups: Vec<ModelPickerProviderGroup>,

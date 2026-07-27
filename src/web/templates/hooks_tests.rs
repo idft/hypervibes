@@ -19,7 +19,10 @@ fn hook_detail_page_renders_hook_metadata_and_runs() {
         ModelPickerView {
             input_id: "hook-model-selection".to_string(),
             input_name: "model_selection".to_string(),
+            variant_input_id: "hook-model-selection-variant".to_string(),
+            variant_input_name: "model_variant".to_string(),
             selected_value: "anthropic/claude-sonnet-4".to_string(),
+            selected_variant: String::new(),
             selected_label: "Anthropic / Claude Sonnet 4".to_string(),
             empty_label: "None selected".to_string(),
             provider_groups: vec![ModelPickerProviderGroup {
@@ -71,13 +74,17 @@ fn new_hook_page_renders_form() {
         form: CreateAgentHookFormValues {
             timeout_seconds: "600".to_string(),
             model_selection: "anthropic/claude-sonnet-4".to_string(),
+            model_variant: String::new(),
             operator_prompt: "Summarize multi-timeframe agreement".to_string(),
             enabled: true,
         },
         model_picker: ModelPickerView {
             input_id: "hook-model-selection".to_string(),
             input_name: "model_selection".to_string(),
+            variant_input_id: "hook-model-selection-variant".to_string(),
+            variant_input_name: "model_variant".to_string(),
             selected_value: "anthropic/claude-sonnet-4".to_string(),
+            selected_variant: String::new(),
             selected_label: "Anthropic / Claude Sonnet 4".to_string(),
             empty_label: "None selected".to_string(),
             provider_groups: vec![ModelPickerProviderGroup {

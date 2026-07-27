@@ -54,6 +54,8 @@ use super::shared::{
 pub(in crate::web::routes) struct NewConversationForm {
     #[serde(default)]
     model_selection: String,
+    #[serde(default)]
+    model_variant: String,
 }
 #[derive(Default, Deserialize)]
 pub(in crate::web::routes) struct ConversationMessageForm {
@@ -66,6 +68,8 @@ pub(in crate::web::routes) struct ConversationMessageForm {
 pub(in crate::web::routes) struct ConversationSettingsForm {
     #[serde(default)]
     model_selection: String,
+    #[serde(default)]
+    model_variant: String,
     #[serde(default)]
     orders_policy: String,
     #[serde(default)]
@@ -134,6 +138,7 @@ async fn load_snapshot(
             "{}/{}",
             conversation.model_provider_id, conversation.model_id
         ),
+        conversation.model_variant.as_deref(),
         load_model_picker_context(state, &agent).await,
     );
     let orders_policy = conversation
@@ -225,6 +230,11 @@ fn render_snapshot(
             "{}/{}",
             snapshot.conversation.model_provider_id, snapshot.conversation.model_id
         ),
+        new_conversation_model_variant: snapshot
+            .conversation
+            .model_variant
+            .clone()
+            .unwrap_or_default(),
         conversations: conversation_items(&snapshot.conversations, Some(snapshot.conversation.id)),
     }
     .render()?;
@@ -232,10 +242,16 @@ fn render_snapshot(
         agent_key: snapshot.agent.agent_key.clone(),
         conversation_id: snapshot.conversation.id,
         title: snapshot.conversation.title.clone(),
-        model_text: format!(
-            "{}/{}",
-            snapshot.conversation.model_provider_id, snapshot.conversation.model_id
-        ),
+        model_text: match snapshot.conversation.model_variant.as_deref() {
+            Some(variant) => format!(
+                "{}/{} - {variant}",
+                snapshot.conversation.model_provider_id, snapshot.conversation.model_id
+            ),
+            None => format!(
+                "{}/{}",
+                snapshot.conversation.model_provider_id, snapshot.conversation.model_id
+            ),
+        },
         busy: snapshot.busy,
         session: snapshot.session.clone(),
         settings: snapshot.settings.clone(),
@@ -305,6 +321,7 @@ pub(in crate::web::routes) async fn agents_show_chat(
     let picker = build_model_picker_view(
         "conversation-model-selection",
         "",
+        None,
         load_model_picker_context(&state, &agent).await,
     );
     Ok(Html(AgentConversationEmptyPageTemplate::render_view(
@@ -335,6 +352,7 @@ pub(in crate::web::routes) async fn agents_new_chat(
     let picker = build_model_picker_view(
         "conversation-model-selection",
         "",
+        None,
         load_model_picker_context(&state, &agent).await,
     );
     Ok(Html(AgentConversationEmptyPageTemplate::render_view(
@@ -382,18 +400,21 @@ pub(in crate::web::routes) async fn agents_create_conversation(
     let conversations =
         crate::agent_conversations::store::list_agent_conversations(&state.db_pool, &agent_key)
             .await?;
-    let model_selection = if form.model_selection.trim().is_empty() {
+    let (model_selection, model_variant) = if form.model_selection.trim().is_empty() {
         conversations
             .first()
             .map(|conversation| {
-                format!(
-                    "{}/{}",
-                    conversation.model_provider_id, conversation.model_id
+                (
+                    format!(
+                        "{}/{}",
+                        conversation.model_provider_id, conversation.model_id
+                    ),
+                    conversation.model_variant.clone().unwrap_or_default(),
                 )
             })
             .unwrap_or_default()
     } else {
-        form.model_selection
+        (form.model_selection, form.model_variant)
     };
     let selection = match parse_model_selection(&model_selection)
         .and_then(|selection| selection.ok_or_else(|| "Select a model.".to_string()))
@@ -403,22 +424,29 @@ pub(in crate::web::routes) async fn agents_create_conversation(
             return render_empty_error(&state, agent, model_selection, error, user.id).await;
         }
     };
-    let selection = match validate_model_selection_for_agent(&state, &agent, Some(selection)).await
-    {
-        Ok(Some(selection)) => selection,
-        Ok(None) | Err(_) => {
-            return render_empty_error(
-                &state,
-                agent,
-                model_selection,
-                "Select a valid model.".to_string(),
-                user.id,
-            )
-            .await;
-        }
-    };
+    let selection =
+        match validate_model_selection_for_agent(&state, &agent, Some(selection), &model_variant)
+            .await
+        {
+            Ok(Some(selection)) => selection,
+            Ok(None) | Err(_) => {
+                return render_empty_error(
+                    &state,
+                    agent,
+                    model_selection,
+                    "Select a valid model.".to_string(),
+                    user.id,
+                )
+                .await;
+            }
+        };
     let conversation = service(&state)
-        .create_web_conversation(&agent_key, &selection.0, &selection.1)
+        .create_web_conversation(
+            &agent_key,
+            &selection.0,
+            &selection.1,
+            selection.2.as_deref(),
+        )
         .await?;
     Ok(Redirect::to(&format!("/agents/{agent_key}/chat/{}", conversation.id)).into_response())
 }
@@ -433,6 +461,7 @@ async fn render_empty_error(
     let picker = build_model_picker_view(
         "conversation-model-selection",
         &selection,
+        None,
         load_model_picker_context(state, &agent).await,
     );
     Ok(Html(AgentConversationEmptyPageTemplate::render_view(
@@ -551,10 +580,11 @@ pub(in crate::web::routes) async fn agents_update_conversation_settings(
     let selection = parse_model_selection(&form.model_selection)
         .map_err(anyhow::Error::msg)?
         .ok_or_else(|| AppError(anyhow::anyhow!("Select a model.")))?;
-    let selection = validate_model_selection_for_agent(&state, &agent, Some(selection))
-        .await
-        .map_err(|error| AppError(anyhow::anyhow!(error)))?
-        .ok_or_else(|| AppError(anyhow::anyhow!("Select a model.")))?;
+    let selection =
+        validate_model_selection_for_agent(&state, &agent, Some(selection), &form.model_variant)
+            .await
+            .map_err(|error| AppError(anyhow::anyhow!(error)))?
+            .ok_or_else(|| AppError(anyhow::anyhow!("Select a model.")))?;
     let current = crate::agent_conversations::store::get_agent_conversation(
         &state.db_pool,
         &agent_key,
@@ -576,6 +606,7 @@ pub(in crate::web::routes) async fn agents_update_conversation_settings(
             conversation_id,
             &selection.0,
             &selection.1,
+            selection.2.as_deref(),
             &policies,
         )
         .await?;

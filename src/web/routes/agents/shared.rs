@@ -1,7 +1,5 @@
 use crate::{
-    model_catalog::options::{
-        ModelPickerOption, build_model_picker_options, selection_exists_in_options,
-    },
+    model_catalog::options::{ModelPickerOption, build_model_picker_options},
     web::{
         AppState,
         templates::{ModelPickerProviderGroup, ModelPickerView},
@@ -43,6 +41,8 @@ pub(in crate::web::routes) struct TimeoutForm {
 pub(in crate::web::routes) struct ModelSelectionForm {
     #[serde(default)]
     pub model_selection: String,
+    #[serde(default)]
+    pub model_variant: String,
 }
 #[derive(Debug, Default, Deserialize)]
 pub(in crate::web::routes) struct TimeoutErrorQuery {
@@ -106,21 +106,28 @@ pub(in crate::web::routes) async fn load_model_picker_context(
 
 pub(in crate::web::routes) fn selected_model_label(
     selected: &str,
+    selected_variant: &str,
     options: &[ModelPickerOption],
 ) -> String {
     if selected.trim().is_empty() {
         return "None selected".to_string();
     }
 
-    options
+    let label = options
         .iter()
         .find(|option| option.value == selected)
         .map(|option| format!("{} / {}", option.provider_name, option.model_name))
-        .unwrap_or_else(|| selected.to_string())
+        .unwrap_or_else(|| selected.to_string());
+    if selected_variant.trim().is_empty() {
+        label
+    } else {
+        format!("{label} - {}", selected_variant.trim())
+    }
 }
 pub(in crate::web::routes) fn build_model_picker_view(
     input_id: &str,
     selected_value: &str,
+    selected_variant: Option<&str>,
     picker: ModelPickerContext,
 ) -> ModelPickerView {
     let provider_groups = build_provider_groups(&picker.options);
@@ -128,8 +135,15 @@ pub(in crate::web::routes) fn build_model_picker_view(
     ModelPickerView {
         input_id: input_id.to_string(),
         input_name: "model_selection".to_string(),
+        variant_input_id: format!("{input_id}-variant"),
+        variant_input_name: "model_variant".to_string(),
         selected_value: selected_value.to_string(),
-        selected_label: selected_model_label(selected_value, &picker.options),
+        selected_variant: selected_variant.unwrap_or_default().to_string(),
+        selected_label: selected_model_label(
+            selected_value,
+            selected_variant.unwrap_or_default(),
+            &picker.options,
+        ),
         empty_label: "None selected".to_string(),
         provider_groups,
         options: picker.options,
@@ -167,9 +181,15 @@ pub(in crate::web::routes) async fn validate_model_selection_for_agent(
     state: &Arc<AppState>,
     agent: &crate::agents::model::AgentDetailRow,
     selection: Option<(String, String)>,
-) -> Result<Option<(String, String)>, String> {
+    variant: &str,
+) -> Result<Option<(String, String, Option<String>)>, String> {
+    let variant = (!variant.trim().is_empty()).then(|| variant.trim().to_string());
     let Some(selection) = selection else {
-        return Ok(None);
+        return if variant.is_none() {
+            Ok(None)
+        } else {
+            Err("Select a model before choosing a thinking mode.".to_string())
+        };
     };
 
     let options = build_model_picker_options(
@@ -180,11 +200,26 @@ pub(in crate::web::routes) async fn validate_model_selection_for_agent(
     )
     .await
     .map_err(|_| "Could not load configured OpenCode models. Try again.".to_string())?;
-    if selection_exists_in_options(&options, &selection) {
-        Ok(Some(selection))
-    } else {
-        Err("Select a valid model.".to_string())
+    validate_model_selection_in_options(&options, selection, variant)
+}
+
+fn validate_model_selection_in_options(
+    options: &[ModelPickerOption],
+    selection: (String, String),
+    variant: Option<String>,
+) -> Result<Option<(String, String, Option<String>)>, String> {
+    let Some(option) = options
+        .iter()
+        .find(|option| option.provider_id == selection.0 && option.model_id == selection.1)
+    else {
+        return Err("Select a valid model.".to_string());
+    };
+    if let Some(ref variant) = variant
+        && !option.thinking_variants.iter().any(|name| name == variant)
+    {
+        return Err("Select a thinking mode advertised for this model.".to_string());
     }
+    Ok(Some((selection.0, selection.1, variant)))
 }
 pub(in crate::web::routes) fn parse_positive_schedule_seconds(
     raw_value: &str,
@@ -199,5 +234,64 @@ pub(in crate::web::routes) fn parse_positive_schedule_seconds(
             ));
             None
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn option() -> ModelPickerOption {
+        ModelPickerOption {
+            value: "anthropic/claude-sonnet-4".to_string(),
+            provider_id: "anthropic".to_string(),
+            provider_name: "Anthropic".to_string(),
+            provider_logo_url: "/model-catalog/logos/anthropic".to_string(),
+            model_id: "claude-sonnet-4".to_string(),
+            model_name: "Claude Sonnet 4".to_string(),
+            metadata_text: String::new(),
+            thinking_variants: vec!["high".to_string()],
+        }
+    }
+
+    #[test]
+    fn model_validation_accepts_default_and_advertised_variants() {
+        let selection = ("anthropic".to_string(), "claude-sonnet-4".to_string());
+
+        assert_eq!(
+            validate_model_selection_in_options(&[option()], selection.clone(), None).unwrap(),
+            Some((selection.0.clone(), selection.1.clone(), None))
+        );
+        assert_eq!(
+            validate_model_selection_in_options(
+                &[option()],
+                selection.clone(),
+                Some("high".to_string()),
+            )
+            .unwrap(),
+            Some((selection.0, selection.1, Some("high".to_string())))
+        );
+    }
+
+    #[test]
+    fn model_validation_rejects_stale_or_mismatched_variants() {
+        let selection = ("anthropic".to_string(), "claude-sonnet-4".to_string());
+
+        assert!(
+            validate_model_selection_in_options(
+                &[option()],
+                selection.clone(),
+                Some("low".to_string()),
+            )
+            .is_err()
+        );
+        assert!(
+            validate_model_selection_in_options(
+                &[option()],
+                ("anthropic".to_string(), "claude-opus-4".to_string()),
+                Some("high".to_string()),
+            )
+            .is_err()
+        );
     }
 }

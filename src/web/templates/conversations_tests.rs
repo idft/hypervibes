@@ -41,6 +41,7 @@ fn conversation_sidebar_posts_the_selected_conversation_model() {
     let rendered = askama::Template::render(&AgentConversationSidebarPartialTemplate {
         agent_key: "test-agent".to_string(),
         new_conversation_model_selection: "ollama-cloud/glm-5.2".to_string(),
+        new_conversation_model_variant: "high".to_string(),
         conversations: Vec::new(),
     })
     .expect("render conversation sidebar");

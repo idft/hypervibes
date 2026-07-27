@@ -1,6 +1,7 @@
 function initPicker(picker: HTMLElement) {
   if (picker.dataset.modelPickerBound === "true") return;
   const input = picker.parentElement?.querySelector<HTMLInputElement>('input[name="model_selection"]');
+  const variantInput = picker.parentElement?.querySelector<HTMLInputElement>('input[name="model_variant"]');
   const form = input?.closest<HTMLFormElement>("form");
   const label = picker.querySelector<HTMLElement>("[data-model-picker-label]");
   const logo = picker.querySelector<HTMLImageElement>("[data-model-picker-logo]");
@@ -11,11 +12,51 @@ function initPicker(picker: HTMLElement) {
   const search = picker.querySelector<HTMLInputElement>("[data-model-picker-search]");
   const options = Array.from(picker.querySelectorAll<HTMLElement>("[data-model-picker-option]"));
   const providers = Array.from(picker.querySelectorAll<HTMLElement>("[data-model-picker-provider]"));
+  const variantArea = picker.querySelector<HTMLElement>("[data-model-picker-variant-area]");
+  const variantPanels = Array.from(picker.querySelectorAll<HTMLElement>("[data-model-picker-variant-panel]"));
+  const unavailableVariantControl = picker.querySelector<HTMLElement>("[data-model-picker-variant-unavailable]");
+  const variantWarning = picker.querySelector<HTMLElement>("[data-model-picker-variant-warning]");
   const isModal = picker.dataset.modelPickerMode === "modal";
-  let draft = input.value;
+  let draftModel = input.value;
+  let draftVariant = variantInput?.value ?? "";
   let activeProvider = "__none__";
   const selectedOption = (value: string) => options.find((option) => option.dataset.value === value) ?? options[0];
-  const updateSelected = (option: HTMLElement) => { label.textContent = option.dataset.label ?? "None selected"; logo.src = option.dataset.logoUrl ?? ""; logo.classList.toggle("hidden", !option.dataset.logoUrl); defaultBadge.classList.toggle("hidden", Boolean(option.dataset.logoUrl)); };
+  const activeVariantPanel = (model: string) => variantPanels.find((panel) => panel.dataset.modelValue === model);
+  const variantIsAvailable = (model: string, variant: string) => {
+    if (!variant) return true;
+    return Array.from(activeVariantPanel(model)?.querySelectorAll<HTMLOptionElement>("option") ?? []).some((option) => option.value === variant);
+  };
+  const unavailableVariantMessage = (model: string, variant: string) => variant && !variantIsAvailable(model, variant)
+    ? `Thinking mode “${variant}” is no longer available for this model. Choose default or a current mode.`
+    : "";
+  const updateSelected = (option: HTMLElement, variant: string) => {
+    const modelLabel = option.dataset.label ?? "None selected";
+    label.textContent = variant ? `${modelLabel} - ${variant}` : modelLabel;
+    logo.src = option.dataset.logoUrl ?? "";
+    logo.classList.toggle("hidden", !option.dataset.logoUrl);
+    defaultBadge.classList.toggle("hidden", Boolean(option.dataset.logoUrl));
+  };
+  const updateVariantControls = (model: string, variant: string) => {
+    const panel = activeVariantPanel(model);
+    const warning = unavailableVariantMessage(model, variant);
+    variantArea?.classList.remove("hidden");
+    variantPanels.forEach((entry) => entry.classList.toggle("hidden", entry !== panel));
+    unavailableVariantControl?.classList.toggle("hidden", Boolean(panel));
+    const unavailableSelect = unavailableVariantControl?.querySelector<HTMLSelectElement>("[data-model-picker-variant-unavailable-select]");
+    if (unavailableSelect) unavailableSelect.disabled = !warning;
+    if (panel) {
+      const select = panel.querySelector<HTMLSelectElement>("[data-model-picker-variant-select]");
+      if (select) select.value = variantIsAvailable(model, variant) ? variant : "";
+    }
+    if (variantWarning) {
+      variantWarning.textContent = warning;
+      variantWarning.classList.toggle("hidden", !warning);
+    }
+  };
+  const currentModel = () => isModal ? draftModel : input.value;
+  const currentVariant = () => isModal ? draftVariant : variantInput?.value ?? "";
+  const selectionIsValid = () => !unavailableVariantMessage(currentModel(), currentVariant());
+  const notifyChange = (element: HTMLInputElement) => element.dispatchEvent(new Event("change", { bubbles: true }));
   const filter = () => {
     const query = search?.value.trim().toLowerCase() ?? "";
     const matchingProviders = new Set<string>();
@@ -30,8 +71,8 @@ function initPicker(picker: HTMLElement) {
       const matches = !query || (option.dataset.searchText ?? option.dataset.label ?? "").toLowerCase().includes(query);
       const visible = matches && (!isModal || option.dataset.providerId === activeProvider);
       option.classList.toggle("hidden", !visible);
-      option.classList.toggle("bg-zinc-900", option.dataset.value === draft);
-      option.classList.toggle("text-white", option.dataset.value === draft);
+      option.classList.toggle("bg-zinc-900", option.dataset.value === draftModel);
+      option.classList.toggle("text-white", option.dataset.value === draftModel);
     });
     if (isModal) providers.forEach((provider) => {
       const visible = !query || (provider.dataset.searchText ?? "").toLowerCase().includes(query) || matchingProviders.has(provider.dataset.providerId ?? "__none__");
@@ -41,13 +82,108 @@ function initPicker(picker: HTMLElement) {
     });
   };
   const close = () => { modal?.classList.add("hidden"); document.body.classList.remove("overflow-hidden"); };
-  picker.querySelector<HTMLElement>("[data-model-picker-open]")?.addEventListener("click", () => { draft = input.value; activeProvider = selectedOption(draft)?.dataset.providerId ?? "__none__"; if (search) search.value = ""; filter(); modal?.classList.remove("hidden"); document.body.classList.add("overflow-hidden"); search?.focus(); });
+  picker.querySelector<HTMLElement>("[data-model-picker-open]")?.addEventListener("click", () => {
+    draftModel = input.value;
+    draftVariant = variantInput?.value ?? "";
+    activeProvider = selectedOption(draftModel)?.dataset.providerId ?? "__none__";
+    if (search) search.value = "";
+    updateVariantControls(draftModel, draftVariant);
+    filter();
+    modal?.classList.remove("hidden");
+    document.body.classList.add("overflow-hidden");
+    search?.focus();
+  });
   picker.querySelectorAll<HTMLElement>("[data-model-picker-close], [data-model-picker-cancel]").forEach((button) => button.addEventListener("click", close));
   search?.addEventListener("input", filter);
-  providers.forEach((provider) => provider.addEventListener("click", () => { activeProvider = provider.dataset.providerId ?? "__none__"; if (activeProvider === "__none__") draft = ""; filter(); }));
-  options.forEach((option) => option.addEventListener("click", () => { if (isModal) { draft = option.dataset.value ?? ""; activeProvider = option.dataset.providerId ?? "__none__"; filter(); return; } input.value = option.dataset.value ?? ""; input.dispatchEvent(new Event("change", { bubbles: true })); updateSelected(option); if (search) search.value = ""; options.forEach((entry) => entry.classList.remove("hidden")); picker.removeAttribute("open"); if (picker.dataset.modelPickerAutoSubmit === "true") form?.requestSubmit(); }));
-  picker.querySelector<HTMLElement>("[data-model-picker-save]")?.addEventListener("click", () => { input.value = draft; input.dispatchEvent(new Event("change", { bubbles: true })); const option = selectedOption(draft); if (option) updateSelected(option); close(); form?.requestSubmit(); });
-  const option = selectedOption(input.value); if (option) updateSelected(option);
+  providers.forEach((provider) => provider.addEventListener("click", () => {
+    activeProvider = provider.dataset.providerId ?? "__none__";
+    if (activeProvider === "__none__") {
+      draftModel = "";
+      draftVariant = "";
+      updateVariantControls(draftModel, draftVariant);
+    }
+    filter();
+  }));
+  options.forEach((option) => option.addEventListener("click", () => {
+    const nextModel = option.dataset.value ?? "";
+    if (isModal) {
+      if (nextModel !== draftModel) draftVariant = "";
+      draftModel = nextModel;
+      activeProvider = option.dataset.providerId ?? "__none__";
+      updateVariantControls(draftModel, draftVariant);
+      filter();
+      return;
+    }
+    const modelChanged = nextModel !== input.value;
+    input.value = nextModel;
+    draftModel = nextModel;
+    if (modelChanged && variantInput) {
+      variantInput.value = "";
+      notifyChange(variantInput);
+    }
+    draftVariant = variantInput?.value ?? "";
+    notifyChange(input);
+    updateVariantControls(input.value, variantInput?.value ?? "");
+    updateSelected(option, variantInput?.value ?? "");
+    if (search) search.value = "";
+    options.forEach((entry) => entry.classList.remove("hidden"));
+    picker.removeAttribute("open");
+    if (picker.dataset.modelPickerAutoSubmit === "true") form?.requestSubmit();
+  }));
+  variantPanels.forEach((panel) => panel.querySelector<HTMLSelectElement>("[data-model-picker-variant-select]")?.addEventListener("change", (event) => {
+    const select = event.currentTarget;
+    if (!(select instanceof HTMLSelectElement)) return;
+    if (isModal) {
+      draftVariant = select.value;
+      updateVariantControls(draftModel, draftVariant);
+      return;
+    }
+    if (!variantInput) return;
+    variantInput.value = select.value;
+    draftVariant = select.value;
+    notifyChange(variantInput);
+    updateVariantControls(input.value, variantInput.value);
+    updateSelected(selectedOption(input.value), variantInput.value);
+    if (picker.dataset.modelPickerAutoSubmit === "true") form?.requestSubmit();
+  }));
+  unavailableVariantControl?.querySelector<HTMLSelectElement>("[data-model-picker-variant-unavailable-select]")?.addEventListener("change", () => {
+    if (isModal) {
+      draftVariant = "";
+      updateVariantControls(draftModel, draftVariant);
+      return;
+    }
+    if (!variantInput) return;
+    variantInput.value = "";
+    draftVariant = "";
+    notifyChange(variantInput);
+    updateVariantControls(input.value, variantInput.value);
+    updateSelected(selectedOption(input.value), variantInput.value);
+    if (picker.dataset.modelPickerAutoSubmit === "true") form?.requestSubmit();
+  });
+  picker.querySelector<HTMLElement>("[data-model-picker-save]")?.addEventListener("click", () => {
+    if (!selectionIsValid()) {
+      updateVariantControls(draftModel, draftVariant);
+      activeVariantPanel(draftModel)?.querySelector<HTMLSelectElement>("[data-model-picker-variant-select]")?.focus();
+      return;
+    }
+    input.value = draftModel;
+    notifyChange(input);
+    if (variantInput) {
+      variantInput.value = draftVariant;
+      notifyChange(variantInput);
+    }
+    updateSelected(selectedOption(draftModel), draftVariant);
+    close();
+    form?.requestSubmit();
+  });
+  form?.addEventListener("submit", (event) => {
+    if (selectionIsValid()) return;
+    event.preventDefault();
+    updateVariantControls(currentModel(), currentVariant());
+    activeVariantPanel(currentModel())?.querySelector<HTMLSelectElement>("[data-model-picker-variant-select]")?.focus();
+  });
+  updateVariantControls(input.value, variantInput?.value ?? "");
+  updateSelected(selectedOption(input.value), variantInput?.value ?? "");
 }
 
 export function initModelPickers(root: ParentNode = document) {

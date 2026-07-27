@@ -16,8 +16,8 @@ use crate::{
 };
 
 use super::common::{
-    ACTIVE_STATUSES, HookRunInsertMode, insert_run_in_tx, lock_agent_coordination_tx,
-    truncate_error_summary,
+    ACTIVE_STATUSES, HookRunInsertMode, insert_run_with_model_variant_in_tx,
+    lock_agent_coordination_tx, truncate_error_summary,
 };
 use super::hooks::HookForUpdate;
 use super::recovery::{has_active_run_in_lane_tx, recover_inactive_agent_runs_tx};
@@ -54,6 +54,7 @@ pub async fn list_active_agent_runs(pool: &DbPool, agent_key: &str) -> Result<Ve
                 backend_run_ref,
                 model_provider_id,
                 model_id,
+                model_variant,
                 scheduled_for,
                 started_at,
                 finished_at,
@@ -112,6 +113,7 @@ pub async fn list_agent_runs_page(
                 backend_run_ref,
                 model_provider_id,
                 model_id,
+                model_variant,
                 scheduled_for,
                 started_at,
                 finished_at,
@@ -266,6 +268,7 @@ pub async fn get_run(pool: &DbPool, run_id: i64) -> Result<Option<AgenticRunRow>
                 backend_run_ref,
                 model_provider_id,
                 model_id,
+                model_variant,
                 scheduled_for,
                 started_at,
                 finished_at,
@@ -311,6 +314,7 @@ pub async fn insert_queued_run(
                 next_run_at,
                 model_provider_id,
                 model_id,
+                model_variant,
                 timeout_seconds
            FROM agentic_job_schedules
           WHERE agent_key = $1
@@ -344,7 +348,7 @@ pub async fn insert_queued_run(
             .unwrap_or(now);
     let wait_for_lane =
         has_active_run_in_lane_tx(&mut tx, &schedule.agent_key, &schedule.job_kind, now).await?;
-    let run_id = insert_run_in_tx(
+    let run_id = insert_run_with_model_variant_in_tx(
         &mut tx,
         Some(schedule.id),
         None,
@@ -356,6 +360,7 @@ pub async fn insert_queued_run(
         None,
         schedule.model_provider_id.as_deref(),
         schedule.model_id.as_deref(),
+        schedule.model_variant.as_deref(),
         scheduled_for,
         None,
         None,
@@ -456,6 +461,7 @@ pub(crate) async fn insert_queued_hook_run_with_mode(
                 enabled,
                 model_provider_id,
                 model_id,
+                model_variant,
                 timeout_seconds
            FROM agentic_job_hooks
           WHERE agent_key = $1
@@ -485,7 +491,7 @@ pub(crate) async fn insert_queued_hook_run_with_mode(
     let now = Utc::now();
     let outcome =
         if has_active_run_in_lane_tx(&mut tx, &hook.agent_key, &hook.job_kind, now).await? {
-            let run_id = insert_run_in_tx(
+            let run_id = insert_run_with_model_variant_in_tx(
                 &mut tx,
                 None,
                 Some(hook.id),
@@ -497,6 +503,7 @@ pub(crate) async fn insert_queued_hook_run_with_mode(
                 None,
                 hook.model_provider_id.as_deref(),
                 hook.model_id.as_deref(),
+                hook.model_variant.as_deref(),
                 now,
                 None,
                 Some(now),
@@ -506,7 +513,7 @@ pub(crate) async fn insert_queued_hook_run_with_mode(
             .await?;
             QueuedHookRun::Skipped { run_id }
         } else {
-            let run_id = insert_run_in_tx(
+            let run_id = insert_run_with_model_variant_in_tx(
                 &mut tx,
                 None,
                 Some(hook.id),
@@ -518,6 +525,7 @@ pub(crate) async fn insert_queued_hook_run_with_mode(
                 None,
                 hook.model_provider_id.as_deref(),
                 hook.model_id.as_deref(),
+                hook.model_variant.as_deref(),
                 now,
                 None,
                 None,
@@ -565,6 +573,7 @@ pub async fn insert_test_run(pool: &PgPool, schedule_id: i64, status: &str) -> R
                 next_run_at,
                 model_provider_id,
                 model_id,
+                model_variant,
                 timeout_seconds
            FROM agentic_job_schedules
           WHERE id = $1",
@@ -581,10 +590,13 @@ pub async fn insert_test_run(pool: &PgPool, schedule_id: i64, status: &str) -> R
             job_key,
             job_kind,
             timeframe,
-            status,
-            scheduled_for,
-            timeout_seconds
-         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+             status,
+             model_provider_id,
+             model_id,
+             model_variant,
+             scheduled_for,
+             timeout_seconds
+          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
          RETURNING id",
     )
     .bind(schedule.id)
@@ -593,6 +605,9 @@ pub async fn insert_test_run(pool: &PgPool, schedule_id: i64, status: &str) -> R
     .bind(&schedule.job_kind)
     .bind(&schedule.timeframe)
     .bind(status)
+    .bind(&schedule.model_provider_id)
+    .bind(&schedule.model_id)
+    .bind(&schedule.model_variant)
     .bind(Utc::now())
     .bind(schedule.timeout_seconds)
     .fetch_one(pool)

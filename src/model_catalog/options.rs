@@ -18,6 +18,7 @@ pub struct ModelPickerOption {
     pub model_id: String,
     pub model_name: String,
     pub metadata_text: String,
+    pub thinking_variants: Vec<String>,
 }
 
 pub async fn build_model_picker_options(
@@ -70,6 +71,7 @@ pub fn build_model_picker_options_from_response(
                 model_id,
                 model_name,
                 metadata_text: build_metadata_text(catalog_model),
+                thinking_variants: model_info.variant_names.iter().cloned().collect(),
             });
         }
     }
@@ -96,6 +98,7 @@ pub fn parse_model_selection(raw: &str) -> Result<Option<(String, String)>, Stri
     Ok(Some((provider.to_string(), model.to_string())))
 }
 
+#[cfg(test)]
 pub fn selection_exists_in_options(
     options: &[ModelPickerOption],
     selection: &(String, String),
@@ -189,6 +192,7 @@ mod tests {
                     OpenCodeModelInfo {
                         id: None,
                         name: Some("Runtime Sonnet".to_string()),
+                        variant_names: Default::default(),
                     },
                 )]),
                 env: Vec::new(),
@@ -228,6 +232,7 @@ mod tests {
             options[0].metadata_text,
             "1M ctx · tools · reasoning · $3/$15"
         );
+        assert!(options[0].thinking_variants.is_empty());
     }
 
     #[test]
@@ -240,6 +245,7 @@ mod tests {
             model_id: "claude-sonnet-4".to_string(),
             model_name: "Claude Sonnet 4".to_string(),
             metadata_text: String::new(),
+            thinking_variants: Vec::new(),
         }];
 
         assert!(selection_exists_in_options(
@@ -250,5 +256,40 @@ mod tests {
             &options,
             &("anthropic".to_string(), "claude-opus-4".to_string())
         ));
+    }
+
+    #[test]
+    fn picker_options_use_runtime_variant_names_for_connected_providers() {
+        let response = OpenCodeProvidersResponse {
+            all: vec![
+                OpenCodeProviderInfo {
+                    id: "connected".to_string(),
+                    name: None,
+                    models: BTreeMap::from([(
+                        "model".to_string(),
+                        OpenCodeModelInfo {
+                            id: None,
+                            name: None,
+                            variant_names: ["high".to_string(), "low".to_string()]
+                                .into_iter()
+                                .collect(),
+                        },
+                    )]),
+                    env: Vec::new(),
+                },
+                OpenCodeProviderInfo {
+                    id: "disconnected".to_string(),
+                    name: None,
+                    models: BTreeMap::new(),
+                    env: Vec::new(),
+                },
+            ],
+            connected: vec!["connected".to_string()],
+        };
+
+        let options = build_model_picker_options_from_response(&response, None);
+
+        assert_eq!(options.len(), 1);
+        assert_eq!(options[0].thinking_variants, ["high", "low"]);
     }
 }

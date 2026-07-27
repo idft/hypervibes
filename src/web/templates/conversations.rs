@@ -24,7 +24,10 @@ impl AgentConversationListItemView {
     pub fn from_row(row: &AgentConversationListRow, selected: Option<Uuid>) -> Self {
         Self {
             title: row.title.clone(),
-            model_text: format!("{}/{}", row.model_provider_id, row.model_id),
+            model_text: match row.model_variant.as_deref() {
+                Some(variant) => format!("{}/{} - {variant}", row.model_provider_id, row.model_id),
+                None => format!("{}/{}", row.model_provider_id, row.model_id),
+            },
             status_text: row
                 .opencode_status
                 .clone()
@@ -89,6 +92,7 @@ pub struct AgentConversationEmptyPageTemplate {
 pub struct AgentConversationSidebarPartialTemplate {
     pub agent_key: String,
     pub new_conversation_model_selection: String,
+    pub new_conversation_model_variant: String,
     pub conversations: Vec<AgentConversationListItemView>,
 }
 #[derive(Template)]

@@ -17,7 +17,7 @@ use crate::{
     db::DbPool,
 };
 
-use super::common::{insert_run_in_tx, lock_agent_coordination_tx};
+use super::common::{insert_run_with_model_variant_in_tx, lock_agent_coordination_tx};
 use super::hooks::insert_default_opencode_hooks;
 use super::recovery::has_active_run_in_lane_tx;
 use super::workspace::agent_has_blocking_workspace_maintenance_tx;
@@ -147,6 +147,7 @@ pub async fn list_agent_schedules(
                 next_run_at,
                 model_provider_id,
                 model_id,
+                model_variant,
                 timeout_seconds,
                 operator_prompt,
                 created_at,
@@ -180,6 +181,7 @@ pub async fn get_agent_schedule(
                 next_run_at,
                 model_provider_id,
                 model_id,
+                model_variant,
                 timeout_seconds,
                 operator_prompt,
                 created_at,
@@ -201,6 +203,7 @@ pub async fn get_agent_schedule(
 /// `job_kind` + `timeframe` and the schedule's first `next_run_at` is
 /// computed from the same timeframe and trigger delay.
 #[allow(clippy::too_many_arguments)]
+#[cfg(test)]
 pub async fn insert_agent_schedule(
     pool: &DbPool,
     agent_key: &str,
@@ -210,6 +213,36 @@ pub async fn insert_agent_schedule(
     trigger_delay_seconds: i32,
     model_provider_id: Option<&str>,
     model_id: Option<&str>,
+    timeout_seconds: i32,
+    operator_prompt: &str,
+) -> Result<i64> {
+    insert_agent_schedule_with_model_variant(
+        pool,
+        agent_key,
+        job_kind,
+        enabled,
+        timeframe,
+        trigger_delay_seconds,
+        model_provider_id,
+        model_id,
+        None,
+        timeout_seconds,
+        operator_prompt,
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+pub async fn insert_agent_schedule_with_model_variant(
+    pool: &DbPool,
+    agent_key: &str,
+    job_kind: &str,
+    enabled: bool,
+    timeframe: &str,
+    trigger_delay_seconds: i32,
+    model_provider_id: Option<&str>,
+    model_id: Option<&str>,
+    model_variant: Option<&str>,
     timeout_seconds: i32,
     operator_prompt: &str,
 ) -> Result<i64> {
@@ -237,9 +270,10 @@ pub async fn insert_agent_schedule(
             next_run_at,
             model_provider_id,
             model_id,
+            model_variant,
             timeout_seconds,
             operator_prompt
-         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
          RETURNING id",
     )
     .bind(agent_key)
@@ -251,6 +285,7 @@ pub async fn insert_agent_schedule(
     .bind(next_run_at)
     .bind(model_provider_id)
     .bind(model_id)
+    .bind(model_variant)
     .bind(timeout_seconds)
     .bind(operator_prompt)
     .fetch_one(pool)
@@ -298,6 +333,7 @@ pub async fn list_schedule_runs(
                 backend_run_ref,
                 model_provider_id,
                 model_id,
+                model_variant,
                 scheduled_for,
                 started_at,
                 finished_at,
@@ -349,17 +385,19 @@ pub async fn set_schedule_enabled(
     Ok(result.rows_affected() > 0)
 }
 
-pub async fn set_schedule_model(
+pub async fn set_schedule_model_with_variant(
     pool: &DbPool,
     agent_key: &str,
     schedule_id: i64,
     model_provider_id: Option<&str>,
     model_id: Option<&str>,
+    model_variant: Option<&str>,
 ) -> Result<bool> {
     let result = sqlx::query(
         "UPDATE agentic_job_schedules
             SET model_provider_id = $3,
                 model_id = $4,
+                model_variant = $5,
                 updated_at = now()
           WHERE agent_key = $1
             AND id = $2",
@@ -368,6 +406,7 @@ pub async fn set_schedule_model(
     .bind(schedule_id)
     .bind(model_provider_id)
     .bind(model_id)
+    .bind(model_variant)
     .execute(pool)
     .await
     .with_context(|| {
@@ -492,6 +531,7 @@ pub async fn list_due_opencode_schedules(
                 schedules.next_run_at,
                 schedules.model_provider_id,
                 schedules.model_id,
+                schedules.model_variant,
                 schedules.timeout_seconds,
                 schedules.operator_prompt,
                 $3::text AS opencode_base_url,
@@ -537,6 +577,7 @@ pub async fn get_opencode_schedule_for_dispatch(
                 schedules.next_run_at,
                 schedules.model_provider_id,
                 schedules.model_id,
+                schedules.model_variant,
                 schedules.timeout_seconds,
                 schedules.operator_prompt,
                 $3::text AS opencode_base_url,
@@ -621,6 +662,7 @@ pub async fn claim_due_schedule(
                 next_run_at,
                 model_provider_id,
                 model_id,
+                model_variant,
                 timeout_seconds
            FROM agentic_job_schedules
           WHERE id = $1
@@ -693,7 +735,7 @@ pub async fn claim_due_schedule(
     )
     .await?
     {
-        let run_id = insert_run_in_tx(
+        let run_id = insert_run_with_model_variant_in_tx(
             &mut tx,
             Some(schedule.id),
             None,
@@ -705,6 +747,7 @@ pub async fn claim_due_schedule(
             None,
             schedule.model_provider_id.as_deref(),
             schedule.model_id.as_deref(),
+            schedule.model_variant.as_deref(),
             scheduled_for,
             None,
             Some(now),
@@ -714,7 +757,7 @@ pub async fn claim_due_schedule(
         .await?;
         ClaimedScheduleRun::Skipped { run_id }
     } else {
-        let run_id = insert_run_in_tx(
+        let run_id = insert_run_with_model_variant_in_tx(
             &mut tx,
             Some(schedule.id),
             None,
@@ -726,6 +769,7 @@ pub async fn claim_due_schedule(
             None,
             schedule.model_provider_id.as_deref(),
             schedule.model_id.as_deref(),
+            schedule.model_variant.as_deref(),
             scheduled_for,
             None,
             None,
@@ -783,5 +827,6 @@ pub(crate) struct ScheduleForUpdate {
     pub(crate) next_run_at: DateTime<Utc>,
     pub(crate) model_provider_id: Option<String>,
     pub(crate) model_id: Option<String>,
+    pub(crate) model_variant: Option<String>,
     pub(crate) timeout_seconds: i32,
 }

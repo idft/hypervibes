@@ -7,11 +7,13 @@ mod workspace;
 
 #[allow(unused_imports)]
 pub use common::set_all_agent_jobs_enabled;
+#[cfg(test)]
+pub use hooks::insert_agent_hook;
 #[allow(unused_imports)]
 pub use hooks::{
     delete_agent_hook, get_agent_hook, get_enabled_hook_for_event, get_opencode_hook_for_dispatch,
-    insert_agent_hook, list_agent_hooks, list_hook_runs, set_hook_enabled, set_hook_model,
-    set_hook_timeout,
+    insert_agent_hook_with_model_variant, list_agent_hooks, list_hook_runs, set_hook_enabled,
+    set_hook_model_with_variant, set_hook_timeout,
 };
 #[allow(unused_imports)]
 pub use recovery::recover_inactive_runs_all;
@@ -24,12 +26,15 @@ pub use runs::{
 };
 #[cfg(test)]
 pub use runs::{insert_test_run, list_agent_runs, mark_run_aborted};
+#[cfg(test)]
+pub use schedules::insert_agent_schedule;
 #[allow(unused_imports)]
 pub use schedules::{
     ClaimedScheduleRun, claim_due_schedule, delete_agent_schedule, get_agent_schedule,
-    get_opencode_schedule_for_dispatch, insert_agent_schedule, insert_default_opencode_schedules,
-    list_agent_schedules, list_due_opencode_schedules, list_schedule_runs, set_schedule_enabled,
-    set_schedule_model, set_schedule_timeframe, set_schedule_timeout,
+    get_opencode_schedule_for_dispatch, insert_agent_schedule_with_model_variant,
+    insert_default_opencode_schedules, list_agent_schedules, list_due_opencode_schedules,
+    list_schedule_runs, set_schedule_enabled, set_schedule_model_with_variant,
+    set_schedule_timeframe, set_schedule_timeout,
 };
 pub use workspace::agent_has_blocking_workspace_maintenance;
 #[cfg(test)]

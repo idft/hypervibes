@@ -95,6 +95,15 @@ backend-URL-keyed provider cache at startup, including before any agents exist.
 Model pickers wait for an initial discovery instead of rendering an empty
 selector; later pickers reuse that cache for its five-minute lifetime.
 
+The model picker also discovers each model's OpenCode-advertised thinking
+variants from that same `/provider` response. The optional **Thinking mode**
+setting stores one advertised variant per job, hook, or conversation; leaving
+it as `default` stores no variant and preserves OpenCode's default
+behavior. `models.dev` reasoning metadata is display-only and cannot authorize
+a thinking mode. Provider configuration changes can add or remove variants
+after the existing provider-cache refresh/dispose process, so operators must
+choose a current mode when a previously selected variant is no longer offered.
+
 ## Agent Workspaces
 
 Creating an agent generates a workspace under the configured host workspace root.
@@ -121,7 +130,7 @@ The workspace `.env` is backend-owned generated state and should not be read or 
 
 The Chat tab creates persistent `agent_conversations` mappings to dedicated
 OpenCode sessions. They are independent of scheduled jobs and use the selected
-provider/model only for later turns; OpenCode keeps per-message model
+provider/model and optional thinking mode for later turns; OpenCode keeps per-message model
 attribution. The UI mirrors transcript, tool, error, token/context, cost, and
 compaction telemetry through server-sent events. Compact and deletion are
 OpenCode-owned session operations and are available only when the session is
@@ -197,7 +206,11 @@ Automatic follow-up hooks for an analysis job that was already allowed to run ar
 
 The agent detail page exposes `Jobs` and `Prompts` tabs for OpenCode agents.
 
-When a job is dispatched, Vibetrading builds the initial OpenCode command prompt with the agent metadata, selected instruments, the job-specific strategy prompt, the latest `agent_learnings` memory, operator prompt, and trading account snapshot when applicable.
+When a job is dispatched, Vibetrading snapshots its provider/model and optional
+thinking mode into the run before building the initial OpenCode command prompt
+with the agent metadata, selected instruments, the job-specific strategy prompt,
+the latest `agent_learnings` memory, operator prompt, and trading account
+snapshot when applicable.
 
 The OpenCode database plugin's `tool_executions` completion fields can be
 incomplete because plugin writes are asynchronous. Run-detail transcripts use

@@ -115,9 +115,9 @@ fn agents_show_page_renders_base_layout_and_delete_modal() {
     assert!(rendered.contains("Delete agent"));
     assert!(rendered.contains("Agent sections"));
     assert!(rendered.contains("data-agent-tabs"));
-    assert!(rendered.contains(
-        "href=\"/agents/test-agent/chat\" data-agent-tab-link title=\"Chat\""
-    ));
+    assert!(
+        rendered.contains("href=\"/agents/test-agent/chat\" data-agent-tab-link title=\"Chat\"")
+    );
     assert!(!rendered.contains(
         "href=\"/agents/test-agent/chat\" data-agent-tab-link hx-get=\"/agents/test-agent/chat\""
     ));
@@ -584,13 +584,17 @@ fn new_job_page_renders_agent_navbar_with_jobs_active() {
             timeframe: "15m".to_string(),
             timeout_seconds: "900".to_string(),
             model_selection: "anthropic/claude-sonnet-4".to_string(),
+            model_variant: String::new(),
             operator_prompt: "Focus on clean continuation setups".to_string(),
             enabled: true,
         },
         model_picker: ModelPickerView {
             input_id: "job-model-selection".to_string(),
             input_name: "model_selection".to_string(),
+            variant_input_id: "job-model-selection-variant".to_string(),
+            variant_input_name: "model_variant".to_string(),
             selected_value: "anthropic/claude-sonnet-4".to_string(),
+            selected_variant: String::new(),
             selected_label: "Anthropic / Claude Sonnet 4".to_string(),
             empty_label: "None selected".to_string(),
             provider_groups: vec![ModelPickerProviderGroup {

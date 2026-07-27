@@ -19,6 +19,7 @@ pub struct AgentConversationRow {
     pub title: String,
     pub model_provider_id: String,
     pub model_id: String,
+    pub model_variant: Option<String>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
     pub tool_policies: Vec<AgentConversationToolPolicyRow>,
@@ -34,6 +35,7 @@ pub struct AgentConversationListRow {
     pub title: String,
     pub model_provider_id: String,
     pub model_id: String,
+    pub model_variant: Option<String>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
     pub tool_policies: Vec<AgentConversationToolPolicyRow>,
@@ -68,6 +70,7 @@ pub struct CreateAgentConversation {
     pub title: String,
     pub model_provider_id: String,
     pub model_id: String,
+    pub model_variant: Option<String>,
 }
 
 impl CreateAgentConversation {
@@ -98,6 +101,13 @@ impl CreateAgentConversation {
         if self.model_id.trim().is_empty() {
             errors.push("model_id is required.".to_string());
         }
+        if self
+            .model_variant
+            .as_deref()
+            .is_some_and(|variant| variant.trim().is_empty())
+        {
+            errors.push("model_variant must not be empty if provided.".to_string());
+        }
         if errors.is_empty() {
             Ok(())
         } else {
@@ -110,6 +120,7 @@ impl CreateAgentConversation {
 pub struct UpdateAgentConversationModel {
     pub model_provider_id: String,
     pub model_id: String,
+    pub model_variant: Option<String>,
 }
 
 impl UpdateAgentConversationModel {
@@ -121,10 +132,33 @@ impl UpdateAgentConversationModel {
         if self.model_id.trim().is_empty() {
             errors.push("model_id is required.".to_string());
         }
+        if self
+            .model_variant
+            .as_deref()
+            .is_some_and(|variant| variant.trim().is_empty())
+        {
+            errors.push("model_variant must not be empty if provided.".to_string());
+        }
         if errors.is_empty() {
             Ok(())
         } else {
             Err(errors)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn conversation_model_rejects_blank_variant() {
+        let update = UpdateAgentConversationModel {
+            model_provider_id: "anthropic".to_string(),
+            model_id: "claude-sonnet-4".to_string(),
+            model_variant: Some("  ".to_string()),
+        };
+
+        assert!(update.validate().is_err());
     }
 }

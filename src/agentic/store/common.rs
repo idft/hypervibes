@@ -117,7 +117,7 @@ pub(crate) fn truncate_error_summary(value: &str) -> String {
 }
 
 #[allow(clippy::too_many_arguments)]
-pub(crate) async fn insert_run_in_tx(
+pub(crate) async fn insert_run_with_model_variant_in_tx(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     schedule_id: Option<i64>,
     hook_id: Option<i64>,
@@ -129,6 +129,7 @@ pub(crate) async fn insert_run_in_tx(
     backend_run_ref: Option<&str>,
     model_provider_id: Option<&str>,
     model_id: Option<&str>,
+    model_variant: Option<&str>,
     scheduled_for: chrono::DateTime<Utc>,
     started_at: Option<chrono::DateTime<Utc>>,
     finished_at: Option<chrono::DateTime<Utc>>,
@@ -148,12 +149,13 @@ pub(crate) async fn insert_run_in_tx(
             backend_run_ref,
             model_provider_id,
             model_id,
+            model_variant,
             scheduled_for,
             started_at,
             finished_at,
             timeout_seconds,
             error_summary
-         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
          RETURNING id",
     )
     .bind(schedule_id)
@@ -166,6 +168,7 @@ pub(crate) async fn insert_run_in_tx(
     .bind(backend_run_ref)
     .bind(model_provider_id)
     .bind(model_id)
+    .bind(model_variant)
     .bind(scheduled_for)
     .bind(started_at)
     .bind(finished_at)

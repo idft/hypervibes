@@ -1,6 +1,7 @@
 {% if let Some(lazy_options_url) = model_picker.lazy_options_url %}
 <div data-model-picker-lazy>
     <input type="hidden" id="{{ model_picker.input_id }}" name="{{ model_picker.input_name }}" value="{{ model_picker.selected_value }}">
+    <input type="hidden" id="{{ model_picker.variant_input_id }}" name="{{ model_picker.variant_input_name }}" value="{{ model_picker.selected_variant }}">
     <div class="mt-2">
         <button type="button" hx-get="{{ lazy_options_url }}" hx-target="closest [data-model-picker-lazy]" hx-swap="outerHTML" hx-indicator="find [data-model-picker-lazy-loading]" class="flex w-full cursor-pointer items-center justify-between gap-3 rounded-2xl border border-zinc-800 bg-zinc-950/40 px-4 py-3 text-left text-sm text-zinc-200">
             <span class="flex min-w-0 items-center gap-3">
@@ -27,6 +28,7 @@
     <p class="text-xs text-amber-300">{{ warning }}</p>
     {% endif %}
     <input type="hidden" id="{{ model_picker.input_id }}" name="{{ model_picker.input_name }}" value="{{ model_picker.selected_value }}">
+    <input type="hidden" id="{{ model_picker.variant_input_id }}" name="{{ model_picker.variant_input_name }}" value="{{ model_picker.selected_variant }}">
     {% if model_picker.use_modal %}
     <div class="mt-2" data-model-picker data-model-picker-mode="modal">
         <button type="button" class="flex w-full cursor-pointer items-center justify-between gap-3 rounded-2xl border border-zinc-800 bg-zinc-950/40 px-4 py-3 text-left text-sm text-zinc-200" data-model-picker-open>
@@ -91,6 +93,28 @@
                         {% endfor %}
                     </div>
                 </div>
+                <div class="hidden border-t border-zinc-800 px-6 py-4" data-model-picker-variant-area>
+                    <div data-model-picker-variant-unavailable>
+                        <label for="{{ model_picker.variant_input_id }}-unavailable" class="block text-sm font-medium text-zinc-300">Thinking mode</label>
+                        <select id="{{ model_picker.variant_input_id }}-unavailable" disabled class="mt-2 block w-full cursor-not-allowed rounded-xl border border-zinc-800 bg-zinc-950 px-3 py-2 text-sm text-zinc-500 opacity-70 focus:outline-none" data-model-picker-variant-unavailable-select>
+                            <option value="">default</option>
+                        </select>
+                    </div>
+                    {% for option in model_picker.options %}
+                    {% if !option.thinking_variants.is_empty() %}
+                    <div class="hidden" data-model-picker-variant-panel data-model-value="{{ option.value }}">
+                        <label for="{{ model_picker.variant_input_id }}-{{ loop.index }}" class="block text-sm font-medium text-zinc-300">Thinking mode</label>
+                        <select id="{{ model_picker.variant_input_id }}-{{ loop.index }}" class="mt-2 block w-full cursor-pointer rounded-xl border border-zinc-800 bg-zinc-950 px-3 py-2 text-sm text-white focus:border-zinc-600 focus:outline-none" data-model-picker-variant-select>
+                            <option value="">default</option>
+                            {% for variant in option.thinking_variants %}
+                            <option value="{{ variant }}">{{ variant }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    {% endif %}
+                    {% endfor %}
+                    <p class="mt-3 hidden text-xs text-amber-300" role="alert" data-model-picker-variant-warning></p>
+                </div>
                 <div class="flex items-center justify-end gap-3 border-t border-zinc-800 px-6 py-4">
                      <button type="button" class="cursor-pointer rounded-full border border-zinc-800 px-4 py-2 text-sm font-medium text-zinc-300 hover:border-zinc-700 hover:text-white" data-model-picker-cancel>Cancel</button>
                      <button type="button" class="cursor-pointer rounded-full border border-sky-900/60 bg-sky-950/30 px-4 py-2 text-sm font-medium text-sky-300 hover:border-sky-800 hover:bg-sky-950/50 hover:text-sky-200" data-model-picker-save>Save</button>
@@ -126,7 +150,29 @@
                     {% endif %}
                 </span>
             </button>
-            {% endfor %}
+              {% endfor %}
+            <div class="hidden mt-2 border-t border-zinc-800 pt-3" data-model-picker-variant-area>
+                <div data-model-picker-variant-unavailable>
+                    <label for="{{ model_picker.variant_input_id }}-unavailable" class="block text-sm font-medium text-zinc-300">Thinking mode</label>
+                    <select id="{{ model_picker.variant_input_id }}-unavailable" disabled class="mt-2 block w-full cursor-not-allowed rounded-xl border border-zinc-800 bg-zinc-950 px-3 py-2 text-sm text-zinc-500 opacity-70 focus:outline-none" data-model-picker-variant-unavailable-select>
+                        <option value="">default</option>
+                    </select>
+                </div>
+                {% for option in model_picker.options %}
+                {% if !option.thinking_variants.is_empty() %}
+                <div class="hidden" data-model-picker-variant-panel data-model-value="{{ option.value }}">
+                    <label for="{{ model_picker.variant_input_id }}-{{ loop.index }}" class="block text-sm font-medium text-zinc-300">Thinking mode</label>
+                    <select id="{{ model_picker.variant_input_id }}-{{ loop.index }}" class="mt-2 block w-full cursor-pointer rounded-xl border border-zinc-800 bg-zinc-950 px-3 py-2 text-sm text-white focus:border-zinc-600 focus:outline-none" data-model-picker-variant-select>
+                        <option value="">default</option>
+                        {% for variant in option.thinking_variants %}
+                        <option value="{{ variant }}">{{ variant }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                {% endif %}
+                {% endfor %}
+                <p class="mt-3 hidden text-xs text-amber-300" role="alert" data-model-picker-variant-warning></p>
+            </div>
         </div>
     </details>
     {% endif %}

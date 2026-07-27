@@ -252,8 +252,12 @@ pub(in crate::web::routes) async fn agents_show_job_detail(
     }
 
     let picker = load_model_picker_context(&state, &agent).await;
-    let mut model_picker =
-        build_model_picker_view("job-model-selection", &job_view.model_selection, picker);
+    let mut model_picker = build_model_picker_view(
+        "job-model-selection",
+        &job_view.model_selection,
+        job.model_variant.as_deref(),
+        picker,
+    );
     model_picker.show_label = false;
     model_picker.use_modal = true;
     let navbar = load_navbar(&state.db_pool, user.id).await?;
@@ -283,7 +287,12 @@ pub(in crate::web::routes) async fn agents_job_model_picker(
         _ => String::new(),
     };
     let picker = load_model_picker_context(&state, &agent).await;
-    let mut model_picker = build_model_picker_view("job-model-selection", &selected, picker);
+    let mut model_picker = build_model_picker_view(
+        "job-model-selection",
+        &selected,
+        job.model_variant.as_deref(),
+        picker,
+    );
     model_picker.show_label = false;
     model_picker.use_modal = true;
     let html = ModelPickerPartialTemplate::render_view(model_picker)?;
@@ -328,6 +337,7 @@ pub(in crate::web::routes) async fn build_job_prompt_preview(
         account_snapshot,
         model_provider_id: job.model_provider_id.clone(),
         model_id: job.model_id.clone(),
+        model_variant: job.model_variant.clone(),
         timeout_seconds: job.timeout_seconds,
         opencode_base_url: String::new(),
         runtime_config: serde_json::json!({}),
@@ -384,6 +394,8 @@ pub(in crate::web::routes) struct CreateAgentScheduleForm {
     #[serde(default)]
     pub model_selection: String,
     #[serde(default)]
+    pub model_variant: String,
+    #[serde(default)]
     pub operator_prompt: String,
     pub enabled: Option<String>,
 }
@@ -394,6 +406,7 @@ pub(in crate::web::routes) struct ValidatedCreateAgentSchedule {
     pub trigger_delay_seconds: i32,
     pub timeout_seconds: i32,
     pub model_selection: Option<(String, String)>,
+    pub model_variant: String,
     pub operator_prompt: String,
     pub enabled: bool,
 }
@@ -418,6 +431,7 @@ impl CreateAgentScheduleForm {
             timeframe: self.timeframe.clone(),
             timeout_seconds: self.timeout_seconds.clone(),
             model_selection: self.model_selection.clone(),
+            model_variant: self.model_variant.clone(),
             operator_prompt: self.operator_prompt.clone(),
             enabled: self.enabled(),
         }
@@ -461,6 +475,7 @@ impl CreateAgentScheduleForm {
                 trigger_delay_seconds: 1,
                 timeout_seconds: timeout_seconds.expect("validated timeout seconds"),
                 model_selection,
+                model_variant: self.model_variant.clone(),
                 operator_prompt: self.operator_prompt.trim().to_string(),
                 enabled: self.enabled(),
             })
@@ -513,31 +528,38 @@ pub(in crate::web::routes) async fn agents_create_job(
         }
     };
 
-    let validated_model_selection =
-        match validate_model_selection_for_agent(&state, &agent, validated.model_selection.clone())
-            .await
-        {
-            Ok(selection) => selection,
-            Err(error) => {
-                let picker = load_model_picker_context(&state, &agent).await;
-                return Ok(render_new_job_form(
-                    agent,
-                    form.as_template_values(),
-                    picker,
-                    vec![error],
-                    StatusCode::UNPROCESSABLE_ENTITY,
-                    navbar.clone(),
-                ));
-            }
-        };
+    let validated_model_selection = match validate_model_selection_for_agent(
+        &state,
+        &agent,
+        validated.model_selection.clone(),
+        &validated.model_variant,
+    )
+    .await
+    {
+        Ok(selection) => selection,
+        Err(error) => {
+            let picker = load_model_picker_context(&state, &agent).await;
+            return Ok(render_new_job_form(
+                agent,
+                form.as_template_values(),
+                picker,
+                vec![error],
+                StatusCode::UNPROCESSABLE_ENTITY,
+                navbar.clone(),
+            ));
+        }
+    };
 
     let model_provider_id = validated_model_selection
         .as_ref()
-        .map(|(provider, _)| provider.as_str());
+        .map(|(provider, _, _)| provider.as_str());
     let model_id = validated_model_selection
         .as_ref()
-        .map(|(_, model)| model.as_str());
-    if let Err(error) = crate::agentic::store::insert_agent_schedule(
+        .map(|(_, model, _)| model.as_str());
+    let model_variant = validated_model_selection
+        .as_ref()
+        .and_then(|(_, _, variant)| variant.as_deref());
+    if let Err(error) = crate::agentic::store::insert_agent_schedule_with_model_variant(
         &state.db_pool,
         &agent_key,
         &validated.job_kind,
@@ -546,6 +568,7 @@ pub(in crate::web::routes) async fn agents_create_job(
         validated.trigger_delay_seconds,
         model_provider_id,
         model_id,
+        model_variant,
         validated.timeout_seconds,
         &validated.operator_prompt,
     )
@@ -793,18 +816,22 @@ pub(in crate::web::routes) async fn agents_update_job_model(
 
     let parsed = parse_model_selection(&form.model_selection)
         .map_err(|message| AppError(anyhow::anyhow!(message)))?;
-    let validated = validate_model_selection_for_agent(&state, &agent, parsed)
+    let validated = validate_model_selection_for_agent(&state, &agent, parsed, &form.model_variant)
         .await
         .map_err(|message| AppError(anyhow::anyhow!(message)))?;
-    let model_provider_id = validated.as_ref().map(|(provider, _)| provider.as_str());
-    let model_id = validated.as_ref().map(|(_, model)| model.as_str());
+    let model_provider_id = validated.as_ref().map(|(provider, _, _)| provider.as_str());
+    let model_id = validated.as_ref().map(|(_, model, _)| model.as_str());
+    let model_variant = validated
+        .as_ref()
+        .and_then(|(_, _, variant)| variant.as_deref());
 
-    if !crate::agentic::store::set_schedule_model(
+    if !crate::agentic::store::set_schedule_model_with_variant(
         &state.db_pool,
         &agent_key,
         job_id,
         model_provider_id,
         model_id,
+        model_variant,
     )
     .await?
     {
@@ -921,8 +948,12 @@ pub(in crate::web::routes) fn render_new_job_form(
     navbar: crate::web::templates::Navbar,
 ) -> Response {
     let current_path = format!("/agents/{}/jobs/new", agent.agent_key);
-    let model_picker =
-        build_model_picker_view("job-model-selection", &form.model_selection, picker);
+    let model_picker = build_model_picker_view(
+        "job-model-selection",
+        &form.model_selection,
+        (!form.model_variant.trim().is_empty()).then_some(form.model_variant.as_str()),
+        picker,
+    );
     let tabs = build_agent_show_tabs(&agent, AgentShowTab::Jobs);
     let template = AgentScheduleNewPageTemplate {
         agent,

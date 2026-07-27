@@ -17,7 +17,10 @@ fn job_detail_page_renders_job_metadata_and_runs() {
         ModelPickerView {
             input_id: "job-model-selection".to_string(),
             input_name: "model_selection".to_string(),
+            variant_input_id: "job-model-selection-variant".to_string(),
+            variant_input_name: "model_variant".to_string(),
             selected_value: "anthropic/claude-sonnet-4".to_string(),
+            selected_variant: String::new(),
             selected_label: "Anthropic / Claude Sonnet 4".to_string(),
             empty_label: "None selected".to_string(),
             provider_groups: vec![ModelPickerProviderGroup {

@@ -16,10 +16,10 @@ use crate::{
 use super::common::ERROR_SUMMARY_MAX_CHARS;
 use super::test_support::{sample_agent, seed_agent_and_schedule};
 use super::{
-    QueuedHookRun, QueuedScheduleRun, count_agent_runs, get_run, insert_agent_hook,
-    insert_queued_hook_run, insert_queued_hook_run_for_automatic_dispatch, insert_queued_run,
-    insert_test_run, insert_workspace_regenerate_task, list_agent_hooks, list_agent_schedules,
-    mark_run_aborted, mark_run_failed, mark_run_running, mark_run_succeeded,
+    QueuedHookRun, QueuedScheduleRun, count_agent_runs, get_run, insert_queued_hook_run,
+    insert_queued_hook_run_for_automatic_dispatch, insert_queued_run, insert_test_run,
+    insert_workspace_regenerate_task, list_agent_hooks, list_agent_schedules, mark_run_aborted,
+    mark_run_failed, mark_run_running, mark_run_succeeded,
 };
 
 #[tokio::test]
@@ -29,7 +29,7 @@ async fn insert_queued_hook_run_inserts_manual_dispatch_run_without_timeframe() 
     insert_agent(&pool, &sample_agent(&key))
         .await
         .expect("insert agent");
-    let hook_id = insert_agent_hook(
+    let hook_id = super::insert_agent_hook_with_model_variant(
         &pool,
         &key,
         JOB_KIND_MARKET_ANALYSIS,
@@ -37,6 +37,7 @@ async fn insert_queued_hook_run_inserts_manual_dispatch_run_without_timeframe() 
         true,
         None,
         None,
+        Some("high"),
         600,
         "",
     )
@@ -59,6 +60,13 @@ async fn insert_queued_hook_run_inserts_manual_dispatch_run_without_timeframe() 
     assert_eq!(run.hook_id, Some(hook_id));
     assert_eq!(run.job_key, "market-analysis");
     assert_eq!(run.timeframe, None);
+    let (model_variant,): (Option<String>,) =
+        query_as("SELECT model_variant FROM agentic_runs WHERE id = $1")
+            .bind(run_id)
+            .fetch_one(&pool)
+            .await
+            .expect("load run model variant");
+    assert_eq!(model_variant.as_deref(), Some("high"));
 }
 
 #[tokio::test]

@@ -5,7 +5,7 @@ use crate::{agentic::model::JOB_KIND_MARKET_ANALYSIS, agents::store::insert_agen
 use super::test_support::sample_agent;
 use super::{
     QueuedHookRun, delete_agent_hook, get_agent_hook, get_run, insert_agent_hook,
-    insert_queued_hook_run, set_hook_timeout,
+    insert_agent_hook_with_model_variant, insert_queued_hook_run, set_hook_timeout,
 };
 
 #[tokio::test]
@@ -16,7 +16,7 @@ async fn insert_agent_hook_generates_market_analysis_key_and_rejects_duplicates(
         .await
         .expect("insert agent");
 
-    let hook_id = insert_agent_hook(
+    let hook_id = insert_agent_hook_with_model_variant(
         &pool,
         &key,
         JOB_KIND_MARKET_ANALYSIS,
@@ -24,6 +24,7 @@ async fn insert_agent_hook_generates_market_analysis_key_and_rejects_duplicates(
         true,
         None,
         None,
+        Some("high"),
         600,
         "",
     )
@@ -35,6 +36,7 @@ async fn insert_agent_hook_generates_market_analysis_key_and_rejects_duplicates(
         .expect("get hook")
         .expect("hook present");
     assert_eq!(hook.job_key, "market-analysis");
+    assert_eq!(hook.model_variant.as_deref(), Some("high"));
 
     let duplicate = insert_agent_hook(
         &pool,

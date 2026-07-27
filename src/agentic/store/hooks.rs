@@ -62,11 +62,12 @@ pub(crate) async fn insert_default_opencode_hooks(pool: &DbPool, agent_key: &str
             job_kind,
             hook_event,
             enabled,
-            model_provider_id,
-            model_id,
-            timeout_seconds,
-            operator_prompt
-         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+             model_provider_id,
+             model_id,
+             model_variant,
+             timeout_seconds,
+             operator_prompt
+          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
          ON CONFLICT (agent_key, job_kind, hook_event) DO NOTHING",
     )
     .bind(agent_key)
@@ -74,6 +75,7 @@ pub(crate) async fn insert_default_opencode_hooks(pool: &DbPool, agent_key: &str
     .bind(JOB_KIND_ANALYSIS_CODING)
     .bind(HOOK_EVENT_DAILY_REVIEW_COMPLETED)
     .bind(false)
+    .bind(None::<&str>)
     .bind(None::<&str>)
     .bind(None::<&str>)
     .bind(DEFAULT_CODING_TIMEOUT_SECONDS)
@@ -97,6 +99,7 @@ pub async fn list_agent_hooks(pool: &DbPool, agent_key: &str) -> Result<Vec<Agen
                 enabled,
                 model_provider_id,
                 model_id,
+                model_variant,
                 timeout_seconds,
                 operator_prompt,
                 created_at,
@@ -127,6 +130,7 @@ pub async fn get_agent_hook(
                 enabled,
                 model_provider_id,
                 model_id,
+                model_variant,
                 timeout_seconds,
                 operator_prompt,
                 created_at,
@@ -158,6 +162,7 @@ pub async fn get_enabled_hook_for_event(
                 enabled,
                 model_provider_id,
                 model_id,
+                model_variant,
                 timeout_seconds,
                 operator_prompt,
                 created_at,
@@ -177,6 +182,7 @@ pub async fn get_enabled_hook_for_event(
 }
 
 #[allow(clippy::too_many_arguments)]
+#[cfg(test)]
 pub async fn insert_agent_hook(
     pool: &DbPool,
     agent_key: &str,
@@ -185,6 +191,34 @@ pub async fn insert_agent_hook(
     enabled: bool,
     model_provider_id: Option<&str>,
     model_id: Option<&str>,
+    timeout_seconds: i32,
+    operator_prompt: &str,
+) -> Result<i64> {
+    insert_agent_hook_with_model_variant(
+        pool,
+        agent_key,
+        job_kind,
+        hook_event,
+        enabled,
+        model_provider_id,
+        model_id,
+        None,
+        timeout_seconds,
+        operator_prompt,
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+pub async fn insert_agent_hook_with_model_variant(
+    pool: &DbPool,
+    agent_key: &str,
+    job_kind: &str,
+    hook_event: &str,
+    enabled: bool,
+    model_provider_id: Option<&str>,
+    model_id: Option<&str>,
+    model_variant: Option<&str>,
     timeout_seconds: i32,
     operator_prompt: &str,
 ) -> Result<i64> {
@@ -198,9 +232,10 @@ pub async fn insert_agent_hook(
             enabled,
             model_provider_id,
             model_id,
+            model_variant,
             timeout_seconds,
             operator_prompt
-         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
          RETURNING id",
     )
     .bind(agent_key)
@@ -210,6 +245,7 @@ pub async fn insert_agent_hook(
     .bind(enabled)
     .bind(model_provider_id)
     .bind(model_id)
+    .bind(model_variant)
     .bind(timeout_seconds)
     .bind(operator_prompt)
     .fetch_one(pool)
@@ -258,17 +294,19 @@ pub async fn delete_agent_hook(pool: &DbPool, agent_key: &str, hook_id: i64) -> 
     Ok(result.rows_affected() > 0)
 }
 
-pub async fn set_hook_model(
+pub async fn set_hook_model_with_variant(
     pool: &DbPool,
     agent_key: &str,
     hook_id: i64,
     model_provider_id: Option<&str>,
     model_id: Option<&str>,
+    model_variant: Option<&str>,
 ) -> Result<bool> {
     let result = sqlx::query(
         "UPDATE agentic_job_hooks
             SET model_provider_id = $3,
                 model_id = $4,
+                model_variant = $5,
                 updated_at = now()
           WHERE agent_key = $1
             AND id = $2",
@@ -277,6 +315,7 @@ pub async fn set_hook_model(
     .bind(hook_id)
     .bind(model_provider_id)
     .bind(model_id)
+    .bind(model_variant)
     .execute(pool)
     .await
     .with_context(|| format!("failed to update model for hook {hook_id} agent {agent_key}"))?;
@@ -325,6 +364,7 @@ pub async fn get_opencode_hook_for_dispatch(
                 hooks.hook_event,
                 hooks.model_provider_id,
                 hooks.model_id,
+                hooks.model_variant,
                 hooks.timeout_seconds,
                 hooks.operator_prompt,
                 $3::text AS opencode_base_url,
@@ -367,6 +407,7 @@ pub async fn list_hook_runs(
                 backend_run_ref,
                 model_provider_id,
                 model_id,
+                model_variant,
                 scheduled_for,
                 started_at,
                 finished_at,
@@ -399,4 +440,5 @@ pub(crate) struct HookForUpdate {
     pub(crate) timeout_seconds: i32,
     pub(crate) model_provider_id: Option<String>,
     pub(crate) model_id: Option<String>,
+    pub(crate) model_variant: Option<String>,
 }

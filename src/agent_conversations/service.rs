@@ -84,6 +84,7 @@ impl<'a> ConversationService<'a> {
         agent_key: &str,
         provider_id: &str,
         model_id: &str,
+        model_variant: Option<&str>,
     ) -> Result<AgentConversationRow> {
         let agent = self.load_agent_with_workspace(agent_key).await?;
         let runtime = workspace_runtime(&agent)?;
@@ -95,6 +96,7 @@ impl<'a> ConversationService<'a> {
                 &runtime.workspace_container_path,
                 provider_id,
                 model_id,
+                model_variant,
                 default_permission_rules(),
             )
             .await?;
@@ -106,6 +108,7 @@ impl<'a> ConversationService<'a> {
             title: "New conversation".to_string(),
             model_provider_id: provider_id.to_string(),
             model_id: model_id.to_string(),
+            model_variant: model_variant.map(ToOwned::to_owned),
         };
         match store::create_conversation_with_default_policies(self.pool, &input).await {
             Ok(conversation) => Ok(conversation),
@@ -175,6 +178,7 @@ impl<'a> ConversationService<'a> {
                     message_id: message_id.to_string(),
                     provider_id: conversation.model_provider_id.clone(),
                     model_id: conversation.model_id.clone(),
+                    variant: conversation.model_variant.clone(),
                     text: text.to_string(),
                 },
             )
@@ -304,6 +308,7 @@ impl<'a> ConversationService<'a> {
         conversation_id: Uuid,
         provider_id: &str,
         model_id: &str,
+        model_variant: Option<&str>,
         policies: &[AgentConversationToolPolicyRow],
     ) -> Result<()> {
         let agent = self.load_agent_with_workspace(agent_key).await?;
@@ -321,21 +326,13 @@ impl<'a> ConversationService<'a> {
                 rules,
             )
             .await?;
-        if !store::update_conversation_model(
+        if !store::update_conversation_model_and_policies(
             self.pool,
             agent_key,
             conversation_id,
             provider_id,
             model_id,
-        )
-        .await?
-        {
-            bail!("Conversation no longer exists.");
-        }
-        if !store::replace_conversation_tool_policies(
-            self.pool,
-            agent_key,
-            conversation_id,
+            model_variant,
             policies,
         )
         .await?
