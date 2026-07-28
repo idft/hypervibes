@@ -14,15 +14,14 @@ use crate::{
     model_catalog::options::ModelPickerOption,
 };
 
-use super::hooks::AgenticJobHookView;
-use super::jobs::AgenticJobScheduleView;
+use super::jobs::HarnessJobView;
 use super::memories::{
     AgentMemoryDetailPartialTemplate, AgentMemoryTimelinePartialTemplate, MemoryTimelineItem,
     MemoryView, TransactionView, build_memory_timeline,
 };
 use super::navbar::Navbar;
 use super::opencode::OpenCodeWorkspaceSettingsView;
-use super::runs::AgenticRunView;
+use super::runs::HarnessRunView;
 use super::{account::TradingAccountChoicesView, balance::AccountBalanceView};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -122,18 +121,10 @@ pub struct AgentTradingAccountChoicesTemplate {
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
-pub struct CreateAgentScheduleFormValues {
+pub struct CreateHarnessJobFormValues {
+    pub trigger_type: String,
     pub job_kind: String,
     pub timeframe: String,
-    pub timeout_seconds: String,
-    pub model_selection: String,
-    pub model_variant: String,
-    pub operator_prompt: String,
-    pub enabled: bool,
-}
-
-#[derive(Debug, Clone, Default, Deserialize)]
-pub struct CreateAgentHookFormValues {
     pub timeout_seconds: String,
     pub model_selection: String,
     pub model_variant: String,
@@ -221,24 +212,11 @@ impl PromptEditorView {
 
 #[derive(Template)]
 #[template(path = "agents/jobs/new.html")]
-pub struct AgentScheduleNewPageTemplate {
+pub struct AgentJobNewPageTemplate {
     pub agent: AgentDetailRow,
     pub tabs: Vec<AgentShowTabLink>,
     pub agent_tabs_use_htmx: bool,
-    pub form: CreateAgentScheduleFormValues,
-    pub model_picker: ModelPickerView,
-    pub errors: Vec<String>,
-    pub current_path: String,
-    pub navbar: Navbar,
-}
-
-#[derive(Template)]
-#[template(path = "agents/hooks/new.html")]
-pub struct AgentHookNewPageTemplate {
-    pub agent: AgentDetailRow,
-    pub tabs: Vec<AgentShowTabLink>,
-    pub agent_tabs_use_htmx: bool,
-    pub form: CreateAgentHookFormValues,
+    pub form: CreateHarnessJobFormValues,
     pub model_picker: ModelPickerView,
     pub errors: Vec<String>,
     pub current_path: String,
@@ -247,7 +225,7 @@ pub struct AgentHookNewPageTemplate {
 
 #[derive(Debug, Clone)]
 pub struct AgentRecentRunsView {
-    pub recent_runs: Vec<AgenticRunView>,
+    pub recent_runs: Vec<HarnessRunView>,
     pub recent_runs_loaded: bool,
     pub recent_runs_page: usize,
     pub recent_runs_total_pages: usize,
@@ -335,10 +313,8 @@ pub struct AgentsShowPageTemplate {
     pub current_path: String,
     pub is_main_account: bool,
     pub subaccount_name: Option<String>,
-    pub jobs: Vec<AgenticJobScheduleView>,
-    pub hooks: Vec<AgenticJobHookView>,
+    pub jobs: Vec<HarnessJobView>,
     pub jobs_loaded: bool,
-    pub hooks_loaded: bool,
     pub can_enable_all_jobs: bool,
     pub can_disable_all_jobs: bool,
     pub recent_runs_section: AgentRecentRunsView,
@@ -393,9 +369,7 @@ impl AgentsShowPageTemplate {
             latest_analysis_summary_html: String::new(),
             sparklines_html: String::new(),
             jobs: Vec::new(),
-            hooks: Vec::new(),
             jobs_loaded: false,
-            hooks_loaded: false,
             can_enable_all_jobs: false,
             can_disable_all_jobs: false,
             recent_runs_section: AgentRecentRunsView::new(&agent_key, 1),

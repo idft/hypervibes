@@ -13,14 +13,14 @@ async fn run_detail_page_handles_missing_opencode_session_mirror() {
         .await
         .expect("insert opencode agent");
 
-    let schedules = crate::agentic::store::list_agent_schedules(&pool, &agent_key)
+    let jobs = crate::harness::store::list_agent_jobs(&pool, &agent_key)
         .await
-        .expect("list schedules");
-    let schedule_id = schedules.first().expect("default schedule").id;
-    let run_id = crate::agentic::store::insert_test_run(&pool, schedule_id, "running")
+        .expect("list jobs");
+    let job_id = jobs.first().expect("default job").id;
+    let run_id = crate::harness::store::insert_test_run(&pool, job_id, "running")
         .await
         .expect("insert run");
-    crate::agentic::store::mark_run_succeeded(&pool, run_id, Some("ses_ui_detail"))
+    crate::harness::store::mark_run_succeeded(&pool, run_id, Some("ses_ui_detail"))
         .await
         .expect("mark succeeded");
 
@@ -36,7 +36,7 @@ async fn run_detail_page_handles_missing_opencode_session_mirror() {
 
     assert_eq!(response.status(), StatusCode::OK);
     let text = response_text(response).await;
-    assert!(text.contains("Scheduled for"));
+    assert!(text.contains("Jobd for"));
     assert!(text.contains("no matching row was found yet in the"));
 }
 
@@ -47,16 +47,16 @@ async fn run_detail_stream_emits_summary_and_transcript_snapshots() {
     let (agent_key, _wallet_address) = insert_test_opencode_agent(&state)
         .await
         .expect("insert opencode agent");
-    let schedule_id = crate::agentic::store::list_agent_schedules(&pool, &agent_key)
+    let job_id = crate::harness::store::list_agent_jobs(&pool, &agent_key)
         .await
-        .expect("list schedules")
+        .expect("list jobs")
         .first()
-        .expect("default schedule")
+        .expect("default job")
         .id;
-    let run_id = crate::agentic::store::insert_test_run(&pool, schedule_id, "running")
+    let run_id = crate::harness::store::insert_test_run(&pool, job_id, "running")
         .await
         .expect("insert run");
-    crate::agentic::store::mark_run_succeeded(&pool, run_id, Some("ses_stream_detail"))
+    crate::harness::store::mark_run_succeeded(&pool, run_id, Some("ses_stream_detail"))
         .await
         .expect("mark succeeded");
     sqlx::query("INSERT INTO opencode.sessions (id) VALUES ('ses_stream_detail')")
@@ -103,16 +103,16 @@ async fn run_detail_stream_rerenders_after_matching_session_event() {
     let (agent_key, _wallet_address) = insert_test_opencode_agent(&state)
         .await
         .expect("insert opencode agent");
-    let schedule_id = crate::agentic::store::list_agent_schedules(&pool, &agent_key)
+    let job_id = crate::harness::store::list_agent_jobs(&pool, &agent_key)
         .await
-        .expect("list schedules")
+        .expect("list jobs")
         .first()
-        .expect("default schedule")
+        .expect("default job")
         .id;
-    let run_id = crate::agentic::store::insert_test_run(&pool, schedule_id, "running")
+    let run_id = crate::harness::store::insert_test_run(&pool, job_id, "running")
         .await
         .expect("insert run");
-    crate::agentic::store::mark_run_succeeded(&pool, run_id, Some("ses_stream_update"))
+    crate::harness::store::mark_run_succeeded(&pool, run_id, Some("ses_stream_update"))
         .await
         .expect("mark succeeded");
     sqlx::query("INSERT INTO opencode.sessions (id) VALUES ('ses_stream_update')")

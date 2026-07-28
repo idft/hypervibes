@@ -144,14 +144,6 @@ pub fn router(state: Arc<AppState>) -> Router {
             get(agents_job_model_picker),
         )
         .route(
-            "/agents/{agent_key}/hooks/{hook_id}",
-            get(agents_show_hook_detail),
-        )
-        .route(
-            "/agents/{agent_key}/hooks/{hook_id}/model-picker",
-            get(agents_hook_model_picker),
-        )
-        .route(
             "/agents/{agent_key}/jobs/{job_id}/toggle",
             post(agents_toggle_job),
         )
@@ -174,28 +166,6 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route(
             "/agents/{agent_key}/jobs/{job_id}/timeframe",
             post(agents_update_job_timeframe),
-        )
-        .route("/agents/{agent_key}/hooks/new", get(agents_new_hook))
-        .route("/agents/{agent_key}/hooks", post(agents_create_hook))
-        .route(
-            "/agents/{agent_key}/hooks/{hook_id}/run",
-            post(agents_run_hook_now),
-        )
-        .route(
-            "/agents/{agent_key}/hooks/{hook_id}/toggle",
-            post(agents_toggle_hook),
-        )
-        .route(
-            "/agents/{agent_key}/hooks/{hook_id}/delete",
-            post(agents_delete_hook),
-        )
-        .route(
-            "/agents/{agent_key}/hooks/{hook_id}/model",
-            post(agents_update_hook_model),
-        )
-        .route(
-            "/agents/{agent_key}/hooks/{hook_id}/timeout",
-            post(agents_update_hook_timeout),
         )
         .route(
             "/agents/{agent_key}/runs/{run_id}",

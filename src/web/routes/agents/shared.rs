@@ -15,7 +15,8 @@ use tracing::warn;
 pub(in crate::web::routes) const WORKSPACE_MAINTENANCE_ACTIVE_WARNING: &str = "Workspace maintenance is queued or running for this agent. Run now is unavailable until it completes.";
 pub(in crate::web::routes) const WORKSPACE_MAINTENANCE_DUPLICATE_WARNING: &str =
     "A workspace maintenance task is already queued or running for this agent.";
-pub(in crate::web::routes) const SERVER_SHUTTING_DOWN_WARNING: &str = "Server is shutting down. Scheduled Run now is unavailable until the next start. Hook Run now is still allowed while the server drains.";
+pub(in crate::web::routes) const SERVER_SHUTTING_DOWN_WARNING: &str =
+    "Server is shutting down. Run now is unavailable until the next start.";
 #[derive(Debug, Clone)]
 pub(in crate::web::routes) struct ModelPickerContext {
     pub options: Vec<ModelPickerOption>,
@@ -29,7 +30,7 @@ pub(in crate::web::routes) fn is_htmx_request(headers: &HeaderMap) -> bool {
         .unwrap_or(false)
 }
 #[derive(Debug, Default, Deserialize)]
-pub(in crate::web::routes) struct ToggleScheduleForm {
+pub(in crate::web::routes) struct ToggleJobForm {
     pub enabled: Option<String>,
 }
 #[derive(Debug, Default, Deserialize)]
@@ -43,13 +44,6 @@ pub(in crate::web::routes) struct ModelSelectionForm {
     pub model_selection: String,
     #[serde(default)]
     pub model_variant: String,
-}
-#[derive(Debug, Default, Deserialize)]
-pub(in crate::web::routes) struct TimeoutErrorQuery {
-    #[serde(default)]
-    pub timeout_error: Option<String>,
-    #[serde(default)]
-    pub warning: Option<String>,
 }
 pub(in crate::web::routes) fn timeout_error_redirect(
     detail_url: &str,
@@ -221,7 +215,7 @@ fn validate_model_selection_in_options(
     }
     Ok(Some((selection.0, selection.1, variant)))
 }
-pub(in crate::web::routes) fn parse_positive_schedule_seconds(
+pub(in crate::web::routes) fn parse_positive_job_seconds(
     raw_value: &str,
     field_name: &str,
     errors: &mut Vec<String>,

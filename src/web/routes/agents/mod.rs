@@ -1,6 +1,3 @@
-mod hooks;
-#[cfg(test)]
-mod hooks_tests;
 mod index;
 #[cfg(test)]
 mod index_tests;
@@ -35,8 +32,8 @@ mod transactions_tests;
 #[cfg(test)]
 use self::shared::*;
 pub(in crate::web::routes) use self::{
-    chat::*, hooks::*, index::*, jobs::*, live_stream::*, memories::*, prompts::*, runs::*,
-    settings::*, show::*, transactions::*,
+    chat::*, index::*, jobs::*, live_stream::*, memories::*, prompts::*, runs::*, settings::*,
+    show::*, transactions::*,
 };
 mod chat;
 #[cfg(test)]

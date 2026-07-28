@@ -2,12 +2,12 @@ use std::sync::Arc;
 
 use crate::{
     agent_conversations::service::ConversationTurnTracker,
-    agentic::{
-        backend::AgenticBackend, in_flight::InFlightTracker, workspace_lease::WorkspaceLeaseManager,
-    },
     agents::crypto::EncryptionKey,
     cache::asset::AssetCache,
     db::DbPool,
+    harness::{
+        backend::HarnessBackend, in_flight::InFlightTracker, workspace_lease::WorkspaceLeaseManager,
+    },
     hyperliquid::builder_fee::BuilderFeeCache,
     hyperliquid::live_state::LiveAccountStore,
     model_catalog::models_dev::ModelsDevCatalog,
@@ -23,7 +23,7 @@ pub struct AppState {
     pub db_pool: DbPool,
     #[cfg(test)]
     pub _test_db_guard: Option<Arc<crate::test_db::TestDb>>,
-    pub agentic_backend: Arc<dyn AgenticBackend>,
+    pub harness_backend: Arc<dyn HarnessBackend>,
     pub encryption_key: EncryptionKey,
     pub live_accounts: Arc<LiveAccountStore>,
     pub ui_events: Arc<UiEventHub>,

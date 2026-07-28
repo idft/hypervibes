@@ -54,7 +54,11 @@ function installDetailDeleteModal() {
       const kind = trigger.dataset.deleteKind ?? "job";
       if (form) form.action = trigger.dataset.deleteAction ?? "";
       const title = document.getElementById("detail-delete-modal-title"); const body = document.getElementById("detail-delete-modal-body"); const confirm = document.getElementById("confirm-detail-delete-btn");
-      if (title) title.textContent = `Delete ${kind}`; if (body) body.textContent = `Are you sure you want to delete ${trigger.dataset.deleteLabel ?? kind}? This action cannot be undone.`; if (confirm) confirm.textContent = `Delete ${kind}`;
+      if (title) title.textContent = `Delete ${kind}`;
+      if (body) body.textContent = kind === "job"
+        ? `Delete ${trigger.dataset.deleteLabel ?? kind}? This permanently removes the job, its run history, and transcript sessions.`
+        : `Are you sure you want to delete ${trigger.dataset.deleteLabel ?? kind}? This action cannot be undone.`;
+      if (confirm) confirm.textContent = `Delete ${kind}`;
       modal.classList.remove("hidden"); modal.classList.add("flex");
     } else if (modal && (target?.closest("#cancel-detail-delete-btn") || target === modal)) close(modal);
   });

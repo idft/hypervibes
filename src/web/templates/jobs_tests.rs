@@ -5,10 +5,10 @@ use crate::web::templates::test_support::*;
 fn job_detail_page_renders_job_metadata_and_runs() {
     let agent = sample_opencode_detail_row();
     let job =
-        AgenticJobDetailView::from_row(&sample_schedule_row(1, "analysis-15m", "analysis", true));
+        HarnessJobDetailView::from_row(&sample_candle_job_row(1, "analysis-15m", "analysis", true));
     let runs = vec![
-        AgenticRunView::from_row(&sample_run_row(1, "succeeded", "analysis-15m")),
-        AgenticRunView::from_row(&sample_run_row(2, "failed", "analysis-15m")),
+        HarnessRunView::from_row(&sample_run_row(1, "succeeded", "analysis-15m")),
+        HarnessRunView::from_row(&sample_run_row(2, "failed", "analysis-15m")),
     ];
 
     let rendered = AgentJobDetailPageTemplate::render_view(
@@ -60,4 +60,13 @@ fn job_detail_page_renders_job_metadata_and_runs() {
     assert!(rendered.contains("data-model-picker-mode="));
     assert!(rendered.contains("Cancel"));
     assert!(rendered.contains("Save"));
+    assert!(!rendered.contains("Trigger delay"));
+}
+
+#[test]
+fn event_job_view_has_no_next_run() {
+    let view = HarnessJobView::from_row(&sample_event_job_row(3, true));
+
+    assert_eq!(view.trigger_text, "Analysis batch completed");
+    assert!(view.next_run_at.is_none());
 }

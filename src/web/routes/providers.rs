@@ -113,7 +113,7 @@ pub(in crate::web::routes) async fn providers_index(
             Some("OpenCode provider information is temporarily unavailable.".to_string()),
         ),
     };
-    let reload_task = crate::agentic::store::get_latest_provider_config_reload_task(&state.db_pool)
+    let reload_task = crate::harness::store::get_latest_provider_config_reload_task(&state.db_pool)
         .await
         .unwrap_or(None);
     let reload_status = ProviderReloadStatusView::from_task(reload_task);
@@ -467,12 +467,12 @@ pub(in crate::web::routes) async fn provider_reload_status(
     State(state): State<Arc<AppState>>,
     _user: AuthenticatedUser,
 ) -> Result<Response, AppError> {
-    let task = crate::agentic::store::get_latest_provider_config_reload_task(&state.db_pool)
+    let task = crate::harness::store::get_latest_provider_config_reload_task(&state.db_pool)
         .await
         .unwrap_or(None);
     let reload_completed = task
         .as_ref()
-        .is_some_and(|task| task.status == crate::agentic::model::MAINTENANCE_STATUS_SUCCEEDED);
+        .is_some_and(|task| task.status == crate::harness::model::MAINTENANCE_STATUS_SUCCEEDED);
     let reload_status = ProviderReloadStatusView::from_task(task);
     let view = ProviderReloadStatusTemplate { reload_status };
     let mut response = Html(
@@ -514,7 +514,7 @@ async fn queue_provider_config_reload(
     state: &AppState,
     failure_message: &str,
 ) -> Result<(), AppError> {
-    crate::agentic::store::insert_provider_config_reload_task(&state.db_pool)
+    crate::harness::store::insert_provider_config_reload_task(&state.db_pool)
         .await
         .map(|_| ())
         .map_err(|error| AppError(error.context(failure_message.to_string())))

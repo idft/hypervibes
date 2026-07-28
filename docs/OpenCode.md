@@ -162,7 +162,11 @@ Deleting an OpenCode agent deletes its generated workspace directory after the d
 
 ## Scheduling
 
-OpenCode jobs are scheduled by Vibetrading.
+OpenCode harness jobs are scheduled by Vibetrading. Candle-close jobs are driven
+by the scheduler; the two fixed event triggers are direct follow-ups rather
+than a durable event queue. Deleting an idle harness job deletes each terminal
+OpenCode session through the OpenCode HTTP API before the job history is
+cascaded.
 
 Current built-in job kinds are:
 
@@ -172,13 +176,13 @@ Current built-in job kinds are:
 - `daily_review`
 - `analysis_coding` hook
 
-The `AgenticScheduler` claims due work, dispatches runs through the OpenCode backend adapter, and stores run state in Postgres.
+The `HarnessScheduler` claims due work, dispatches runs through the OpenCode backend adapter, and stores run state in Postgres.
 
-Before claiming new work for an agent lane, Vibetrading reconciles stale active runs left behind by app restarts. A `running` run whose OpenCode session is recorded as `idle` after a command was created is marked `succeeded`; queued or running orphan rows that have exceeded their configured timeout are marked `failed`, regardless of whether they ever reached an OpenCode session. The `AgenticScheduler` also runs a periodic global recovery sweep (throttled to once a minute) that applies the same reconciliation across every agent, so a `running` run whose dispatch worker has died does not block its lane until the next claim attempt. This prevents one interrupted process from causing all later runs in the same lane to be skipped forever.
+Before claiming new work for an agent lane, Vibetrading reconciles stale active runs left behind by app restarts. A `running` run whose OpenCode session is recorded as `idle` after a command was created is marked `succeeded`; queued or running orphan rows that have exceeded their configured timeout are marked `failed`, regardless of whether they ever reached an OpenCode session. The `HarnessScheduler` also runs a periodic global recovery sweep (throttled to once a minute) that applies the same reconciliation across every agent, so a `running` run whose dispatch worker has died does not block its lane until the next claim attempt. This prevents one interrupted process from causing all later runs in the same lane to be skipped forever.
 
 ## Shutdown And Maintenance
 
-A single signal handler in `main` watches for `SIGINT` (Ctrl-C) and `SIGTERM` and flips one shared `watch<bool>`. The web server, the `AgenticScheduler`, and the `HyperliquidAgentMonitor` all observe that flag and stop claiming new work. The web server's `axum::serve` `with_graceful_shutdown` future is driven by the same flag, so in-flight HTTP requests still finish.
+A single signal handler in `main` watches for `SIGINT` (Ctrl-C) and `SIGTERM` and flips one shared `watch<bool>`. The web server, the `HarnessScheduler`, and the `HyperliquidAgentMonitor` all observe that flag and stop claiming new work. The web server's `axum::serve` `with_graceful_shutdown` future is driven by the same flag, so in-flight HTTP requests still finish.
 
 The web server additionally waits for the shared `InFlightTracker` to drain (or hit the 30-minute grace) once the shutdown flag flips, because the agent's MCP server makes HTTP calls back into this API during a dispatch. Without that hold, the web server can return between agent tool calls and starve the in-flight dispatch's API calls (each MCP call from the agent would fail with connection refused).
 
@@ -194,7 +198,7 @@ The new policy on what may and may not start after the shutdown signal:
 
 Queued workspace maintenance is processed before normal schedule dispatch, but it only starts once the agent is fully idle:
 
-- no queued/running `agentic_runs` remain for that agent
+- no queued/running `harness_runs` remain for that agent
 - no recorded OpenCode sessions for that workspace are marked `busy` or `retry`
 
 While workspace maintenance is queued or running:
@@ -220,7 +224,7 @@ completed tool state from `opencode.message_parts` when available and retain
 Run-detail pages display `opencode.sessions`, `opencode.messages`,
 `opencode.message_parts`, `opencode.tool_executions`, and
 `opencode.session_errors`. The displayed session is associated with a
-Vibetrading run through `agentic_runs.backend_run_ref`. Plugin writes and
+Vibetrading run through `harness_runs.backend_run_ref`. Plugin writes and
 Vibetrading run updates issue Postgres notifications after their transactions
 commit; the web process fans those notifications out to the run-detail SSE
 stream and the Jobs tab's Recent Runs SSE section. Each Recent Runs update

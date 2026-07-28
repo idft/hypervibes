@@ -60,6 +60,11 @@
 
     <section class="grid grid-cols-1 gap-4 lg:grid-cols-4">
         <div class="bg-zinc-950/50 p-5">
+            <p class="text-xs uppercase tracking-[0.16em] text-zinc-500">Trigger</p>
+            <p class="mt-2 text-sm text-zinc-200">{{ job.trigger_text }}</p>
+        </div>
+        {% if job.is_candle_job %}
+        <div class="bg-zinc-950/50 p-5">
             <p class="text-xs uppercase tracking-[0.16em] text-zinc-500">Timeframe</p>
             <div data-inline-editor class="mt-2 flex flex-col gap-1" {% if let Some(_) = job.timeframe_editor.error %}data-inline-editor-open{% endif %}>
                 <div class="flex flex-wrap items-center gap-2" data-inline-editor-display-row>
@@ -96,6 +101,7 @@
                 {% endif %}
             </div>
         </div>
+        {% endif %}
         <div class="bg-zinc-950/50 p-5">
             <p class="text-xs uppercase tracking-[0.16em] text-zinc-500">Timeout</p>
             <div data-inline-editor class="mt-2 flex flex-col gap-1" {% if let Some(_) = job.timeout_editor.error %}data-inline-editor-open{% endif %}>
@@ -134,16 +140,20 @@
                 {% endif %}
             </div>
         </div>
+        {% if job.is_candle_job %}
         <div class="bg-zinc-950/50 p-5">
             <p class="text-xs uppercase tracking-[0.16em] text-zinc-500">Next run</p>
             <p class="mt-2 font-mono text-sm text-zinc-200">
                 {% if !job.enabled %}
                 —
+                {% else if let Some(next_run_at) = job.next_run_at %}
+                <time class="local-datetime" data-local-format="datetime" datetime="{{ next_run_at.iso }}" title="{{ next_run_at.fallback_text }}">{{ next_run_at.fallback_text }}</time>
                 {% else %}
-                <time class="local-datetime" data-local-format="datetime" datetime="{{ job.next_run_at.iso }}" title="{{ job.next_run_at.fallback_text }}">{{ job.next_run_at.fallback_text }}</time>
+                —
                 {% endif %}
             </p>
         </div>
+        {% endif %}
         <div class="bg-zinc-950/50 p-5">
             <p class="text-xs uppercase tracking-[0.16em] text-zinc-500">Model</p>
             <form action="{{ job.model_update_action }}" method="post" hx-post="{{ job.model_update_action }}" hx-swap="none" class="mt-2">
@@ -337,9 +347,62 @@
             });
         }
 
+        function initDetailDeleteModal() {
+            const modal = document.getElementById('detail-delete-modal');
+            const form = document.getElementById('detail-delete-form');
+            const title = document.getElementById('detail-delete-modal-title');
+            const body = document.getElementById('detail-delete-modal-body');
+            const confirm = document.getElementById('confirm-detail-delete-btn');
+            const cancel = document.getElementById('cancel-detail-delete-btn');
+            if (!modal || !form || !title || !body || !confirm || !cancel) {
+                return;
+            }
+
+            function close() {
+                modal.classList.add('hidden');
+                modal.classList.remove('flex');
+            }
+
+            if (modal.dataset.detailDeleteModalBound !== 'true') {
+                modal.dataset.detailDeleteModalBound = 'true';
+                modal.addEventListener('click', function (event) {
+                    if (event.target === modal) {
+                        close();
+                    }
+                });
+                document.addEventListener('keydown', function (event) {
+                    if (event.key === 'Escape') {
+                        close();
+                    }
+                });
+                cancel.addEventListener('click', close);
+            }
+
+            document.querySelectorAll('[data-detail-delete-trigger]').forEach(function (trigger) {
+                if (trigger.dataset.detailDeleteTriggerBound === 'true') {
+                    return;
+                }
+                trigger.dataset.detailDeleteTriggerBound = 'true';
+                trigger.addEventListener('click', function () {
+                    const action = trigger.getAttribute('data-delete-action');
+                    const label = trigger.getAttribute('data-delete-label');
+                    if (!action || !label) {
+                        return;
+                    }
+                    form.setAttribute('action', action);
+                    title.textContent = 'Delete job';
+                    confirm.textContent = 'Delete job';
+                    body.textContent = 'Delete ' + label + '? This permanently removes the job, its run history, and transcript sessions.';
+                    modal.classList.remove('hidden');
+                    modal.classList.add('flex');
+                });
+            });
+        }
+
         function init() {
             initClickableRows();
             initInlineEditors();
+            initDetailDeleteModal();
         }
 
         if (document.readyState === 'loading') {

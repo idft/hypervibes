@@ -54,12 +54,12 @@ pub struct ProviderReloadStatusView {
 
 impl ProviderReloadStatusView {
     pub fn from_task(
-        task: Option<crate::agentic::model::GlobalMaintenanceTaskRow>,
+        task: Option<crate::harness::model::GlobalMaintenanceTaskRow>,
     ) -> Option<Self> {
         let task = task?;
-        let pending = task.status == crate::agentic::model::MAINTENANCE_STATUS_QUEUED;
-        let running = task.status == crate::agentic::model::MAINTENANCE_STATUS_RUNNING;
-        let failed = task.status == crate::agentic::model::MAINTENANCE_STATUS_FAILED;
+        let pending = task.status == crate::harness::model::MAINTENANCE_STATUS_QUEUED;
+        let running = task.status == crate::harness::model::MAINTENANCE_STATUS_RUNNING;
+        let failed = task.status == crate::harness::model::MAINTENANCE_STATUS_FAILED;
         if !pending && !running && !failed {
             return None;
         }

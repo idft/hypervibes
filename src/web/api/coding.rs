@@ -33,7 +33,7 @@ async fn owns_coding_task(
 ) -> Result<bool, ApiError> {
     let row: (bool,) = sqlx::query_as(
         "SELECT EXISTS (
-             SELECT 1 FROM agentic_maintenance_tasks
+             SELECT 1 FROM harness_maintenance_tasks
               WHERE id = $1 AND agent_key = $2 AND task_kind = 'analysis_coding'
          )",
     )

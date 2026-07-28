@@ -24,7 +24,23 @@ in-flight OpenCode MCP server can finish its API calls.
 | Subsystem | Responsibility |
 | --- | --- |
 | `agents` | Agent registry, API keys, OpenCode workspaces, selected instruments, and strategy prompts. User-owned encrypted Hyperliquid signing material lives with authentication records. |
-| `agentic` | Persisted schedules, hooks, runs, workspace maintenance, recovery of orphaned runs, and OpenCode dispatch. |
+| `harness` | Persisted unified jobs/runs, workspace maintenance, recovery of orphaned runs, and OpenCode dispatch. |
+
+## Harness jobs
+
+`harness_jobs` is the single configuration record for every OpenCode job and
+`harness_runs` is its durable execution queue. Candle jobs use the
+`candle_closed` trigger, which the scheduler owns and advances at UTC candle
+boundaries after the configured settling delay. The fixed event jobs use
+`analysis_batch_completed` and `daily_review_completed`; they are dispatched
+directly after their qualifying predecessor and deliberately have no event
+outbox. `harness_maintenance_tasks` remains separate for workspace work,
+analysis-coding promotion, and provider reloads.
+
+Jobs can be deleted only while their runs and OpenCode sessions are idle.
+Deletion first removes terminal sessions through the OpenCode API, then deletes
+the job and cascades its runs and coding maintenance rows. Conversations remain
+separate from harness jobs and runs.
 | `opencode` | OpenCode HTTP client, session persistence access, and generated agent workspaces. |
 | `memory` | Append-only, agent-owned analysis and review records plus links between records. |
 | `hyperliquid` | Instrument reference data, account-history journal, live account state, signed order gateway, and order reconciliation. |
@@ -68,7 +84,7 @@ Run state is persisted. On startup and periodically thereafter, the scheduler
 recovers stale queued or running runs so interrupted dispatches do not block an
 agent lane indefinitely.
 
-Agent conversations are separate from scheduled jobs and `agentic_runs`. Each
+Agent conversations are separate from scheduled jobs and `harness_runs`. Each
 `agent_conversations` row maps one operator or future-gateway conversation to
 one OpenCode session. Chat transcript, tool activity, errors, and context
 telemetry are mirrored from OpenCode and delivered to the browser as complete
@@ -108,7 +124,7 @@ write after validation fails promotion closed.
 
 Promotion swaps directories, never individual files. A JSON journal records
 each swap phase, and startup recovery restores the previous tree when a process
-stops before a verified completion. The maintenance task and linked agentic
+stops before a verified completion. The maintenance task and linked harness
 run remain the durable lifecycle record in Postgres.
 
 ## Configuration
@@ -132,7 +148,7 @@ from the OpenCode container or runtime.
 
 The operator interface is server-rendered with Askama. HTMX handles partial
 updates and SSE publishes live account, memory, and database-notified agent run
-changes. The shared Postgres notification listener fans `agentic_runs` changes
+changes. The shared Postgres notification listener fans `harness_runs` changes
 out to both run-detail streams and the Jobs tab's Recent Runs section; session
 notifications are used only by run-detail transcript and summary streams.
 Frontend source is in `assets/`; `build.rs` builds the Tailwind and esbuild

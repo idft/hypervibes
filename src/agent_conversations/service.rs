@@ -14,9 +14,9 @@ use crate::{
         },
         store,
     },
-    agentic::{in_flight::InFlightTracker, workspace_lease::WorkspaceLeaseManager},
     agents::{model::AgentDetailRow, store::get_agent},
     db::DbPool,
+    harness::{in_flight::InFlightTracker, workspace_lease::WorkspaceLeaseManager},
     opencode::{
         client::{
             DeleteSessionResult, OpenCodeClient, OpenCodePermissionReply, OpenCodePermissionRule,
@@ -148,7 +148,7 @@ impl<'a> ConversationService<'a> {
         }
         let agent = self.load_agent_with_workspace(agent_key).await?;
         let runtime = workspace_runtime(&agent)?;
-        if crate::agentic::store::agent_has_blocking_workspace_maintenance(self.pool, agent_key)
+        if crate::harness::store::agent_has_blocking_workspace_maintenance(self.pool, agent_key)
             .await?
         {
             bail!("Workspace maintenance is in progress. Send a message after it finishes.");

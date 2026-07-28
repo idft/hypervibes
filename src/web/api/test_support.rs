@@ -9,7 +9,6 @@ use chrono::Utc;
 use uuid::Uuid;
 
 use crate::{
-    agentic::backend::{AgenticBackend, DispatchRequest, DispatchResult},
     agents::{
         crypto::EncryptionKey,
         keys::derive_wallet_address,
@@ -20,12 +19,13 @@ use crate::{
             upsert_agent_strategy_prompt,
         },
     },
+    harness::backend::{DispatchRequest, DispatchResult, HarnessBackend},
     hyperliquid::builder_fee::{BuilderFeeCache, BuilderFeeLookup, LookupFuture},
     test_db,
     web::{AppState, api, run_detail_events::RunDetailEventHub, ui_events::UiEventHub},
 };
 
-pub struct NoopAgenticBackend;
+pub struct NoopHarnessBackend;
 
 struct TestBuilderFeeLookup;
 
@@ -36,7 +36,7 @@ impl BuilderFeeLookup for TestBuilderFeeLookup {
 }
 
 #[async_trait]
-impl AgenticBackend for NoopAgenticBackend {
+impl HarnessBackend for NoopHarnessBackend {
     async fn dispatch(&self, _request: DispatchRequest) -> Result<DispatchResult> {
         Ok(DispatchResult {
             backend_run_ref: "ses_test".to_string(),
@@ -51,7 +51,7 @@ pub async fn test_state() -> Arc<AppState> {
     Arc::new(AppState {
         db_pool: pool.as_ref().as_ref().clone(),
         _test_db_guard: Some(Arc::clone(&pool)),
-        agentic_backend: Arc::new(NoopAgenticBackend),
+        harness_backend: Arc::new(NoopHarnessBackend),
         encryption_key: EncryptionKey::new(
             "test",
             [
@@ -95,8 +95,8 @@ pub async fn test_state() -> Arc<AppState> {
         .unwrap(),
         asset_cache: Arc::new(crate::cache::asset::AssetCache::new(cache_dir).unwrap()),
         builder_fee_cache: Arc::new(BuilderFeeCache::new(Arc::new(TestBuilderFeeLookup))),
-        in_flight: crate::agentic::in_flight::InFlightTracker::new(),
-        workspace_leases: crate::agentic::workspace_lease::WorkspaceLeaseManager::new(),
+        in_flight: crate::harness::in_flight::InFlightTracker::new(),
+        workspace_leases: crate::harness::workspace_lease::WorkspaceLeaseManager::new(),
         conversation_turns: crate::agent_conversations::service::ConversationTurnTracker::default(),
         shutdown_rx,
         provider_connections: crate::web::provider_connections::ProviderConnectionsState::new(),

@@ -337,17 +337,11 @@
                         </svg>
                         New job
                     </a>
-                    <a href="/agents/{{ agent.agent_key }}/hooks/new" class="inline-flex items-center justify-center gap-2 rounded-full border border-zinc-700 bg-zinc-900/70 px-4 py-2 text-sm font-medium text-zinc-200 hover:border-zinc-600 hover:bg-zinc-800 hover:text-white">
-                        <svg class="h-4 w-4" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
-                            <path d="M10 4a1 1 0 0 1 1 1v4h4a1 1 0 1 1 0 2h-4v4a1 1 0 1 1-2 0v-4H5a1 1 0 1 1 0-2h4V5a1 1 0 0 1 1-1Z"></path>
-                        </svg>
-                        New hook
-                    </a>
                 </div>
             </div>
 
             <div class="mt-8 flex min-h-0 flex-1 flex-col xl:flex-none">
-                <h3 class="text-base font-medium text-white">Scheduled</h3>
+                <h3 class="text-base font-medium text-white">Jobs</h3>
                 {% if !jobs_loaded %}
                 <div class="mt-4 rounded-xl border border-amber-900/60 bg-amber-950/30 px-4 py-3 text-sm text-amber-200">Jobs could not be loaded.</div>
                 {% else if jobs.is_empty() %}
@@ -360,9 +354,10 @@
                         <thead class="bg-zinc-950/60 text-left text-xs uppercase tracking-[0.16em] text-zinc-500">
                             <tr>
                                 <th class="px-4 py-3 font-medium">Job key</th>
-                                <th class="px-4 py-3 font-medium">Kind</th>
-                                <th class="px-4 py-3 font-medium">Status</th>
-                                <th class="px-4 py-3 font-medium">Timeframe</th>
+                                 <th class="px-4 py-3 font-medium">Kind</th>
+                                 <th class="px-4 py-3 font-medium">Trigger</th>
+                                 <th class="px-4 py-3 font-medium">Status</th>
+                                 <th class="px-4 py-3 font-medium">Timeframe</th>
                                 <th class="px-4 py-3 font-medium">Next run</th>
                                 <th class="px-4 py-3 font-medium">Model</th>
                                 <th class="px-4 py-3 font-medium"></th>
@@ -371,93 +366,22 @@
                         <tbody class="divide-y divide-zinc-800">
                             {% for row in jobs %}
                             <tr data-row-href="{{ row.detail_url }}" tabindex="0" role="link" class="cursor-pointer hover:bg-zinc-900/50">
-                                <td class="px-4 py-3 align-top font-mono text-xs text-zinc-200">{{ row.job_key }}</td>
-                                <td class="px-4 py-3 align-top text-zinc-300">{{ row.job_kind }}</td>
+                                 <td class="px-4 py-3 align-top font-mono text-xs text-zinc-200">{{ row.job_key }}</td>
+                                 <td class="px-4 py-3 align-top text-zinc-300">{{ row.job_kind }}</td>
+                                 <td class="px-4 py-3 align-top text-xs text-zinc-300">{{ row.trigger_text }}</td>
                                 <td class="px-4 py-3 align-top">
                                     <span class="inline-flex rounded-full border px-2 py-0.5 text-xs font-medium {{ row.enabled_class }}">{{ row.enabled_label }}</span>
                                 </td>
-                                <td class="px-4 py-3 align-top font-mono text-xs tabular-nums text-zinc-300">{{ row.timeframe_text }}</td>
-                                <td class="px-4 py-3 align-top font-mono text-xs text-zinc-300">
-                                    {% if !row.enabled %}
-                                    —
-                                    {% else %}
-                                    <time class="local-datetime" data-local-format="datetime" datetime="{{ row.next_run_at.iso }}" title="{{ row.next_run_at.fallback_text }}">{{ row.next_run_at.fallback_text }}</time>
-                                    {% endif %}
-                                </td>
-                                <td class="px-4 py-3 align-top text-xs text-zinc-300">
-                                    <span class="inline-flex items-center gap-2">
-                                        {% if let Some(logo_url) = row.model_logo_url %}
-                                        <img src="{{ logo_url }}" alt="Model provider logo" class="h-4 w-4 rounded-sm border border-zinc-800 bg-white p-0.5">
-                                        {% endif %}
-                                        <span class="font-mono">{{ row.model_text }}</span>
-                                    </span>
-                                </td>
-                                <td class="px-4 py-3 align-top">
-                                    <div class="flex flex-wrap items-center gap-2">
-                                        <form action="{{ row.run_now_action }}" method="post">
-                                            <button type="submit" {% if !row.has_model %}disabled title="No model set"{% endif %} class="inline-flex items-center gap-1.5 rounded-full border border-sky-900/60 bg-sky-950/30 px-3 py-1.5 text-xs font-medium text-sky-300 hover:border-sky-800 hover:bg-sky-950/50 hover:text-sky-200 {% if row.has_model %}cursor-pointer{% else %}cursor-not-allowed opacity-50{% endif %}">
-                                                <svg class="h-3.5 w-3.5" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
-                                                    <path d="M11.25 1.5 4.5 10h4.25L7.75 18.5 14.5 10h-4.25l1-8.5Z"></path>
-                                                </svg>
-                                                Run now
-                                            </button>
-                                        </form>
-                                        <form action="{{ row.toggle_action }}" method="post">
-                                            <input type="hidden" name="enabled" value="{{ row.hidden_enabled_value }}">
-                                            <button type="submit" {% if !row.enabled && !row.has_model %}disabled title="No model set"{% endif %} class="inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs font-medium {% if row.enabled %}cursor-pointer border-zinc-800 text-zinc-300 hover:border-zinc-700 hover:text-white{% else if row.has_model %}cursor-pointer border-emerald-900/60 bg-emerald-950/20 text-emerald-300 hover:border-emerald-800 hover:bg-emerald-950/40 hover:text-emerald-200{% else %}border-zinc-800 text-zinc-500 cursor-not-allowed opacity-50{% endif %}">
-                                                {% if row.enabled %}
-                                                <svg class="h-3.5 w-3.5" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
-                                                    <path d="M5.5 4h3v12h-3V4Zm6 0h3v12h-3V4Z"></path>
-                                                </svg>
-                                                Disable
-                                                {% else %}
-                                                <svg class="h-3.5 w-3.5" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
-                                                    <path d="M6 4.5v11l9-5.5-9-5.5Z"></path>
-                                                </svg>
-                                                Enable
-                                                {% endif %}
-                                            </button>
-                                        </form>
-                                    </div>
-                                </td>
-                            </tr>
-                            {% endfor %}
-                        </tbody>
-                    </table>
-                </div>
-                {% endif %}
-            </div>
-
-            <div class="mt-8 flex min-h-0 flex-1 flex-col border-t border-zinc-800 pt-8 xl:flex-none">
-                <h3 class="text-base font-medium text-white">Hooks</h3>
-                {% if !hooks_loaded %}
-                <div class="mt-4 rounded-xl border border-amber-900/60 bg-amber-950/30 px-4 py-3 text-sm text-amber-200">Hooks could not be loaded.</div>
-                {% else if hooks.is_empty() %}
-                <div class="mt-4 rounded-xl border border-zinc-800 bg-zinc-950/70 p-6 text-center">
-                    <p class="text-sm text-zinc-400">No hook jobs have been created for this agent yet.</p>
-                </div>
-                {% else %}
-                <div class="dark-scrollbar mt-4 min-h-0 flex-1 overflow-auto xl:flex-none xl:overflow-x-auto xl:overflow-y-visible">
-                    <table class="min-w-full divide-y divide-zinc-800 text-sm">
-                        <thead class="bg-zinc-950/60 text-left text-xs uppercase tracking-[0.16em] text-zinc-500">
-                            <tr>
-                                <th class="px-4 py-3 font-medium">Job key</th>
-                                <th class="px-4 py-3 font-medium">Kind</th>
-                                <th class="px-4 py-3 font-medium">Trigger</th>
-                                <th class="px-4 py-3 font-medium">Status</th>
-                                <th class="px-4 py-3 font-medium">Model</th>
-                                <th class="px-4 py-3 font-medium"></th>
-                            </tr>
-                        </thead>
-                        <tbody class="divide-y divide-zinc-800">
-                            {% for row in hooks %}
-                            <tr data-row-href="{{ row.detail_url }}" tabindex="0" role="link" class="cursor-pointer hover:bg-zinc-900/50">
-                                <td class="px-4 py-3 align-top font-mono text-xs text-zinc-200">{{ row.job_key }}</td>
-                                <td class="px-4 py-3 align-top text-zinc-300">{{ row.job_kind }}</td>
-                                <td class="px-4 py-3 align-top text-zinc-300">{{ row.hook_event }}</td>
-                                <td class="px-4 py-3 align-top">
-                                    <span class="inline-flex rounded-full border px-2 py-0.5 text-xs font-medium {{ row.enabled_class }}">{{ row.enabled_label }}</span>
-                                </td>
+                                 <td class="px-4 py-3 align-top font-mono text-xs tabular-nums text-zinc-300">{{ row.timeframe_text }}</td>
+                                 <td class="px-4 py-3 align-top font-mono text-xs text-zinc-300">
+                                     {% if !row.enabled || !row.is_candle_job %}
+                                     —
+                                     {% else if let Some(next_run_at) = row.next_run_at %}
+                                     <time class="local-datetime" data-local-format="datetime" datetime="{{ next_run_at.iso }}" title="{{ next_run_at.fallback_text }}">{{ next_run_at.fallback_text }}</time>
+                                     {% else %}
+                                     —
+                                     {% endif %}
+                                 </td>
                                 <td class="px-4 py-3 align-top text-xs text-zinc-300">
                                     <span class="inline-flex items-center gap-2">
                                         {% if let Some(logo_url) = row.model_logo_url %}
@@ -573,7 +497,7 @@
     </div>
 </div>
 
-<!-- Job and hook delete confirmation modal -->
+<!-- Job delete confirmation modal -->
 <div id="agent-job-delete-modal" class="fixed inset-0 z-50 hidden items-center justify-center bg-black/70 backdrop-blur-sm px-4" aria-modal="true" role="dialog">
     <div class="w-full max-w-md rounded-2xl border border-zinc-800 bg-[#0d0d10] p-6 shadow-2xl">
         <h3 id="agent-job-delete-modal-title" class="text-lg font-semibold text-white">Delete job</h3>

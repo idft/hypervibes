@@ -21,7 +21,7 @@ use crate::{
         run_detail_events::RunDetailDbEvent,
         templates::{
             AgentRunDetailPageTemplate, AgentRunDetailSummaryPartialTemplate,
-            AgentRunDetailTranscriptPartialTemplate, AgenticRunDetailView, OpenCodeSessionView,
+            AgentRunDetailTranscriptPartialTemplate, HarnessRunDetailView, OpenCodeSessionView,
             load_navbar,
         },
     },
@@ -29,7 +29,7 @@ use crate::{
 
 struct RunDetailSnapshot {
     agent: crate::agents::model::AgentDetailRow,
-    run: AgenticRunDetailView,
+    run: HarnessRunDetailView,
     session: Option<OpenCodeSessionView>,
     session_lookup_attempted: bool,
 }
@@ -42,14 +42,14 @@ async fn load_run_detail_snapshot(
     let Some(agent) = get_agent(&state.db_pool, agent_key).await? else {
         return Ok(None);
     };
-    let Some(run) = crate::agentic::store::get_run(&state.db_pool, run_id).await? else {
+    let Some(run) = crate::harness::store::get_run(&state.db_pool, run_id).await? else {
         return Ok(None);
     };
     if run.agent_key != agent_key {
         return Ok(None);
     }
 
-    let run = AgenticRunDetailView::from_row(&run);
+    let run = HarnessRunDetailView::from_row(&run);
     let session_lookup_attempted = !run.backend_run_ref.is_empty();
     let session = if session_lookup_attempted {
         crate::opencode::store::get_session_detail(&state.db_pool, &run.backend_run_ref)

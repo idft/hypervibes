@@ -24,11 +24,11 @@ pub struct AgentStrategyPromptRow {
 
 pub fn prompt_kind_for_job_kind(job_kind: &str) -> Option<&'static str> {
     match job_kind {
-        crate::agentic::model::JOB_KIND_ANALYSIS => Some(PROMPT_KIND_ANALYSIS),
-        crate::agentic::model::JOB_KIND_MARKET_ANALYSIS => Some(PROMPT_KIND_MARKET_ANALYSIS),
-        crate::agentic::model::JOB_KIND_TRADING => Some(PROMPT_KIND_TRADING),
-        crate::agentic::model::JOB_KIND_DAILY_REVIEW => Some(PROMPT_KIND_DAILY_REVIEW),
-        crate::agentic::model::JOB_KIND_ANALYSIS_CODING => Some(PROMPT_KIND_ANALYSIS_CODING),
+        crate::harness::model::JOB_KIND_ANALYSIS => Some(PROMPT_KIND_ANALYSIS),
+        crate::harness::model::JOB_KIND_MARKET_ANALYSIS => Some(PROMPT_KIND_MARKET_ANALYSIS),
+        crate::harness::model::JOB_KIND_TRADING => Some(PROMPT_KIND_TRADING),
+        crate::harness::model::JOB_KIND_DAILY_REVIEW => Some(PROMPT_KIND_DAILY_REVIEW),
+        crate::harness::model::JOB_KIND_ANALYSIS_CODING => Some(PROMPT_KIND_ANALYSIS_CODING),
         _ => None,
     }
 }

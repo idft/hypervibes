@@ -275,7 +275,7 @@ pub(in crate::web::routes) async fn build_agent_recent_runs_view(
 ) -> AgentRecentRunsView {
     let mut view = AgentRecentRunsView::new(agent_key, requested_runs_page);
 
-    match crate::agentic::store::count_agent_runs(&state.db_pool, agent_key).await {
+    match crate::harness::store::count_agent_runs(&state.db_pool, agent_key).await {
         Ok(total_count) => {
             let total_count = total_count as usize;
             let total_pages = if total_count == 0 {
@@ -305,7 +305,7 @@ pub(in crate::web::routes) async fn build_agent_recent_runs_view(
             }
 
             let offset = ((current_page - 1) * RUNS_PER_PAGE) as i64;
-            match crate::agentic::store::list_agent_runs_page(
+            match crate::harness::store::list_agent_runs_page(
                 &state.db_pool,
                 agent_key,
                 RUNS_PER_PAGE as i64,
@@ -318,7 +318,7 @@ pub(in crate::web::routes) async fn build_agent_recent_runs_view(
                     view.recent_runs_loaded = true;
                     view.recent_runs = rows
                         .iter()
-                        .map(crate::web::templates::AgenticRunView::from_row)
+                        .map(crate::web::templates::HarnessRunView::from_row)
                         .collect();
                     view.recent_runs_range_start = offset as usize + 1;
                     view.recent_runs_range_end = offset as usize + run_count;
@@ -350,12 +350,12 @@ pub(in crate::web::routes) async fn populate_jobs_tab(
     template: &mut AgentsShowPageTemplate,
     requested_runs_page: usize,
 ) {
-    match crate::agentic::store::list_agent_schedules(&state.db_pool, &agent.agent_key).await {
+    match crate::harness::store::list_agent_jobs(&state.db_pool, &agent.agent_key).await {
         Ok(rows) => {
             template.jobs_loaded = true;
             template.jobs = rows
                 .iter()
-                .map(crate::web::templates::AgenticJobScheduleView::from_row)
+                .map(crate::web::templates::HarnessJobView::from_row)
                 .collect();
         }
         Err(error) => {
@@ -367,28 +367,9 @@ pub(in crate::web::routes) async fn populate_jobs_tab(
         }
     }
 
-    match crate::agentic::store::list_agent_hooks(&state.db_pool, &agent.agent_key).await {
-        Ok(rows) => {
-            template.hooks_loaded = true;
-            template.hooks = rows
-                .iter()
-                .map(crate::web::templates::AgenticJobHookView::from_row)
-                .collect();
-        }
-        Err(error) => {
-            warn!(
-                agent_key = %agent.agent_key,
-                error = ?error,
-                "failed to list agent hooks for operator page"
-            );
-        }
-    }
-
-    if template.jobs_loaded && template.hooks_loaded {
-        template.can_enable_all_jobs = template.jobs.iter().any(|job| !job.enabled)
-            || template.hooks.iter().any(|hook| !hook.enabled);
-        template.can_disable_all_jobs = template.jobs.iter().any(|job| job.enabled)
-            || template.hooks.iter().any(|hook| hook.enabled);
+    if template.jobs_loaded {
+        template.can_enable_all_jobs = template.jobs.iter().any(|job| !job.enabled);
+        template.can_disable_all_jobs = template.jobs.iter().any(|job| job.enabled);
     }
 
     template.recent_runs_section =

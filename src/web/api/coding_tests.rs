@@ -12,32 +12,34 @@ async fn coding_report_is_scoped_to_the_authenticated_agent() {
     let (agent_key, api_key) = seed_agent(&state, "coding-report").await;
     let (_other_agent, other_key) = seed_agent(&state, "coding-other").await;
     sqlx::query(
-        "INSERT INTO agentic_job_hooks
-            (agent_key, job_key, job_kind, hook_event, enabled, timeout_seconds, operator_prompt)
+        "INSERT INTO harness_jobs
+            (agent_key, job_key, job_kind, trigger_type, enabled, timeout_seconds, operator_prompt)
          VALUES ($1, 'analysis-coding', 'analysis_coding', 'daily_review_completed', false, 1800, '')",
     )
     .bind(&agent_key)
     .execute(&state.db_pool)
     .await
     .unwrap();
-    let hook_id = crate::agentic::store::list_agent_hooks(&state.db_pool, &agent_key)
+    let job_id = crate::harness::store::list_agent_jobs(&state.db_pool, &agent_key)
         .await
         .unwrap()
         .into_iter()
-        .find(|hook| hook.job_kind == "analysis_coding")
-        .expect("coding hook")
+        .find(|job| job.job_kind == "analysis_coding")
+        .expect("coding job")
         .id;
-    sqlx::query("UPDATE agentic_job_hooks SET model_provider_id = 'test', model_id = 'strong' WHERE id = $1")
-        .bind(hook_id)
-        .execute(&state.db_pool)
-        .await
-        .unwrap();
-    let queued = crate::agentic::store::insert_analysis_coding_task_and_run(
+    sqlx::query(
+        "UPDATE harness_jobs SET model_provider_id = 'test', model_id = 'strong' WHERE id = $1",
+    )
+    .bind(job_id)
+    .execute(&state.db_pool)
+    .await
+    .unwrap();
+    let queued = crate::harness::store::insert_analysis_coding_task_and_run(
         &state.db_pool,
-        crate::agentic::store::AnalysisCodingTaskRequest {
+        crate::harness::store::AnalysisCodingTaskRequest {
             agent_key: &agent_key,
-            hook_id,
-            trigger_mode: crate::agentic::store::CodingTriggerMode::Manual,
+            job_id,
+            trigger_mode: crate::harness::store::CodingTriggerMode::Automatic,
             source_run_id: None,
             source_memory_id: None,
             operator_prompt: None,
@@ -47,11 +49,11 @@ async fn coding_report_is_scoped_to_the_authenticated_agent() {
     .await
     .unwrap();
     let task_id = match queued {
-        crate::agentic::store::InsertAnalysisCodingTaskOutcome::Inserted { task_id, .. } => task_id,
-        crate::agentic::store::InsertAnalysisCodingTaskOutcome::AlreadyQueued => {
+        crate::harness::store::InsertAnalysisCodingTaskOutcome::Inserted { task_id, .. } => task_id,
+        crate::harness::store::InsertAnalysisCodingTaskOutcome::AlreadyQueued => {
             panic!("unexpected duplicate")
         }
-        crate::agentic::store::InsertAnalysisCodingTaskOutcome::BlockedByMaintenance => {
+        crate::harness::store::InsertAnalysisCodingTaskOutcome::BlockedByMaintenance => {
             panic!("unexpected maintenance block")
         }
     };

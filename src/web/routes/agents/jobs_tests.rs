@@ -9,8 +9,8 @@ use std::sync::{Arc, Mutex};
 use tower::util::ServiceExt;
 
 use crate::{
-    agentic::model::{JOB_KIND_ANALYSIS, JOB_KIND_TRADING},
     agents::store::replace_agent_instruments,
+    harness::model::{JOB_KIND_ANALYSIS, JOB_KIND_TRADING},
 };
 
 #[tokio::test]
@@ -20,15 +20,15 @@ async fn manual_job_run_redirects_with_warning_during_workspace_maintenance() {
     let (agent_key, _) = insert_test_opencode_agent(&state)
         .await
         .expect("insert agent");
-    let schedules = crate::agentic::store::list_agent_schedules(&state.db_pool, &agent_key)
+    let jobs = crate::harness::store::list_agent_jobs(&state.db_pool, &agent_key)
         .await
-        .expect("list schedules");
-    let schedule_id = schedules
+        .expect("list jobs");
+    let job_id = jobs
         .iter()
         .find(|row| row.job_key == "analysis-15m")
-        .expect("analysis schedule present")
+        .expect("analysis job present")
         .id;
-    crate::agentic::store::insert_workspace_regenerate_task(
+    crate::harness::store::insert_workspace_regenerate_task(
         &state.db_pool,
         &agent_key,
         false,
@@ -41,7 +41,7 @@ async fn manual_job_run_redirects_with_warning_during_workspace_maintenance() {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri(format!("/agents/{agent_key}/jobs/{schedule_id}/run"))
+                .uri(format!("/agents/{agent_key}/jobs/{job_id}/run"))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -77,13 +77,9 @@ async fn jobs_route_renders_create_job_button_and_runs_section() {
     let text = response_text(response).await;
     assert!(text.contains("New job"));
     assert!(text.contains(&format!("/agents/{agent_key}/jobs/new")));
-    assert!(text.contains("Scheduled"));
-    assert!(text.contains("Hooks"));
     assert!(text.contains("Enable all"));
     assert!(!text.contains("Disable all"));
     assert!(text.contains("Recent Runs"));
-    assert!(text.contains("New hook"));
-    assert!(text.contains(&format!("/agents/{agent_key}/hooks/new")));
     assert!(text.contains("Run now"));
     assert!(!text.contains("Operator prompt"));
 }
@@ -93,22 +89,21 @@ async fn jobs_route_paginates_recent_runs() {
     let (agent_key, _wallet_address) = insert_test_opencode_agent(&state)
         .await
         .expect("insert opencode agent");
-    let schedule_id = crate::agentic::store::list_agent_schedules(&state.db_pool, &agent_key)
+    let job_id = crate::harness::store::list_agent_jobs(&state.db_pool, &agent_key)
         .await
-        .expect("list schedules")
+        .expect("list jobs")
         .into_iter()
         .next()
-        .expect("default schedule")
+        .expect("default job")
         .id;
 
     let base_time = chrono::Utc::now();
     for index in 1..=12 {
-        let run_id =
-            crate::agentic::store::insert_test_run(&state.db_pool, schedule_id, "succeeded")
-                .await
-                .expect("insert test run");
+        let run_id = crate::harness::store::insert_test_run(&state.db_pool, job_id, "succeeded")
+            .await
+            .expect("insert test run");
         sqlx::query(
-            "UPDATE agentic_runs
+            "UPDATE harness_runs
                 SET backend_run_ref = $1,
                     created_at = $2,
                     updated_at = $2
@@ -160,13 +155,13 @@ async fn recent_runs_stream_emits_initial_snapshot_and_matching_update() {
     let (agent_key, _) = insert_test_opencode_agent(&state)
         .await
         .expect("insert agent");
-    let schedule_id = crate::agentic::store::list_agent_schedules(&pool, &agent_key)
+    let job_id = crate::harness::store::list_agent_jobs(&pool, &agent_key)
         .await
-        .expect("list schedules")
+        .expect("list jobs")
         .first()
-        .expect("default schedule")
+        .expect("default job")
         .id;
-    let run_id = crate::agentic::store::insert_test_run(&pool, schedule_id, "queued")
+    let run_id = crate::harness::store::insert_test_run(&pool, job_id, "queued")
         .await
         .expect("insert run");
 
@@ -186,7 +181,7 @@ async fn recent_runs_stream_emits_initial_snapshot_and_matching_update() {
 
     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
     sqlx::query(
-        "UPDATE agentic_runs
+        "UPDATE harness_runs
             SET status = 'running', started_at = now(), backend_run_ref = 'stream-session'
           WHERE id = $1",
     )
@@ -215,15 +210,14 @@ async fn recent_runs_stream_ignores_other_agents_and_sessions() {
     let (other_agent_key, _) = insert_test_opencode_agent(&state)
         .await
         .expect("insert other agent");
-    let other_schedule_id =
-        crate::agentic::store::list_agent_schedules(&state.db_pool, &other_agent_key)
-            .await
-            .expect("list other schedules")
-            .first()
-            .expect("other default schedule")
-            .id;
+    let other_job_id = crate::harness::store::list_agent_jobs(&state.db_pool, &other_agent_key)
+        .await
+        .expect("list other jobs")
+        .first()
+        .expect("other default job")
+        .id;
     let other_run_id =
-        crate::agentic::store::insert_test_run(&state.db_pool, other_schedule_id, "running")
+        crate::harness::store::insert_test_run(&state.db_pool, other_job_id, "running")
             .await
             .expect("insert other run");
 
@@ -262,14 +256,14 @@ async fn recent_runs_stream_resync_preserves_page_and_refreshes_pagination() {
     let (agent_key, _) = insert_test_opencode_agent(&state)
         .await
         .expect("insert agent");
-    let schedule_id = crate::agentic::store::list_agent_schedules(&pool, &agent_key)
+    let job_id = crate::harness::store::list_agent_jobs(&pool, &agent_key)
         .await
-        .expect("list schedules")
+        .expect("list jobs")
         .first()
-        .expect("default schedule")
+        .expect("default job")
         .id;
     for _ in 0..12 {
-        crate::agentic::store::insert_test_run(&pool, schedule_id, "succeeded")
+        crate::harness::store::insert_test_run(&pool, job_id, "succeeded")
             .await
             .expect("insert run");
     }
@@ -287,7 +281,7 @@ async fn recent_runs_stream_resync_preserves_page_and_refreshes_pagination() {
         .expect("request stream");
     let reader = tokio::spawn(read_sse_chunk(response.into_body(), 1_000));
     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-    crate::agentic::store::insert_test_run(&pool, schedule_id, "queued")
+    crate::harness::store::insert_test_run(&pool, job_id, "queued")
         .await
         .expect("insert new run");
     state
@@ -320,7 +314,7 @@ async fn recent_runs_stream_returns_not_found_for_unknown_agent() {
 
 #[tokio::test]
 async fn recent_runs_stream_ends_after_shutdown_signal() {
-    let state = test_state_with_backend_and_shutdown(Arc::new(NoopAgenticBackend), true).await;
+    let state = test_state_with_backend_and_shutdown(Arc::new(NoopHarnessBackend), true).await;
     let (agent_key, _) = insert_test_opencode_agent(&state)
         .await
         .expect("insert agent");
@@ -340,7 +334,7 @@ async fn recent_runs_stream_ends_after_shutdown_signal() {
 #[tokio::test]
 async fn post_job_run_now_queues_and_dispatches_run() {
     let calls = Arc::new(Mutex::new(Vec::new()));
-    let backend = Arc::new(RecordingAgenticBackend {
+    let backend = Arc::new(RecordingHarnessBackend {
         calls: Arc::clone(&calls),
     });
     let state = test_state_with_backend(backend).await;
@@ -348,24 +342,24 @@ async fn post_job_run_now_queues_and_dispatches_run() {
     let (agent_key, _wallet_address) = insert_test_opencode_agent(&state)
         .await
         .expect("insert opencode agent");
-    let schedules = crate::agentic::store::list_agent_schedules(&pool, &agent_key)
+    let jobs = crate::harness::store::list_agent_jobs(&pool, &agent_key)
         .await
-        .expect("list schedules");
+        .expect("list jobs");
     seed_instrument(&state, "BTC", true).await;
     replace_agent_instruments(&pool, &agent_key, &["BTC".to_string()])
         .await
         .expect("seed instruments");
-    let schedule_id = schedules
+    let job_id = jobs
         .iter()
         .find(|row| row.job_key == "analysis-15m")
         .map(|row| row.id)
-        .expect("analysis schedule id");
+        .expect("analysis job id");
 
     let response = router(state.clone())
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri(format!("/agents/{agent_key}/jobs/{schedule_id}/run"))
+                .uri(format!("/agents/{agent_key}/jobs/{job_id}/run"))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -396,20 +390,20 @@ async fn post_job_run_now_queues_and_dispatches_run() {
     {
         let recorded = calls.lock().unwrap();
         assert_eq!(recorded.len(), 1);
-        assert_eq!(recorded[0].schedule_id, Some(schedule_id));
+        assert_eq!(recorded[0].job_id, job_id);
         assert_eq!(recorded[0].agent_key, agent_key);
         assert_eq!(recorded[0].job_key, "analysis-15m");
     }
 
-    let runs = crate::agentic::store::list_agent_runs(&pool, &agent_key, 10)
+    let runs = crate::harness::store::list_agent_runs(&pool, &agent_key, 10)
         .await
         .expect("list runs");
-    assert!(runs.iter().any(|run| run.schedule_id == Some(schedule_id)));
+    assert!(runs.iter().any(|run| run.job_id == job_id));
 }
 #[tokio::test]
-async fn post_analysis_job_run_now_triggers_market_analysis_hook_after_success() {
+async fn post_analysis_job_run_now_triggers_market_analysis_event_after_success() {
     let calls = Arc::new(Mutex::new(Vec::new()));
-    let backend = Arc::new(RecordingAgenticBackend {
+    let backend = Arc::new(RecordingHarnessBackend {
         calls: Arc::clone(&calls),
     });
     let state = test_state_with_backend(backend).await;
@@ -421,28 +415,29 @@ async fn post_analysis_job_run_now_triggers_market_analysis_hook_after_success()
     replace_agent_instruments(&pool, &agent_key, &["BTC".to_string()])
         .await
         .expect("seed instruments");
-    let hook_id = crate::agentic::store::list_agent_hooks(&pool, &agent_key)
+    let event_job_id = crate::harness::store::list_agent_jobs(&pool, &agent_key)
         .await
-        .expect("list hooks")
-        .first()
-        .expect("default hook present")
+        .expect("list jobs")
+        .into_iter()
+        .find(|job| job.job_kind == "market_analysis")
+        .expect("default event job present")
         .id;
-    crate::agentic::store::set_hook_enabled(&pool, &agent_key, hook_id, true)
+    crate::harness::store::set_job_enabled(&pool, &agent_key, event_job_id, true)
         .await
-        .expect("enable default hook");
-    let schedule_id = crate::agentic::store::list_agent_schedules(&pool, &agent_key)
+        .expect("enable default event job");
+    let job_id = crate::harness::store::list_agent_jobs(&pool, &agent_key)
         .await
-        .expect("list schedules")
+        .expect("list jobs")
         .into_iter()
         .find(|row| row.job_key == "analysis-15m")
         .map(|row| row.id)
-        .expect("analysis schedule id");
+        .expect("analysis job id");
 
     let response = router(state.clone())
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri(format!("/agents/{agent_key}/jobs/{schedule_id}/run"))
+                .uri(format!("/agents/{agent_key}/jobs/{job_id}/run"))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -458,7 +453,7 @@ async fn post_analysis_job_run_now_triggers_market_analysis_hook_after_success()
         }
         assert!(
             tokio::time::Instant::now() < deadline,
-            "analysis hook dispatch was not spawned"
+            "analysis event dispatch was not spawned"
         );
         tokio::time::sleep(tokio::time::Duration::from_millis(20)).await;
     }
@@ -473,9 +468,9 @@ async fn post_analysis_job_run_now_triggers_market_analysis_hook_after_success()
 }
 
 #[tokio::test]
-async fn post_schedule_run_now_rejected_after_shutdown_signal() {
+async fn post_job_run_now_rejected_after_shutdown_signal() {
     let calls = Arc::new(Mutex::new(Vec::new()));
-    let backend = Arc::new(RecordingAgenticBackend {
+    let backend = Arc::new(RecordingHarnessBackend {
         calls: Arc::clone(&calls),
     });
     let state = test_state_with_backend_and_shutdown(backend, true).await;
@@ -487,19 +482,19 @@ async fn post_schedule_run_now_rejected_after_shutdown_signal() {
     replace_agent_instruments(&pool, &agent_key, &["BTC".to_string()])
         .await
         .expect("seed instruments");
-    let schedule_id = crate::agentic::store::list_agent_schedules(&pool, &agent_key)
+    let job_id = crate::harness::store::list_agent_jobs(&pool, &agent_key)
         .await
-        .expect("list schedules")
+        .expect("list jobs")
         .into_iter()
         .find(|row| row.job_key == "analysis-15m")
         .map(|row| row.id)
-        .expect("analysis schedule id");
+        .expect("analysis job id");
 
     let response = router(state.clone())
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri(format!("/agents/{agent_key}/jobs/{schedule_id}/run"))
+                .uri(format!("/agents/{agent_key}/jobs/{job_id}/run"))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -522,13 +517,13 @@ async fn post_schedule_run_now_rejected_after_shutdown_signal() {
     );
 
     // The run row should have been inserted (the route claimed the
-    // schedule) but immediately failed and never dispatched.
-    let runs = crate::agentic::store::list_agent_runs(&pool, &agent_key, 10)
+    // job) but immediately failed and never dispatched.
+    let runs = crate::harness::store::list_agent_runs(&pool, &agent_key, 10)
         .await
         .expect("list runs");
     let run = runs
         .iter()
-        .find(|row| row.schedule_id == Some(schedule_id))
+        .find(|row| row.job_id == job_id)
         .expect("a run row was inserted");
     assert_eq!(run.status, "failed");
     assert!(
@@ -543,13 +538,13 @@ async fn post_schedule_run_now_rejected_after_shutdown_signal() {
     // No backend call should have been recorded.
     assert!(
         calls.lock().unwrap().is_empty(),
-        "schedule Run now should not dispatch when shutdown_rx is set"
+        "job Run now should not dispatch when shutdown_rx is set"
     );
 }
 #[tokio::test]
-async fn post_analysis_job_run_now_skipped_does_not_trigger_market_analysis_hook() {
+async fn post_analysis_job_run_now_skipped_does_not_trigger_market_analysis_event() {
     let calls = Arc::new(Mutex::new(Vec::new()));
-    let backend = Arc::new(RecordingAgenticBackend {
+    let backend = Arc::new(RecordingHarnessBackend {
         calls: Arc::clone(&calls),
     });
     let state = test_state_with_backend(backend).await;
@@ -557,26 +552,27 @@ async fn post_analysis_job_run_now_skipped_does_not_trigger_market_analysis_hook
     let (agent_key, _wallet_address) = insert_test_opencode_agent(&state)
         .await
         .expect("insert opencode agent");
-    let hook_id = crate::agentic::store::list_agent_hooks(&pool, &agent_key)
+    let event_job_id = crate::harness::store::list_agent_jobs(&pool, &agent_key)
         .await
-        .expect("list hooks")
-        .first()
-        .expect("default hook present")
+        .expect("list jobs")
+        .into_iter()
+        .find(|job| job.job_kind == "market_analysis")
+        .expect("default event job present")
         .id;
-    crate::agentic::store::set_hook_enabled(&pool, &agent_key, hook_id, true)
+    crate::harness::store::set_job_enabled(&pool, &agent_key, event_job_id, true)
         .await
-        .expect("enable default hook");
-    let schedule_id = crate::agentic::store::list_agent_schedules(&pool, &agent_key)
+        .expect("enable default event job");
+    let job_id = crate::harness::store::list_agent_jobs(&pool, &agent_key)
         .await
-        .expect("list schedules")
+        .expect("list jobs")
         .into_iter()
         .find(|row| row.job_key == "analysis-15m")
         .map(|row| row.id)
-        .expect("analysis schedule id");
-    let active_run_id = crate::agentic::store::insert_test_run(&pool, schedule_id, "running")
+        .expect("analysis job id");
+    let active_run_id = crate::harness::store::insert_test_run(&pool, job_id, "running")
         .await
         .expect("insert active run");
-    crate::agentic::store::mark_run_running(&pool, active_run_id, Some("ses_active"))
+    crate::harness::store::mark_run_running(&pool, active_run_id, Some("ses_active"))
         .await
         .expect("mark active run running");
 
@@ -584,7 +580,7 @@ async fn post_analysis_job_run_now_skipped_does_not_trigger_market_analysis_hook
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri(format!("/agents/{agent_key}/jobs/{schedule_id}/run"))
+                .uri(format!("/agents/{agent_key}/jobs/{job_id}/run"))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -596,9 +592,9 @@ async fn post_analysis_job_run_now_skipped_does_not_trigger_market_analysis_hook
     assert!(calls.lock().unwrap().is_empty());
 }
 #[tokio::test]
-async fn post_trading_job_run_now_does_not_trigger_market_analysis_hook() {
+async fn post_trading_job_run_now_does_not_trigger_market_analysis_event() {
     let calls = Arc::new(Mutex::new(Vec::new()));
-    let backend = Arc::new(RecordingAgenticBackend {
+    let backend = Arc::new(RecordingHarnessBackend {
         calls: Arc::clone(&calls),
     });
     let state = test_state_with_backend(backend).await;
@@ -610,28 +606,29 @@ async fn post_trading_job_run_now_does_not_trigger_market_analysis_hook() {
     replace_agent_instruments(&pool, &agent_key, &["BTC".to_string()])
         .await
         .expect("seed instruments");
-    let hook_id = crate::agentic::store::list_agent_hooks(&pool, &agent_key)
+    let event_job_id = crate::harness::store::list_agent_jobs(&pool, &agent_key)
         .await
-        .expect("list hooks")
-        .first()
-        .expect("default hook present")
+        .expect("list jobs")
+        .into_iter()
+        .find(|job| job.job_kind == "market_analysis")
+        .expect("default event job present")
         .id;
-    crate::agentic::store::set_hook_enabled(&pool, &agent_key, hook_id, true)
+    crate::harness::store::set_job_enabled(&pool, &agent_key, event_job_id, true)
         .await
-        .expect("enable default hook");
-    let schedule_id = crate::agentic::store::list_agent_schedules(&pool, &agent_key)
+        .expect("enable default event job");
+    let job_id = crate::harness::store::list_agent_jobs(&pool, &agent_key)
         .await
-        .expect("list schedules")
+        .expect("list jobs")
         .into_iter()
         .find(|row| row.job_key == "trading-1m")
         .map(|row| row.id)
-        .expect("trading schedule id");
+        .expect("trading job id");
 
     let response = router(state.clone())
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri(format!("/agents/{agent_key}/jobs/{schedule_id}/run"))
+                .uri(format!("/agents/{agent_key}/jobs/{job_id}/run"))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -685,7 +682,7 @@ async fn new_job_page_renders_for_opencode_agent() {
     assert!(text.contains("name=\"timeout_seconds\""));
 }
 #[tokio::test]
-async fn post_job_creates_new_schedule_and_redirects() {
+async fn post_job_creates_new_job_and_redirects() {
     let state = test_state().await;
     let pool = state.db_pool.clone();
     let (agent_key, _wallet_address) = insert_test_opencode_agent(&state)
@@ -715,23 +712,23 @@ async fn post_job_creates_new_schedule_and_redirects() {
         Some(format!("/agents/{agent_key}/jobs").as_str())
     );
 
-    let schedules = crate::agentic::store::list_agent_schedules(&pool, &agent_key)
+    let jobs = crate::harness::store::list_agent_jobs(&pool, &agent_key)
         .await
-        .expect("list schedules");
-    let schedule = schedules
+        .expect("list jobs");
+    let job = jobs
         .iter()
         .find(|row| row.job_key == "analysis-4h")
-        .expect("custom schedule present");
-    assert_eq!(schedule.job_kind, JOB_KIND_ANALYSIS);
-    assert!(!schedule.enabled);
-    assert_eq!(schedule.timeframe, "4h");
-    assert_eq!(schedule.timeout_seconds, 600);
-    assert_eq!(schedule.model_provider_id.as_deref(), None);
-    assert_eq!(schedule.model_id.as_deref(), None);
-    assert_eq!(schedule.operator_prompt, "Check higher timeframe structure");
+        .expect("custom job present");
+    assert_eq!(job.job_kind, JOB_KIND_ANALYSIS);
+    assert!(!job.enabled);
+    assert_eq!(job.timeframe.as_deref(), Some("4h"));
+    assert_eq!(job.timeout_seconds, 600);
+    assert_eq!(job.model_provider_id.as_deref(), None);
+    assert_eq!(job.model_id.as_deref(), None);
+    assert_eq!(job.operator_prompt, "Check higher timeframe structure");
 }
 #[tokio::test]
-async fn post_toggle_all_jobs_updates_schedules_and_hooks() {
+async fn post_toggle_all_jobs_updates_all_jobs() {
     let state = test_state().await;
     let pool = state.db_pool.clone();
     let (agent_key, _wallet_address) = insert_test_opencode_agent(&state)
@@ -751,30 +748,21 @@ async fn post_toggle_all_jobs_updates_schedules_and_hooks() {
         .unwrap();
 
     assert_eq!(response.status(), StatusCode::SEE_OTHER);
-    assert!(
-        crate::agentic::store::list_agent_schedules(&pool, &agent_key)
-            .await
-            .expect("list schedules")
-            .iter()
-            .all(|row| row.enabled)
-    );
-    // Bulk-enable must NOT enable the autonomous analysis-coding
-    // hook; the operator must enable it explicitly with a pinned model.
-    let hooks = crate::agentic::store::list_agent_hooks(&pool, &agent_key)
+    let jobs = crate::harness::store::list_agent_jobs(&pool, &agent_key)
         .await
-        .expect("list hooks");
-    for hook in &hooks {
-        if hook.job_kind == crate::agentic::model::JOB_KIND_ANALYSIS_CODING {
+        .expect("list jobs");
+    for job in &jobs {
+        if job.job_kind == crate::harness::model::JOB_KIND_ANALYSIS_CODING {
             assert!(
-                !hook.enabled,
-                "coding hook {} must remain disabled after bulk enable",
-                hook.id
+                !job.enabled,
+                "coding job {} must remain disabled after bulk enable",
+                job.id
             );
         } else {
             assert!(
-                hook.enabled,
-                "non-coding hook {} ({}) should be enabled after bulk enable",
-                hook.id, hook.job_kind
+                job.enabled,
+                "non-coding job {} ({}) should be enabled after bulk enable",
+                job.id, job.job_kind
             );
         }
     }
@@ -793,16 +781,9 @@ async fn post_toggle_all_jobs_updates_schedules_and_hooks() {
 
     assert_eq!(response.status(), StatusCode::SEE_OTHER);
     assert!(
-        crate::agentic::store::list_agent_schedules(&pool, &agent_key)
+        crate::harness::store::list_agent_jobs(&pool, &agent_key)
             .await
-            .expect("list schedules")
-            .iter()
-            .all(|row| !row.enabled)
-    );
-    assert!(
-        crate::agentic::store::list_agent_hooks(&pool, &agent_key)
-            .await
-            .expect("list hooks")
+            .expect("list jobs")
             .iter()
             .all(|row| !row.enabled)
     );
@@ -840,21 +821,21 @@ async fn job_detail_page_renders_job_specific_runs() {
         .await
         .expect("insert opencode agent");
 
-    let schedules = crate::agentic::store::list_agent_schedules(&pool, &agent_key)
+    let jobs = crate::harness::store::list_agent_jobs(&pool, &agent_key)
         .await
-        .expect("list schedules");
-    let schedule_id = schedules.first().expect("default schedule").id;
-    let run_id = crate::agentic::store::insert_test_run(&pool, schedule_id, "running")
+        .expect("list jobs");
+    let job_id = jobs.first().expect("default job").id;
+    let run_id = crate::harness::store::insert_test_run(&pool, job_id, "running")
         .await
         .expect("insert run");
-    crate::agentic::store::mark_run_succeeded(&pool, run_id, Some("ses_job_detail"))
+    crate::harness::store::mark_run_succeeded(&pool, run_id, Some("ses_job_detail"))
         .await
         .expect("mark succeeded");
 
     let response = router(state.clone())
         .oneshot(
             Request::builder()
-                .uri(format!("/agents/{agent_key}/jobs/{schedule_id}"))
+                .uri(format!("/agents/{agent_key}/jobs/{job_id}"))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -865,9 +846,9 @@ async fn job_detail_page_renders_job_specific_runs() {
     let text = response_text(response).await;
     assert!(text.contains("Run now"));
     assert!(text.contains(&format!("/agents/{agent_key}/runs/{run_id}")));
-    assert!(text.contains(&format!("/agents/{agent_key}/jobs/{schedule_id}/timeframe")));
+    assert!(text.contains(&format!("/agents/{agent_key}/jobs/{job_id}/timeframe")));
     assert!(text.contains("data-detail-delete-trigger"));
-    assert!(text.contains(&format!("/agents/{agent_key}/jobs/{schedule_id}/delete")));
+    assert!(text.contains(&format!("/agents/{agent_key}/jobs/{job_id}/delete")));
     assert!(text.contains("cursor-pointer"));
     assert!(text.contains("data-model-picker-mode=\"modal\""));
     assert!(!text.contains("data-model-picker-lazy-open data-model-picker-url"));
@@ -875,9 +856,7 @@ async fn job_detail_page_renders_job_specific_runs() {
     let response = router(state.clone())
         .oneshot(
             Request::builder()
-                .uri(format!(
-                    "/agents/{agent_key}/jobs/{schedule_id}/model-picker"
-                ))
+                .uri(format!("/agents/{agent_key}/jobs/{job_id}/model-picker"))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -895,18 +874,18 @@ async fn post_job_model_htmx_updates_without_redirect() {
     let (agent_key, _wallet_address) = insert_test_opencode_agent(&state)
         .await
         .expect("insert opencode agent");
-    let schedule_id = crate::agentic::store::list_agent_schedules(&pool, &agent_key)
+    let job_id = crate::harness::store::list_agent_jobs(&pool, &agent_key)
         .await
-        .expect("list schedules")
+        .expect("list jobs")
         .first()
-        .expect("default schedule present")
+        .expect("default job present")
         .id;
 
     let response = router(state.clone())
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri(format!("/agents/{agent_key}/jobs/{schedule_id}/model"))
+                .uri(format!("/agents/{agent_key}/jobs/{job_id}/model"))
                 .header("content-type", "application/x-www-form-urlencoded")
                 .header("HX-Request", "true")
                 .body(Body::from("model_selection="))
@@ -916,12 +895,12 @@ async fn post_job_model_htmx_updates_without_redirect() {
         .unwrap();
 
     assert_eq!(response.status(), StatusCode::NO_CONTENT);
-    let schedule = crate::agentic::store::get_agent_schedule(&pool, &agent_key, schedule_id)
+    let job = crate::harness::store::get_agent_job(&pool, &agent_key, job_id)
         .await
-        .expect("get schedule")
-        .expect("schedule present");
-    assert!(schedule.model_provider_id.is_none());
-    assert!(schedule.model_id.is_none());
+        .expect("get job")
+        .expect("job present");
+    assert!(job.model_provider_id.is_none());
+    assert!(job.model_id.is_none());
 }
 #[tokio::test]
 async fn post_job_model_without_htmx_redirects_to_detail() {
@@ -929,18 +908,18 @@ async fn post_job_model_without_htmx_redirects_to_detail() {
     let (agent_key, _wallet_address) = insert_test_opencode_agent(&state)
         .await
         .expect("insert opencode agent");
-    let schedule_id = crate::agentic::store::list_agent_schedules(&state.db_pool, &agent_key)
+    let job_id = crate::harness::store::list_agent_jobs(&state.db_pool, &agent_key)
         .await
-        .expect("list schedules")
+        .expect("list jobs")
         .first()
-        .expect("default schedule present")
+        .expect("default job present")
         .id;
 
     let response = router(state)
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri(format!("/agents/{agent_key}/jobs/{schedule_id}/model"))
+                .uri(format!("/agents/{agent_key}/jobs/{job_id}/model"))
                 .header("content-type", "application/x-www-form-urlencoded")
                 .body(Body::from("model_selection="))
                 .unwrap(),
@@ -954,7 +933,7 @@ async fn post_job_model_without_htmx_redirects_to_detail() {
             .headers()
             .get("location")
             .and_then(|value| value.to_str().ok()),
-        Some(format!("/agents/{agent_key}/jobs/{schedule_id}").as_str())
+        Some(format!("/agents/{agent_key}/jobs/{job_id}").as_str())
     );
 }
 #[tokio::test]
@@ -964,18 +943,18 @@ async fn post_job_timeout_updates_and_redirects() {
     let (agent_key, _wallet_address) = insert_test_opencode_agent(&state)
         .await
         .expect("insert opencode agent");
-    let schedule_id = crate::agentic::store::list_agent_schedules(&pool, &agent_key)
+    let job_id = crate::harness::store::list_agent_jobs(&pool, &agent_key)
         .await
-        .expect("list schedules")
+        .expect("list jobs")
         .first()
-        .expect("default schedule present")
+        .expect("default job present")
         .id;
 
     let response = router(state.clone())
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri(format!("/agents/{agent_key}/jobs/{schedule_id}/timeout"))
+                .uri(format!("/agents/{agent_key}/jobs/{job_id}/timeout"))
                 .header("content-type", "application/x-www-form-urlencoded")
                 .body(Body::from("timeout=20m"))
                 .unwrap(),
@@ -989,37 +968,34 @@ async fn post_job_timeout_updates_and_redirects() {
             .headers()
             .get("location")
             .and_then(|value| value.to_str().ok()),
-        Some(format!("/agents/{agent_key}/jobs/{schedule_id}").as_str())
+        Some(format!("/agents/{agent_key}/jobs/{job_id}").as_str())
     );
 
-    let schedule = crate::agentic::store::get_agent_schedule(&pool, &agent_key, schedule_id)
+    let job = crate::harness::store::get_agent_job(&pool, &agent_key, job_id)
         .await
-        .expect("get schedule")
-        .expect("schedule present");
-    assert_eq!(schedule.timeout_seconds, 20 * 60);
+        .expect("get job")
+        .expect("job present");
+    assert_eq!(job.timeout_seconds, 20 * 60);
 }
 #[tokio::test]
-async fn post_job_timeframe_reanchors_schedule_and_regenerates_job_key() {
+async fn post_job_timeframe_reanchors_job_and_regenerates_job_key() {
     let state = test_state().await;
     let pool = state.db_pool.clone();
     let (agent_key, _wallet_address) = insert_test_opencode_agent(&state)
         .await
         .expect("insert opencode agent");
-    let schedule = crate::agentic::store::list_agent_schedules(&pool, &agent_key)
+    let job = crate::harness::store::list_agent_jobs(&pool, &agent_key)
         .await
-        .expect("list schedules")
+        .expect("list jobs")
         .into_iter()
-        .find(|schedule| schedule.job_key == "analysis-15m")
-        .expect("analysis schedule present");
+        .find(|job| job.job_key == "analysis-15m")
+        .expect("analysis job present");
 
     let response = router(state.clone())
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri(format!(
-                    "/agents/{agent_key}/jobs/{}/timeframe",
-                    schedule.id
-                ))
+                .uri(format!("/agents/{agent_key}/jobs/{}/timeframe", job.id))
                 .header("content-type", "application/x-www-form-urlencoded")
                 .body(Body::from("timeframe=4h"))
                 .unwrap(),
@@ -1033,19 +1009,20 @@ async fn post_job_timeframe_reanchors_schedule_and_regenerates_job_key() {
             .headers()
             .get("location")
             .and_then(|value| value.to_str().ok()),
-        Some(format!("/agents/{agent_key}/jobs/{}", schedule.id).as_str())
+        Some(format!("/agents/{agent_key}/jobs/{}", job.id).as_str())
     );
 
-    let updated = crate::agentic::store::get_agent_schedule(&pool, &agent_key, schedule.id)
+    let updated = crate::harness::store::get_agent_job(&pool, &agent_key, job.id)
         .await
-        .expect("get schedule")
-        .expect("schedule present");
-    assert_eq!(updated.timeframe, "4h");
+        .expect("get job")
+        .expect("job present");
+    assert_eq!(updated.timeframe.as_deref(), Some("4h"));
     assert_eq!(updated.job_key, "analysis-4h");
-    assert!(updated.next_run_at > chrono::Utc::now());
+    let next_run_at = updated.next_run_at.expect("candle job has next run time");
+    assert!(next_run_at > chrono::Utc::now());
     assert_eq!(
-        (updated.next_run_at.timestamp()
-            - i64::from(crate::agentic::timeframe::DEFAULT_TRIGGER_DELAY_SECONDS))
+        (next_run_at.timestamp()
+            - i64::from(crate::harness::timeframe::DEFAULT_TRIGGER_DELAY_SECONDS))
             % (4 * 60 * 60),
         0
     );
@@ -1057,18 +1034,18 @@ async fn post_job_timeframe_invalid_value_redirects_with_error() {
     let (agent_key, _wallet_address) = insert_test_opencode_agent(&state)
         .await
         .expect("insert opencode agent");
-    let schedule_id = crate::agentic::store::list_agent_schedules(&pool, &agent_key)
+    let job_id = crate::harness::store::list_agent_jobs(&pool, &agent_key)
         .await
-        .expect("list schedules")
+        .expect("list jobs")
         .first()
-        .expect("default schedule present")
+        .expect("default job present")
         .id;
 
     let response = router(state)
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri(format!("/agents/{agent_key}/jobs/{schedule_id}/timeframe"))
+                .uri(format!("/agents/{agent_key}/jobs/{job_id}/timeframe"))
                 .header("content-type", "application/x-www-form-urlencoded")
                 .body(Body::from("timeframe=15s"))
                 .unwrap(),
@@ -1083,7 +1060,7 @@ async fn post_job_timeframe_invalid_value_redirects_with_error() {
             .get("location")
             .and_then(|value| value.to_str().ok())
             .is_some_and(|location| location.starts_with(&format!(
-                "/agents/{agent_key}/jobs/{schedule_id}?timeframe_error="
+                "/agents/{agent_key}/jobs/{job_id}?timeframe_error="
             )))
     );
 }
@@ -1094,11 +1071,11 @@ async fn post_job_timeout_accepts_humanized_and_composite_inputs() {
     let (agent_key, _wallet_address) = insert_test_opencode_agent(&state)
         .await
         .expect("insert opencode agent");
-    let schedule_id = crate::agentic::store::list_agent_schedules(&pool, &agent_key)
+    let job_id = crate::harness::store::list_agent_jobs(&pool, &agent_key)
         .await
-        .expect("list schedules")
+        .expect("list jobs")
         .first()
-        .expect("default schedule present")
+        .expect("default job present")
         .id;
 
     for (raw, expected_seconds) in [("1h 30m", 90 * 60), ("90", 90), ("45s", 45)] {
@@ -1106,7 +1083,7 @@ async fn post_job_timeout_accepts_humanized_and_composite_inputs() {
             .oneshot(
                 Request::builder()
                     .method("POST")
-                    .uri(format!("/agents/{agent_key}/jobs/{schedule_id}/timeout"))
+                    .uri(format!("/agents/{agent_key}/jobs/{job_id}/timeout"))
                     .header("content-type", "application/x-www-form-urlencoded")
                     .body(Body::from(format!("timeout={}", urlencode(raw))))
                     .unwrap(),
@@ -1115,11 +1092,11 @@ async fn post_job_timeout_accepts_humanized_and_composite_inputs() {
             .unwrap();
         assert_eq!(response.status(), StatusCode::SEE_OTHER, "input: {raw}");
 
-        let schedule = crate::agentic::store::get_agent_schedule(&pool, &agent_key, schedule_id)
+        let job = crate::harness::store::get_agent_job(&pool, &agent_key, job_id)
             .await
-            .expect("get schedule")
-            .expect("schedule present");
-        assert_eq!(schedule.timeout_seconds, expected_seconds, "input: {raw}");
+            .expect("get job")
+            .expect("job present");
+        assert_eq!(job.timeout_seconds, expected_seconds, "input: {raw}");
     }
 }
 #[tokio::test]
@@ -1129,18 +1106,18 @@ async fn post_job_timeout_invalid_value_redirects_with_error() {
     let (agent_key, _wallet_address) = insert_test_opencode_agent(&state)
         .await
         .expect("insert opencode agent");
-    let schedule_id = crate::agentic::store::list_agent_schedules(&pool, &agent_key)
+    let job_id = crate::harness::store::list_agent_jobs(&pool, &agent_key)
         .await
-        .expect("list schedules")
+        .expect("list jobs")
         .first()
-        .expect("default schedule present")
+        .expect("default job present")
         .id;
 
     let response = router(state.clone())
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri(format!("/agents/{agent_key}/jobs/{schedule_id}/timeout"))
+                .uri(format!("/agents/{agent_key}/jobs/{job_id}/timeout"))
                 .header("content-type", "application/x-www-form-urlencoded")
                 .body(Body::from("timeout=not-a-time"))
                 .unwrap(),
@@ -1154,18 +1131,16 @@ async fn post_job_timeout_invalid_value_redirects_with_error() {
         .get("location")
         .and_then(|value| value.to_str().ok())
         .expect("location header");
-    assert!(location.starts_with(&format!(
-        "/agents/{agent_key}/jobs/{schedule_id}?timeout_error="
-    )));
+    assert!(location.starts_with(&format!("/agents/{agent_key}/jobs/{job_id}?timeout_error=")));
 
-    let schedule = crate::agentic::store::get_agent_schedule(&pool, &agent_key, schedule_id)
+    let job = crate::harness::store::get_agent_job(&pool, &agent_key, job_id)
         .await
-        .expect("get schedule")
-        .expect("schedule present");
-    assert_ne!(schedule.timeout_seconds, 0);
+        .expect("get job")
+        .expect("job present");
+    assert_ne!(job.timeout_seconds, 0);
 }
 #[tokio::test]
-async fn post_job_timeout_missing_schedule_returns_404() {
+async fn post_job_timeout_missing_job_returns_404() {
     let state = test_state().await;
     let (agent_key, _wallet_address) = insert_test_opencode_agent(&state)
         .await

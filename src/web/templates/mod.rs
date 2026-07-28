@@ -2,7 +2,6 @@ mod account;
 mod agents;
 mod balance;
 mod conversations;
-mod hooks;
 mod jobs;
 mod memories;
 mod navbar;
@@ -21,7 +20,6 @@ pub use account::*;
 pub use agents::*;
 pub use balance::*;
 pub use conversations::*;
-pub use hooks::*;
 pub use jobs::*;
 pub use memories::*;
 pub use navbar::*;
@@ -50,10 +48,6 @@ mod opencode_tests;
 #[cfg(test)]
 #[path = "jobs_tests.rs"]
 mod jobs_tests;
-
-#[cfg(test)]
-#[path = "hooks_tests.rs"]
-mod hooks_tests;
 
 #[cfg(test)]
 #[path = "runs_tests.rs"]

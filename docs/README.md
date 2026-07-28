@@ -18,7 +18,7 @@ and supervised background work for agent jobs and exchange monitoring.
 
 - `src/main.rs`: application startup and shutdown
 - `src/web/`: operator UI, SSE, and `/api/v1` agent API
-- `src/agentic/`: schedules, hooks, run tracking, and dispatch
+- `src/harness/`: unified OpenCode jobs, runs, maintenance, and dispatch
 - `src/agents/`: agent registry, credentials, and Hyperliquid monitor
 - `src/hyperliquid/`: exchange integration and execution gateway
 - `src/memory/`: memory persistence and queries

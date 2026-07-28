@@ -19,9 +19,9 @@ use tracing::warn;
 
 use super::shared::{
     ModelPickerContext, ModelSelectionForm, SERVER_SHUTTING_DOWN_WARNING, TimeoutForm,
-    ToggleScheduleForm, WORKSPACE_MAINTENANCE_ACTIVE_WARNING, build_model_picker_view,
-    is_htmx_request, jobs_warning_redirect, load_model_picker_context,
-    parse_positive_schedule_seconds, timeout_error_redirect, validate_model_selection_for_agent,
+    ToggleJobForm, WORKSPACE_MAINTENANCE_ACTIVE_WARNING, build_model_picker_view, is_htmx_request,
+    jobs_warning_redirect, load_model_picker_context, parse_positive_job_seconds,
+    timeout_error_redirect, validate_model_selection_for_agent,
 };
 use super::show::{
     AgentJobsQuery, AgentShowQueries, build_agent_recent_runs_view, parse_positive_page,
@@ -29,19 +29,23 @@ use super::show::{
 };
 use crate::web::error::AppError;
 use crate::{
-    agentic::{
-        model::{JOB_KIND_ANALYSIS, JOB_KIND_TRADING},
-        scheduler::{
-            DispatchRequestInputs, dispatch_analysis_batch_completed_hook,
-            dispatch_daily_review_coding_hook, dispatch_request_from_schedule,
-            dispatch_run_with_workspace_lease,
-        },
-        store::{self, QueuedScheduleRun},
-        timeframe::{parse_timeframe_seconds, parse_timeout_seconds},
-    },
     agents::{
         store::get_agent,
         strategy_prompts::{get_agent_strategy_prompt, prompt_kind_for_job_kind},
+    },
+    harness::{
+        model::{
+            JOB_KIND_ANALYSIS, JOB_KIND_ANALYSIS_CODING, JOB_KIND_MARKET_ANALYSIS,
+            JOB_KIND_TRADING, TRIGGER_TYPE_ANALYSIS_BATCH_COMPLETED, TRIGGER_TYPE_CANDLE_CLOSED,
+            TRIGGER_TYPE_DAILY_REVIEW_COMPLETED,
+        },
+        scheduler::{
+            DispatchRequestInputs, build_dispatch_request, dispatch_analysis_batch_completed_event,
+            dispatch_daily_review_coding_event, dispatch_request_from_job,
+            dispatch_run_with_workspace_lease,
+        },
+        store::{self, QueuedJobRun},
+        timeframe::{parse_timeframe_seconds, parse_timeout_seconds},
     },
     hyperliquid::live_state::live_agent_snapshot_for_dispatch,
     memory::get_latest_agent_memory_by_type,
@@ -51,9 +55,9 @@ use crate::{
         auth::AuthenticatedUser,
         run_detail_events::RunDetailDbEvent,
         templates::{
-            AgentJobDetailPageTemplate, AgentRecentRunsPartialTemplate,
-            AgentScheduleNewPageTemplate, AgentShowTab, CreateAgentScheduleFormValues,
-            ModelPickerPartialTemplate, build_agent_show_tabs, load_navbar,
+            AgentJobDetailPageTemplate, AgentJobNewPageTemplate, AgentRecentRunsPartialTemplate,
+            AgentShowTab, CreateHarnessJobFormValues, ModelPickerPartialTemplate,
+            build_agent_show_tabs, load_navbar,
         },
     },
 };
@@ -143,7 +147,7 @@ async fn next_agent_recent_runs_event(
 
         let matches = match event {
             RunDetailDbEvent::RunChanged { run_id } => {
-                match crate::agentic::store::get_run(&stream_state.state.db_pool, run_id).await {
+                match crate::harness::store::get_run(&stream_state.state.db_pool, run_id).await {
                     Ok(Some(run)) => run.agent_key == stream_state.agent_key,
                     Ok(None) => false,
                     Err(error) => {
@@ -199,39 +203,35 @@ pub(in crate::web::routes) async fn agents_show_job_detail(
         return Ok((StatusCode::NOT_FOUND, "agent not found").into_response());
     };
     let Some(job) =
-        crate::agentic::store::get_agent_schedule(&state.db_pool, &agent_key, job_id).await?
+        crate::harness::store::get_agent_job(&state.db_pool, &agent_key, job_id).await?
     else {
         return Ok((StatusCode::NOT_FOUND, "job not found").into_response());
     };
 
     const RUNS_LIMIT: i64 = 50;
     let mut job_runs_loaded = false;
-    let job_runs = match crate::agentic::store::list_schedule_runs(
-        &state.db_pool,
-        &agent_key,
-        job_id,
-        RUNS_LIMIT,
-    )
-    .await
-    {
-        Ok(rows) => {
-            job_runs_loaded = true;
-            rows.iter()
-                .map(crate::web::templates::AgenticRunView::from_row)
-                .collect()
-        }
-        Err(error) => {
-            warn!(
-                agent_key = %agent.agent_key,
-                job_id,
-                error = ?error,
-                "failed to list job runs for operator page"
-            );
-            Vec::new()
-        }
-    };
+    let job_runs =
+        match crate::harness::store::list_job_runs(&state.db_pool, &agent_key, job_id, RUNS_LIMIT)
+            .await
+        {
+            Ok(rows) => {
+                job_runs_loaded = true;
+                rows.iter()
+                    .map(crate::web::templates::HarnessRunView::from_row)
+                    .collect()
+            }
+            Err(error) => {
+                warn!(
+                    agent_key = %agent.agent_key,
+                    job_id,
+                    error = ?error,
+                    "failed to list job runs for operator page"
+                );
+                Vec::new()
+            }
+        };
 
-    let mut job_view = crate::web::templates::AgenticJobDetailView::from_row(&job);
+    let mut job_view = crate::web::templates::HarnessJobDetailView::from_row(&job);
     if let Some(error) = query.timeout_error {
         job_view.timeout_editor.error = Some(error);
     }
@@ -278,7 +278,7 @@ pub(in crate::web::routes) async fn agents_job_model_picker(
     let Some(agent) = get_agent(&state.db_pool, &agent_key).await? else {
         return Ok((StatusCode::NOT_FOUND, "agent not found").into_response());
     };
-    let Some(job) = store::get_agent_schedule(&state.db_pool, &agent_key, job_id).await? else {
+    let Some(job) = store::get_agent_job(&state.db_pool, &agent_key, job_id).await? else {
         return Ok((StatusCode::NOT_FOUND, "job not found").into_response());
     };
 
@@ -301,52 +301,42 @@ pub(in crate::web::routes) async fn agents_job_model_picker(
 pub(in crate::web::routes) async fn build_job_prompt_preview(
     state: &Arc<AppState>,
     agent: &crate::agents::model::AgentDetailRow,
-    job: &crate::agentic::model::AgenticJobScheduleRow,
+    job: &crate::harness::model::HarnessJobRow,
 ) -> anyhow::Result<String> {
-    use crate::agentic::backend::DispatchRequest;
-
-    let selected_instruments =
-        crate::agents::store::list_agent_instrument_ids(&state.db_pool, &agent.agent_key).await?;
-    let system_prompt = crate::agents::prompts::SYSTEM_PROMPT.to_string();
-
-    let account_snapshot = if job.job_kind == crate::agentic::model::JOB_KIND_TRADING {
-        Some(live_agent_snapshot_for_dispatch(
-            agent.trading_account_address.as_deref().unwrap_or_default(),
-            &agent.environment,
-            &state.live_accounts,
-        ))
-    } else {
-        None
+    let Some(dispatch_job) = store::get_dispatch_job(
+        &state.db_pool,
+        &agent.agent_key,
+        job.id,
+        &state.opencode_base_url,
+    )
+    .await?
+    else {
+        anyhow::bail!("Job dispatch context is unavailable.");
+    };
+    let requires_instruments = matches!(
+        job.job_kind.as_str(),
+        JOB_KIND_ANALYSIS | JOB_KIND_MARKET_ANALYSIS | crate::harness::model::JOB_KIND_TRADING
+    );
+    if requires_instruments
+        && crate::agents::store::list_agent_instrument_ids(&state.db_pool, &agent.agent_key)
+            .await?
+            .is_empty()
+    {
+        anyhow::bail!("Prompt preview requires at least one selected instrument for this job.");
+    }
+    let Some(request) = build_dispatch_request(
+        &state.db_pool,
+        &state.live_accounts,
+        &dispatch_job,
+        0,
+        job.next_run_at.unwrap_or_else(Utc::now),
+    )
+    .await?
+    else {
+        anyhow::bail!("Prompt preview dispatch context is unavailable.");
     };
 
-    let request = DispatchRequest {
-        run_id: 0,
-        schedule_id: Some(job.id),
-        hook_id: None,
-        agent_key: agent.agent_key.clone(),
-        display_name: agent.display_name.clone(),
-        job_key: job.job_key.clone(),
-        job_kind: job.job_kind.clone(),
-        timeframe: Some(job.timeframe.clone()),
-        operator_prompt: job.operator_prompt.clone(),
-        strategy_prompt: load_strategy_prompt(state, &agent.agent_key, &job.job_kind).await?,
-        accumulated_learnings: load_accumulated_learnings(state, &agent.agent_key).await?,
-        system_prompt,
-        environment: agent.environment.clone(),
-        selected_instruments,
-        account_snapshot,
-        model_provider_id: job.model_provider_id.clone(),
-        model_id: job.model_id.clone(),
-        model_variant: job.model_variant.clone(),
-        timeout_seconds: job.timeout_seconds,
-        opencode_base_url: String::new(),
-        runtime_config: serde_json::json!({}),
-        scheduled_for: job.next_run_at,
-        review_window_start: None,
-        review_window_end: None,
-    };
-
-    crate::agentic::prompt::build_prompt(&request)
+    crate::harness::prompt::build_prompt(&request)
 }
 
 async fn load_strategy_prompt(
@@ -384,7 +374,9 @@ async fn load_accumulated_learnings(
     )
 }
 #[derive(Debug, Clone, Default, Deserialize)]
-pub(in crate::web::routes) struct CreateAgentScheduleForm {
+pub(in crate::web::routes) struct CreateHarnessJobForm {
+    #[serde(default)]
+    pub trigger_type: String,
     #[serde(default)]
     pub job_kind: String,
     #[serde(default)]
@@ -400,7 +392,8 @@ pub(in crate::web::routes) struct CreateAgentScheduleForm {
     pub enabled: Option<String>,
 }
 #[derive(Debug)]
-pub(in crate::web::routes) struct ValidatedCreateAgentSchedule {
+pub(in crate::web::routes) struct ValidatedCreateHarnessJob {
+    pub trigger_type: String,
     pub job_kind: String,
     pub timeframe: String,
     pub trigger_delay_seconds: i32,
@@ -410,10 +403,11 @@ pub(in crate::web::routes) struct ValidatedCreateAgentSchedule {
     pub operator_prompt: String,
     pub enabled: bool,
 }
-impl CreateAgentScheduleForm {
+impl CreateHarnessJobForm {
     fn defaults() -> Self {
         Self {
             job_kind: JOB_KIND_ANALYSIS.to_string(),
+            trigger_type: TRIGGER_TYPE_CANDLE_CLOSED.to_string(),
             timeframe: "15m".to_string(),
             timeout_seconds: "900".to_string(),
             enabled: Some("on".to_string()),
@@ -425,8 +419,9 @@ impl CreateAgentScheduleForm {
         self.enabled.is_some()
     }
 
-    fn as_template_values(&self) -> CreateAgentScheduleFormValues {
-        CreateAgentScheduleFormValues {
+    fn as_template_values(&self) -> CreateHarnessJobFormValues {
+        CreateHarnessJobFormValues {
+            trigger_type: self.trigger_type.clone(),
             job_kind: self.job_kind.clone(),
             timeframe: self.timeframe.clone(),
             timeout_seconds: self.timeout_seconds.clone(),
@@ -437,16 +432,32 @@ impl CreateAgentScheduleForm {
         }
     }
 
-    fn validate(&self) -> Result<ValidatedCreateAgentSchedule, Vec<String>> {
+    fn validate(&self) -> Result<ValidatedCreateHarnessJob, Vec<String>> {
         let mut errors = Vec::new();
 
         let job_kind = self.job_kind.trim();
-        if !matches!(job_kind, JOB_KIND_ANALYSIS | JOB_KIND_TRADING) {
-            errors.push("Job kind must be analysis or trading.".to_string());
+        let trigger_type = self.trigger_type.trim();
+        let candle = matches!(
+            job_kind,
+            JOB_KIND_ANALYSIS | JOB_KIND_TRADING | crate::harness::model::JOB_KIND_DAILY_REVIEW
+        ) && trigger_type == TRIGGER_TYPE_CANDLE_CLOSED;
+        let event = matches!(
+            (job_kind, trigger_type),
+            (
+                JOB_KIND_MARKET_ANALYSIS,
+                TRIGGER_TYPE_ANALYSIS_BATCH_COMPLETED
+            ) | (
+                JOB_KIND_ANALYSIS_CODING,
+                TRIGGER_TYPE_DAILY_REVIEW_COMPLETED
+            )
+        );
+        if !candle && !event {
+            errors
+                .push("Choose one of the supported job kind and trigger combinations.".to_string());
         }
 
         let timeframe = self.timeframe.trim().to_string();
-        if parse_timeframe_seconds(&timeframe).is_err() {
+        if candle && parse_timeframe_seconds(&timeframe).is_err() {
             errors.push(
                 "Timeframe must be a positive integer with unit m, h, or d (e.g. 15m, 1h, 1d)."
                     .to_string(),
@@ -454,7 +465,7 @@ impl CreateAgentScheduleForm {
         }
 
         let timeout_seconds =
-            parse_positive_schedule_seconds(&self.timeout_seconds, "Timeout", &mut errors);
+            parse_positive_job_seconds(&self.timeout_seconds, "Timeout", &mut errors);
 
         let model_selection = match parse_model_selection(&self.model_selection) {
             Ok(selection) => selection,
@@ -469,7 +480,8 @@ impl CreateAgentScheduleForm {
         }
 
         if errors.is_empty() {
-            Ok(ValidatedCreateAgentSchedule {
+            Ok(ValidatedCreateHarnessJob {
+                trigger_type: trigger_type.to_string(),
                 job_kind: job_kind.to_string(),
                 timeframe,
                 trigger_delay_seconds: 1,
@@ -496,7 +508,7 @@ pub(in crate::web::routes) async fn agents_new_job(
     let navbar = load_navbar(&state.db_pool, user.id).await?;
     Ok(render_new_job_form(
         agent,
-        CreateAgentScheduleForm::defaults().as_template_values(),
+        CreateHarnessJobForm::defaults().as_template_values(),
         picker,
         Vec::new(),
         StatusCode::OK,
@@ -507,7 +519,7 @@ pub(in crate::web::routes) async fn agents_create_job(
     State(state): State<Arc<AppState>>,
     user: AuthenticatedUser,
     Path(agent_key): Path<String>,
-    Form(form): Form<CreateAgentScheduleForm>,
+    Form(form): Form<CreateHarnessJobForm>,
 ) -> Result<Response, AppError> {
     let Some(agent) = get_agent(&state.db_pool, &agent_key).await? else {
         return Ok((StatusCode::NOT_FOUND, "agent not found").into_response());
@@ -559,22 +571,38 @@ pub(in crate::web::routes) async fn agents_create_job(
     let model_variant = validated_model_selection
         .as_ref()
         .and_then(|(_, _, variant)| variant.as_deref());
-    if let Err(error) = crate::agentic::store::insert_agent_schedule_with_model_variant(
-        &state.db_pool,
-        &agent_key,
-        &validated.job_kind,
-        validated.enabled,
-        &validated.timeframe,
-        validated.trigger_delay_seconds,
-        model_provider_id,
-        model_id,
-        model_variant,
-        validated.timeout_seconds,
-        &validated.operator_prompt,
-    )
-    .await
-    {
-        let errors = match schedule_unique_violation_message(&error) {
+    let result = if validated.trigger_type == TRIGGER_TYPE_CANDLE_CLOSED {
+        crate::harness::store::insert_candle_job_with_model_variant(
+            &state.db_pool,
+            &agent_key,
+            &validated.job_kind,
+            validated.enabled,
+            &validated.timeframe,
+            validated.trigger_delay_seconds,
+            model_provider_id,
+            model_id,
+            model_variant,
+            validated.timeout_seconds,
+            &validated.operator_prompt,
+        )
+        .await
+    } else {
+        crate::harness::store::insert_event_job_with_model_variant(
+            &state.db_pool,
+            &agent_key,
+            &validated.job_kind,
+            &validated.trigger_type,
+            validated.enabled,
+            model_provider_id,
+            model_id,
+            model_variant,
+            validated.timeout_seconds,
+            &validated.operator_prompt,
+        )
+        .await
+    };
+    if let Err(error) = result {
+        let errors = match job_unique_violation_message(&error) {
             Some(message) => vec![message],
             None => return Err(AppError(error)),
         };
@@ -594,7 +622,7 @@ pub(in crate::web::routes) async fn agents_create_job(
 pub(in crate::web::routes) async fn agents_toggle_job(
     State(state): State<Arc<AppState>>,
     Path((agent_key, job_id)): Path<(String, i64)>,
-    Form(form): Form<ToggleScheduleForm>,
+    Form(form): Form<ToggleJobForm>,
 ) -> Result<Response, AppError> {
     let Some(_agent) = get_agent(&state.db_pool, &agent_key).await? else {
         return Ok((StatusCode::NOT_FOUND, "agent not found").into_response());
@@ -605,7 +633,7 @@ pub(in crate::web::routes) async fn agents_toggle_job(
     let enable = matches!(form.enabled.as_deref(), Some("on"));
     if enable {
         let Some(job) =
-            crate::agentic::store::get_agent_schedule(&state.db_pool, &agent_key, job_id).await?
+            crate::harness::store::get_agent_job(&state.db_pool, &agent_key, job_id).await?
         else {
             return Ok((StatusCode::NOT_FOUND, "job not found").into_response());
         };
@@ -614,8 +642,7 @@ pub(in crate::web::routes) async fn agents_toggle_job(
         }
     }
     let updated =
-        crate::agentic::store::set_schedule_enabled(&state.db_pool, &agent_key, job_id, enable)
-            .await?;
+        crate::harness::store::set_job_enabled(&state.db_pool, &agent_key, job_id, enable).await?;
 
     if !updated {
         return Ok((StatusCode::NOT_FOUND, "job not found").into_response());
@@ -626,13 +653,13 @@ pub(in crate::web::routes) async fn agents_toggle_job(
 pub(in crate::web::routes) async fn agents_toggle_all_jobs(
     State(state): State<Arc<AppState>>,
     Path(agent_key): Path<String>,
-    Form(form): Form<ToggleScheduleForm>,
+    Form(form): Form<ToggleJobForm>,
 ) -> Result<Response, AppError> {
     let Some(_agent) = get_agent(&state.db_pool, &agent_key).await? else {
         return Ok((StatusCode::NOT_FOUND, "agent not found").into_response());
     };
     let enable = matches!(form.enabled.as_deref(), Some("on"));
-    crate::agentic::store::set_all_agent_jobs_enabled(&state.db_pool, &agent_key, enable).await?;
+    crate::harness::store::set_all_agent_jobs_enabled(&state.db_pool, &agent_key, enable).await?;
 
     Ok(Redirect::to(&format!("/agents/{agent_key}/jobs")).into_response())
 }
@@ -643,10 +670,20 @@ pub(in crate::web::routes) async fn agents_delete_job(
     let Some(_agent) = get_agent(&state.db_pool, &agent_key).await? else {
         return Ok((StatusCode::NOT_FOUND, "agent not found").into_response());
     };
-    let deleted =
-        crate::agentic::store::delete_agent_schedule(&state.db_pool, &agent_key, job_id).await?;
-    if !deleted {
-        return Ok((StatusCode::NOT_FOUND, "job not found").into_response());
+    match crate::harness::service::delete_idle_job(
+        &state.db_pool,
+        &state.opencode_client,
+        &state.workspace_leases,
+        &state.opencode_base_url,
+        &agent_key,
+        job_id,
+    )
+    .await?
+    {
+        crate::harness::service::DeleteJobOutcome::Deleted => {}
+        crate::harness::service::DeleteJobOutcome::Missing => {
+            return Ok((StatusCode::NOT_FOUND, "job not found").into_response());
+        }
     }
 
     Ok(Redirect::to(&format!("/agents/{agent_key}/jobs")).into_response())
@@ -658,7 +695,7 @@ pub(in crate::web::routes) async fn agents_run_job_now(
     let Some(_agent) = get_agent(&state.db_pool, &agent_key).await? else {
         return Ok((StatusCode::NOT_FOUND, "agent not found").into_response());
     };
-    let Some(schedule) = crate::agentic::store::get_opencode_schedule_for_dispatch(
+    let Some(job) = crate::harness::store::get_dispatch_job(
         &state.db_pool,
         &agent_key,
         job_id,
@@ -668,20 +705,50 @@ pub(in crate::web::routes) async fn agents_run_job_now(
     else {
         return Ok((StatusCode::NOT_FOUND, "job not found").into_response());
     };
-    if schedule.model_provider_id.is_none() || schedule.model_id.is_none() {
+    if job.model_provider_id.is_none() || job.model_id.is_none() {
         return Ok(jobs_warning_redirect(&agent_key, "No model set"));
     }
 
-    match crate::agentic::store::insert_queued_run(&state.db_pool, &agent_key, job_id).await? {
-        QueuedScheduleRun::Dispatch {
+    if job.job_kind == crate::harness::model::JOB_KIND_ANALYSIS_CODING {
+        return match store::insert_analysis_coding_task_and_run(
+            &state.db_pool,
+            store::AnalysisCodingTaskRequest {
+                agent_key: &agent_key,
+                job_id,
+                trigger_mode: store::CodingTriggerMode::Manual,
+                source_run_id: None,
+                source_memory_id: None,
+                operator_prompt: None,
+                requested_mode: None,
+            },
+        )
+        .await?
+        {
+            store::InsertAnalysisCodingTaskOutcome::Inserted { run_id, .. } => {
+                Ok(Redirect::to(&format!("/agents/{agent_key}/runs/{run_id}")).into_response())
+            }
+            store::InsertAnalysisCodingTaskOutcome::AlreadyQueued => Ok(jobs_warning_redirect(
+                &agent_key,
+                "Analysis coding is already queued.",
+            )),
+            store::InsertAnalysisCodingTaskOutcome::BlockedByMaintenance => Ok(
+                jobs_warning_redirect(&agent_key, WORKSPACE_MAINTENANCE_ACTIVE_WARNING),
+            ),
+        };
+    }
+
+    let queued_run = if job.trigger_type == TRIGGER_TYPE_CANDLE_CLOSED {
+        crate::harness::store::insert_queued_manual_run(&state.db_pool, &agent_key, job_id).await?
+    } else {
+        crate::harness::store::insert_queued_event_run(&state.db_pool, &agent_key, job_id).await?
+    };
+
+    match queued_run {
+        QueuedJobRun::Dispatch {
             run_id,
             scheduled_for,
             wait_for_lane,
         } => {
-            // Scheduled Run now is not allowed once the server has
-            // begun shutting down: new work would either be killed
-            // mid-dispatch or block the drain until completion. Hook
-            // Run now is still allowed (see the hook route).
             if *state.shutdown_rx.borrow() {
                 let _ = store::mark_run_failed(
                     &state.db_pool,
@@ -701,7 +768,7 @@ pub(in crate::web::routes) async fn agents_run_job_now(
             let selected_instruments =
                 crate::agents::store::list_agent_instrument_ids(&state.db_pool, &agent_key).await?;
             let system_prompt = crate::agents::prompts::SYSTEM_PROMPT.to_string();
-            let account_snapshot = if schedule.job_kind == crate::agentic::model::JOB_KIND_TRADING {
+            let account_snapshot = if job.job_kind == crate::harness::model::JOB_KIND_TRADING {
                 Some(live_agent_snapshot_for_dispatch(
                     agent.trading_account_address.as_deref().unwrap_or_default(),
                     &agent.environment,
@@ -710,21 +777,21 @@ pub(in crate::web::routes) async fn agents_run_job_now(
             } else {
                 None
             };
-            let mut request = dispatch_request_from_schedule(
-                &schedule,
+            let mut request = dispatch_request_from_job(
+                &job,
                 DispatchRequestInputs {
                     run_id,
                     scheduled_for,
                     agent,
                     selected_instruments,
-                    strategy_prompt: load_strategy_prompt(&state, &agent_key, &schedule.job_kind)
+                    strategy_prompt: load_strategy_prompt(&state, &agent_key, &job.job_kind)
                         .await?,
                     accumulated_learnings: load_accumulated_learnings(&state, &agent_key).await?,
                     system_prompt,
                 },
                 account_snapshot,
             );
-            if schedule.job_kind == crate::agentic::model::JOB_KIND_DAILY_REVIEW {
+            if job.job_kind == crate::harness::model::JOB_KIND_DAILY_REVIEW {
                 let review_window_end = Utc::now();
                 let review_window_start = Utc.from_utc_datetime(
                     &review_window_end
@@ -736,13 +803,12 @@ pub(in crate::web::routes) async fn agents_run_job_now(
                 request.review_window_end = Some(review_window_end);
             }
             let pool = state.db_pool.clone();
-            let backend = state.agentic_backend.clone();
+            let backend = state.harness_backend.clone();
             let live_accounts = state.live_accounts.clone();
             let workspace_leases = state.workspace_leases.clone();
-            let trigger_hook = schedule.job_kind == JOB_KIND_ANALYSIS;
-            let trigger_coding_hook =
-                schedule.job_kind == crate::agentic::model::JOB_KIND_DAILY_REVIEW;
-            let hook_agent_key = agent_key.clone();
+            let trigger_analysis_event = job.job_kind == JOB_KIND_ANALYSIS;
+            let trigger_coding_event = job.job_kind == crate::harness::model::JOB_KIND_DAILY_REVIEW;
+            let dispatch_agent_key = agent_key.clone();
             let in_flight = state.in_flight.clone();
             tokio::spawn(async move {
                 let _guard = in_flight.track();
@@ -750,8 +816,8 @@ pub(in crate::web::routes) async fn agents_run_job_now(
                     loop {
                         match store::has_prior_active_run_in_lane(
                             &pool,
-                            &hook_agent_key,
-                            &schedule.job_kind,
+                            &dispatch_agent_key,
+                            &job.job_kind,
                             run_id,
                         )
                         .await
@@ -767,7 +833,9 @@ pub(in crate::web::routes) async fn agents_run_job_now(
                         tokio::time::sleep(std::time::Duration::from_millis(250)).await;
                     }
                 }
-                let _workspace_lease = workspace_leases.acquire_live_read(&hook_agent_key).await;
+                let _workspace_lease = workspace_leases
+                    .acquire_live_read(&dispatch_agent_key)
+                    .await;
                 let result = dispatch_run_with_workspace_lease(
                     pool.clone(),
                     backend.clone(),
@@ -775,25 +843,29 @@ pub(in crate::web::routes) async fn agents_run_job_now(
                     &workspace_leases,
                 )
                 .await;
-                if trigger_hook && result.succeeded {
-                    let _ = dispatch_analysis_batch_completed_hook(
+                if trigger_analysis_event && result.succeeded {
+                    let _ = dispatch_analysis_batch_completed_event(
                         &pool,
                         &backend,
                         &live_accounts,
-                        &hook_agent_key,
+                        &dispatch_agent_key,
                         &workspace_leases,
                         &state.opencode_base_url,
                     )
                     .await;
                 }
-                if trigger_coding_hook && result.succeeded {
-                    let _ = dispatch_daily_review_coding_hook(&pool, &hook_agent_key, run_id).await;
+                if trigger_coding_event && result.succeeded {
+                    let _ = dispatch_daily_review_coding_event(&pool, &dispatch_agent_key, run_id)
+                        .await;
                 }
             });
             Ok(Redirect::to(&format!("/agents/{agent_key}/runs/{run_id}")).into_response())
         }
-        QueuedScheduleRun::Missing => Ok((StatusCode::NOT_FOUND, "job not found").into_response()),
-        QueuedScheduleRun::BlockedByMaintenance => Ok(jobs_warning_redirect(
+        QueuedJobRun::Missing => Ok((StatusCode::NOT_FOUND, "job not found").into_response()),
+        QueuedJobRun::Skipped { run_id } => {
+            Ok(Redirect::to(&format!("/agents/{agent_key}/runs/{run_id}")).into_response())
+        }
+        QueuedJobRun::BlockedByMaintenance => Ok(jobs_warning_redirect(
             &agent_key,
             WORKSPACE_MAINTENANCE_ACTIVE_WARNING,
         )),
@@ -809,7 +881,7 @@ pub(in crate::web::routes) async fn agents_update_job_model(
         return Ok((StatusCode::NOT_FOUND, "agent not found").into_response());
     };
     let Some(_job) =
-        crate::agentic::store::get_agent_schedule(&state.db_pool, &agent_key, job_id).await?
+        crate::harness::store::get_agent_job(&state.db_pool, &agent_key, job_id).await?
     else {
         return Ok((StatusCode::NOT_FOUND, "job not found").into_response());
     };
@@ -825,7 +897,7 @@ pub(in crate::web::routes) async fn agents_update_job_model(
         .as_ref()
         .and_then(|(_, _, variant)| variant.as_deref());
 
-    if !crate::agentic::store::set_schedule_model_with_variant(
+    if !crate::harness::store::set_job_model_with_variant(
         &state.db_pool,
         &agent_key,
         job_id,
@@ -851,7 +923,7 @@ pub(in crate::web::routes) async fn agents_update_job_timeout(
 ) -> Result<Response, AppError> {
     let detail_url = format!("/agents/{agent_key}/jobs/{job_id}");
 
-    if crate::agentic::store::get_agent_schedule(&state.db_pool, &agent_key, job_id)
+    if crate::harness::store::get_agent_job(&state.db_pool, &agent_key, job_id)
         .await?
         .is_none()
     {
@@ -879,7 +951,7 @@ pub(in crate::web::routes) async fn agents_update_job_timeout(
         }
     };
 
-    if !crate::agentic::store::set_schedule_timeout(&state.db_pool, &agent_key, job_id, timeout_i32)
+    if !crate::harness::store::set_job_timeout(&state.db_pool, &agent_key, job_id, timeout_i32)
         .await?
     {
         return Ok((StatusCode::NOT_FOUND, "job not found").into_response());
@@ -915,7 +987,7 @@ pub(in crate::web::routes) async fn agents_update_job_timeframe(
         ));
     }
 
-    match crate::agentic::store::set_schedule_timeframe(
+    match crate::harness::store::set_candle_job_timeframe(
         &state.db_pool,
         &agent_key,
         job_id,
@@ -925,7 +997,7 @@ pub(in crate::web::routes) async fn agents_update_job_timeframe(
     {
         Ok(true) => Ok(Redirect::to(&detail_url).into_response()),
         Ok(false) => Ok((StatusCode::NOT_FOUND, "job not found").into_response()),
-        Err(error) => match schedule_unique_violation_message(&error) {
+        Err(error) => match job_unique_violation_message(&error) {
             Some(message) => Ok(timeframe_error_redirect(&detail_url, message)),
             None => Err(AppError(error)),
         },
@@ -941,7 +1013,7 @@ fn timeframe_error_redirect(detail_url: &str, message: String) -> Response {
 }
 pub(in crate::web::routes) fn render_new_job_form(
     agent: crate::agents::model::AgentDetailRow,
-    form: CreateAgentScheduleFormValues,
+    form: CreateHarnessJobFormValues,
     picker: ModelPickerContext,
     errors: Vec<String>,
     status: StatusCode,
@@ -956,7 +1028,7 @@ pub(in crate::web::routes) fn render_new_job_form(
     );
     let tabs = build_agent_show_tabs(&agent, AgentShowTab::Jobs);
     let navbar = navbar.with_selected_agent(agent.display_name.clone(), agent.enabled);
-    let template = AgentScheduleNewPageTemplate {
+    let template = AgentJobNewPageTemplate {
         agent,
         tabs,
         agent_tabs_use_htmx: false,
@@ -975,7 +1047,7 @@ pub(in crate::web::routes) fn render_new_job_form(
             .into_response(),
     }
 }
-pub(in crate::web::routes) fn schedule_unique_violation_message(
+pub(in crate::web::routes) fn job_unique_violation_message(
     error: &anyhow::Error,
 ) -> Option<String> {
     let db_err = error.downcast_ref::<sqlx::Error>()?.as_database_error()?;
@@ -984,7 +1056,7 @@ pub(in crate::web::routes) fn schedule_unique_violation_message(
     }
 
     let constraint = db_err.constraint().unwrap_or("unknown");
-    if constraint.contains("agentic_job_schedules") || constraint.contains("job_key") {
+    if constraint.contains("harness_jobs") || constraint.contains("job_key") {
         Some("A job with this kind and timeframe already exists for this agent.".to_string())
     } else {
         Some("This job conflicts with an existing row.".to_string())

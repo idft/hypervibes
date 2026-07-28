@@ -75,39 +75,44 @@ pub fn sample_opencode_detail_row() -> AgentDetailRow {
     row
 }
 
-pub fn sample_schedule_row(
+pub fn sample_candle_job_row(
     id: i64,
     job_key: &str,
     job_kind: &str,
     enabled: bool,
-) -> crate::agentic::model::AgenticJobScheduleRow {
+) -> crate::harness::model::HarnessJobRow {
     let now = Utc::now();
     let timeframe = if job_kind == "trading" { "1m" } else { "15m" };
-    crate::agentic::model::AgenticJobScheduleRow {
+    crate::harness::model::HarnessJobRow {
         id,
         agent_key: "test-agent".to_string(),
         job_key: job_key.to_string(),
         job_kind: job_kind.to_string(),
+        trigger_type: crate::harness::model::TRIGGER_TYPE_CANDLE_CLOSED.to_string(),
         enabled,
-        timeframe: timeframe.to_string(),
-        next_run_at: now,
+        timeframe: Some(timeframe.to_string()),
+        next_run_at: Some(now),
         model_provider_id: Some("anthropic".to_string()),
         model_id: Some("claude-3-5-sonnet".to_string()),
         model_variant: None,
         timeout_seconds: 600,
         operator_prompt: String::new(),
+        created_at: now,
+        updated_at: now,
     }
 }
 
-pub fn sample_hook_row(id: i64, enabled: bool) -> crate::agentic::model::AgenticJobHookRow {
+pub fn sample_event_job_row(id: i64, enabled: bool) -> crate::harness::model::HarnessJobRow {
     let now = Utc::now();
-    crate::agentic::model::AgenticJobHookRow {
+    crate::harness::model::HarnessJobRow {
         id,
         agent_key: "test-agent".to_string(),
         job_key: "market-analysis".to_string(),
-        job_kind: crate::agentic::model::JOB_KIND_MARKET_ANALYSIS.to_string(),
-        hook_event: crate::agentic::model::HOOK_EVENT_ANALYSIS_BATCH_COMPLETED.to_string(),
+        job_kind: crate::harness::model::JOB_KIND_MARKET_ANALYSIS.to_string(),
+        trigger_type: crate::harness::model::TRIGGER_TYPE_ANALYSIS_BATCH_COMPLETED.to_string(),
         enabled,
+        timeframe: None,
+        next_run_at: None,
         model_provider_id: Some("anthropic".to_string()),
         model_id: Some("claude-3-5-sonnet".to_string()),
         model_variant: None,
@@ -135,14 +140,15 @@ pub fn sample_run_row(
     id: i64,
     status: &str,
     job_key: &str,
-) -> crate::agentic::model::AgenticRunRow {
+) -> crate::harness::model::HarnessRunRow {
     let now = Utc::now();
-    crate::agentic::model::AgenticRunRow {
+    crate::harness::model::HarnessRunRow {
         id,
-        schedule_id: Some(1),
-        hook_id: None,
+        job_id: 1,
         agent_key: "test-agent".to_string(),
         job_key: job_key.to_string(),
+        job_kind: "analysis".to_string(),
+        trigger_type: "candle_closed".to_string(),
         timeframe: Some("15m".to_string()),
         status: status.to_string(),
         backend_run_ref: Some("ses_abc123".to_string()),
@@ -154,6 +160,8 @@ pub fn sample_run_row(
         finished_at: Some(now + chrono::Duration::seconds(42)),
         timeout_seconds: 600,
         error_summary: None,
+        created_at: now,
+        updated_at: now,
     }
 }
 

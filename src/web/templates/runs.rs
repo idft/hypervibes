@@ -13,7 +13,7 @@ use super::shared::{
 
 /// View-model for a single row in a Runs table.
 #[derive(Debug, Clone)]
-pub struct AgenticRunView {
+pub struct HarnessRunView {
     pub is_running: bool,
     pub status_label: String,
     pub status_class: String,
@@ -28,7 +28,7 @@ pub struct AgenticRunView {
 }
 
 #[derive(Debug, Clone)]
-pub struct AgenticRunDetailView {
+pub struct HarnessRunDetailView {
     pub id: i64,
     pub agent_key: String,
     pub status: String,
@@ -102,8 +102,14 @@ pub struct OpenCodeSessionErrorView {
     pub error_data_json: String,
 }
 
-impl AgenticRunView {
-    pub fn from_row(row: &crate::agentic::model::AgenticRunRow) -> Self {
+impl HarnessRunView {
+    pub fn from_row(row: &crate::harness::model::HarnessRunRow) -> Self {
+        let _ = (
+            &row.job_kind,
+            &row.trigger_type,
+            row.created_at,
+            row.updated_at,
+        );
         let (status_label, status_class) = status_badge(row.status.as_str());
         let duration_text = run_duration_text(row.started_at, row.finished_at);
 
@@ -123,8 +129,14 @@ impl AgenticRunView {
     }
 }
 
-impl AgenticRunDetailView {
-    pub fn from_row(row: &crate::agentic::model::AgenticRunRow) -> Self {
+impl HarnessRunDetailView {
+    pub fn from_row(row: &crate::harness::model::HarnessRunRow) -> Self {
+        let _ = (
+            &row.job_kind,
+            &row.trigger_type,
+            row.created_at,
+            row.updated_at,
+        );
         let (status_label, status_class) = status_badge(row.status.as_str());
 
         Self {
@@ -142,14 +154,8 @@ impl AgenticRunDetailView {
             timeout_text: format_duration(row.timeout_seconds),
             backend_run_ref: row.backend_run_ref.clone().unwrap_or_default(),
             error_summary: row.error_summary.clone().unwrap_or_default(),
-            job_url: row
-                .schedule_id
-                .map(|schedule_id| format!("/agents/{}/jobs/{}", row.agent_key, schedule_id))
-                .or_else(|| {
-                    row.hook_id
-                        .map(|hook_id| format!("/agents/{}/hooks/{}", row.agent_key, hook_id))
-                }),
-            job_label: if row.hook_id.is_some() { "hook" } else { "job" },
+            job_url: Some(format!("/agents/{}/jobs/{}", row.agent_key, row.job_id)),
+            job_label: "job",
         }
     }
 }
@@ -286,7 +292,7 @@ pub struct AgentRunDetailPageTemplate {
     pub agent: AgentDetailRow,
     pub tabs: Vec<AgentShowTabLink>,
     pub agent_tabs_use_htmx: bool,
-    pub run: AgenticRunDetailView,
+    pub run: HarnessRunDetailView,
     pub summary_html: String,
     pub transcript_html: String,
     pub current_path: String,
@@ -296,21 +302,21 @@ pub struct AgentRunDetailPageTemplate {
 #[derive(Template)]
 #[template(path = "agents/runs/detail-summary.html")]
 pub struct AgentRunDetailSummaryPartialTemplate {
-    pub run: AgenticRunDetailView,
+    pub run: HarnessRunDetailView,
     pub session: Option<OpenCodeSessionView>,
 }
 
 #[derive(Template)]
 #[template(path = "agents/runs/detail-transcript.html")]
 pub struct AgentRunDetailTranscriptPartialTemplate {
-    pub run: AgenticRunDetailView,
+    pub run: HarnessRunDetailView,
     pub session: Option<OpenCodeSessionView>,
     pub session_lookup_attempted: bool,
 }
 
 impl AgentRunDetailSummaryPartialTemplate {
     pub fn render_view(
-        run: AgenticRunDetailView,
+        run: HarnessRunDetailView,
         session: Option<OpenCodeSessionView>,
     ) -> Result<String, askama::Error> {
         Self { run, session }.render()
@@ -319,7 +325,7 @@ impl AgentRunDetailSummaryPartialTemplate {
 
 impl AgentRunDetailTranscriptPartialTemplate {
     pub fn render_view(
-        run: AgenticRunDetailView,
+        run: HarnessRunDetailView,
         session: Option<OpenCodeSessionView>,
         session_lookup_attempted: bool,
     ) -> Result<String, askama::Error> {
@@ -335,7 +341,7 @@ impl AgentRunDetailTranscriptPartialTemplate {
 impl AgentRunDetailPageTemplate {
     pub fn render_view(
         agent: AgentDetailRow,
-        run: AgenticRunDetailView,
+        run: HarnessRunDetailView,
         session: Option<OpenCodeSessionView>,
         session_lookup_attempted: bool,
         navbar: Navbar,

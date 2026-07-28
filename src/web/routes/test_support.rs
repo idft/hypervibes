@@ -13,7 +13,6 @@ use crate::agents::{
     store::{get_agent, insert_agent},
 };
 use crate::{
-    agentic::backend::{AgenticBackend, DispatchRequest, DispatchResult},
     agents::{
         crypto::EncryptionKey,
         store::update_agent_runtime_config,
@@ -22,6 +21,7 @@ use crate::{
             upsert_agent_strategy_prompt,
         },
     },
+    harness::backend::{DispatchRequest, DispatchResult, HarnessBackend},
     hyperliquid::builder_fee::{BuilderFeeCache, BuilderFeeLookup, LookupFuture},
     memory::CreateMemory,
     opencode::workspace::{
@@ -34,7 +34,7 @@ use crate::{
 use axum::response::Response;
 use http_body_util::BodyExt as _;
 
-pub(in crate::web::routes) struct NoopAgenticBackend;
+pub(in crate::web::routes) struct NoopHarnessBackend;
 
 struct TestBuilderFeeLookup;
 
@@ -44,18 +44,18 @@ impl BuilderFeeLookup for TestBuilderFeeLookup {
     }
 }
 #[async_trait]
-impl AgenticBackend for NoopAgenticBackend {
+impl HarnessBackend for NoopHarnessBackend {
     async fn dispatch(&self, _request: DispatchRequest) -> Result<DispatchResult> {
         Ok(DispatchResult {
             backend_run_ref: "ses_test".to_string(),
         })
     }
 }
-pub(in crate::web::routes) struct RecordingAgenticBackend {
+pub(in crate::web::routes) struct RecordingHarnessBackend {
     pub calls: Arc<Mutex<Vec<DispatchRequest>>>,
 }
 #[async_trait]
-impl AgenticBackend for RecordingAgenticBackend {
+impl HarnessBackend for RecordingHarnessBackend {
     async fn dispatch(&self, request: DispatchRequest) -> Result<DispatchResult> {
         self.calls.lock().unwrap().push(request);
         Ok(DispatchResult {
@@ -64,16 +64,16 @@ impl AgenticBackend for RecordingAgenticBackend {
     }
 }
 pub(in crate::web::routes) async fn test_state() -> Arc<AppState> {
-    test_state_with_backend(Arc::new(NoopAgenticBackend)).await
+    test_state_with_backend(Arc::new(NoopHarnessBackend)).await
 }
 pub(in crate::web::routes) async fn test_state_with_backend(
-    agentic_backend: Arc<dyn AgenticBackend>,
+    harness_backend: Arc<dyn HarnessBackend>,
 ) -> Arc<AppState> {
-    test_state_with_backend_and_shutdown(agentic_backend, false).await
+    test_state_with_backend_and_shutdown(harness_backend, false).await
 }
 
 pub(in crate::web::routes) async fn test_state_with_backend_and_shutdown(
-    agentic_backend: Arc<dyn AgenticBackend>,
+    harness_backend: Arc<dyn HarnessBackend>,
     shutdown_signaled: bool,
 ) -> Arc<AppState> {
     let pool = Arc::new(test_db::pool().await);
@@ -85,7 +85,7 @@ pub(in crate::web::routes) async fn test_state_with_backend_and_shutdown(
     Arc::new(AppState {
         db_pool: pool.as_ref().as_ref().clone(),
         _test_db_guard: Some(Arc::clone(&pool)),
-        agentic_backend,
+        harness_backend,
         encryption_key: EncryptionKey::new(
             "test",
             [
@@ -131,8 +131,8 @@ pub(in crate::web::routes) async fn test_state_with_backend_and_shutdown(
         .unwrap(),
         asset_cache: Arc::new(crate::cache::asset::AssetCache::new(cache_dir).unwrap()),
         builder_fee_cache: Arc::new(BuilderFeeCache::new(Arc::new(TestBuilderFeeLookup))),
-        in_flight: crate::agentic::in_flight::InFlightTracker::new(),
-        workspace_leases: crate::agentic::workspace_lease::WorkspaceLeaseManager::new(),
+        in_flight: crate::harness::in_flight::InFlightTracker::new(),
+        workspace_leases: crate::harness::workspace_lease::WorkspaceLeaseManager::new(),
         conversation_turns: crate::agent_conversations::service::ConversationTurnTracker::default(),
         shutdown_rx,
         provider_connections: crate::web::provider_connections::ProviderConnectionsState::new(),
@@ -297,11 +297,11 @@ pub(in crate::web::routes) async fn insert_test_opencode_agent(
     insert_default_strategy_prompts_for_agent(&state.db_pool, &agent_key)
         .await
         .expect("insert default prompts");
-    crate::agentic::store::insert_default_opencode_schedules(&state.db_pool, &agent_key)
+    crate::harness::store::insert_default_harness_jobs(&state.db_pool, &agent_key)
         .await
         .expect("insert default schedules");
     sqlx::query(
-        "UPDATE agentic_job_schedules
+        "UPDATE harness_jobs
             SET model_provider_id = 'anthropic', model_id = 'claude-sonnet-test'
           WHERE agent_key = $1",
     )
@@ -310,14 +310,14 @@ pub(in crate::web::routes) async fn insert_test_opencode_agent(
     .await
     .expect("set test schedule models");
     sqlx::query(
-        "UPDATE agentic_job_hooks
+        "UPDATE harness_jobs
             SET model_provider_id = 'anthropic', model_id = 'claude-sonnet-test'
           WHERE agent_key = $1",
     )
     .bind(&agent_key)
     .execute(&state.db_pool)
     .await
-    .expect("set test hook models");
+    .expect("set test event-job models");
     Some((agent_key, wallet_address))
 }
 pub(in crate::web::routes) async fn seed_workspace_runtime_config(

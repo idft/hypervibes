@@ -6,7 +6,7 @@ use serde_json::json;
 #[test]
 fn run_detail_page_renders_opencode_session_sections() {
     let agent = sample_opencode_detail_row();
-    let run = AgenticRunDetailView::from_row(&sample_run_row(7, "succeeded", "analysis-15m"));
+    let run = HarnessRunDetailView::from_row(&sample_run_row(7, "succeeded", "analysis-15m"));
     let session = OpenCodeSessionView {
         model_text: "anthropic/claude-3-5-sonnet".to_string(),
         input_tokens_text: "1,200".to_string(),
@@ -57,16 +57,16 @@ fn run_detail_page_renders_opencode_session_sections() {
 }
 
 #[test]
-fn hook_run_detail_view_uses_dash_timeframe_and_hook_job_url() {
+fn event_run_detail_view_uses_dash_timeframe_and_job_url() {
     let mut row = sample_run_row(8, "succeeded", "market-analysis");
-    row.schedule_id = None;
-    row.hook_id = Some(3);
+    row.job_id = 3;
+    row.trigger_type = "analysis_batch_completed".to_string();
     row.timeframe = None;
 
-    let run = AgenticRunDetailView::from_row(&row);
+    let run = HarnessRunDetailView::from_row(&row);
     assert_eq!(run.timeframe_text, "—");
-    assert_eq!(run.job_url, Some("/agents/test-agent/hooks/3".to_string()));
-    assert_eq!(run.job_label, "hook");
+    assert_eq!(run.job_url, Some("/agents/test-agent/jobs/3".to_string()));
+    assert_eq!(run.job_label, "job");
 }
 
 #[test]

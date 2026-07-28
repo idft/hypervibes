@@ -4,20 +4,22 @@ use crate::agents::model::AgentDetailRow;
 
 use super::agents::{AgentShowTab, AgentShowTabLink, ModelPickerView, build_agent_show_tabs};
 use super::navbar::Navbar;
-use super::runs::AgenticRunView;
+use super::runs::HarnessRunView;
 use super::shared::{LocalTimestampView, TimeoutEditorView, format_duration, local_timestamp_view};
 
 /// View-model for a single row on the Jobs table.
 #[derive(Debug, Clone)]
-pub struct AgenticJobScheduleView {
+pub struct HarnessJobView {
     pub job_key: String,
     pub job_kind: String,
     pub enabled: bool,
     pub enabled_label: &'static str,
     pub enabled_class: &'static str,
+    pub is_candle_job: bool,
     pub timeframe_text: String,
+    pub trigger_text: String,
     pub timeout_text: String,
-    pub next_run_at: LocalTimestampView,
+    pub next_run_at: Option<LocalTimestampView>,
     pub model_text: String,
     pub has_model: bool,
     pub model_logo_url: Option<String>,
@@ -28,16 +30,18 @@ pub struct AgenticJobScheduleView {
 }
 
 #[derive(Debug, Clone)]
-pub struct AgenticJobDetailView {
+pub struct HarnessJobDetailView {
     pub id: i64,
     pub job_key: String,
     pub enabled: bool,
     pub enabled_label: &'static str,
     pub enabled_class: &'static str,
     pub has_model: bool,
+    pub is_candle_job: bool,
+    pub trigger_text: String,
     pub timeframe_editor: TimeframeEditorView,
     pub timeout_editor: TimeoutEditorView,
-    pub next_run_at: LocalTimestampView,
+    pub next_run_at: Option<LocalTimestampView>,
     pub operator_prompt_text: String,
     pub prompt_preview_text: String,
     pub prompt_preview_error: Option<String>,
@@ -57,8 +61,8 @@ pub struct TimeframeEditorView {
     pub error: Option<String>,
 }
 
-impl AgenticJobScheduleView {
-    pub fn from_row(row: &crate::agentic::model::AgenticJobScheduleRow) -> Self {
+impl HarnessJobView {
+    pub fn from_row(row: &crate::harness::model::HarnessJobRow) -> Self {
         let model_text = match (row.model_provider_id.as_deref(), row.model_id.as_deref()) {
             (Some(provider), Some(model)) => format!("{provider}/{model}"),
             _ => "—".to_string(),
@@ -78,7 +82,24 @@ impl AgenticJobScheduleView {
             ("Disabled", "border-zinc-700 bg-zinc-900/60 text-zinc-400")
         };
 
-        let timeframe_text = row.timeframe.clone();
+        let (is_candle_job, timeframe_text, trigger_text) = match row.trigger_type.as_str() {
+            "candle_closed" => (
+                true,
+                row.timeframe.clone().unwrap_or_else(|| "—".to_string()),
+                "Candle closed".to_string(),
+            ),
+            "analysis_batch_completed" => (
+                false,
+                "—".to_string(),
+                "After analysis batch completes".to_string(),
+            ),
+            "daily_review_completed" => (
+                false,
+                "—".to_string(),
+                "After qualifying daily review completes".to_string(),
+            ),
+            _ => (false, "—".to_string(), row.trigger_type.clone()),
+        };
 
         Self {
             job_key: row.job_key.clone(),
@@ -86,9 +107,11 @@ impl AgenticJobScheduleView {
             enabled: row.enabled,
             enabled_label,
             enabled_class,
+            is_candle_job,
             timeframe_text,
+            trigger_text,
             timeout_text: format_duration(row.timeout_seconds),
-            next_run_at: local_timestamp_view(row.next_run_at),
+            next_run_at: row.next_run_at.map(local_timestamp_view),
             model_text,
             has_model,
             model_logo_url,
@@ -100,9 +123,9 @@ impl AgenticJobScheduleView {
     }
 }
 
-impl AgenticJobDetailView {
-    pub fn from_row(row: &crate::agentic::model::AgenticJobScheduleRow) -> Self {
-        let summary = AgenticJobScheduleView::from_row(row);
+impl HarnessJobDetailView {
+    pub fn from_row(row: &crate::harness::model::HarnessJobRow) -> Self {
+        let summary = HarnessJobView::from_row(row);
 
         Self {
             id: row.id,
@@ -111,9 +134,11 @@ impl AgenticJobDetailView {
             enabled_label: summary.enabled_label,
             enabled_class: summary.enabled_class,
             has_model: summary.has_model,
+            is_candle_job: summary.is_candle_job,
+            trigger_text: summary.trigger_text.clone(),
             timeframe_editor: TimeframeEditorView {
                 display_text: summary.timeframe_text,
-                edit_text: row.timeframe.clone(),
+                edit_text: row.timeframe.clone().unwrap_or_default(),
                 action: format!("/agents/{}/jobs/{}/timeframe", row.agent_key, row.id),
                 error: None,
             },
@@ -150,9 +175,9 @@ pub struct AgentJobDetailPageTemplate {
     pub agent: AgentDetailRow,
     pub tabs: Vec<AgentShowTabLink>,
     pub agent_tabs_use_htmx: bool,
-    pub job: AgenticJobDetailView,
+    pub job: HarnessJobDetailView,
     pub model_picker: ModelPickerView,
-    pub job_runs: Vec<AgenticRunView>,
+    pub job_runs: Vec<HarnessRunView>,
     pub job_runs_loaded: bool,
     pub current_path: String,
     pub navbar: Navbar,
@@ -161,9 +186,9 @@ pub struct AgentJobDetailPageTemplate {
 impl AgentJobDetailPageTemplate {
     pub fn render_view(
         agent: AgentDetailRow,
-        job: AgenticJobDetailView,
+        job: HarnessJobDetailView,
         model_picker: ModelPickerView,
-        job_runs: Vec<AgenticRunView>,
+        job_runs: Vec<HarnessRunView>,
         job_runs_loaded: bool,
         navbar: Navbar,
     ) -> Result<String, askama::Error> {

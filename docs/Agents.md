@@ -129,7 +129,14 @@ While workspace maintenance is queued or running:
 
 Deleting an agent removes the registry row and cascades through agent-owned state:
 
-- agent schedules, hooks, and runs
+  - harness jobs, runs, and maintenance tasks
+
+## Harness job lifecycle
+
+Every OpenCode agent receives seven disabled harness jobs: analysis at 15m, 1h,
+and 1d; trading at 1m; daily review at 1d; market analysis after an analysis
+batch; and analysis coding after a qualifying daily review. Operators configure
+model, enablement, timeout, and an operator prompt on the same job surface.
 - memory records
 - selected instruments
 - Hyperliquid orders and order events

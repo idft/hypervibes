@@ -1,9 +1,9 @@
 pub mod agent_conversations;
-mod agentic;
 mod agents;
 mod cache;
 mod config;
 mod db;
+mod harness;
 mod hyperliquid;
 mod memory;
 mod model_catalog;
@@ -22,7 +22,7 @@ use tokio::sync::watch;
 use tracing::{error, info, warn};
 use tracing_subscriber::{EnvFilter, fmt};
 
-use crate::agentic::in_flight::{InFlightTracker, SHUTDOWN_IN_FLIGHT_GRACE};
+use crate::harness::in_flight::{InFlightTracker, SHUTDOWN_IN_FLIGHT_GRACE};
 use crate::hyperliquid::live_state::LiveAccountStore;
 
 #[tokio::main]
@@ -51,7 +51,7 @@ async fn main() -> Result<()> {
         config.agents_encryption_key,
     );
     let in_flight = InFlightTracker::new();
-    let workspace_leases = agentic::workspace_lease::WorkspaceLeaseManager::new();
+    let workspace_leases = harness::workspace_lease::WorkspaceLeaseManager::new();
     let in_flight_for_scheduler = in_flight.clone();
     let in_flight_for_web = in_flight.clone();
 
@@ -73,8 +73,8 @@ async fn main() -> Result<()> {
         )
         .context("failed to build OpenCode HTTP client")?,
     );
-    let opencode_backend: Arc<dyn agentic::backend::AgenticBackend> = Arc::new(
-        agentic::backend::OpenCodeBackend::new(pool.clone(), Arc::clone(&opencode_client)),
+    let opencode_backend: Arc<dyn harness::backend::HarnessBackend> = Arc::new(
+        harness::backend::OpenCodeBackend::new(pool.clone(), Arc::clone(&opencode_client)),
     );
     let asset_cache = cache::asset::AssetCache::new(config.app_cache_dir.clone())?;
     let model_catalog =
@@ -116,14 +116,14 @@ async fn main() -> Result<()> {
         }
     });
 
-    info!("starting agentic scheduler");
-    let agentic_scheduler = agentic::scheduler::AgenticScheduler::new_with_workspace_leases(
+    info!("starting harness scheduler");
+    let harness_scheduler = harness::scheduler::HarnessScheduler::new_with_workspace_leases(
         pool.clone(),
         shutdown_rx.clone(),
         force_shutdown_rx.clone(),
         opencode_backend.clone(),
         Arc::clone(&live_accounts),
-        agentic::scheduler::AgenticSchedulerRuntime {
+        harness::scheduler::HarnessSchedulerRuntime {
             workspace_controller: Arc::clone(&workspace_controller),
             agent_api_base_url: config.vibetrading_agent_api_base_url.clone(),
             container_workspaces_root: config.opencode_container_workspaces_root.clone(),
@@ -132,9 +132,9 @@ async fn main() -> Result<()> {
         },
         workspace_leases.clone(),
     );
-    let mut agentic_scheduler_handle = tokio::spawn(async move {
-        if let Err(e) = agentic_scheduler.run().await {
-            error!(error = ?e, "agentic scheduler exited with error");
+    let mut harness_scheduler_handle = tokio::spawn(async move {
+        if let Err(e) = harness_scheduler.run().await {
+            error!(error = ?e, "harness scheduler exited with error");
         }
     });
 
@@ -162,7 +162,7 @@ async fn main() -> Result<()> {
 
     // Single source of truth for shutdown: when SIGINT or SIGTERM
     // arrives, set the shared flag. Every long-running task
-    // (web server's graceful shutdown, agentic scheduler's loop,
+    // (web server's graceful shutdown, harness scheduler's loop,
     // hyperliquid monitor's loop) observes it and drains. A second
     // signal flips a separate `force` watch that short-circuits
     // the web server's in-flight hold and the scheduler's drain
@@ -178,18 +178,18 @@ async fn main() -> Result<()> {
             warn!("hyperliquid agent monitor exited early");
             return Ok(());
         }
-        _ = &mut agentic_scheduler_handle => {
-            warn!("agentic scheduler exited early");
+        _ = &mut harness_scheduler_handle => {
+            warn!("harness scheduler exited early");
             return Ok(());
         }
     }
 
     // Wait for the background tasks to finish their graceful shutdown.
     let _ = hyperliquid_monitor_handle.await;
-    let _ = agentic_scheduler_handle.await;
+    let _ = harness_scheduler_handle.await;
 
     // The scheduler drains the trackers it knows about inside its
-    // own `run`, but manual hook dispatches that started after the
+    // own `run`, but manual event dispatches that started after the
     // scheduler already drained are only visible here. One more
     // bounded wait covers them, and the wait is short-circuited by
     // the force watch so a second Ctrl-C exits immediately.
@@ -197,7 +197,7 @@ async fn main() -> Result<()> {
         info!(
             in_flight = in_flight.in_flight(),
             grace_seconds = SHUTDOWN_IN_FLIGHT_GRACE.as_secs(),
-            "main waiting for in-flight agentic dispatches to complete"
+            "main waiting for in-flight harness dispatches to complete"
         );
         let mut force_rx = force_shutdown_rx;
         let drained = tokio::select! {
@@ -212,11 +212,11 @@ async fn main() -> Result<()> {
         if !drained {
             warn!(
                 remaining = in_flight.in_flight(),
-                "in-flight agentic dispatches did not drain; \
+                "in-flight harness dispatches did not drain; \
                  leaving them orphaned for the next start to recover"
             );
         } else {
-            info!("all in-flight agentic dispatches completed");
+            info!("all in-flight harness dispatches completed");
         }
     }
 

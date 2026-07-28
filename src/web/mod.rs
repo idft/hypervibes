@@ -23,14 +23,14 @@ use tower_http::{services::ServeDir, trace::TraceLayer};
 use tracing::Level;
 
 use crate::{
-    agentic::{
-        backend::AgenticBackend,
-        in_flight::{InFlightTracker, SHUTDOWN_IN_FLIGHT_GRACE},
-        workspace_lease::WorkspaceLeaseManager,
-    },
     agents::crypto::EncryptionKey,
     cache::asset::AssetCache,
     db::DbPool,
+    harness::{
+        backend::HarnessBackend,
+        in_flight::{InFlightTracker, SHUTDOWN_IN_FLIGHT_GRACE},
+        workspace_lease::WorkspaceLeaseManager,
+    },
     hyperliquid::builder_fee::BuilderFeeCache,
     hyperliquid::live_state::LiveAccountStore,
     model_catalog::models_dev::ModelsDevCatalog,
@@ -44,7 +44,7 @@ use self::ui_events::UiEventHub;
 pub async fn serve(
     bind_addr: &str,
     db_pool: DbPool,
-    agentic_backend: Arc<dyn AgenticBackend>,
+    harness_backend: Arc<dyn HarnessBackend>,
     encryption_key: EncryptionKey,
     live_accounts: Arc<LiveAccountStore>,
     workspace_controller: Arc<dyn WorkspaceController>,
@@ -79,7 +79,7 @@ pub async fn serve(
             container_workspaces_root: opencode_container_workspaces_root.clone(),
             api_base_url: vibetrading_agent_api_base_url.clone(),
         },
-        agentic_backend,
+        harness_backend,
         encryption_key,
         live_accounts,
         ui_events: Arc::new(UiEventHub::new()),
@@ -140,7 +140,7 @@ async fn shutdown_signal_future_with_grace(
         tracing::info!(
             in_flight = in_flight_count,
             grace_seconds = grace.as_secs(),
-            "web server holding for in-flight agentic dispatches to complete"
+            "web server holding for in-flight harness dispatches to complete"
         );
     }
 
@@ -152,11 +152,11 @@ async fn shutdown_signal_future_with_grace(
                 .wait_idle_with_timeout(grace)
                 .await;
             if drained {
-                tracing::info!("web server proceeding with graceful shutdown (in-flight agentic dispatches drained)");
+                tracing::info!("web server proceeding with graceful shutdown (in-flight harness dispatches drained)");
             } else {
                 tracing::warn!(
                     remaining = in_flight_for_wait.in_flight(),
-                    "web server proceeding with graceful shutdown; in-flight agentic dispatches did not drain within grace period"
+                    "web server proceeding with graceful shutdown; in-flight harness dispatches did not drain within grace period"
                 );
             }
         } => {}
@@ -165,7 +165,7 @@ async fn shutdown_signal_future_with_grace(
                 if *force_for_wait.borrow() { break; }
                 if force_for_wait.changed().await.is_err() { return; }
             }
-            tracing::warn!("web server force-shutdown: cutting API to in-flight agentic dispatches");
+            tracing::warn!("web server force-shutdown: cutting API to in-flight harness dispatches");
         } => {}
     }
 }

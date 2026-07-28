@@ -162,7 +162,7 @@ async fn post_user_subaccounts_requires_a_ready_signer() {
 }
 
 #[tokio::test]
-async fn post_agents_creates_agent_active_with_default_prompts_and_schedules() {
+async fn post_agents_creates_agent_active_with_default_prompts_and_jobs() {
     let state = test_state().await;
     seed_instrument(&state, "BTC", true).await;
     let guard = state

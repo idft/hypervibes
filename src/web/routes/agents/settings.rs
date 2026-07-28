@@ -11,8 +11,8 @@ use tracing::warn;
 use super::shared::{WORKSPACE_MAINTENANCE_DUPLICATE_WARNING, urlencode};
 use super::show::{AgentSettingsQuery, AgentShowQueries, render_agent_show_page};
 use crate::{
-    agentic::store::InsertWorkspaceMaintenanceTaskOutcome,
     agents::store::{get_agent, replace_agent_instruments},
+    harness::store::InsertWorkspaceMaintenanceTaskOutcome,
     opencode::{
         workspace::OpenCodeWorkspaceRuntimeConfig,
         workspace_control_client::{WorkspaceAgentInput, WorkspaceController},
@@ -71,7 +71,7 @@ pub(in crate::web::routes) async fn agents_regenerate_workspace(
         return Ok((StatusCode::NOT_FOUND, "agent not found").into_response());
     };
     let redirect_url = format!("/agents/{agent_key}/settings");
-    match crate::agentic::store::insert_workspace_regenerate_task(
+    match crate::harness::store::insert_workspace_regenerate_task(
         &state.db_pool,
         &agent.agent_key,
         form.hard_reset(),
@@ -122,12 +122,12 @@ pub(in crate::web::routes) async fn load_workspace_maintenance_view(
     agent_key: &str,
     workspace_controller: &Arc<dyn WorkspaceController>,
 ) -> Result<OpenCodeWorkspaceMaintenanceView, AppError> {
-    let task = crate::agentic::store::get_latest_maintenance_task(pool, agent_key).await?;
+    let task = crate::harness::store::get_latest_maintenance_task(pool, agent_key).await?;
     let Some(task) = task else {
         return Ok(OpenCodeWorkspaceMaintenanceView::idle(agent_key));
     };
     let (report_summary, changed_paths) =
-        if task.task_kind == crate::agentic::model::MAINTENANCE_TASK_KIND_ANALYSIS_CODING {
+        if task.task_kind == crate::harness::model::MAINTENANCE_TASK_KIND_ANALYSIS_CODING {
             let report = workspace_controller
                 .inspect_candidate(agent_key, task.id)
                 .await

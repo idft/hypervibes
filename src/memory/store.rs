@@ -275,7 +275,7 @@ pub async fn get_daily_review_memory_for_run(
           WHERE agent_key = $1
             AND symbol = '__agent__'
             AND memory_type = 'daily_review'
-            AND metadata->>'source_agentic_run_id' = $2
+            AND metadata->>'source_harness_run_id' = $2
           ORDER BY created_at DESC, id DESC
           LIMIT 2",
     )
@@ -285,7 +285,7 @@ pub async fn get_daily_review_memory_for_run(
     .await
     .context("failed to fetch daily review memory for run")?;
     if rows.len() > 1 {
-        anyhow::bail!("multiple daily review memories match agentic run {run_id}");
+        anyhow::bail!("multiple daily review memories match harness run {run_id}");
     }
     Ok(rows.into_iter().next())
 }

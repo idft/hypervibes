@@ -43,13 +43,13 @@ async fn post_regenerate_workspace_queues_regular_maintenance_task() {
     );
 
     let task =
-        crate::agentic::store::get_latest_workspace_regenerate_task(&state.db_pool, &agent_key)
+        crate::harness::store::get_latest_workspace_regenerate_task(&state.db_pool, &agent_key)
             .await
             .expect("load maintenance task")
             .expect("maintenance task present");
     assert_eq!(
         task.status,
-        crate::agentic::model::MAINTENANCE_STATUS_QUEUED
+        crate::harness::model::MAINTENANCE_STATUS_QUEUED
     );
     assert!(!task.parameter_bool("hard_reset"));
 }
@@ -76,7 +76,7 @@ async fn post_regenerate_workspace_with_hard_reset_and_memory_reset_queues_both_
 
     assert_eq!(response.status(), StatusCode::SEE_OTHER);
     let task =
-        crate::agentic::store::get_latest_workspace_regenerate_task(&state.db_pool, &agent_key)
+        crate::harness::store::get_latest_workspace_regenerate_task(&state.db_pool, &agent_key)
             .await
             .expect("load maintenance task")
             .expect("maintenance task present");
@@ -90,7 +90,7 @@ async fn post_regenerate_workspace_redirects_with_warning_when_task_already_exis
     let (agent_key, _) = insert_test_opencode_agent(&state)
         .await
         .expect("insert agent");
-    crate::agentic::store::insert_workspace_regenerate_task(
+    crate::harness::store::insert_workspace_regenerate_task(
         &state.db_pool,
         &agent_key,
         false,
@@ -127,7 +127,7 @@ async fn settings_page_and_partial_render_workspace_maintenance_status() {
         .await
         .expect("insert agent");
     seed_workspace_runtime_config(&state, &agent_key).await;
-    let task_id = match crate::agentic::store::insert_workspace_regenerate_task(
+    let task_id = match crate::harness::store::insert_workspace_regenerate_task(
         &state.db_pool,
         &agent_key,
         true,
@@ -136,7 +136,7 @@ async fn settings_page_and_partial_render_workspace_maintenance_status() {
     .await
     .expect("seed maintenance task")
     {
-        crate::agentic::store::InsertWorkspaceMaintenanceTaskOutcome::Inserted { task_id } => {
+        crate::harness::store::InsertWorkspaceMaintenanceTaskOutcome::Inserted { task_id } => {
             task_id
         }
         other => panic!("expected inserted maintenance task, got {other:?}"),
@@ -176,7 +176,7 @@ async fn settings_page_and_partial_render_workspace_maintenance_status() {
     assert!(partial_text.contains("hx-trigger=\"every 2s\""));
 
     assert!(
-        crate::agentic::store::mark_maintenance_task_succeeded(&state.db_pool, task_id,)
+        crate::harness::store::mark_maintenance_task_succeeded(&state.db_pool, task_id,)
             .await
             .expect("mark maintenance succeeded")
     );

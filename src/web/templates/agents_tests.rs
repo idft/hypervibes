@@ -136,23 +136,20 @@ fn opencode_agent_shows_jobs_tab_with_recent_runs() {
         AgentsShowPageTemplate::new(sample_opencode_detail_row(), AgentShowTab::Jobs);
     template.jobs_loaded = true;
     template.jobs = vec![
-        AgenticJobScheduleView::from_row(&sample_schedule_row(1, "analysis-15m", "analysis", true)),
-        AgenticJobScheduleView::from_row(&sample_schedule_row(2, "trading-1m", "trading", false)),
+        HarnessJobView::from_row(&sample_candle_job_row(1, "analysis-15m", "analysis", true)),
+        HarnessJobView::from_row(&sample_candle_job_row(2, "trading-1m", "trading", false)),
+        HarnessJobView::from_row(&sample_event_job_row(3, true)),
     ];
-    template.hooks_loaded = true;
-    template.hooks = vec![AgenticJobHookView::from_row(&sample_hook_row(3, true))];
     template.can_enable_all_jobs = true;
     template.can_disable_all_jobs = true;
     template.recent_runs_section.recent_runs_loaded = true;
-    template.recent_runs_section.recent_runs = vec![AgenticRunView::from_row(&sample_run_row(
+    template.recent_runs_section.recent_runs = vec![HarnessRunView::from_row(&sample_run_row(
         1,
         "succeeded",
         "analysis-15m",
     ))];
     let rendered = template.render().expect("render jobs tab");
     assert!(rendered.contains("/agents/test-agent/jobs"));
-    assert!(rendered.contains("Scheduled"));
-    assert!(rendered.contains("Hooks"));
     assert!(rendered.contains("Enable all"));
     assert!(rendered.contains("Disable all"));
     assert!(rendered.contains("Recent Runs"));
@@ -163,6 +160,7 @@ fn opencode_agent_shows_jobs_tab_with_recent_runs() {
     assert!(rendered.contains("1m"));
     assert!(!rendered.contains(">10m<"));
     assert!(!rendered.contains(">Timeout<"));
+    assert!(!rendered.contains(">Delay</th>"));
     let disabled_job_row = rendered
         .split_once("data-row-href=\"/agents/test-agent/jobs/2\"")
         .and_then(|(_, remainder)| remainder.split_once("</tr>"))
@@ -171,12 +169,20 @@ fn opencode_agent_shows_jobs_tab_with_recent_runs() {
     assert!(disabled_job_row.contains("Disabled"));
     assert!(disabled_job_row.contains("—"));
     assert!(!disabled_job_row.contains("local-datetime"));
+    let event_job_row = rendered
+        .split_once("data-row-href=\"/agents/test-agent/jobs/3\"")
+        .and_then(|(_, remainder)| remainder.split_once("</tr>"))
+        .map(|(row, _)| row)
+        .expect("render event job row");
+    assert!(event_job_row.contains("Analysis batch completed"));
+    assert!(event_job_row.contains(">—<"));
+    assert!(!event_job_row.contains("local-datetime"));
     assert!(rendered.contains("anthropic/claude-3-5-sonnet"));
     assert!(rendered.contains("Run now"));
     assert!(!rendered.contains("Operator prompt</th>"));
     assert!(rendered.contains("/agents/test-agent/jobs/1/run"));
-    assert!(rendered.contains("/agents/test-agent/hooks/3/run"));
-    assert!(rendered.contains("/agents/test-agent/hooks/3"));
+    assert!(rendered.contains("/agents/test-agent/jobs/3/run"));
+    assert!(rendered.contains("/agents/test-agent/jobs/3"));
     assert!(rendered.contains("/agents/test-agent/runs/1"));
     assert!(rendered.contains("id=\"agent-recent-runs-stream\" hx-ext=\"sse\""));
     assert!(rendered.contains(&format!(
@@ -193,8 +199,8 @@ fn jobs_page_renders_recent_run_rows() {
         AgentsShowPageTemplate::new(sample_opencode_detail_row(), AgentShowTab::Jobs);
     template.recent_runs_section.recent_runs_loaded = true;
     template.recent_runs_section.recent_runs = vec![
-        AgenticRunView::from_row(&sample_run_row(1, "succeeded", "analysis-15m")),
-        AgenticRunView::from_row(&sample_run_row(2, "failed", "trading-1m")),
+        HarnessRunView::from_row(&sample_run_row(1, "succeeded", "analysis-15m")),
+        HarnessRunView::from_row(&sample_run_row(2, "failed", "trading-1m")),
     ];
     template.recent_runs_section.recent_runs_page = 1;
     template.recent_runs_section.recent_runs_total_pages = 1;
@@ -216,7 +222,7 @@ fn jobs_page_renders_running_duration_ticker_markup() {
     let mut row = sample_run_row(3, "running", "analysis-15m");
     row.started_at = Some(Utc::now() - chrono::Duration::seconds(5));
     row.finished_at = None;
-    let run = AgenticRunView::from_row(&row);
+    let run = HarnessRunView::from_row(&row);
     let fallback = run.duration_text.clone();
 
     let mut template =
@@ -235,7 +241,7 @@ fn jobs_page_renders_recent_runs_pagination_controls() {
     let mut template =
         AgentsShowPageTemplate::new(sample_opencode_detail_row(), AgentShowTab::Jobs);
     template.recent_runs_section.recent_runs_loaded = true;
-    template.recent_runs_section.recent_runs = vec![AgenticRunView::from_row(&sample_run_row(
+    template.recent_runs_section.recent_runs = vec![HarnessRunView::from_row(&sample_run_row(
         12,
         "succeeded",
         "analysis-15m",
@@ -307,13 +313,13 @@ fn transactions_page_renders_pagination_controls() {
 }
 
 #[test]
-fn jobs_page_links_to_new_hook_page() {
+fn jobs_page_links_to_new_job_page() {
     let mut template =
         AgentsShowPageTemplate::new(sample_opencode_detail_row(), AgentShowTab::Jobs);
-    template.hooks_loaded = true;
-    let rendered = template.render().expect("render jobs page hook section");
-    assert!(rendered.contains("New hook"));
-    assert!(rendered.contains("/agents/test-agent/hooks/new"));
+    template.jobs_loaded = true;
+    let rendered = template.render().expect("render jobs page");
+    assert!(rendered.contains("New job"));
+    assert!(rendered.contains("/agents/test-agent/jobs/new"));
 }
 
 #[test]
@@ -575,11 +581,12 @@ fn trading_account_choices_render_subaccount_names() {
 #[test]
 fn new_job_page_renders_agent_navbar_with_jobs_active() {
     let agent = sample_opencode_detail_row();
-    let template = AgentScheduleNewPageTemplate {
+    let template = AgentJobNewPageTemplate {
         tabs: build_agent_show_tabs(&agent, AgentShowTab::Jobs),
         agent_tabs_use_htmx: false,
         agent,
-        form: CreateAgentScheduleFormValues {
+        form: CreateHarnessJobFormValues {
+            trigger_type: "candle_closed".to_string(),
             job_kind: "analysis".to_string(),
             timeframe: "15m".to_string(),
             timeout_seconds: "900".to_string(),

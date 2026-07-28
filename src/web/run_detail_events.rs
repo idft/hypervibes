@@ -56,7 +56,7 @@ pub fn event_from_notification(channel: &str, payload: &str) -> Result<RunDetail
             .trim()
             .parse::<i64>()
             .map(|run_id| RunDetailDbEvent::RunChanged { run_id })
-            .map_err(|_| format!("invalid agentic run id payload: {payload:?}")),
+            .map_err(|_| format!("invalid harness run id payload: {payload:?}")),
         AGENT_CONVERSATION_CHANGED_CHANNEL => Uuid::parse_str(payload.trim())
             .map(|conversation_id| RunDetailDbEvent::ConversationChanged { conversation_id })
             .map_err(|_| format!("invalid agent conversation id payload: {payload:?}")),
@@ -354,7 +354,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn agentic_run_triggers_notify_the_run_id() {
+    async fn harness_run_triggers_notify_the_run_id() {
         let pool = crate::test_db::pool().await;
         let mut listener = listener(&pool).await;
         let suffix = Uuid::new_v4().to_string();
@@ -377,8 +377,8 @@ mod tests {
         .execute(&pool)
         .await
         .expect("insert trigger agent");
-        let schedule_id: i64 = query(
-            "INSERT INTO agentic_job_schedules
+        let job_id: i64 = query(
+            "INSERT INTO harness_jobs
                 (agent_key, job_key, job_kind, timeframe, next_run_at, timeout_seconds)
              VALUES ($1, 'trigger-job', 'analysis', '15m', $2, 60)
              RETURNING id",
@@ -387,16 +387,16 @@ mod tests {
         .bind(now)
         .fetch_one(&pool)
         .await
-        .expect("insert trigger schedule")
+        .expect("insert trigger job")
         .get("id");
         let run_id: i64 = query(
-            "INSERT INTO agentic_runs
-                (schedule_id, agent_key, job_key, job_kind, timeframe, status,
+            "INSERT INTO harness_runs
+                (job_id, agent_key, job_key, job_kind, timeframe, status,
                  scheduled_for, timeout_seconds)
              VALUES ($1, $2, 'trigger-job', 'analysis', '15m', 'queued', $3, 60)
              RETURNING id",
         )
-        .bind(schedule_id)
+        .bind(job_id)
         .bind(&agent_key)
         .bind(now)
         .fetch_one(&pool)
@@ -409,7 +409,7 @@ mod tests {
         );
 
         query(
-            "UPDATE agentic_runs
+            "UPDATE harness_runs
                 SET status = 'running', backend_run_ref = 'trigger-session'
               WHERE id = $1",
         )

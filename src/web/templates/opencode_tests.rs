@@ -1,4 +1,4 @@
-use crate::agentic::model::{
+use crate::harness::model::{
     AgentMaintenanceTaskRow, MAINTENANCE_PHASE_COMPLETED, MAINTENANCE_PHASE_GENERATING,
     MAINTENANCE_STATUS_RUNNING, MAINTENANCE_STATUS_SUCCEEDED,
     MAINTENANCE_TASK_KIND_ANALYSIS_CODING, MAINTENANCE_TASK_KIND_WORKSPACE_REGENERATE,
@@ -19,6 +19,7 @@ fn workspace_maintenance_partial_hides_succeeded_state() {
                 status: MAINTENANCE_STATUS_SUCCEEDED.to_string(),
                 phase: MAINTENANCE_PHASE_COMPLETED.to_string(),
                 error_summary: None,
+                job_id: None,
                 run_id: None,
                 source_run_id: None,
                 source_memory_id: None,
@@ -41,6 +42,7 @@ fn coding_maintenance_partial_shows_generation_phase() {
             status: MAINTENANCE_STATUS_RUNNING.to_string(),
             phase: MAINTENANCE_PHASE_GENERATING.to_string(),
             error_summary: None,
+            job_id: Some(8),
             run_id: Some(9),
             source_run_id: None,
             source_memory_id: None,

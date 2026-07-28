@@ -59,7 +59,7 @@ struct CachedProvidersResponse {
 ///
 /// Vibetrading treats `Idle` as terminal for the purposes of run
 /// cancellation; a dispatch that has timed out keeps the underlying
-/// `agentic_runs` row in `running` until a probe confirms `Idle`.
+/// `harness_runs` row in `running` until a probe confirms `Idle`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SessionStatusKind {
     Idle,
