@@ -10,11 +10,15 @@ pub(crate) mod ui_events;
 
 pub use state::AppState;
 
-use std::sync::Arc;
+use std::{path::PathBuf, sync::Arc};
 
 use anyhow::{Context, Result};
 use axum::Router;
+#[cfg(debug_assertions)]
+use axum::http::{HeaderValue, header::CACHE_CONTROL};
 use tokio::sync::watch;
+#[cfg(debug_assertions)]
+use tower_http::set_header::SetResponseHeaderLayer;
 use tower_http::{services::ServeDir, trace::TraceLayer};
 use tracing::Level;
 
@@ -181,7 +185,7 @@ fn shutdown_signal_future(
 
 fn router(state: Arc<AppState>) -> Router {
     let app = api::merge(routes::router(Arc::clone(&state)), Arc::clone(&state));
-    app.nest_service("/static", ServeDir::new("static")).layer(
+    app.nest("/static", static_router("static")).layer(
         TraceLayer::new_for_http()
             .make_span_with(tower_http::trace::DefaultMakeSpan::new().level(Level::INFO))
             .on_response(tower_http::trace::DefaultOnResponse::new().level(Level::INFO))
@@ -189,14 +193,68 @@ fn router(state: Arc<AppState>) -> Router {
     )
 }
 
+fn static_router(static_root: impl Into<PathBuf>) -> Router {
+    let static_root = static_root.into();
+    let dist = Router::new().fallback_service(ServeDir::new(static_root.join("dist")));
+    #[cfg(debug_assertions)]
+    let dist = dist.layer(SetResponseHeaderLayer::overriding(
+        CACHE_CONTROL,
+        HeaderValue::from_static("no-store"),
+    ));
+
+    Router::new()
+        .nest("/dist", dist)
+        .fallback_service(ServeDir::new(static_root))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(debug_assertions)]
+    use axum::{body::Body, http::Request};
     use std::time::Duration;
+    #[cfg(debug_assertions)]
+    use tower::util::ServiceExt;
 
     /// Short grace used by these tests so the timeout path runs
     /// quickly. The real `SHUTDOWN_IN_FLIGHT_GRACE` is 30 minutes.
     const TEST_GRACE: Duration = Duration::from_millis(200);
+
+    #[cfg(debug_assertions)]
+    #[tokio::test]
+    async fn built_assets_are_not_cached_in_debug_builds() {
+        let app = static_router("static");
+        for path in ["/dist/app.js", "/dist/app.css"] {
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .uri(path)
+                        .body(Body::empty())
+                        .expect("build frontend asset request"),
+                )
+                .await
+                .expect("serve frontend asset");
+            assert_eq!(
+                response
+                    .headers()
+                    .get(CACHE_CONTROL)
+                    .and_then(|value| value.to_str().ok()),
+                Some("no-store")
+            );
+        }
+        let icon_response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/favicon.ico")
+                    .body(Body::empty())
+                    .expect("build icon request"),
+            )
+            .await
+            .expect("serve icon asset");
+
+        assert!(icon_response.headers().get(CACHE_CONTROL).is_none());
+    }
 
     async fn run_with_grace(
         shutdown_rx: watch::Receiver<bool>,
