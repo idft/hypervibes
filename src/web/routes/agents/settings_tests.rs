@@ -228,8 +228,13 @@ async fn agent_settings_route_renders_currency_controls() {
     assert!(text.contains("value=\"BTC\" checked"));
     assert!(!text.contains("Sync status"));
     assert!(!text.contains("abc123"));
-    assert!(text.contains("data-save-currencies"));
-    assert!(text.contains("hidden cursor-pointer rounded-full bg-violet-600"));
+    assert!(text.contains("data-select-currencies"));
+    assert!(text.contains("data-currency-modal"));
+    assert!(text.contains("data-apply-currencies"));
+    assert!(text.contains("type=\"submit\" data-apply-currencies"));
+    assert!(text.contains(">Save</button>"));
+    assert!(text.contains("Select all"));
+    assert!(text.contains("Select none"));
 }
 #[tokio::test]
 async fn opencode_agent_settings_route_renders_workspace_state() {

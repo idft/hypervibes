@@ -64,16 +64,19 @@ function initInstrumentSelectors(root: ParentNode) {
     const list = container.querySelector<HTMLElement>("[data-selected-instrument-list]");
     const empty = container.querySelector<HTMLElement>("[data-selected-instrument-empty]");
     const warning = container.querySelector<HTMLElement>("[data-no-currencies-warning]");
-    const save = container.querySelector<HTMLElement>("[data-save-currencies]");
     const searchEmpty = container.querySelector<HTMLElement>("[data-instrument-search-empty]");
     const scrollContainer = container.querySelector<HTMLElement>("[data-instrument-scroll-container]");
+    const selectButton = container.querySelector<HTMLButtonElement>("[data-select-currencies]");
+    const modal = container.querySelector<HTMLElement>("[data-currency-modal]");
+    const apply = container.querySelector<HTMLButtonElement>("[data-apply-currencies]");
+    const selectAll = container.querySelector<HTMLButtonElement>("[data-select-all-currencies]");
+    const selectNone = container.querySelector<HTMLButtonElement>("[data-select-no-currencies]");
+    const closeButtons = container.querySelectorAll<HTMLButtonElement>("[data-currency-modal-close]");
     const rows = Array.from(container.querySelectorAll<HTMLElement>("[data-instrument-row]"));
-    if (!list || !empty || !warning || !save || rows.length === 0) return;
+    if (!list || !empty || !warning || !selectButton || !modal || !apply || !selectAll || !selectNone || rows.length === 0) return;
     container.dataset.bound = "true";
     const inputFor = (row: HTMLElement) => row.querySelector<HTMLInputElement>('input[name="instrument_id"]');
     const labelFor = (row: HTMLElement) => inputFor(row)?.value ?? "";
-    const initial = () => rows.filter((row) => inputFor(row)?.checked).map(labelFor).sort().join(",");
-    const initialSelection = initial();
     const loadLogo = (row: HTMLElement) => {
       const image = row.querySelector<HTMLImageElement>("[data-instrument-logo]");
       const url = row.dataset.instrumentLogoUrl;
@@ -84,11 +87,50 @@ function initInstrumentSelectors(root: ParentNode) {
     const sync = () => {
       const selected = rows.filter((row) => inputFor(row)?.checked);
       list.replaceChildren();
-      selected.forEach((row) => { const label = labelFor(row); const item = document.createElement("div"); const name = document.createElement("span"); const remove = document.createElement("button"); item.className = "flex items-center justify-between gap-3 rounded-xl border border-zinc-800 bg-zinc-950/70 px-4 py-3"; name.className = "font-medium text-zinc-200"; name.textContent = label; remove.type = "button"; remove.className = "inline-flex h-7 w-7 cursor-pointer items-center justify-center rounded-full border border-zinc-800 text-sm text-zinc-400 hover:border-zinc-700 hover:text-white"; remove.ariaLabel = `Remove ${label}`; remove.textContent = "x"; remove.dataset.removeInstrument = label; item.append(name, remove); list.append(item); });
-      empty.classList.toggle("hidden", selected.length > 0); warning.classList.toggle("hidden", selected.length > 0); save.classList.toggle("hidden", initial() === initialSelection);
+      selected.forEach((row) => {
+        const label = labelFor(row);
+        const item = document.createElement("div");
+        const identity = document.createElement("div");
+        const logo = document.createElement("img");
+        const name = document.createElement("span");
+        item.className = "flex shrink-0 items-center gap-2 rounded-xl border border-zinc-800 bg-zinc-950/70 px-3 py-2";
+        identity.className = "flex items-center gap-2";
+        logo.alt = "";
+        logo.setAttribute("aria-hidden", "true");
+        logo.className = "h-5 w-5 rounded-sm bg-zinc-800";
+        if (row.dataset.instrumentLogoUrl) logo.src = row.dataset.instrumentLogoUrl;
+        name.className = "font-medium text-zinc-200";
+        name.textContent = label;
+        identity.append(logo, name);
+        item.append(identity);
+        list.append(item);
+      });
+      empty.classList.toggle("hidden", selected.length > 0); warning.classList.toggle("hidden", selected.length > 0);
     };
     const filter = () => { const query = search?.value.trim().toLowerCase() ?? ""; let count = 0; rows.forEach((row) => { const visible = !query || (row.dataset.instrumentLabel ?? "").toLowerCase().includes(query); row.classList.toggle("hidden", !visible); if (visible) count += 1; }); searchEmpty?.classList.toggle("hidden", count > 0); };
-    rows.forEach((row) => inputFor(row)?.addEventListener("change", sync)); list.addEventListener("click", (event) => { const button = (event.target as Element | null)?.closest<HTMLElement>("[data-remove-instrument]"); const row = rows.find((candidate) => labelFor(candidate) === button?.dataset.removeInstrument); const input = row && inputFor(row); if (input) { input.checked = false; sync(); } }); search?.addEventListener("input", filter);
+    let selectionBeforeModal: boolean[] = [];
+    const closeModal = (restoreSelection: boolean) => {
+      if (restoreSelection) rows.forEach((row, index) => { const input = inputFor(row); if (input) input.checked = selectionBeforeModal[index] ?? false; });
+      modal.classList.add("hidden");
+      modal.classList.remove("flex");
+      document.body.classList.remove("overflow-hidden");
+    };
+    const openModal = () => {
+      selectionBeforeModal = rows.map((row) => inputFor(row)?.checked ?? false);
+      if (search) search.value = "";
+      filter();
+      modal.classList.remove("hidden");
+      modal.classList.add("flex");
+      document.body.classList.add("overflow-hidden");
+      search?.focus();
+    };
+    search?.addEventListener("input", filter);
+    selectButton.addEventListener("click", openModal);
+    closeButtons.forEach((button) => button.addEventListener("click", () => closeModal(true)));
+    apply.addEventListener("click", () => { sync(); closeModal(false); });
+    selectAll.addEventListener("click", () => rows.forEach((row) => { const input = inputFor(row); if (input) input.checked = true; }));
+    selectNone.addEventListener("click", () => rows.forEach((row) => { const input = inputFor(row); if (input) input.checked = false; }));
+    document.addEventListener("keydown", (event) => { if (event.key === "Escape" && !modal.classList.contains("hidden")) closeModal(true); });
     if (scrollContainer && "IntersectionObserver" in window) {
       const observer = new IntersectionObserver((entries) => {
         entries.forEach((entry) => {

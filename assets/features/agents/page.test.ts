@@ -76,16 +76,22 @@ describe("agent currency icons", () => {
     vi.stubGlobal("IntersectionObserver", TestIntersectionObserver);
     document.body.innerHTML = `
       <section data-agent-instrument-selector>
-        <div data-instrument-scroll-container>
+        <button data-select-currencies></button>
+        <div data-currency-modal class="hidden">
+          <button data-currency-modal-close></button>
+          <button data-apply-currencies></button>
+          <button data-select-all-currencies></button>
+          <button data-select-no-currencies></button>
+          <div data-instrument-scroll-container>
           <label data-instrument-row data-instrument-label="BTC" data-instrument-logo-url="/currency/btc.svg">
             <input type="checkbox" name="instrument_id" value="BTC">
             <img data-instrument-logo alt="">
           </label>
         </div>
+        </div>
         <div data-selected-instrument-list></div>
         <div data-selected-instrument-empty></div>
         <div data-no-currencies-warning></div>
-        <button data-save-currencies></button>
       </section>
     `;
 
@@ -96,5 +102,43 @@ describe("agent currency icons", () => {
     callback?.([{ isIntersecting: true, target: row } as unknown as IntersectionObserverEntry], {} as IntersectionObserver);
 
     expect(document.querySelector<HTMLImageElement>("[data-instrument-logo]")?.getAttribute("src")).toBe("/currency/btc.svg");
+  });
+
+  it("renders selected currency icons and saves modal selections", () => {
+    document.body.innerHTML = `
+      <section data-agent-instrument-selector>
+        <button data-select-currencies>Select currencies</button>
+        <div data-currency-modal class="hidden">
+          <button data-currency-modal-close></button>
+          <button type="submit" data-apply-currencies>Save</button>
+          <button data-select-all-currencies>Select all</button>
+          <button data-select-no-currencies>Select none</button>
+          <input data-instrument-search>
+          <div data-instrument-scroll-container>
+            <label data-instrument-row data-instrument-label="BTC" data-instrument-logo-url="/currency/btc.svg"><input type="checkbox" name="instrument_id" value="BTC" checked></label>
+            <label data-instrument-row data-instrument-label="ETH" data-instrument-logo-url="/currency/eth.svg"><input type="checkbox" name="instrument_id" value="ETH"></label>
+          </div>
+        </div>
+        <div data-instrument-search-empty></div>
+        <div data-selected-instrument-list></div>
+        <div data-selected-instrument-empty></div>
+        <div data-no-currencies-warning></div>
+      </section>
+    `;
+
+    initAgentPage();
+    expect(document.querySelector<HTMLImageElement>("[data-selected-instrument-list] img")?.getAttribute("src")).toBe("/currency/btc.svg");
+
+    document.querySelector<HTMLButtonElement>("[data-select-currencies]")?.click();
+    document.querySelector<HTMLButtonElement>("[data-select-all-currencies]")?.click();
+    expect(document.querySelectorAll<HTMLInputElement>('input[name="instrument_id"]:checked')).toHaveLength(2);
+    document.querySelector<HTMLButtonElement>("[data-select-no-currencies]")?.click();
+    expect(document.querySelectorAll<HTMLInputElement>('input[name="instrument_id"]:checked')).toHaveLength(0);
+    document.querySelector<HTMLInputElement>('input[value="ETH"]')?.click();
+    expect(document.querySelector<HTMLButtonElement>("[data-apply-currencies]")?.type).toBe("submit");
+    document.querySelector<HTMLButtonElement>("[data-apply-currencies]")?.click();
+
+    expect(document.querySelectorAll("[data-selected-instrument-list] img")).toHaveLength(1);
+    expect(document.querySelector<HTMLElement>("[data-currency-modal]")?.classList.contains("hidden")).toBe(true);
   });
 });
