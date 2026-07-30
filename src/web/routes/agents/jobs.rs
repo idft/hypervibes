@@ -236,7 +236,7 @@ pub(in crate::web::routes) async fn agents_show_job_detail(
         job_view.timeout_editor.error = Some(error);
     }
     if let Some(error) = query.timeframe_error {
-        job_view.timeframe_editor.error = Some(error);
+        job_view.candle_trigger_editor.error = Some(error);
     }
     match build_job_prompt_preview(&state, &agent, &job).await {
         Ok(text) => job_view.prompt_preview_text = text,

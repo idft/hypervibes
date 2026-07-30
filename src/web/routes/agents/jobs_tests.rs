@@ -824,7 +824,11 @@ async fn job_detail_page_renders_job_specific_runs() {
     let jobs = crate::harness::store::list_agent_jobs(&pool, &agent_key)
         .await
         .expect("list jobs");
-    let job_id = jobs.first().expect("default job").id;
+    let job_id = jobs
+        .iter()
+        .find(|job| job.job_key == "analysis-15m")
+        .expect("analysis candle job")
+        .id;
     let run_id = crate::harness::store::insert_test_run(&pool, job_id, "running")
         .await
         .expect("insert run");
@@ -847,6 +851,8 @@ async fn job_detail_page_renders_job_specific_runs() {
     assert!(text.contains("Run now"));
     assert!(text.contains(&format!("/agents/{agent_key}/runs/{run_id}")));
     assert!(text.contains(&format!("/agents/{agent_key}/jobs/{job_id}/timeframe")));
+    assert!(text.contains("At 15m candle close"));
+    assert!(!text.contains(">Timeframe</p>"));
     assert!(text.contains("data-detail-delete-trigger"));
     assert!(text.contains(&format!("/agents/{agent_key}/jobs/{job_id}/delete")));
     assert!(text.contains("cursor-pointer"));

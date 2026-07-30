@@ -49,6 +49,8 @@ fn job_detail_page_renders_job_metadata_and_runs() {
     assert!(rendered.contains("d=\"M10.5 19.5 3 12m0 0 7.5-7.5M3 12h18\""));
     assert!(!rendered.contains(">Back<"));
     assert!(rendered.contains("analysis-15m"));
+    assert!(rendered.contains("At 15m candle close"));
+    assert!(!rendered.contains(">Timeframe</p>"));
     assert!(rendered.contains("Operator prompt"));
     assert!(rendered.contains("/agents/test-agent/jobs/1/run"));
     assert!(rendered.contains("Disable"));

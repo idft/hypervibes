@@ -16,7 +16,6 @@ pub struct HarnessJobView {
     pub enabled_label: &'static str,
     pub enabled_class: &'static str,
     pub is_candle_job: bool,
-    pub timeframe_text: String,
     pub trigger_text: String,
     pub timeout_text: String,
     pub next_run_at: Option<LocalTimestampView>,
@@ -39,7 +38,7 @@ pub struct HarnessJobDetailView {
     pub has_model: bool,
     pub is_candle_job: bool,
     pub trigger_text: String,
-    pub timeframe_editor: TimeframeEditorView,
+    pub candle_trigger_editor: CandleTriggerEditorView,
     pub timeout_editor: TimeoutEditorView,
     pub next_run_at: Option<LocalTimestampView>,
     pub operator_prompt_text: String,
@@ -54,8 +53,7 @@ pub struct HarnessJobDetailView {
 }
 
 #[derive(Debug, Clone)]
-pub struct TimeframeEditorView {
-    pub display_text: String,
+pub struct CandleTriggerEditorView {
     pub edit_text: String,
     pub action: String,
     pub error: Option<String>,
@@ -82,23 +80,19 @@ impl HarnessJobView {
             ("Disabled", "border-zinc-700 bg-zinc-900/60 text-zinc-400")
         };
 
-        let (is_candle_job, timeframe_text, trigger_text) = match row.trigger_type.as_str() {
+        let (is_candle_job, trigger_text) = match row.trigger_type.as_str() {
             "candle_closed" => (
                 true,
-                row.timeframe.clone().unwrap_or_else(|| "—".to_string()),
-                "Candle closed".to_string(),
+                format!(
+                    "At {} candle close",
+                    row.timeframe.as_deref().unwrap_or("an unknown interval")
+                ),
             ),
-            "analysis_batch_completed" => (
-                false,
-                "—".to_string(),
-                "After analysis batch completes".to_string(),
-            ),
-            "daily_review_completed" => (
-                false,
-                "—".to_string(),
-                "After qualifying daily review completes".to_string(),
-            ),
-            _ => (false, "—".to_string(), row.trigger_type.clone()),
+            "analysis_batch_completed" => (false, "After analysis batch completes".to_string()),
+            "daily_review_completed" => {
+                (false, "After qualifying daily review completes".to_string())
+            }
+            _ => (false, row.trigger_type.clone()),
         };
 
         Self {
@@ -108,7 +102,6 @@ impl HarnessJobView {
             enabled_label,
             enabled_class,
             is_candle_job,
-            timeframe_text,
             trigger_text,
             timeout_text: format_duration(row.timeout_seconds),
             next_run_at: row.next_run_at.map(local_timestamp_view),
@@ -136,8 +129,7 @@ impl HarnessJobDetailView {
             has_model: summary.has_model,
             is_candle_job: summary.is_candle_job,
             trigger_text: summary.trigger_text.clone(),
-            timeframe_editor: TimeframeEditorView {
-                display_text: summary.timeframe_text,
+            candle_trigger_editor: CandleTriggerEditorView {
                 edit_text: row.timeframe.clone().unwrap_or_default(),
                 action: format!("/agents/{}/jobs/{}/timeframe", row.agent_key, row.id),
                 error: None,
