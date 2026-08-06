@@ -34,9 +34,9 @@ function start() {
   installMemoryLifecycle();
   installModelPickerLifecycle();
   document.addEventListener("htmx:afterSwap", (event) => {
-    const target = (event as CustomEvent<{ target?: unknown }>).detail.target;
-    if (target instanceof Element) {
-      initialize(target);
+    const swappedElement = (event as CustomEvent<{ elt?: unknown }>).detail.elt;
+    if (swappedElement instanceof Element) {
+      initialize(swappedElement);
     }
   });
   initialize();

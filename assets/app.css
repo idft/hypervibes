@@ -287,9 +287,10 @@ html.agent-rail-initially-collapsed .agent-rail.agent-rail-expanded .agent-rail-
   text-underline-offset: 0.18em;
 }
 
-/* Hide time.timeago content until timeago.js has rendered the relative time
-   on the client, to avoid flashing the raw ISO timestamp on initial load. */
-time.timeago:not(.timeago-ready) {
+/* Hide client-formatted timestamps until their display text is ready, avoiding
+   a flash of the server-rendered UTC fallback. */
+time.timeago:not(.timeago-ready),
+time.local-datetime:not(.local-datetime-ready) {
   visibility: hidden;
 }
 

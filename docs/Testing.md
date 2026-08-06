@@ -1,5 +1,13 @@
 # Testing
 
+## All Test Suites
+
+Run the Rust, Python, and JavaScript test suites together with:
+
+```bash
+just test
+```
+
 ## Test Database
 
 By default `cargo test` uses the dedicated `test-postgres` service from `podman-compose.yaml` via `TEST_DATABASE_URL=postgres://vibetrading:vibetrading@127.0.0.1:15433/postgres` from `.cargo/config.toml`.

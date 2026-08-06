@@ -22,6 +22,21 @@
             {% block content %}{% endblock %}
         </main>
     </div>
+    <script>
+        document.querySelectorAll("time.local-datetime").forEach((node) => {
+            const value = node.dateTime;
+            const date = new Date(value);
+            if (!value || Number.isNaN(date.getTime())) return;
+            const format = node.dataset.localFormat ?? "datetime";
+            const options = format === "date"
+                ? { year: "numeric", month: "short", day: "numeric" }
+                : format === "time"
+                    ? { hour: "numeric", minute: "2-digit" }
+                    : { year: "numeric", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" };
+            node.textContent = new Intl.DateTimeFormat(undefined, options).format(date);
+            node.classList.add("local-datetime-ready");
+        });
+    </script>
 
 </body>
 </html>

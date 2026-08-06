@@ -37,6 +37,7 @@ export function renderLocalDateTimes(root: ParentNode = document) {
     }
     const format = (node.dataset.localFormat as LocalDateTimeFormat | undefined) ?? "datetime";
     node.textContent = formatLocalDateTime(date, format);
+    node.classList.add("local-datetime-ready");
   });
 }
 

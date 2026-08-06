@@ -155,6 +155,7 @@ fn opencode_agent_shows_jobs_tab_with_recent_runs() {
     assert!(rendered.contains("Enable all"));
     assert!(rendered.contains("Disable all"));
     assert!(rendered.contains("Recent Runs"));
+    assert!(rendered.contains("local-datetime-ready"));
     assert!(rendered.contains("analysis-15m"));
     assert!(rendered.contains("trading-1m"));
     assert!(rendered.contains("market-analysis"));
