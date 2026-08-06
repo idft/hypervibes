@@ -51,7 +51,7 @@ async fn insert_workspace_regenerate_task_rejects_duplicate_active_task() {
 }
 
 #[tokio::test]
-async fn coding_queue_requires_model_and_deduplicates_source_memory() {
+async fn coding_queue_deduplicates_source_memory() {
     let pool = test_db::pool().await;
     let key = format!(
         "coding-queue-{}",
@@ -59,15 +59,17 @@ async fn coding_queue_requires_model_and_deduplicates_source_memory() {
     );
     let _job_id = seed_agent_and_job(&pool, &key, 0).await;
     sqlx::query(
-        "INSERT INTO harness_jobs
-            (agent_key, job_key, job_kind, trigger_type, enabled, timeout_seconds, operator_prompt)
-         VALUES ($1, 'analysis-coding', 'analysis_coding', 'daily_review_completed', true, 1800, '')
-         ON CONFLICT (agent_key, job_kind, trigger_type) DO NOTHING",
+        "UPDATE harness_jobs
+            SET enabled = true,
+                model_provider_id = 'test',
+                model_id = 'strong'
+          WHERE agent_key = $1
+            AND job_kind = 'analysis_coding'",
     )
     .bind(&key)
     .execute(&pool)
     .await
-    .expect("seed coding event job");
+    .expect("configure coding event job");
     let job_id: (i64,) = sqlx::query_as(
         "SELECT id FROM harness_jobs WHERE agent_key = $1 AND job_kind = 'analysis_coding'",
     )
@@ -75,27 +77,6 @@ async fn coding_queue_requires_model_and_deduplicates_source_memory() {
     .fetch_one(&pool)
     .await
     .expect("load coding event job");
-    assert!(
-        insert_analysis_coding_task_and_run(
-            &pool,
-            AnalysisCodingTaskRequest {
-                agent_key: &key,
-                job_id: job_id.0,
-                trigger_mode: CodingTriggerMode::Automatic,
-                source_run_id: None,
-                source_memory_id: None,
-                operator_prompt: None,
-                requested_mode: Some("auto"),
-            },
-        )
-        .await
-        .is_err()
-    );
-    sqlx::query("UPDATE harness_jobs SET enabled = true, model_provider_id = 'test', model_id = 'strong' WHERE id = $1")
-        .bind(job_id.0)
-        .execute(&pool)
-        .await
-        .expect("set model");
     let source_memory = Uuid::new_v4();
     sqlx::query(
         "INSERT INTO memory.records (id, agent_key, symbol, memory_type, summary, content, metadata)

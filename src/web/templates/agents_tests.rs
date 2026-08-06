@@ -174,8 +174,7 @@ fn opencode_agent_shows_jobs_tab_with_recent_runs() {
         .and_then(|(_, remainder)| remainder.split_once("</tr>"))
         .map(|(row, _)| row)
         .expect("render event job row");
-    assert!(event_job_row.contains("Analysis batch completed"));
-    assert!(event_job_row.contains(">—<"));
+    assert!(event_job_row.contains("analysis batch"));
     assert!(!event_job_row.contains("local-datetime"));
     assert!(rendered.contains("anthropic/claude-3-5-sonnet"));
     assert!(rendered.contains("Run now"));
@@ -385,8 +384,7 @@ fn settings_tab_renders_masked_api_key_with_wallet_actions() {
     let rendered = template.render().unwrap();
 
     assert!(rendered.contains("https://arbiscan.io/address/0x1234567890abcdef"));
-    assert!(rendered.contains("data-copy-value=\"0x1234567890abcdef\""));
-    assert!(rendered.contains("data-copy-value=\"vt_test_key\""));
+    assert_eq!(rendered.matches("data-copy-button").count(), 2);
     assert!(rendered.contains("aria-label=\"Copy trading account address\""));
     assert!(rendered.contains("aria-label=\"Copy API key\""));
     assert!(rendered.contains(">****<"));

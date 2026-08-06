@@ -29,35 +29,32 @@ use super::error::ApiError;
 
 /// Build the [`HyperliquidExchange`] for the calling agent by loading
 /// and decrypting their Hyperliquid private key.
-pub(super) async fn build_exchange_for_agent(
+pub(crate) async fn build_exchange_for_agent(
     state: &AppState,
     agent_key: &str,
-) -> Result<HyperliquidExchange, ApiError> {
+) -> anyhow::Result<HyperliquidExchange> {
     let wallet = get_user_api_wallet_for_agent(&state.db_pool, agent_key)
-        .await
-        .map_err(ApiError::Internal)?
-        .ok_or(ApiError::NotFound("agent not found"))?;
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("agent not found"))?;
     if !wallet.is_ready() {
-        return Err(ApiError::Validation(
-            "the user's trading signer needs attention".to_string(),
-        ));
+        anyhow::bail!("the user's trading signer needs attention");
     }
-    let ciphertext = wallet.hyperliquid_private_key_ciphertext.ok_or_else(|| {
-        ApiError::Validation("the user's trading signer needs attention".to_string())
-    })?;
-    let key_id = wallet.hyperliquid_private_key_key_id.ok_or_else(|| {
-        ApiError::Validation("the user's trading signer needs attention".to_string())
-    })?;
+    let ciphertext = wallet
+        .hyperliquid_private_key_ciphertext
+        .ok_or_else(|| anyhow::anyhow!("the user's trading signer needs attention"))?;
+    let key_id = wallet
+        .hyperliquid_private_key_key_id
+        .ok_or_else(|| anyhow::anyhow!("the user's trading signer needs attention"))?;
 
     if state.encryption_key.key_id != key_id {
-        return Err(ApiError::Internal(anyhow::anyhow!(
+        return Err(anyhow::anyhow!(
             "agent private key was encrypted with key_id '{key_id}' but server is using '{}'",
             state.encryption_key.key_id
-        )));
+        ));
     }
 
     let pk_string = agent_crypto::decrypt(&state.encryption_key, &ciphertext)
-        .map_err(|e| ApiError::Internal(anyhow::anyhow!("failed to decrypt private key: {e}")))?;
+        .map_err(|e| anyhow::anyhow!("failed to decrypt private key: {e}"))?;
 
     // Use the `PrivateKeySigner` re-exported by `hypersdk` — the
     // struct's `signer` field is typed as `hypersdk::hypercore::PrivateKeySigner`,
@@ -66,15 +63,15 @@ pub(super) async fn build_exchange_for_agent(
     // version-mismatch error.
     let signer: hypersdk::hypercore::PrivateKeySigner = pk_string
         .parse()
-        .map_err(|e| ApiError::Internal(anyhow::anyhow!("invalid private key: {e}")))?;
+        .map_err(|e| anyhow::anyhow!("invalid private key: {e}"))?;
     let expected_address = wallet
         .api_wallet_address
         .as_deref()
-        .ok_or_else(|| ApiError::Validation("the user's trading signer needs attention".into()))?;
+        .ok_or_else(|| anyhow::anyhow!("the user's trading signer needs attention"))?;
     if signer.address().to_string().to_ascii_lowercase() != expected_address {
-        return Err(ApiError::Internal(anyhow::anyhow!(
+        return Err(anyhow::anyhow!(
             "stored user trading signer address does not match its database address"
-        )));
+        ));
     }
     let client = hypersdk::hypercore::mainnet();
     Ok(HyperliquidExchange::new(signer, client))
@@ -219,7 +216,9 @@ pub(super) async fn place_orders_handler(
     };
     let environment = agent_row.environment.clone();
 
-    let exchange = build_exchange_for_agent(&state, &agent.agent_key).await?;
+    let exchange = build_exchange_for_agent(&state, &agent.agent_key)
+        .await
+        .map_err(ApiError::Internal)?;
     let resp = place_orders(
         &state.db_pool,
         &exchange,
@@ -312,7 +311,9 @@ pub(super) async fn cancel_orders_handler(
     let Some(account_address) = agent_row.trading_account_address.clone() else {
         return Ok((StatusCode::CONFLICT, "agent has no trading account").into_response());
     };
-    let exchange = build_exchange_for_agent(&state, &agent.agent_key).await?;
+    let exchange = build_exchange_for_agent(&state, &agent.agent_key)
+        .await
+        .map_err(ApiError::Internal)?;
     let outcomes = cancel_orders(
         &state.db_pool,
         &exchange,
@@ -340,7 +341,9 @@ pub(super) async fn cancel_all_handler(
     let Some(account_address) = agent_row.trading_account_address.clone() else {
         return Ok((StatusCode::CONFLICT, "agent has no trading account").into_response());
     };
-    let exchange = build_exchange_for_agent(&state, &agent.agent_key).await?;
+    let exchange = build_exchange_for_agent(&state, &agent.agent_key)
+        .await
+        .map_err(ApiError::Internal)?;
     let summary = cancel_all(
         &state.db_pool,
         &exchange,

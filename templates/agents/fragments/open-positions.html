@@ -6,6 +6,13 @@
         <p class="text-sm text-zinc-400">No open positions.</p>
     </div>
     {% else %}
+    {% if view.has_open_positions %}
+    <div class="mb-3 flex justify-end">
+        <form action="/agents/{{ view.agent_key }}/positions/close-all" method="post" onsubmit="return confirm('Close all current positions at market? This does not disable the agent.');">
+            <button type="submit" class="cursor-pointer rounded-full border border-red-900/60 bg-red-950/30 px-3 py-1.5 text-xs font-medium text-red-300 hover:border-red-800 hover:bg-red-950/50 hover:text-red-200">Close all</button>
+        </form>
+    </div>
+    {% endif %}
     <div class="overflow-x-auto">
         <table class="min-w-full divide-y divide-zinc-800 text-sm">
             <thead class="bg-zinc-950/60 text-left text-xs uppercase tracking-[0.16em] text-zinc-500">
@@ -19,6 +26,7 @@
                     <th class="px-4 py-3 text-right font-medium">Liq</th>
                     <th class="px-4 py-3 text-right font-medium">Margin</th>
                     <th class="px-4 py-3 text-right font-medium">ROE</th>
+                    <th class="px-4 py-3 font-medium"></th>
                 </tr>
             </thead>
             <tbody class="divide-y divide-zinc-800">
@@ -46,6 +54,13 @@
                     <td class="px-4 py-3 text-right align-top font-mono text-xs tabular-nums {{ pos.liquidation_px.color_class }}">{{ pos.liquidation_px.value }}</td>
                     <td class="px-4 py-3 text-right align-top font-mono text-xs tabular-nums {{ pos.margin_used.color_class }}">{{ pos.margin_used.value }}</td>
                     <td class="px-4 py-3 text-right align-top font-mono text-xs tabular-nums {{ pos.roe_color_class }}">{{ pos.return_on_equity }}</td>
+                    <td class="px-4 py-3 align-top text-right">
+                        {% if pos.has_position %}
+                        <form action="/agents/{{ view.agent_key }}/positions/{{ pos.coin }}/close" method="post" onsubmit="return confirm('Close {{ pos.coin }} at market? This does not disable the agent.');">
+                            <button type="submit" class="cursor-pointer rounded-full border border-red-900/60 bg-red-950/30 px-3 py-1.5 text-xs font-medium text-red-300 hover:border-red-800 hover:bg-red-950/50 hover:text-red-200">Close</button>
+                        </form>
+                        {% endif %}
+                    </td>
                 </tr>
                 {% endfor %}
             </tbody>

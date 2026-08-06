@@ -30,9 +30,7 @@ use crate::{
             PlaceOrdersResponse,
         },
         rounding::{DEFAULT_MARKET_SLIPPAGE_BPS, market_guard_price, round_price, round_size},
-        store::{
-            self, NewOrder, OrderOutcome, find_order_by_oid, insert_order, update_order_outcome,
-        },
+        store::{NewOrder, OrderOutcome, find_order_by_oid, insert_order, update_order_outcome},
     },
 };
 
@@ -62,6 +60,21 @@ pub trait ExchangeClient: Send + Sync {
         trading_account: &'a str,
     ) -> BoxFuture<'a, Result<Vec<OrderResponseStatus>, String>>;
     fn all_mids<'a>(&'a self) -> BoxFuture<'a, Result<HashMap<String, Decimal>, String>>;
+    fn open_orders<'a>(
+        &'a self,
+        trading_account: &'a str,
+    ) -> BoxFuture<'a, Result<Vec<CancelInput>, String>>;
+    fn positions<'a>(
+        &'a self,
+        trading_account: &'a str,
+    ) -> BoxFuture<'a, Result<Vec<ExchangePosition>, String>>;
+}
+
+/// Authoritative exchange position used only for operator-requested exits.
+#[derive(Debug, Clone)]
+pub struct ExchangePosition {
+    pub symbol: String,
+    pub szi: Decimal,
 }
 
 // ---- real implementation --------------------------------------------------
@@ -132,6 +145,55 @@ impl ExchangeClient for HyperliquidExchange {
     fn all_mids<'a>(&'a self) -> BoxFuture<'a, Result<HashMap<String, Decimal>, String>> {
         Box::pin(async move { self.client.all_mids(None).await.map_err(|e| e.to_string()) })
     }
+
+    fn open_orders<'a>(
+        &'a self,
+        trading_account: &'a str,
+    ) -> BoxFuture<'a, Result<Vec<CancelInput>, String>> {
+        Box::pin(async move {
+            let account = trading_account
+                .parse::<Address>()
+                .map_err(|e| e.to_string())?;
+            self.client
+                .open_orders(account, None)
+                .await
+                .map_err(|e| e.to_string())
+                .map(|orders| {
+                    orders
+                        .into_iter()
+                        .map(|order| CancelInput {
+                            symbol: order.coin,
+                            oid: order.oid,
+                        })
+                        .collect()
+                })
+        })
+    }
+
+    fn positions<'a>(
+        &'a self,
+        trading_account: &'a str,
+    ) -> BoxFuture<'a, Result<Vec<ExchangePosition>, String>> {
+        Box::pin(async move {
+            let account = trading_account
+                .parse::<Address>()
+                .map_err(|e| e.to_string())?;
+            self.client
+                .clearinghouse_state(account, None)
+                .await
+                .map_err(|e| e.to_string())
+                .map(|state| {
+                    state
+                        .asset_positions
+                        .into_iter()
+                        .map(|asset| ExchangePosition {
+                            symbol: asset.position.coin,
+                            szi: asset.position.szi,
+                        })
+                        .collect()
+                })
+        })
+    }
 }
 
 // ---- instrument lookup ----------------------------------------------------
@@ -201,6 +263,13 @@ impl From<anyhow::Error> for GatewayError {
     }
 }
 
+struct PlaceContext<'a> {
+    agent_key: &'a str,
+    account_address: &'a str,
+    environment: &'a str,
+    require_enabled: bool,
+}
+
 // ---- place flow -----------------------------------------------------------
 
 /// Place one or more orders through the execution gateway.
@@ -222,6 +291,52 @@ pub async fn place_orders(
     environment: &str,
     req: &PlaceOrdersRequest,
 ) -> Result<PlaceOrdersResponse, GatewayError> {
+    let mut tx = pool
+        .begin()
+        .await
+        .map_err(|error| GatewayError::Internal(error.into()))?;
+    let execution = crate::agents::store::lock_agent_execution_tx(&mut tx, agent_key)
+        .await
+        .map_err(GatewayError::Internal)?;
+    let Some(execution) = execution else {
+        return Err(GatewayError::Validation(
+            "agent owner is unavailable".into(),
+        ));
+    };
+    if !execution.active {
+        return Err(GatewayError::Validation("agent is not active".into()));
+    }
+    if !execution.enabled {
+        return Err(GatewayError::Validation(
+            "agent is disabled; order placement is blocked".into(),
+        ));
+    }
+
+    let result = place_orders_unlocked(
+        pool,
+        exchange,
+        builder_fee_cache,
+        agent_key,
+        account_address,
+        environment,
+        req,
+    )
+    .await;
+    tx.rollback()
+        .await
+        .map_err(|error| GatewayError::Internal(error.into()))?;
+    result
+}
+
+async fn place_orders_unlocked(
+    pool: &DbPool,
+    exchange: &dyn ExchangeClient,
+    builder_fee_cache: &BuilderFeeCache,
+    agent_key: &str,
+    account_address: &str,
+    environment: &str,
+    req: &PlaceOrdersRequest,
+) -> Result<PlaceOrdersResponse, GatewayError> {
     req.validate().map_err(GatewayError::Validation)?;
 
     let mut results: Vec<OrderResult> = Vec::with_capacity(req.orders.len() * 3);
@@ -231,9 +346,12 @@ pub async fn place_orders(
             pool,
             exchange,
             builder_fee_cache,
-            agent_key,
-            account_address,
-            environment,
+            PlaceContext {
+                agent_key,
+                account_address,
+                environment,
+                require_enabled: true,
+            },
             input,
         )
         .await?;
@@ -248,14 +366,12 @@ async fn place_one(
     pool: &DbPool,
     exchange: &dyn ExchangeClient,
     builder_fee_cache: &BuilderFeeCache,
-    agent_key: &str,
-    account_address: &str,
-    environment: &str,
+    context: PlaceContext<'_>,
     input: &PlaceOrderInput,
 ) -> Result<Vec<OrderResult>, GatewayError> {
     input.validate().map_err(GatewayError::Validation)?;
 
-    let owner = load_builder_fee(pool, agent_key).await?;
+    let owner = load_builder_fee(pool, context.agent_key, context.require_enabled).await?;
     let builder_fee = owner.saved_fee;
 
     let meta = load_instrument_meta(pool, &input.symbol)
@@ -442,9 +558,9 @@ async fn place_one(
     for leg in &legs {
         let new = NewOrder {
             id: leg.id,
-            agent_key: agent_key.to_string(),
-            account_address: account_address.to_string(),
-            environment: environment.to_string(),
+            agent_key: context.agent_key.to_string(),
+            account_address: context.account_address.to_string(),
+            environment: context.environment.to_string(),
             group_id: leg.group_id,
             parent_cloid: leg.parent_cloid.clone(),
             memory_record_ids: json!(memory_ids),
@@ -483,7 +599,7 @@ async fn place_one(
     };
     let nonce = Utc::now().timestamp_millis() as u64;
 
-    let statuses = match exchange.place(batch, nonce, account_address).await {
+    let statuses = match exchange.place(batch, nonce, context.account_address).await {
         Ok(statuses) => statuses,
         Err(e) => {
             // Whole-batch failure: mark every leg 'error' and append one
@@ -494,8 +610,8 @@ async fn place_one(
             for leg in &legs {
                 let outcome = OrderOutcome {
                     order_id: leg.id,
-                    account_address: account_address.to_string(),
-                    environment: environment.to_string(),
+                    account_address: context.account_address.to_string(),
+                    environment: context.environment.to_string(),
                     status: "error".to_string(),
                     status_detail: Some(e.clone()),
                     exchange_oid: None,
@@ -548,8 +664,8 @@ async fn place_one(
         let (db_status, oid_opt, filled, avg_px, status_detail) = map_response_status(&status);
         let outcome = OrderOutcome {
             order_id: leg.id,
-            account_address: account_address.to_string(),
-            environment: environment.to_string(),
+            account_address: context.account_address.to_string(),
+            environment: context.environment.to_string(),
             status: db_status.clone(),
             status_detail: status_detail.clone(),
             exchange_oid: oid_opt.clone(),
@@ -707,6 +823,7 @@ struct BuilderFeeOwnerRow {
     builder_fee_tenths_of_bp: i16,
     builder_fee_approved_at: Option<chrono::DateTime<Utc>>,
     lifecycle: String,
+    enabled: bool,
     api_wallet_expires_at: Option<chrono::DateTime<Utc>>,
     api_wallet_expiry_checked_at: Option<chrono::DateTime<Utc>>,
     private_key_ciphertext: Option<Vec<u8>>,
@@ -721,10 +838,14 @@ struct BuilderFeeOwner {
     approval_recorded: bool,
 }
 
-async fn load_builder_fee(pool: &DbPool, agent_key: &str) -> Result<BuilderFeeOwner, GatewayError> {
+async fn load_builder_fee(
+    pool: &DbPool,
+    agent_key: &str,
+    require_enabled: bool,
+) -> Result<BuilderFeeOwner, GatewayError> {
     let row = sqlx::query_as::<_, BuilderFeeOwnerRow>(
         "SELECT users.id AS user_id, users.wallet_address, users.builder_fee_tenths_of_bp,
-                users.builder_fee_approved_at, agents.lifecycle,
+                users.builder_fee_approved_at, agents.lifecycle, agents.enabled,
                 users.api_wallet_expires_at, users.api_wallet_expiry_checked_at,
                 users.hyperliquid_private_key_ciphertext AS private_key_ciphertext,
                 users.hyperliquid_private_key_key_id AS private_key_key_id
@@ -743,6 +864,11 @@ async fn load_builder_fee(pool: &DbPool, agent_key: &str) -> Result<BuilderFeeOw
     };
     if owner_row.lifecycle != crate::agents::model::AGENT_LIFECYCLE_ACTIVE {
         return Err(GatewayError::Validation("agent is not active".into()));
+    }
+    if require_enabled && !owner_row.enabled {
+        return Err(GatewayError::Validation(
+            "agent is disabled; order placement is blocked".into(),
+        ));
     }
     if owner_row.private_key_ciphertext.is_none()
         || owner_row.private_key_key_id.is_none()
@@ -978,6 +1104,27 @@ pub async fn cancel_orders(
     environment: &str,
     req: &CancelOrdersRequest,
 ) -> Result<Vec<CancelOutcome>, GatewayError> {
+    cancel_orders_inner(
+        pool,
+        exchange,
+        agent_key,
+        account_address,
+        environment,
+        req,
+        false,
+    )
+    .await
+}
+
+async fn cancel_orders_inner(
+    pool: &DbPool,
+    exchange: &dyn ExchangeClient,
+    agent_key: &str,
+    account_address: &str,
+    environment: &str,
+    req: &CancelOrdersRequest,
+    allow_untracked: bool,
+) -> Result<Vec<CancelOutcome>, GatewayError> {
     let mut outcomes: Vec<CancelOutcome> = Vec::with_capacity(req.orders.len());
     let nonce = Utc::now().timestamp_millis() as u64;
 
@@ -1014,6 +1161,10 @@ pub async fn cancel_orders(
             .map_err(GatewayError::Internal)?;
 
         match local_row {
+            None if allow_untracked => decisions.push(Decision::Send(Cancel {
+                asset: meta_row.asset_index,
+                oid: c.oid,
+            })),
             None => decisions.push(Decision::NotFound),
             Some(row) if row.agent_key != agent_key => decisions.push(Decision::NotOwned(row.id)),
             Some(_) => decisions.push(Decision::Send(Cancel {
@@ -1140,24 +1291,14 @@ pub async fn cancel_all(
     environment: &str,
     symbol: Option<&str>,
 ) -> Result<CancelAllSummary, GatewayError> {
-    let open = store::list_orders(pool, agent_key, Some("open"), symbol, None, None, None)
+    let inputs: Vec<CancelInput> = exchange
+        .open_orders(account_address)
         .await
-        .map_err(GatewayError::Internal)?;
-
-    let considered = open.len();
-    let mut inputs: Vec<CancelInput> = Vec::new();
-    for row in &open {
-        if let Some(oid) = row
-            .exchange_oid
-            .as_deref()
-            .and_then(|s| s.parse::<u64>().ok())
-        {
-            inputs.push(CancelInput {
-                symbol: row.symbol.clone(),
-                oid,
-            });
-        }
-    }
+        .map_err(|error| GatewayError::Internal(anyhow::anyhow!("open_orders failed: {error}")))?
+        .into_iter()
+        .filter(|order| symbol.is_none_or(|requested| requested == order.symbol))
+        .collect();
+    let considered = inputs.len();
 
     if inputs.is_empty() {
         return Ok(CancelAllSummary {
@@ -1167,19 +1308,118 @@ pub async fn cancel_all(
     }
 
     let req = CancelOrdersRequest { orders: inputs };
-    let outcomes = cancel_orders(
+    let outcomes = cancel_orders_inner(
         pool,
         exchange,
         agent_key,
         account_address,
         environment,
         &req,
+        false,
     )
     .await?;
     Ok(CancelAllSummary {
         considered,
         outcomes,
     })
+}
+
+/// Cancel every order that Hyperliquid currently reports for the agent's
+/// account. This server-authorized operation intentionally permits exchange
+/// orders without a local journal row, which is required for emergency stop
+/// and position exits to remain effective when local state is stale.
+pub async fn cancel_all_exchange_orders(
+    pool: &DbPool,
+    exchange: &dyn ExchangeClient,
+    agent_key: &str,
+    account_address: &str,
+    environment: &str,
+    symbol: Option<&str>,
+) -> Result<CancelAllSummary, GatewayError> {
+    let inputs: Vec<CancelInput> = exchange
+        .open_orders(account_address)
+        .await
+        .map_err(|error| GatewayError::Internal(anyhow::anyhow!("open_orders failed: {error}")))?
+        .into_iter()
+        .filter(|order| symbol.is_none_or(|requested| requested == order.symbol))
+        .collect();
+    let considered = inputs.len();
+    if inputs.is_empty() {
+        return Ok(CancelAllSummary {
+            considered,
+            outcomes: Vec::new(),
+        });
+    }
+
+    let outcomes = cancel_orders_inner(
+        pool,
+        exchange,
+        agent_key,
+        account_address,
+        environment,
+        &CancelOrdersRequest { orders: inputs },
+        true,
+    )
+    .await?;
+    Ok(CancelAllSummary {
+        considered,
+        outcomes,
+    })
+}
+
+/// Submit a server-authorized reduce-only market order for the current
+/// exchange position. This is deliberately separate from the agent-facing
+/// placement API, so a disabled agent can still be exited but cannot open
+/// exposure.
+pub async fn close_exchange_position(
+    pool: &DbPool,
+    exchange: &dyn ExchangeClient,
+    builder_fee_cache: &BuilderFeeCache,
+    agent_key: &str,
+    account_address: &str,
+    environment: &str,
+    symbol: &str,
+) -> Result<Option<Vec<OrderResult>>, GatewayError> {
+    let position = exchange
+        .positions(account_address)
+        .await
+        .map_err(|error| GatewayError::Internal(anyhow::anyhow!("positions failed: {error}")))?
+        .into_iter()
+        .find(|position| position.symbol == symbol && !position.szi.is_zero());
+    let Some(position) = position else {
+        return Ok(None);
+    };
+    let input = PlaceOrderInput {
+        symbol: position.symbol,
+        side: if position.szi.is_sign_negative() {
+            "buy".to_string()
+        } else {
+            "sell".to_string()
+        },
+        order_type: "market".to_string(),
+        size: position.szi.abs(),
+        price: None,
+        time_in_force: None,
+        reduce_only: true,
+        take_profits: Vec::new(),
+        stop_losses: Vec::new(),
+        memory_record_ids: Vec::new(),
+        attribution_source: "manual".to_string(),
+    };
+    place_one(
+        pool,
+        exchange,
+        builder_fee_cache,
+        PlaceContext {
+            agent_key,
+            account_address,
+            environment,
+            require_enabled: false,
+        },
+        &input,
+    )
+    .await
+    .map(Some)
 }
 
 /// Summary of a `cancel_all` call. `considered` is the number of open
@@ -1201,6 +1441,7 @@ mod tests {
 
     use super::*;
     use crate::hyperliquid::builder_fee::{BuilderFeeLookup, LookupFuture};
+    use crate::hyperliquid::orders::store;
     use crate::{
         agents::{
             crypto::{EncryptionKey, encrypt},
@@ -1313,6 +1554,20 @@ mod tests {
 
         fn all_mids<'a>(&'a self) -> BoxFuture<'a, Result<HashMap<String, Decimal>, String>> {
             Box::pin(async move { Ok(self.mids.lock().await.clone()) })
+        }
+
+        fn open_orders<'a>(
+            &'a self,
+            _trading_account: &'a str,
+        ) -> BoxFuture<'a, Result<Vec<CancelInput>, String>> {
+            Box::pin(async move { Ok(Vec::new()) })
+        }
+
+        fn positions<'a>(
+            &'a self,
+            _trading_account: &'a str,
+        ) -> BoxFuture<'a, Result<Vec<ExchangePosition>, String>> {
+            Box::pin(async move { Ok(Vec::new()) })
         }
     }
 
@@ -1471,6 +1726,39 @@ mod tests {
                 .await
                 .expect("fetch request payload");
         assert_eq!(payload["builder"], json!({"b": BUILDER_RECIPIENT, "f": 10}));
+    }
+
+    #[tokio::test]
+    async fn disabled_agent_cannot_submit_orders() {
+        let pool = test_db::pool().await;
+        let (agent_key, account) = seed(&pool, "disabled").await;
+        sqlx::query("UPDATE agents SET enabled = false WHERE agent_key = $1")
+            .bind(&agent_key)
+            .execute(&pool)
+            .await
+            .expect("disable agent");
+        let exchange = FakeExchange::new().await;
+        let req = PlaceOrdersRequest {
+            orders: vec![limit_buy("BTC", dec!(0.1), dec!(50000))],
+        };
+
+        let error = place_orders(
+            &pool,
+            &exchange,
+            &test_cache(),
+            &agent_key,
+            &account,
+            "live",
+            &req,
+        )
+        .await
+        .expect_err("disabled agent must be rejected");
+
+        assert_eq!(
+            error.to_string(),
+            "agent is disabled; order placement is blocked"
+        );
+        assert_eq!(*exchange.place_call_count.lock().await, 0);
     }
 
     #[tokio::test]

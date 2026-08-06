@@ -2,7 +2,7 @@ mod account;
 mod coding;
 mod error;
 mod memories;
-mod orders;
+pub(crate) mod orders;
 mod transactions;
 
 #[cfg(test)]

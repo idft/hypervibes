@@ -3,7 +3,8 @@
 The Hyperliquid subsystem owns market reference data, account-history
 journaling, live account state, and the application's order execution gateway.
 It runs inside the Vibetrading process. Each enabled agent is supervised as an
-account identified by its wallet address and environment.
+account identified by its wallet address and environment. Disabled agents are
+not monitored and cannot submit new orders through the gateway.
 
 ## Integration Boundaries
 
@@ -63,6 +64,19 @@ Agents can read their own bounded journal windows through the read-only
 `vibetrading_list_account_transactions` MCP tool. It returns normalized fill,
 funding, and ledger events from `account_timeline`; it never sends an
 agent-initiated request to Hyperliquid.
+
+## Operator Stops And Exits
+
+Order placement holds the agent execution lock until the exchange request has
+completed. Emergency Stop obtains the same lock before setting the agent
+disabled and cancelling the exchange's currently open orders. This prevents a
+placement that began immediately before a stop from being missed by the
+cancellation pass. Cancellation cannot undo an order that was already filled.
+
+Operator-requested position Close and Close all actions use the server-owned
+signer, re-read exchange positions, and submit only reduce-only market orders.
+They remain available while the agent is disabled and cannot be invoked through
+the agent-facing API.
 
 Live account state is intentionally in memory. It supports the operator UI and
 trading dispatch context; the journal remains the durable source for history.

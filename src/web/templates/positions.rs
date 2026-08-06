@@ -32,6 +32,8 @@ pub struct OpenPositionView {
 pub struct OpenPositionsView {
     pub positions: Vec<OpenPositionView>,
     pub has_any_state: bool,
+    pub has_open_positions: bool,
+    pub agent_key: String,
 }
 
 impl OpenPositionsView {
@@ -92,9 +94,16 @@ impl OpenPositionsView {
         }
 
         Self {
+            has_open_positions: !visible.is_empty(),
             positions,
             has_any_state,
+            agent_key: String::new(),
         }
+    }
+
+    pub fn with_agent_key(mut self, agent_key: &str) -> Self {
+        self.agent_key = agent_key.to_string();
+        self
     }
 }
 

@@ -50,9 +50,11 @@ pub async fn seed_agent_and_job(pool: &DbPool, key: &str, job_id_offset: i64) ->
 
     query(
         "UPDATE harness_jobs
-            SET enabled = true
-          WHERE agent_key = $1
-            AND job_key = $2",
+            SET enabled = true,
+                model_provider_id = 'anthropic',
+                model_id = 'claude-sonnet-test'
+           WHERE agent_key = $1
+             AND job_key = $2",
     )
     .bind(key)
     .bind(default_analysis_job_key())

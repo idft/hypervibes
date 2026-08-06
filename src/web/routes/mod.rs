@@ -72,6 +72,22 @@ pub fn router(state: Arc<AppState>) -> Router {
             post(agents_update_prompt),
         )
         .route("/agents/{agent_key}/settings", get(agents_show_settings))
+        .route(
+            "/agents/{agent_key}/settings/toggle-enabled",
+            post(agents_set_enabled),
+        )
+        .route(
+            "/agents/{agent_key}/emergency-stop",
+            post(agents_emergency_stop),
+        )
+        .route(
+            "/agents/{agent_key}/positions/{symbol}/close",
+            post(agents_close_position),
+        )
+        .route(
+            "/agents/{agent_key}/positions/close-all",
+            post(agents_close_all_positions),
+        )
         .route("/agents/{agent_key}/chat", get(agents_show_chat))
         .route("/agents/{agent_key}/chat/new", get(agents_new_chat))
         .route(

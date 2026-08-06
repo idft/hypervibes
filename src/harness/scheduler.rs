@@ -2244,11 +2244,13 @@ mod tests {
 
     async fn seed_test_agent(pool: &DbPool, key: &str) {
         let far_future = Utc::now() + chrono::Duration::days(365);
-        sqlx::query("UPDATE harness_jobs SET next_run_at = $1")
-            .bind(far_future)
-            .execute(pool)
-            .await
-            .expect("push existing jobs");
+        sqlx::query(
+            "UPDATE harness_jobs SET next_run_at = $1 WHERE trigger_type = 'candle_closed'",
+        )
+        .bind(far_future)
+        .execute(pool)
+        .await
+        .expect("push existing jobs");
         sqlx::query("UPDATE harness_jobs SET enabled = false")
             .execute(pool)
             .await

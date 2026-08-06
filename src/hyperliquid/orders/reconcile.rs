@@ -814,6 +814,19 @@ mod tests {
         {
             Box::pin(async { Ok(Default::default()) })
         }
+        fn open_orders<'a>(
+            &'a self,
+            _trading_account: &'a str,
+        ) -> BoxFuture<'a, Result<Vec<CancelInput>, String>> {
+            Box::pin(async { Ok(Vec::new()) })
+        }
+        fn positions<'a>(
+            &'a self,
+            _trading_account: &'a str,
+        ) -> BoxFuture<'a, Result<Vec<crate::hyperliquid::orders::gateway::ExchangePosition>, String>>
+        {
+            Box::pin(async { Ok(Vec::new()) })
+        }
     }
 
     #[tokio::test]

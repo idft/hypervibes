@@ -185,7 +185,11 @@ impl AgentJobDetailPageTemplate {
         navbar: Navbar,
     ) -> Result<String, askama::Error> {
         let current_path = format!("/agents/{}/jobs/{}", agent.agent_key, job.id);
-        let navbar = navbar.with_selected_agent(agent.display_name.clone(), agent.enabled);
+        let navbar = navbar.with_selected_agent(
+            agent.agent_key.clone(),
+            agent.display_name.clone(),
+            agent.enabled,
+        );
         Self {
             tabs: build_agent_show_tabs(&agent, AgentShowTab::Jobs),
             agent_tabs_use_htmx: false,

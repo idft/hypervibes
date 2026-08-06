@@ -1,7 +1,7 @@
 use std::collections::BTreeSet;
 
 use anyhow::{Context, Result, anyhow};
-use sqlx::query_as;
+use sqlx::{Postgres, Transaction, query_as};
 
 use crate::{
     agents::model::{AgentDetailRow, AgentListRow, AgentRegistryRow},
@@ -74,6 +74,64 @@ pub async fn agent_belongs_to_user(
             .await
             .context("failed to check agent ownership")?;
     Ok(found.is_some())
+}
+
+/// Locked execution state for one agent. Callers that change execution
+/// eligibility or submit an exchange request must hold this advisory lock until
+/// their operation has reached a terminal exchange outcome.
+#[derive(Debug, Clone, Copy)]
+pub struct AgentExecutionState {
+    pub enabled: bool,
+    pub active: bool,
+}
+
+/// Lock an agent's execution state inside the caller's transaction.
+///
+/// The transaction-scoped advisory lock avoids conflicting with foreign-key
+/// locks acquired while the gateway persists child order rows.
+pub async fn lock_agent_execution_tx(
+    tx: &mut Transaction<'_, Postgres>,
+    agent_key: &str,
+) -> Result<Option<AgentExecutionState>> {
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtext($1))")
+        .bind(agent_key)
+        .execute(&mut **tx)
+        .await
+        .with_context(|| format!("failed to acquire execution lock for agent {agent_key}"))?;
+    let row: Option<(bool, String)> =
+        query_as("SELECT enabled, lifecycle FROM agents WHERE agent_key = $1")
+            .bind(agent_key)
+            .fetch_optional(&mut **tx)
+            .await
+            .with_context(|| format!("failed to load execution state for agent {agent_key}"))?;
+
+    Ok(row.map(|(enabled, lifecycle)| AgentExecutionState {
+        enabled,
+        active: lifecycle == crate::agents::model::AGENT_LIFECYCLE_ACTIVE,
+    }))
+}
+
+/// Update the durable execution gate for one agent while holding its advisory lock.
+pub async fn set_agent_enabled(pool: &DbPool, agent_key: &str, enabled: bool) -> Result<bool> {
+    let mut tx = pool
+        .begin()
+        .await
+        .context("failed to begin agent enabled update")?;
+    if lock_agent_execution_tx(&mut tx, agent_key).await?.is_none() {
+        tx.rollback().await?;
+        return Ok(false);
+    }
+
+    sqlx::query("UPDATE agents SET enabled = $2, updated_at = now() WHERE agent_key = $1")
+        .bind(agent_key)
+        .bind(enabled)
+        .execute(&mut *tx)
+        .await
+        .with_context(|| format!("failed to update enabled state for agent {agent_key}"))?;
+    tx.commit()
+        .await
+        .context("failed to commit agent enabled update")?;
+    Ok(true)
 }
 
 /// Fetch a single agent by its unique agent key.

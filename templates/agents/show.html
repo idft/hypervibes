@@ -20,6 +20,9 @@
     <div id="agent-show-tab-content"{% if show_transactions_tab || show_memories_tab || show_jobs_tab %} class="min-h-0 flex-1"{% endif %}>
     {% if show_positions_tab %}
     <section class="mt-2 space-y-2" hx-ext="sse" sse-connect="/agents/{{ agent.agent_key }}/live/stream">
+        {% if let Some(notice) = operation_notice %}
+        <div class="rounded-xl border border-amber-900/60 bg-amber-950/30 px-4 py-3 text-sm text-amber-200">{{ notice }}</div>
+        {% endif %}
         <section class="rounded-2xl border border-zinc-800 bg-[#0d0d10] p-6">
             <div class="grid grid-cols-1 gap-6 sm:grid-cols-4">
                 <div class="contents" sse-swap="balance">{{account_balance_html|safe}}</div>
@@ -217,6 +220,15 @@
                         <button type="button" data-copy-button data-copy-value="{{ agent.api_key }}" class="shrink-0 cursor-pointer rounded-md p-1.5 text-zinc-400 hover:bg-zinc-800 hover:text-white" aria-label="Copy API key" title="Copy API key">
                             <svg class="h-3.5 w-3.5" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><rect x="7" y="7" width="10" height="10" rx="1.5"></rect><path stroke-linecap="round" stroke-linejoin="round" d="M13 7V5.5A2.5 2.5 0 0 0 10.5 3h-5A2.5 2.5 0 0 0 3 5.5v5A2.5 2.5 0 0 0 5.5 13H7"></path></svg>
                         </button>
+                    </dd>
+                </div>
+                <div>
+                    <dt class="text-xs uppercase tracking-[0.16em] text-zinc-500">Agent execution</dt>
+                    <dd class="mt-2 flex items-center gap-3">
+                        <span class="text-sm font-medium {% if agent.enabled %}text-emerald-300{% else %}text-red-300{% endif %}">{% if agent.enabled %}Enabled{% else %}Disabled{% endif %}</span>
+                        <form action="/agents/{{ agent.agent_key }}/settings/toggle-enabled" method="post">
+                            <button type="submit" class="cursor-pointer rounded-full px-4 py-2 text-sm font-medium {% if agent.enabled %}border border-zinc-700 bg-zinc-900/70 text-zinc-200 hover:border-zinc-600 hover:bg-zinc-800 hover:text-white{% else %}bg-emerald-600 text-white hover:bg-emerald-500{% endif %}">{% if agent.enabled %}Disable agent{% else %}Enable agent{% endif %}</button>
+                        </form>
                     </dd>
                 </div>
             </dl>

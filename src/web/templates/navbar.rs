@@ -16,6 +16,7 @@ pub struct Navbar {
     pub warnings: Vec<NavbarWarning>,
     pub agents: Vec<NavbarAgent>,
     pub can_create_agent: bool,
+    pub selected_agent_key: Option<String>,
     pub selected_agent_name: Option<String>,
     pub selected_agent_enabled: bool,
 }
@@ -28,7 +29,13 @@ pub struct NavbarAgent {
 }
 
 impl Navbar {
-    pub fn with_selected_agent(mut self, display_name: String, enabled: bool) -> Self {
+    pub fn with_selected_agent(
+        mut self,
+        agent_key: String,
+        display_name: String,
+        enabled: bool,
+    ) -> Self {
+        self.selected_agent_key = Some(agent_key);
         self.selected_agent_name = Some(display_name);
         self.selected_agent_enabled = enabled;
         self
@@ -203,6 +210,7 @@ pub async fn load_navbar(pool: &DbPool, user_id: Uuid) -> anyhow::Result<Navbar>
         can_create_agent: api_key_ready
             && row.has_api_wallet_private_key
             && row.has_api_wallet_key_id,
+        selected_agent_key: None,
         selected_agent_name: None,
         selected_agent_enabled: false,
     })
@@ -241,7 +249,11 @@ mod tests {
 
     #[test]
     fn navbar_uses_the_selected_agent_label_and_status() {
-        let navbar = Navbar::default().with_selected_agent("BTC Agent".to_string(), true);
+        let navbar = Navbar::default().with_selected_agent(
+            "btc-agent".to_string(),
+            "BTC Agent".to_string(),
+            true,
+        );
 
         assert_eq!(navbar.agent_selector_label(), "BTC Agent");
         assert!(navbar.selected_agent_enabled);

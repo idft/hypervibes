@@ -36,7 +36,7 @@ async fn run_detail_page_handles_missing_opencode_session_mirror() {
 
     assert_eq!(response.status(), StatusCode::OK);
     let text = response_text(response).await;
-    assert!(text.contains("Jobd for"));
+    assert!(text.contains("backend session id"));
     assert!(text.contains("no matching row was found yet in the"));
 }
 

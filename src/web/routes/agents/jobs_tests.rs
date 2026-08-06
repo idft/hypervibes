@@ -696,7 +696,7 @@ async fn post_job_creates_new_job_and_redirects() {
                 .uri(format!("/agents/{agent_key}/jobs"))
                 .header("content-type", "application/x-www-form-urlencoded")
                 .body(Body::from(
-                    "job_kind=analysis&timeframe=4h&timeout_seconds=600&model_selection=&operator_prompt=Check+higher+timeframe+structure",
+                    "trigger_type=candle_closed&job_kind=analysis&timeframe=4h&timeout_seconds=600&model_selection=&operator_prompt=Check+higher+timeframe+structure",
                 ))
                 .unwrap(),
         )
@@ -802,7 +802,7 @@ async fn post_job_with_duplicate_job_kind_timeframe_returns_validation_error() {
                 .uri(format!("/agents/{agent_key}/jobs"))
                 .header("content-type", "application/x-www-form-urlencoded")
                 .body(Body::from(
-                    "job_kind=analysis&timeframe=15m&timeout_seconds=600&model_selection=",
+                    "trigger_type=candle_closed&job_kind=analysis&timeframe=15m&timeout_seconds=600&model_selection=",
                 ))
                 .unwrap(),
         )

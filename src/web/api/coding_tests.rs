@@ -28,7 +28,11 @@ async fn coding_report_is_scoped_to_the_authenticated_agent() {
         .expect("coding job")
         .id;
     sqlx::query(
-        "UPDATE harness_jobs SET model_provider_id = 'test', model_id = 'strong' WHERE id = $1",
+        "UPDATE harness_jobs
+            SET enabled = true,
+                model_provider_id = 'test',
+                model_id = 'strong'
+          WHERE id = $1",
     )
     .bind(job_id)
     .execute(&state.db_pool)

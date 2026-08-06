@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use askama::Template;
 use axum::{
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::StatusCode,
     response::{Html, IntoResponse, Response},
 };
@@ -50,13 +50,17 @@ pub(in crate::web::routes) async fn agents_show(
     State(state): State<Arc<AppState>>,
     user: AuthenticatedUser,
     Path(agent_key): Path<String>,
+    Query(query): Query<AgentOperationQuery>,
 ) -> Result<Response, AppError> {
     render_agent_show_page(
         &state,
         &user,
         &agent_key,
         AgentShowTab::Positions,
-        AgentShowQueries::default(),
+        AgentShowQueries {
+            operation_notice: query.notice,
+            ..Default::default()
+        },
     )
     .await
 }
@@ -77,9 +81,15 @@ pub(in crate::web::routes) struct AgentSettingsQuery {
     #[serde(default)]
     pub workspace_warning: Option<String>,
 }
+#[derive(Debug, Clone, Default, Deserialize)]
+pub(in crate::web::routes) struct AgentOperationQuery {
+    #[serde(default)]
+    pub notice: Option<String>,
+}
 
 #[derive(Debug, Default)]
 pub(in crate::web::routes) struct AgentShowQueries {
+    pub operation_notice: Option<String>,
     pub transactions: Option<AgentTransactionsQuery>,
     pub memories: Option<AgentMemoriesQuery>,
     pub settings: Option<AgentSettingsQuery>,
@@ -94,6 +104,7 @@ pub(in crate::web::routes) async fn render_agent_show_page(
     queries: AgentShowQueries,
 ) -> Result<Response, AppError> {
     let AgentShowQueries {
+        operation_notice,
         transactions: transactions_query,
         memories: memories_query,
         settings: settings_query,
@@ -104,9 +115,14 @@ pub(in crate::web::routes) async fn render_agent_show_page(
     };
 
     let mut template = AgentsShowPageTemplate::new(agent.clone(), active_tab);
+    template.operation_notice = operation_notice;
     template.navbar = load_navbar(&state.db_pool, user.id)
         .await?
-        .with_selected_agent(agent.display_name.clone(), agent.enabled);
+        .with_selected_agent(
+            agent.agent_key.clone(),
+            agent.display_name.clone(),
+            agent.enabled,
+        );
     if let Some(address) = agent.trading_account_address.as_deref() {
         let is_main = address.eq_ignore_ascii_case(&user.wallet_address);
         template.is_main_account = is_main;
@@ -529,7 +545,8 @@ pub(in crate::web::routes) async fn populate_positions_tab(
     let open_positions_view = OpenPositionsView::from_live_state_with_configured_coins(
         live_snapshot.clone(),
         &configured_coins,
-    );
+    )
+    .with_agent_key(&agent.agent_key);
     template.open_positions_html = OpenPositionsPartialTemplate::render_view(open_positions_view)
         .map_err(anyhow::Error::from)?;
 

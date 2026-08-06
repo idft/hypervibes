@@ -275,6 +275,7 @@ pub async fn insert_candle_job_with_model_variant(
             agent_key,
             job_key,
             job_kind,
+            trigger_type,
             enabled,
             timeframe,
             trigger_delay_seconds,
@@ -626,8 +627,9 @@ pub async fn get_dispatch_job(
            JOIN agents
              ON agents.agent_key = jobs.agent_key
             WHERE jobs.agent_key = $1
-               AND jobs.id = $2
-               AND agents.lifecycle = 'active'",
+                AND jobs.id = $2
+                AND agents.enabled = true
+                AND agents.lifecycle = 'active'",
     )
     .bind(agent_key)
     .bind(job_id)

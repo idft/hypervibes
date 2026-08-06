@@ -15,7 +15,6 @@ pub const RUN_STATUS_QUEUED: &str = "queued";
 pub const RUN_STATUS_RUNNING: &str = "running";
 pub const RUN_STATUS_SUCCEEDED: &str = "succeeded";
 pub const RUN_STATUS_FAILED: &str = "failed";
-#[cfg(test)]
 pub const RUN_STATUS_ABORTED: &str = "aborted";
 pub const RUN_STATUS_SKIPPED: &str = "skipped";
 

@@ -769,10 +769,10 @@ mod tests {
         // something to load and persist into.
         let (run_id,): (i64,) = sqlx::query_as(
             "INSERT INTO harness_runs (
-                 job_id, agent_key, job_key, job_kind, timeframe,
-                 status, scheduled_for, timeout_seconds
-             ) VALUES ($1, $2, 'analysis-15m', 'analysis', '15m',
-                       'queued', now(), $3)
+                 job_id, agent_key, job_key, job_kind, trigger_type, timeframe,
+                  status, scheduled_for, timeout_seconds
+             ) VALUES ($1, $2, 'analysis-15m', 'analysis', 'candle_closed', '15m',
+                        'queued', now(), $3)
              RETURNING id",
         )
         .bind(job_id)

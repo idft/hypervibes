@@ -1,4 +1,3 @@
-#[cfg(test)]
 use crate::harness::model::RUN_STATUS_ABORTED;
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
@@ -238,7 +237,6 @@ pub async fn mark_run_failed(
 }
 
 /// Mark a run as aborted with a short, sanitized error summary.
-#[cfg(test)]
 pub async fn mark_run_aborted(
     pool: &DbPool,
     run_id: i64,
@@ -562,18 +560,31 @@ pub(crate) async fn insert_queued_event_run_with_mode(
     Ok(outcome)
 }
 
+#[cfg(test)]
+#[derive(sqlx::FromRow)]
+struct TestRunJob {
+    id: i64,
+    agent_key: String,
+    job_key: String,
+    job_kind: String,
+    trigger_type: String,
+    timeframe: Option<String>,
+    model_provider_id: Option<String>,
+    model_id: Option<String>,
+    model_variant: Option<String>,
+    timeout_seconds: i32,
+}
+
 /// Small helper to keep the row insert signature in one place for tests.
 #[cfg(test)]
 pub async fn insert_test_run(pool: &PgPool, job_id: i64, status: &str) -> Result<i64> {
-    let job: super::jobs::CandleJobForUpdate = query_as(
+    let job: TestRunJob = query_as(
         "SELECT id,
                 agent_key,
                 job_key,
                 job_kind,
-                enabled,
+                trigger_type,
                 timeframe,
-                trigger_delay_seconds,
-                next_run_at,
                 model_provider_id,
                 model_id,
                 model_variant,
@@ -600,18 +611,19 @@ pub async fn insert_test_run(pool: &PgPool, job_id: i64, status: &str) -> Result
              model_variant,
              scheduled_for,
              timeout_seconds
-           ) VALUES ($1, $2, $3, $4, 'candle_closed', $5, $6, $7, $8, $9, $10, $11)
+           ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
          RETURNING id",
     )
     .bind(job.id)
     .bind(&job.agent_key)
     .bind(&job.job_key)
     .bind(&job.job_kind)
-    .bind(&job.timeframe)
+    .bind(&job.trigger_type)
+    .bind(job.timeframe)
     .bind(status)
-    .bind(&job.model_provider_id)
-    .bind(&job.model_id)
-    .bind(&job.model_variant)
+    .bind(job.model_provider_id)
+    .bind(job.model_id)
+    .bind(job.model_variant)
     .bind(Utc::now())
     .bind(job.timeout_seconds)
     .fetch_one(pool)

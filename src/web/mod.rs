@@ -1,4 +1,4 @@
-mod api;
+pub(crate) mod api;
 pub(crate) mod auth;
 mod error;
 pub(crate) mod provider_connections;

@@ -234,7 +234,11 @@ impl AgentMemoryDetailPageTemplate {
         navbar: Navbar,
     ) -> Result<String, askama::Error> {
         let current_path = format!("/agents/{}/memories/{}", agent.agent_key, memory.memory_id);
-        let navbar = navbar.with_selected_agent(agent.display_name.clone(), agent.enabled);
+        let navbar = navbar.with_selected_agent(
+            agent.agent_key.clone(),
+            agent.display_name.clone(),
+            agent.enabled,
+        );
         Self {
             tabs: build_agent_show_tabs(&agent, AgentShowTab::Memories),
             agent_tabs_use_htmx: false,

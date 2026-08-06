@@ -379,8 +379,9 @@ mod tests {
         .expect("insert trigger agent");
         let job_id: i64 = query(
             "INSERT INTO harness_jobs
-                (agent_key, job_key, job_kind, timeframe, next_run_at, timeout_seconds)
-             VALUES ($1, 'trigger-job', 'analysis', '15m', $2, 60)
+                (agent_key, job_key, job_kind, trigger_type, timeframe, trigger_delay_seconds,
+                 next_run_at, timeout_seconds)
+             VALUES ($1, 'trigger-job', 'analysis', 'candle_closed', '15m', 0, $2, 60)
              RETURNING id",
         )
         .bind(&agent_key)
@@ -391,9 +392,9 @@ mod tests {
         .get("id");
         let run_id: i64 = query(
             "INSERT INTO harness_runs
-                (job_id, agent_key, job_key, job_kind, timeframe, status,
+                (job_id, agent_key, job_key, job_kind, trigger_type, timeframe, status,
                  scheduled_for, timeout_seconds)
-             VALUES ($1, $2, 'trigger-job', 'analysis', '15m', 'queued', $3, 60)
+             VALUES ($1, $2, 'trigger-job', 'analysis', 'candle_closed', '15m', 'queued', $3, 60)
              RETURNING id",
         )
         .bind(job_id)

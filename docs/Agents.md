@@ -39,6 +39,29 @@ Important `agents` fields:
 - `api_key`
 - `runtime_config`
 
+## Execution Controls
+
+`enabled` is the durable execution gate for an agent. When disabled, the
+system does not start scheduled or manual job runs and the order gateway rejects
+new order placement. Agent API read operations and order cancellation remain
+available so an operator can inspect and remediate an account while paused.
+
+The Settings page controls one agent's enabled state. Disabling an agent does
+not interrupt an already-running OpenCode session, but that session cannot
+place a new order after the gateway observes the disabled state.
+
+The top navigation Emergency Stop applies to the selected agent only. It
+disables that agent, asks OpenCode to abort its active job sessions, and cancels
+all unfilled orders currently reported by Hyperliquid. It does not close open
+positions. Placement, disabling, and emergency cancellation are serialized per
+agent with a transaction-scoped database advisory lock; a placement already accepted by Hyperliquid can be cancelled only if it
+remains unfilled, and an already-filled order cannot be reversed.
+
+The Positions page has Close and Close all actions. They cancel open orders for
+the affected position(s) and submit server-authorized reduce-only market exits
+using the latest exchange position size. These actions do not disable the agent;
+an enabled agent can subsequently open another position.
+
 Strategy prompts are no longer stored directly on `agents`. They live in `agent_strategy_prompts` with prompt kinds:
 
 - `analysis`
