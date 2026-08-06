@@ -43,6 +43,48 @@ pub enum LiveConnectionStatus {
     Stopped,
 }
 
+/// Authority of one account-data subscription at the time it is consumed.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LiveDataStatus {
+    #[default]
+    Loading,
+    Current,
+    Stale,
+    Degraded,
+}
+
+impl LiveDataStatus {
+    pub fn is_current(self) -> bool {
+        matches!(self, Self::Current)
+    }
+}
+
+/// Overall operator-facing health for one monitored account.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LiveAccountHealthStatus {
+    #[default]
+    Loading,
+    Healthy,
+    Degraded,
+    Stale,
+    Failed,
+    Stopped,
+}
+
+/// Derived authority and observability data for a live account snapshot.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LiveAccountHealth {
+    pub status: LiveAccountHealthStatus,
+    pub connection_status: LiveConnectionStatus,
+    pub positions: LiveDataStatus,
+    pub open_orders: LiveDataStatus,
+    pub balance: LiveDataStatus,
+    pub last_successful_update: Option<DateTime<Utc>>,
+    pub last_error: Option<String>,
+}
+
 /// Margin/leverage summary mirroring `hypersdk::MarginSummary` for the cross
 /// account (the orchestrator tracks the cross-margin account; isolated
 /// positions still surface leverage fields per-position).
@@ -112,6 +154,11 @@ pub struct LiveAgentSnapshot {
     pub account_data_available: bool,
     pub account_data_stale: bool,
     pub account_data_as_of: Option<DateTime<Utc>>,
+    pub account_data_status: LiveAccountHealthStatus,
+    pub account_data_error: Option<String>,
+    pub positions_data_status: LiveDataStatus,
+    pub orders_data_status: LiveDataStatus,
+    pub balance_data_status: LiveDataStatus,
     pub total_equity_usd: Option<Decimal>,
     pub available_to_trade_usd: Option<Decimal>,
     pub margin_used_usd: Option<Decimal>,
@@ -130,9 +177,17 @@ impl LiveAgentSnapshot {
             .unwrap_or_default();
 
         let mut body = format!(
-            "- Account: {}\n- Environment: {}\n- Available: {}\n- Stale: {}\n- As of: {}\n",
-            self.account_address, self.environment, available, stale, as_of,
+            "- Account: {}\n- Environment: {}\n- Available: {}\n- Stale: {}\n- Status: {:?}\n- As of: {}\n",
+            self.account_address,
+            self.environment,
+            available,
+            stale,
+            self.account_data_status,
+            as_of,
         );
+        if let Some(error) = &self.account_data_error {
+            body.push_str(&format!("- Monitoring error: {error}\n"));
+        }
 
         body.push_str(&format!(
             "- Total equity USD: {}\n- Available to trade USD: {}\n- Margin used USD: {}\n- Unrealized PnL USD: {}\n",
@@ -143,7 +198,9 @@ impl LiveAgentSnapshot {
         ));
 
         body.push_str("\n### Open positions\n");
-        if self.open_positions.is_empty() {
+        if !self.positions_data_status.is_current() {
+            body.push_str("Unavailable: live positions data is not authoritative.\n");
+        } else if self.open_positions.is_empty() {
             body.push_str("None\n");
         } else {
             for position in &self.open_positions {
@@ -163,7 +220,9 @@ impl LiveAgentSnapshot {
         }
 
         body.push_str("\n### Open orders\n");
-        if self.open_orders.is_empty() {
+        if !self.orders_data_status.is_current() {
+            body.push_str("Unavailable: live open-orders data is not authoritative.\n");
+        } else if self.open_orders.is_empty() {
             body.push_str("None\n");
         } else {
             for order in &self.open_orders {
@@ -189,7 +248,7 @@ impl LiveAgentSnapshot {
 
 /// Maximum age for live account data to be considered fresh enough for
 /// trading prompts. Data older than this is treated as stale/unavailable.
-const ACCOUNT_DATA_MAX_AGE: chrono::Duration = chrono::Duration::minutes(2);
+pub const ACCOUNT_DATA_MAX_AGE: chrono::Duration = chrono::Duration::minutes(2);
 
 /// Assets treated as collateral when computing account equity and
 /// available-to-trade balances.
@@ -198,9 +257,10 @@ const COLLATERAL_ASSETS: &[&str] = &["USDC", "USDE", "USDT0", "USDH"];
 impl LiveAgentSnapshot {
     /// Build a prompt-ready snapshot from an in-memory account state.
     ///
-    /// The caller is responsible for checking staleness; this method
-    /// copies the latest state verbatim and sets the `as_of` timestamp.
+    /// Carries authority metadata with the snapshot so consumers never mistake
+    /// unavailable data for an empty account.
     pub fn from_state(state: &AccountLiveState) -> Self {
+        let health = account_live_health(state);
         let spot_balances = &state.spot_balances;
 
         let collateral_total: Decimal = COLLATERAL_ASSETS
@@ -263,9 +323,14 @@ impl LiveAgentSnapshot {
         Self {
             account_address: state.account_address.clone(),
             environment: state.environment.clone(),
-            account_data_available: true,
-            account_data_stale: false,
-            account_data_as_of: state.updated_at,
+            account_data_available: health.status == LiveAccountHealthStatus::Healthy,
+            account_data_stale: health.status != LiveAccountHealthStatus::Healthy,
+            account_data_as_of: state.account_data_as_of(),
+            account_data_status: health.status,
+            account_data_error: health.last_error,
+            positions_data_status: health.positions,
+            orders_data_status: health.open_orders,
+            balance_data_status: health.balance,
             total_equity_usd,
             available_to_trade_usd,
             margin_used_usd: if margin_used_usd > Decimal::ZERO {
@@ -303,30 +368,7 @@ pub fn live_agent_snapshot_for_dispatch(
         };
     };
 
-    let Some(updated_at) = state.updated_at else {
-        return LiveAgentSnapshot {
-            account_address: state.account_address.clone(),
-            environment: state.environment.clone(),
-            account_data_available: false,
-            account_data_stale: true,
-            ..Default::default()
-        };
-    };
-
-    if Utc::now() - updated_at > ACCOUNT_DATA_MAX_AGE {
-        return LiveAgentSnapshot {
-            account_address: state.account_address.clone(),
-            environment: state.environment.clone(),
-            account_data_available: false,
-            account_data_stale: true,
-            ..Default::default()
-        };
-    }
-
-    let mut snapshot = LiveAgentSnapshot::from_state(&state);
-    snapshot.account_data_available = true;
-    snapshot.account_data_stale = false;
-    snapshot
+    LiveAgentSnapshot::from_state(&state)
 }
 
 /// Full per-account live state.
@@ -336,12 +378,113 @@ pub struct AccountLiveState {
     pub environment: String,
     pub status: LiveConnectionStatus,
     pub connected_at: Option<DateTime<Utc>>,
-    pub updated_at: Option<DateTime<Utc>>,
+    /// Last successful clearinghouse snapshot. This authorizes positions.
+    pub clearinghouse_updated_at: Option<DateTime<Utc>>,
+    /// Last successful open-orders snapshot.
+    pub open_orders_updated_at: Option<DateTime<Utc>>,
+    /// Last successful spot-state snapshot. This, with clearinghouse state,
+    /// authorizes the unified-account balance.
+    pub spot_updated_at: Option<DateTime<Utc>>,
     pub last_error: Option<String>,
     pub margin: Option<LiveMarginState>,
     pub spot_balances: Vec<LiveSpotBalance>,
     pub open_positions: Vec<LivePosition>,
     pub open_orders: Vec<LiveOpenOrder>,
+}
+
+impl AccountLiveState {
+    pub fn account_data_as_of(&self) -> Option<DateTime<Utc>> {
+        [
+            self.clearinghouse_updated_at,
+            self.open_orders_updated_at,
+            self.spot_updated_at,
+        ]
+        .into_iter()
+        .flatten()
+        .min()
+    }
+}
+
+pub fn account_live_health(state: &AccountLiveState) -> LiveAccountHealth {
+    account_live_health_at(state, Utc::now())
+}
+
+pub fn account_live_health_at(state: &AccountLiveState, now: DateTime<Utc>) -> LiveAccountHealth {
+    let positions = stream_health(state.clearinghouse_updated_at, state.status, now);
+    let open_orders = stream_health(state.open_orders_updated_at, state.status, now);
+    let balance = if positions.is_current() {
+        stream_health(state.spot_updated_at, state.status, now)
+    } else {
+        positions
+    };
+    let status = match state.status {
+        LiveConnectionStatus::Failed => LiveAccountHealthStatus::Failed,
+        LiveConnectionStatus::Stopped => LiveAccountHealthStatus::Stopped,
+        LiveConnectionStatus::Starting
+        | LiveConnectionStatus::StartupSyncing
+        | LiveConnectionStatus::Connecting => LiveAccountHealthStatus::Loading,
+        LiveConnectionStatus::Disconnected | LiveConnectionStatus::Reconnecting => {
+            LiveAccountHealthStatus::Degraded
+        }
+        LiveConnectionStatus::Connected => {
+            if [positions, open_orders, balance]
+                .into_iter()
+                .all(LiveDataStatus::is_current)
+            {
+                LiveAccountHealthStatus::Healthy
+            } else if [positions, open_orders, balance]
+                .into_iter()
+                .any(|status| status == LiveDataStatus::Stale)
+            {
+                LiveAccountHealthStatus::Stale
+            } else {
+                LiveAccountHealthStatus::Loading
+            }
+        }
+    };
+
+    LiveAccountHealth {
+        status,
+        connection_status: state.status,
+        positions,
+        open_orders,
+        balance,
+        last_successful_update: [
+            state.clearinghouse_updated_at,
+            state.open_orders_updated_at,
+            state.spot_updated_at,
+        ]
+        .into_iter()
+        .flatten()
+        .max(),
+        last_error: state.last_error.clone(),
+    }
+}
+
+fn stream_health(
+    updated_at: Option<DateTime<Utc>>,
+    connection_status: LiveConnectionStatus,
+    now: DateTime<Utc>,
+) -> LiveDataStatus {
+    if matches!(
+        connection_status,
+        LiveConnectionStatus::Disconnected
+            | LiveConnectionStatus::Reconnecting
+            | LiveConnectionStatus::Failed
+            | LiveConnectionStatus::Stopped
+    ) {
+        return LiveDataStatus::Degraded;
+    }
+    let Some(updated_at) = updated_at else {
+        return LiveDataStatus::Loading;
+    };
+    if now - updated_at > ACCOUNT_DATA_MAX_AGE {
+        return LiveDataStatus::Stale;
+    }
+    if connection_status != LiveConnectionStatus::Connected {
+        return LiveDataStatus::Degraded;
+    }
+    LiveDataStatus::Current
 }
 
 /// Capacity of the per-store broadcast channel used to notify subscribers
@@ -464,13 +607,9 @@ impl LiveAccountStore {
                     ..Default::default()
                 });
             state.status = status;
-            if matches!(status, LiveConnectionStatus::Connected) {
-                if state.connected_at.is_none() {
-                    state.connected_at = Some(Utc::now());
-                }
-                state.last_error = None;
+            if matches!(status, LiveConnectionStatus::Connected) && state.connected_at.is_none() {
+                state.connected_at = Some(Utc::now());
             }
-            state.updated_at = Some(Utc::now());
             state.clone()
         };
         self.notify(key);
@@ -489,7 +628,6 @@ impl LiveAccountStore {
                     ..Default::default()
                 });
             state.last_error = Some(message.into());
-            state.updated_at = Some(Utc::now());
         }
         self.notify(key);
     }
@@ -542,7 +680,7 @@ mod tests {
         let state = store.set_status(&k, LiveConnectionStatus::Connected);
         assert_eq!(state.status, LiveConnectionStatus::Connected);
         assert!(state.connected_at.is_some());
-        assert!(state.updated_at.is_some());
+        assert!(state.connected_at.is_some());
     }
 
     #[test]
@@ -607,6 +745,63 @@ mod tests {
         let snap = store.get(&k).expect("state present");
         assert_eq!(snap.status, LiveConnectionStatus::Connected);
         assert_eq!(snap.last_error.as_deref(), Some("oops"));
+    }
+
+    #[test]
+    fn health_requires_each_subscription_before_reporting_a_current_account() {
+        let now = Utc::now();
+        let mut state = AccountLiveState {
+            status: LiveConnectionStatus::Connected,
+            clearinghouse_updated_at: Some(now),
+            ..Default::default()
+        };
+
+        let health = account_live_health_at(&state, now);
+        assert_eq!(health.positions, LiveDataStatus::Current);
+        assert_eq!(health.open_orders, LiveDataStatus::Loading);
+        assert_eq!(health.balance, LiveDataStatus::Loading);
+        assert_eq!(health.status, LiveAccountHealthStatus::Loading);
+
+        state.open_orders_updated_at = Some(now);
+        state.spot_updated_at = Some(now);
+        let health = account_live_health_at(&state, now);
+        assert_eq!(health.status, LiveAccountHealthStatus::Healthy);
+    }
+
+    #[test]
+    fn health_marks_recent_data_degraded_when_monitoring_is_not_connected() {
+        let now = Utc::now();
+        let state = AccountLiveState {
+            status: LiveConnectionStatus::Failed,
+            clearinghouse_updated_at: Some(now),
+            open_orders_updated_at: Some(now),
+            spot_updated_at: Some(now),
+            ..Default::default()
+        };
+
+        let health = account_live_health_at(&state, now);
+        assert_eq!(health.status, LiveAccountHealthStatus::Failed);
+        assert_eq!(health.positions, LiveDataStatus::Degraded);
+        assert_eq!(health.open_orders, LiveDataStatus::Degraded);
+    }
+
+    #[test]
+    fn health_marks_old_connected_data_stale() {
+        let now = Utc::now();
+        let state = AccountLiveState {
+            status: LiveConnectionStatus::Connected,
+            clearinghouse_updated_at: Some(
+                now - ACCOUNT_DATA_MAX_AGE - chrono::Duration::seconds(1),
+            ),
+            open_orders_updated_at: Some(now),
+            spot_updated_at: Some(now),
+            ..Default::default()
+        };
+
+        let health = account_live_health_at(&state, now);
+        assert_eq!(health.positions, LiveDataStatus::Stale);
+        assert_eq!(health.balance, LiveDataStatus::Stale);
+        assert_eq!(health.status, LiveAccountHealthStatus::Stale);
     }
 
     #[test]
@@ -694,7 +889,7 @@ mod tests {
         // Should not panic even though nobody is subscribed.
         store.set_status(&k, LiveConnectionStatus::Connected);
         store.upsert(k.clone(), |state| {
-            state.updated_at = Some(Utc::now());
+            state.clearinghouse_updated_at = Some(Utc::now());
         });
         store.record_error(&k, "ignore me");
         store.replace(

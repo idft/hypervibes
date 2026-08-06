@@ -86,7 +86,9 @@ async fn account_balance_stream_emits_initial_value_when_state_present() {
                 account_value: Some(rust_decimal::Decimal::new(123_4567, 4)),
                 ..Default::default()
             }),
-            updated_at: Some(Utc::now()),
+            clearinghouse_updated_at: Some(Utc::now()),
+            open_orders_updated_at: Some(Utc::now()),
+            spot_updated_at: Some(Utc::now()),
             ..Default::default()
         },
     );
@@ -143,7 +145,9 @@ async fn account_balance_stream_emits_updates_when_state_changes() {
                 account_value: Some(rust_decimal::Decimal::new(99_0000, 4)),
                 ..Default::default()
             }),
-            updated_at: Some(Utc::now()),
+            clearinghouse_updated_at: Some(Utc::now()),
+            open_orders_updated_at: Some(Utc::now()),
+            spot_updated_at: Some(Utc::now()),
             ..Default::default()
         },
     );
@@ -221,7 +225,9 @@ async fn open_positions_stream_emits_initial_rows_when_state_present() {
             account_address: key.account_address.clone(),
             environment: key.environment.clone(),
             status: LiveConnectionStatus::Connected,
-            updated_at: Some(Utc::now()),
+            clearinghouse_updated_at: Some(Utc::now()),
+            open_orders_updated_at: Some(Utc::now()),
+            spot_updated_at: Some(Utc::now()),
             open_positions: vec![crate::hyperliquid::live_state::LivePosition {
                 coin: "BTC".to_string(),
                 szi: Some(rust_decimal::Decimal::new(1, 0)),
@@ -279,7 +285,9 @@ async fn open_positions_stream_emits_configured_placeholder_rows_without_live_po
             account_address: key.account_address.clone(),
             environment: key.environment.clone(),
             status: LiveConnectionStatus::Connected,
-            updated_at: Some(Utc::now()),
+            clearinghouse_updated_at: Some(Utc::now()),
+            open_orders_updated_at: Some(Utc::now()),
+            spot_updated_at: Some(Utc::now()),
             ..Default::default()
         },
     );
@@ -370,7 +378,9 @@ async fn open_orders_stream_emits_initial_rows_when_state_present() {
             account_address: key.account_address.clone(),
             environment: key.environment.clone(),
             status: LiveConnectionStatus::Connected,
-            updated_at: Some(Utc::now()),
+            clearinghouse_updated_at: Some(Utc::now()),
+            open_orders_updated_at: Some(Utc::now()),
+            spot_updated_at: Some(Utc::now()),
             open_orders: vec![crate::hyperliquid::live_state::LiveOpenOrder {
                 coin: "ETH".to_string(),
                 side: Some("buy".to_string()),

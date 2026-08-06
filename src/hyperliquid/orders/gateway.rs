@@ -24,6 +24,7 @@ use uuid::Uuid;
 use crate::{
     db::DbPool,
     hyperliquid::builder_fee::{BuilderFeeCache, MAX_BUILDER_FEE_TENTHS_OF_BP},
+    hyperliquid::live_state::{LiveAccountStore, account_live_health},
     hyperliquid::orders::{
         model::{
             CancelInput, CancelOrdersRequest, OrderResult, PlaceOrderInput, PlaceOrdersRequest,
@@ -270,6 +271,19 @@ struct PlaceContext<'a> {
     require_enabled: bool,
 }
 
+/// Live account data used to decide whether a placement may increase exposure.
+pub struct LiveOrderPlacementContext<'a> {
+    pub account_address: &'a str,
+    pub environment: &'a str,
+    pub live_accounts: &'a LiveAccountStore,
+}
+
+struct OrderPlacementAccount<'a> {
+    account_address: &'a str,
+    environment: &'a str,
+    live_accounts: Option<&'a LiveAccountStore>,
+}
+
 // ---- place flow -----------------------------------------------------------
 
 /// Place one or more orders through the execution gateway.
@@ -282,6 +296,7 @@ struct PlaceContext<'a> {
 ///    `pending_submission`)
 /// 5. POST the batch to the exchange (always with `OrderGrouping::Na`)
 /// 6. ZIP the response back to each leg, update the row + append event
+#[cfg(test)]
 pub async fn place_orders(
     pool: &DbPool,
     exchange: &dyn ExchangeClient,
@@ -290,6 +305,55 @@ pub async fn place_orders(
     account_address: &str,
     environment: &str,
     req: &PlaceOrdersRequest,
+) -> Result<PlaceOrdersResponse, GatewayError> {
+    place_orders_inner(
+        pool,
+        exchange,
+        builder_fee_cache,
+        agent_key,
+        req,
+        OrderPlacementAccount {
+            account_address,
+            environment,
+            live_accounts: None,
+        },
+    )
+    .await
+}
+
+/// Place orders while enforcing the authority of the monitored account state.
+/// Agent-facing order placement must pass its live-state store here; the
+/// optional form keeps offline gateway tests independent of WebSocket setup.
+pub async fn place_orders_with_live_state(
+    pool: &DbPool,
+    exchange: &dyn ExchangeClient,
+    builder_fee_cache: &BuilderFeeCache,
+    agent_key: &str,
+    req: &PlaceOrdersRequest,
+    live: LiveOrderPlacementContext<'_>,
+) -> Result<PlaceOrdersResponse, GatewayError> {
+    place_orders_inner(
+        pool,
+        exchange,
+        builder_fee_cache,
+        agent_key,
+        req,
+        OrderPlacementAccount {
+            account_address: live.account_address,
+            environment: live.environment,
+            live_accounts: Some(live.live_accounts),
+        },
+    )
+    .await
+}
+
+async fn place_orders_inner(
+    pool: &DbPool,
+    exchange: &dyn ExchangeClient,
+    builder_fee_cache: &BuilderFeeCache,
+    agent_key: &str,
+    req: &PlaceOrdersRequest,
+    account: OrderPlacementAccount<'_>,
 ) -> Result<PlaceOrdersResponse, GatewayError> {
     let mut tx = pool
         .begin()
@@ -311,14 +375,34 @@ pub async fn place_orders(
             "agent is disabled; order placement is blocked".into(),
         ));
     }
+    if req.orders.iter().any(|order| !order.reduce_only)
+        && let Some(live_accounts) = account.live_accounts
+    {
+        let key = crate::hyperliquid::live_state::AccountKey::new(
+            account.account_address,
+            account.environment,
+        );
+        let Some(state) = live_accounts.get(&key) else {
+            return Err(GatewayError::Validation(
+                "new exposure is blocked until live account monitoring is current".into(),
+            ));
+        };
+        let health = account_live_health(&state);
+        if !health.positions.is_current() || !health.open_orders.is_current() {
+            return Err(GatewayError::Validation(
+                "new exposure is blocked until live positions and open-orders data are current"
+                    .into(),
+            ));
+        }
+    }
 
     let result = place_orders_unlocked(
         pool,
         exchange,
         builder_fee_cache,
         agent_key,
-        account_address,
-        environment,
+        account.account_address,
+        account.environment,
         req,
     )
     .await;
@@ -1726,6 +1810,58 @@ mod tests {
                 .await
                 .expect("fetch request payload");
         assert_eq!(payload["builder"], json!({"b": BUILDER_RECIPIENT, "f": 10}));
+    }
+
+    #[tokio::test]
+    async fn degraded_live_state_blocks_new_exposure_but_allows_reduce_only_orders() {
+        let pool = test_db::pool().await;
+        let (agent_key, account) = seed(&pool, "live-health").await;
+        seed_instrument(&pool, "BTC", 0, 5).await;
+        let exchange = FakeExchange::with_place_statuses(vec![OrderResponseStatus::Resting {
+            oid: 42,
+            cloid: None,
+        }])
+        .await;
+        let live_accounts = LiveAccountStore::new();
+        let req = PlaceOrdersRequest {
+            orders: vec![limit_buy("BTC", dec!(0.1), dec!(50000))],
+        };
+
+        let error = place_orders_with_live_state(
+            &pool,
+            &exchange,
+            &test_cache(),
+            &agent_key,
+            &req,
+            LiveOrderPlacementContext {
+                account_address: &account,
+                environment: "live",
+                live_accounts: &live_accounts,
+            },
+        )
+        .await
+        .expect_err("missing live state must block new exposure");
+        assert!(error.to_string().contains("new exposure is blocked"));
+
+        let mut reduce_only = limit_buy("BTC", dec!(0.1), dec!(50000));
+        reduce_only.reduce_only = true;
+        let response = place_orders_with_live_state(
+            &pool,
+            &exchange,
+            &test_cache(),
+            &agent_key,
+            &PlaceOrdersRequest {
+                orders: vec![reduce_only],
+            },
+            LiveOrderPlacementContext {
+                account_address: &account,
+                environment: "live",
+                live_accounts: &live_accounts,
+            },
+        )
+        .await
+        .expect("reduce-only order remains available for remediation");
+        assert_eq!(response.results.len(), 1);
     }
 
     #[tokio::test]

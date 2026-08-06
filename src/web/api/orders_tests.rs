@@ -180,6 +180,28 @@ async fn post_orders_selected_symbol_submits_saved_builder_fee() {
     let (agent_key, api_key) = seed_agent(&state, "ord-symbol-enabled").await;
     seed_instrument(&state, "BTC", true).await;
     select_instruments(&state, &agent_key, &["BTC"]).await;
+    let agent = crate::agents::store::get_agent(&state.db_pool, &agent_key)
+        .await
+        .expect("load agent")
+        .expect("agent exists");
+    let account_address = agent
+        .trading_account_address
+        .expect("agent has trading account");
+    let account_key =
+        crate::hyperliquid::live_state::AccountKey::new(&account_address, &agent.environment);
+    let now = chrono::Utc::now();
+    state.live_accounts.replace(
+        account_key.clone(),
+        crate::hyperliquid::live_state::AccountLiveState {
+            account_address: account_key.account_address.clone(),
+            environment: account_key.environment.clone(),
+            status: crate::hyperliquid::live_state::LiveConnectionStatus::Connected,
+            clearinghouse_updated_at: Some(now),
+            open_orders_updated_at: Some(now),
+            spot_updated_at: Some(now),
+            ..Default::default()
+        },
+    );
 
     let body = serde_json::json!({
         "orders": [{

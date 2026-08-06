@@ -265,7 +265,9 @@ async fn post_delete_agent_removes_agent_and_redirects() {
             account_address: trading_account.to_string(),
             environment: stored.environment.clone(),
             status: LiveConnectionStatus::Connected,
-            updated_at: Some(Utc::now()),
+            clearinghouse_updated_at: Some(Utc::now()),
+            open_orders_updated_at: Some(Utc::now()),
+            spot_updated_at: Some(Utc::now()),
             ..Default::default()
         },
     );

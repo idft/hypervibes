@@ -109,19 +109,30 @@ impl HyperliquidAgentMonitor {
         // Stop tasks that are no longer enabled or whose wallet/environment changed.
         let mut to_stop = Vec::new();
         for (key, handle) in &self.tasks {
-            if let Some(agent) = agents.iter().find(|a| a.agent_key == *key) {
+            if handle.task.is_finished() {
+                // A failed task is restarted on the next registry pass. Its
+                // terminal state remains visible until this replacement begins.
+                to_stop.push((key.clone(), false));
+            } else if let Some(agent) = agents.iter().find(|a| a.agent_key == *key) {
                 if handle.trading_account_address != agent.trading_account_address
                     || handle.environment != agent.environment
                 {
-                    to_stop.push(key.clone());
+                    to_stop.push((key.clone(), true));
                 }
             } else {
-                to_stop.push(key.clone());
+                to_stop.push((key.clone(), true));
             }
         }
-        for key in to_stop {
+        for (key, intentional) in to_stop {
             if let Some(handle) = self.tasks.remove(&key) {
                 info!(agent_key = %key, "stopping agent sync task");
+                if intentional {
+                    live_state_stopped(
+                        &self.live_accounts,
+                        &handle.trading_account_address,
+                        &handle.environment,
+                    );
+                }
                 handle.task.abort();
             }
         }
@@ -150,6 +161,11 @@ impl HyperliquidAgentMonitor {
 
     async fn shutdown_all(mut self) {
         for (_key, handle) in self.tasks.drain() {
+            live_state_stopped(
+                &self.live_accounts,
+                &handle.trading_account_address,
+                &handle.environment,
+            );
             handle.task.abort();
         }
     }
@@ -197,6 +213,10 @@ async fn run_agent_task(
     live_accounts: Arc<LiveAccountStore>,
     encryption_key: EncryptionKey,
 ) {
+    let account_key = crate::hyperliquid::live_state::AccountKey::new(
+        agent.trading_account_address.clone(),
+        agent.environment.clone(),
+    );
     let environment = match agent.environment.parse::<HyperliquidEnvironment>() {
         Ok(env) => env,
         Err(e) => {
@@ -205,6 +225,14 @@ async fn run_agent_task(
                 environment = %agent.environment,
                 error = ?e,
                 "agent has invalid environment"
+            );
+            live_accounts.set_status(
+                &account_key,
+                crate::hyperliquid::live_state::LiveConnectionStatus::Failed,
+            );
+            live_accounts.record_error(
+                &account_key,
+                "Live monitoring is unavailable for this account.",
             );
             return;
         }
@@ -253,19 +281,13 @@ async fn run_agent_task(
 
     // Set the initial visible state for the API.
     live_accounts.set_status(
-        &crate::hyperliquid::live_state::AccountKey::new(
-            config.account_address.clone(),
-            config.environment.as_journal_str(),
-        ),
+        &account_key,
         crate::hyperliquid::live_state::LiveConnectionStatus::StartupSyncing,
     );
 
     if *shutdown_rx.borrow() {
         live_accounts.set_status(
-            &crate::hyperliquid::live_state::AccountKey::new(
-                config.account_address.clone(),
-                config.environment.as_journal_str(),
-            ),
+            &account_key,
             crate::hyperliquid::live_state::LiveConnectionStatus::Stopped,
         );
         return;
@@ -279,6 +301,7 @@ async fn run_agent_task(
             error = ?e,
             "startup account sync failed"
         );
+        live_accounts.record_error(&account_key, "Initial account synchronization failed.");
     }
 
     if let Err(e) = sync_historical_orders_once(&pool, &config, &raw_http, &lookup).await {
@@ -289,11 +312,12 @@ async fn run_agent_task(
             error = ?e,
             "startup historical orders sync failed"
         );
+        live_accounts.record_error(&account_key, "Initial order synchronization failed.");
     }
 
     // Run the WebSocket loop until shutdown. The `run_account_live_ws`
     // implementation handles reconnect catch-up internally.
-    if let Err(e) = run_account_live_ws(
+    match run_account_live_ws(
         pool.clone(),
         config.clone(),
         Arc::clone(&lookup),
@@ -304,13 +328,28 @@ async fn run_agent_task(
     )
     .await
     {
-        error!(
-            agent_key = %agent.agent_key,
-            wallet_address = %config.account_address,
-            environment = %config.environment.as_journal_str(),
-            error = ?e,
-            "live WebSocket loop exited with error"
-        );
+        Ok(()) if *shutdown_rx.borrow() => {}
+        Ok(()) => {
+            live_accounts.set_status(
+                &account_key,
+                crate::hyperliquid::live_state::LiveConnectionStatus::Failed,
+            );
+            live_accounts.record_error(&account_key, "Live monitoring stopped unexpectedly.");
+        }
+        Err(e) => {
+            error!(
+                agent_key = %agent.agent_key,
+                wallet_address = %config.account_address,
+                environment = %config.environment.as_journal_str(),
+                error = ?e,
+                "live WebSocket loop exited with error"
+            );
+            live_accounts.set_status(
+                &account_key,
+                crate::hyperliquid::live_state::LiveConnectionStatus::Failed,
+            );
+            live_accounts.record_error(&account_key, "Live monitoring failed and will retry.");
+        }
     }
 
     if let Some(handle) = reconcile_handle {
@@ -318,6 +357,18 @@ async fn run_agent_task(
     }
 
     info!(agent_key = %agent.agent_key, "agent live loop stopped");
+}
+
+fn live_state_stopped(
+    live_accounts: &LiveAccountStore,
+    trading_account_address: &str,
+    environment: &str,
+) {
+    let key = crate::hyperliquid::live_state::AccountKey::new(trading_account_address, environment);
+    live_accounts.set_status(
+        &key,
+        crate::hyperliquid::live_state::LiveConnectionStatus::Stopped,
+    );
 }
 
 async fn build_order_reconcile_clients(

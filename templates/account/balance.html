@@ -6,12 +6,16 @@
             <span class="font-mono text-2xl font-semibold tabular-nums number-roll inline-block overflow-hidden align-bottom {{ total.color_class }}" data-animate-key="account-balance" data-raw-value="{{ total.raw }}">{% if !total.prefix.is_empty() %}<span class="inline-block">{{ total.prefix }}</span>{% endif %}{% for ch in total.chars %}<span class="number-digit inline-block" data-digit="{{ ch }}">{{ ch }}</span>{% endfor %}{% if !total.suffix.is_empty() %}<span class="inline-block">{{ total.suffix }}</span>{% endif %}</span>
             <span class="text-xs text-zinc-500">USDC</span>
             {% else %}
-            <span class="text-base italic text-zinc-500">Loading…</span>
+            <span class="text-base italic text-zinc-500">Unavailable</span>
             {% endif %}
         </div>
     </div>
     <div class="p-1">
         <div class="text-xs uppercase tracking-[0.16em] text-zinc-500">Unrealized</div>
-        <div class="mt-1 font-mono text-2xl font-semibold tabular-nums number-roll inline-block overflow-hidden align-bottom {{ view.total_u_pnl.color_class }}" data-animate-key="total-upnl" data-raw-value="{{ view.total_u_pnl.raw }}">{% if !view.total_u_pnl.prefix.is_empty() %}<span class="inline-block">{{ view.total_u_pnl.prefix }}</span>{% endif %}{% for ch in view.total_u_pnl.chars %}<span class="number-digit inline-block" data-digit="{{ ch }}">{{ ch }}</span>{% endfor %}{% if !view.total_u_pnl.suffix.is_empty() %}<span class="inline-block">{{ view.total_u_pnl.suffix }}</span>{% endif %}</div>
+        {% if let Some(total_u_pnl) = view.unrealized_pnl() %}
+        <div class="mt-1 font-mono text-2xl font-semibold tabular-nums number-roll inline-block overflow-hidden align-bottom {{ total_u_pnl.color_class }}" data-animate-key="total-upnl" data-raw-value="{{ total_u_pnl.raw }}">{% if !total_u_pnl.prefix.is_empty() %}<span class="inline-block">{{ total_u_pnl.prefix }}</span>{% endif %}{% for ch in total_u_pnl.chars %}<span class="number-digit inline-block" data-digit="{{ ch }}">{{ ch }}</span>{% endfor %}{% if !total_u_pnl.suffix.is_empty() %}<span class="inline-block">{{ total_u_pnl.suffix }}</span>{% endif %}</div>
+        {% else %}
+        <span class="mt-1 text-base italic text-zinc-500">Unavailable</span>
+        {% endif %}
     </div>
 </div>

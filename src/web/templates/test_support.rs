@@ -39,6 +39,7 @@ pub fn sample_account_balance_view() -> AccountBalanceView {
     AccountBalanceView {
         total_balance: Some(rust_decimal::Decimal::new(232_6800, 4)),
         total_u_pnl: AnimatedNumber::for_pnl(rust_decimal::Decimal::new(12_3400, 4)),
+        data_available: true,
     }
 }
 

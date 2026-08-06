@@ -24,6 +24,7 @@
         <div class="rounded-xl border border-amber-900/60 bg-amber-950/30 px-4 py-3 text-sm text-amber-200">{{ notice }}</div>
         {% endif %}
         <section class="rounded-2xl border border-zinc-800 bg-[#0d0d10] p-6">
+            <div class="mb-4" sse-swap="health">{{ live_account_health_html|safe }}</div>
             <div class="grid grid-cols-1 gap-6 sm:grid-cols-4">
                 <div class="contents" sse-swap="balance">{{account_balance_html|safe}}</div>
                 {{ sparklines_html|safe }}

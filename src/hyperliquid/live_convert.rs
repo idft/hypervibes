@@ -34,7 +34,9 @@ pub fn live_state_from_clearinghouse(
         environment: account_key.environment.clone(),
         status: crate::hyperliquid::live_state::LiveConnectionStatus::Connected,
         connected_at: None,
-        updated_at: Some(Utc::now()),
+        clearinghouse_updated_at: Some(Utc::now()),
+        open_orders_updated_at: None,
+        spot_updated_at: None,
         last_error: None,
         margin: Some(LiveMarginState {
             account_value: Some(cross_margin_summary.account_value),

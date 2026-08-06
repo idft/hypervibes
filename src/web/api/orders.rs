@@ -16,8 +16,8 @@ use crate::{
     },
     hyperliquid::orders::{
         gateway::{
-            CancelAllSummary, CancelOutcome, GatewayError, HyperliquidExchange, cancel_all,
-            cancel_orders, place_orders,
+            CancelAllSummary, CancelOutcome, GatewayError, HyperliquidExchange,
+            LiveOrderPlacementContext, cancel_all, cancel_orders, place_orders_with_live_state,
         },
         model::{CancelOrdersRequest, PlaceOrdersRequest, PlaceOrdersResponse},
         store as orders_store,
@@ -219,14 +219,17 @@ pub(super) async fn place_orders_handler(
     let exchange = build_exchange_for_agent(&state, &agent.agent_key)
         .await
         .map_err(ApiError::Internal)?;
-    let resp = place_orders(
+    let resp = place_orders_with_live_state(
         &state.db_pool,
         &exchange,
         &state.builder_fee_cache,
         &agent.agent_key,
-        &account_address,
-        &environment,
         &input,
+        LiveOrderPlacementContext {
+            account_address: &account_address,
+            environment: &environment,
+            live_accounts: &state.live_accounts,
+        },
     )
     .await
     .map_err(map_gateway_error)?;

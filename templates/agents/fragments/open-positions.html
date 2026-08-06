@@ -1,6 +1,10 @@
 <div id="open-positions-content">
-    {% if !view.has_any_state %}
+    {% if view.is_loading %}
     <p class="text-sm italic text-zinc-500">Loading…</p>
+    {% else if let Some(message) = view.unavailable_message %}
+    <div class="rounded-xl border border-amber-900/60 bg-amber-950/30 p-6 text-center">
+        <p class="text-sm text-amber-200">{{ message }}</p>
+    </div>
     {% else if view.positions.is_empty() %}
     <div class="rounded-xl border border-zinc-800 bg-zinc-950/70 p-6 text-center">
         <p class="text-sm text-zinc-400">No open positions.</p>

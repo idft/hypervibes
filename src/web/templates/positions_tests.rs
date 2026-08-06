@@ -10,6 +10,7 @@ fn open_positions_view_filters_zero_szi_and_sign_based_side() {
         account_address: "0xtest".to_string(),
         environment: "live".to_string(),
         status: LiveConnectionStatus::Connected,
+        clearinghouse_updated_at: Some(Utc::now()),
         open_positions: vec![
             LivePosition {
                 coin: "BTC".to_string(),
@@ -71,10 +72,11 @@ fn open_positions_view_handles_no_positions() {
         account_address: "0xtest".to_string(),
         environment: "live".to_string(),
         status: LiveConnectionStatus::Connected,
+        clearinghouse_updated_at: Some(Utc::now()),
         ..Default::default()
     };
     let view = OpenPositionsView::from_live_state(state);
-    assert!(view.has_any_state);
+    assert!(!view.is_loading);
     assert!(view.positions.is_empty());
 }
 
@@ -86,6 +88,7 @@ fn open_positions_view_includes_configured_coins_without_live_positions() {
         account_address: "0xtest".to_string(),
         environment: "live".to_string(),
         status: LiveConnectionStatus::Connected,
+        clearinghouse_updated_at: Some(Utc::now()),
         open_positions: vec![LivePosition {
             coin: "BTC".to_string(),
             szi: Some(rust_decimal::Decimal::new(1, 0)),
@@ -124,7 +127,7 @@ fn open_positions_view_has_no_state_when_only_starting() {
         ..Default::default()
     };
     let view = OpenPositionsView::from_live_state(state);
-    assert!(!view.has_any_state);
+    assert!(view.is_loading);
 }
 
 #[test]
@@ -149,11 +152,27 @@ fn open_positions_partial_renders_empty_state() {
         account_address: "0xtest".to_string(),
         environment: "live".to_string(),
         status: LiveConnectionStatus::Connected,
+        clearinghouse_updated_at: Some(Utc::now()),
         ..Default::default()
     };
     let view = OpenPositionsView::from_live_state(state);
     let html = OpenPositionsPartialTemplate::render_view(view).unwrap();
     assert!(html.contains("No open positions"));
+}
+
+#[test]
+fn open_positions_partial_does_not_render_empty_state_when_monitoring_failed() {
+    use crate::hyperliquid::live_state::AccountLiveState;
+    let state = AccountLiveState {
+        account_address: "0xtest".to_string(),
+        environment: "live".to_string(),
+        status: LiveConnectionStatus::Failed,
+        ..Default::default()
+    };
+    let html = OpenPositionsPartialTemplate::render_view(OpenPositionsView::from_live_state(state))
+        .expect("render positions");
+    assert!(html.contains("unavailable"));
+    assert!(!html.contains("No open positions"));
 }
 
 #[test]
@@ -164,7 +183,7 @@ fn open_positions_partial_renders_configured_placeholder_rows_and_market_links()
         account_address: "0xtest".to_string(),
         environment: "live".to_string(),
         status: LiveConnectionStatus::Connected,
-        updated_at: Some(Utc::now()),
+        clearinghouse_updated_at: Some(Utc::now()),
         ..Default::default()
     };
 
@@ -186,7 +205,7 @@ fn open_positions_partial_renders_rows_and_pills() {
         account_address: "0xtest".to_string(),
         environment: "live".to_string(),
         status: LiveConnectionStatus::Connected,
-        updated_at: Some(Utc::now()),
+        clearinghouse_updated_at: Some(Utc::now()),
         open_positions: vec![
             LivePosition {
                 coin: "BTC".to_string(),

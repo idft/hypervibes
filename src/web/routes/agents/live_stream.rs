@@ -21,8 +21,8 @@ use crate::{
         templates::{
             AccountBalancePartialTemplate, AccountBalanceView,
             LatestAnalysisSummaryPartialTemplate, LatestTradeExecutionSummaryPartialTemplate,
-            OpenOrdersPartialTemplate, OpenOrdersView, OpenPositionsPartialTemplate,
-            OpenPositionsView,
+            LiveAccountHealthPartialTemplate, LiveAccountHealthView, OpenOrdersPartialTemplate,
+            OpenOrdersView, OpenPositionsPartialTemplate, OpenPositionsView,
         },
         ui_events::UiEvent,
     },
@@ -80,6 +80,7 @@ pub(in crate::web::routes) async fn agent_live_stream(
         .push(render_latest_analysis_summary_event(&state.db_pool, &agent.agent_key).await?);
 
     let account_key_filter = account_key.clone();
+    let account_key_for_notifications = account_key.clone();
     let live_accounts_filter = Arc::clone(&live_accounts);
     let configured_coins_filter = configured_coins.clone();
     let agent_key_for_positions = agent.agent_key.clone();
@@ -102,7 +103,7 @@ pub(in crate::web::routes) async fn agent_live_stream(
         })
         .flat_map(move |_key| {
             let live_accounts = Arc::clone(&live_accounts_filter);
-            let key = account_key.clone();
+            let key = account_key_for_notifications.clone();
             let configured_coins = configured_coins_filter.clone();
             let events = match live_accounts.get(&key) {
                 Some(snapshot) => {
@@ -188,6 +189,30 @@ pub(in crate::web::routes) async fn agent_live_stream(
         })
         .flat_map(tokio_stream::iter);
 
+    // Store notifications cover incoming exchange data. This timer covers the
+    // opposite case: a silent connection must still visibly become stale.
+    let live_accounts_refresh = Arc::clone(&live_accounts);
+    let refresh_account_key = account_key.clone();
+    let refresh_configured_coins = configured_coins.clone();
+    let refresh_agent_key = agent.agent_key.clone();
+    let freshness_refresh = tokio_stream::wrappers::IntervalStream::new(tokio::time::interval(
+        std::time::Duration::from_secs(15),
+    ))
+    .skip(1)
+    .flat_map(move |_| {
+        let events = live_accounts_refresh
+            .get(&refresh_account_key)
+            .map(|snapshot| {
+                render_live_events(&snapshot, &refresh_configured_coins, &refresh_agent_key)
+                    .unwrap_or_else(|error| {
+                        warn!(error = ?error, "failed to render live freshness SSE events");
+                        Vec::new()
+                    })
+            })
+            .unwrap_or_default();
+        tokio_stream::iter(events.into_iter().map(Ok::<Event, Infallible>))
+    });
+
     let stream = tokio_stream::iter(
         initial_events
             .into_iter()
@@ -195,7 +220,7 @@ pub(in crate::web::routes) async fn agent_live_stream(
             .collect::<Vec<_>>(),
     )
     .chain(futures::stream::select(
-        notifications,
+        futures::stream::select(notifications, freshness_refresh),
         summary_notifications,
     ));
     let sse =
@@ -208,10 +233,18 @@ pub(in crate::web::routes) fn render_live_events(
     agent_key: &str,
 ) -> Result<Vec<Event>, AppError> {
     Ok(vec![
+        render_live_account_health_event(state)?,
         render_account_balance_event(state)?,
         render_open_positions_event(state, configured_coins, agent_key)?,
         render_open_orders_event(state)?,
     ])
+}
+pub(in crate::web::routes) fn render_live_account_health_event(
+    state: &AccountLiveState,
+) -> Result<Event, AppError> {
+    let view = LiveAccountHealthView::from_live_state(state);
+    let html = LiveAccountHealthPartialTemplate::render_view(view)?;
+    Ok(Event::default().event("health").data(html))
 }
 pub(in crate::web::routes) fn render_account_balance_event(
     state: &AccountLiveState,

@@ -10,10 +10,11 @@ fn account_balance_partial_renders_loading_state_when_value_missing() {
     let view = AccountBalanceView {
         total_balance: None,
         total_u_pnl: AnimatedNumber::for_pnl(rust_decimal::Decimal::ZERO),
+        data_available: false,
     };
     let html = AccountBalancePartialTemplate::render_view(view).unwrap();
     assert!(html.contains("Balance"));
-    assert!(html.contains("Loading"));
+    assert!(html.contains("Unavailable"));
     assert!(!html.contains("USDC"));
 }
 
@@ -34,6 +35,8 @@ fn balance_view_sums_perps_and_spot_available() {
         account_address: "0xtest".to_string(),
         environment: "live".to_string(),
         status: LiveConnectionStatus::Connected,
+        clearinghouse_updated_at: Some(Utc::now()),
+        spot_updated_at: Some(Utc::now()),
         margin: Some(LiveMarginState {
             account_value: Some(rust_decimal::Decimal::new(50_0700, 4)),
             withdrawable: Some(rust_decimal::Decimal::new(420, 4)),
@@ -64,6 +67,8 @@ fn balance_view_uses_perps_only_when_no_spot_state() {
         account_address: "0xtest".to_string(),
         environment: "live".to_string(),
         status: LiveConnectionStatus::Connected,
+        clearinghouse_updated_at: Some(Utc::now()),
+        spot_updated_at: Some(Utc::now()),
         margin: Some(LiveMarginState {
             account_value: Some(rust_decimal::Decimal::new(1000, 0)),
             withdrawable: Some(rust_decimal::Decimal::new(900, 0)),
@@ -86,6 +91,8 @@ fn balance_view_uses_spot_total_when_no_perps_margin_state() {
         account_address: "0xtest".to_string(),
         environment: "live".to_string(),
         status: LiveConnectionStatus::Connected,
+        clearinghouse_updated_at: Some(Utc::now()),
+        spot_updated_at: Some(Utc::now()),
         spot_balances: vec![LiveSpotBalance {
             coin: "USDC".to_string(),
             total: Some(rust_decimal::Decimal::new(500, 0)),
@@ -108,6 +115,8 @@ fn balance_view_sums_total_upnl_from_open_positions() {
         account_address: "0xtest".to_string(),
         environment: "live".to_string(),
         status: LiveConnectionStatus::Connected,
+        clearinghouse_updated_at: Some(Utc::now()),
+        spot_updated_at: Some(Utc::now()),
         open_positions: vec![
             LivePosition {
                 unrealized_pnl: Some(rust_decimal::Decimal::new(125, 0)),

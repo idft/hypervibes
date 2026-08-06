@@ -9,6 +9,7 @@ fn open_orders_view_sorts_by_price_descending() {
         account_address: "0xtest".to_string(),
         environment: "live".to_string(),
         status: LiveConnectionStatus::Connected,
+        open_orders_updated_at: Some(chrono::Utc::now()),
         open_orders: vec![
             LiveOpenOrder {
                 coin: "ETH".to_string(),
@@ -60,6 +61,7 @@ fn open_orders_partial_renders_flags() {
         account_address: "0xtest".to_string(),
         environment: "live".to_string(),
         status: LiveConnectionStatus::Connected,
+        open_orders_updated_at: Some(chrono::Utc::now()),
         open_orders: vec![LiveOpenOrder {
             coin: "BTC".to_string(),
             side: Some("sell".to_string()),
@@ -115,9 +117,25 @@ fn open_orders_partial_renders_empty_state() {
         account_address: "0xtest".to_string(),
         environment: "live".to_string(),
         status: LiveConnectionStatus::Connected,
+        open_orders_updated_at: Some(chrono::Utc::now()),
         ..Default::default()
     };
     let view = OpenOrdersView::from_live_state(state);
     let html = OpenOrdersPartialTemplate::render_view(view).unwrap();
     assert!(html.contains("No open orders"));
+}
+
+#[test]
+fn open_orders_partial_does_not_render_empty_state_when_monitoring_failed() {
+    use crate::hyperliquid::live_state::AccountLiveState;
+    let state = AccountLiveState {
+        account_address: "0xtest".to_string(),
+        environment: "live".to_string(),
+        status: LiveConnectionStatus::Failed,
+        ..Default::default()
+    };
+    let html = OpenOrdersPartialTemplate::render_view(OpenOrdersView::from_live_state(state))
+        .expect("render orders");
+    assert!(html.contains("unavailable"));
+    assert!(!html.contains("No open orders"));
 }

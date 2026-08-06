@@ -81,6 +81,25 @@ the agent-facing API.
 Live account state is intentionally in memory. It supports the operator UI and
 trading dispatch context; the journal remains the durable source for history.
 
+### Live Data Health
+
+The monitor tracks successful clearinghouse, open-orders, and spot-state
+snapshots independently. Positions are authoritative only after a fresh
+clearinghouse snapshot, open orders only after a fresh open-orders snapshot,
+and the unified balance only after both clearinghouse and spot-state snapshots.
+Snapshots older than two minutes, or any snapshot while the WebSocket is not
+connected, are not authoritative.
+
+The operator UI exposes connection health and a sanitized monitoring error. It never presents an unavailable stream as an
+empty positions or orders list. Agent account responses and trading prompts
+carry the same health metadata.
+
+New agent-originated exposure fails closed unless fresh clearinghouse and
+open-orders snapshots are available from a connected monitor. Pure reduce-only
+orders and cancellation remain available so agents and operators can reduce
+risk during an outage. Server-authorized operator close actions independently
+re-read exchange positions before submitting exits.
+
 ## Orders
 
 Agents place and manage orders only through the authenticated `/api/v1/orders`

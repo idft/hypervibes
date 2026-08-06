@@ -5,12 +5,15 @@ use axum::{
     extract::State,
     response::{IntoResponse, Response},
 };
-use chrono::{DateTime, Duration, Utc};
+use chrono::{DateTime, Utc};
 use rust_decimal::Decimal;
 
 use crate::{
     agents::{AuthenticatedAgent, store::get_agent},
-    hyperliquid::live_state::{AccountKey, AccountLiveState, LiveOpenOrder, LivePosition},
+    hyperliquid::live_state::{
+        AccountKey, AccountLiveState, LiveAccountHealthStatus, LiveConnectionStatus,
+        LiveDataStatus, LiveOpenOrder, LivePosition, account_live_health,
+    },
     web::AppState,
 };
 
@@ -52,6 +55,13 @@ pub(super) struct AccountDataStatus {
     available: bool,
     as_of: Option<DateTime<Utc>>,
     stale: bool,
+    status: LiveAccountHealthStatus,
+    connection_status: LiveConnectionStatus,
+    positions_status: LiveDataStatus,
+    orders_status: LiveDataStatus,
+    balance_status: LiveDataStatus,
+    last_successful_update: Option<DateTime<Utc>>,
+    error: Option<String>,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -73,7 +83,6 @@ pub(super) struct CollateralBalance {
     available: Decimal,
 }
 
-pub(super) const ACCOUNT_DATA_MAX_AGE: Duration = Duration::minutes(2);
 pub(super) const COLLATERAL_ASSETS: &[&str] = &["USDC", "USDE", "USDT0", "USDH"];
 
 pub(super) fn live_agent_snapshot(
@@ -88,25 +97,38 @@ pub(super) fn live_agent_snapshot(
     let Some(snapshot) = snapshot else {
         return unavailable_live_agent_snapshot(row);
     };
-    let Some(updated_at) = snapshot.updated_at else {
-        return unavailable_live_agent_snapshot(row);
-    };
-    if Utc::now() - updated_at > ACCOUNT_DATA_MAX_AGE {
-        return unavailable_live_agent_snapshot(row);
-    }
+    let health = account_live_health(&snapshot);
 
     LiveAgentSnapshot {
         agent_key: row.agent_key.clone(),
         account_address: trading_account_address.to_string(),
         environment: row.environment.clone(),
         account_data: AccountDataStatus {
-            available: true,
-            as_of: Some(updated_at),
-            stale: false,
+            available: health.status == LiveAccountHealthStatus::Healthy,
+            as_of: snapshot.account_data_as_of(),
+            stale: health.status != LiveAccountHealthStatus::Healthy,
+            status: health.status,
+            connection_status: health.connection_status,
+            positions_status: health.positions,
+            orders_status: health.open_orders,
+            balance_status: health.balance,
+            last_successful_update: health.last_successful_update,
+            error: health.last_error,
         },
-        balance: Some(account_balance_from_live_state(&snapshot)),
-        open_positions: snapshot.open_positions.clone(),
-        open_orders: snapshot.open_orders.clone(),
+        balance: health
+            .balance
+            .is_current()
+            .then(|| account_balance_from_live_state(&snapshot)),
+        open_positions: if health.positions.is_current() {
+            snapshot.open_positions.clone()
+        } else {
+            Vec::new()
+        },
+        open_orders: if health.open_orders.is_current() {
+            snapshot.open_orders.clone()
+        } else {
+            Vec::new()
+        },
     }
 }
 
@@ -121,6 +143,13 @@ pub(super) fn unavailable_live_agent_snapshot(
             available: false,
             as_of: None,
             stale: true,
+            status: LiveAccountHealthStatus::Loading,
+            connection_status: LiveConnectionStatus::Starting,
+            positions_status: LiveDataStatus::Loading,
+            orders_status: LiveDataStatus::Loading,
+            balance_status: LiveDataStatus::Loading,
+            last_successful_update: None,
+            error: None,
         },
         balance: None,
         open_positions: Vec::new(),

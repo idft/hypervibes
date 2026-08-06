@@ -537,6 +537,11 @@ pub(in crate::web::routes) async fn populate_positions_tab(
             ..Default::default()
         });
 
+    let health_view = crate::web::templates::LiveAccountHealthView::from_live_state(&live_snapshot);
+    template.live_account_health_html =
+        crate::web::templates::LiveAccountHealthPartialTemplate::render_view(health_view)
+            .map_err(anyhow::Error::from)?;
+
     let account_balance_view = AccountBalanceView::from_live_state(live_snapshot.clone());
     template.account_balance_html =
         AccountBalancePartialTemplate::render_view(account_balance_view.clone())

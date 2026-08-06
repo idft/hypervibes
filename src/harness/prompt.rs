@@ -358,7 +358,9 @@ mod tests {
     use chrono::{TimeZone, Utc};
     use rust_decimal_macros::dec;
 
-    use crate::hyperliquid::live_state::{LiveAgentSnapshot, LiveOpenOrder, LivePosition};
+    use crate::hyperliquid::live_state::{
+        LiveAccountHealthStatus, LiveAgentSnapshot, LiveDataStatus, LiveOpenOrder, LivePosition,
+    };
 
     fn sample_request(job_kind: &str) -> DispatchRequest {
         DispatchRequest {
@@ -446,6 +448,11 @@ mod tests {
             account_data_available: true,
             account_data_stale: false,
             account_data_as_of: Some(Utc::now()),
+            account_data_status: LiveAccountHealthStatus::Healthy,
+            account_data_error: None,
+            positions_data_status: LiveDataStatus::Current,
+            orders_data_status: LiveDataStatus::Current,
+            balance_data_status: LiveDataStatus::Current,
             total_equity_usd: Some(dec!(1000)),
             available_to_trade_usd: Some(dec!(750)),
             margin_used_usd: Some(dec!(250)),
@@ -610,6 +617,11 @@ mod tests {
             account_data_available: true,
             account_data_stale: false,
             account_data_as_of: Some(Utc::now()),
+            account_data_status: LiveAccountHealthStatus::Healthy,
+            account_data_error: None,
+            positions_data_status: LiveDataStatus::Current,
+            orders_data_status: LiveDataStatus::Current,
+            balance_data_status: LiveDataStatus::Current,
             total_equity_usd: Some(dec!(1000)),
             available_to_trade_usd: Some(dec!(750)),
             margin_used_usd: Some(dec!(250)),

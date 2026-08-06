@@ -1,0 +1,12 @@
+<div id="live-account-health" class="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-zinc-500" role="status">
+    <span class="h-2 w-2 rounded-full {{ view.status_dot_class }}" aria-hidden="true"></span>
+    <span class="font-medium text-zinc-400">{{ view.status_label }}</span>
+    {% if !view.is_healthy %}
+    {% if let Some(description) = view.description %}
+    <span class="text-amber-300">{{ description }}</span>
+    {% endif %}
+    {% if let Some(error) = view.last_error %}
+    <span class="text-amber-300">{{ error }}</span>
+    {% endif %}
+    {% endif %}
+</div>

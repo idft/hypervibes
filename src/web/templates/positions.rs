@@ -1,6 +1,8 @@
 use std::collections::{HashMap, HashSet};
 
-use crate::hyperliquid::live_state::{AccountLiveState, LiveConnectionStatus, LivePosition};
+use crate::hyperliquid::live_state::{
+    AccountLiveState, LiveDataStatus, LivePosition, account_live_health,
+};
 use askama::Template;
 use rust_decimal::Decimal;
 
@@ -31,7 +33,8 @@ pub struct OpenPositionView {
 #[derive(Debug, Clone)]
 pub struct OpenPositionsView {
     pub positions: Vec<OpenPositionView>,
-    pub has_any_state: bool,
+    pub is_loading: bool,
+    pub unavailable_message: Option<String>,
     pub has_open_positions: bool,
     pub agent_key: String,
 }
@@ -46,12 +49,18 @@ impl OpenPositionsView {
         state: AccountLiveState,
         configured_coins: &[String],
     ) -> Self {
-        let has_any_state = state.status != LiveConnectionStatus::Starting
-            || state.updated_at.is_some()
-            || !state.open_positions.is_empty()
-            || !state.open_orders.is_empty()
-            || state.margin.is_some()
-            || !state.spot_balances.is_empty();
+        let health = account_live_health(&state);
+        let (is_loading, unavailable_message) = section_message(health.positions, "positions");
+
+        if !health.positions.is_current() {
+            return Self {
+                positions: Vec::new(),
+                is_loading,
+                unavailable_message,
+                has_open_positions: false,
+                agent_key: String::new(),
+            };
+        }
 
         let mut visible: Vec<&LivePosition> = state
             .open_positions
@@ -96,7 +105,8 @@ impl OpenPositionsView {
         Self {
             has_open_positions: !visible.is_empty(),
             positions,
-            has_any_state,
+            is_loading,
+            unavailable_message,
             agent_key: String::new(),
         }
     }
@@ -104,6 +114,25 @@ impl OpenPositionsView {
     pub fn with_agent_key(mut self, agent_key: &str) -> Self {
         self.agent_key = agent_key.to_string();
         self
+    }
+}
+
+fn section_message(status: LiveDataStatus, section: &str) -> (bool, Option<String>) {
+    match status {
+        LiveDataStatus::Current => (false, None),
+        LiveDataStatus::Loading => (true, None),
+        LiveDataStatus::Stale => (
+            false,
+            Some(format!(
+                "Live {section} data is stale. Waiting for a current exchange snapshot."
+            )),
+        ),
+        LiveDataStatus::Degraded => (
+            false,
+            Some(format!(
+                "Live {section} data is unavailable while exchange monitoring is not connected."
+            )),
+        ),
     }
 }
 

@@ -72,7 +72,11 @@ For a dispatch, the OpenCode backend creates a session in the agent workspace
 and invokes the appropriate OpenCode command. The initial prompt contains the
 agent and job context, selected instruments, the job-specific strategy prompt,
 the latest `agent_learnings` memory, the global operator prompt, and a live
-account snapshot for trading work.
+account snapshot for trading work. That snapshot includes per-stream data
+authority and monitor health; unavailable data is never represented as an
+empty account. The order gateway rejects new agent exposure until the
+clearinghouse and open-orders streams are current, while reduce-only orders
+remain available for risk reduction.
 
 Market-analysis is the authority for market thesis and execution conditions.
 Trading ordinarily executes its latest fresh handoff without market-data access.

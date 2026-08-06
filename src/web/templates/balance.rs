@@ -1,6 +1,7 @@
 use askama::Template;
 use rust_decimal::Decimal;
 
+use crate::hyperliquid::live_state::account_live_health;
 use crate::hyperliquid::queries::BalancePoint;
 
 use super::shared::{AnimatedNumber, MoneyCell, dash_cell, format_signed_money_cell};
@@ -21,10 +22,13 @@ use super::shared::{AnimatedNumber, MoneyCell, dash_cell, format_signed_money_ce
 pub struct AccountBalanceView {
     pub total_balance: Option<Decimal>,
     pub total_u_pnl: AnimatedNumber,
+    pub data_available: bool,
 }
 
 impl AccountBalanceView {
     pub fn from_live_state(state: crate::hyperliquid::live_state::AccountLiveState) -> Self {
+        let health = account_live_health(&state);
+        let data_available = health.balance.is_current();
         let perps_account_value = state
             .margin
             .as_ref()
@@ -55,8 +59,9 @@ impl AccountBalanceView {
             .fold(Decimal::ZERO, |acc, value| acc + value);
 
         Self {
-            total_balance,
+            total_balance: data_available.then_some(total_balance).flatten(),
             total_u_pnl: AnimatedNumber::for_pnl(total_u_pnl),
+            data_available,
         }
     }
 
@@ -67,6 +72,10 @@ impl AccountBalanceView {
     pub fn total(&self) -> Option<AnimatedNumber> {
         self.total_balance
             .map(|v| AnimatedNumber::from_decimal(v, "text-zinc-100"))
+    }
+
+    pub fn unrealized_pnl(&self) -> Option<&AnimatedNumber> {
+        self.data_available.then_some(&self.total_u_pnl)
     }
 }
 

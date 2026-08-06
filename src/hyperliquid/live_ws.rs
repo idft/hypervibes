@@ -123,8 +123,7 @@ pub async fn run_account_live_ws(
                         agent_address = %account_key.account_address,
                         "live WebSocket stream ended"
                     );
-                    live_store.set_status(&account_key, LiveConnectionStatus::Stopped);
-                    return Ok(());
+                    anyhow::bail!("live WebSocket stream ended unexpectedly");
                 };
                 match event {
                     hws::Event::Connected => {
@@ -145,6 +144,10 @@ pub async fn run_account_live_ws(
                                     agent_address = %account_key.account_address,
                                     error = ?e,
                                     "live WebSocket reconnect catch-up failed"
+                                );
+                                live_store.record_error(
+                                    &account_key,
+                                    "Account synchronization after reconnect failed.",
                                 );
                             }
                             reconnected_after_gap = false;
@@ -249,14 +252,16 @@ async fn handle_message(
             let balances = live_spot_balances_from_spot_state(&spot_state);
             live_store.upsert(account_key.clone(), |state| {
                 state.spot_balances = balances.clone();
-                state.updated_at = Some(chrono::Utc::now());
+                state.spot_updated_at = Some(chrono::Utc::now());
+                state.last_error = None;
             });
         }
         htypes::Incoming::OpenOrders { orders, .. } => {
             let live_orders = live_open_orders_from_orders(&orders);
             live_store.upsert(account_key.clone(), |state| {
                 state.open_orders = live_orders.clone();
-                state.updated_at = Some(chrono::Utc::now());
+                state.open_orders_updated_at = Some(chrono::Utc::now());
+                state.last_error = None;
             });
         }
         htypes::Incoming::UserFills {
@@ -447,6 +452,8 @@ fn merge_existing_snapshot(
             new_state.open_orders = existing.open_orders;
         }
         new_state.connected_at = existing.connected_at;
+        new_state.open_orders_updated_at = existing.open_orders_updated_at;
+        new_state.spot_updated_at = existing.spot_updated_at;
     }
 }
 

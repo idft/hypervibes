@@ -60,7 +60,10 @@ async fn get_account_returns_fresh_account_contract_after_live_state_seeded() {
         AccountLiveState {
             account_address: trading_account.to_string(),
             environment: row.environment.clone(),
-            updated_at: Some(Utc::now()),
+            status: crate::hyperliquid::live_state::LiveConnectionStatus::Connected,
+            clearinghouse_updated_at: Some(Utc::now()),
+            open_orders_updated_at: Some(Utc::now()),
+            spot_updated_at: Some(Utc::now()),
             margin: Some(LiveMarginState {
                 account_value: Some(dec!(100)),
                 withdrawable: Some(dec!(75)),

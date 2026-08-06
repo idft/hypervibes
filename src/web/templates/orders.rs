@@ -3,7 +3,9 @@ use std::time::Duration;
 use askama::Template;
 use chrono::{DateTime, Utc};
 
-use crate::hyperliquid::live_state::{AccountLiveState, LiveConnectionStatus, LiveOpenOrder};
+use crate::hyperliquid::live_state::{
+    AccountLiveState, LiveDataStatus, LiveOpenOrder, account_live_health,
+};
 
 use super::shared::{
     MoneyCell, currency_logo_url, format_money_cell, format_neutral_money_cell_with_decimals,
@@ -32,17 +34,21 @@ pub struct OpenOrderView {
 #[derive(Debug, Clone)]
 pub struct OpenOrdersView {
     pub orders: Vec<OpenOrderView>,
-    pub has_any_state: bool,
+    pub is_loading: bool,
+    pub unavailable_message: Option<String>,
 }
 
 impl OpenOrdersView {
     pub fn from_live_state(state: AccountLiveState) -> Self {
-        let has_any_state = state.status != LiveConnectionStatus::Starting
-            || state.updated_at.is_some()
-            || !state.open_positions.is_empty()
-            || !state.open_orders.is_empty()
-            || state.margin.is_some()
-            || !state.spot_balances.is_empty();
+        let health = account_live_health(&state);
+        let (is_loading, unavailable_message) = section_message(health.open_orders);
+        if !health.open_orders.is_current() {
+            return Self {
+                orders: Vec::new(),
+                is_loading,
+                unavailable_message,
+            };
+        }
 
         let mut indexed: Vec<(Option<rust_decimal::Decimal>, u64, &LiveOpenOrder)> = state
             .open_orders
@@ -64,8 +70,30 @@ impl OpenOrdersView {
 
         Self {
             orders,
-            has_any_state,
+            is_loading,
+            unavailable_message,
         }
+    }
+}
+
+fn section_message(status: LiveDataStatus) -> (bool, Option<String>) {
+    match status {
+        LiveDataStatus::Current => (false, None),
+        LiveDataStatus::Loading => (true, None),
+        LiveDataStatus::Stale => (
+            false,
+            Some(
+                "Live open-orders data is stale. Waiting for a current exchange snapshot."
+                    .to_string(),
+            ),
+        ),
+        LiveDataStatus::Degraded => (
+            false,
+            Some(
+                "Live open-orders data is unavailable while exchange monitoring is not connected."
+                    .to_string(),
+            ),
+        ),
     }
 }
 
