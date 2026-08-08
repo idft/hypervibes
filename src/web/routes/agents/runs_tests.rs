@@ -104,6 +104,72 @@ async fn cancel_running_run_aborts_session_and_marks_run_aborted() {
 }
 
 #[tokio::test]
+async fn retry_failed_run_creates_a_new_queued_run() {
+    let state = test_state().await;
+    let pool = state.db_pool.clone();
+    let (agent_key, _wallet_address) = insert_test_opencode_agent(&state)
+        .await
+        .expect("insert agent");
+    let job_id = crate::harness::store::list_agent_jobs(&pool, &agent_key)
+        .await
+        .expect("list jobs")
+        .iter()
+        .find(|job| job.job_key == "analysis-15m")
+        .expect("analysis job")
+        .id;
+    let failed_run_id = crate::harness::store::insert_test_run(&pool, job_id, "running")
+        .await
+        .expect("insert run");
+    crate::harness::store::mark_run_failed(&pool, failed_run_id, "provider unavailable", None)
+        .await
+        .expect("mark failed");
+
+    let detail_response = router(Arc::clone(&state))
+        .oneshot(
+            Request::builder()
+                .uri(format!("/agents/{agent_key}/runs/{failed_run_id}"))
+                .body(Body::empty())
+                .expect("build detail request"),
+        )
+        .await
+        .expect("show run detail");
+    let detail_html = response_text(detail_response).await;
+    assert!(detail_html.contains("Retry run"));
+    assert!(detail_html.contains(&format!("/agents/{agent_key}/runs/{failed_run_id}/retry")));
+
+    let response = router(Arc::clone(&state))
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/agents/{agent_key}/runs/{failed_run_id}/retry"))
+                .body(Body::empty())
+                .expect("build retry request"),
+        )
+        .await
+        .expect("retry run");
+
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+    let location = response
+        .headers()
+        .get("location")
+        .and_then(|value| value.to_str().ok())
+        .expect("retry location");
+    let retry_run_id = location
+        .rsplit('/')
+        .next()
+        .expect("retry id")
+        .parse::<i64>()
+        .expect("numeric retry id");
+    assert_ne!(retry_run_id, failed_run_id);
+    let retry = crate::harness::store::get_run(&pool, retry_run_id)
+        .await
+        .expect("fetch retry")
+        .expect("retry exists");
+    assert_eq!(retry.job_id, job_id);
+    assert_eq!(retry.status, "queued");
+}
+
+#[tokio::test]
 async fn run_detail_page_handles_missing_opencode_session_mirror() {
     let state = test_state().await;
     let pool = state.db_pool.clone();
@@ -136,6 +202,56 @@ async fn run_detail_page_handles_missing_opencode_session_mirror() {
     let text = response_text(response).await;
     assert!(text.contains("backend session id"));
     assert!(text.contains("no matching row was found yet in the"));
+}
+
+#[tokio::test]
+async fn run_detail_surfaces_session_error_only_in_top_error_panel() {
+    let state = test_state().await;
+    let pool = state.db_pool.clone();
+    let (agent_key, _wallet_address) = insert_test_opencode_agent(&state)
+        .await
+        .expect("insert opencode agent");
+    let job_id = crate::harness::store::list_agent_jobs(&pool, &agent_key)
+        .await
+        .expect("list jobs")
+        .first()
+        .expect("default job")
+        .id;
+    let run_id = crate::harness::store::insert_test_run(&pool, job_id, "running")
+        .await
+        .expect("insert run");
+    crate::harness::store::mark_run_running(&pool, run_id, Some("ses_error_detail"))
+        .await
+        .expect("mark running");
+    crate::harness::store::mark_run_failed(&pool, run_id, "model request failed", None)
+        .await
+        .expect("mark failed");
+    sqlx::query("INSERT INTO opencode.sessions (id) VALUES ('ses_error_detail')")
+        .execute(&pool)
+        .await
+        .expect("insert session");
+    sqlx::query(
+        "INSERT INTO opencode.session_errors (session_id, error_type, error_message)
+         VALUES ('ses_error_detail', 'APIError', 'Model requires explicit opt-in')",
+    )
+    .execute(&pool)
+    .await
+    .expect("insert session error");
+
+    let response = router(state)
+        .oneshot(
+            Request::builder()
+                .uri(format!("/agents/{agent_key}/runs/{run_id}"))
+                .body(Body::empty())
+                .expect("build request"),
+        )
+        .await
+        .expect("show run detail");
+
+    let text = response_text(response).await;
+    assert!(text.contains(">Error</h2>"));
+    assert!(text.contains("APIError: Model requires explicit opt-in"));
+    assert!(!text.contains("Session errors"));
 }
 
 #[tokio::test]

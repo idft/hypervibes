@@ -66,10 +66,8 @@ struct OpenCodeToolMessagePartRow {
 
 #[derive(Debug, Clone, sqlx::FromRow)]
 pub struct OpenCodeSessionErrorRow {
-    pub created_at: DateTime<Utc>,
     pub error_type: Option<String>,
     pub error_message: Option<String>,
-    pub error_data: Option<Value>,
 }
 
 pub async fn get_session_detail(
@@ -172,12 +170,10 @@ pub async fn get_session_detail(
     });
 
     let session_errors = query_as::<_, OpenCodeSessionErrorRow>(
-        "SELECT created_at,
-                error_type,
-                error_message,
-                error_data
+        "SELECT error_type,
+                error_message
            FROM opencode.session_errors
-          WHERE session_id = $1
+           WHERE session_id = $1
           ORDER BY created_at ASC, id ASC",
     )
     .bind(session_id)
@@ -191,6 +187,59 @@ pub async fn get_session_detail(
         tool_executions,
         session_errors,
     }))
+}
+
+/// Whether OpenCode recorded evidence that the model produced work for a
+/// completed command. An empty assistant placeholder alone is not evidence.
+pub async fn session_has_model_activity(pool: &DbPool, session_id: &str) -> Result<bool> {
+    let (has_activity,): (bool,) = query_as(
+        "SELECT EXISTS (
+             SELECT 1
+               FROM opencode.sessions
+              WHERE id = $1
+                AND (COALESCE(output_tokens, 0) > 0 OR COALESCE(reasoning_tokens, 0) > 0)
+         )
+         OR EXISTS (
+             SELECT 1
+               FROM opencode.messages
+              WHERE session_id = $1
+                AND role = 'assistant'
+                AND NULLIF(btrim(COALESCE(text, '')), '') IS NOT NULL
+         )
+         OR EXISTS (
+             SELECT 1
+               FROM opencode.message_parts AS parts
+               JOIN opencode.messages AS messages ON messages.id = parts.message_id
+              WHERE messages.session_id = $1
+                AND parts.part_type = 'tool'
+         )",
+    )
+    .bind(session_id)
+    .fetch_one(pool)
+    .await
+    .with_context(|| format!("failed to check model activity for OpenCode session {session_id}"))?;
+    Ok(has_activity)
+}
+
+/// Return the most recent provider error reported for a session, if any.
+pub async fn latest_session_error_message(
+    pool: &DbPool,
+    session_id: &str,
+) -> Result<Option<String>> {
+    let row: Option<(Option<String>,)> = query_as(
+        "SELECT error_message
+           FROM opencode.session_errors
+          WHERE session_id = $1
+          ORDER BY created_at DESC, id DESC
+          LIMIT 1",
+    )
+    .bind(session_id)
+    .fetch_optional(pool)
+    .await
+    .with_context(|| format!("failed to fetch latest error for OpenCode session {session_id}"))?;
+    Ok(row
+        .and_then(|(message,)| message)
+        .filter(|message| !message.trim().is_empty()))
 }
 
 fn tool_execution_from_message_part(part: OpenCodeToolMessagePartRow) -> OpenCodeToolExecutionRow {
@@ -368,6 +417,63 @@ mod tests {
         assert_eq!(failed.success, Some(false));
         assert_eq!(failed.error.as_deref(), Some("command failed"));
         assert_eq!(failed.duration_ms, Some(10));
+    }
+
+    #[tokio::test]
+    async fn session_model_activity_requires_model_output_or_tool_work() {
+        let pool = crate::test_db::pool().await;
+        query("INSERT INTO opencode.sessions (id) VALUES ('session-activity')")
+            .execute(&pool)
+            .await
+            .expect("insert session");
+        query(
+            "INSERT INTO opencode.messages (id, session_id, role, text)
+             VALUES ('message-empty-assistant', 'session-activity', 'assistant', '')",
+        )
+        .execute(&pool)
+        .await
+        .expect("insert empty assistant message");
+
+        assert!(
+            !session_has_model_activity(&pool, "session-activity")
+                .await
+                .expect("check empty session")
+        );
+
+        query("UPDATE opencode.sessions SET output_tokens = 1 WHERE id = 'session-activity'")
+            .execute(&pool)
+            .await
+            .expect("record output token");
+
+        assert!(
+            session_has_model_activity(&pool, "session-activity")
+                .await
+                .expect("check active session")
+        );
+    }
+
+    #[tokio::test]
+    async fn latest_session_error_message_returns_the_newest_nonempty_error() {
+        let pool = crate::test_db::pool().await;
+        query("INSERT INTO opencode.sessions (id) VALUES ('session-error')")
+            .execute(&pool)
+            .await
+            .expect("insert session");
+        query(
+            "INSERT INTO opencode.session_errors (session_id, error_message, created_at)
+             VALUES ('session-error', 'first error', '2023-11-14 22:13:20Z'),
+                    ('session-error', 'latest error', '2023-11-14 22:13:21Z')",
+        )
+        .execute(&pool)
+        .await
+        .expect("insert session errors");
+
+        assert_eq!(
+            latest_session_error_message(&pool, "session-error")
+                .await
+                .expect("fetch latest error"),
+            Some("latest error".to_string())
+        );
     }
 
     #[tokio::test]

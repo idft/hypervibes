@@ -1243,6 +1243,10 @@ async fn dispatch_coding_model(
                 failure_summary: None,
             })
         }
+        DispatchOutcome::Cancelled => Ok(CodingDispatchResult {
+            succeeded: false,
+            failure_summary: Some("coding run was cancelled".to_string()),
+        }),
         DispatchOutcome::Failed { summary } => {
             debug!(task_id, summary, "coding model dispatch failed");
             Ok(CodingDispatchResult {
@@ -2009,6 +2013,15 @@ pub async fn dispatch_run(
                 "harness dispatch finished"
             );
             DispatchRunResult { succeeded: true }
+        }
+        Ok(DispatchOutcome::Cancelled) => {
+            debug!(
+                run_id,
+                agent_key = %agent_key,
+                job_key = %job_key,
+                "harness dispatch was cancelled; follow-up events will not fire"
+            );
+            DispatchRunResult { succeeded: false }
         }
         Ok(DispatchOutcome::Failed { summary }) => {
             // `dispatch_with_timeout` already persisted the terminal

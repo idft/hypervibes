@@ -17,6 +17,7 @@ use crate::{
     },
     opencode::{
         client::{OpenCodeClient, OpenCodeCommandRequest, SessionStatusKind},
+        store as opencode_store,
         workspace::OpenCodeWorkspaceRuntimeConfig,
     },
 };
@@ -36,6 +37,8 @@ const DEFAULT_ANALYSIS_CODING_AGENT: &str = "analysis-coding";
 const DEFAULT_ANALYSIS_CODING_COMMAND: &str = "vibetrading-analysis-coding";
 const DEFAULT_TRADING_AGENT: &str = "trading";
 const DEFAULT_TRADING_COMMAND: &str = "vibetrading-trading";
+const MODEL_ACTIVITY_POLL_ATTEMPTS: usize = 10;
+const MODEL_ACTIVITY_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_millis(200);
 
 #[derive(Debug, Clone)]
 pub struct DispatchRequest {
@@ -201,6 +204,13 @@ impl HarnessBackend for OpenCodeBackend {
                 )
             })?;
 
+        if !wait_for_model_activity(&self.pool, &session.id).await? {
+            let message = opencode_store::latest_session_error_message(&self.pool, &session.id)
+                .await?
+                .unwrap_or_else(|| "model request failed".to_string());
+            return Err(anyhow!(message));
+        }
+
         info!(
             run_id = request.run_id,
             job_id = request.job_id,
@@ -238,6 +248,18 @@ impl HarnessBackend for OpenCodeBackend {
             .get_session_status_in_directory(base_url, session_id, workspace_container_path)
             .await
     }
+}
+
+async fn wait_for_model_activity(pool: &DbPool, session_id: &str) -> Result<bool> {
+    for attempt in 0..MODEL_ACTIVITY_POLL_ATTEMPTS {
+        if opencode_store::session_has_model_activity(pool, session_id).await? {
+            return Ok(true);
+        }
+        if attempt + 1 < MODEL_ACTIVITY_POLL_ATTEMPTS {
+            tokio::time::sleep(MODEL_ACTIVITY_POLL_INTERVAL).await;
+        }
+    }
+    Ok(false)
 }
 
 fn resolve_opencode_job(job_kind: &str) -> Result<(&'static str, &'static str)> {
@@ -356,8 +378,14 @@ async fn dispatch_with_timeout_mode(
     match dispatch_result {
         Ok(Ok(result)) => {
             if finalize_success {
-                let _ =
-                    store::mark_run_succeeded(pool, run_id, Some(&result.backend_run_ref)).await;
+                if !store::mark_run_succeeded(pool, run_id, Some(&result.backend_run_ref)).await? {
+                    return Ok(DispatchOutcome::Cancelled);
+                }
+            } else if !store::get_run(pool, run_id)
+                .await?
+                .is_some_and(|run| run.status == crate::harness::model::RUN_STATUS_RUNNING)
+            {
+                return Ok(DispatchOutcome::Cancelled);
             }
             Ok(DispatchOutcome::Succeeded {
                 backend_run_ref: result.backend_run_ref,
@@ -522,6 +550,7 @@ fn timeout_failure_summary(
 #[derive(Debug, Clone)]
 pub enum DispatchOutcome {
     Succeeded { backend_run_ref: String },
+    Cancelled,
     Failed { summary: String },
 }
 
@@ -584,6 +613,21 @@ mod tests {
     impl HarnessBackend for FailingBackend {
         async fn dispatch(&self, _request: DispatchRequest) -> Result<DispatchResult> {
             Err(anyhow!("simulated dispatch failure"))
+        }
+    }
+
+    struct CancellingBackend {
+        pool: DbPool,
+    }
+
+    #[async_trait]
+    impl HarnessBackend for CancellingBackend {
+        async fn dispatch(&self, request: DispatchRequest) -> Result<DispatchResult> {
+            store::mark_run_aborted(&self.pool, request.run_id, "cancelled by operator", None)
+                .await?;
+            Ok(DispatchResult {
+                backend_run_ref: "ses_cancelled".to_string(),
+            })
         }
     }
 
@@ -681,23 +725,16 @@ mod tests {
     #[tokio::test]
     async fn dispatch_with_timeout_marks_succeeded_when_backend_ok() {
         let pool = crate::test_db::pool().await;
-        // Insert a minimal agent + job + queued run, then dispatch.
-        let key = format!(
-            "backend-ok-{}",
-            Utc::now().timestamp_nanos_opt().unwrap_or(0)
-        );
-        crate::harness::store::insert_default_harness_jobs(&pool, &key)
-            .await
-            .ok();
+        let (job_id, run_id, agent_key) = seed_run_for_timeout_test(&pool, "backend-ok").await;
 
-        // We can't create an agent without going through the full insert path,
-        // so the integration test for `mark_run_succeeded` is in the store tests.
-        // Here we just verify that the helper returns the expected outcome.
         let backend = std::sync::Arc::new(RecordingBackend {
             calls: Mutex::new(Vec::new()),
             backend_ref: "ses_test",
         });
-        let request = make_request();
+        let mut request = make_request();
+        request.job_id = job_id;
+        request.run_id = run_id;
+        request.agent_key = agent_key;
         let outcome = dispatch_with_timeout(&pool, backend.clone(), request)
             .await
             .expect("dispatch");
@@ -725,6 +762,29 @@ mod tests {
             }
             other => panic!("expected Failed, got {other:?}"),
         }
+    }
+
+    #[tokio::test]
+    async fn dispatch_with_timeout_does_not_succeed_after_cancellation() {
+        let pool = crate::test_db::pool().await;
+        let (job_id, run_id, agent_key) =
+            seed_run_for_timeout_test(&pool, "cancelled-dispatch").await;
+        let backend: Arc<dyn HarnessBackend> = Arc::new(CancellingBackend { pool: pool.clone() });
+        let mut request = make_request();
+        request.job_id = job_id;
+        request.run_id = run_id;
+        request.agent_key = agent_key;
+
+        let outcome = dispatch_with_timeout(&pool, backend, request)
+            .await
+            .expect("dispatch returned outcome");
+
+        assert!(matches!(outcome, DispatchOutcome::Cancelled));
+        let run = store::get_run(&pool, run_id)
+            .await
+            .expect("fetch run")
+            .expect("run exists");
+        assert_eq!(run.status, crate::harness::model::RUN_STATUS_ABORTED);
     }
 
     /// Fake backend that simulates an OpenCode dispatch that:

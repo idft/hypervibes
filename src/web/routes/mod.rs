@@ -192,6 +192,10 @@ pub fn router(state: Arc<AppState>) -> Router {
             post(agents_cancel_run),
         )
         .route(
+            "/agents/{agent_key}/runs/{run_id}/retry",
+            post(agents_retry_run),
+        )
+        .route(
             "/agents/{agent_key}/runs/{run_id}/stream",
             get(agent_run_detail_stream),
         )

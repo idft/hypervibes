@@ -1,22 +1,4 @@
 {% if let Some(session) = session %}
-{% if !session.session_errors.is_empty() %}
-<section class="border-t border-zinc-800 bg-red-950/20 p-4">
-    <h2 class="text-lg font-medium text-red-200">Session errors</h2>
-    <div class="mt-4 space-y-3">
-        {% for error in session.session_errors %}
-        <article class="bg-red-950/30 p-4">
-            <div class="flex items-center justify-between gap-3">
-                <span class="text-sm font-medium text-red-200">{% if error.error_type.is_empty() %}error{% else %}{{ error.error_type }}{% endif %}</span>
-                <time class="local-datetime font-mono text-xs text-red-200/70" data-local-format="datetime" datetime="{{ error.created_at.iso }}" title="{{ error.created_at.fallback_text }}">{{ error.created_at.fallback_text }}</time>
-            </div>
-            {% if !error.error_message.is_empty() %}<p class="mt-3 text-sm text-red-100/90">{{ error.error_message }}</p>{% endif %}
-            {% if !error.error_data_json.is_empty() %}<pre class="mt-3 overflow-x-auto whitespace-pre-wrap break-words bg-[#09090b] px-3 py-2 text-xs text-red-100/90">{{ error.error_data_json }}</pre>{% endif %}
-        </article>
-        {% endfor %}
-    </div>
-</section>
-{% endif %}
-
 <section class="border-t border-zinc-800 pt-6">
     {% if session.transcript.is_empty() %}
     {% if run.status == "running" %}

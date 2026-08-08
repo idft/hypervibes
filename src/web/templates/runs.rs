@@ -96,10 +96,8 @@ pub struct OpenCodeToolExecutionView {
 
 #[derive(Debug, Clone)]
 pub struct OpenCodeSessionErrorView {
-    pub created_at: LocalTimestampView,
     pub error_type: String,
     pub error_message: String,
-    pub error_data_json: String,
 }
 
 impl HarnessRunView {
@@ -278,10 +276,8 @@ impl OpenCodeToolExecutionView {
 impl OpenCodeSessionErrorView {
     fn from_row(row: &crate::opencode::store::OpenCodeSessionErrorRow) -> Self {
         Self {
-            created_at: local_timestamp_view(row.created_at),
             error_type: row.error_type.clone().unwrap_or_default(),
             error_message: row.error_message.clone().unwrap_or_default(),
-            error_data_json: format_json_value(row.error_data.as_ref()),
         }
     }
 }

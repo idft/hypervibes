@@ -10,6 +10,11 @@
             <button type="submit" class="cursor-pointer rounded-full border border-amber-800/70 px-3 py-1.5 text-xs font-medium text-amber-200 hover:border-amber-600 hover:bg-amber-950/30">Cancel run</button>
         </form>
         {% endif %}
+        {% if run.status == "failed" %}
+        <form action="/agents/{{ run.agent_key }}/runs/{{ run.id }}/retry" method="post" class="ml-auto">
+            <button type="submit" class="cursor-pointer rounded-full border border-sky-800/70 px-3 py-1.5 text-xs font-medium text-sky-200 hover:border-sky-600 hover:bg-sky-950/30">Retry run</button>
+        </form>
+        {% endif %}
     </div>
 </header>
 

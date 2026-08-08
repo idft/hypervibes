@@ -901,12 +901,54 @@ async fn post_job_model_htmx_updates_without_redirect() {
         .unwrap();
 
     assert_eq!(response.status(), StatusCode::NO_CONTENT);
+    assert_eq!(
+        response
+            .headers()
+            .get("hx-redirect")
+            .and_then(|value| value.to_str().ok()),
+        Some(format!("/agents/{agent_key}/jobs/{job_id}").as_str())
+    );
     let job = crate::harness::store::get_agent_job(&pool, &agent_key, job_id)
         .await
         .expect("get job")
         .expect("job present");
     assert!(job.model_provider_id.is_none());
     assert!(job.model_id.is_none());
+}
+
+#[tokio::test]
+async fn post_invalid_job_model_htmx_redirects_with_an_error() {
+    let state = test_state().await;
+    let (agent_key, _wallet_address) = insert_test_opencode_agent(&state)
+        .await
+        .expect("insert opencode agent");
+    let job_id = crate::harness::store::list_agent_jobs(&state.db_pool, &agent_key)
+        .await
+        .expect("list jobs")
+        .first()
+        .expect("default job present")
+        .id;
+
+    let response = router(state)
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/agents/{agent_key}/jobs/{job_id}/model"))
+                .header("content-type", "application/x-www-form-urlencoded")
+                .header("HX-Request", "true")
+                .body(Body::from("model_selection=invalid"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::NO_CONTENT);
+    let location = response
+        .headers()
+        .get("hx-redirect")
+        .and_then(|value| value.to_str().ok())
+        .expect("model error redirect");
+    assert!(location.starts_with(&format!("/agents/{agent_key}/jobs/{job_id}?model_error=")));
 }
 #[tokio::test]
 async fn post_job_model_without_htmx_redirects_to_detail() {

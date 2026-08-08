@@ -49,7 +49,7 @@ async fn load_run_detail_snapshot(
         return Ok(None);
     }
 
-    let run = HarnessRunDetailView::from_row(&run);
+    let mut run = HarnessRunDetailView::from_row(&run);
     let session_lookup_attempted = !run.backend_run_ref.is_empty();
     let session = if session_lookup_attempted {
         crate::opencode::store::get_session_detail(&state.db_pool, &run.backend_run_ref)
@@ -59,6 +59,9 @@ async fn load_run_detail_snapshot(
     } else {
         None
     };
+    if let Some(session) = session.as_ref() {
+        prefer_session_error(&mut run, session);
+    }
 
     Ok(Some(RunDetailSnapshot {
         agent,
@@ -66,6 +69,22 @@ async fn load_run_detail_snapshot(
         session,
         session_lookup_attempted,
     }))
+}
+
+fn prefer_session_error(run: &mut HarnessRunDetailView, session: &OpenCodeSessionView) {
+    let Some(error) = session
+        .session_errors
+        .iter()
+        .rev()
+        .find(|error| !error.error_message.trim().is_empty())
+    else {
+        return;
+    };
+    run.error_summary = if error.error_type.trim().is_empty() {
+        error.error_message.clone()
+    } else {
+        format!("{}: {}", error.error_type, error.error_message)
+    };
 }
 
 fn render_run_detail_events(snapshot: &RunDetailSnapshot) -> Result<Vec<Event>, AppError> {
@@ -147,6 +166,49 @@ pub(in crate::web::routes) async fn agents_cancel_run(
             warn!(agent_key, run_id, error = ?error, "failed to cancel OpenCode run");
             Ok((StatusCode::BAD_GATEWAY, "failed to cancel OpenCode run").into_response())
         }
+    }
+}
+
+pub(in crate::web::routes) async fn agents_retry_run(
+    State(state): State<Arc<AppState>>,
+    Path((agent_key, run_id)): Path<(String, i64)>,
+) -> Result<Response, AppError> {
+    let Some(run) = crate::harness::store::get_run(&state.db_pool, run_id).await? else {
+        return Ok((StatusCode::NOT_FOUND, "run not found").into_response());
+    };
+    if run.agent_key != agent_key {
+        return Ok((StatusCode::NOT_FOUND, "run not found").into_response());
+    }
+    if run.status != crate::harness::model::RUN_STATUS_FAILED {
+        return Ok((StatusCode::CONFLICT, "only failed runs can be retried").into_response());
+    }
+
+    let queued = match run.trigger_type.as_str() {
+        crate::harness::model::TRIGGER_TYPE_CANDLE_CLOSED => {
+            crate::harness::store::insert_queued_manual_run(&state.db_pool, &agent_key, run.job_id)
+                .await?
+        }
+        crate::harness::model::TRIGGER_TYPE_ANALYSIS_BATCH_COMPLETED
+        | crate::harness::model::TRIGGER_TYPE_DAILY_REVIEW_COMPLETED => {
+            crate::harness::store::insert_queued_event_run(&state.db_pool, &agent_key, run.job_id)
+                .await?
+        }
+        _ => return Ok((StatusCode::CONFLICT, "run has an unsupported trigger").into_response()),
+    };
+
+    match queued {
+        crate::harness::store::QueuedJobRun::Dispatch { run_id, .. }
+        | crate::harness::store::QueuedJobRun::Skipped { run_id } => {
+            Ok(Redirect::to(&format!("/agents/{agent_key}/runs/{run_id}")).into_response())
+        }
+        crate::harness::store::QueuedJobRun::Missing => {
+            Ok((StatusCode::NOT_FOUND, "job not found").into_response())
+        }
+        crate::harness::store::QueuedJobRun::BlockedByMaintenance => Ok((
+            StatusCode::CONFLICT,
+            "workspace maintenance is active; retry is unavailable",
+        )
+            .into_response()),
     }
 }
 

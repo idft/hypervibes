@@ -4,7 +4,7 @@ use askama::Template;
 use axum::{
     Form,
     extract::{Path, Query, State},
-    http::{HeaderMap, StatusCode},
+    http::{HeaderMap, HeaderName, HeaderValue, StatusCode},
     response::{
         Html, IntoResponse, Redirect, Response,
         sse::{Event, KeepAlive, Sse},
@@ -237,6 +237,9 @@ pub(in crate::web::routes) async fn agents_show_job_detail(
     }
     if let Some(error) = query.timeframe_error {
         job_view.candle_trigger_editor.error = Some(error);
+    }
+    if let Some(error) = query.model_error {
+        job_view.model_error = Some(error);
     }
     match build_job_prompt_preview(&state, &agent, &job).await {
         Ok(text) => job_view.prompt_preview_text = text,
@@ -883,6 +886,7 @@ pub(in crate::web::routes) async fn agents_update_job_model(
     headers: HeaderMap,
     Form(form): Form<ModelSelectionForm>,
 ) -> Result<Response, AppError> {
+    let detail_url = format!("/agents/{agent_key}/jobs/{job_id}");
     let Some(agent) = get_agent(&state.db_pool, &agent_key).await? else {
         return Ok((StatusCode::NOT_FOUND, "agent not found").into_response());
     };
@@ -892,11 +896,16 @@ pub(in crate::web::routes) async fn agents_update_job_model(
         return Ok((StatusCode::NOT_FOUND, "job not found").into_response());
     };
 
-    let parsed = parse_model_selection(&form.model_selection)
-        .map_err(|message| AppError(anyhow::anyhow!(message)))?;
-    let validated = validate_model_selection_for_agent(&state, &agent, parsed, &form.model_variant)
-        .await
-        .map_err(|message| AppError(anyhow::anyhow!(message)))?;
+    let parsed = match parse_model_selection(&form.model_selection) {
+        Ok(parsed) => parsed,
+        Err(message) => return Ok(model_error_response(&headers, &detail_url, &message)),
+    };
+    let validated =
+        match validate_model_selection_for_agent(&state, &agent, parsed, &form.model_variant).await
+        {
+            Ok(validated) => validated,
+            Err(message) => return Ok(model_error_response(&headers, &detail_url, &message)),
+        };
     let model_provider_id = validated.as_ref().map(|(provider, _, _)| provider.as_str());
     let model_id = validated.as_ref().map(|(_, model, _)| model.as_str());
     let model_variant = validated
@@ -917,10 +926,31 @@ pub(in crate::web::routes) async fn agents_update_job_model(
     }
 
     if is_htmx_request(&headers) {
-        return Ok(StatusCode::NO_CONTENT.into_response());
+        return Ok(htmx_redirect(&detail_url));
     }
 
-    Ok(Redirect::to(&format!("/agents/{agent_key}/jobs/{job_id}")).into_response())
+    Ok(Redirect::to(&detail_url).into_response())
+}
+
+fn model_error_response(headers: &HeaderMap, detail_url: &str, message: &str) -> Response {
+    let location = format!(
+        "{detail_url}?model_error={}",
+        super::shared::urlencode(message)
+    );
+    if is_htmx_request(headers) {
+        htmx_redirect(&location)
+    } else {
+        Redirect::to(&location).into_response()
+    }
+}
+
+fn htmx_redirect(location: &str) -> Response {
+    let mut response = StatusCode::NO_CONTENT.into_response();
+    response.headers_mut().insert(
+        HeaderName::from_static("hx-redirect"),
+        HeaderValue::from_str(location).expect("job detail redirect locations are valid headers"),
+    );
+    response
 }
 pub(in crate::web::routes) async fn agents_update_job_timeout(
     State(state): State<Arc<AppState>>,
@@ -977,6 +1007,8 @@ pub(in crate::web::routes) struct JobDetailQuery {
     pub timeout_error: Option<String>,
     #[serde(default)]
     pub timeframe_error: Option<String>,
+    #[serde(default)]
+    pub model_error: Option<String>,
 }
 
 pub(in crate::web::routes) async fn agents_update_job_timeframe(

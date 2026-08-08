@@ -157,6 +157,9 @@
             <form action="{{ job.model_update_action }}" method="post" hx-post="{{ job.model_update_action }}" hx-swap="none" class="mt-2">
                 {% include "agents/components/model-picker.html" %}
             </form>
+            {% if let Some(error) = job.model_error %}
+            <p class="mt-2 text-xs text-amber-300" role="alert">{{ error }}</p>
+            {% endif %}
         </div>
     </section>
 
