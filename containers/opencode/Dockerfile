@@ -1,4 +1,4 @@
-ARG OPENCODE_TAG=1.18.7
+ARG OPENCODE_TAG=1.18.11
 
 FROM docker.io/library/rust:1.96-alpine AS workspace-controller-builder
 
