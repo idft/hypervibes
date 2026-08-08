@@ -135,10 +135,13 @@ html.agent-rail-initially-collapsed .agent-rail.agent-rail-expanded .agent-rail-
   }
 }
 
-.dark-scrollbar {
-  cursor: grab;
+* {
   scrollbar-width: thin;
   scrollbar-color: rgba(113, 113, 122, 0.9) rgba(24, 24, 27, 0.9);
+}
+
+.dark-scrollbar {
+  cursor: grab;
 }
 
 [data-run-transcript-scroll] {
@@ -153,23 +156,23 @@ html.agent-rail-initially-collapsed .agent-rail.agent-rail-expanded .agent-rail-
   cursor: grabbing;
 }
 
-.dark-scrollbar::-webkit-scrollbar {
+*::-webkit-scrollbar {
   width: 12px;
   height: 12px;
 }
 
-.dark-scrollbar::-webkit-scrollbar-track {
+*::-webkit-scrollbar-track {
   border-radius: 9999px;
   background: rgba(24, 24, 27, 0.9);
 }
 
-.dark-scrollbar::-webkit-scrollbar-thumb {
+*::-webkit-scrollbar-thumb {
   border: 3px solid rgba(24, 24, 27, 0.9);
   border-radius: 9999px;
   background: linear-gradient(90deg, rgba(82, 82, 91, 0.95), rgba(113, 113, 122, 0.95));
 }
 
-.dark-scrollbar::-webkit-scrollbar-thumb:hover {
+*::-webkit-scrollbar-thumb:hover {
   background: linear-gradient(90deg, rgba(113, 113, 122, 0.98), rgba(161, 161, 170, 0.98));
 }
 
