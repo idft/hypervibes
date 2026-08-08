@@ -1,9 +1,107 @@
 //! Tests for agents/runs_tests.rs
+use std::sync::{Arc, Mutex};
+
 use crate::web::routes::router;
 use crate::web::routes::test_support::*;
+use anyhow::Result;
+use async_trait::async_trait;
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use tower::util::ServiceExt;
+
+use crate::harness::backend::{DispatchRequest, DispatchResult, HarnessBackend};
+
+struct CancelRecordingBackend {
+    cancelled_sessions: Arc<Mutex<Vec<String>>>,
+}
+
+#[async_trait]
+impl HarnessBackend for CancelRecordingBackend {
+    async fn dispatch(&self, _request: DispatchRequest) -> Result<DispatchResult> {
+        Ok(DispatchResult {
+            backend_run_ref: "ses_unused".to_string(),
+        })
+    }
+
+    async fn abort_session(&self, _base_url: &str, session_id: &str) -> Result<bool> {
+        self.cancelled_sessions
+            .lock()
+            .expect("lock cancelled sessions")
+            .push(session_id.to_string());
+        Ok(true)
+    }
+}
+
+#[tokio::test]
+async fn cancel_running_run_aborts_session_and_marks_run_aborted() {
+    let cancelled_sessions = Arc::new(Mutex::new(Vec::new()));
+    let state = test_state_with_backend(Arc::new(CancelRecordingBackend {
+        cancelled_sessions: Arc::clone(&cancelled_sessions),
+    }))
+    .await;
+    let pool = state.db_pool.clone();
+    let (agent_key, _wallet_address) = insert_test_opencode_agent(&state)
+        .await
+        .expect("insert agent");
+    let job_id = crate::harness::store::list_agent_jobs(&pool, &agent_key)
+        .await
+        .expect("list jobs")
+        .first()
+        .expect("default job")
+        .id;
+    let run_id = crate::harness::store::insert_test_run(&pool, job_id, "running")
+        .await
+        .expect("insert run");
+    crate::harness::store::mark_run_running(&pool, run_id, Some("ses_cancel"))
+        .await
+        .expect("mark running");
+
+    let detail_response = router(Arc::clone(&state))
+        .oneshot(
+            Request::builder()
+                .uri(format!("/agents/{agent_key}/runs/{run_id}"))
+                .body(Body::empty())
+                .expect("build detail request"),
+        )
+        .await
+        .expect("show run detail");
+    let detail_html = response_text(detail_response).await;
+    assert!(detail_html.contains("Cancel run"));
+    assert!(detail_html.contains(&format!("/agents/{agent_key}/runs/{run_id}/cancel")));
+
+    let response = router(Arc::clone(&state))
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/agents/{agent_key}/runs/{run_id}/cancel"))
+                .body(Body::empty())
+                .expect("build cancel request"),
+        )
+        .await
+        .expect("cancel run");
+
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+    assert_eq!(
+        response
+            .headers()
+            .get("location")
+            .and_then(|value| value.to_str().ok()),
+        Some(format!("/agents/{agent_key}/runs/{run_id}").as_str())
+    );
+    assert_eq!(
+        cancelled_sessions
+            .lock()
+            .expect("lock cancelled sessions")
+            .as_slice(),
+        ["ses_cancel"]
+    );
+    let run = crate::harness::store::get_run(&pool, run_id)
+        .await
+        .expect("fetch run")
+        .expect("run present");
+    assert_eq!(run.status, "aborted");
+    assert_eq!(run.error_summary.as_deref(), Some("cancelled by operator"));
+}
 
 #[tokio::test]
 async fn run_detail_page_handles_missing_opencode_session_mirror() {

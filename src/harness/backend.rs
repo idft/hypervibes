@@ -22,6 +22,10 @@ use crate::{
 };
 
 const ERROR_SUMMARY_MAX_CHARS: usize = 500;
+#[cfg(not(test))]
+const RETRY_STATUS_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_secs(5);
+#[cfg(test)]
+const RETRY_STATUS_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_millis(10);
 const DEFAULT_ANALYSIS_AGENT: &str = "analysis";
 const DEFAULT_ANALYSIS_COMMAND: &str = "vibetrading-analysis";
 const DEFAULT_MARKET_ANALYSIS_AGENT: &str = "market-analysis";
@@ -265,7 +269,8 @@ fn build_command_model(model_provider_id: Option<&str>, model_id: Option<&str>) 
 }
 
 /// Run a single dispatch through the backend, applying the job's
-/// timeout. On timeout, the backend's `abort_session` /
+/// timeout. While OpenCode is retrying a provider request, its retry
+/// message is mirrored to the running job. On timeout, the backend's `abort_session` /
 /// `get_session_status` capabilities are used to confirm that the
 /// previously-created OpenCode session is no longer executing before
 /// marking the run `failed`. If cancellation cannot be confirmed (e.g.
@@ -306,7 +311,47 @@ async fn dispatch_with_timeout_mode(
         OpenCodeWorkspaceRuntimeConfig::from_value(&request.runtime_config)
             .map(|workspace| workspace.workspace_container_path);
 
-    let dispatch_result = tokio::time::timeout(timeout, backend.dispatch(request)).await;
+    let dispatch = tokio::time::timeout(timeout, backend.dispatch(request));
+    tokio::pin!(dispatch);
+    let mut retry_status_poll = tokio::time::interval(RETRY_STATUS_POLL_INTERVAL);
+    retry_status_poll.tick().await;
+
+    let dispatch_result = loop {
+        tokio::select! {
+            result = &mut dispatch => break result,
+            _ = retry_status_poll.tick() => {
+                let Some(session_id) = store::get_run(pool, run_id)
+                    .await?
+                    .and_then(|run| run.backend_run_ref)
+                else {
+                    continue;
+                };
+                let status = match backend
+                    .get_session_status_in_directory(
+                        &opencode_base_url,
+                        &session_id,
+                        workspace_container_path.as_deref(),
+                    )
+                    .await
+                {
+                    Ok(status) => status,
+                    Err(error) => {
+                        warn!(run_id, session_id, error = ?error, "failed to probe OpenCode retry status");
+                        continue;
+                    }
+                };
+                let retry_summary = match status {
+                    Some(SessionStatusKind::Retry { message }) if !message.trim().is_empty() => {
+                        Some(sanitize_error(&message))
+                    }
+                    Some(SessionStatusKind::Retry { .. } | SessionStatusKind::Idle | SessionStatusKind::Busy) | None => None,
+                };
+                if let Err(error) = store::set_run_error_summary(pool, run_id, retry_summary.as_deref()).await {
+                    warn!(run_id, error = ?error, "failed to publish OpenCode retry status");
+                }
+            }
+        }
+    };
 
     match dispatch_result {
         Ok(Ok(result)) => {
@@ -355,19 +400,21 @@ async fn dispatch_with_timeout_mode(
             )
             .await
             {
-                Ok(TerminationOutcome::AlreadyTerminal) => {
-                    let summary = format!(
-                        "run exceeded timeout of {timeout_seconds}s; \
-                         OpenCode session already terminal"
+                Ok(TerminationOutcome::AlreadyTerminal { provider_error }) => {
+                    let summary = timeout_failure_summary(
+                        timeout_seconds,
+                        "OpenCode session already terminal",
+                        provider_error.as_deref(),
                     );
                     warn!(run_id, summary = %summary, "harness run timed out; session terminal");
                     let _ = store::mark_run_failed(pool, run_id, &summary, None).await;
                     Ok(DispatchOutcome::Failed { summary })
                 }
-                Ok(TerminationOutcome::Aborted) => {
-                    let summary = format!(
-                        "run exceeded timeout of {timeout_seconds}s; \
-                         OpenCode session aborted"
+                Ok(TerminationOutcome::Aborted { provider_error }) => {
+                    let summary = timeout_failure_summary(
+                        timeout_seconds,
+                        "OpenCode session aborted",
+                        provider_error.as_deref(),
                     );
                     warn!(run_id, summary = %summary, "harness run timed out; session aborted");
                     let _ = store::mark_run_failed(pool, run_id, &summary, None).await;
@@ -401,8 +448,8 @@ async fn dispatch_with_timeout_mode(
 
 #[derive(Debug)]
 enum TerminationOutcome {
-    AlreadyTerminal,
-    Aborted,
+    AlreadyTerminal { provider_error: Option<String> },
+    Aborted { provider_error: Option<String> },
     StillActive,
 }
 
@@ -424,10 +471,11 @@ async fn confirm_session_terminated(
     let initial = backend
         .get_session_status_in_directory(base_url, session_id, workspace_container_path)
         .await?;
+    let provider_error = provider_retry_message(initial.as_ref());
     if !initial.is_some_and(|status| status.is_active()) {
         // Either Idle, None (unknown), or no status known. All are
         // treated as terminal for our purposes.
-        return Ok(TerminationOutcome::AlreadyTerminal);
+        return Ok(TerminationOutcome::AlreadyTerminal { provider_error });
     }
 
     let aborted = backend.abort_session(base_url, session_id).await?;
@@ -441,10 +489,34 @@ async fn confirm_session_terminated(
             .get_session_status_in_directory(base_url, session_id, workspace_container_path)
             .await?;
         if !status.is_some_and(|status| status.is_active()) {
-            return Ok(TerminationOutcome::Aborted);
+            return Ok(TerminationOutcome::Aborted { provider_error });
         }
     }
     Ok(TerminationOutcome::StillActive)
+}
+
+fn provider_retry_message(status: Option<&SessionStatusKind>) -> Option<String> {
+    match status {
+        Some(SessionStatusKind::Retry { message }) if !message.trim().is_empty() => {
+            Some(sanitize_error(message))
+        }
+        Some(
+            SessionStatusKind::Idle | SessionStatusKind::Busy | SessionStatusKind::Retry { .. },
+        )
+        | None => None,
+    }
+}
+
+fn timeout_failure_summary(
+    timeout_seconds: i32,
+    session_outcome: &str,
+    provider_error: Option<&str>,
+) -> String {
+    let timeout_summary = format!("run exceeded timeout of {timeout_seconds}s; {session_outcome}");
+    match provider_error {
+        Some(message) => format!("OpenCode provider failure: {message}; {timeout_summary}"),
+        None => timeout_summary,
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -869,7 +941,9 @@ mod tests {
         let backend = Arc::new(BlockingBackend {
             pool: pool.clone(),
             session_id: session_id.clone(),
-            initial_status: SessionStatusKind::Busy,
+            initial_status: SessionStatusKind::Retry {
+                message: "You exceeded your current quota".to_string(),
+            },
             post_abort_status: SessionStatusKind::Idle,
             abort_returns: true,
             abort_calls: Arc::new(std::sync::Mutex::new(Vec::new())),
@@ -910,8 +984,8 @@ mod tests {
         match outcome {
             DispatchOutcome::Failed { summary } => {
                 assert!(
-                    summary.contains("aborted"),
-                    "expected aborted summary, got {summary:?}"
+                    summary.contains("You exceeded your current quota"),
+                    "expected provider error summary, got {summary:?}"
                 );
             }
             other => panic!("expected Failed, got {other:?}"),
@@ -927,6 +1001,84 @@ mod tests {
             .expect("fetch run")
             .expect("run row");
         assert_eq!(run.status, crate::harness::model::RUN_STATUS_FAILED);
+        assert!(
+            run.error_summary
+                .as_deref()
+                .is_some_and(|summary| summary.contains("You exceeded your current quota")),
+            "provider error should be persisted: {:?}",
+            run.error_summary
+        );
+    }
+
+    #[tokio::test]
+    async fn dispatch_publishes_provider_retry_message_while_run_is_active() {
+        let pool = crate::test_db::pool().await;
+        let key = format!(
+            "retry-status-{}",
+            Utc::now().timestamp_nanos_opt().unwrap_or(0)
+        );
+        let (job_id, run_id, agent_key) = seed_run_for_timeout_test(&pool, &key).await;
+        let session_id = format!("ses_retry_{}", run_id);
+        let backend = Arc::new(BlockingBackend {
+            pool: pool.clone(),
+            session_id,
+            initial_status: SessionStatusKind::Retry {
+                message: "Your Ollama Cloud usage is exhausted".to_string(),
+            },
+            post_abort_status: SessionStatusKind::Idle,
+            abort_returns: true,
+            abort_calls: Arc::new(std::sync::Mutex::new(Vec::new())),
+            status_calls: Arc::new(std::sync::Mutex::new(0)),
+        });
+        let request = DispatchRequest {
+            run_id,
+            job_id,
+            agent_key,
+            display_name: key.clone(),
+            job_key: "analysis-15m".to_string(),
+            job_kind: JOB_KIND_ANALYSIS.to_string(),
+            timeframe: Some("15m".to_string()),
+            operator_prompt: String::new(),
+            strategy_prompt: String::new(),
+            accumulated_learnings: None,
+            system_prompt: String::new(),
+            environment: "live".to_string(),
+            selected_instruments: Vec::new(),
+            account_snapshot: None,
+            model_provider_id: None,
+            model_id: None,
+            model_variant: None,
+            timeout_seconds: 2,
+            opencode_base_url: "http://localhost:14096".to_string(),
+            runtime_config: serde_json::json!({}),
+            scheduled_for: Utc::now(),
+            review_window_start: None,
+            review_window_end: None,
+        };
+        let dispatch_pool = pool.clone();
+        let dispatch =
+            tokio::spawn(
+                async move { dispatch_with_timeout(&dispatch_pool, backend, request).await },
+            );
+
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(1);
+        loop {
+            let run = store::get_run(&pool, run_id)
+                .await
+                .expect("fetch run")
+                .expect("run row");
+            if run.error_summary.as_deref() == Some("Your Ollama Cloud usage is exhausted") {
+                assert_eq!(run.status, crate::harness::model::RUN_STATUS_RUNNING);
+                break;
+            }
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "provider retry message was not published: {:?}",
+                run.error_summary
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        dispatch.abort();
     }
 
     #[tokio::test]

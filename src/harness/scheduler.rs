@@ -36,7 +36,7 @@ use crate::{
     hyperliquid::live_state::{LiveAccountStore, live_agent_snapshot_for_dispatch},
     memory::{delete_memories_for_agent, get_latest_agent_memory_by_type},
     opencode::{
-        client::{OpenCodeClient, SessionStatusKind},
+        client::OpenCodeClient,
         coding_workspace::{changed_paths, manifest_hash},
         workspace::OpenCodeWorkspaceRuntimeConfig,
         workspace_control_client::{WorkspaceAgentInput, WorkspaceController},
@@ -46,6 +46,7 @@ use crate::{
 const SCHEDULER_POLL_INTERVAL: Duration = Duration::from_secs(10);
 const ORPHAN_RECOVERY_INTERVAL: Duration = Duration::from_secs(60);
 const DUE_SCHEDULE_LIMIT: i64 = 20;
+const QUEUED_RUN_RESUME_LIMIT: i64 = 20;
 
 /// Periodic background loop that claims due OpenCode jobs and
 /// dispatches them through an [`HarnessBackend`].
@@ -307,6 +308,8 @@ impl HarnessScheduler {
         )
         .await?;
 
+        self.resume_queued_runs().await?;
+
         let now = Utc::now();
         let due = store::list_due_candle_jobs(
             &self.pool,
@@ -402,6 +405,45 @@ impl HarnessScheduler {
             }
         }
 
+        Ok(())
+    }
+
+    /// Resume persisted runs whose previous in-memory dispatcher was interrupted.
+    /// Each lane starts at most one run per tick; later queued runs wait for the
+    /// earlier row to finish before the next scheduler pass resumes them.
+    async fn resume_queued_runs(&self) -> Result<()> {
+        for run in store::list_queued_runs_for_dispatch(&self.pool, QUEUED_RUN_RESUME_LIMIT).await?
+        {
+            let lane = match run.job_kind.as_str() {
+                JOB_KIND_TRADING => CandleJobrLane::Trading,
+                JOB_KIND_ANALYSIS | JOB_KIND_MARKET_ANALYSIS | JOB_KIND_DAILY_REVIEW => {
+                    CandleJobrLane::Analysis
+                }
+                _ => continue,
+            };
+            let Some(lane_guard) = self.lane_locks.try_acquire(&run.agent_key, lane) else {
+                continue;
+            };
+            let pool = self.pool.clone();
+            let backend = self.backend.clone();
+            let live_accounts = self.live_accounts.clone();
+            let workspace_leases = self.workspace_leases.clone();
+            let opencode_base_url = self.opencode_client.base_url().to_string();
+            let in_flight = self.in_flight.clone();
+            tokio::spawn(async move {
+                let _guard = in_flight.track();
+                let _lane_guard = lane_guard;
+                resume_queued_run(
+                    &pool,
+                    &backend,
+                    &live_accounts,
+                    &workspace_leases,
+                    &opencode_base_url,
+                    run,
+                )
+                .await;
+            });
+        }
         Ok(())
     }
 
@@ -540,6 +582,109 @@ impl HarnessScheduler {
         }
         self.last_orphan_recovery_at = Some(now);
         Ok(())
+    }
+}
+
+async fn resume_queued_run(
+    pool: &DbPool,
+    backend: &Arc<dyn HarnessBackend>,
+    live_accounts: &Arc<LiveAccountStore>,
+    workspace_leases: &WorkspaceLeaseManager,
+    opencode_base_url: &str,
+    queued_run: store::QueuedRunForDispatch,
+) {
+    let run_id = queued_run.run_id;
+    let has_prior = match store::has_prior_active_run_in_lane(
+        pool,
+        &queued_run.agent_key,
+        &queued_run.job_kind,
+        run_id,
+    )
+    .await
+    {
+        Ok(has_prior) => has_prior,
+        Err(error) => {
+            warn!(run_id, error = ?error, "failed to check queued run lane before resume");
+            return;
+        }
+    };
+    if has_prior {
+        return;
+    }
+
+    let dispatch_job = match store::get_dispatch_job(
+        pool,
+        &queued_run.agent_key,
+        queued_run.job_id,
+        opencode_base_url,
+    )
+    .await
+    {
+        Ok(Some(job)) => job,
+        Ok(None) => {
+            let _ = store::mark_run_failed(
+                pool,
+                run_id,
+                "queued run dispatch context is unavailable",
+                None,
+            )
+            .await;
+            return;
+        }
+        Err(error) => {
+            warn!(run_id, error = ?error, "failed to load queued run dispatch context");
+            return;
+        }
+    };
+    let request = match build_dispatch_request(
+        pool,
+        live_accounts,
+        &dispatch_job,
+        run_id,
+        queued_run.scheduled_for,
+    )
+    .await
+    {
+        Ok(Some(request)) => request,
+        Ok(None) => {
+            let _ = store::mark_run_failed(
+                pool,
+                run_id,
+                "no currencies selected for agent; job skipped",
+                None,
+            )
+            .await;
+            return;
+        }
+        Err(error) => {
+            warn!(run_id, error = ?error, "failed to build queued run dispatch request");
+            let _ = store::mark_run_failed(pool, run_id, "dispatch request errored", None).await;
+            return;
+        }
+    };
+    let result =
+        dispatch_run_with_workspace_lease(pool.clone(), backend.clone(), request, workspace_leases)
+            .await;
+    if queued_run.job_kind == JOB_KIND_ANALYSIS
+        && result.succeeded
+        && let Err(error) = dispatch_analysis_batch_completed_event(
+            pool,
+            backend,
+            live_accounts,
+            &queued_run.agent_key,
+            workspace_leases,
+            opencode_base_url,
+        )
+        .await
+    {
+        warn!(run_id, error = ?error, "failed to dispatch queued analysis follow-up");
+    }
+    if queued_run.job_kind == JOB_KIND_DAILY_REVIEW
+        && result.succeeded
+        && let Err(error) =
+            dispatch_daily_review_coding_event(pool, &queued_run.agent_key, run_id).await
+    {
+        warn!(run_id, error = ?error, "failed to dispatch queued daily-review follow-up");
     }
 }
 
@@ -1079,11 +1224,6 @@ async fn dispatch_coding_model(
     task_id: i64,
 ) -> Result<CodingDispatchResult> {
     store::mark_run_running(pool, request.run_id, None).await?;
-    let run_id = request.run_id;
-    let opencode_base_url = request.opencode_base_url.clone();
-    let workspace_container_path =
-        OpenCodeWorkspaceRuntimeConfig::from_value(&request.runtime_config)
-            .map(|workspace| workspace.workspace_container_path);
     let dispatch = dispatch_with_timeout_for_coding(pool, Arc::clone(&backend), request);
     tokio::pin!(dispatch);
     let mut heartbeat = tokio::time::interval(CODING_DISPATCH_HEARTBEAT_INTERVAL);
@@ -1092,32 +1232,6 @@ async fn dispatch_coding_model(
             result = &mut dispatch => break result?,
             _ = heartbeat.tick() => {
                 let _ = store::heartbeat_maintenance_task(pool, task_id).await;
-                if let Some(session_id) = store::get_run(pool, run_id)
-                    .await?
-                    .and_then(|run| run.backend_run_ref)
-                {
-                    match backend
-                        .get_session_status_in_directory(
-                            &opencode_base_url,
-                            &session_id,
-                            workspace_container_path.as_deref(),
-                        )
-                        .await
-                    {
-                        Ok(Some(SessionStatusKind::Retry { message })) => {
-                            if let Some(summary) = permanent_provider_retry_failure(&message) {
-                                match backend.abort_session(&opencode_base_url, &session_id).await {
-                                    Ok(true) => {}
-                                    Ok(false) => warn!(task_id, session_id, "OpenCode declined provider-failure abort"),
-                                    Err(error) => warn!(task_id, session_id, error = ?error, "failed to abort OpenCode provider retry"),
-                                }
-                                break DispatchOutcome::Failed { summary };
-                            }
-                        }
-                        Ok(Some(SessionStatusKind::Idle | SessionStatusKind::Busy)) | Ok(None) => {}
-                        Err(error) => warn!(task_id, session_id, error = ?error, "failed to probe OpenCode coding status"),
-                    }
-                }
             }
         }
     };
@@ -1142,23 +1256,6 @@ async fn dispatch_coding_model(
 struct CodingDispatchResult {
     succeeded: bool,
     failure_summary: Option<String>,
-}
-
-fn permanent_provider_retry_failure(message: &str) -> Option<String> {
-    let normalized = message.to_ascii_lowercase();
-    let permanent = [
-        "exceeded your current quota",
-        "insufficient_quota",
-        "insufficient quota",
-        "billing details",
-        "invalid api key",
-        "incorrect api key",
-        "api key revoked",
-    ];
-    permanent
-        .iter()
-        .any(|needle| normalized.contains(needle))
-        .then(|| format!("OpenCode provider failure: {message}"))
 }
 
 fn coding_run_exceeded_timeout(
@@ -2039,21 +2136,11 @@ mod tests {
         harness::{
             backend::{DispatchResult, HarnessBackend},
             in_flight::InFlightTracker,
-            model::{HarnessRunRow, RUN_STATUS_SKIPPED, RUN_STATUS_SUCCEEDED},
+            model::{HarnessRunRow, RUN_STATUS_QUEUED, RUN_STATUS_SKIPPED, RUN_STATUS_SUCCEEDED},
             store::{self, ClaimedCandleJobRun, insert_default_harness_jobs, insert_test_run},
         },
         test_db,
     };
-
-    #[test]
-    fn permanent_provider_retry_failure_detects_quota_errors() {
-        let summary = permanent_provider_retry_failure(
-            "You exceeded your current quota, please check your plan and billing details.",
-        )
-        .expect("quota error should be terminal");
-        assert!(summary.contains("exceeded your current quota"));
-        assert!(permanent_provider_retry_failure("Provider is overloaded").is_none());
-    }
 
     #[test]
     fn coding_run_timeout_uses_the_run_deadline() {
@@ -2404,6 +2491,59 @@ mod tests {
             .find(|row| row.status == RUN_STATUS_SUCCEEDED)
             .expect("succeeded run present");
         assert_eq!(run.backend_run_ref.as_deref(), Some("ses_fake"));
+    }
+
+    #[tokio::test]
+    async fn tick_resumes_queued_run_after_dispatcher_restart() {
+        let pool = test_db::pool().await;
+        let key = format!(
+            "sched-resume-{}",
+            Utc::now().timestamp_nanos_opt().unwrap_or(0)
+        );
+        seed_test_agent(&pool, &key).await;
+        let (job_id,): (i64,) = sqlx::query_as(
+            "SELECT id FROM harness_jobs
+              WHERE agent_key = $1 AND job_key = 'analysis-1h'",
+        )
+        .bind(&key)
+        .fetch_one(&pool)
+        .await
+        .expect("fetch queued job");
+        let run_id = insert_test_run(&pool, job_id, RUN_STATUS_QUEUED)
+            .await
+            .expect("insert queued run");
+
+        let calls: Arc<Mutex<Vec<DispatchRequest>>> = Arc::new(Mutex::new(Vec::new()));
+        let backend: Arc<dyn HarnessBackend> = Arc::new(FakeBackend::success(calls.clone()));
+        let live_accounts = Arc::new(crate::hyperliquid::live_state::LiveAccountStore::new());
+        let (_tx, rx) = watch::channel(false);
+        let (_force_tx, force_rx) = watch::channel(false);
+        let mut scheduler = HarnessScheduler::new(
+            pool.clone(),
+            rx,
+            force_rx,
+            backend,
+            live_accounts,
+            scheduler_runtime(InFlightTracker::new()),
+        );
+
+        scheduler.tick().await.expect("tick");
+        run_until(|| async { calls.lock().is_ok_and(|calls| !calls.is_empty()) }).await;
+
+        {
+            let calls = calls.lock().expect("lock dispatch calls");
+            assert_eq!(calls.len(), 1);
+            assert_eq!(calls[0].run_id, run_id);
+            assert_eq!(calls[0].job_key, "analysis-1h");
+        }
+        run_until(|| async {
+            store::get_run(&pool, run_id)
+                .await
+                .ok()
+                .flatten()
+                .is_some_and(|run| run.status == RUN_STATUS_SUCCEEDED)
+        })
+        .await;
     }
 
     #[tokio::test]

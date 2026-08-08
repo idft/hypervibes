@@ -77,8 +77,8 @@ impl SessionStatusKind {
 }
 
 /// Deserialized entry from `/session/status` -- a tagged union with the
-/// kind string (`idle`/`busy`/`retry`) at `type`. Only the `type` field
-/// is consulted; retry-specific details are dropped.
+/// kind string (`idle`/`busy`/`retry`) at `type`. Retry messages are
+/// retained for live job status reporting.
 #[derive(Debug, Clone, Deserialize)]
 struct SessionStatusResponse {
     #[serde(rename = "type")]

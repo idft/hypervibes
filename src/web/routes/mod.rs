@@ -188,6 +188,10 @@ pub fn router(state: Arc<AppState>) -> Router {
             get(agents_show_run_detail),
         )
         .route(
+            "/agents/{agent_key}/runs/{run_id}/cancel",
+            post(agents_cancel_run),
+        )
+        .route(
             "/agents/{agent_key}/runs/{run_id}/stream",
             get(agent_run_detail_stream),
         )

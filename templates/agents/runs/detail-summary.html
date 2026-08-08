@@ -5,6 +5,11 @@
         </a>
         <h2 class="text-lg font-medium text-white">{{ run.job_key }} · Run {{ run.id }}</h2>
         <span class="inline-flex rounded-full border px-2 py-0.5 text-xs font-medium {{ run.status_class }}">{{ run.status_label }}</span>
+        {% if run.status == "running" && !run.backend_run_ref.is_empty() %}
+        <form action="/agents/{{ run.agent_key }}/runs/{{ run.id }}/cancel" method="post" class="ml-auto" onsubmit="return confirm('Cancel this running job?');">
+            <button type="submit" class="cursor-pointer rounded-full border border-amber-800/70 px-3 py-1.5 text-xs font-medium text-amber-200 hover:border-amber-600 hover:bg-amber-950/30">Cancel run</button>
+        </form>
+        {% endif %}
     </div>
 </header>
 
@@ -78,3 +83,10 @@
     </div>
     {% endif %}
 </div>
+
+{% if !run.error_summary.is_empty() %}
+<section class="mt-6 border-t border-zinc-800 bg-red-950/20 p-4">
+    <h2 class="text-lg font-medium text-red-200">Error</h2>
+    <p class="mt-2 text-sm leading-6 text-red-100/90">{{ run.error_summary }}</p>
+</section>
+{% endif %}

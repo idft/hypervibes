@@ -2,7 +2,7 @@ use axum::{
     extract::{Path, State},
     http::StatusCode,
     response::{
-        Html, IntoResponse, Response,
+        Html, IntoResponse, Redirect, Response,
         sse::{Event, KeepAlive, Sse},
     },
 };
@@ -102,6 +102,52 @@ pub(in crate::web::routes) async fn agents_show_run_detail(
         navbar,
     )?;
     Ok(Html(html).into_response())
+}
+
+pub(in crate::web::routes) async fn agents_cancel_run(
+    State(state): State<Arc<AppState>>,
+    Path((agent_key, run_id)): Path<(String, i64)>,
+) -> Result<Response, AppError> {
+    let Some(run) = crate::harness::store::get_run(&state.db_pool, run_id).await? else {
+        return Ok((StatusCode::NOT_FOUND, "run not found").into_response());
+    };
+    if run.agent_key != agent_key {
+        return Ok((StatusCode::NOT_FOUND, "run not found").into_response());
+    }
+    if run.status != crate::harness::model::RUN_STATUS_RUNNING {
+        return Ok((StatusCode::CONFLICT, "run is no longer running").into_response());
+    }
+    let Some(session_id) = run.backend_run_ref.as_deref() else {
+        return Ok((
+            StatusCode::CONFLICT,
+            "run has not created an OpenCode session yet",
+        )
+            .into_response());
+    };
+
+    match state
+        .harness_backend
+        .abort_session(&state.opencode_base_url, session_id)
+        .await
+    {
+        Ok(true) => {
+            crate::harness::store::mark_run_aborted(
+                &state.db_pool,
+                run_id,
+                "cancelled by operator",
+                None,
+            )
+            .await?;
+            Ok(Redirect::to(&format!("/agents/{agent_key}/runs/{run_id}")).into_response())
+        }
+        Ok(false) => {
+            Ok((StatusCode::CONFLICT, "OpenCode could not cancel this run").into_response())
+        }
+        Err(error) => {
+            warn!(agent_key, run_id, error = ?error, "failed to cancel OpenCode run");
+            Ok((StatusCode::BAD_GATEWAY, "failed to cancel OpenCode run").into_response())
+        }
+    }
 }
 
 pub(in crate::web::routes) async fn agent_run_detail_stream(

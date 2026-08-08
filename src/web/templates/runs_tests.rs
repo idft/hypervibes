@@ -57,6 +57,22 @@ fn run_detail_page_renders_opencode_session_sections() {
 }
 
 #[test]
+fn run_error_renders_in_fixed_summary_not_transcript() {
+    let mut row = sample_run_row(9, "running", "analysis-15m");
+    row.error_summary = Some("Usage limit reached".to_string());
+    let run = HarnessRunDetailView::from_row(&row);
+
+    let summary = AgentRunDetailSummaryPartialTemplate::render_view(run.clone(), None)
+        .expect("render summary");
+    let transcript = AgentRunDetailTranscriptPartialTemplate::render_view(run, None, false)
+        .expect("render transcript");
+
+    assert!(summary.contains(">Error</h2>"));
+    assert!(summary.contains("Usage limit reached"));
+    assert!(!transcript.contains("Usage limit reached"));
+}
+
+#[test]
 fn event_run_detail_view_uses_dash_timeframe_and_job_url() {
     let mut row = sample_run_row(8, "succeeded", "market-analysis");
     row.job_id = 3;

@@ -18,10 +18,11 @@ pub use jobs::{
 pub use recovery::recover_inactive_runs_all;
 #[allow(unused_imports)]
 pub use runs::{
-    QueuedJobRun, agent_has_active_runs, count_agent_runs, get_run, has_prior_active_run_in_lane,
-    insert_queued_event_run, insert_queued_event_run_for_automatic_dispatch,
-    insert_queued_manual_run, list_active_agent_runs, list_agent_runs_page, mark_run_aborted,
-    mark_run_failed, mark_run_running, mark_run_succeeded,
+    QueuedJobRun, QueuedRunForDispatch, agent_has_active_runs, count_agent_runs, get_run,
+    has_prior_active_run_in_lane, insert_queued_event_run,
+    insert_queued_event_run_for_automatic_dispatch, insert_queued_manual_run,
+    list_active_agent_runs, list_agent_runs_page, list_queued_runs_for_dispatch, mark_run_aborted,
+    mark_run_failed, mark_run_running, mark_run_succeeded, set_run_error_summary,
 };
 #[cfg(test)]
 pub use runs::{insert_test_run, list_agent_runs};

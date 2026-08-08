@@ -17,7 +17,7 @@ use super::test_support::seed_agent_and_job;
 use super::{
     QueuedJobRun, count_agent_runs, get_run, insert_queued_manual_run, insert_test_run,
     insert_workspace_regenerate_task, mark_run_aborted, mark_run_failed, mark_run_running,
-    mark_run_succeeded,
+    mark_run_succeeded, set_run_error_summary,
 };
 
 #[tokio::test]
@@ -182,6 +182,43 @@ async fn mark_run_succeeded_records_finished_at_and_backend_ref() {
 }
 
 #[tokio::test]
+async fn set_run_error_summary_preserves_running_status_and_can_clear() {
+    let pool = test_db::pool().await;
+    let key = format!(
+        "run-retry-{}",
+        Utc::now().timestamp_nanos_opt().unwrap_or(0)
+    );
+    let job_id = seed_agent_and_job(&pool, &key, 0).await;
+    let run_id = insert_test_run(&pool, job_id, RUN_STATUS_RUNNING)
+        .await
+        .expect("seed run");
+
+    assert!(
+        set_run_error_summary(&pool, run_id, Some("usage exhausted"))
+            .await
+            .expect("set retry summary")
+    );
+    let run = get_run(&pool, run_id)
+        .await
+        .expect("fetch run")
+        .expect("run present");
+    assert_eq!(run.status, RUN_STATUS_RUNNING);
+    assert_eq!(run.error_summary.as_deref(), Some("usage exhausted"));
+
+    assert!(
+        set_run_error_summary(&pool, run_id, None)
+            .await
+            .expect("clear retry summary")
+    );
+    let run = get_run(&pool, run_id)
+        .await
+        .expect("fetch cleared run")
+        .expect("run present");
+    assert_eq!(run.status, RUN_STATUS_RUNNING);
+    assert!(run.error_summary.is_none());
+}
+
+#[tokio::test]
 async fn mark_run_failed_truncates_error_summary() {
     let pool = test_db::pool().await;
     let key = format!("run-fail-{}", Utc::now().timestamp_nanos_opt().unwrap_or(0));
@@ -257,4 +294,46 @@ async fn mark_run_aborted_marks_status_finished_at() {
         .expect("run present");
     assert_eq!(run.status, RUN_STATUS_ABORTED);
     assert!(run.finished_at.is_some());
+}
+
+#[tokio::test]
+async fn terminal_run_cannot_be_overwritten_after_cancellation() {
+    let pool = test_db::pool().await;
+    let key = format!(
+        "run-cancel-{}",
+        Utc::now().timestamp_nanos_opt().unwrap_or(0)
+    );
+    let job_id = seed_agent_and_job(&pool, &key, 0).await;
+    let run_id = insert_test_run(&pool, job_id, RUN_STATUS_RUNNING)
+        .await
+        .expect("seed run");
+
+    assert!(
+        mark_run_aborted(&pool, run_id, "cancelled by operator", Some("ses_cancel"))
+            .await
+            .expect("mark aborted")
+    );
+    assert!(
+        !mark_run_running(&pool, run_id, Some("ses_late"))
+            .await
+            .expect("late running update")
+    );
+    assert!(
+        !mark_run_failed(&pool, run_id, "late failure", None)
+            .await
+            .expect("late failed update")
+    );
+    assert!(
+        !mark_run_succeeded(&pool, run_id, None)
+            .await
+            .expect("late succeeded update")
+    );
+
+    let run = get_run(&pool, run_id)
+        .await
+        .expect("fetch run")
+        .expect("run present");
+    assert_eq!(run.status, RUN_STATUS_ABORTED);
+    assert_eq!(run.error_summary.as_deref(), Some("cancelled by operator"));
+    assert_eq!(run.backend_run_ref.as_deref(), Some("ses_cancel"));
 }

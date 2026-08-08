@@ -168,18 +168,45 @@ pub async fn mark_run_running(
 ) -> Result<bool> {
     let result = sqlx::query(
         "UPDATE harness_runs
-            SET status = $2,
-                started_at = COALESCE(started_at, now()),
-                backend_run_ref = COALESCE($3, backend_run_ref),
-                updated_at = now()
-          WHERE id = $1",
+           SET status = $2,
+               started_at = COALESCE(started_at, now()),
+               backend_run_ref = COALESCE($3, backend_run_ref),
+               updated_at = now()
+          WHERE id = $1
+            AND status = ANY($4)",
     )
     .bind(run_id)
     .bind(RUN_STATUS_RUNNING)
     .bind(backend_run_ref)
+    .bind([RUN_STATUS_QUEUED, RUN_STATUS_RUNNING])
     .execute(pool)
     .await
     .with_context(|| format!("failed to mark run {run_id} running"))?;
+
+    Ok(result.rows_affected() > 0)
+}
+
+/// Update the current retry message without changing a running run's lifecycle.
+pub async fn set_run_error_summary(
+    pool: &DbPool,
+    run_id: i64,
+    error_summary: Option<&str>,
+) -> Result<bool> {
+    let error_summary = error_summary.map(truncate_error_summary);
+    let result = sqlx::query(
+        "UPDATE harness_runs
+            SET error_summary = $2,
+                updated_at = now()
+          WHERE id = $1
+            AND status = $3
+            AND error_summary IS DISTINCT FROM $2",
+    )
+    .bind(run_id)
+    .bind(error_summary)
+    .bind(RUN_STATUS_RUNNING)
+    .execute(pool)
+    .await
+    .with_context(|| format!("failed to update error summary for run {run_id}"))?;
 
     Ok(result.rows_affected() > 0)
 }
@@ -192,16 +219,18 @@ pub async fn mark_run_succeeded(
 ) -> Result<bool> {
     let result = sqlx::query(
         "UPDATE harness_runs
-            SET status = $2,
-                finished_at = now(),
-                backend_run_ref = COALESCE($3, backend_run_ref),
-                error_summary = NULL,
-                updated_at = now()
-          WHERE id = $1",
+           SET status = $2,
+               finished_at = now(),
+               backend_run_ref = COALESCE($3, backend_run_ref),
+               error_summary = NULL,
+               updated_at = now()
+          WHERE id = $1
+            AND status = ANY($4)",
     )
     .bind(run_id)
     .bind(RUN_STATUS_SUCCEEDED)
     .bind(backend_run_ref)
+    .bind([RUN_STATUS_QUEUED, RUN_STATUS_RUNNING])
     .execute(pool)
     .await
     .with_context(|| format!("failed to mark run {run_id} succeeded"))?;
@@ -218,17 +247,19 @@ pub async fn mark_run_failed(
 ) -> Result<bool> {
     let result = sqlx::query(
         "UPDATE harness_runs
-            SET status = $2,
-                finished_at = now(),
-                error_summary = $3,
-                backend_run_ref = COALESCE($4, backend_run_ref),
-                updated_at = now()
-          WHERE id = $1",
+           SET status = $2,
+               finished_at = now(),
+               error_summary = $3,
+               backend_run_ref = COALESCE($4, backend_run_ref),
+               updated_at = now()
+          WHERE id = $1
+            AND status = ANY($5)",
     )
     .bind(run_id)
     .bind(RUN_STATUS_FAILED)
     .bind(truncate_error_summary(error_summary))
     .bind(backend_run_ref)
+    .bind([RUN_STATUS_QUEUED, RUN_STATUS_RUNNING])
     .execute(pool)
     .await
     .with_context(|| format!("failed to mark run {run_id} failed"))?;
@@ -245,17 +276,19 @@ pub async fn mark_run_aborted(
 ) -> Result<bool> {
     let result = sqlx::query(
         "UPDATE harness_runs
-            SET status = $2,
-                finished_at = now(),
-                error_summary = $3,
-                backend_run_ref = COALESCE($4, backend_run_ref),
-                updated_at = now()
-          WHERE id = $1",
+           SET status = $2,
+               finished_at = now(),
+               error_summary = $3,
+               backend_run_ref = COALESCE($4, backend_run_ref),
+               updated_at = now()
+          WHERE id = $1
+            AND status = ANY($5)",
     )
     .bind(run_id)
     .bind(RUN_STATUS_ABORTED)
     .bind(truncate_error_summary(error_summary))
     .bind(backend_run_ref)
+    .bind([RUN_STATUS_QUEUED, RUN_STATUS_RUNNING])
     .execute(pool)
     .await
     .with_context(|| format!("failed to mark run {run_id} aborted"))?;
@@ -295,6 +328,42 @@ pub async fn get_run(pool: &DbPool, run_id: i64) -> Result<Option<HarnessRunRow>
     .with_context(|| format!("failed to fetch run {run_id}"))?;
 
     Ok(row)
+}
+
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub struct QueuedRunForDispatch {
+    pub run_id: i64,
+    pub job_id: i64,
+    pub agent_key: String,
+    pub job_kind: String,
+    pub scheduled_for: DateTime<Utc>,
+}
+
+/// List persisted queued runs that need a scheduler dispatch worker.
+/// Analysis-coding runs are owned by maintenance tasks instead.
+pub async fn list_queued_runs_for_dispatch(
+    pool: &DbPool,
+    limit: i64,
+) -> Result<Vec<QueuedRunForDispatch>> {
+    let rows = query_as(
+        "SELECT id AS run_id,
+                job_id,
+                agent_key,
+                job_kind,
+                scheduled_for
+           FROM harness_runs
+          WHERE status = $1
+            AND job_kind <> 'analysis_coding'
+          ORDER BY created_at ASC, id ASC
+          LIMIT $2",
+    )
+    .bind(RUN_STATUS_QUEUED)
+    .bind(limit)
+    .fetch_all(pool)
+    .await
+    .context("failed to list queued harness runs for dispatch")?;
+
+    Ok(rows)
 }
 
 /// Insert a brand-new `queued` run for a job. Used by manual

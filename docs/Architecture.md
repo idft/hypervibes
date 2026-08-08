@@ -85,8 +85,7 @@ Hyperliquid OHLCV helper and `scripts/user/analyze.py` to verify the memory's
 declared closed-candle rules; it cannot derive a new thesis or alter its levels.
 
 Run state is persisted. On startup and periodically thereafter, the scheduler
-recovers stale queued or running runs so interrupted dispatches do not block an
-agent lane indefinitely.
+resumes queued runs and recovers stale running runs so interrupted dispatches
 
 Agent conversations are separate from scheduled jobs and `harness_runs`. Each
 `agent_conversations` row maps one operator or future-gateway conversation to

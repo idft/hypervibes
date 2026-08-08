@@ -20,6 +20,7 @@
                     <th class="px-4 py-3 font-medium">Started</th>
                     <th class="px-4 py-3 font-medium">Finished</th>
                     <th class="px-4 py-3 font-medium">Duration</th>
+                    <th class="px-4 py-3 font-medium">Error</th>
                 </tr>
             </thead>
             <tbody class="divide-y divide-zinc-800">
@@ -49,6 +50,13 @@
                     </td>
                     <td class="px-4 py-3 align-top font-mono text-xs text-zinc-300">
                         {% if run.is_running %}{% if let Some(started_at) = run.started_at %}<span data-running-duration data-started-at="{{ started_at.iso }}">{{ run.duration_text }}</span>{% else %}{{ run.duration_text }}{% endif %}{% else %}{{ run.duration_text }}{% endif %}
+                    </td>
+                    <td class="px-4 py-3 align-top text-xs text-zinc-300">
+                        {% if run.error_summary.is_empty() %}
+                        <span class="text-zinc-500">—</span>
+                        {% else %}
+                        {{ run.error_summary }}
+                        {% endif %}
                     </td>
                 </tr>
                 {% endfor %}
