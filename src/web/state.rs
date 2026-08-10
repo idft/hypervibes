@@ -10,6 +10,7 @@ use crate::{
     },
     hyperliquid::builder_fee::BuilderFeeCache,
     hyperliquid::live_state::LiveAccountStore,
+    hyperliquid::market_data::MarketDataStore,
     model_catalog::models_dev::ModelsDevCatalog,
     opencode::{client::OpenCodeClient, workspace_control_client::WorkspaceController},
 };
@@ -26,6 +27,7 @@ pub struct AppState {
     pub harness_backend: Arc<dyn HarnessBackend>,
     pub encryption_key: EncryptionKey,
     pub live_accounts: Arc<LiveAccountStore>,
+    pub market_data: Arc<MarketDataStore>,
     pub ui_events: Arc<UiEventHub>,
     pub run_detail_events: Arc<RunDetailEventHub>,
     pub workspace_controller: Arc<dyn WorkspaceController>,

@@ -522,6 +522,8 @@ pub(in crate::web::routes) async fn populate_positions_tab(
             Vec::new()
         }
     };
+    state.market_data.refresh(&configured_coins).await;
+    let market_data = state.market_data.snapshot();
 
     let Some(account_address) = agent.trading_account_address.as_deref() else {
         return Ok(());
@@ -547,11 +549,13 @@ pub(in crate::web::routes) async fn populate_positions_tab(
         AccountBalancePartialTemplate::render_view(account_balance_view.clone())
             .map_err(anyhow::Error::from)?;
 
-    let open_positions_view = OpenPositionsView::from_live_state_with_configured_coins(
-        live_snapshot.clone(),
-        &configured_coins,
-    )
-    .with_agent_key(&agent.agent_key);
+    let open_positions_view =
+        OpenPositionsView::from_live_state_with_configured_coins_and_market_data(
+            live_snapshot.clone(),
+            &configured_coins,
+            &market_data,
+        )
+        .with_agent_key(&agent.agent_key);
     template.open_positions_html = OpenPositionsPartialTemplate::render_view(open_positions_view)
         .map_err(anyhow::Error::from)?;
 

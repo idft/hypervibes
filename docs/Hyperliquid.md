@@ -81,6 +81,18 @@ the agent-facing API.
 Live account state is intentionally in memory. It supports the operator UI and
 trading dispatch context; the journal remains the durable source for history.
 
+### Operator Market Data
+
+The Agent Positions page also uses an in-memory cache of public Hyperliquid
+market data. It refreshes the global mid-price snapshot at most every 15
+seconds and refreshes requested symbols' 24-hour hourly candle history at most
+every five minutes. The UI appends the latest mid price to the candle closes to
+render each instrument's current price and 24-hour sparkline.
+
+This cache is shared by active operator page requests, is not persisted, and is
+not authoritative account or execution data. Missing market data is displayed
+as unavailable rather than inferred from account state.
+
 ### Live Data Health
 
 The monitor tracks successful clearinghouse, open-orders, and spot-state

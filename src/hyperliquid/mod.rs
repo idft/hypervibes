@@ -6,6 +6,7 @@ pub mod instruments;
 pub mod live_convert;
 pub mod live_state;
 pub mod live_ws;
+pub mod market_data;
 pub mod normalize;
 pub mod orders;
 pub mod queries;

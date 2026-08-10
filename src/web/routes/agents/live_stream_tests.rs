@@ -5,13 +5,16 @@ use crate::web::routes::test_support::*;
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use chrono::Utc;
+use http_body_util::BodyExt as _;
 use tower::util::ServiceExt;
 
 use crate::{
     agents::store::replace_agent_instruments,
     hyperliquid::live_state::{AccountKey, AccountLiveState, LiveConnectionStatus},
+    hyperliquid::market_data::MarketPrice,
     memory::CreateMemory,
 };
+use std::{collections::HashMap, sync::Arc};
 
 #[tokio::test]
 async fn account_balance_stream_returns_404_for_unknown_agent() {
@@ -29,6 +32,29 @@ async fn account_balance_stream_returns_404_for_unknown_agent() {
         .unwrap();
     assert_eq!(response.status(), StatusCode::NOT_FOUND);
 }
+
+#[tokio::test]
+async fn account_live_stream_closes_when_shutdown_is_signaled() {
+    let state = test_state_with_backend_and_shutdown(Arc::new(NoopHarnessBackend), true).await;
+    let (agent_key, _wallet_address) = insert_test_agent(&state).await.expect("insert agent");
+
+    let response = router(state)
+        .oneshot(
+            Request::builder()
+                .uri(format!("/agents/{agent_key}/live/stream"))
+                .body(Body::empty())
+                .expect("build live stream request"),
+        )
+        .await
+        .expect("serve live stream");
+    let mut body = response.into_body();
+    let frame = tokio::time::timeout(std::time::Duration::from_millis(250), body.frame())
+        .await
+        .expect("shutdown should close the SSE stream promptly");
+
+    assert!(frame.is_none(), "shutdown should close the SSE body");
+}
+
 #[tokio::test]
 async fn account_balance_stream_emits_initial_loading_placeholder() {
     let state = test_state().await;
@@ -92,7 +118,6 @@ async fn account_balance_stream_emits_initial_value_when_state_present() {
             ..Default::default()
         },
     );
-
     let app = router(state);
     let response = app
         .oneshot(
@@ -244,6 +269,16 @@ async fn open_positions_stream_emits_initial_rows_when_state_present() {
             ..Default::default()
         },
     );
+    state.market_data.replace_for_test(HashMap::from([(
+        "BTC".to_string(),
+        MarketPrice {
+            current: Some(rust_decimal::Decimal::new(65_000, 0)),
+            prices_24h: vec![
+                rust_decimal::Decimal::new(63_000, 0),
+                rust_decimal::Decimal::new(64_000, 0),
+            ],
+        },
+    )]));
 
     let app = router(state);
     let response = app
@@ -262,6 +297,8 @@ async fn open_positions_stream_emits_initial_rows_when_state_present() {
     assert!(text.contains("BTC"));
     assert!(text.contains("long"));
     assert!(text.contains("+25.00%"));
+    assert!(text.contains("65,000.0000"));
+    assert!(text.contains("BTC price over the last 24 hours"));
 }
 
 #[tokio::test]

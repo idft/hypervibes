@@ -148,74 +148,83 @@ impl SparklineView {
         let first = points.first().expect("non-empty").balance;
         let last = points.last().expect("non-empty").balance;
         let change = format_signed_money_cell(Some(last - first));
-
-        let mut min = first;
-        let mut max = first;
-        for p in points {
-            let _bucket = p.bucket;
-            if p.balance < min {
-                min = p.balance;
-            }
-            if p.balance > max {
-                max = p.balance;
-            }
-        }
-        // Always leave a small vertical gutter so flat lines don't sit
-        // exactly on the edge of the viewBox.
-        let span = (max - min).abs();
-        let pad = if span.is_zero() {
-            Decimal::ONE
-        } else {
-            span * Decimal::new(1, 1)
-        };
-        let y_min = min - pad;
-        let y_max = max + pad;
-        let y_range = (y_max - y_min).abs();
-
-        let count = points.len();
-        // Map index 0..count-1 evenly across 0..width. Guard against
-        // a single-point series, which we already short-circuited above.
-        let denom = (count - 1) as i64;
-        let x_for = |i: usize| -> f64 {
-            if denom == 0 {
-                width as f64 / 2.0
-            } else {
-                (i as f64 / denom as f64) * (width as f64)
-            }
-        };
-        let y_for = |balance: Decimal| -> f64 {
-            let normalized = if y_range.is_zero() {
-                0.5
-            } else {
-                ((balance - y_min) / y_range)
-                    .to_string()
-                    .parse::<f64>()
-                    .unwrap_or(0.5)
-            };
-            // Invert (SVG y grows downward) and leave a 1px gutter.
-            let clamped = normalized.clamp(0.0, 1.0);
-            (1.0 - clamped) * (height as f64 - 1.0) + 0.5
-        };
-
-        let mut buf = String::new();
-        for (i, p) in points.iter().enumerate() {
-            if i > 0 {
-                buf.push(' ');
-            }
-            let x = x_for(i);
-            let y = y_for(p.balance);
-            buf.push_str(&format!("{x:.2},{y:.2}"));
-        }
+        let values = points
+            .iter()
+            .map(|point| {
+                let _bucket = point.bucket;
+                point.balance
+            })
+            .collect::<Vec<_>>();
 
         Self {
             label,
-            polyline: buf,
+            polyline: sparkline_polyline(&values, width, height)
+                .expect("multiple points always produce a sparkline polyline"),
             change,
             is_empty: false,
             width,
             height,
         }
     }
+}
+
+/// Return SVG polyline coordinates for a sequence of values, normalized to
+/// the given view box. A sparkline requires at least two values.
+pub(crate) fn sparkline_polyline(values: &[Decimal], width: u32, height: u32) -> Option<String> {
+    let first = *values.first()?;
+    if values.len() < 2 {
+        return None;
+    }
+
+    let mut min = first;
+    let mut max = first;
+    for value in values {
+        if *value < min {
+            min = *value;
+        }
+        if *value > max {
+            max = *value;
+        }
+    }
+    // Always leave a small vertical gutter so flat lines don't sit exactly on
+    // the edge of the viewBox.
+    let span = (max - min).abs();
+    let pad = if span.is_zero() {
+        Decimal::ONE
+    } else {
+        span * Decimal::new(1, 1)
+    };
+    let y_min = min - pad;
+    let y_max = max + pad;
+    let y_range = (y_max - y_min).abs();
+
+    let count = values.len();
+    let denom = (count - 1) as i64;
+    let x_for = |i: usize| -> f64 { (i as f64 / denom as f64) * (width as f64) };
+    let y_for = |value: Decimal| -> f64 {
+        let normalized = if y_range.is_zero() {
+            0.5
+        } else {
+            ((value - y_min) / y_range)
+                .to_string()
+                .parse::<f64>()
+                .unwrap_or(0.5)
+        };
+        // Invert because SVG y grows downward and leave a 1px gutter.
+        let clamped = normalized.clamp(0.0, 1.0);
+        (1.0 - clamped) * (height as f64 - 1.0) + 0.5
+    };
+
+    let mut buf = String::new();
+    for (i, value) in values.iter().enumerate() {
+        if i > 0 {
+            buf.push(' ');
+        }
+        let x = x_for(i);
+        let y = y_for(*value);
+        buf.push_str(&format!("{x:.2},{y:.2}"));
+    }
+    Some(buf)
 }
 
 #[derive(Template)]

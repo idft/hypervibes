@@ -56,6 +56,7 @@ pub(in crate::web::routes) async fn agent_live_stream(
     let Some(trading_account_address) = agent.trading_account_address.as_deref() else {
         return Ok(StatusCode::NOT_FOUND.into_response());
     };
+    state.market_data.refresh(&configured_coins).await;
     let account_key = AccountKey::new(trading_account_address, &agent.environment);
     let live_accounts = Arc::clone(&state.live_accounts);
 
@@ -72,8 +73,12 @@ pub(in crate::web::routes) async fn agent_live_stream(
             status: LiveConnectionStatus::Starting,
             ..Default::default()
         });
-    let mut initial_events =
-        render_live_events(&initial_snapshot, &configured_coins, &agent.agent_key)?;
+    let mut initial_events = render_live_events(
+        &initial_snapshot,
+        &configured_coins,
+        &state.market_data.snapshot(),
+        &agent.agent_key,
+    )?;
     initial_events
         .push(render_latest_trade_execution_summary_event(&state.db_pool, &agent.agent_key).await?);
     initial_events
@@ -84,6 +89,7 @@ pub(in crate::web::routes) async fn agent_live_stream(
     let live_accounts_filter = Arc::clone(&live_accounts);
     let configured_coins_filter = configured_coins.clone();
     let agent_key_for_positions = agent.agent_key.clone();
+    let market_data_for_notifications = Arc::clone(&state.market_data);
     let notifications = BroadcastStream::new(live_accounts.subscribe())
         .filter_map(move |item| {
             let account_key = account_key_filter.clone();
@@ -105,10 +111,15 @@ pub(in crate::web::routes) async fn agent_live_stream(
             let live_accounts = Arc::clone(&live_accounts_filter);
             let key = account_key_for_notifications.clone();
             let configured_coins = configured_coins_filter.clone();
+            let market_data = Arc::clone(&market_data_for_notifications);
             let events = match live_accounts.get(&key) {
                 Some(snapshot) => {
-                    match render_live_events(&snapshot, &configured_coins, &agent_key_for_positions)
-                    {
+                    match render_live_events(
+                        &snapshot,
+                        &configured_coins,
+                        &market_data.snapshot(),
+                        &agent_key_for_positions,
+                    ) {
                         Ok(events) => events,
                         Err(e) => {
                             warn!(error = ?e, "failed to render live SSE events");
@@ -194,25 +205,48 @@ pub(in crate::web::routes) async fn agent_live_stream(
     let live_accounts_refresh = Arc::clone(&live_accounts);
     let refresh_account_key = account_key.clone();
     let refresh_configured_coins = configured_coins.clone();
+    let refresh_market_coins = refresh_configured_coins.clone();
     let refresh_agent_key = agent.agent_key.clone();
+    let refresh_market_data = Arc::clone(&state.market_data);
     let freshness_refresh = tokio_stream::wrappers::IntervalStream::new(tokio::time::interval(
         std::time::Duration::from_secs(15),
     ))
     .skip(1)
-    .flat_map(move |_| {
+    .then(move |_| {
+        let market_data = Arc::clone(&refresh_market_data);
+        let configured_coins = refresh_market_coins.clone();
+        async move {
+            market_data.refresh(&configured_coins).await;
+            market_data.snapshot()
+        }
+    })
+    .flat_map(move |market_data| {
         let events = live_accounts_refresh
             .get(&refresh_account_key)
             .map(|snapshot| {
-                render_live_events(&snapshot, &refresh_configured_coins, &refresh_agent_key)
-                    .unwrap_or_else(|error| {
-                        warn!(error = ?error, "failed to render live freshness SSE events");
-                        Vec::new()
-                    })
+                render_live_events(
+                    &snapshot,
+                    &refresh_configured_coins,
+                    &market_data,
+                    &refresh_agent_key,
+                )
+                .unwrap_or_else(|error| {
+                    warn!(error = ?error, "failed to render live freshness SSE events");
+                    Vec::new()
+                })
             })
             .unwrap_or_default();
         tokio_stream::iter(events.into_iter().map(Ok::<Event, Infallible>))
     });
 
+    let mut shutdown_rx = state.shutdown_rx.clone();
+    let shutdown = async move {
+        loop {
+            if *shutdown_rx.borrow() || shutdown_rx.changed().await.is_err() {
+                return;
+            }
+        }
+    };
     let stream = tokio_stream::iter(
         initial_events
             .into_iter()
@@ -222,7 +256,10 @@ pub(in crate::web::routes) async fn agent_live_stream(
     .chain(futures::stream::select(
         futures::stream::select(notifications, freshness_refresh),
         summary_notifications,
-    ));
+    ))
+    // Ending the SSE stream drops an in-progress market-data request before
+    // the runtime starts tearing down its HTTP dispatcher.
+    .take_until(shutdown);
     let sse =
         Sse::new(stream).keep_alive(KeepAlive::new().interval(std::time::Duration::from_secs(15)));
     Ok(sse.into_response())
@@ -230,12 +267,13 @@ pub(in crate::web::routes) async fn agent_live_stream(
 pub(in crate::web::routes) fn render_live_events(
     state: &AccountLiveState,
     configured_coins: &[String],
+    market_data: &crate::hyperliquid::market_data::MarketDataSnapshot,
     agent_key: &str,
 ) -> Result<Vec<Event>, AppError> {
     Ok(vec![
         render_live_account_health_event(state)?,
         render_account_balance_event(state)?,
-        render_open_positions_event(state, configured_coins, agent_key)?,
+        render_open_positions_event(state, configured_coins, market_data, agent_key)?,
         render_open_orders_event(state)?,
     ])
 }
@@ -256,11 +294,15 @@ pub(in crate::web::routes) fn render_account_balance_event(
 pub(in crate::web::routes) fn render_open_positions_event(
     state: &AccountLiveState,
     configured_coins: &[String],
+    market_data: &crate::hyperliquid::market_data::MarketDataSnapshot,
     agent_key: &str,
 ) -> Result<Event, AppError> {
-    let view =
-        OpenPositionsView::from_live_state_with_configured_coins(state.clone(), configured_coins)
-            .with_agent_key(agent_key);
+    let view = OpenPositionsView::from_live_state_with_configured_coins_and_market_data(
+        state.clone(),
+        configured_coins,
+        market_data,
+    )
+    .with_agent_key(agent_key);
     let html = OpenPositionsPartialTemplate::render_view(view)?;
     Ok(Event::default().event("positions").data(html))
 }

@@ -60,6 +60,7 @@ pub async fn test_state() -> Arc<AppState> {
             ],
         ),
         live_accounts: Arc::new(crate::hyperliquid::live_state::LiveAccountStore::new()),
+        market_data: Arc::new(crate::hyperliquid::market_data::MarketDataStore::new()),
         ui_events: Arc::new(UiEventHub::new()),
         run_detail_events: Arc::new(RunDetailEventHub::new()),
         opencode_workspace_config: crate::opencode::workspace::OpenCodeWorkspaceConfig {

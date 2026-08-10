@@ -1,4 +1,6 @@
 use crate::hyperliquid::live_state::LiveConnectionStatus;
+use crate::hyperliquid::market_data::{MarketDataStore, MarketPrice};
+use std::collections::HashMap;
 
 use super::*;
 use chrono::Utc;
@@ -196,6 +198,43 @@ fn open_positions_partial_renders_configured_placeholder_rows_and_market_links()
     assert!(html.contains("target=\"_blank\""));
     assert!(html.contains("rel=\"noopener noreferrer\""));
     assert!(!html.contains("No open positions"));
+}
+
+#[test]
+fn open_positions_partial_renders_market_price_and_sparkline_for_placeholder_row() {
+    use crate::hyperliquid::live_state::AccountLiveState;
+
+    let market_data = MarketDataStore::new();
+    market_data.replace_for_test(HashMap::from([(
+        "BTC".to_string(),
+        MarketPrice {
+            current: Some(rust_decimal::Decimal::new(65_000, 0)),
+            prices_24h: vec![
+                rust_decimal::Decimal::new(63_000, 0),
+                rust_decimal::Decimal::new(64_000, 0),
+            ],
+        },
+    )]));
+    let state = AccountLiveState {
+        account_address: "0xtest".to_string(),
+        environment: "live".to_string(),
+        status: LiveConnectionStatus::Connected,
+        clearinghouse_updated_at: Some(Utc::now()),
+        ..Default::default()
+    };
+
+    let view = OpenPositionsView::from_live_state_with_configured_coins_and_market_data(
+        state,
+        &["BTC".to_string()],
+        &market_data.snapshot(),
+    );
+    let html = OpenPositionsPartialTemplate::render_view(view).expect("render positions");
+
+    assert!(html.contains(">Price<"));
+    assert!(html.contains(">24h<"));
+    assert!(html.contains("65,000.0000"));
+    assert!(html.contains("BTC price over the last 24 hours"));
+    assert!(html.contains("<polyline"));
 }
 
 #[test]

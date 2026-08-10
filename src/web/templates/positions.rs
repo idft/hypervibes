@@ -3,6 +3,7 @@ use std::collections::{HashMap, HashSet};
 use crate::hyperliquid::live_state::{
     AccountLiveState, LiveDataStatus, LivePosition, account_live_health,
 };
+use crate::hyperliquid::market_data::MarketDataSnapshot;
 use askama::Template;
 use rust_decimal::Decimal;
 
@@ -10,6 +11,7 @@ use super::shared::{
     MoneyCell, currency_logo_url, dash_cell, format_decimal_with_commas,
     format_money_text_with_decimals, format_neutral_money_cell_with_decimals,
 };
+use super::sparkline_polyline;
 
 /// Per-row view of an open perpetual position for the agent detail page.
 #[derive(Debug, Clone)]
@@ -21,6 +23,10 @@ pub struct OpenPositionView {
     pub side: &'static str,
     pub size: String,
     pub entry_px: MoneyCell,
+    pub current_px: MoneyCell,
+    pub price_sparkline: String,
+    pub has_price_sparkline: bool,
+    pub price_sparkline_color_class: &'static str,
     pub mark_px_or_value: String,
     pub unrealized_pnl: MoneyCell,
     pub liquidation_px: MoneyCell,
@@ -45,9 +51,22 @@ impl OpenPositionsView {
         Self::from_live_state_with_configured_coins(state, &[])
     }
 
+    #[cfg(test)]
     pub fn from_live_state_with_configured_coins(
         state: AccountLiveState,
         configured_coins: &[String],
+    ) -> Self {
+        Self::from_live_state_with_configured_coins_and_market_data(
+            state,
+            configured_coins,
+            &MarketDataSnapshot::default(),
+        )
+    }
+
+    pub fn from_live_state_with_configured_coins_and_market_data(
+        state: AccountLiveState,
+        configured_coins: &[String],
+        market_data: &MarketDataSnapshot,
     ) -> Self {
         let health = account_live_health(&state);
         let (is_loading, unavailable_message) = section_message(health.positions, "positions");
@@ -90,15 +109,15 @@ impl OpenPositionsView {
             }
 
             if let Some(position) = visible_by_coin.remove(coin.as_str()) {
-                positions.push(position_view(position));
+                positions.push(position_view(position, market_data));
             } else {
-                positions.push(empty_position_view(coin));
+                positions.push(empty_position_view(coin, market_data));
             }
         }
 
         for position in &visible {
             if visible_by_coin.contains_key(position.coin.as_str()) {
-                positions.push(position_view(position));
+                positions.push(position_view(position, market_data));
             }
         }
 
@@ -136,7 +155,10 @@ fn section_message(status: LiveDataStatus, section: &str) -> (bool, Option<Strin
     }
 }
 
-pub(super) fn position_view(pos: &LivePosition) -> OpenPositionView {
+pub(super) fn position_view(
+    pos: &LivePosition,
+    market_data: &MarketDataSnapshot,
+) -> OpenPositionView {
     let szi = pos.szi.unwrap_or_default();
     let abs_szi = szi.abs();
     let side: &'static str = if szi.is_sign_negative() {
@@ -154,6 +176,8 @@ pub(super) fn position_view(pos: &LivePosition) -> OpenPositionView {
         Some(_) => "text-emerald-400",
         None => "text-zinc-500",
     };
+    let (current_px, price_sparkline, has_price_sparkline, price_sparkline_color_class) =
+        market_fields(&pos.coin, market_data);
 
     OpenPositionView {
         coin: pos.coin.clone(),
@@ -163,6 +187,10 @@ pub(super) fn position_view(pos: &LivePosition) -> OpenPositionView {
         side,
         size: format_size(abs_szi),
         entry_px: format_neutral_money_cell_with_decimals(pos.entry_px, 0),
+        current_px,
+        price_sparkline,
+        has_price_sparkline,
+        price_sparkline_color_class,
         mark_px_or_value: format_money_text_with_decimals(pos.position_value, 0),
         unrealized_pnl: money_cell_for_pnl(pos.unrealized_pnl.unwrap_or_default()),
         liquidation_px: format_neutral_money_cell_with_decimals(pos.liquidation_px, 0),
@@ -172,7 +200,9 @@ pub(super) fn position_view(pos: &LivePosition) -> OpenPositionView {
     }
 }
 
-fn empty_position_view(coin: &str) -> OpenPositionView {
+fn empty_position_view(coin: &str, market_data: &MarketDataSnapshot) -> OpenPositionView {
+    let (current_px, price_sparkline, has_price_sparkline, price_sparkline_color_class) =
+        market_fields(coin, market_data);
     OpenPositionView {
         coin: coin.to_string(),
         logo_url: currency_logo_url(coin),
@@ -181,6 +211,10 @@ fn empty_position_view(coin: &str) -> OpenPositionView {
         side: "No position",
         size: "-".to_string(),
         entry_px: dash_cell(),
+        current_px,
+        price_sparkline,
+        has_price_sparkline,
+        price_sparkline_color_class,
         mark_px_or_value: "-".to_string(),
         unrealized_pnl: dash_cell(),
         liquidation_px: dash_cell(),
@@ -188,6 +222,27 @@ fn empty_position_view(coin: &str) -> OpenPositionView {
         return_on_equity: "-".to_string(),
         roe_color_class: "text-zinc-500",
     }
+}
+
+fn market_fields(
+    coin: &str,
+    market_data: &MarketDataSnapshot,
+) -> (MoneyCell, String, bool, &'static str) {
+    let price = market_data.price_for(coin);
+    let values = price
+        .map(|price| price.prices_24h.as_slice())
+        .unwrap_or_default();
+    let change = match (values.first(), values.last()) {
+        (Some(first), Some(last)) if last < first => "text-red-400",
+        (Some(first), Some(last)) if last > first => "text-emerald-400",
+        _ => "text-zinc-500",
+    };
+    (
+        format_neutral_money_cell_with_decimals(price.and_then(|price| price.current), 4),
+        sparkline_polyline(values, 96, 24).unwrap_or_default(),
+        values.len() >= 2,
+        change,
+    )
 }
 
 fn hyperliquid_market_url(coin: &str) -> String {

@@ -33,6 +33,7 @@ use crate::{
     },
     hyperliquid::builder_fee::BuilderFeeCache,
     hyperliquid::live_state::LiveAccountStore,
+    hyperliquid::market_data::MarketDataStore,
     model_catalog::models_dev::ModelsDevCatalog,
     opencode::{client::OpenCodeClient, workspace_control_client::WorkspaceController},
 };
@@ -82,6 +83,7 @@ pub async fn serve(
         harness_backend,
         encryption_key,
         live_accounts,
+        market_data: Arc::new(MarketDataStore::new()),
         ui_events: Arc::new(UiEventHub::new()),
         run_detail_events,
         workspace_controller,
