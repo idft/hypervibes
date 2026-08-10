@@ -129,6 +129,18 @@ class VibetradingMcpServerTests(unittest.TestCase):
             }.issubset(registered)
         )
 
+    def test_logger_has_a_stderr_handler(self) -> None:
+        self.assertTrue(
+            any(
+                isinstance(handler, self.server.logging.StreamHandler)
+                for handler in self.server.LOGGER.handlers
+            )
+        )
+
+    def test_container_log_redirection_is_best_effort(self) -> None:
+        with mock.patch.object(self.server.os, "open", side_effect=OSError):
+            self.server._redirect_stderr_to_container_log()
+
     def test_missing_env_raises_with_clear_message(self) -> None:
         with mock.patch.dict(os.environ, {}, clear=True):
             with self.assertRaises(RuntimeError) as ctx:
@@ -219,13 +231,39 @@ class VibetradingMcpServerTests(unittest.TestCase):
             self.server.get_market_analysis("   ")
 
     def test_get_market_analysis_returns_none_for_no_rows(self) -> None:
-        with mock.patch.object(self.server, "_request", return_value=[]):
-            self.assertIsNone(self.server.get_market_analysis("BTC"))
+        with self.assertLogs(self.server.LOGGER, level="INFO") as logs:
+            with mock.patch.object(self.server, "_request", return_value=[]):
+                self.assertIsNone(self.server.get_market_analysis("BTC"))
+        self.assertIn(
+            "vibetrading_mcp_market_analysis symbol=BTC found=false",
+            logs.output[0],
+        )
 
     def test_get_market_analysis_returns_first_row(self) -> None:
         row = {"symbol": "BTC", "memory_type": "market_analysis"}
-        with mock.patch.object(self.server, "_request", return_value=[row]):
-            self.assertEqual(self.server.get_market_analysis("BTC"), row)
+        with self.assertLogs(self.server.LOGGER, level="INFO") as logs:
+            with mock.patch.object(self.server, "_request", return_value=[row]):
+                self.assertEqual(self.server.get_market_analysis("BTC"), row)
+        self.assertIn(
+            "vibetrading_mcp_market_analysis symbol=BTC found=true",
+            logs.output[0],
+        )
+
+    def test_request_logs_safe_response_shape(self) -> None:
+        response = mock.Mock()
+        response.status_code = 200
+        response.content = b"[]"
+        response.json.return_value = []
+        with self.assertLogs(self.server.LOGGER, level="INFO") as logs:
+            with mock.patch.object(self.server.httpx, "request", return_value=response):
+                result = self.server._request(
+                    "GET",
+                    "/api/v1/memories",
+                    params={"symbol": "BTC", "memory_type": "market_analysis"},
+                )
+        self.assertEqual(result, [])
+        self.assertIn("path=/api/v1/memories", logs.output[0])
+        self.assertIn("response=list:0", logs.output[0])
 
     def test_validation_rejects_zero_limit(self) -> None:
         with self.assertRaises(ValueError):

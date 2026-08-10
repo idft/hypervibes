@@ -93,8 +93,7 @@ fn build_market_analysis_prompt(request: &DispatchRequest) -> String {
     body.push_str("- For each selected symbol, read the latest valid timeframe analysis memories with `vibetrading_get_latest_analysis(symbol)`.\n");
     body.push_str("- Synthesize those timeframe-specific analysis memories into exactly one execution-facing market analysis per symbol.\n");
     body.push_str("- Write exactly one memory per symbol with `vibetrading_write_memory`.\n");
-    body.push_str("- Use `memory_type = \"market_analysis\"`.\n");
-    body.push_str("- Do not pass a `timeframe` argument at all; leave it out entirely so the memory is general rather than timeframe-specific. Do not pass an empty string.\n");
+    body.push_str("- Use `memory_type = \"market_analysis\"`. Do not pass a `timeframe` argument at all; leave it out entirely so the memory is general rather than timeframe-specific. Never use a placeholder such as `__omit__`, `none`, `null`, or an empty string; the backend rejects a timeframe on market-analysis memories.\n");
     body.push_str("- Include metadata with `schema_version = 1`, `analysis_kind = \"market_analysis\"`, `valid_for_seconds = 1800` unless the operator prompt explicitly requires a different validity, plus `source_memory_ids` and `source_timeframes`.\n");
     body.push_str("- When you write a market-analysis memory, attach `links` with `link_type = \"derived_from\"` to the source analysis memory IDs used for the synthesis.\n");
     body.push_str("- Include actionable entries, exits, invalidation, confidence, and risk notes in the memory content and metadata.\n");
@@ -521,6 +520,7 @@ mod tests {
         assert!(
             prompt.contains("Do not pass a `timeframe` argument at all; leave it out entirely")
         );
+        assert!(prompt.contains("Never use a placeholder such as `__omit__`"));
         assert!(prompt.contains("valid_for_seconds = 1800"));
         assert!(prompt.contains("Do not place or cancel orders."));
     }

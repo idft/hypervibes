@@ -250,6 +250,43 @@ async fn post_memories_empty_field_returns_422_json() {
 }
 
 #[tokio::test]
+async fn post_market_analysis_with_timeframe_returns_422() {
+    let state = test_state().await;
+    let (_agent_key, api_key) = seed_agent(&state, "market-analysis-timeframe").await;
+
+    let body = serde_json::json!({
+        "symbol": "BTC",
+        "timeframe": "__omit__",
+        "memory_type": "market_analysis",
+        "summary": "invalid market analysis",
+        "content": "timeframe must be absent"
+    });
+    let (headers, body) = json_body(&body);
+    let mut builder = Request::builder()
+        .method("POST")
+        .uri("/memories")
+        .header("authorization", format!("Bearer {api_key}"));
+    if let Some((key, value)) = headers {
+        builder = builder.header(key, value);
+    }
+    let response = app(state)
+        .oneshot(builder.body(body).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    let body = axum::body::to_bytes(response.into_body(), 16 * 1024)
+        .await
+        .unwrap();
+    let body: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert!(
+        body["error"]
+            .as_str()
+            .expect("validation error")
+            .contains("market_analysis memories must omit timeframe")
+    );
+}
+
+#[tokio::test]
 async fn post_memories_non_object_metadata_returns_422() {
     let state = test_state().await;
 
@@ -381,7 +418,7 @@ async fn list_memories_filters_and_orders_desc() {
         .collect();
     assert_eq!(summaries, vec!["c", "b", "a"]);
 
-    // No timeframe => all timeframes (including NULL) in DESC order.
+    // No timeframe => all timeframes (including NULL) in newest-first order.
     let request = Request::builder()
         .uri("/memories?symbol=BTC")
         .header("authorization", format!("Bearer {api_key}"))
@@ -397,11 +434,11 @@ async fn list_memories_filters_and_orders_desc() {
         .iter()
         .map(|r| r["summary"].as_str().unwrap())
         .collect();
-    assert_eq!(summaries, vec!["c", "b", "a", "general"]);
-    let last = rows.last().expect("at least one row");
+    assert_eq!(summaries, vec!["general", "c", "b", "a"]);
+    let first = rows.first().expect("at least one row");
     assert!(
-        last["timeframe"].is_null(),
-        "NULL-timeframe row still in the set"
+        first["timeframe"].is_null(),
+        "newest NULL-timeframe row remains in the set"
     );
 
     // Scope check: another agent must not see any of these rows.
@@ -417,6 +454,88 @@ async fn list_memories_filters_and_orders_desc() {
         .unwrap();
     let rows: Vec<serde_json::Value> = serde_json::from_slice(&body_bytes).unwrap();
     assert!(rows.is_empty());
+}
+
+#[tokio::test]
+async fn list_memories_returns_fresh_null_timeframe_market_analysis() {
+    let state = test_state().await;
+    let (_agent_key, api_key) = seed_agent(&state, "market-analysis-list").await;
+
+    let body = serde_json::json!({
+        "symbol": "BTC",
+        "memory_type": "market_analysis",
+        "summary": "wait for confirmation",
+        "content": "No new exposure.",
+        "metadata": { "valid_for_seconds": 1800 }
+    });
+    let (headers, body) = json_body(&body);
+    let mut builder = Request::builder()
+        .method("POST")
+        .uri("/memories")
+        .header("authorization", format!("Bearer {api_key}"));
+    if let Some((key, value)) = headers {
+        builder = builder.header(key, value);
+    }
+    let response = app(Arc::clone(&state))
+        .oneshot(builder.body(body).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::CREATED);
+
+    let (status, body) = get_json_response(
+        &state,
+        &api_key,
+        "/memories?symbol=BTC&memory_type=market_analysis&limit=1",
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let rows = body.as_array().expect("array response");
+    assert_eq!(rows.len(), 1);
+    assert!(rows[0]["timeframe"].is_null());
+    assert_eq!(rows[0]["summary"], "wait for confirmation");
+    assert!(rows[0]["expires_at"].is_string());
+}
+
+#[tokio::test]
+async fn list_memories_orders_before_filtering_expired_legacy_timeframe_rows() {
+    let state = test_state().await;
+    let (agent_key, api_key) = seed_agent(&state, "market-analysis-legacy").await;
+    let now = Utc::now();
+
+    insert_memory_at(
+        &state,
+        &agent_key,
+        now - Duration::hours(2),
+        "BTC",
+        Some("__omit__"),
+        "market_analysis",
+        "expired legacy row",
+        json!({ "valid_for_seconds": 1800 }),
+    )
+    .await;
+    insert_memory_at(
+        &state,
+        &agent_key,
+        now - Duration::minutes(1),
+        "BTC",
+        None,
+        "market_analysis",
+        "fresh handoff",
+        json!({ "valid_for_seconds": 1800 }),
+    )
+    .await;
+
+    let (status, body) = get_json_response(
+        &state,
+        &api_key,
+        "/memories?symbol=BTC&memory_type=market_analysis&limit=1",
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let rows = body.as_array().expect("array response");
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0]["summary"], "fresh handoff");
+    assert!(rows[0]["timeframe"].is_null());
 }
 
 #[tokio::test]

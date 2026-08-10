@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import os
 import secrets
 import subprocess
@@ -32,6 +33,32 @@ from mcp.server.fastmcp import FastMCP
 HTTP_TIMEOUT_SECONDS = 30.0
 
 mcp = FastMCP("vibetrading")
+
+
+# MCP uses stdout for its JSON-RPC transport. Keep operational diagnostics on
+# stderr so they cannot corrupt tool responses.
+LOGGER = logging.getLogger("vibetrading.mcp")
+LOGGER.setLevel(logging.INFO)
+if not LOGGER.handlers:
+    formatter = logging.Formatter("%(asctime)s %(levelname)s %(message)s")
+    stderr_handler = logging.StreamHandler(sys.stderr)
+    stderr_handler.setFormatter(formatter)
+    LOGGER.addHandler(stderr_handler)
+LOGGER.propagate = False
+
+
+def _redirect_stderr_to_container_log() -> None:
+    """Bypass OpenCode's MCP stderr capture without touching stdio stdout."""
+    try:
+        container_stdout = os.open("/proc/1/fd/1", os.O_WRONLY)
+        try:
+            os.dup2(container_stdout, sys.stderr.fileno())
+        finally:
+            os.close(container_stdout)
+    except OSError:
+        # This path is unavailable outside the container, such as unit tests.
+        pass
+
 
 def _load_config() -> tuple[str, str, str]:
     """Read required env vars, failing fast with a clear message.
@@ -106,22 +133,52 @@ def _request(
 
     if response.status_code >= 400:
         detail = response.text.strip()
-        # The backend may echo the bearer token in some misconfigurations;
-        # never let a raw response body leak credentials back to the LLM.
+        # Do not log the raw body: a misconfigured backend could echo
+        # credentials or memory content in it. Preserve the existing redacted
+        # error for the tool caller, which is useful for actionable API errors.
         detail = detail.replace(_require_config()[1], "[redacted]")
+        LOGGER.warning(
+            "vibetrading_mcp_request_failed method=%s path=%s params=%r status=%s",
+            method,
+            path,
+            params or {},
+            response.status_code,
+        )
         raise RuntimeError(
             f"Vibetrading {method} {path} returned "
             f"{response.status_code}: {detail[:500]}"
         )
 
     if not response.content:
+        LOGGER.info(
+            "vibetrading_mcp_request method=%s path=%s params=%r status=%s response=empty",
+            method,
+            path,
+            params or {},
+            response.status_code,
+        )
         return None
     try:
-        return response.json()
+        result = response.json()
     except ValueError as exc:
         raise RuntimeError(
             f"Vibetrading {method} {path} returned non-JSON body"
         ) from exc
+    if isinstance(result, list):
+        response_shape = f"list:{len(result)}"
+    elif isinstance(result, dict):
+        response_shape = "object"
+    else:
+        response_shape = type(result).__name__
+    LOGGER.info(
+        "vibetrading_mcp_request method=%s path=%s params=%r status=%s response=%s",
+        method,
+        path,
+        params or {},
+        response.status_code,
+        response_shape,
+    )
+    return result
 
 
 def _require_nonblank(name: str, value: str) -> str:
@@ -351,10 +408,12 @@ def get_market_analysis(symbol: str) -> dict[str, Any] | None:
     if not isinstance(result, list):
         raise RuntimeError("Vibetrading /memories returned unexpected shape")
     if not result:
+        LOGGER.info("vibetrading_mcp_market_analysis symbol=%s found=false", symbol)
         return None
     first = result[0]
     if not isinstance(first, dict):
         raise RuntimeError("Vibetrading /memories returned unexpected shape")
+    LOGGER.info("vibetrading_mcp_market_analysis symbol=%s found=true", symbol)
     return first
 
 
@@ -606,7 +665,9 @@ def cancel_all_orders(symbol: str | None = None) -> dict[str, Any]:
 def main() -> None:
     # Fail fast on missing config so OpenCode gets a clear stderr message
     # instead of a half-initialised server.
-    _require_config()
+    _redirect_stderr_to_container_log()
+    _, _, agent_key = _require_config()
+    LOGGER.info("vibetrading_mcp_started agent_key=%s", agent_key)
     mcp.run()
 
 

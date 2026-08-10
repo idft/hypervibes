@@ -88,6 +88,9 @@ impl CreateMemory {
         {
             errors.push("timeframe must not be empty if provided.".to_string());
         }
+        if self.memory_type.trim() == "market_analysis" && self.timeframe.is_some() {
+            errors.push("market_analysis memories must omit timeframe.".to_string());
+        }
         if let Some(value) = &self.metadata
             && !value.is_object()
         {

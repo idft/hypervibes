@@ -66,6 +66,7 @@ The backend keeps `metadata` flexible JSON, but some OpenCode flows rely on stab
 Current important contract:
 
 - `memory_type = "market_analysis"` is the primary execution handoff for trading
+- market-analysis memories must omit `timeframe` so the stored value is `NULL`
 - OpenCode trading instructions require a fresh `market_analysis` memory before
   opening new exposure; this is a workflow contract, not an API-level order
   validation rule today

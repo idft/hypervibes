@@ -24,6 +24,13 @@ server is a thin transport layer; it does not hold any Hyperliquid private
 keys, and its tool schemas never expose `api_key` (or any other credential)
 as a callable argument.
 
+## Operator Logs
+
+The MCP server redirects its stderr to the container log while leaving stdout
+exclusively for the MCP stdio protocol. Entries include safe request
+parameters, HTTP status, and response shape, but never API keys,
+authorization headers, request bodies, or memory content.
+
 If you are an agent reading this file from inside a generated workspace:
 do not edit, import, or invoke this module directly. Use the `vibetrading`
 MCP tools instead.

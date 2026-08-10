@@ -1,4 +1,4 @@
-ARG OPENCODE_TAG=1.18.11
+ARG OPENCODE_TAG=1.18.16
 
 FROM docker.io/library/rust:1.96-alpine AS workspace-controller-builder
 
@@ -64,6 +64,7 @@ COPY agent-runtime/mcp /opt/vibetrading/mcp
 RUN uv venv --python 3.13 /opt/vibetrading/mcp/.venv \
     && uv pip install --python /opt/vibetrading/mcp/.venv/bin/python \
         --no-cache \
-        --requirement /opt/vibetrading/mcp/requirements.txt
+        --requirement /opt/vibetrading/mcp/requirements.txt \
+    && /opt/vibetrading/mcp/.venv/bin/python -c 'from mcp.server.fastmcp import FastMCP'
 
 ENTRYPOINT ["/usr/local/bin/vibetrading-opencode"]

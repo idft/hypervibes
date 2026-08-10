@@ -188,7 +188,7 @@ pub async fn list_memories(
         qb.push(" AND created_at < ").push_bind(until);
     }
 
-    qb.push(" ORDER BY timeframe NULLS LAST, created_at DESC LIMIT ")
+    qb.push(" ORDER BY created_at DESC, timeframe NULLS LAST LIMIT ")
         .push_bind(limit);
 
     let rows = qb

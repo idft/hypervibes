@@ -75,11 +75,32 @@ pub(super) async fn list_memories(
     // analysis said during a `[SILENT]` incident.
     let now = Utc::now();
     let include_expired = filter.include_expired;
+    let matched_count = rows.len();
+    let mut expired_count = 0;
     let bodies: Vec<MemoryRecordResponse> = rows
         .into_iter()
-        .filter(|row| include_expired || !memory_expires_at(row).is_some_and(|value| value <= now))
-        .map(MemoryRecordResponse::from)
+        .filter_map(|row| {
+            if !include_expired && memory_expires_at(&row).is_some_and(|value| value <= now) {
+                expired_count += 1;
+                return None;
+            }
+            Some(MemoryRecordResponse::from(row))
+        })
         .collect();
+    info!(
+        agent_key = %agent.agent_key,
+        symbol = ?filter.symbol,
+        timeframe = ?filter.timeframe,
+        memory_type = ?filter.memory_type,
+        since = ?filter.since,
+        until = ?filter.until,
+        limit = ?filter.limit,
+        include_expired,
+        matched_count,
+        expired_count,
+        returned_count = bodies.len(),
+        "listed agent memories"
+    );
     Ok(Json(bodies).into_response())
 }
 
