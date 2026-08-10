@@ -65,6 +65,25 @@ function installDetailDeleteModal() {
   document.addEventListener("keydown", (event) => { if (event.key === "Escape") { const modal = document.getElementById("detail-delete-modal"); if (modal?.classList.contains("flex")) close(modal); } });
 }
 
+function installPositionCloseModal() {
+  const close = (modal: HTMLElement) => { modal.classList.add("hidden"); modal.classList.remove("flex"); };
+  document.addEventListener("click", (event) => {
+    const target = event.target as Element | null;
+    const modal = document.getElementById("position-close-modal");
+    const trigger = target?.closest<HTMLElement>("[data-position-close-trigger]");
+    if (trigger && modal) {
+      const form = document.getElementById("position-close-form") as HTMLFormElement | null;
+      const body = document.getElementById("position-close-modal-body");
+      const confirm = document.getElementById("position-close-confirm");
+      if (form) form.action = trigger.dataset.positionCloseAction ?? "";
+      if (body) body.textContent = trigger.dataset.positionCloseMessage ?? "Close this position at market?";
+      if (confirm) confirm.textContent = trigger.dataset.positionCloseConfirm ?? "Close";
+      modal.classList.remove("hidden"); modal.classList.add("flex");
+    } else if (modal && (target?.closest("[data-position-close-cancel]") || target === modal)) close(modal);
+  });
+  document.addEventListener("keydown", (event) => { if (event.key === "Escape") { const modal = document.getElementById("position-close-modal"); if (modal?.classList.contains("flex")) close(modal); } });
+}
+
 function installConversationComposerShortcut() {
   document.addEventListener("keydown", (event) => {
     if (event.key !== "Enter" || event.shiftKey || event.isComposing) return;
@@ -79,6 +98,7 @@ function installConversationComposerShortcut() {
 
 export function installAgentLiveLifecycle() {
   installDetailDeleteModal();
+  installPositionCloseModal();
   installConversationComposerShortcut();
   document.addEventListener("change", (event) => {
     const input = event.target;

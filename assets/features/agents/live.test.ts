@@ -82,3 +82,34 @@ describe("model-dependent buttons", () => {
     expect(button.disabled).toBe(false);
   });
 });
+
+describe("position close confirmation", () => {
+  it("opens a modal configured for the selected close action", () => {
+    document.body.innerHTML = `
+      <button type="button" data-position-close-trigger data-position-close-action="/agents/test/positions/BTC/close" data-position-close-message="Close BTC at market?" data-position-close-confirm="Close BTC">Close</button>
+      <div id="position-close-modal" class="hidden">
+        <p id="position-close-modal-body"></p>
+        <button type="button" data-position-close-cancel>Cancel</button>
+        <form id="position-close-form"><button id="position-close-confirm" type="submit">Close</button></form>
+      </div>
+    `;
+    installAgentLiveLifecycle();
+
+    const trigger = document.querySelector<HTMLElement>("[data-position-close-trigger]");
+    const modal = document.getElementById("position-close-modal");
+    const form = document.getElementById("position-close-form") as HTMLFormElement | null;
+    const body = document.getElementById("position-close-modal-body");
+    const confirm = document.getElementById("position-close-confirm");
+    if (!trigger || !modal || !form || !body || !confirm) throw new Error("Position close modal was not rendered");
+
+    trigger.click();
+
+    expect(modal.classList.contains("flex")).toBe(true);
+    expect(form.action).toBe("http://localhost:3000/agents/test/positions/BTC/close");
+    expect(body.textContent).toBe("Close BTC at market?");
+    expect(confirm.textContent).toBe("Close BTC");
+
+    document.querySelector<HTMLElement>("[data-position-close-cancel]")?.click();
+    expect(modal.classList.contains("hidden")).toBe(true);
+  });
+});

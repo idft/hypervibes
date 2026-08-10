@@ -77,7 +77,7 @@ pub struct OrderEventInsert {
     pub filled_size: Option<Decimal>,
     pub avg_fill_price: Option<Decimal>,
     pub status_timestamp: DateTime<Utc>,
-    /// `"http_response" | "ws_order_update" | "reconcile"`.
+    /// `"http_response" | "ws_order_update" | "reconcile" | "historical_reconcile"`.
     pub source: String,
     pub payload: Value,
 }
@@ -202,34 +202,63 @@ pub struct OrderOutcome {
     pub response_payload: Value,
 }
 
+#[derive(sqlx::FromRow)]
+struct CurrentOrderState {
+    status: String,
+    status_timestamp: Option<DateTime<Utc>>,
+}
+
 /// Bump the latest state of an order AND append a matching `order_events`
-/// row, in a single transaction. `source` is one of `http_response`,
-/// `ws_order_update`, or `reconcile`. The event dedup constraint makes
-/// repeated updates safe.
+/// row, in a single transaction. All events are retained, but the current row
+/// changes only through a valid state transition. Exchange-timestamped WS and
+/// historical events cannot be superseded by older events or local HTTP/snapshot
+/// observations. The event dedup constraint makes repeated updates safe.
 pub async fn update_order_outcome(pool: &DbPool, outcome: &OrderOutcome) -> Result<()> {
     let mut tx = pool.begin().await.context("failed to begin tx")?;
 
-    sqlx::query::<Postgres>(
-        "UPDATE hyperliquid.orders
-            SET status         = $2,
-                status_detail  = $3,
-                exchange_oid   = COALESCE(exchange_oid, $4),
-                filled_size    = COALESCE($5, filled_size),
-                avg_fill_price = COALESCE($6, avg_fill_price),
-                response_payload = $7,
-                updated_at     = now()
-          WHERE id = $1",
+    let current = sqlx::query_as::<_, CurrentOrderState>(
+        "SELECT status, status_timestamp
+           FROM hyperliquid.orders
+          WHERE id = $1
+          FOR UPDATE",
     )
     .bind(outcome.order_id)
-    .bind(&outcome.status)
-    .bind(outcome.status_detail.as_deref())
-    .bind(outcome.exchange_oid.as_deref())
-    .bind(outcome.filled_size)
-    .bind(outcome.avg_fill_price)
-    .bind(&outcome.response_payload)
-    .execute(&mut *tx)
+    .fetch_optional(&mut *tx)
     .await
-    .context("failed to update order outcome")?;
+    .context("failed to load current order state")?
+    .context("order outcome references a missing order")?;
+
+    let authoritative = is_authoritative_source(&outcome.source);
+    if should_apply_outcome(&current, outcome, authoritative) {
+        sqlx::query::<Postgres>(
+            "UPDATE hyperliquid.orders
+                SET status = $2,
+                    status_detail = $3,
+                    exchange_oid = COALESCE(exchange_oid, $4),
+                    filled_size = CASE
+                        WHEN $5 IS NULL THEN filled_size
+                        WHEN filled_size IS NULL THEN $5
+                        ELSE GREATEST(filled_size, $5)
+                    END,
+                    avg_fill_price = COALESCE($6, avg_fill_price),
+                    response_payload = $7,
+                    status_timestamp = CASE WHEN $8 THEN $9 ELSE status_timestamp END,
+                    updated_at = now()
+              WHERE id = $1",
+        )
+        .bind(outcome.order_id)
+        .bind(&outcome.status)
+        .bind(outcome.status_detail.as_deref())
+        .bind(outcome.exchange_oid.as_deref())
+        .bind(outcome.filled_size)
+        .bind(outcome.avg_fill_price)
+        .bind(&outcome.response_payload)
+        .bind(authoritative)
+        .bind(outcome.status_timestamp)
+        .execute(&mut *tx)
+        .await
+        .context("failed to update order outcome")?;
+    }
 
     let event = OrderEventInsert {
         id: Uuid::new_v4(),
@@ -250,6 +279,56 @@ pub async fn update_order_outcome(pool: &DbPool, outcome: &OrderOutcome) -> Resu
         .await
         .context("failed to commit order outcome tx")?;
     Ok(())
+}
+
+fn is_authoritative_source(source: &str) -> bool {
+    matches!(source, "ws_order_update" | "historical_reconcile")
+}
+
+fn should_apply_outcome(
+    current: &CurrentOrderState,
+    outcome: &OrderOutcome,
+    authoritative: bool,
+) -> bool {
+    if !is_valid_transition(&current.status, &outcome.status) {
+        return false;
+    }
+
+    if !authoritative {
+        return current.status_timestamp.is_none();
+    }
+
+    current
+        .status_timestamp
+        .is_none_or(|timestamp| outcome.status_timestamp >= timestamp)
+}
+
+fn is_valid_transition(current: &str, next: &str) -> bool {
+    if current == next {
+        return true;
+    }
+
+    match current {
+        "pending_submission" => matches!(
+            next,
+            "submitted" | "resting" | "partially_filled" | "filled" | "rejected" | "unknown"
+        ),
+        "unknown" => matches!(
+            next,
+            "submitted" | "resting" | "partially_filled" | "filled" | "canceled" | "rejected"
+        ),
+        "submitted" => matches!(
+            next,
+            "resting" | "partially_filled" | "filled" | "canceled" | "rejected"
+        ),
+        "resting" => matches!(
+            next,
+            "partially_filled" | "filled" | "canceled" | "rejected"
+        ),
+        "partially_filled" => matches!(next, "filled" | "canceled"),
+        "filled" | "canceled" | "rejected" | "error" => false,
+        _ => false,
+    }
 }
 
 async fn append_order_event_in_tx(
@@ -697,6 +776,96 @@ mod tests {
             .filter(|e| e.source == "http_response" && e.status == "resting")
             .collect();
         assert_eq!(http_event.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn late_http_response_cannot_overwrite_websocket_fill() {
+        let pool = test_db::pool().await;
+        let (agent_key, account) = seed(&pool, "late-http").await;
+        let new = new_order(&agent_key, &account, "0xcloid_late_http");
+        let id = new.id;
+        insert_order(&pool, &new).await.unwrap();
+
+        let filled_at = DateTime::parse_from_rfc3339("2025-01-01T00:00:10Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        update_order_outcome(
+            &pool,
+            &OrderOutcome {
+                order_id: id,
+                account_address: account.clone(),
+                environment: "live".to_string(),
+                status: "filled".to_string(),
+                status_detail: None,
+                exchange_oid: Some("12345".to_string()),
+                filled_size: Some(dec!(0.1)),
+                avg_fill_price: Some(dec!(50000)),
+                status_timestamp: filled_at,
+                source: "ws_order_update".to_string(),
+                response_payload: json!({"status": "filled"}),
+            },
+        )
+        .await
+        .unwrap();
+
+        update_order_outcome(
+            &pool,
+            &OrderOutcome {
+                order_id: id,
+                account_address: account.clone(),
+                environment: "live".to_string(),
+                status: "submitted".to_string(),
+                status_detail: None,
+                exchange_oid: None,
+                filled_size: None,
+                avg_fill_price: None,
+                status_timestamp: Utc::now(),
+                source: "http_response".to_string(),
+                response_payload: json!({"status": "success"}),
+            },
+        )
+        .await
+        .unwrap();
+
+        let row = get_order(&pool, &agent_key, id).await.unwrap().unwrap();
+        assert_eq!(row.status, "filled");
+        assert_eq!(row.filled_size, Some(dec!(0.1)));
+
+        let events = list_events(&pool, id).await.unwrap();
+        assert!(
+            events
+                .iter()
+                .any(|event| { event.source == "http_response" && event.status == "submitted" })
+        );
+    }
+
+    #[test]
+    fn older_authoritative_event_cannot_advance_current_state() {
+        let current_timestamp = DateTime::parse_from_rfc3339("2025-01-01T00:00:10Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let older_timestamp = DateTime::parse_from_rfc3339("2025-01-01T00:00:09Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let current = CurrentOrderState {
+            status: "resting".to_string(),
+            status_timestamp: Some(current_timestamp),
+        };
+        let outcome = OrderOutcome {
+            order_id: Uuid::new_v4(),
+            account_address: "0xaccount".to_string(),
+            environment: "live".to_string(),
+            status: "filled".to_string(),
+            status_detail: None,
+            exchange_oid: Some("12345".to_string()),
+            filled_size: Some(dec!(0.1)),
+            avg_fill_price: Some(dec!(50000)),
+            status_timestamp: older_timestamp,
+            source: "ws_order_update".to_string(),
+            response_payload: json!({}),
+        };
+
+        assert!(!should_apply_outcome(&current, &outcome, true));
     }
 
     #[tokio::test]

@@ -418,12 +418,19 @@ async fn build_order_reconcile_clients(
             agent.agent_key
         );
     }
+    let main_account = wallet.main_wallet_address.parse().with_context(|| {
+        format!(
+            "invalid main wallet address for agent '{}'",
+            agent.agent_key
+        )
+    })?;
 
     Ok((
         Arc::new(RealExchangeReader::new(hypersdk::hypercore::mainnet())),
         Arc::new(HyperliquidExchange::new(
             signer,
             hypersdk::hypercore::mainnet(),
+            main_account,
         )),
     ))
 }

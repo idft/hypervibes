@@ -73,8 +73,12 @@ pub(crate) async fn build_exchange_for_agent(
             "stored user trading signer address does not match its database address"
         ));
     }
+    let main_account = wallet
+        .main_wallet_address
+        .parse()
+        .map_err(|error| anyhow::anyhow!("invalid stored main wallet address: {error}"))?;
     let client = hypersdk::hypercore::mainnet();
-    Ok(HyperliquidExchange::new(signer, client))
+    Ok(HyperliquidExchange::new(signer, client, main_account))
 }
 
 /// Per-row summary for `GET /api/v1/orders`.

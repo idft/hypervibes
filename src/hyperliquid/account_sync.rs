@@ -467,9 +467,12 @@ fn normalize_order(
     let oid = order
         .order
         .get("oid")
-        .cloned()
-        .unwrap_or(Value::Null)
-        .to_string();
+        .and_then(|value| match value {
+            Value::String(value) => Some(value.clone()),
+            Value::Number(value) => Some(value.to_string()),
+            _ => None,
+        })
+        .unwrap_or_default();
     let event_ms = order
         .status_timestamp
         .or_else(|| order.order.get("timestamp").and_then(Value::as_u64))

@@ -273,7 +273,7 @@ async fn handle_message(
                 info!(
                     agent_address = %account_key.account_address,
                     fills = fills.len(),
-                    "received initial UserFills snapshot; will be repaired by reconnect catch-up if enabled"
+                    "received initial UserFills snapshot"
                 );
             }
             for fill in fills {

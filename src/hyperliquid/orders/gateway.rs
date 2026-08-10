@@ -86,11 +86,36 @@ pub struct ExchangePosition {
 pub struct HyperliquidExchange {
     signer: PrivateKeySigner,
     client: hypercore::HttpClient,
+    main_account: Address,
 }
 
 impl HyperliquidExchange {
-    pub fn new(signer: PrivateKeySigner, client: hypercore::HttpClient) -> Self {
-        Self { signer, client }
+    pub fn new(
+        signer: PrivateKeySigner,
+        client: hypercore::HttpClient,
+        main_account: Address,
+    ) -> Self {
+        Self {
+            signer,
+            client,
+            main_account,
+        }
+    }
+
+    fn vault_address(&self, trading_account: &str) -> Result<Option<Address>, String> {
+        Self::vault_address_for(self.main_account, trading_account)
+    }
+
+    fn vault_address_for(
+        main_account: Address,
+        trading_account: &str,
+    ) -> Result<Option<Address>, String> {
+        let account = trading_account
+            .parse::<Address>()
+            .map_err(|error| error.to_string())?;
+        // Hyperliquid interprets any supplied address as a vault or subaccount.
+        // The master account must therefore be represented by an omitted value.
+        Ok((account != main_account).then_some(account))
     }
 }
 
@@ -102,18 +127,9 @@ impl ExchangeClient for HyperliquidExchange {
         trading_account: &'a str,
     ) -> BoxFuture<'a, Result<Vec<OrderResponseStatus>, String>> {
         Box::pin(async move {
+            let vault_address = self.vault_address(trading_account)?;
             self.client
-                .place(
-                    &self.signer,
-                    batch,
-                    nonce,
-                    Some(
-                        trading_account
-                            .parse::<Address>()
-                            .map_err(|e| e.to_string())?,
-                    ),
-                    None,
-                )
+                .place(&self.signer, batch, nonce, vault_address, None)
                 .await
                 .map_err(|e| e.to_string())
         })
@@ -126,18 +142,9 @@ impl ExchangeClient for HyperliquidExchange {
         trading_account: &'a str,
     ) -> BoxFuture<'a, Result<Vec<OrderResponseStatus>, String>> {
         Box::pin(async move {
+            let vault_address = self.vault_address(trading_account)?;
             self.client
-                .cancel(
-                    &self.signer,
-                    batch,
-                    nonce,
-                    Some(
-                        trading_account
-                            .parse::<Address>()
-                            .map_err(|e| e.to_string())?,
-                    ),
-                    None,
-                )
+                .cancel(&self.signer, batch, nonce, vault_address, None)
                 .await
                 .map_err(|e| e.to_string())
         })
@@ -686,8 +693,9 @@ async fn place_one(
     let statuses = match exchange.place(batch, nonce, context.account_address).await {
         Ok(statuses) => statuses,
         Err(e) => {
-            // Whole-batch failure: mark every leg 'error' and append one
-            // event per leg.
+            // A transport failure does not prove that Hyperliquid rejected the
+            // batch. Keep each CLOID reconcilable instead of recording a
+            // terminal error that could hide an accepted order.
             let now = Utc::now();
             let err_payload = json!({"error": &e});
             let e_clone_for_results = e.clone();
@@ -696,7 +704,7 @@ async fn place_one(
                     order_id: leg.id,
                     account_address: context.account_address.to_string(),
                     environment: context.environment.to_string(),
-                    status: "error".to_string(),
+                    status: "unknown".to_string(),
                     status_detail: Some(e.clone()),
                     exchange_oid: None,
                     filled_size: None,
@@ -720,7 +728,7 @@ async fn place_one(
                     symbol: leg.symbol,
                     side: leg.side,
                     order_kind: leg.order_kind,
-                    status: "error".to_string(),
+                    status: "unknown".to_string(),
                     exchange_oid: None,
                     group_id: leg.group_id,
                     error: Some(e_clone_for_results.clone()),
@@ -1655,6 +1663,41 @@ mod tests {
         }
     }
 
+    #[test]
+    fn omits_vault_address_for_the_main_account() {
+        let main: Address = "0x8f0bb61c41988b44f623a0b5390fd2b52838d20e"
+            .parse()
+            .expect("valid main account");
+
+        assert_eq!(
+            HyperliquidExchange::vault_address_for(
+                main,
+                "0x8f0bb61c41988b44f623a0b5390fd2b52838d20e"
+            )
+            .expect("valid trading account"),
+            None
+        );
+    }
+
+    #[test]
+    fn supplies_vault_address_for_a_subaccount() {
+        let main: Address = "0x8f0bb61c41988b44f623a0b5390fd2b52838d20e"
+            .parse()
+            .expect("valid main account");
+        let account: Address = "0x1111111111111111111111111111111111111111"
+            .parse()
+            .expect("valid subaccount");
+
+        assert_eq!(
+            HyperliquidExchange::vault_address_for(
+                main,
+                "0x1111111111111111111111111111111111111111"
+            )
+            .expect("valid subaccount"),
+            Some(account)
+        );
+    }
+
     // ---- test helpers -----------------------------------------------------
 
     fn sample_agent(suffix: &str) -> AgentRegistryRow {
@@ -2418,7 +2461,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn place_error_from_exchange_marks_all_legs_error() {
+    async fn place_transport_error_marks_all_legs_unknown() {
         let pool = test_db::pool().await;
         let (agent_key, account) = seed(&pool, "perr").await;
         seed_instrument(&pool, "BTC", 0, 5).await;
@@ -2448,14 +2491,14 @@ mod tests {
         .expect("error path returns Ok with per-leg errors");
         assert_eq!(resp.results.len(), 2);
         for r in &resp.results {
-            assert_eq!(r.status, "error");
+            assert_eq!(r.status, "unknown");
             assert_eq!(r.error.as_deref(), Some("network down"));
         }
         let stored = store::list_orders(&pool, &agent_key, None, None, None, None, None)
             .await
             .unwrap();
         for s in &stored {
-            assert_eq!(s.status, "error");
+            assert_eq!(s.status, "unknown");
         }
     }
 

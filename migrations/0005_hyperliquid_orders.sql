@@ -22,6 +22,9 @@ CREATE TABLE IF NOT EXISTS hyperliquid.orders (
     cloid TEXT NOT NULL,
     exchange_oid TEXT,
     status TEXT NOT NULL,
+    -- Set only from exchange-timestamped WS or historical-order events.
+    -- NULL means the current state came from a local HTTP/snapshot observation.
+    status_timestamp TIMESTAMPTZ,
     status_detail TEXT,
     filled_size NUMERIC(38, 18),
     avg_fill_price NUMERIC(38, 18),
@@ -60,7 +63,7 @@ CREATE TABLE IF NOT EXISTS hyperliquid.order_events (
     FOREIGN KEY (order_id) REFERENCES hyperliquid.orders(id) ON DELETE CASCADE,
     CONSTRAINT order_events_dedup_unique UNIQUE (order_id, status, status_timestamp, source),
     CHECK (environment IN ('live')),
-    CHECK (source IN ('http_response', 'ws_order_update', 'reconcile'))
+    CHECK (source IN ('http_response', 'ws_order_update', 'reconcile', 'historical_reconcile'))
 );
 
 CREATE INDEX IF NOT EXISTS order_events_order_time_idx ON hyperliquid.order_events(order_id, status_timestamp);

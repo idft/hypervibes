@@ -124,15 +124,20 @@ surface and the workspace MCP adapter. The gateway:
 3. Generates a client order ID and writes a local pending order before calling
    the exchange.
 4. Loads and decrypts the owner's user trading signer and submits or cancels
-   against the agent's stored trading account.
+   against the agent's stored trading account. Main-account requests omit
+   Hyperliquid's `vaultAddress`; sub-account requests supply it.
 5. Records the immediate result and later WebSocket or reconciliation updates.
 
 `hyperliquid.orders` holds the current, agent-attributed order state.
 `hyperliquid.order_events` is the append-only audit trail for transitions from
 HTTP responses, WebSocket order updates, and reconciliation. Orders can be
 linked to memory records and grouped with attached take-profit or stop-loss
-legs. The reconciler resolves uncertain submissions and cancels orphaned
-reduce-only TP/SL legs after the underlying position is flat.
+legs. Current state only advances through valid transitions; exchange-timestamped
+WebSocket and historical events cannot be overwritten by a late HTTP response.
+Transport failures leave orders as reconcilable `unknown` states, which the
+reconciler resolves by CLOID/OID against open and historical exchange orders. It
+also cancels orphaned reduce-only TP/SL legs after the underlying position is
+flat.
 
 Market orders use the configured conservative slippage limit before rounding.
 The gateway stores both requested and rounded values, which preserves the

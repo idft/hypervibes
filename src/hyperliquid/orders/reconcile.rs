@@ -25,7 +25,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use rust_decimal::Decimal;
 use serde_json::json;
 use tokio::sync::watch;
@@ -168,6 +168,16 @@ pub struct ReconcileReport {
     pub errors: usize,
 }
 
+#[derive(Debug, sqlx::FromRow)]
+struct HistoricalOrderMatch {
+    order_id: String,
+    order_status: Option<String>,
+    filled_size: Option<Decimal>,
+    status_timestamp: Option<DateTime<Utc>>,
+    event_time: DateTime<Utc>,
+    payload: serde_json::Value,
+}
+
 // ---- status-merge logic ---------------------------------------------------
 
 /// Terminal status values — once an order reaches one of these, the
@@ -209,6 +219,44 @@ pub fn merge_status(local_status: &str, exchange_status: OpenOrderStatus) -> (St
     };
     let changed = new != local_status;
     (new, changed)
+}
+
+fn historical_terminal_status(status: Option<&str>) -> Option<&'static str> {
+    let status = status?.to_ascii_lowercase();
+    if status == "filled" {
+        return Some("filled");
+    }
+    if status.contains("cancel") {
+        return Some("canceled");
+    }
+    if status.contains("reject") {
+        return Some("rejected");
+    }
+    None
+}
+
+async fn historical_order_match(
+    pool: &DbPool,
+    account_address: &str,
+    environment: &str,
+    row: &orders_store::OrderRow,
+) -> Result<Option<HistoricalOrderMatch>> {
+    sqlx::query_as::<_, HistoricalOrderMatch>(
+        "SELECT order_id, order_status, filled_size, status_timestamp, event_time, payload
+           FROM hyperliquid.historical_orders
+          WHERE account_address = $1
+            AND environment = $2
+            AND (client_order_id = $3 OR order_id = $4)
+          ORDER BY COALESCE(status_timestamp, event_time) DESC
+          LIMIT 1",
+    )
+    .bind(account_address)
+    .bind(environment)
+    .bind(&row.cloid)
+    .bind(row.exchange_oid.as_deref().unwrap_or_default())
+    .fetch_optional(pool)
+    .await
+    .context("failed to match local order against historical orders")
 }
 
 // ---- orphan-cancel decision ----------------------------------------------
@@ -329,19 +377,46 @@ pub async fn reconcile_account(
         }
 
         let Some(observed) = observed_status else {
-            // The order is not in the live open list. Two cases:
-            // 1. It's already terminal (filled/canceled) — the WS path
-            //    should have caught it; treat as unknown only when we
-            //    really can't tell.
-            // 2. The exchange has no record of the order, so it must be
-            //    stale — downgrade to `rejected` with a "vanished"
-            //    detail.
+            // An order absent from open_orders may have reached a terminal
+            // state while the WebSocket was disconnected. Resolve it from
+            // the historical feed before treating submission as ambiguous.
+            if let Some(historical) =
+                historical_order_match(pool, account_address, environment, row).await?
+                && let Some(status) = historical_terminal_status(historical.order_status.as_deref())
+            {
+                let outcome = orders_store::OrderOutcome {
+                    order_id: row.id,
+                    account_address: account_address.to_string(),
+                    environment: environment.to_string(),
+                    status: status.to_string(),
+                    status_detail: historical
+                        .order_status
+                        .map(|status| format!("resolved from historical order status '{status}'")),
+                    exchange_oid: Some(historical.order_id),
+                    filled_size: historical.filled_size,
+                    avg_fill_price: None,
+                    status_timestamp: historical.status_timestamp.unwrap_or(historical.event_time),
+                    source: "historical_reconcile".to_string(),
+                    response_payload: historical.payload,
+                };
+                if let Err(e) = orders_store::update_order_outcome(pool, &outcome).await {
+                    warn!(error = ?e, "reconcile: failed to apply historical order status");
+                    report.errors += 1;
+                } else {
+                    report.reconciled += 1;
+                }
+                continue;
+            }
+
+            // No exchange record does not prove rejection: the request may
+            // have timed out after Hyperliquid accepted it, or the history
+            // feed may not be current yet. Keep its CLOID reconcilable.
             if row.status != "pending_submission" {
                 continue;
             }
             // Grace period: a freshly-submitted order may not have
             // shown up on the live feed yet (WS round-trip, exchange
-            // indexing lag). Only mark "vanished" once the row is
+            // indexing lag). Only mark the outcome as ambiguous once the row is
             // older than [`PENDING_SUBMISSION_GRACE`].
             let age = Utc::now()
                 .signed_duration_since(row.created_at)
@@ -354,8 +429,10 @@ pub async fn reconcile_account(
                 order_id: row.id,
                 account_address: account_address.to_string(),
                 environment: environment.to_string(),
-                status: "rejected".to_string(),
-                status_detail: Some("order not found on exchange".to_string()),
+                status: "unknown".to_string(),
+                status_detail: Some(
+                    "submission outcome unknown; order not found on exchange".to_string(),
+                ),
                 exchange_oid: row.exchange_oid.clone(),
                 filled_size: None,
                 avg_fill_price: None,
@@ -830,7 +907,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn reconcile_marks_vanished_pending_as_rejected() {
+    async fn reconcile_marks_vanished_pending_as_unknown() {
         let pool = test_db::pool().await;
         let (agent_key, account) = seed_agent(&pool, "vanish").await;
 
@@ -870,7 +947,54 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(stored.len(), 1);
-        assert_eq!(stored[0].status, "rejected");
+        assert_eq!(stored[0].status, "unknown");
+    }
+
+    #[tokio::test]
+    async fn reconcile_resolves_absent_open_order_from_history() {
+        let pool = test_db::pool().await;
+        let (agent_key, account) = seed_agent(&pool, "historical").await;
+        let new = new_order_row(
+            &agent_key,
+            &account,
+            "0xcloid_historical",
+            "limit",
+            "BTC",
+            false,
+            None,
+        );
+        let id = new.id;
+        orders_store::insert_order(&pool, &new).await.unwrap();
+
+        let status_time = Utc::now();
+        sqlx::query(
+            "INSERT INTO hyperliquid.historical_orders (
+                account_address, environment, order_id, event_time, order_status,
+                filled_size, client_order_id, status_timestamp, payload, ingest_source, inserted_at
+             ) VALUES ($1, 'live', '12345', $2, 'filled', 0.1, $3, $2, $4, 'test', now())",
+        )
+        .bind(&account)
+        .bind(status_time)
+        .bind(&new.cloid)
+        .bind(json!({"status": "filled"}))
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let reader = FakeReader::new();
+        let exchange = FakeExchange::new();
+        let report = reconcile_account(&pool, &reader, &exchange, &account, "live")
+            .await
+            .unwrap();
+        assert_eq!(report.reconciled, 1);
+
+        let stored = orders_store::list_orders(&pool, &agent_key, None, None, None, None, None)
+            .await
+            .unwrap();
+        assert_eq!(stored[0].status, "filled");
+        assert_eq!(stored[0].exchange_oid.as_deref(), Some("12345"));
+        assert_eq!(stored[0].filled_size, Some(dec!(0.1)));
+        assert_eq!(stored[0].id, id);
     }
 
     #[tokio::test]
