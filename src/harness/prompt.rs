@@ -143,7 +143,7 @@ fn build_trading_prompt(request: &DispatchRequest) -> String {
     body.push_str(
         "- Do not open new exposure when no fresh market analysis exists for the symbol.\n",
     );
-    body.push_str("- Every non-reduce-only agent opening order must include the selected fresh market-analysis memory ID in `memory_record_ids` or the backend will reject it.\n");
+    body.push_str("- Before opening new exposure, verify that the selected market analysis is fresh for the symbol. Every non-reduce-only opening order must include that selected fresh market-analysis memory ID in `memory_record_ids` for execution traceability.\n");
     body.push_str("- Reduce-only or risk-reduction orders may omit `memory_record_ids`.\n");
     body.push_str(
         "- Agent-submitted orders should use the default `attribution_source = \"agent\"`.\n",
