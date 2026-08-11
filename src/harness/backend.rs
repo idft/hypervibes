@@ -523,6 +523,23 @@ async fn confirm_session_terminated(
     Ok(TerminationOutcome::StillActive)
 }
 
+/// Abort a session when needed and confirm it is no longer executing.
+///
+/// Callers must not remove the workspace or its database records when this
+/// returns `false`, because OpenCode may still be using them.
+pub(crate) async fn abort_and_confirm_session_terminated(
+    backend: &Arc<dyn HarnessBackend>,
+    base_url: &str,
+    session_id: &str,
+    workspace_container_path: Option<&str>,
+) -> Result<bool> {
+    Ok(!matches!(
+        confirm_session_terminated(backend, base_url, session_id, workspace_container_path,)
+            .await?,
+        TerminationOutcome::StillActive
+    ))
+}
+
 fn provider_retry_message(status: Option<&SessionStatusKind>) -> Option<String> {
     match status {
         Some(SessionStatusKind::Retry { message }) if !message.trim().is_empty() => {

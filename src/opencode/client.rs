@@ -455,6 +455,45 @@ impl OpenCodeClient {
         Ok(aborted)
     }
 
+    /// Abort an active session and wait briefly for it to become terminal.
+    ///
+    /// A `false` result means the abort was not accepted or the session was
+    /// still active after the bounded confirmation period.
+    pub async fn abort_and_confirm_session_terminated_in_directory(
+        &self,
+        base_url: &str,
+        session_id: &str,
+        workspace_container_path: &str,
+    ) -> Result<bool> {
+        let initial = self
+            .get_session_status_in_directory(base_url, session_id, Some(workspace_container_path))
+            .await?;
+        if !initial.is_some_and(|status| status.is_active()) {
+            return Ok(true);
+        }
+        if !self
+            .abort_session_in_directory(base_url, session_id, Some(workspace_container_path))
+            .await?
+        {
+            return Ok(false);
+        }
+
+        for _ in 0..3 {
+            tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+            let status = self
+                .get_session_status_in_directory(
+                    base_url,
+                    session_id,
+                    Some(workspace_container_path),
+                )
+                .await?;
+            if !status.is_some_and(|status| status.is_active()) {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
     /// Probe the live status of a single OpenCode session by querying
     /// `/session/status` (which returns a map keyed by session ID) and
     /// looking up `session_id`. Returns `Ok(None)` when the session is

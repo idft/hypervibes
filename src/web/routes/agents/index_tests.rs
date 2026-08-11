@@ -2,10 +2,13 @@
 use crate::web::routes::router;
 use crate::web::routes::test_support::*;
 
+use anyhow::Result;
+use async_trait::async_trait;
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use chrono::Utc;
 use std::fs;
+use std::sync::Arc;
 use tower::util::ServiceExt;
 
 use crate::{
@@ -13,9 +16,35 @@ use crate::{
         model::slugify_agent_key,
         store::{get_agent, list_agent_instrument_ids},
     },
+    harness::backend::{DispatchRequest, DispatchResult, HarnessBackend},
     hyperliquid::live_state::{AccountKey, AccountLiveState, LiveConnectionStatus},
+    opencode::client::SessionStatusKind,
     opencode::workspace::delete_agent_workspace,
 };
+
+struct RefusingDeleteAbortBackend;
+
+#[async_trait]
+impl HarnessBackend for RefusingDeleteAbortBackend {
+    async fn dispatch(&self, _request: DispatchRequest) -> Result<DispatchResult> {
+        Ok(DispatchResult {
+            backend_run_ref: "ses_unused".to_string(),
+        })
+    }
+
+    async fn abort_session(&self, _base_url: &str, _session_id: &str) -> Result<bool> {
+        Ok(false)
+    }
+
+    async fn get_session_status_in_directory(
+        &self,
+        _base_url: &str,
+        _session_id: &str,
+        _workspace_container_path: Option<&str>,
+    ) -> Result<Option<SessionStatusKind>> {
+        Ok(Some(SessionStatusKind::Busy))
+    }
+}
 
 #[tokio::test]
 async fn get_agents_renders_db_data() {
@@ -319,6 +348,87 @@ async fn post_delete_agent_removes_agent_and_redirects() {
     assert_eq!(response.status(), StatusCode::NOT_FOUND);
     assert!(!workspace_path.exists());
     assert!(state.live_accounts.get(&live_account_key).is_none());
+}
+
+#[tokio::test]
+async fn post_delete_agent_aborts_queued_run_before_deleting() {
+    let state = test_state().await;
+    let pool = state.db_pool.clone();
+    let (agent_key, _) = insert_test_opencode_agent(&state)
+        .await
+        .expect("insert agent");
+    generate_test_agent_workspace(&state, &agent_key).await;
+    let job_id = crate::harness::store::list_agent_jobs(&pool, &agent_key)
+        .await
+        .expect("list jobs")
+        .first()
+        .expect("default job")
+        .id;
+    crate::harness::store::insert_test_run(&pool, job_id, "queued")
+        .await
+        .expect("insert queued run");
+
+    let response = router(state.clone())
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/agents/{agent_key}/delete"))
+                .body(Body::empty())
+                .expect("build delete request"),
+        )
+        .await
+        .expect("delete agent");
+
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+    assert!(
+        get_agent(&pool, &agent_key)
+            .await
+            .expect("get deleted agent")
+            .is_none()
+    );
+}
+
+#[tokio::test]
+async fn post_delete_agent_preserves_disabled_agent_when_run_cannot_abort() {
+    let state = test_state_with_backend(Arc::new(RefusingDeleteAbortBackend)).await;
+    let pool = state.db_pool.clone();
+    let (agent_key, _) = insert_test_opencode_agent(&state)
+        .await
+        .expect("insert agent");
+    generate_test_agent_workspace(&state, &agent_key).await;
+    let job_id = crate::harness::store::list_agent_jobs(&pool, &agent_key)
+        .await
+        .expect("list jobs")
+        .first()
+        .expect("default job")
+        .id;
+    let run_id = crate::harness::store::insert_test_run(&pool, job_id, "running")
+        .await
+        .expect("insert running run");
+    crate::harness::store::mark_run_running(&pool, run_id, Some("ses_still_active"))
+        .await
+        .expect("mark running");
+
+    let response = router(state.clone())
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/agents/{agent_key}/delete"))
+                .body(Body::empty())
+                .expect("build delete request"),
+        )
+        .await
+        .expect("delete agent");
+
+    assert_eq!(response.status(), StatusCode::CONFLICT);
+    let agent = get_agent(&pool, &agent_key)
+        .await
+        .expect("get preserved agent")
+        .expect("agent remains after failed deletion");
+    assert!(
+        !agent.enabled,
+        "failed deletion must leave the agent disabled"
+    );
 }
 #[tokio::test]
 async fn post_agents_creates_the_opencode_workspace() {

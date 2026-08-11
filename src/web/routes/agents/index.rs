@@ -22,8 +22,10 @@ use crate::{
         store::{
             delete_agent as delete_agent_in_store, get_agent, insert_agent,
             list_agent_instrument_options, list_agents_for_user, replace_agent_instruments,
+            set_agent_enabled,
         },
     },
+    harness::store::{list_active_agent_runs, mark_run_aborted},
     hyperliquid::live_state::{AccountKey, AccountLiveState, LiveConnectionStatus},
     opencode::{
         client::{DeleteSessionResult, SessionStatusKind},
@@ -145,6 +147,59 @@ pub(in crate::web::routes) async fn delete_agent(
                 "agent is missing OpenCode workspace metadata"
             ))
         })?;
+
+    // Disable first so the execution lock waits for an in-flight placement and
+    // prevents further order submissions or job dispatch while deletion runs.
+    if agent.enabled && !set_agent_enabled(&state.db_pool, &agent_key, false).await? {
+        return Ok((StatusCode::NOT_FOUND, "agent not found").into_response());
+    }
+
+    for run in list_active_agent_runs(&state.db_pool, &agent_key).await? {
+        if let Some(session_id) = run.backend_run_ref.as_deref()
+            && !crate::harness::backend::abort_and_confirm_session_terminated(
+                &state.harness_backend,
+                &state.opencode_base_url,
+                session_id,
+                Some(&workspace.workspace_container_path),
+            )
+            .await?
+        {
+            return Ok((
+                StatusCode::CONFLICT,
+                "could not stop an active run; the agent remains disabled",
+            )
+                .into_response());
+        }
+        mark_run_aborted(&state.db_pool, run.id, "aborted by agent deletion", None).await?;
+    }
+
+    let conversation_sessions =
+        crate::agent_conversations::store::list_agent_conversation_opencode_session_ids(
+            &state.db_pool,
+            &agent_key,
+        )
+        .await?;
+    for session_id in conversation_sessions {
+        if !state
+            .opencode_client
+            .abort_and_confirm_session_terminated_in_directory(
+                &state.opencode_base_url,
+                &session_id,
+                &workspace.workspace_container_path,
+            )
+            .await?
+        {
+            return Ok((
+                StatusCode::CONFLICT,
+                "could not stop an active conversation; the agent remains disabled",
+            )
+                .into_response());
+        }
+    }
+
+    // Existing runs and turns release their read leases after the abort above.
+    // Once the write lease is held, no new workspace work can begin.
+    let _workspace_lease = state.workspace_leases.acquire_live_write(&agent_key).await;
     let conversation_sessions =
         crate::agent_conversations::store::list_agent_conversation_opencode_session_ids(
             &state.db_pool,
@@ -163,7 +218,7 @@ pub(in crate::web::routes) async fn delete_agent(
         if status.as_ref().is_some_and(SessionStatusKind::is_active) {
             return Ok((
                 StatusCode::CONFLICT,
-                "stop active conversations before deleting this agent",
+                "an active conversation prevented deletion; the agent remains disabled",
             )
                 .into_response());
         }
@@ -179,6 +234,15 @@ pub(in crate::web::routes) async fn delete_agent(
             DeleteSessionResult::Deleted | DeleteSessionResult::NotFound => {}
         }
     }
+
+    state
+        .workspace_controller
+        .delete_workspace(
+            &agent.agent_key,
+            &format!("delete-agent:{}", agent.agent_key),
+        )
+        .await?;
+
     let account_key = AccountKey::new(trading_account_address, &agent.environment);
     let deleted = delete_agent_in_store(&state.db_pool, &agent_key).await?;
     if !deleted {
@@ -186,12 +250,6 @@ pub(in crate::web::routes) async fn delete_agent(
     }
 
     state.live_accounts.remove(&account_key);
-
-    state.workspace_controller.delete_workspace(&agent.agent_key, &format!("delete-agent:{}", agent.agent_key)).await.inspect_err(
-        |error| {
-            error!(agent_key = %agent.agent_key, error = ?error, "failed to delete OpenCode workspace after deleting agent");
-        },
-    )?;
 
     Ok(Redirect::to("/agents").into_response())
 }
