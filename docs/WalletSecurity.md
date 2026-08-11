@@ -23,13 +23,24 @@
 The Account page handles signer setup, replacement, and approval. A replacement
 must be explicit and must derive a fresh address; the old deregistered address
 is never silently reused. Approval timestamps are recorded only after
-Hyperliquid accepts the relay. Exchange-provided expiry is stored only when an
-authoritative response provides it; it is never synthesized from approval time.
+Hyperliquid accepts the relay. Hyperliquid does not expose an API-wallet expiry
+lookup, so Vibetrading records the expected six-month signer lifetime from that
+approval and treats it as the local expiry deadline. The Account page and
+authenticated-page navbar warn when fewer than 30 days remain.
 
 Before every order or cancel action, Vibetrading requires an active agent,
-valid owner signer material, recorded approval, and a live signer expiry check
-when expiry is available. Any failure blocks all of the owner's exchange
-actions with a trading-signer error while preserving account history.
+valid owner signer material, recorded approval, and an unexpired local signer
+deadline. Any failure blocks all of the owner's exchange actions with a
+trading-signer error while preserving account history.
+
+## Agent API Keys
+
+Agent API keys are Vibetrading bearer credentials used by MCP tools and external
+agent harnesses to access the application's agent API. They do not grant direct
+access to the trading signer. They are deliberately stored in plaintext and
+rendered on the agent Settings page so the owner can retrieve and copy them
+later; they are not rotated or revoked. This is an intentional usability
+tradeoff for this low-scope integration credential.
 
 ## Server-Side L1 Actions
 
