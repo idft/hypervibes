@@ -113,3 +113,26 @@ describe("position close confirmation", () => {
     expect(modal.classList.contains("hidden")).toBe(true);
   });
 });
+
+describe("run cancellation confirmation", () => {
+  it("opens and closes the run cancellation modal", () => {
+    document.body.innerHTML = `
+      <button type="button" data-run-cancel-trigger>Cancel run</button>
+      <div id="run-cancel-modal" class="hidden">
+        <button type="button" data-run-cancel-close>Keep running</button>
+        <form action="/agents/test/runs/1/cancel" method="post"><button type="submit">Cancel run</button></form>
+      </div>
+    `;
+    installAgentLiveLifecycle();
+
+    const trigger = document.querySelector<HTMLElement>("[data-run-cancel-trigger]");
+    const modal = document.getElementById("run-cancel-modal");
+    if (!trigger || !modal) throw new Error("Run cancellation controls were not rendered");
+
+    trigger.click();
+    expect(modal.classList.contains("flex")).toBe(true);
+
+    document.querySelector<HTMLElement>("[data-run-cancel-close]")?.click();
+    expect(modal.classList.contains("hidden")).toBe(true);
+  });
+});

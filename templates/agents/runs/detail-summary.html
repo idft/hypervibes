@@ -6,9 +6,7 @@
         <h2 class="text-lg font-medium text-white">{{ run.job_key }} · Run {{ run.id }}</h2>
         <span class="inline-flex rounded-full border px-2 py-0.5 text-xs font-medium {{ run.status_class }}">{{ run.status_label }}</span>
         {% if run.status == "running" && !run.backend_run_ref.is_empty() %}
-        <form action="/agents/{{ run.agent_key }}/runs/{{ run.id }}/cancel" method="post" class="ml-auto" onsubmit="return confirm('Cancel this running job?');">
-            <button type="submit" class="cursor-pointer rounded-full border border-amber-800/70 px-3 py-1.5 text-xs font-medium text-amber-200 hover:border-amber-600 hover:bg-amber-950/30">Cancel run</button>
-        </form>
+        <button type="button" data-run-cancel-trigger class="ml-auto cursor-pointer rounded-full border border-amber-800/70 px-3 py-1.5 text-xs font-medium text-amber-200 hover:border-amber-600 hover:bg-amber-950/30">Cancel run</button>
         {% endif %}
         {% if run.status == "failed" %}
         <form action="/agents/{{ run.agent_key }}/runs/{{ run.id }}/retry" method="post" class="ml-auto">
@@ -88,6 +86,21 @@
     </div>
     {% endif %}
 </div>
+
+{% if run.status == "running" && !run.backend_run_ref.is_empty() %}
+<div id="run-cancel-modal" class="fixed inset-0 z-50 hidden items-center justify-center bg-black/70 px-4 backdrop-blur-sm" aria-modal="true" aria-labelledby="run-cancel-modal-title" role="dialog">
+    <div class="w-full max-w-md rounded-2xl border border-zinc-800 bg-[#0d0d10] p-6 shadow-2xl">
+        <h3 id="run-cancel-modal-title" class="text-lg font-semibold text-white">Cancel run</h3>
+        <p class="mt-2 text-sm leading-6 text-zinc-400">Cancel this running job?</p>
+        <div class="mt-6 flex flex-col-reverse gap-3 sm:flex-row sm:justify-end">
+            <button type="button" data-run-cancel-close class="w-full cursor-pointer rounded-full border border-zinc-800 px-4 py-2 text-sm font-medium text-zinc-300 hover:border-zinc-700 hover:text-white sm:w-auto">Keep running</button>
+            <form action="/agents/{{ run.agent_key }}/runs/{{ run.id }}/cancel" method="post" class="w-full sm:w-auto">
+                <button type="submit" class="w-full cursor-pointer rounded-full bg-amber-600 px-4 py-2 text-sm font-medium text-white hover:bg-amber-500 sm:w-auto">Cancel run</button>
+            </form>
+        </div>
+    </div>
+</div>
+{% endif %}
 
 {% if !run.error_summary.is_empty() %}
 <section class="mt-6 border-t border-zinc-800 bg-red-950/20 p-4">

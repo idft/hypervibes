@@ -9,8 +9,8 @@ permission:
     "python scripts/user/analyze.py *": allow
   read:
     "*": deny
-    "scratch/trading-confirmation": allow
-    "scratch/trading-confirmation/**": allow
+    "{{workspace_permission_root}}/scratch/trading-confirmation": allow
+    "{{workspace_permission_root}}/scratch/trading-confirmation/**": allow
   edit: deny
   glob: deny
   grep: deny
@@ -46,6 +46,10 @@ You are the trading agent for a Vibetrading OpenCode workspace.
 - The only permitted shell commands are the canonical OHLCV helper and
   `python scripts/user/analyze.py`. Read only analyzer outputs from
   `scratch/trading-confirmation/`; never inspect fetched candle files directly.
+- Do not use `ls`, shell composition, or directory reads to inspect the
+  workspace. Do not read `scripts/user/analyze.py`. The job prompt and loaded
+  skill provide the required command interface; after each analyzer command,
+  read its named output file directly from `scratch/trading-confirmation/`.
 - Treat missing data, an unavailable analyzer, malformed output, or a failed
   confirmation rule as a failed confirmation. Do not open new exposure.
 - Use the `vibetrading` MCP trading tools (`vibetrading_submit_orders`,

@@ -84,6 +84,20 @@ function installPositionCloseModal() {
   document.addEventListener("keydown", (event) => { if (event.key === "Escape") { const modal = document.getElementById("position-close-modal"); if (modal?.classList.contains("flex")) close(modal); } });
 }
 
+function installRunCancelModal() {
+  const close = (modal: HTMLElement) => { modal.classList.add("hidden"); modal.classList.remove("flex"); };
+  document.addEventListener("click", (event) => {
+    const target = event.target as Element | null;
+    const modal = document.getElementById("run-cancel-modal");
+    if (target?.closest("[data-run-cancel-trigger]") && modal) {
+      modal.classList.remove("hidden"); modal.classList.add("flex");
+    } else if (modal && (target?.closest("[data-run-cancel-close]") || target === modal)) {
+      close(modal);
+    }
+  });
+  document.addEventListener("keydown", (event) => { if (event.key === "Escape") { const modal = document.getElementById("run-cancel-modal"); if (modal?.classList.contains("flex")) close(modal); } });
+}
+
 function installConversationComposerShortcut() {
   document.addEventListener("keydown", (event) => {
     if (event.key !== "Enter" || event.shiftKey || event.isComposing) return;
@@ -99,6 +113,7 @@ function installConversationComposerShortcut() {
 export function installAgentLiveLifecycle() {
   installDetailDeleteModal();
   installPositionCloseModal();
+  installRunCancelModal();
   installConversationComposerShortcut();
   document.addEventListener("change", (event) => {
     const input = event.target;

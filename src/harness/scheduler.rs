@@ -692,7 +692,7 @@ async fn process_workspace_maintenance_tasks(
     pool: &DbPool,
     workspace_controller: &Arc<dyn WorkspaceController>,
     agent_api_base_url: &str,
-    _opencode_client: &Arc<OpenCodeClient>,
+    opencode_client: &Arc<OpenCodeClient>,
     workspace_leases: &WorkspaceLeaseManager,
 ) -> Result<()> {
     let Some(task) = store::get_next_queued_workspace_regenerate_task(pool).await? else {
@@ -782,13 +782,19 @@ async fn process_workspace_maintenance_tasks(
             )
             .await?;
         let runtime_config = OpenCodeWorkspaceRuntimeConfig {
-            workspace_container_path: generated.workspace_container_path,
+            workspace_container_path: generated.workspace_container_path.clone(),
             profile_source: generated.profile_source,
         }
         .into_value();
         if !update_agent_runtime_config(pool, &agent.agent_key, runtime_config).await? {
             anyhow::bail!("agent disappeared before workspace metadata update");
         }
+        opencode_client
+            .dispose_workspace_instance(
+                opencode_client.base_url(),
+                &generated.workspace_container_path,
+            )
+            .await?;
         if reset_memories {
             delete_memories_for_agent(pool, &agent.agent_key).await?;
         }
@@ -2270,6 +2276,35 @@ mod tests {
         }
     }
 
+    async fn workspace_maintenance_runtime(
+        in_flight: InFlightTracker,
+    ) -> (HarnessSchedulerRuntime, tokio::task::JoinHandle<()>) {
+        use axum::{Json, Router, routing::post};
+
+        let app = Router::new().route("/instance/dispose", post(|| async { Json(true) }));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind workspace instance dispose test server");
+        let base_url = format!("http://{}", listener.local_addr().expect("local address"));
+        let server = tokio::spawn(async move {
+            axum::serve(listener, app)
+                .await
+                .expect("serve workspace instance dispose test server");
+        });
+        let mut runtime = scheduler_runtime(in_flight);
+        runtime.opencode_client = Arc::new(
+            OpenCodeClient::new(
+                crate::opencode::client::OpenCodeClientConfig::new_with_base_url(
+                    "opencode".to_string(),
+                    None,
+                    base_url,
+                ),
+            )
+            .expect("build OpenCode client"),
+        );
+        (runtime, server)
+    }
+
     impl FakeBackend {
         fn success(calls: Arc<Mutex<Vec<DispatchRequest>>>) -> Self {
             Self {
@@ -3015,14 +3050,9 @@ mod tests {
         let live_accounts = Arc::new(crate::hyperliquid::live_state::LiveAccountStore::new());
         let (_tx, rx) = watch::channel(false);
         let (_force_tx, force_rx) = watch::channel(false);
-        let mut scheduler = HarnessScheduler::new(
-            pool.clone(),
-            rx,
-            force_rx,
-            backend,
-            live_accounts,
-            scheduler_runtime(InFlightTracker::new()),
-        );
+        let (runtime, server) = workspace_maintenance_runtime(InFlightTracker::new()).await;
+        let mut scheduler =
+            HarnessScheduler::new(pool.clone(), rx, force_rx, backend, live_accounts, runtime);
         scheduler.tick().await.expect("tick");
 
         let task = store::get_latest_workspace_regenerate_task(&pool, &key)
@@ -3052,6 +3082,7 @@ mod tests {
                 .await
                 .expect("count memories");
         assert_eq!(memory_count, 0);
+        server.abort();
     }
 
     #[tokio::test]
@@ -3086,14 +3117,9 @@ mod tests {
         let live_accounts = Arc::new(crate::hyperliquid::live_state::LiveAccountStore::new());
         let (_tx, rx) = watch::channel(false);
         let (_force_tx, force_rx) = watch::channel(false);
-        let mut scheduler = HarnessScheduler::new(
-            pool.clone(),
-            rx,
-            force_rx,
-            backend,
-            live_accounts,
-            scheduler_runtime(InFlightTracker::new()),
-        );
+        let (runtime, server) = workspace_maintenance_runtime(InFlightTracker::new()).await;
+        let mut scheduler =
+            HarnessScheduler::new(pool.clone(), rx, force_rx, backend, live_accounts, runtime);
         scheduler.tick().await.expect("tick");
 
         let task = store::get_latest_workspace_regenerate_task(&pool, &key)
@@ -3104,6 +3130,7 @@ mod tests {
             task.status,
             crate::harness::model::MAINTENANCE_STATUS_SUCCEEDED
         );
+        server.abort();
     }
 
     #[tokio::test]
@@ -3137,14 +3164,9 @@ mod tests {
         let live_accounts = Arc::new(crate::hyperliquid::live_state::LiveAccountStore::new());
         let (_tx, rx) = watch::channel(false);
         let (_force_tx, force_rx) = watch::channel(false);
-        let mut scheduler = HarnessScheduler::new(
-            pool.clone(),
-            rx,
-            force_rx,
-            backend,
-            live_accounts,
-            scheduler_runtime(InFlightTracker::new()),
-        );
+        let (runtime, server) = workspace_maintenance_runtime(InFlightTracker::new()).await;
+        let mut scheduler =
+            HarnessScheduler::new(pool.clone(), rx, force_rx, backend, live_accounts, runtime);
         scheduler.tick().await.expect("tick");
 
         let task = store::get_latest_workspace_regenerate_task(&pool, &key)
@@ -3155,6 +3177,7 @@ mod tests {
             task.status,
             crate::harness::model::MAINTENANCE_STATUS_SUCCEEDED
         );
+        server.abort();
     }
 
     #[tokio::test]

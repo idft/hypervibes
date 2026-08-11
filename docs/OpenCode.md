@@ -150,6 +150,8 @@ Re-generating a workspace is now queued as per-agent maintenance work instead of
 
 Regular re-generation still refreshes generated files while preserving user-managed files under paths like `scripts/user/`, `data/`, and `scratch/`.
 
+After a workspace re-generation, Vibetrading disposes that workspace's idle OpenCode instance so its next session loads the refreshed generated configuration. Other agent workspaces are not interrupted.
+
 Operators may also queue a hard reset, which deletes the full workspace directory first and then re-generates it from the template.
 
 Only one queued/running workspace maintenance task is allowed per agent. Duplicate submissions are rejected.

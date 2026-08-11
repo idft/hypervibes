@@ -682,6 +682,33 @@ impl OpenCodeClient {
         self.provider_cache.write().await.clear();
     }
 
+    /// Dispose one workspace's cached OpenCode instance after its generated
+    /// configuration changes. Unlike global disposal, this cannot interrupt
+    /// work in another agent workspace.
+    pub async fn dispose_workspace_instance(
+        &self,
+        base_url: &str,
+        workspace_container_path: &str,
+    ) -> Result<()> {
+        let url = build_url(
+            base_url,
+            "instance/dispose",
+            &[("directory", workspace_container_path)],
+        );
+        let response = self
+            .http
+            .post(url)
+            .timeout(self.config.status_timeout)
+            .apply_basic_auth(&self.config)
+            .send()
+            .await
+            .map_err(|error| {
+                anyhow!("OpenCode workspace instance dispose request failed: {error}")
+            })?;
+        let _ = parse_status_response(response, "workspace instance dispose").await?;
+        Ok(())
+    }
+
     /// Dispose all OpenCode instances, invalidating the in-memory
     /// provider/runtime cache so newly stored credentials are reflected
     /// in the next `/provider` response. This is the HTTP equivalent of
@@ -1153,6 +1180,51 @@ mod tests {
         assert_eq!(
             directory.lock().expect("lock directory").as_deref(),
             Some("/workspaces/coding/btc-1/7/workspace")
+        );
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn workspace_instance_dispose_uses_workspace_directory() {
+        use std::sync::Mutex;
+
+        use axum::{Json, Router, extract::Query, routing::post};
+
+        let directory = Arc::new(Mutex::new(None));
+        let app = Router::new().route(
+            "/instance/dispose",
+            post({
+                let directory = Arc::clone(&directory);
+                move |Query(query): Query<HashMap<String, String>>| {
+                    let directory = Arc::clone(&directory);
+                    async move {
+                        *directory.lock().expect("lock directory") =
+                            query.get("directory").cloned();
+                        Json(true)
+                    }
+                }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind instance dispose test server");
+        let base_url = format!("http://{}", listener.local_addr().expect("local address"));
+        let server = tokio::spawn(async move {
+            axum::serve(listener, app)
+                .await
+                .expect("serve instance dispose test server");
+        });
+        let client = OpenCodeClient::new(OpenCodeClientConfig::new("opencode".to_string(), None))
+            .expect("client");
+
+        client
+            .dispose_workspace_instance(&base_url, "/workspaces/agents/btc-1")
+            .await
+            .expect("dispose workspace instance");
+
+        assert_eq!(
+            directory.lock().expect("lock directory").as_deref(),
+            Some("/workspaces/agents/btc-1")
         );
         server.abort();
     }

@@ -111,12 +111,7 @@ pub fn generate_agent_workspace(
             .with_context(|| format!("failed to create workspace directory {}", path.display()))?;
     }
 
-    let replacements = BTreeMap::from([
-        ("agent_key", agent.agent_key.clone()),
-        ("display_name", agent.display_name.clone()),
-        ("api_base_url", config.api_base_url.clone()),
-        ("workspace_container_path", workspace_container_path.clone()),
-    ]);
+    let replacements = template_replacements(config, agent, &workspace_container_path);
 
     write_rendered_template(
         &config.source_root.join("opencode.json.template"),
@@ -133,9 +128,10 @@ pub fn generate_agent_workspace(
         &config.source_root.join(".opencode/commands"),
         &workspace_host_path.join(".opencode/commands"),
     )?;
-    copy_tree(
+    copy_rendered_tree(
         &config.source_root.join(".opencode/agents"),
         &workspace_host_path.join(".opencode/agents"),
+        &replacements,
     )?;
     copy_tree(
         &config.source_root.join(".opencode/skills"),
@@ -335,7 +331,12 @@ fn expected_workspace_template_files(
         Path::new(".opencode/agents"),
         Path::new(".opencode/skills"),
     ] {
-        collect_expected_workspace_files(&config.source_root, relative_root, &mut files)?;
+        collect_expected_workspace_files(
+            &config.source_root,
+            relative_root,
+            &replacements,
+            &mut files,
+        )?;
     }
 
     files.sort_by(|left, right| left.relative_path.cmp(&right.relative_path));
@@ -345,6 +346,7 @@ fn expected_workspace_template_files(
 fn collect_expected_workspace_files(
     source_root: &Path,
     relative_root: &Path,
+    replacements: &BTreeMap<&str, String>,
     files: &mut Vec<ExpectedWorkspaceFile>,
 ) -> Result<()> {
     let source_path = source_root.join(relative_root);
@@ -364,7 +366,7 @@ fn collect_expected_workspace_files(
             .metadata()
             .with_context(|| format!("failed to stat {}", entry_path.display()))?;
         if metadata.is_dir() {
-            collect_expected_workspace_files(source_root, &relative_path, files)?;
+            collect_expected_workspace_files(source_root, &relative_path, replacements, files)?;
             continue;
         }
         if !metadata.is_file() || file_name == ".gitkeep" {
@@ -372,9 +374,13 @@ fn collect_expected_workspace_files(
         }
         files.push(ExpectedWorkspaceFile {
             relative_path,
-            expected_contents: fs::read(&entry_path).with_context(|| {
-                format!("failed to read template file {}", entry_path.display())
-            })?,
+            expected_contents: if relative_root.starts_with(Path::new(".opencode/agents")) {
+                render_template_file(&entry_path, replacements)?.into_bytes()
+            } else {
+                fs::read(&entry_path).with_context(|| {
+                    format!("failed to read template file {}", entry_path.display())
+                })?
+            },
         });
     }
 
@@ -393,6 +399,10 @@ fn template_replacements(
         (
             "workspace_container_path",
             workspace_container_path.to_string(),
+        ),
+        (
+            "workspace_permission_root",
+            workspace_container_path.trim_start_matches('/').to_string(),
         ),
     ])
 }
@@ -471,6 +481,37 @@ fn copy_tree(source_root: &Path, destination_root: &Path) -> Result<()> {
                     destination_path.display()
                 )
             })?;
+        }
+    }
+
+    Ok(())
+}
+
+fn copy_rendered_tree(
+    source_root: &Path,
+    destination_root: &Path,
+    replacements: &BTreeMap<&str, String>,
+) -> Result<()> {
+    let entries = fs::read_dir(source_root)
+        .with_context(|| format!("failed to read directory {}", source_root.display()))?;
+
+    for entry in entries {
+        let entry =
+            entry.with_context(|| format!("failed to read entry in {}", source_root.display()))?;
+        if is_workspace_excluded_artifact(&entry.file_name()) {
+            continue;
+        }
+        let source_path = entry.path();
+        let destination_path = destination_root.join(entry.file_name());
+        let metadata = entry
+            .metadata()
+            .with_context(|| format!("failed to stat {}", source_path.display()))?;
+        if metadata.is_dir() {
+            fs::create_dir_all(&destination_path)
+                .with_context(|| format!("failed to create {}", destination_path.display()))?;
+            copy_rendered_tree(&source_path, &destination_path, replacements)?;
+        } else if metadata.is_file() {
+            write_rendered_template(&source_path, &destination_path, replacements)?;
         }
     }
 
@@ -692,8 +733,16 @@ mod tests {
             "\"*\": deny\n    \"python .opencode/skills/hyperliquid-data/fetch_ohlcv.py *\": allow"
         ));
         assert!(profile.contains("\"python scripts/user/analyze.py *\": allow"));
-        assert!(profile.contains("scratch/trading-confirmation/**\": allow"));
+        assert!(
+            profile.contains("\"workspaces/agents/btc-2/scratch/trading-confirmation\": allow")
+        );
+        assert!(
+            profile.contains("\"workspaces/agents/btc-2/scratch/trading-confirmation/**\": allow")
+        );
+        assert!(!profile.contains("\"scratch/trading-confirmation/**\": allow"));
         assert!(profile.contains("hyperliquid-data: allow"));
+        assert!(profile.contains("Do not use `ls`, shell composition, or directory reads"));
+        assert!(profile.contains("Do not read `scripts/user/analyze.py`."));
         assert!(profile.contains("webfetch: deny"));
         assert!(profile.contains("task: deny"));
     }
@@ -979,7 +1028,8 @@ mod tests {
         assert!(!destination.join("__pycache__").exists());
 
         let mut files = Vec::new();
-        collect_expected_workspace_files(&source, Path::new("skills"), &mut files)
+        let replacements = BTreeMap::new();
+        collect_expected_workspace_files(&source, Path::new("skills"), &replacements, &mut files)
             .expect("collect template files");
         assert_eq!(files.len(), 1);
         assert_eq!(files[0].relative_path, PathBuf::from("skills/SKILL.md"));
