@@ -1,10 +1,10 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::{Context, Result, anyhow};
 use sqlx::{Postgres, Transaction, query_as};
 
 use crate::{
-    agents::model::{AgentDetailRow, AgentListRow, AgentRegistryRow},
+    agents::model::{AgentDetailRow, AgentListRow, AgentReadiness, AgentRegistryRow},
     db::DbPool,
     web::templates::shared::currency_logo_url,
 };
@@ -57,6 +57,155 @@ pub async fn list_agents_for_user(pool: &DbPool, user_id: uuid::Uuid) -> Result<
     .fetch_all(pool)
     .await
     .context("failed to list user agents")?;
+    Ok(rows)
+}
+
+/// Load the setup state that determines whether each active agent can run the
+/// unattended analysis-to-trading chain.
+pub async fn list_agent_readiness_for_user(
+    pool: &DbPool,
+    user_id: uuid::Uuid,
+) -> Result<BTreeMap<String, AgentReadiness>> {
+    let rows = query_as::<_, AgentReadiness>(
+        "SELECT agents.agent_key,
+                agents.lifecycle = 'active' AS active,
+                agents.enabled,
+                EXISTS (
+                    SELECT 1
+                      FROM agent_instruments
+                      JOIN hyperliquid.instruments AS instruments
+                        ON instruments.instrument_id = agent_instruments.instrument_id
+                     WHERE agent_instruments.agent_key = agents.agent_key
+                       AND instruments.market_type = 'perp'
+                       AND instruments.active = true
+                ) AS has_selected_instruments,
+                EXISTS (
+                    SELECT 1
+                      FROM harness_jobs
+                     WHERE harness_jobs.agent_key = agents.agent_key
+                       AND harness_jobs.job_kind = 'analysis'
+                       AND harness_jobs.trigger_type = 'candle_closed'
+                       AND harness_jobs.enabled = true
+                ) AS has_enabled_analysis_job,
+                EXISTS (
+                    SELECT 1
+                      FROM harness_jobs
+                     WHERE harness_jobs.agent_key = agents.agent_key
+                       AND harness_jobs.job_kind = 'market_analysis'
+                       AND harness_jobs.trigger_type = 'analysis_batch_completed'
+                       AND harness_jobs.enabled = true
+                ) AS has_enabled_market_analysis_job,
+                EXISTS (
+                    SELECT 1
+                      FROM harness_jobs
+                     WHERE harness_jobs.agent_key = agents.agent_key
+                       AND harness_jobs.job_kind = 'trading'
+                       AND harness_jobs.trigger_type = 'candle_closed'
+                       AND harness_jobs.enabled = true
+                ) AS has_enabled_trading_job,
+                (
+                    SELECT id
+                     FROM harness_jobs
+                     WHERE harness_jobs.agent_key = agents.agent_key
+                       AND harness_jobs.job_kind = 'market_analysis'
+                       AND harness_jobs.trigger_type = 'analysis_batch_completed'
+                     ORDER BY id
+                     LIMIT 1
+                ) AS market_analysis_job_id,
+                (
+                    SELECT id
+                      FROM harness_jobs
+                     WHERE harness_jobs.agent_key = agents.agent_key
+                       AND harness_jobs.job_kind = 'trading'
+                       AND harness_jobs.trigger_type = 'candle_closed'
+                     ORDER BY id
+                     LIMIT 1
+                ) AS trading_job_id
+           FROM agents
+          WHERE agents.user_id = $1
+            AND agents.lifecycle = 'active'",
+    )
+    .bind(user_id)
+    .fetch_all(pool)
+    .await
+    .context("failed to list agent readiness")?;
+
+    Ok(rows
+        .into_iter()
+        .map(|readiness| (readiness.agent_key.clone(), readiness))
+        .collect())
+}
+
+/// Load readiness for a single agent page.
+pub async fn get_agent_readiness(pool: &DbPool, agent_key: &str) -> Result<Option<AgentReadiness>> {
+    let rows = list_agent_readiness_for_agent_key(pool, agent_key).await?;
+    Ok(rows.into_iter().next())
+}
+
+async fn list_agent_readiness_for_agent_key(
+    pool: &DbPool,
+    agent_key: &str,
+) -> Result<Vec<AgentReadiness>> {
+    let rows = query_as::<_, AgentReadiness>(
+        "SELECT agents.agent_key,
+                agents.lifecycle = 'active' AS active,
+                agents.enabled,
+                EXISTS (
+                    SELECT 1
+                      FROM agent_instruments
+                      JOIN hyperliquid.instruments AS instruments
+                        ON instruments.instrument_id = agent_instruments.instrument_id
+                     WHERE agent_instruments.agent_key = agents.agent_key
+                       AND instruments.market_type = 'perp'
+                       AND instruments.active = true
+                ) AS has_selected_instruments,
+                EXISTS (
+                    SELECT 1 FROM harness_jobs
+                     WHERE harness_jobs.agent_key = agents.agent_key
+                       AND harness_jobs.job_kind = 'analysis'
+                       AND harness_jobs.trigger_type = 'candle_closed'
+                       AND harness_jobs.enabled = true
+                ) AS has_enabled_analysis_job,
+                EXISTS (
+                    SELECT 1 FROM harness_jobs
+                     WHERE harness_jobs.agent_key = agents.agent_key
+                       AND harness_jobs.job_kind = 'market_analysis'
+                       AND harness_jobs.trigger_type = 'analysis_batch_completed'
+                       AND harness_jobs.enabled = true
+                ) AS has_enabled_market_analysis_job,
+                EXISTS (
+                    SELECT 1 FROM harness_jobs
+                     WHERE harness_jobs.agent_key = agents.agent_key
+                       AND harness_jobs.job_kind = 'trading'
+                       AND harness_jobs.trigger_type = 'candle_closed'
+                       AND harness_jobs.enabled = true
+                ) AS has_enabled_trading_job,
+                (
+                    SELECT id
+                      FROM harness_jobs
+                     WHERE harness_jobs.agent_key = agents.agent_key
+                       AND harness_jobs.job_kind = 'market_analysis'
+                       AND harness_jobs.trigger_type = 'analysis_batch_completed'
+                     ORDER BY id
+                     LIMIT 1
+                ) AS market_analysis_job_id,
+                (
+                    SELECT id
+                      FROM harness_jobs
+                     WHERE harness_jobs.agent_key = agents.agent_key
+                       AND harness_jobs.job_kind = 'trading'
+                       AND harness_jobs.trigger_type = 'candle_closed'
+                     ORDER BY id
+                     LIMIT 1
+                ) AS trading_job_id
+           FROM agents
+          WHERE agents.agent_key = $1",
+    )
+    .bind(agent_key)
+    .fetch_all(pool)
+    .await
+    .with_context(|| format!("failed to load readiness for agent {agent_key}"))?;
+
     Ok(rows)
 }
 
@@ -496,6 +645,60 @@ mod tests {
 
         let agents = list_agents(&pool).await.expect("list agents");
         assert!(agents.iter().any(|a| a.agent_key == key));
+    }
+
+    #[tokio::test]
+    async fn readiness_tracks_the_complete_agent_trading_chain() {
+        let pool = test_db::pool().await;
+        let key = format!("readiness-test-{}", Utc::now().timestamp_millis());
+        let agent = sample_agent(&key);
+        insert_agent(&pool, &agent).await.expect("insert agent");
+        crate::harness::store::insert_default_harness_jobs(&pool, &key)
+            .await
+            .expect("insert default jobs");
+
+        let initial = get_agent_readiness(&pool, &key)
+            .await
+            .expect("load initial readiness")
+            .expect("agent readiness");
+        assert!(initial.enabled);
+        assert!(!initial.has_selected_instruments);
+        assert!(!initial.has_enabled_analysis_job);
+        assert!(!initial.has_enabled_market_analysis_job);
+        assert!(!initial.has_enabled_trading_job);
+        assert!(!initial.is_ready_for_agent_trading());
+
+        seed_instrument(&pool, "BTC", "perp", true).await;
+        replace_agent_instruments(&pool, &key, &["BTC".to_string()])
+            .await
+            .expect("select BTC");
+        sqlx::query(
+            "UPDATE harness_jobs
+                SET model_provider_id = 'test-provider',
+                    model_id = 'test-model',
+                    enabled = true
+              WHERE agent_key = $1
+                AND job_kind IN ('analysis', 'market_analysis', 'trading')",
+        )
+        .bind(&key)
+        .execute(&pool)
+        .await
+        .expect("configure required jobs");
+
+        let readiness = get_agent_readiness(&pool, &key)
+            .await
+            .expect("load configured readiness")
+            .expect("agent readiness");
+        assert!(readiness.has_selected_instruments);
+        assert!(readiness.has_enabled_analysis_job);
+        assert!(readiness.has_enabled_market_analysis_job);
+        assert!(readiness.has_enabled_trading_job);
+        assert!(readiness.is_ready_for_agent_trading());
+
+        let all_readiness = list_agent_readiness_for_user(&pool, agent.user_id)
+            .await
+            .expect("list user readiness");
+        assert!(all_readiness.contains_key(&key));
     }
 
     #[tokio::test]

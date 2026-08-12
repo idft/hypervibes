@@ -3,7 +3,7 @@ use rust_decimal::Decimal;
 use uuid::Uuid;
 
 use crate::{
-    agents::model::{AgentDetailRow, AgentListRow},
+    agents::model::{AgentDetailRow, AgentListRow, AgentReadiness},
     hyperliquid::queries::BalancePoint,
     memory::MemoryRecord,
     model_catalog::options::ModelPickerOption,
@@ -19,6 +19,20 @@ pub fn sample_agent_list_row() -> AgentListRow {
         trading_account_address: "0x1234567890abcdef".to_string(),
         environment: "live".to_string(),
         api_key_last_used_at: None,
+    }
+}
+
+pub fn sample_agent_readiness() -> AgentReadiness {
+    AgentReadiness {
+        agent_key: "test-agent".to_string(),
+        active: true,
+        enabled: true,
+        has_selected_instruments: true,
+        has_enabled_analysis_job: true,
+        has_enabled_market_analysis_job: true,
+        has_enabled_trading_job: true,
+        market_analysis_job_id: Some(2),
+        trading_job_id: Some(3),
     }
 }
 
@@ -83,7 +97,7 @@ pub fn sample_candle_job_row(
     enabled: bool,
 ) -> crate::harness::model::HarnessJobRow {
     let now = Utc::now();
-    let timeframe = if job_kind == "trading" { "1m" } else { "15m" };
+    let timeframe = if job_kind == "trading" { "5m" } else { "15m" };
     crate::harness::model::HarnessJobRow {
         id,
         agent_key: "test-agent".to_string(),

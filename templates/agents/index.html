@@ -50,11 +50,8 @@
                                 <div class="font-medium text-white">{{ entry.row.display_name }}</div>
                             </td>
                             <td class="px-5 py-4 align-top">
-                                {% if entry.row.enabled %}
-                                <span class="inline-flex rounded-full border border-emerald-900/60 bg-emerald-950/30 px-2.5 py-1 text-xs text-emerald-300">Enabled</span>
-                                {% else %}
-                                <span class="inline-flex rounded-full border border-zinc-700 px-2.5 py-1 text-xs text-zinc-300">Disabled</span>
-                                {% endif %}
+                                {% let status = entry.status() %}
+                                <span class="inline-flex rounded-full border px-2.5 py-1 text-xs {{ status.class }}">{{ status.label }}</span>
                             </td>
                             <td class="px-5 py-4 align-top font-mono text-xs text-zinc-300">{{ entry.row.trading_account_address }}</td>
                             <td class="px-5 py-4 align-top text-zinc-300">

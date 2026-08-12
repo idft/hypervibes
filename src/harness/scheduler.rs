@@ -2701,14 +2701,14 @@ mod tests {
         .expect("fetch analysis id");
         let (trading_id,): (i64,) = sqlx::query_as(
             "SELECT id FROM harness_jobs
-              WHERE agent_key = $1 AND job_key = 'trading-1m'",
+              WHERE agent_key = $1 AND job_key = 'trading-5m'",
         )
         .bind(&key)
         .fetch_one(&pool)
         .await
         .expect("fetch trading id");
         pin_job_due(&pool, analysis_id, "15m").await;
-        pin_job_due(&pool, trading_id, "1m").await;
+        pin_job_due(&pool, trading_id, "5m").await;
 
         let calls: Arc<Mutex<Vec<DispatchRequest>>> = Arc::new(Mutex::new(Vec::new()));
         let backend_impl = Arc::new(FakeBackend::with_delay(
@@ -2736,7 +2736,7 @@ mod tests {
         let mut jobs: Vec<&str> = guard.iter().map(|r| r.job_key.as_str()).collect();
         jobs.sort();
         assert!(
-            jobs == vec!["analysis-15m", "trading-1m"],
+            jobs == vec!["analysis-15m", "trading-5m"],
             "expected both lanes to dispatch, got {jobs:?}"
         );
         assert!(

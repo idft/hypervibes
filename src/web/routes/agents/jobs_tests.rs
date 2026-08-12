@@ -620,7 +620,7 @@ async fn post_trading_job_run_now_does_not_trigger_market_analysis_event() {
         .await
         .expect("list jobs")
         .into_iter()
-        .find(|row| row.job_key == "trading-1m")
+        .find(|row| row.job_key == "trading-5m")
         .map(|row| row.id)
         .expect("trading job id");
 
@@ -653,7 +653,7 @@ async fn post_trading_job_run_now_does_not_trigger_market_analysis_event() {
 
     let recorded = calls.lock().unwrap();
     assert_eq!(recorded.len(), 1);
-    assert_eq!(recorded[0].job_key, "trading-1m");
+    assert_eq!(recorded[0].job_key, "trading-5m");
     assert_eq!(recorded[0].job_kind, JOB_KIND_TRADING);
 }
 #[tokio::test]

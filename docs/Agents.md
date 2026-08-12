@@ -33,6 +33,7 @@ Important `agents` fields:
 
 - `agent_key`
 - `display_name`
+- `lifecycle`
 - `enabled`
 - `environment`
 - `wallet_address`
@@ -41,10 +42,32 @@ Important `agents` fields:
 
 ## Execution Controls
 
+`lifecycle = 'active'` is the provisioning state for an agent with an assigned
+trading account and generated workspace. It is an internal eligibility check,
+not an operator-facing claim that unattended trading has been configured.
+
 `enabled` is the durable execution gate for an agent. When disabled, the
 system does not start scheduled or manual job runs and the order gateway rejects
 new order placement. Agent API read operations and order cancellation remain
 available so an operator can inspect and remediate an account while paused.
+
+An agent is ready for scheduled agent trading only when all of the following
+are true:
+
+- the agent is `active` and `enabled`
+- at least one active perp instrument is selected
+- at least one modeled analysis schedule is enabled
+- the modeled market-analysis follow-up job is enabled
+- the modeled trading schedule is enabled
+
+This is a derived setup state rather than a persisted agent field. The agent
+landing page shows an incomplete setup checklist, while the Agents list labels
+the result as `Paused`, `Setup required`, or `Ready for agent trading`.
+
+The navbar's `Agent trading disabled` badge specifically means the scheduled
+trading job is disabled. It does not block manual or chat-originated orders;
+those remain governed by the global agent `enabled` state and the order-gateway
+rules.
 
 The Settings page controls one agent's enabled state. Disabling an agent does
 not interrupt an already-running OpenCode session, but that session cannot
@@ -157,7 +180,7 @@ Deleting an agent removes the registry row and cascades through agent-owned stat
 ## Harness job lifecycle
 
 Every OpenCode agent receives seven disabled harness jobs: analysis at 15m, 1h,
-and 1d; trading at 1m; daily review at 1d; market analysis after an analysis
+and 1d; trading at 5m; daily review at 1d; market analysis after an analysis
 batch; and analysis coding after a qualifying daily review. Operators configure
 model, enablement, timeout, and an operator prompt on the same job surface.
 - memory records

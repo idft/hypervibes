@@ -27,7 +27,7 @@ use super::workspace::agent_has_blocking_workspace_maintenance_tx;
 #[cfg(test)]
 pub(crate) const DEFAULT_ANALYSIS_TIMEFRAME: &str = "15m";
 const DEFAULT_ANALYSIS_TIMEFRAMES: [&str; 3] = ["15m", "1h", "1d"];
-pub(crate) const DEFAULT_TRADING_TIMEFRAME: &str = "1m";
+pub(crate) const DEFAULT_TRADING_TIMEFRAME: &str = "5m";
 pub(crate) const DEFAULT_DAILY_REVIEW_TIMEFRAME: &str = "1d";
 pub(crate) const DEFAULT_ANALYSIS_TIMEOUT_SECONDS: i32 = 900;
 pub(crate) const DEFAULT_TRADING_TIMEOUT_SECONDS: i32 = 900;
@@ -43,7 +43,7 @@ pub(crate) fn default_analysis_job_key() -> String {
 /// This is idempotent: existing `(agent_key, job_kind, timeframe)` rows
 /// are left untouched, and the default market-analysis event is inserted only
 /// when it does not already exist. New agents always get disabled
-/// `analysis-15m`, `analysis-1h`, `analysis-1d`, and `trading-1m` rows plus
+/// `analysis-15m`, `analysis-1h`, `analysis-1d`, and `trading-5m` rows plus
 /// a disabled `market-analysis` event.
 pub async fn insert_default_harness_jobs(pool: &DbPool, agent_key: &str) -> Result<()> {
     for timeframe in DEFAULT_ANALYSIS_TIMEFRAMES {

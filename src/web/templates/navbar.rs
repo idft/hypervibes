@@ -1,7 +1,10 @@
 use chrono::Utc;
 use uuid::Uuid;
 
-use crate::{agents::store::list_agents_for_user, db::DbPool};
+use crate::{
+    agents::store::{list_agent_readiness_for_user, list_agents_for_user},
+    db::DbPool,
+};
 
 /// Server-rendered fragment included by every page via `{% include "layouts/navbar.html" %}`. Holds
 /// the authenticated wallet address and user-visible warning state (Hyperliquid API key,
@@ -19,6 +22,7 @@ pub struct Navbar {
     pub selected_agent_key: Option<String>,
     pub selected_agent_name: Option<String>,
     pub selected_agent_enabled: bool,
+    pub selected_agent_trading_job_enabled: Option<bool>,
 }
 
 #[derive(Debug, Clone)]
@@ -26,6 +30,7 @@ pub struct NavbarAgent {
     pub agent_key: String,
     pub display_name: String,
     pub enabled: bool,
+    pub trading_job_enabled: bool,
 }
 
 impl Navbar {
@@ -38,6 +43,11 @@ impl Navbar {
         self.selected_agent_key = Some(agent_key);
         self.selected_agent_name = Some(display_name);
         self.selected_agent_enabled = enabled;
+        self.selected_agent_trading_job_enabled = self
+            .agents
+            .iter()
+            .find(|agent| self.selected_agent_key.as_deref() == Some(agent.agent_key.as_str()))
+            .map(|agent| agent.trading_job_enabled);
         self
     }
 
@@ -161,7 +171,7 @@ fn days_until_expiry(expires_at: Option<chrono::DateTime<Utc>>) -> Option<i64> {
 
 /// Load the state shared by every authenticated page's top bar.
 pub async fn load_navbar(pool: &DbPool, user_id: Uuid) -> anyhow::Result<Navbar> {
-    let (row, agents) = tokio::try_join!(
+    let (row, agents, readiness_by_agent) = tokio::try_join!(
         async {
             let row: NavbarRow = sqlx::query_as(
                 "SELECT wallet_address, api_wallet_address, api_wallet_approved_at,
@@ -177,6 +187,7 @@ pub async fn load_navbar(pool: &DbPool, user_id: Uuid) -> anyhow::Result<Navbar>
             Ok::<_, anyhow::Error>(row)
         },
         list_agents_for_user(pool, user_id),
+        list_agent_readiness_for_user(pool, user_id),
     )?;
     let now = Utc::now();
     let api_key_ready = row.api_wallet_address.is_some()
@@ -201,10 +212,16 @@ pub async fn load_navbar(pool: &DbPool, user_id: Uuid) -> anyhow::Result<Navbar>
         warnings,
         agents: agents
             .into_iter()
-            .map(|agent| NavbarAgent {
-                agent_key: agent.agent_key,
-                display_name: agent.display_name,
-                enabled: agent.enabled,
+            .map(|agent| {
+                let trading_job_enabled = readiness_by_agent
+                    .get(&agent.agent_key)
+                    .is_some_and(|readiness| readiness.has_enabled_trading_job);
+                NavbarAgent {
+                    agent_key: agent.agent_key,
+                    display_name: agent.display_name,
+                    enabled: agent.enabled,
+                    trading_job_enabled,
+                }
             })
             .collect(),
         can_create_agent: api_key_ready
@@ -213,6 +230,7 @@ pub async fn load_navbar(pool: &DbPool, user_id: Uuid) -> anyhow::Result<Navbar>
         selected_agent_key: None,
         selected_agent_name: None,
         selected_agent_enabled: false,
+        selected_agent_trading_job_enabled: None,
     })
 }
 
@@ -230,7 +248,7 @@ struct NavbarRow {
 
 #[cfg(test)]
 mod tests {
-    use super::Navbar;
+    use super::{Navbar, NavbarAgent};
 
     #[test]
     fn navbar_renders_a_short_wallet_address_and_safe_identicon_uri() {
@@ -249,13 +267,19 @@ mod tests {
 
     #[test]
     fn navbar_uses_the_selected_agent_label_and_status() {
-        let navbar = Navbar::default().with_selected_agent(
-            "btc-agent".to_string(),
-            "BTC Agent".to_string(),
-            true,
-        );
+        let navbar = Navbar {
+            agents: vec![NavbarAgent {
+                agent_key: "btc-agent".to_string(),
+                display_name: "BTC Agent".to_string(),
+                enabled: true,
+                trading_job_enabled: false,
+            }],
+            ..Default::default()
+        }
+        .with_selected_agent("btc-agent".to_string(), "BTC Agent".to_string(), true);
 
         assert_eq!(navbar.agent_selector_label(), "BTC Agent");
         assert!(navbar.selected_agent_enabled);
+        assert_eq!(navbar.selected_agent_trading_job_enabled, Some(false));
     }
 }

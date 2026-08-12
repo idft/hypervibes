@@ -4,6 +4,34 @@ use uuid::Uuid;
 
 pub const AGENT_LIFECYCLE_ACTIVE: &str = "active";
 
+/// Derived operator-facing readiness for unattended agent trading.
+///
+/// This intentionally is not persisted: its inputs are the durable agent,
+/// instrument, and harness-job controls that determine what can run.
+#[derive(Debug, Clone, Default, sqlx::FromRow)]
+pub struct AgentReadiness {
+    pub agent_key: String,
+    pub active: bool,
+    pub enabled: bool,
+    pub has_selected_instruments: bool,
+    pub has_enabled_analysis_job: bool,
+    pub has_enabled_market_analysis_job: bool,
+    pub has_enabled_trading_job: bool,
+    pub market_analysis_job_id: Option<i64>,
+    pub trading_job_id: Option<i64>,
+}
+
+impl AgentReadiness {
+    pub fn is_ready_for_agent_trading(&self) -> bool {
+        self.active
+            && self.enabled
+            && self.has_selected_instruments
+            && self.has_enabled_analysis_job
+            && self.has_enabled_market_analysis_job
+            && self.has_enabled_trading_job
+    }
+}
+
 /// Row shape returned by the registry list query.
 #[derive(Debug, Clone, sqlx::FromRow)]
 pub struct AgentListRow {
@@ -115,7 +143,7 @@ pub fn slugify_agent_key(name: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{CreateAgentForm, slugify_agent_key};
+    use super::{AgentReadiness, CreateAgentForm, slugify_agent_key};
 
     #[test]
     fn slugifies_display_name() {
@@ -150,5 +178,28 @@ mod tests {
             .validate()
             .is_err()
         );
+    }
+
+    #[test]
+    fn agent_readiness_requires_the_complete_trading_chain() {
+        let mut readiness = AgentReadiness {
+            agent_key: "test-agent".to_string(),
+            active: true,
+            enabled: true,
+            has_selected_instruments: true,
+            has_enabled_analysis_job: true,
+            has_enabled_market_analysis_job: true,
+            has_enabled_trading_job: false,
+            market_analysis_job_id: Some(2),
+            trading_job_id: Some(3),
+        };
+
+        assert!(!readiness.is_ready_for_agent_trading());
+
+        readiness.has_enabled_trading_job = true;
+        assert!(readiness.is_ready_for_agent_trading());
+
+        readiness.enabled = false;
+        assert!(!readiness.is_ready_for_agent_trading());
     }
 }

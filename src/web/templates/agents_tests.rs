@@ -13,6 +13,7 @@ use chrono::Utc;
 fn agents_page_renders_base_layout_and_status_box() {
     let entry = AgentListEntry {
         row: sample_agent_list_row(),
+        readiness: sample_agent_readiness(),
         account_balance: AccountBalanceView {
             total_balance: Some(rust_decimal::Decimal::new(232_6800, 4)),
             total_u_pnl: AnimatedNumber::for_pnl(rust_decimal::Decimal::ZERO),
@@ -37,12 +38,14 @@ fn agents_page_renders_base_layout_and_status_box() {
     assert!(!rendered.contains(">opencode<"));
     assert!(rendered.contains("<th class=\"px-5 py-3 font-medium\"></th>"));
     assert!(rendered.contains("M10 4v12m-6-6h12"));
+    assert!(rendered.contains("Ready for agent trading"));
 }
 
 #[test]
 fn agents_page_renders_loading_placeholder_when_no_balance() {
     let entry = AgentListEntry {
         row: sample_agent_list_row(),
+        readiness: sample_agent_readiness(),
         account_balance: AccountBalanceView {
             total_balance: None,
             total_u_pnl: AnimatedNumber::for_pnl(rust_decimal::Decimal::ZERO),
@@ -110,6 +113,7 @@ fn agents_show_page_renders_base_layout_and_delete_modal() {
         )
         .unwrap();
     template.sparklines_html = sparklines_html;
+    template.setup_checklist = AgentSetupChecklistView::from_readiness(&sample_agent_readiness());
     let rendered = template.render().unwrap();
     assert!(rendered.contains("<!DOCTYPE html>"));
     assert!(rendered.contains("Test Agent · Vibetrading"));
@@ -130,6 +134,30 @@ fn agents_show_page_renders_base_layout_and_delete_modal() {
     assert!(rendered.contains("Balance"));
     assert!(rendered.contains("Unrealized"));
     assert!(rendered.contains("Scaled out into strength"));
+    assert!(!rendered.contains("Agent setup"));
+}
+
+#[test]
+fn positions_page_renders_linked_incomplete_agent_setup_checklist() {
+    let mut readiness = sample_agent_readiness();
+    readiness.has_enabled_trading_job = false;
+    let mut template =
+        AgentsShowPageTemplate::new(sample_agent_detail_row(), AgentShowTab::Positions);
+    template.setup_checklist = AgentSetupChecklistView::from_readiness(&readiness);
+
+    let rendered = template.render().expect("render setup checklist");
+
+    assert!(rendered.contains("Agent setup"));
+    let checklist_index = rendered.find("Agent setup").expect("setup checklist");
+    let tab_content_index = rendered
+        .find("id=\"agent-show-tab-content\"")
+        .expect("HTMX tab content");
+    assert!(checklist_index > tab_content_index);
+    assert!(rendered.contains("Select currencies to trade"));
+    assert!(rendered.contains("BTC is selected by default"));
+    assert!(rendered.contains("Enable Trading job"));
+    assert!(rendered.contains("href=\"/agents/test-agent/jobs/2?setup=true\""));
+    assert!(rendered.contains("href=\"/agents/test-agent/jobs/3?setup=true\""));
 }
 
 #[test]
@@ -139,7 +167,7 @@ fn opencode_agent_shows_jobs_tab_with_recent_runs() {
     template.jobs_loaded = true;
     template.jobs = vec![
         HarnessJobView::from_row(&sample_candle_job_row(1, "analysis-15m", "analysis", true)),
-        HarnessJobView::from_row(&sample_candle_job_row(2, "trading-1m", "trading", false)),
+        HarnessJobView::from_row(&sample_candle_job_row(2, "trading-5m", "trading", false)),
         HarnessJobView::from_row(&sample_event_job_row(3, true)),
     ];
     template.can_enable_all_jobs = true;
@@ -157,10 +185,10 @@ fn opencode_agent_shows_jobs_tab_with_recent_runs() {
     assert!(rendered.contains("Recent Runs"));
     assert!(rendered.contains("local-datetime-ready"));
     assert!(rendered.contains("analysis-15m"));
-    assert!(rendered.contains("trading-1m"));
+    assert!(rendered.contains("trading-5m"));
     assert!(rendered.contains("market-analysis"));
     assert!(rendered.contains("15m"));
-    assert!(rendered.contains("1m"));
+    assert!(rendered.contains("5m"));
     assert!(!rendered.contains(">10m<"));
     assert!(!rendered.contains(">Timeout<"));
     assert!(!rendered.contains(">Delay</th>"));
@@ -202,7 +230,7 @@ fn jobs_page_renders_recent_run_rows() {
     template.recent_runs_section.recent_runs_loaded = true;
     template.recent_runs_section.recent_runs = vec![
         HarnessRunView::from_row(&sample_run_row(1, "succeeded", "analysis-15m")),
-        HarnessRunView::from_row(&sample_run_row(2, "failed", "trading-1m")),
+        HarnessRunView::from_row(&sample_run_row(2, "failed", "trading-5m")),
     ];
     template.recent_runs_section.recent_runs_page = 1;
     template.recent_runs_section.recent_runs_total_pages = 1;

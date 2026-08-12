@@ -3,7 +3,7 @@ use serde::Deserialize;
 
 use crate::{
     agents::{
-        model::{AgentDetailRow, AgentListRow, CreateAgentForm},
+        model::{AgentDetailRow, AgentListRow, AgentReadiness, CreateAgentForm},
         store::AgentInstrumentOptionRow,
         strategy_prompts::{
             PROMPT_KIND_ANALYSIS, PROMPT_KIND_ANALYSIS_CODING, PROMPT_KIND_DAILY_REVIEW,
@@ -86,12 +86,95 @@ pub fn build_agent_show_tabs(
 #[derive(Debug, Clone)]
 pub struct AgentListEntry {
     pub row: AgentListRow,
+    pub readiness: AgentReadiness,
     pub account_balance: AccountBalanceView,
     /// API key `last_used_at` formatted as an ISO 8601 / RFC 3339 string
     /// with a `Z` suffix, suitable for the `datetime` attribute of a
     /// `<time>` element consumed by timeago.js. `None` mirrors
     /// `row.api_key_last_used_at`.
     pub api_key_last_used_iso: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct AgentListStatusView {
+    pub label: &'static str,
+    pub class: &'static str,
+}
+
+impl AgentListEntry {
+    pub fn status(&self) -> AgentListStatusView {
+        if !self.readiness.enabled {
+            return AgentListStatusView {
+                label: "Paused",
+                class: "border-zinc-700 bg-zinc-900/60 text-zinc-300",
+            };
+        }
+        if self.readiness.is_ready_for_agent_trading() {
+            return AgentListStatusView {
+                label: "Ready for agent trading",
+                class: "border-emerald-900/60 bg-emerald-950/30 text-emerald-300",
+            };
+        }
+        AgentListStatusView {
+            label: "Setup required",
+            class: "border-amber-900/60 bg-amber-950/30 text-amber-200",
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct AgentSetupChecklistStepView {
+    pub label: &'static str,
+    pub description: &'static str,
+    pub href: String,
+    pub complete: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct AgentSetupChecklistView {
+    pub is_ready: bool,
+    pub steps: Vec<AgentSetupChecklistStepView>,
+}
+
+impl AgentSetupChecklistView {
+    pub fn from_readiness(readiness: &AgentReadiness) -> Self {
+        let agent_key = &readiness.agent_key;
+        Self {
+            is_ready: readiness.is_ready_for_agent_trading(),
+            steps: vec![
+                AgentSetupChecklistStepView {
+                    label: "Select currencies to trade",
+                    description: "BTC is selected by default. Review or change the currencies this agent may trade.",
+                    href: format!("/agents/{agent_key}/settings"),
+                    complete: readiness.has_selected_instruments,
+                },
+                AgentSetupChecklistStepView {
+                    label: "Enable an Analysis job",
+                    description: "Enable at least one modeled analysis job to produce the trading inputs.",
+                    href: format!("/agents/{agent_key}/jobs"),
+                    complete: readiness.has_enabled_analysis_job,
+                },
+                AgentSetupChecklistStepView {
+                    label: "Enable Market Analysis",
+                    description: "Enable the modeled market-analysis follow-up after analysis completes.",
+                    href: readiness.market_analysis_job_id.map_or_else(
+                        || format!("/agents/{agent_key}/jobs"),
+                        |job_id| format!("/agents/{agent_key}/jobs/{job_id}?setup=true"),
+                    ),
+                    complete: readiness.has_enabled_market_analysis_job,
+                },
+                AgentSetupChecklistStepView {
+                    label: "Enable Trading job",
+                    description: "Enable the modeled trading job to evaluate the latest market analysis.",
+                    href: readiness.trading_job_id.map_or_else(
+                        || format!("/agents/{agent_key}/jobs"),
+                        |job_id| format!("/agents/{agent_key}/jobs/{job_id}?setup=true"),
+                    ),
+                    complete: readiness.has_enabled_trading_job,
+                },
+            ],
+        }
+    }
 }
 
 #[derive(Template)]
@@ -301,6 +384,7 @@ pub struct AgentsShowPageTemplate {
     pub instrument_options: Vec<AgentInstrumentOptionRow>,
     pub instrument_options_loaded: bool,
     pub has_selected_instruments: bool,
+    pub setup_checklist: AgentSetupChecklistView,
     pub opencode_workspace: Option<OpenCodeWorkspaceSettingsView>,
     pub settings_workspace_warning: Option<String>,
     pub live_account_health_html: String,
@@ -363,6 +447,10 @@ impl AgentsShowPageTemplate {
             instrument_options: Vec::new(),
             instrument_options_loaded: false,
             has_selected_instruments: false,
+            setup_checklist: AgentSetupChecklistView {
+                is_ready: false,
+                steps: Vec::new(),
+            },
             opencode_workspace: None,
             settings_workspace_warning: None,
             live_account_health_html: String::new(),

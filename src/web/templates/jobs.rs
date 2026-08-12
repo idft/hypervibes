@@ -45,6 +45,7 @@ pub struct HarnessJobDetailView {
     pub prompt_preview_text: String,
     pub prompt_preview_error: Option<String>,
     pub model_error: Option<String>,
+    pub highlight_model_selector: bool,
     pub model_selection: String,
     pub model_update_action: String,
     pub run_now_action: String,
@@ -150,6 +151,7 @@ impl HarnessJobDetailView {
             prompt_preview_text: String::new(),
             prompt_preview_error: None,
             model_error: None,
+            highlight_model_selector: false,
             model_selection: match (row.model_provider_id.as_deref(), row.model_id.as_deref()) {
                 (Some(provider), Some(model)) => format!("{provider}/{model}"),
                 _ => String::new(),

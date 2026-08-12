@@ -21,8 +21,8 @@ use crate::{
         model::{AGENT_LIFECYCLE_ACTIVE, AgentRegistryRow, CreateAgentForm, slugify_agent_key},
         store::{
             delete_agent as delete_agent_in_store, get_agent, insert_agent,
-            list_agent_instrument_options, list_agents_for_user, replace_agent_instruments,
-            set_agent_enabled,
+            list_agent_instrument_options, list_agent_readiness_for_user, list_agents_for_user,
+            replace_agent_instruments, set_agent_enabled,
         },
     },
     harness::store::{list_active_agent_runs, mark_run_aborted},
@@ -45,11 +45,20 @@ pub(in crate::web::routes) async fn agents_index(
     State(state): State<Arc<AppState>>,
     user: AuthenticatedUser,
 ) -> Result<Response, AppError> {
-    let agents = list_agents_for_user(&state.db_pool, user.id).await?;
+    let (agents, readiness_by_agent) = tokio::try_join!(
+        list_agents_for_user(&state.db_pool, user.id),
+        list_agent_readiness_for_user(&state.db_pool, user.id),
+    )?;
 
     let entries: Vec<AgentListEntry> = agents
         .into_iter()
         .map(|row| {
+            let readiness = readiness_by_agent
+                .get(&row.agent_key)
+                .cloned()
+                .ok_or_else(|| {
+                    anyhow::anyhow!("missing readiness for active agent {}", row.agent_key)
+                })?;
             let account_key = AccountKey::new(&row.trading_account_address, &row.environment);
             let snapshot =
                 state
@@ -65,13 +74,14 @@ pub(in crate::web::routes) async fn agents_index(
             let api_key_last_used_iso = row
                 .api_key_last_used_at
                 .map(|t| t.to_rfc3339_opts(chrono::SecondsFormat::AutoSi, true));
-            AgentListEntry {
+            Ok::<_, anyhow::Error>(AgentListEntry {
                 row,
+                readiness,
                 account_balance,
                 api_key_last_used_iso,
-            }
+            })
         })
-        .collect();
+        .collect::<Result<_, _>>()?;
 
     let navbar = load_navbar(&state.db_pool, user.id).await?;
     let template = AgentsPageTemplate {

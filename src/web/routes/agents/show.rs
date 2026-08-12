@@ -16,7 +16,10 @@ use super::settings::build_opencode_workspace_settings_view;
 use super::transactions::apply_live_cash_balance_anchor;
 use crate::{
     agents::{
-        store::{get_agent, list_agent_instrument_ids, list_agent_instrument_options},
+        store::{
+            get_agent, get_agent_readiness, list_agent_instrument_ids,
+            list_agent_instrument_options,
+        },
         strategy_prompts::{
             PROMPT_KIND_ANALYSIS, PROMPT_KIND_ANALYSIS_CODING, PROMPT_KIND_DAILY_REVIEW,
             PROMPT_KIND_MARKET_ANALYSIS, PROMPT_KIND_TRADING, default_prompt_for_kind,
@@ -113,8 +116,13 @@ pub(in crate::web::routes) async fn render_agent_show_page(
     let Some(agent) = get_agent(&state.db_pool, agent_key).await? else {
         return Ok((StatusCode::NOT_FOUND, "agent not found").into_response());
     };
+    let readiness = get_agent_readiness(&state.db_pool, agent_key)
+        .await?
+        .ok_or_else(|| AppError(anyhow::anyhow!("agent disappeared while loading readiness")))?;
 
     let mut template = AgentsShowPageTemplate::new(agent.clone(), active_tab);
+    template.setup_checklist =
+        crate::web::templates::AgentSetupChecklistView::from_readiness(&readiness);
     template.operation_notice = operation_notice;
     template.navbar = load_navbar(&state.db_pool, user.id)
         .await?

@@ -232,6 +232,7 @@ pub(in crate::web::routes) async fn agents_show_job_detail(
         };
 
     let mut job_view = crate::web::templates::HarnessJobDetailView::from_row(&job);
+    job_view.highlight_model_selector = query.setup && !job_view.has_model;
     if let Some(error) = query.timeout_error {
         job_view.timeout_editor.error = Some(error);
     }
@@ -1009,6 +1010,8 @@ pub(in crate::web::routes) struct JobDetailQuery {
     pub timeframe_error: Option<String>,
     #[serde(default)]
     pub model_error: Option<String>,
+    #[serde(default)]
+    pub setup: bool,
 }
 
 pub(in crate::web::routes) async fn agents_update_job_timeframe(
