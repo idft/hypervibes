@@ -441,9 +441,13 @@ pub async fn set_job_model_with_variant(
             SET model_provider_id = $3,
                 model_id = $4,
                 model_variant = $5,
+                enabled = CASE
+                    WHEN $3 IS NULL AND $4 IS NULL THEN false
+                    ELSE enabled
+                END,
                 updated_at = now()
-          WHERE agent_key = $1
-            AND id = $2",
+           WHERE agent_key = $1
+             AND id = $2",
     )
     .bind(agent_key)
     .bind(job_id)

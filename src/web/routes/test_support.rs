@@ -1,5 +1,8 @@
 //! Shared test helpers for route tests.
-use std::sync::{Arc, Mutex};
+use std::sync::{
+    Arc, Mutex,
+    atomic::{AtomicU64, Ordering},
+};
 
 use anyhow::Result;
 use async_trait::async_trait;
@@ -35,6 +38,16 @@ use axum::response::Response;
 use http_body_util::BodyExt as _;
 
 pub(in crate::web::routes) struct NoopHarnessBackend;
+
+static TEST_AGENT_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+
+fn test_agent_identifier() -> String {
+    format!(
+        "{}-{}",
+        chrono::Utc::now().timestamp_millis(),
+        TEST_AGENT_SEQUENCE.fetch_add(1, Ordering::Relaxed)
+    )
+}
 
 struct TestBuilderFeeLookup;
 
@@ -269,8 +282,8 @@ pub(in crate::web::routes) async fn insert_test_agent(
 pub(in crate::web::routes) async fn insert_test_opencode_agent(
     state: &Arc<AppState>,
 ) -> Option<(String, String)> {
-    let timestamp = chrono::Utc::now().timestamp_millis();
-    let display_name = format!("OpenCodeScheduleTest{}", timestamp);
+    let identifier = test_agent_identifier();
+    let display_name = format!("OpenCodeScheduleTest{identifier}");
     let agent_key = slugify_agent_key(&display_name);
     let private_key = random_private_key();
     let wallet_address = match derive_wallet_address(&private_key) {
@@ -288,7 +301,7 @@ pub(in crate::web::routes) async fn insert_test_opencode_agent(
         display_name,
         trading_account_address: Some(wallet_address.clone()),
         environment: "live".to_string(),
-        api_key: format!("opencode-schedule-test-{timestamp}"),
+        api_key: format!("opencode-schedule-test-{identifier}"),
         api_key_last_used_at: None,
         runtime_config: serde_json::json!({}),
     };
@@ -369,8 +382,8 @@ pub(in crate::web::routes) async fn insert_test_agent_with_text(
     analysis_prompt: String,
     trading_prompt: String,
 ) -> Option<(String, String)> {
-    let timestamp = chrono::Utc::now().timestamp_millis();
-    let display_name = format!("BalanceStreamTest{}", timestamp);
+    let identifier = test_agent_identifier();
+    let display_name = format!("BalanceStreamTest{identifier}");
     let agent_key = slugify_agent_key(&display_name);
     let private_key = random_private_key();
     let wallet_address = match derive_wallet_address(&private_key) {
@@ -388,7 +401,7 @@ pub(in crate::web::routes) async fn insert_test_agent_with_text(
         display_name,
         trading_account_address: Some(wallet_address.clone()),
         environment: "live".to_string(),
-        api_key: format!("balance-stream-test-{timestamp}"),
+        api_key: format!("balance-stream-test-{identifier}"),
         api_key_last_used_at: None,
         runtime_config: serde_json::json!({}),
     };

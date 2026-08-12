@@ -886,6 +886,21 @@ async fn post_job_model_htmx_updates_without_redirect() {
         .first()
         .expect("default job present")
         .id;
+    crate::harness::store::set_job_model_with_variant(
+        &pool,
+        &agent_key,
+        job_id,
+        Some("anthropic"),
+        Some("claude-sonnet-4"),
+        Some("high"),
+    )
+    .await
+    .expect("set job model");
+    assert!(
+        crate::harness::store::set_job_enabled(&pool, &agent_key, job_id, true)
+            .await
+            .expect("enable modeled job")
+    );
 
     let response = router(state.clone())
         .oneshot(
@@ -914,6 +929,8 @@ async fn post_job_model_htmx_updates_without_redirect() {
         .expect("job present");
     assert!(job.model_provider_id.is_none());
     assert!(job.model_id.is_none());
+    assert!(job.model_variant.is_none());
+    assert!(!job.enabled);
 }
 
 #[tokio::test]
