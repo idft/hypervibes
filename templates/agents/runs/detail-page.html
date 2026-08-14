@@ -1,6 +1,6 @@
 {% extends "layouts/base.html" %}
 
-{% block title %}Run {{ run.id }} · {{ agent.display_name }} · Vibetrading{% endblock %}
+{% block title %}Run {{ run.id }} · {{ agent.display_name }} · HyperVibes{% endblock %}
 
 {% block content %}
 <div class="mx-auto flex h-full min-h-0 max-w-[1500px] flex-col overflow-hidden" hx-ext="sse" sse-connect="/agents/{{ agent.agent_key }}/runs/{{ run.id }}/stream">

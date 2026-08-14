@@ -45,7 +45,7 @@ async function approveTradingSigner(page: HTMLElement) {
   const address = page.dataset.apiWalletAddress;
   if (!status || !address) throw new Error("Set up a trading signer first.");
   status.textContent = "Awaiting wallet signature...";
-  const signed = await signWalletAction("HyperliquidTransaction:ApproveAgent", { "HyperliquidTransaction:ApproveAgent": [{ name: "hyperliquidChain", type: "string" }, { name: "agentAddress", type: "address" }, { name: "agentName", type: "string" }, { name: "nonce", type: "uint64" }] }, { type: "approveAgent", ...actionBase(), agentAddress: address, agentName: "Vibetrading" });
+  const signed = await signWalletAction("HyperliquidTransaction:ApproveAgent", { "HyperliquidTransaction:ApproveAgent": [{ name: "hyperliquidChain", type: "string" }, { name: "agentAddress", type: "address" }, { name: "agentName", type: "string" }, { name: "nonce", type: "uint64" }] }, { type: "approveAgent", ...actionBase(), agentAddress: address, agentName: "HyperVibes" });
   const response = await fetch("/account/approve-api-wallet", { method: "POST", headers: jsonHeaders(), body: JSON.stringify(signed) });
   if (!response.ok) throw new Error("Hyperliquid did not approve the trading signer.");
   window.location.reload();

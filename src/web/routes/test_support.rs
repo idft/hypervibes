@@ -90,7 +90,7 @@ pub(in crate::web::routes) async fn test_state_with_backend_and_shutdown(
     shutdown_signaled: bool,
 ) -> Arc<AppState> {
     let pool = Arc::new(test_db::pool().await);
-    let cache_dir = std::path::PathBuf::from("/tmp/opencode/vibetrading-routes-cache");
+    let cache_dir = std::path::PathBuf::from("/tmp/opencode/hypervibes-routes-cache");
     let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(shutdown_signaled);
     // Keep the sender alive for the test by leaking it; tests are
     // short-lived and the watch is shared with the AppState clone.
@@ -113,7 +113,7 @@ pub(in crate::web::routes) async fn test_state_with_backend_and_shutdown(
         opencode_workspace_config: crate::opencode::workspace::OpenCodeWorkspaceConfig {
             source_root: std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
                 .join(crate::opencode::workspace::PROFILE_SOURCE_RELATIVE_PATH),
-            host_workspaces_root: std::path::PathBuf::from("/tmp/opencode/vibetrading-routes"),
+            host_workspaces_root: std::path::PathBuf::from("/tmp/opencode/hypervibes-routes"),
             container_workspaces_root: "/workspaces".to_string(),
             api_base_url: "http://host.containers.internal:3003".to_string(),
         },
@@ -123,14 +123,14 @@ pub(in crate::web::routes) async fn test_state_with_backend_and_shutdown(
                     source_root: std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
                         .join(crate::opencode::workspace::PROFILE_SOURCE_RELATIVE_PATH),
                     host_workspaces_root: std::path::PathBuf::from(
-                        "/tmp/opencode/vibetrading-routes",
+                        "/tmp/opencode/hypervibes-routes",
                     ),
                     container_workspaces_root: "/workspaces".to_string(),
                     api_base_url: "http://host.containers.internal:3003".to_string(),
                 },
             ),
         ),
-        vibetrading_agent_api_base_url: "http://host.containers.internal:3003".to_string(),
+        hypervibes_agent_api_base_url: "http://host.containers.internal:3003".to_string(),
         opencode_container_workspaces_root: "/workspaces".to_string(),
         opencode_base_url: "http://localhost:14096".to_string(),
         opencode_client: Arc::new(

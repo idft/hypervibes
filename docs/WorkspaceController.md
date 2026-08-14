@@ -1,6 +1,6 @@
 # Workspace Controller Deployment
 
-Set `WORKSPACE_CONTROL_API_KEY` for both the host Vibetrading process and Podman Compose.
+Set `WORKSPACE_CONTROL_API_KEY` for both the host HyperVibes process and Podman Compose.
 The controller is published only at `127.0.0.1:${WORKSPACE_CONTROL_PORT:-14097}`. Do not expose
 it publicly or place the key in an agent workspace, prompt, MCP configuration, or agent `.env`.
 

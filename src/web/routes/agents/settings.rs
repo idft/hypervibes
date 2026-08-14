@@ -173,7 +173,7 @@ pub(in crate::web::routes) async fn build_opencode_workspace_settings_view(
         agent_key: agent.agent_key.clone(),
         display_name: agent.display_name.clone(),
         agent_api_key: agent.api_key.clone(),
-        api_base_url: state.vibetrading_agent_api_base_url.clone(),
+        api_base_url: state.hypervibes_agent_api_base_url.clone(),
     };
     let template_drift = state.workspace_controller.template_drift(workspace_agent).await
     .inspect_err(|error| {

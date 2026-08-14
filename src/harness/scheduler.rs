@@ -2262,7 +2262,7 @@ mod tests {
                         source_root: std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
                             .join(crate::opencode::workspace::PROFILE_SOURCE_RELATIVE_PATH),
                         host_workspaces_root: std::path::PathBuf::from(
-                            "/tmp/opencode/vibetrading-scheduler-tests",
+                            "/tmp/opencode/hypervibes-scheduler-tests",
                         ),
                         container_workspaces_root: "/workspaces".to_string(),
                         api_base_url: "http://host.containers.internal:3003".to_string(),

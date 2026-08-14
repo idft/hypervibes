@@ -28,7 +28,7 @@ fn agents_page_renders_base_layout_and_status_box() {
     };
     let rendered = template.render().unwrap();
     assert!(rendered.contains("<!DOCTYPE html>"));
-    assert!(rendered.contains("Vibetrading Agents"));
+    assert!(rendered.contains("HyperVibes Agents"));
     assert!(!rendered.contains("Registered agents"));
     assert!(!rendered.contains("Agents persisted in the registry database."));
     assert!(rendered.contains("Account balance"));
@@ -116,7 +116,7 @@ fn agents_show_page_renders_base_layout_and_delete_modal() {
     template.setup_checklist = AgentSetupChecklistView::from_readiness(&sample_agent_readiness());
     let rendered = template.render().unwrap();
     assert!(rendered.contains("<!DOCTYPE html>"));
-    assert!(rendered.contains("Test Agent · Vibetrading"));
+    assert!(rendered.contains("Test Agent · HyperVibes"));
     assert!(rendered.contains("delete-modal"));
     assert!(rendered.contains("Delete agent"));
     assert!(rendered.contains("Agent sections"));
@@ -541,7 +541,7 @@ fn agents_new_page_renders_base_layout_and_form() {
     };
     let rendered = template.render().unwrap();
     assert!(rendered.contains("<!DOCTYPE html>"));
-    assert!(rendered.contains("Create New Agent · Vibetrading"));
+    assert!(rendered.contains("Create New Agent · HyperVibes"));
     assert!(!rendered.contains("The wallet address and app API key"));
     assert!(rendered.contains(">Name</label>"));
     assert!(!rendered.contains("The agent key is derived"));

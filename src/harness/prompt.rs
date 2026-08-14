@@ -21,7 +21,7 @@ pub fn build_prompt(request: &DispatchRequest) -> Result<String> {
 fn build_analysis_prompt(request: &DispatchRequest) -> String {
     let mut body = String::new();
     body.push_str(&request.system_prompt);
-    body.push_str("\n\nYou are running an **analysis job** for the Vibetrading agent system.\n\n");
+    body.push_str("\n\nYou are running an **analysis job** for the HyperVibes agent system.\n\n");
     body.push_str("## Agent\n");
     body.push_str(&format!("- Agent key: {}\n", request.agent_key));
     body.push_str(&format!("- Display name: {}\n", request.display_name));
@@ -55,11 +55,11 @@ fn build_analysis_prompt(request: &DispatchRequest) -> String {
         "- Use the shared `python-analysis` runtime for indicator and statistical work.\n",
     );
     body.push_str(
-        "- Write a memory record with `vibetrading_write_memory` summarizing your analysis so the trading job can consume it.\n",
+        "- Write a memory record with `hypervibes_write_memory` summarizing your analysis so the trading job can consume it.\n",
     );
     body.push_str("\n## Completion requirements\n");
     body.push_str("- Do not stop after planning, loading skills, fetching candles, or updating a todo list. Those are intermediate steps only.\n");
-    body.push_str("- The analysis job is incomplete until `vibetrading_write_memory` succeeds for every selected symbol.\n");
+    body.push_str("- The analysis job is incomplete until `hypervibes_write_memory` succeeds for every selected symbol.\n");
     body.push_str("- For each selected symbol, write exactly one timeframe-specific memory with `memory_type = \"analysis\"` and `timeframe` set to this job's timeframe.\n");
     body.push_str("- If there is no actionable setup, still write the analysis memory with a neutral or mixed bias and explicitly state that there is no trade.\n");
     body.push_str(
@@ -72,7 +72,7 @@ fn build_market_analysis_prompt(request: &DispatchRequest) -> String {
     let mut body = String::new();
     body.push_str(&request.system_prompt);
     body.push_str(
-        "\n\nYou are running a **market-analysis event job** for the Vibetrading agent system. This job runs after an analysis batch completes.\n\n",
+        "\n\nYou are running a **market-analysis event job** for the HyperVibes agent system. This job runs after an analysis batch completes.\n\n",
     );
     body.push_str("## Agent\n");
     body.push_str(&format!("- Agent key: {}\n", request.agent_key));
@@ -90,9 +90,9 @@ fn build_market_analysis_prompt(request: &DispatchRequest) -> String {
     body.push_str("\n\n## Selected instruments\n");
     body.push_str(&selected_instruments_section(&request.selected_instruments));
     body.push_str("\n\n## Instructions\n");
-    body.push_str("- For each selected symbol, read the latest valid timeframe analysis memories with `vibetrading_get_latest_analysis(symbol)`.\n");
+    body.push_str("- For each selected symbol, read the latest valid timeframe analysis memories with `hypervibes_get_latest_analysis(symbol)`.\n");
     body.push_str("- Synthesize those timeframe-specific analysis memories into exactly one execution-facing market analysis per symbol.\n");
-    body.push_str("- Write exactly one memory per symbol with `vibetrading_write_memory`.\n");
+    body.push_str("- Write exactly one memory per symbol with `hypervibes_write_memory`.\n");
     body.push_str("- Use `memory_type = \"market_analysis\"`. Do not pass a `timeframe` argument at all; leave it out entirely so the memory is general rather than timeframe-specific. Never use a placeholder such as `__omit__`, `none`, `null`, or an empty string; the backend rejects a timeframe on market-analysis memories.\n");
     body.push_str("- Include metadata with `schema_version = 1`, `analysis_kind = \"market_analysis\"`, `valid_for_seconds = 1800` unless the operator prompt explicitly requires a different validity, plus `source_memory_ids` and `source_timeframes`.\n");
     body.push_str("- When you write a market-analysis memory, attach `links` with `link_type = \"derived_from\"` to the source analysis memory IDs used for the synthesis.\n");
@@ -107,7 +107,7 @@ fn build_market_analysis_prompt(request: &DispatchRequest) -> String {
 fn build_trading_prompt(request: &DispatchRequest) -> String {
     let mut body = String::new();
     body.push_str(&request.system_prompt);
-    body.push_str("\n\nYou are running a **trading job** for the Vibetrading agent system.\n\n");
+    body.push_str("\n\nYou are running a **trading job** for the HyperVibes agent system.\n\n");
     body.push_str("## Agent\n");
     body.push_str(&format!("- Agent key: {}\n", request.agent_key));
     body.push_str(&format!("- Display name: {}\n", request.display_name));
@@ -139,7 +139,7 @@ fn build_trading_prompt(request: &DispatchRequest) -> String {
     body.push_str("- For every permitted confirmation timeframe, a candle is eligible only when `start_ms + interval_ms < boundary_ms`; a candle closing exactly at the boundary is excluded.\n");
     body.push_str("- Fetch confirmation candles with `--closed-before <boundary_ms>` and never use `--stdout` or an open candle.\n");
     body.push_str("\n\n## Instructions\n");
-    body.push_str("- Call `vibetrading_get_market_analysis(symbol)` for each selected symbol before placing any trades.\n");
+    body.push_str("- Call `hypervibes_get_market_analysis(symbol)` for each selected symbol before placing any trades.\n");
     body.push_str(
         "- Do not open new exposure when no fresh market analysis exists for the symbol.\n",
     );
@@ -154,7 +154,7 @@ fn build_trading_prompt(request: &DispatchRequest) -> String {
     body.push_str("- For `execution_state = \"execute\"`, do not fetch market data or run the analyzer; reconcile and execute only the stated plan. For `wait`, `manage_existing`, or `cancel_entries`, do not fetch market data or run the analyzer; take only the stated non-opening action.\n");
     body.push_str("- Only for `execution_state = \"conditional\"`, load the `hyperliquid-data` skill and fetch only the selected symbol, exact `confirmation_timeframes`, and declared `minimum_candles` using the cutoff above. Run only `python scripts/user/analyze.py` against each fetched canonical input, writing output beneath `scratch/trading-confirmation/`.\n");
     body.push_str("- For conditional execution, compare only the analyzer measurements and signals named in `confirmation_rules` to their declared values. If a rule, analyzer, input, output, or required measurement is missing or fails, do not open new exposure. Do not derive a new indicator, use another timeframe, or reinterpret a failed condition.\n");
-    body.push_str("- Submit and cancel orders only through the `vibetrading` MCP trading tools.\n");
+    body.push_str("- Submit and cancel orders only through the `hypervibes` MCP trading tools.\n");
     body.push_str("- Do not trade instruments that are not in the selected list.\n");
     body
 }
@@ -171,7 +171,7 @@ fn build_daily_review_prompt(request: &DispatchRequest) -> Result<String> {
     let mut body = String::new();
     body.push_str(&request.system_prompt);
     body.push_str(
-        "\n\nYou are running a **daily-review job** for the Vibetrading agent system.\n\n",
+        "\n\nYou are running a **daily-review job** for the HyperVibes agent system.\n\n",
     );
     body.push_str("## Agent\n");
     body.push_str(&format!("- Agent key: {}\n", request.agent_key));
@@ -215,7 +215,7 @@ fn build_analysis_coding_prompt(request: &DispatchRequest) -> String {
     let mut body = String::new();
     body.push_str(&request.system_prompt);
     body.push_str(
-        "\n\nYou are running an **analysis-coding job** for the Vibetrading agent system.\n\n",
+        "\n\nYou are running an **analysis-coding job** for the HyperVibes agent system.\n\n",
     );
     body.push_str("## Agent\n");
     body.push_str(&format!("- Agent key: {}\n", request.agent_key));
@@ -426,7 +426,7 @@ mod tests {
         assert!(prompt.contains("## Completion requirements"));
         assert!(
             prompt.contains(
-                "The analysis job is incomplete until `vibetrading_write_memory` succeeds"
+                "The analysis job is incomplete until `hypervibes_write_memory` succeeds"
             )
         );
         assert!(prompt.contains("`memory_type = \"analysis\"`"));
@@ -484,7 +484,7 @@ mod tests {
         assert!(prompt.contains("Trade breakouts."));
         assert!(prompt.contains("- Account: 0xabc"));
         assert!(prompt.contains("- Available to trade USD: 750"));
-        assert!(prompt.contains("vibetrading_get_market_analysis(symbol)"));
+        assert!(prompt.contains("hypervibes_get_market_analysis(symbol)"));
         assert!(prompt.contains("Do not fall back to raw timeframe `analysis` memories"));
         assert!(prompt.contains("## Conditional-confirmation candle cutoff"));
         assert!(prompt.contains("2026-07-03T21:30:00Z (1783114200000 milliseconds)"));
@@ -510,7 +510,7 @@ mod tests {
         assert!(prompt.contains("BTC, ETH"));
         assert!(prompt.contains("## Accumulated learnings"));
         assert!(prompt.contains("market-analysis event job"));
-        assert!(prompt.contains("vibetrading_get_latest_analysis(symbol)"));
+        assert!(prompt.contains("hypervibes_get_latest_analysis(symbol)"));
         assert!(prompt.contains("source_memory_ids"));
         assert!(prompt.contains("memory_type = \"market_analysis\""));
         assert!(prompt.contains("link_type = \"derived_from\""));

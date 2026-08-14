@@ -29,7 +29,7 @@ pub struct AuthenticatedUser {
     pub wallet_address: String,
 }
 
-/// The single Hyperliquid exchange signer owned by a Vibetrading user.
+/// The single Hyperliquid exchange signer owned by a HyperVibes user.
 ///
 /// The private-key fields are intentionally only loaded by exchange-signing
 /// code. UI callers should use the audit fields without exposing ciphertext.

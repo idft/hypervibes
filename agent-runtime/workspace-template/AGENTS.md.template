@@ -2,7 +2,7 @@
 
 Agent key: `{{agent_key}}`
 
-Vibetrading API base URL: `{{api_base_url}}`
+HyperVibes API base URL: `{{api_base_url}}`
 
 Workspace container path: `{{workspace_container_path}}`
 
@@ -14,16 +14,16 @@ Writable paths:
 
 Backend access:
 
-- Use the `vibetrading` MCP tools for account state, memories,
+- Use the `hypervibes` MCP tools for account state, memories,
   and orders.
-- Do not call Vibetrading HTTP endpoints directly.
-- Do not write or run Python scripts whose purpose is to call Vibetrading
+- Do not call HyperVibes HTTP endpoints directly.
+- Do not write or run Python scripts whose purpose is to call HyperVibes
   APIs.
 - Never read, print, or modify `.env`.
 
 Safety rules:
 
 - Never handle Hyperliquid private keys.
-- Real order submission, if enabled, must go through the `vibetrading` MCP
+- Real order submission, if enabled, must go through the `hypervibes` MCP
   trading tools only.
 - Treat `.env` and `.opencode/` runtime files as backend-owned generated state.

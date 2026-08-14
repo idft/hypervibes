@@ -10,7 +10,7 @@ just test
 
 ## Test Database
 
-By default `cargo test` uses the dedicated `test-postgres` service from `podman-compose.yaml` via `TEST_DATABASE_URL=postgres://vibetrading:vibetrading@127.0.0.1:15433/postgres` from `.cargo/config.toml`.
+By default `cargo test` uses the dedicated `test-postgres` service from `podman-compose.yaml` via `TEST_DATABASE_URL=postgres://hypervibes:hypervibes@127.0.0.1:15433/postgres` from `.cargo/config.toml`.
 
 `src/test_db.rs` creates a fresh database for each `pool()` call when `TEST_DATABASE_URL` is set, runs migrations inside that database, and lets those isolated test databases be created concurrently on the dedicated test Postgres service.
 
@@ -31,7 +31,7 @@ The dedicated test Postgres service is intentionally speed-optimized and disposa
 
 ## Frontend Build During Tests
 
-`build.rs` skips the automatic frontend `pnpm build` path during `cargo test`. Template and route tests render directly from source templates and do not need compiled assets. If you explicitly need the build-script asset step during a test invocation, run with `VIBETRADING_FORCE_FRONTEND_BUILD=1 cargo test`.
+`build.rs` skips the automatic frontend `pnpm build` path during `cargo test`. Template and route tests render directly from source templates and do not need compiled assets. If you explicitly need the build-script asset step during a test invocation, run with `HYPERVIBES_FORCE_FRONTEND_BUILD=1 cargo test`.
 
 ## SSE Tests
 

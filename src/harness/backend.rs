@@ -28,15 +28,15 @@ const RETRY_STATUS_POLL_INTERVAL: std::time::Duration = std::time::Duration::fro
 #[cfg(test)]
 const RETRY_STATUS_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_millis(10);
 const DEFAULT_ANALYSIS_AGENT: &str = "analysis";
-const DEFAULT_ANALYSIS_COMMAND: &str = "vibetrading-analysis";
+const DEFAULT_ANALYSIS_COMMAND: &str = "hypervibes-analysis";
 const DEFAULT_MARKET_ANALYSIS_AGENT: &str = "market-analysis";
-const DEFAULT_MARKET_ANALYSIS_COMMAND: &str = "vibetrading-market-analysis";
+const DEFAULT_MARKET_ANALYSIS_COMMAND: &str = "hypervibes-market-analysis";
 const DEFAULT_DAILY_REVIEW_AGENT: &str = "daily-review";
-const DEFAULT_DAILY_REVIEW_COMMAND: &str = "vibetrading-daily-review";
+const DEFAULT_DAILY_REVIEW_COMMAND: &str = "hypervibes-daily-review";
 const DEFAULT_ANALYSIS_CODING_AGENT: &str = "analysis-coding";
-const DEFAULT_ANALYSIS_CODING_COMMAND: &str = "vibetrading-analysis-coding";
+const DEFAULT_ANALYSIS_CODING_COMMAND: &str = "hypervibes-analysis-coding";
 const DEFAULT_TRADING_AGENT: &str = "trading";
-const DEFAULT_TRADING_COMMAND: &str = "vibetrading-trading";
+const DEFAULT_TRADING_COMMAND: &str = "hypervibes-trading";
 const MODEL_ACTIVITY_POLL_ATTEMPTS: usize = 10;
 const MODEL_ACTIVITY_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_millis(200);
 
@@ -717,7 +717,7 @@ mod tests {
         assert!(args.contains("## Instructions"));
         assert!(args.contains("(none)"));
         // Ensure no api-key-like token is present
-        assert!(!args.contains("VIBETRADING_API_KEY"));
+        assert!(!args.contains("HYPERVIBES_API_KEY"));
         assert!(!args.contains("vta_"));
     }
 

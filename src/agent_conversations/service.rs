@@ -446,14 +446,14 @@ fn permission_rules_for(orders: &str, memory_writes: &str) -> Result<Vec<OpenCod
     let orders = action(orders)?;
     let memory_writes = action(memory_writes)?;
     let mut rules = [
-        "vibetrading_get_account",
-        "vibetrading_get_latest_analysis",
-        "vibetrading_get_market_analysis",
-        "vibetrading_get_memory_detail",
-        "vibetrading_list_memories",
-        "vibetrading_list_orders",
-        "vibetrading_list_account_transactions",
-        "vibetrading_get_order",
+        "hypervibes_get_account",
+        "hypervibes_get_latest_analysis",
+        "hypervibes_get_market_analysis",
+        "hypervibes_get_memory_detail",
+        "hypervibes_list_memories",
+        "hypervibes_list_orders",
+        "hypervibes_list_account_transactions",
+        "hypervibes_get_order",
     ]
     .into_iter()
     .map(|permission| OpenCodePermissionRule {
@@ -463,9 +463,9 @@ fn permission_rules_for(orders: &str, memory_writes: &str) -> Result<Vec<OpenCod
     })
     .collect::<Vec<_>>();
     for permission in [
-        "vibetrading_submit_orders",
-        "vibetrading_cancel_orders",
-        "vibetrading_cancel_all_orders",
+        "hypervibes_submit_orders",
+        "hypervibes_cancel_orders",
+        "hypervibes_cancel_all_orders",
     ] {
         rules.push(OpenCodePermissionRule {
             permission: permission.to_string(),
@@ -474,7 +474,7 @@ fn permission_rules_for(orders: &str, memory_writes: &str) -> Result<Vec<OpenCod
         });
     }
     rules.push(OpenCodePermissionRule {
-        permission: "vibetrading_write_memory".to_string(),
+        permission: "hypervibes_write_memory".to_string(),
         pattern: "*".to_string(),
         action: memory_writes.to_string(),
     });

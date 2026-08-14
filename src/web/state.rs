@@ -31,7 +31,7 @@ pub struct AppState {
     pub ui_events: Arc<UiEventHub>,
     pub run_detail_events: Arc<RunDetailEventHub>,
     pub workspace_controller: Arc<dyn WorkspaceController>,
-    pub vibetrading_agent_api_base_url: String,
+    pub hypervibes_agent_api_base_url: String,
     pub opencode_container_workspaces_root: String,
     #[cfg(test)]
     pub opencode_workspace_config: crate::opencode::workspace::OpenCodeWorkspaceConfig,

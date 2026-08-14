@@ -218,7 +218,7 @@ fn config_from_env() -> Result<App> {
     let root = absolute_env("WORKSPACE_CONTROL_WORKSPACES_ROOT", "/workspaces")?;
     let template = absolute_env(
         "WORKSPACE_CONTROL_TEMPLATE_ROOT",
-        "/opt/vibetrading/workspace-template",
+        "/opt/hypervibes/workspace-template",
     )?;
     if !template.is_dir() {
         bail!("WORKSPACE_CONTROL_TEMPLATE_ROOT must be a usable directory");

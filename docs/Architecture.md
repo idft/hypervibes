@@ -1,6 +1,6 @@
 # Architecture
 
-Vibetrading is one Rust application process. It runs the Axum web server,
+HyperVibes is one Rust application process. It runs the Axum web server,
 Postgres migrations, the Hyperliquid monitor, and the OpenCode scheduler in a
 single Tokio runtime.
 
@@ -96,9 +96,9 @@ channel and external conversation key.
 
 ## Boundaries
 
-OpenCode performs LLM and tool execution. Vibetrading retains authority over
+OpenCode performs LLM and tool execution. HyperVibes retains authority over
 agent identity, scheduling, memory, account state, and exchange execution.
-The workspace MCP server uses the agent API key to call Vibetrading; it does
+The workspace MCP server uses the agent API key to call HyperVibes; it does
 not receive the user's Hyperliquid private key. Exchange orders are signed by
 the owner's trading signer and target the agent's stored trading account.
 
@@ -120,7 +120,7 @@ promoting a validated candidate and verifying that the promoted tree has the
 same hash.
 
 Candidate validation runs through a fixed local MCP tool in the OpenCode
-analysis runtime, not through a Vibetrading HTTP endpoint. The tool accepts no
+analysis runtime, not through a HyperVibes HTTP endpoint. The tool accepts no
 executable or path arguments and records a task-scoped result bound to the
 candidate tree hash. The worker recomputes that hash after generation, so any
 write after validation fails promotion closed.
@@ -144,7 +144,7 @@ inside OpenCode workspaces, `OPENCODE_BASE_URL`, and OpenCode Basic Auth credent
 `.env.example` for the complete local-development configuration.
 
 The application defaults to `127.0.0.1:3000`. The workspace-facing API URL is
-configured separately with `VIBETRADING_AGENT_API_BASE_URL`; it must resolve
+configured separately with `HYPERVIBES_AGENT_API_BASE_URL`; it must resolve
 from the OpenCode container or runtime.
 
 ## Frontend
@@ -158,7 +158,7 @@ Frontend source is in `assets/`; `build.rs` builds the Tailwind and esbuild
 output when application assets or templates change.
 # Workspace Volume Boundary
 
-The host-running Vibetrading application never mounts or accesses agent workspace files. The
+The host-running HyperVibes application never mounts or accesses agent workspace files. The
 OpenCode container owns the `agent_workspaces` named volume at `/workspaces` and runs the
 `workspace-controller` HTTP process alongside OpenCode. The host calls its loopback-only `/v1`
 API with `WORKSPACE_CONTROL_API_KEY` for workspace lifecycle operations. This controller is not

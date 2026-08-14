@@ -57,7 +57,7 @@ struct CachedProvidersResponse {
 /// `/session/status` endpoint. The value reflects whether the session
 /// is actively executing (`Busy`/`Retry`) or idle (`Idle`).
 ///
-/// Vibetrading treats `Idle` as terminal for the purposes of run
+/// HyperVibes treats `Idle` as terminal for the purposes of run
 /// cancellation; a dispatch that has timed out keeps the underlying
 /// `harness_runs` row in `running` until a probe confirms `Idle`.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -393,7 +393,7 @@ impl OpenCodeClient {
     /// Run a slash command against an existing session.
     ///
     /// For the current OpenCode integration, this HTTP request blocks until the
-    /// command finishes. Vibetrading therefore marks the run succeeded only
+    /// command finishes. HyperVibes therefore marks the run succeeded only
     /// after this request returns successfully.
     pub async fn run_command(
         &self,
@@ -1405,7 +1405,7 @@ mod tests {
     #[test]
     fn command_request_serializes_model_as_provider_and_model_string() {
         let request = OpenCodeCommandRequest {
-            command: "vibetrading-analysis".to_string(),
+            command: "hypervibes-analysis".to_string(),
             arguments: "Agent key: btc-2".to_string(),
             agent: Some("analysis".to_string()),
             model: Some("anthropic/claude-sonnet-4".to_string()),
@@ -1423,7 +1423,7 @@ mod tests {
     #[test]
     fn command_request_omits_absent_variant() {
         let request = OpenCodeCommandRequest {
-            command: "vibetrading-analysis".to_string(),
+            command: "hypervibes-analysis".to_string(),
             arguments: "Agent key: btc-2".to_string(),
             agent: None,
             model: None,

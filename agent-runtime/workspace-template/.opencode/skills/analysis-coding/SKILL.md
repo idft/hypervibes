@@ -121,7 +121,7 @@ authoritative:
   divergences, or custom indicator states. Do not emit final trade direction,
   actionability, trading confidence, entries, exits, stops, targets, sizing, or
   orders.
-- Do not call Vibetrading APIs, place orders, install packages, or depend on
+- Do not call HyperVibes APIs, place orders, install packages, or depend on
   agent-specific absolute paths.
 - Run the fixed validation tool until it returns `ok: true`, then submit exactly
   one structured coding report when finished.

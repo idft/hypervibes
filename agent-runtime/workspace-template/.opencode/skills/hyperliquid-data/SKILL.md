@@ -1,6 +1,6 @@
 ---
 name: hyperliquid-data
-description: Use when fetching Hyperliquid public OHLCV candle data in Vibetrading OpenCode workspaces, especially with fetch_ohlcv.py.
+description: Use when fetching Hyperliquid public OHLCV candle data in HyperVibes OpenCode workspaces, especially with fetch_ohlcv.py.
 ---
 
 # Hyperliquid Data

@@ -1,6 +1,6 @@
 ---
 name: python-analysis
-description: Use when writing Python analysis scripts in Vibetrading OpenCode workspaces, especially for pandas, numpy, pandas-ta-classic, statistics, plotting, or OHLCV analysis.
+description: Use when writing Python analysis scripts in HyperVibes OpenCode workspaces, especially for pandas, numpy, pandas-ta-classic, statistics, plotting, or OHLCV analysis.
 ---
 
 # Python Analysis
@@ -10,7 +10,7 @@ Use the container-provided Python analysis runtime for market analysis scripts.
 ## Runtime
 
 Run scripts with `python`. The `python` executable is provided by the shared
-analysis virtualenv at `/opt/vibetrading/analysis/.venv`.
+analysis virtualenv at `/opt/hypervibes/analysis/.venv`.
 
 Common libraries available:
 
@@ -33,8 +33,8 @@ Do not write generated helper scripts outside those paths.
 
 ## Backend Boundary
 
-Do not write Python scripts that call Vibetrading HTTP APIs directly. Use the
-`vibetrading` MCP tools for backend access, memory reads/writes, account state,
+Do not write Python scripts that call HyperVibes HTTP APIs directly. Use the
+`hypervibes` MCP tools for backend access, memory reads/writes, account state,
 and orders.
 
 It is allowed to fetch public market data directly from Hyperliquid using the

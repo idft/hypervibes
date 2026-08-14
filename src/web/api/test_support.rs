@@ -46,7 +46,7 @@ impl HarnessBackend for NoopHarnessBackend {
 
 pub async fn test_state() -> Arc<AppState> {
     let pool = Arc::new(test_db::pool().await);
-    let cache_dir = std::path::PathBuf::from("/tmp/opencode/vibetrading-api-cache");
+    let cache_dir = std::path::PathBuf::from("/tmp/opencode/hypervibes-api-cache");
     let (_shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
     Arc::new(AppState {
         db_pool: pool.as_ref().as_ref().clone(),
@@ -66,7 +66,7 @@ pub async fn test_state() -> Arc<AppState> {
         opencode_workspace_config: crate::opencode::workspace::OpenCodeWorkspaceConfig {
             source_root: std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
                 .join(crate::opencode::workspace::PROFILE_SOURCE_RELATIVE_PATH),
-            host_workspaces_root: std::path::PathBuf::from("/tmp/opencode/vibetrading-api"),
+            host_workspaces_root: std::path::PathBuf::from("/tmp/opencode/hypervibes-api"),
             container_workspaces_root: "/workspaces".to_string(),
             api_base_url: "http://host.containers.internal:3003".to_string(),
         },
@@ -75,13 +75,13 @@ pub async fn test_state() -> Arc<AppState> {
                 crate::opencode::workspace::OpenCodeWorkspaceConfig {
                     source_root: std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
                         .join(crate::opencode::workspace::PROFILE_SOURCE_RELATIVE_PATH),
-                    host_workspaces_root: std::path::PathBuf::from("/tmp/opencode/vibetrading-api"),
+                    host_workspaces_root: std::path::PathBuf::from("/tmp/opencode/hypervibes-api"),
                     container_workspaces_root: "/workspaces".to_string(),
                     api_base_url: "http://host.containers.internal:3003".to_string(),
                 },
             ),
         ),
-        vibetrading_agent_api_base_url: "http://host.containers.internal:3003".to_string(),
+        hypervibes_agent_api_base_url: "http://host.containers.internal:3003".to_string(),
         opencode_container_workspaces_root: "/workspaces".to_string(),
         opencode_base_url: "http://localhost:14096".to_string(),
         opencode_client: Arc::new(

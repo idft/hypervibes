@@ -215,7 +215,7 @@ pub fn prepare_coding_candidate(
     fs::write(
         root.join(".env"),
         format!(
-            "VIBETRADING_AGENT_KEY={agent_key}\nVIBETRADING_API_BASE_URL={}\nVIBETRADING_API_KEY={api_key}\nVIBETRADING_WORKSPACE={}\nVIBETRADING_CODING_TASK_ID={task_id}\n",
+            "HYPERVIBES_AGENT_KEY={agent_key}\nHYPERVIBES_API_BASE_URL={}\nHYPERVIBES_API_KEY={api_key}\nHYPERVIBES_WORKSPACE={}\nHYPERVIBES_CODING_TASK_ID={task_id}\n",
             config.api_base_url, container_root,
         ),
     )?;

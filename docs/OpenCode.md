@@ -12,10 +12,10 @@ Related docs:
 OpenCode is the only supported agent execution backend today.
 
 Each generated workspace starts a local stdio MCP server. It reads the
-workspace-scoped Vibetrading API credentials and adapts OpenCode tool calls to
+workspace-scoped HyperVibes API credentials and adapts OpenCode tool calls to
 the authenticated agent API; it never receives a Hyperliquid private key.
 
-Vibetrading owns:
+HyperVibes owns:
 
 - agent identity
 - job scheduling and dispatch
@@ -32,13 +32,13 @@ OpenCode owns:
 
 Provider credentials are global to the one shared OpenCode service. Operators
 manage API-key and OAuth connections at `/providers`; credentials are never
-stored on an agent or in Vibetrading's database. OpenCode persists its auth
+stored on an agent or in HyperVibes's database. OpenCode persists its auth
 storage in the retained `opencode_data` volume.
 
 The page uses OpenCode's advertised authentication methods rather than a fixed
 provider list or hard-coded method indexes. For OpenAI, select
 `ChatGPT Pro/Plus (headless)`, open the displayed device URL, follow its
-instructions, and then submit the completion action in Vibetrading. The browser
+instructions, and then submit the completion action in HyperVibes. The browser
 loopback method is disabled because it requires a local OpenCode TUI. Other
 providers may advertise API-key prompts, OAuth prompts, or both.
 
@@ -55,7 +55,7 @@ generic "Manually enter API key" connection method in the UI.
 
 OpenCode caches its provider list in memory. After a provider is connected or
 disconnected through `/providers`, the cached `connected` list does not update
-until OpenCode's instance cache is disposed. Vibetrading handles this
+until OpenCode's instance cache is disposed. HyperVibes handles this
 automatically by queuing a `provider_config_reload` maintenance task after
 every successful connect, OAuth callback, or disconnect.
 
@@ -81,7 +81,7 @@ API keys, OAuth codes, prompt answers, or provider token data.
 OpenCode is a single application-level dependency rather than a database-
 managed runtime assignment. The endpoint is configured with
 `OPENCODE_BASE_URL`, defaulting to `http://localhost:14096` for a host-running
-Vibetrading process. An application container on the Compose network should
+HyperVibes process. An application container on the Compose network should
 use `http://opencode:14096`.
 
 Each agent has one generated workspace. Workspace paths and generation
@@ -89,7 +89,7 @@ metadata are stored in `agents.runtime_config`; no OpenCode endpoint or runtime
 identity is stored on the agent row.
 
 OpenCode's provider discovery request requires a workspace directory, but model
-providers and models are configured by the shared OpenCode backend. Vibetrading
+providers and models are configured by the shared OpenCode backend. HyperVibes
 uses the configured container workspace root to warm one application-wide,
 backend-URL-keyed provider cache at startup, including before any agents exist.
 Model pickers wait for an initial discovery instead of rendering an empty
@@ -138,7 +138,7 @@ idle.
 
 The `agent-conversations` profile is defined in the container-global
 `agent-runtime/container/opencode.jsonc` and duplicated in the workspace
-template. It uses Vibetrading MCP tools for data, denies native
+template. It uses HyperVibes MCP tools for data, denies native
 shell/filesystem access, and never reads `.env`. Once the OpenCode image is
 rolled out, existing workspaces can use the profile without regeneration.
 
@@ -150,7 +150,7 @@ Re-generating a workspace is now queued as per-agent maintenance work instead of
 
 Regular re-generation still refreshes generated files while preserving user-managed files under paths like `scripts/user/`, `data/`, and `scratch/`.
 
-After a workspace re-generation, Vibetrading disposes that workspace's idle OpenCode instance so its next session loads the refreshed generated configuration. Other agent workspaces are not interrupted.
+After a workspace re-generation, HyperVibes disposes that workspace's idle OpenCode instance so its next session loads the refreshed generated configuration. Other agent workspaces are not interrupted.
 
 Operators may also queue a hard reset, which deletes the full workspace directory first and then re-generates it from the template.
 
@@ -164,7 +164,7 @@ Deleting an OpenCode agent deletes its generated workspace directory after the d
 
 ## Scheduling
 
-OpenCode harness jobs are scheduled by Vibetrading. Candle-close jobs are driven
+OpenCode harness jobs are scheduled by HyperVibes. Candle-close jobs are driven
 by the scheduler; the two fixed event triggers are direct follow-ups rather
 than a durable event queue. Deleting an idle harness job deletes each terminal
 OpenCode session through the OpenCode HTTP API before the job history is
@@ -180,7 +180,7 @@ Current built-in job kinds are:
 
 The `HarnessScheduler` claims due work, dispatches runs through the OpenCode backend adapter, and stores run state in Postgres.
 
-Before claiming new work for an agent lane, Vibetrading reconciles stale active runs left behind by app restarts. A `running` run whose OpenCode session is recorded as `idle` after a command was created is marked `succeeded`; queued or running orphan rows that have exceeded their configured timeout are marked `failed`, regardless of whether they ever reached an OpenCode session. The `HarnessScheduler` also runs a periodic global recovery sweep (throttled to once a minute) that applies the same reconciliation across every agent, so a `running` run whose dispatch worker has died does not block its lane until the next claim attempt. This prevents one interrupted process from causing all later runs in the same lane to be skipped forever.
+Before claiming new work for an agent lane, HyperVibes reconciles stale active runs left behind by app restarts. A `running` run whose OpenCode session is recorded as `idle` after a command was created is marked `succeeded`; queued or running orphan rows that have exceeded their configured timeout are marked `failed`, regardless of whether they ever reached an OpenCode session. The `HarnessScheduler` also runs a periodic global recovery sweep (throttled to once a minute) that applies the same reconciliation across every agent, so a `running` run whose dispatch worker has died does not block its lane until the next claim attempt. This prevents one interrupted process from causing all later runs in the same lane to be skipped forever.
 
 ## Shutdown And Maintenance
 
@@ -212,7 +212,7 @@ Automatic follow-up hooks for an analysis job that was already allowed to run ar
 
 The agent detail page exposes `Jobs` and `Prompts` tabs for OpenCode agents.
 
-When a job is dispatched, Vibetrading snapshots its provider/model and optional
+When a job is dispatched, HyperVibes snapshots its provider/model and optional
 thinking mode into the run before building the initial OpenCode command prompt
 with the agent metadata, selected instruments, the job-specific strategy prompt,
 the latest `agent_learnings` memory, operator prompt, and trading account
@@ -226,8 +226,8 @@ completed tool state from `opencode.message_parts` when available and retain
 Run-detail pages display `opencode.sessions`, `opencode.messages`,
 `opencode.message_parts`, `opencode.tool_executions`, and
 `opencode.session_errors`. The displayed session is associated with a
-Vibetrading run through `harness_runs.backend_run_ref`. Plugin writes and
-Vibetrading run updates issue Postgres notifications after their transactions
+HyperVibes run through `harness_runs.backend_run_ref`. Plugin writes and
+HyperVibes run updates issue Postgres notifications after their transactions
 commit; the web process fans those notifications out to the run-detail SSE
 stream and the Jobs tab's Recent Runs SSE section. Each Recent Runs update
 re-queries and re-renders the complete section so inserts, status transitions,
@@ -287,10 +287,10 @@ The `analysis-coding` OpenCode agent explicitly invokes its dedicated
 `analysis-coding` skill. The skill defines the canonical analysis CLI,
 quantitative output envelope, optional indicator signals, closed-candle rule,
 and focused optional-test policy. The fixed validator and its deterministic fixture are container-global assets at
-`/opt/vibetrading/coding/`; they are not copied into agent workspaces.
+`/opt/hypervibes/coding/`; they are not copied into agent workspaces.
 # Workspace Lifecycle
 
 Agent workspaces live in the OpenCode container's named volume, not on a host bind mount.
-Vibetrading uses the authenticated workspace controller for generation, drift inspection,
+HyperVibes uses the authenticated workspace controller for generation, drift inspection,
 coding candidates, report storage, promotion, and recovery. `opencode_data` remains a separate
 named volume for global provider credentials and OAuth state.

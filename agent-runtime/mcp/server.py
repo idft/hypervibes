@@ -1,13 +1,13 @@
-"""Vibetrading MCP server.
+"""HyperVibes MCP server.
 
-Runtime infrastructure that exposes Vibetrading backend endpoints to
+Runtime infrastructure that exposes HyperVibes backend endpoints to
 OpenCode agents as MCP tools. See ``README.md`` for context.
 
 The server:
 
 * Loads ``.env`` from the current working directory (the agent workspace)
-  defensively. Required vars: ``VIBETRADING_API_BASE_URL``,
-  ``VIBETRADING_API_KEY``, ``VIBETRADING_AGENT_KEY``.
+  defensively. Required vars: ``HYPERVIBES_API_BASE_URL``,
+  ``HYPERVIBES_API_KEY``, ``HYPERVIBES_AGENT_KEY``.
 * Never prints secret values.
 * Returns JSON-compatible dict/list values only.
 * Maps backend HTTP errors to MCP errors without leaking the bearer token.
@@ -32,12 +32,12 @@ from mcp.server.fastmcp import FastMCP
 
 HTTP_TIMEOUT_SECONDS = 30.0
 
-mcp = FastMCP("vibetrading")
+mcp = FastMCP("hypervibes")
 
 
 # MCP uses stdout for its JSON-RPC transport. Keep operational diagnostics on
 # stderr so they cannot corrupt tool responses.
-LOGGER = logging.getLogger("vibetrading.mcp")
+LOGGER = logging.getLogger("hypervibes.mcp")
 LOGGER.setLevel(logging.INFO)
 if not LOGGER.handlers:
     formatter = logging.Formatter("%(asctime)s %(levelname)s %(message)s")
@@ -67,22 +67,22 @@ def _load_config() -> tuple[str, str, str]:
     trailing slash stripped.
     """
     load_dotenv(dotenv_path=Path.cwd() / ".env")
-    base_url = os.getenv("VIBETRADING_API_BASE_URL", "").strip().rstrip("/")
-    api_key = os.getenv("VIBETRADING_API_KEY", "").strip()
-    agent_key = os.getenv("VIBETRADING_AGENT_KEY", "").strip()
+    base_url = os.getenv("HYPERVIBES_API_BASE_URL", "").strip().rstrip("/")
+    api_key = os.getenv("HYPERVIBES_API_KEY", "").strip()
+    agent_key = os.getenv("HYPERVIBES_AGENT_KEY", "").strip()
     missing = [
         name
         for name, value in (
-            ("VIBETRADING_API_BASE_URL", base_url),
-            ("VIBETRADING_API_KEY", api_key),
-            ("VIBETRADING_AGENT_KEY", agent_key),
+            ("HYPERVIBES_API_BASE_URL", base_url),
+            ("HYPERVIBES_API_KEY", api_key),
+            ("HYPERVIBES_AGENT_KEY", agent_key),
         )
         if not value
     ]
     if missing:
         joined = ", ".join(missing)
         raise RuntimeError(
-            "Vibetrading MCP server is missing required environment "
+            "HyperVibes MCP server is missing required environment "
             f"variables: {joined}"
         )
     return base_url, api_key, agent_key
@@ -113,7 +113,7 @@ def _request(
     params: dict[str, Any] | None = None,
     json_body: Any = None,
 ) -> Any:
-    """Make an authenticated request to the Vibetrading backend.
+    """Make an authenticated request to the HyperVibes backend.
 
     Translates HTTP errors into ``RuntimeError`` with a redacted message.
     """
@@ -129,7 +129,7 @@ def _request(
             timeout=HTTP_TIMEOUT_SECONDS,
         )
     except httpx.HTTPError as exc:
-        raise RuntimeError(f"Vibetrading request failed: {exc}") from exc
+        raise RuntimeError(f"HyperVibes request failed: {exc}") from exc
 
     if response.status_code >= 400:
         detail = response.text.strip()
@@ -138,20 +138,20 @@ def _request(
         # error for the tool caller, which is useful for actionable API errors.
         detail = detail.replace(_require_config()[1], "[redacted]")
         LOGGER.warning(
-            "vibetrading_mcp_request_failed method=%s path=%s params=%r status=%s",
+            "hypervibes_mcp_request_failed method=%s path=%s params=%r status=%s",
             method,
             path,
             params or {},
             response.status_code,
         )
         raise RuntimeError(
-            f"Vibetrading {method} {path} returned "
+            f"HyperVibes {method} {path} returned "
             f"{response.status_code}: {detail[:500]}"
         )
 
     if not response.content:
         LOGGER.info(
-            "vibetrading_mcp_request method=%s path=%s params=%r status=%s response=empty",
+            "hypervibes_mcp_request method=%s path=%s params=%r status=%s response=empty",
             method,
             path,
             params or {},
@@ -162,7 +162,7 @@ def _request(
         result = response.json()
     except ValueError as exc:
         raise RuntimeError(
-            f"Vibetrading {method} {path} returned non-JSON body"
+            f"HyperVibes {method} {path} returned non-JSON body"
         ) from exc
     if isinstance(result, list):
         response_shape = f"list:{len(result)}"
@@ -171,7 +171,7 @@ def _request(
     else:
         response_shape = type(result).__name__
     LOGGER.info(
-        "vibetrading_mcp_request method=%s path=%s params=%r status=%s response=%s",
+        "hypervibes_mcp_request method=%s path=%s params=%r status=%s response=%s",
         method,
         path,
         params or {},
@@ -206,8 +206,8 @@ def _require_offset(offset: int | None) -> int | None:
 CODING_ALLOWED_SUFFIXES = {".py", ".json", ".md"}
 CODING_MAX_FILE_BYTES = 1024 * 1024
 CODING_MAX_TOTAL_BYTES = 20 * 1024 * 1024
-CODING_VALIDATOR_PYTHON = "/opt/vibetrading/analysis/.venv/bin/python"
-CODING_VALIDATOR_SCRIPT = "/opt/vibetrading/coding/coding_validate.py"
+CODING_VALIDATOR_PYTHON = "/opt/hypervibes/analysis/.venv/bin/python"
+CODING_VALIDATOR_SCRIPT = "/opt/hypervibes/coding/coding_validate.py"
 CODING_VALIDATOR_TIMEOUT_SECONDS = 65
 
 
@@ -218,7 +218,7 @@ def _coding_user_root() -> Path:
 
 
 def _coding_task_id() -> int:
-    value = os.getenv("VIBETRADING_CODING_TASK_ID", "").strip()
+    value = os.getenv("HYPERVIBES_CODING_TASK_ID", "").strip()
     try:
         task_id = int(value)
     except ValueError as exc:
@@ -372,7 +372,7 @@ def get_account() -> dict[str, Any]:
     """Return this agent's current Hyperliquid account snapshot."""
     result = _request("GET", "/api/v1/account")
     if not isinstance(result, dict):
-        raise RuntimeError("Vibetrading /account returned unexpected shape")
+        raise RuntimeError("HyperVibes /account returned unexpected shape")
     return result
 
 
@@ -391,7 +391,7 @@ def get_latest_analysis(symbol: str, limit: int | None = None) -> list[dict[str,
     result = _request("GET", "/api/v1/memories/latest", params=params)
     if not isinstance(result, list):
         raise RuntimeError(
-            "Vibetrading /memories/latest returned unexpected shape"
+            "HyperVibes /memories/latest returned unexpected shape"
         )
     return result
 
@@ -406,14 +406,14 @@ def get_market_analysis(symbol: str) -> dict[str, Any] | None:
         params={"symbol": symbol, "memory_type": "market_analysis", "limit": 1},
     )
     if not isinstance(result, list):
-        raise RuntimeError("Vibetrading /memories returned unexpected shape")
+        raise RuntimeError("HyperVibes /memories returned unexpected shape")
     if not result:
-        LOGGER.info("vibetrading_mcp_market_analysis symbol=%s found=false", symbol)
+        LOGGER.info("hypervibes_mcp_market_analysis symbol=%s found=false", symbol)
         return None
     first = result[0]
     if not isinstance(first, dict):
-        raise RuntimeError("Vibetrading /memories returned unexpected shape")
-    LOGGER.info("vibetrading_mcp_market_analysis symbol=%s found=true", symbol)
+        raise RuntimeError("HyperVibes /memories returned unexpected shape")
+    LOGGER.info("hypervibes_mcp_market_analysis symbol=%s found=true", symbol)
     return first
 
 
@@ -427,7 +427,7 @@ def get_memory_detail(memory_id: str) -> dict[str, Any]:
         params={"include": "links"},
     )
     if not isinstance(result, dict):
-        raise RuntimeError("Vibetrading memory detail returned unexpected shape")
+        raise RuntimeError("HyperVibes memory detail returned unexpected shape")
     return result
 
 
@@ -463,7 +463,7 @@ def list_memories(
         params["include_expired"] = "true"
     result = _request("GET", "/api/v1/memories", params=params or None)
     if not isinstance(result, list):
-        raise RuntimeError("Vibetrading /memories returned unexpected shape")
+        raise RuntimeError("HyperVibes /memories returned unexpected shape")
     return result
 
 
@@ -493,7 +493,7 @@ def list_orders(
         params["limit"] = _require_limit(limit)
     result = _request("GET", "/api/v1/orders", params=params or None)
     if not isinstance(result, list):
-        raise RuntimeError("Vibetrading /orders returned unexpected shape")
+        raise RuntimeError("HyperVibes /orders returned unexpected shape")
     return result
 
 
@@ -509,7 +509,7 @@ def list_account_transactions(
     """List durable Hyperliquid fills, funding, and ledger events for this agent.
 
     ``since`` and ``until`` are required RFC 3339 bounds. Results come from
-    Vibetrading's account journal, not a direct exchange request. Use
+    HyperVibes's account journal, not a direct exchange request. Use
     ``offset`` with a fixed ``limit`` to page through a review window until a
     page returns fewer rows than the requested limit.
     """
@@ -530,7 +530,7 @@ def list_account_transactions(
     result = _request("GET", "/api/v1/account/transactions", params=params)
     if not isinstance(result, list):
         raise RuntimeError(
-            "Vibetrading /account/transactions returned unexpected shape"
+            "HyperVibes /account/transactions returned unexpected shape"
         )
     return result
 
@@ -547,7 +547,7 @@ def get_order(order_id: str, include_events: bool = False) -> dict[str, Any]:
     )
     result = _request("GET", f"/api/v1/orders/{order_id}", params=params)
     if not isinstance(result, dict):
-        raise RuntimeError("Vibetrading /orders/{id} returned unexpected shape")
+        raise RuntimeError("HyperVibes /orders/{id} returned unexpected shape")
     return result
 
 
@@ -597,13 +597,13 @@ def write_memory(
         body["links"] = links
     result = _request("POST", "/api/v1/memories", json_body=body)
     if not isinstance(result, dict):
-        raise RuntimeError("Vibetrading /memories POST returned unexpected shape")
+        raise RuntimeError("HyperVibes /memories POST returned unexpected shape")
     return result
 
 
 @mcp.tool()
 def submit_orders(orders: list[dict[str, Any]]) -> dict[str, Any]:
-    """Submit one or more orders through the Vibetrading backend.
+    """Submit one or more orders through the HyperVibes backend.
 
     ``orders`` is the same list shape the backend expects on
     ``POST /api/v1/orders``. Opening agent orders should include the selected
@@ -618,13 +618,13 @@ def submit_orders(orders: list[dict[str, Any]]) -> dict[str, Any]:
             raise ValueError(f"orders[{index}] must be a JSON object")
     result = _request("POST", "/api/v1/orders", json_body={"orders": orders})
     if not isinstance(result, dict):
-        raise RuntimeError("Vibetrading /orders POST returned unexpected shape")
+        raise RuntimeError("HyperVibes /orders POST returned unexpected shape")
     return result
 
 
 @mcp.tool()
 def cancel_orders(orders: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Cancel one or more orders through the Vibetrading backend.
+    """Cancel one or more orders through the HyperVibes backend.
 
     ``orders`` is the same list shape the backend expects on
     ``POST /api/v1/orders/cancel``. Returns one outcome per requested
@@ -638,7 +638,7 @@ def cancel_orders(orders: list[dict[str, Any]]) -> list[dict[str, Any]]:
     result = _request("POST", "/api/v1/orders/cancel", json_body={"orders": orders})
     if not isinstance(result, list):
         raise RuntimeError(
-            "Vibetrading /orders/cancel returned unexpected shape"
+            "HyperVibes /orders/cancel returned unexpected shape"
         )
     return result
 
@@ -657,7 +657,7 @@ def cancel_all_orders(symbol: str | None = None) -> dict[str, Any]:
     result = _request("POST", "/api/v1/orders/cancel-all", params=params)
     if not isinstance(result, dict):
         raise RuntimeError(
-            "Vibetrading /orders/cancel-all returned unexpected shape"
+            "HyperVibes /orders/cancel-all returned unexpected shape"
         )
     return result
 
@@ -667,7 +667,7 @@ def main() -> None:
     # instead of a half-initialised server.
     _redirect_stderr_to_container_log()
     _, _, agent_key = _require_config()
-    LOGGER.info("vibetrading_mcp_started agent_key=%s", agent_key)
+    LOGGER.info("hypervibes_mcp_started agent_key=%s", agent_key)
     mcp.run()
 
 
@@ -675,5 +675,5 @@ if __name__ == "__main__":
     try:
         main()
     except Exception as exc:  # noqa: BLE001
-        print(f"vibetrading MCP server failed to start: {exc}", file=sys.stderr)
+        print(f"hypervibes MCP server failed to start: {exc}", file=sys.stderr)
         raise

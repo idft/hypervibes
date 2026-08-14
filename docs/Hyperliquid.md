@@ -2,14 +2,14 @@
 
 The Hyperliquid subsystem owns market reference data, account-history
 journaling, live account state, and the application's order execution gateway.
-It runs inside the Vibetrading process. Each enabled agent is supervised as an
+It runs inside the HyperVibes process. Each enabled agent is supervised as an
 account identified by its wallet address and environment. Disabled agents are
 not monitored and cannot submit new orders through the gateway.
 
 ## Integration Boundaries
 
 `hypersdk` provides mainnet perpetual instruments, live WebSocket state, and
-signed order placement and cancellation. Vibetrading owns raw Hyperliquid
+signed order placement and cancellation. HyperVibes owns raw Hyperliquid
 `/info` HTTP calls for account history, including fills, funding, non-user
 funding ledger updates, and historical orders.
 
@@ -17,7 +17,7 @@ The authenticated `/account` page reads `spotClearinghouseState`, `subAccounts`,
 and `userAbstraction` concurrently from `/info` on each load. Its account table
 shows the Unified Account's Spot-state USDC `total` in USDC, with unavailable
 values shown explicitly rather than using cached or fabricated balances.
-Vibetrading currently supports Unified Accounts only. User-signed `sendAsset`
+HyperVibes currently supports Unified Accounts only. User-signed `sendAsset`
 transfers are restricted to the authenticated main account and its currently
 discovered sub-accounts, use `spot` for both DEX fields because Unified mode
 shares the collateral balance with Spot, and use canonical mainnet USDC.
@@ -61,7 +61,7 @@ idempotent. The current journal supports only the `live` environment. Testnet
 or sandbox support requires a schema and integration change.
 
 Agents can read their own bounded journal windows through the read-only
-`vibetrading_list_account_transactions` MCP tool. It returns normalized fill,
+`hypervibes_list_account_transactions` MCP tool. It returns normalized fill,
 funding, and ledger events from `account_timeline`; it never sends an
 agent-initiated request to Hyperliquid.
 

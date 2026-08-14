@@ -1,10 +1,10 @@
-Run the daily review workflow for Vibetrading.
+Run the daily review workflow for HyperVibes.
 
 Review analyses, market analyses, orders, account transactions, and learnings
 only for the provided UTC review window. Always pass both window bounds to
 listing tools; do not inspect or mention records outside the window.
 
-Page `vibetrading_list_account_transactions` with a fixed `limit` and
+Page `hypervibes_list_account_transactions` with a fixed `limit` and
 increasing `offset` until a page contains fewer rows than the limit.
 
 Write one `daily_review` memory with `reviews` links to the memories that informed it.

@@ -6,7 +6,7 @@
   builder-fee approval, the one `approveAgent` action for the user's signer,
   and main-account transfers. Its private key is never stored or sent to the
   server.
-- Each user has one **trading signer** (Hyperliquid API wallet). Vibetrading
+- Each user has one **trading signer** (Hyperliquid API wallet). HyperVibes
   generates or imports its private key, validates the derived address, and
   stores only AES-256-GCM ciphertext plus the encryption key ID. The signer is
   approved once by the user's main Hyperliquid account, holds no funds, and is
@@ -15,7 +15,7 @@
   account or one Hyperliquid sub-account. Balances, positions, orders, fills,
   and history are always tracked against this address. The database enforces
   uniqueness by `(trading_account_address, environment)`.
-- Agent API keys are unrelated bearer credentials for Vibetrading's API. They
+- Agent API keys are unrelated bearer credentials for HyperVibes's API. They
   never grant access to the trading signer.
 
 ## Signer Lifecycle
@@ -24,18 +24,18 @@ The Account page handles signer setup, replacement, and approval. A replacement
 must be explicit and must derive a fresh address; the old deregistered address
 is never silently reused. Approval timestamps are recorded only after
 Hyperliquid accepts the relay. Hyperliquid does not expose an API-wallet expiry
-lookup, so Vibetrading records the expected six-month signer lifetime from that
+lookup, so HyperVibes records the expected six-month signer lifetime from that
 approval and treats it as the local expiry deadline. The Account page and
 authenticated-page navbar warn when fewer than 30 days remain.
 
-Before every order or cancel action, Vibetrading requires an active agent,
+Before every order or cancel action, HyperVibes requires an active agent,
 valid owner signer material, recorded approval, and an unexpired local signer
 deadline. Any failure blocks all of the owner's exchange actions with a
 trading-signer error while preserving account history.
 
 ## Agent API Keys
 
-Agent API keys are Vibetrading bearer credentials used by MCP tools and external
+Agent API keys are HyperVibes bearer credentials used by MCP tools and external
 agent harnesses to access the application's agent API. They do not grant direct
 access to the trading signer. They are deliberately stored in plaintext and
 rendered on the agent Settings page so the owner can retrieve and copy them
@@ -53,7 +53,7 @@ action.
 The main wallet continues to sign browser-only actions such as `approveAgent`,
 builder-fee approval, and `sendAsset` transfers on Arbitrum mainnet. The
 `/account` page displays fresh Hyperliquid Unified Account Spot USDC totals for
-the main account and every discovered owned sub-account. Vibetrading
+the main account and every discovered owned sub-account. HyperVibes
 currently supports Unified Accounts only. Transfers use Hyperliquid's `spot`
 route for the shared Unified USDC balance, are limited to those accounts and
 canonical USDC, and are rejected when the account mode cannot be verified or

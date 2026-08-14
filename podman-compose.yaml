@@ -6,9 +6,9 @@ services:
     restart: unless-stopped
     command: postgres -c max_connections=200
     environment:
-      POSTGRES_USER: ${POSTGRES_USER:-vibetrading}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-vibetrading}
-      POSTGRES_DB: ${POSTGRES_DB:-vibetrading}
+      POSTGRES_USER: ${POSTGRES_USER:-hypervibes}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-hypervibes}
+      POSTGRES_DB: ${POSTGRES_DB:-hypervibes}
     ports:
       - "${POSTGRES_PORT:-5432}:5432"
     volumes:
@@ -32,8 +32,8 @@ services:
       -c synchronous_commit=off
       -c full_page_writes=off
     environment:
-      POSTGRES_USER: vibetrading
-      POSTGRES_PASSWORD: vibetrading
+      POSTGRES_USER: hypervibes
+      POSTGRES_PASSWORD: hypervibes
       POSTGRES_DB: postgres
       PGDATA: /var/lib/postgresql/data
     ports:
@@ -41,7 +41,7 @@ services:
     tmpfs:
       - /var/lib/postgresql/data:rw,size=2g
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U vibetrading -d postgres"]
+      test: ["CMD-SHELL", "pg_isready -U hypervibes -d postgres"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -50,13 +50,13 @@ services:
     build:
       context: .
       dockerfile: containers/opencode/Dockerfile
-    image: vibetrading-opencode:local
+    image: hypervibes-opencode:local
     restart: unless-stopped
     command: ["serve", "--hostname", "0.0.0.0", "--port", "14096"]
     environment:
       OPENCODE_SERVER_PASSWORD: ${OPENCODE_SERVER_PASSWORD:?OPENCODE_SERVER_PASSWORD must be set}
       OPENCODE_SERVER_USERNAME: ${OPENCODE_SERVER_USERNAME:-opencode}
-      OPENCODE_CONFIG: /opt/vibetrading/opencode/opencode.jsonc
+      OPENCODE_CONFIG: /opt/hypervibes/opencode/opencode.jsonc
       OPENCODE_CONFIG_DIR: /opencode-data
       XDG_DATA_HOME: /opencode-data
       OPENCODE_DISABLE_AUTOUPDATE: "true"
@@ -65,7 +65,7 @@ services:
       # Postgres connection must set `search_path=opencode,public`. The
       # compose hostname `postgres` resolves to the dev Postgres service
       # inside the compose network; do not switch this to localhost.
-      OPENCODE_DATABASE_URL: postgres://${POSTGRES_USER:-vibetrading}:${POSTGRES_PASSWORD:-vibetrading}@postgres:5432/${POSTGRES_DB:-vibetrading}?search_path=opencode,public
+      OPENCODE_DATABASE_URL: postgres://${POSTGRES_USER:-hypervibes}:${POSTGRES_PASSWORD:-hypervibes}@postgres:5432/${POSTGRES_DB:-hypervibes}?search_path=opencode,public
       OPENCODE_DB_QUERY_TIMEOUT: ${OPENCODE_DB_QUERY_TIMEOUT:-10000}
       WORKSPACE_CONTROL_API_KEY: ${WORKSPACE_CONTROL_API_KEY:?WORKSPACE_CONTROL_API_KEY must be set}
     ports:

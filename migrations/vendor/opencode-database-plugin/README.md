@@ -6,5 +6,5 @@ Upstream commit: 53fea73
 License: Apache-2.0
 
 `schema.sql` is copied from upstream `sql/schema.sql` and kept as the reference
-DDL. The executable Vibetrading migration adapts this schema to run under the
+DDL. The executable HyperVibes migration adapts this schema to run under the
 dedicated `opencode` Postgres schema by setting `search_path`.

@@ -49,7 +49,7 @@ Important `memory.links` fields:
 
 ## Retrieval
 
-Agents read memories through the authenticated Vibetrading API and workspace
+Agents read memories through the authenticated HyperVibes API and workspace
 MCP tools. All reads and writes are scoped to the calling `agent_key`.
 
 Common retrieval patterns:

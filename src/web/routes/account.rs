@@ -66,7 +66,7 @@ pub(in crate::web::routes) struct ApiWalletForm {
     hyperliquid_private_key: String,
 }
 
-pub(in crate::web::routes) const USER_API_WALLET_NAME: &str = "Vibetrading";
+pub(in crate::web::routes) const USER_API_WALLET_NAME: &str = "HyperVibes";
 
 #[derive(Debug, Clone)]
 pub(in crate::web::routes) struct TradingAccountChoices {
@@ -310,7 +310,7 @@ fn account_mode_message(mode: AccountMode) -> &'static str {
     match mode {
         AccountMode::Unified => "",
         AccountMode::Unsupported => {
-            "Vibetrading currently supports Unified Accounts only. Enable Unified Account in Hyperliquid before transferring or creating agents."
+            "HyperVibes currently supports Unified Accounts only. Enable Unified Account in Hyperliquid before transferring or creating agents."
         }
         AccountMode::Unavailable => {
             "Hyperliquid account mode could not be verified. Transfers are temporarily unavailable."
@@ -870,7 +870,7 @@ pub(in crate::web::routes) fn selected_trading_account(
     choices: &TradingAccountChoices,
 ) -> Result<String, &'static str> {
     if !choices.account_mode_supported {
-        return Err("Vibetrading currently supports Unified Accounts only.");
+        return Err("HyperVibes currently supports Unified Accounts only.");
     }
     if selection == "main" && choices.main_assigned_to.is_none() {
         return Ok(choices.main_address.clone());
@@ -1052,9 +1052,9 @@ async fn relay_create_subaccount(
     Ok(address)
 }
 
-/// The Hyperliquid sub-account name Vibetrading creates for an agent.
+/// The Hyperliquid sub-account name HyperVibes creates for an agent.
 /// Hyperliquid limits sub-account names to 16 characters, so the display
-/// name is truncated to fit the `vt-` prefix that marks Vibetrading-managed
+/// name is truncated to fit the `vt-` prefix that marks HyperVibes-managed
 /// accounts.
 pub(in crate::web::routes) fn agent_subaccount_name(display_name: &str) -> String {
     let suffix = display_name
@@ -1265,7 +1265,7 @@ mod tests {
             "4c0883a69102937d6231471b5dbb6204fe5129617082795f9d3d2c7e2f9f3f5b",
         )
         .expect("signer");
-        let action = json!({"type":"approveAgent","hyperliquidChain":"Mainnet","signatureChainId":"0xa4b1","agentAddress":"0x0000000000000000000000000000000000000001","agentName":"Vibetrading","nonce":1});
+        let action = json!({"type":"approveAgent","hyperliquidChain":"Mainnet","signatureChainId":"0xa4b1","agentAddress":"0x0000000000000000000000000000000000000001","agentName":"HyperVibes","nonce":1});
         let signature = signer
             .sign_hash(&typed_action_hash(&action, ActionKind::Agent).expect("hash"))
             .await

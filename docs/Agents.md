@@ -121,7 +121,7 @@ Non-secret metadata is stored in `agents.runtime_config`, including:
 - `workspace_container_path`
 - `profile_source`
 
-The generated workspace `.env` receives the agent-scoped Vibetrading API key. The backend does not read that file back.
+The generated workspace `.env` receives the agent-scoped HyperVibes API key. The backend does not read that file back.
 
 For OpenCode agents, the settings page also reports whether the generated workspace has drifted from `agent-runtime/workspace-template/`. The comparison is limited to template-managed files and ignores agent-authored files.
 

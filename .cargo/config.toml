@@ -1,2 +1,2 @@
 [env]
-TEST_DATABASE_URL = "postgres://vibetrading:vibetrading@127.0.0.1:15433/postgres"
+TEST_DATABASE_URL = "postgres://hypervibes:hypervibes@127.0.0.1:15433/postgres"

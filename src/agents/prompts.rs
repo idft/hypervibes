@@ -1,6 +1,6 @@
 /// Global system prompt prepended to every OpenCode agent job prompt.
 pub const SYSTEM_PROMPT: &str =
-    "This is the Vibetrading system for trading perpetual futures on Hyperliquid.";
+    "This is the HyperVibes system for trading perpetual futures on Hyperliquid.";
 
 /// Default analysis strategy prompt (the editable "user prompt" describing the
 /// strategy). This is an example format; operators may replace it entirely with
@@ -56,4 +56,4 @@ Every candle path must exclude candles whose complete close time is not strictly
 The exact eligibility rule is `timestamp_ms + interval_ms < boundary_ms`; a candle closing exactly at the boundary is excluded. Reject invalid context, missing intervals, unsupported input, and calculation failures with a non-zero exit rather than emitting a successful empty measurement set.
 
 ## Safety
-Use Pyright LSP diagnostics for Python. Never call Vibetrading APIs, place or cancel orders, edit prompts, access another workspace, or hard-code agent-specific paths. Run fixed validation and submit exactly one structured report."#;
+Use Pyright LSP diagnostics for Python. Never call HyperVibes APIs, place or cancel orders, edit prompts, access another workspace, or hard-code agent-specific paths. Run fixed validation and submit exactly one structured report."#;

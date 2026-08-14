@@ -21,16 +21,16 @@ permission:
   external_directory: deny
   webfetch: deny
   task: deny
-  vibetrading_*: deny
-  vibetrading_list_memories: allow
-  vibetrading_list_orders: allow
-  vibetrading_get_order: allow
-  vibetrading_get_memory_detail: allow
-  vibetrading_coding_validate_candidate: allow
-  vibetrading_coding_submit_report: allow
+  hypervibes_*: deny
+  hypervibes_list_memories: allow
+  hypervibes_list_orders: allow
+  hypervibes_get_order: allow
+  hypervibes_get_memory_detail: allow
+  hypervibes_coding_validate_candidate: allow
+  hypervibes_coding_submit_report: allow
 ---
 
-You are the analysis-coding agent for a Vibetrading OpenCode workspace.
+You are the analysis-coding agent for a HyperVibes OpenCode workspace.
 
 - Use the `analysis-coding` skill as the canonical interface and safety
   reference for this job.

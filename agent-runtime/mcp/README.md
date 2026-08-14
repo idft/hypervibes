@@ -1,24 +1,24 @@
-# Vibetrading MCP Server
+# HyperVibes MCP Server
 
-This directory contains the source for the `vibetrading` Model Context
-Protocol (MCP) server that OpenCode agents use to talk to the Vibetrading
+This directory contains the source for the `hypervibes` Model Context
+Protocol (MCP) server that OpenCode agents use to talk to the HyperVibes
 backend.
 
 It is **runtime infrastructure, not an agent-authored script**:
 
 - It is installed into the custom OpenCode container image at the fixed
-  path `/opt/vibetrading/mcp/`.
+  path `/opt/hypervibes/mcp/`.
 - Generated agent workspaces register it as a local stdio MCP server in
   their `opencode.json`.
 - The MCP server process is launched **per workspace** by OpenCode, not
   once globally.
 - Auth credentials are read from the workspace's own `.env` file in the
   MCP process working directory:
-  - `VIBETRADING_API_BASE_URL`
-  - `VIBETRADING_API_KEY`
-  - `VIBETRADING_AGENT_KEY`
+  - `HYPERVIBES_API_BASE_URL`
+  - `HYPERVIBES_API_KEY`
+  - `HYPERVIBES_AGENT_KEY`
 
-The Vibetrading backend remains the source of truth for agent identity,
+The HyperVibes backend remains the source of truth for agent identity,
 memory scoping, instrument allowlists, and order permissions. The MCP
 server is a thin transport layer; it does not hold any Hyperliquid private
 keys, and its tool schemas never expose `api_key` (or any other credential)
@@ -32,7 +32,7 @@ parameters, HTTP status, and response shape, but never API keys,
 authorization headers, request bodies, or memory content.
 
 If you are an agent reading this file from inside a generated workspace:
-do not edit, import, or invoke this module directly. Use the `vibetrading`
+do not edit, import, or invoke this module directly. Use the `hypervibes`
 MCP tools instead.
 
 ## Coding Sessions
@@ -43,7 +43,7 @@ permissions select the MCP tools available to each job session. The
 filesystem operations through path-scoped native OpenCode tools, fixed local
 validation, and one structured report submission.
 
-Coding candidate workspaces set only `VIBETRADING_CODING_TASK_ID`.
+Coding candidate workspaces set only `HYPERVIBES_CODING_TASK_ID`.
 Candidate file operations are not MCP calls: generated OpenCode native
 read/edit/glob permissions restrict them to the current candidate's
 `scripts/user/` tree, including the root-relative path OpenCode uses for non-Git

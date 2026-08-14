@@ -1,6 +1,6 @@
-# Vibetrading
+# HyperVibes
 
-Vibetrading runs OpenCode-backed crypto trading agents on Hyperliquid. It is a
+HyperVibes runs OpenCode-backed crypto trading agents on Hyperliquid. It is a
 Rust application with an operator UI, a scoped agent API, Postgres persistence,
 and supervised background work for agent jobs and exchange monitoring.
 

@@ -59,7 +59,7 @@ mod tests {
         )
         .expect("test signer");
         let nonce = 1_752_886_867_123u64;
-        let (hash, signature) = sign_create_subaccount(&signer, "Vibetrading - BTC", nonce)
+        let (hash, signature) = sign_create_subaccount(&signer, "HyperVibes - BTC", nonce)
             .await
             .expect("sign action");
         let recovered = signature

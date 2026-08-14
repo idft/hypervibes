@@ -1,4 +1,4 @@
-"""Lightweight tests for the Vibetrading MCP server helpers.
+"""Lightweight tests for the HyperVibes MCP server helpers.
 
 These tests intentionally avoid importing :mod:`mcp.server.fastmcp` so they
 can run in environments where the MCP package is not installed (such as
@@ -67,7 +67,7 @@ def _load_server(defaults: dict[str, str] | None = None):
         os.environ[key] = value
     try:
         spec = importlib.util.spec_from_file_location(
-            "vibetrading_mcp_server", MCP_DIR / "server.py"
+            "hypervibes_mcp_server", MCP_DIR / "server.py"
         )
         assert spec and spec.loader
         module: Any = importlib.util.module_from_spec(spec)
@@ -81,14 +81,14 @@ def _load_server(defaults: dict[str, str] | None = None):
                 os.environ[key] = value
 
 
-class VibetradingMcpServerTests(unittest.TestCase):
+class HyperVibesMcpServerTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
         cls.server = _load_server(
             {
-                "VIBETRADING_API_BASE_URL": "http://example.test",
-                "VIBETRADING_API_KEY": "vta_test_default",
-                "VIBETRADING_AGENT_KEY": "default",
+                "HYPERVIBES_API_BASE_URL": "http://example.test",
+                "HYPERVIBES_API_KEY": "vta_test_default",
+                "HYPERVIBES_AGENT_KEY": "default",
             }
         )
 
@@ -96,9 +96,9 @@ class VibetradingMcpServerTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             workspace = Path(tmp)
             workspace.joinpath(".env").write_text(
-                "VIBETRADING_API_BASE_URL=http://example.test/\n"
-                "VIBETRADING_API_KEY=vta_test_xyz\n"
-                "VIBETRADING_AGENT_KEY=btc-2\n",
+                "HYPERVIBES_API_BASE_URL=http://example.test/\n"
+                "HYPERVIBES_API_KEY=vta_test_xyz\n"
+                "HYPERVIBES_AGENT_KEY=btc-2\n",
                 encoding="utf-8",
             )
             with mock.patch.dict(os.environ, {}, clear=True):
@@ -146,17 +146,17 @@ class VibetradingMcpServerTests(unittest.TestCase):
             with self.assertRaises(RuntimeError) as ctx:
                 self.server._load_config()
         message = str(ctx.exception)
-        self.assertIn("VIBETRADING_API_BASE_URL", message)
-        self.assertIn("VIBETRADING_API_KEY", message)
-        self.assertIn("VIBETRADING_AGENT_KEY", message)
+        self.assertIn("HYPERVIBES_API_BASE_URL", message)
+        self.assertIn("HYPERVIBES_API_KEY", message)
+        self.assertIn("HYPERVIBES_AGENT_KEY", message)
 
     def test_headers_use_bearer_token(self) -> None:
         with mock.patch.dict(
             os.environ,
             {
-                "VIBETRADING_API_BASE_URL": "http://example.test",
-                "VIBETRADING_API_KEY": "vta_secret",
-                "VIBETRADING_AGENT_KEY": "btc-2",
+                "HYPERVIBES_API_BASE_URL": "http://example.test",
+                "HYPERVIBES_API_KEY": "vta_secret",
+                "HYPERVIBES_AGENT_KEY": "btc-2",
             },
             clear=True,
         ):
@@ -177,9 +177,9 @@ class VibetradingMcpServerTests(unittest.TestCase):
         with mock.patch.dict(
             os.environ,
             {
-                "VIBETRADING_API_BASE_URL": "http://example.test",
-                "VIBETRADING_API_KEY": "k",
-                "VIBETRADING_AGENT_KEY": "a",
+                "HYPERVIBES_API_BASE_URL": "http://example.test",
+                "HYPERVIBES_API_KEY": "k",
+                "HYPERVIBES_AGENT_KEY": "a",
             },
             clear=True,
         ):
@@ -210,9 +210,9 @@ class VibetradingMcpServerTests(unittest.TestCase):
         with mock.patch.dict(
             os.environ,
             {
-                "VIBETRADING_API_BASE_URL": "http://example.test",
-                "VIBETRADING_API_KEY": "k",
-                "VIBETRADING_AGENT_KEY": "a",
+                "HYPERVIBES_API_BASE_URL": "http://example.test",
+                "HYPERVIBES_API_KEY": "k",
+                "HYPERVIBES_AGENT_KEY": "a",
             },
             clear=True,
         ):
@@ -235,7 +235,7 @@ class VibetradingMcpServerTests(unittest.TestCase):
             with mock.patch.object(self.server, "_request", return_value=[]):
                 self.assertIsNone(self.server.get_market_analysis("BTC"))
         self.assertIn(
-            "vibetrading_mcp_market_analysis symbol=BTC found=false",
+            "hypervibes_mcp_market_analysis symbol=BTC found=false",
             logs.output[0],
         )
 
@@ -245,7 +245,7 @@ class VibetradingMcpServerTests(unittest.TestCase):
             with mock.patch.object(self.server, "_request", return_value=[row]):
                 self.assertEqual(self.server.get_market_analysis("BTC"), row)
         self.assertIn(
-            "vibetrading_mcp_market_analysis symbol=BTC found=true",
+            "hypervibes_mcp_market_analysis symbol=BTC found=true",
             logs.output[0],
         )
 
@@ -322,9 +322,9 @@ class VibetradingMcpServerTests(unittest.TestCase):
         with mock.patch.dict(
             os.environ,
             {
-                "VIBETRADING_API_BASE_URL": "http://example.test",
-                "VIBETRADING_API_KEY": "k",
-                "VIBETRADING_AGENT_KEY": "a",
+                "HYPERVIBES_API_BASE_URL": "http://example.test",
+                "HYPERVIBES_API_KEY": "k",
+                "HYPERVIBES_AGENT_KEY": "a",
             },
             clear=True,
         ):
@@ -389,10 +389,10 @@ class VibetradingMcpServerTests(unittest.TestCase):
     def test_coding_validation_runs_fixed_local_validator(self) -> None:
         coding = _load_server(
             {
-                "VIBETRADING_API_BASE_URL": "http://example.test",
-                "VIBETRADING_API_KEY": "k",
-                "VIBETRADING_AGENT_KEY": "a",
-                "VIBETRADING_CODING_TASK_ID": "42",
+                "HYPERVIBES_API_BASE_URL": "http://example.test",
+                "HYPERVIBES_API_KEY": "k",
+                "HYPERVIBES_AGENT_KEY": "a",
+                "HYPERVIBES_CODING_TASK_ID": "42",
             }
         )
         with tempfile.TemporaryDirectory() as tmp:
@@ -410,7 +410,7 @@ class VibetradingMcpServerTests(unittest.TestCase):
             try:
                 with mock.patch.dict(
                     os.environ,
-                    {"VIBETRADING_CODING_TASK_ID": "42"},
+                    {"HYPERVIBES_CODING_TASK_ID": "42"},
                 ):
                     with mock.patch.object(
                         coding.subprocess, "run", return_value=completed
@@ -431,9 +431,9 @@ class VibetradingMcpServerTests(unittest.TestCase):
     def test_coding_manifest_rejects_unapproved_extension(self) -> None:
         coding = _load_server(
             {
-                "VIBETRADING_API_BASE_URL": "http://example.test",
-                "VIBETRADING_API_KEY": "k",
-                "VIBETRADING_AGENT_KEY": "a",
+                "HYPERVIBES_API_BASE_URL": "http://example.test",
+                "HYPERVIBES_API_KEY": "k",
+                "HYPERVIBES_AGENT_KEY": "a",
             }
         )
         with tempfile.TemporaryDirectory() as tmp:
@@ -452,10 +452,10 @@ class VibetradingMcpServerTests(unittest.TestCase):
     def test_coding_report_uses_task_id_from_environment(self) -> None:
         coding = _load_server(
             {
-                "VIBETRADING_API_BASE_URL": "http://example.test",
-                "VIBETRADING_API_KEY": "k",
-                "VIBETRADING_AGENT_KEY": "a",
-                "VIBETRADING_CODING_TASK_ID": "42",
+                "HYPERVIBES_API_BASE_URL": "http://example.test",
+                "HYPERVIBES_API_KEY": "k",
+                "HYPERVIBES_AGENT_KEY": "a",
+                "HYPERVIBES_CODING_TASK_ID": "42",
             }
         )
         captured: dict[str, object] = {}
@@ -464,7 +464,7 @@ class VibetradingMcpServerTests(unittest.TestCase):
             captured.update(method=method, path=path, **kwargs)
             return {"submitted": True}
 
-        with mock.patch.dict(os.environ, {"VIBETRADING_CODING_TASK_ID": "42"}):
+        with mock.patch.dict(os.environ, {"HYPERVIBES_CODING_TASK_ID": "42"}):
             with mock.patch.object(coding, "_request", side_effect=fake_request):
                 result = coding.coding_submit_report(
                     "no_change", "none", "no evidence", [], [], "tests passed"
@@ -477,9 +477,9 @@ class VibetradingMcpServerTests(unittest.TestCase):
         with mock.patch.dict(
             os.environ,
             {
-                "VIBETRADING_API_BASE_URL": "http://example.test",
-                "VIBETRADING_API_KEY": "vta_super_secret",
-                "VIBETRADING_AGENT_KEY": "a",
+                "HYPERVIBES_API_BASE_URL": "http://example.test",
+                "HYPERVIBES_API_KEY": "vta_super_secret",
+                "HYPERVIBES_AGENT_KEY": "a",
             },
             clear=True,
         ):

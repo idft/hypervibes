@@ -141,7 +141,7 @@ pub fn generate_agent_workspace(
     fs::write(
         workspace_host_path.join(".env"),
         format!(
-            "VIBETRADING_AGENT_KEY={}\nVIBETRADING_API_BASE_URL={}\nVIBETRADING_API_KEY={}\nVIBETRADING_WORKSPACE={}\n",
+            "HYPERVIBES_AGENT_KEY={}\nHYPERVIBES_API_BASE_URL={}\nHYPERVIBES_API_KEY={}\nHYPERVIBES_WORKSPACE={}\n",
             agent.agent_key, config.api_base_url, agent.api_key, workspace_container_path,
         ),
     )
@@ -626,10 +626,10 @@ mod tests {
             generated.workspace_host_path.join(".env"),
             generated
                 .workspace_host_path
-                .join(".opencode/commands/vibetrading-analysis.md"),
+                .join(".opencode/commands/hypervibes-analysis.md"),
             generated
                 .workspace_host_path
-                .join(".opencode/commands/vibetrading-market-analysis.md"),
+                .join(".opencode/commands/hypervibes-market-analysis.md"),
             generated
                 .workspace_host_path
                 .join(".opencode/agents/analysis.md"),
@@ -648,11 +648,11 @@ mod tests {
         );
 
         // The workspace-local Python API client has been removed in favor
-        // of the `vibetrading` MCP server, which is installed by the custom
+        // of the `hypervibes` MCP server, which is installed by the custom
         // OpenCode image at a fixed path.
         assert!(
-            !generated.workspace_host_path.join("vibetrading").exists(),
-            "vibetrading/ should not be generated into workspaces"
+            !generated.workspace_host_path.join("hypervibes").exists(),
+            "hypervibes/ should not be generated into workspaces"
         );
         assert!(
             !generated
@@ -664,7 +664,7 @@ mod tests {
     }
 
     #[test]
-    fn generated_opencode_json_registers_vibetrading_mcp_server() {
+    fn generated_opencode_json_registers_hypervibes_mcp_server() {
         let temp = TempDir::new("opencode-mcp-config");
         let generated = generate_agent_workspace(
             &sample_config(&temp.path),
@@ -681,9 +681,9 @@ mod tests {
             .and_then(Value::as_object)
             .expect("mcp object");
         let server = mcp
-            .get("vibetrading")
+            .get("hypervibes")
             .and_then(Value::as_object)
-            .expect("vibetrading mcp entry");
+            .expect("hypervibes mcp entry");
         assert_eq!(server.get("type").and_then(Value::as_str), Some("local"));
         assert_eq!(server.get("enabled").and_then(Value::as_bool), Some(true));
 
@@ -695,13 +695,13 @@ mod tests {
         assert!(
             command_strs
                 .iter()
-                .any(|part| part.contains("vibetrading/mcp/.venv/bin/python")),
+                .any(|part| part.contains("hypervibes/mcp/.venv/bin/python")),
             "command should use the MCP venv python; got {command_strs:?}"
         );
         assert!(
             command_strs
                 .iter()
-                .any(|part| part.ends_with("vibetrading/mcp/server.py")),
+                .any(|part| part.ends_with("hypervibes/mcp/server.py")),
             "command should launch the MCP server script; got {command_strs:?}"
         );
 
@@ -709,7 +709,7 @@ mod tests {
 
         // The tool schema is server-defined, but the config itself must
         // never embed a credential.
-        assert!(!raw.contains("VIBETRADING_API_KEY"));
+        assert!(!raw.contains("HYPERVIBES_API_KEY"));
         assert!(!raw.contains("vta_"));
     }
 
@@ -776,10 +776,10 @@ mod tests {
         let env_text =
             fs::read_to_string(generated.workspace_host_path.join(".env")).expect("read .env");
 
-        assert!(env_text.contains("VIBETRADING_API_KEY=vta_test_123"));
-        assert!(env_text.contains("VIBETRADING_API_BASE_URL=http://host.containers.internal:3003"));
-        assert!(env_text.contains("VIBETRADING_AGENT_KEY=btc-2"));
-        assert!(env_text.contains("VIBETRADING_WORKSPACE=/workspaces/agents/btc-2"));
+        assert!(env_text.contains("HYPERVIBES_API_KEY=vta_test_123"));
+        assert!(env_text.contains("HYPERVIBES_API_BASE_URL=http://host.containers.internal:3003"));
+        assert!(env_text.contains("HYPERVIBES_AGENT_KEY=btc-2"));
+        assert!(env_text.contains("HYPERVIBES_WORKSPACE=/workspaces/agents/btc-2"));
     }
 
     #[test]
@@ -795,7 +795,7 @@ mod tests {
         let commands = fs::read_to_string(
             generated
                 .workspace_host_path
-                .join(".opencode/commands/vibetrading-market-analysis.md"),
+                .join(".opencode/commands/hypervibes-market-analysis.md"),
         )
         .expect("read command");
         let agent = fs::read_to_string(
@@ -805,7 +805,7 @@ mod tests {
         )
         .expect("read agent");
 
-        assert!(commands.contains("Vibetrading"));
+        assert!(commands.contains("HyperVibes"));
         assert!(agent.contains("scripts/user/"));
         assert!(agent.contains("steps: 100"));
     }
@@ -907,7 +907,7 @@ mod tests {
         assert!(
             regenerated
                 .workspace_host_path
-                .join(".opencode/commands/vibetrading-analysis.md")
+                .join(".opencode/commands/hypervibes-analysis.md")
                 .exists()
         );
         assert!(
@@ -1086,7 +1086,7 @@ mod tests {
         )
         .expect("write agents template");
         fs::write(
-            source_root.join(".opencode/commands/vibetrading-analysis.md"),
+            source_root.join(".opencode/commands/hypervibes-analysis.md"),
             "test\n",
         )
         .expect("write command");
@@ -1121,7 +1121,7 @@ mod tests {
 
         assert!(rendered.contains("https://opencode.ai/config.json"));
         assert!(!rendered.contains("@aeondave/opencode-dotenv@latest"));
-        assert!(rendered.contains("vibetrading"));
+        assert!(rendered.contains("hypervibes"));
     }
 
     #[test]

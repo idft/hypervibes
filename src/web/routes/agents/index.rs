@@ -324,7 +324,7 @@ pub(in crate::web::routes) async fn create_agent(
                 agent_key: agent_key.clone(),
                 display_name: row.display_name.clone(),
                 agent_api_key: api_key.clone(),
-                api_base_url: state.vibetrading_agent_api_base_url.clone(),
+                api_base_url: state.hypervibes_agent_api_base_url.clone(),
             },
             false,
             &format!("create-agent:{agent_key}"),

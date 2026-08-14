@@ -1,4 +1,5 @@
 .env
+.envsitter/
 target/
 .opencode/plans/*.md
 node_modules

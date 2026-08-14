@@ -37,7 +37,7 @@ async fn main() -> Result<()> {
         .init();
 
     let config = AppConfig::from_env()?;
-    info!("starting Vibetrading web server");
+    info!("starting HyperVibes web server");
     info!("connecting to database");
     let pool = connect(&config.database_url).await?;
     info!("running migrations");
@@ -125,7 +125,7 @@ async fn main() -> Result<()> {
         Arc::clone(&live_accounts),
         harness::scheduler::HarnessSchedulerRuntime {
             workspace_controller: Arc::clone(&workspace_controller),
-            agent_api_base_url: config.vibetrading_agent_api_base_url.clone(),
+            agent_api_base_url: config.hypervibes_agent_api_base_url.clone(),
             container_workspaces_root: config.opencode_container_workspaces_root.clone(),
             opencode_client: Arc::clone(&opencode_client),
             in_flight: in_flight_for_scheduler,
@@ -147,7 +147,7 @@ async fn main() -> Result<()> {
         encryption_key,
         Arc::clone(&live_accounts),
         workspace_controller,
-        config.vibetrading_agent_api_base_url,
+        config.hypervibes_agent_api_base_url,
         config.opencode_container_workspaces_root,
         config.opencode_base_url,
         opencode_client,

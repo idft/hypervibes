@@ -10,7 +10,7 @@ pub struct AppConfig {
     pub agents_encryption_key: [u8; 32],
     pub agents_encryption_key_id: String,
     pub opencode_container_workspaces_root: String,
-    pub vibetrading_agent_api_base_url: String,
+    pub hypervibes_agent_api_base_url: String,
     pub workspace_control_base_url: String,
     pub workspace_control_api_key: String,
     pub opencode_base_url: String,
@@ -27,7 +27,7 @@ impl AppConfig {
             agents_encryption_key: agents_encryption_key_from_env()?,
             agents_encryption_key_id: agents_encryption_key_id_from_env()?,
             opencode_container_workspaces_root: opencode_container_workspaces_root_from_env()?,
-            vibetrading_agent_api_base_url: vibetrading_agent_api_base_url_from_env()?,
+            hypervibes_agent_api_base_url: hypervibes_agent_api_base_url_from_env()?,
             workspace_control_base_url: workspace_control_base_url_from_env()?,
             workspace_control_api_key: workspace_control_api_key_from_env()?,
             opencode_base_url: opencode_base_url_from_env()?,
@@ -76,9 +76,9 @@ pub fn database_url_from_env() -> Result<String> {
 
     let host = env::var("POSTGRES_HOST").unwrap_or_else(|_| "localhost".to_string());
     let port = env::var("POSTGRES_PORT").unwrap_or_else(|_| "5432".to_string());
-    let user = env::var("POSTGRES_USER").unwrap_or_else(|_| "vibetrading".to_string());
-    let password = env::var("POSTGRES_PASSWORD").unwrap_or_else(|_| "vibetrading".to_string());
-    let database = env::var("POSTGRES_DB").unwrap_or_else(|_| "vibetrading".to_string());
+    let user = env::var("POSTGRES_USER").unwrap_or_else(|_| "hypervibes".to_string());
+    let password = env::var("POSTGRES_PASSWORD").unwrap_or_else(|_| "hypervibes".to_string());
+    let database = env::var("POSTGRES_DB").unwrap_or_else(|_| "hypervibes".to_string());
 
     if host.trim().is_empty()
         || port.trim().is_empty()
@@ -132,14 +132,14 @@ fn opencode_container_workspaces_root_from_env() -> Result<String> {
     Ok(root.trim_end_matches('/').to_string())
 }
 
-fn vibetrading_agent_api_base_url_from_env() -> Result<String> {
-    let url = env::var("VIBETRADING_AGENT_API_BASE_URL")
+fn hypervibes_agent_api_base_url_from_env() -> Result<String> {
+    let url = env::var("HYPERVIBES_AGENT_API_BASE_URL")
         .unwrap_or_else(|_| "http://host.containers.internal:3003".to_string());
     let url = url.trim();
     if url.is_empty() {
-        bail!("VIBETRADING_AGENT_API_BASE_URL must not be empty");
+        bail!("HYPERVIBES_AGENT_API_BASE_URL must not be empty");
     }
-    validate_absolute_url("VIBETRADING_AGENT_API_BASE_URL", url)?;
+    validate_absolute_url("HYPERVIBES_AGENT_API_BASE_URL", url)?;
     Ok(url.to_string())
 }
 

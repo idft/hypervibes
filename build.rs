@@ -7,7 +7,7 @@ use std::time::SystemTime;
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Unit tests render templates directly and do not need compiled frontend assets.
     if std::env::var_os("CARGO_CFG_TEST").is_some()
-        && std::env::var_os("VIBETRADING_FORCE_FRONTEND_BUILD").is_none()
+        && std::env::var_os("HYPERVIBES_FORCE_FRONTEND_BUILD").is_none()
     {
         return Ok(());
     }
