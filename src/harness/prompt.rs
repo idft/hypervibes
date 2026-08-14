@@ -96,6 +96,7 @@ fn build_market_analysis_prompt(request: &DispatchRequest) -> String {
     body.push_str("- Use `memory_type = \"market_analysis\"`. Do not pass a `timeframe` argument at all; leave it out entirely so the memory is general rather than timeframe-specific. Never use a placeholder such as `__omit__`, `none`, `null`, or an empty string; the backend rejects a timeframe on market-analysis memories.\n");
     body.push_str("- Include metadata with `schema_version = 1`, `analysis_kind = \"market_analysis\"`, `valid_for_seconds = 1800` unless the operator prompt explicitly requires a different validity, plus `source_memory_ids` and `source_timeframes`.\n");
     body.push_str("- When you write a market-analysis memory, attach `links` with `link_type = \"derived_from\"` to the source analysis memory IDs used for the synthesis.\n");
+    body.push_str("- Use a concise summary title of no more than 12 words. Include the symbol, directional bias or no-trade status, and the key reason or next step. Never include a date, time, timestamp, timeframe, or other metadata in the title.\n");
     body.push_str("- Include actionable entries, exits, invalidation, confidence, and risk notes in the memory content and metadata.\n");
     body.push_str("- Set metadata `execution_state` to exactly one of `execute`, `conditional`, `wait`, `manage_existing`, or `cancel_entries`. Use `execute` only when the latest source analyses already establish every required entry condition. Use `conditional` only when trading may verify a finite set of stated quantitative conditions against fresh closed candles. Use `wait` when later analysis is required before opening exposure.\n");
     body.push_str("- For `conditional`, include metadata `confirmation_timeframes` as the exact timeframes trading may fetch and `confirmation_rules` as an array of machine-readable rules. Each rule must name its timeframe, a stable analyzer `measurement` or `signal`, its comparison or expected value, and `minimum_candles` needed for that calculation. Trading must be able to verify the rules without creating indicators, changing parameters, or inferring additional conditions.\n");
@@ -521,6 +522,8 @@ mod tests {
             prompt.contains("Do not pass a `timeframe` argument at all; leave it out entirely")
         );
         assert!(prompt.contains("Never use a placeholder such as `__omit__`"));
+        assert!(prompt.contains("Use a concise summary title of no more than 12 words"));
+        assert!(prompt.contains("Never include a date, time, timestamp, timeframe"));
         assert!(prompt.contains("valid_for_seconds = 1800"));
         assert!(prompt.contains("Do not place or cancel orders."));
     }
