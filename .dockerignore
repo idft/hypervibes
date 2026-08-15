@@ -1,0 +1,11 @@
+.env
+.env.*
+.git
+.opencode/plans
+target
+node_modules
+cache
+static/dist
+__pycache__
+*.py[cod]
+REVIEW.md

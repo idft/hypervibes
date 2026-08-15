@@ -26,11 +26,11 @@ Frontend assets are managed with `pnpm` and built via `esbuild` and Tailwind CSS
 * Don't test web UI changes with browser-mcp.  The user will test.
 * Web server defaults to running on port 3003
 * Never start the dev webserver yourself.  The user will run it.
-* Never stop the running podman-compose
+* Never stop the running podman-compose stack
 
 ## Testing
 
-* Run `cargo test` from the repo root. Tests use the dedicated `test-postgres` service from `podman-compose.yaml` via `TEST_DATABASE_URL=postgres://hypervibes:hypervibes@127.0.0.1:15433/postgres`. `src/test_db.rs` creates isolated databases for test helper calls against that service and runs migrations in each one so database setup can happen concurrently. The dev server's container Postgres at `localhost:15432` (u: hypervibes, p: hypervibes, db: hypervibes) is never touched by tests.
+* Run `cargo test` from the repo root. Tests use the dedicated `test-postgres` service from `podman-compose.dev.yaml` via `TEST_DATABASE_URL=postgres://hypervibes:hypervibes@127.0.0.1:15433/postgres`. `src/test_db.rs` creates isolated databases for test helper calls against that service and runs migrations in each one so database setup can happen concurrently. The dev stack's Postgres at `localhost:15432` (u: hypervibes, p: hypervibes, db: hypervibes) is never touched by tests.
 
 ## UI Rules
 

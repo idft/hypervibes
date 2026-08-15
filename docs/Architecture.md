@@ -136,6 +136,7 @@ Required configuration:
 
 - `AGENTS_ENCRYPTION_KEY`: 32-byte key encoded as 64 hexadecimal characters
 - `AGENTS_ENCRYPTION_KEY_ID`: identifier stored alongside encrypted keys
+- `WORKSPACE_CONTROL_API_KEY`: shared credential for the workspace controller
 - database configuration through `DATABASE_URL`, or the `POSTGRES_*` variables
 
 Operational configuration includes `APP_BIND_ADDR` or `APP_HOST` and
@@ -143,7 +144,7 @@ Operational configuration includes `APP_BIND_ADDR` or `APP_HOST` and
 inside OpenCode workspaces, `OPENCODE_BASE_URL`, and OpenCode Basic Auth credentials. See
 `.env.example` for the complete local-development configuration.
 
-The application defaults to `127.0.0.1:3000`. The workspace-facing API URL is
+The application defaults to `127.0.0.1:3003`. The workspace-facing API URL is
 configured separately with `HYPERVIBES_AGENT_API_BASE_URL`; it must resolve
 from the OpenCode container or runtime.
 
@@ -158,8 +159,8 @@ Frontend source is in `assets/`; `build.rs` builds the Tailwind and esbuild
 output when application assets or templates change.
 # Workspace Volume Boundary
 
-The host-running HyperVibes application never mounts or accesses agent workspace files. The
-OpenCode container owns the `agent_workspaces` named volume at `/workspaces` and runs the
-`workspace-controller` HTTP process alongside OpenCode. The host calls its loopback-only `/v1`
+The HyperVibes service never mounts or accesses agent workspace files. The OpenCode container
+owns the `agent_workspaces` named volume at `/workspaces` and runs the `workspace-controller`
+HTTP process alongside OpenCode. The HyperVibes service calls its private Compose-network `/v1`
 API with `WORKSPACE_CONTROL_API_KEY` for workspace lifecycle operations. This controller is not
 an agent MCP tool; agents cannot create, delete, inspect, or promote workspaces through it.

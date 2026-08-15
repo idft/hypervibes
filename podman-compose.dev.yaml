@@ -1,0 +1,86 @@
+services:
+  postgres:
+    image: docker.io/library/postgres:18.4-alpine
+    restart: unless-stopped
+    command: postgres -c max_connections=200
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-hypervibes}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-hypervibes}
+      POSTGRES_DB: ${POSTGRES_DB:-hypervibes}
+    ports:
+      - "${POSTGRES_PORT:-15432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-hypervibes} -d ${POSTGRES_DB:-hypervibes}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  test-postgres:
+    image: docker.io/library/postgres:18.4-alpine
+    restart: unless-stopped
+    shm_size: 512m
+    # Dedicated disposable database for cargo test. These settings trade
+    # durability for speed because test data is throwaway.
+    command: >-
+      postgres
+      -c max_connections=400
+      -c fsync=off
+      -c synchronous_commit=off
+      -c full_page_writes=off
+    environment:
+      POSTGRES_USER: hypervibes
+      POSTGRES_PASSWORD: hypervibes
+      POSTGRES_DB: postgres
+      PGDATA: /var/lib/postgresql/data
+    ports:
+      - "15433:5432"
+    tmpfs:
+      - /var/lib/postgresql/data:rw,size=2g
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U hypervibes -d postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  opencode:
+    build:
+      context: .
+      dockerfile: Containerfile
+    image: hypervibes:dev
+    restart: unless-stopped
+    command: ["opencode", "serve", "--hostname", "0.0.0.0", "--port", "14096"]
+    environment:
+      OPENCODE_SERVER_PASSWORD: ${OPENCODE_SERVER_PASSWORD:?OPENCODE_SERVER_PASSWORD must be set}
+      OPENCODE_SERVER_USERNAME: ${OPENCODE_SERVER_USERNAME:-opencode}
+      OPENCODE_CONFIG: /opt/hypervibes/opencode/opencode.jsonc
+      OPENCODE_CONFIG_DIR: /opencode-data
+      XDG_DATA_HOME: /opencode-data
+      OPENCODE_DISABLE_AUTOUPDATE: "true"
+      OPENCODE_DISABLE_PRUNE: "true"
+      # The OpenCode plugin's SQL is unqualified, so the connection needs this
+      # search path and the Compose service hostname rather than localhost.
+      OPENCODE_DATABASE_URL: postgres://${POSTGRES_USER:-hypervibes}:${POSTGRES_PASSWORD:-hypervibes}@postgres:5432/${POSTGRES_DB:-hypervibes}?search_path=opencode,public
+      OPENCODE_DB_QUERY_TIMEOUT: ${OPENCODE_DB_QUERY_TIMEOUT:-10000}
+      WORKSPACE_CONTROL_API_KEY: ${WORKSPACE_CONTROL_API_KEY:?WORKSPACE_CONTROL_API_KEY must be set}
+    ports:
+      - "127.0.0.1:${OPENCODE_PORT:-14096}:14096"
+      - "127.0.0.1:${WORKSPACE_CONTROL_PORT:-14097}:14097"
+    volumes:
+      - opencode_data:/opencode-data
+      - agent_workspaces:/workspaces
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import socket, urllib.request; s = socket.create_connection(('127.0.0.1', 14096), 5); s.close(); urllib.request.urlopen('http://127.0.0.1:14097/health', timeout=5).close()"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+volumes:
+  postgres_data:
+  opencode_data:
+  agent_workspaces:

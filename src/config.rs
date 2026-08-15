@@ -62,7 +62,7 @@ fn bind_addr_from_env() -> String {
     }
 
     let host = env::var("APP_HOST").unwrap_or_else(|_| "127.0.0.1".to_string());
-    let port = env::var("APP_PORT").unwrap_or_else(|_| "3000".to_string());
+    let port = env::var("APP_PORT").unwrap_or_else(|_| "3003".to_string());
 
     format!("{}:{}", host, port)
 }
@@ -204,7 +204,36 @@ fn opencode_server_password_from_env() -> Option<String> {
 mod tests {
     use std::env;
 
-    use super::app_cache_dir_from_env;
+    use super::{app_cache_dir_from_env, bind_addr_from_env};
+
+    #[test]
+    fn bind_addr_defaults_to_loopback_port_3003() {
+        let previous_bind_addr = env::var_os("APP_BIND_ADDR");
+        let previous_host = env::var_os("APP_HOST");
+        let previous_port = env::var_os("APP_PORT");
+        unsafe {
+            env::remove_var("APP_BIND_ADDR");
+            env::remove_var("APP_HOST");
+            env::remove_var("APP_PORT");
+        }
+
+        let result = bind_addr_from_env();
+
+        match previous_bind_addr {
+            Some(value) => unsafe { env::set_var("APP_BIND_ADDR", value) },
+            None => unsafe { env::remove_var("APP_BIND_ADDR") },
+        }
+        match previous_host {
+            Some(value) => unsafe { env::set_var("APP_HOST", value) },
+            None => unsafe { env::remove_var("APP_HOST") },
+        }
+        match previous_port {
+            Some(value) => unsafe { env::set_var("APP_PORT", value) },
+            None => unsafe { env::remove_var("APP_PORT") },
+        }
+
+        assert_eq!(result, "127.0.0.1:3003");
+    }
 
     #[test]
     fn app_cache_dir_defaults_relative_to_current_directory() {
