@@ -38,9 +38,18 @@ USER root
 
 RUN apk add --no-cache \
         ca-certificates \
+        freetype \
         libgomp \
+        libpng \
         libstdc++ \
-        python3
+        python3 \
+        zlib \
+    && apk add --no-cache --virtual .python-build-deps \
+        build-base \
+        freetype-dev \
+        libpng-dev \
+        pkgconf \
+        zlib-dev
 
 RUN uv python install 3.13
 
@@ -65,7 +74,8 @@ RUN chmod +x /usr/local/bin/hypervibes-entrypoint \
     && uv pip install --python /opt/hypervibes/mcp/.venv/bin/python \
         --no-cache \
         --requirement /opt/hypervibes/mcp/requirements.txt \
-    && /opt/hypervibes/mcp/.venv/bin/python -c 'from mcp.server.fastmcp import FastMCP'
+    && /opt/hypervibes/mcp/.venv/bin/python -c 'from mcp.server.fastmcp import FastMCP' \
+    && apk del .python-build-deps
 
 ENV PATH="/opt/hypervibes/analysis/.venv/bin:${PATH}"
 
