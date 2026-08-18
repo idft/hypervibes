@@ -50,6 +50,7 @@ RUN apk add --no-cache \
         compiler-rt \
         freetype-dev \
         libpng-dev \
+        llvm22 \
         pkgconf \
         zlib-dev
 
@@ -68,7 +69,7 @@ COPY containers/entrypoint.sh /usr/local/bin/hypervibes-entrypoint
 
 RUN chmod +x /usr/local/bin/hypervibes-entrypoint \
     && uv venv --python 3.13 /opt/hypervibes/analysis/.venv \
-    && CC=clang CXX=clang++ uv pip install --python /opt/hypervibes/analysis/.venv/bin/python \
+    && AR=llvm22-ar CC=clang CXX=clang++ RANLIB=llvm22-ranlib uv pip install --python /opt/hypervibes/analysis/.venv/bin/python \
         --no-cache \
         --requirement /opt/hypervibes/analysis/requirements.txt \
     && /opt/hypervibes/analysis/.venv/bin/pyright --version \
