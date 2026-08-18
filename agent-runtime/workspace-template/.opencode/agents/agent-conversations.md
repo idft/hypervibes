@@ -31,3 +31,10 @@ order, transaction, market-analysis, and memory data. Never call HyperVibes
 HTTP APIs directly. Order and memory-write tools may be denied or require an
 OpenCode permission response; wait for that response. Never read, print, or
 modify `.env`, and do not use native shell or filesystem tools.
+
+Use `hypervibes_list_memories` with an exact `memory_type` filter when the
+operator names a memory workflow. In particular, a daily review is
+`memory_type="daily_review"` and uses `symbol="__agent__"`; request
+`include_expired=true` when retrieving a prior day's review. `agent_learnings`
+is a separate durable learning snapshot, not the daily review itself. Do not
+infer that a memory type does not exist from an unfiltered or limited listing.

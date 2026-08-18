@@ -445,6 +445,10 @@ def list_memories(
 
     All filters are optional. ``include_expired`` defaults to ``False`` to
     match the backend's default staleness hiding.
+
+    Use ``memory_type="daily_review"`` and ``symbol="__agent__"`` for an
+    agent's daily reviews; set ``include_expired=True`` for historical reviews.
+    ``agent_learnings`` is a separate durable learning-memory type.
     """
     params: dict[str, Any] = {}
     if symbol is not None:

@@ -269,6 +269,34 @@ class HyperVibesMcpServerTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             self.server.get_latest_analysis("BTC", limit=0)
 
+    def test_list_memories_builds_historical_daily_review_query(self) -> None:
+        captured: dict[str, object] = {}
+
+        def fake_request(method, path, *, params=None, json_body=None):
+            captured["method"] = method
+            captured["path"] = path
+            captured["params"] = params
+            return []
+
+        with mock.patch.object(self.server, "_request", side_effect=fake_request):
+            self.server.list_memories(
+                symbol="__agent__",
+                memory_type="daily_review",
+                include_expired=True,
+                limit=1,
+            )
+        self.assertEqual(captured["method"], "GET")
+        self.assertEqual(captured["path"], "/api/v1/memories")
+        self.assertEqual(
+            captured["params"],
+            {
+                "symbol": "__agent__",
+                "memory_type": "daily_review",
+                "include_expired": "true",
+                "limit": 1,
+            },
+        )
+
     def test_list_account_transactions_query_construction(self) -> None:
         captured: dict[str, object] = {}
 
