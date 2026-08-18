@@ -47,6 +47,7 @@ RUN apk add --no-cache \
     && apk add --no-cache --virtual .python-build-deps \
         build-base \
         clang \
+        compiler-rt \
         freetype-dev \
         libpng-dev \
         pkgconf \
