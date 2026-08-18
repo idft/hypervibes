@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "build:js": "esbuild assets/app.ts assets/login.ts --bundle --outdir=static/dist --minify",
+    "build:js": "./node_modules/esbuild/bin/esbuild assets/app.ts assets/login.ts --bundle --outdir=static/dist --minify",
     "build:css": "tailwindcss -i assets/app.css -o static/dist/app.css --minify",
     "build": "pnpm build:js && pnpm build:css",
     "lint": "eslint assets",

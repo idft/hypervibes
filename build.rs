@@ -18,7 +18,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("cargo:rerun-if-changed=pnpm-workspace.yaml");
     println!("cargo:rerun-if-changed=templates/");
 
-    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let root = PathBuf::from(
+        std::env::var_os("CARGO_MANIFEST_DIR")
+            .expect("Cargo must set CARGO_MANIFEST_DIR for build scripts"),
+    );
     let dist = root.join("static/dist");
     let js_out = dist.join("app.js");
     let css_out = dist.join("app.css");

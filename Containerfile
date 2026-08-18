@@ -1,4 +1,4 @@
-ARG OPENCODE_TAG=1.18.16
+ARG OPENCODE_TAG=1.18.18
 
 FROM docker.io/library/rust:1.96-alpine AS builder
 
@@ -46,6 +46,7 @@ RUN apk add --no-cache \
         zlib \
     && apk add --no-cache --virtual .python-build-deps \
         build-base \
+        clang \
         freetype-dev \
         libpng-dev \
         pkgconf \
@@ -66,7 +67,7 @@ COPY containers/entrypoint.sh /usr/local/bin/hypervibes-entrypoint
 
 RUN chmod +x /usr/local/bin/hypervibes-entrypoint \
     && uv venv --python 3.13 /opt/hypervibes/analysis/.venv \
-    && uv pip install --python /opt/hypervibes/analysis/.venv/bin/python \
+    && CC=clang CXX=clang++ uv pip install --python /opt/hypervibes/analysis/.venv/bin/python \
         --no-cache \
         --requirement /opt/hypervibes/analysis/requirements.txt \
     && /opt/hypervibes/analysis/.venv/bin/pyright --version \
