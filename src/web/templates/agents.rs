@@ -181,6 +181,7 @@ impl AgentSetupChecklistView {
 #[template(path = "agents/index.html")]
 pub struct AgentsPageTemplate {
     pub agents: Vec<AgentListEntry>,
+    pub notice: Option<String>,
     pub current_path: String,
     pub navbar: Navbar,
 }

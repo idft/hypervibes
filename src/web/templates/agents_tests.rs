@@ -23,6 +23,7 @@ fn agents_page_renders_base_layout_and_status_box() {
     };
     let template = AgentsPageTemplate {
         agents: vec![entry],
+        notice: None,
         current_path: "/agents".to_string(),
         navbar: Navbar::default(),
     };
@@ -55,6 +56,7 @@ fn agents_page_renders_loading_placeholder_when_no_balance() {
     };
     let template = AgentsPageTemplate {
         agents: vec![entry],
+        notice: None,
         current_path: "/agents".to_string(),
         navbar: Navbar::default(),
     };
@@ -67,6 +69,7 @@ fn agents_page_renders_loading_placeholder_when_no_balance() {
 fn agents_page_renders_empty_state_without_table_or_header_action() {
     let template = AgentsPageTemplate {
         agents: vec![],
+        notice: None,
         current_path: "/agents".to_string(),
         navbar: Navbar::default(),
     };

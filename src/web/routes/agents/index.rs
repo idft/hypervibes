@@ -44,6 +44,7 @@ use crate::{
 pub(in crate::web::routes) async fn agents_index(
     State(state): State<Arc<AppState>>,
     user: AuthenticatedUser,
+    Query(query): Query<AgentsIndexQuery>,
 ) -> Result<Response, AppError> {
     let (agents, readiness_by_agent) = tokio::try_join!(
         list_agents_for_user(&state.db_pool, user.id),
@@ -86,12 +87,20 @@ pub(in crate::web::routes) async fn agents_index(
     let navbar = load_navbar(&state.db_pool, user.id).await?;
     let template = AgentsPageTemplate {
         agents: entries,
+        notice: (query.notice.as_deref() == Some("agent-unavailable"))
+            .then(|| "The requested page is not available.".to_string()),
         current_path: "/agents".to_string(),
         navbar,
     };
 
     Ok(Html(template.render()?).into_response())
 }
+
+#[derive(serde::Deserialize)]
+pub(in crate::web::routes) struct AgentsIndexQuery {
+    notice: Option<String>,
+}
+
 pub(in crate::web::routes) async fn agents_new(
     State(state): State<Arc<AppState>>,
     user: AuthenticatedUser,

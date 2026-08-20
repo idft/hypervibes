@@ -65,6 +65,28 @@ async fn get_agents_renders_db_data() {
 }
 
 #[tokio::test]
+async fn get_agents_renders_unavailable_agent_notice() {
+    let state = test_state().await;
+
+    let response = router(state)
+        .oneshot(
+            Request::builder()
+                .uri("/agents?notice=agent-unavailable")
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+
+    assert_eq!(response.status(), StatusCode::OK);
+    assert!(
+        response_text(response)
+            .await
+            .contains("The requested page is not available.")
+    );
+}
+
+#[tokio::test]
 async fn wallet_route_is_not_registered() {
     let state = test_state().await;
     let response = router(state)

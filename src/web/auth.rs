@@ -375,6 +375,9 @@ pub async fn require_operator(
         match agent_belongs_to_user(&state.db_pool, agent_key, session.user_id).await {
             Ok(true) => {}
             Ok(false) => {
+                if is_htmx_request(&request) {
+                    return htmx_redirect("/agents?notice=agent-unavailable");
+                }
                 if request.method() == axum::http::Method::GET
                     || request.method() == axum::http::Method::HEAD
                 {
@@ -393,11 +396,30 @@ pub async fn require_operator(
 }
 
 fn login_required(request: &axum::extract::Request) -> Response {
+    if is_htmx_request(request) {
+        return htmx_redirect("/login");
+    }
     if request.method() == axum::http::Method::GET {
         Redirect::to("/login").into_response()
     } else {
         StatusCode::UNAUTHORIZED.into_response()
     }
+}
+
+fn is_htmx_request(request: &axum::extract::Request) -> bool {
+    request
+        .headers()
+        .get("HX-Request")
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|value| value.eq_ignore_ascii_case("true"))
+}
+
+fn htmx_redirect(location: &'static str) -> Response {
+    let mut response = StatusCode::OK.into_response();
+    response
+        .headers_mut()
+        .insert("HX-Redirect", HeaderValue::from_static(location));
+    response
 }
 
 fn request_domain(headers: &HeaderMap) -> Option<String> {

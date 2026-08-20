@@ -3,6 +3,7 @@ use crate::web::routes::router;
 use crate::web::routes::test_support::*;
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
+use sha2::{Digest, Sha256};
 use sqlx::query;
 use tower::util::ServiceExt;
 use uuid::Uuid;
@@ -83,4 +84,74 @@ async fn unknown_agent_subroute_returns_404() {
         .unwrap();
 
     assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn htmx_request_for_another_users_agent_redirects_to_agents_with_a_notice() {
+    let state = test_state().await;
+    let (agent_key, _) = insert_test_agent(&state).await.expect("insert agent");
+    let user_id = Uuid::new_v4();
+    let token = "other-user-session";
+    let wallet_address = format!("0x{:040x}", user_id.as_u128());
+
+    query("INSERT INTO users (id, wallet_address) VALUES ($1, $2)")
+        .bind(user_id)
+        .bind(wallet_address)
+        .execute(&state.db_pool)
+        .await
+        .expect("insert user");
+    query("INSERT INTO user_sessions (token_hash, csrf_hash, user_id, issued_at, expires_at) VALUES ($1, $2, $3, now(), now() + INTERVAL '1 day')")
+        .bind(Sha256::digest(token.as_bytes()).to_vec())
+        .bind(vec![0_u8; 32])
+        .bind(user_id)
+        .execute(&state.db_pool)
+        .await
+        .expect("insert session");
+
+    let response = router(state)
+        .oneshot(
+            Request::builder()
+                .uri(format!("/agents/{agent_key}/transactions"))
+                .header("Cookie", format!("vt_session={token}"))
+                .header("HX-Request", "true")
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response
+            .headers()
+            .get("HX-Redirect")
+            .and_then(|value| value.to_str().ok()),
+        Some("/agents?notice=agent-unavailable")
+    );
+}
+
+#[tokio::test]
+async fn htmx_request_with_an_invalid_session_redirects_to_login() {
+    let state = test_state().await;
+
+    let response = router(state)
+        .oneshot(
+            Request::builder()
+                .uri("/agents")
+                .header("Cookie", "vt_session=invalid")
+                .header("HX-Request", "true")
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response
+            .headers()
+            .get("HX-Redirect")
+            .and_then(|value| value.to_str().ok()),
+        Some("/login")
+    );
 }

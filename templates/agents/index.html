@@ -6,6 +6,9 @@
 
 {% block content %}
 <div class="mx-auto max-w-[1400px]">
+    {% if let Some(notice) = notice %}
+    <div role="alert" class="mb-6 rounded-xl border border-amber-800/70 bg-amber-950/30 px-4 py-3 text-sm text-amber-200">{{ notice }}</div>
+    {% endif %}
     <header class="flex flex-col gap-4 border-b border-zinc-800 pb-6 lg:flex-row lg:items-start lg:justify-between">
         <div>
             <h1 class="text-3xl font-semibold tracking-tight text-white">Agents</h1>
