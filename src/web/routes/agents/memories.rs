@@ -14,7 +14,7 @@ use tokio_stream::wrappers::BroadcastStream;
 use tracing::warn;
 
 use super::shared::is_htmx_request;
-use super::show::{AgentShowQueries, render_agent_show_page};
+use super::show::{AgentShowQueries, load_selected_agent_navbar, render_agent_show_page};
 use crate::web::error::AppError;
 use crate::{
     agents::store::get_agent,
@@ -27,7 +27,7 @@ use crate::{
         auth::AuthenticatedUser,
         templates::{
             AgentMemoryDetailPageTemplate, AgentMemoryDetailPartialTemplate,
-            AgentMemoryTimelinePartialTemplate, AgentShowTab, MemoryView, load_navbar,
+            AgentMemoryTimelinePartialTemplate, AgentShowTab, MemoryView,
         },
         ui_events::UiEvent,
     },
@@ -91,7 +91,7 @@ pub(in crate::web::routes) async fn agents_show_memory_detail(
         memory_view.clone(),
         format!("/agents/{}/memories", agent.agent_key),
     )?;
-    let navbar = load_navbar(&state.db_pool, user.id).await?;
+    let navbar = load_selected_agent_navbar(&state, user.id, &agent).await?.0;
     let html = AgentMemoryDetailPageTemplate::render_view(
         agent.clone(),
         memory_view,

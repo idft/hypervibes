@@ -1,4 +1,5 @@
 use anyhow::{Context, Result};
+use chrono::{DateTime, Utc};
 use sqlx::query_as;
 
 use crate::{
@@ -20,6 +21,7 @@ pub const PROMPT_KIND_ANALYSIS_CODING: &str = "analysis_coding";
 pub struct AgentStrategyPromptRow {
     pub prompt_kind: String,
     pub prompt: String,
+    pub updated_at: DateTime<Utc>,
 }
 
 pub fn prompt_kind_for_job_kind(job_kind: &str) -> Option<&'static str> {
@@ -70,7 +72,7 @@ pub async fn list_agent_strategy_prompts(
     agent_key: &str,
 ) -> Result<Vec<AgentStrategyPromptRow>> {
     query_as::<_, AgentStrategyPromptRow>(
-        "SELECT agent_key, prompt_kind, prompt, created_at, updated_at
+        "SELECT prompt_kind, prompt, updated_at
            FROM agent_strategy_prompts
           WHERE agent_key = $1
           ORDER BY prompt_kind",
@@ -87,7 +89,7 @@ pub async fn get_agent_strategy_prompt(
     prompt_kind: &str,
 ) -> Result<Option<AgentStrategyPromptRow>> {
     query_as::<_, AgentStrategyPromptRow>(
-        "SELECT agent_key, prompt_kind, prompt, created_at, updated_at
+        "SELECT prompt_kind, prompt, updated_at
            FROM agent_strategy_prompts
           WHERE agent_key = $1
             AND prompt_kind = $2",

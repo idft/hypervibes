@@ -142,3 +142,29 @@ describe("agent currency icons", () => {
     expect(document.querySelector<HTMLElement>("[data-currency-modal]")?.classList.contains("hidden")).toBe(true);
   });
 });
+
+describe("job detail modals", () => {
+  it("opens, focuses, and closes the additional instructions modal", () => {
+    document.body.innerHTML = `
+      <button type="button" data-job-detail-modal-trigger="additional-instructions-modal">Additional Instructions</button>
+      <div id="additional-instructions-modal" data-job-detail-modal class="hidden" aria-hidden="true">
+        <button type="button" data-job-detail-modal-close>Close</button>
+        <textarea data-job-detail-modal-initial-focus></textarea>
+      </div>
+    `;
+
+    initAgentPage();
+    const trigger = document.querySelector<HTMLButtonElement>("[data-job-detail-modal-trigger]");
+    const modal = document.querySelector<HTMLElement>("[data-job-detail-modal]");
+    const textarea = document.querySelector<HTMLTextAreaElement>("[data-job-detail-modal-initial-focus]");
+    trigger?.click();
+
+    expect(modal?.classList.contains("hidden")).toBe(false);
+    expect(modal?.getAttribute("aria-hidden")).toBe("false");
+    expect(document.activeElement).toBe(textarea);
+
+    modal?.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    expect(modal?.classList.contains("hidden")).toBe(true);
+    expect(document.activeElement).toBe(trigger);
+  });
+});

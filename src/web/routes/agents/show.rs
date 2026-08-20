@@ -44,8 +44,9 @@ use crate::{
             AccountBalancePartialTemplate, AccountBalanceView, AgentRecentRunsView, AgentShowTab,
             AgentsShowPageTemplate, BalanceSparklinesPartialTemplate,
             LatestAnalysisSummaryPartialTemplate, LatestTradeExecutionSummaryPartialTemplate,
-            OpenOrdersPartialTemplate, OpenOrdersView, OpenPositionsPartialTemplate,
-            OpenPositionsView, SparklineView, TransactionView, load_navbar,
+            OpenCodeWorkspaceTemplateDriftView, OpenOrdersPartialTemplate, OpenOrdersView,
+            OpenPositionsPartialTemplate, OpenPositionsView, SparklineView, TransactionView,
+            load_navbar,
         },
     },
 };
@@ -124,13 +125,8 @@ pub(in crate::web::routes) async fn render_agent_show_page(
     template.setup_checklist =
         crate::web::templates::AgentSetupChecklistView::from_readiness(&readiness);
     template.operation_notice = operation_notice;
-    template.navbar = load_navbar(&state.db_pool, user.id)
-        .await?
-        .with_selected_agent(
-            agent.agent_key.clone(),
-            agent.display_name.clone(),
-            agent.enabled,
-        );
+    let (navbar, template_drift) = load_selected_agent_navbar(state, user.id, &agent).await?;
+    template.navbar = navbar;
     if let Some(address) = agent.trading_account_address.as_deref() {
         let is_main = address.eq_ignore_ascii_case(&user.wallet_address);
         template.is_main_account = is_main;
@@ -273,7 +269,7 @@ pub(in crate::web::routes) async fn render_agent_show_page(
                 .as_ref()
                 .and_then(|query| query.workspace_warning.clone());
             template.opencode_workspace =
-                build_opencode_workspace_settings_view(state, &agent).await;
+                build_opencode_workspace_settings_view(state, &agent, template_drift).await;
             if let Some(rows) = instrument_options {
                 template.instrument_options = rows;
             }
@@ -289,6 +285,51 @@ pub(in crate::web::routes) async fn render_agent_show_page(
     }
 
     Ok(Html(template.render()?).into_response())
+}
+
+pub(in crate::web::routes) async fn load_selected_agent_navbar(
+    state: &Arc<AppState>,
+    user_id: uuid::Uuid,
+    agent: &crate::agents::model::AgentDetailRow,
+) -> Result<
+    (
+        crate::web::templates::Navbar,
+        OpenCodeWorkspaceTemplateDriftView,
+    ),
+    AppError,
+> {
+    let template_drift = load_workspace_template_drift(state, agent).await;
+    let mut navbar = load_navbar(&state.db_pool, user_id)
+        .await?
+        .with_selected_agent(
+            agent.agent_key.clone(),
+            agent.display_name.clone(),
+            agent.enabled,
+        );
+    navbar.selected_agent_workspace_template_drift = template_drift.has_changes();
+    Ok((navbar, template_drift))
+}
+
+pub(in crate::web::routes) async fn load_workspace_template_drift(
+    state: &Arc<AppState>,
+    agent: &crate::agents::model::AgentDetailRow,
+) -> OpenCodeWorkspaceTemplateDriftView {
+    let workspace_agent = crate::opencode::workspace_control_client::WorkspaceAgentInput {
+        agent_key: agent.agent_key.clone(),
+        display_name: agent.display_name.clone(),
+        agent_api_key: agent.api_key.clone(),
+        api_base_url: state.hypervibes_agent_api_base_url.clone(),
+    };
+    state
+        .workspace_controller
+        .template_drift(workspace_agent)
+        .await
+        .inspect_err(|error| {
+            warn!(agent_key = %agent.agent_key, error = ?error, "failed to diff OpenCode workspace template for selected-agent navbar");
+        })
+        .ok()
+        .map(OpenCodeWorkspaceTemplateDriftView::from_diff)
+        .unwrap_or_else(OpenCodeWorkspaceTemplateDriftView::unavailable)
 }
 const RUNS_PER_PAGE: usize = 10;
 

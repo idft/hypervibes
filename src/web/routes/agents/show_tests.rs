@@ -3,6 +3,7 @@ use crate::web::routes::router;
 use crate::web::routes::test_support::*;
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
+use std::fs;
 use tower::util::ServiceExt;
 
 #[tokio::test]
@@ -82,6 +83,52 @@ async fn agent_positions_route_renders_latest_analysis_summary_under_open_orders
         text.contains(&format!("/agents/{agent_key}/memories/{}", analysis.id)),
         "analysis summary should link to the memory detail page"
     );
+}
+
+#[tokio::test]
+async fn selected_agent_page_renders_workspace_template_drift_warning() {
+    let state = test_state().await;
+    let (agent_key, _) = insert_test_opencode_agent(&state)
+        .await
+        .expect("insert agent");
+    generate_test_agent_workspace(&state, &agent_key).await;
+    let workspace_path = crate::opencode::workspace::agent_workspace_host_path(
+        &state.opencode_workspace_config,
+        &agent_key,
+    )
+    .expect("workspace path");
+    let clean_response = router(state.clone())
+        .oneshot(
+            Request::builder()
+                .uri(format!("/agents/{agent_key}"))
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+
+    assert_eq!(clean_response.status(), StatusCode::OK);
+    assert!(
+        !response_text(clean_response)
+            .await
+            .contains("data-navbar-workspace-template-drift")
+    );
+    fs::write(workspace_path.join("AGENTS.md"), "user-modified\n").expect("modify AGENTS.md");
+
+    let response = router(state)
+        .oneshot(
+            Request::builder()
+                .uri(format!("/agents/{agent_key}"))
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let text = response_text(response).await;
+    assert!(text.contains("data-navbar-workspace-template-drift"));
+    assert!(text.contains(&format!("href=\"/agents/{agent_key}/settings\"")));
 }
 #[tokio::test]
 async fn agent_positions_route_renders_empty_analysis_section_when_no_market_analysis_memory() {

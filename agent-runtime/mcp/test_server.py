@@ -113,6 +113,9 @@ class HyperVibesMcpServerTests(unittest.TestCase):
         self.assertTrue(
             {
                 "get_account",
+                "list_strategy_prompts",
+                "get_strategy_prompt",
+                "update_strategy_prompt",
                 "get_latest_analysis",
                 "get_market_analysis",
                 "get_memory_detail",
@@ -128,6 +131,87 @@ class HyperVibesMcpServerTests(unittest.TestCase):
                 "coding_submit_report",
             }.issubset(registered)
         )
+
+    def test_automated_job_profiles_deny_strategy_prompt_tools(self) -> None:
+        profiles = (
+            Path(__file__).parents[2]
+            / "agent-runtime"
+            / "workspace-template"
+            / ".opencode"
+            / "agents"
+        )
+        for profile_name in [
+            "analysis.md",
+            "market-analysis.md",
+            "trading.md",
+            "daily-review.md",
+            "analysis-coding.md",
+        ]:
+            profile = (profiles / profile_name).read_text(encoding="utf-8")
+            self.assertIn("hypervibes_*: deny", profile, profile_name)
+            self.assertNotIn("hypervibes_list_strategy_prompts:", profile, profile_name)
+            self.assertNotIn("hypervibes_get_strategy_prompt:", profile, profile_name)
+            self.assertNotIn("hypervibes_update_strategy_prompt:", profile, profile_name)
+
+    def test_strategy_prompt_tools_use_authenticated_api_paths(self) -> None:
+        captured: list[dict[str, object]] = []
+
+        def fake_request(method, path, *, params=None, json_body=None):
+            captured.append(
+                {
+                    "method": method,
+                    "path": path,
+                    "params": params,
+                    "json_body": json_body,
+                }
+            )
+            response = {
+                "prompt_kind": "analysis",
+                "prompt": "Review market structure.",
+                "updated_at": "2026-08-20T00:00:00Z",
+            }
+            return [response] if method == "GET" and path.endswith("prompts") else response
+
+        with mock.patch.object(self.server, "_request", side_effect=fake_request):
+            listed = self.server.list_strategy_prompts()
+            fetched = self.server.get_strategy_prompt("analysis")
+            updated = self.server.update_strategy_prompt("analysis", "  Keep it concise.  ")
+
+        self.assertEqual(len(listed), 1)
+        self.assertEqual(fetched["prompt_kind"], "analysis")
+        self.assertEqual(updated["prompt"], "Review market structure.")
+        self.assertEqual(
+            captured,
+            [
+                {
+                    "method": "GET",
+                    "path": "/api/v1/strategy-prompts",
+                    "params": None,
+                    "json_body": None,
+                },
+                {
+                    "method": "GET",
+                    "path": "/api/v1/strategy-prompts/analysis",
+                    "params": None,
+                    "json_body": None,
+                },
+                {
+                    "method": "PUT",
+                    "path": "/api/v1/strategy-prompts/analysis",
+                    "params": None,
+                    "json_body": {"prompt": "  Keep it concise.  "},
+                },
+            ],
+        )
+
+    def test_strategy_prompt_tools_validate_inputs_and_response_shape(self) -> None:
+        with self.assertRaises(ValueError):
+            self.server.get_strategy_prompt("invalid")
+        with self.assertRaises(ValueError):
+            self.server.update_strategy_prompt("analysis", None)  # type: ignore[arg-type]
+        with mock.patch.object(self.server, "_request", return_value={"prompt": "missing"}):
+            with self.assertRaisesRegex(RuntimeError, "unexpected shape"):
+                self.server.get_strategy_prompt("analysis")
 
     def test_logger_has_a_stderr_handler(self) -> None:
         self.assertTrue(

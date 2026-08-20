@@ -3,6 +3,7 @@ mod coding;
 mod error;
 mod memories;
 pub(crate) mod orders;
+mod strategy_prompts;
 mod transactions;
 
 #[cfg(test)]
@@ -17,11 +18,13 @@ mod memories_tests;
 #[cfg(test)]
 mod orders_tests;
 #[cfg(test)]
+mod strategy_prompts_tests;
+#[cfg(test)]
 mod transactions_tests;
 
 // Re-export so handlers are reachable by bare name from `router()` below,
 // and so test code can reference them via `super::*` if needed.
-use self::{account::*, coding::*, memories::*, orders::*, transactions::*};
+use self::{account::*, coding::*, memories::*, orders::*, strategy_prompts::*, transactions::*};
 
 use std::sync::Arc;
 
@@ -41,6 +44,11 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/account", get(get_account))
         .route("/account/transactions", get(list_account_transactions))
         .route("/coding/report", post(submit_coding_report))
+        .route("/strategy-prompts", get(list_strategy_prompts))
+        .route(
+            "/strategy-prompts/{prompt_kind}",
+            get(get_strategy_prompt).put(update_strategy_prompt),
+        )
         .route(
             "/orders",
             post(place_orders_handler).get(list_orders_handler),

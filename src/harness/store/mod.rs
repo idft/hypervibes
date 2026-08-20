@@ -12,7 +12,8 @@ pub use jobs::{
     ClaimedCandleJobRun, claim_due_candle_job, get_agent_job, get_dispatch_job,
     get_enabled_event_job, insert_candle_job_with_model_variant, insert_default_harness_jobs,
     insert_event_job_with_model_variant, list_agent_jobs, list_due_candle_jobs, list_job_runs,
-    set_candle_job_timeframe, set_job_enabled, set_job_model_with_variant, set_job_timeout,
+    set_candle_job_timeframe, set_job_enabled, set_job_model_with_variant, set_job_operator_prompt,
+    set_job_timeout,
 };
 #[allow(unused_imports)]
 pub use recovery::recover_inactive_runs_all;

@@ -447,6 +447,8 @@ fn permission_rules_for(orders: &str, memory_writes: &str) -> Result<Vec<OpenCod
     let memory_writes = action(memory_writes)?;
     let mut rules = [
         "hypervibes_get_account",
+        "hypervibes_list_strategy_prompts",
+        "hypervibes_get_strategy_prompt",
         "hypervibes_get_latest_analysis",
         "hypervibes_get_market_analysis",
         "hypervibes_get_memory_detail",
@@ -478,6 +480,11 @@ fn permission_rules_for(orders: &str, memory_writes: &str) -> Result<Vec<OpenCod
         pattern: "*".to_string(),
         action: memory_writes.to_string(),
     });
+    rules.push(OpenCodePermissionRule {
+        permission: "hypervibes_update_strategy_prompt".to_string(),
+        pattern: "*".to_string(),
+        action: "ask".to_string(),
+    });
     Ok(rules)
 }
 
@@ -504,5 +511,23 @@ mod tests {
         drop(guard);
         tokio::task::yield_now().await;
         assert!(!tracker.is_active(conversation_id).await);
+    }
+
+    #[test]
+    fn chat_allows_strategy_prompt_reads_and_confirms_updates() {
+        let rules = default_permission_rules();
+        let action_for = |permission: &str| {
+            rules
+                .iter()
+                .find(|rule| rule.permission == permission)
+                .map(|rule| rule.action.as_str())
+        };
+
+        assert_eq!(
+            action_for("hypervibes_list_strategy_prompts"),
+            Some("allow")
+        );
+        assert_eq!(action_for("hypervibes_get_strategy_prompt"), Some("allow"));
+        assert_eq!(action_for("hypervibes_update_strategy_prompt"), Some("ask"));
     }
 }

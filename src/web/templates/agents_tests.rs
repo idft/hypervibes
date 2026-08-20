@@ -141,6 +141,34 @@ fn agents_show_page_renders_base_layout_and_delete_modal() {
 }
 
 #[test]
+fn selected_agent_workspace_template_drift_renders_a_settings_warning() {
+    let mut template =
+        AgentsShowPageTemplate::new(sample_agent_detail_row(), AgentShowTab::Positions);
+    template.navbar = Navbar {
+        selected_agent_workspace_template_drift: true,
+        ..Default::default()
+    }
+    .with_selected_agent("test-agent".to_string(), "Test Agent".to_string(), true);
+
+    let rendered = template.render().expect("render template");
+
+    assert!(rendered.contains("data-navbar-workspace-template-drift"));
+    assert!(rendered.contains("href=\"/agents/test-agent/settings\""));
+    assert!(
+        rendered
+            .contains("title=\"Workspace template drift detected. Review workspace settings.\"")
+    );
+    assert!(
+        rendered.contains(
+            "aria-label=\"Workspace template drift detected. Review workspace settings.\""
+        )
+    );
+    assert!(rendered.contains(
+        "data-navbar-workspace-template-drift class=\"ml-auto inline-flex h-9 w-9 cursor-pointer"
+    ));
+}
+
+#[test]
 fn positions_page_renders_linked_incomplete_agent_setup_checklist() {
     let mut readiness = sample_agent_readiness();
     readiness.has_enabled_trading_job = false;
@@ -503,10 +531,16 @@ fn prompts_tab_renders_strategy_copy_and_reset_defaults_ui() {
 
     let rendered = template.render().unwrap();
     assert!(rendered.contains("Strategy Prompts"));
+    assert!(rendered.contains("Discuss prompt"));
+    assert!(rendered.contains("formaction=\"/agents/test-agent/chat/conversations\""));
     assert!(rendered.contains("Analysis"));
+    assert!(rendered.contains("Runs on a fixed schedule"));
     assert!(rendered.contains("Market Analysis"));
+    assert!(rendered.contains("Runs after analysis jobs complete"));
     assert!(rendered.contains("Trading"));
+    assert!(rendered.contains("Manages positions and orders based on market-analysis memories"));
     assert!(rendered.contains("Daily Review"));
+    assert!(rendered.contains("Directs the daily review"));
     assert!(rendered.contains("data-agent-prompt-form=\"analysis\""));
     assert!(rendered.contains("data-agent-prompt-form=\"market_analysis\""));
     assert!(rendered.contains("data-agent-prompt-form=\"trading\""));

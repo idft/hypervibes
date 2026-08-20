@@ -26,7 +26,7 @@ use crate::{
         model::{AgentConversationRow, TOOL_GROUP_MEMORY_WRITES, TOOL_GROUP_ORDERS},
         service::{CONVERSATION_MESSAGE_MAX_CHARS, ConversationService},
     },
-    agents::store::get_agent,
+    agents::{store::get_agent, strategy_prompts::is_valid_prompt_kind},
     model_catalog::options::parse_model_selection,
     opencode::{client::OpenCodePermissionReply, store::get_session_detail},
     web::{
@@ -40,7 +40,6 @@ use crate::{
             AgentConversationPermissionsPartialTemplate, AgentConversationSettingsView,
             AgentConversationSidebarPartialTemplate, AgentConversationSummaryPartialTemplate,
             AgentConversationTranscriptPartialTemplate, OpenCodeSessionView, conversation_items,
-            load_navbar,
         },
     },
 };
@@ -49,6 +48,7 @@ use super::shared::{
     build_model_picker_view, is_htmx_request, load_model_picker_context,
     validate_model_selection_for_agent,
 };
+use super::show::load_selected_agent_navbar;
 
 #[derive(Default, Deserialize)]
 pub(in crate::web::routes) struct NewConversationForm {
@@ -56,6 +56,19 @@ pub(in crate::web::routes) struct NewConversationForm {
     model_selection: String,
     #[serde(default)]
     model_variant: String,
+    #[serde(default, alias = "prompt_kind")]
+    strategy_prompt_kind: String,
+    #[serde(default, alias = "prompt")]
+    strategy_prompt: String,
+}
+
+impl NewConversationForm {
+    pub(super) fn strategy_prompt_context(&self) -> (&str, &str) {
+        (
+            self.strategy_prompt_kind.trim(),
+            self.strategy_prompt.as_str(),
+        )
+    }
 }
 #[derive(Default, Deserialize)]
 pub(in crate::web::routes) struct ConversationMessageForm {
@@ -324,11 +337,14 @@ pub(in crate::web::routes) async fn agents_show_chat(
         None,
         load_model_picker_context(&state, &agent).await,
     );
+    let navbar = load_selected_agent_navbar(&state, user.id, &agent).await?.0;
     Ok(Html(AgentConversationEmptyPageTemplate::render_view(
         agent,
         picker,
         Vec::new(),
-        load_navbar(&state.db_pool, user.id).await?,
+        String::new(),
+        String::new(),
+        navbar,
     )?)
     .into_response())
 }
@@ -355,11 +371,14 @@ pub(in crate::web::routes) async fn agents_new_chat(
         None,
         load_model_picker_context(&state, &agent).await,
     );
+    let navbar = load_selected_agent_navbar(&state, user.id, &agent).await?.0;
     Ok(Html(AgentConversationEmptyPageTemplate::render_view(
         agent,
         picker,
         Vec::new(),
-        load_navbar(&state.db_pool, user.id).await?,
+        String::new(),
+        String::new(),
+        navbar,
     )?)
     .into_response())
 }
@@ -373,6 +392,9 @@ pub(in crate::web::routes) async fn agents_show_chat_detail(
         return Ok((StatusCode::NOT_FOUND, "conversation not found").into_response());
     };
     let rendered = render_snapshot(&snapshot, String::new(), None)?;
+    let navbar = load_selected_agent_navbar(&state, user.id, &snapshot.agent)
+        .await?
+        .0;
     let html = AgentConversationPageTemplate::render_view(
         crate::web::templates::AgentConversationPageInput {
             agent: snapshot.agent,
@@ -382,7 +404,7 @@ pub(in crate::web::routes) async fn agents_show_chat_detail(
             transcript_html: rendered.transcript,
             composer_html: rendered.composer,
             permissions_html: rendered.permissions,
-            navbar: load_navbar(&state.db_pool, user.id).await?,
+            navbar,
         },
     )?;
     Ok(Html(html).into_response())
@@ -400,6 +422,12 @@ pub(in crate::web::routes) async fn agents_create_conversation(
     let conversations =
         crate::agent_conversations::store::list_agent_conversations(&state.db_pool, &agent_key)
             .await?;
+    let (strategy_prompt_kind, strategy_prompt) = form.strategy_prompt_context();
+    let strategy_prompt_kind = strategy_prompt_kind.to_string();
+    if !strategy_prompt_kind.is_empty() && !is_valid_prompt_kind(&strategy_prompt_kind) {
+        return Ok((StatusCode::BAD_REQUEST, "invalid strategy prompt kind").into_response());
+    }
+    let strategy_prompt = strategy_prompt.to_string();
     let (model_selection, model_variant) = if form.model_selection.trim().is_empty() {
         conversations
             .first()
@@ -421,7 +449,16 @@ pub(in crate::web::routes) async fn agents_create_conversation(
     {
         Ok(selection) => selection,
         Err(error) => {
-            return render_empty_error(&state, agent, model_selection, error, user.id).await;
+            return render_empty_error(
+                &state,
+                agent,
+                model_selection,
+                error,
+                strategy_prompt_kind,
+                strategy_prompt,
+                user.id,
+            )
+            .await;
         }
     };
     let selection =
@@ -435,6 +472,8 @@ pub(in crate::web::routes) async fn agents_create_conversation(
                     agent,
                     model_selection,
                     "Select a valid model.".to_string(),
+                    strategy_prompt_kind,
+                    strategy_prompt,
                     user.id,
                 )
                 .await;
@@ -448,7 +487,39 @@ pub(in crate::web::routes) async fn agents_create_conversation(
             selection.2.as_deref(),
         )
         .await?;
+    if !strategy_prompt_kind.is_empty() {
+        service(&state)
+            .submit_conversation_turn(
+                &agent_key,
+                conversation.id,
+                &opencode_message_id(),
+                &strategy_prompt_chat_message(&strategy_prompt_kind, &strategy_prompt),
+            )
+            .await?;
+    }
     Ok(Redirect::to(&format!("/agents/{agent_key}/chat/{}", conversation.id)).into_response())
+}
+
+pub(super) fn strategy_prompt_chat_message(prompt_kind: &str, prompt: &str) -> String {
+    let label = match prompt_kind {
+        "analysis" => "Analysis",
+        "market_analysis" => "Market Analysis",
+        "trading" => "Trading",
+        "daily_review" => "Daily Review",
+        "analysis_coding" => "Analysis Coding",
+        _ => "Strategy",
+    };
+    let intro = format!("We are discussing this agent's {label} strategy prompt:\n\n```text\n");
+    let outro = "\n```";
+    if intro.chars().count() + prompt.chars().count() + outro.chars().count()
+        <= CONVERSATION_MESSAGE_MAX_CHARS
+    {
+        return format!("{intro}{prompt}{outro}");
+    }
+
+    format!(
+        "We are discussing this agent's {label} strategy prompt. It is too long to include in this message, so use `hypervibes_get_strategy_prompt` with prompt kind `{prompt_kind}` to load the saved prompt."
+    )
 }
 
 async fn render_empty_error(
@@ -456,6 +527,8 @@ async fn render_empty_error(
     agent: crate::agents::model::AgentDetailRow,
     selection: String,
     error: String,
+    strategy_prompt_kind: String,
+    strategy_prompt: String,
     user_id: Uuid,
 ) -> Result<Response, AppError> {
     let picker = build_model_picker_view(
@@ -464,11 +537,14 @@ async fn render_empty_error(
         None,
         load_model_picker_context(state, &agent).await,
     );
+    let navbar = load_selected_agent_navbar(state, user_id, &agent).await?.0;
     Ok(Html(AgentConversationEmptyPageTemplate::render_view(
         agent,
         picker,
         vec![error],
-        load_navbar(&state.db_pool, user_id).await?,
+        strategy_prompt_kind,
+        strategy_prompt,
+        navbar,
     )?)
     .into_response())
 }

@@ -12,6 +12,7 @@ use std::{collections::VecDeque, convert::Infallible, sync::Arc};
 use tokio::sync::broadcast;
 use tracing::warn;
 
+use super::show::load_selected_agent_navbar;
 use crate::{
     agents::store::get_agent,
     web::{
@@ -22,7 +23,6 @@ use crate::{
         templates::{
             AgentRunDetailPageTemplate, AgentRunDetailSummaryPartialTemplate,
             AgentRunDetailTranscriptPartialTemplate, HarnessRunDetailView, OpenCodeSessionView,
-            load_navbar,
         },
     },
 };
@@ -112,7 +112,9 @@ pub(in crate::web::routes) async fn agents_show_run_detail(
         return Ok((StatusCode::NOT_FOUND, "run not found").into_response());
     };
 
-    let navbar = load_navbar(&state.db_pool, user.id).await?;
+    let navbar = load_selected_agent_navbar(&state, user.id, &snapshot.agent)
+        .await?
+        .0;
     let html = AgentRunDetailPageTemplate::render_view(
         snapshot.agent,
         snapshot.run,

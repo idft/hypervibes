@@ -9,13 +9,14 @@ use std::sync::Arc;
 use tracing::warn;
 
 use super::shared::{WORKSPACE_MAINTENANCE_DUPLICATE_WARNING, urlencode};
-use super::show::{AgentSettingsQuery, AgentShowQueries, render_agent_show_page};
+use super::show::{
+    AgentSettingsQuery, AgentShowQueries, load_workspace_template_drift, render_agent_show_page,
+};
 use crate::{
     agents::store::{get_agent, replace_agent_instruments},
     harness::store::InsertWorkspaceMaintenanceTaskOutcome,
     opencode::{
-        workspace::OpenCodeWorkspaceRuntimeConfig,
-        workspace_control_client::{WorkspaceAgentInput, WorkspaceController},
+        workspace::OpenCodeWorkspaceRuntimeConfig, workspace_control_client::WorkspaceController,
     },
     web::{
         AppState,
@@ -25,6 +26,7 @@ use crate::{
             AgentShowTab, OpenCodeWorkspaceMaintenanceStatusTemplate,
             OpenCodeWorkspaceMaintenanceStatusView, OpenCodeWorkspaceMaintenanceView,
             OpenCodeWorkspaceSectionTemplate, OpenCodeWorkspaceSettingsView,
+            OpenCodeWorkspaceTemplateDriftView,
         },
     },
 };
@@ -96,7 +98,9 @@ pub(in crate::web::routes) async fn agents_workspace_maintenance_status(
     let Some(agent) = get_agent(&state.db_pool, &agent_key).await? else {
         return Ok((StatusCode::NOT_FOUND, "agent not found").into_response());
     };
-    let opencode_workspace = build_opencode_workspace_settings_view(&state, &agent).await;
+    let template_drift = load_workspace_template_drift(&state, &agent).await;
+    let opencode_workspace =
+        build_opencode_workspace_settings_view(&state, &agent, template_drift).await;
     let html = OpenCodeWorkspaceSectionTemplate::render_view(opencode_workspace, None)?;
     Ok(Html(html).into_response())
 }
@@ -168,20 +172,8 @@ pub(in crate::web::routes) async fn load_workspace_maintenance_view(
 pub(in crate::web::routes) async fn build_opencode_workspace_settings_view(
     state: &Arc<AppState>,
     agent: &crate::agents::model::AgentDetailRow,
+    template_drift: OpenCodeWorkspaceTemplateDriftView,
 ) -> Option<OpenCodeWorkspaceSettingsView> {
-    let workspace_agent = WorkspaceAgentInput {
-        agent_key: agent.agent_key.clone(),
-        display_name: agent.display_name.clone(),
-        agent_api_key: agent.api_key.clone(),
-        api_base_url: state.hypervibes_agent_api_base_url.clone(),
-    };
-    let template_drift = state.workspace_controller.template_drift(workspace_agent).await
-    .inspect_err(|error| {
-        warn!(agent_key = %agent.agent_key, error = ?error, "failed to diff OpenCode workspace template for settings page");
-    })
-    .ok()
-    .map(crate::web::templates::OpenCodeWorkspaceTemplateDriftView::from_diff)
-    .unwrap_or_else(crate::web::templates::OpenCodeWorkspaceTemplateDriftView::unavailable);
     let maintenance = load_workspace_maintenance_view(
         &state.db_pool,
         &agent.agent_key,

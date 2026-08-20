@@ -187,6 +187,34 @@ def _require_nonblank(name: str, value: str) -> str:
     return value
 
 
+STRATEGY_PROMPT_KINDS = {
+    "analysis",
+    "market_analysis",
+    "trading",
+    "daily_review",
+    "analysis_coding",
+}
+
+
+def _require_strategy_prompt_kind(prompt_kind: str) -> str:
+    if not isinstance(prompt_kind, str) or prompt_kind not in STRATEGY_PROMPT_KINDS:
+        allowed = ", ".join(sorted(STRATEGY_PROMPT_KINDS))
+        raise ValueError(f"prompt_kind must be one of: {allowed}")
+    return prompt_kind
+
+
+def _require_strategy_prompt_response(value: Any) -> dict[str, Any]:
+    if (
+        not isinstance(value, dict)
+        or set(value) != {"prompt_kind", "prompt", "updated_at"}
+        or not isinstance(value["prompt_kind"], str)
+        or not isinstance(value["prompt"], str)
+        or not isinstance(value["updated_at"], str)
+    ):
+        raise RuntimeError("HyperVibes strategy prompt returned unexpected shape")
+    return value
+
+
 def _require_limit(limit: int | None) -> int | None:
     if limit is None:
         return None
@@ -374,6 +402,37 @@ def get_account() -> dict[str, Any]:
     if not isinstance(result, dict):
         raise RuntimeError("HyperVibes /account returned unexpected shape")
     return result
+
+
+@mcp.tool()
+def list_strategy_prompts() -> list[dict[str, Any]]:
+    """List this agent's editable strategy prompts for chat review."""
+    result = _request("GET", "/api/v1/strategy-prompts")
+    if not isinstance(result, list):
+        raise RuntimeError("HyperVibes strategy prompts returned unexpected shape")
+    return [_require_strategy_prompt_response(prompt) for prompt in result]
+
+
+@mcp.tool()
+def get_strategy_prompt(prompt_kind: str) -> dict[str, Any]:
+    """Get one editable strategy prompt for chat review."""
+    prompt_kind = _require_strategy_prompt_kind(prompt_kind)
+    result = _request("GET", f"/api/v1/strategy-prompts/{prompt_kind}")
+    return _require_strategy_prompt_response(result)
+
+
+@mcp.tool()
+def update_strategy_prompt(prompt_kind: str, prompt: str) -> dict[str, Any]:
+    """Update one strategy prompt from chat; blank prompts are allowed."""
+    prompt_kind = _require_strategy_prompt_kind(prompt_kind)
+    if not isinstance(prompt, str):
+        raise ValueError("prompt must be a string")
+    result = _request(
+        "PUT",
+        f"/api/v1/strategy-prompts/{prompt_kind}",
+        json_body={"prompt": prompt},
+    )
+    return _require_strategy_prompt_response(result)
 
 
 @mcp.tool()

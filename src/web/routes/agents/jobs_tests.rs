@@ -680,6 +680,8 @@ async fn new_job_page_renders_for_opencode_agent() {
     assert!(text.contains("name=\"job_kind\""));
     assert!(text.contains("name=\"timeframe\""));
     assert!(text.contains("name=\"timeout_seconds\""));
+    assert!(text.contains("Additional Instructions"));
+    assert!(!text.contains("Operator prompt"));
 }
 #[tokio::test]
 async fn post_job_creates_new_job_and_redirects() {
@@ -858,6 +860,12 @@ async fn job_detail_page_renders_job_specific_runs() {
     assert!(text.contains("cursor-pointer"));
     assert!(text.contains("data-model-picker-mode=\"modal\""));
     assert!(!text.contains("data-model-picker-lazy-open data-model-picker-url"));
+    assert!(text.contains("Additional Instructions"));
+    assert!(text.contains("Preview Prompt"));
+    assert!(text.contains(&format!(
+        "/agents/{agent_key}/jobs/{job_id}/operator-prompt"
+    )));
+    assert!(!text.contains("Operator prompt"));
 
     let response = router(state.clone())
         .oneshot(
@@ -872,6 +880,70 @@ async fn job_detail_page_renders_job_specific_runs() {
     let text = response_text(response).await;
     assert!(text.contains("data-model-picker-mode=\"modal\""));
     assert!(text.contains("Could not load configured OpenCode models"));
+}
+#[tokio::test]
+async fn post_job_additional_instructions_trims_and_allows_blank() {
+    let state = test_state().await;
+    let pool = state.db_pool.clone();
+    let (agent_key, _wallet_address) = insert_test_opencode_agent(&state)
+        .await
+        .expect("insert opencode agent");
+    let job_id = crate::harness::store::list_agent_jobs(&pool, &agent_key)
+        .await
+        .expect("list jobs")
+        .first()
+        .expect("default job present")
+        .id;
+    let url = format!("/agents/{agent_key}/jobs/{job_id}/operator-prompt");
+
+    let response = router(state.clone())
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(&url)
+                .header("content-type", "application/x-www-form-urlencoded")
+                .body(Body::from("operator_prompt=++Focus+on+BTC++"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+    assert_eq!(
+        response
+            .headers()
+            .get("location")
+            .and_then(|value| value.to_str().ok()),
+        Some(format!("/agents/{agent_key}/jobs/{job_id}").as_str())
+    );
+    assert_eq!(
+        crate::harness::store::get_agent_job(&pool, &agent_key, job_id)
+            .await
+            .expect("load job")
+            .expect("job present")
+            .operator_prompt,
+        "Focus on BTC"
+    );
+
+    let response = router(state.clone())
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(&url)
+                .header("content-type", "application/x-www-form-urlencoded")
+                .body(Body::from("operator_prompt=+++"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+    assert!(
+        crate::harness::store::get_agent_job(&pool, &agent_key, job_id)
+            .await
+            .expect("load job")
+            .expect("job present")
+            .operator_prompt
+            .is_empty()
+    );
 }
 #[tokio::test]
 async fn post_job_model_htmx_updates_without_redirect() {

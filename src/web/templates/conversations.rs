@@ -85,6 +85,8 @@ pub struct AgentConversationEmptyPageTemplate {
     pub current_path: String,
     pub model_picker: ModelPickerView,
     pub errors: Vec<String>,
+    pub strategy_prompt_kind: String,
+    pub strategy_prompt: String,
     pub navbar: Navbar,
 }
 #[derive(Template)]
@@ -180,6 +182,8 @@ impl AgentConversationEmptyPageTemplate {
         agent: AgentDetailRow,
         mut model_picker: ModelPickerView,
         errors: Vec<String>,
+        strategy_prompt_kind: String,
+        strategy_prompt: String,
         navbar: Navbar,
     ) -> Result<String, askama::Error> {
         let current_path = format!("/agents/{}/chat", agent.agent_key);
@@ -198,6 +202,8 @@ impl AgentConversationEmptyPageTemplate {
             agent,
             model_picker,
             errors,
+            strategy_prompt_kind,
+            strategy_prompt,
             navbar,
         }
         .render()

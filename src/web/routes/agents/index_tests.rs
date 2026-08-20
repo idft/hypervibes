@@ -373,6 +373,38 @@ async fn post_delete_agent_removes_agent_and_redirects() {
 }
 
 #[tokio::test]
+async fn agents_index_omits_selected_agent_workspace_template_drift_warning() {
+    let state = test_state().await;
+    let (agent_key, _) = insert_test_opencode_agent(&state)
+        .await
+        .expect("insert agent");
+    generate_test_agent_workspace(&state, &agent_key).await;
+    let workspace_path = crate::opencode::workspace::agent_workspace_host_path(
+        &state.opencode_workspace_config,
+        &agent_key,
+    )
+    .expect("workspace path");
+    fs::write(workspace_path.join("AGENTS.md"), "user-modified\n").expect("modify AGENTS.md");
+
+    let response = router(state)
+        .oneshot(
+            Request::builder()
+                .uri("/agents")
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+
+    assert_eq!(response.status(), StatusCode::OK);
+    assert!(
+        !response_text(response)
+            .await
+            .contains("data-navbar-workspace-template-drift")
+    );
+}
+
+#[tokio::test]
 async fn post_delete_agent_aborts_queued_run_before_deleting() {
     let state = test_state().await;
     let pool = state.db_pool.clone();

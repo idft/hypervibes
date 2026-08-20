@@ -180,6 +180,10 @@ pub fn router(state: Arc<AppState>) -> Router {
             post(agents_update_job_timeout),
         )
         .route(
+            "/agents/{agent_key}/jobs/{job_id}/operator-prompt",
+            post(agents_update_job_operator_prompt),
+        )
+        .route(
             "/agents/{agent_key}/jobs/{job_id}/timeframe",
             post(agents_update_job_timeframe),
         )

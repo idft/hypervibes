@@ -51,7 +51,11 @@ fn job_detail_page_renders_job_metadata_and_runs() {
     assert!(rendered.contains("analysis-15m"));
     assert!(rendered.contains("At 15m candle close"));
     assert!(!rendered.contains(">Timeframe</p>"));
-    assert!(rendered.contains("Operator prompt"));
+    assert!(rendered.contains("Additional Instructions"));
+    assert!(rendered.contains("Preview Prompt"));
+    assert!(rendered.contains("additional-instructions-modal"));
+    assert!(rendered.contains("action=\"/agents/test-agent/jobs/1/operator-prompt\""));
+    assert!(!rendered.contains("Operator prompt"));
     assert!(rendered.contains("/agents/test-agent/jobs/1/run"));
     assert!(rendered.contains("Disable"));
     assert!(rendered.contains("/agents/test-agent/runs/1"));

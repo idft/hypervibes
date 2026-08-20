@@ -247,6 +247,7 @@ pub struct ModelPickerView {
 pub struct PromptEditorView {
     pub prompt_kind: String,
     pub label: &'static str,
+    pub description: &'static str,
     pub textarea_id: &'static str,
     pub placeholder: &'static str,
     pub prompt: String,
@@ -255,37 +256,43 @@ pub struct PromptEditorView {
 
 impl PromptEditorView {
     pub fn new(prompt_kind: &str, prompt: String, default_prompt: &'static str) -> Self {
-        let (label, textarea_id, placeholder) = match prompt_kind {
+        let (label, description, textarea_id, placeholder) = match prompt_kind {
             PROMPT_KIND_ANALYSIS => (
                 "Analysis",
+                "Runs on a fixed schedule to develop an analysis of enabled currencies. It can execute previously generated strategy code or invoke other tools as needed. The result is saved as a memory.",
                 "analysis_prompt",
                 "Assets, timeframes, analysis methods, confidence thresholds, validity, and trade blockers.",
             ),
             PROMPT_KIND_MARKET_ANALYSIS => (
                 "Market Analysis",
+                "Runs after analysis jobs complete to develop an overall market assessment from their results. The assessment is saved as a memory for trading.",
                 "market_analysis_prompt",
                 "How timeframe analyses should be synthesized into one execution-facing market view.",
             ),
             PROMPT_KIND_TRADING => (
                 "Trading",
+                "Manages positions and orders based on market-analysis memories. Describe desired position sizes, order sizes, and take-profit and stop-loss orders.",
                 "trading_prompt",
                 "Sizing, laddering, time-in-force preference, max orders, stale-order policy, and scaling rules.",
             ),
             PROMPT_KIND_DAILY_REVIEW => (
                 "Daily Review",
+                "Directs the daily review of decisions, outcomes, and durable agent learnings.",
                 "daily_review_prompt",
                 "What the daily review should inspect, how it should record learnings, and what patterns to emphasize.",
             ),
             PROMPT_KIND_ANALYSIS_CODING => (
                 "Analysis Coding",
+                "Guides improvements to reusable quantitative analysis code; it does not set market bias or place trades.",
                 "analysis_coding_prompt",
                 "How the coding job should improve reusable analysis code, what constraints it must obey, and how to report changes.",
             ),
-            _ => ("Strategy", "strategy_prompt", ""),
+            _ => ("Strategy", "", "strategy_prompt", ""),
         };
         Self {
             prompt_kind: prompt_kind.to_string(),
             label,
+            description,
             textarea_id,
             placeholder,
             prompt,

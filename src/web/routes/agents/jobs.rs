@@ -24,8 +24,8 @@ use super::shared::{
     timeout_error_redirect, validate_model_selection_for_agent,
 };
 use super::show::{
-    AgentJobsQuery, AgentShowQueries, build_agent_recent_runs_view, parse_positive_page,
-    render_agent_show_page,
+    AgentJobsQuery, AgentShowQueries, build_agent_recent_runs_view, load_selected_agent_navbar,
+    parse_positive_page, render_agent_show_page,
 };
 use crate::web::error::AppError;
 use crate::{
@@ -57,7 +57,7 @@ use crate::{
         templates::{
             AgentJobDetailPageTemplate, AgentJobNewPageTemplate, AgentRecentRunsPartialTemplate,
             AgentShowTab, CreateHarnessJobFormValues, ModelPickerPartialTemplate,
-            build_agent_show_tabs, load_navbar,
+            build_agent_show_tabs,
         },
     },
 };
@@ -264,7 +264,7 @@ pub(in crate::web::routes) async fn agents_show_job_detail(
     );
     model_picker.show_label = false;
     model_picker.use_modal = true;
-    let navbar = load_navbar(&state.db_pool, user.id).await?;
+    let navbar = load_selected_agent_navbar(&state, user.id, &agent).await?.0;
     let html = AgentJobDetailPageTemplate::render_view(
         agent.clone(),
         job_view,
@@ -509,7 +509,7 @@ pub(in crate::web::routes) async fn agents_new_job(
         return Ok((StatusCode::NOT_FOUND, "agent not found").into_response());
     };
     let picker = load_model_picker_context(&state, &agent).await;
-    let navbar = load_navbar(&state.db_pool, user.id).await?;
+    let navbar = load_selected_agent_navbar(&state, user.id, &agent).await?.0;
     Ok(render_new_job_form(
         agent,
         CreateHarnessJobForm::defaults().as_template_values(),
@@ -528,7 +528,7 @@ pub(in crate::web::routes) async fn agents_create_job(
     let Some(agent) = get_agent(&state.db_pool, &agent_key).await? else {
         return Ok((StatusCode::NOT_FOUND, "agent not found").into_response());
     };
-    let navbar = load_navbar(&state.db_pool, user.id).await?;
+    let navbar = load_selected_agent_navbar(&state, user.id, &agent).await?.0;
     let validated = match form.validate() {
         Ok(validated) => validated,
         Err(errors) => {
@@ -996,6 +996,33 @@ pub(in crate::web::routes) async fn agents_update_job_timeout(
 
     Ok(Redirect::to(&detail_url).into_response())
 }
+
+#[derive(Debug, Default, Deserialize)]
+pub(in crate::web::routes) struct OperatorPromptForm {
+    #[serde(default)]
+    pub operator_prompt: String,
+}
+
+pub(in crate::web::routes) async fn agents_update_job_operator_prompt(
+    State(state): State<Arc<AppState>>,
+    Path((agent_key, job_id)): Path<(String, i64)>,
+    Form(form): Form<OperatorPromptForm>,
+) -> Result<Response, AppError> {
+    let detail_url = format!("/agents/{agent_key}/jobs/{job_id}");
+    if !crate::harness::store::set_job_operator_prompt(
+        &state.db_pool,
+        &agent_key,
+        job_id,
+        form.operator_prompt.trim(),
+    )
+    .await?
+    {
+        return Ok((StatusCode::NOT_FOUND, "job not found").into_response());
+    }
+
+    Ok(Redirect::to(&detail_url).into_response())
+}
+
 #[derive(Debug, Default, Deserialize)]
 pub(in crate::web::routes) struct TimeframeForm {
     #[serde(default)]

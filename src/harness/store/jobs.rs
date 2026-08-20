@@ -487,6 +487,35 @@ pub async fn set_job_timeout(
     Ok(result.rows_affected() > 0)
 }
 
+/// Update the optional, per-job instructions supplied by the operator.
+///
+/// Returns `true` when a row was updated, `false` when the (agent_key,
+/// job_id) pair did not match an existing row.
+pub async fn set_job_operator_prompt(
+    pool: &DbPool,
+    agent_key: &str,
+    job_id: i64,
+    operator_prompt: &str,
+) -> Result<bool> {
+    let result = sqlx::query(
+        "UPDATE harness_jobs
+            SET operator_prompt = $3,
+                updated_at = now()
+          WHERE agent_key = $1
+            AND id = $2",
+    )
+    .bind(agent_key)
+    .bind(job_id)
+    .bind(operator_prompt)
+    .execute(pool)
+    .await
+    .with_context(|| {
+        format!("failed to update additional instructions for job {job_id} agent {agent_key}")
+    })?;
+
+    Ok(result.rows_affected() > 0)
+}
+
 /// Change a job's timeframe and re-anchor its next run to the next
 /// boundary for that timeframe. Keeping these fields together prevents an
 /// edited job from firing at a boundary from its previous cadence.

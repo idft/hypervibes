@@ -181,6 +181,33 @@ function initInlineEditors(root: ParentNode) {
   });
 }
 
+function initJobDetailModals(root: ParentNode) {
+  root.querySelectorAll<HTMLElement>("[data-job-detail-modal]").forEach((modal) => {
+    if (modal.dataset.bound === "true") return;
+    const trigger = root.querySelector<HTMLElement>(`[data-job-detail-modal-trigger="${modal.id}"]`);
+    const initialFocus = modal.querySelector<HTMLElement>("[data-job-detail-modal-initial-focus]");
+    if (!trigger || !initialFocus) return;
+    modal.dataset.bound = "true";
+    const close = () => {
+      modal.classList.add("hidden");
+      modal.classList.remove("flex");
+      modal.setAttribute("aria-hidden", "true");
+      document.body.classList.remove("overflow-hidden");
+      trigger.focus();
+    };
+    const open = () => {
+      modal.classList.remove("hidden");
+      modal.classList.add("flex");
+      modal.setAttribute("aria-hidden", "false");
+      document.body.classList.add("overflow-hidden");
+      initialFocus.focus();
+    };
+    trigger.addEventListener("click", open);
+    modal.querySelectorAll<HTMLElement>("[data-job-detail-modal-close]").forEach((button) => button.addEventListener("click", close));
+    modal.addEventListener("keydown", (event) => { if (event.key === "Escape") { event.preventDefault(); close(); } });
+  });
+}
+
 function initWorkspaceModal(root: ParentNode) {
   const modal = root.querySelector<HTMLElement>("#regenerate-workspace-modal");
   const hardReset = modal?.querySelector<HTMLInputElement>("#hard-reset-workspace");
@@ -202,7 +229,7 @@ function initWorkspaceModal(root: ParentNode) {
   sync();
 }
 
-export function initAgentPage(root: ParentNode = document) { initAgentCreation(root); initPromptEditor(root); initInstrumentSelectors(root); initClickableRows(root); initInlineEditors(root); initWorkspaceModal(root); }
+export function initAgentPage(root: ParentNode = document) { initAgentCreation(root); initPromptEditor(root); initInstrumentSelectors(root); initClickableRows(root); initInlineEditors(root); initJobDetailModals(root); initWorkspaceModal(root); }
 export function installAgentPageLifecycle() {
   installAgentModals();
   document.addEventListener("click", (event) => {

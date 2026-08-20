@@ -23,6 +23,7 @@ pub struct Navbar {
     pub selected_agent_name: Option<String>,
     pub selected_agent_enabled: bool,
     pub selected_agent_trading_job_enabled: Option<bool>,
+    pub selected_agent_workspace_template_drift: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -53,6 +54,13 @@ impl Navbar {
 
     pub fn agent_selector_label(&self) -> &str {
         self.selected_agent_name.as_deref().unwrap_or("Agents")
+    }
+
+    pub fn selected_agent_settings_url(&self) -> String {
+        self.selected_agent_key
+            .as_ref()
+            .map(|agent_key| format!("/agents/{agent_key}/settings"))
+            .unwrap_or_default()
     }
 
     pub fn short_wallet_address(&self) -> String {
@@ -233,6 +241,7 @@ pub async fn load_navbar(pool: &DbPool, user_id: Uuid) -> anyhow::Result<Navbar>
         selected_agent_name: None,
         selected_agent_enabled: false,
         selected_agent_trading_job_enabled: None,
+        selected_agent_workspace_template_drift: false,
     })
 }
 

@@ -41,7 +41,8 @@ pub struct HarnessJobDetailView {
     pub candle_trigger_editor: CandleTriggerEditorView,
     pub timeout_editor: TimeoutEditorView,
     pub next_run_at: Option<LocalTimestampView>,
-    pub operator_prompt_text: String,
+    pub operator_prompt: String,
+    pub operator_prompt_update_action: String,
     pub prompt_preview_text: String,
     pub prompt_preview_error: Option<String>,
     pub model_error: Option<String>,
@@ -143,11 +144,11 @@ impl HarnessJobDetailView {
                 error: None,
             },
             next_run_at: summary.next_run_at,
-            operator_prompt_text: if row.operator_prompt.trim().is_empty() {
-                "—".to_string()
-            } else {
-                row.operator_prompt.clone()
-            },
+            operator_prompt: row.operator_prompt.clone(),
+            operator_prompt_update_action: format!(
+                "/agents/{}/jobs/{}/operator-prompt",
+                row.agent_key, row.id
+            ),
             prompt_preview_text: String::new(),
             prompt_preview_error: None,
             model_error: None,
