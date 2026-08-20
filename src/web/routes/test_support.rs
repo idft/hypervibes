@@ -25,7 +25,10 @@ use crate::{
         },
     },
     harness::backend::{DispatchRequest, DispatchResult, HarnessBackend},
-    hyperliquid::builder_fee::{BuilderFeeCache, BuilderFeeLookup, LookupFuture},
+    hyperliquid::{
+        builder_fee::{BuilderFeeCache, BuilderFeeLookup, LookupFuture},
+        referral::{ReferralExchange, ReferralFuture},
+    },
     memory::CreateMemory,
     opencode::workspace::{
         OpenCodeWorkspaceAgent, WorkspaceGenerationMode, generate_agent_workspace,
@@ -50,6 +53,28 @@ fn test_agent_identifier() -> String {
 }
 
 struct TestBuilderFeeLookup;
+
+struct TestReferralExchange;
+
+impl ReferralExchange for TestReferralExchange {
+    fn referral_state<'a>(&'a self, _user: &'a str) -> ReferralFuture<'a> {
+        Box::pin(async {
+            Ok(serde_json::json!({
+                "referredBy": null,
+                "tokenToState": [{}, {"cumVlm": "0"}]
+            }))
+        })
+    }
+
+    fn relay_set_referrer<'a>(
+        &'a self,
+        _action: &'a serde_json::Value,
+        _nonce: u64,
+        _signature: serde_json::Value,
+    ) -> ReferralFuture<'a> {
+        Box::pin(async { Ok(serde_json::json!({"status": "ok"})) })
+    }
+}
 
 impl BuilderFeeLookup for TestBuilderFeeLookup {
     fn max_builder_fee<'a>(&'a self, _user: &'a str, _builder: &'a str) -> LookupFuture<'a> {
@@ -88,6 +113,30 @@ pub(in crate::web::routes) async fn test_state_with_backend(
 pub(in crate::web::routes) async fn test_state_with_backend_and_shutdown(
     harness_backend: Arc<dyn HarnessBackend>,
     shutdown_signaled: bool,
+) -> Arc<AppState> {
+    test_state_with_backend_shutdown_and_referral(
+        harness_backend,
+        shutdown_signaled,
+        Arc::new(TestReferralExchange),
+    )
+    .await
+}
+
+pub(in crate::web::routes) async fn test_state_with_referral_exchange(
+    referral_exchange: Arc<dyn ReferralExchange>,
+) -> Arc<AppState> {
+    test_state_with_backend_shutdown_and_referral(
+        Arc::new(NoopHarnessBackend),
+        false,
+        referral_exchange,
+    )
+    .await
+}
+
+async fn test_state_with_backend_shutdown_and_referral(
+    harness_backend: Arc<dyn HarnessBackend>,
+    shutdown_signaled: bool,
+    referral_exchange: Arc<dyn ReferralExchange>,
 ) -> Arc<AppState> {
     let pool = Arc::new(test_db::pool().await);
     let cache_dir = std::path::PathBuf::from("/tmp/opencode/hypervibes-routes-cache");
@@ -145,6 +194,7 @@ pub(in crate::web::routes) async fn test_state_with_backend_and_shutdown(
         .unwrap(),
         asset_cache: Arc::new(crate::cache::asset::AssetCache::new(cache_dir).unwrap()),
         builder_fee_cache: Arc::new(BuilderFeeCache::new(Arc::new(TestBuilderFeeLookup))),
+        referral_exchange,
         in_flight: crate::harness::in_flight::InFlightTracker::new(),
         workspace_leases: crate::harness::workspace_lease::WorkspaceLeaseManager::new(),
         conversation_turns: crate::agent_conversations::service::ConversationTurnTracker::default(),

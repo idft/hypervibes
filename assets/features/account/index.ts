@@ -150,6 +150,66 @@ function initTransfers(page: HTMLElement) {
   });
 }
 
+type ReferralSigningPayload = {
+  action: { type: string; code: string };
+  nonce: number;
+  domain: { name: string; version: string; chainId: number; verifyingContract: `0x${string}` };
+  types: { Agent: readonly [{ name: "source"; type: "string" }, { name: "connectionId"; type: "bytes32" }] };
+  primaryType: "Agent";
+  message: { source: string; connectionId: `0x${string}` };
+};
+
+function referralDismissalKey(walletAddress: string) {
+  return `hypervibes:referral-prompt-dismissed:${walletAddress.toLowerCase()}`;
+}
+
+function initReferral(page: HTMLElement) {
+  const modal = page.querySelector<HTMLElement>("[data-referral-modal]");
+  const status = modal?.querySelector<HTMLElement>("[data-referral-status]");
+  const dismiss = modal?.querySelector<HTMLButtonElement>("[data-referral-dismiss]");
+  const claim = modal?.querySelector<HTMLButtonElement>("[data-referral-claim]");
+  const open = page.querySelector<HTMLButtonElement>("[data-referral-open]");
+  const walletAddress = page.dataset.referralWalletAddress;
+  if (!modal || !status || !dismiss || !claim || !open || !walletAddress || modal.dataset.bound === "true") return;
+  modal.dataset.bound = "true";
+  const dismissalKey = referralDismissalKey(walletAddress);
+  const close = () => { modal.classList.add("hidden"); modal.classList.remove("flex"); };
+  const show = () => { status.textContent = ""; modal.classList.remove("hidden"); modal.classList.add("flex"); claim.focus(); };
+  const setSubmitting = (submitting: boolean) => { claim.disabled = submitting; open.disabled = submitting; };
+  const errorMessage = async (response: Response, fallback: string) => {
+    const body = (await response.json().catch(() => null)) as { error?: string } | null;
+    return body?.error ?? fallback;
+  };
+  const submit = async () => {
+    setSubmitting(true);
+    try {
+      status.textContent = "Preparing wallet signature...";
+      const payloadResponse = await fetch("/account/referral/signing-payload", { method: "POST", headers: jsonHeaders() });
+      if (!payloadResponse.ok) throw new Error(await errorMessage(payloadResponse, "Could not confirm referral eligibility."));
+      const payload = (await payloadResponse.json()) as ReferralSigningPayload;
+      const { client } = walletClient();
+      const [account] = await client.requestAddresses();
+      if (!account) throw new Error("No wallet account selected.");
+      status.textContent = "Awaiting wallet signature...";
+      const signature = await client.signTypedData({ account, domain: payload.domain, types: payload.types, primaryType: payload.primaryType, message: payload.message });
+      status.textContent = "Claiming discount...";
+      const claimResponse = await fetch("/account/referral/claim", { method: "POST", headers: jsonHeaders(), body: JSON.stringify({ action: payload.action, nonce: payload.nonce, signature }) });
+      if (!claimResponse.ok) throw new Error(await errorMessage(claimResponse, "Hyperliquid did not apply the discount."));
+      const result = (await claimResponse.json().catch(() => null)) as { redirect?: string } | null;
+      window.location.assign(result?.redirect ?? "/account");
+    } catch (reason) {
+      status.textContent = reason instanceof Error ? reason.message : "Could not claim the discount.";
+      setSubmitting(false);
+    }
+  };
+  open.addEventListener("click", show);
+  claim.addEventListener("click", () => void submit());
+  dismiss.addEventListener("click", () => { window.localStorage.setItem(dismissalKey, "true"); close(); });
+  modal.addEventListener("click", (event) => { if ((event.target as Element | null)?.closest("[data-referral-close]")) close(); });
+  document.addEventListener("keydown", (event) => { if (event.key === "Escape" && !modal.classList.contains("hidden")) close(); });
+  if (page.dataset.referralAutoPrompt === "true" && window.localStorage.getItem(dismissalKey) === null) show();
+}
+
 export function initAccount(root: ParentNode = document) {
-  root.querySelectorAll<HTMLElement>("[data-account-page]").forEach((page) => { initApiWallet(page); initBuilderFee(page); initTransfers(page); });
+  root.querySelectorAll<HTMLElement>("[data-account-page]").forEach((page) => { initApiWallet(page); initBuilderFee(page); initTransfers(page); initReferral(page); });
 }

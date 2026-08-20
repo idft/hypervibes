@@ -11,5 +11,6 @@ pub mod normalize;
 pub mod orders;
 pub mod queries;
 pub mod raw_http;
+pub mod referral;
 pub mod signing;
 pub mod sync_state;

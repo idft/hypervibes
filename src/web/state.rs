@@ -8,9 +8,9 @@ use crate::{
     harness::{
         backend::HarnessBackend, in_flight::InFlightTracker, workspace_lease::WorkspaceLeaseManager,
     },
-    hyperliquid::builder_fee::BuilderFeeCache,
     hyperliquid::live_state::LiveAccountStore,
     hyperliquid::market_data::MarketDataStore,
+    hyperliquid::{builder_fee::BuilderFeeCache, referral::ReferralExchange},
     model_catalog::models_dev::ModelsDevCatalog,
     opencode::{client::OpenCodeClient, workspace_control_client::WorkspaceController},
 };
@@ -40,6 +40,7 @@ pub struct AppState {
     pub model_catalog: Arc<ModelsDevCatalog>,
     pub asset_cache: Arc<AssetCache>,
     pub builder_fee_cache: Arc<BuilderFeeCache>,
+    pub referral_exchange: Arc<dyn ReferralExchange>,
     pub in_flight: InFlightTracker,
     pub workspace_leases: WorkspaceLeaseManager,
     pub conversation_turns: ConversationTurnTracker,

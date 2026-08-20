@@ -7,8 +7,8 @@ use crate::{
 };
 
 /// Server-rendered fragment included by every page via `{% include "layouts/navbar.html" %}`. Holds
-/// the authenticated wallet address and user-visible warning state (Hyperliquid API key,
-/// builder fee approval) used by the top bar without an extra round trip.
+/// the authenticated wallet address and user-visible warning state used by the
+/// top bar without an extra round trip.
 ///
 /// The fragment is rendered by askama's `{% include %}` mechanism: pages that
 /// extend `base.html` declare a `navbar: Navbar` field and the included
@@ -147,6 +147,7 @@ fn encode_uri_component(value: &str) -> String {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NavbarWarning {
+    HyperliquidTradingNotEnabled,
     ApiKeyNotSet,
     ApiKeyExpiringSoon,
     BuilderFeeNotApproved,
@@ -155,6 +156,7 @@ pub enum NavbarWarning {
 impl NavbarWarning {
     pub fn label(self) -> &'static str {
         match self {
+            Self::HyperliquidTradingNotEnabled => "Enable trading on Hyperliquid",
             Self::ApiKeyNotSet => "Hyperliquid API key not set",
             Self::ApiKeyExpiringSoon => "Hyperliquid API key expires soon",
             Self::BuilderFeeNotApproved => "Builder fee not approved",
@@ -248,7 +250,15 @@ struct NavbarRow {
 
 #[cfg(test)]
 mod tests {
-    use super::{Navbar, NavbarAgent};
+    use super::{Navbar, NavbarAgent, NavbarWarning};
+
+    #[test]
+    fn activation_warning_describes_the_required_first_step() {
+        assert_eq!(
+            NavbarWarning::HyperliquidTradingNotEnabled.label(),
+            "Enable trading on Hyperliquid"
+        );
+    }
 
     #[test]
     fn navbar_renders_a_short_wallet_address_and_safe_identicon_uri() {

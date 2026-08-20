@@ -230,6 +230,11 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/account/api-wallet", post(setup_user_api_wallet))
         .route("/account/approve-api-wallet", post(approve_user_api_wallet))
         .route("/account/transfers", post(transfer_between_accounts))
+        .route(
+            "/account/referral/signing-payload",
+            post(referral_signing_payload),
+        )
+        .route("/account/referral/claim", post(claim_referral_discount))
         .with_state(Arc::clone(&state))
         .layer(middleware::from_fn_with_state(
             state,

@@ -1,7 +1,7 @@
 {% extends "layouts/base.html" %}
 {% block title %}Account · HyperVibes{% endblock %}
 {% block content %}
-<div class="mx-auto max-w-3xl space-y-4" data-account-page data-account-address="{{ wallet_address }}" data-main-address="{{ wallet_address }}" data-transfers-enabled="{{ transfers_enabled }}" data-api-wallet-address="{% match api_wallet_address %}{% when Some with (address) %}{{ address }}{% when None %}{% endmatch %}" data-builder-recipient="{{ builder_recipient }}">
+<div class="mx-auto max-w-3xl space-y-4" data-account-page data-account-address="{{ wallet_address }}" data-main-address="{{ wallet_address }}" data-transfers-enabled="{{ transfers_enabled }}" data-api-wallet-address="{% match api_wallet_address %}{% when Some with (address) %}{{ address }}{% when None %}{% endmatch %}" data-builder-recipient="{{ builder_recipient }}" data-referral-auto-prompt="{{ referral_auto_prompt }}" data-referral-wallet-address="{{ referral_wallet_address }}">
   <header class="flex items-start justify-between gap-4">
     <h1 class="flex min-w-0 items-center gap-3 text-3xl font-semibold text-white">
        <img src="{{ navbar.identicon_data_uri() }}" alt="" class="h-8 w-8 shrink-0 rounded-full">
@@ -18,6 +18,14 @@
     </form>
   </header>
 
+  {% if account_registration_required %}
+  <section class="rounded-2xl border border-violet-900/70 bg-violet-950/20 p-6 sm:p-8" data-hyperliquid-registration>
+    <p class="text-sm font-medium uppercase tracking-[0.18em] text-violet-300">Hyperliquid setup</p>
+    <h2 class="mt-3 text-2xl font-semibold text-white">Enable trading on Hyperliquid</h2>
+    <p class="mt-3 max-w-2xl text-sm leading-6 text-zinc-300">Open Hyperliquid with this same wallet, then choose <span class="font-medium text-white">Enable Trading</span> and sign its gas-less transaction. Complete the first deposit Hyperliquid requests to activate the new account, then return here and refresh the page to set up your trading signer, builder-fee approval, and agents.</p>
+    <a href="https://app.hyperliquid.xyz/trade" target="_blank" rel="noopener noreferrer" class="mt-6 inline-flex cursor-pointer items-center gap-2 rounded-full bg-violet-600 px-5 py-2.5 text-sm font-medium text-white hover:bg-violet-500">Open Hyperliquid<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="size-4"><path stroke-linecap="round" stroke-linejoin="round" d="M13.5 6H5.25A2.25 2.25 0 0 0 3 8.25v10.5A2.25 2.25 0 0 0 5.25 21h10.5A2.25 2.25 0 0 0 18 18.75V10.5m-10.5 6L21 3m0 0h-5.25M21 3v5.25"/></svg></a>
+  </section>
+  {% else %}
   <div class="grid gap-3 sm:grid-cols-2">
     <section class="flex flex-col rounded-2xl border border-zinc-800 bg-[#0d0d10] p-6">
       <div class="flex items-start justify-between gap-3">
@@ -39,13 +47,17 @@
         <span class="inline-flex items-center gap-1.5 text-sm font-medium text-amber-400"><span title="{{ api_wallet_state }}" aria-label="{{ api_wallet_state }}" class="inline-flex h-6 w-6 shrink-0 items-center justify-center text-amber-400"><svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="h-5 w-5"><path stroke-linecap="round" stroke-linejoin="round" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126ZM12 15.75h.007v.008H12v-.008Z"/></svg></span>Required</span>
         {% endif %}
       </div>
-      {% if api_wallet_state != "Approved" %}
-      <div data-api-wallet-import class="mt-3 hidden"><label for="api-wallet-private-key" class="sr-only">Private key</label><input id="api-wallet-private-key" form="api-wallet-form" type="password" name="hyperliquid_private_key" autocomplete="off" placeholder="Private key" class="w-full rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2 text-white"></div>
-      {% endif %}
+       {% if account_registration_required %}
+       <p class="mt-4 text-sm leading-6 text-amber-300">Register this wallet with <a href="https://app.hyperliquid.xyz/" target="_blank" rel="noopener noreferrer" class="cursor-pointer underline hover:text-amber-100">Hyperliquid</a>, then refresh this page to set up a trading signer.</p>
+       {% else %}
+       {% if api_wallet_state != "Approved" %}
+       <div data-api-wallet-import class="mt-3 hidden"><label for="api-wallet-private-key" class="sr-only">Private key</label><input id="api-wallet-private-key" form="api-wallet-form" type="password" name="hyperliquid_private_key" autocomplete="off" placeholder="Private key" class="w-full rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2 text-white"></div>
+       {% endif %}
       {% if api_wallet_state == "Approved" %}{% match api_wallet_address %}{% when Some with (address) %}<div class="mt-3"><p class="break-all font-mono text-base text-zinc-200">{{ address }}</p></div>{% when None %}{% endmatch %}{% endif %}
       {% if api_wallet_show_expired %}{% match api_wallet_address %}{% when Some with (address) %}<div class="mt-3 space-y-1"><p class="break-all font-mono text-base text-zinc-200">{{ address }}</p><div class="flex items-center gap-2 text-sm font-semibold text-red-400"><svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="h-4 w-4 shrink-0"><path stroke-linecap="round" stroke-linejoin="round" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126ZM12 15.75h.007v.008H12v-.008Z"/></svg>Expired</div></div>{% when None %}{% endmatch %}{% endif %}
-      <p data-api-wallet-status class="mt-3 text-sm text-zinc-400"></p>
-      <div class="mt-auto pt-4 space-y-3">{% if api_wallet_state != "Approved" %}<form id="api-wallet-form" class="flex items-center gap-4" data-api-wallet-form><button type="button" data-api-wallet-submit class="cursor-pointer rounded-full bg-violet-600 px-5 py-2 text-sm font-medium text-white">Generate API Key</button><button type="button" data-api-wallet-import-toggle aria-expanded="false" class="cursor-pointer text-sm text-zinc-400 underline hover:text-zinc-200">Import existing API key</button></form>{% else %}<button type="button" data-api-wallet-regenerate class="cursor-pointer rounded-full border border-violet-500 px-5 py-2 text-sm font-medium text-violet-300 hover:border-violet-400 hover:bg-violet-950/30">Re-generate API key</button>{% endif %}</div>
+       <p data-api-wallet-status class="mt-3 text-sm text-zinc-400"></p>
+       <div class="mt-auto pt-4 space-y-3">{% if api_wallet_state != "Approved" %}<form id="api-wallet-form" class="flex items-center gap-4" data-api-wallet-form><button type="button" data-api-wallet-submit class="cursor-pointer rounded-full bg-violet-600 px-5 py-2 text-sm font-medium text-white">Generate API Key</button><button type="button" data-api-wallet-import-toggle aria-expanded="false" class="cursor-pointer text-sm text-zinc-400 underline hover:text-zinc-200">Import existing API key</button></form>{% else %}<button type="button" data-api-wallet-regenerate class="cursor-pointer rounded-full border border-violet-500 px-5 py-2 text-sm font-medium text-violet-300 hover:border-violet-400 hover:bg-violet-950/30">Re-generate API key</button>{% endif %}</div>
+       {% endif %}
     </section>
 
     <section class="flex flex-col rounded-2xl border border-zinc-800 bg-[#0d0d10] p-6">
@@ -62,10 +74,21 @@
         {% if builder_fee_approved %}<span class="ml-auto -mr-1 shrink-0 text-sm text-emerald-400">Approved</span>{% endif %}
         {% if builder_fee_approved %}<span title="Builder fee is approved" aria-label="Builder fee is approved" class="inline-flex h-6 w-6 shrink-0 items-center justify-center text-emerald-400"><svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="h-5 w-5"><path stroke-linecap="round" stroke-linejoin="round" d="m4.5 12.75 6 6 9-13.5"/></svg></span>{% else %}<span class="inline-flex items-center gap-1.5 text-sm font-medium text-amber-400"><span title="Builder fee is not approved" aria-label="Builder fee is not approved" class="inline-flex h-6 w-6 shrink-0 items-center justify-center text-amber-400"><svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="h-5 w-5"><path stroke-linecap="round" stroke-linejoin="round" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126ZM12 15.75h.007v.008H12v-.008Z"/></svg></span>Required</span>{% endif %}
       </div>
-      <div class="mt-6 flex items-center gap-3"><input data-builder-fee-input type="number" min="{{ min_fee_bps as f64 / 100.0 }}" max="{{ max_fee_bps as f64 / 100.0 }}" step="0.01" value="{{ fee_bps as f64 / 100.0 }}" class="w-20 shrink-0 rounded-lg border border-zinc-700 bg-zinc-900 px-2 py-1 text-right text-sm font-medium text-zinc-300 [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"><span aria-hidden="true" class="w-6 shrink-0 text-left text-sm text-zinc-300">%</span><input id="builder-fee" data-builder-fee type="range" min="{{ min_fee_bps }}" max="{{ max_fee_bps }}" value="{{ fee_bps }}" class="flex-1 cursor-pointer"><span aria-hidden="true" class="w-20 shrink-0 text-left text-lg">😊</span></div>
-      <div class="mt-auto pt-4 flex items-center gap-3">{% if builder_fee_approved %}<button data-approve-builder-fee class="cursor-pointer rounded-full border border-violet-500 px-5 py-2 text-sm font-medium text-violet-300 hover:border-violet-400 hover:bg-violet-950/30">Change approval</button><button data-cancel-builder-fee class="cursor-pointer rounded-full border border-zinc-600 px-5 py-2 text-sm font-medium text-zinc-300 hover:border-zinc-500 hover:bg-zinc-800/50">Cancel Approval</button>{% else %}<button data-approve-builder-fee class="cursor-pointer rounded-full bg-violet-600 px-5 py-2 text-sm font-medium text-white">Approve</button>{% endif %}<span data-builder-fee-status class="text-sm text-zinc-400"></span></div>
+       {% if account_registration_required %}
+       <p class="mt-6 text-sm leading-6 text-amber-300">Builder-fee approval becomes available after Hyperliquid registration.</p>
+       {% else %}
+       <div class="mt-6 flex items-center gap-3"><input data-builder-fee-input type="number" min="{{ min_fee_bps as f64 / 100.0 }}" max="{{ max_fee_bps as f64 / 100.0 }}" step="0.01" value="{{ fee_bps as f64 / 100.0 }}" class="w-20 shrink-0 rounded-lg border border-zinc-700 bg-zinc-900 px-2 py-1 text-right text-sm font-medium text-zinc-300 [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none"><span aria-hidden="true" class="w-6 shrink-0 text-left text-sm text-zinc-300">%</span><input id="builder-fee" data-builder-fee type="range" min="{{ min_fee_bps }}" max="{{ max_fee_bps }}" value="{{ fee_bps }}" class="flex-1 cursor-pointer"><span aria-hidden="true" class="w-20 shrink-0 text-left text-lg">😊</span></div>
+       <div class="mt-auto pt-4 flex items-center gap-3">{% if builder_fee_approved %}<button data-approve-builder-fee class="cursor-pointer rounded-full border border-violet-500 px-5 py-2 text-sm font-medium text-violet-300 hover:border-violet-400 hover:bg-violet-950/30">Change approval</button><button data-cancel-builder-fee class="cursor-pointer rounded-full border border-zinc-600 px-5 py-2 text-sm font-medium text-zinc-300 hover:border-zinc-500 hover:bg-zinc-800/50">Cancel Approval</button>{% else %}<button data-approve-builder-fee class="cursor-pointer rounded-full bg-violet-600 px-5 py-2 text-sm font-medium text-white">Approve</button>{% endif %}<span data-builder-fee-status class="text-sm text-zinc-400"></span></div>
+       {% endif %}
     </section>
   </div>
+
+  {% if referral_offer_available %}
+  <section class="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-violet-900/70 bg-violet-950/20 px-5 py-4">
+    <div><h2 class="text-sm font-medium text-violet-100">4% Hyperliquid fee discount</h2><p class="mt-1 text-sm text-zinc-400">Available for your first $25M of volume.</p></div>
+    <button type="button" data-referral-open class="cursor-pointer rounded-full border border-violet-500 px-4 py-2 text-sm font-medium text-violet-200 hover:border-violet-400 hover:bg-violet-950/40">Claim discount</button>
+  </section>
+  {% endif %}
 
   <section class="rounded-2xl border border-zinc-800 bg-[#0d0d10] p-6">
     <h2 class="text-lg font-medium text-white">Accounts</h2>
@@ -89,8 +112,22 @@
         <label class="block text-sm text-zinc-400">Amount<div class="mt-2 flex items-center rounded-lg border border-zinc-700 bg-zinc-900"><input required type="text" inputmode="decimal" pattern="[0-9]+(\.[0-9]+)?" data-transfer-amount class="min-w-0 flex-1 bg-transparent px-3 py-2 text-white outline-none" placeholder="0.00"><span class="px-3 text-sm text-zinc-500">USDC</span></div></label>
         <label class="block text-sm text-zinc-400">To<select required data-transfer-to class="mt-2 w-full cursor-pointer rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-2 text-white">{% for account in accounts %}<option value="{{ account.transfer_value }}"{% if loop.index == 2 %} selected{% endif %}>{{ account.name }}</option>{% endfor %}</select></label>
       </div>
-      <div class="flex items-center gap-3"><button type="submit" data-transfer-submit class="cursor-pointer rounded-full bg-violet-600 px-5 py-2 text-sm font-medium text-white disabled:cursor-not-allowed disabled:opacity-50"{% if accounts.len() < 2 %} disabled{% endif %}>Transfer</button><p data-transfer-status aria-live="polite" class="text-sm text-zinc-400">{% if accounts.len() < 2 %}At least two accounts are required to transfer funds.{% endif %}</p></div>
+      <div class="flex items-center gap-3"><button type="submit" data-transfer-submit class="cursor-pointer rounded-full bg-violet-600 px-5 py-2 text-sm font-medium text-white disabled:cursor-not-allowed disabled:opacity-50"{% if accounts.len() < 2 %} disabled{% endif %}>Transfer</button><p data-transfer-status aria-live="polite" class="text-sm text-zinc-400">{% if account_registration_required %}Register with Hyperliquid before transferring funds.{% else %}{% if accounts.len() < 2 %}At least two accounts are required to transfer funds.{% endif %}{% endif %}</p></div>
     </form>
   </section>
+
+  {% if referral_offer_available %}
+  <div data-referral-modal class="fixed inset-0 z-50 hidden items-start justify-center overflow-y-auto p-4 sm:items-center" aria-modal="true" aria-labelledby="referral-title" role="dialog">
+    <button type="button" class="absolute inset-0 cursor-pointer bg-black/70 backdrop-blur-sm" aria-label="Close referral discount dialog" data-referral-close></button>
+    <div class="relative my-8 w-full max-w-lg rounded-3xl border border-zinc-800 bg-[#0d0d10] p-6 shadow-2xl shadow-black/50">
+      <button type="button" class="absolute right-4 top-4 cursor-pointer rounded-full p-2 text-zinc-500 hover:bg-zinc-900 hover:text-zinc-200" aria-label="Close referral discount dialog" data-referral-close><svg class="size-5" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true"><path fill-rule="evenodd" d="M4.22 4.22a.75.75 0 0 1 1.06 0L10 8.94l4.72-4.72a.75.75 0 1 1 1.06 1.06L11.06 10l4.72 4.72a.75.75 0 1 1-1.06 1.06L10 11.06l-4.72 4.72a.75.75 0 0 1-1.06-1.06L8.94 10 4.22 5.28a.75.75 0 0 1 0-1.06Z" clip-rule="evenodd" /></svg></button>
+      <h2 id="referral-title" class="pr-10 text-xl font-semibold text-white">Claim your 4% fee discount</h2>
+      <div class="mt-4 space-y-3 text-sm leading-6 text-zinc-400"><p>Your account can receive a 4% Hyperliquid fee discount for its first $25M of volume.</p><p>Claiming needs a wallet signature, but it does not transfer funds or spend ETH.</p><p>This can only be claimed before your account exceeds $10,000 cumulative volume or uses another referral code.</p></div>
+      <p data-referral-status aria-live="polite" class="mt-4 min-h-5 text-sm text-zinc-300"></p>
+      <div class="mt-6 flex flex-col-reverse gap-3 sm:flex-row sm:justify-end"><button type="button" data-referral-dismiss class="cursor-pointer rounded-full border border-zinc-700 px-4 py-2 text-sm font-medium text-zinc-300 hover:border-zinc-500 hover:text-white">No thanks</button><button type="button" data-referral-claim class="cursor-pointer rounded-full bg-violet-600 px-5 py-2 text-sm font-medium text-white hover:bg-violet-500 disabled:cursor-not-allowed disabled:opacity-50">Claim discount</button></div>
+    </div>
+  </div>
+  {% endif %}
+  {% endif %}
 </div>
 {% endblock %}

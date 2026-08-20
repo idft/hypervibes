@@ -20,7 +20,10 @@ use crate::{
         },
     },
     harness::backend::{DispatchRequest, DispatchResult, HarnessBackend},
-    hyperliquid::builder_fee::{BuilderFeeCache, BuilderFeeLookup, LookupFuture},
+    hyperliquid::{
+        builder_fee::{BuilderFeeCache, BuilderFeeLookup, LookupFuture},
+        referral::HyperliquidReferralExchange,
+    },
     test_db,
     web::{AppState, api, run_detail_events::RunDetailEventHub, ui_events::UiEventHub},
 };
@@ -96,6 +99,7 @@ pub async fn test_state() -> Arc<AppState> {
         .unwrap(),
         asset_cache: Arc::new(crate::cache::asset::AssetCache::new(cache_dir).unwrap()),
         builder_fee_cache: Arc::new(BuilderFeeCache::new(Arc::new(TestBuilderFeeLookup))),
+        referral_exchange: Arc::new(HyperliquidReferralExchange::mainnet()),
         in_flight: crate::harness::in_flight::InFlightTracker::new(),
         workspace_leases: crate::harness::workspace_lease::WorkspaceLeaseManager::new(),
         conversation_turns: crate::agent_conversations::service::ConversationTurnTracker::default(),
