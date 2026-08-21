@@ -39,7 +39,7 @@ fn agents_page_renders_base_layout_and_status_box() {
     assert!(!rendered.contains(">opencode<"));
     assert!(rendered.contains("<th class=\"px-5 py-3 font-medium\"></th>"));
     assert!(rendered.contains("M10 4v12m-6-6h12"));
-    assert!(rendered.contains("Ready for agent trading"));
+    assert!(rendered.contains("Enabled"));
 }
 
 #[test]
@@ -652,7 +652,6 @@ fn new_job_page_renders_agent_navbar_with_jobs_active() {
         agent_tabs_use_htmx: false,
         agent,
         form: CreateHarnessJobFormValues {
-            trigger_type: "candle_closed".to_string(),
             job_kind: "analysis".to_string(),
             timeframe: "15m".to_string(),
             timeout_seconds: "900".to_string(),
@@ -681,8 +680,12 @@ fn new_job_page_renders_agent_navbar_with_jobs_active() {
             show_label: true,
             auto_submit: false,
             use_modal: false,
+            submit_on_save: true,
             lazy_options_url: None,
         },
+        market_analysis_available: false,
+        analysis_coding_available: false,
+        show_timeframe: true,
         errors: Vec::new(),
         current_path: "/agents/test-agent/jobs/new".to_string(),
         navbar: Navbar::default(),

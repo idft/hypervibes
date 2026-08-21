@@ -30,7 +30,7 @@
     <input type="hidden" id="{{ model_picker.input_id }}" name="{{ model_picker.input_name }}" value="{{ model_picker.selected_value }}">
     <input type="hidden" id="{{ model_picker.variant_input_id }}" name="{{ model_picker.variant_input_name }}" value="{{ model_picker.selected_variant }}">
     {% if model_picker.use_modal %}
-    <div class="mt-2" data-model-picker data-model-picker-mode="modal">
+    <div class="mt-2" data-model-picker data-model-picker-mode="modal"{% if model_picker.submit_on_save %} data-model-picker-submit-on-save="true"{% endif %}>
         <button type="button" class="flex w-full cursor-pointer items-center justify-between gap-3 rounded-2xl border border-zinc-800 bg-zinc-950/40 px-4 py-3 text-left text-sm text-zinc-200" data-model-picker-open>
             <span class="flex min-w-0 items-center gap-3">
                 <span class="flex h-8 w-8 items-center justify-center rounded-lg border border-zinc-700 bg-zinc-900 text-xs text-zinc-400" data-model-picker-default-badge>OC</span>

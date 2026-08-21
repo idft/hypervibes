@@ -168,3 +168,28 @@ describe("job detail modals", () => {
     expect(document.activeElement).toBe(trigger);
   });
 });
+
+describe("new job form", () => {
+  it("only requires a timeframe for candle-close jobs", () => {
+    document.body.innerHTML = `
+      <form data-new-job-form>
+        <select data-new-job-kind>
+          <option value="analysis" selected>Analysis</option>
+          <option value="market_analysis">Market analysis</option>
+        </select>
+        <div data-new-job-timeframe><input data-new-job-timeframe-input required></div>
+      </form>
+    `;
+
+    initAgentPage();
+    const kind = document.querySelector<HTMLSelectElement>("[data-new-job-kind]");
+    const timeframe = document.querySelector<HTMLElement>("[data-new-job-timeframe]");
+    const input = document.querySelector<HTMLInputElement>("[data-new-job-timeframe-input]");
+
+    kind!.value = "market_analysis";
+    kind!.dispatchEvent(new Event("change"));
+
+    expect(timeframe?.classList.contains("hidden")).toBe(true);
+    expect(input?.required).toBe(false);
+  });
+});

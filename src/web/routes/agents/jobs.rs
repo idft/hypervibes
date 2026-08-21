@@ -35,9 +35,9 @@ use crate::{
     },
     harness::{
         model::{
-            JOB_KIND_ANALYSIS, JOB_KIND_ANALYSIS_CODING, JOB_KIND_MARKET_ANALYSIS,
-            JOB_KIND_TRADING, TRIGGER_TYPE_ANALYSIS_BATCH_COMPLETED, TRIGGER_TYPE_CANDLE_CLOSED,
-            TRIGGER_TYPE_DAILY_REVIEW_COMPLETED,
+            JOB_KIND_ANALYSIS, JOB_KIND_ANALYSIS_CODING, JOB_KIND_DAILY_REVIEW,
+            JOB_KIND_MARKET_ANALYSIS, JOB_KIND_TRADING, TRIGGER_TYPE_ANALYSIS_BATCH_COMPLETED,
+            TRIGGER_TYPE_CANDLE_CLOSED, TRIGGER_TYPE_DAILY_REVIEW_COMPLETED,
         },
         scheduler::{
             DispatchRequestInputs, build_dispatch_request, dispatch_analysis_batch_completed_event,
@@ -380,8 +380,6 @@ async fn load_accumulated_learnings(
 #[derive(Debug, Clone, Default, Deserialize)]
 pub(in crate::web::routes) struct CreateHarnessJobForm {
     #[serde(default)]
-    pub trigger_type: String,
-    #[serde(default)]
     pub job_kind: String,
     #[serde(default)]
     pub timeframe: String,
@@ -411,7 +409,6 @@ impl CreateHarnessJobForm {
     fn defaults() -> Self {
         Self {
             job_kind: JOB_KIND_ANALYSIS.to_string(),
-            trigger_type: TRIGGER_TYPE_CANDLE_CLOSED.to_string(),
             timeframe: "15m".to_string(),
             timeout_seconds: "900".to_string(),
             enabled: Some("on".to_string()),
@@ -425,7 +422,6 @@ impl CreateHarnessJobForm {
 
     fn as_template_values(&self) -> CreateHarnessJobFormValues {
         CreateHarnessJobFormValues {
-            trigger_type: self.trigger_type.clone(),
             job_kind: self.job_kind.clone(),
             timeframe: self.timeframe.clone(),
             timeout_seconds: self.timeout_seconds.clone(),
@@ -440,27 +436,17 @@ impl CreateHarnessJobForm {
         let mut errors = Vec::new();
 
         let job_kind = self.job_kind.trim();
-        let trigger_type = self.trigger_type.trim();
-        let candle = matches!(
-            job_kind,
-            JOB_KIND_ANALYSIS | JOB_KIND_TRADING | crate::harness::model::JOB_KIND_DAILY_REVIEW
-        ) && trigger_type == TRIGGER_TYPE_CANDLE_CLOSED;
-        let event = matches!(
-            (job_kind, trigger_type),
-            (
-                JOB_KIND_MARKET_ANALYSIS,
-                TRIGGER_TYPE_ANALYSIS_BATCH_COMPLETED
-            ) | (
-                JOB_KIND_ANALYSIS_CODING,
-                TRIGGER_TYPE_DAILY_REVIEW_COMPLETED
-            )
-        );
-        if !candle && !event {
-            errors
-                .push("Choose one of the supported job kind and trigger combinations.".to_string());
-        }
+        let Some(trigger_type) = trigger_for_job_kind(job_kind) else {
+            errors.push("Choose a supported job kind.".to_string());
+            return Err(errors);
+        };
+        let candle = trigger_type == TRIGGER_TYPE_CANDLE_CLOSED;
 
-        let timeframe = self.timeframe.trim().to_string();
+        let timeframe = if candle {
+            self.timeframe.trim().to_string()
+        } else {
+            String::new()
+        };
         if candle && parse_timeframe_seconds(&timeframe).is_err() {
             errors.push(
                 "Timeframe must be a positive integer with unit m, h, or d (e.g. 15m, 1h, 1d)."
@@ -500,6 +486,61 @@ impl CreateHarnessJobForm {
         }
     }
 }
+
+fn trigger_for_job_kind(job_kind: &str) -> Option<&'static str> {
+    match job_kind {
+        JOB_KIND_ANALYSIS | JOB_KIND_TRADING | JOB_KIND_DAILY_REVIEW => {
+            Some(TRIGGER_TYPE_CANDLE_CLOSED)
+        }
+        JOB_KIND_MARKET_ANALYSIS => Some(TRIGGER_TYPE_ANALYSIS_BATCH_COMPLETED),
+        JOB_KIND_ANALYSIS_CODING => Some(TRIGGER_TYPE_DAILY_REVIEW_COMPLETED),
+        _ => None,
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(in crate::web::routes) struct NewJobKindAvailability {
+    market_analysis: bool,
+    analysis_coding: bool,
+}
+
+impl NewJobKindAvailability {
+    fn singleton_exists(self, job_kind: &str) -> bool {
+        match job_kind {
+            JOB_KIND_MARKET_ANALYSIS => !self.market_analysis,
+            JOB_KIND_ANALYSIS_CODING => !self.analysis_coding,
+            _ => false,
+        }
+    }
+}
+
+async fn load_new_job_kind_availability(
+    state: &Arc<AppState>,
+    agent_key: &str,
+) -> anyhow::Result<NewJobKindAvailability> {
+    let jobs = store::list_agent_jobs(&state.db_pool, agent_key).await?;
+    Ok(NewJobKindAvailability {
+        market_analysis: !jobs
+            .iter()
+            .any(|job| job.job_kind == JOB_KIND_MARKET_ANALYSIS),
+        analysis_coding: !jobs
+            .iter()
+            .any(|job| job.job_kind == JOB_KIND_ANALYSIS_CODING),
+    })
+}
+
+fn singleton_job_exists_message(job_kind: &str) -> Option<String> {
+    match job_kind {
+        JOB_KIND_MARKET_ANALYSIS => {
+            Some("A market analysis job already exists for this agent.".to_string())
+        }
+        JOB_KIND_ANALYSIS_CODING => {
+            Some("An analysis coding job already exists for this agent.".to_string())
+        }
+        _ => None,
+    }
+}
+
 pub(in crate::web::routes) async fn agents_new_job(
     State(state): State<Arc<AppState>>,
     user: AuthenticatedUser,
@@ -509,11 +550,13 @@ pub(in crate::web::routes) async fn agents_new_job(
         return Ok((StatusCode::NOT_FOUND, "agent not found").into_response());
     };
     let picker = load_model_picker_context(&state, &agent).await;
+    let availability = load_new_job_kind_availability(&state, &agent_key).await?;
     let navbar = load_selected_agent_navbar(&state, user.id, &agent).await?.0;
     Ok(render_new_job_form(
         agent,
         CreateHarnessJobForm::defaults().as_template_values(),
         picker,
+        availability,
         Vec::new(),
         StatusCode::OK,
         navbar,
@@ -529,6 +572,7 @@ pub(in crate::web::routes) async fn agents_create_job(
         return Ok((StatusCode::NOT_FOUND, "agent not found").into_response());
     };
     let navbar = load_selected_agent_navbar(&state, user.id, &agent).await?.0;
+    let availability = load_new_job_kind_availability(&state, &agent_key).await?;
     let validated = match form.validate() {
         Ok(validated) => validated,
         Err(errors) => {
@@ -537,12 +581,29 @@ pub(in crate::web::routes) async fn agents_create_job(
                 agent,
                 form.as_template_values(),
                 picker,
+                availability,
                 errors,
                 StatusCode::UNPROCESSABLE_ENTITY,
                 navbar.clone(),
             ));
         }
     };
+
+    if availability.singleton_exists(&validated.job_kind) {
+        let picker = load_model_picker_context(&state, &agent).await;
+        return Ok(render_new_job_form(
+            agent,
+            form.as_template_values(),
+            picker,
+            availability,
+            vec![
+                singleton_job_exists_message(&validated.job_kind)
+                    .expect("only singleton jobs can be unavailable"),
+            ],
+            StatusCode::UNPROCESSABLE_ENTITY,
+            navbar.clone(),
+        ));
+    }
 
     let validated_model_selection = match validate_model_selection_for_agent(
         &state,
@@ -559,6 +620,7 @@ pub(in crate::web::routes) async fn agents_create_job(
                 agent,
                 form.as_template_values(),
                 picker,
+                availability,
                 vec![error],
                 StatusCode::UNPROCESSABLE_ENTITY,
                 navbar.clone(),
@@ -606,7 +668,11 @@ pub(in crate::web::routes) async fn agents_create_job(
         .await
     };
     if let Err(error) = result {
+        let singleton_message = singleton_job_exists_message(&validated.job_kind);
         let errors = match job_unique_violation_message(&error) {
+            Some(_) if singleton_message.is_some() => {
+                vec![singleton_message.expect("singleton conflict message must exist")]
+            }
             Some(message) => vec![message],
             None => return Err(AppError(error)),
         };
@@ -615,6 +681,7 @@ pub(in crate::web::routes) async fn agents_create_job(
             agent,
             form.as_template_values(),
             picker,
+            availability,
             errors,
             StatusCode::UNPROCESSABLE_ENTITY,
             navbar,
@@ -1083,29 +1150,36 @@ pub(in crate::web::routes) fn render_new_job_form(
     agent: crate::agents::model::AgentDetailRow,
     form: CreateHarnessJobFormValues,
     picker: ModelPickerContext,
+    availability: NewJobKindAvailability,
     errors: Vec<String>,
     status: StatusCode,
     navbar: crate::web::templates::Navbar,
 ) -> Response {
     let current_path = format!("/agents/{}/jobs/new", agent.agent_key);
-    let model_picker = build_model_picker_view(
+    let mut model_picker = build_model_picker_view(
         "job-model-selection",
         &form.model_selection,
         (!form.model_variant.trim().is_empty()).then_some(form.model_variant.as_str()),
         picker,
     );
+    model_picker.use_modal = true;
+    model_picker.submit_on_save = false;
     let tabs = build_agent_show_tabs(&agent, AgentShowTab::Jobs);
     let navbar = navbar.with_selected_agent(
         agent.agent_key.clone(),
         agent.display_name.clone(),
         agent.enabled,
     );
+    let show_timeframe = trigger_for_job_kind(&form.job_kind) == Some(TRIGGER_TYPE_CANDLE_CLOSED);
     let template = AgentJobNewPageTemplate {
         agent,
         tabs,
         agent_tabs_use_htmx: false,
         form,
         model_picker,
+        market_analysis_available: availability.market_analysis,
+        analysis_coding_available: availability.analysis_coding,
+        show_timeframe,
         errors,
         current_path,
         navbar,

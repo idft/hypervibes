@@ -678,8 +678,13 @@ async fn new_job_page_renders_for_opencode_agent() {
     assert!(text.contains("Create job"));
     assert!(!text.contains("name=\"job_key\""));
     assert!(text.contains("name=\"job_kind\""));
+    assert!(!text.contains("name=\"trigger_type\""));
     assert!(text.contains("name=\"timeframe\""));
     assert!(text.contains("name=\"timeout_seconds\""));
+    assert!(text.contains("data-model-picker-mode=\"modal\""));
+    assert!(!text.contains("data-model-picker-submit-on-save"));
+    assert!(!text.contains("value=\"market_analysis\""));
+    assert!(!text.contains("value=\"analysis_coding\""));
     assert!(text.contains("Additional Instructions"));
     assert!(!text.contains("Operator prompt"));
 }
@@ -698,7 +703,7 @@ async fn post_job_creates_new_job_and_redirects() {
                 .uri(format!("/agents/{agent_key}/jobs"))
                 .header("content-type", "application/x-www-form-urlencoded")
                 .body(Body::from(
-                    "trigger_type=candle_closed&job_kind=analysis&timeframe=4h&timeout_seconds=600&model_selection=&operator_prompt=Check+higher+timeframe+structure",
+                    "trigger_type=daily_review_completed&job_kind=analysis&timeframe=4h&timeout_seconds=600&model_selection=&operator_prompt=Check+higher+timeframe+structure",
                 ))
                 .unwrap(),
         )
@@ -722,12 +727,68 @@ async fn post_job_creates_new_job_and_redirects() {
         .find(|row| row.job_key == "analysis-4h")
         .expect("custom job present");
     assert_eq!(job.job_kind, JOB_KIND_ANALYSIS);
+    assert_eq!(job.trigger_type, "candle_closed");
     assert!(!job.enabled);
     assert_eq!(job.timeframe.as_deref(), Some("4h"));
     assert_eq!(job.timeout_seconds, 600);
     assert_eq!(job.model_provider_id.as_deref(), None);
     assert_eq!(job.model_id.as_deref(), None);
     assert_eq!(job.operator_prompt, "Check higher timeframe structure");
+}
+#[tokio::test]
+async fn post_job_recreates_missing_singleton_event_job() {
+    let state = test_state().await;
+    let pool = state.db_pool.clone();
+    let (agent_key, _wallet_address) = insert_test_opencode_agent(&state)
+        .await
+        .expect("insert opencode agent");
+
+    sqlx::query("DELETE FROM harness_jobs WHERE agent_key = $1 AND job_kind = 'market_analysis'")
+        .bind(&agent_key)
+        .execute(&pool)
+        .await
+        .expect("delete default market analysis job");
+
+    let new_job_page = router(state.clone())
+        .oneshot(
+            Request::builder()
+                .uri(format!("/agents/{agent_key}/jobs/new"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(new_job_page.status(), StatusCode::OK);
+    assert!(
+        response_text(new_job_page)
+            .await
+            .contains("value=\"market_analysis\"")
+    );
+
+    let response = router(state.clone())
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/agents/{agent_key}/jobs"))
+                .header("content-type", "application/x-www-form-urlencoded")
+                .body(Body::from(
+                    "job_kind=market_analysis&timeout_seconds=600&model_selection=",
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+    let jobs = crate::harness::store::list_agent_jobs(&pool, &agent_key)
+        .await
+        .expect("list jobs");
+    let job = jobs
+        .iter()
+        .find(|row| row.job_kind == "market_analysis")
+        .expect("market analysis job recreated");
+    assert_eq!(job.trigger_type, "analysis_batch_completed");
+    assert_eq!(job.timeframe, None);
 }
 #[tokio::test]
 async fn post_toggle_all_jobs_updates_all_jobs() {

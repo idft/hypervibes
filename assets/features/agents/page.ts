@@ -229,7 +229,23 @@ function initWorkspaceModal(root: ParentNode) {
   sync();
 }
 
-export function initAgentPage(root: ParentNode = document) { initAgentCreation(root); initPromptEditor(root); initInstrumentSelectors(root); initClickableRows(root); initInlineEditors(root); initJobDetailModals(root); initWorkspaceModal(root); }
+function initNewJobForm(root: ParentNode) {
+  const form = root.querySelector<HTMLElement>("[data-new-job-form]");
+  const kind = form?.querySelector<HTMLSelectElement>("[data-new-job-kind]");
+  const timeframe = form?.querySelector<HTMLElement>("[data-new-job-timeframe]");
+  const timeframeInput = form?.querySelector<HTMLInputElement>("[data-new-job-timeframe-input]");
+  if (!form || !kind || !timeframe || !timeframeInput || form.dataset.newJobBound === "true") return;
+  form.dataset.newJobBound = "true";
+  const sync = () => {
+    const candleJob = ["analysis", "trading", "daily_review"].includes(kind.value);
+    timeframe.classList.toggle("hidden", !candleJob);
+    timeframeInput.required = candleJob;
+  };
+  kind.addEventListener("change", sync);
+  sync();
+}
+
+export function initAgentPage(root: ParentNode = document) { initAgentCreation(root); initPromptEditor(root); initInstrumentSelectors(root); initClickableRows(root); initInlineEditors(root); initJobDetailModals(root); initWorkspaceModal(root); initNewJobForm(root); }
 export function installAgentPageLifecycle() {
   installAgentModals();
   document.addEventListener("click", (event) => {

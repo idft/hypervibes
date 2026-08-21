@@ -31,34 +31,28 @@
     </div>
     {% endif %}
 
-    <form method="post" action="/agents/{{ agent.agent_key }}/jobs" class="mt-6 space-y-6">
+    <form method="post" action="/agents/{{ agent.agent_key }}/jobs" class="mt-6 space-y-6" data-new-job-form>
         <div>
             <label for="job_kind" class="block text-sm font-medium text-zinc-300">Job kind</label>
-            <select id="job_kind" name="job_kind" required
+            <select id="job_kind" name="job_kind" required data-new-job-kind
                 class="mt-2 block w-full rounded-xl border border-zinc-800 bg-zinc-950 px-3 py-2 text-sm text-white focus:border-zinc-600 focus:outline-none">
                 <option value="analysis" {% if form.job_kind == "analysis" %}selected{% endif %}>analysis</option>
                 <option value="trading" {% if form.job_kind == "trading" %}selected{% endif %}>trading</option>
                 <option value="daily_review" {% if form.job_kind == "daily_review" %}selected{% endif %}>daily review</option>
+                {% if market_analysis_available %}
                 <option value="market_analysis" {% if form.job_kind == "market_analysis" %}selected{% endif %}>market analysis</option>
+                {% endif %}
+                {% if analysis_coding_available %}
                 <option value="analysis_coding" {% if form.job_kind == "analysis_coding" %}selected{% endif %}>analysis coding</option>
+                {% endif %}
             </select>
             <p class="mt-1 text-xs text-zinc-500">Controls which OpenCode agent and slash command are dispatched.</p>
         </div>
 
-        <div>
-            <label for="trigger_type" class="block text-sm font-medium text-zinc-300">Trigger</label>
-            <select id="trigger_type" name="trigger_type" required class="mt-2 block w-full rounded-xl border border-zinc-800 bg-zinc-950 px-3 py-2 text-sm text-white focus:border-zinc-600 focus:outline-none">
-                <option value="candle_closed" {% if form.trigger_type == "candle_closed" %}selected{% endif %}>At candle close</option>
-                <option value="analysis_batch_completed" {% if form.trigger_type == "analysis_batch_completed" %}selected{% endif %}>After analysis batch completes</option>
-                <option value="daily_review_completed" {% if form.trigger_type == "daily_review_completed" %}selected{% endif %}>After qualifying daily review completes</option>
-            </select>
-            <p class="mt-1 text-xs text-zinc-500">Only supported kind and trigger pairs are accepted.</p>
-        </div>
-
         <div class="grid gap-6 sm:grid-cols-2">
-            <div>
+            <div data-new-job-timeframe{% if !show_timeframe %} class="hidden"{% endif %}>
                 <label for="timeframe" class="block text-sm font-medium text-zinc-300">Timeframe</label>
-                <input type="text" id="timeframe" name="timeframe" value="{{ form.timeframe }}" required placeholder="15m" list="timeframe-options"
+                <input type="text" id="timeframe" name="timeframe" value="{{ form.timeframe }}"{% if show_timeframe %} required{% endif %} placeholder="15m" list="timeframe-options" data-new-job-timeframe-input
                     class="mt-2 block w-full rounded-xl border border-zinc-800 bg-zinc-950 px-3 py-2 text-sm text-white placeholder-zinc-600 focus:border-zinc-600 focus:outline-none">
                 <datalist id="timeframe-options">
                     <option value="1m"></option>

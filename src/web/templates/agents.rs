@@ -111,7 +111,7 @@ impl AgentListEntry {
         }
         if self.readiness.is_ready_for_agent_trading() {
             return AgentListStatusView {
-                label: "Ready for agent trading",
+                label: "Enabled",
                 class: "border-emerald-900/60 bg-emerald-950/30 text-emerald-300",
             };
         }
@@ -206,7 +206,6 @@ pub struct AgentTradingAccountChoicesTemplate {
 
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct CreateHarnessJobFormValues {
-    pub trigger_type: String,
     pub job_kind: String,
     pub timeframe: String,
     pub timeout_seconds: String,
@@ -240,6 +239,7 @@ pub struct ModelPickerView {
     pub show_label: bool,
     pub auto_submit: bool,
     pub use_modal: bool,
+    pub submit_on_save: bool,
     pub lazy_options_url: Option<String>,
 }
 
@@ -309,6 +309,9 @@ pub struct AgentJobNewPageTemplate {
     pub agent_tabs_use_htmx: bool,
     pub form: CreateHarnessJobFormValues,
     pub model_picker: ModelPickerView,
+    pub market_analysis_available: bool,
+    pub analysis_coding_available: bool,
+    pub show_timeframe: bool,
     pub errors: Vec<String>,
     pub current_path: String,
     pub navbar: Navbar,

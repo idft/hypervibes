@@ -174,7 +174,7 @@ function initPicker(picker: HTMLElement) {
     }
     updateSelected(selectedOption(draftModel), draftVariant);
     close();
-    form?.requestSubmit();
+    if (picker.dataset.modelPickerSubmitOnSave === "true") form?.requestSubmit();
   });
   form?.addEventListener("submit", (event) => {
     if (selectionIsValid()) return;
