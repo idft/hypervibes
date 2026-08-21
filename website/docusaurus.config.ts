@@ -4,10 +4,10 @@ import type * as Preset from '@docusaurus/preset-classic';
 const config: Config = {
   title: 'HyperVibes',
   tagline: 'OpenCode-backed trading agents for Hyperliquid',
-  favicon: 'img/favicon.svg',
+  favicon: 'img/favicon.png',
   url: 'https://hypervibes.ai',
   baseUrl: '/',
-  organizationName: 'johnkozan',
+  organizationName: 'idft',
   projectName: 'hypervibes',
   onBrokenLinks: 'throw',
   clientModules: ['./src/clientModules/goatcounter.ts'],
