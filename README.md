@@ -48,3 +48,22 @@ local configuration and `docs/Testing.md` for test database details.
 ## License
 
 MIT
+
+## Disclaimer
+
+HyperVibes is open-source software that can enable agents to submit orders to
+Hyperliquid using user-authorized signing keys. It is not financial,
+investment, trading, legal, or tax advice, and is not a broker, dealer,
+exchange, custodian, or financial intermediary.
+
+Trading digital assets and derivatives involves substantial risk, including the
+possible loss of all capital. AI-generated analysis, automated strategies, and
+software outputs may be incorrect or unsuitable for any purpose. You are solely
+responsible for your trading decisions, agent configuration, credentials,
+monitoring, and compliance with applicable laws and regulations.
+
+The software and related materials are provided "as is" without warranties of
+any kind. To the maximum extent permitted by law, the authors and copyright
+holders are not liable for losses, damages, or expenses arising from use of the
+software, including trading losses, software defects, configuration errors,
+service outages, or third-party failures.
