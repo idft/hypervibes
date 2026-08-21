@@ -1,4 +1,4 @@
-# HyperVibes V2
+# HyperVibes
 
 This is a framework for allowing OpenCode-backed AI agents to trade crypto on Hyperliquid exchange.
 
