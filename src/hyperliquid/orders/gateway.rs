@@ -1700,7 +1700,7 @@ mod tests {
 
     // ---- test helpers -----------------------------------------------------
 
-    fn sample_agent(suffix: &str) -> AgentRegistryRow {
+    fn deterministic_private_key(suffix: &str) -> String {
         let private_key_raw = format!("deterministic-{suffix}");
         let mut bytes = [0u8; 32];
         let raw = private_key_raw.as_bytes();
@@ -1710,7 +1710,11 @@ mod tests {
             }
             bytes[i] = *b;
         }
-        let private_key = format!("0x{}", hex::encode(bytes));
+        format!("0x{}", hex::encode(bytes))
+    }
+
+    fn sample_agent(suffix: &str) -> AgentRegistryRow {
+        let private_key = deterministic_private_key(suffix);
         let wallet = derive_wallet_address(&private_key).unwrap();
         let now = Utc::now();
         let ts = now.timestamp_millis();
@@ -2257,9 +2261,9 @@ mod tests {
         let (b_key, b_account) = seed(&pool, "fee-owner-b").await;
         seed_instrument(&pool, "BTC", 0, 5).await;
         let other_user = Uuid::new_v4();
-        let other_private_key = "59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d";
+        let other_private_key = deterministic_private_key("fee-owner-other");
         let other_signer_address =
-            derive_wallet_address(other_private_key).expect("signer address");
+            derive_wallet_address(&other_private_key).expect("signer address");
         let other_encryption_key = EncryptionKey::new(
             "test",
             [
@@ -2268,7 +2272,7 @@ mod tests {
             ],
         );
         let other_ciphertext =
-            encrypt(&other_encryption_key, other_private_key).expect("encrypt signer");
+            encrypt(&other_encryption_key, &other_private_key).expect("encrypt signer");
         sqlx::query(
             "INSERT INTO users (id, wallet_address, api_wallet_address,
                                 hyperliquid_private_key_ciphertext, hyperliquid_private_key_key_id,
