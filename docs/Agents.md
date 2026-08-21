@@ -1,209 +1,77 @@
-# Agents Module
+---
+slug: /concepts/agents
+---
 
-Related docs:
+# Agents
 
-- `README.md`
-- `OpenCode.md`
-- `Memory.md`
-- `Hyperliquid.md`
+## Configure and operate an agent
 
-## Goal
+An agent is an isolated HyperVibes configuration with one assigned trading
+account, selected perpetual instruments, strategy prompts, an OpenCode
+workspace, and scheduled jobs.
 
-The agents module is the system of record for:
+Before an agent can trade on a schedule, it needs:
 
-- which trading agents exist
-- which OpenCode workspace each agent owns
-- which Hyperliquid account each agent controls
-- which instruments each agent may trade
-- which strategy prompts and API credentials belong to the agent
+- an active, enabled agent with an assigned main account or sub-account
+- at least one selected perpetual instrument
+- at least one enabled analysis schedule
+- an enabled market-analysis follow-up job
+- an enabled trading schedule
+- an explicit model selection for each enabled scheduled job
 
-The agent API key is the ownership boundary for agent-facing account, memory,
-and order operations. Hyperliquid signing keys are encrypted at rest and remain
-server-owned.
+HyperVibes reports incomplete setups as `Paused` or `Setup required`. It reports
+`Enabled` only after the required configuration is in place.
 
-## Current Data Model
+The web interface separates analysis, market analysis, trading, and daily
+review into durable jobs. Job runs record whether work is scheduled, running,
+completed, or failed. Market analysis creates the execution handoff for
+trading; trading ordinarily uses that handoff rather than independently
+developing a new market thesis. The memory system preserves analyses,
+handoffs, reviews, and learnings across runs.
 
-The current implementation keeps the registry intentionally small:
+The web interface shows positions, orders, transactions, memory, jobs, and
+conversations. Missing or stale live account data is marked unavailable, and
+new agent-originated exposure fails closed until the required live streams are
+current. Before enabling live trading, verify the account, trading signer,
+instruments, prompts, models, schedules, and current account state. Review runs
+and positions continuously, especially after provider changes or configuration
+edits.
 
-- one `agents` row per trading agent
-- one `agent_instruments` mapping table for selected markets
-- one `agent_strategy_prompts` row per `(agent_key, prompt_kind)`
+## Workspace
 
-Important `agents` fields:
+Every agent receives a generated workspace with an OpenCode configuration,
+agent instructions, and an MCP adapter. The adapter uses an agent-scoped
+HyperVibes API credential. The generated workspace `.env` is backend-owned
+state; do not read or modify it. The workspace does not receive the user's
+Hyperliquid private key.
 
-- `agent_key`
-- `display_name`
-- `lifecycle`
-- `enabled`
-- `environment`
-- `wallet_address`
-- `api_key`
-- `runtime_config`
+The default workspace layout has `AGENTS.md` and `opencode.json` at the root.
+The `.opencode/` directory contains agent profiles, commands, and skills.
+Analysis files are organized under `scripts/`, while `scripts/user/`, `data/`,
+and `scratch/` are writable agent-managed paths.
 
-## Execution Controls
+### Workspace Drift
 
-`lifecycle = 'active'` is the provisioning state for an agent with an assigned
-trading account and generated workspace. It is an internal eligibility check,
-not an operator-facing claim that unattended trading has been configured.
+The agent settings page reports drift when template-managed workspace files no
+longer match the current workspace template. Agent-authored files are not part
+of this comparison.
 
-`enabled` is the durable execution gate for an agent. When disabled, the
-system does not start scheduled or manual job runs and the order gateway rejects
-new order placement. Agent API read operations and order cancellation remain
-available so an operator can inspect and remediate an account while paused.
+When drift is detected, the workspace can be reset with these options:
 
-An agent is ready for scheduled agent trading only when all of the following
-are true:
+- **Regular reset** refreshes template-managed files while preserving
+  `scripts/user/`, `data/`, and `scratch/`.
+- **Hard Reset** deletes the entire workspace, including user-managed and
+  agent-generated files, before recreating it from the template.
+- **Reset memories** deletes all memories stored for the agent. This option is
+  available with Hard Reset.
 
-- the agent is `active` and `enabled`
-- at least one active perp instrument is selected
-- at least one modeled analysis schedule is enabled
-- the modeled market-analysis follow-up job is enabled
-- the modeled trading schedule is enabled
-
-This is a derived setup state rather than a persisted agent field. The agent
-landing page shows an incomplete setup checklist, while the Agents list labels
-the result as `Paused`, `Setup required`, or `Ready for agent trading`.
-
-The navbar's `Agent trading disabled` badge specifically means the scheduled
-trading job is disabled. It does not block manual or chat-originated orders;
-those remain governed by the global agent `enabled` state and the order-gateway
-rules.
-
-The Settings page controls one agent's enabled state. Disabling an agent does
-not interrupt an already-running OpenCode session, but that session cannot
-place a new order after the gateway observes the disabled state.
-
-The top navigation Emergency Stop applies to the selected agent only. It
-disables that agent, asks OpenCode to abort its active job sessions, and cancels
-all unfilled orders currently reported by Hyperliquid. It does not close open
-positions. Placement, disabling, and emergency cancellation are serialized per
-agent with a transaction-scoped database advisory lock; a placement already accepted by Hyperliquid can be cancelled only if it
-remains unfilled, and an already-filled order cannot be reversed.
-
-The Positions page has Close and Close all actions. They cancel open orders for
-the affected position(s) and submit server-authorized reduce-only market exits
-using the latest exchange position size. These actions do not disable the agent;
-an enabled agent can subsequently open another position.
-
-Strategy prompts are no longer stored directly on `agents`. They live in `agent_strategy_prompts` with prompt kinds:
-
-- `analysis`
-- `market_analysis`
-- `trading`
-- `daily_review`
-
-## OpenCode Execution
-
-OpenCode is the only execution backend. Every agent uses the local OpenCode
-server configured by `OPENCODE_BASE_URL`, which defaults to
-`http://localhost:14096`.
-
-`agents.runtime_config` stores per-agent workspace metadata. It does not store
-or select an OpenCode server.
-
-Persistent agent conversations are also agent-owned state. Each maps one web
-conversation today, or a future external messaging channel conversation, to a
-dedicated OpenCode session under the same agent ownership boundary. Deleting an
-agent first removes its idle mapped OpenCode conversations, then cascades the
-conversation records and policies with the agent row.
-
-## Workspace Generation
-
-Creating an OpenCode agent also generates a per-agent workspace.
-
-Workspace generation completes before the agent registry row is inserted. If
-workspace generation fails, no agent is persisted. Later initialization failures
-also remove the newly created registry row and workspace.
-
-Non-secret metadata is stored in `agents.runtime_config`, including:
-
-- `workspace_host_path`
-- `workspace_container_path`
-- `profile_source`
-
-The generated workspace `.env` receives the agent-scoped HyperVibes API key. The backend does not read that file back.
-
-For OpenCode agents, the settings page also reports whether the generated workspace has drifted from `agent-runtime/workspace-template/`. The comparison is limited to template-managed files and ignores agent-authored files.
-
-Analysis code ownership is separate from job execution. Analysis, market
-analysis, trading, and daily review jobs may execute reusable analysis code but
-must not modify `scripts/user/`. The disabled-by-default `analysis_coding`
-hook is the only job allowed to change that tree, and it requires an explicit
-strong provider/model selection.
-
-Coding supports bootstrap and improvement runs. Generation occurs in an
-isolated candidate workspace. A fixed MCP tool validates the candidate in the
-shared analysis runtime and binds the result to its deterministic tree hash;
-the worker promotes only those validated bytes. Failed validation or promotion
-verification leaves the live analysis tree unchanged and can be rolled back
-from retained versions.
-
-The canonical entrypoint is `scripts/user/analyze.py`; supporting Python modules
-are allowed and no model-owned manifest file is required. Reusable code produces
-quantitative measurements and may produce calculation-derived indicator
-signals. Analysis jobs combine those outputs with qualitative evidence and own
-all final bias, confidence, actionability, and setup decisions. Candidate tests
-are optional and should be focused on demonstrated bugs or nontrivial custom
-math rather than duplicating the fixed contract validator.
-
-The Hyperliquid fetch helper writes the analyzer's canonical input envelope
-directly: `symbol`, `timeframe`, authoritative positive `interval_ms`, and
-normalized OHLCV candles. Candle timestamps are open times. Analyzer code must
-apply `timestamp_ms + interval_ms < boundary_ms`; candles closing exactly at the
-boundary are excluded. Context mismatches and invalid intervals fail closed.
-
-Trading normally consumes the latest `market_analysis` memory without market
-data access. A memory may instead declare a finite conditional-execution
-contract: selected confirmation timeframes and machine-readable analyzer rules.
-Only then may trading fetch those closed candles and run the canonical analyzer.
-It uses the resulting measurements only to verify the declared rules; it cannot
-change the market-analysis thesis, levels, indicators, or execution plan.
-
-Workspace regeneration is queued as agent-scoped maintenance work:
-
-- regular re-generation preserves `scripts/user/`, `data/`, and `scratch/`
-- hard reset deletes the full workspace before re-generating it
-- only one queued/running maintenance task is allowed per agent
-- duplicate regenerate submissions are rejected
-- queued maintenance waits for active runs and OpenCode sessions marked `busy` or `retry` to finish
-
-While workspace maintenance is queued or running:
-
-- scheduled jobs are held until maintenance completes
-- manual job `Run now` and manual hook `Run now` are blocked
-- automatic follow-up hooks for already-running analysis jobs still complete before maintenance begins
-
-Deleting an agent removes the registry row and cascades through agent-owned state:
-
-  - harness jobs, runs, and maintenance tasks
-
-## Harness job lifecycle
-
-Every OpenCode agent receives seven disabled harness jobs: analysis at 15m, 1h,
-and 1d; trading at 5m; daily review at 1d; market analysis after an analysis
-batch; and analysis coding after a qualifying daily review. Operators configure
-model, enablement, timeout, and an operator prompt on the same job surface.
-- memory records
-- selected instruments
-- Hyperliquid orders and order events
-- account-scoped Hyperliquid sync/history rows for that wallet+environment
-
-Global Hyperliquid instrument metadata is preserved.
+When changes are made to the default agent workspace template, such as an
+application update that changes agent skills or tools, the web interface warns
+that the workspace has drifted from the default template.
 
 ## Instrument Selection
 
-Each agent may be linked to zero or more Hyperliquid perp instruments.
-
-- empty selection is allowed
-- empty selection means the agent should not analyze markets or place new trades
-- `POST /api/v1/orders` rejects orders for symbols not currently selected for that agent
-
-OpenCode jobs receive the job-specific strategy prompt, the latest agent-level
-learnings memory, selected instruments, and job metadata through the dispatched
-prompt text. Trading jobs also receive a live account snapshot.
-# Workspace Storage
-
-Agent workspaces are controller-managed data in the OpenCode container volume. A rollout uses
-a fresh volume and requires operators to recreate agents; the application does not import or
-delete the legacy host `workspaces/` directory. Coding agents retain their fixed validation and
-report MCP tools but cannot promote their own changes.
+Instrument selection limits the Hyperliquid perpetual markets an agent can
+analyze and trade. At least one instrument must be selected before the agent can
+trade. With no instruments selected, the agent does not analyze markets or place
+new trades.

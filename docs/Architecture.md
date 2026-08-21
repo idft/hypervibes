@@ -1,3 +1,7 @@
+---
+slug: /development/architecture
+---
+
 # Architecture
 
 HyperVibes is one Rust application process. It runs the Axum web server,
@@ -12,7 +16,7 @@ Startup performs the following work:
 2. Runs the shared SQL migration stream.
 3. Starts the Hyperliquid agent monitor.
 4. Starts the OpenCode job scheduler.
-5. Serves the operator UI, static files, SSE streams, and the agent JSON API.
+5. Serves the web interface, static files, SSE streams, and the agent JSON API.
 
 The main process owns graceful shutdown. The first `SIGINT` or `SIGTERM` stops
 new scheduled work and lets in-flight agent dispatches drain. A second signal
@@ -44,7 +48,7 @@ separate from harness jobs and runs.
 | `opencode` | OpenCode HTTP client, session persistence access, and generated agent workspaces. |
 | `memory` | Append-only, agent-owned analysis and review records plus links between records. |
 | `hyperliquid` | Instrument reference data, account-history journal, live account state, signed order gateway, and order reconciliation. |
-| `web` | Askama-rendered operator UI, HTMX/SSE updates, static assets, and `/api/v1` agent endpoints. |
+| `web` | Askama-rendered web interface, HTMX/SSE updates, static assets, and `/api/v1` agent endpoints. |
 | `settings` | Global application settings, including the base OpenCode system prompt. |
 
 Postgres is the durable system of record. The application uses the public
@@ -54,7 +58,7 @@ schema for registry and orchestration tables, and `memory`, `hyperliquid`, and
 
 ## Agent Execution
 
-An operator first configures and approves one user-owned Hyperliquid trading
+A user first configures and approves one user-owned Hyperliquid trading
 signer on the Account page. Agent creation then selects an exclusive main or
 sub-account, creates an agent API key, creates default prompts and schedules,
 and generates the agent workspace after funding is completed or skipped.
@@ -71,7 +75,7 @@ different agents to run concurrently. Built-in work includes:
 For a dispatch, the OpenCode backend creates a session in the agent workspace
 and invokes the appropriate OpenCode command. The initial prompt contains the
 agent and job context, selected instruments, the job-specific strategy prompt,
-the latest `agent_learnings` memory, the global operator prompt, and a live
+the latest `agent_learnings` memory, the global prompt, and a live
 account snapshot for trading work. That snapshot includes per-stream data
 authority and monitor health; unavailable data is never represented as an
 empty account. The order gateway rejects new agent exposure until the
@@ -88,7 +92,7 @@ Run state is persisted. On startup and periodically thereafter, the scheduler
 resumes queued runs and recovers stale running runs so interrupted dispatches
 
 Agent conversations are separate from scheduled jobs and `harness_runs`. Each
-`agent_conversations` row maps one operator or future-gateway conversation to
+`agent_conversations` row maps one user or future-gateway conversation to
 one OpenCode session. Chat transcript, tool activity, errors, and context
 telemetry are mirrored from OpenCode and delivered to the browser as complete
 HTMX SSE partial snapshots. Future channels use the same mapping with their
@@ -150,17 +154,36 @@ from the OpenCode container or runtime.
 
 ## Frontend
 
-The operator interface is server-rendered with Askama. HTMX handles partial
+The web interface is server-rendered with Askama. HTMX handles partial
 updates and SSE publishes live account, memory, and database-notified agent run
 changes. The shared Postgres notification listener fans `harness_runs` changes
 out to both run-detail streams and the Jobs tab's Recent Runs section; session
 notifications are used only by run-detail transcript and summary streams.
 Frontend source is in `assets/`; `build.rs` builds the Tailwind and esbuild
 output when application assets or templates change.
-# Workspace Volume Boundary
+## Workspace Controller And Volumes
 
-The HyperVibes service never mounts or accesses agent workspace files. The OpenCode container
-owns the `agent_workspaces` named volume at `/workspaces` and runs the `workspace-controller`
-HTTP process alongside OpenCode. The HyperVibes service calls its private Compose-network `/v1`
-API with `WORKSPACE_CONTROL_API_KEY` for workspace lifecycle operations. This controller is not
-an agent MCP tool; agents cannot create, delete, inspect, or promote workspaces through it.
+The HyperVibes service never mounts or accesses agent workspace files. The
+OpenCode container owns the `agent_workspaces` named volume at `/workspaces` and
+runs the `workspace-controller` HTTP process alongside OpenCode. The HyperVibes
+service calls its private Compose-network `/v1` API with
+`WORKSPACE_CONTROL_API_KEY` for workspace lifecycle operations. This controller
+is not an agent MCP tool; agents cannot create, delete, inspect, or promote
+workspaces through it.
+
+Set `WORKSPACE_CONTROL_API_KEY` for both the HyperVibes and OpenCode services.
+In production, the controller is private to the Compose network at
+`http://opencode:14097` and has no host port. The development stack publishes
+it only at `127.0.0.1:${WORKSPACE_CONTROL_PORT:-14097}`. Do not expose it
+publicly or place the key in an agent workspace, prompt, MCP configuration, or
+agent `.env`.
+
+Back up the `agent_workspaces` volume with Podman volume tooling. Preserve the
+`opencode_data` volume independently because it contains global provider
+credentials and OAuth state. Back up the production `podman-compose.yaml` with
+the database because it contains the agent-encryption key.
+
+A rollout uses a fresh `agent_workspaces` volume. Back up the database, retain
+the legacy host `workspaces/` directory outside normal operation, deploy, and
+then recreate required agents. The application does not copy or remove legacy
+workspace data.

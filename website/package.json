@@ -1,0 +1,30 @@
+{
+  "name": "hypervibes-website",
+  "private": true,
+  "version": "0.1.0",
+  "description": "HyperVibes documentation and marketing site",
+  "engines": {
+    "node": ">=20.0"
+  },
+  "scripts": {
+    "build": "docusaurus build",
+    "clear": "docusaurus clear",
+    "start": "docusaurus start",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@docusaurus/core": "3.10.2",
+    "@docusaurus/preset-classic": "3.10.2",
+    "@mdx-js/react": "^3.1.1",
+    "clsx": "^2.1.1",
+    "prism-react-renderer": "^2.4.1",
+    "react": "^19.1.1",
+    "react-dom": "^19.1.1"
+  },
+  "devDependencies": {
+    "@docusaurus/module-type-aliases": "3.10.2",
+    "@docusaurus/tsconfig": "3.10.2",
+    "@docusaurus/types": "3.10.2",
+    "typescript": "~5.6.2"
+  }
+}

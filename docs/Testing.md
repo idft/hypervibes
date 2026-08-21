@@ -1,3 +1,7 @@
+---
+slug: /development/testing
+---
+
 # Testing
 
 ## All Test Suites

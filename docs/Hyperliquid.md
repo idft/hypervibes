@@ -1,175 +1,136 @@
-# Hyperliquid Module
+---
+slug: /operation/hyperliquid
+---
 
-The Hyperliquid subsystem owns market reference data, account-history
-journaling, live account state, and the application's order execution gateway.
-It runs inside the HyperVibes process. Each enabled agent is supervised as an
-account identified by its wallet address and environment. Disabled agents are
-not monitored and cannot submit new orders through the gateway.
+# Hyperliquid configuration
 
-## Integration Boundaries
+[Hyperliquid](https://hyperliquid.xyz) is currently the only exchange supported
+by HyperVibes because of its worldwide availability and straightforward
+integration for AI agents.
 
-`hypersdk` provides mainnet perpetual instruments, live WebSocket state, and
-signed order placement and cancellation. HyperVibes owns raw Hyperliquid
-`/info` HTTP calls for account history, including fills, funding, non-user
-funding ledger updates, and historical orders.
+## Register with Hyperliquid
 
-The authenticated `/account` page reads `spotClearinghouseState`, `subAccounts`,
-and `userAbstraction` concurrently from `/info` on each load. Its account table
-shows the Unified Account's Spot-state USDC `total` in USDC, with unavailable
-values shown explicitly rather than using cached or fabricated balances.
-HyperVibes currently supports Unified Accounts only. User-signed `sendAsset`
-transfers are restricted to the authenticated main account and its currently
-discovered sub-accounts, use `spot` for both DEX fields because Unified mode
-shares the collateral balance with Spot, and use canonical mainnet USDC.
-Hyperliquid account mode is checked again before relay. API-wallet signers
-never custody or transfer account funds.
+Before using HyperVibes, register the wallet you use to sign in with
+Hyperliquid:
 
-The application, not an agent, owns signing. One encrypted user trading signer
-is decrypted only server-side for signed exchange requests and is never written
-into an agent workspace or returned through the agent API. Agent accounts are
-tracked independently from that signer.
+1. Open Hyperliquid and connect the same wallet you use to sign in to
+   HyperVibes. The wallet must be on Arbitrum.
+2. Choose **Enable Trading** in Hyperliquid and sign the gas-less transaction.
+3. Make the first deposit requested by Hyperliquid, with at least $5 USDC.
+4. Return to HyperVibes and refresh the Account page.
 
-## Monitoring And Journal
+See Hyperliquid's [onboarding and trading guide](https://hyperliquid.gitbook.io/hyperliquid-docs/onboarding/how-to-start-trading.md)
+for its current wallet connection and deposit instructions. Its [USDC
+documentation](https://hyperliquid.gitbook.io/hyperliquid-docs/hypercore/usdc.md)
+explains how USDC moves onto HyperCore.
 
-At startup the monitor loads and upserts perpetual instrument metadata. It
-then supervises one live task for each enabled agent, refreshing that registry
-every 30 seconds.
+Connecting a wallet alone does not activate a Hyperliquid trading account. The
+Account page must show the wallet as registered before you can set up an API
+key, approve a builder fee, or create an agent.
 
-An agent task:
+HyperVibes currently supports Hyperliquid Unified Accounts. Your main account
+and its sub-accounts use the shared Unified USDC balance shown on the Account
+page.
 
-1. Performs startup HTTP synchronization for account history and historical
-   orders. Errors are logged; they do not prevent the live loop from starting.
-2. Starts the WebSocket loop for account state, fills, user events, and
-   clearinghouse state. The loop performs HTTP catch-up on reconnect.
-3. Runs an order reconciler every 30 seconds when its exchange clients can be
-   initialized.
+## API Keys
 
-The durable journal uses typed tables rather than a generic event table:
+Hyperliquid API keys, also called API wallets or agent wallets, are signing
+wallets that can place orders on behalf of your main account or its sub-
+accounts. They do not hold funds. Your main wallet remains the owner and is
+used for login, approvals, and account transfers.
 
-| Data | Purpose |
-| --- | --- |
-| `hyperliquid.instruments` | Perpetual market identifiers, precision, leverage, and activity metadata. |
-| `hyperliquid.sync_state` | Per-account, per-stream sync checkpoints and status. |
-| `hyperliquid.trade_fills` | Exchange fills, prices, sizes, fees, and realized PnL. |
-| `hyperliquid.funding_events` | Funding payments and associated market context. |
-| `hyperliquid.ledger_events` | Non-funding ledger changes such as transfers and withdrawals returned by the history feed. |
-| `hyperliquid.historical_orders` | Historical exchange order state. |
-| `hyperliquid.account_timeline` | A view combining fill, funding, and ledger activity in chronological order. |
+See Hyperliquid's [API wallet documentation](https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/api/nonces-and-api-wallets.md)
+for the exchange-level API wallet model and expiry behavior.
 
-Journal rows are keyed so overlapping HTTP windows and WebSocket catch-up are
-idempotent. The current journal supports only the `live` environment. Testnet
-or sandbox support requires a schema and integration change.
+HyperVibes recommends generating the API key from the Account page:
 
-Agents can read their own bounded journal windows through the read-only
-`hypervibes_list_account_transactions` MCP tool. It returns normalized fill,
-funding, and ledger events from `account_timeline`; it never sends an
-agent-initiated request to Hyperliquid.
+1. Select **Generate API Key**.
+2. HyperVibes creates a new signing key and stores it encrypted.
+3. Approve the key with your main wallet when Hyperliquid requests approval.
 
-## Operator Stops And Exits
+You can instead select **Import existing API key** and provide a key that you
+generated manually on Hyperliquid's web site. HyperVibes checks that the key
+matches its derived address and stores the private key encrypted. Only import a
+key when you understand where it came from and who has had access to it.
 
-Order placement holds the agent execution lock until the exchange request has
-completed. Emergency Stop obtains the same lock before setting the agent
-disabled and cancelling the exchange's currently open orders. This prevents a
-placement that began immediately before a stop from being missed by the
-cancellation pass. Cancellation cannot undo an order that was already filled.
+API keys expire after six months. Rotate an expiring or expired key from the
+Account page by generating a fresh key and approving it with your main wallet.
+Do not reuse a key that has expired or been deregistered. HyperVibes uses the
+API key for exchange signing; it never gives the key to an agent workspace and
+the key does not custody your funds.
 
-Operator-requested position Close and Close all actions use the server-owned
-signer, re-read exchange positions, and submit only reduce-only market orders.
-They remain available while the agent is disabled and cannot be invoked through
-the agent-facing API.
+## Accounts and sub-accounts
 
-Live account state is intentionally in memory. It supports the operator UI and
-trading dispatch context; the journal remains the durable source for history.
+An agent must be assigned exactly one exclusive Hyperliquid trading account.
+That account can be your main account or one of your sub-accounts. No two
+agents can share the same account. The agent's positions, orders, balances, and
+transaction history are kept separate from every other agent's account.
 
-### Operator Market Data
+Sub-accounts remain owned by the main account but provide separate trading
+boundaries. Hyperliquid allows up to 10 sub-accounts after the main account
+reaches $100,000 in trading volume. Every additional $100 million in volume
+allows one more sub-account, up to a maximum of 50. Hyperliquid's sub-account
+limit is based on the main account's cumulative volume.
 
-The Agent Positions page also uses an in-memory cache of public Hyperliquid
-market data. It refreshes the global mid-price snapshot at most every 15
-seconds and refreshes requested symbols' 24-hour hourly candle history at most
-every five minutes. The UI appends the latest mid price to the candle closes to
-render each instrument's current price and 24-hour sparkline.
+See Hyperliquid's [sub-account documentation](https://hyperliquid.gitbook.io/hyperliquid-docs/trading/sub-accounts.md)
+for the current volume thresholds and sub-account limits.
 
-This cache is shared by active operator page requests, is not persisted, and is
-not authoritative account or execution data. Missing market data is displayed
-as unavailable rather than inferred from account state.
+After you have an approved API key and enough sub-account capacity, HyperVibes
+can create a named sub-account while you create an agent. The application
+assigns the new account to that agent after Hyperliquid confirms it. You can
+also assign an existing unassigned main account or sub-account from the agent
+setup page.
 
-### Live Data Health
+Sub-accounts use the main account's fee tier, but Hyperliquid referral
+discounts do not apply to sub-accounts.
 
-The monitor tracks successful clearinghouse, open-orders, and spot-state
-snapshots independently. Positions are authoritative only after a fresh
-clearinghouse snapshot, open orders only after a fresh open-orders snapshot,
-and the unified balance only after both clearinghouse and spot-state snapshots.
-Snapshots older than two minutes, or any snapshot while the WebSocket is not
-connected, are not authoritative.
+## Transactions
 
-The operator UI exposes connection health and a sanitized monitoring error. It never presents an unavailable stream as an
-empty positions or orders list. Agent account responses and trading prompts
-carry the same health metadata.
+HyperVibes imports Hyperliquid account activity for each agent's assigned
+account and displays it as a chronological ledger on the agent's Transactions
+page. The application combines exchange history with newly received account
+events and avoids adding the same event more than once.
 
-New agent-originated exposure fails closed unless fresh clearinghouse and
-open-orders snapshots are available from a connected monitor. Pure reduce-only
-orders and cancellation remain available so agents and operators can reduce
-risk during an outage. Server-authorized operator close actions independently
-re-read exchange positions before submitting exits.
+The ledger can include:
 
-## Orders
+- trades and fills
+- trading fees and realized profit or loss
+- funding payments
+- deposits, withdrawals, and account transfers
+- other Hyperliquid ledger changes
 
-Agents place and manage orders only through the authenticated `/api/v1/orders`
-surface and the workspace MCP adapter. The gateway:
+Transactions are historical account activity. Current positions and open orders
+are shown separately on the agent page, while the transaction ledger remains
+the account's historical record. Hyperliquid's [historical data
+documentation](https://hyperliquid.gitbook.io/hyperliquid-docs/historical-data.md)
+describes the exchange's own historical-data sources.
 
-1. Resolves the calling agent from its API key and enforces that agent's
-   instrument allowlist.
-2. Validates the request and rounds price and size according to the stored
-   instrument precision.
-3. Generates a client order ID and writes a local pending order before calling
-   the exchange.
-4. Loads and decrypts the owner's user trading signer and submits or cancels
-   against the agent's stored trading account. Main-account requests omit
-   Hyperliquid's `vaultAddress`; sub-account requests supply it.
-5. Records the immediate result and later WebSocket or reconciliation updates.
+## Builder Fee
 
-`hyperliquid.orders` holds the current, agent-attributed order state.
-`hyperliquid.order_events` is the append-only audit trail for transitions from
-HTTP responses, WebSocket order updates, and reconciliation. Orders can be
-linked to memory records and grouped with attached take-profit or stop-loss
-legs. Current state only advances through valid transitions; exchange-timestamped
-WebSocket and historical events cannot be overwritten by a late HTTP response.
-Transport failures leave orders as reconcilable `unknown` states, which the
-reconciler resolves by CLOID/OID against open and historical exchange orders. It
-also cancels orphaned reduce-only TP/SL legs after the underlying position is
-flat.
+A builder fee approval is required before HyperVibes can place eligible
+perpetual orders. The fee supports ongoing HyperVibes development and is
+collected on eligible orders submitted through the application.
 
-Market orders use the configured conservative slippage limit before rounding.
-The gateway stores both requested and rounded values, which preserves the
-execution audit trail.
+Hyperliquid explains builder-code approvals and limits in its [builder code
+documentation](https://hyperliquid.gitbook.io/hyperliquid-docs/trading/builder-codes.md).
+Its general [fee documentation](https://hyperliquid.gitbook.io/hyperliquid-docs/trading/fees.md)
+covers exchange trading fees separately from the HyperVibes builder fee.
 
-### Builder Fees
+The builder fee must be set between **1 basis point (0.01%)** and **10 basis
+points (0.10%)**.
 
-Eligible perp orders submit the per-user builder fee and the server-side
-builder address on every batch. The application does not preflight
-`maxBuilderFee` before each order or on every account-page request. Instead,
-the current remote maximum is looked up lazily on the first account-page
-request for a user and builder, then cached in process memory and synchronized
-back to the local fee setting. A builder-fee-specific order rejection forces
-one targeted refresh. The in-process cache is cleared when the process
-restarts, while the database remains synchronized by successful lookups.
+Your main wallet signs the approval. You can change or cancel the approval from
+the Account page. The selected fee is applied to eligible orders for your
+account.
 
-The builder address is part of the lookup key and comes from the server-side
-constant; Hyperliquid returns only the numeric maximum. A successful signed
-approval and a successful order update the local cache without another lookup.
-Orders are never automatically retried after a builder-fee rejection; the
-original exchange result is retained for the agent and user to resolve.
+## Referral Discount
 
-## Deferred Work
+The referral discount is optional. Eligible users can apply the HyperVibes
+referral code from the Account page for an additional **4% discount on
+Hyperliquid fees**.
 
-The following remain intentional future work:
-
-- account summary projections or rollups for daily, symbol, fee, funding, and
-  realized-PnL reporting
-- a product decision on whether to include sub-account and spot transfers in
-  the journal scope
-- richer multi-account account registry support
-- vault activity, staking, deep historical archival, and agent webhooks
-
-The existing journal and order records should be extended when these are
-implemented; do not introduce duplicate draft schemas alongside them.
+The main account must have less than $10,000 in cumulative trading volume and
+must not already have a referral code. The discount is offered only while the
+account remains eligible. Referral discounts do not apply to sub-accounts. See
+Hyperliquid's [referral documentation](https://hyperliquid.gitbook.io/hyperliquid-docs/referrals.md)
+for its current referral terms.
