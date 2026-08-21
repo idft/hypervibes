@@ -68,14 +68,19 @@ export default function Home() {
               the image, configure your environment, then connect your wallet
               and provider from the operator interface.
             </p>
-              <Link to="/docs/installation">Read the installation guide -&gt;</Link>
+              <Link className="quick-start-link" to="/docs/quick-start">
+                Get Started
+                <svg aria-hidden="true" viewBox="0 0 24 24">
+                  <path d="M5 12h14m-6-6 6 6-6 6" />
+                </svg>
+              </Link>
           </div>
           <div className="terminal" aria-label="Example HyperVibes container setup command">
             <div className="terminal-bar">
               <span><i /><i /><i /></span>
               <small>terminal</small>
             </div>
-            <pre><code><span className="terminal-comment"># Container image command coming soon</span>{'\n'}<span className="terminal-prompt">$</span> podman pull &lt;hypervibes-container-image&gt;</code></pre>
+            <pre><code><span className="terminal-comment"># Download the latest Compose file</span>{'\n'}<span className="terminal-prompt">$</span> umask 077 &amp;&amp; curl -fsSLo podman-compose.yaml https://raw.githubusercontent.com/idft/hypervibes/master/podman-compose.yaml{'\n\n'}<span className="terminal-comment"># Generate local secrets, then start the stack</span>{'\n'}<span className="terminal-prompt">$</span> KEY=$(openssl rand -hex 32) &amp;&amp; CTRL=$(openssl rand -hex 32) &amp;&amp; OC=$(openssl rand -hex 32) &amp;&amp; DB=$(openssl rand -hex 32) &amp;&amp; sed -i -e "s/REPLACE_KEY/$KEY/" -e "s/REPLACE_CTRL/$CTRL/" -e "s/REPLACE_OC/$OC/" -e "s/REPLACE_DB/$DB/" podman-compose.yaml{'\n'}<span className="terminal-prompt">$</span> podman-compose up -d</code></pre>
           </div>
         </section>
 

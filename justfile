@@ -49,6 +49,7 @@ branding:
     generate_png 192 "${static_dir}/android-chrome-192x192.png"
     generate_png 512 "${static_dir}/android-chrome-512x512.png"
     generate_png 64 "${website_image_dir}/favicon.png"
+    generate_png 512 "${website_image_dir}/logo.png"
 
     magick "${source}" \
         -background none \

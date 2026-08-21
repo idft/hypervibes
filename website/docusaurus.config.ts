@@ -81,6 +81,16 @@ const config: Config = {
           label: 'GitHub',
           position: 'right',
         },
+        {
+          href: 'https://discord.gg/Up39Qvqmkh',
+          label: 'Discord',
+          position: 'right',
+        },
+        {
+          href: 'https://x.com/hypervibes.ai',
+          label: 'X',
+          position: 'right',
+        },
       ],
     },
     footer: {

@@ -372,10 +372,28 @@ pre code {
   line-height: 1.65;
 }
 
-.quick-start-copy > a {
+.quick-start-link {
+  display: inline-flex;
+  gap: 0.45rem;
+  align-items: center;
   color: #c4b5fd;
   font-size: 0.9rem;
   font-weight: 650;
+}
+
+.quick-start-link svg {
+  width: 1.05rem;
+  height: 1.05rem;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.75;
+  transition: transform 160ms ease;
+}
+
+.quick-start-link:hover svg {
+  transform: translateX(0.2rem);
 }
 
 .terminal {
@@ -427,6 +445,7 @@ pre code {
 }
 
 .terminal pre {
+  overflow-x: auto;
   margin: 0;
   border: 0;
   border-radius: 0;
