@@ -27,7 +27,7 @@ FROM ghcr.io/anomalyco/opencode:${OPENCODE_TAG}
 
 ARG VERSION=dev
 
-LABEL org.opencontainers.image.source="https://github.com/johnkozan/hypervibes" \
+LABEL org.opencontainers.image.source="https://github.com/idft/hypervibes" \
       org.opencontainers.image.version="${VERSION}"
 
 # `uv` is a static binary copied from its Alpine image. It installs the

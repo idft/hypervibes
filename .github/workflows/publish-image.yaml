@@ -11,7 +11,7 @@ permissions:
   packages: write
 
 env:
-  IMAGE_NAME: ghcr.io/johnkozan/hypervibes
+  IMAGE_NAME: ghcr.io/idft/hypervibes
 
 jobs:
   build:

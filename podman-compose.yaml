@@ -16,7 +16,7 @@ services:
       retries: 5
 
   hypervibes:
-    image: ghcr.io/johnkozan/hypervibes:${HYPERVIBES_IMAGE_TAG:-latest}
+    image: ghcr.io/idft/hypervibes:${HYPERVIBES_IMAGE_TAG:-latest}
     restart: unless-stopped
     command: ["hypervibes"]
     environment:
@@ -45,7 +45,7 @@ services:
       start_period: 20s
 
   opencode:
-    image: ghcr.io/johnkozan/hypervibes:${HYPERVIBES_IMAGE_TAG:-latest}
+    image: ghcr.io/idft/hypervibes:${HYPERVIBES_IMAGE_TAG:-latest}
     restart: unless-stopped
     command: ["opencode", "serve", "--hostname", "0.0.0.0", "--port", "14096"]
     environment:
