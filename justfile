@@ -79,8 +79,14 @@ release version:
     git commit -m "prepare ${tag} release"
     git tag -a "${tag}" -m "${tag}"
 
-    printf '\nCreated the release commit and tag locally. Push both after review:\n'
-    printf '  git push origin HEAD %s\n' "${tag}"
+    printf '\nCreated the release commit and tag locally. Push both to origin now? [y/N] '
+    read -r push_confirm
+    if [[ "${push_confirm}" == "y" || "${push_confirm}" == "Y" ]]; then
+        git push origin HEAD --follow-tags
+    else
+        printf 'Release commit and tag remain local. Push later with:\n'
+        printf '  git push origin HEAD --follow-tags\n'
+    fi
 
 dev:
     podman-compose -f podman-compose.dev.yaml up
