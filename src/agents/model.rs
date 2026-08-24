@@ -17,8 +17,8 @@ pub struct AgentReadiness {
     pub has_enabled_analysis_job: bool,
     pub has_enabled_market_analysis_job: bool,
     pub has_enabled_trading_job: bool,
-    pub market_analysis_job_id: Option<i64>,
-    pub trading_job_id: Option<i64>,
+    pub market_analysis_sub_agent_id: Option<i64>,
+    pub trading_sub_agent_id: Option<i64>,
 }
 
 impl AgentReadiness {
@@ -190,8 +190,8 @@ mod tests {
             has_enabled_analysis_job: true,
             has_enabled_market_analysis_job: true,
             has_enabled_trading_job: false,
-            market_analysis_job_id: Some(2),
-            trading_job_id: Some(3),
+            market_analysis_sub_agent_id: Some(2),
+            trading_sub_agent_id: Some(3),
         };
 
         assert!(!readiness.is_ready_for_agent_trading());

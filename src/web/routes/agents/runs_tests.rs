@@ -43,13 +43,13 @@ async fn cancel_running_run_aborts_session_and_marks_run_aborted() {
     let (agent_key, _wallet_address) = insert_test_opencode_agent(&state)
         .await
         .expect("insert agent");
-    let job_id = crate::harness::store::list_agent_jobs(&pool, &agent_key)
+    let sub_agent_id = crate::harness::store::list_agent_sub_agents(&pool, &agent_key)
         .await
         .expect("list jobs")
         .first()
         .expect("default job")
         .id;
-    let run_id = crate::harness::store::insert_test_run(&pool, job_id, "running")
+    let run_id = crate::harness::store::insert_test_run(&pool, sub_agent_id, "running")
         .await
         .expect("insert run");
     crate::harness::store::mark_run_running(&pool, run_id, Some("ses_cancel"))
@@ -110,14 +110,14 @@ async fn retry_failed_run_creates_a_new_queued_run() {
     let (agent_key, _wallet_address) = insert_test_opencode_agent(&state)
         .await
         .expect("insert agent");
-    let job_id = crate::harness::store::list_agent_jobs(&pool, &agent_key)
+    let sub_agent_id = crate::harness::store::list_agent_sub_agents(&pool, &agent_key)
         .await
         .expect("list jobs")
         .iter()
-        .find(|job| job.job_key == "analysis-15m")
+        .find(|job| job.sub_agent_key == "analysis-15m")
         .expect("analysis job")
         .id;
-    let failed_run_id = crate::harness::store::insert_test_run(&pool, job_id, "running")
+    let failed_run_id = crate::harness::store::insert_test_run(&pool, sub_agent_id, "running")
         .await
         .expect("insert run");
     crate::harness::store::mark_run_failed(&pool, failed_run_id, "provider unavailable", None)
@@ -165,7 +165,7 @@ async fn retry_failed_run_creates_a_new_queued_run() {
         .await
         .expect("fetch retry")
         .expect("retry exists");
-    assert_eq!(retry.job_id, job_id);
+    assert_eq!(retry.sub_agent_id, sub_agent_id);
     assert_eq!(retry.status, "queued");
 }
 
@@ -177,11 +177,11 @@ async fn run_detail_page_handles_missing_opencode_session_mirror() {
         .await
         .expect("insert opencode agent");
 
-    let jobs = crate::harness::store::list_agent_jobs(&pool, &agent_key)
+    let jobs = crate::harness::store::list_agent_sub_agents(&pool, &agent_key)
         .await
         .expect("list jobs");
-    let job_id = jobs.first().expect("default job").id;
-    let run_id = crate::harness::store::insert_test_run(&pool, job_id, "running")
+    let sub_agent_id = jobs.first().expect("default job").id;
+    let run_id = crate::harness::store::insert_test_run(&pool, sub_agent_id, "running")
         .await
         .expect("insert run");
     crate::harness::store::mark_run_succeeded(&pool, run_id, Some("ses_ui_detail"))
@@ -211,13 +211,13 @@ async fn run_detail_surfaces_session_error_only_in_top_error_panel() {
     let (agent_key, _wallet_address) = insert_test_opencode_agent(&state)
         .await
         .expect("insert opencode agent");
-    let job_id = crate::harness::store::list_agent_jobs(&pool, &agent_key)
+    let sub_agent_id = crate::harness::store::list_agent_sub_agents(&pool, &agent_key)
         .await
         .expect("list jobs")
         .first()
         .expect("default job")
         .id;
-    let run_id = crate::harness::store::insert_test_run(&pool, job_id, "running")
+    let run_id = crate::harness::store::insert_test_run(&pool, sub_agent_id, "running")
         .await
         .expect("insert run");
     crate::harness::store::mark_run_running(&pool, run_id, Some("ses_error_detail"))
@@ -261,13 +261,13 @@ async fn run_detail_stream_emits_summary_and_transcript_snapshots() {
     let (agent_key, _wallet_address) = insert_test_opencode_agent(&state)
         .await
         .expect("insert opencode agent");
-    let job_id = crate::harness::store::list_agent_jobs(&pool, &agent_key)
+    let sub_agent_id = crate::harness::store::list_agent_sub_agents(&pool, &agent_key)
         .await
         .expect("list jobs")
         .first()
         .expect("default job")
         .id;
-    let run_id = crate::harness::store::insert_test_run(&pool, job_id, "running")
+    let run_id = crate::harness::store::insert_test_run(&pool, sub_agent_id, "running")
         .await
         .expect("insert run");
     crate::harness::store::mark_run_succeeded(&pool, run_id, Some("ses_stream_detail"))
@@ -317,13 +317,13 @@ async fn run_detail_stream_rerenders_after_matching_session_event() {
     let (agent_key, _wallet_address) = insert_test_opencode_agent(&state)
         .await
         .expect("insert opencode agent");
-    let job_id = crate::harness::store::list_agent_jobs(&pool, &agent_key)
+    let sub_agent_id = crate::harness::store::list_agent_sub_agents(&pool, &agent_key)
         .await
         .expect("list jobs")
         .first()
         .expect("default job")
         .id;
-    let run_id = crate::harness::store::insert_test_run(&pool, job_id, "running")
+    let run_id = crate::harness::store::insert_test_run(&pool, sub_agent_id, "running")
         .await
         .expect("insert run");
     crate::harness::store::mark_run_succeeded(&pool, run_id, Some("ses_stream_update"))

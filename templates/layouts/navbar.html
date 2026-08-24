@@ -21,7 +21,7 @@
     </details>
     {% if let Some(agent_key) = navbar.selected_agent_key %}
     {% if navbar.selected_agent_enabled && navbar.selected_agent_trading_job_enabled == Some(false) %}
-    <a href="/agents/{{ agent_key }}/jobs" title="The scheduled trading job is disabled. Manual or chat orders remain available while agent execution is enabled." class="ml-1 inline-flex h-9 cursor-pointer items-center rounded-lg border border-amber-900/60 bg-amber-950/30 px-3 text-xs font-medium text-amber-200 hover:border-amber-800 hover:bg-amber-950/40 hover:text-amber-100">Agent trading disabled</a>
+    <a href="/agents/{{ agent_key }}/sub-agents" title="The scheduled trading sub-agent is disabled. Manual or chat orders remain available while agent execution is enabled." class="ml-1 inline-flex h-9 cursor-pointer items-center rounded-lg border border-amber-900/60 bg-amber-950/30 px-3 text-xs font-medium text-amber-200 hover:border-amber-800 hover:bg-amber-950/40 hover:text-amber-100">Agent trading disabled</a>
     {% endif %}
     {% if navbar.selected_agent_enabled %}
     <form action="/agents/{{ agent_key }}/emergency-stop" method="post" class="ml-1" onsubmit="return confirm('Emergency stop this agent? Active runs will be aborted and all unfilled orders cancelled. Open positions will remain open.');">

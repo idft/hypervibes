@@ -26,9 +26,9 @@ describe("conversation composer shortcut", () => {
 });
 
 describe("model-dependent buttons", () => {
-  it("enables a disabled job after its model selection changes", () => {
+  it("enables a disabled sub-agent after its model selection changes", () => {
     document.body.innerHTML = `
-      <form action="/agents/test-agent/jobs/1/model">
+      <form action="/agents/test-agent/sub-agents/1/model">
         <input name="model_selection" value="">
       </form>
       <button class="border-zinc-800 text-zinc-500 cursor-not-allowed opacity-50" data-model-dependent-enable data-enabled="false" disabled></button>
@@ -47,9 +47,9 @@ describe("model-dependent buttons", () => {
     expect(button.classList.contains("text-zinc-500")).toBe(false);
   });
 
-  it("enables a disabled job when a model picker modal is saved", () => {
+  it("enables a disabled sub-agent when a model picker modal is saved", () => {
     document.body.innerHTML = `
-      <form action="/agents/test-agent/jobs/1/model">
+      <form action="/agents/test-agent/sub-agents/1/model">
         <input name="model_selection" value="">
         <div data-model-picker data-model-picker-mode="modal">
           <button type="button" data-model-picker-open></button>

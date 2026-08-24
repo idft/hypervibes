@@ -31,8 +31,8 @@ pub fn sample_agent_readiness() -> AgentReadiness {
         has_enabled_analysis_job: true,
         has_enabled_market_analysis_job: true,
         has_enabled_trading_job: true,
-        market_analysis_job_id: Some(2),
-        trading_job_id: Some(3),
+        market_analysis_sub_agent_id: Some(2),
+        trading_sub_agent_id: Some(3),
     }
 }
 
@@ -92,18 +92,21 @@ pub fn sample_opencode_detail_row() -> AgentDetailRow {
 
 pub fn sample_candle_job_row(
     id: i64,
-    job_key: &str,
-    job_kind: &str,
+    sub_agent_key: &str,
+    sub_agent_kind: &str,
     enabled: bool,
-) -> crate::harness::model::HarnessJobRow {
+) -> crate::harness::model::HarnessSubAgentRow {
     let now = Utc::now();
-    let timeframe = if job_kind == "trading" { "5m" } else { "15m" };
-    crate::harness::model::HarnessJobRow {
+    let timeframe = if sub_agent_kind == "trading" {
+        "5m"
+    } else {
+        "15m"
+    };
+    crate::harness::model::HarnessSubAgentRow {
         id,
         agent_key: "test-agent".to_string(),
-        job_key: job_key.to_string(),
-        job_kind: job_kind.to_string(),
-        trigger_type: crate::harness::model::TRIGGER_TYPE_CANDLE_CLOSED.to_string(),
+        sub_agent_key: sub_agent_key.to_string(),
+        sub_agent_kind: sub_agent_kind.to_string(),
         enabled,
         timeframe: Some(timeframe.to_string()),
         next_run_at: Some(now),
@@ -117,14 +120,13 @@ pub fn sample_candle_job_row(
     }
 }
 
-pub fn sample_event_job_row(id: i64, enabled: bool) -> crate::harness::model::HarnessJobRow {
+pub fn sample_event_job_row(id: i64, enabled: bool) -> crate::harness::model::HarnessSubAgentRow {
     let now = Utc::now();
-    crate::harness::model::HarnessJobRow {
+    crate::harness::model::HarnessSubAgentRow {
         id,
         agent_key: "test-agent".to_string(),
-        job_key: "market-analysis".to_string(),
-        job_kind: crate::harness::model::JOB_KIND_MARKET_ANALYSIS.to_string(),
-        trigger_type: crate::harness::model::TRIGGER_TYPE_ANALYSIS_BATCH_COMPLETED.to_string(),
+        sub_agent_key: "market-analysis".to_string(),
+        sub_agent_kind: crate::harness::model::SUB_AGENT_KIND_MARKET_ANALYSIS.to_string(),
         enabled,
         timeframe: None,
         next_run_at: None,
@@ -154,16 +156,15 @@ pub fn sample_model_options() -> Vec<ModelPickerOption> {
 pub fn sample_run_row(
     id: i64,
     status: &str,
-    job_key: &str,
-) -> crate::harness::model::HarnessRunRow {
+    sub_agent_key: &str,
+) -> crate::harness::model::HarnessSubAgentRunRow {
     let now = Utc::now();
-    crate::harness::model::HarnessRunRow {
+    crate::harness::model::HarnessSubAgentRunRow {
         id,
-        job_id: 1,
+        sub_agent_id: 1,
         agent_key: "test-agent".to_string(),
-        job_key: job_key.to_string(),
-        job_kind: "analysis".to_string(),
-        trigger_type: "candle_closed".to_string(),
+        sub_agent_key: sub_agent_key.to_string(),
+        sub_agent_kind: "analysis".to_string(),
         timeframe: Some("15m".to_string()),
         status: status.to_string(),
         backend_run_ref: Some("ses_abc123".to_string()),

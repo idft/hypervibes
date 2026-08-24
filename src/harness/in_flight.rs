@@ -6,7 +6,7 @@ use tokio::sync::Notify;
 
 /// Maximum time callers wait for in-flight harness dispatches to
 /// drain after a shutdown signal. Sized to be larger than the longest
-/// configured `harness_jobs.timeout_seconds` (currently
+/// configured `harness_sub_agents.timeout_seconds` (currently
 /// 900s) so a hung-but-still-progressing dispatch can complete, plus
 /// a 15m buffer. The harness scheduler and `main` enforce this
 /// ceiling on the in-flight tracker, and the web server's graceful

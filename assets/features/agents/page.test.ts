@@ -146,17 +146,17 @@ describe("agent currency icons", () => {
 describe("job detail modals", () => {
   it("opens, focuses, and closes the additional instructions modal", () => {
     document.body.innerHTML = `
-      <button type="button" data-job-detail-modal-trigger="additional-instructions-modal">Additional Instructions</button>
-      <div id="additional-instructions-modal" data-job-detail-modal class="hidden" aria-hidden="true">
-        <button type="button" data-job-detail-modal-close>Close</button>
-        <textarea data-job-detail-modal-initial-focus></textarea>
+      <button type="button" data-sub-agent-detail-modal-trigger="additional-instructions-modal">Additional Instructions</button>
+      <div id="additional-instructions-modal" data-sub-agent-detail-modal class="hidden" aria-hidden="true">
+        <button type="button" data-sub-agent-detail-modal-close>Close</button>
+        <textarea data-sub-agent-detail-modal-initial-focus></textarea>
       </div>
     `;
 
     initAgentPage();
-    const trigger = document.querySelector<HTMLButtonElement>("[data-job-detail-modal-trigger]");
-    const modal = document.querySelector<HTMLElement>("[data-job-detail-modal]");
-    const textarea = document.querySelector<HTMLTextAreaElement>("[data-job-detail-modal-initial-focus]");
+    const trigger = document.querySelector<HTMLButtonElement>("[data-sub-agent-detail-modal-trigger]");
+    const modal = document.querySelector<HTMLElement>("[data-sub-agent-detail-modal]");
+    const textarea = document.querySelector<HTMLTextAreaElement>("[data-sub-agent-detail-modal-initial-focus]");
     trigger?.click();
 
     expect(modal?.classList.contains("hidden")).toBe(false);
@@ -172,19 +172,19 @@ describe("job detail modals", () => {
 describe("new job form", () => {
   it("only requires a timeframe for candle-close jobs", () => {
     document.body.innerHTML = `
-      <form data-new-job-form>
-        <select data-new-job-kind>
+      <form data-new-sub-agent-form>
+        <select data-new-sub-agent-kind>
           <option value="analysis" selected>Analysis</option>
           <option value="market_analysis">Market analysis</option>
         </select>
-        <div data-new-job-timeframe><input data-new-job-timeframe-input required></div>
+        <div data-new-sub-agent-timeframe><input data-new-sub-agent-timeframe-input required></div>
       </form>
     `;
 
     initAgentPage();
-    const kind = document.querySelector<HTMLSelectElement>("[data-new-job-kind]");
-    const timeframe = document.querySelector<HTMLElement>("[data-new-job-timeframe]");
-    const input = document.querySelector<HTMLInputElement>("[data-new-job-timeframe-input]");
+    const kind = document.querySelector<HTMLSelectElement>("[data-new-sub-agent-kind]");
+    const timeframe = document.querySelector<HTMLElement>("[data-new-sub-agent-timeframe]");
+    const input = document.querySelector<HTMLInputElement>("[data-new-sub-agent-timeframe-input]");
 
     kind!.value = "market_analysis";
     kind!.dispatchEvent(new Event("change"));

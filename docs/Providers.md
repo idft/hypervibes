@@ -17,7 +17,7 @@ page. Provider credentials are stored by OpenCode in its retained data volume,
 not on individual agents and not in the HyperVibes database.
 
 Provider configuration is global to the shared OpenCode service. Once a
-provider is connected, select an available model for each scheduled job or
+provider is connected, select an available model for each scheduled sub-agent or
 conversation. Some models also provide a selectable thinking mode.
 
 AI providers may authenticate with API keys, OAuth, or both. Connect and verify

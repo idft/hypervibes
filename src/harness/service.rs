@@ -27,7 +27,7 @@ pub async fn delete_idle_job(
     workspace_leases: &WorkspaceLeaseManager,
     base_url: &str,
     agent_key: &str,
-    job_id: i64,
+    sub_agent_id: i64,
 ) -> Result<DeleteJobOutcome> {
     let agent = get_agent(pool, agent_key)
         .await?
@@ -39,9 +39,9 @@ pub async fn delete_idle_job(
     lock_agent_coordination_tx(&mut tx, agent_key).await?;
 
     let job_exists: Option<(i64,)> =
-        query_as("SELECT id FROM harness_jobs WHERE agent_key = $1 AND id = $2 FOR UPDATE")
+        query_as("SELECT id FROM harness_sub_agents WHERE agent_key = $1 AND id = $2 FOR UPDATE")
             .bind(agent_key)
-            .bind(job_id)
+            .bind(sub_agent_id)
             .fetch_optional(&mut *tx)
             .await
             .context("failed to lock harness job for deletion")?;
@@ -52,12 +52,12 @@ pub async fn delete_idle_job(
 
     let runs: Vec<(String, Option<String>)> = query_as(
         "SELECT status, backend_run_ref
-           FROM harness_runs
-          WHERE agent_key = $1 AND job_id = $2
+           FROM harness_sub_agent_runs
+          WHERE agent_key = $1 AND sub_agent_id = $2
           FOR UPDATE",
     )
     .bind(agent_key)
-    .bind(job_id)
+    .bind(sub_agent_id)
     .fetch_all(&mut *tx)
     .await
     .context("failed to load harness job runs for deletion")?;
@@ -96,9 +96,9 @@ pub async fn delete_idle_job(
         }
     }
 
-    sqlx::query("DELETE FROM harness_jobs WHERE agent_key = $1 AND id = $2")
+    sqlx::query("DELETE FROM harness_sub_agents WHERE agent_key = $1 AND id = $2")
         .bind(agent_key)
-        .bind(job_id)
+        .bind(sub_agent_id)
         .execute(&mut *tx)
         .await
         .context("failed to delete idle harness job")?;

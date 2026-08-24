@@ -1,25 +1,17 @@
 mod common;
-mod jobs;
 mod recovery;
 mod runs;
+mod sub_agents;
 mod workspace;
 
 #[allow(unused_imports)]
-pub use common::set_all_agent_jobs_enabled;
+pub use common::set_all_agent_sub_agents_enabled;
 pub(crate) use common::{ACTIVE_STATUSES, lock_agent_coordination_tx};
-#[allow(unused_imports)]
-pub use jobs::{
-    ClaimedCandleJobRun, claim_due_candle_job, get_agent_job, get_dispatch_job,
-    get_enabled_event_job, insert_candle_job_with_model_variant, insert_default_harness_jobs,
-    insert_event_job_with_model_variant, list_agent_jobs, list_due_candle_jobs, list_job_runs,
-    set_candle_job_timeframe, set_job_enabled, set_job_model_with_variant, set_job_operator_prompt,
-    set_job_timeout,
-};
 #[allow(unused_imports)]
 pub use recovery::recover_inactive_runs_all;
 #[allow(unused_imports)]
 pub use runs::{
-    QueuedJobRun, QueuedRunForDispatch, agent_has_active_runs, count_agent_runs, get_run,
+    QueuedRunForDispatch, QueuedSubAgentRun, agent_has_active_runs, count_agent_runs, get_run,
     has_prior_active_run_in_lane, insert_queued_event_run,
     insert_queued_event_run_for_automatic_dispatch, insert_queued_manual_run,
     list_active_agent_runs, list_agent_runs_page, list_queued_runs_for_dispatch, mark_run_aborted,
@@ -27,6 +19,16 @@ pub use runs::{
 };
 #[cfg(test)]
 pub use runs::{insert_test_run, list_agent_runs};
+#[allow(unused_imports)]
+pub use sub_agents::{
+    ClaimedCandleSubAgentRun, claim_due_candle_sub_agent, count_sub_agent_runs,
+    get_agent_sub_agent, get_dispatch_sub_agent, get_enabled_sub_agent,
+    insert_candle_sub_agent_with_model_variant, insert_default_harness_sub_agents,
+    insert_unscheduled_sub_agent_with_model_variant, list_agent_sub_agents,
+    list_due_candle_sub_agents, list_sub_agent_runs_page, set_candle_sub_agent_timeframe,
+    set_sub_agent_enabled, set_sub_agent_model_with_variant, set_sub_agent_operator_prompt,
+    set_sub_agent_timeout,
+};
 pub use workspace::agent_has_blocking_workspace_maintenance;
 #[cfg(test)]
 pub use workspace::get_latest_workspace_regenerate_task;

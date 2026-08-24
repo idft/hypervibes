@@ -15,7 +15,7 @@ use crate::{
 use super::common::ERROR_SUMMARY_MAX_CHARS;
 use super::test_support::seed_agent_and_job;
 use super::{
-    QueuedJobRun, count_agent_runs, get_run, insert_queued_manual_run, insert_test_run,
+    QueuedSubAgentRun, count_agent_runs, get_run, insert_queued_manual_run, insert_test_run,
     insert_workspace_regenerate_task, mark_run_aborted, mark_run_failed, mark_run_running,
     mark_run_succeeded, set_run_error_summary,
 };
@@ -27,15 +27,15 @@ async fn insert_queued_manual_run_returns_blocked_by_maintenance() {
         "manual-maint-{}",
         Utc::now().timestamp_nanos_opt().unwrap_or(0)
     );
-    let job_id = seed_agent_and_job(&pool, &key, 0).await;
+    let sub_agent_id = seed_agent_and_job(&pool, &key, 0).await;
     insert_workspace_regenerate_task(&pool, &key, false, false)
         .await
         .expect("insert maintenance task");
 
-    let outcome = insert_queued_manual_run(&pool, &key, job_id)
+    let outcome = insert_queued_manual_run(&pool, &key, sub_agent_id)
         .await
         .expect("manual run");
-    assert!(matches!(outcome, QueuedJobRun::BlockedByMaintenance));
+    assert!(matches!(outcome, QueuedSubAgentRun::BlockedByMaintenance));
     assert_eq!(count_agent_runs(&pool, &key).await.expect("count runs"), 0);
 }
 
@@ -43,20 +43,20 @@ async fn insert_queued_manual_run_returns_blocked_by_maintenance() {
 async fn insert_queued_manual_run_inserts_manual_dispatch_run_and_does_not_advance_job() {
     let pool = test_db::pool().await;
     let key = format!("manual-{}", Utc::now().timestamp_nanos_opt().unwrap_or(0));
-    let job_id = seed_agent_and_job(&pool, &key, 0).await;
+    let sub_agent_id = seed_agent_and_job(&pool, &key, 0).await;
 
     let (before_next_run_at,): (DateTime<Utc>,) =
-        query_as("SELECT next_run_at FROM harness_jobs WHERE id = $1")
-            .bind(job_id)
+        query_as("SELECT next_run_at FROM harness_sub_agents WHERE id = $1")
+            .bind(sub_agent_id)
             .fetch_one(&pool)
             .await
             .expect("fetch before next_run_at");
 
-    let outcome = insert_queued_manual_run(&pool, &key, job_id)
+    let outcome = insert_queued_manual_run(&pool, &key, sub_agent_id)
         .await
         .expect("manual run");
     let (run_id, scheduled_for) = match outcome {
-        QueuedJobRun::Dispatch {
+        QueuedSubAgentRun::Dispatch {
             run_id,
             scheduled_for,
             ..
@@ -72,11 +72,11 @@ async fn insert_queued_manual_run_inserts_manual_dispatch_run_and_does_not_advan
     assert_eq!(run.status, RUN_STATUS_QUEUED);
     assert_eq!(
         run.timeframe.as_deref(),
-        Some(crate::harness::store::jobs::DEFAULT_ANALYSIS_TIMEFRAME)
+        Some(crate::harness::store::sub_agents::DEFAULT_ANALYSIS_TIMEFRAME)
     );
     let expected_scheduled_for = latest_due_at_or_before(
         after,
-        crate::harness::store::jobs::DEFAULT_ANALYSIS_TIMEFRAME,
+        crate::harness::store::sub_agents::DEFAULT_ANALYSIS_TIMEFRAME,
         DEFAULT_TRIGGER_DELAY_SECONDS,
     )
     .expect("compute latest due")
@@ -89,8 +89,8 @@ async fn insert_queued_manual_run_inserts_manual_dispatch_run_and_does_not_advan
     assert!(delta.abs() <= 1, "scheduled_for delta too large: {delta}us");
 
     let (after_next_run_at,): (DateTime<Utc>,) =
-        query_as("SELECT next_run_at FROM harness_jobs WHERE id = $1")
-            .bind(job_id)
+        query_as("SELECT next_run_at FROM harness_sub_agents WHERE id = $1")
+            .bind(sub_agent_id)
             .fetch_one(&pool)
             .await
             .expect("fetch after next_run_at");
@@ -107,16 +107,16 @@ async fn insert_queued_manual_run_waits_when_previous_run_is_active() {
         "manual-skip-{}",
         Utc::now().timestamp_nanos_opt().unwrap_or(0)
     );
-    let job_id = seed_agent_and_job(&pool, &key, 0).await;
-    insert_test_run(&pool, job_id, RUN_STATUS_RUNNING)
+    let sub_agent_id = seed_agent_and_job(&pool, &key, 0).await;
+    insert_test_run(&pool, sub_agent_id, RUN_STATUS_RUNNING)
         .await
         .expect("seed active run");
 
-    let outcome = insert_queued_manual_run(&pool, &key, job_id)
+    let outcome = insert_queued_manual_run(&pool, &key, sub_agent_id)
         .await
         .expect("manual run");
     match outcome {
-        QueuedJobRun::Dispatch {
+        QueuedSubAgentRun::Dispatch {
             run_id,
             wait_for_lane,
             ..
@@ -139,8 +139,8 @@ async fn mark_run_running_sets_status_and_started_at() {
         "run-running-{}",
         Utc::now().timestamp_nanos_opt().unwrap_or(0)
     );
-    let job_id = seed_agent_and_job(&pool, &key, 0).await;
-    let run_id = insert_test_run(&pool, job_id, RUN_STATUS_QUEUED)
+    let sub_agent_id = seed_agent_and_job(&pool, &key, 0).await;
+    let run_id = insert_test_run(&pool, sub_agent_id, RUN_STATUS_QUEUED)
         .await
         .expect("seed run");
 
@@ -162,8 +162,8 @@ async fn mark_run_running_sets_status_and_started_at() {
 async fn mark_run_succeeded_records_finished_at_and_backend_ref() {
     let pool = test_db::pool().await;
     let key = format!("run-ok-{}", Utc::now().timestamp_nanos_opt().unwrap_or(0));
-    let job_id = seed_agent_and_job(&pool, &key, 0).await;
-    let run_id = insert_test_run(&pool, job_id, RUN_STATUS_RUNNING)
+    let sub_agent_id = seed_agent_and_job(&pool, &key, 0).await;
+    let run_id = insert_test_run(&pool, sub_agent_id, RUN_STATUS_RUNNING)
         .await
         .expect("seed run");
 
@@ -188,8 +188,8 @@ async fn set_run_error_summary_preserves_running_status_and_can_clear() {
         "run-retry-{}",
         Utc::now().timestamp_nanos_opt().unwrap_or(0)
     );
-    let job_id = seed_agent_and_job(&pool, &key, 0).await;
-    let run_id = insert_test_run(&pool, job_id, RUN_STATUS_RUNNING)
+    let sub_agent_id = seed_agent_and_job(&pool, &key, 0).await;
+    let run_id = insert_test_run(&pool, sub_agent_id, RUN_STATUS_RUNNING)
         .await
         .expect("seed run");
 
@@ -222,8 +222,8 @@ async fn set_run_error_summary_preserves_running_status_and_can_clear() {
 async fn mark_run_failed_truncates_error_summary() {
     let pool = test_db::pool().await;
     let key = format!("run-fail-{}", Utc::now().timestamp_nanos_opt().unwrap_or(0));
-    let job_id = seed_agent_and_job(&pool, &key, 0).await;
-    let run_id = insert_test_run(&pool, job_id, RUN_STATUS_RUNNING)
+    let sub_agent_id = seed_agent_and_job(&pool, &key, 0).await;
+    let run_id = insert_test_run(&pool, sub_agent_id, RUN_STATUS_RUNNING)
         .await
         .expect("seed run");
 
@@ -251,8 +251,8 @@ async fn mark_run_failed_preserves_existing_backend_ref_when_not_provided() {
         "run-fail-preserve-ref-{}",
         Utc::now().timestamp_nanos_opt().unwrap_or(0)
     );
-    let job_id = seed_agent_and_job(&pool, &key, 0).await;
-    let run_id = insert_test_run(&pool, job_id, RUN_STATUS_QUEUED)
+    let sub_agent_id = seed_agent_and_job(&pool, &key, 0).await;
+    let run_id = insert_test_run(&pool, sub_agent_id, RUN_STATUS_QUEUED)
         .await
         .expect("seed run");
 
@@ -278,8 +278,8 @@ async fn mark_run_aborted_marks_status_finished_at() {
         "run-abort-{}",
         Utc::now().timestamp_nanos_opt().unwrap_or(0)
     );
-    let job_id = seed_agent_and_job(&pool, &key, 0).await;
-    let run_id = insert_test_run(&pool, job_id, RUN_STATUS_RUNNING)
+    let sub_agent_id = seed_agent_and_job(&pool, &key, 0).await;
+    let run_id = insert_test_run(&pool, sub_agent_id, RUN_STATUS_RUNNING)
         .await
         .expect("seed run");
 
@@ -303,8 +303,8 @@ async fn terminal_run_cannot_be_overwritten_after_cancellation() {
         "run-cancel-{}",
         Utc::now().timestamp_nanos_opt().unwrap_or(0)
     );
-    let job_id = seed_agent_and_job(&pool, &key, 0).await;
-    let run_id = insert_test_run(&pool, job_id, RUN_STATUS_RUNNING)
+    let sub_agent_id = seed_agent_and_job(&pool, &key, 0).await;
+    let run_id = insert_test_run(&pool, sub_agent_id, RUN_STATUS_RUNNING)
         .await
         .expect("seed run");
 

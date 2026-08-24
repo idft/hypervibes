@@ -2,7 +2,6 @@ mod account;
 mod agents;
 mod balance;
 mod conversations;
-mod jobs;
 mod live_health;
 mod memories;
 mod navbar;
@@ -13,6 +12,7 @@ mod providers;
 mod runs;
 mod settings;
 pub(crate) mod shared;
+mod sub_agents;
 
 #[cfg(test)]
 use self::shared::*;
@@ -21,7 +21,6 @@ pub use account::*;
 pub use agents::*;
 pub use balance::*;
 pub use conversations::*;
-pub use jobs::*;
 pub use live_health::*;
 pub use memories::*;
 pub use navbar::*;
@@ -31,6 +30,7 @@ pub use positions::*;
 pub use providers::*;
 pub use runs::*;
 pub use settings::*;
+pub use sub_agents::*;
 
 #[cfg(test)]
 mod test_support;
@@ -48,8 +48,8 @@ mod agents_tests;
 mod opencode_tests;
 
 #[cfg(test)]
-#[path = "jobs_tests.rs"]
-mod jobs_tests;
+#[path = "sub_agents_tests.rs"]
+mod sub_agents_tests;
 
 #[cfg(test)]
 #[path = "runs_tests.rs"]

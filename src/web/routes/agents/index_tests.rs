@@ -412,13 +412,13 @@ async fn post_delete_agent_aborts_queued_run_before_deleting() {
         .await
         .expect("insert agent");
     generate_test_agent_workspace(&state, &agent_key).await;
-    let job_id = crate::harness::store::list_agent_jobs(&pool, &agent_key)
+    let sub_agent_id = crate::harness::store::list_agent_sub_agents(&pool, &agent_key)
         .await
         .expect("list jobs")
         .first()
         .expect("default job")
         .id;
-    crate::harness::store::insert_test_run(&pool, job_id, "queued")
+    crate::harness::store::insert_test_run(&pool, sub_agent_id, "queued")
         .await
         .expect("insert queued run");
 
@@ -450,13 +450,13 @@ async fn post_delete_agent_preserves_disabled_agent_when_run_cannot_abort() {
         .await
         .expect("insert agent");
     generate_test_agent_workspace(&state, &agent_key).await;
-    let job_id = crate::harness::store::list_agent_jobs(&pool, &agent_key)
+    let sub_agent_id = crate::harness::store::list_agent_sub_agents(&pool, &agent_key)
         .await
         .expect("list jobs")
         .first()
         .expect("default job")
         .id;
-    let run_id = crate::harness::store::insert_test_run(&pool, job_id, "running")
+    let run_id = crate::harness::store::insert_test_run(&pool, sub_agent_id, "running")
         .await
         .expect("insert running run");
     crate::harness::store::mark_run_running(&pool, run_id, Some("ses_still_active"))

@@ -19,4 +19,4 @@ Do not place or cancel orders.
 
 Do not edit `scripts/user/`, `data/`, or `scratch/`. If reusable analysis
 code should improve, record `analysis_coding_requested` and its reason
-in the daily-review metadata for the separate coding job.
+in the daily-review metadata for the separate coding sub-agent.

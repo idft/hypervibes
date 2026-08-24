@@ -275,7 +275,7 @@ pub async fn get_daily_review_memory_for_run(
           WHERE agent_key = $1
             AND symbol = '__agent__'
             AND memory_type = 'daily_review'
-            AND metadata->>'source_harness_run_id' = $2
+            AND metadata->>'source_sub_agent_run_id' = $2
           ORDER BY created_at DESC, id DESC
           LIMIT 2",
     )

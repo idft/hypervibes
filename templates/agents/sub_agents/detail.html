@@ -1,6 +1,6 @@
 {% extends "layouts/base.html" %}
 
-{% block title %}{{ job.job_key }} · {{ agent.display_name }} · HyperVibes{% endblock %}
+{% block title %}{{ job.sub_agent_key }} · {{ agent.display_name }} · HyperVibes{% endblock %}
 
 {% block content %}
 <div class="mx-auto max-w-[1500px]">
@@ -13,12 +13,12 @@
         <div class="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
             <div>
                 <div class="flex items-center gap-3">
-                    <a href="/agents/{{ agent.agent_key }}/jobs" aria-label="Back" title="Back" class="inline-flex w-fit shrink-0 cursor-pointer items-center rounded-full border border-zinc-800 p-2 text-zinc-300 hover:border-zinc-700 hover:text-white">
+                    <a href="/agents/{{ agent.agent_key }}/sub-agents" aria-label="Back" title="Back" class="inline-flex w-fit shrink-0 cursor-pointer items-center rounded-full border border-zinc-800 p-2 text-zinc-300 hover:border-zinc-700 hover:text-white">
                         <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="size-6" aria-hidden="true">
                             <path stroke-linecap="round" stroke-linejoin="round" d="M10.5 19.5 3 12m0 0 7.5-7.5M3 12h18" />
                         </svg>
                     </a>
-                    <h2 class="text-lg font-medium text-white">{{ job.job_key }}</h2>
+                    <h2 class="text-lg font-medium text-white">{{ job.sub_agent_key }}</h2>
                     <span class="inline-flex rounded-full border px-2 py-0.5 text-xs font-medium {{ job.enabled_class }}">{{ job.enabled_label }}</span>
                 </div>
             </div>
@@ -51,8 +51,8 @@
                     </button>
                 </form>
                 {% set delete_action = job.delete_action %}
-                {% set delete_label = job.job_key %}
-                {% set delete_kind = "job" %}
+                {% set delete_label = job.sub_agent_key %}
+                {% set delete_kind = "sub-agent" %}
                 {% include "agents/components/delete-modal.html" %}
             </div>
         </div>
@@ -152,61 +152,62 @@
             </p>
         </div>
         {% endif %}
-        <div class="p-5 {% if job.highlight_model_selector %}rounded-xl border border-violet-700/70 bg-violet-950/30 ring-1 ring-violet-500/30{% else %}bg-zinc-950/50{% endif %}">
-            <p class="text-xs uppercase tracking-[0.16em] text-zinc-500">Model</p>
-            <form action="{{ job.model_update_action }}" method="post" hx-post="{{ job.model_update_action }}" hx-swap="none" class="mt-2">
-                {% include "agents/components/model-picker.html" %}
-            </form>
-            {% if job.highlight_model_selector %}
-            <p class="mt-3 text-xs text-violet-200">Select a model before enabling this job.</p>
-            {% endif %}
-            {% if let Some(error) = job.model_error %}
-            <p class="mt-2 text-xs text-amber-300" role="alert">{{ error }}</p>
-            {% endif %}
-        </div>
     </section>
 
     <section class="mt-6 border-t border-zinc-800 pt-6">
-        <div class="flex flex-wrap gap-3">
-            <button type="button" data-job-detail-modal-trigger="additional-instructions-modal" aria-controls="additional-instructions-modal"
-                class="cursor-pointer rounded-full border border-zinc-800 bg-zinc-950/50 px-4 py-2 text-sm font-medium text-zinc-300 hover:border-zinc-700 hover:text-white">
-                Additional Instructions
-            </button>
-            <button type="button" data-job-detail-modal-trigger="prompt-preview-modal" aria-controls="prompt-preview-modal"
-                class="cursor-pointer rounded-full border border-zinc-800 bg-zinc-950/50 px-4 py-2 text-sm font-medium text-zinc-300 hover:border-zinc-700 hover:text-white">
-                Preview Prompt
-            </button>
+        <div class="grid gap-4 lg:grid-cols-2 lg:items-center">
+            <div class="p-5 {% if job.highlight_model_selector %}rounded-xl border border-violet-700/70 bg-violet-950/30 ring-1 ring-violet-500/30{% else %}bg-zinc-950/50{% endif %}">
+                <form action="{{ job.model_update_action }}" method="post" hx-post="{{ job.model_update_action }}" hx-swap="none">
+                    {% include "agents/components/model-picker.html" %}
+                </form>
+                {% if job.highlight_model_selector %}
+                <p class="mt-3 text-xs text-violet-200">Select a model before enabling this sub-agent.</p>
+                {% endif %}
+                {% if let Some(error) = job.model_error %}
+                <p class="mt-2 text-xs text-amber-300" role="alert">{{ error }}</p>
+                {% endif %}
+            </div>
+            <div class="flex flex-wrap items-center gap-3">
+                <button type="button" data-sub-agent-detail-modal-trigger="additional-instructions-modal" aria-controls="additional-instructions-modal"
+                    class="cursor-pointer rounded-full border border-zinc-800 bg-zinc-950/50 px-4 py-2 text-sm font-medium text-zinc-300 hover:border-zinc-700 hover:text-white">
+                    Additional Instructions
+                </button>
+                <button type="button" data-sub-agent-detail-modal-trigger="prompt-preview-modal" aria-controls="prompt-preview-modal"
+                    class="cursor-pointer rounded-full border border-zinc-800 bg-zinc-950/50 px-4 py-2 text-sm font-medium text-zinc-300 hover:border-zinc-700 hover:text-white">
+                    Preview Prompt
+                </button>
+            </div>
         </div>
 
-        <div id="additional-instructions-modal" data-job-detail-modal class="fixed inset-0 z-50 hidden items-start justify-center overflow-y-auto p-4 sm:items-center" aria-hidden="true" aria-labelledby="additional-instructions-modal-title" aria-modal="true" role="dialog">
-            <button type="button" data-job-detail-modal-close class="absolute inset-0 cursor-pointer bg-black/70 backdrop-blur-sm" aria-label="Close additional instructions dialog"></button>
+        <div id="additional-instructions-modal" data-sub-agent-detail-modal class="fixed inset-0 z-50 hidden items-start justify-center overflow-y-auto p-4 sm:items-center" aria-hidden="true" aria-labelledby="additional-instructions-modal-title" aria-modal="true" role="dialog">
+            <button type="button" data-sub-agent-detail-modal-close class="absolute inset-0 cursor-pointer bg-black/70 backdrop-blur-sm" aria-label="Close additional instructions dialog"></button>
             <form action="{{ job.operator_prompt_update_action }}" method="post" class="relative my-auto w-full max-w-2xl rounded-2xl border border-zinc-800 bg-[#0d0d10] shadow-2xl shadow-black/50">
                 <div class="flex items-start justify-between gap-4 border-b border-zinc-800 px-6 py-5">
                     <div>
                         <h3 id="additional-instructions-modal-title" class="text-lg font-medium text-white">Additional Instructions</h3>
-                        <p id="additional-instructions-modal-description" class="mt-1 text-sm text-zinc-500">Optional details for this specific job. They add to its strategy prompt without replacing it.</p>
+                        <p id="additional-instructions-modal-description" class="mt-1 text-sm text-zinc-500">Optional details for this specific sub-agent. They add to its strategy prompt without replacing it.</p>
                     </div>
-                    <button type="button" data-job-detail-modal-close class="cursor-pointer rounded-full p-2 text-zinc-500 hover:bg-zinc-900 hover:text-zinc-200" aria-label="Close additional instructions dialog">
+                    <button type="button" data-sub-agent-detail-modal-close class="cursor-pointer rounded-full p-2 text-zinc-500 hover:bg-zinc-900 hover:text-zinc-200" aria-label="Close additional instructions dialog">
                         <svg class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true"><path fill-rule="evenodd" d="M4.22 4.22a.75.75 0 0 1 1.06 0L10 8.94l4.72-4.72a.75.75 0 1 1 1.06 1.06L11.06 10l4.72 4.72a.75.75 0 0 1-1.06 1.06L10 11.06l-4.72 4.72a.75.75 0 0 1-1.06-1.06L8.94 10 4.22 5.28a.75.75 0 0 1 0-1.06Z" clip-rule="evenodd"></path></svg>
                     </button>
                 </div>
                 <div class="p-6">
-                    <label for="job-operator-prompt" class="sr-only">Additional Instructions</label>
-                    <textarea id="job-operator-prompt" name="operator_prompt" rows="12" data-job-detail-modal-initial-focus aria-describedby="additional-instructions-modal-description" class="block w-full rounded-xl border border-zinc-800 bg-zinc-950 px-3 py-2 text-sm leading-6 text-white placeholder-zinc-600 focus:border-zinc-600 focus:outline-none">{{ job.operator_prompt }}</textarea>
+                    <label for="sub-agent-operator-prompt" class="sr-only">Additional Instructions</label>
+                    <textarea id="sub-agent-operator-prompt" name="operator_prompt" rows="12" data-sub-agent-detail-modal-initial-focus aria-describedby="additional-instructions-modal-description" class="block w-full rounded-xl border border-zinc-800 bg-zinc-950 px-3 py-2 text-sm leading-6 text-white placeholder-zinc-600 focus:border-zinc-600 focus:outline-none">{{ job.operator_prompt }}</textarea>
                 </div>
                 <div class="flex flex-wrap justify-end gap-3 border-t border-zinc-800 px-6 py-4">
-                    <button type="button" data-job-detail-modal-close class="cursor-pointer rounded-full border border-zinc-800 px-4 py-2 text-sm font-medium text-zinc-300 hover:border-zinc-700 hover:text-white">Cancel</button>
+                    <button type="button" data-sub-agent-detail-modal-close class="cursor-pointer rounded-full border border-zinc-800 px-4 py-2 text-sm font-medium text-zinc-300 hover:border-zinc-700 hover:text-white">Cancel</button>
                     <button type="submit" class="cursor-pointer rounded-full border border-zinc-700 bg-zinc-900/70 px-4 py-2 text-sm font-medium text-zinc-200 hover:border-zinc-600 hover:bg-zinc-800 hover:text-white">Save</button>
                 </div>
             </form>
         </div>
 
-        <div id="prompt-preview-modal" data-job-detail-modal class="fixed inset-0 z-50 hidden items-start justify-center overflow-y-auto p-4 sm:items-center" aria-hidden="true" aria-labelledby="prompt-preview-modal-title" aria-modal="true" role="dialog">
-            <button type="button" data-job-detail-modal-close class="absolute inset-0 cursor-pointer bg-black/70 backdrop-blur-sm" aria-label="Close prompt preview dialog"></button>
-            <div class="relative my-auto flex max-h-[calc(100vh-2rem)] w-full max-w-4xl flex-col rounded-2xl border border-zinc-800 bg-[#0d0d10] shadow-2xl shadow-black/50">
+        <div id="prompt-preview-modal" data-sub-agent-detail-modal class="fixed inset-x-0 bottom-0 top-14 z-50 hidden items-start justify-center overflow-y-auto p-4 sm:items-center" aria-hidden="true" aria-labelledby="prompt-preview-modal-title" aria-modal="true" role="dialog">
+            <button type="button" data-sub-agent-detail-modal-close class="absolute inset-0 cursor-pointer bg-black/70 backdrop-blur-sm" aria-label="Close prompt preview dialog"></button>
+            <div class="relative my-auto flex max-h-[calc(100vh-5.5rem)] w-full max-w-4xl flex-col rounded-2xl border border-zinc-800 bg-[#0d0d10] shadow-2xl shadow-black/50">
                 <div class="flex items-center justify-between gap-4 border-b border-zinc-800 px-6 py-5">
                     <h3 id="prompt-preview-modal-title" class="text-lg font-medium text-white">Preview Prompt</h3>
-                    <button type="button" data-job-detail-modal-close data-job-detail-modal-initial-focus class="cursor-pointer rounded-full p-2 text-zinc-500 hover:bg-zinc-900 hover:text-zinc-200" aria-label="Close prompt preview dialog">
+                    <button type="button" data-sub-agent-detail-modal-close data-sub-agent-detail-modal-initial-focus class="cursor-pointer rounded-full p-2 text-zinc-500 hover:bg-zinc-900 hover:text-zinc-200" aria-label="Close prompt preview dialog">
                         <svg class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true"><path fill-rule="evenodd" d="M4.22 4.22a.75.75 0 0 1 1.06 0L10 8.94l4.72-4.72a.75.75 0 1 1 1.06 1.06L11.06 10l4.72 4.72a.75.75 0 0 1-1.06 1.06L10 11.06l-4.72 4.72a.75.75 0 0 1-1.06-1.06L8.94 10 4.22 5.28a.75.75 0 0 1 0-1.06Z" clip-rule="evenodd"></path></svg>
                     </button>
                 </div>
@@ -231,7 +232,7 @@
         <div class="mt-4 rounded-xl border border-amber-900/60 bg-amber-950/30 px-4 py-3 text-sm text-amber-200">Runs could not be loaded.</div>
         {% else if job_runs.is_empty() %}
         <div class="mt-4 rounded-xl border border-zinc-800 bg-zinc-950/70 p-6 text-center">
-            <p class="text-sm text-zinc-400">No runs have been recorded for this job yet.</p>
+            <p class="text-sm text-zinc-400">No runs have been recorded for this sub-agent yet.</p>
         </div>
         {% else %}
         <div class="mt-4 overflow-x-auto">
@@ -281,6 +282,18 @@
                     {% endfor %}
                 </tbody>
             </table>
+        </div>
+        <div class="mt-4 flex flex-col gap-3 border-t border-zinc-800 pt-4 text-sm text-zinc-400 sm:flex-row sm:items-center sm:justify-between">
+            <p>Showing {{ job_runs_range_start }}-{{ job_runs_range_end }} of {{ job_runs_total_count }} runs</p>
+            <div class="flex items-center gap-2">
+                {% if let Some(previous_page_url) = job_runs_previous_page_url %}
+                <a href="{{ previous_page_url }}" class="inline-flex cursor-pointer items-center rounded-full border border-zinc-800 px-3 py-1.5 text-xs font-medium text-zinc-300 hover:border-zinc-700 hover:text-white">Previous</a>
+                {% endif %}
+                <span class="px-2 text-xs uppercase tracking-[0.16em] text-zinc-500">Page {{ job_runs_page }} of {{ job_runs_total_pages }}</span>
+                {% if let Some(next_page_url) = job_runs_next_page_url %}
+                <a href="{{ next_page_url }}" class="inline-flex cursor-pointer items-center rounded-full border border-zinc-800 px-3 py-1.5 text-xs font-medium text-zinc-300 hover:border-zinc-700 hover:text-white">Next</a>
+                {% endif %}
+            </div>
         </div>
         {% endif %}
     </section>
@@ -428,9 +441,9 @@
                         return;
                     }
                     form.setAttribute('action', action);
-                    title.textContent = 'Delete job';
-                    confirm.textContent = 'Delete job';
-                    body.textContent = 'Delete ' + label + '? This permanently removes the job, its run history, and transcript sessions.';
+                    title.textContent = 'Delete sub-agent';
+                    confirm.textContent = 'Delete sub-agent';
+                    body.textContent = 'Delete ' + label + '? This permanently removes the sub-agent, its run history, and transcript sessions.';
                     modal.classList.remove('hidden');
                     modal.classList.add('flex');
                 });

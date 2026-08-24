@@ -12,29 +12,29 @@ async fn coding_report_is_scoped_to_the_authenticated_agent() {
     let (agent_key, api_key) = seed_agent(&state, "coding-report").await;
     let (_other_agent, other_key) = seed_agent(&state, "coding-other").await;
     sqlx::query(
-        "INSERT INTO harness_jobs
-            (agent_key, job_key, job_kind, trigger_type, enabled, timeout_seconds, operator_prompt)
-         VALUES ($1, 'analysis-coding', 'analysis_coding', 'daily_review_completed', false, 1800, '')",
+        "INSERT INTO harness_sub_agents
+            (agent_key, sub_agent_key, sub_agent_kind, enabled, timeout_seconds, operator_prompt)
+         VALUES ($1, 'analysis-coding', 'analysis_coding', false, 1800, '')",
     )
     .bind(&agent_key)
     .execute(&state.db_pool)
     .await
     .unwrap();
-    let job_id = crate::harness::store::list_agent_jobs(&state.db_pool, &agent_key)
+    let sub_agent_id = crate::harness::store::list_agent_sub_agents(&state.db_pool, &agent_key)
         .await
         .unwrap()
         .into_iter()
-        .find(|job| job.job_kind == "analysis_coding")
+        .find(|job| job.sub_agent_kind == "analysis_coding")
         .expect("coding job")
         .id;
     sqlx::query(
-        "UPDATE harness_jobs
+        "UPDATE harness_sub_agents
             SET enabled = true,
                 model_provider_id = 'test',
                 model_id = 'strong'
           WHERE id = $1",
     )
-    .bind(job_id)
+    .bind(sub_agent_id)
     .execute(&state.db_pool)
     .await
     .unwrap();
@@ -42,9 +42,10 @@ async fn coding_report_is_scoped_to_the_authenticated_agent() {
         &state.db_pool,
         crate::harness::store::AnalysisCodingTaskRequest {
             agent_key: &agent_key,
-            job_id,
+            sub_agent_id,
             trigger_mode: crate::harness::store::CodingTriggerMode::Automatic,
-            source_run_id: None,
+            request_origin: "manual",
+            source_sub_agent_run_id: None,
             source_memory_id: None,
             operator_prompt: None,
             requested_mode: Some("auto"),

@@ -1,15 +1,11 @@
 use chrono::{DateTime, Utc};
 use serde_json::Value;
 
-pub const JOB_KIND_ANALYSIS: &str = "analysis";
-pub const JOB_KIND_MARKET_ANALYSIS: &str = "market_analysis";
-pub const JOB_KIND_TRADING: &str = "trading";
-pub const JOB_KIND_DAILY_REVIEW: &str = "daily_review";
-pub const JOB_KIND_ANALYSIS_CODING: &str = "analysis_coding";
-
-pub const TRIGGER_TYPE_CANDLE_CLOSED: &str = "candle_closed";
-pub const TRIGGER_TYPE_ANALYSIS_BATCH_COMPLETED: &str = "analysis_batch_completed";
-pub const TRIGGER_TYPE_DAILY_REVIEW_COMPLETED: &str = "daily_review_completed";
+pub const SUB_AGENT_KIND_ANALYSIS: &str = "analysis";
+pub const SUB_AGENT_KIND_MARKET_ANALYSIS: &str = "market_analysis";
+pub const SUB_AGENT_KIND_TRADING: &str = "trading";
+pub const SUB_AGENT_KIND_DAILY_REVIEW: &str = "daily_review";
+pub const SUB_AGENT_KIND_ANALYSIS_CODING: &str = "analysis_coding";
 
 pub const RUN_STATUS_QUEUED: &str = "queued";
 pub const RUN_STATUS_RUNNING: &str = "running";
@@ -52,12 +48,11 @@ pub const CODING_PROMOTION_PHASES: &[&str] = &[
 ];
 
 #[derive(Debug, Clone, sqlx::FromRow)]
-pub struct HarnessJobRow {
+pub struct HarnessSubAgentRow {
     pub id: i64,
     pub agent_key: String,
-    pub job_key: String,
-    pub job_kind: String,
-    pub trigger_type: String,
+    pub sub_agent_key: String,
+    pub sub_agent_kind: String,
     pub enabled: bool,
     pub timeframe: Option<String>,
     pub next_run_at: Option<DateTime<Utc>>,
@@ -80,13 +75,12 @@ pub struct HarnessJobRow {
 }
 
 #[derive(Debug, Clone, sqlx::FromRow)]
-pub struct HarnessRunRow {
+pub struct HarnessSubAgentRunRow {
     pub id: i64,
-    pub job_id: i64,
+    pub sub_agent_id: i64,
     pub agent_key: String,
-    pub job_key: String,
-    pub job_kind: String,
-    pub trigger_type: String,
+    pub sub_agent_key: String,
+    pub sub_agent_kind: String,
     pub timeframe: Option<String>,
     pub status: String,
     pub backend_run_ref: Option<String>,
@@ -111,9 +105,9 @@ pub struct AgentMaintenanceTaskRow {
     pub status: String,
     pub phase: String,
     pub error_summary: Option<String>,
-    pub job_id: Option<i64>,
+    pub sub_agent_id: Option<i64>,
     pub run_id: Option<i64>,
-    pub source_run_id: Option<i64>,
+    pub source_sub_agent_run_id: Option<i64>,
     pub source_memory_id: Option<uuid::Uuid>,
 }
 
@@ -141,13 +135,12 @@ pub struct GlobalMaintenanceTaskRow {
 }
 
 #[derive(Debug, Clone, sqlx::FromRow)]
-pub struct HarnessDispatchJobRow {
-    pub job_id: i64,
+pub struct HarnessDispatchSubAgentRow {
+    pub sub_agent_id: i64,
     pub agent_key: String,
     pub display_name: String,
-    pub job_key: String,
-    pub job_kind: String,
-    pub trigger_type: String,
+    pub sub_agent_key: String,
+    pub sub_agent_kind: String,
     pub timeframe: Option<String>,
     pub trigger_delay_seconds: Option<i32>,
     pub next_run_at: Option<DateTime<Utc>>,

@@ -361,11 +361,11 @@ pub(in crate::web::routes) async fn insert_test_opencode_agent(
     insert_default_strategy_prompts_for_agent(&state.db_pool, &agent_key)
         .await
         .expect("insert default prompts");
-    crate::harness::store::insert_default_harness_jobs(&state.db_pool, &agent_key)
+    crate::harness::store::insert_default_harness_sub_agents(&state.db_pool, &agent_key)
         .await
         .expect("insert default schedules");
     sqlx::query(
-        "UPDATE harness_jobs
+        "UPDATE harness_sub_agents
             SET model_provider_id = 'anthropic', model_id = 'claude-sonnet-test'
           WHERE agent_key = $1",
     )
@@ -374,7 +374,7 @@ pub(in crate::web::routes) async fn insert_test_opencode_agent(
     .await
     .expect("set test schedule models");
     sqlx::query(
-        "UPDATE harness_jobs
+        "UPDATE harness_sub_agents
             SET model_provider_id = 'anthropic', model_id = 'claude-sonnet-test'
           WHERE agent_key = $1",
     )

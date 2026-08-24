@@ -162,7 +162,7 @@ function installModal(trigger: string, modalId: string, cancelId: string, config
 
 function installAgentModals() {
   installModal("[data-delete-agent-trigger]", "delete-modal", "cancel-delete-btn");
-  installModal("[data-agent-job-delete-trigger]", "agent-job-delete-modal", "cancel-agent-job-delete-btn", (button) => { const form = document.getElementById("agent-job-delete-form") as HTMLFormElement | null; const kind = button.dataset.deleteKind ?? "job"; if (form) form.action = button.dataset.deleteAction ?? ""; const title = document.getElementById("agent-job-delete-modal-title"); const confirm = document.getElementById("confirm-agent-job-delete-btn"); const body = document.getElementById("agent-job-delete-modal-body"); if (title) title.textContent = `Delete ${kind}`; if (confirm) confirm.textContent = `Delete ${kind}`; if (body) body.textContent = `Are you sure you want to delete ${button.dataset.deleteLabel ?? kind}? This action cannot be undone.`; });
+  installModal("[data-agent-sub-agent-delete-trigger]", "agent-sub-agent-delete-modal", "cancel-agent-sub-agent-delete-btn", (button) => { const form = document.getElementById("agent-sub-agent-delete-form") as HTMLFormElement | null; const kind = button.dataset.deleteKind ?? "sub-agent"; if (form) form.action = button.dataset.deleteAction ?? ""; const title = document.getElementById("agent-sub-agent-delete-modal-title"); const confirm = document.getElementById("confirm-agent-sub-agent-delete-btn"); const body = document.getElementById("agent-sub-agent-delete-modal-body"); if (title) title.textContent = `Delete ${kind}`; if (confirm) confirm.textContent = `Delete ${kind}`; if (body) body.textContent = `Are you sure you want to delete ${button.dataset.deleteLabel ?? kind}? This action cannot be undone.`; });
   installModal("[data-regenerate-workspace-trigger]", "regenerate-workspace-modal", "cancel-regenerate-workspace-btn");
 }
 
@@ -182,10 +182,10 @@ function initInlineEditors(root: ParentNode) {
 }
 
 function initJobDetailModals(root: ParentNode) {
-  root.querySelectorAll<HTMLElement>("[data-job-detail-modal]").forEach((modal) => {
+  root.querySelectorAll<HTMLElement>("[data-sub-agent-detail-modal]").forEach((modal) => {
     if (modal.dataset.bound === "true") return;
-    const trigger = root.querySelector<HTMLElement>(`[data-job-detail-modal-trigger="${modal.id}"]`);
-    const initialFocus = modal.querySelector<HTMLElement>("[data-job-detail-modal-initial-focus]");
+    const trigger = root.querySelector<HTMLElement>(`[data-sub-agent-detail-modal-trigger="${modal.id}"]`);
+    const initialFocus = modal.querySelector<HTMLElement>("[data-sub-agent-detail-modal-initial-focus]");
     if (!trigger || !initialFocus) return;
     modal.dataset.bound = "true";
     const close = () => {
@@ -203,7 +203,7 @@ function initJobDetailModals(root: ParentNode) {
       initialFocus.focus();
     };
     trigger.addEventListener("click", open);
-    modal.querySelectorAll<HTMLElement>("[data-job-detail-modal-close]").forEach((button) => button.addEventListener("click", close));
+    modal.querySelectorAll<HTMLElement>("[data-sub-agent-detail-modal-close]").forEach((button) => button.addEventListener("click", close));
     modal.addEventListener("keydown", (event) => { if (event.key === "Escape") { event.preventDefault(); close(); } });
   });
 }
@@ -230,10 +230,10 @@ function initWorkspaceModal(root: ParentNode) {
 }
 
 function initNewJobForm(root: ParentNode) {
-  const form = root.querySelector<HTMLElement>("[data-new-job-form]");
-  const kind = form?.querySelector<HTMLSelectElement>("[data-new-job-kind]");
-  const timeframe = form?.querySelector<HTMLElement>("[data-new-job-timeframe]");
-  const timeframeInput = form?.querySelector<HTMLInputElement>("[data-new-job-timeframe-input]");
+  const form = root.querySelector<HTMLElement>("[data-new-sub-agent-form]");
+  const kind = form?.querySelector<HTMLSelectElement>("[data-new-sub-agent-kind]");
+  const timeframe = form?.querySelector<HTMLElement>("[data-new-sub-agent-timeframe]");
+  const timeframeInput = form?.querySelector<HTMLInputElement>("[data-new-sub-agent-timeframe-input]");
   if (!form || !kind || !timeframe || !timeframeInput || form.dataset.newJobBound === "true") return;
   form.dataset.newJobBound = "true";
   const sync = () => {

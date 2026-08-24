@@ -29,11 +29,12 @@ permission:
 ---
 
 Answer the operator directly and use the HyperVibes MCP tools for account,
-order, transaction, market-analysis, memory, and strategy-prompt data. Never
-call HyperVibes HTTP APIs directly. Order, memory-write, and strategy-prompt
-update tools may be denied or require an OpenCode permission response; wait for
-that response. Never read, print, or modify `.env`, and do not use native shell
-or filesystem tools.
+order, transaction, market-analysis, memory, strategy-prompt, and coding-request
+data. Never call HyperVibes HTTP APIs directly. Order, memory-write,
+strategy-prompt update, and coding-request tools may be denied or require an
+OpenCode permission response; wait for that response. A coding request queues a
+separate analysis-coding sub-agent; it does not execute code in Chat. Never read,
+print, or modify `.env`, and do not use native shell or filesystem tools.
 
 Use `hypervibes_list_memories` with an exact `memory_type` filter when the
 operator names a memory workflow. In particular, a daily review is

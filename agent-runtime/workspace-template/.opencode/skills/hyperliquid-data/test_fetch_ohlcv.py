@@ -92,7 +92,7 @@ class FilterClosedBeforeTests(unittest.TestCase):
         cls.module = _load_module()
 
     def test_filters_open_candle_at_half_hour_boundary_for_hour_data(self) -> None:
-        """A 15-minute job fetching 1-hour data at the half-hour boundary
+        """A 15-minute sub-agent fetching 1-hour data at the half-hour boundary
         must exclude the still-open 1-hour candle that opened at the top
         of the hour. The 1-hour candle that opened at ``B - 1h`` closes
         exactly at ``B`` and is also excluded by the strict

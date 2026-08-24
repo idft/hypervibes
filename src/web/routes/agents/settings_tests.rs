@@ -155,7 +155,7 @@ async fn settings_page_and_partial_render_workspace_maintenance_status() {
     assert_eq!(settings_response.status(), StatusCode::OK);
     let settings_text = response_text(settings_response).await;
     assert!(settings_text.contains("Workspace maintenance"));
-    assert!(settings_text.contains("Waiting for active jobs and sessions to finish"));
+    assert!(settings_text.contains("Waiting for active sub-agents and sessions to finish"));
     assert!(settings_text.contains("Hard reset"));
 
     let partial_response = app

@@ -4,20 +4,24 @@ use crate::web::templates::test_support::*;
 #[test]
 fn job_detail_page_renders_job_metadata_and_runs() {
     let agent = sample_opencode_detail_row();
-    let job =
-        HarnessJobDetailView::from_row(&sample_candle_job_row(1, "analysis-15m", "analysis", true));
+    let job = HarnessSubAgentDetailView::from_row(&sample_candle_job_row(
+        1,
+        "analysis-15m",
+        "analysis",
+        true,
+    ));
     let runs = vec![
-        HarnessRunView::from_row(&sample_run_row(1, "succeeded", "analysis-15m")),
-        HarnessRunView::from_row(&sample_run_row(2, "failed", "analysis-15m")),
+        HarnessSubAgentRunView::from_row(&sample_run_row(1, "succeeded", "analysis-15m")),
+        HarnessSubAgentRunView::from_row(&sample_run_row(2, "failed", "analysis-15m")),
     ];
 
     let rendered = AgentJobDetailPageTemplate::render_view(
         agent,
         job,
         ModelPickerView {
-            input_id: "job-model-selection".to_string(),
+            input_id: "sub-agent-model-selection".to_string(),
             input_name: "model_selection".to_string(),
-            variant_input_id: "job-model-selection-variant".to_string(),
+            variant_input_id: "sub-agent-model-selection-variant".to_string(),
             variant_input_name: "model_variant".to_string(),
             selected_value: "anthropic/claude-sonnet-4".to_string(),
             selected_variant: String::new(),
@@ -39,13 +43,23 @@ fn job_detail_page_renders_job_metadata_and_runs() {
         },
         runs,
         true,
+        HarnessSubAgentRunsPagination {
+            page: 1,
+            total_pages: 1,
+            total_count: 2,
+            range_start: 1,
+            range_end: 2,
+            previous_page_url: None,
+            next_page_url: None,
+        },
         Navbar::default(),
     )
-    .expect("render job detail page");
+    .expect("render sub-agent detail page");
 
     assert!(rendered.contains("Agent sections"));
     assert!(
-        rendered.contains("href=\"/agents/test-agent/jobs\" aria-label=\"Back\" title=\"Back\"")
+        rendered
+            .contains("href=\"/agents/test-agent/sub-agents\" aria-label=\"Back\" title=\"Back\"")
     );
     assert!(rendered.contains("d=\"M10.5 19.5 3 12m0 0 7.5-7.5M3 12h18\""));
     assert!(!rendered.contains(">Back<"));
@@ -55,13 +69,13 @@ fn job_detail_page_renders_job_metadata_and_runs() {
     assert!(rendered.contains("Additional Instructions"));
     assert!(rendered.contains("Preview Prompt"));
     assert!(rendered.contains("additional-instructions-modal"));
-    assert!(rendered.contains("action=\"/agents/test-agent/jobs/1/operator-prompt\""));
+    assert!(rendered.contains("action=\"/agents/test-agent/sub-agents/1/operator-prompt\""));
     assert!(!rendered.contains("Operator prompt"));
-    assert!(rendered.contains("/agents/test-agent/jobs/1/run"));
+    assert!(rendered.contains("/agents/test-agent/sub-agents/1/run"));
     assert!(rendered.contains("Disable"));
     assert!(rendered.contains("/agents/test-agent/runs/1"));
-    assert!(rendered.contains("action=\"/agents/test-agent/jobs/1/model\""));
-    assert!(rendered.contains("hx-post=\"/agents/test-agent/jobs/1/model\""));
+    assert!(rendered.contains("action=\"/agents/test-agent/sub-agents/1/model\""));
+    assert!(rendered.contains("hx-post=\"/agents/test-agent/sub-agents/1/model\""));
     assert!(rendered.contains("hx-swap=\"none\""));
     assert!(rendered.contains("Select model"));
     assert!(rendered.contains("data-model-picker-mode="));
@@ -72,7 +86,7 @@ fn job_detail_page_renders_job_metadata_and_runs() {
 
 #[test]
 fn event_job_view_has_no_next_run() {
-    let view = HarnessJobView::from_row(&sample_event_job_row(3, true));
+    let view = HarnessSubAgentView::from_row(&sample_event_job_row(3, true));
 
     assert!(view.trigger_text.contains("analysis batch"));
     assert!(view.next_run_at.is_none());
@@ -81,8 +95,12 @@ fn event_job_view_has_no_next_run() {
 #[test]
 fn job_detail_highlights_model_picker_when_setup_needs_a_model() {
     let agent = sample_opencode_detail_row();
-    let mut job =
-        HarnessJobDetailView::from_row(&sample_candle_job_row(1, "trading-1m", "trading", false));
+    let mut job = HarnessSubAgentDetailView::from_row(&sample_candle_job_row(
+        1,
+        "trading-1m",
+        "trading",
+        false,
+    ));
     job.has_model = false;
     job.highlight_model_selector = true;
 
@@ -90,9 +108,9 @@ fn job_detail_highlights_model_picker_when_setup_needs_a_model() {
         agent,
         job,
         ModelPickerView {
-            input_id: "job-model-selection".to_string(),
+            input_id: "sub-agent-model-selection".to_string(),
             input_name: "model_selection".to_string(),
-            variant_input_id: "job-model-selection-variant".to_string(),
+            variant_input_id: "sub-agent-model-selection-variant".to_string(),
             variant_input_name: "model_variant".to_string(),
             selected_value: String::new(),
             selected_variant: String::new(),
@@ -109,10 +127,19 @@ fn job_detail_highlights_model_picker_when_setup_needs_a_model() {
         },
         Vec::new(),
         true,
+        HarnessSubAgentRunsPagination {
+            page: 1,
+            total_pages: 0,
+            total_count: 0,
+            range_start: 0,
+            range_end: 0,
+            previous_page_url: None,
+            next_page_url: None,
+        },
         Navbar::default(),
     )
-    .expect("render highlighted job detail page");
+    .expect("render highlighted sub-agent detail page");
 
     assert!(rendered.contains("border-violet-700/70"));
-    assert!(rendered.contains("Select a model before enabling this job."));
+    assert!(rendered.contains("Select a model before enabling this sub-agent."));
 }

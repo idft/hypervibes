@@ -1,9 +1,9 @@
 <header class="flex shrink-0 flex-col gap-2 pb-6">
     <div class="flex items-center gap-3">
-        <a href="{% if let Some(job_url) = run.job_url %}{{ job_url }}{% else %}/agents/{{ run.agent_key }}/jobs{% endif %}" class="inline-flex h-9 w-9 shrink-0 cursor-pointer items-center justify-center rounded-full border border-zinc-800 text-zinc-300 hover:border-zinc-700 hover:text-white" aria-label="{% if let Some(_job_url) = run.job_url %}Back to {{ run.job_label }}{% else %}Back to jobs{% endif %}" title="{% if let Some(_job_url) = run.job_url %}Back to {{ run.job_label }}{% else %}Back to jobs{% endif %}">
+        <a href="{% if let Some(job_url) = run.job_url %}{{ job_url }}{% else %}/agents/{{ run.agent_key }}/sub-agents{% endif %}" class="inline-flex h-9 w-9 shrink-0 cursor-pointer items-center justify-center rounded-full border border-zinc-800 text-zinc-300 hover:border-zinc-700 hover:text-white" aria-label="{% if let Some(_job_url) = run.job_url %}Back to {{ run.job_label }}{% else %}Back to sub-agents{% endif %}" title="{% if let Some(_job_url) = run.job_url %}Back to {{ run.job_label }}{% else %}Back to sub-agents{% endif %}">
             <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="M10 19l-7-7m0 0l7-7m-7 7h18"></path></svg>
         </a>
-        <h2 class="text-lg font-medium text-white">{{ run.job_key }} · Run {{ run.id }}</h2>
+        <h2 class="text-lg font-medium text-white">{{ run.sub_agent_key }} · Run {{ run.id }}</h2>
         <span class="inline-flex rounded-full border px-2 py-0.5 text-xs font-medium {{ run.status_class }}">{{ run.status_label }}</span>
         {% if run.status == "running" && !run.backend_run_ref.is_empty() %}
         <button type="button" data-run-cancel-trigger class="ml-auto cursor-pointer rounded-full border border-amber-800/70 px-3 py-1.5 text-xs font-medium text-amber-200 hover:border-amber-600 hover:bg-amber-950/30">Cancel run</button>
@@ -91,7 +91,7 @@
 <div id="run-cancel-modal" class="fixed inset-0 z-50 hidden items-center justify-center bg-black/70 px-4 backdrop-blur-sm" aria-modal="true" aria-labelledby="run-cancel-modal-title" role="dialog">
     <div class="w-full max-w-md rounded-2xl border border-zinc-800 bg-[#0d0d10] p-6 shadow-2xl">
         <h3 id="run-cancel-modal-title" class="text-lg font-semibold text-white">Cancel run</h3>
-        <p class="mt-2 text-sm leading-6 text-zinc-400">Cancel this running job?</p>
+        <p class="mt-2 text-sm leading-6 text-zinc-400">Cancel this running sub-agent?</p>
         <div class="mt-6 flex flex-col-reverse gap-3 sm:flex-row sm:justify-end">
             <button type="button" data-run-cancel-close class="w-full cursor-pointer rounded-full border border-zinc-800 px-4 py-2 text-sm font-medium text-zinc-300 hover:border-zinc-700 hover:text-white sm:w-auto">Keep running</button>
             <form action="/agents/{{ run.agent_key }}/runs/{{ run.id }}/cancel" method="post" class="w-full sm:w-auto">

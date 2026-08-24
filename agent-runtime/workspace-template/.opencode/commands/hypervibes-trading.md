@@ -1,6 +1,6 @@
 Run HyperVibes trading execution for this agent.
 
-- Follow the Trading strategy and the job prompt's Instructions for execution,
+- Follow the Trading strategy and the sub-agent prompt's Instructions for execution,
   sizing, entries, stops, and take-profits.
 - If real trading tools are enabled, submit or cancel orders only through
   the `hypervibes` MCP trading tools (`hypervibes_submit_orders`,

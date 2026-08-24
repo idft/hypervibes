@@ -1,9 +1,6 @@
 mod index;
 #[cfg(test)]
 mod index_tests;
-mod jobs;
-#[cfg(test)]
-mod jobs_tests;
 mod live_stream;
 #[cfg(test)]
 mod live_stream_tests;
@@ -26,6 +23,9 @@ mod shared;
 mod show;
 #[cfg(test)]
 mod show_tests;
+mod sub_agents;
+#[cfg(test)]
+mod sub_agents_tests;
 mod transactions;
 #[cfg(test)]
 mod transactions_tests;
@@ -33,8 +33,8 @@ mod transactions_tests;
 #[cfg(test)]
 use self::shared::*;
 pub(in crate::web::routes) use self::{
-    chat::*, index::*, jobs::*, live_stream::*, memories::*, operations::*, prompts::*, runs::*,
-    settings::*, show::*, transactions::*,
+    chat::*, index::*, live_stream::*, memories::*, operations::*, prompts::*, runs::*,
+    settings::*, show::*, sub_agents::*, transactions::*,
 };
 mod chat;
 #[cfg(test)]

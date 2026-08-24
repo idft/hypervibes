@@ -14,14 +14,14 @@ use crate::{
     model_catalog::options::ModelPickerOption,
 };
 
-use super::jobs::HarnessJobView;
 use super::memories::{
     AgentMemoryDetailPartialTemplate, AgentMemoryTimelinePartialTemplate, MemoryTimelineItem,
     MemoryView, TransactionView, build_memory_timeline,
 };
 use super::navbar::Navbar;
 use super::opencode::OpenCodeWorkspaceSettingsView;
-use super::runs::HarnessRunView;
+use super::runs::HarnessSubAgentRunView;
+use super::sub_agents::HarnessSubAgentView;
 use super::{account::TradingAccountChoicesView, balance::AccountBalanceView};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -32,7 +32,7 @@ pub enum AgentShowTab {
     Memories,
     Prompts,
     Settings,
-    Jobs,
+    SubAgents,
 }
 
 impl AgentShowTab {
@@ -44,7 +44,7 @@ impl AgentShowTab {
             Self::Memories => format!("/agents/{agent_key}/memories"),
             Self::Prompts => format!("/agents/{agent_key}/prompts"),
             Self::Settings => format!("/agents/{agent_key}/settings"),
-            Self::Jobs => format!("/agents/{agent_key}/jobs"),
+            Self::SubAgents => format!("/agents/{agent_key}/sub-agents"),
         }
     }
 }
@@ -67,7 +67,7 @@ pub fn build_agent_show_tabs(
         ("Transactions", AgentShowTab::Transactions),
         ("Memories", AgentShowTab::Memories),
         ("Prompts", AgentShowTab::Prompts),
-        ("Jobs", AgentShowTab::Jobs),
+        ("Sub-agents", AgentShowTab::SubAgents),
         ("Settings", AgentShowTab::Settings),
     ]
     .into_iter()
@@ -149,26 +149,30 @@ impl AgentSetupChecklistView {
                     complete: readiness.has_selected_instruments,
                 },
                 AgentSetupChecklistStepView {
-                    label: "Enable an Analysis job",
-                    description: "Enable at least one modeled analysis job to produce the trading inputs.",
-                    href: format!("/agents/{agent_key}/jobs"),
+                    label: "Enable an Analysis sub-agent",
+                    description: "Enable at least one modeled analysis sub-agent to produce the trading inputs.",
+                    href: format!("/agents/{agent_key}/sub-agents"),
                     complete: readiness.has_enabled_analysis_job,
                 },
                 AgentSetupChecklistStepView {
                     label: "Enable Market Analysis",
                     description: "Enable the modeled market-analysis follow-up after analysis completes.",
-                    href: readiness.market_analysis_job_id.map_or_else(
-                        || format!("/agents/{agent_key}/jobs"),
-                        |job_id| format!("/agents/{agent_key}/jobs/{job_id}?setup=true"),
+                    href: readiness.market_analysis_sub_agent_id.map_or_else(
+                        || format!("/agents/{agent_key}/sub-agents"),
+                        |sub_agent_id| {
+                            format!("/agents/{agent_key}/sub-agents/{sub_agent_id}?setup=true")
+                        },
                     ),
                     complete: readiness.has_enabled_market_analysis_job,
                 },
                 AgentSetupChecklistStepView {
-                    label: "Enable Trading job",
-                    description: "Enable the modeled trading job to evaluate the latest market analysis.",
-                    href: readiness.trading_job_id.map_or_else(
-                        || format!("/agents/{agent_key}/jobs"),
-                        |job_id| format!("/agents/{agent_key}/jobs/{job_id}?setup=true"),
+                    label: "Enable Trading sub-agent",
+                    description: "Enable the modeled trading sub-agent to evaluate the latest market analysis.",
+                    href: readiness.trading_sub_agent_id.map_or_else(
+                        || format!("/agents/{agent_key}/sub-agents"),
+                        |sub_agent_id| {
+                            format!("/agents/{agent_key}/sub-agents/{sub_agent_id}?setup=true")
+                        },
                     ),
                     complete: readiness.has_enabled_trading_job,
                 },
@@ -205,8 +209,8 @@ pub struct AgentTradingAccountChoicesTemplate {
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
-pub struct CreateHarnessJobFormValues {
-    pub job_kind: String,
+pub struct CreateHarnessSubAgentFormValues {
+    pub sub_agent_kind: String,
     pub timeframe: String,
     pub timeout_seconds: String,
     pub model_selection: String,
@@ -265,7 +269,7 @@ impl PromptEditorView {
             ),
             PROMPT_KIND_MARKET_ANALYSIS => (
                 "Market Analysis",
-                "Runs after analysis jobs complete to develop an overall market assessment from their results. The assessment is saved as a memory for trading.",
+                "Runs after analysis sub-agents complete to develop an overall market assessment from their results. The assessment is saved as a memory for trading.",
                 "market_analysis_prompt",
                 "How timeframe analyses should be synthesized into one execution-facing market view.",
             ),
@@ -285,7 +289,7 @@ impl PromptEditorView {
                 "Analysis Coding",
                 "Guides improvements to reusable quantitative analysis code; it does not set market bias or place trades.",
                 "analysis_coding_prompt",
-                "How the coding job should improve reusable analysis code, what constraints it must obey, and how to report changes.",
+                "How the coding sub-agent should improve reusable analysis code, what constraints it must obey, and how to report changes.",
             ),
             _ => ("Strategy", "", "strategy_prompt", ""),
         };
@@ -302,12 +306,12 @@ impl PromptEditorView {
 }
 
 #[derive(Template)]
-#[template(path = "agents/jobs/new.html")]
+#[template(path = "agents/sub_agents/new.html")]
 pub struct AgentJobNewPageTemplate {
     pub agent: AgentDetailRow,
     pub tabs: Vec<AgentShowTabLink>,
     pub agent_tabs_use_htmx: bool,
-    pub form: CreateHarnessJobFormValues,
+    pub form: CreateHarnessSubAgentFormValues,
     pub model_picker: ModelPickerView,
     pub market_analysis_available: bool,
     pub analysis_coding_available: bool,
@@ -319,7 +323,7 @@ pub struct AgentJobNewPageTemplate {
 
 #[derive(Debug, Clone)]
 pub struct AgentRecentRunsView {
-    pub recent_runs: Vec<HarnessRunView>,
+    pub recent_runs: Vec<HarnessSubAgentRunView>,
     pub recent_runs_loaded: bool,
     pub recent_runs_page: usize,
     pub recent_runs_total_pages: usize,
@@ -343,7 +347,7 @@ impl AgentRecentRunsView {
             recent_runs_range_end: 0,
             recent_runs_previous_page_url: None,
             recent_runs_next_page_url: None,
-            stream_url: format!("/agents/{agent_key}/jobs/recent-runs/stream?page={page}"),
+            stream_url: format!("/agents/{agent_key}/sub-agents/recent-runs/stream?page={page}"),
         }
     }
 }
@@ -410,7 +414,7 @@ pub struct AgentsShowPageTemplate {
     pub current_path: String,
     pub is_main_account: bool,
     pub subaccount_name: Option<String>,
-    pub jobs: Vec<HarnessJobView>,
+    pub jobs: Vec<HarnessSubAgentView>,
     pub jobs_loaded: bool,
     pub can_enable_all_jobs: bool,
     pub can_disable_all_jobs: bool,
@@ -436,7 +440,7 @@ impl AgentsShowPageTemplate {
             show_memories_tab: active_tab == AgentShowTab::Memories,
             show_prompts_tab: active_tab == AgentShowTab::Prompts,
             show_settings_tab: active_tab == AgentShowTab::Settings,
-            show_jobs_tab: active_tab == AgentShowTab::Jobs,
+            show_jobs_tab: active_tab == AgentShowTab::SubAgents,
             operation_notice: None,
             agent,
             transactions: Vec::new(),

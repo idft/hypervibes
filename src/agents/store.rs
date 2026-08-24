@@ -81,46 +81,41 @@ pub async fn list_agent_readiness_for_user(
                 ) AS has_selected_instruments,
                 EXISTS (
                     SELECT 1
-                      FROM harness_jobs
-                     WHERE harness_jobs.agent_key = agents.agent_key
-                       AND harness_jobs.job_kind = 'analysis'
-                       AND harness_jobs.trigger_type = 'candle_closed'
-                       AND harness_jobs.enabled = true
+                      FROM harness_sub_agents
+                     WHERE harness_sub_agents.agent_key = agents.agent_key
+                       AND harness_sub_agents.sub_agent_kind = 'analysis'
+                       AND harness_sub_agents.enabled = true
                 ) AS has_enabled_analysis_job,
                 EXISTS (
                     SELECT 1
-                      FROM harness_jobs
-                     WHERE harness_jobs.agent_key = agents.agent_key
-                       AND harness_jobs.job_kind = 'market_analysis'
-                       AND harness_jobs.trigger_type = 'analysis_batch_completed'
-                       AND harness_jobs.enabled = true
+                      FROM harness_sub_agents
+                     WHERE harness_sub_agents.agent_key = agents.agent_key
+                       AND harness_sub_agents.sub_agent_kind = 'market_analysis'
+                       AND harness_sub_agents.enabled = true
                 ) AS has_enabled_market_analysis_job,
                 EXISTS (
                     SELECT 1
-                      FROM harness_jobs
-                     WHERE harness_jobs.agent_key = agents.agent_key
-                       AND harness_jobs.job_kind = 'trading'
-                       AND harness_jobs.trigger_type = 'candle_closed'
-                       AND harness_jobs.enabled = true
+                      FROM harness_sub_agents
+                     WHERE harness_sub_agents.agent_key = agents.agent_key
+                       AND harness_sub_agents.sub_agent_kind = 'trading'
+                       AND harness_sub_agents.enabled = true
                 ) AS has_enabled_trading_job,
                 (
                     SELECT id
-                     FROM harness_jobs
-                     WHERE harness_jobs.agent_key = agents.agent_key
-                       AND harness_jobs.job_kind = 'market_analysis'
-                       AND harness_jobs.trigger_type = 'analysis_batch_completed'
+                     FROM harness_sub_agents
+                     WHERE harness_sub_agents.agent_key = agents.agent_key
+                       AND harness_sub_agents.sub_agent_kind = 'market_analysis'
                      ORDER BY id
                      LIMIT 1
-                ) AS market_analysis_job_id,
+                ) AS market_analysis_sub_agent_id,
                 (
                     SELECT id
-                      FROM harness_jobs
-                     WHERE harness_jobs.agent_key = agents.agent_key
-                       AND harness_jobs.job_kind = 'trading'
-                       AND harness_jobs.trigger_type = 'candle_closed'
+                      FROM harness_sub_agents
+                     WHERE harness_sub_agents.agent_key = agents.agent_key
+                       AND harness_sub_agents.sub_agent_kind = 'trading'
                      ORDER BY id
                      LIMIT 1
-                ) AS trading_job_id
+                ) AS trading_sub_agent_id
            FROM agents
           WHERE agents.user_id = $1
             AND agents.lifecycle = 'active'",
@@ -160,44 +155,39 @@ async fn list_agent_readiness_for_agent_key(
                        AND instruments.active = true
                 ) AS has_selected_instruments,
                 EXISTS (
-                    SELECT 1 FROM harness_jobs
-                     WHERE harness_jobs.agent_key = agents.agent_key
-                       AND harness_jobs.job_kind = 'analysis'
-                       AND harness_jobs.trigger_type = 'candle_closed'
-                       AND harness_jobs.enabled = true
+                    SELECT 1 FROM harness_sub_agents
+                     WHERE harness_sub_agents.agent_key = agents.agent_key
+                       AND harness_sub_agents.sub_agent_kind = 'analysis'
+                       AND harness_sub_agents.enabled = true
                 ) AS has_enabled_analysis_job,
                 EXISTS (
-                    SELECT 1 FROM harness_jobs
-                     WHERE harness_jobs.agent_key = agents.agent_key
-                       AND harness_jobs.job_kind = 'market_analysis'
-                       AND harness_jobs.trigger_type = 'analysis_batch_completed'
-                       AND harness_jobs.enabled = true
+                    SELECT 1 FROM harness_sub_agents
+                     WHERE harness_sub_agents.agent_key = agents.agent_key
+                       AND harness_sub_agents.sub_agent_kind = 'market_analysis'
+                       AND harness_sub_agents.enabled = true
                 ) AS has_enabled_market_analysis_job,
                 EXISTS (
-                    SELECT 1 FROM harness_jobs
-                     WHERE harness_jobs.agent_key = agents.agent_key
-                       AND harness_jobs.job_kind = 'trading'
-                       AND harness_jobs.trigger_type = 'candle_closed'
-                       AND harness_jobs.enabled = true
+                    SELECT 1 FROM harness_sub_agents
+                     WHERE harness_sub_agents.agent_key = agents.agent_key
+                       AND harness_sub_agents.sub_agent_kind = 'trading'
+                       AND harness_sub_agents.enabled = true
                 ) AS has_enabled_trading_job,
                 (
                     SELECT id
-                      FROM harness_jobs
-                     WHERE harness_jobs.agent_key = agents.agent_key
-                       AND harness_jobs.job_kind = 'market_analysis'
-                       AND harness_jobs.trigger_type = 'analysis_batch_completed'
+                      FROM harness_sub_agents
+                     WHERE harness_sub_agents.agent_key = agents.agent_key
+                       AND harness_sub_agents.sub_agent_kind = 'market_analysis'
                      ORDER BY id
                      LIMIT 1
-                ) AS market_analysis_job_id,
+                ) AS market_analysis_sub_agent_id,
                 (
                     SELECT id
-                      FROM harness_jobs
-                     WHERE harness_jobs.agent_key = agents.agent_key
-                       AND harness_jobs.job_kind = 'trading'
-                       AND harness_jobs.trigger_type = 'candle_closed'
+                      FROM harness_sub_agents
+                     WHERE harness_sub_agents.agent_key = agents.agent_key
+                       AND harness_sub_agents.sub_agent_kind = 'trading'
                      ORDER BY id
                      LIMIT 1
-                ) AS trading_job_id
+                ) AS trading_sub_agent_id
            FROM agents
           WHERE agents.agent_key = $1",
     )
@@ -653,7 +643,7 @@ mod tests {
         let key = format!("readiness-test-{}", Utc::now().timestamp_millis());
         let agent = sample_agent(&key);
         insert_agent(&pool, &agent).await.expect("insert agent");
-        crate::harness::store::insert_default_harness_jobs(&pool, &key)
+        crate::harness::store::insert_default_harness_sub_agents(&pool, &key)
             .await
             .expect("insert default jobs");
 
@@ -673,12 +663,12 @@ mod tests {
             .await
             .expect("select BTC");
         sqlx::query(
-            "UPDATE harness_jobs
+            "UPDATE harness_sub_agents
                 SET model_provider_id = 'test-provider',
                     model_id = 'test-model',
                     enabled = true
               WHERE agent_key = $1
-                AND job_kind IN ('analysis', 'market_analysis', 'trading')",
+                AND sub_agent_kind IN ('analysis', 'market_analysis', 'trading')",
         )
         .bind(&key)
         .execute(&pool)

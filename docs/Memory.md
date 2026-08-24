@@ -18,7 +18,7 @@ They provide the research that later market-analysis and trading work can use.
 ## Market Analysis
 
 Market-analysis memories combine recent analysis memories into a current view of
-one market and an execution handoff for the trading job. They help trading act
+one market and an execution handoff for the trading sub-agent. They help trading act
 on the latest analysis instead of developing a separate thesis.
 
 ## Daily Review

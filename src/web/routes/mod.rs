@@ -139,53 +139,56 @@ pub fn router(state: Arc<AppState>) -> Router {
             get(agents_workspace_maintenance_status),
         )
         .route(
-            "/agents/{agent_key}/jobs",
-            get(agents_show_jobs).post(agents_create_job),
+            "/agents/{agent_key}/sub-agents",
+            get(agents_show_sub_agents).post(agents_create_sub_agent),
         )
         .route(
-            "/agents/{agent_key}/jobs/recent-runs/stream",
-            get(agent_recent_runs_stream),
-        )
-        .route("/agents/{agent_key}/jobs/new", get(agents_new_job))
-        .route(
-            "/agents/{agent_key}/jobs/toggle-all",
-            post(agents_toggle_all_jobs),
+            "/agents/{agent_key}/sub-agents/recent-runs/stream",
+            get(agent_sub_agent_recent_runs_stream),
         )
         .route(
-            "/agents/{agent_key}/jobs/{job_id}",
-            get(agents_show_job_detail),
+            "/agents/{agent_key}/sub-agents/new",
+            get(agents_new_sub_agent),
         )
         .route(
-            "/agents/{agent_key}/jobs/{job_id}/model-picker",
-            get(agents_job_model_picker),
+            "/agents/{agent_key}/sub-agents/toggle-all",
+            post(agents_toggle_all_sub_agents),
         )
         .route(
-            "/agents/{agent_key}/jobs/{job_id}/toggle",
-            post(agents_toggle_job),
+            "/agents/{agent_key}/sub-agents/{sub_agent_id}",
+            get(agents_show_sub_agent_detail),
         )
         .route(
-            "/agents/{agent_key}/jobs/{job_id}/delete",
-            post(agents_delete_job),
+            "/agents/{agent_key}/sub-agents/{sub_agent_id}/model-picker",
+            get(agents_sub_agent_model_picker),
         )
         .route(
-            "/agents/{agent_key}/jobs/{job_id}/run",
-            post(agents_run_job_now),
+            "/agents/{agent_key}/sub-agents/{sub_agent_id}/toggle",
+            post(agents_toggle_sub_agent),
         )
         .route(
-            "/agents/{agent_key}/jobs/{job_id}/model",
-            post(agents_update_job_model),
+            "/agents/{agent_key}/sub-agents/{sub_agent_id}/delete",
+            post(agents_delete_sub_agent),
         )
         .route(
-            "/agents/{agent_key}/jobs/{job_id}/timeout",
-            post(agents_update_job_timeout),
+            "/agents/{agent_key}/sub-agents/{sub_agent_id}/run",
+            post(agents_run_sub_agent_now),
         )
         .route(
-            "/agents/{agent_key}/jobs/{job_id}/operator-prompt",
-            post(agents_update_job_operator_prompt),
+            "/agents/{agent_key}/sub-agents/{sub_agent_id}/model",
+            post(agents_update_sub_agent_model),
         )
         .route(
-            "/agents/{agent_key}/jobs/{job_id}/timeframe",
-            post(agents_update_job_timeframe),
+            "/agents/{agent_key}/sub-agents/{sub_agent_id}/timeout",
+            post(agents_update_sub_agent_timeout),
+        )
+        .route(
+            "/agents/{agent_key}/sub-agents/{sub_agent_id}/operator-prompt",
+            post(agents_update_sub_agent_operator_prompt),
+        )
+        .route(
+            "/agents/{agent_key}/sub-agents/{sub_agent_id}/timeframe",
+            post(agents_update_sub_agent_timeframe),
         )
         .route(
             "/agents/{agent_key}/runs/{run_id}",

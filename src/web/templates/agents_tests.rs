@@ -186,31 +186,29 @@ fn positions_page_renders_linked_incomplete_agent_setup_checklist() {
     assert!(checklist_index > tab_content_index);
     assert!(rendered.contains("Select currencies to trade"));
     assert!(rendered.contains("BTC is selected by default"));
-    assert!(rendered.contains("Enable Trading job"));
-    assert!(rendered.contains("href=\"/agents/test-agent/jobs/2?setup=true\""));
-    assert!(rendered.contains("href=\"/agents/test-agent/jobs/3?setup=true\""));
+    assert!(rendered.contains("Enable Trading sub-agent"));
+    assert!(rendered.contains("href=\"/agents/test-agent/sub-agents/2?setup=true\""));
+    assert!(rendered.contains("href=\"/agents/test-agent/sub-agents/3?setup=true\""));
 }
 
 #[test]
 fn opencode_agent_shows_jobs_tab_with_recent_runs() {
     let mut template =
-        AgentsShowPageTemplate::new(sample_opencode_detail_row(), AgentShowTab::Jobs);
+        AgentsShowPageTemplate::new(sample_opencode_detail_row(), AgentShowTab::SubAgents);
     template.jobs_loaded = true;
     template.jobs = vec![
-        HarnessJobView::from_row(&sample_candle_job_row(1, "analysis-15m", "analysis", true)),
-        HarnessJobView::from_row(&sample_candle_job_row(2, "trading-5m", "trading", false)),
-        HarnessJobView::from_row(&sample_event_job_row(3, true)),
+        HarnessSubAgentView::from_row(&sample_candle_job_row(1, "analysis-15m", "analysis", true)),
+        HarnessSubAgentView::from_row(&sample_candle_job_row(2, "trading-5m", "trading", false)),
+        HarnessSubAgentView::from_row(&sample_event_job_row(3, true)),
     ];
     template.can_enable_all_jobs = true;
     template.can_disable_all_jobs = true;
     template.recent_runs_section.recent_runs_loaded = true;
-    template.recent_runs_section.recent_runs = vec![HarnessRunView::from_row(&sample_run_row(
-        1,
-        "succeeded",
-        "analysis-15m",
-    ))];
-    let rendered = template.render().expect("render jobs tab");
-    assert!(rendered.contains("/agents/test-agent/jobs"));
+    template.recent_runs_section.recent_runs = vec![HarnessSubAgentRunView::from_row(
+        &sample_run_row(1, "succeeded", "analysis-15m"),
+    )];
+    let rendered = template.render().expect("render sub-agents tab");
+    assert!(rendered.contains("/agents/test-agent/sub-agents"));
     assert!(rendered.contains("Enable all"));
     assert!(rendered.contains("Disable all"));
     assert!(rendered.contains("Recent Runs"));
@@ -224,7 +222,7 @@ fn opencode_agent_shows_jobs_tab_with_recent_runs() {
     assert!(!rendered.contains(">Timeout<"));
     assert!(!rendered.contains(">Delay</th>"));
     let disabled_job_row = rendered
-        .split_once("data-row-href=\"/agents/test-agent/jobs/2\"")
+        .split_once("data-row-href=\"/agents/test-agent/sub-agents/2\"")
         .and_then(|(_, remainder)| remainder.split_once("</tr>"))
         .map(|(row, _)| row)
         .expect("render disabled scheduled job row");
@@ -232,7 +230,7 @@ fn opencode_agent_shows_jobs_tab_with_recent_runs() {
     assert!(disabled_job_row.contains("—"));
     assert!(!disabled_job_row.contains("local-datetime"));
     let event_job_row = rendered
-        .split_once("data-row-href=\"/agents/test-agent/jobs/3\"")
+        .split_once("data-row-href=\"/agents/test-agent/sub-agents/3\"")
         .and_then(|(_, remainder)| remainder.split_once("</tr>"))
         .map(|(row, _)| row)
         .expect("render event job row");
@@ -241,13 +239,13 @@ fn opencode_agent_shows_jobs_tab_with_recent_runs() {
     assert!(rendered.contains("anthropic/claude-3-5-sonnet"));
     assert!(rendered.contains("Run now"));
     assert!(!rendered.contains("Operator prompt</th>"));
-    assert!(rendered.contains("/agents/test-agent/jobs/1/run"));
-    assert!(rendered.contains("/agents/test-agent/jobs/3/run"));
-    assert!(rendered.contains("/agents/test-agent/jobs/3"));
+    assert!(rendered.contains("/agents/test-agent/sub-agents/1/run"));
+    assert!(rendered.contains("/agents/test-agent/sub-agents/3/run"));
+    assert!(rendered.contains("/agents/test-agent/sub-agents/3"));
     assert!(rendered.contains("/agents/test-agent/runs/1"));
     assert!(rendered.contains("id=\"agent-recent-runs-stream\" hx-ext=\"sse\""));
     assert!(rendered.contains(&format!(
-        "sse-connect=\"/agents/{}/jobs/recent-runs/stream?page=1\"",
+        "sse-connect=\"/agents/{}/sub-agents/recent-runs/stream?page=1\"",
         "test-agent"
     )));
     assert!(rendered.contains("sse-swap=\"recent-runs\""));
@@ -257,11 +255,11 @@ fn opencode_agent_shows_jobs_tab_with_recent_runs() {
 #[test]
 fn jobs_page_renders_recent_run_rows() {
     let mut template =
-        AgentsShowPageTemplate::new(sample_opencode_detail_row(), AgentShowTab::Jobs);
+        AgentsShowPageTemplate::new(sample_opencode_detail_row(), AgentShowTab::SubAgents);
     template.recent_runs_section.recent_runs_loaded = true;
     template.recent_runs_section.recent_runs = vec![
-        HarnessRunView::from_row(&sample_run_row(1, "succeeded", "analysis-15m")),
-        HarnessRunView::from_row(&sample_run_row(2, "failed", "trading-5m")),
+        HarnessSubAgentRunView::from_row(&sample_run_row(1, "succeeded", "analysis-15m")),
+        HarnessSubAgentRunView::from_row(&sample_run_row(2, "failed", "trading-5m")),
     ];
     template.recent_runs_section.recent_runs_page = 1;
     template.recent_runs_section.recent_runs_total_pages = 1;
@@ -283,11 +281,11 @@ fn jobs_page_renders_running_duration_ticker_markup() {
     let mut row = sample_run_row(3, "running", "analysis-15m");
     row.started_at = Some(Utc::now() - chrono::Duration::seconds(5));
     row.finished_at = None;
-    let run = HarnessRunView::from_row(&row);
+    let run = HarnessSubAgentRunView::from_row(&row);
     let fallback = run.duration_text.clone();
 
     let mut template =
-        AgentsShowPageTemplate::new(sample_opencode_detail_row(), AgentShowTab::Jobs);
+        AgentsShowPageTemplate::new(sample_opencode_detail_row(), AgentShowTab::SubAgents);
     template.recent_runs_section.recent_runs_loaded = true;
     template.recent_runs_section.recent_runs = vec![run];
     let rendered = template.render().expect("render running jobs page");
@@ -300,32 +298,33 @@ fn jobs_page_renders_running_duration_ticker_markup() {
 #[test]
 fn jobs_page_renders_recent_runs_pagination_controls() {
     let mut template =
-        AgentsShowPageTemplate::new(sample_opencode_detail_row(), AgentShowTab::Jobs);
+        AgentsShowPageTemplate::new(sample_opencode_detail_row(), AgentShowTab::SubAgents);
     template.recent_runs_section.recent_runs_loaded = true;
-    template.recent_runs_section.recent_runs = vec![HarnessRunView::from_row(&sample_run_row(
-        12,
-        "succeeded",
-        "analysis-15m",
-    ))];
+    template.recent_runs_section.recent_runs = vec![HarnessSubAgentRunView::from_row(
+        &sample_run_row(12, "succeeded", "analysis-15m"),
+    )];
     template.recent_runs_section.recent_runs_page = 2;
     template.recent_runs_section.recent_runs_total_pages = 3;
     template.recent_runs_section.recent_runs_total_count = 25;
     template.recent_runs_section.recent_runs_range_start = 11;
     template.recent_runs_section.recent_runs_range_end = 20;
     template.recent_runs_section.recent_runs_previous_page_url =
-        Some("/agents/test-agent/jobs?page=1".to_string());
+        Some("/agents/test-agent/sub-agents?page=1".to_string());
     template.recent_runs_section.recent_runs_next_page_url =
-        Some("/agents/test-agent/jobs?page=3".to_string());
+        Some("/agents/test-agent/sub-agents?page=3".to_string());
     template.recent_runs_section.stream_url =
-        "/agents/test-agent/jobs/recent-runs/stream?page=2".to_string();
+        "/agents/test-agent/sub-agents/recent-runs/stream?page=2".to_string();
 
     let rendered = template.render().expect("render jobs page pagination");
 
     assert!(rendered.contains("Showing 11-20 of 25 runs"));
     assert!(rendered.contains("Page 2 of 3"));
-    assert!(rendered.contains("/agents/test-agent/jobs?page=1"));
-    assert!(rendered.contains("/agents/test-agent/jobs?page=3"));
-    assert!(rendered.contains("sse-connect=\"/agents/test-agent/jobs/recent-runs/stream?page=2\""));
+    assert!(rendered.contains("/agents/test-agent/sub-agents?page=1"));
+    assert!(rendered.contains("/agents/test-agent/sub-agents?page=3"));
+    assert!(
+        rendered
+            .contains("sse-connect=\"/agents/test-agent/sub-agents/recent-runs/stream?page=2\"")
+    );
     assert!(rendered.contains("id=\"agent-recent-runs\""));
     assert!(rendered.contains("hx-select=\"#agent-recent-runs-stream\""));
     assert!(rendered.contains("hx-target=\"#agent-recent-runs-stream\""));
@@ -376,11 +375,11 @@ fn transactions_page_renders_pagination_controls() {
 #[test]
 fn jobs_page_links_to_new_job_page() {
     let mut template =
-        AgentsShowPageTemplate::new(sample_opencode_detail_row(), AgentShowTab::Jobs);
+        AgentsShowPageTemplate::new(sample_opencode_detail_row(), AgentShowTab::SubAgents);
     template.jobs_loaded = true;
-    let rendered = template.render().expect("render jobs page");
-    assert!(rendered.contains("New job"));
-    assert!(rendered.contains("/agents/test-agent/jobs/new"));
+    let rendered = template.render().expect("render sub-agents page");
+    assert!(rendered.contains("New sub-agent"));
+    assert!(rendered.contains("/agents/test-agent/sub-agents/new"));
 }
 
 #[test]
@@ -536,7 +535,7 @@ fn prompts_tab_renders_strategy_copy_and_reset_defaults_ui() {
     assert!(rendered.contains("Analysis"));
     assert!(rendered.contains("Runs on a fixed schedule"));
     assert!(rendered.contains("Market Analysis"));
-    assert!(rendered.contains("Runs after analysis jobs complete"));
+    assert!(rendered.contains("Runs after analysis sub-agents complete"));
     assert!(rendered.contains("Trading"));
     assert!(rendered.contains("Manages positions and orders based on market-analysis memories"));
     assert!(rendered.contains("Daily Review"));
@@ -648,11 +647,11 @@ fn trading_account_choices_render_subaccount_names() {
 fn new_job_page_renders_agent_navbar_with_jobs_active() {
     let agent = sample_opencode_detail_row();
     let template = AgentJobNewPageTemplate {
-        tabs: build_agent_show_tabs(&agent, AgentShowTab::Jobs),
+        tabs: build_agent_show_tabs(&agent, AgentShowTab::SubAgents),
         agent_tabs_use_htmx: false,
         agent,
-        form: CreateHarnessJobFormValues {
-            job_kind: "analysis".to_string(),
+        form: CreateHarnessSubAgentFormValues {
+            sub_agent_kind: "analysis".to_string(),
             timeframe: "15m".to_string(),
             timeout_seconds: "900".to_string(),
             model_selection: "anthropic/claude-sonnet-4".to_string(),
@@ -661,9 +660,9 @@ fn new_job_page_renders_agent_navbar_with_jobs_active() {
             enabled: true,
         },
         model_picker: ModelPickerView {
-            input_id: "job-model-selection".to_string(),
+            input_id: "sub-agent-model-selection".to_string(),
             input_name: "model_selection".to_string(),
-            variant_input_id: "job-model-selection-variant".to_string(),
+            variant_input_id: "sub-agent-model-selection-variant".to_string(),
             variant_input_name: "model_variant".to_string(),
             selected_value: "anthropic/claude-sonnet-4".to_string(),
             selected_variant: String::new(),
@@ -687,17 +686,17 @@ fn new_job_page_renders_agent_navbar_with_jobs_active() {
         analysis_coding_available: false,
         show_timeframe: true,
         errors: Vec::new(),
-        current_path: "/agents/test-agent/jobs/new".to_string(),
+        current_path: "/agents/test-agent/sub-agents/new".to_string(),
         navbar: Navbar::default(),
     };
 
-    let rendered = template.render().expect("render new job page");
+    let rendered = template.render().expect("render new sub-agent page");
 
     assert!(rendered.contains("Agent sections"));
     assert!(rendered.contains("agent-rail-initially-collapsed"));
     assert!(rendered.contains("agent-rail agent-rail-expanded"));
     assert!(rendered.contains("data-agent-rail-toggle"));
     assert!(rendered.contains("Expand agent navigation"));
-    assert!(rendered.contains("Create job"));
-    assert!(rendered.contains("action=\"/agents/test-agent/jobs\""));
+    assert!(rendered.contains("Create sub-agent"));
+    assert!(rendered.contains("action=\"/agents/test-agent/sub-agents\""));
 }

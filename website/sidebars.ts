@@ -12,7 +12,7 @@ const sidebars: SidebarsConfig = {
     {
       type: 'category',
       label: 'Concepts',
-      items: ['Agents', 'Prompts', 'Jobs', 'Chat', 'Memory'],
+      items: ['Agents', 'Prompts', 'SubAgents', 'Chat', 'Memory'],
     },
     {
       type: 'category',

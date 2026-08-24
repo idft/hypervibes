@@ -65,9 +65,12 @@ pub(in crate::web::routes) fn urlencode(value: &str) -> String {
         })
         .collect()
 }
-pub(in crate::web::routes) fn jobs_warning_redirect(agent_key: &str, message: &str) -> Response {
+pub(in crate::web::routes) fn sub_agents_warning_redirect(
+    agent_key: &str,
+    message: &str,
+) -> Response {
     Redirect::to(&format!(
-        "/agents/{agent_key}/jobs?warning={}",
+        "/agents/{agent_key}/sub-agents?warning={}",
         urlencode(message)
     ))
     .into_response()

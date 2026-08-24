@@ -10,8 +10,8 @@ use crate::{
     db::DbPool,
     harness::{
         model::{
-            JOB_KIND_ANALYSIS, JOB_KIND_ANALYSIS_CODING, JOB_KIND_DAILY_REVIEW,
-            JOB_KIND_MARKET_ANALYSIS, JOB_KIND_TRADING,
+            SUB_AGENT_KIND_ANALYSIS, SUB_AGENT_KIND_ANALYSIS_CODING, SUB_AGENT_KIND_DAILY_REVIEW,
+            SUB_AGENT_KIND_MARKET_ANALYSIS, SUB_AGENT_KIND_TRADING,
         },
         store,
     },
@@ -43,11 +43,11 @@ const MODEL_ACTIVITY_POLL_INTERVAL: std::time::Duration = std::time::Duration::f
 #[derive(Debug, Clone)]
 pub struct DispatchRequest {
     pub run_id: i64,
-    pub job_id: i64,
+    pub sub_agent_id: i64,
     pub agent_key: String,
     pub display_name: String,
-    pub job_key: String,
-    pub job_kind: String,
+    pub sub_agent_key: String,
+    pub sub_agent_kind: String,
     pub timeframe: Option<String>,
     pub operator_prompt: String,
     pub strategy_prompt: String,
@@ -138,12 +138,12 @@ impl HarnessBackend for OpenCodeBackend {
             .ok_or_else(|| anyhow!("OpenCode workspace is not configured"))?;
         let workspace_container_path = workspace.workspace_container_path.clone();
 
-        let (agent_name, command_name) = resolve_opencode_job(&request.job_kind)?;
+        let (agent_name, command_name) = resolve_opencode_sub_agent(&request.sub_agent_kind)?;
 
         let title = format!(
             "{} {} {}",
             request.agent_key,
-            request.job_key,
+            request.sub_agent_key,
             request.scheduled_for.format("%Y-%m-%dT%H:%M:%SZ")
         );
 
@@ -164,10 +164,10 @@ impl HarnessBackend for OpenCodeBackend {
 
         info!(
             run_id = request.run_id,
-            job_id = request.job_id,
+            sub_agent_id = request.sub_agent_id,
             agent_key = %request.agent_key,
             display_name = %request.display_name,
-            job_key = %request.job_key,
+            sub_agent_key = %request.sub_agent_key,
             session_id = %session.id,
             "opencode session created"
         );
@@ -213,10 +213,10 @@ impl HarnessBackend for OpenCodeBackend {
 
         info!(
             run_id = request.run_id,
-            job_id = request.job_id,
+            sub_agent_id = request.sub_agent_id,
             agent_key = %request.agent_key,
             display_name = %request.display_name,
-            job_key = %request.job_key,
+            sub_agent_key = %request.sub_agent_key,
             session_id = %session.id,
             "opencode command dispatched"
         );
@@ -262,19 +262,21 @@ async fn wait_for_model_activity(pool: &DbPool, session_id: &str) -> Result<bool
     Ok(false)
 }
 
-fn resolve_opencode_job(job_kind: &str) -> Result<(&'static str, &'static str)> {
-    match job_kind {
-        JOB_KIND_ANALYSIS => Ok((DEFAULT_ANALYSIS_AGENT, DEFAULT_ANALYSIS_COMMAND)),
-        JOB_KIND_MARKET_ANALYSIS => Ok((
+fn resolve_opencode_sub_agent(sub_agent_kind: &str) -> Result<(&'static str, &'static str)> {
+    match sub_agent_kind {
+        SUB_AGENT_KIND_ANALYSIS => Ok((DEFAULT_ANALYSIS_AGENT, DEFAULT_ANALYSIS_COMMAND)),
+        SUB_AGENT_KIND_MARKET_ANALYSIS => Ok((
             DEFAULT_MARKET_ANALYSIS_AGENT,
             DEFAULT_MARKET_ANALYSIS_COMMAND,
         )),
-        JOB_KIND_DAILY_REVIEW => Ok((DEFAULT_DAILY_REVIEW_AGENT, DEFAULT_DAILY_REVIEW_COMMAND)),
-        JOB_KIND_ANALYSIS_CODING => Ok((
+        SUB_AGENT_KIND_DAILY_REVIEW => {
+            Ok((DEFAULT_DAILY_REVIEW_AGENT, DEFAULT_DAILY_REVIEW_COMMAND))
+        }
+        SUB_AGENT_KIND_ANALYSIS_CODING => Ok((
             DEFAULT_ANALYSIS_CODING_AGENT,
             DEFAULT_ANALYSIS_CODING_COMMAND,
         )),
-        JOB_KIND_TRADING => Ok((DEFAULT_TRADING_AGENT, DEFAULT_TRADING_COMMAND)),
+        SUB_AGENT_KIND_TRADING => Ok((DEFAULT_TRADING_AGENT, DEFAULT_TRADING_COMMAND)),
         other => Err(anyhow!("unknown job kind: {other}")),
     }
 }
@@ -651,11 +653,11 @@ mod tests {
     fn make_request() -> DispatchRequest {
         DispatchRequest {
             run_id: 1,
-            job_id: 2,
+            sub_agent_id: 2,
             agent_key: "btc-2".to_string(),
             display_name: "BTC 2".to_string(),
-            job_key: "analysis-15m".to_string(),
-            job_kind: JOB_KIND_ANALYSIS.to_string(),
+            sub_agent_key: "analysis-15m".to_string(),
+            sub_agent_kind: SUB_AGENT_KIND_ANALYSIS.to_string(),
             timeframe: Some("15m".to_string()),
             operator_prompt: String::new(),
             strategy_prompt: "Analyze trends.".to_string(),
@@ -681,30 +683,30 @@ mod tests {
     }
 
     #[test]
-    fn resolve_opencode_job_maps_kinds_to_agent_and_command() {
+    fn resolve_opencode_sub_agent_maps_kinds_to_agent_and_command() {
         assert_eq!(
-            resolve_opencode_job(JOB_KIND_ANALYSIS).unwrap(),
+            resolve_opencode_sub_agent(SUB_AGENT_KIND_ANALYSIS).unwrap(),
             (DEFAULT_ANALYSIS_AGENT, DEFAULT_ANALYSIS_COMMAND)
         );
         assert_eq!(
-            resolve_opencode_job(JOB_KIND_TRADING).unwrap(),
+            resolve_opencode_sub_agent(SUB_AGENT_KIND_TRADING).unwrap(),
             (DEFAULT_TRADING_AGENT, DEFAULT_TRADING_COMMAND)
         );
         assert_eq!(
-            resolve_opencode_job(JOB_KIND_MARKET_ANALYSIS).unwrap(),
+            resolve_opencode_sub_agent(SUB_AGENT_KIND_MARKET_ANALYSIS).unwrap(),
             (
                 DEFAULT_MARKET_ANALYSIS_AGENT,
                 DEFAULT_MARKET_ANALYSIS_COMMAND,
             )
         );
         assert_eq!(
-            resolve_opencode_job(JOB_KIND_ANALYSIS_CODING).unwrap(),
+            resolve_opencode_sub_agent(SUB_AGENT_KIND_ANALYSIS_CODING).unwrap(),
             (
                 DEFAULT_ANALYSIS_CODING_AGENT,
                 DEFAULT_ANALYSIS_CODING_COMMAND,
             )
         );
-        assert!(resolve_opencode_job("unknown").is_err());
+        assert!(resolve_opencode_sub_agent("unknown").is_err());
     }
 
     #[test]
@@ -742,14 +744,15 @@ mod tests {
     #[tokio::test]
     async fn dispatch_with_timeout_marks_succeeded_when_backend_ok() {
         let pool = crate::test_db::pool().await;
-        let (job_id, run_id, agent_key) = seed_run_for_timeout_test(&pool, "backend-ok").await;
+        let (sub_agent_id, run_id, agent_key) =
+            seed_run_for_timeout_test(&pool, "backend-ok").await;
 
         let backend = std::sync::Arc::new(RecordingBackend {
             calls: Mutex::new(Vec::new()),
             backend_ref: "ses_test",
         });
         let mut request = make_request();
-        request.job_id = job_id;
+        request.sub_agent_id = sub_agent_id;
         request.run_id = run_id;
         request.agent_key = agent_key;
         let outcome = dispatch_with_timeout(&pool, backend.clone(), request)
@@ -784,11 +787,11 @@ mod tests {
     #[tokio::test]
     async fn dispatch_with_timeout_does_not_succeed_after_cancellation() {
         let pool = crate::test_db::pool().await;
-        let (job_id, run_id, agent_key) =
+        let (sub_agent_id, run_id, agent_key) =
             seed_run_for_timeout_test(&pool, "cancelled-dispatch").await;
         let backend: Arc<dyn HarnessBackend> = Arc::new(CancellingBackend { pool: pool.clone() });
         let mut request = make_request();
-        request.job_id = job_id;
+        request.sub_agent_id = sub_agent_id;
         request.run_id = run_id;
         request.agent_key = agent_key;
 
@@ -863,7 +866,7 @@ mod tests {
         use crate::agents::{
             keys::derive_wallet_address, model::AgentRegistryRow, store::insert_agent,
         };
-        use crate::harness::store::insert_default_harness_jobs;
+        use crate::harness::store::insert_default_harness_sub_agents;
         // Seed a deterministic private key.
         fn deterministic_private_key(key: &str) -> String {
             use rand::rngs::StdRng;
@@ -901,13 +904,13 @@ mod tests {
         )
         .await
         .expect("insert agent");
-        insert_default_harness_jobs(pool, key)
+        insert_default_harness_sub_agents(pool, key)
             .await
             .expect("insert default jobs");
 
-        let (job_id,): (i64,) = sqlx::query_as(
-            "SELECT id FROM harness_jobs
-              WHERE agent_key = $1 AND job_key = 'analysis-15m'",
+        let (sub_agent_id,): (i64,) = sqlx::query_as(
+            "SELECT id FROM harness_sub_agents
+              WHERE agent_key = $1 AND sub_agent_key = 'analysis-15m'",
         )
         .bind(key)
         .fetch_one(pool)
@@ -917,21 +920,21 @@ mod tests {
         // Insert a queued run row directly so dispatch_with_timeout has
         // something to load and persist into.
         let (run_id,): (i64,) = sqlx::query_as(
-            "INSERT INTO harness_runs (
-                 job_id, agent_key, job_key, job_kind, trigger_type, timeframe,
+            "INSERT INTO harness_sub_agent_runs (
+                 sub_agent_id, agent_key, sub_agent_key, sub_agent_kind, timeframe,
                   status, scheduled_for, timeout_seconds
-             ) VALUES ($1, $2, 'analysis-15m', 'analysis', 'candle_closed', '15m',
+             ) VALUES ($1, $2, 'analysis-15m', 'analysis', '15m',
                         'queued', now(), $3)
              RETURNING id",
         )
-        .bind(job_id)
+        .bind(sub_agent_id)
         .bind(key)
         .bind(2_i32) // 2 second timeout for the test
         .fetch_one(pool)
         .await
         .expect("insert queued run");
 
-        (job_id, run_id, key.to_string())
+        (sub_agent_id, run_id, key.to_string())
     }
 
     #[tokio::test]
@@ -941,7 +944,7 @@ mod tests {
             "abort-terminal-{}",
             Utc::now().timestamp_nanos_opt().unwrap_or(0)
         );
-        let (job_id, run_id, agent_key) = seed_run_for_timeout_test(&pool, &key).await;
+        let (sub_agent_id, run_id, agent_key) = seed_run_for_timeout_test(&pool, &key).await;
         let session_id = format!("ses_terminal_{}", run_id);
 
         let backend = Arc::new(BlockingBackend {
@@ -957,11 +960,11 @@ mod tests {
 
         let request = DispatchRequest {
             run_id,
-            job_id,
+            sub_agent_id,
             agent_key,
             display_name: key.clone(),
-            job_key: "analysis-15m".to_string(),
-            job_kind: JOB_KIND_ANALYSIS.to_string(),
+            sub_agent_key: "analysis-15m".to_string(),
+            sub_agent_kind: SUB_AGENT_KIND_ANALYSIS.to_string(),
             timeframe: Some("15m".to_string()),
             operator_prompt: String::new(),
             strategy_prompt: String::new(),
@@ -1012,7 +1015,7 @@ mod tests {
     async fn dispatch_with_timeout_aborts_active_session_and_marks_failed() {
         let pool = crate::test_db::pool().await;
         let key = format!("abort-ok-{}", Utc::now().timestamp_nanos_opt().unwrap_or(0));
-        let (job_id, run_id, agent_key) = seed_run_for_timeout_test(&pool, &key).await;
+        let (sub_agent_id, run_id, agent_key) = seed_run_for_timeout_test(&pool, &key).await;
         let session_id = format!("ses_abort_{}", run_id);
 
         let backend = Arc::new(BlockingBackend {
@@ -1030,11 +1033,11 @@ mod tests {
 
         let request = DispatchRequest {
             run_id,
-            job_id,
+            sub_agent_id,
             agent_key,
             display_name: key.clone(),
-            job_key: "analysis-15m".to_string(),
-            job_kind: JOB_KIND_ANALYSIS.to_string(),
+            sub_agent_key: "analysis-15m".to_string(),
+            sub_agent_kind: SUB_AGENT_KIND_ANALYSIS.to_string(),
             timeframe: Some("15m".to_string()),
             operator_prompt: String::new(),
             strategy_prompt: String::new(),
@@ -1094,7 +1097,7 @@ mod tests {
             "retry-status-{}",
             Utc::now().timestamp_nanos_opt().unwrap_or(0)
         );
-        let (job_id, run_id, agent_key) = seed_run_for_timeout_test(&pool, &key).await;
+        let (sub_agent_id, run_id, agent_key) = seed_run_for_timeout_test(&pool, &key).await;
         let session_id = format!("ses_retry_{}", run_id);
         let backend = Arc::new(BlockingBackend {
             pool: pool.clone(),
@@ -1109,11 +1112,11 @@ mod tests {
         });
         let request = DispatchRequest {
             run_id,
-            job_id,
+            sub_agent_id,
             agent_key,
             display_name: key.clone(),
-            job_key: "analysis-15m".to_string(),
-            job_kind: JOB_KIND_ANALYSIS.to_string(),
+            sub_agent_key: "analysis-15m".to_string(),
+            sub_agent_kind: SUB_AGENT_KIND_ANALYSIS.to_string(),
             timeframe: Some("15m".to_string()),
             operator_prompt: String::new(),
             strategy_prompt: String::new(),
@@ -1165,7 +1168,7 @@ mod tests {
             "abort-fail-{}",
             Utc::now().timestamp_nanos_opt().unwrap_or(0)
         );
-        let (job_id, run_id, agent_key) = seed_run_for_timeout_test(&pool, &key).await;
+        let (sub_agent_id, run_id, agent_key) = seed_run_for_timeout_test(&pool, &key).await;
         let session_id = format!("ses_active_{}", run_id);
 
         let backend = Arc::new(BlockingBackend {
@@ -1185,11 +1188,11 @@ mod tests {
 
         let request = DispatchRequest {
             run_id,
-            job_id,
+            sub_agent_id,
             agent_key,
             display_name: key.clone(),
-            job_key: "analysis-15m".to_string(),
-            job_kind: JOB_KIND_ANALYSIS.to_string(),
+            sub_agent_key: "analysis-15m".to_string(),
+            sub_agent_kind: SUB_AGENT_KIND_ANALYSIS.to_string(),
             timeframe: Some("15m".to_string()),
             operator_prompt: String::new(),
             strategy_prompt: String::new(),

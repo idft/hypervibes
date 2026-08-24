@@ -138,7 +138,7 @@ impl OpenCodeWorkspaceMaintenanceStatusView {
                 MAINTENANCE_STATUS_QUEUED => (
                     "Queued".to_string(),
                     "border-amber-900/60 bg-amber-950/30 text-amber-300".to_string(),
-                    "Waiting for active jobs and sessions to finish".to_string(),
+                    "Waiting for active sub-agents and sessions to finish".to_string(),
                     true,
                     true,
                     true,

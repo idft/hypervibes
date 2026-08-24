@@ -485,6 +485,11 @@ fn permission_rules_for(orders: &str, memory_writes: &str) -> Result<Vec<OpenCod
         pattern: "*".to_string(),
         action: "ask".to_string(),
     });
+    rules.push(OpenCodePermissionRule {
+        permission: "hypervibes_request_analysis_coding".to_string(),
+        pattern: "*".to_string(),
+        action: "ask".to_string(),
+    });
     Ok(rules)
 }
 

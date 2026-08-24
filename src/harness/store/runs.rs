@@ -8,7 +8,7 @@ use sqlx::query_as;
 use crate::{
     db::DbPool,
     harness::model::{
-        HarnessRunRow, RUN_STATUS_FAILED, RUN_STATUS_QUEUED, RUN_STATUS_RUNNING,
+        HarnessSubAgentRunRow, RUN_STATUS_FAILED, RUN_STATUS_QUEUED, RUN_STATUS_RUNNING,
         RUN_STATUS_SKIPPED, RUN_STATUS_SUCCEEDED,
     },
     harness::timeframe::{boundary_for_due_at, latest_due_at_or_before},
@@ -18,27 +18,29 @@ use super::common::{
     ACTIVE_STATUSES, EventRunInsertMode, insert_run_with_model_variant_in_tx,
     lock_agent_coordination_tx, truncate_error_summary,
 };
-use super::jobs::CandleJobForUpdate;
 use super::recovery::{has_active_run_in_lane_tx, recover_inactive_agent_runs_tx};
+use super::sub_agents::CandleSubAgentForUpdate;
 use super::workspace::{
     agent_has_blocking_workspace_maintenance_for_mode_tx,
     agent_has_blocking_workspace_maintenance_tx,
 };
 
 #[derive(sqlx::FromRow)]
-struct EventJobForUpdate {
+struct UnscheduledSubAgentForUpdate {
     id: i64,
     agent_key: String,
-    job_key: String,
-    job_kind: String,
-    trigger_type: String,
+    sub_agent_key: String,
+    sub_agent_kind: String,
     timeout_seconds: i32,
     model_provider_id: Option<String>,
     model_id: Option<String>,
     model_variant: Option<String>,
 }
 
-pub async fn list_active_agent_runs(pool: &DbPool, agent_key: &str) -> Result<Vec<HarnessRunRow>> {
+pub async fn list_active_agent_runs(
+    pool: &DbPool,
+    agent_key: &str,
+) -> Result<Vec<HarnessSubAgentRunRow>> {
     let mut tx = pool
         .begin()
         .await
@@ -53,13 +55,12 @@ pub async fn list_active_agent_runs(pool: &DbPool, agent_key: &str) -> Result<Ve
         );
     }
 
-    let rows = query_as::<_, HarnessRunRow>(
+    let rows = query_as::<_, HarnessSubAgentRunRow>(
         "SELECT id,
-                job_id,
+                sub_agent_id,
                 agent_key,
-                job_key,
-                job_kind,
-                trigger_type,
+                sub_agent_key,
+                sub_agent_kind,
                 timeframe,
                 status,
                 backend_run_ref,
@@ -73,7 +74,7 @@ pub async fn list_active_agent_runs(pool: &DbPool, agent_key: &str) -> Result<Ve
                 error_summary,
                 created_at,
                 updated_at
-           FROM harness_runs
+           FROM harness_sub_agent_runs
           WHERE agent_key = $1
             AND status = ANY($2)
           ORDER BY created_at ASC, id ASC",
@@ -101,7 +102,7 @@ pub async fn list_agent_runs(
     pool: &DbPool,
     agent_key: &str,
     limit: i64,
-) -> Result<Vec<HarnessRunRow>> {
+) -> Result<Vec<HarnessSubAgentRunRow>> {
     list_agent_runs_page(pool, agent_key, limit, 0).await
 }
 
@@ -111,14 +112,13 @@ pub async fn list_agent_runs_page(
     agent_key: &str,
     limit: i64,
     offset: i64,
-) -> Result<Vec<HarnessRunRow>> {
-    let rows = query_as::<_, HarnessRunRow>(
+) -> Result<Vec<HarnessSubAgentRunRow>> {
+    let rows = query_as::<_, HarnessSubAgentRunRow>(
         "SELECT id,
-                job_id,
+                sub_agent_id,
                 agent_key,
-                job_key,
-                job_kind,
-                trigger_type,
+                sub_agent_key,
+                sub_agent_kind,
                 timeframe,
                 status,
                 backend_run_ref,
@@ -132,7 +132,7 @@ pub async fn list_agent_runs_page(
                 error_summary,
                 created_at,
                 updated_at
-           FROM harness_runs
+           FROM harness_sub_agent_runs
           WHERE agent_key = $1
           ORDER BY created_at DESC
           LIMIT $2
@@ -150,11 +150,12 @@ pub async fn list_agent_runs_page(
 
 /// Count runs recorded for an agent.
 pub async fn count_agent_runs(pool: &DbPool, agent_key: &str) -> Result<i64> {
-    let (count,): (i64,) = query_as("SELECT COUNT(*) FROM harness_runs WHERE agent_key = $1")
-        .bind(agent_key)
-        .fetch_one(pool)
-        .await
-        .with_context(|| format!("failed to count runs for agent {agent_key}"))?;
+    let (count,): (i64,) =
+        query_as("SELECT COUNT(*) FROM harness_sub_agent_runs WHERE agent_key = $1")
+            .bind(agent_key)
+            .fetch_one(pool)
+            .await
+            .with_context(|| format!("failed to count runs for agent {agent_key}"))?;
 
     Ok(count)
 }
@@ -167,7 +168,7 @@ pub async fn mark_run_running(
     backend_run_ref: Option<&str>,
 ) -> Result<bool> {
     let result = sqlx::query(
-        "UPDATE harness_runs
+        "UPDATE harness_sub_agent_runs
            SET status = $2,
                started_at = COALESCE(started_at, now()),
                backend_run_ref = COALESCE($3, backend_run_ref),
@@ -194,7 +195,7 @@ pub async fn set_run_error_summary(
 ) -> Result<bool> {
     let error_summary = error_summary.map(truncate_error_summary);
     let result = sqlx::query(
-        "UPDATE harness_runs
+        "UPDATE harness_sub_agent_runs
             SET error_summary = $2,
                 updated_at = now()
           WHERE id = $1
@@ -218,7 +219,7 @@ pub async fn mark_run_succeeded(
     backend_run_ref: Option<&str>,
 ) -> Result<bool> {
     let result = sqlx::query(
-        "UPDATE harness_runs
+        "UPDATE harness_sub_agent_runs
            SET status = $2,
                finished_at = now(),
                backend_run_ref = COALESCE($3, backend_run_ref),
@@ -246,7 +247,7 @@ pub async fn mark_run_failed(
     backend_run_ref: Option<&str>,
 ) -> Result<bool> {
     let result = sqlx::query(
-        "UPDATE harness_runs
+        "UPDATE harness_sub_agent_runs
            SET status = $2,
                finished_at = now(),
                error_summary = $3,
@@ -275,7 +276,7 @@ pub async fn mark_run_aborted(
     backend_run_ref: Option<&str>,
 ) -> Result<bool> {
     let result = sqlx::query(
-        "UPDATE harness_runs
+        "UPDATE harness_sub_agent_runs
            SET status = $2,
                finished_at = now(),
                error_summary = $3,
@@ -298,14 +299,13 @@ pub async fn mark_run_aborted(
 
 /// Look up the run row by id, returning `None` if it has been deleted
 /// (e.g., by an agent cascading delete).
-pub async fn get_run(pool: &DbPool, run_id: i64) -> Result<Option<HarnessRunRow>> {
-    let row: Option<HarnessRunRow> = query_as(
+pub async fn get_run(pool: &DbPool, run_id: i64) -> Result<Option<HarnessSubAgentRunRow>> {
+    let row: Option<HarnessSubAgentRunRow> = query_as(
         "SELECT id,
-                job_id,
+                sub_agent_id,
                 agent_key,
-                job_key,
-                job_kind,
-                trigger_type,
+                sub_agent_key,
+                sub_agent_kind,
                 timeframe,
                 status,
                 backend_run_ref,
@@ -319,7 +319,7 @@ pub async fn get_run(pool: &DbPool, run_id: i64) -> Result<Option<HarnessRunRow>
                 error_summary,
                 created_at,
                 updated_at
-           FROM harness_runs
+           FROM harness_sub_agent_runs
           WHERE id = $1",
     )
     .bind(run_id)
@@ -333,9 +333,9 @@ pub async fn get_run(pool: &DbPool, run_id: i64) -> Result<Option<HarnessRunRow>
 #[derive(Debug, Clone, sqlx::FromRow)]
 pub struct QueuedRunForDispatch {
     pub run_id: i64,
-    pub job_id: i64,
+    pub sub_agent_id: i64,
     pub agent_key: String,
-    pub job_kind: String,
+    pub sub_agent_kind: String,
     pub scheduled_for: DateTime<Utc>,
 }
 
@@ -347,13 +347,13 @@ pub async fn list_queued_runs_for_dispatch(
 ) -> Result<Vec<QueuedRunForDispatch>> {
     let rows = query_as(
         "SELECT id AS run_id,
-                job_id,
+                sub_agent_id,
                 agent_key,
-                job_kind,
+                sub_agent_kind,
                 scheduled_for
-           FROM harness_runs
+           FROM harness_sub_agent_runs
           WHERE status = $1
-            AND job_kind <> 'analysis_coding'
+            AND sub_agent_kind <> 'analysis_coding'
           ORDER BY created_at ASC, id ASC
           LIMIT $2",
     )
@@ -367,26 +367,26 @@ pub async fn list_queued_runs_for_dispatch(
 }
 
 /// Insert a brand-new `queued` run for a job. Used by manual
-/// `Run now` actions. Does not advance `harness_jobs.next_run_at`.
+/// `Run now` actions. Does not advance `harness_sub_agents.next_run_at`.
 ///
 /// If a previous run for the same agent is still active, inserts a
 /// `skipped` run row instead and does not dispatch.
 pub async fn insert_queued_manual_run(
     pool: &DbPool,
     agent_key: &str,
-    job_id: i64,
-) -> Result<QueuedJobRun> {
+    sub_agent_id: i64,
+) -> Result<QueuedSubAgentRun> {
     let mut tx = pool
         .begin()
         .await
         .context("failed to begin manual queued run insert")?;
     lock_agent_coordination_tx(&mut tx, agent_key).await?;
 
-    let job: Option<CandleJobForUpdate> = query_as(
+    let job: Option<CandleSubAgentForUpdate> = query_as(
         "SELECT id,
                 agent_key,
-                job_key,
-                job_kind,
+                sub_agent_key,
+                sub_agent_kind,
                 enabled,
                 timeframe,
                 trigger_delay_seconds,
@@ -395,13 +395,13 @@ pub async fn insert_queued_manual_run(
                 model_id,
                 model_variant,
                 timeout_seconds
-           FROM harness_jobs
+           FROM harness_sub_agents
           WHERE agent_key = $1
             AND id = $2
           FOR UPDATE",
     )
     .bind(agent_key)
-    .bind(job_id)
+    .bind(sub_agent_id)
     .fetch_optional(&mut *tx)
     .await
     .context("failed to lock job for manual run")?;
@@ -410,14 +410,14 @@ pub async fn insert_queued_manual_run(
         tx.rollback()
             .await
             .context("failed to roll back missing-job manual run")?;
-        return Ok(QueuedJobRun::Missing);
+        return Ok(QueuedSubAgentRun::Missing);
     };
 
     if agent_has_blocking_workspace_maintenance_tx(&mut tx, &job.agent_key).await? {
         tx.rollback()
             .await
             .context("failed to roll back maintenance-blocked manual run")?;
-        return Ok(QueuedJobRun::BlockedByMaintenance);
+        return Ok(QueuedSubAgentRun::BlockedByMaintenance);
     }
 
     let now = Utc::now();
@@ -425,14 +425,13 @@ pub async fn insert_queued_manual_run(
         .map(|due| boundary_for_due_at(due, job.trigger_delay_seconds))
         .unwrap_or(now);
     let wait_for_lane =
-        has_active_run_in_lane_tx(&mut tx, &job.agent_key, &job.job_kind, now).await?;
+        has_active_run_in_lane_tx(&mut tx, &job.agent_key, &job.sub_agent_kind, now).await?;
     let run_id = insert_run_with_model_variant_in_tx(
         &mut tx,
         job.id,
         &job.agent_key,
-        &job.job_key,
-        &job.job_kind,
-        "candle_closed",
+        &job.sub_agent_key,
+        &job.sub_agent_kind,
         Some(&job.timeframe),
         RUN_STATUS_QUEUED,
         None,
@@ -446,7 +445,7 @@ pub async fn insert_queued_manual_run(
         None,
     )
     .await?;
-    let outcome = QueuedJobRun::Dispatch {
+    let outcome = QueuedSubAgentRun::Dispatch {
         run_id,
         scheduled_for,
         wait_for_lane,
@@ -460,7 +459,7 @@ pub async fn insert_queued_manual_run(
 }
 
 #[derive(Debug, Clone)]
-pub enum QueuedJobRun {
+pub enum QueuedSubAgentRun {
     Dispatch {
         run_id: i64,
         scheduled_for: DateTime<Utc>,
@@ -477,19 +476,19 @@ pub enum QueuedJobRun {
 pub async fn has_prior_active_run_in_lane(
     pool: &DbPool,
     agent_key: &str,
-    job_kind: &str,
+    sub_agent_kind: &str,
     run_id: i64,
 ) -> Result<bool> {
-    let lane_job_kinds = super::recovery::active_job_kinds_for_lane(job_kind);
+    let lane_sub_agent_kinds = super::recovery::active_sub_agent_kinds_for_lane(sub_agent_kind);
     let active: Option<(i32,)> = query_as(
-        "SELECT 1 FROM harness_runs
+        "SELECT 1 FROM harness_sub_agent_runs
           WHERE agent_key = $1
-            AND job_kind = ANY($2)
+            AND sub_agent_kind = ANY($2)
             AND (status = $3 OR (status = $4 AND id < $5))
           LIMIT 1",
     )
     .bind(agent_key)
-    .bind(lane_job_kinds)
+    .bind(lane_sub_agent_kinds)
     .bind(RUN_STATUS_RUNNING)
     .bind(RUN_STATUS_QUEUED)
     .bind(run_id)
@@ -502,20 +501,21 @@ pub async fn has_prior_active_run_in_lane(
 pub async fn insert_queued_event_run(
     pool: &DbPool,
     agent_key: &str,
-    job_id: i64,
-) -> Result<QueuedJobRun> {
-    insert_queued_event_run_with_mode(pool, agent_key, job_id, EventRunInsertMode::Manual).await
+    sub_agent_id: i64,
+) -> Result<QueuedSubAgentRun> {
+    insert_queued_event_run_with_mode(pool, agent_key, sub_agent_id, EventRunInsertMode::Manual)
+        .await
 }
 
 pub async fn insert_queued_event_run_for_automatic_dispatch(
     pool: &DbPool,
     agent_key: &str,
-    job_id: i64,
-) -> Result<QueuedJobRun> {
+    sub_agent_id: i64,
+) -> Result<QueuedSubAgentRun> {
     insert_queued_event_run_with_mode(
         pool,
         agent_key,
-        job_id,
+        sub_agent_id,
         EventRunInsertMode::AnalysisContinuation,
     )
     .await
@@ -524,33 +524,32 @@ pub async fn insert_queued_event_run_for_automatic_dispatch(
 pub(crate) async fn insert_queued_event_run_with_mode(
     pool: &DbPool,
     agent_key: &str,
-    job_id: i64,
+    sub_agent_id: i64,
     mode: EventRunInsertMode,
-) -> Result<QueuedJobRun> {
+) -> Result<QueuedSubAgentRun> {
     let mut tx = pool
         .begin()
         .await
         .context("failed to begin manual queued event run insert")?;
     lock_agent_coordination_tx(&mut tx, agent_key).await?;
 
-    let event: Option<EventJobForUpdate> = query_as(
+    let event: Option<UnscheduledSubAgentForUpdate> = query_as(
         "SELECT id,
                 agent_key,
-                job_key,
-                job_kind,
-                trigger_type,
+                sub_agent_key,
+                sub_agent_kind,
                 enabled,
                 model_provider_id,
                 model_id,
                 model_variant,
                 timeout_seconds
-           FROM harness_jobs
+           FROM harness_sub_agents
           WHERE agent_key = $1
             AND id = $2
           FOR UPDATE",
     )
     .bind(agent_key)
-    .bind(job_id)
+    .bind(sub_agent_id)
     .fetch_optional(&mut *tx)
     .await
     .context("failed to lock event for manual run")?;
@@ -559,7 +558,7 @@ pub(crate) async fn insert_queued_event_run_with_mode(
         tx.rollback()
             .await
             .context("failed to roll back missing-event manual run")?;
-        return Ok(QueuedJobRun::Missing);
+        return Ok(QueuedSubAgentRun::Missing);
     };
 
     if agent_has_blocking_workspace_maintenance_for_mode_tx(&mut tx, &event.agent_key, mode).await?
@@ -567,60 +566,64 @@ pub(crate) async fn insert_queued_event_run_with_mode(
         tx.rollback()
             .await
             .context("failed to roll back maintenance-blocked manual event run")?;
-        return Ok(QueuedJobRun::BlockedByMaintenance);
+        return Ok(QueuedSubAgentRun::BlockedByMaintenance);
     }
 
     let now = Utc::now();
-    let outcome =
-        if has_active_run_in_lane_tx(&mut tx, &event.agent_key, &event.job_kind, now).await? {
-            let run_id = insert_run_with_model_variant_in_tx(
-                &mut tx,
-                event.id,
-                &event.agent_key,
-                &event.job_key,
-                &event.job_kind,
-                &event.trigger_type,
-                None,
-                RUN_STATUS_SKIPPED,
-                None,
-                event.model_provider_id.as_deref(),
-                event.model_id.as_deref(),
-                event.model_variant.as_deref(),
-                now,
-                None,
-                Some(now),
-                event.timeout_seconds,
-                Some("previous run still active"),
-            )
-            .await?;
-            QueuedJobRun::Skipped { run_id }
-        } else {
-            let run_id = insert_run_with_model_variant_in_tx(
-                &mut tx,
-                event.id,
-                &event.agent_key,
-                &event.job_key,
-                &event.job_kind,
-                &event.trigger_type,
-                None,
-                RUN_STATUS_QUEUED,
-                None,
-                event.model_provider_id.as_deref(),
-                event.model_id.as_deref(),
-                event.model_variant.as_deref(),
-                now,
-                None,
-                None,
-                event.timeout_seconds,
-                None,
-            )
-            .await?;
-            QueuedJobRun::Dispatch {
-                run_id,
-                scheduled_for: now,
-                wait_for_lane: false,
-            }
-        };
+    let outcome = if has_active_run_in_lane_tx(
+        &mut tx,
+        &event.agent_key,
+        &event.sub_agent_kind,
+        now,
+    )
+    .await?
+    {
+        let run_id = insert_run_with_model_variant_in_tx(
+            &mut tx,
+            event.id,
+            &event.agent_key,
+            &event.sub_agent_key,
+            &event.sub_agent_kind,
+            None,
+            RUN_STATUS_SKIPPED,
+            None,
+            event.model_provider_id.as_deref(),
+            event.model_id.as_deref(),
+            event.model_variant.as_deref(),
+            now,
+            None,
+            Some(now),
+            event.timeout_seconds,
+            Some("previous run still active"),
+        )
+        .await?;
+        QueuedSubAgentRun::Skipped { run_id }
+    } else {
+        let run_id = insert_run_with_model_variant_in_tx(
+            &mut tx,
+            event.id,
+            &event.agent_key,
+            &event.sub_agent_key,
+            &event.sub_agent_kind,
+            None,
+            RUN_STATUS_QUEUED,
+            None,
+            event.model_provider_id.as_deref(),
+            event.model_id.as_deref(),
+            event.model_variant.as_deref(),
+            now,
+            None,
+            None,
+            event.timeout_seconds,
+            None,
+        )
+        .await?;
+        QueuedSubAgentRun::Dispatch {
+            run_id,
+            scheduled_for: now,
+            wait_for_lane: false,
+        }
+    };
 
     tx.commit()
         .await
@@ -634,9 +637,8 @@ pub(crate) async fn insert_queued_event_run_with_mode(
 struct TestRunJob {
     id: i64,
     agent_key: String,
-    job_key: String,
-    job_kind: String,
-    trigger_type: String,
+    sub_agent_key: String,
+    sub_agent_kind: String,
     timeframe: Option<String>,
     model_provider_id: Option<String>,
     model_id: Option<String>,
@@ -646,33 +648,31 @@ struct TestRunJob {
 
 /// Small helper to keep the row insert signature in one place for tests.
 #[cfg(test)]
-pub async fn insert_test_run(pool: &PgPool, job_id: i64, status: &str) -> Result<i64> {
+pub async fn insert_test_run(pool: &PgPool, sub_agent_id: i64, status: &str) -> Result<i64> {
     let job: TestRunJob = query_as(
         "SELECT id,
                 agent_key,
-                job_key,
-                job_kind,
-                trigger_type,
+                sub_agent_key,
+                sub_agent_kind,
                 timeframe,
                 model_provider_id,
                 model_id,
                 model_variant,
                 timeout_seconds
-           FROM harness_jobs
+           FROM harness_sub_agents
           WHERE id = $1",
     )
-    .bind(job_id)
+    .bind(sub_agent_id)
     .fetch_one(pool)
     .await
     .context("failed to load job for test run")?;
 
     let row: (i64,) = query_as(
-        "INSERT INTO harness_runs (
-            job_id,
+        "INSERT INTO harness_sub_agent_runs (
+            sub_agent_id,
             agent_key,
-            job_key,
-            job_kind,
-            trigger_type,
+            sub_agent_key,
+            sub_agent_kind,
                 timeframe,
              status,
              model_provider_id,
@@ -680,14 +680,13 @@ pub async fn insert_test_run(pool: &PgPool, job_id: i64, status: &str) -> Result
              model_variant,
              scheduled_for,
              timeout_seconds
-           ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
          RETURNING id",
     )
     .bind(job.id)
     .bind(&job.agent_key)
-    .bind(&job.job_key)
-    .bind(&job.job_kind)
-    .bind(&job.trigger_type)
+    .bind(&job.sub_agent_key)
+    .bind(&job.sub_agent_kind)
     .bind(job.timeframe)
     .bind(status)
     .bind(job.model_provider_id)

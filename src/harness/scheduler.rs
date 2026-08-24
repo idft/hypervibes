@@ -14,7 +14,7 @@ use crate::{
         store::{get_agent, list_agent_instrument_ids, update_agent_runtime_config},
         strategy_prompts::{
             PROMPT_KIND_ANALYSIS, PROMPT_KIND_ANALYSIS_CODING, default_prompt_for_kind,
-            get_agent_strategy_prompt, prompt_kind_for_job_kind,
+            get_agent_strategy_prompt, prompt_kind_for_sub_agent_kind,
         },
     },
     db::DbPool,
@@ -25,9 +25,9 @@ use crate::{
         },
         in_flight::{InFlightTracker, SHUTDOWN_IN_FLIGHT_GRACE},
         model::{
-            HarnessDispatchJobRow, JOB_KIND_ANALYSIS, JOB_KIND_DAILY_REVIEW,
-            JOB_KIND_MARKET_ANALYSIS, JOB_KIND_TRADING, MAINTENANCE_STATUS_QUEUED,
-            TRIGGER_TYPE_ANALYSIS_BATCH_COMPLETED,
+            HarnessDispatchSubAgentRow, MAINTENANCE_STATUS_QUEUED, SUB_AGENT_KIND_ANALYSIS,
+            SUB_AGENT_KIND_ANALYSIS_CODING, SUB_AGENT_KIND_DAILY_REVIEW,
+            SUB_AGENT_KIND_MARKET_ANALYSIS, SUB_AGENT_KIND_TRADING,
         },
         store,
         timeframe::{boundary_for_due_at, parse_timeframe_seconds},
@@ -54,7 +54,7 @@ const QUEUED_RUN_RESUME_LIMIT: i64 = 20;
 /// The scheduler is generic over the backend so tests can swap in a
 /// fake implementation. In production this is `OpenCodeBackend`.
 ///
-/// CandleJobs for the same agent run in two independent lanes:
+/// CandleSubAgents for the same agent run in two independent lanes:
 /// analysis-lane work (`analysis` plus `market_analysis` events) and
 /// trading-lane work (`trading`). Different agents may also run
 /// concurrently.
@@ -72,7 +72,7 @@ pub struct HarnessScheduler {
     in_flight: InFlightTracker,
     workspace_leases: WorkspaceLeaseManager,
     coding_semaphore: Arc<Semaphore>,
-    lane_locks: CandleJobrLaneLockManager,
+    lane_locks: CandleSubAgentrLaneLockManager,
 }
 
 pub struct HarnessSchedulerRuntime {
@@ -87,22 +87,22 @@ pub struct HarnessSchedulerRuntime {
 /// serializes individual claims, but a later tick must not claim a second due
 /// candle_job while the earlier tick is still executing the first one.
 #[derive(Clone, Default)]
-struct CandleJobrLaneLockManager {
+struct CandleSubAgentrLaneLockManager {
     locks: LaneLockMap,
 }
 
-type LaneLockMap = Arc<Mutex<HashMap<(String, CandleJobrLane), Weak<AsyncMutex<()>>>>>;
+type LaneLockMap = Arc<Mutex<HashMap<(String, CandleSubAgentrLane), Weak<AsyncMutex<()>>>>>;
 
 #[derive(Clone, Copy, Hash, PartialEq, Eq)]
-enum CandleJobrLane {
+enum CandleSubAgentrLane {
     Analysis,
     Trading,
 }
 
-type AnalysisCandleJobSortKey = (i64, chrono::DateTime<Utc>, i64);
-type TradingCandleJobSortKey = (chrono::DateTime<Utc>, i64, i64);
-type IndexedAnalysisCandleJob = (AnalysisCandleJobSortKey, HarnessDispatchJobRow);
-type IndexedTradingCandleJob = (TradingCandleJobSortKey, HarnessDispatchJobRow);
+type AnalysisCandleSubAgentSortKey = (i64, chrono::DateTime<Utc>, i64);
+type TradingCandleSubAgentSortKey = (chrono::DateTime<Utc>, i64, i64);
+type IndexedAnalysisCandleSubAgent = (AnalysisCandleSubAgentSortKey, HarnessDispatchSubAgentRow);
+type IndexedTradingCandleSubAgent = (TradingCandleSubAgentSortKey, HarnessDispatchSubAgentRow);
 
 pub struct DispatchRequestInputs {
     pub run_id: i64,
@@ -114,8 +114,8 @@ pub struct DispatchRequestInputs {
     pub system_prompt: String,
 }
 
-impl CandleJobrLaneLockManager {
-    fn lock_for(&self, agent_key: &str, lane: CandleJobrLane) -> Arc<AsyncMutex<()>> {
+impl CandleSubAgentrLaneLockManager {
+    fn lock_for(&self, agent_key: &str, lane: CandleSubAgentrLane) -> Arc<AsyncMutex<()>> {
         let mut locks = self.locks.lock().expect("scheduler lane lock map poisoned");
         let key = (agent_key.to_string(), lane);
         if let Some(lock) = locks.get(&key).and_then(Weak::upgrade) {
@@ -127,7 +127,11 @@ impl CandleJobrLaneLockManager {
         lock
     }
 
-    fn try_acquire(&self, agent_key: &str, lane: CandleJobrLane) -> Option<OwnedMutexGuard<()>> {
+    fn try_acquire(
+        &self,
+        agent_key: &str,
+        lane: CandleSubAgentrLane,
+    ) -> Option<OwnedMutexGuard<()>> {
         self.lock_for(agent_key, lane).try_lock_owned().ok()
     }
 }
@@ -176,7 +180,7 @@ impl HarnessScheduler {
             in_flight: runtime.in_flight,
             workspace_leases,
             coding_semaphore: Arc::new(Semaphore::new(1)),
-            lane_locks: CandleJobrLaneLockManager::default(),
+            lane_locks: CandleSubAgentrLaneLockManager::default(),
         }
     }
 
@@ -311,7 +315,7 @@ impl HarnessScheduler {
         self.resume_queued_runs().await?;
 
         let now = Utc::now();
-        let due = store::list_due_candle_jobs(
+        let due = store::list_due_candle_sub_agents(
             &self.pool,
             now,
             DUE_SCHEDULE_LIMIT,
@@ -324,7 +328,7 @@ impl HarnessScheduler {
             return Ok(());
         }
 
-        let mut by_agent: BTreeMap<String, Vec<HarnessDispatchJobRow>> = BTreeMap::new();
+        let mut by_agent: BTreeMap<String, Vec<HarnessDispatchSubAgentRow>> = BTreeMap::new();
         for candle_job in due {
             by_agent
                 .entry(candle_job.agent_key.clone())
@@ -341,10 +345,10 @@ impl HarnessScheduler {
             let mut daily_review_jobs = Vec::new();
             let mut trading_jobs = Vec::new();
             for candle_job in jobs {
-                match candle_job.job_kind.as_str() {
-                    JOB_KIND_ANALYSIS => analysis_jobs.push(candle_job),
-                    JOB_KIND_DAILY_REVIEW => daily_review_jobs.push(candle_job),
-                    JOB_KIND_TRADING => trading_jobs.push(candle_job),
+                match candle_job.sub_agent_kind.as_str() {
+                    SUB_AGENT_KIND_ANALYSIS => analysis_jobs.push(candle_job),
+                    SUB_AGENT_KIND_DAILY_REVIEW => daily_review_jobs.push(candle_job),
+                    SUB_AGENT_KIND_TRADING => trading_jobs.push(candle_job),
                     _ => {}
                 }
             }
@@ -352,7 +356,7 @@ impl HarnessScheduler {
             if (!analysis_jobs.is_empty() || !daily_review_jobs.is_empty())
                 && let Some(lane_guard) = self
                     .lane_locks
-                    .try_acquire(&agent_key, CandleJobrLane::Analysis)
+                    .try_acquire(&agent_key, CandleSubAgentrLane::Analysis)
             {
                 let pool = self.pool.clone();
                 let backend = self.backend.clone();
@@ -379,7 +383,7 @@ impl HarnessScheduler {
             if !trading_jobs.is_empty() {
                 let Some(lane_guard) = self
                     .lane_locks
-                    .try_acquire(&agent_key, CandleJobrLane::Trading)
+                    .try_acquire(&agent_key, CandleSubAgentrLane::Trading)
                 else {
                     continue;
                 };
@@ -414,11 +418,11 @@ impl HarnessScheduler {
     async fn resume_queued_runs(&self) -> Result<()> {
         for run in store::list_queued_runs_for_dispatch(&self.pool, QUEUED_RUN_RESUME_LIMIT).await?
         {
-            let lane = match run.job_kind.as_str() {
-                JOB_KIND_TRADING => CandleJobrLane::Trading,
-                JOB_KIND_ANALYSIS | JOB_KIND_MARKET_ANALYSIS | JOB_KIND_DAILY_REVIEW => {
-                    CandleJobrLane::Analysis
-                }
+            let lane = match run.sub_agent_kind.as_str() {
+                SUB_AGENT_KIND_TRADING => CandleSubAgentrLane::Trading,
+                SUB_AGENT_KIND_ANALYSIS
+                | SUB_AGENT_KIND_MARKET_ANALYSIS
+                | SUB_AGENT_KIND_DAILY_REVIEW => CandleSubAgentrLane::Analysis,
                 _ => continue,
             };
             let Some(lane_guard) = self.lane_locks.try_acquire(&run.agent_key, lane) else {
@@ -447,7 +451,7 @@ impl HarnessScheduler {
         Ok(())
     }
 
-    /// Periodically sweep every agent's `harness_runs` for orphans and
+    /// Periodically sweep every agent's `harness_sub_agent_runs` for orphans and
     /// mark them with a terminal status. The per-lane recovery in
     /// [`store::recovery::recover_inactive_runs_in_lane_tx`] only fires
     /// when a new run is claimed for the same lane, so a `running` run
@@ -494,11 +498,11 @@ impl HarnessScheduler {
                 let mut summary =
                     format!("coding run exceeded timeout of {}s", run.timeout_seconds);
                 if let Some(session_id) = run.backend_run_ref
-                    && let Some(job_id) = task.job_id
-                    && let Some(event) = store::get_dispatch_job(
+                    && let Some(sub_agent_id) = task.sub_agent_id
+                    && let Some(event) = store::get_dispatch_sub_agent(
                         &self.pool,
                         &task.agent_key,
-                        job_id,
+                        sub_agent_id,
                         self.opencode_client.base_url(),
                     )
                     .await?
@@ -525,11 +529,11 @@ impl HarnessScheduler {
                 && let Some(run_id) = task.run_id
                 && let Some(run) = store::get_run(&self.pool, run_id).await?
                 && let Some(session_id) = run.backend_run_ref
-                && let Some(job_id) = task.job_id
-                && let Some(event) = store::get_dispatch_job(
+                && let Some(sub_agent_id) = task.sub_agent_id
+                && let Some(event) = store::get_dispatch_sub_agent(
                     &self.pool,
                     &task.agent_key,
-                    job_id,
+                    sub_agent_id,
                     self.opencode_client.base_url(),
                 )
                 .await?
@@ -597,7 +601,7 @@ async fn resume_queued_run(
     let has_prior = match store::has_prior_active_run_in_lane(
         pool,
         &queued_run.agent_key,
-        &queued_run.job_kind,
+        &queued_run.sub_agent_kind,
         run_id,
     )
     .await
@@ -612,10 +616,10 @@ async fn resume_queued_run(
         return;
     }
 
-    let dispatch_job = match store::get_dispatch_job(
+    let dispatch_job = match store::get_dispatch_sub_agent(
         pool,
         &queued_run.agent_key,
-        queued_run.job_id,
+        queued_run.sub_agent_id,
         opencode_base_url,
     )
     .await
@@ -665,7 +669,7 @@ async fn resume_queued_run(
     let result =
         dispatch_run_with_workspace_lease(pool.clone(), backend.clone(), request, workspace_leases)
             .await;
-    if queued_run.job_kind == JOB_KIND_ANALYSIS
+    if queued_run.sub_agent_kind == SUB_AGENT_KIND_ANALYSIS
         && result.succeeded
         && let Err(error) = dispatch_analysis_batch_completed_event(
             pool,
@@ -679,7 +683,7 @@ async fn resume_queued_run(
     {
         warn!(run_id, error = ?error, "failed to dispatch queued analysis follow-up");
     }
-    if queued_run.job_kind == JOB_KIND_DAILY_REVIEW
+    if queued_run.sub_agent_kind == SUB_AGENT_KIND_DAILY_REVIEW
         && result.succeeded
         && let Err(error) =
             dispatch_daily_review_coding_event(pool, &queued_run.agent_key, run_id).await
@@ -949,12 +953,13 @@ async fn run_coding_task(
         fail_coding_task(pool, task.id, run_id, "agent disappeared before coding").await?;
         return Ok(());
     };
-    let Some(job_id) = task.job_id else {
+    let Some(sub_agent_id) = task.sub_agent_id else {
         fail_coding_task(pool, task.id, run_id, "coding task has no job").await?;
         return Ok(());
     };
     let Some(event) =
-        store::get_dispatch_job(pool, &task.agent_key, job_id, opencode_base_url).await?
+        store::get_dispatch_sub_agent(pool, &task.agent_key, sub_agent_id, opencode_base_url)
+            .await?
     else {
         fail_coding_task(pool, task.id, run_id, "coding event disappeared").await?;
         return Ok(());
@@ -1451,9 +1456,9 @@ async fn write_coding_result_memory(
             "schema_version": 1,
             "task_id": task.id,
             "run_id": task.run_id,
-            "source_run_id": task.source_run_id,
+            "source_sub_agent_run_id": task.source_sub_agent_run_id,
             "source_memory_id": task.source_memory_id,
-            "source_daily_review_run_id": task.source_run_id,
+            "source_daily_review_run_id": task.source_sub_agent_run_id,
             "source_daily_review_memory_id": task.source_memory_id,
             "outcome": result.outcome,
             "mode": task.parameters.get("mode"),
@@ -1490,8 +1495,8 @@ async fn process_analysis_lane_for_agent(
     backend: &Arc<dyn HarnessBackend>,
     live_accounts: &Arc<LiveAccountStore>,
     agent_key: &str,
-    jobs: Vec<HarnessDispatchJobRow>,
-    daily_review_jobs: Vec<HarnessDispatchJobRow>,
+    jobs: Vec<HarnessDispatchSubAgentRow>,
+    daily_review_jobs: Vec<HarnessDispatchSubAgentRow>,
     workspace_leases: &WorkspaceLeaseManager,
 ) {
     let opencode_base_url = jobs
@@ -1553,7 +1558,7 @@ async fn process_trading_lane_for_agent(
     backend: &Arc<dyn HarnessBackend>,
     live_accounts: &Arc<LiveAccountStore>,
     agent_key: &str,
-    jobs: Vec<HarnessDispatchJobRow>,
+    jobs: Vec<HarnessDispatchSubAgentRow>,
     workspace_leases: &WorkspaceLeaseManager,
 ) {
     let _lease = workspace_leases.acquire_live_read(agent_key).await;
@@ -1575,11 +1580,11 @@ async fn process_candle_job_for_agent(
     backend: &Arc<dyn HarnessBackend>,
     live_accounts: &Arc<LiveAccountStore>,
     agent_key: &str,
-    candle_job: HarnessDispatchJobRow,
+    candle_job: HarnessDispatchSubAgentRow,
     _workspace_leases: &WorkspaceLeaseManager,
 ) -> Option<i64> {
-    let job_id = candle_job.job_id;
-    let job_key = candle_job.job_key.clone();
+    let sub_agent_id = candle_job.sub_agent_id;
+    let sub_agent_key = candle_job.sub_agent_key.clone();
     let scheduled_for = boundary_for_due_at(
         candle_job
             .next_run_at
@@ -1589,13 +1594,13 @@ async fn process_candle_job_for_agent(
             .expect("due candle job has trigger delay"),
     );
 
-    let claim = match store::claim_due_candle_job(pool, job_id, Utc::now()).await {
+    let claim = match store::claim_due_candle_sub_agent(pool, sub_agent_id, Utc::now()).await {
         Ok(claim) => claim,
         Err(error) => {
             warn!(
-                job_id,
+                sub_agent_id,
                 agent_key,
-                job_key = %job_key,
+                sub_agent_key = %sub_agent_key,
                 error = ?error,
                 "failed to claim due candle_job"
             );
@@ -1604,30 +1609,33 @@ async fn process_candle_job_for_agent(
     };
 
     match claim {
-        store::ClaimedCandleJobRun::NotDue => {
-            debug!(job_id, agent_key, "candle_job no longer due at claim time");
+        store::ClaimedCandleSubAgentRun::NotDue => {
+            debug!(
+                sub_agent_id,
+                agent_key, "candle_job no longer due at claim time"
+            );
             None
         }
-        store::ClaimedCandleJobRun::BlockedByMaintenance => {
+        store::ClaimedCandleSubAgentRun::BlockedByMaintenance => {
             info!(
-                job_id,
+                sub_agent_id,
                 agent_key,
-                job_key = %job_key,
+                sub_agent_key = %sub_agent_key,
                 "scheduled dispatch held because workspace maintenance is queued or running"
             );
             None
         }
-        store::ClaimedCandleJobRun::Skipped { run_id } => {
+        store::ClaimedCandleSubAgentRun::Skipped { run_id } => {
             info!(
-                job_id,
+                sub_agent_id,
                 run_id,
                 agent_key,
-                job_key = %job_key,
+                sub_agent_key = %sub_agent_key,
                 "harness run skipped because previous run still active"
             );
             None
         }
-        store::ClaimedCandleJobRun::Dispatch { run_id } => {
+        store::ClaimedCandleSubAgentRun::Dispatch { run_id } => {
             match build_dispatch_request(pool, live_accounts, &candle_job, run_id, scheduled_for)
                 .await
             {
@@ -1639,7 +1647,7 @@ async fn process_candle_job_for_agent(
                     warn!(
                         run_id,
                         agent_key = %agent_key,
-                        job_key = %job_key,
+                        sub_agent_key = %sub_agent_key,
                         "no currencies selected for agent; job skipped"
                     );
                     let _ = store::mark_run_failed(
@@ -1655,7 +1663,7 @@ async fn process_candle_job_for_agent(
                     error!(
                         run_id,
                         agent_key = %agent_key,
-                        job_key = %job_key,
+                        sub_agent_key = %sub_agent_key,
                         error = ?error,
                         "failed to build dispatch request"
                     );
@@ -1669,17 +1677,17 @@ async fn process_candle_job_for_agent(
 }
 
 pub fn dispatch_request_from_job(
-    candle_job: &HarnessDispatchJobRow,
+    candle_job: &HarnessDispatchSubAgentRow,
     inputs: DispatchRequestInputs,
     account_snapshot: Option<crate::hyperliquid::live_state::LiveAgentSnapshot>,
 ) -> DispatchRequest {
     DispatchRequest {
         run_id: inputs.run_id,
-        job_id: candle_job.job_id,
+        sub_agent_id: candle_job.sub_agent_id,
         agent_key: candle_job.agent_key.clone(),
         display_name: candle_job.display_name.clone(),
-        job_key: candle_job.job_key.clone(),
-        job_kind: candle_job.job_kind.clone(),
+        sub_agent_key: candle_job.sub_agent_key.clone(),
+        sub_agent_kind: candle_job.sub_agent_kind.clone(),
         timeframe: candle_job.timeframe.clone(),
         operator_prompt: candle_job.operator_prompt.clone(),
         strategy_prompt: inputs.strategy_prompt,
@@ -1703,7 +1711,7 @@ pub fn dispatch_request_from_job(
 pub async fn build_dispatch_request(
     pool: &DbPool,
     live_accounts: &Arc<LiveAccountStore>,
-    candle_job: &HarnessDispatchJobRow,
+    candle_job: &HarnessDispatchSubAgentRow,
     run_id: i64,
     scheduled_for: chrono::DateTime<Utc>,
 ) -> Result<Option<DispatchRequest>> {
@@ -1716,16 +1724,17 @@ pub async fn build_dispatch_request(
 
     let selected_instruments = list_agent_instrument_ids(pool, &candle_job.agent_key).await?;
 
-    if selected_instruments.is_empty() && requires_selected_instruments(&candle_job.job_kind) {
+    if selected_instruments.is_empty() && requires_selected_instruments(&candle_job.sub_agent_kind)
+    {
         return Ok(None);
     }
 
     let system_prompt = crate::agents::prompts::SYSTEM_PROMPT.to_string();
     let strategy_prompt =
-        load_strategy_prompt(pool, &candle_job.agent_key, &candle_job.job_kind).await?;
+        load_strategy_prompt(pool, &candle_job.agent_key, &candle_job.sub_agent_kind).await?;
     let accumulated_learnings = load_accumulated_learnings(pool, &candle_job.agent_key).await?;
 
-    let account_snapshot = if candle_job.job_kind == JOB_KIND_TRADING {
+    let account_snapshot = if candle_job.sub_agent_kind == SUB_AGENT_KIND_TRADING {
         Some(live_agent_snapshot_for_dispatch(
             agent.trading_account_address.as_deref().unwrap_or_default(),
             &agent.environment,
@@ -1757,14 +1766,15 @@ pub async fn build_dispatch_request(
 pub(crate) async fn dispatch_daily_review_coding_event(
     pool: &DbPool,
     agent_key: &str,
-    source_run_id: i64,
+    source_sub_agent_run_id: i64,
 ) -> Result<()> {
     let Some(memory) =
-        crate::memory::get_daily_review_memory_for_run(pool, agent_key, source_run_id).await?
+        crate::memory::get_daily_review_memory_for_run(pool, agent_key, source_sub_agent_run_id)
+            .await?
     else {
         debug!(
             agent_key,
-            source_run_id, "daily review wrote no linked memory"
+            source_sub_agent_run_id, "daily review wrote no linked memory"
         );
         return Ok(());
     };
@@ -1776,12 +1786,8 @@ pub(crate) async fn dispatch_daily_review_coding_event(
     if !requested {
         return Ok(());
     }
-    let Some(event) = store::get_enabled_event_job(
-        pool,
-        agent_key,
-        crate::harness::model::TRIGGER_TYPE_DAILY_REVIEW_COMPLETED,
-    )
-    .await?
+    let Some(event) =
+        store::get_enabled_sub_agent(pool, agent_key, SUB_AGENT_KIND_ANALYSIS_CODING).await?
     else {
         debug!(agent_key, "coding event is disabled or missing");
         return Ok(());
@@ -1790,9 +1796,10 @@ pub(crate) async fn dispatch_daily_review_coding_event(
         pool,
         store::AnalysisCodingTaskRequest {
             agent_key,
-            job_id: event.id,
+            sub_agent_id: event.id,
             trigger_mode: store::CodingTriggerMode::Automatic,
-            source_run_id: Some(source_run_id),
+            request_origin: "daily_review",
+            source_sub_agent_run_id: Some(source_sub_agent_run_id),
             source_memory_id: Some(memory.id),
             operator_prompt: memory
                 .metadata
@@ -1807,7 +1814,7 @@ pub(crate) async fn dispatch_daily_review_coding_event(
 
 pub async fn build_event_dispatch_request(
     pool: &DbPool,
-    event: &HarnessDispatchJobRow,
+    event: &HarnessDispatchSubAgentRow,
     run_id: i64,
     scheduled_for: chrono::DateTime<Utc>,
 ) -> Result<Option<DispatchRequest>> {
@@ -1819,12 +1826,13 @@ pub async fn build_event_dispatch_request(
     }
 
     let selected_instruments = list_agent_instrument_ids(pool, &event.agent_key).await?;
-    if selected_instruments.is_empty() && requires_selected_instruments(&event.job_kind) {
+    if selected_instruments.is_empty() && requires_selected_instruments(&event.sub_agent_kind) {
         return Ok(None);
     }
 
     let system_prompt = crate::agents::prompts::SYSTEM_PROMPT.to_string();
-    let strategy_prompt = load_strategy_prompt(pool, &event.agent_key, &event.job_kind).await?;
+    let strategy_prompt =
+        load_strategy_prompt(pool, &event.agent_key, &event.sub_agent_kind).await?;
     let accumulated_learnings = load_accumulated_learnings(pool, &event.agent_key).await?;
 
     let mut request = dispatch_request_from_job(
@@ -1854,16 +1862,20 @@ async fn apply_run_model_snapshot(pool: &DbPool, request: &mut DispatchRequest) 
     Ok(())
 }
 
-fn requires_selected_instruments(job_kind: &str) -> bool {
+fn requires_selected_instruments(sub_agent_kind: &str) -> bool {
     matches!(
-        job_kind,
-        JOB_KIND_ANALYSIS | JOB_KIND_MARKET_ANALYSIS | JOB_KIND_TRADING
+        sub_agent_kind,
+        SUB_AGENT_KIND_ANALYSIS | SUB_AGENT_KIND_MARKET_ANALYSIS | SUB_AGENT_KIND_TRADING
     )
 }
 
-async fn load_strategy_prompt(pool: &DbPool, agent_key: &str, job_kind: &str) -> Result<String> {
-    let prompt_kind = prompt_kind_for_job_kind(job_kind)
-        .ok_or_else(|| anyhow!("unknown prompt kind for job kind {job_kind}"))?;
+async fn load_strategy_prompt(
+    pool: &DbPool,
+    agent_key: &str,
+    sub_agent_kind: &str,
+) -> Result<String> {
+    let prompt_kind = prompt_kind_for_sub_agent_kind(sub_agent_kind)
+        .ok_or_else(|| anyhow!("unknown prompt kind for job kind {sub_agent_kind}"))?;
     let stored = get_agent_strategy_prompt(pool, agent_key, prompt_kind)
         .await?
         .map(|row| row.prompt)
@@ -1904,8 +1916,7 @@ pub async fn dispatch_analysis_batch_completed_event(
     opencode_base_url: &str,
 ) -> Result<()> {
     let Some(event) =
-        store::get_enabled_event_job(pool, agent_key, TRIGGER_TYPE_ANALYSIS_BATCH_COMPLETED)
-            .await?
+        store::get_enabled_sub_agent(pool, agent_key, SUB_AGENT_KIND_MARKET_ANALYSIS).await?
     else {
         debug!(
             agent_key,
@@ -1915,13 +1926,13 @@ pub async fn dispatch_analysis_batch_completed_event(
     };
 
     match store::insert_queued_event_run_for_automatic_dispatch(pool, agent_key, event.id).await? {
-        store::QueuedJobRun::Dispatch {
+        store::QueuedSubAgentRun::Dispatch {
             run_id,
             scheduled_for,
             ..
         } => {
             let Some(event_dispatch) =
-                store::get_dispatch_job(pool, agent_key, event.id, opencode_base_url).await?
+                store::get_dispatch_sub_agent(pool, agent_key, event.id, opencode_base_url).await?
             else {
                 let _ =
                     store::mark_run_failed(pool, run_id, "event disappeared before dispatch", None)
@@ -1955,25 +1966,25 @@ pub async fn dispatch_analysis_batch_completed_event(
                 }
             }
         }
-        store::QueuedJobRun::Skipped { run_id } => {
+        store::QueuedSubAgentRun::Skipped { run_id } => {
             info!(
                 agent_key,
-                job_id = event.id,
+                sub_agent_id = event.id,
                 run_id,
                 "event run skipped because previous analysis-lane run is still active"
             );
         }
-        store::QueuedJobRun::Missing => {
+        store::QueuedSubAgentRun::Missing => {
             debug!(
                 agent_key,
-                job_id = event.id,
+                sub_agent_id = event.id,
                 "event disappeared before queue insert"
             );
         }
-        store::QueuedJobRun::BlockedByMaintenance => {
+        store::QueuedSubAgentRun::BlockedByMaintenance => {
             warn!(
                 agent_key,
-                job_id = event.id,
+                sub_agent_id = event.id,
                 "automatic follow-up event was unexpectedly blocked by maintenance"
             );
         }
@@ -1996,13 +2007,13 @@ pub async fn dispatch_run(
 ) -> DispatchRunResult {
     let run_id = request.run_id;
     let agent_key = request.agent_key.clone();
-    let job_key = request.job_key.clone();
+    let sub_agent_key = request.sub_agent_key.clone();
 
     if let Err(error) = store::mark_run_running(&pool, run_id, None).await {
         warn!(
             run_id,
             agent_key = %agent_key,
-            job_key = %job_key,
+            sub_agent_key = %sub_agent_key,
             error = ?error,
             "failed to mark harness run as running"
         );
@@ -2014,7 +2025,7 @@ pub async fn dispatch_run(
             debug!(
                 run_id,
                 agent_key = %agent_key,
-                job_key = %job_key,
+                sub_agent_key = %sub_agent_key,
                 backend_run_ref,
                 "harness dispatch finished"
             );
@@ -2024,7 +2035,7 @@ pub async fn dispatch_run(
             debug!(
                 run_id,
                 agent_key = %agent_key,
-                job_key = %job_key,
+                sub_agent_key = %sub_agent_key,
                 "harness dispatch was cancelled; follow-up events will not fire"
             );
             DispatchRunResult { succeeded: false }
@@ -2037,7 +2048,7 @@ pub async fn dispatch_run(
             debug!(
                 run_id,
                 agent_key = %agent_key,
-                job_key = %job_key,
+                sub_agent_key = %sub_agent_key,
                 summary,
                 "harness dispatch failed; follow-up events will not fire"
             );
@@ -2047,7 +2058,7 @@ pub async fn dispatch_run(
             error!(
                 run_id,
                 agent_key = %agent_key,
-                job_key = %job_key,
+                sub_agent_key = %sub_agent_key,
                 error = ?error,
                 "harness dispatch errored"
             );
@@ -2070,7 +2081,7 @@ pub async fn dispatch_run_with_workspace_lease(
     dispatch_run(pool, backend, request).await
 }
 
-fn timeframe_duration_for_sort(candle_job: &HarnessDispatchJobRow) -> i64 {
+fn timeframe_duration_for_sort(candle_job: &HarnessDispatchSubAgentRow) -> i64 {
     match candle_job
         .timeframe
         .as_deref()
@@ -2080,7 +2091,7 @@ fn timeframe_duration_for_sort(candle_job: &HarnessDispatchJobRow) -> i64 {
         Ok(seconds) => seconds,
         Err(error) => {
             warn!(
-                job_id = candle_job.job_id,
+                sub_agent_id = candle_job.sub_agent_id,
                 timeframe = ?candle_job.timeframe,
                 error = ?error,
                 "ignoring candle_job with invalid timeframe"
@@ -2090,8 +2101,10 @@ fn timeframe_duration_for_sort(candle_job: &HarnessDispatchJobRow) -> i64 {
     }
 }
 
-fn sort_analysis_jobs_for_dispatch(due: Vec<HarnessDispatchJobRow>) -> Vec<HarnessDispatchJobRow> {
-    let mut indexed: Vec<IndexedAnalysisCandleJob> = due
+fn sort_analysis_jobs_for_dispatch(
+    due: Vec<HarnessDispatchSubAgentRow>,
+) -> Vec<HarnessDispatchSubAgentRow> {
+    let mut indexed: Vec<IndexedAnalysisCandleSubAgent> = due
         .into_iter()
         .map(|candle_job| {
             (
@@ -2100,7 +2113,7 @@ fn sort_analysis_jobs_for_dispatch(due: Vec<HarnessDispatchJobRow>) -> Vec<Harne
                     candle_job
                         .next_run_at
                         .expect("due candle job has next_run_at"),
-                    candle_job.job_id,
+                    candle_job.sub_agent_id,
                 ),
                 candle_job,
             )
@@ -2110,8 +2123,10 @@ fn sort_analysis_jobs_for_dispatch(due: Vec<HarnessDispatchJobRow>) -> Vec<Harne
     indexed.into_iter().map(|(_, row)| row).collect()
 }
 
-fn sort_trading_jobs_for_dispatch(due: Vec<HarnessDispatchJobRow>) -> Vec<HarnessDispatchJobRow> {
-    let mut indexed: Vec<IndexedTradingCandleJob> = due
+fn sort_trading_jobs_for_dispatch(
+    due: Vec<HarnessDispatchSubAgentRow>,
+) -> Vec<HarnessDispatchSubAgentRow> {
+    let mut indexed: Vec<IndexedTradingCandleSubAgent> = due
         .into_iter()
         .map(|candle_job| {
             (
@@ -2120,7 +2135,7 @@ fn sort_trading_jobs_for_dispatch(due: Vec<HarnessDispatchJobRow>) -> Vec<Harnes
                         .next_run_at
                         .expect("due candle job has next_run_at"),
                     timeframe_duration_for_sort(&candle_job),
-                    candle_job.job_id,
+                    candle_job.sub_agent_id,
                 ),
                 candle_job,
             )
@@ -2155,8 +2170,12 @@ mod tests {
         harness::{
             backend::{DispatchResult, HarnessBackend},
             in_flight::InFlightTracker,
-            model::{HarnessRunRow, RUN_STATUS_QUEUED, RUN_STATUS_SKIPPED, RUN_STATUS_SUCCEEDED},
-            store::{self, ClaimedCandleJobRun, insert_default_harness_jobs, insert_test_run},
+            model::{
+                HarnessSubAgentRunRow, RUN_STATUS_QUEUED, RUN_STATUS_SKIPPED, RUN_STATUS_SUCCEEDED,
+            },
+            store::{
+                self, ClaimedCandleSubAgentRun, insert_default_harness_sub_agents, insert_test_run,
+            },
         },
         test_db,
     };
@@ -2379,14 +2398,12 @@ mod tests {
 
     async fn seed_test_agent(pool: &DbPool, key: &str) {
         let far_future = Utc::now() + chrono::Duration::days(365);
-        sqlx::query(
-            "UPDATE harness_jobs SET next_run_at = $1 WHERE trigger_type = 'candle_closed'",
-        )
-        .bind(far_future)
-        .execute(pool)
-        .await
-        .expect("push existing jobs");
-        sqlx::query("UPDATE harness_jobs SET enabled = false")
+        sqlx::query("UPDATE harness_sub_agents SET next_run_at = $1 WHERE next_run_at IS NOT NULL")
+            .bind(far_future)
+            .execute(pool)
+            .await
+            .expect("push existing jobs");
+        sqlx::query("UPDATE harness_sub_agents SET enabled = false")
             .execute(pool)
             .await
             .expect("disable existing jobs");
@@ -2394,7 +2411,7 @@ mod tests {
         insert_agent(pool, &sample_agent(key))
             .await
             .expect("insert agent");
-        insert_default_harness_jobs(pool, key)
+        insert_default_harness_sub_agents(pool, key)
             .await
             .expect("insert defaults");
 
@@ -2417,7 +2434,7 @@ mod tests {
             .await
             .expect("seed agent instruments");
         sqlx::query(
-            "UPDATE harness_jobs
+            "UPDATE harness_sub_agents
                 SET model_provider_id = 'anthropic', model_id = 'claude-sonnet-test'
               WHERE agent_key = $1",
         )
@@ -2451,7 +2468,11 @@ mod tests {
 
     /// Pin a candle_job's `next_run_at` to the latest due boundary for
     /// `timeframe` at or before `now`, so a claim at `now` will fire.
-    async fn pin_job_due(pool: &DbPool, job_id: i64, timeframe: &str) -> chrono::DateTime<Utc> {
+    async fn pin_job_due(
+        pool: &DbPool,
+        sub_agent_id: i64,
+        timeframe: &str,
+    ) -> chrono::DateTime<Utc> {
         let now = Utc::now();
         let due = crate::harness::timeframe::latest_due_at_or_before(
             now,
@@ -2461,11 +2482,11 @@ mod tests {
         .expect("compute latest due")
         .expect("should have a previous due boundary");
         sqlx::query(
-            "UPDATE harness_jobs
+            "UPDATE harness_sub_agents
                 SET enabled = true, next_run_at = $2
               WHERE id = $1",
         )
-        .bind(job_id)
+        .bind(sub_agent_id)
         .bind(due)
         .execute(pool)
         .await
@@ -2479,15 +2500,15 @@ mod tests {
         let key = format!("sched-ok-{}", Utc::now().timestamp_nanos_opt().unwrap_or(0));
         seed_test_agent(&pool, &key).await;
 
-        let (job_id,): (i64,) = sqlx::query_as(
-            "SELECT id FROM harness_jobs
-              WHERE agent_key = $1 AND job_key = 'analysis-15m'",
+        let (sub_agent_id,): (i64,) = sqlx::query_as(
+            "SELECT id FROM harness_sub_agents
+              WHERE agent_key = $1 AND sub_agent_key = 'analysis-15m'",
         )
         .bind(&key)
         .fetch_one(&pool)
         .await
         .expect("fetch candle_job id");
-        let due = pin_job_due(&pool, job_id, "15m").await;
+        let due = pin_job_due(&pool, sub_agent_id, "15m").await;
 
         let calls: Arc<Mutex<Vec<DispatchRequest>>> = Arc::new(Mutex::new(Vec::new()));
         let backend: Arc<dyn HarnessBackend> = Arc::new(FakeBackend::success(calls.clone()));
@@ -2512,7 +2533,7 @@ mod tests {
             assert_eq!(guard.len(), 1);
             let request = &guard[0];
             assert_eq!(request.agent_key, key);
-            assert_eq!(request.job_key, "analysis-15m");
+            assert_eq!(request.sub_agent_key, "analysis-15m");
             assert_eq!(request.timeframe.as_deref(), Some("15m"));
             assert_eq!(
                 request.scheduled_for,
@@ -2531,7 +2552,7 @@ mod tests {
         })
         .await;
 
-        let runs: Vec<HarnessRunRow> = store::list_agent_runs(&pool, &key, 10)
+        let runs: Vec<HarnessSubAgentRunRow> = store::list_agent_runs(&pool, &key, 10)
             .await
             .expect("list runs");
         let run = runs
@@ -2549,15 +2570,15 @@ mod tests {
             Utc::now().timestamp_nanos_opt().unwrap_or(0)
         );
         seed_test_agent(&pool, &key).await;
-        let (job_id,): (i64,) = sqlx::query_as(
-            "SELECT id FROM harness_jobs
-              WHERE agent_key = $1 AND job_key = 'analysis-1h'",
+        let (sub_agent_id,): (i64,) = sqlx::query_as(
+            "SELECT id FROM harness_sub_agents
+              WHERE agent_key = $1 AND sub_agent_key = 'analysis-1h'",
         )
         .bind(&key)
         .fetch_one(&pool)
         .await
         .expect("fetch queued job");
-        let run_id = insert_test_run(&pool, job_id, RUN_STATUS_QUEUED)
+        let run_id = insert_test_run(&pool, sub_agent_id, RUN_STATUS_QUEUED)
             .await
             .expect("insert queued run");
 
@@ -2582,7 +2603,7 @@ mod tests {
             let calls = calls.lock().expect("lock dispatch calls");
             assert_eq!(calls.len(), 1);
             assert_eq!(calls[0].run_id, run_id);
-            assert_eq!(calls[0].job_key, "analysis-1h");
+            assert_eq!(calls[0].sub_agent_key, "analysis-1h");
         }
         run_until(|| async {
             store::get_run(&pool, run_id)
@@ -2605,16 +2626,16 @@ mod tests {
 
         // Force both analysis jobs to be due at the same boundary.
         let (fifteen_m_id,): (i64,) = sqlx::query_as(
-            "SELECT id FROM harness_jobs
-              WHERE agent_key = $1 AND job_key = 'analysis-15m'",
+            "SELECT id FROM harness_sub_agents
+              WHERE agent_key = $1 AND sub_agent_key = 'analysis-15m'",
         )
         .bind(&key)
         .fetch_one(&pool)
         .await
         .expect("fetch 15m candle_job id");
         let (one_h_id,): (i64,) = sqlx::query_as(
-            "SELECT id FROM harness_jobs
-              WHERE agent_key = $1 AND job_key = 'analysis-1h'",
+            "SELECT id FROM harness_sub_agents
+              WHERE agent_key = $1 AND sub_agent_key = 'analysis-1h'",
         )
         .bind(&key)
         .fetch_one(&pool)
@@ -2628,9 +2649,9 @@ mod tests {
         // between candle boundaries. Using the later due time keeps both
         // jobs fresh (not stale) for their respective timeframes.
         sqlx::query(
-            "UPDATE harness_jobs
+            "UPDATE harness_sub_agents
                 SET next_run_at = (
-                    SELECT MAX(next_run_at) FROM harness_jobs
+                    SELECT MAX(next_run_at) FROM harness_sub_agents
                     WHERE id = $1 OR id = $2
                 )
               WHERE id = $1 OR id = $2",
@@ -2670,7 +2691,7 @@ mod tests {
             assert_eq!(guard.len(), 2);
             guard
                 .iter()
-                .map(|request| request.job_key.clone())
+                .map(|request| request.sub_agent_key.clone())
                 .collect()
         };
         // 15m is shorter than 1h, so it should dispatch first.
@@ -2692,16 +2713,16 @@ mod tests {
         seed_test_agent(&pool, &key).await;
 
         let (analysis_id,): (i64,) = sqlx::query_as(
-            "SELECT id FROM harness_jobs
-              WHERE agent_key = $1 AND job_key = 'analysis-15m'",
+            "SELECT id FROM harness_sub_agents
+              WHERE agent_key = $1 AND sub_agent_key = 'analysis-15m'",
         )
         .bind(&key)
         .fetch_one(&pool)
         .await
         .expect("fetch analysis id");
         let (trading_id,): (i64,) = sqlx::query_as(
-            "SELECT id FROM harness_jobs
-              WHERE agent_key = $1 AND job_key = 'trading-5m'",
+            "SELECT id FROM harness_sub_agents
+              WHERE agent_key = $1 AND sub_agent_key = 'trading-5m'",
         )
         .bind(&key)
         .fetch_one(&pool)
@@ -2733,7 +2754,7 @@ mod tests {
         run_until(|| async { calls.lock().map(|guard| guard.len() >= 2).unwrap_or(false) }).await;
 
         let guard = calls.lock().unwrap();
-        let mut jobs: Vec<&str> = guard.iter().map(|r| r.job_key.as_str()).collect();
+        let mut jobs: Vec<&str> = guard.iter().map(|r| r.sub_agent_key.as_str()).collect();
         jobs.sort();
         assert!(
             jobs == vec!["analysis-15m", "trading-5m"],
@@ -2755,26 +2776,26 @@ mod tests {
         );
         seed_test_agent(&pool, &key).await;
 
-        let job_id = store::list_agent_jobs(&pool, &key)
+        let sub_agent_id = store::list_agent_sub_agents(&pool, &key)
             .await
             .expect("list jobs")
             .into_iter()
-            .find(|job| job.trigger_type == TRIGGER_TYPE_ANALYSIS_BATCH_COMPLETED)
+            .find(|job| job.sub_agent_kind == SUB_AGENT_KIND_MARKET_ANALYSIS)
             .expect("default event present")
             .id;
-        store::set_job_enabled(&pool, &key, job_id, true)
+        store::set_sub_agent_enabled(&pool, &key, sub_agent_id, true)
             .await
             .expect("enable default event");
 
-        let (job_id,): (i64,) = sqlx::query_as(
-            "SELECT id FROM harness_jobs
-              WHERE agent_key = $1 AND job_key = 'analysis-15m'",
+        let (sub_agent_id,): (i64,) = sqlx::query_as(
+            "SELECT id FROM harness_sub_agents
+              WHERE agent_key = $1 AND sub_agent_key = 'analysis-15m'",
         )
         .bind(&key)
         .fetch_one(&pool)
         .await
         .expect("fetch analysis id");
-        pin_job_due(&pool, job_id, "15m").await;
+        pin_job_due(&pool, sub_agent_id, "15m").await;
 
         let calls: Arc<Mutex<Vec<DispatchRequest>>> = Arc::new(Mutex::new(Vec::new()));
         let backend: Arc<dyn HarnessBackend> = Arc::new(FakeBackend::success(calls.clone()));
@@ -2796,7 +2817,7 @@ mod tests {
         let guard = calls.lock().unwrap();
         let mut jobs: Vec<&str> = guard
             .iter()
-            .map(|request| request.job_key.as_str())
+            .map(|request| request.sub_agent_key.as_str())
             .collect();
         jobs.sort();
         assert_eq!(jobs, vec!["analysis-15m", "market-analysis"]);
@@ -2809,12 +2830,12 @@ mod tests {
         let key_b = format!("agent-b-{}", Utc::now().timestamp_nanos_opt().unwrap_or(0));
 
         let far_future = Utc::now() + chrono::Duration::days(365);
-        sqlx::query("UPDATE harness_jobs SET next_run_at = $1")
+        sqlx::query("UPDATE harness_sub_agents SET next_run_at = $1")
             .bind(far_future)
             .execute(&pool)
             .await
             .expect("push existing jobs");
-        sqlx::query("UPDATE harness_jobs SET enabled = false")
+        sqlx::query("UPDATE harness_sub_agents SET enabled = false")
             .execute(&pool)
             .await
             .expect("disable existing jobs");
@@ -2823,15 +2844,15 @@ mod tests {
         seed_test_agent(&pool, &key_b).await;
 
         for key in [&key_a, &key_b] {
-            let (job_id,): (i64,) = sqlx::query_as(
-                "SELECT id FROM harness_jobs
-                  WHERE agent_key = $1 AND job_key = 'analysis-15m'",
+            let (sub_agent_id,): (i64,) = sqlx::query_as(
+                "SELECT id FROM harness_sub_agents
+                  WHERE agent_key = $1 AND sub_agent_key = 'analysis-15m'",
             )
             .bind(key)
             .fetch_one(&pool)
             .await
             .expect("fetch candle_job id");
-            pin_job_due(&pool, job_id, "15m").await;
+            pin_job_due(&pool, sub_agent_id, "15m").await;
         }
 
         let calls: Arc<Mutex<Vec<DispatchRequest>>> = Arc::new(Mutex::new(Vec::new()));
@@ -2877,17 +2898,17 @@ mod tests {
         );
         seed_test_agent(&pool, &key).await;
 
-        let (job_id,): (i64,) = sqlx::query_as(
-            "SELECT id FROM harness_jobs
-              WHERE agent_key = $1 AND job_key = 'analysis-15m'",
+        let (sub_agent_id,): (i64,) = sqlx::query_as(
+            "SELECT id FROM harness_sub_agents
+              WHERE agent_key = $1 AND sub_agent_key = 'analysis-15m'",
         )
         .bind(&key)
         .fetch_one(&pool)
         .await
         .expect("fetch candle_job id");
-        pin_job_due(&pool, job_id, "15m").await;
+        pin_job_due(&pool, sub_agent_id, "15m").await;
 
-        insert_test_run(&pool, job_id, "running")
+        insert_test_run(&pool, sub_agent_id, "running")
             .await
             .expect("seed active run");
 
@@ -2931,15 +2952,15 @@ mod tests {
         );
         seed_test_agent(&pool, &key).await;
 
-        let (job_id,): (i64,) = sqlx::query_as(
-            "SELECT id FROM harness_jobs
-              WHERE agent_key = $1 AND job_key = 'analysis-15m'",
+        let (sub_agent_id,): (i64,) = sqlx::query_as(
+            "SELECT id FROM harness_sub_agents
+              WHERE agent_key = $1 AND sub_agent_key = 'analysis-15m'",
         )
         .bind(&key)
         .fetch_one(&pool)
         .await
         .expect("fetch candle_job id");
-        insert_test_run(&pool, job_id, "running")
+        insert_test_run(&pool, sub_agent_id, "running")
             .await
             .expect("seed active run");
         store::insert_workspace_regenerate_task(&pool, &key, false, false)
@@ -3181,7 +3202,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn claim_due_candle_job_does_not_double_dispatch() {
+    async fn claim_due_candle_sub_agent_does_not_double_dispatch() {
         let pool = test_db::pool().await;
         let key = format!(
             "sched-double-{}",
@@ -3189,33 +3210,33 @@ mod tests {
         );
         seed_test_agent(&pool, &key).await;
 
-        let (job_id,): (i64,) = sqlx::query_as(
-            "SELECT id FROM harness_jobs
-              WHERE agent_key = $1 AND job_key = 'analysis-15m'",
+        let (sub_agent_id,): (i64,) = sqlx::query_as(
+            "SELECT id FROM harness_sub_agents
+              WHERE agent_key = $1 AND sub_agent_key = 'analysis-15m'",
         )
         .bind(&key)
         .fetch_one(&pool)
         .await
         .expect("fetch candle_job id");
-        pin_job_due(&pool, job_id, "15m").await;
+        pin_job_due(&pool, sub_agent_id, "15m").await;
 
         let now = Utc::now();
-        let first = claim_due_candle_job(&pool, job_id, now)
+        let first = claim_due_candle_sub_agent(&pool, sub_agent_id, now)
             .await
             .expect("claim 1");
-        assert!(matches!(first, ClaimedCandleJobRun::Dispatch { .. }));
-        let second = claim_due_candle_job(&pool, job_id, now)
+        assert!(matches!(first, ClaimedCandleSubAgentRun::Dispatch { .. }));
+        let second = claim_due_candle_sub_agent(&pool, sub_agent_id, now)
             .await
             .expect("claim 2");
-        assert!(matches!(second, ClaimedCandleJobRun::NotDue));
+        assert!(matches!(second, ClaimedCandleSubAgentRun::NotDue));
     }
 
-    async fn claim_due_candle_job(
+    async fn claim_due_candle_sub_agent(
         pool: &DbPool,
-        job_id: i64,
+        sub_agent_id: i64,
         now: chrono::DateTime<Utc>,
-    ) -> Result<ClaimedCandleJobRun> {
-        store::claim_due_candle_job(pool, job_id, now).await
+    ) -> Result<ClaimedCandleSubAgentRun> {
+        store::claim_due_candle_sub_agent(pool, sub_agent_id, now).await
     }
 
     #[tokio::test]
@@ -3227,15 +3248,15 @@ mod tests {
         );
         seed_test_agent(&pool, &key).await;
 
-        let (job_id,): (i64,) = sqlx::query_as(
-            "SELECT id FROM harness_jobs
-              WHERE agent_key = $1 AND job_key = 'analysis-15m'",
+        let (sub_agent_id,): (i64,) = sqlx::query_as(
+            "SELECT id FROM harness_sub_agents
+              WHERE agent_key = $1 AND sub_agent_key = 'analysis-15m'",
         )
         .bind(&key)
         .fetch_one(&pool)
         .await
         .expect("fetch candle_job id");
-        pin_job_due(&pool, job_id, "15m").await;
+        pin_job_due(&pool, sub_agent_id, "15m").await;
 
         let calls: Arc<Mutex<Vec<DispatchRequest>>> = Arc::new(Mutex::new(Vec::new()));
         let backend: Arc<dyn HarnessBackend> = Arc::new(FakeBackend::success(calls.clone()));
@@ -3269,15 +3290,15 @@ mod tests {
         );
         seed_test_agent(&pool, &key).await;
 
-        let (job_id,): (i64,) = sqlx::query_as(
-            "SELECT id FROM harness_jobs
-              WHERE agent_key = $1 AND job_key = 'analysis-15m'",
+        let (sub_agent_id,): (i64,) = sqlx::query_as(
+            "SELECT id FROM harness_sub_agents
+              WHERE agent_key = $1 AND sub_agent_key = 'analysis-15m'",
         )
         .bind(&key)
         .fetch_one(&pool)
         .await
         .expect("fetch candle_job id");
-        pin_job_due(&pool, job_id, "15m").await;
+        pin_job_due(&pool, sub_agent_id, "15m").await;
 
         // The fake backend takes 200ms; the in-flight tracker should
         // keep `run()` alive long enough for the dispatch to finish
@@ -3341,15 +3362,15 @@ mod tests {
         );
         seed_test_agent(&pool, &key).await;
 
-        let (job_id,): (i64,) = sqlx::query_as(
-            "SELECT id FROM harness_jobs
-              WHERE agent_key = $1 AND job_key = 'analysis-15m'",
+        let (sub_agent_id,): (i64,) = sqlx::query_as(
+            "SELECT id FROM harness_sub_agents
+              WHERE agent_key = $1 AND sub_agent_key = 'analysis-15m'",
         )
         .bind(&key)
         .fetch_one(&pool)
         .await
         .expect("fetch candle_job id");
-        pin_job_due(&pool, job_id, "15m").await;
+        pin_job_due(&pool, sub_agent_id, "15m").await;
 
         // The fake backend holds the dispatch for 30s so the only way
         // `run` can return quickly is via the force signal.
@@ -3458,26 +3479,26 @@ mod tests {
 
         // Enable the default market-analysis event so we can verify it
         // is NOT triggered by a failed analysis batch.
-        let job_id = store::list_agent_jobs(&pool, &key)
+        let sub_agent_id = store::list_agent_sub_agents(&pool, &key)
             .await
             .expect("list jobs")
             .into_iter()
-            .find(|job| job.trigger_type == TRIGGER_TYPE_ANALYSIS_BATCH_COMPLETED)
+            .find(|job| job.sub_agent_kind == SUB_AGENT_KIND_MARKET_ANALYSIS)
             .expect("default event present")
             .id;
-        store::set_job_enabled(&pool, &key, job_id, true)
+        store::set_sub_agent_enabled(&pool, &key, sub_agent_id, true)
             .await
             .expect("enable default event");
 
-        let (job_id,): (i64,) = sqlx::query_as(
-            "SELECT id FROM harness_jobs
-              WHERE agent_key = $1 AND job_key = 'analysis-15m'",
+        let (sub_agent_id,): (i64,) = sqlx::query_as(
+            "SELECT id FROM harness_sub_agents
+              WHERE agent_key = $1 AND sub_agent_key = 'analysis-15m'",
         )
         .bind(&key)
         .fetch_one(&pool)
         .await
         .expect("fetch analysis id");
-        pin_job_due(&pool, job_id, "15m").await;
+        pin_job_due(&pool, sub_agent_id, "15m").await;
 
         let calls: Arc<Mutex<Vec<DispatchRequest>>> = Arc::new(Mutex::new(Vec::new()));
         let failing: Arc<dyn HarnessBackend> = Arc::new(FailingBackend);
@@ -3514,14 +3535,14 @@ mod tests {
         let runs = store::list_agent_runs(&pool, &key, 20)
             .await
             .expect("list runs");
-        let job_keys: Vec<String> = runs.iter().map(|r| r.job_key.clone()).collect();
+        let sub_agent_keys: Vec<String> = runs.iter().map(|r| r.sub_agent_key.clone()).collect();
         assert!(
-            !job_keys.iter().any(|k| k == "market-analysis"),
-            "market-analysis event must not fire after a failed analysis batch, got {job_keys:?}"
+            !sub_agent_keys.iter().any(|k| k == "market-analysis"),
+            "market-analysis event must not fire after a failed analysis batch, got {sub_agent_keys:?}"
         );
         assert!(
-            job_keys.iter().any(|k| k == "analysis-15m"),
-            "analysis run should be present, got {job_keys:?}"
+            sub_agent_keys.iter().any(|k| k == "analysis-15m"),
+            "analysis run should be present, got {sub_agent_keys:?}"
         );
     }
 }

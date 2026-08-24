@@ -23,7 +23,7 @@ async fn insert_workspace_regenerate_task_rejects_duplicate_active_task() {
         "maintenance-dup-{}",
         Utc::now().timestamp_nanos_opt().unwrap_or(0)
     );
-    let _job_id = seed_agent_and_job(&pool, &key, 0).await;
+    let _sub_agent_id = seed_agent_and_job(&pool, &key, 0).await;
 
     let first = insert_workspace_regenerate_task(&pool, &key, false, false)
         .await
@@ -57,21 +57,21 @@ async fn coding_queue_deduplicates_source_memory() {
         "coding-queue-{}",
         Utc::now().timestamp_nanos_opt().unwrap_or(0)
     );
-    let _job_id = seed_agent_and_job(&pool, &key, 0).await;
+    let _sub_agent_id = seed_agent_and_job(&pool, &key, 0).await;
     sqlx::query(
-        "UPDATE harness_jobs
+        "UPDATE harness_sub_agents
             SET enabled = true,
                 model_provider_id = 'test',
                 model_id = 'strong'
           WHERE agent_key = $1
-            AND job_kind = 'analysis_coding'",
+            AND sub_agent_kind = 'analysis_coding'",
     )
     .bind(&key)
     .execute(&pool)
     .await
     .expect("configure coding event job");
-    let job_id: (i64,) = sqlx::query_as(
-        "SELECT id FROM harness_jobs WHERE agent_key = $1 AND job_kind = 'analysis_coding'",
+    let sub_agent_id: (i64,) = sqlx::query_as(
+        "SELECT id FROM harness_sub_agents WHERE agent_key = $1 AND sub_agent_kind = 'analysis_coding'",
     )
     .bind(&key)
     .fetch_one(&pool)
@@ -91,9 +91,10 @@ async fn coding_queue_deduplicates_source_memory() {
         &pool,
         AnalysisCodingTaskRequest {
             agent_key: &key,
-            job_id: job_id.0,
+            sub_agent_id: sub_agent_id.0,
             trigger_mode: CodingTriggerMode::Automatic,
-            source_run_id: None,
+            request_origin: "manual",
+            source_sub_agent_run_id: None,
             source_memory_id: Some(source_memory),
             operator_prompt: Some("review"),
             requested_mode: Some("auto"),
@@ -109,9 +110,10 @@ async fn coding_queue_deduplicates_source_memory() {
         &pool,
         AnalysisCodingTaskRequest {
             agent_key: &key,
-            job_id: job_id.0,
+            sub_agent_id: sub_agent_id.0,
             trigger_mode: CodingTriggerMode::Automatic,
-            source_run_id: None,
+            request_origin: "manual",
+            source_sub_agent_run_id: None,
             source_memory_id: None,
             operator_prompt: Some("review"),
             requested_mode: Some("auto"),
@@ -127,9 +129,10 @@ async fn coding_queue_deduplicates_source_memory() {
         &pool,
         AnalysisCodingTaskRequest {
             agent_key: &key,
-            job_id: job_id.0,
+            sub_agent_id: sub_agent_id.0,
             trigger_mode: CodingTriggerMode::Automatic,
-            source_run_id: None,
+            request_origin: "manual",
+            source_sub_agent_run_id: None,
             source_memory_id: Some(source_memory),
             operator_prompt: Some("review"),
             requested_mode: Some("auto"),
@@ -149,7 +152,7 @@ async fn agent_has_blocking_workspace_maintenance_only_for_queued_or_running_tas
         "maintenance-state-{}",
         Utc::now().timestamp_nanos_opt().unwrap_or(0)
     );
-    let _job_id = seed_agent_and_job(&pool, &key, 0).await;
+    let _sub_agent_id = seed_agent_and_job(&pool, &key, 0).await;
 
     assert!(
         !agent_has_blocking_workspace_maintenance(&pool, &key)
@@ -196,7 +199,7 @@ async fn mark_maintenance_task_failed_preserves_error_summary() {
         "maintenance-failure-{}",
         Utc::now().timestamp_nanos_opt().unwrap_or(0)
     );
-    let _job_id = seed_agent_and_job(&pool, &key, 0).await;
+    let _sub_agent_id = seed_agent_and_job(&pool, &key, 0).await;
     let task_id = match insert_workspace_regenerate_task(&pool, &key, false, false)
         .await
         .expect("insert maintenance task")

@@ -20,31 +20,30 @@ use tracing::warn;
 use super::shared::{
     ModelPickerContext, ModelSelectionForm, SERVER_SHUTTING_DOWN_WARNING, TimeoutForm,
     ToggleJobForm, WORKSPACE_MAINTENANCE_ACTIVE_WARNING, build_model_picker_view, is_htmx_request,
-    jobs_warning_redirect, load_model_picker_context, parse_positive_job_seconds,
+    load_model_picker_context, parse_positive_job_seconds, sub_agents_warning_redirect,
     timeout_error_redirect, validate_model_selection_for_agent,
 };
 use super::show::{
-    AgentJobsQuery, AgentShowQueries, build_agent_recent_runs_view, load_selected_agent_navbar,
-    parse_positive_page, render_agent_show_page,
+    AgentShowQueries, AgentSubAgentsQuery, build_agent_recent_runs_view,
+    load_selected_agent_navbar, parse_positive_page, render_agent_show_page,
 };
 use crate::web::error::AppError;
 use crate::{
     agents::{
         store::get_agent,
-        strategy_prompts::{get_agent_strategy_prompt, prompt_kind_for_job_kind},
+        strategy_prompts::{get_agent_strategy_prompt, prompt_kind_for_sub_agent_kind},
     },
     harness::{
         model::{
-            JOB_KIND_ANALYSIS, JOB_KIND_ANALYSIS_CODING, JOB_KIND_DAILY_REVIEW,
-            JOB_KIND_MARKET_ANALYSIS, JOB_KIND_TRADING, TRIGGER_TYPE_ANALYSIS_BATCH_COMPLETED,
-            TRIGGER_TYPE_CANDLE_CLOSED, TRIGGER_TYPE_DAILY_REVIEW_COMPLETED,
+            SUB_AGENT_KIND_ANALYSIS, SUB_AGENT_KIND_ANALYSIS_CODING, SUB_AGENT_KIND_DAILY_REVIEW,
+            SUB_AGENT_KIND_MARKET_ANALYSIS, SUB_AGENT_KIND_TRADING,
         },
         scheduler::{
             DispatchRequestInputs, build_dispatch_request, dispatch_analysis_batch_completed_event,
             dispatch_daily_review_coding_event, dispatch_request_from_job,
             dispatch_run_with_workspace_lease,
         },
-        store::{self, QueuedJobRun},
+        store::{self, QueuedSubAgentRun},
         timeframe::{parse_timeframe_seconds, parse_timeout_seconds},
     },
     hyperliquid::live_state::live_agent_snapshot_for_dispatch,
@@ -56,34 +55,34 @@ use crate::{
         run_detail_events::RunDetailDbEvent,
         templates::{
             AgentJobDetailPageTemplate, AgentJobNewPageTemplate, AgentRecentRunsPartialTemplate,
-            AgentShowTab, CreateHarnessJobFormValues, ModelPickerPartialTemplate,
+            AgentShowTab, CreateHarnessSubAgentFormValues, ModelPickerPartialTemplate,
             build_agent_show_tabs,
         },
     },
 };
-pub(in crate::web::routes) async fn agents_show_jobs(
+pub(in crate::web::routes) async fn agents_show_sub_agents(
     State(state): State<Arc<AppState>>,
     user: AuthenticatedUser,
     Path(agent_key): Path<String>,
-    Query(query): Query<AgentJobsQuery>,
+    Query(query): Query<AgentSubAgentsQuery>,
 ) -> Result<Response, AppError> {
     render_agent_show_page(
         &state,
         &user,
         &agent_key,
-        AgentShowTab::Jobs,
+        AgentShowTab::SubAgents,
         AgentShowQueries {
-            jobs: Some(query),
+            sub_agents: Some(query),
             ..Default::default()
         },
     )
     .await
 }
 
-pub(in crate::web::routes) async fn agent_recent_runs_stream(
+pub(in crate::web::routes) async fn agent_sub_agent_recent_runs_stream(
     State(state): State<Arc<AppState>>,
     Path(agent_key): Path<String>,
-    Query(query): Query<AgentJobsQuery>,
+    Query(query): Query<AgentSubAgentsQuery>,
 ) -> Result<Response, AppError> {
     let requested_page = parse_positive_page(&query.page);
     let receiver = state.run_detail_events.subscribe();
@@ -193,45 +192,107 @@ async fn next_agent_recent_runs_event(
     }
 }
 
-pub(in crate::web::routes) async fn agents_show_job_detail(
+pub(in crate::web::routes) async fn agents_show_sub_agent_detail(
     State(state): State<Arc<AppState>>,
     user: AuthenticatedUser,
-    Path((agent_key, job_id)): Path<(String, i64)>,
+    Path((agent_key, sub_agent_id)): Path<(String, i64)>,
     Query(query): Query<JobDetailQuery>,
 ) -> Result<Response, AppError> {
     let Some(agent) = get_agent(&state.db_pool, &agent_key).await? else {
         return Ok((StatusCode::NOT_FOUND, "agent not found").into_response());
     };
     let Some(job) =
-        crate::harness::store::get_agent_job(&state.db_pool, &agent_key, job_id).await?
+        crate::harness::store::get_agent_sub_agent(&state.db_pool, &agent_key, sub_agent_id)
+            .await?
     else {
-        return Ok((StatusCode::NOT_FOUND, "job not found").into_response());
+        return Ok((StatusCode::NOT_FOUND, "sub-agent not found").into_response());
     };
 
-    const RUNS_LIMIT: i64 = 50;
+    const RUNS_PER_PAGE: usize = 10;
+    let requested_runs_page = parse_positive_page(&query.page);
     let mut job_runs_loaded = false;
-    let job_runs =
-        match crate::harness::store::list_job_runs(&state.db_pool, &agent_key, job_id, RUNS_LIMIT)
-            .await
-        {
-            Ok(rows) => {
-                job_runs_loaded = true;
-                rows.iter()
-                    .map(crate::web::templates::HarnessRunView::from_row)
-                    .collect()
-            }
-            Err(error) => {
-                warn!(
-                    agent_key = %agent.agent_key,
-                    job_id,
-                    error = ?error,
-                    "failed to list job runs for operator page"
-                );
-                Vec::new()
-            }
-        };
+    let mut job_runs = Vec::new();
+    let mut job_runs_page = requested_runs_page;
+    let mut job_runs_total_pages = 0;
+    let mut job_runs_total_count = 0;
+    let mut job_runs_range_start = 0;
+    let mut job_runs_range_end = 0;
+    let mut job_runs_previous_page_url = None;
+    let mut job_runs_next_page_url = None;
 
-    let mut job_view = crate::web::templates::HarnessJobDetailView::from_row(&job);
+    match crate::harness::store::count_sub_agent_runs(&state.db_pool, &agent_key, sub_agent_id)
+        .await
+    {
+        Ok(total_count) => {
+            job_runs_total_count = total_count as usize;
+            job_runs_total_pages = if job_runs_total_count == 0 {
+                0
+            } else {
+                job_runs_total_count.div_ceil(RUNS_PER_PAGE)
+            };
+            job_runs_page = if job_runs_total_pages == 0 {
+                1
+            } else {
+                requested_runs_page.min(job_runs_total_pages)
+            };
+            job_runs_previous_page_url = (job_runs_page > 1).then(|| {
+                format!(
+                    "/agents/{agent_key}/sub-agents/{sub_agent_id}?page={}",
+                    job_runs_page - 1
+                )
+            });
+            job_runs_next_page_url = (job_runs_page < job_runs_total_pages).then(|| {
+                format!(
+                    "/agents/{agent_key}/sub-agents/{sub_agent_id}?page={}",
+                    job_runs_page + 1
+                )
+            });
+
+            if job_runs_total_count == 0 {
+                job_runs_loaded = true;
+            } else {
+                let offset = ((job_runs_page - 1) * RUNS_PER_PAGE) as i64;
+                match crate::harness::store::list_sub_agent_runs_page(
+                    &state.db_pool,
+                    &agent_key,
+                    sub_agent_id,
+                    RUNS_PER_PAGE as i64,
+                    offset,
+                )
+                .await
+                {
+                    Ok(rows) => {
+                        let run_count = rows.len();
+                        job_runs_loaded = true;
+                        job_runs = rows
+                            .iter()
+                            .map(crate::web::templates::HarnessSubAgentRunView::from_row)
+                            .collect();
+                        job_runs_range_start = offset as usize + 1;
+                        job_runs_range_end = offset as usize + run_count;
+                    }
+                    Err(error) => {
+                        warn!(
+                            agent_key = %agent.agent_key,
+                            sub_agent_id,
+                            error = ?error,
+                            "failed to list sub-agent runs for operator page"
+                        );
+                    }
+                }
+            }
+        }
+        Err(error) => {
+            warn!(
+                agent_key = %agent.agent_key,
+                sub_agent_id,
+                error = ?error,
+                "failed to count sub-agent runs for operator page"
+            );
+        }
+    }
+
+    let mut job_view = crate::web::templates::HarnessSubAgentDetailView::from_row(&job);
     job_view.highlight_model_selector = query.setup && !job_view.has_model;
     if let Some(error) = query.timeout_error {
         job_view.timeout_editor.error = Some(error);
@@ -247,9 +308,9 @@ pub(in crate::web::routes) async fn agents_show_job_detail(
         Err(error) => {
             warn!(
                 agent_key = %agent.agent_key,
-                job_id,
+                sub_agent_id,
                 error = ?error,
-                "failed to build prompt preview for job detail page"
+                "failed to build prompt preview for sub-agent detail page"
             );
             job_view.prompt_preview_error = Some(format!("{error:#}"));
         }
@@ -257,7 +318,7 @@ pub(in crate::web::routes) async fn agents_show_job_detail(
 
     let picker = load_model_picker_context(&state, &agent).await;
     let mut model_picker = build_model_picker_view(
-        "job-model-selection",
+        "sub-agent-model-selection",
         &job_view.model_selection,
         job.model_variant.as_deref(),
         picker,
@@ -271,19 +332,29 @@ pub(in crate::web::routes) async fn agents_show_job_detail(
         model_picker,
         job_runs,
         job_runs_loaded,
+        crate::web::templates::HarnessSubAgentRunsPagination {
+            page: job_runs_page,
+            total_pages: job_runs_total_pages,
+            total_count: job_runs_total_count,
+            range_start: job_runs_range_start,
+            range_end: job_runs_range_end,
+            previous_page_url: job_runs_previous_page_url,
+            next_page_url: job_runs_next_page_url,
+        },
         navbar,
     )?;
     Ok(Html(html).into_response())
 }
-pub(in crate::web::routes) async fn agents_job_model_picker(
+pub(in crate::web::routes) async fn agents_sub_agent_model_picker(
     State(state): State<Arc<AppState>>,
-    Path((agent_key, job_id)): Path<(String, i64)>,
+    Path((agent_key, sub_agent_id)): Path<(String, i64)>,
 ) -> Result<Response, AppError> {
     let Some(agent) = get_agent(&state.db_pool, &agent_key).await? else {
         return Ok((StatusCode::NOT_FOUND, "agent not found").into_response());
     };
-    let Some(job) = store::get_agent_job(&state.db_pool, &agent_key, job_id).await? else {
-        return Ok((StatusCode::NOT_FOUND, "job not found").into_response());
+    let Some(job) = store::get_agent_sub_agent(&state.db_pool, &agent_key, sub_agent_id).await?
+    else {
+        return Ok((StatusCode::NOT_FOUND, "sub-agent not found").into_response());
     };
 
     let selected = match (job.model_provider_id.as_deref(), job.model_id.as_deref()) {
@@ -292,7 +363,7 @@ pub(in crate::web::routes) async fn agents_job_model_picker(
     };
     let picker = load_model_picker_context(&state, &agent).await;
     let mut model_picker = build_model_picker_view(
-        "job-model-selection",
+        "sub-agent-model-selection",
         &selected,
         job.model_variant.as_deref(),
         picker,
@@ -305,9 +376,9 @@ pub(in crate::web::routes) async fn agents_job_model_picker(
 pub(in crate::web::routes) async fn build_job_prompt_preview(
     state: &Arc<AppState>,
     agent: &crate::agents::model::AgentDetailRow,
-    job: &crate::harness::model::HarnessJobRow,
+    job: &crate::harness::model::HarnessSubAgentRow,
 ) -> anyhow::Result<String> {
-    let Some(dispatch_job) = store::get_dispatch_job(
+    let Some(dispatch_job) = store::get_dispatch_sub_agent(
         &state.db_pool,
         &agent.agent_key,
         job.id,
@@ -318,15 +389,19 @@ pub(in crate::web::routes) async fn build_job_prompt_preview(
         anyhow::bail!("Job dispatch context is unavailable.");
     };
     let requires_instruments = matches!(
-        job.job_kind.as_str(),
-        JOB_KIND_ANALYSIS | JOB_KIND_MARKET_ANALYSIS | crate::harness::model::JOB_KIND_TRADING
+        job.sub_agent_kind.as_str(),
+        SUB_AGENT_KIND_ANALYSIS
+            | SUB_AGENT_KIND_MARKET_ANALYSIS
+            | crate::harness::model::SUB_AGENT_KIND_TRADING
     );
     if requires_instruments
         && crate::agents::store::list_agent_instrument_ids(&state.db_pool, &agent.agent_key)
             .await?
             .is_empty()
     {
-        anyhow::bail!("Prompt preview requires at least one selected instrument for this job.");
+        anyhow::bail!(
+            "Prompt preview requires at least one selected instrument for this sub-agent."
+        );
     }
     let Some(request) = build_dispatch_request(
         &state.db_pool,
@@ -346,10 +421,10 @@ pub(in crate::web::routes) async fn build_job_prompt_preview(
 async fn load_strategy_prompt(
     state: &Arc<AppState>,
     agent_key: &str,
-    job_kind: &str,
+    sub_agent_kind: &str,
 ) -> anyhow::Result<String> {
-    let prompt_kind = prompt_kind_for_job_kind(job_kind)
-        .ok_or_else(|| anyhow::anyhow!("unknown job kind {job_kind}"))?;
+    let prompt_kind = prompt_kind_for_sub_agent_kind(sub_agent_kind)
+        .ok_or_else(|| anyhow::anyhow!("unknown job kind {sub_agent_kind}"))?;
     Ok(
         get_agent_strategy_prompt(&state.db_pool, agent_key, prompt_kind)
             .await?
@@ -378,9 +453,9 @@ async fn load_accumulated_learnings(
     )
 }
 #[derive(Debug, Clone, Default, Deserialize)]
-pub(in crate::web::routes) struct CreateHarnessJobForm {
+pub(in crate::web::routes) struct CreateHarnessSubAgentForm {
     #[serde(default)]
-    pub job_kind: String,
+    pub sub_agent_kind: String,
     #[serde(default)]
     pub timeframe: String,
     #[serde(default)]
@@ -394,9 +469,8 @@ pub(in crate::web::routes) struct CreateHarnessJobForm {
     pub enabled: Option<String>,
 }
 #[derive(Debug)]
-pub(in crate::web::routes) struct ValidatedCreateHarnessJob {
-    pub trigger_type: String,
-    pub job_kind: String,
+pub(in crate::web::routes) struct ValidatedCreateHarnessSubAgent {
+    pub sub_agent_kind: String,
     pub timeframe: String,
     pub trigger_delay_seconds: i32,
     pub timeout_seconds: i32,
@@ -405,10 +479,10 @@ pub(in crate::web::routes) struct ValidatedCreateHarnessJob {
     pub operator_prompt: String,
     pub enabled: bool,
 }
-impl CreateHarnessJobForm {
+impl CreateHarnessSubAgentForm {
     fn defaults() -> Self {
         Self {
-            job_kind: JOB_KIND_ANALYSIS.to_string(),
+            sub_agent_kind: SUB_AGENT_KIND_ANALYSIS.to_string(),
             timeframe: "15m".to_string(),
             timeout_seconds: "900".to_string(),
             enabled: Some("on".to_string()),
@@ -420,9 +494,9 @@ impl CreateHarnessJobForm {
         self.enabled.is_some()
     }
 
-    fn as_template_values(&self) -> CreateHarnessJobFormValues {
-        CreateHarnessJobFormValues {
-            job_kind: self.job_kind.clone(),
+    fn as_template_values(&self) -> CreateHarnessSubAgentFormValues {
+        CreateHarnessSubAgentFormValues {
+            sub_agent_kind: self.sub_agent_kind.clone(),
             timeframe: self.timeframe.clone(),
             timeout_seconds: self.timeout_seconds.clone(),
             model_selection: self.model_selection.clone(),
@@ -432,15 +506,15 @@ impl CreateHarnessJobForm {
         }
     }
 
-    fn validate(&self) -> Result<ValidatedCreateHarnessJob, Vec<String>> {
+    fn validate(&self) -> Result<ValidatedCreateHarnessSubAgent, Vec<String>> {
         let mut errors = Vec::new();
 
-        let job_kind = self.job_kind.trim();
-        let Some(trigger_type) = trigger_for_job_kind(job_kind) else {
-            errors.push("Choose a supported job kind.".to_string());
+        let sub_agent_kind = self.sub_agent_kind.trim();
+        if !is_supported_sub_agent_kind(sub_agent_kind) {
+            errors.push("Choose a supported sub-agent type.".to_string());
             return Err(errors);
-        };
-        let candle = trigger_type == TRIGGER_TYPE_CANDLE_CLOSED;
+        }
+        let candle = is_candle_sub_agent_kind(sub_agent_kind);
 
         let timeframe = if candle {
             self.timeframe.trim().to_string()
@@ -466,13 +540,12 @@ impl CreateHarnessJobForm {
         };
 
         if self.enabled() && model_selection.is_none() {
-            errors.push("A model is required to enable a job.".to_string());
+            errors.push("A model is required to enable a sub-agent.".to_string());
         }
 
         if errors.is_empty() {
-            Ok(ValidatedCreateHarnessJob {
-                trigger_type: trigger_type.to_string(),
-                job_kind: job_kind.to_string(),
+            Ok(ValidatedCreateHarnessSubAgent {
+                sub_agent_kind: sub_agent_kind.to_string(),
                 timeframe,
                 trigger_delay_seconds: 1,
                 timeout_seconds: timeout_seconds.expect("validated timeout seconds"),
@@ -487,15 +560,22 @@ impl CreateHarnessJobForm {
     }
 }
 
-fn trigger_for_job_kind(job_kind: &str) -> Option<&'static str> {
-    match job_kind {
-        JOB_KIND_ANALYSIS | JOB_KIND_TRADING | JOB_KIND_DAILY_REVIEW => {
-            Some(TRIGGER_TYPE_CANDLE_CLOSED)
-        }
-        JOB_KIND_MARKET_ANALYSIS => Some(TRIGGER_TYPE_ANALYSIS_BATCH_COMPLETED),
-        JOB_KIND_ANALYSIS_CODING => Some(TRIGGER_TYPE_DAILY_REVIEW_COMPLETED),
-        _ => None,
-    }
+fn is_supported_sub_agent_kind(sub_agent_kind: &str) -> bool {
+    matches!(
+        sub_agent_kind,
+        SUB_AGENT_KIND_ANALYSIS
+            | SUB_AGENT_KIND_TRADING
+            | SUB_AGENT_KIND_DAILY_REVIEW
+            | SUB_AGENT_KIND_MARKET_ANALYSIS
+            | SUB_AGENT_KIND_ANALYSIS_CODING
+    )
+}
+
+fn is_candle_sub_agent_kind(sub_agent_kind: &str) -> bool {
+    matches!(
+        sub_agent_kind,
+        SUB_AGENT_KIND_ANALYSIS | SUB_AGENT_KIND_TRADING | SUB_AGENT_KIND_DAILY_REVIEW
+    )
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -505,43 +585,43 @@ pub(in crate::web::routes) struct NewJobKindAvailability {
 }
 
 impl NewJobKindAvailability {
-    fn singleton_exists(self, job_kind: &str) -> bool {
-        match job_kind {
-            JOB_KIND_MARKET_ANALYSIS => !self.market_analysis,
-            JOB_KIND_ANALYSIS_CODING => !self.analysis_coding,
+    fn singleton_exists(self, sub_agent_kind: &str) -> bool {
+        match sub_agent_kind {
+            SUB_AGENT_KIND_MARKET_ANALYSIS => !self.market_analysis,
+            SUB_AGENT_KIND_ANALYSIS_CODING => !self.analysis_coding,
             _ => false,
         }
     }
 }
 
-async fn load_new_job_kind_availability(
+async fn load_new_sub_agent_kind_availability(
     state: &Arc<AppState>,
     agent_key: &str,
 ) -> anyhow::Result<NewJobKindAvailability> {
-    let jobs = store::list_agent_jobs(&state.db_pool, agent_key).await?;
+    let jobs = store::list_agent_sub_agents(&state.db_pool, agent_key).await?;
     Ok(NewJobKindAvailability {
         market_analysis: !jobs
             .iter()
-            .any(|job| job.job_kind == JOB_KIND_MARKET_ANALYSIS),
+            .any(|job| job.sub_agent_kind == SUB_AGENT_KIND_MARKET_ANALYSIS),
         analysis_coding: !jobs
             .iter()
-            .any(|job| job.job_kind == JOB_KIND_ANALYSIS_CODING),
+            .any(|job| job.sub_agent_kind == SUB_AGENT_KIND_ANALYSIS_CODING),
     })
 }
 
-fn singleton_job_exists_message(job_kind: &str) -> Option<String> {
-    match job_kind {
-        JOB_KIND_MARKET_ANALYSIS => {
-            Some("A market analysis job already exists for this agent.".to_string())
+fn singleton_job_exists_message(sub_agent_kind: &str) -> Option<String> {
+    match sub_agent_kind {
+        SUB_AGENT_KIND_MARKET_ANALYSIS => {
+            Some("A market analysis sub-agent already exists for this agent.".to_string())
         }
-        JOB_KIND_ANALYSIS_CODING => {
-            Some("An analysis coding job already exists for this agent.".to_string())
+        SUB_AGENT_KIND_ANALYSIS_CODING => {
+            Some("An analysis coding sub-agent already exists for this agent.".to_string())
         }
         _ => None,
     }
 }
 
-pub(in crate::web::routes) async fn agents_new_job(
+pub(in crate::web::routes) async fn agents_new_sub_agent(
     State(state): State<Arc<AppState>>,
     user: AuthenticatedUser,
     Path(agent_key): Path<String>,
@@ -550,11 +630,11 @@ pub(in crate::web::routes) async fn agents_new_job(
         return Ok((StatusCode::NOT_FOUND, "agent not found").into_response());
     };
     let picker = load_model_picker_context(&state, &agent).await;
-    let availability = load_new_job_kind_availability(&state, &agent_key).await?;
+    let availability = load_new_sub_agent_kind_availability(&state, &agent_key).await?;
     let navbar = load_selected_agent_navbar(&state, user.id, &agent).await?.0;
     Ok(render_new_job_form(
         agent,
-        CreateHarnessJobForm::defaults().as_template_values(),
+        CreateHarnessSubAgentForm::defaults().as_template_values(),
         picker,
         availability,
         Vec::new(),
@@ -562,17 +642,17 @@ pub(in crate::web::routes) async fn agents_new_job(
         navbar,
     ))
 }
-pub(in crate::web::routes) async fn agents_create_job(
+pub(in crate::web::routes) async fn agents_create_sub_agent(
     State(state): State<Arc<AppState>>,
     user: AuthenticatedUser,
     Path(agent_key): Path<String>,
-    Form(form): Form<CreateHarnessJobForm>,
+    Form(form): Form<CreateHarnessSubAgentForm>,
 ) -> Result<Response, AppError> {
     let Some(agent) = get_agent(&state.db_pool, &agent_key).await? else {
         return Ok((StatusCode::NOT_FOUND, "agent not found").into_response());
     };
     let navbar = load_selected_agent_navbar(&state, user.id, &agent).await?.0;
-    let availability = load_new_job_kind_availability(&state, &agent_key).await?;
+    let availability = load_new_sub_agent_kind_availability(&state, &agent_key).await?;
     let validated = match form.validate() {
         Ok(validated) => validated,
         Err(errors) => {
@@ -589,7 +669,7 @@ pub(in crate::web::routes) async fn agents_create_job(
         }
     };
 
-    if availability.singleton_exists(&validated.job_kind) {
+    if availability.singleton_exists(&validated.sub_agent_kind) {
         let picker = load_model_picker_context(&state, &agent).await;
         return Ok(render_new_job_form(
             agent,
@@ -597,7 +677,7 @@ pub(in crate::web::routes) async fn agents_create_job(
             picker,
             availability,
             vec![
-                singleton_job_exists_message(&validated.job_kind)
+                singleton_job_exists_message(&validated.sub_agent_kind)
                     .expect("only singleton jobs can be unavailable"),
             ],
             StatusCode::UNPROCESSABLE_ENTITY,
@@ -637,11 +717,11 @@ pub(in crate::web::routes) async fn agents_create_job(
     let model_variant = validated_model_selection
         .as_ref()
         .and_then(|(_, _, variant)| variant.as_deref());
-    let result = if validated.trigger_type == TRIGGER_TYPE_CANDLE_CLOSED {
-        crate::harness::store::insert_candle_job_with_model_variant(
+    let result = if is_candle_sub_agent_kind(&validated.sub_agent_kind) {
+        crate::harness::store::insert_candle_sub_agent_with_model_variant(
             &state.db_pool,
             &agent_key,
-            &validated.job_kind,
+            &validated.sub_agent_kind,
             validated.enabled,
             &validated.timeframe,
             validated.trigger_delay_seconds,
@@ -653,11 +733,10 @@ pub(in crate::web::routes) async fn agents_create_job(
         )
         .await
     } else {
-        crate::harness::store::insert_event_job_with_model_variant(
+        crate::harness::store::insert_unscheduled_sub_agent_with_model_variant(
             &state.db_pool,
             &agent_key,
-            &validated.job_kind,
-            &validated.trigger_type,
+            &validated.sub_agent_kind,
             validated.enabled,
             model_provider_id,
             model_id,
@@ -668,7 +747,7 @@ pub(in crate::web::routes) async fn agents_create_job(
         .await
     };
     if let Err(error) = result {
-        let singleton_message = singleton_job_exists_message(&validated.job_kind);
+        let singleton_message = singleton_job_exists_message(&validated.sub_agent_kind);
         let errors = match job_unique_violation_message(&error) {
             Some(_) if singleton_message.is_some() => {
                 vec![singleton_message.expect("singleton conflict message must exist")]
@@ -688,11 +767,11 @@ pub(in crate::web::routes) async fn agents_create_job(
         ));
     }
 
-    Ok(Redirect::to(&format!("/agents/{agent_key}/jobs")).into_response())
+    Ok(Redirect::to(&format!("/agents/{agent_key}/sub-agents")).into_response())
 }
-pub(in crate::web::routes) async fn agents_toggle_job(
+pub(in crate::web::routes) async fn agents_toggle_sub_agent(
     State(state): State<Arc<AppState>>,
-    Path((agent_key, job_id)): Path<(String, i64)>,
+    Path((agent_key, sub_agent_id)): Path<(String, i64)>,
     Form(form): Form<ToggleJobForm>,
 ) -> Result<Response, AppError> {
     let Some(_agent) = get_agent(&state.db_pool, &agent_key).await? else {
@@ -704,24 +783,30 @@ pub(in crate::web::routes) async fn agents_toggle_job(
     let enable = matches!(form.enabled.as_deref(), Some("on"));
     if enable {
         let Some(job) =
-            crate::harness::store::get_agent_job(&state.db_pool, &agent_key, job_id).await?
+            crate::harness::store::get_agent_sub_agent(&state.db_pool, &agent_key, sub_agent_id)
+                .await?
         else {
-            return Ok((StatusCode::NOT_FOUND, "job not found").into_response());
+            return Ok((StatusCode::NOT_FOUND, "sub-agent not found").into_response());
         };
         if job.model_provider_id.is_none() || job.model_id.is_none() {
-            return Ok(jobs_warning_redirect(&agent_key, "No model set"));
+            return Ok(sub_agents_warning_redirect(&agent_key, "No model set"));
         }
     }
-    let updated =
-        crate::harness::store::set_job_enabled(&state.db_pool, &agent_key, job_id, enable).await?;
+    let updated = crate::harness::store::set_sub_agent_enabled(
+        &state.db_pool,
+        &agent_key,
+        sub_agent_id,
+        enable,
+    )
+    .await?;
 
     if !updated {
-        return Ok((StatusCode::NOT_FOUND, "job not found").into_response());
+        return Ok((StatusCode::NOT_FOUND, "sub-agent not found").into_response());
     }
 
-    Ok(Redirect::to(&format!("/agents/{agent_key}/jobs")).into_response())
+    Ok(Redirect::to(&format!("/agents/{agent_key}/sub-agents")).into_response())
 }
-pub(in crate::web::routes) async fn agents_toggle_all_jobs(
+pub(in crate::web::routes) async fn agents_toggle_all_sub_agents(
     State(state): State<Arc<AppState>>,
     Path(agent_key): Path<String>,
     Form(form): Form<ToggleJobForm>,
@@ -730,13 +815,14 @@ pub(in crate::web::routes) async fn agents_toggle_all_jobs(
         return Ok((StatusCode::NOT_FOUND, "agent not found").into_response());
     };
     let enable = matches!(form.enabled.as_deref(), Some("on"));
-    crate::harness::store::set_all_agent_jobs_enabled(&state.db_pool, &agent_key, enable).await?;
+    crate::harness::store::set_all_agent_sub_agents_enabled(&state.db_pool, &agent_key, enable)
+        .await?;
 
-    Ok(Redirect::to(&format!("/agents/{agent_key}/jobs")).into_response())
+    Ok(Redirect::to(&format!("/agents/{agent_key}/sub-agents")).into_response())
 }
-pub(in crate::web::routes) async fn agents_delete_job(
+pub(in crate::web::routes) async fn agents_delete_sub_agent(
     State(state): State<Arc<AppState>>,
-    Path((agent_key, job_id)): Path<(String, i64)>,
+    Path((agent_key, sub_agent_id)): Path<(String, i64)>,
 ) -> Result<Response, AppError> {
     let Some(_agent) = get_agent(&state.db_pool, &agent_key).await? else {
         return Ok((StatusCode::NOT_FOUND, "agent not found").into_response());
@@ -747,53 +833,54 @@ pub(in crate::web::routes) async fn agents_delete_job(
         &state.workspace_leases,
         &state.opencode_base_url,
         &agent_key,
-        job_id,
+        sub_agent_id,
     )
     .await?
     {
         crate::harness::service::DeleteJobOutcome::Deleted => {}
         crate::harness::service::DeleteJobOutcome::Missing => {
-            return Ok((StatusCode::NOT_FOUND, "job not found").into_response());
+            return Ok((StatusCode::NOT_FOUND, "sub-agent not found").into_response());
         }
     }
 
-    Ok(Redirect::to(&format!("/agents/{agent_key}/jobs")).into_response())
+    Ok(Redirect::to(&format!("/agents/{agent_key}/sub-agents")).into_response())
 }
-pub(in crate::web::routes) async fn agents_run_job_now(
+pub(in crate::web::routes) async fn agents_run_sub_agent_now(
     State(state): State<Arc<AppState>>,
-    Path((agent_key, job_id)): Path<(String, i64)>,
+    Path((agent_key, sub_agent_id)): Path<(String, i64)>,
 ) -> Result<Response, AppError> {
     let Some(agent) = get_agent(&state.db_pool, &agent_key).await? else {
         return Ok((StatusCode::NOT_FOUND, "agent not found").into_response());
     };
     if !agent.enabled {
-        return Ok(jobs_warning_redirect(
+        return Ok(sub_agents_warning_redirect(
             &agent_key,
             "Agent is disabled; Run now is unavailable.",
         ));
     }
-    let Some(job) = crate::harness::store::get_dispatch_job(
+    let Some(job) = crate::harness::store::get_dispatch_sub_agent(
         &state.db_pool,
         &agent_key,
-        job_id,
+        sub_agent_id,
         &state.opencode_base_url,
     )
     .await?
     else {
-        return Ok((StatusCode::NOT_FOUND, "job not found").into_response());
+        return Ok((StatusCode::NOT_FOUND, "sub-agent not found").into_response());
     };
     if job.model_provider_id.is_none() || job.model_id.is_none() {
-        return Ok(jobs_warning_redirect(&agent_key, "No model set"));
+        return Ok(sub_agents_warning_redirect(&agent_key, "No model set"));
     }
 
-    if job.job_kind == crate::harness::model::JOB_KIND_ANALYSIS_CODING {
+    if job.sub_agent_kind == crate::harness::model::SUB_AGENT_KIND_ANALYSIS_CODING {
         return match store::insert_analysis_coding_task_and_run(
             &state.db_pool,
             store::AnalysisCodingTaskRequest {
                 agent_key: &agent_key,
-                job_id,
+                sub_agent_id,
                 trigger_mode: store::CodingTriggerMode::Manual,
-                source_run_id: None,
+                request_origin: "manual",
+                source_sub_agent_run_id: None,
                 source_memory_id: None,
                 operator_prompt: None,
                 requested_mode: None,
@@ -804,24 +891,25 @@ pub(in crate::web::routes) async fn agents_run_job_now(
             store::InsertAnalysisCodingTaskOutcome::Inserted { run_id, .. } => {
                 Ok(Redirect::to(&format!("/agents/{agent_key}/runs/{run_id}")).into_response())
             }
-            store::InsertAnalysisCodingTaskOutcome::AlreadyQueued => Ok(jobs_warning_redirect(
-                &agent_key,
-                "Analysis coding is already queued.",
-            )),
+            store::InsertAnalysisCodingTaskOutcome::AlreadyQueued => Ok(
+                sub_agents_warning_redirect(&agent_key, "Analysis coding is already queued."),
+            ),
             store::InsertAnalysisCodingTaskOutcome::BlockedByMaintenance => Ok(
-                jobs_warning_redirect(&agent_key, WORKSPACE_MAINTENANCE_ACTIVE_WARNING),
+                sub_agents_warning_redirect(&agent_key, WORKSPACE_MAINTENANCE_ACTIVE_WARNING),
             ),
         };
     }
 
-    let queued_run = if job.trigger_type == TRIGGER_TYPE_CANDLE_CLOSED {
-        crate::harness::store::insert_queued_manual_run(&state.db_pool, &agent_key, job_id).await?
+    let queued_run = if job.timeframe.is_some() {
+        crate::harness::store::insert_queued_manual_run(&state.db_pool, &agent_key, sub_agent_id)
+            .await?
     } else {
-        crate::harness::store::insert_queued_event_run(&state.db_pool, &agent_key, job_id).await?
+        crate::harness::store::insert_queued_event_run(&state.db_pool, &agent_key, sub_agent_id)
+            .await?
     };
 
     match queued_run {
-        QueuedJobRun::Dispatch {
+        QueuedSubAgentRun::Dispatch {
             run_id,
             scheduled_for,
             wait_for_lane,
@@ -834,7 +922,7 @@ pub(in crate::web::routes) async fn agents_run_job_now(
                     None,
                 )
                 .await;
-                return Ok(jobs_warning_redirect(
+                return Ok(sub_agents_warning_redirect(
                     &agent_key,
                     SERVER_SHUTTING_DOWN_WARNING,
                 ));
@@ -845,15 +933,16 @@ pub(in crate::web::routes) async fn agents_run_job_now(
             let selected_instruments =
                 crate::agents::store::list_agent_instrument_ids(&state.db_pool, &agent_key).await?;
             let system_prompt = crate::agents::prompts::SYSTEM_PROMPT.to_string();
-            let account_snapshot = if job.job_kind == crate::harness::model::JOB_KIND_TRADING {
-                Some(live_agent_snapshot_for_dispatch(
-                    agent.trading_account_address.as_deref().unwrap_or_default(),
-                    &agent.environment,
-                    &state.live_accounts,
-                ))
-            } else {
-                None
-            };
+            let account_snapshot =
+                if job.sub_agent_kind == crate::harness::model::SUB_AGENT_KIND_TRADING {
+                    Some(live_agent_snapshot_for_dispatch(
+                        agent.trading_account_address.as_deref().unwrap_or_default(),
+                        &agent.environment,
+                        &state.live_accounts,
+                    ))
+                } else {
+                    None
+                };
             let mut request = dispatch_request_from_job(
                 &job,
                 DispatchRequestInputs {
@@ -861,14 +950,14 @@ pub(in crate::web::routes) async fn agents_run_job_now(
                     scheduled_for,
                     agent,
                     selected_instruments,
-                    strategy_prompt: load_strategy_prompt(&state, &agent_key, &job.job_kind)
+                    strategy_prompt: load_strategy_prompt(&state, &agent_key, &job.sub_agent_kind)
                         .await?,
                     accumulated_learnings: load_accumulated_learnings(&state, &agent_key).await?,
                     system_prompt,
                 },
                 account_snapshot,
             );
-            if job.job_kind == crate::harness::model::JOB_KIND_DAILY_REVIEW {
+            if job.sub_agent_kind == crate::harness::model::SUB_AGENT_KIND_DAILY_REVIEW {
                 let review_window_end = Utc::now();
                 let review_window_start = Utc.from_utc_datetime(
                     &review_window_end
@@ -883,8 +972,9 @@ pub(in crate::web::routes) async fn agents_run_job_now(
             let backend = state.harness_backend.clone();
             let live_accounts = state.live_accounts.clone();
             let workspace_leases = state.workspace_leases.clone();
-            let trigger_analysis_event = job.job_kind == JOB_KIND_ANALYSIS;
-            let trigger_coding_event = job.job_kind == crate::harness::model::JOB_KIND_DAILY_REVIEW;
+            let trigger_analysis_event = job.sub_agent_kind == SUB_AGENT_KIND_ANALYSIS;
+            let trigger_coding_event =
+                job.sub_agent_kind == crate::harness::model::SUB_AGENT_KIND_DAILY_REVIEW;
             let dispatch_agent_key = agent_key.clone();
             let in_flight = state.in_flight.clone();
             tokio::spawn(async move {
@@ -894,7 +984,7 @@ pub(in crate::web::routes) async fn agents_run_job_now(
                         match store::has_prior_active_run_in_lane(
                             &pool,
                             &dispatch_agent_key,
-                            &job.job_kind,
+                            &job.sub_agent_kind,
                             run_id,
                         )
                         .await
@@ -938,30 +1028,33 @@ pub(in crate::web::routes) async fn agents_run_job_now(
             });
             Ok(Redirect::to(&format!("/agents/{agent_key}/runs/{run_id}")).into_response())
         }
-        QueuedJobRun::Missing => Ok((StatusCode::NOT_FOUND, "job not found").into_response()),
-        QueuedJobRun::Skipped { run_id } => {
+        QueuedSubAgentRun::Missing => {
+            Ok((StatusCode::NOT_FOUND, "sub-agent not found").into_response())
+        }
+        QueuedSubAgentRun::Skipped { run_id } => {
             Ok(Redirect::to(&format!("/agents/{agent_key}/runs/{run_id}")).into_response())
         }
-        QueuedJobRun::BlockedByMaintenance => Ok(jobs_warning_redirect(
+        QueuedSubAgentRun::BlockedByMaintenance => Ok(sub_agents_warning_redirect(
             &agent_key,
             WORKSPACE_MAINTENANCE_ACTIVE_WARNING,
         )),
     }
 }
-pub(in crate::web::routes) async fn agents_update_job_model(
+pub(in crate::web::routes) async fn agents_update_sub_agent_model(
     State(state): State<Arc<AppState>>,
-    Path((agent_key, job_id)): Path<(String, i64)>,
+    Path((agent_key, sub_agent_id)): Path<(String, i64)>,
     headers: HeaderMap,
     Form(form): Form<ModelSelectionForm>,
 ) -> Result<Response, AppError> {
-    let detail_url = format!("/agents/{agent_key}/jobs/{job_id}");
+    let detail_url = format!("/agents/{agent_key}/sub-agents/{sub_agent_id}");
     let Some(agent) = get_agent(&state.db_pool, &agent_key).await? else {
         return Ok((StatusCode::NOT_FOUND, "agent not found").into_response());
     };
     let Some(_job) =
-        crate::harness::store::get_agent_job(&state.db_pool, &agent_key, job_id).await?
+        crate::harness::store::get_agent_sub_agent(&state.db_pool, &agent_key, sub_agent_id)
+            .await?
     else {
-        return Ok((StatusCode::NOT_FOUND, "job not found").into_response());
+        return Ok((StatusCode::NOT_FOUND, "sub-agent not found").into_response());
     };
 
     let parsed = match parse_model_selection(&form.model_selection) {
@@ -980,17 +1073,17 @@ pub(in crate::web::routes) async fn agents_update_job_model(
         .as_ref()
         .and_then(|(_, _, variant)| variant.as_deref());
 
-    if !crate::harness::store::set_job_model_with_variant(
+    if !crate::harness::store::set_sub_agent_model_with_variant(
         &state.db_pool,
         &agent_key,
-        job_id,
+        sub_agent_id,
         model_provider_id,
         model_id,
         model_variant,
     )
     .await?
     {
-        return Ok((StatusCode::NOT_FOUND, "job not found").into_response());
+        return Ok((StatusCode::NOT_FOUND, "sub-agent not found").into_response());
     }
 
     if is_htmx_request(&headers) {
@@ -1016,22 +1109,23 @@ fn htmx_redirect(location: &str) -> Response {
     let mut response = StatusCode::NO_CONTENT.into_response();
     response.headers_mut().insert(
         HeaderName::from_static("hx-redirect"),
-        HeaderValue::from_str(location).expect("job detail redirect locations are valid headers"),
+        HeaderValue::from_str(location)
+            .expect("sub-agent detail redirect locations are valid headers"),
     );
     response
 }
-pub(in crate::web::routes) async fn agents_update_job_timeout(
+pub(in crate::web::routes) async fn agents_update_sub_agent_timeout(
     State(state): State<Arc<AppState>>,
-    Path((agent_key, job_id)): Path<(String, i64)>,
+    Path((agent_key, sub_agent_id)): Path<(String, i64)>,
     Form(form): Form<TimeoutForm>,
 ) -> Result<Response, AppError> {
-    let detail_url = format!("/agents/{agent_key}/jobs/{job_id}");
+    let detail_url = format!("/agents/{agent_key}/sub-agents/{sub_agent_id}");
 
-    if crate::harness::store::get_agent_job(&state.db_pool, &agent_key, job_id)
+    if crate::harness::store::get_agent_sub_agent(&state.db_pool, &agent_key, sub_agent_id)
         .await?
         .is_none()
     {
-        return Ok((StatusCode::NOT_FOUND, "job not found").into_response());
+        return Ok((StatusCode::NOT_FOUND, "sub-agent not found").into_response());
     }
 
     let timeout_seconds = match parse_timeout_seconds(&form.timeout) {
@@ -1055,10 +1149,15 @@ pub(in crate::web::routes) async fn agents_update_job_timeout(
         }
     };
 
-    if !crate::harness::store::set_job_timeout(&state.db_pool, &agent_key, job_id, timeout_i32)
-        .await?
+    if !crate::harness::store::set_sub_agent_timeout(
+        &state.db_pool,
+        &agent_key,
+        sub_agent_id,
+        timeout_i32,
+    )
+    .await?
     {
-        return Ok((StatusCode::NOT_FOUND, "job not found").into_response());
+        return Ok((StatusCode::NOT_FOUND, "sub-agent not found").into_response());
     }
 
     Ok(Redirect::to(&detail_url).into_response())
@@ -1070,21 +1169,21 @@ pub(in crate::web::routes) struct OperatorPromptForm {
     pub operator_prompt: String,
 }
 
-pub(in crate::web::routes) async fn agents_update_job_operator_prompt(
+pub(in crate::web::routes) async fn agents_update_sub_agent_operator_prompt(
     State(state): State<Arc<AppState>>,
-    Path((agent_key, job_id)): Path<(String, i64)>,
+    Path((agent_key, sub_agent_id)): Path<(String, i64)>,
     Form(form): Form<OperatorPromptForm>,
 ) -> Result<Response, AppError> {
-    let detail_url = format!("/agents/{agent_key}/jobs/{job_id}");
-    if !crate::harness::store::set_job_operator_prompt(
+    let detail_url = format!("/agents/{agent_key}/sub-agents/{sub_agent_id}");
+    if !crate::harness::store::set_sub_agent_operator_prompt(
         &state.db_pool,
         &agent_key,
-        job_id,
+        sub_agent_id,
         form.operator_prompt.trim(),
     )
     .await?
     {
-        return Ok((StatusCode::NOT_FOUND, "job not found").into_response());
+        return Ok((StatusCode::NOT_FOUND, "sub-agent not found").into_response());
     }
 
     Ok(Redirect::to(&detail_url).into_response())
@@ -1099,6 +1198,8 @@ pub(in crate::web::routes) struct TimeframeForm {
 #[derive(Debug, Default, Deserialize)]
 pub(in crate::web::routes) struct JobDetailQuery {
     #[serde(default)]
+    pub page: String,
+    #[serde(default)]
     pub timeout_error: Option<String>,
     #[serde(default)]
     pub timeframe_error: Option<String>,
@@ -1108,12 +1209,12 @@ pub(in crate::web::routes) struct JobDetailQuery {
     pub setup: bool,
 }
 
-pub(in crate::web::routes) async fn agents_update_job_timeframe(
+pub(in crate::web::routes) async fn agents_update_sub_agent_timeframe(
     State(state): State<Arc<AppState>>,
-    Path((agent_key, job_id)): Path<(String, i64)>,
+    Path((agent_key, sub_agent_id)): Path<(String, i64)>,
     Form(form): Form<TimeframeForm>,
 ) -> Result<Response, AppError> {
-    let detail_url = format!("/agents/{agent_key}/jobs/{job_id}");
+    let detail_url = format!("/agents/{agent_key}/sub-agents/{sub_agent_id}");
     let timeframe = form.timeframe.trim();
     if let Err(error) = parse_timeframe_seconds(timeframe) {
         return Ok(timeframe_error_redirect(
@@ -1122,16 +1223,16 @@ pub(in crate::web::routes) async fn agents_update_job_timeframe(
         ));
     }
 
-    match crate::harness::store::set_candle_job_timeframe(
+    match crate::harness::store::set_candle_sub_agent_timeframe(
         &state.db_pool,
         &agent_key,
-        job_id,
+        sub_agent_id,
         timeframe,
     )
     .await
     {
         Ok(true) => Ok(Redirect::to(&detail_url).into_response()),
-        Ok(false) => Ok((StatusCode::NOT_FOUND, "job not found").into_response()),
+        Ok(false) => Ok((StatusCode::NOT_FOUND, "sub-agent not found").into_response()),
         Err(error) => match job_unique_violation_message(&error) {
             Some(message) => Ok(timeframe_error_redirect(&detail_url, message)),
             None => Err(AppError(error)),
@@ -1148,29 +1249,29 @@ fn timeframe_error_redirect(detail_url: &str, message: String) -> Response {
 }
 pub(in crate::web::routes) fn render_new_job_form(
     agent: crate::agents::model::AgentDetailRow,
-    form: CreateHarnessJobFormValues,
+    form: CreateHarnessSubAgentFormValues,
     picker: ModelPickerContext,
     availability: NewJobKindAvailability,
     errors: Vec<String>,
     status: StatusCode,
     navbar: crate::web::templates::Navbar,
 ) -> Response {
-    let current_path = format!("/agents/{}/jobs/new", agent.agent_key);
+    let current_path = format!("/agents/{}/sub-agents/new", agent.agent_key);
     let mut model_picker = build_model_picker_view(
-        "job-model-selection",
+        "sub-agent-model-selection",
         &form.model_selection,
         (!form.model_variant.trim().is_empty()).then_some(form.model_variant.as_str()),
         picker,
     );
     model_picker.use_modal = true;
     model_picker.submit_on_save = false;
-    let tabs = build_agent_show_tabs(&agent, AgentShowTab::Jobs);
+    let tabs = build_agent_show_tabs(&agent, AgentShowTab::SubAgents);
     let navbar = navbar.with_selected_agent(
         agent.agent_key.clone(),
         agent.display_name.clone(),
         agent.enabled,
     );
-    let show_timeframe = trigger_for_job_kind(&form.job_kind) == Some(TRIGGER_TYPE_CANDLE_CLOSED);
+    let show_timeframe = is_candle_sub_agent_kind(&form.sub_agent_kind);
     let template = AgentJobNewPageTemplate {
         agent,
         tabs,
@@ -1202,9 +1303,9 @@ pub(in crate::web::routes) fn job_unique_violation_message(
     }
 
     let constraint = db_err.constraint().unwrap_or("unknown");
-    if constraint.contains("harness_jobs") || constraint.contains("job_key") {
-        Some("A job with this kind and timeframe already exists for this agent.".to_string())
+    if constraint.contains("harness_sub_agents") || constraint.contains("sub_agent_key") {
+        Some("A sub-agent with this type and timeframe already exists for this agent.".to_string())
     } else {
-        Some("This job conflicts with an existing row.".to_string())
+        Some("This sub-agent conflicts with an existing row.".to_string())
     }
 }

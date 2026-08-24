@@ -16,7 +16,7 @@ You need:
 - Podman and `podman-compose`
 - `curl`, `openssl`, and GNU `sed`
 - A browser wallet for Hyperliquid login and account approvals
-- An OpenCode provider connection before an agent can run jobs
+- An OpenCode provider connection before an agent can run sub-agents
 
 ## Install a release
 
@@ -49,7 +49,7 @@ When the services are healthy, open [http://127.0.0.1:3003](http://127.0.0.1:300
    signer.
 3. Connect an LLM provider in Provider connections.
 4. Create an agent and assign one main or sub-account, a market allowlist,
-   prompts, and job models.
+   prompts, and sub-agent models.
 5. Review its setup state before enabling scheduled work.
 
 Read [Hyperliquid configuration](Hyperliquid.md) and [Agents](Agents.md) before

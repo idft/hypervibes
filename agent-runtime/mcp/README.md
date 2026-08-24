@@ -30,7 +30,7 @@ Chat sessions can review and edit their own per-agent strategy prompts through
 `list_strategy_prompts`, `get_strategy_prompt`, and `update_strategy_prompt`.
 The available prompt kinds are `analysis`, `market_analysis`, `trading`,
 `daily_review`, and `analysis_coding`. These tools are chat-only: scheduled
-jobs receive their selected strategy prompt but do not edit it. Updates require
+sub-agents receive their selected strategy prompt but do not edit it. Updates require
 the chat operator's one-time OpenCode approval.
 
 ## Operator Logs
@@ -47,7 +47,7 @@ MCP tools instead.
 ## Coding Sessions
 
 The MCP server registers its full API for every workspace. OpenCode agent
-permissions select the MCP tools available to each job session. The
+permissions select the MCP tools available to each sub-agent session. The
 `analysis-coding` agent permits only agent-scoped evidence reads, candidate
 filesystem operations through path-scoped native OpenCode tools, fixed local
 validation, and one structured report submission.

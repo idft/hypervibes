@@ -8,7 +8,7 @@ use uuid::Uuid;
 use crate::db::DbPool;
 
 pub const SESSION_CHANGED_CHANNEL: &str = "agent_run_detail_session_changed";
-pub const RUN_CHANGED_CHANNEL: &str = "agent_run_detail_run_changed";
+pub const RUN_CHANGED_CHANNEL: &str = "agent_sub_agent_run_detail_changed";
 pub const AGENT_CONVERSATION_CHANGED_CHANNEL: &str = "agent_conversation_changed";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -377,11 +377,11 @@ mod tests {
         .execute(&pool)
         .await
         .expect("insert trigger agent");
-        let job_id: i64 = query(
-            "INSERT INTO harness_jobs
-                (agent_key, job_key, job_kind, trigger_type, timeframe, trigger_delay_seconds,
-                 next_run_at, timeout_seconds)
-             VALUES ($1, 'trigger-job', 'analysis', 'candle_closed', '15m', 0, $2, 60)
+        let sub_agent_id: i64 = query(
+            "INSERT INTO harness_sub_agents
+                (agent_key, sub_agent_key, sub_agent_kind, timeframe, trigger_delay_seconds,
+                  next_run_at, timeout_seconds)
+              VALUES ($1, 'trigger-sub-agent', 'analysis', '15m', 0, $2, 60)
              RETURNING id",
         )
         .bind(&agent_key)
@@ -391,13 +391,13 @@ mod tests {
         .expect("insert trigger job")
         .get("id");
         let run_id: i64 = query(
-            "INSERT INTO harness_runs
-                (job_id, agent_key, job_key, job_kind, trigger_type, timeframe, status,
-                 scheduled_for, timeout_seconds)
-             VALUES ($1, $2, 'trigger-job', 'analysis', 'candle_closed', '15m', 'queued', $3, 60)
+            "INSERT INTO harness_sub_agent_runs
+                (sub_agent_id, agent_key, sub_agent_key, sub_agent_kind, timeframe, status,
+                  scheduled_for, timeout_seconds)
+              VALUES ($1, $2, 'trigger-sub-agent', 'analysis', '15m', 'queued', $3, 60)
              RETURNING id",
         )
-        .bind(job_id)
+        .bind(sub_agent_id)
         .bind(&agent_key)
         .bind(now)
         .fetch_one(&pool)
@@ -410,7 +410,7 @@ mod tests {
         );
 
         query(
-            "UPDATE harness_runs
+            "UPDATE harness_sub_agent_runs
                 SET status = 'running', backend_run_ref = 'trigger-session'
               WHERE id = $1",
         )

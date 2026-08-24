@@ -10,7 +10,11 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::{agents::AuthenticatedAgent, web::AppState};
+use crate::{
+    agents::AuthenticatedAgent,
+    harness::{model::SUB_AGENT_KIND_ANALYSIS_CODING, store},
+    web::AppState,
+};
 
 use super::error::ApiError;
 
@@ -24,6 +28,24 @@ pub(super) struct CodingReportRequest {
     pub changed_paths: Vec<String>,
     pub evidence_memory_ids: Vec<String>,
     pub validation_notes: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub(super) struct CodingRequest {
+    pub reason: String,
+    #[serde(default = "default_coding_mode")]
+    pub mode: String,
+}
+
+fn default_coding_mode() -> String {
+    "auto".to_string()
+}
+
+#[derive(Debug, Serialize)]
+struct CodingRequestResponse {
+    task_id: i64,
+    run_id: i64,
+    status: &'static str,
 }
 
 async fn owns_coding_task(
@@ -43,6 +65,71 @@ async fn owns_coding_task(
     .await
     .map_err(|error| ApiError::Internal(AnyhowError::from(error)))?;
     Ok(row.0)
+}
+
+pub(super) async fn request_analysis_coding(
+    State(state): State<Arc<AppState>>,
+    agent: AuthenticatedAgent,
+    Json(input): Json<CodingRequest>,
+) -> Result<Response, ApiError> {
+    let reason = input.reason.trim();
+    if reason.is_empty() || reason.chars().count() > 4_000 {
+        return Err(ApiError::Validation("invalid coding request reason".into()));
+    }
+    if !matches!(
+        input.mode.as_str(),
+        "auto" | "bootstrap" | "manual_improvement"
+    ) {
+        return Err(ApiError::Validation("invalid coding request mode".into()));
+    }
+    let Some(sub_agent) = store::get_enabled_sub_agent(
+        &state.db_pool,
+        &agent.agent_key,
+        SUB_AGENT_KIND_ANALYSIS_CODING,
+    )
+    .await
+    .map_err(ApiError::Internal)?
+    else {
+        return Ok((
+            StatusCode::CONFLICT,
+            "analysis coding is disabled or missing",
+        )
+            .into_response());
+    };
+    match store::insert_analysis_coding_task_and_run(
+        &state.db_pool,
+        store::AnalysisCodingTaskRequest {
+            agent_key: &agent.agent_key,
+            sub_agent_id: sub_agent.id,
+            trigger_mode: store::CodingTriggerMode::Automatic,
+            request_origin: "chat",
+            source_sub_agent_run_id: None,
+            source_memory_id: None,
+            operator_prompt: Some(reason),
+            requested_mode: Some(&input.mode),
+        },
+    )
+    .await
+    .map_err(ApiError::Internal)?
+    {
+        store::InsertAnalysisCodingTaskOutcome::Inserted {
+            task_id, run_id, ..
+        } => Ok((
+            StatusCode::ACCEPTED,
+            Json(CodingRequestResponse {
+                task_id,
+                run_id,
+                status: "queued",
+            }),
+        )
+            .into_response()),
+        store::InsertAnalysisCodingTaskOutcome::AlreadyQueued => {
+            Ok((StatusCode::CONFLICT, "analysis coding is already queued").into_response())
+        }
+        store::InsertAnalysisCodingTaskOutcome::BlockedByMaintenance => {
+            Ok((StatusCode::CONFLICT, "workspace maintenance is active").into_response())
+        }
+    }
 }
 
 pub(super) async fn submit_coding_report(

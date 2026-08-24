@@ -55,12 +55,12 @@ Set `HYPERLIQUID_ENVIRONMENT` to `mainnet` or `testnet`. Defaults to `mainnet`.
 - A candle is fully closed at `start + interval_ms`. A candle that only opened
   before a boundary has not closed at the boundary and must be excluded to
   avoid leaking unclosed data into deterministic analysis.
-- For a job anchored to boundary `B`, always fetch with
+- For a sub-agent anchored to boundary `B`, always fetch with
   `--closed-before B_ms`. The script derives the candle close timestamp
   locally from `start + interval_ms` (the Hyperliquid API omits a reliable
   close field) and keeps only candles whose close is strictly less than
   `B_ms`. This matters for shorter jobs fetching longer-timeframe data:
-  a 15-minute job at the half-hour boundary `B` requesting 1-hour candles
+  a 15-minute sub-agent at the half-hour boundary `B` requesting 1-hour candles
   must exclude the 1-hour candle that opened at `B - interval_ms` (because
   it has not closed at `B`).
 - Do not pair `--end-time` with `--closed-before`; the local close filter

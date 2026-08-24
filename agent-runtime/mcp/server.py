@@ -665,6 +665,36 @@ def write_memory(
 
 
 @mcp.tool()
+def request_analysis_coding(reason: str, mode: str = "auto") -> dict[str, Any]:
+    """Queue an on-demand analysis-coding sub-agent run.
+
+    This returns after the durable task is queued; it does not wait for model
+    execution, validation, or candidate promotion. ``reason`` must explain the
+    requested reusable analysis-code improvement. ``mode`` is ``auto``,
+    ``bootstrap``, or ``manual_improvement``.
+    """
+    reason = _require_nonblank("reason", reason)
+    if len(reason) > 4_000:
+        raise ValueError("reason must be at most 4000 characters")
+    if mode not in {"auto", "bootstrap", "manual_improvement"}:
+        raise ValueError("mode must be auto, bootstrap, or manual_improvement")
+    result = _request(
+        "POST",
+        "/api/v1/coding/requests",
+        json_body={"reason": reason, "mode": mode},
+    )
+    if (
+        not isinstance(result, dict)
+        or set(result) != {"task_id", "run_id", "status"}
+        or not isinstance(result["task_id"], int)
+        or not isinstance(result["run_id"], int)
+        or result["status"] != "queued"
+    ):
+        raise RuntimeError("HyperVibes coding request returned unexpected shape")
+    return result
+
+
+@mcp.tool()
 def submit_orders(orders: list[dict[str, Any]]) -> dict[str, Any]:
     """Submit one or more orders through the HyperVibes backend.
 

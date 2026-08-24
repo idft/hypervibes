@@ -57,15 +57,16 @@ impl CodingTriggerMode {
 
 pub struct AnalysisCodingTaskRequest<'a> {
     pub agent_key: &'a str,
-    pub job_id: i64,
+    pub sub_agent_id: i64,
     pub trigger_mode: CodingTriggerMode,
-    pub source_run_id: Option<i64>,
+    pub request_origin: &'a str,
+    pub source_sub_agent_run_id: Option<i64>,
     pub source_memory_id: Option<Uuid>,
     pub operator_prompt: Option<&'a str>,
     pub requested_mode: Option<&'a str>,
 }
 
-type CodingJobRow = (
+type CodingSubAgentRow = (
     i64,
     String,
     String,
@@ -86,9 +87,10 @@ pub async fn insert_analysis_coding_task_and_run(
 ) -> Result<InsertAnalysisCodingTaskOutcome> {
     let AnalysisCodingTaskRequest {
         agent_key,
-        job_id,
+        sub_agent_id,
         trigger_mode,
-        source_run_id,
+        request_origin,
+        source_sub_agent_run_id,
         source_memory_id,
         operator_prompt,
         requested_mode,
@@ -99,23 +101,23 @@ pub async fn insert_analysis_coding_task_and_run(
         .context("failed to begin coding queue transaction")?;
     lock_agent_coordination_tx(&mut tx, agent_key).await?;
 
-    let job: Option<CodingJobRow> = query_as(
-        "SELECT id, agent_key, job_key, job_kind, enabled,
+    let job: Option<CodingSubAgentRow> = query_as(
+        "SELECT id, agent_key, sub_agent_key, sub_agent_kind, enabled,
                     model_provider_id, model_id, model_variant, timeout_seconds, operator_prompt
-               FROM harness_jobs
+               FROM harness_sub_agents
               WHERE agent_key = $1 AND id = $2
               FOR UPDATE",
     )
     .bind(agent_key)
-    .bind(job_id)
+    .bind(sub_agent_id)
     .fetch_optional(&mut *tx)
     .await
     .context("failed to lock coding job")?;
     let Some((
-        job_id,
+        sub_agent_id,
         job_agent_key,
-        job_key,
-        job_kind,
+        sub_agent_key,
+        sub_agent_kind,
         enabled,
         provider,
         model,
@@ -126,7 +128,7 @@ pub async fn insert_analysis_coding_task_and_run(
     else {
         anyhow::bail!("coding job not found")
     };
-    if job_agent_key != agent_key || job_kind != "analysis_coding" {
+    if job_agent_key != agent_key || sub_agent_kind != "analysis_coding" {
         anyhow::bail!("job is not an analysis coding job")
     }
     if trigger_mode == CodingTriggerMode::Automatic && !enabled {
@@ -136,6 +138,9 @@ pub async fn insert_analysis_coding_task_and_run(
         && !matches!(mode, "auto" | "bootstrap" | "manual_improvement")
     {
         anyhow::bail!("invalid analysis coding mode")
+    }
+    if !matches!(request_origin, "daily_review" | "chat" | "manual") {
+        anyhow::bail!("invalid analysis coding request origin");
     }
     let (Some(provider), Some(model)) = (provider, model) else {
         anyhow::bail!("analysis coding requires an explicit provider and model")
@@ -176,11 +181,10 @@ pub async fn insert_analysis_coding_task_and_run(
     let now = Utc::now();
     let run_id = insert_run_with_model_variant_in_tx(
         &mut tx,
-        job_id,
+        sub_agent_id,
         agent_key,
-        &job_key,
-        &job_kind,
-        crate::harness::model::TRIGGER_TYPE_DAILY_REVIEW_COMPLETED,
+        &sub_agent_key,
+        &sub_agent_kind,
         None,
         RUN_STATUS_QUEUED,
         None,
@@ -196,6 +200,7 @@ pub async fn insert_analysis_coding_task_and_run(
     .await?;
     let parameters = json!({
         "trigger_mode": trigger_mode.as_str(),
+        "request_origin": request_origin,
         "mode": requested_mode.unwrap_or("auto"),
         "operator_prompt": operator_prompt.unwrap_or(""),
         "job_prompt": job_prompt,
@@ -206,8 +211,8 @@ pub async fn insert_analysis_coding_task_and_run(
     });
     let task: (i64,) = query_as(
         "INSERT INTO harness_maintenance_tasks
-              (agent_key, task_kind, parameters, status, phase, job_id, run_id,
-               source_run_id, source_memory_id)
+              (agent_key, task_kind, parameters, status, phase, sub_agent_id, run_id,
+               source_sub_agent_run_id, source_memory_id)
            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
           RETURNING id",
     )
@@ -216,9 +221,9 @@ pub async fn insert_analysis_coding_task_and_run(
     .bind(parameters)
     .bind(MAINTENANCE_STATUS_QUEUED)
     .bind(crate::harness::model::MAINTENANCE_PHASE_QUEUED)
-    .bind(job_id)
+    .bind(sub_agent_id)
     .bind(run_id)
-    .bind(source_run_id)
+    .bind(source_sub_agent_run_id)
     .bind(source_memory_id)
     .fetch_one(&mut *tx)
     .await
@@ -299,9 +304,9 @@ pub async fn get_latest_workspace_regenerate_task(
                 status,
                  phase,
                  error_summary,
-                 job_id,
+                 sub_agent_id,
                  run_id,
-                source_run_id,
+                source_sub_agent_run_id,
                 source_memory_id,
                 heartbeat_at,
                 attempt_count,
@@ -330,7 +335,7 @@ pub async fn get_latest_maintenance_task(
 ) -> Result<Option<AgentMaintenanceTaskRow>> {
     query_as::<_, AgentMaintenanceTaskRow>(
         "SELECT id, agent_key, task_kind, parameters, status, phase,
-                error_summary, job_id, run_id, source_run_id, source_memory_id,
+                error_summary, sub_agent_id, run_id, source_sub_agent_run_id, source_memory_id,
                 heartbeat_at, attempt_count, created_at, updated_at,
                 started_at, finished_at
            FROM harness_maintenance_tasks
@@ -444,9 +449,9 @@ pub async fn get_next_queued_workspace_regenerate_task(
                 status,
                  phase,
                  error_summary,
-                 job_id,
+                 sub_agent_id,
                  run_id,
-                source_run_id,
+                source_sub_agent_run_id,
                 source_memory_id,
                 heartbeat_at,
                 attempt_count,
@@ -475,7 +480,7 @@ pub async fn list_queued_maintenance_candidates(
 ) -> Result<Vec<AgentMaintenanceTaskRow>> {
     query_as::<_, AgentMaintenanceTaskRow>(
         "SELECT id, agent_key, task_kind, parameters, status, phase,
-                error_summary, job_id, run_id, source_run_id, source_memory_id,
+                error_summary, sub_agent_id, run_id, source_sub_agent_run_id, source_memory_id,
                 heartbeat_at, attempt_count, created_at, updated_at,
                 started_at, finished_at
            FROM harness_maintenance_tasks
@@ -555,7 +560,7 @@ pub async fn list_stale_running_maintenance_tasks(
 ) -> Result<Vec<AgentMaintenanceTaskRow>> {
     query_as::<_, AgentMaintenanceTaskRow>(
         "SELECT id, agent_key, task_kind, parameters, status, phase,
-                error_summary, job_id, run_id, source_run_id, source_memory_id,
+                error_summary, sub_agent_id, run_id, source_sub_agent_run_id, source_memory_id,
                 heartbeat_at, attempt_count, created_at, updated_at,
                 started_at, finished_at
            FROM harness_maintenance_tasks
@@ -576,15 +581,15 @@ pub async fn list_stale_running_maintenance_tasks(
 pub async fn agent_has_active_live_runs(pool: &DbPool, agent_key: &str) -> Result<bool> {
     let row: (bool,) = query_as(
         "SELECT EXISTS (
-             SELECT 1 FROM harness_runs
+             SELECT 1 FROM harness_sub_agent_runs
               WHERE agent_key = $1
                 AND status = ANY($2)
-                AND job_kind <> $3
+                AND sub_agent_kind <> $3
          )",
     )
     .bind(agent_key)
     .bind(crate::harness::store::common::ACTIVE_STATUSES)
-    .bind(crate::harness::model::JOB_KIND_ANALYSIS_CODING)
+    .bind(crate::harness::model::SUB_AGENT_KIND_ANALYSIS_CODING)
     .fetch_one(pool)
     .await
     .context("failed to check active live runs")?;

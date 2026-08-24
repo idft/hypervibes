@@ -147,7 +147,7 @@ def filter_closed_before(
     A candle is "fully closed" when its close timestamp (start + interval_ms)
     is strictly less than ``closed_before_ms``. Candles that merely *open*
     before the boundary but have not yet closed are excluded; this is the
-    behaviour that callers such as a 15-minute job fetching 1-hour data at
+    behaviour that callers such as a 15-minute sub-agent fetching 1-hour data at
     a half-hour boundary require (the still-open 1-hour candle would
     otherwise leak future data into the analysis).
     """

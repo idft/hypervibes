@@ -13,11 +13,11 @@ use super::shared::{
 
 /// View-model for a single row in a Runs table.
 #[derive(Debug, Clone)]
-pub struct HarnessRunView {
+pub struct HarnessSubAgentRunView {
     pub is_running: bool,
     pub status_label: String,
     pub status_class: String,
-    pub job_key: String,
+    pub sub_agent_key: String,
     pub timeframe_text: String,
     pub scheduled_for: LocalTimestampView,
     pub started_at: Option<LocalTimestampView>,
@@ -28,13 +28,13 @@ pub struct HarnessRunView {
 }
 
 #[derive(Debug, Clone)]
-pub struct HarnessRunDetailView {
+pub struct HarnessSubAgentRunDetailView {
     pub id: i64,
     pub agent_key: String,
     pub status: String,
     pub status_label: String,
     pub status_class: String,
-    pub job_key: String,
+    pub sub_agent_key: String,
     pub timeframe_text: String,
     pub scheduled_for: LocalTimestampView,
     pub started_at: Option<LocalTimestampView>,
@@ -100,14 +100,9 @@ pub struct OpenCodeSessionErrorView {
     pub error_message: String,
 }
 
-impl HarnessRunView {
-    pub fn from_row(row: &crate::harness::model::HarnessRunRow) -> Self {
-        let _ = (
-            &row.job_kind,
-            &row.trigger_type,
-            row.created_at,
-            row.updated_at,
-        );
+impl HarnessSubAgentRunView {
+    pub fn from_row(row: &crate::harness::model::HarnessSubAgentRunRow) -> Self {
+        let _ = (&row.sub_agent_kind, row.created_at, row.updated_at);
         let (status_label, status_class) = status_badge(row.status.as_str());
         let duration_text = run_duration_text(row.started_at, row.finished_at);
 
@@ -115,7 +110,7 @@ impl HarnessRunView {
             is_running: row.status == "running",
             status_label,
             status_class,
-            job_key: row.job_key.clone(),
+            sub_agent_key: row.sub_agent_key.clone(),
             timeframe_text: row.timeframe.clone().unwrap_or_else(|| "—".to_string()),
             scheduled_for: local_timestamp_view(row.scheduled_for),
             started_at: optional_local_timestamp_view(row.started_at),
@@ -127,14 +122,9 @@ impl HarnessRunView {
     }
 }
 
-impl HarnessRunDetailView {
-    pub fn from_row(row: &crate::harness::model::HarnessRunRow) -> Self {
-        let _ = (
-            &row.job_kind,
-            &row.trigger_type,
-            row.created_at,
-            row.updated_at,
-        );
+impl HarnessSubAgentRunDetailView {
+    pub fn from_row(row: &crate::harness::model::HarnessSubAgentRunRow) -> Self {
+        let _ = (&row.sub_agent_kind, row.created_at, row.updated_at);
         let (status_label, status_class) = status_badge(row.status.as_str());
 
         Self {
@@ -143,7 +133,7 @@ impl HarnessRunDetailView {
             status: row.status.clone(),
             status_label,
             status_class,
-            job_key: row.job_key.clone(),
+            sub_agent_key: row.sub_agent_key.clone(),
             timeframe_text: row.timeframe.clone().unwrap_or_else(|| "—".to_string()),
             scheduled_for: local_timestamp_view(row.scheduled_for),
             started_at: optional_local_timestamp_view(row.started_at),
@@ -152,8 +142,11 @@ impl HarnessRunDetailView {
             timeout_text: format_duration(row.timeout_seconds),
             backend_run_ref: row.backend_run_ref.clone().unwrap_or_default(),
             error_summary: row.error_summary.clone().unwrap_or_default(),
-            job_url: Some(format!("/agents/{}/jobs/{}", row.agent_key, row.job_id)),
-            job_label: "job",
+            job_url: Some(format!(
+                "/agents/{}/sub-agents/{}",
+                row.agent_key, row.sub_agent_id
+            )),
+            job_label: "sub-agent",
         }
     }
 }
@@ -288,7 +281,7 @@ pub struct AgentRunDetailPageTemplate {
     pub agent: AgentDetailRow,
     pub tabs: Vec<AgentShowTabLink>,
     pub agent_tabs_use_htmx: bool,
-    pub run: HarnessRunDetailView,
+    pub run: HarnessSubAgentRunDetailView,
     pub summary_html: String,
     pub transcript_html: String,
     pub current_path: String,
@@ -298,21 +291,21 @@ pub struct AgentRunDetailPageTemplate {
 #[derive(Template)]
 #[template(path = "agents/runs/detail-summary.html")]
 pub struct AgentRunDetailSummaryPartialTemplate {
-    pub run: HarnessRunDetailView,
+    pub run: HarnessSubAgentRunDetailView,
     pub session: Option<OpenCodeSessionView>,
 }
 
 #[derive(Template)]
 #[template(path = "agents/runs/detail-transcript.html")]
 pub struct AgentRunDetailTranscriptPartialTemplate {
-    pub run: HarnessRunDetailView,
+    pub run: HarnessSubAgentRunDetailView,
     pub session: Option<OpenCodeSessionView>,
     pub session_lookup_attempted: bool,
 }
 
 impl AgentRunDetailSummaryPartialTemplate {
     pub fn render_view(
-        run: HarnessRunDetailView,
+        run: HarnessSubAgentRunDetailView,
         session: Option<OpenCodeSessionView>,
     ) -> Result<String, askama::Error> {
         Self { run, session }.render()
@@ -321,7 +314,7 @@ impl AgentRunDetailSummaryPartialTemplate {
 
 impl AgentRunDetailTranscriptPartialTemplate {
     pub fn render_view(
-        run: HarnessRunDetailView,
+        run: HarnessSubAgentRunDetailView,
         session: Option<OpenCodeSessionView>,
         session_lookup_attempted: bool,
     ) -> Result<String, askama::Error> {
@@ -337,7 +330,7 @@ impl AgentRunDetailTranscriptPartialTemplate {
 impl AgentRunDetailPageTemplate {
     pub fn render_view(
         agent: AgentDetailRow,
-        run: HarnessRunDetailView,
+        run: HarnessSubAgentRunDetailView,
         session: Option<OpenCodeSessionView>,
         session_lookup_attempted: bool,
         navbar: Navbar,
@@ -356,7 +349,7 @@ impl AgentRunDetailPageTemplate {
             session_lookup_attempted,
         )?;
         Self {
-            tabs: build_agent_show_tabs(&agent, AgentShowTab::Jobs),
+            tabs: build_agent_show_tabs(&agent, AgentShowTab::SubAgents),
             agent_tabs_use_htmx: false,
             agent,
             run,

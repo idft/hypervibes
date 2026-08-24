@@ -6,7 +6,7 @@ slug: /concepts/chat
 
 The Chat tab provides a persistent conversation with one agent through the
 shared OpenCode backend. A conversation is mapped to a dedicated OpenCode
-session and is independent of scheduled job runs.
+session and is independent of scheduled sub-agent runs.
 
 Each generated workspace registers a local stdio HyperVibes MCP server with
 OpenCode. The adapter reads workspace-scoped HyperVibes credentials and calls
@@ -73,7 +73,7 @@ The Prompts tab's **Discuss prompt** action is a shortcut into Chat:
    with `hypervibes_get_strategy_prompt` when the draft was too long.
 5. A requested MCP update waits for the user's one-time confirmation.
 
-Chat prompt tools can only access the current agent's prompts. Scheduled jobs
+Chat prompt tools can only access the current agent's prompts. Scheduled sub-agents
 receive their prompts as input but cannot modify them.
 
 See [Prompts](Prompts.md) for prompt roles and [AI Providers](Providers.md) for

@@ -1,6 +1,6 @@
 import { animateNumberRolls, tickRunningDurations } from "../../shared/presentation";
 
-const JOBS_REFRESH_KEY = "agent-jobs-refresh-required";
+const SUB_AGENTS_REFRESH_KEY = "agent-sub-agents-refresh-required";
 
 export function scrollRunTranscriptToBottom() {
   document.querySelectorAll<HTMLElement>("[data-run-transcript-scroll], [data-conversation-transcript-scroll]").forEach((scroll) => { scroll.scrollTop = scroll.scrollHeight; });
@@ -20,7 +20,7 @@ export function initRunTranscripts(root: ParentNode = document) {
 
 function updateModelDependentButtons(form: HTMLFormElement) {
   const input = form.querySelector<HTMLInputElement>('input[name="model_selection"]');
-  if (!input || !/\/agents\/[^/]+\/(?:jobs|hooks)\/\d+\/model$/.test(new URL(form.action, window.location.href).pathname)) return;
+  if (!input || !/\/agents\/[^/]+\/sub-agents\/\d+\/model$/.test(new URL(form.action, window.location.href).pathname)) return;
   const hasModel = Boolean(input.value.trim());
   document.querySelectorAll<HTMLButtonElement>("[data-model-dependent-run-now]").forEach((button) => { button.disabled = !hasModel; button.classList.toggle("cursor-pointer", hasModel); button.classList.toggle("cursor-not-allowed", !hasModel); button.classList.toggle("opacity-50", !hasModel); button.title = hasModel ? "" : "No model set"; });
   document.querySelectorAll<HTMLButtonElement>("[data-model-dependent-enable]").forEach((button) => {
@@ -51,12 +51,12 @@ function installDetailDeleteModal() {
     const modal = document.getElementById("detail-delete-modal");
     if (trigger && modal) {
       const form = document.getElementById("detail-delete-form") as HTMLFormElement | null;
-      const kind = trigger.dataset.deleteKind ?? "job";
+      const kind = trigger.dataset.deleteKind ?? "sub-agent";
       if (form) form.action = trigger.dataset.deleteAction ?? "";
       const title = document.getElementById("detail-delete-modal-title"); const body = document.getElementById("detail-delete-modal-body"); const confirm = document.getElementById("confirm-detail-delete-btn");
       if (title) title.textContent = `Delete ${kind}`;
-      if (body) body.textContent = kind === "job"
-        ? `Delete ${trigger.dataset.deleteLabel ?? kind}? This permanently removes the job, its run history, and transcript sessions.`
+      if (body) body.textContent = kind === "sub-agent"
+        ? `Delete ${trigger.dataset.deleteLabel ?? kind}? This permanently removes the sub-agent, its run history, and transcript sessions.`
         : `Are you sure you want to delete ${trigger.dataset.deleteLabel ?? kind}? This action cannot be undone.`;
       if (confirm) confirm.textContent = `Delete ${kind}`;
       modal.classList.remove("hidden"); modal.classList.add("flex");
@@ -130,8 +130,8 @@ export function installAgentLiveLifecycle() {
   document.addEventListener("htmx:afterRequest", (event) => {
     const detail = (event as CustomEvent<{ successful?: boolean; elt?: Element }>).detail;
     if (!detail.successful || !(detail.elt instanceof HTMLFormElement)) return;
-    if (/^\/agents\/[^/]+\/(?:jobs|hooks)\/\d+\/model$/.test(new URL(detail.elt.action, window.location.href).pathname)) window.sessionStorage.setItem(JOBS_REFRESH_KEY, "true");
+    if (/^\/agents\/[^/]+\/sub-agents\/\d+\/model$/.test(new URL(detail.elt.action, window.location.href).pathname)) window.sessionStorage.setItem(SUB_AGENTS_REFRESH_KEY, "true");
     updateModelDependentButtons(detail.elt);
   });
-  window.addEventListener("pageshow", (event) => { const rail = document.querySelector(".agent-rail"); rail?.classList.remove("agent-rail-exit"); if (event.persisted && document.querySelector("[data-agent-jobs]") && window.sessionStorage.getItem(JOBS_REFRESH_KEY) === "true") window.location.reload(); });
+  window.addEventListener("pageshow", (event) => { const rail = document.querySelector(".agent-rail"); rail?.classList.remove("agent-rail-exit"); if (event.persisted && document.querySelector("[data-agent-sub-agents]") && window.sessionStorage.getItem(SUB_AGENTS_REFRESH_KEY) === "true") window.location.reload(); });
 }

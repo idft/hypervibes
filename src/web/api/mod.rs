@@ -43,6 +43,7 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/memories/{id}", get(get_memory_by_id))
         .route("/account", get(get_account))
         .route("/account/transactions", get(list_account_transactions))
+        .route("/coding/requests", post(request_analysis_coding))
         .route("/coding/report", post(submit_coding_report))
         .route("/strategy-prompts", get(list_strategy_prompts))
         .route(

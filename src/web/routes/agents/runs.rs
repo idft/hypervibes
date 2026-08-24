@@ -22,14 +22,15 @@ use crate::{
         run_detail_events::RunDetailDbEvent,
         templates::{
             AgentRunDetailPageTemplate, AgentRunDetailSummaryPartialTemplate,
-            AgentRunDetailTranscriptPartialTemplate, HarnessRunDetailView, OpenCodeSessionView,
+            AgentRunDetailTranscriptPartialTemplate, HarnessSubAgentRunDetailView,
+            OpenCodeSessionView,
         },
     },
 };
 
 struct RunDetailSnapshot {
     agent: crate::agents::model::AgentDetailRow,
-    run: HarnessRunDetailView,
+    run: HarnessSubAgentRunDetailView,
     session: Option<OpenCodeSessionView>,
     session_lookup_attempted: bool,
 }
@@ -49,7 +50,7 @@ async fn load_run_detail_snapshot(
         return Ok(None);
     }
 
-    let mut run = HarnessRunDetailView::from_row(&run);
+    let mut run = HarnessSubAgentRunDetailView::from_row(&run);
     let session_lookup_attempted = !run.backend_run_ref.is_empty();
     let session = if session_lookup_attempted {
         crate::opencode::store::get_session_detail(&state.db_pool, &run.backend_run_ref)
@@ -71,7 +72,7 @@ async fn load_run_detail_snapshot(
     }))
 }
 
-fn prefer_session_error(run: &mut HarnessRunDetailView, session: &OpenCodeSessionView) {
+fn prefer_session_error(run: &mut HarnessSubAgentRunDetailView, session: &OpenCodeSessionView) {
     let Some(error) = session
         .session_errors
         .iter()
@@ -185,28 +186,27 @@ pub(in crate::web::routes) async fn agents_retry_run(
         return Ok((StatusCode::CONFLICT, "only failed runs can be retried").into_response());
     }
 
-    let queued = match run.trigger_type.as_str() {
-        crate::harness::model::TRIGGER_TYPE_CANDLE_CLOSED => {
-            crate::harness::store::insert_queued_manual_run(&state.db_pool, &agent_key, run.job_id)
-                .await?
-        }
-        crate::harness::model::TRIGGER_TYPE_ANALYSIS_BATCH_COMPLETED
-        | crate::harness::model::TRIGGER_TYPE_DAILY_REVIEW_COMPLETED => {
-            crate::harness::store::insert_queued_event_run(&state.db_pool, &agent_key, run.job_id)
-                .await?
-        }
-        _ => return Ok((StatusCode::CONFLICT, "run has an unsupported trigger").into_response()),
+    let queued = if run.timeframe.is_some() {
+        crate::harness::store::insert_queued_manual_run(
+            &state.db_pool,
+            &agent_key,
+            run.sub_agent_id,
+        )
+        .await?
+    } else {
+        crate::harness::store::insert_queued_event_run(&state.db_pool, &agent_key, run.sub_agent_id)
+            .await?
     };
 
     match queued {
-        crate::harness::store::QueuedJobRun::Dispatch { run_id, .. }
-        | crate::harness::store::QueuedJobRun::Skipped { run_id } => {
+        crate::harness::store::QueuedSubAgentRun::Dispatch { run_id, .. }
+        | crate::harness::store::QueuedSubAgentRun::Skipped { run_id } => {
             Ok(Redirect::to(&format!("/agents/{agent_key}/runs/{run_id}")).into_response())
         }
-        crate::harness::store::QueuedJobRun::Missing => {
-            Ok((StatusCode::NOT_FOUND, "job not found").into_response())
+        crate::harness::store::QueuedSubAgentRun::Missing => {
+            Ok((StatusCode::NOT_FOUND, "sub-agent not found").into_response())
         }
-        crate::harness::store::QueuedJobRun::BlockedByMaintenance => Ok((
+        crate::harness::store::QueuedSubAgentRun::BlockedByMaintenance => Ok((
             StatusCode::CONFLICT,
             "workspace maintenance is active; retry is unavailable",
         )

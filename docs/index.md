@@ -35,13 +35,13 @@ been tested.
 Each agent has its own Hyperliquid account or sub-account. This keeps each
 agent's positions, orders, and account activity separate.
 
-Agent jobs run automatically. The available job types are:
+Agent sub-agents run automatically. The available sub-agent types are:
 
 - **Analysis** - Runs on a fixed schedule tied to candle closings, such as 5m,
   15m, or 1h. It executes strategy code written by the coding agent and saves
   the results as memory.
 - **Market analysis** - Compiles an overall analysis of one market from
-  previously saved memories. It runs after each batch of analysis jobs.
+   previously saved memories. It runs after each batch of analysis sub-agents.
 - **Trading** - Runs more frequently, defaulting to every 5 minutes. It
   reviews the current market-analysis state, places orders, manages positions,
   and manages stop-loss and take-profit orders.
@@ -50,4 +50,4 @@ Agent jobs run automatically. The available job types are:
 - **Coding** - Writes Python code for technical analysis and custom
   indicators.
 
-Prompts for each job type can be edited to describe your trading strategy.
+Prompts for each sub-agent type can be edited to describe your trading strategy.

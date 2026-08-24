@@ -69,7 +69,7 @@ pub(in crate::web::routes) async fn agents_show(
     .await
 }
 #[derive(Debug, Clone, Default, Deserialize)]
-pub(in crate::web::routes) struct AgentJobsQuery {
+pub(in crate::web::routes) struct AgentSubAgentsQuery {
     #[serde(default)]
     pub page: String,
     #[serde(default)]
@@ -97,7 +97,7 @@ pub(in crate::web::routes) struct AgentShowQueries {
     pub transactions: Option<AgentTransactionsQuery>,
     pub memories: Option<AgentMemoriesQuery>,
     pub settings: Option<AgentSettingsQuery>,
-    pub jobs: Option<AgentJobsQuery>,
+    pub sub_agents: Option<AgentSubAgentsQuery>,
 }
 
 pub(in crate::web::routes) async fn render_agent_show_page(
@@ -112,7 +112,7 @@ pub(in crate::web::routes) async fn render_agent_show_page(
         transactions: transactions_query,
         memories: memories_query,
         settings: settings_query,
-        jobs: jobs_query,
+        sub_agents: sub_agents_query,
     } = queries;
     let Some(agent) = get_agent(&state.db_pool, agent_key).await? else {
         return Ok((StatusCode::NOT_FOUND, "agent not found").into_response());
@@ -274,13 +274,15 @@ pub(in crate::web::routes) async fn render_agent_show_page(
                 template.instrument_options = rows;
             }
         }
-        AgentShowTab::Jobs => {
-            let requested_page = jobs_query
+        AgentShowTab::SubAgents => {
+            let requested_page = sub_agents_query
                 .as_ref()
                 .map(|query| parse_positive_page(&query.page))
                 .unwrap_or(1);
-            template.jobs_warning = jobs_query.as_ref().and_then(|query| query.warning.clone());
-            populate_jobs_tab(state, &agent, &mut template, requested_page).await;
+            template.jobs_warning = sub_agents_query
+                .as_ref()
+                .and_then(|query| query.warning.clone());
+            populate_sub_agents_tab(state, &agent, &mut template, requested_page).await;
         }
     }
 
@@ -358,11 +360,11 @@ pub(in crate::web::routes) async fn build_agent_recent_runs_view(
             view.recent_runs_total_pages = total_pages;
             view.recent_runs_total_count = total_count;
             view.recent_runs_previous_page_url = (current_page > 1)
-                .then(|| format!("/agents/{agent_key}/jobs?page={}", current_page - 1));
+                .then(|| format!("/agents/{agent_key}/sub-agents?page={}", current_page - 1));
             view.recent_runs_next_page_url = (total_pages > 0 && current_page < total_pages)
-                .then(|| format!("/agents/{agent_key}/jobs?page={}", current_page + 1));
+                .then(|| format!("/agents/{agent_key}/sub-agents?page={}", current_page + 1));
             view.stream_url =
-                format!("/agents/{agent_key}/jobs/recent-runs/stream?page={current_page}");
+                format!("/agents/{agent_key}/sub-agents/recent-runs/stream?page={current_page}");
 
             if total_count == 0 {
                 view.recent_runs_loaded = true;
@@ -383,7 +385,7 @@ pub(in crate::web::routes) async fn build_agent_recent_runs_view(
                     view.recent_runs_loaded = true;
                     view.recent_runs = rows
                         .iter()
-                        .map(crate::web::templates::HarnessRunView::from_row)
+                        .map(crate::web::templates::HarnessSubAgentRunView::from_row)
                         .collect();
                     view.recent_runs_range_start = offset as usize + 1;
                     view.recent_runs_range_end = offset as usize + run_count;
@@ -409,18 +411,18 @@ pub(in crate::web::routes) async fn build_agent_recent_runs_view(
     view
 }
 
-pub(in crate::web::routes) async fn populate_jobs_tab(
+pub(in crate::web::routes) async fn populate_sub_agents_tab(
     state: &Arc<AppState>,
     agent: &crate::agents::model::AgentDetailRow,
     template: &mut AgentsShowPageTemplate,
     requested_runs_page: usize,
 ) {
-    match crate::harness::store::list_agent_jobs(&state.db_pool, &agent.agent_key).await {
+    match crate::harness::store::list_agent_sub_agents(&state.db_pool, &agent.agent_key).await {
         Ok(rows) => {
             template.jobs_loaded = true;
             template.jobs = rows
                 .iter()
-                .map(crate::web::templates::HarnessJobView::from_row)
+                .map(crate::web::templates::HarnessSubAgentView::from_row)
                 .collect();
         }
         Err(error) => {

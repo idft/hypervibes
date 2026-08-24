@@ -3,9 +3,9 @@ use chrono::{DateTime, Utc};
 use sqlx::{PgPool, Postgres, Transaction, query_as};
 
 use crate::harness::model::{
-    JOB_KIND_ANALYSIS, JOB_KIND_ANALYSIS_CODING, JOB_KIND_DAILY_REVIEW, JOB_KIND_MARKET_ANALYSIS,
-    JOB_KIND_TRADING, RUN_STATUS_FAILED, RUN_STATUS_QUEUED, RUN_STATUS_RUNNING,
-    RUN_STATUS_SUCCEEDED,
+    RUN_STATUS_FAILED, RUN_STATUS_QUEUED, RUN_STATUS_RUNNING, RUN_STATUS_SUCCEEDED,
+    SUB_AGENT_KIND_ANALYSIS, SUB_AGENT_KIND_ANALYSIS_CODING, SUB_AGENT_KIND_DAILY_REVIEW,
+    SUB_AGENT_KIND_MARKET_ANALYSIS, SUB_AGENT_KIND_TRADING,
 };
 
 use super::common::ACTIVE_STATUSES;
@@ -16,15 +16,17 @@ pub(crate) const ORPHANED_QUEUED_RUN_SUMMARY: &str =
 pub(crate) const ORPHANED_RUNNING_RUN_SUMMARY: &str =
     "running run orphaned by app restart after timeout";
 
-pub(crate) fn active_job_kinds_for_lane(job_kind: &str) -> &'static [&'static str] {
-    match job_kind {
-        JOB_KIND_TRADING => &[JOB_KIND_TRADING],
-        JOB_KIND_ANALYSIS | JOB_KIND_MARKET_ANALYSIS | JOB_KIND_DAILY_REVIEW => &[
-            JOB_KIND_ANALYSIS,
-            JOB_KIND_MARKET_ANALYSIS,
-            JOB_KIND_DAILY_REVIEW,
-        ],
-        JOB_KIND_ANALYSIS_CODING => &[],
+pub(crate) fn active_sub_agent_kinds_for_lane(sub_agent_kind: &str) -> &'static [&'static str] {
+    match sub_agent_kind {
+        SUB_AGENT_KIND_TRADING => &[SUB_AGENT_KIND_TRADING],
+        SUB_AGENT_KIND_ANALYSIS | SUB_AGENT_KIND_MARKET_ANALYSIS | SUB_AGENT_KIND_DAILY_REVIEW => {
+            &[
+                SUB_AGENT_KIND_ANALYSIS,
+                SUB_AGENT_KIND_MARKET_ANALYSIS,
+                SUB_AGENT_KIND_DAILY_REVIEW,
+            ]
+        }
+        SUB_AGENT_KIND_ANALYSIS_CODING => &[],
         _ => &[],
     }
 }
@@ -32,30 +34,30 @@ pub(crate) fn active_job_kinds_for_lane(job_kind: &str) -> &'static [&'static st
 pub(crate) async fn has_active_run_in_lane_tx(
     tx: &mut Transaction<'_, Postgres>,
     agent_key: &str,
-    job_kind: &str,
+    sub_agent_kind: &str,
     now: DateTime<Utc>,
 ) -> Result<bool> {
-    let recovered = recover_inactive_runs_in_lane_tx(tx, agent_key, job_kind, now).await?;
+    let recovered = recover_inactive_runs_in_lane_tx(tx, agent_key, sub_agent_kind, now).await?;
     if recovered > 0 {
         tracing::info!(
             agent_key,
-            job_kind,
+            sub_agent_kind,
             recovered,
             "recovered inactive harness runs before lane active check"
         );
     }
 
-    let lane_job_kinds = active_job_kinds_for_lane(job_kind);
+    let lane_sub_agent_kinds = active_sub_agent_kinds_for_lane(sub_agent_kind);
     let active: Option<(i32,)> = query_as(
-        "SELECT 1 FROM harness_runs
+        "SELECT 1 FROM harness_sub_agent_runs
           WHERE agent_key = $1
             AND status = ANY($2)
-            AND job_kind = ANY($3)
+            AND sub_agent_kind = ANY($3)
           LIMIT 1",
     )
     .bind(agent_key)
     .bind(ACTIVE_STATUSES)
-    .bind(lane_job_kinds)
+    .bind(lane_sub_agent_kinds)
     .fetch_optional(&mut **tx)
     .await
     .context("failed to check for active run in lane")?;
@@ -66,24 +68,24 @@ pub(crate) async fn has_active_run_in_lane_tx(
 pub(crate) async fn recover_inactive_runs_in_lane_tx(
     tx: &mut Transaction<'_, Postgres>,
     agent_key: &str,
-    job_kind: &str,
+    sub_agent_kind: &str,
     now: DateTime<Utc>,
 ) -> Result<u64> {
-    let lane_job_kinds = active_job_kinds_for_lane(job_kind);
-    if lane_job_kinds.is_empty() {
+    let lane_sub_agent_kinds = active_sub_agent_kinds_for_lane(sub_agent_kind);
+    if lane_sub_agent_kinds.is_empty() {
         return Ok(0);
     }
 
     let recovered_succeeded = sqlx::query(
-        "UPDATE harness_runs AS runs
+        "UPDATE harness_sub_agent_runs AS runs
             SET status = $3,
                 finished_at = COALESCE(runs.finished_at, sessions.updated_at, now()),
                 error_summary = NULL,
                 updated_at = now()
            FROM opencode.sessions AS sessions
            WHERE runs.agent_key = $1
-             AND runs.job_kind = ANY($2)
-             AND runs.job_kind <> 'analysis_coding'
+             AND runs.sub_agent_kind = ANY($2)
+             AND runs.sub_agent_kind <> 'analysis_coding'
             AND runs.status = $4
             AND runs.backend_run_ref IS NOT NULL
             AND sessions.id = runs.backend_run_ref
@@ -95,7 +97,7 @@ pub(crate) async fn recover_inactive_runs_in_lane_tx(
             )",
     )
     .bind(agent_key)
-    .bind(lane_job_kinds)
+    .bind(lane_sub_agent_kinds)
     .bind(RUN_STATUS_SUCCEEDED)
     .bind(RUN_STATUS_RUNNING)
     .bind(OPENCODE_STATUS_IDLE)
@@ -105,21 +107,21 @@ pub(crate) async fn recover_inactive_runs_in_lane_tx(
     .rows_affected();
 
     let recovered_queued = sqlx::query(
-        "UPDATE harness_runs
+        "UPDATE harness_sub_agent_runs
             SET status = $3,
                 finished_at = $4,
                 error_summary = $5,
                 updated_at = now()
            WHERE agent_key = $1
-             AND job_kind = ANY($2)
-             AND job_kind <> 'analysis_coding'
+             AND sub_agent_kind = ANY($2)
+             AND sub_agent_kind <> 'analysis_coding'
             AND status = $6
             AND started_at IS NULL
             AND finished_at IS NULL
             AND created_at + (timeout_seconds * interval '1 second') <= $4",
     )
     .bind(agent_key)
-    .bind(lane_job_kinds)
+    .bind(lane_sub_agent_kinds)
     .bind(RUN_STATUS_FAILED)
     .bind(now)
     .bind(ORPHANED_QUEUED_RUN_SUMMARY)
@@ -130,20 +132,20 @@ pub(crate) async fn recover_inactive_runs_in_lane_tx(
     .rows_affected();
 
     let recovered_running = sqlx::query(
-        "UPDATE harness_runs
+        "UPDATE harness_sub_agent_runs
             SET status = $3,
                 finished_at = $4,
                 error_summary = $5,
                 updated_at = now()
            WHERE agent_key = $1
-             AND job_kind = ANY($2)
-             AND job_kind <> 'analysis_coding'
+             AND sub_agent_kind = ANY($2)
+             AND sub_agent_kind <> 'analysis_coding'
             AND status = $6
             AND finished_at IS NULL
             AND COALESCE(started_at, created_at) + (timeout_seconds * interval '1 second') <= $4",
     )
     .bind(agent_key)
-    .bind(lane_job_kinds)
+    .bind(lane_sub_agent_kinds)
     .bind(RUN_STATUS_FAILED)
     .bind(now)
     .bind(ORPHANED_RUNNING_RUN_SUMMARY)
@@ -172,14 +174,14 @@ pub async fn recover_inactive_runs_all(pool: &PgPool, now: DateTime<Utc>) -> Res
         .context("failed to begin global harness run recovery transaction")?;
 
     let recovered_succeeded = sqlx::query(
-        "UPDATE harness_runs AS runs
+        "UPDATE harness_sub_agent_runs AS runs
             SET status = $1,
                 finished_at = COALESCE(runs.finished_at, sessions.updated_at, now()),
                 error_summary = NULL,
                 updated_at = now()
            FROM opencode.sessions AS sessions
           WHERE runs.status = $2
-            AND runs.job_kind <> 'analysis_coding'
+            AND runs.sub_agent_kind <> 'analysis_coding'
             AND runs.backend_run_ref IS NOT NULL
             AND sessions.id = runs.backend_run_ref
             AND sessions.status = $3
@@ -198,13 +200,13 @@ pub async fn recover_inactive_runs_all(pool: &PgPool, now: DateTime<Utc>) -> Res
     .rows_affected();
 
     let recovered_queued = sqlx::query(
-        "UPDATE harness_runs
+        "UPDATE harness_sub_agent_runs
             SET status = $1,
                 finished_at = $2,
                 error_summary = $3,
                 updated_at = $2
           WHERE status = $4
-            AND job_kind <> 'analysis_coding'
+            AND sub_agent_kind <> 'analysis_coding'
             AND started_at IS NULL
             AND finished_at IS NULL
             AND created_at + (timeout_seconds * interval '1 second') <= $2",
@@ -219,13 +221,13 @@ pub async fn recover_inactive_runs_all(pool: &PgPool, now: DateTime<Utc>) -> Res
     .rows_affected();
 
     let recovered_running = sqlx::query(
-        "UPDATE harness_runs
+        "UPDATE harness_sub_agent_runs
             SET status = $1,
                 finished_at = $2,
                 error_summary = $3,
                 updated_at = $2
           WHERE status = $4
-            AND job_kind <> 'analysis_coding'
+            AND sub_agent_kind <> 'analysis_coding'
             AND finished_at IS NULL
             AND COALESCE(started_at, created_at) + (timeout_seconds * interval '1 second') <= $2",
     )
@@ -251,7 +253,7 @@ pub(crate) async fn recover_inactive_agent_runs_tx(
     now: DateTime<Utc>,
 ) -> Result<u64> {
     let recovered_succeeded = sqlx::query(
-        "UPDATE harness_runs AS runs
+        "UPDATE harness_sub_agent_runs AS runs
             SET status = $2,
                 finished_at = COALESCE(runs.finished_at, sessions.updated_at, now()),
                 error_summary = NULL,
@@ -259,7 +261,7 @@ pub(crate) async fn recover_inactive_agent_runs_tx(
            FROM opencode.sessions AS sessions
            WHERE runs.agent_key = $1
              AND runs.status = $3
-             AND runs.job_kind <> 'analysis_coding'
+             AND runs.sub_agent_kind <> 'analysis_coding'
             AND runs.backend_run_ref IS NOT NULL
             AND sessions.id = runs.backend_run_ref
             AND sessions.status = $4
@@ -279,14 +281,14 @@ pub(crate) async fn recover_inactive_agent_runs_tx(
     .rows_affected();
 
     let recovered_queued = sqlx::query(
-        "UPDATE harness_runs
+        "UPDATE harness_sub_agent_runs
             SET status = $2,
                 finished_at = $3,
                 error_summary = $4,
                 updated_at = now()
            WHERE agent_key = $1
              AND status = $5
-             AND job_kind <> 'analysis_coding'
+             AND sub_agent_kind <> 'analysis_coding'
             AND started_at IS NULL
             AND finished_at IS NULL
             AND created_at + (timeout_seconds * interval '1 second') <= $3",
@@ -302,14 +304,14 @@ pub(crate) async fn recover_inactive_agent_runs_tx(
     .rows_affected();
 
     let recovered_running = sqlx::query(
-        "UPDATE harness_runs
+        "UPDATE harness_sub_agent_runs
             SET status = $2,
                 finished_at = $3,
                 error_summary = $4,
                 updated_at = now()
            WHERE agent_key = $1
              AND status = $5
-             AND job_kind <> 'analysis_coding'
+             AND sub_agent_kind <> 'analysis_coding'
             AND finished_at IS NULL
             AND COALESCE(started_at, created_at) + (timeout_seconds * interval '1 second') <= $3",
     )

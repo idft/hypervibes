@@ -406,7 +406,7 @@ async fn activate_new_agent(state: &Arc<AppState>, agent_key: &str) -> Result<()
         agent_key,
     )
     .await?;
-    crate::harness::store::insert_default_harness_jobs(&state.db_pool, agent_key).await?;
+    crate::harness::store::insert_default_harness_sub_agents(&state.db_pool, agent_key).await?;
     Ok(())
 }
 pub(in crate::web::routes) fn render_new_form(

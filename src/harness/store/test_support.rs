@@ -37,38 +37,38 @@ pub fn sample_agent(key: &str) -> AgentRegistryRow {
     }
 }
 
-pub async fn seed_agent_and_job(pool: &DbPool, key: &str, job_id_offset: i64) -> i64 {
-    use super::insert_default_harness_jobs;
-    use super::jobs::default_analysis_job_key;
+pub async fn seed_agent_and_job(pool: &DbPool, key: &str, sub_agent_id_offset: i64) -> i64 {
+    use super::insert_default_harness_sub_agents;
+    use super::sub_agents::default_analysis_sub_agent_key;
 
     insert_agent(pool, &sample_agent(key))
         .await
         .expect("insert agent");
-    insert_default_harness_jobs(pool, key)
+    insert_default_harness_sub_agents(pool, key)
         .await
         .expect("insert default jobs");
 
     query(
-        "UPDATE harness_jobs
+        "UPDATE harness_sub_agents
             SET enabled = true,
                 model_provider_id = 'anthropic',
                 model_id = 'claude-sonnet-test'
            WHERE agent_key = $1
-             AND job_key = $2",
+             AND sub_agent_key = $2",
     )
     .bind(key)
-    .bind(default_analysis_job_key())
+    .bind(default_analysis_sub_agent_key())
     .execute(pool)
     .await
     .expect("enable seeded analysis job");
 
-    if job_id_offset > 0 {
+    if sub_agent_id_offset > 0 {
         query(
-            "UPDATE harness_jobs
+            "UPDATE harness_sub_agents
                 SET next_run_at = $2
               WHERE id = $1",
         )
-        .bind(job_id_offset)
+        .bind(sub_agent_id_offset)
         .bind(Utc::now() + chrono::Duration::seconds(60))
         .execute(pool)
         .await
@@ -76,12 +76,12 @@ pub async fn seed_agent_and_job(pool: &DbPool, key: &str, job_id_offset: i64) ->
     }
 
     let (id,): (i64,) = query_as(
-        "SELECT id FROM harness_jobs
+        "SELECT id FROM harness_sub_agents
           WHERE agent_key = $1
-            AND job_key = $2",
+            AND sub_agent_key = $2",
     )
     .bind(key)
-    .bind(default_analysis_job_key())
+    .bind(default_analysis_sub_agent_key())
     .fetch_one(pool)
     .await
     .expect("fetch job id");

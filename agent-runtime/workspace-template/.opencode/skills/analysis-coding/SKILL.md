@@ -1,6 +1,6 @@
 ---
 name: analysis-coding
-description: Use only for the analysis-coding job to modify the canonical reusable analysis implementation.
+description: Use only for the analysis-coding sub-agent to modify the canonical reusable analysis implementation.
 ---
 
 # Analysis Coding

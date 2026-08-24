@@ -24,13 +24,13 @@ pub struct AgentStrategyPromptRow {
     pub updated_at: DateTime<Utc>,
 }
 
-pub fn prompt_kind_for_job_kind(job_kind: &str) -> Option<&'static str> {
-    match job_kind {
-        crate::harness::model::JOB_KIND_ANALYSIS => Some(PROMPT_KIND_ANALYSIS),
-        crate::harness::model::JOB_KIND_MARKET_ANALYSIS => Some(PROMPT_KIND_MARKET_ANALYSIS),
-        crate::harness::model::JOB_KIND_TRADING => Some(PROMPT_KIND_TRADING),
-        crate::harness::model::JOB_KIND_DAILY_REVIEW => Some(PROMPT_KIND_DAILY_REVIEW),
-        crate::harness::model::JOB_KIND_ANALYSIS_CODING => Some(PROMPT_KIND_ANALYSIS_CODING),
+pub fn prompt_kind_for_sub_agent_kind(sub_agent_kind: &str) -> Option<&'static str> {
+    match sub_agent_kind {
+        crate::harness::model::SUB_AGENT_KIND_ANALYSIS => Some(PROMPT_KIND_ANALYSIS),
+        crate::harness::model::SUB_AGENT_KIND_MARKET_ANALYSIS => Some(PROMPT_KIND_MARKET_ANALYSIS),
+        crate::harness::model::SUB_AGENT_KIND_TRADING => Some(PROMPT_KIND_TRADING),
+        crate::harness::model::SUB_AGENT_KIND_DAILY_REVIEW => Some(PROMPT_KIND_DAILY_REVIEW),
+        crate::harness::model::SUB_AGENT_KIND_ANALYSIS_CODING => Some(PROMPT_KIND_ANALYSIS_CODING),
         _ => None,
     }
 }

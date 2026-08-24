@@ -15,7 +15,7 @@ Startup performs the following work:
 1. Loads configuration and connects to Postgres.
 2. Runs the shared SQL migration stream.
 3. Starts the Hyperliquid agent monitor.
-4. Starts the OpenCode job scheduler.
+4. Starts the OpenCode sub-agent scheduler.
 5. Serves the web interface, static files, SSE streams, and the agent JSON API.
 
 The main process owns graceful shutdown. The first `SIGINT` or `SIGTERM` stops
@@ -28,23 +28,23 @@ in-flight OpenCode MCP server can finish its API calls.
 | Subsystem | Responsibility |
 | --- | --- |
 | `agents` | Agent registry, API keys, OpenCode workspaces, selected instruments, and strategy prompts. User-owned encrypted Hyperliquid signing material lives with authentication records. |
-| `harness` | Persisted unified jobs/runs, workspace maintenance, recovery of orphaned runs, and OpenCode dispatch. |
+| `harness` | Persisted unified sub-agents/runs, workspace maintenance, recovery of orphaned runs, and OpenCode dispatch. |
 
-## Harness jobs
+## Harness sub-agents
 
-`harness_jobs` is the single configuration record for every OpenCode job and
-`harness_runs` is its durable execution queue. Candle jobs use the
+`harness_sub_agents` is the single configuration record for every OpenCode sub-agent and
+`harness_sub_agent_runs` is its durable execution queue. Candle sub-agents use the
 `candle_closed` trigger, which the scheduler owns and advances at UTC candle
-boundaries after the configured settling delay. The fixed event jobs use
+boundaries after the configured settling delay. The fixed event sub-agents use
 `analysis_batch_completed` and `daily_review_completed`; they are dispatched
 directly after their qualifying predecessor and deliberately have no event
 outbox. `harness_maintenance_tasks` remains separate for workspace work,
 analysis-coding promotion, and provider reloads.
 
-Jobs can be deleted only while their runs and OpenCode sessions are idle.
+Sub-agents can be deleted only while their runs and OpenCode sessions are idle.
 Deletion first removes terminal sessions through the OpenCode API, then deletes
-the job and cascades its runs and coding maintenance rows. Conversations remain
-separate from harness jobs and runs.
+the sub-agent and cascades its runs and coding maintenance rows. Conversations remain
+separate from harness sub-agents and runs.
 | `opencode` | OpenCode HTTP client, session persistence access, and generated agent workspaces. |
 | `memory` | Append-only, agent-owned analysis and review records plus links between records. |
 | `hyperliquid` | Instrument reference data, account-history journal, live account state, signed order gateway, and order reconciliation. |
@@ -67,14 +67,14 @@ The scheduler polls every 10 seconds. It claims due work transactionally and
 uses independent analysis and trading lanes per agent, while allowing work for
 different agents to run concurrently. Built-in work includes:
 
-- scheduled `analysis`, `trading`, and `daily_review` jobs
+- scheduled `analysis`, `trading`, and `daily_review` sub-agents
 - an `analysis_batch_completed` hook that can dispatch `market_analysis`
 - request-gated `analysis_coding` follow-up work after a daily review
 - queued workspace regeneration or hard reset
 
 For a dispatch, the OpenCode backend creates a session in the agent workspace
 and invokes the appropriate OpenCode command. The initial prompt contains the
-agent and job context, selected instruments, the job-specific strategy prompt,
+agent and sub-agent context, selected instruments, the sub-agent-specific strategy prompt,
 the latest `agent_learnings` memory, the global prompt, and a live
 account snapshot for trading work. That snapshot includes per-stream data
 authority and monitor health; unavailable data is never represented as an
@@ -91,7 +91,7 @@ declared closed-candle rules; it cannot derive a new thesis or alter its levels.
 Run state is persisted. On startup and periodically thereafter, the scheduler
 resumes queued runs and recovers stale running runs so interrupted dispatches
 
-Agent conversations are separate from scheduled jobs and `harness_runs`. Each
+Agent conversations are separate from scheduled sub-agents and `harness_sub_agent_runs`. Each
 `agent_conversations` row maps one user or future-gateway conversation to
 one OpenCode session. Chat transcript, tool activity, errors, and context
 telemetry are mirrored from OpenCode and delivered to the browser as complete
@@ -118,7 +118,7 @@ database runtime rows.
 Analysis coding runs in a candidate workspace under the configured
 workspace root. The model receives path-scoped native OpenCode filesystem
 permissions that can edit only approved files under candidate `scripts/user`.
-Pyright supplies Python diagnostics for those native reads and edits. Normal analysis, trading, and review jobs hold read
+Pyright supplies Python diagnostics for those native reads and edits. Normal analysis, trading, and review sub-agents hold read
 leases on the live workspace; coding holds a write lease only while
 promoting a validated candidate and verifying that the promoted tree has the
 same hash.
@@ -156,8 +156,8 @@ from the OpenCode container or runtime.
 
 The web interface is server-rendered with Askama. HTMX handles partial
 updates and SSE publishes live account, memory, and database-notified agent run
-changes. The shared Postgres notification listener fans `harness_runs` changes
-out to both run-detail streams and the Jobs tab's Recent Runs section; session
+changes. The shared Postgres notification listener fans `harness_sub_agent_runs` changes
+out to both run-detail streams and the Sub-agents tab's Recent Runs section; session
 notifications are used only by run-detail transcript and summary streams.
 Frontend source is in `assets/`; `build.rs` builds the Tailwind and esbuild
 output when application assets or templates change.

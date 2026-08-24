@@ -4,7 +4,7 @@
         <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
             <div>
                 <h3 class="text-sm font-medium text-white">Workspace maintenance</h3>
-                <p class="mt-1 text-xs text-zinc-500">Queued maintenance waits for active jobs and live OpenCode sessions to finish.</p>
+                <p class="mt-1 text-xs text-zinc-500">Queued maintenance waits for active sub-agents and live OpenCode sessions to finish.</p>
             </div>
             {% if let Some(status) = maintenance.status %}
             <span class="inline-flex rounded-full border px-3 py-1 text-xs font-medium {{ status.status_class }}">{{ status.status_label }}</span>

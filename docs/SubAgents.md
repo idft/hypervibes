@@ -1,53 +1,53 @@
 ---
-slug: /concepts/jobs
+slug: /concepts/sub-agents
 ---
 
-# Jobs
+# Sub-agents
 
-Jobs are the durable schedules and follow-up tasks that run an agent's
-OpenCode sessions. HyperVibes stores both the job configuration and each run,
+Sub-agents are the durable schedules and follow-up tasks an agent dispatches to
+run OpenCode sessions. HyperVibes stores both the sub-agent configuration and each run,
 so users can inspect work that is queued, running, completed, or failed.
 
-## Job types
+## Sub-agent types
 
-Each new OpenCode agent receives seven disabled jobs: three analysis schedules,
+Each new OpenCode agent receives seven disabled sub-agents: three analysis schedules,
 one trading schedule, one daily review schedule, and two follow-up hooks.
 
-| Job | Default schedule or trigger | Purpose |
+| Sub-agent | Default schedule or trigger | Purpose |
 | --- | --- | --- |
 | Analysis | Candle close at 15m, 1h, or 1d | Runs strategy analysis for selected markets and saves the results as memory. |
 | Market analysis | `analysis_batch_completed` | Combines the latest analysis memories into a market-level execution handoff. |
 | Trading | Candle close at 5m | Reviews the current market-analysis handoff, places or manages orders, and manages exits. |
 | Daily review | Candle close at 1d | Reviews agent performance and records accumulated learnings. |
-| Analysis coding | `daily_review_completed` | Generates or improves user analysis code after a qualifying review. This hook is disabled by default and request-gated. |
+| Analysis coding | On demand | Generates or improves user analysis code after a daily-review request, an approved Chat request, or a manual run. It is disabled by default. |
 
-Candle-close jobs are driven by UTC candle boundaries after the configured
-settling delay. The two event triggers are direct follow-ups from their
-predecessor; they are not a separate durable event queue.
+Candle-close sub-agents are driven by UTC candle boundaries after the configured
+settling delay. Market analysis is a direct analysis follow-up. Analysis coding
+is queued on demand and never waits for the requesting session.
 
-## Configure a job
+## Configure a sub-agent
 
-The Jobs tab lets a user configure each job's:
+The Sub-agents tab lets a user configure each sub-agent's:
 
 - enabled state
 - provider, model, and optional thinking mode
 - timeout
 - Additional Instructions
 
-An enabled scheduled job must have an explicit model. Additional Instructions
-are specific to that job and are appended to its selected strategy prompt; they
+An enabled scheduled sub-agent must have an explicit model. Additional Instructions
+are specific to that sub-agent and are appended to its selected strategy prompt; they
 are not part of the saved strategy prompt and are not exposed through the agent
 API or MCP.
 
 Analysis, market analysis, trading, and daily review can use reusable analysis
-code but cannot modify `scripts/user/`. Analysis coding is the only job allowed
+code but cannot modify `scripts/user/`. Analysis coding is the only sub-agent allowed
 to change that tree, and it requires an explicit strong provider and model.
 
 ## Dispatch and runs
 
-The scheduler claims due jobs transactionally and dispatches them through the
+The scheduler claims due sub-agents transactionally and dispatches them through the
 OpenCode backend. Before a run starts, HyperVibes snapshots its provider,
-model, optional thinking mode, selected instruments, job-specific prompt,
+model, optional thinking mode, selected instruments, sub-agent-specific prompt,
 latest agent learnings, global prompt, and trading account snapshot when
 applicable.
 
@@ -57,7 +57,7 @@ interrupted process does not permanently block later work for the same agent.
 Run details include the OpenCode transcript, tool activity, errors, token and
 context telemetry, and cost when those records are available.
 
-Jobs are held while per-agent workspace maintenance is queued or running. A
+Sub-agents are held while per-agent workspace maintenance is queued or running. A
 maintenance task waits for active runs and busy OpenCode sessions to finish;
 then scheduled work remains due and can run after maintenance completes.
 
@@ -68,5 +68,5 @@ workspace before regenerating it. Only one maintenance task can be queued or
 running for an agent, and the agent settings page reports drift in
 template-managed files.
 
-See [Prompts](Prompts.md) for the content passed to each job and
+See [Prompts](Prompts.md) for the content passed to each sub-agent and
 [Architecture](/docs/development/architecture) for the runtime lifecycle.
