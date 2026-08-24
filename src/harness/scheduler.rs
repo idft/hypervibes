@@ -44,6 +44,7 @@ use crate::{
 };
 
 const SCHEDULER_POLL_INTERVAL: Duration = Duration::from_secs(10);
+const OPENCODE_STARTUP_RETRY_INTERVAL: Duration = Duration::from_secs(5);
 const ORPHAN_RECOVERY_INTERVAL: Duration = Duration::from_secs(60);
 const DUE_SCHEDULE_LIMIT: i64 = 20;
 const QUEUED_RUN_RESUME_LIMIT: i64 = 20;
@@ -196,38 +197,49 @@ impl HarnessScheduler {
     /// instead of waiting for the 30-minute grace to elapse.
     pub async fn run(mut self) -> Result<()> {
         info!("harness scheduler starting");
-        match self.workspace_controller.recover_promotions().await {
-            Ok(journals) => {
-                let mut recovered = 0;
-                for journal in journals {
-                    match journal.phase {
-                        workspace_store::coding_workspace::PromotionJournalPhase::Completed => {
-                            let _ =
-                                store::mark_maintenance_task_succeeded(&self.pool, journal.task_id)
-                                    .await;
-                            recovered += 1;
-                        }
-                        workspace_store::coding_workspace::PromotionJournalPhase::RolledBack => {
-                            let _ = store::mark_maintenance_task_failed(
-                                &self.pool,
-                                journal.task_id,
-                                "promotion was rolled back during startup recovery",
-                            )
-                            .await;
-                            recovered += 1;
-                        }
-                        _ => {}
-                    }
-                }
-                if recovered > 0 {
-                    info!(recovered, "reconciled promotion journals at startup");
-                }
-            }
-            Err(error) => warn!(error = ?error, "promotion journal recovery failed"),
-        }
+        let mut promotion_recovery_pending = !*self.shutdown_rx.borrow();
         loop {
             if *self.shutdown_rx.borrow() {
                 break;
+            }
+
+            if promotion_recovery_pending {
+                match self.workspace_controller.recover_promotions().await {
+                    Ok(journals) => {
+                        let mut recovered = 0;
+                        for journal in journals {
+                            match journal.phase {
+                                workspace_store::coding_workspace::PromotionJournalPhase::Completed => {
+                                    let _ = store::mark_maintenance_task_succeeded(
+                                        &self.pool,
+                                        journal.task_id,
+                                    )
+                                    .await;
+                                    recovered += 1;
+                                }
+                                workspace_store::coding_workspace::PromotionJournalPhase::RolledBack => {
+                                    let _ = store::mark_maintenance_task_failed(
+                                        &self.pool,
+                                        journal.task_id,
+                                        "promotion was rolled back during startup recovery",
+                                    )
+                                    .await;
+                                    recovered += 1;
+                                }
+                                _ => {}
+                            }
+                        }
+                        if recovered > 0 {
+                            info!(recovered, "reconciled promotion journals at startup");
+                        }
+                        promotion_recovery_pending = false;
+                    }
+                    Err(error) => warn!(
+                        error = ?error,
+                        retry_in = ?OPENCODE_STARTUP_RETRY_INTERVAL,
+                        "promotion journal recovery failed; will retry"
+                    ),
+                }
             }
 
             if let Err(error) = self.tick().await {
@@ -235,7 +247,11 @@ impl HarnessScheduler {
             }
 
             tokio::select! {
-                _ = tokio::time::sleep(SCHEDULER_POLL_INTERVAL) => {}
+                _ = tokio::time::sleep(if promotion_recovery_pending {
+                    OPENCODE_STARTUP_RETRY_INTERVAL
+                } else {
+                    SCHEDULER_POLL_INTERVAL
+                }) => {}
                 _ = self.shutdown_rx.changed() => break,
             }
         }

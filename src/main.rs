@@ -13,7 +13,7 @@ mod web;
 #[cfg(test)]
 mod test_db;
 
-use std::sync::Arc;
+use std::{sync::Arc, time::Duration};
 
 use anyhow::{Context, Result};
 use config::AppConfig;
@@ -24,6 +24,9 @@ use tracing_subscriber::{EnvFilter, fmt};
 
 use crate::harness::in_flight::{InFlightTracker, SHUTDOWN_IN_FLIGHT_GRACE};
 use crate::hyperliquid::live_state::LiveAccountStore;
+use crate::opencode::retry::retry_until_ready;
+
+const OPENCODE_STARTUP_RETRY_INTERVAL: Duration = Duration::from_secs(5);
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -88,18 +91,27 @@ async fn main() -> Result<()> {
     let warm_provider_client = Arc::clone(&opencode_client);
     let warm_opencode_base_url = config.opencode_base_url.clone();
     let warm_provider_workspace = config.opencode_container_workspaces_root.clone();
+    let mut warm_shutdown_rx = shutdown_rx.clone();
     tokio::spawn(async move {
         info!(workspace = %warm_provider_workspace, "warming shared OpenCode provider cache");
-        match warm_provider_client
-            .list_providers(&warm_opencode_base_url, &warm_provider_workspace)
-            .await
-        {
-            Ok(response) => info!(
+        let response = retry_until_ready(
+            "OpenCode provider cache warmup",
+            OPENCODE_STARTUP_RETRY_INTERVAL,
+            &mut warm_shutdown_rx,
+            || {
+                let client = Arc::clone(&warm_provider_client);
+                let base_url = warm_opencode_base_url.clone();
+                let workspace = warm_provider_workspace.clone();
+                async move { client.list_providers(&base_url, &workspace).await }
+            },
+        )
+        .await;
+        if let Some(response) = response {
+            info!(
                 providers = response.all.len(),
                 connected = response.connected.len(),
                 "OpenCode provider cache warmed"
-            ),
-            Err(error) => warn!(error = ?error, "OpenCode provider warmup failed"),
+            );
         }
     });
 

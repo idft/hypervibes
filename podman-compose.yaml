@@ -63,7 +63,7 @@ services:
       - opencode_data:/opencode-data
       - agent_workspaces:/workspaces
     depends_on:
-      hypervibes:
+      postgres:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "python3", "-c", "import socket, urllib.request; s = socket.create_connection(('127.0.0.1', 14096), 5); s.close(); urllib.request.urlopen('http://127.0.0.1:14097/health', timeout=5).close()"]
