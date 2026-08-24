@@ -29,8 +29,7 @@
     {% endif %}
     <input type="hidden" id="{{ model_picker.input_id }}" name="{{ model_picker.input_name }}" value="{{ model_picker.selected_value }}">
     <input type="hidden" id="{{ model_picker.variant_input_id }}" name="{{ model_picker.variant_input_name }}" value="{{ model_picker.selected_variant }}">
-    {% if model_picker.use_modal %}
-    <div class="mt-2" data-model-picker data-model-picker-mode="modal"{% if model_picker.submit_on_save %} data-model-picker-submit-on-save="true"{% endif %}>
+    <div class="mt-2" data-model-picker{% if model_picker.submit_on_save %} data-model-picker-submit-on-save="true"{% endif %}>
         <button type="button" class="flex w-full cursor-pointer items-center justify-between gap-3 rounded-2xl border border-zinc-800 bg-zinc-950/40 px-4 py-3 text-left text-sm text-zinc-200" data-model-picker-open>
             <span class="flex min-w-0 items-center gap-3">
                 <span class="flex h-8 w-8 items-center justify-center rounded-lg border border-zinc-700 bg-zinc-900 text-xs text-zinc-400" data-model-picker-default-badge>OC</span>
@@ -122,59 +121,5 @@
             </div>
         </div>
     </div>
-    {% else %}
-    <details class="relative mt-2" data-model-picker {% if model_picker.auto_submit %}data-model-picker-auto-submit="true"{% endif %}>
-        <summary class="flex cursor-pointer list-none items-center justify-between gap-3 rounded-2xl border border-zinc-800 bg-zinc-950/40 px-4 py-3 text-sm text-zinc-200">
-            <span class="flex min-w-0 items-center gap-3">
-                <span class="flex h-8 w-8 items-center justify-center rounded-lg border border-zinc-700 bg-zinc-900 text-xs text-zinc-400" data-model-picker-default-badge>OC</span>
-                <img src="" alt="Selected provider logo" class="hidden h-8 w-8 rounded-lg border border-zinc-800 bg-white p-1" data-model-picker-logo>
-                <span class="truncate" data-model-picker-label>{{ model_picker.selected_label }}</span>
-            </span>
-            <svg class="h-4 w-4 shrink-0 text-zinc-500" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
-                <path fill-rule="evenodd" d="M5.23 7.21a.75.75 0 0 1 1.06.02L10 11.168l3.71-3.938a.75.75 0 1 1 1.08 1.04l-4.25 4.5a.75.75 0 0 1-1.08 0l-4.25-4.5a.75.75 0 0 1 .02-1.06Z" clip-rule="evenodd"></path>
-            </svg>
-        </summary>
-        <div class="absolute top-full right-0 left-0 z-30 mt-2 rounded-2xl border border-zinc-800 bg-zinc-950/95 p-2 shadow-2xl shadow-black/40">
-            <input type="text" placeholder="Filter models" class="mb-2 block w-full rounded-xl border border-zinc-800 bg-zinc-950 px-3 py-2 text-sm text-white placeholder-zinc-600 focus:border-zinc-600 focus:outline-none" data-model-picker-search>
-             <button type="button" class="flex w-full cursor-pointer items-center gap-3 rounded-xl px-3 py-2 text-left text-sm text-zinc-200 hover:bg-zinc-900" data-model-picker-option data-value="" data-label="{{ model_picker.empty_label }}" data-search-text="{{ model_picker.empty_label }}">
-                <span class="flex h-8 w-8 items-center justify-center rounded-lg border border-zinc-700 bg-zinc-900 text-xs text-zinc-400">OC</span>
-                <span>{{ model_picker.empty_label }}</span>
-            </button>
-            {% for option in model_picker.options %}
-             <button type="button" class="mt-1 flex w-full cursor-pointer items-start gap-3 rounded-xl px-3 py-2 text-left text-sm text-zinc-200 hover:bg-zinc-900" data-model-picker-option data-value="{{ option.value }}" data-label="{{ option.provider_name }} / {{ option.model_name }}" data-logo-url="{{ option.provider_logo_url }}" data-search-text="{{ option.provider_name }} {{ option.model_name }} {{ option.metadata_text }}">
-                <img src="{{ option.provider_logo_url }}" alt="{{ option.provider_name }} logo" class="mt-0.5 h-8 w-8 rounded-lg border border-zinc-800 bg-white p-1">
-                <span>
-                    <span class="block">{{ option.provider_name }} / {{ option.model_name }}</span>
-                    {% if !option.metadata_text.is_empty() %}
-                    <span class="block text-xs text-zinc-500">{{ option.metadata_text }}</span>
-                    {% endif %}
-                </span>
-            </button>
-              {% endfor %}
-            <div class="hidden mt-2 border-t border-zinc-800 pt-3" data-model-picker-variant-area>
-                <div data-model-picker-variant-unavailable>
-                    <label for="{{ model_picker.variant_input_id }}-unavailable" class="block text-sm font-medium text-zinc-300">Thinking mode</label>
-                    <select id="{{ model_picker.variant_input_id }}-unavailable" disabled class="mt-2 block w-full cursor-not-allowed rounded-xl border border-zinc-800 bg-zinc-950 px-3 py-2 text-sm text-zinc-500 opacity-70 focus:outline-none" data-model-picker-variant-unavailable-select>
-                        <option value="">default</option>
-                    </select>
-                </div>
-                {% for option in model_picker.options %}
-                {% if !option.thinking_variants.is_empty() %}
-                <div class="hidden" data-model-picker-variant-panel data-model-value="{{ option.value }}">
-                    <label for="{{ model_picker.variant_input_id }}-{{ loop.index }}" class="block text-sm font-medium text-zinc-300">Thinking mode</label>
-                    <select id="{{ model_picker.variant_input_id }}-{{ loop.index }}" class="mt-2 block w-full cursor-pointer rounded-xl border border-zinc-800 bg-zinc-950 px-3 py-2 text-sm text-white focus:border-zinc-600 focus:outline-none" data-model-picker-variant-select>
-                        <option value="">default</option>
-                        {% for variant in option.thinking_variants %}
-                        <option value="{{ variant }}">{{ variant }}</option>
-                        {% endfor %}
-                    </select>
-                </div>
-                {% endif %}
-                {% endfor %}
-                <p class="mt-3 hidden text-xs text-amber-300" role="alert" data-model-picker-variant-warning></p>
-            </div>
-        </div>
-    </details>
-    {% endif %}
 </div>
 {% endif %}

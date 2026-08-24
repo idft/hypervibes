@@ -677,8 +677,6 @@ fn new_job_page_renders_agent_navbar_with_jobs_active() {
             options: sample_model_options(),
             warning: None,
             show_label: true,
-            auto_submit: false,
-            use_modal: false,
             submit_on_save: true,
             lazy_options_url: None,
         },

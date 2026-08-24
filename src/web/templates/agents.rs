@@ -241,8 +241,6 @@ pub struct ModelPickerView {
     pub options: Vec<ModelPickerOption>,
     pub warning: Option<String>,
     pub show_label: bool,
-    pub auto_submit: bool,
-    pub use_modal: bool,
     pub submit_on_save: bool,
     pub lazy_options_url: Option<String>,
 }

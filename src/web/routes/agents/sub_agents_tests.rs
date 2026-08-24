@@ -761,7 +761,7 @@ async fn new_sub_agent_page_renders_for_opencode_agent() {
     assert!(!text.contains("name=\"trigger_type\""));
     assert!(text.contains("name=\"timeframe\""));
     assert!(text.contains("name=\"timeout_seconds\""));
-    assert!(text.contains("data-model-picker-mode=\"modal\""));
+    assert!(text.contains("data-model-picker-modal"));
     assert!(!text.contains("data-model-picker-submit-on-save"));
     assert!(!text.contains("value=\"market_analysis\""));
     assert!(!text.contains("value=\"analysis_coding\""));
@@ -1003,7 +1003,7 @@ async fn job_detail_page_renders_job_specific_runs() {
         "/agents/{agent_key}/sub-agents/{sub_agent_id}/delete"
     )));
     assert!(text.contains("cursor-pointer"));
-    assert!(text.contains("data-model-picker-mode=\"modal\""));
+    assert!(text.contains("data-model-picker-modal"));
     assert!(!text.contains("data-model-picker-lazy-open data-model-picker-url"));
     assert!(text.contains("Additional Instructions"));
     assert!(text.contains("Preview Prompt"));
@@ -1025,7 +1025,7 @@ async fn job_detail_page_renders_job_specific_runs() {
         .unwrap();
     assert_eq!(response.status(), StatusCode::OK);
     let text = response_text(response).await;
-    assert!(text.contains("data-model-picker-mode=\"modal\""));
+    assert!(text.contains("data-model-picker-modal"));
     assert!(text.contains("Could not load configured OpenCode models"));
 }
 #[tokio::test]

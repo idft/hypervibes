@@ -36,8 +36,6 @@ fn job_detail_page_renders_job_metadata_and_runs() {
             options: sample_model_options(),
             warning: None,
             show_label: false,
-            auto_submit: false,
-            use_modal: true,
             submit_on_save: true,
             lazy_options_url: None,
         },
@@ -78,7 +76,7 @@ fn job_detail_page_renders_job_metadata_and_runs() {
     assert!(rendered.contains("hx-post=\"/agents/test-agent/sub-agents/1/model\""));
     assert!(rendered.contains("hx-swap=\"none\""));
     assert!(rendered.contains("Select model"));
-    assert!(rendered.contains("data-model-picker-mode="));
+    assert!(rendered.contains("data-model-picker-modal"));
     assert!(rendered.contains("Cancel"));
     assert!(rendered.contains("Save"));
     assert!(!rendered.contains("Trigger delay"));
@@ -120,8 +118,6 @@ fn job_detail_highlights_model_picker_when_setup_needs_a_model() {
             options: Vec::new(),
             warning: None,
             show_label: false,
-            auto_submit: false,
-            use_modal: true,
             submit_on_save: true,
             lazy_options_url: None,
         },

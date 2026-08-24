@@ -16,7 +16,6 @@ function initPicker(picker: HTMLElement) {
   const variantPanels = Array.from(picker.querySelectorAll<HTMLElement>("[data-model-picker-variant-panel]"));
   const unavailableVariantControl = picker.querySelector<HTMLElement>("[data-model-picker-variant-unavailable]");
   const variantWarning = picker.querySelector<HTMLElement>("[data-model-picker-variant-warning]");
-  const isModal = picker.dataset.modelPickerMode === "modal";
   let draftModel = input.value;
   let draftVariant = variantInput?.value ?? "";
   let activeProvider = "__none__";
@@ -53,8 +52,8 @@ function initPicker(picker: HTMLElement) {
       variantWarning.classList.toggle("hidden", !warning);
     }
   };
-  const currentModel = () => isModal ? draftModel : input.value;
-  const currentVariant = () => isModal ? draftVariant : variantInput?.value ?? "";
+  const currentModel = () => draftModel;
+  const currentVariant = () => draftVariant;
   const selectionIsValid = () => !unavailableVariantMessage(currentModel(), currentVariant());
   const notifyChange = (element: HTMLInputElement) => element.dispatchEvent(new Event("change", { bubbles: true }));
   const filter = () => {
@@ -64,17 +63,17 @@ function initPicker(picker: HTMLElement) {
       const matches = !query || (option.dataset.searchText ?? option.dataset.label ?? "").toLowerCase().includes(query);
       if (matches) matchingProviders.add(option.dataset.providerId ?? "__none__");
     });
-    if (isModal && query && !matchingProviders.has(activeProvider)) {
+    if (query && !matchingProviders.has(activeProvider)) {
       activeProvider = providers.find((provider) => matchingProviders.has(provider.dataset.providerId ?? "__none__"))?.dataset.providerId ?? "__none__";
     }
     options.forEach((option) => {
       const matches = !query || (option.dataset.searchText ?? option.dataset.label ?? "").toLowerCase().includes(query);
-      const visible = matches && (!isModal || option.dataset.providerId === activeProvider);
+      const visible = matches && option.dataset.providerId === activeProvider;
       option.classList.toggle("hidden", !visible);
       option.classList.toggle("bg-zinc-900", option.dataset.value === draftModel);
       option.classList.toggle("text-white", option.dataset.value === draftModel);
     });
-    if (isModal) providers.forEach((provider) => {
+    providers.forEach((provider) => {
       const visible = !query || (provider.dataset.searchText ?? "").toLowerCase().includes(query) || matchingProviders.has(provider.dataset.providerId ?? "__none__");
       provider.classList.toggle("hidden", !visible);
       provider.classList.toggle("bg-zinc-900", provider.dataset.providerId === activeProvider);
@@ -106,59 +105,21 @@ function initPicker(picker: HTMLElement) {
   }));
   options.forEach((option) => option.addEventListener("click", () => {
     const nextModel = option.dataset.value ?? "";
-    if (isModal) {
-      if (nextModel !== draftModel) draftVariant = "";
-      draftModel = nextModel;
-      activeProvider = option.dataset.providerId ?? "__none__";
-      updateVariantControls(draftModel, draftVariant);
-      filter();
-      return;
-    }
-    const modelChanged = nextModel !== input.value;
-    input.value = nextModel;
+    if (nextModel !== draftModel) draftVariant = "";
     draftModel = nextModel;
-    if (modelChanged && variantInput) {
-      variantInput.value = "";
-      notifyChange(variantInput);
-    }
-    draftVariant = variantInput?.value ?? "";
-    notifyChange(input);
-    updateVariantControls(input.value, variantInput?.value ?? "");
-    updateSelected(option, variantInput?.value ?? "");
-    if (search) search.value = "";
-    options.forEach((entry) => entry.classList.remove("hidden"));
-    picker.removeAttribute("open");
-    if (picker.dataset.modelPickerAutoSubmit === "true") form?.requestSubmit();
+    activeProvider = option.dataset.providerId ?? "__none__";
+    updateVariantControls(draftModel, draftVariant);
+    filter();
   }));
   variantPanels.forEach((panel) => panel.querySelector<HTMLSelectElement>("[data-model-picker-variant-select]")?.addEventListener("change", (event) => {
     const select = event.currentTarget;
     if (!(select instanceof HTMLSelectElement)) return;
-    if (isModal) {
-      draftVariant = select.value;
-      updateVariantControls(draftModel, draftVariant);
-      return;
-    }
-    if (!variantInput) return;
-    variantInput.value = select.value;
     draftVariant = select.value;
-    notifyChange(variantInput);
-    updateVariantControls(input.value, variantInput.value);
-    updateSelected(selectedOption(input.value), variantInput.value);
-    if (picker.dataset.modelPickerAutoSubmit === "true") form?.requestSubmit();
+    updateVariantControls(draftModel, draftVariant);
   }));
   unavailableVariantControl?.querySelector<HTMLSelectElement>("[data-model-picker-variant-unavailable-select]")?.addEventListener("change", () => {
-    if (isModal) {
-      draftVariant = "";
-      updateVariantControls(draftModel, draftVariant);
-      return;
-    }
-    if (!variantInput) return;
-    variantInput.value = "";
     draftVariant = "";
-    notifyChange(variantInput);
-    updateVariantControls(input.value, variantInput.value);
-    updateSelected(selectedOption(input.value), variantInput.value);
-    if (picker.dataset.modelPickerAutoSubmit === "true") form?.requestSubmit();
+    updateVariantControls(draftModel, draftVariant);
   });
   picker.querySelector<HTMLElement>("[data-model-picker-save]")?.addEventListener("click", () => {
     if (!selectionIsValid()) {
@@ -192,7 +153,12 @@ export function initModelPickers(root: ParentNode = document) {
 }
 
 export function installModelPickerLifecycle() {
-  document.addEventListener("keydown", (event) => { if (event.key === "Escape") document.querySelectorAll<HTMLElement>("[data-model-picker-modal]:not(.hidden)").forEach((modal) => modal.classList.add("hidden")); });
+  document.addEventListener("keydown", (event) => {
+    if (event.key !== "Escape") return;
+    const modals = document.querySelectorAll<HTMLElement>("[data-model-picker-modal]:not(.hidden)");
+    modals.forEach((modal) => modal.classList.add("hidden"));
+    if (modals.length) document.body.classList.remove("overflow-hidden");
+  });
   document.addEventListener("htmx:load", (event) => {
     const target = (event as CustomEvent<{ elt?: unknown }>).detail.elt;
     if (target instanceof Element) initModelPickers(target);

@@ -180,7 +180,7 @@ pub struct AgentConversationPageInput {
 impl AgentConversationEmptyPageTemplate {
     pub fn render_view(
         agent: AgentDetailRow,
-        mut model_picker: ModelPickerView,
+        model_picker: ModelPickerView,
         errors: Vec<String>,
         strategy_prompt_kind: String,
         strategy_prompt: String,
@@ -192,9 +192,6 @@ impl AgentConversationEmptyPageTemplate {
             agent.display_name.clone(),
             agent.enabled,
         );
-        // The empty Chat view is viewport-bounded, so use the picker modal
-        // rather than an inline option list that could extend off-screen.
-        model_picker.use_modal = true;
         Self {
             tabs: build_agent_show_tabs(&agent, AgentShowTab::Chat),
             agent_tabs_use_htmx: false,

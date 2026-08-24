@@ -51,7 +51,7 @@ describe("model-dependent buttons", () => {
     document.body.innerHTML = `
       <form action="/agents/test-agent/sub-agents/1/model">
         <input name="model_selection" value="">
-        <div data-model-picker data-model-picker-mode="modal">
+        <div data-model-picker>
           <button type="button" data-model-picker-open></button>
           <span data-model-picker-label></span>
           <img data-model-picker-logo>

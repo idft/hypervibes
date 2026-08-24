@@ -324,7 +324,6 @@ pub(in crate::web::routes) async fn agents_show_sub_agent_detail(
         picker,
     );
     model_picker.show_label = false;
-    model_picker.use_modal = true;
     let navbar = load_selected_agent_navbar(&state, user.id, &agent).await?.0;
     let html = AgentJobDetailPageTemplate::render_view(
         agent.clone(),
@@ -369,7 +368,6 @@ pub(in crate::web::routes) async fn agents_sub_agent_model_picker(
         picker,
     );
     model_picker.show_label = false;
-    model_picker.use_modal = true;
     let html = ModelPickerPartialTemplate::render_view(model_picker)?;
     Ok(Html(html).into_response())
 }
@@ -1263,7 +1261,6 @@ pub(in crate::web::routes) fn render_new_job_form(
         (!form.model_variant.trim().is_empty()).then_some(form.model_variant.as_str()),
         picker,
     );
-    model_picker.use_modal = true;
     model_picker.submit_on_save = false;
     let tabs = build_agent_show_tabs(&agent, AgentShowTab::SubAgents);
     let navbar = navbar.with_selected_agent(
