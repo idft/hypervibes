@@ -15,11 +15,11 @@ own separate Linux virtual machine.
 ## Podman Compose install (recommended)
 
 Install Podman, `podman-compose`, `curl`, `openssl`, and GNU `sed`. Create a
-private installation directory, then download the Compose file for the release
-you want. Replace `v0.3.0` with the release tag you intend to run.
+private installation directory, then download the current Compose file from the
+`master` branch.
 
 ```sh
-umask 077 && curl -fsSLo podman-compose.yaml https://raw.githubusercontent.com/idft/hypervibes/v0.3.0/podman-compose.yaml
+umask 077 && curl -fsSLo podman-compose.yaml https://raw.githubusercontent.com/idft/hypervibes/master/podman-compose.yaml
 ```
 
 Generate unique secrets before the first start:

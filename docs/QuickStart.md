@@ -18,14 +18,13 @@ You need:
 - A browser wallet for Hyperliquid login and account approvals
 - An OpenCode provider connection before an agent can run sub-agents
 
-## Install a release
+## Install
 
-Create a new installation directory, then download the Compose file for the
-release you intend to run. Replace `v0.3.0` below with the release tag you
-want.
+Create a new installation directory, then download the current Compose file from
+the `master` branch.
 
 ```sh
-umask 077 && curl -fsSLo podman-compose.yaml https://raw.githubusercontent.com/idft/hypervibes/v0.3.0/podman-compose.yaml
+umask 077 && curl -fsSLo podman-compose.yaml https://raw.githubusercontent.com/idft/hypervibes/master/podman-compose.yaml
 ```
 
 Generate unique secrets before the first start:

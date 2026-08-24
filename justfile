@@ -45,8 +45,7 @@ release version:
 
     sed -i -E "0,/^version = \"[0-9]+\.[0-9]+\.[0-9]+\"/{s//version = \"${version}\"/;}" Cargo.toml
     npm pkg set "version=${version}" >/dev/null
-    sed -i -E "s/v[0-9]+\.[0-9]+\.[0-9]+/v${version}/g" docs/Installation.md docs/QuickStart.md
-    sed -i -E "s/(HYPERVIBES_IMAGE_TAG:-)[^}]*/\1${version}/g" podman-compose.yaml
+    sed -i -E "s#(ghcr.io/idft/hypervibes:)[^[:space:]]+#\1${version}#g" podman-compose.yaml
 
     # Cargo updates the root package entry in Cargo.lock without changing the
     # dependency resolution.
@@ -68,7 +67,7 @@ release version:
     fi
 
     printf '\nRelease diff:\n'
-    git diff -- Cargo.toml Cargo.lock package.json docs/Installation.md docs/QuickStart.md podman-compose.yaml
+    git diff -- Cargo.toml Cargo.lock package.json podman-compose.yaml
     printf '\nCreate the release commit and annotated tag %s locally? [y/N] ' "${tag}"
     read -r confirm
     if [[ "${confirm}" != "y" && "${confirm}" != "Y" ]]; then
@@ -76,7 +75,7 @@ release version:
         exit 0
     fi
 
-    git add -- Cargo.toml Cargo.lock package.json docs/Installation.md docs/QuickStart.md podman-compose.yaml
+    git add -- Cargo.toml Cargo.lock package.json podman-compose.yaml
     git commit -m "prepare ${tag} release"
     git tag -a "${tag}" -m "${tag}"
 
