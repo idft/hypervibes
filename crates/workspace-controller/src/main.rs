@@ -3,7 +3,7 @@ use std::{collections::BTreeMap, env, fs, path::PathBuf, sync::Arc};
 use anyhow::{Context, Result, bail};
 use axum::{
     Json, Router,
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::{HeaderMap, StatusCode},
     response::{IntoResponse, Response},
     routing::{get, post, put},
@@ -20,9 +20,10 @@ use workspace_store::{
         promote_coding_candidate, recover_promotion_journal, store_coding_report,
     },
     workspace::{
-        OpenCodeWorkspaceAgent, OpenCodeWorkspaceConfig, WorkspaceGenerationMode,
-        WorkspaceTemplateDrift, delete_agent_workspace, diff_agent_workspace_from_template,
-        generate_agent_workspace,
+        OpenCodeWorkspaceAgent, OpenCodeWorkspaceConfig, WorkspaceBrowserListing,
+        WorkspaceFilePreview, WorkspaceGenerationMode, WorkspaceTemplateDrift,
+        delete_agent_workspace, diff_agent_workspace_from_template, generate_agent_workspace,
+        list_workspace_browser_entries, read_workspace_browser_file,
     },
 };
 
@@ -59,6 +60,11 @@ struct CandidateRequest {
     display_name: String,
     agent_api_key: String,
     api_base_url: String,
+}
+
+#[derive(Deserialize)]
+struct WorkspaceBrowserFileQuery {
+    path: String,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -101,6 +107,7 @@ struct ErrorBody {
     message: &'static str,
 }
 
+#[derive(Debug)]
 struct ApiError {
     status: StatusCode,
     code: &'static str,
@@ -192,6 +199,14 @@ fn router(app: Arc<App>) -> Router {
         .route(
             "/v1/agent-workspaces/{agent_key}/template-drift",
             post(template_drift),
+        )
+        .route(
+            "/v1/agent-workspaces/{agent_key}/browser",
+            get(list_workspace_browser_entries_handler),
+        )
+        .route(
+            "/v1/agent-workspaces/{agent_key}/browser/file",
+            get(read_workspace_browser_file_handler),
         )
         .route(
             "/v1/coding-candidates/{agent_key}/{task_id}",
@@ -371,6 +386,36 @@ async fn template_drift(
     .await
     .map_err(|_| ApiError::internal())?
     .map_err(classify)?;
+    Ok(Json(result))
+}
+
+async fn list_workspace_browser_entries_handler(
+    State(app): State<Arc<App>>,
+    Path(agent_key): Path<String>,
+    headers: HeaderMap,
+) -> Result<Json<WorkspaceBrowserListing>, ApiError> {
+    authorize(&headers, &app)?;
+    let config = app.store.clone();
+    let result = spawn_blocking(move || list_workspace_browser_entries(&config, &agent_key))
+        .await
+        .map_err(|_| ApiError::internal())?
+        .map_err(classify)?;
+    Ok(Json(result))
+}
+
+async fn read_workspace_browser_file_handler(
+    State(app): State<Arc<App>>,
+    Path(agent_key): Path<String>,
+    headers: HeaderMap,
+    Query(query): Query<WorkspaceBrowserFileQuery>,
+) -> Result<Json<WorkspaceFilePreview>, ApiError> {
+    authorize(&headers, &app)?;
+    let config = app.store.clone();
+    let result =
+        spawn_blocking(move || read_workspace_browser_file(&config, &agent_key, &query.path))
+            .await
+            .map_err(|_| ApiError::internal())?
+            .map_err(classify)?;
     Ok(Json(result))
 }
 
@@ -617,8 +662,11 @@ fn classify(error: anyhow::Error) -> ApiError {
     {
         ApiError::conflict()
     } else if message.contains("agent key")
+        || message.contains("agent_key")
         || message.contains("task id")
         || message.contains("symlink")
+        || message.contains("not a regular file")
+        || message.contains("not a directory")
         || message.contains("unsupported")
         || message.contains("invalid")
     {
@@ -626,5 +674,191 @@ fn classify(error: anyhow::Error) -> ApiError {
     } else {
         warn!(error = ?error, "workspace operation failed");
         ApiError::internal()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{
+        process,
+        time::{SystemTime, UNIX_EPOCH},
+    };
+
+    use super::*;
+
+    struct TempDir {
+        path: PathBuf,
+    }
+
+    impl TempDir {
+        fn new() -> Self {
+            let suffix = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("time after unix epoch")
+                .as_nanos();
+            let path = PathBuf::from("/tmp/opencode")
+                .join(format!("workspace-controller-{}-{suffix}", process::id()));
+            fs::create_dir_all(&path).expect("create temp directory");
+            Self { path }
+        }
+    }
+
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.path);
+        }
+    }
+
+    fn browser_test_app(root: &std::path::Path) -> Arc<App> {
+        let idempotency_root = root.join("idempotency");
+        fs::create_dir_all(&idempotency_root).expect("create idempotency directory");
+        Arc::new(App {
+            store: OpenCodeWorkspaceConfig {
+                source_root: root.join("template"),
+                host_workspaces_root: root.to_path_buf(),
+                container_workspaces_root: "/workspaces".to_string(),
+                api_base_url: String::new(),
+            },
+            api_key: Arc::from("controller-key"),
+            idempotency_root,
+        })
+    }
+
+    fn authorized_headers() -> HeaderMap {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "authorization",
+            "Bearer controller-key".parse().expect("header value"),
+        );
+        headers
+    }
+
+    #[tokio::test]
+    async fn workspace_browser_handlers_require_authentication() {
+        let temp = TempDir::new();
+        let app = browser_test_app(&temp.path);
+
+        let list_error = list_workspace_browser_entries_handler(
+            State(app.clone()),
+            Path("agent".to_string()),
+            HeaderMap::new(),
+        )
+        .await
+        .expect_err("list without auth should fail");
+        assert_eq!(
+            list_error.into_response().status(),
+            StatusCode::UNAUTHORIZED
+        );
+
+        let file_error = read_workspace_browser_file_handler(
+            State(app),
+            Path("agent".to_string()),
+            HeaderMap::new(),
+            Query(WorkspaceBrowserFileQuery {
+                path: "file.txt".to_string(),
+            }),
+        )
+        .await
+        .expect_err("file without auth should fail");
+        assert_eq!(
+            file_error.into_response().status(),
+            StatusCode::UNAUTHORIZED
+        );
+    }
+
+    #[tokio::test]
+    async fn workspace_browser_handlers_return_typed_results_without_idempotency() {
+        let temp = TempDir::new();
+        let app = browser_test_app(&temp.path);
+        let workspace = temp.path.join("agents/agent");
+        fs::create_dir_all(&workspace).expect("create workspace");
+        fs::write(workspace.join("file.txt"), "contents\n").expect("write workspace file");
+        let headers = authorized_headers();
+
+        let Json(listing) = list_workspace_browser_entries_handler(
+            State(app.clone()),
+            Path("agent".to_string()),
+            headers.clone(),
+        )
+        .await
+        .expect("list workspace");
+        assert!(listing.workspace_exists);
+        assert_eq!(listing.entries[0].path, "file.txt");
+
+        let Json(preview) = read_workspace_browser_file_handler(
+            State(app.clone()),
+            Path("agent".to_string()),
+            headers,
+            Query(WorkspaceBrowserFileQuery {
+                path: "file.txt".to_string(),
+            }),
+        )
+        .await
+        .expect("read workspace file");
+        assert_eq!(
+            preview.status,
+            workspace_store::workspace::WorkspaceFilePreviewStatus::Text
+        );
+        assert_eq!(preview.text.as_deref(), Some("contents\n"));
+
+        fs::remove_file(workspace.join("file.txt")).expect("remove workspace file");
+        let Json(missing) = read_workspace_browser_file_handler(
+            State(app.clone()),
+            Path("agent".to_string()),
+            authorized_headers(),
+            Query(WorkspaceBrowserFileQuery {
+                path: "file.txt".to_string(),
+            }),
+        )
+        .await
+        .expect("read removed workspace file");
+        assert_eq!(
+            missing.status,
+            workspace_store::workspace::WorkspaceFilePreviewStatus::Missing
+        );
+        assert_eq!(
+            fs::read_dir(&app.idempotency_root)
+                .expect("read idempotency directory")
+                .count(),
+            0
+        );
+    }
+
+    #[tokio::test]
+    async fn workspace_browser_handler_rejects_unsafe_file_paths() {
+        let temp = TempDir::new();
+        let app = browser_test_app(&temp.path);
+        let workspace = temp.path.join("agents/agent");
+        fs::create_dir_all(workspace.join("directory")).expect("create workspace directory");
+        fs::write(workspace.join(".env"), "secret\n").expect("write env");
+
+        for path in [".env", "../.env", "directory"] {
+            let error = read_workspace_browser_file_handler(
+                State(app.clone()),
+                Path("agent".to_string()),
+                authorized_headers(),
+                Query(WorkspaceBrowserFileQuery {
+                    path: path.to_string(),
+                }),
+            )
+            .await
+            .expect_err("unsafe browser read should fail");
+            assert_eq!(
+                error.into_response().status(),
+                StatusCode::UNPROCESSABLE_ENTITY
+            );
+        }
+
+        let error = list_workspace_browser_entries_handler(
+            State(app),
+            Path("../agent".to_string()),
+            authorized_headers(),
+        )
+        .await
+        .expect_err("unsafe agent key should fail");
+        assert_eq!(
+            error.into_response().status(),
+            StatusCode::UNPROCESSABLE_ENTITY
+        );
     }
 }

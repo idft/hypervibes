@@ -167,9 +167,9 @@ The HyperVibes service never mounts or accesses agent workspace files. The
 OpenCode container owns the `agent_workspaces` named volume at `/workspaces` and
 runs the `workspace-controller` HTTP process alongside OpenCode. The HyperVibes
 service calls its private Compose-network `/v1` API with
-`WORKSPACE_CONTROL_API_KEY` for workspace lifecycle operations. This controller
-is not an agent MCP tool; agents cannot create, delete, inspect, or promote
-workspaces through it.
+`WORKSPACE_CONTROL_API_KEY` for workspace lifecycle operations and bounded,
+read-only workspace-browser requests. This controller is not an agent MCP tool;
+agents cannot create, delete, inspect, promote, or browse workspaces through it.
 
 Set `WORKSPACE_CONTROL_API_KEY` for both the HyperVibes and OpenCode services.
 In production, the controller is private to the Compose network at

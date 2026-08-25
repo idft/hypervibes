@@ -13,6 +13,7 @@ mod runs;
 mod settings;
 pub(crate) mod shared;
 mod sub_agents;
+mod workspace;
 
 #[cfg(test)]
 use self::shared::*;
@@ -31,6 +32,7 @@ pub use providers::*;
 pub use runs::*;
 pub use settings::*;
 pub use sub_agents::*;
+pub use workspace::*;
 
 #[cfg(test)]
 mod test_support;

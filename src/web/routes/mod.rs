@@ -67,6 +67,7 @@ pub fn router(state: Arc<AppState>) -> Router {
             post(agents_delete_memory),
         )
         .route("/agents/{agent_key}/prompts", get(agents_show_prompts))
+        .route("/agents/{agent_key}/workspace", get(agents_show_workspace))
         .route(
             "/agents/{agent_key}/prompts/update",
             post(agents_update_prompt),

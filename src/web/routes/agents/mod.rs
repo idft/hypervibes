@@ -29,12 +29,13 @@ mod sub_agents_tests;
 mod transactions;
 #[cfg(test)]
 mod transactions_tests;
+mod workspace;
 
 #[cfg(test)]
 use self::shared::*;
 pub(in crate::web::routes) use self::{
     chat::*, index::*, live_stream::*, memories::*, operations::*, prompts::*, runs::*,
-    settings::*, show::*, sub_agents::*, transactions::*,
+    settings::*, show::*, sub_agents::*, transactions::*, workspace::*,
 };
 mod chat;
 #[cfg(test)]

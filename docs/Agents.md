@@ -50,6 +50,11 @@ The `.opencode/` directory contains agent profiles, commands, and skills.
 Analysis files are organized under `scripts/`, while `scripts/user/`, `data/`,
 and `scratch/` are writable agent-managed paths.
 
+The agent Workspace page provides a read-only browser for this live workspace.
+It shows generated and agent-authored files, including `.opencode/`, but never
+lists or reads `.env` files. Binary and oversized files remain visible in the
+tree with an unavailable preview state.
+
 ### Workspace Drift
 
 The agent settings page reports drift when template-managed workspace files no

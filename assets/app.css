@@ -144,6 +144,17 @@ html.agent-rail-initially-collapsed .agent-rail.agent-rail-expanded .agent-rail-
   cursor: grab;
 }
 
+@media (min-width: 768px) {
+  .workspace-file-pane {
+    width: var(--workspace-file-pane-width, 20rem);
+  }
+}
+
+[data-workspace-explorer][data-workspace-resizing="true"] {
+  cursor: col-resize;
+  user-select: none;
+}
+
 [data-run-transcript-scroll] {
   overflow-anchor: none;
 }

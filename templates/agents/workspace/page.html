@@ -1,0 +1,59 @@
+{% extends "layouts/base.html" %}
+
+{% block title %}Workspace · {{ agent.display_name }} · HyperVibes{% endblock %}
+
+{% block content %}
+<div class="mx-auto flex h-full min-h-0 max-w-[1500px] flex-col overflow-hidden">
+    {% include "agents/components/page-header.html" %}
+    {% include "agents/components/tabs.html" %}
+    <div id="agent-show-tab-content" class="min-h-0 flex-1">
+        <section data-workspace-explorer class="flex min-h-0 h-full flex-col overflow-hidden rounded-2xl border border-zinc-800 bg-[#0d0d10] md:flex-row">
+            <aside data-workspace-file-pane class="workspace-file-pane dark-scrollbar min-h-0 w-full shrink-0 overflow-y-auto border-b border-zinc-800 md:border-b-0 md:border-r">
+                <div class="border-b border-zinc-800 px-4 py-3 text-xs font-medium uppercase tracking-wider text-zinc-500">Files</div>
+                {% if controller_unavailable %}
+                <p class="p-4 text-sm text-amber-200">Workspace browser is temporarily unavailable.</p>
+                {% else if !workspace_exists %}
+                <p class="p-4 text-sm text-zinc-400">This workspace is unavailable.</p>
+                {% else if entries.is_empty() %}
+                <p class="p-4 text-sm text-zinc-400">This workspace is empty.</p>
+                {% else %}
+                <div data-workspace-tree class="py-2 font-mono text-sm">
+                    {% for entry in entries %}
+                    {% if entry.is_directory %}
+                    <button type="button" data-workspace-entry data-workspace-folder data-workspace-path="{{ entry.path }}" data-workspace-depth="{{ entry.depth }}" class="flex w-full cursor-pointer items-center gap-2 px-3 py-1.5 text-left text-zinc-400 hover:bg-zinc-800 {% if entry.initially_hidden %}hidden{% endif %}" style="padding-left: {{ 12 + entry.depth * 16 }}px" aria-expanded="false">
+                        <svg data-workspace-chevron class="h-3.5 w-3.5 shrink-0 transition-transform" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="m7 4 6 6-6 6"></path></svg>
+                        <svg class="h-4 w-4 shrink-0 text-amber-300" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="M3.75 6.75A2.25 2.25 0 0 1 6 4.5h3.19c.597 0 1.17.237 1.591.659l.56.56c.422.422.994.659 1.591.659H18A2.25 2.25 0 0 1 20.25 8.63v8.62A2.25 2.25 0 0 1 18 19.5H6a2.25 2.25 0 0 1-2.25-2.25V6.75Z"></path></svg>
+                        <span class="truncate">{{ entry.name }}</span>
+                    </button>
+                    {% else %}
+                    <a href="{{ entry.href }}" data-workspace-entry data-workspace-path="{{ entry.path }}" data-workspace-depth="{{ entry.depth }}" {% if entry.selected %}data-workspace-selected{% endif %} hx-get="{{ entry.href }}" hx-select="#agent-show-tab-content" hx-target="#agent-show-tab-content" hx-swap="outerHTML" hx-push-url="true" class="flex cursor-pointer items-center gap-2 px-3 py-1.5 hover:bg-zinc-800 {% if entry.selected %}bg-zinc-800 text-white{% else %}text-zinc-300{% endif %} {% if entry.initially_hidden %}hidden{% endif %}" style="padding-left: {{ 28 + entry.depth * 16 }}px">
+                        <svg class="h-4 w-4 shrink-0 text-sky-300" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="M5.25 3.75h8.38c.597 0 1.17.237 1.591.659l2.37 2.37c.422.422.659.994.659 1.591v11.88A2.25 2.25 0 0 1 16 22.5H5.25A2.25 2.25 0 0 1 3 20.25V6A2.25 2.25 0 0 1 5.25 3.75Z"></path><path stroke-linecap="round" d="M8 12h8m-8 3h8"></path></svg>
+                        <span class="truncate">{{ entry.name }}</span>
+                    </a>
+                    {% endif %}
+                    {% endfor %}
+                </div>
+                {% if listing_truncated %}<p class="border-t border-zinc-800 px-4 py-3 text-xs text-amber-200">Listing exceeded the safe limit of {{ max_entries }} entries or {{ max_depth }} levels.</p>{% endif %}
+                {% endif %}
+            </aside>
+            <div data-workspace-resizer class="workspace-pane-resizer hidden w-1 shrink-0 cursor-col-resize bg-zinc-800 hover:bg-sky-500 md:block" role="separator" aria-label="Resize file pane" aria-orientation="vertical" tabindex="0"></div>
+            <main class="dark-scrollbar min-h-0 min-w-0 flex-1 overflow-auto">
+                <div class="border-b border-zinc-800 px-4 py-3 font-mono text-sm text-zinc-300">{% if selected_path.is_empty() %}Preview{% else %}{{ selected_path }}{% endif %}</div>
+                {% if controller_unavailable %}
+                <p class="p-5 text-sm text-amber-200">Workspace preview is temporarily unavailable.</p>
+                {% else if selected_path.is_empty() %}
+                <p class="p-5 text-sm text-zinc-400">Select a text file to preview its contents.</p>
+                {% else if preview_missing %}
+                <p class="p-5 text-sm text-zinc-400">This file is no longer available.</p>
+                {% else if preview_binary %}
+                <p class="p-5 text-sm text-zinc-400">Binary files cannot be previewed.</p>
+                {% else if preview_too_large %}
+                <p class="p-5 text-sm text-zinc-400">This file is too large to preview.</p>
+                {% else if let Some(text) = preview_text %}
+                <pre class="p-5 font-mono text-sm leading-6 text-zinc-200"><code>{{ text }}</code></pre>
+                {% endif %}
+            </main>
+        </section>
+    </div>
+</div>
+{% endblock %}

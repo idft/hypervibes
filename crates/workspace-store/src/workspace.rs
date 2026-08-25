@@ -1,14 +1,61 @@
 use std::{
     collections::BTreeMap,
     fs,
+    io::Read,
     path::{Path, PathBuf},
 };
 
 use anyhow::{Context, Result, bail};
+use rustix::{
+    fs::{Mode, OFlags, open, openat},
+    io::Errno,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 pub const PROFILE_SOURCE_RELATIVE_PATH: &str = "agent-runtime/workspace-template";
+pub const WORKSPACE_BROWSER_MAX_DEPTH: usize = 32;
+pub const WORKSPACE_BROWSER_MAX_ENTRIES: usize = 2_000;
+pub const WORKSPACE_BROWSER_MAX_FILENAME_BYTES: usize = 255;
+pub const WORKSPACE_BROWSER_MAX_PREVIEW_BYTES: u64 = 1024 * 1024;
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WorkspaceBrowserListing {
+    pub workspace_exists: bool,
+    pub entries: Vec<WorkspaceBrowserEntry>,
+    pub truncated: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WorkspaceBrowserEntry {
+    pub path: String,
+    pub kind: WorkspaceBrowserEntryKind,
+    pub size_bytes: Option<u64>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkspaceBrowserEntryKind {
+    Directory,
+    File,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WorkspaceFilePreview {
+    pub path: String,
+    pub size_bytes: u64,
+    pub status: WorkspaceFilePreviewStatus,
+    pub text: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkspaceFilePreviewStatus {
+    Text,
+    Binary,
+    TooLarge,
+    Missing,
+}
 
 #[derive(Debug, Clone)]
 pub struct OpenCodeWorkspaceConfig {
@@ -265,6 +312,126 @@ pub fn delete_agent_workspace(config: &OpenCodeWorkspaceConfig, agent_key: &str)
     Ok(true)
 }
 
+pub fn list_workspace_browser_entries(
+    config: &OpenCodeWorkspaceConfig,
+    agent_key: &str,
+) -> Result<WorkspaceBrowserListing> {
+    let workspace_root = agent_workspace_host_path(config, agent_key)?;
+    let root = match open_workspace_browser_root(&workspace_root) {
+        Ok(root) => root,
+        Err(Errno::NOENT) => {
+            return Ok(WorkspaceBrowserListing {
+                workspace_exists: false,
+                entries: Vec::new(),
+                truncated: false,
+            });
+        }
+        Err(Errno::LOOP) => bail!("workspace browser root is a symlink"),
+        Err(error) => return Err(error.into()),
+    };
+    let mut entries = Vec::new();
+    let mut truncated = false;
+    list_workspace_browser_directory(&root, "", 0, &mut entries, &mut truncated)?;
+    Ok(WorkspaceBrowserListing {
+        workspace_exists: true,
+        entries,
+        truncated,
+    })
+}
+
+pub fn read_workspace_browser_file(
+    config: &OpenCodeWorkspaceConfig,
+    agent_key: &str,
+    relative_path: &str,
+) -> Result<WorkspaceFilePreview> {
+    let components = workspace_browser_path_components(relative_path)?;
+    let workspace_root = agent_workspace_host_path(config, agent_key)?;
+    let mut directory = match open_workspace_browser_root(&workspace_root) {
+        Ok(root) => root,
+        Err(Errno::NOENT) => return Ok(missing_workspace_file_preview(relative_path)),
+        Err(Errno::LOOP) => bail!("workspace browser root is a symlink"),
+        Err(error) => return Err(error.into()),
+    };
+
+    for component in &components[..components.len() - 1] {
+        directory = match openat(
+            &directory,
+            *component,
+            OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+            Mode::empty(),
+        ) {
+            Ok(directory) => fs::File::from(directory),
+            Err(Errno::NOENT) => return Ok(missing_workspace_file_preview(relative_path)),
+            Err(Errno::LOOP) => bail!("workspace browser path component is a symlink"),
+            Err(error) => return Err(error.into()),
+        };
+        if !directory.metadata()?.is_dir() {
+            bail!("workspace browser path component is not a directory");
+        }
+    }
+
+    let file = match openat(
+        &directory,
+        *components
+            .last()
+            .expect("validated path has a final component"),
+        OFlags::RDONLY | OFlags::NONBLOCK | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+        Mode::empty(),
+    ) {
+        Ok(file) => fs::File::from(file),
+        Err(Errno::NOENT) => return Ok(missing_workspace_file_preview(relative_path)),
+        Err(Errno::LOOP) => bail!("workspace browser path is a symlink"),
+        Err(error) => return Err(error.into()),
+    };
+    let metadata = file.metadata()?;
+    if !metadata.is_file() {
+        bail!("workspace browser path is not a regular file");
+    }
+    let size_bytes = metadata.len();
+    if size_bytes > WORKSPACE_BROWSER_MAX_PREVIEW_BYTES {
+        return Ok(WorkspaceFilePreview {
+            path: relative_path.to_owned(),
+            size_bytes,
+            status: WorkspaceFilePreviewStatus::TooLarge,
+            text: None,
+        });
+    }
+
+    let mut contents = Vec::with_capacity(size_bytes as usize + 1);
+    file.take(WORKSPACE_BROWSER_MAX_PREVIEW_BYTES + 1)
+        .read_to_end(&mut contents)?;
+    if contents.len() as u64 > WORKSPACE_BROWSER_MAX_PREVIEW_BYTES {
+        return Ok(WorkspaceFilePreview {
+            path: relative_path.to_owned(),
+            size_bytes: contents.len() as u64,
+            status: WorkspaceFilePreviewStatus::TooLarge,
+            text: None,
+        });
+    }
+    if contents.contains(&0) {
+        return Ok(WorkspaceFilePreview {
+            path: relative_path.to_owned(),
+            size_bytes: contents.len() as u64,
+            status: WorkspaceFilePreviewStatus::Binary,
+            text: None,
+        });
+    }
+    match String::from_utf8(contents) {
+        Ok(text) => Ok(WorkspaceFilePreview {
+            path: relative_path.to_owned(),
+            size_bytes: text.len() as u64,
+            status: WorkspaceFilePreviewStatus::Text,
+            text: Some(text),
+        }),
+        Err(error) => Ok(WorkspaceFilePreview {
+            path: relative_path.to_owned(),
+            size_bytes: error.into_bytes().len() as u64,
+            status: WorkspaceFilePreviewStatus::Binary,
+            text: None,
+        }),
+    }
+}
+
 pub fn runtime_config_for_generated_workspace(
     generated: &GeneratedOpenCodeWorkspace,
 ) -> OpenCodeWorkspaceRuntimeConfig {
@@ -278,10 +445,162 @@ fn validate_agent_key(agent_key: &str) -> Result<()> {
     if agent_key.trim().is_empty() {
         bail!("agent_key must not be empty");
     }
-    if agent_key.contains("..") || agent_key.contains('/') || agent_key.contains('\\') {
+    if matches!(agent_key, "." | "..")
+        || agent_key.contains("..")
+        || agent_key.contains('/')
+        || agent_key.contains('\\')
+    {
         bail!("agent_key contains unsafe path characters");
     }
     Ok(())
+}
+
+fn open_workspace_browser_root(root: &Path) -> rustix::io::Result<fs::File> {
+    open(
+        root,
+        OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+        Mode::empty(),
+    )
+    .map(fs::File::from)
+}
+
+fn list_workspace_browser_directory(
+    directory: &fs::File,
+    prefix: &str,
+    depth: usize,
+    entries: &mut Vec<WorkspaceBrowserEntry>,
+    truncated: &mut bool,
+) -> Result<()> {
+    // Reading through this descriptor path keeps enumeration anchored to the
+    // already opened directory even if its name is concurrently renamed.
+    let descriptor_path = format!(
+        "/proc/self/fd/{}",
+        std::os::fd::AsRawFd::as_raw_fd(directory)
+    );
+    let mut candidates = Vec::new();
+    for entry in fs::read_dir(descriptor_path)? {
+        let entry = entry?;
+        let Ok(name) = entry.file_name().into_string() else {
+            continue;
+        };
+        if !is_workspace_browser_name_allowed(&name) {
+            continue;
+        }
+        let probe = match openat(
+            directory,
+            &name,
+            OFlags::PATH | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+            Mode::empty(),
+        ) {
+            Ok(probe) => fs::File::from(probe),
+            Err(Errno::NOENT) => continue,
+            Err(error) => return Err(error.into()),
+        };
+        let metadata = probe.metadata()?;
+        let kind = if metadata.is_dir() {
+            WorkspaceBrowserEntryKind::Directory
+        } else if metadata.is_file() {
+            WorkspaceBrowserEntryKind::File
+        } else {
+            continue;
+        };
+        let opened = if kind == WorkspaceBrowserEntryKind::Directory {
+            match openat(
+                directory,
+                &name,
+                OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+                Mode::empty(),
+            ) {
+                Ok(opened) => Some(fs::File::from(opened)),
+                Err(Errno::NOENT) | Err(Errno::LOOP) => continue,
+                Err(error) => return Err(error.into()),
+            }
+        } else {
+            None
+        };
+        candidates.push((name, kind, metadata.len(), opened));
+    }
+    candidates.sort_by(|left, right| {
+        let left_kind = matches!(left.1, WorkspaceBrowserEntryKind::File);
+        let right_kind = matches!(right.1, WorkspaceBrowserEntryKind::File);
+        left_kind
+            .cmp(&right_kind)
+            .then_with(|| left.0.as_bytes().cmp(right.0.as_bytes()))
+    });
+
+    for (name, kind, size_bytes, opened) in candidates {
+        if entries.len() == WORKSPACE_BROWSER_MAX_ENTRIES {
+            *truncated = true;
+            return Ok(());
+        }
+        let path = if prefix.is_empty() {
+            name
+        } else {
+            format!("{prefix}/{name}")
+        };
+        entries.push(WorkspaceBrowserEntry {
+            path: path.clone(),
+            kind,
+            size_bytes: (kind == WorkspaceBrowserEntryKind::File).then_some(size_bytes),
+        });
+        if kind == WorkspaceBrowserEntryKind::Directory {
+            if depth == WORKSPACE_BROWSER_MAX_DEPTH {
+                *truncated = true;
+            } else {
+                list_workspace_browser_directory(
+                    opened
+                        .as_ref()
+                        .expect("directories have an open descriptor"),
+                    &path,
+                    depth + 1,
+                    entries,
+                    truncated,
+                )?;
+                if *truncated {
+                    return Ok(());
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+fn workspace_browser_path_components(relative_path: &str) -> Result<Vec<&str>> {
+    if relative_path.is_empty()
+        || Path::new(relative_path).is_absolute()
+        || relative_path.contains('\\')
+    {
+        bail!("invalid workspace browser path");
+    }
+    let components: Vec<_> = relative_path.split('/').collect();
+    if components
+        .iter()
+        .any(|component| !is_workspace_browser_name_allowed(component))
+    {
+        bail!("invalid workspace browser path");
+    }
+    Ok(components)
+}
+
+fn is_workspace_browser_name_allowed(name: &str) -> bool {
+    !name.is_empty()
+        && name != "."
+        && name != ".."
+        && name != ".env"
+        && !matches!(name, ".node_modules" | "node_modules")
+        && !name.contains('/')
+        && !name.contains('\\')
+        && !name.contains('\0')
+        && name.len() <= WORKSPACE_BROWSER_MAX_FILENAME_BYTES
+}
+
+fn missing_workspace_file_preview(path: &str) -> WorkspaceFilePreview {
+    WorkspaceFilePreview {
+        path: path.to_owned(),
+        size_bytes: 0,
+        status: WorkspaceFilePreviewStatus::Missing,
+        text: None,
+    }
 }
 
 fn join_container_path(root: &str, segments: &[&str]) -> String {
@@ -1172,5 +1491,167 @@ mod tests {
 
         assert!(error.to_string().contains("workspace already exists"));
         assert!(workspace_path.join("sentinel.txt").exists());
+    }
+
+    fn browser_workspace(config: &OpenCodeWorkspaceConfig) -> PathBuf {
+        let path = agent_workspace_host_path(config, &sample_agent().agent_key)
+            .expect("agent workspace path");
+        fs::create_dir_all(&path).expect("create browser workspace");
+        path
+    }
+
+    #[test]
+    fn workspace_browser_lists_safe_entries_in_stable_order() {
+        let temp = TempDir::new("workspace-browser-list");
+        let config = sample_config(&temp.path);
+        let workspace = browser_workspace(&config);
+        fs::create_dir_all(workspace.join(".opencode")).expect("create opencode directory");
+        fs::create_dir_all(workspace.join("nested")).expect("create nested directory");
+        fs::write(workspace.join(".opencode/config.json"), "{}\n").expect("write config");
+        fs::write(workspace.join("nested/file.txt"), "nested\n").expect("write nested file");
+        fs::write(workspace.join("root.txt"), "root\n").expect("write root file");
+        fs::write(workspace.join(".env"), "secret\n").expect("write root env");
+        fs::write(workspace.join("nested/.env"), "secret\n").expect("write nested env");
+        fs::create_dir_all(workspace.join("node_modules/package")).expect("create node modules");
+        fs::write(workspace.join("node_modules/package/index.js"), "hidden\n")
+            .expect("write node module");
+
+        let listing = list_workspace_browser_entries(&config, "btc-2").expect("list workspace");
+
+        assert!(listing.workspace_exists);
+        assert!(!listing.truncated);
+        assert_eq!(
+            listing
+                .entries
+                .iter()
+                .map(|entry| entry.path.as_str())
+                .collect::<Vec<_>>(),
+            [
+                ".opencode",
+                ".opencode/config.json",
+                "nested",
+                "nested/file.txt",
+                "root.txt",
+            ]
+        );
+        assert_eq!(
+            listing.entries[0].kind,
+            WorkspaceBrowserEntryKind::Directory
+        );
+        assert_eq!(listing.entries[1].size_bytes, Some(3));
+        assert!(
+            listing
+                .entries
+                .iter()
+                .all(|entry| !entry.path.starts_with("node_modules"))
+        );
+    }
+
+    #[test]
+    fn workspace_browser_file_previews_report_text_binary_large_and_missing() {
+        let temp = TempDir::new("workspace-browser-preview");
+        let config = sample_config(&temp.path);
+        let workspace = browser_workspace(&config);
+        fs::write(workspace.join("text.txt"), "hello\n").expect("write text");
+        fs::write(workspace.join("binary.bin"), [b'a', 0, b'b']).expect("write binary");
+        fs::write(
+            workspace.join("large.txt"),
+            vec![b'x'; WORKSPACE_BROWSER_MAX_PREVIEW_BYTES as usize + 1],
+        )
+        .expect("write large file");
+
+        let text = read_workspace_browser_file(&config, "btc-2", "text.txt").expect("read text");
+        assert_eq!(text.status, WorkspaceFilePreviewStatus::Text);
+        assert_eq!(text.text.as_deref(), Some("hello\n"));
+
+        let binary =
+            read_workspace_browser_file(&config, "btc-2", "binary.bin").expect("read binary");
+        assert_eq!(binary.status, WorkspaceFilePreviewStatus::Binary);
+        assert!(binary.text.is_none());
+
+        let large = read_workspace_browser_file(&config, "btc-2", "large.txt").expect("read large");
+        assert_eq!(large.status, WorkspaceFilePreviewStatus::TooLarge);
+        assert!(large.text.is_none());
+
+        let missing =
+            read_workspace_browser_file(&config, "btc-2", "missing.txt").expect("read missing");
+        assert_eq!(missing.status, WorkspaceFilePreviewStatus::Missing);
+    }
+
+    #[test]
+    fn workspace_browser_rejects_unsafe_paths_and_agent_keys() {
+        let temp = TempDir::new("workspace-browser-invalid");
+        let config = sample_config(&temp.path);
+        browser_workspace(&config);
+
+        for path in [
+            "",
+            "/text.txt",
+            "nested//text.txt",
+            "./text.txt",
+            "../text.txt",
+            ".env",
+            "a/\0b",
+        ] {
+            assert!(
+                read_workspace_browser_file(&config, "btc-2", path).is_err(),
+                "path should be rejected: {path:?}"
+            );
+        }
+        for agent_key in [".", "..", "../btc", "btc/2", ""] {
+            assert!(
+                list_workspace_browser_entries(&config, agent_key).is_err(),
+                "agent key should be rejected: {agent_key:?}"
+            );
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn workspace_browser_omits_and_rejects_symlinks() {
+        use std::os::unix::fs::symlink;
+
+        let temp = TempDir::new("workspace-browser-symlink");
+        let config = sample_config(&temp.path);
+        let workspace = browser_workspace(&config);
+        let outside = temp.path.join("outside.txt");
+        fs::write(&outside, "outside\n").expect("write outside file");
+        symlink(&outside, workspace.join("outside-link")).expect("create outside symlink");
+
+        let listing = list_workspace_browser_entries(&config, "btc-2").expect("list workspace");
+        assert!(listing.entries.is_empty());
+        assert!(read_workspace_browser_file(&config, "btc-2", "outside-link").is_err());
+    }
+
+    #[test]
+    fn workspace_browser_reports_missing_workspace_and_truncated_trees() {
+        let temp = TempDir::new("workspace-browser-limits");
+        let config = sample_config(&temp.path);
+        let missing = list_workspace_browser_entries(&config, "btc-2").expect("list missing");
+        assert!(!missing.workspace_exists);
+        assert_eq!(
+            read_workspace_browser_file(&config, "btc-2", "missing.txt")
+                .expect("read missing workspace")
+                .status,
+            WorkspaceFilePreviewStatus::Missing
+        );
+
+        let workspace = browser_workspace(&config);
+        for index in 0..=WORKSPACE_BROWSER_MAX_ENTRIES {
+            fs::write(workspace.join(format!("{index:03}.txt")), "x").expect("write entry");
+        }
+        let entry_limited = list_workspace_browser_entries(&config, "btc-2").expect("list entries");
+        assert!(entry_limited.truncated);
+        assert_eq!(entry_limited.entries.len(), WORKSPACE_BROWSER_MAX_ENTRIES);
+
+        fs::remove_dir_all(&workspace).expect("remove entry-limited workspace");
+        fs::create_dir_all(&workspace).expect("recreate workspace");
+        let mut nested = workspace;
+        for index in 0..=WORKSPACE_BROWSER_MAX_DEPTH {
+            nested = nested.join(format!("level-{index}"));
+            fs::create_dir_all(&nested).expect("create nested directory");
+        }
+        let depth_limited = list_workspace_browser_entries(&config, "btc-2").expect("list depth");
+        assert!(depth_limited.truncated);
     }
 }

@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use workspace_store::{
     coding_workspace::{CandidateInspection, PromotionJournalPhase, PromotionResult},
-    workspace::WorkspaceTemplateDrift,
+    workspace::{WorkspaceBrowserListing, WorkspaceFilePreview, WorkspaceTemplateDrift},
 };
 
 #[cfg(test)]
@@ -53,6 +53,15 @@ pub trait WorkspaceController: Send + Sync {
         idempotency_key: &str,
     ) -> Result<WorkspaceCreated>;
     async fn delete_workspace(&self, agent_key: &str, idempotency_key: &str) -> Result<bool>;
+    async fn list_workspace_browser_entries(
+        &self,
+        agent_key: &str,
+    ) -> Result<WorkspaceBrowserListing>;
+    async fn read_workspace_browser_file(
+        &self,
+        agent_key: &str,
+        relative_path: &str,
+    ) -> Result<WorkspaceFilePreview>;
     async fn template_drift(&self, input: WorkspaceAgentInput) -> Result<WorkspaceTemplateDrift>;
     async fn create_candidate(
         &self,
@@ -127,6 +136,23 @@ impl WorkspaceController for LocalWorkspaceController {
     }
     async fn delete_workspace(&self, agent_key: &str, _idempotency_key: &str) -> Result<bool> {
         workspace_store::workspace::delete_agent_workspace(&self.config, agent_key)
+    }
+    async fn list_workspace_browser_entries(
+        &self,
+        agent_key: &str,
+    ) -> Result<WorkspaceBrowserListing> {
+        workspace_store::workspace::list_workspace_browser_entries(&self.config, agent_key)
+    }
+    async fn read_workspace_browser_file(
+        &self,
+        agent_key: &str,
+        relative_path: &str,
+    ) -> Result<WorkspaceFilePreview> {
+        workspace_store::workspace::read_workspace_browser_file(
+            &self.config,
+            agent_key,
+            relative_path,
+        )
     }
     async fn template_drift(&self, input: WorkspaceAgentInput) -> Result<WorkspaceTemplateDrift> {
         let config = self.config_for(input.api_base_url);
@@ -299,6 +325,41 @@ impl WorkspaceController for HttpWorkspaceController {
             idempotency_key.to_string(),
         )
         .await
+    }
+
+    async fn list_workspace_browser_entries(
+        &self,
+        agent_key: &str,
+    ) -> Result<WorkspaceBrowserListing> {
+        let response = self
+            .request(
+                reqwest::Method::GET,
+                &format!("v1/agent-workspaces/{agent_key}/browser"),
+            )?
+            .send()
+            .await
+            .context("workspace controller request failed")?;
+        Self::response(response).await
+    }
+
+    async fn read_workspace_browser_file(
+        &self,
+        agent_key: &str,
+        relative_path: &str,
+    ) -> Result<WorkspaceFilePreview> {
+        let mut url = self
+            .base_url
+            .join(&format!("v1/agent-workspaces/{agent_key}/browser/file"))
+            .context("failed to build workspace controller request URL")?;
+        url.query_pairs_mut().append_pair("path", relative_path);
+        let response = self
+            .client
+            .request(reqwest::Method::GET, url)
+            .bearer_auth(self.api_key.as_ref())
+            .send()
+            .await
+            .context("workspace controller request failed")?;
+        Self::response(response).await
     }
 
     async fn template_drift(&self, input: WorkspaceAgentInput) -> Result<WorkspaceTemplateDrift> {

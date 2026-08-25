@@ -31,6 +31,7 @@ pub enum AgentShowTab {
     Transactions,
     Memories,
     Prompts,
+    Workspace,
     Settings,
     SubAgents,
 }
@@ -43,6 +44,7 @@ impl AgentShowTab {
             Self::Transactions => format!("/agents/{agent_key}/transactions"),
             Self::Memories => format!("/agents/{agent_key}/memories"),
             Self::Prompts => format!("/agents/{agent_key}/prompts"),
+            Self::Workspace => format!("/agents/{agent_key}/workspace"),
             Self::Settings => format!("/agents/{agent_key}/settings"),
             Self::SubAgents => format!("/agents/{agent_key}/sub-agents"),
         }
@@ -67,6 +69,7 @@ pub fn build_agent_show_tabs(
         ("Transactions", AgentShowTab::Transactions),
         ("Memories", AgentShowTab::Memories),
         ("Prompts", AgentShowTab::Prompts),
+        ("Workspace", AgentShowTab::Workspace),
         ("Sub-agents", AgentShowTab::SubAgents),
         ("Settings", AgentShowTab::Settings),
     ]

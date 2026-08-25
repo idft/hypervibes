@@ -698,3 +698,47 @@ fn new_job_page_renders_agent_navbar_with_jobs_active() {
     assert!(rendered.contains("Create sub-agent"));
     assert!(rendered.contains("action=\"/agents/test-agent/sub-agents\""));
 }
+
+#[test]
+fn workspace_page_renders_escaped_preview_and_htmx_file_link() {
+    let agent = sample_agent_detail_row();
+    let template = AgentWorkspacePageTemplate {
+        tabs: build_agent_show_tabs(&agent, AgentShowTab::Workspace),
+        agent_tabs_use_htmx: true,
+        agent,
+        navbar: Navbar::default(),
+        current_path: "/agents/test-agent/workspace?file=scripts%2Fstrategy%20%23%201.rs"
+            .to_string(),
+        entries: vec![WorkspaceTreeEntryView {
+            path: "scripts/strategy # 1.rs".to_string(),
+            name: "strategy # 1.rs".to_string(),
+            href: "/agents/test-agent/workspace?file=scripts%2Fstrategy%20%23%201.rs".to_string(),
+            depth: 1,
+            is_directory: false,
+            selected: true,
+            initially_hidden: false,
+        }],
+        workspace_exists: true,
+        listing_truncated: false,
+        max_entries: 2_000,
+        max_depth: 32,
+        controller_unavailable: false,
+        selected_path: "scripts/strategy # 1.rs".to_string(),
+        preview_text: Some("<script>unsafe</script>".to_string()),
+        preview_missing: false,
+        preview_binary: false,
+        preview_too_large: false,
+    };
+
+    let rendered = template.render().expect("render workspace page");
+
+    assert!(rendered.contains("Workspace"));
+    assert!(
+        rendered.contains(
+            "hx-get=\"/agents/test-agent/workspace?file=scripts%2Fstrategy%20%23%201.rs\""
+        )
+    );
+    assert!(rendered.contains("hx-select=\"#agent-show-tab-content\""));
+    assert!(rendered.contains("unsafe"));
+    assert!(!rendered.contains("<script>unsafe</script>"));
+}
