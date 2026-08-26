@@ -9,12 +9,12 @@ use dashmap::DashMap;
 use futures::StreamExt;
 use teloxide::{
     prelude::*,
-    types::{ChatId, Update, UpdateKind},
+    types::{ChatAction, ChatId, Update, UpdateKind},
     update_listeners::AsUpdateStream,
     utils::command::BotCommands,
 };
 use tokio::sync::watch;
-use tokio::task::JoinHandle;
+use tokio::task::{AbortHandle, JoinHandle};
 use tracing::{error, info, warn};
 use uuid::Uuid;
 
@@ -51,6 +51,7 @@ const PERMISSION_POLL_INTERVAL: Duration = Duration::from_secs(2);
 const TELEGRAM_REPLY_POLL_INTERVAL: Duration = Duration::from_secs(2);
 const TELEGRAM_REPLY_TIMEOUT: Duration = Duration::from_secs(30 * 60);
 const TELEGRAM_REPLY_MIRROR_TIMEOUT: Duration = Duration::from_secs(10);
+const TELEGRAM_TYPING_REFRESH_INTERVAL: Duration = Duration::from_secs(4);
 const TELEGRAM_MESSAGE_MAX_CHARS: usize = 4096;
 const NOTIFICATION_CHANNEL: &str = "notification_created";
 
@@ -739,6 +740,20 @@ impl GatewayServiceState {
         chat_id: ChatId,
         text: &str,
     ) -> Result<()> {
+        match bot.send_chat_action(chat_id, ChatAction::Typing).await {
+            Ok(_) => {
+                info!(
+                    agent_key = agent_key,
+                    chat_id = chat_id.0,
+                    "sent Telegram typing action"
+                );
+            }
+            Err(error) => {
+                warn!(agent_key = agent_key, chat_id = chat_id.0, error = ?error, "failed to send Telegram typing action");
+            }
+        }
+        let typing_indicator =
+            self.spawn_telegram_typing_indicator(agent_key.to_string(), bot.clone(), chat_id);
         let result = async {
             let conversation = match self.find_current_conversation(agent_key, chat_id.0).await? {
                 Some(conversation) => conversation,
@@ -764,11 +779,13 @@ impl GatewayServiceState {
                 chat_id,
                 conversation.opencode_session_id,
                 reply_baseline,
+                typing_indicator.clone(),
             );
             Ok(())
         }
         .await;
         if let Err(error) = result {
+            typing_indicator.abort();
             warn!(agent_key = agent_key, error = ?error, "telegram chat turn submission failed");
             bot.send_message(chat_id, telegram_error_message(&error))
                 .await
@@ -784,13 +801,15 @@ impl GatewayServiceState {
         chat_id: ChatId,
         session_id: String,
         reply_baseline: TelegramTurnBaseline,
+        typing_indicator: AbortHandle,
     ) {
         let service = self.clone();
         tokio::spawn(async move {
-            let reply = match service
+            let reply = service
                 .wait_for_telegram_turn_reply(&agent_key, &session_id, &reply_baseline)
-                .await
-            {
+                .await;
+            typing_indicator.abort();
+            let reply = match reply {
                 Ok(reply) => reply,
                 Err(error) => {
                     warn!(
@@ -823,6 +842,31 @@ impl GatewayServiceState {
                 }
             }
         });
+    }
+
+    fn spawn_telegram_typing_indicator(
+        &self,
+        agent_key: String,
+        bot: Bot,
+        chat_id: ChatId,
+    ) -> AbortHandle {
+        let mut shutdown_rx = self.shutdown_rx.clone();
+        tokio::spawn(async move {
+            loop {
+                tokio::select! {
+                    _ = tokio::time::sleep(TELEGRAM_TYPING_REFRESH_INTERVAL) => {}
+                    changed = shutdown_rx.changed() => {
+                        if changed.is_err() || *shutdown_rx.borrow() {
+                            return;
+                        }
+                    }
+                }
+                if let Err(error) = bot.send_chat_action(chat_id, ChatAction::Typing).await {
+                    warn!(agent_key = agent_key, chat_id = chat_id.0, error = ?error, "failed to refresh Telegram typing action");
+                }
+            }
+        })
+        .abort_handle()
     }
 
     async fn wait_for_telegram_turn_reply(
@@ -1574,6 +1618,11 @@ mod tests {
         assert_eq!(chunks[0].chars().count(), TELEGRAM_MESSAGE_MAX_CHARS);
         assert_eq!(chunks[1], "\u{1f4ac}");
         assert_eq!(chunks.concat(), text);
+    }
+
+    #[test]
+    fn telegram_typing_refresh_precedes_action_expiry() {
+        assert!(TELEGRAM_TYPING_REFRESH_INTERVAL < Duration::from_secs(5));
     }
 
     #[tokio::test]
