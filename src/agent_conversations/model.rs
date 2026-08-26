@@ -3,6 +3,7 @@ use rust_decimal::Decimal;
 use uuid::Uuid;
 
 pub const CONVERSATION_CHANNEL_WEB: &str = "web";
+pub const CONVERSATION_CHANNEL_TELEGRAM: &str = "telegram";
 pub const TOOL_GROUP_ORDERS: &str = "orders";
 pub const TOOL_GROUP_MEMORY_WRITES: &str = "memory_writes";
 pub const TOOL_POLICY_DENY: &str = "deny";
@@ -23,6 +24,17 @@ pub struct AgentConversationRow {
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
     pub tool_policies: Vec<AgentConversationToolPolicyRow>,
+}
+
+impl AgentConversationRow {
+    /// Builder-style helper that returns a clone with the supplied external
+    /// conversation key. Used by [`crate::agent_conversations::service::ConversationService::create_web_conversation`]
+    /// to erase the empty external key passed through the generic
+    /// `create_gateway_conversation` entry point.
+    pub fn with_external_conversation_key(mut self, value: Option<String>) -> Self {
+        self.external_conversation_key = value;
+        self
+    }
 }
 
 #[derive(Debug, Clone)]

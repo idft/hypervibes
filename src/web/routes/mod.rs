@@ -140,6 +140,30 @@ pub fn router(state: Arc<AppState>) -> Router {
             get(agents_workspace_maintenance_status),
         )
         .route(
+            "/agents/{agent_key}/settings/gateway/telegram/toggle",
+            post(toggle_telegram_gateway),
+        )
+        .route(
+            "/agents/{agent_key}/settings/gateway/telegram/token",
+            post(update_telegram_token),
+        )
+        .route(
+            "/agents/{agent_key}/settings/gateway/telegram/link",
+            post(start_telegram_link),
+        )
+        .route(
+            "/agents/{agent_key}/settings/gateway/telegram/link/{token}/confirm",
+            post(confirm_telegram_link),
+        )
+        .route(
+            "/agents/{agent_key}/settings/gateway/telegram/link/{token}/reject",
+            post(reject_telegram_link),
+        )
+        .route(
+            "/agents/{agent_key}/settings/gateway/telegram/unlink",
+            post(unlink_telegram_chat),
+        )
+        .route(
             "/agents/{agent_key}/sub-agents",
             get(agents_show_sub_agents).post(agents_create_sub_agent),
         )

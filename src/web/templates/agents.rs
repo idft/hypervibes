@@ -24,6 +24,8 @@ use super::runs::HarnessSubAgentRunView;
 use super::sub_agents::HarnessSubAgentView;
 use super::{account::TradingAccountChoicesView, balance::AccountBalanceView};
 
+pub use crate::gateway::service::GatewayTelegramView;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AgentShowTab {
     Chat,
@@ -403,6 +405,7 @@ pub struct AgentsShowPageTemplate {
     pub setup_checklist: AgentSetupChecklistView,
     pub opencode_workspace: Option<OpenCodeWorkspaceSettingsView>,
     pub settings_workspace_warning: Option<String>,
+    pub gateway_telegram: Option<GatewayTelegramView>,
     pub live_account_health_html: String,
     pub account_balance_html: String,
     pub open_positions_html: String,
@@ -469,6 +472,7 @@ impl AgentsShowPageTemplate {
             },
             opencode_workspace: None,
             settings_workspace_warning: None,
+            gateway_telegram: None,
             live_account_health_html: String::new(),
             account_balance_html: String::new(),
             open_positions_html: String::new(),

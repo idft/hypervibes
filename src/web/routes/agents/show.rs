@@ -84,6 +84,8 @@ pub(in crate::web::routes) struct AgentTransactionsQuery {
 pub(in crate::web::routes) struct AgentSettingsQuery {
     #[serde(default)]
     pub workspace_warning: Option<String>,
+    #[serde(default)]
+    pub gateway_link: Option<uuid::Uuid>,
 }
 #[derive(Debug, Clone, Default, Deserialize)]
 pub(in crate::web::routes) struct AgentOperationQuery {
@@ -271,6 +273,16 @@ pub(in crate::web::routes) async fn render_agent_show_page(
                 .and_then(|query| query.workspace_warning.clone());
             template.opencode_workspace =
                 build_opencode_workspace_settings_view(state, &agent, template_drift).await;
+            let gateway_link = settings_query.as_ref().and_then(|query| query.gateway_link);
+            template.gateway_telegram = Some(
+                super::gateway::load_telegram_gateway_view(
+                    state,
+                    &agent.agent_key,
+                    user.id,
+                    gateway_link,
+                )
+                .await,
+            );
             if let Some(rows) = instrument_options {
                 template.instrument_options = rows;
             }

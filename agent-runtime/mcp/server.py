@@ -755,6 +755,43 @@ def cancel_all_orders(symbol: str | None = None) -> dict[str, Any]:
     return result
 
 
+NOTIFICATION_SEVERITIES = {"info", "warning", "error"}
+
+
+def _require_severity(severity: str) -> str:
+    if not isinstance(severity, str) or severity not in NOTIFICATION_SEVERITIES:
+        allowed = ", ".join(sorted(NOTIFICATION_SEVERITIES))
+        raise ValueError(f"severity must be one of: {allowed}")
+    return severity
+
+
+@mcp.tool()
+def send_notification(title: str, body: str, severity: str = "info") -> dict[str, Any]:
+    """Send a notification through the agent's configured messaging gateway.
+
+    Args:
+        title: Short notification title.
+        body: Detailed notification body (plain text).
+        severity: One of "info", "warning", "error". Affects gateway
+            formatting (for example, a warning emoji prefix on Telegram).
+    """
+    title = _require_nonblank("title", title)
+    body = _require_nonblank("body", body)
+    severity = _require_severity(severity)
+    result = _request(
+        "POST",
+        "/api/v1/notifications",
+        json_body={
+            "title": title,
+            "body": body,
+            "severity": severity,
+        },
+    )
+    if not isinstance(result, dict) or not isinstance(result.get("id"), str):
+        raise RuntimeError("HyperVibes /notifications returned unexpected shape")
+    return result
+
+
 def main() -> None:
     # Fail fast on missing config so OpenCode gets a clear stderr message
     # instead of a half-initialised server.

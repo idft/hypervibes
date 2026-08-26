@@ -1,3 +1,6 @@
+mod gateway;
+#[cfg(test)]
+mod gateway_tests;
 mod index;
 #[cfg(test)]
 mod index_tests;
@@ -34,7 +37,7 @@ mod workspace;
 #[cfg(test)]
 use self::shared::*;
 pub(in crate::web::routes) use self::{
-    chat::*, index::*, live_stream::*, memories::*, operations::*, prompts::*, runs::*,
+    chat::*, gateway::*, index::*, live_stream::*, memories::*, operations::*, prompts::*, runs::*,
     settings::*, show::*, sub_agents::*, transactions::*, workspace::*,
 };
 mod chat;

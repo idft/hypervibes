@@ -5,7 +5,19 @@ const UI_EVENT_CAPACITY: usize = 128;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum UiEvent {
-    MemoryCreated { agent_key: String, memory_id: Uuid },
+    MemoryCreated {
+        agent_key: String,
+        memory_id: Uuid,
+    },
+    /// Notification was queued by `POST /api/v1/notifications`. The gateway
+    /// service observes this to dispatch the message to the configured
+    /// Telegram chat. The database trigger also emits `notification_created`
+    /// pg_notify, so this hub event is purely for in-process consumers
+    /// that want a typed notification without subscribing to Postgres.
+    NotificationQueued {
+        agent_key: String,
+        notification_id: Uuid,
+    },
 }
 
 #[derive(Debug)]

@@ -611,6 +611,52 @@ class HyperVibesMcpServerTests(unittest.TestCase):
         self.assertNotIn("vta_super_secret", str(ctx.exception))
         self.assertIn("[redacted]", str(ctx.exception))
 
+    def test_send_notification_posts_to_notifications_endpoint(self) -> None:
+        captured: dict[str, object] = {}
+
+        def fake_request(method, path, *, params=None, json_body=None):
+            captured["method"] = method
+            captured["path"] = path
+            captured["json_body"] = json_body
+            return {"id": "00000000-0000-0000-0000-000000000000"}
+
+        with mock.patch.object(self.server, "_request", side_effect=fake_request):
+            result = self.server.send_notification(
+                title="Position opened",
+                body="BTC/USDC long 0.1",
+                severity="info",
+            )
+        self.assertEqual(captured["method"], "POST")
+        self.assertEqual(captured["path"], "/api/v1/notifications")
+        self.assertEqual(
+            captured["json_body"],
+            {
+                "title": "Position opened",
+                "body": "BTC/USDC long 0.1",
+                "severity": "info",
+            },
+        )
+        self.assertEqual(result["id"], "00000000-0000-0000-0000-000000000000")
+
+    def test_send_notification_defaults_severity_to_info(self) -> None:
+        captured: dict[str, object] = {}
+
+        def fake_request(method, path, *, params=None, json_body=None):
+            captured["json_body"] = json_body
+            return {"id": "id"}
+
+        with mock.patch.object(self.server, "_request", side_effect=fake_request):
+            self.server.send_notification(title="t", body="b")
+        self.assertEqual(captured["json_body"]["severity"], "info")
+
+    def test_send_notification_rejects_blank_title(self) -> None:
+        with self.assertRaises(ValueError):
+            self.server.send_notification(title="  ", body="body")
+
+    def test_send_notification_rejects_unknown_severity(self) -> None:
+        with self.assertRaises(ValueError):
+            self.server.send_notification(title="t", body="b", severity="critical")
+
 
 if __name__ == "__main__":
     unittest.main()

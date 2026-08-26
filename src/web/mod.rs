@@ -26,6 +26,7 @@ use crate::{
     agents::crypto::EncryptionKey,
     cache::asset::AssetCache,
     db::DbPool,
+    gateway::model::PendingLink,
     harness::{
         backend::HarnessBackend,
         in_flight::{InFlightTracker, SHUTDOWN_IN_FLIGHT_GRACE},
@@ -59,6 +60,7 @@ pub async fn serve(
     force_shutdown_rx: watch::Receiver<bool>,
     in_flight: InFlightTracker,
     workspace_leases: WorkspaceLeaseManager,
+    gateway_pending_links: Arc<dashmap::DashMap<uuid::Uuid, PendingLink>>,
 ) -> Result<()> {
     let shutdown_rx_for_state = shutdown_rx.clone();
     let run_detail_events = Arc::new(RunDetailEventHub::new());
@@ -102,6 +104,7 @@ pub async fn serve(
         conversation_turns: crate::agent_conversations::service::ConversationTurnTracker::default(),
         shutdown_rx: shutdown_rx_for_state,
         provider_connections: provider_connections::ProviderConnectionsState::new(),
+        gateway_pending_links: Some(gateway_pending_links),
     });
     let app = router(state);
     let listener = tokio::net::TcpListener::bind(bind_addr)

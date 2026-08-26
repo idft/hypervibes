@@ -86,6 +86,33 @@ impl<'a> ConversationService<'a> {
         model_id: &str,
         model_variant: Option<&str>,
     ) -> Result<AgentConversationRow> {
+        self.create_gateway_conversation(
+            agent_key,
+            crate::agent_conversations::model::CONVERSATION_CHANNEL_WEB,
+            "",
+            provider_id,
+            model_id,
+            model_variant,
+        )
+        .await
+        .map(|row| row.with_external_conversation_key(None))
+    }
+
+    /// Create a new conversation bound to an external gateway channel
+    /// (e.g. `telegram`) and the external chat id (e.g. the Telegram chat
+    /// id as a string). Reuses the same OpenCode session creation flow as
+    /// `create_web_conversation` and is the entry point used by the
+    /// gateway service when an operator sends `/new` or first messages
+    /// the bot.
+    pub async fn create_gateway_conversation(
+        &self,
+        agent_key: &str,
+        channel: &str,
+        external_conversation_key: &str,
+        provider_id: &str,
+        model_id: &str,
+        model_variant: Option<&str>,
+    ) -> Result<AgentConversationRow> {
         let agent = self.load_agent_with_workspace(agent_key).await?;
         let runtime = workspace_runtime(&agent)?;
         let _lease = self.workspace_leases.acquire_live_read(agent_key).await;
@@ -100,11 +127,16 @@ impl<'a> ConversationService<'a> {
                 default_permission_rules(),
             )
             .await?;
+        let external_key = if external_conversation_key.trim().is_empty() {
+            None
+        } else {
+            Some(external_conversation_key.trim().to_string())
+        };
         let input = CreateAgentConversation {
             agent_key: agent_key.to_string(),
             opencode_session_id: session.id.clone(),
-            channel: crate::agent_conversations::model::CONVERSATION_CHANNEL_WEB.to_string(),
-            external_conversation_key: None,
+            channel: channel.to_string(),
+            external_conversation_key: external_key,
             title: "New conversation".to_string(),
             model_provider_id: provider_id.to_string(),
             model_id: model_id.to_string(),

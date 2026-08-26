@@ -3,10 +3,12 @@ mod agents;
 mod cache;
 mod config;
 mod db;
+mod gateway;
 mod harness;
 mod hyperliquid;
 mod memory;
 mod model_catalog;
+mod notifications;
 mod opencode;
 mod web;
 
@@ -17,11 +19,14 @@ use std::{sync::Arc, time::Duration};
 
 use anyhow::{Context, Result};
 use config::AppConfig;
+use dashmap::DashMap;
 use db::{connect, migrate};
 use tokio::sync::watch;
 use tracing::{error, info, warn};
 use tracing_subscriber::{EnvFilter, fmt};
+use uuid::Uuid;
 
+use crate::gateway::model::PendingLink;
 use crate::harness::in_flight::{InFlightTracker, SHUTDOWN_IN_FLIGHT_GRACE};
 use crate::hyperliquid::live_state::LiveAccountStore;
 use crate::opencode::retry::retry_until_ready;
@@ -152,6 +157,24 @@ async fn main() -> Result<()> {
 
     info!(address = %config.bind_addr, "listening for web requests");
 
+    let gateway_pending_links: Arc<DashMap<Uuid, PendingLink>> = Arc::new(DashMap::new());
+    let gateway_service = gateway::GatewayService::new(
+        pool.clone(),
+        Arc::clone(&opencode_client),
+        config.opencode_base_url.clone(),
+        encryption_key.clone(),
+        shutdown_rx.clone(),
+        in_flight.clone(),
+        workspace_leases.clone(),
+        crate::agent_conversations::service::ConversationTurnTracker::default(),
+        Arc::clone(&gateway_pending_links),
+    );
+    let mut gateway_handle = tokio::spawn(async move {
+        if let Err(e) = gateway_service.run().await {
+            error!(error = ?e, "gateway service exited with error");
+        }
+    });
+
     let server_future = web::serve(
         &config.bind_addr,
         pool,
@@ -169,6 +192,7 @@ async fn main() -> Result<()> {
         force_shutdown_rx.clone(),
         in_flight_for_web,
         workspace_leases,
+        gateway_pending_links,
     );
     tokio::pin!(server_future);
 
@@ -194,11 +218,16 @@ async fn main() -> Result<()> {
             warn!("harness scheduler exited early");
             return Ok(());
         }
+        _ = &mut gateway_handle => {
+            warn!("gateway service exited early");
+            return Ok(());
+        }
     }
 
     // Wait for the background tasks to finish their graceful shutdown.
     let _ = hyperliquid_monitor_handle.await;
     let _ = harness_scheduler_handle.await;
+    let _ = gateway_handle.await;
 
     // The scheduler drains the trackers it knows about inside its
     // own `run`, but manual event dispatches that started after the

@@ -133,6 +133,20 @@ pub(in crate::web::routes) async fn test_state_with_referral_exchange(
     .await
 }
 
+/// Build a test state whose `gateway_pending_links` map is wired to the
+/// returned `Arc<DashMap<...>>` so gateway route tests can drive the full
+/// Telegram link flow (start, confirm, reject) through the HTTP router.
+pub(in crate::web::routes) async fn test_state_with_gateway_pending_links() -> (
+    Arc<AppState>,
+    Arc<dashmap::DashMap<uuid::Uuid, crate::gateway::model::PendingLink>>,
+) {
+    let pending_links = Arc::new(dashmap::DashMap::new());
+    let state = test_state_with_backend(Arc::new(NoopHarnessBackend)).await;
+    let mut state_inner = (*state).clone();
+    state_inner.gateway_pending_links = Some(Arc::clone(&pending_links));
+    (Arc::new(state_inner), pending_links)
+}
+
 async fn test_state_with_backend_shutdown_and_referral(
     harness_backend: Arc<dyn HarnessBackend>,
     shutdown_signaled: bool,
@@ -200,6 +214,7 @@ async fn test_state_with_backend_shutdown_and_referral(
         conversation_turns: crate::agent_conversations::service::ConversationTurnTracker::default(),
         shutdown_rx,
         provider_connections: crate::web::provider_connections::ProviderConnectionsState::new(),
+        gateway_pending_links: None,
     })
 }
 pub(in crate::web::routes) async fn read_sse_chunk(body: Body, timeout_ms: u64) -> String {

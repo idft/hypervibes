@@ -338,6 +338,10 @@
 
         {% include "agents/components/workspace-section.html" %}
 
+        {% if let Some(gateway_telegram) = gateway_telegram %}
+        {% include "agents/components/gateway-telegram.html" %}
+        {% endif %}
+
         <section class="rounded-2xl border border-red-900/60 bg-red-950/20 p-6">
             <h2 class="text-lg font-medium text-white">Delete agent</h2>
             <p class="mt-2 max-w-3xl text-sm leading-6 text-zinc-400">Permanently delete this agent, its workspace, conversations, and all local records, including locally synchronized Hyperliquid orders, fills, and history. The Hyperliquid account, open orders, positions, and funds remain on Hyperliquid. Open orders may still execute after deletion.</p>

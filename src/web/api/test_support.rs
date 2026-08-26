@@ -105,6 +105,7 @@ pub async fn test_state() -> Arc<AppState> {
         conversation_turns: crate::agent_conversations::service::ConversationTurnTracker::default(),
         shutdown_rx,
         provider_connections: crate::web::provider_connections::ProviderConnectionsState::new(),
+        gateway_pending_links: None,
     })
 }
 
