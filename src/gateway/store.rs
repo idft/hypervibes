@@ -23,7 +23,7 @@ pub async fn upsert_gateway(
            DO UPDATE SET enabled = EXCLUDED.enabled,
                          config = EXCLUDED.config,
                          updated_at = now()
-          RETURNING agent_key, enabled, config",
+           RETURNING agent_key, config",
     )
     .bind(agent_key)
     .bind(gateway_type)
@@ -35,39 +35,15 @@ pub async fn upsert_gateway(
     Ok(row)
 }
 
-/// Set only the `enabled` flag on an existing gateway row. Returns `false`
-/// when the gateway does not exist.
-pub async fn set_gateway_enabled(
-    pool: &DbPool,
-    agent_key: &str,
-    gateway_type: &str,
-    enabled: bool,
-) -> Result<bool> {
-    let result = sqlx::query(
-        "UPDATE agent_gateways
-            SET enabled = $3
-          WHERE agent_key = $1 AND gateway_type = $2",
-    )
-    .bind(agent_key)
-    .bind(gateway_type)
-    .bind(enabled)
-    .execute(pool)
-    .await
-    .context("failed to update agent gateway enabled flag")?;
-    Ok(result.rows_affected() > 0)
-}
-
 /// Persist a new Telegram config blob, creating or updating the gateway row.
-/// The row is left disabled when first created so the operator must
-/// explicitly enable it after pasting a token.
+/// The gateway is enabled whenever the config contains token material.
 pub async fn upsert_telegram_config(
     pool: &DbPool,
     agent_key: &str,
     config: &TelegramGatewayConfig,
 ) -> Result<AgentGatewayRow> {
     let value = serde_json::to_value(config).context("failed to serialize telegram config")?;
-    let existing = get_gateway(pool, agent_key, GATEWAY_TYPE_TELEGRAM).await?;
-    let enabled = existing.as_ref().is_some_and(|row| row.enabled);
+    let enabled = config.is_ready();
     upsert_gateway(pool, agent_key, GATEWAY_TYPE_TELEGRAM, enabled, &value).await
 }
 
@@ -78,7 +54,7 @@ pub async fn get_gateway(
     gateway_type: &str,
 ) -> Result<Option<AgentGatewayRow>> {
     let row = query_as::<_, AgentGatewayRow>(
-        "SELECT agent_key, enabled, config
+        "SELECT agent_key, config
            FROM agent_gateways
           WHERE agent_key = $1 AND gateway_type = $2",
     )
@@ -90,34 +66,31 @@ pub async fn get_gateway(
     Ok(row)
 }
 
-/// List every enabled Telegram gateway. Used by the gateway service to spawn
-/// per-agent polling tasks.
-pub async fn list_enabled_telegram_gateways(pool: &DbPool) -> Result<Vec<AgentGatewayRow>> {
+/// List every Telegram gateway with token material. Token presence is the
+/// source of truth for Telegram activation; the persisted enabled flag is
+/// maintained for generic gateway-row compatibility.
+pub async fn list_configured_telegram_gateways(pool: &DbPool) -> Result<Vec<AgentGatewayRow>> {
     let rows = query_as::<_, AgentGatewayRow>(
-        "SELECT agent_key, enabled, config
+        "SELECT agent_key, config
            FROM agent_gateways
-          WHERE gateway_type = $1 AND enabled = TRUE",
+          WHERE gateway_type = $1
+            AND config->>'bot_token_ciphertext' IS NOT NULL
+            AND config->>'bot_token_key_id' IS NOT NULL",
     )
     .bind(GATEWAY_TYPE_TELEGRAM)
     .fetch_all(pool)
     .await
-    .context("failed to list enabled telegram gateways")?;
+    .context("failed to list configured telegram gateways")?;
     Ok(rows)
 }
 
-/// Clear the bound chat identity from a Telegram gateway config, leaving the
-/// encrypted bot token in place. Used by the unlink handler.
-pub async fn clear_telegram_chat(pool: &DbPool, agent_key: &str) -> Result<bool> {
-    let Some(row) = get_gateway(pool, agent_key, GATEWAY_TYPE_TELEGRAM).await? else {
-        return Ok(false);
-    };
-    let mut config = TelegramGatewayConfig::from_value(&row.config);
-    config.chat_id = None;
-    config.chat_username = None;
-    let value = serde_json::to_value(&config).context("failed to serialize telegram config")?;
+/// Remove all Telegram credentials and bindings for an agent.
+pub async fn disconnect_telegram_gateway(pool: &DbPool, agent_key: &str) -> Result<bool> {
+    let value = serde_json::to_value(TelegramGatewayConfig::default())
+        .context("failed to serialize empty telegram config")?;
     let result = sqlx::query(
         "UPDATE agent_gateways
-            SET config = $3
+            SET enabled = FALSE, config = $3
           WHERE agent_key = $1 AND gateway_type = $2",
     )
     .bind(agent_key)
@@ -125,12 +98,12 @@ pub async fn clear_telegram_chat(pool: &DbPool, agent_key: &str) -> Result<bool>
     .bind(value)
     .execute(pool)
     .await
-    .context("failed to clear telegram chat binding")?;
+    .context("failed to disconnect telegram gateway")?;
     Ok(result.rows_affected() > 0)
 }
 
-/// Persist the bound chat identity onto a Telegram gateway config. Used
-/// after the operator confirms the link flow.
+/// Persist the bound chat identity onto a Telegram gateway config. Used when
+/// Telegram receives the `/start` message for a pending link.
 pub async fn set_telegram_chat(
     pool: &DbPool,
     agent_key: &str,
@@ -146,12 +119,13 @@ pub async fn set_telegram_chat(
     let value = serde_json::to_value(&config).context("failed to serialize telegram config")?;
     let result = sqlx::query(
         "UPDATE agent_gateways
-            SET config = $3
+            SET enabled = $4, config = $3
           WHERE agent_key = $1 AND gateway_type = $2",
     )
     .bind(agent_key)
     .bind(GATEWAY_TYPE_TELEGRAM)
     .bind(value)
+    .bind(config.is_ready())
     .execute(pool)
     .await
     .context("failed to persist telegram chat binding")?;
@@ -186,8 +160,16 @@ mod tests {
         .expect("insert agent");
     }
 
+    async fn gateway_enabled(pool: &DbPool, key: &str) -> bool {
+        sqlx::query_scalar("SELECT enabled FROM agent_gateways WHERE agent_key = $1")
+            .bind(key)
+            .fetch_one(pool)
+            .await
+            .expect("read gateway enabled flag")
+    }
+
     #[tokio::test]
-    async fn upsert_telegram_config_creates_disabled_row_then_preserves_enabled_flag() {
+    async fn upsert_telegram_config_enables_gateway_when_token_material_is_present() {
         let pool = test_db::pool().await;
         let key = format!(
             "gateway-upsert-{}",
@@ -201,21 +183,14 @@ mod tests {
             bot_username: Some("testbot".to_string()),
             ..Default::default()
         };
-        let created = upsert_telegram_config(&pool, &key, &config)
+        upsert_telegram_config(&pool, &key, &config)
             .await
             .expect("create telegram config");
-        assert!(!created.enabled);
-
-        set_gateway_enabled(&pool, &key, GATEWAY_TYPE_TELEGRAM, true)
-            .await
-            .expect("enable gateway");
-        let updated = upsert_telegram_config(&pool, &key, &config)
+        assert!(gateway_enabled(&pool, &key).await);
+        upsert_telegram_config(&pool, &key, &config)
             .await
             .expect("update telegram config");
-        assert!(
-            updated.enabled,
-            "enabled flag must be preserved on config update"
-        );
+        assert!(gateway_enabled(&pool, &key).await);
     }
 
     #[tokio::test]
@@ -251,37 +226,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn clear_telegram_chat_preserves_bot_token() {
-        let pool = test_db::pool().await;
-        let key = format!(
-            "gateway-clear-{}",
-            chrono::Utc::now().timestamp_nanos_opt().unwrap_or(0)
-        );
-        seed_agent(&pool, &key).await;
-
-        let config = TelegramGatewayConfig {
-            bot_token_ciphertext: Some(vec![9, 9, 9]),
-            chat_id: Some(42),
-            chat_username: Some("user".to_string()),
-            ..Default::default()
-        };
-        upsert_telegram_config(&pool, &key, &config)
-            .await
-            .expect("create config");
-
-        assert!(clear_telegram_chat(&pool, &key).await.expect("clear chat"));
-        let stored = get_gateway(&pool, &key, GATEWAY_TYPE_TELEGRAM)
-            .await
-            .expect("get gateway")
-            .expect("gateway exists");
-        let telegram = TelegramGatewayConfig::from_value(&stored.config);
-        assert_eq!(telegram.chat_id, None);
-        assert_eq!(telegram.chat_username, None);
-        assert_eq!(telegram.bot_token_ciphertext, Some(vec![9, 9, 9]));
-    }
-
-    #[tokio::test]
-    async fn list_enabled_telegram_gateways_returns_only_enabled_rows() {
+    async fn list_configured_telegram_gateways_returns_only_rows_with_token_material() {
         let pool = test_db::pool().await;
         let key_enabled = format!(
             "gateway-enabled-{}",
@@ -296,22 +241,65 @@ mod tests {
 
         let config = TelegramGatewayConfig {
             bot_token_ciphertext: Some(vec![1, 2, 3]),
+            bot_token_key_id: Some("test".to_string()),
             ..Default::default()
         };
         upsert_telegram_config(&pool, &key_enabled, &config)
             .await
             .expect("create enabled config");
-        upsert_telegram_config(&pool, &key_disabled, &config)
+        upsert_telegram_config(&pool, &key_disabled, &TelegramGatewayConfig::default())
             .await
             .expect("create disabled config");
-        set_gateway_enabled(&pool, &key_enabled, GATEWAY_TYPE_TELEGRAM, true)
-            .await
-            .expect("enable first");
+        sqlx::query(
+            "UPDATE agent_gateways SET enabled = FALSE WHERE agent_key = $1 AND gateway_type = $2",
+        )
+        .bind(&key_enabled)
+        .bind(GATEWAY_TYPE_TELEGRAM)
+        .execute(&pool)
+        .await
+        .expect("disable configured gateway row");
 
-        let rows = list_enabled_telegram_gateways(&pool)
+        let rows = list_configured_telegram_gateways(&pool)
             .await
-            .expect("list enabled");
+            .expect("list configured");
         assert!(rows.iter().any(|row| row.agent_key == key_enabled));
         assert!(!rows.iter().any(|row| row.agent_key == key_disabled));
+    }
+
+    #[tokio::test]
+    async fn disconnect_telegram_gateway_clears_config_and_disables_row() {
+        let pool = test_db::pool().await;
+        let key = format!(
+            "gateway-disconnect-{}",
+            chrono::Utc::now().timestamp_nanos_opt().unwrap_or(0)
+        );
+        seed_agent(&pool, &key).await;
+        let config = TelegramGatewayConfig {
+            bot_token_ciphertext: Some(vec![1, 2, 3]),
+            bot_token_key_id: Some("test".to_string()),
+            chat_id: Some(42),
+            chat_username: Some("user".to_string()),
+            bot_username: Some("bot".to_string()),
+        };
+        upsert_telegram_config(&pool, &key, &config)
+            .await
+            .expect("create config");
+
+        assert!(
+            disconnect_telegram_gateway(&pool, &key)
+                .await
+                .expect("disconnect gateway")
+        );
+        let stored = get_gateway(&pool, &key, GATEWAY_TYPE_TELEGRAM)
+            .await
+            .expect("get gateway")
+            .expect("gateway exists");
+        assert!(!gateway_enabled(&pool, &key).await);
+        let config = TelegramGatewayConfig::from_value(&stored.config);
+        assert!(config.bot_token_ciphertext.is_none());
+        assert!(config.bot_token_key_id.is_none());
+        assert!(config.bot_username.is_none());
+        assert!(config.chat_id.is_none());
+        assert!(config.chat_username.is_none());
     }
 }

@@ -27,6 +27,7 @@ use crate::{
         service::{CONVERSATION_MESSAGE_MAX_CHARS, ConversationService},
     },
     agents::{store::get_agent, strategy_prompts::is_valid_prompt_kind},
+    gateway::{model::TelegramGatewayConfig, store as gateway_store},
     model_catalog::options::parse_model_selection,
     opencode::{client::OpenCodePermissionReply, store::get_session_detail},
     web::{
@@ -98,6 +99,7 @@ struct ConversationSnapshot {
     agent: crate::agents::model::AgentDetailRow,
     conversation: AgentConversationRow,
     conversations: Vec<crate::agent_conversations::model::AgentConversationListRow>,
+    telegram_chat_id: Option<String>,
     session: Option<OpenCodeSessionView>,
     busy: bool,
     settings: AgentConversationSettingsView,
@@ -136,6 +138,20 @@ async fn load_snapshot(
     let conversations =
         crate::agent_conversations::store::list_agent_conversations(&state.db_pool, agent_key)
             .await?;
+    let telegram_chat_id = gateway_store::get_gateway(
+        &state.db_pool,
+        agent_key,
+        crate::gateway::model::GATEWAY_TYPE_TELEGRAM,
+    )
+    .await?
+    .and_then(|row| {
+        let config = TelegramGatewayConfig::from_value(&row.config);
+        if config.is_ready() {
+            config.chat_id.map(|chat_id| chat_id.to_string())
+        } else {
+            None
+        }
+    });
     let session = get_session_detail(&state.db_pool, &conversation.opencode_session_id)
         .await?
         .as_ref()
@@ -184,6 +200,7 @@ async fn load_snapshot(
         agent,
         conversation,
         conversations,
+        telegram_chat_id,
         session,
         busy,
         settings: AgentConversationSettingsView {
@@ -248,7 +265,11 @@ fn render_snapshot(
             .model_variant
             .clone()
             .unwrap_or_default(),
-        conversations: conversation_items(&snapshot.conversations, Some(snapshot.conversation.id)),
+        conversations: conversation_items(
+            &snapshot.conversations,
+            Some(snapshot.conversation.id),
+            snapshot.telegram_chat_id.as_deref(),
+        ),
     }
     .render()?;
     let summary = AgentConversationSummaryPartialTemplate {

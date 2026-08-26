@@ -26,6 +26,26 @@ use super::{account::TradingAccountChoicesView, balance::AccountBalanceView};
 
 pub use crate::gateway::service::GatewayTelegramView;
 
+#[derive(Template)]
+#[template(path = "agents/components/gateway-telegram.html")]
+pub struct TelegramGatewayPartialTemplate {
+    pub agent: AgentDetailRow,
+    pub gateway_telegram: GatewayTelegramView,
+}
+
+impl TelegramGatewayPartialTemplate {
+    pub fn render_view(
+        agent: AgentDetailRow,
+        gateway_telegram: GatewayTelegramView,
+    ) -> Result<String, askama::Error> {
+        Self {
+            agent,
+            gateway_telegram,
+        }
+        .render()
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AgentShowTab {
     Chat,

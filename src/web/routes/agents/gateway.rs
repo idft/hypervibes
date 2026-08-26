@@ -4,7 +4,7 @@ use axum::{
     Form,
     extract::{Path, State},
     http::StatusCode,
-    response::{IntoResponse, Redirect, Response},
+    response::{Html, IntoResponse, Redirect, Response},
 };
 use serde::Deserialize;
 use tracing::warn;
@@ -12,87 +12,55 @@ use uuid::Uuid;
 
 use crate::{
     agents::crypto::encrypt,
+    agents::store::get_agent,
     gateway::{
         self, GATEWAY_TYPE_TELEGRAM,
         model::TelegramGatewayConfig,
         store as gateway_store,
         telegram::{build_bot, fetch_bot_username},
     },
-    web::{AppState, auth::AuthenticatedUser, error::AppError},
+    web::{
+        AppState, auth::AuthenticatedUser, error::AppError,
+        templates::TelegramGatewayPartialTemplate,
+    },
 };
 
 #[derive(Debug, Default, Deserialize)]
-pub(in crate::web::routes) struct ToggleTelegramGatewayForm {
-    #[serde(default)]
-    pub enabled: Option<String>,
-}
-
-impl ToggleTelegramGatewayForm {
-    fn enabled(&self) -> bool {
-        self.enabled.is_some()
-    }
-}
-
-#[derive(Debug, Default, Deserialize)]
-pub(in crate::web::routes) struct UpdateTelegramTokenForm {
+pub(in crate::web::routes) struct AddTelegramTokenForm {
     #[serde(default)]
     pub bot_token: String,
 }
 
-/// `POST /agents/{agent_key}/settings/gateway/telegram/toggle`
-pub(in crate::web::routes) async fn toggle_telegram_gateway(
-    State(state): State<Arc<AppState>>,
-    user: AuthenticatedUser,
-    Path(agent_key): Path<String>,
-    Form(form): Form<ToggleTelegramGatewayForm>,
-) -> Result<Response, AppError> {
-    let _ = user;
-    let existing =
-        gateway_store::get_gateway(&state.db_pool, &agent_key, GATEWAY_TYPE_TELEGRAM).await?;
-    let enabled = form.enabled();
-    match existing {
-        Some(_) => {
-            gateway_store::set_gateway_enabled(
-                &state.db_pool,
-                &agent_key,
-                GATEWAY_TYPE_TELEGRAM,
-                enabled,
-            )
-            .await?;
-        }
-        None => {
-            let config_value = serde_json::to_value(TelegramGatewayConfig::default())?;
-            gateway_store::upsert_gateway(
-                &state.db_pool,
-                &agent_key,
-                GATEWAY_TYPE_TELEGRAM,
-                enabled,
-                &config_value,
-            )
-            .await?;
-        }
-    }
-    Ok(Redirect::to(&format!("/agents/{agent_key}/settings")).into_response())
-}
-
 /// `POST /agents/{agent_key}/settings/gateway/telegram/token`
-pub(in crate::web::routes) async fn update_telegram_token(
+pub(in crate::web::routes) async fn add_telegram_token(
     State(state): State<Arc<AppState>>,
     user: AuthenticatedUser,
     Path(agent_key): Path<String>,
-    Form(form): Form<UpdateTelegramTokenForm>,
+    Form(form): Form<AddTelegramTokenForm>,
 ) -> Result<Response, AppError> {
     let _ = user;
     let token = form.bot_token.trim();
     if token.is_empty() {
         return Ok((StatusCode::BAD_REQUEST, "bot token must not be empty").into_response());
     }
+    if let Some(row) =
+        gateway_store::get_gateway(&state.db_pool, &agent_key, GATEWAY_TYPE_TELEGRAM).await?
+    {
+        let config = TelegramGatewayConfig::from_value(&row.config);
+        if config.is_ready() {
+            return Ok((
+                StatusCode::CONFLICT,
+                "disconnect Telegram before adding a new bot token",
+            )
+                .into_response());
+        }
+    }
     // Validate before changing the stored config. Persisting a rejected token
     // would leave the previous bot username visible while polling fails.
     let bot_username = match fetch_bot_username(&build_bot(token)).await {
         Ok(bot_username) => bot_username,
         Err(error) => {
-            warn!(agent_key = %agent_key, error = ?error, "telegram getMe failed during token update");
+            warn!(agent_key = %agent_key, error = ?error, "telegram getMe failed during token add");
             return Ok((StatusCode::BAD_REQUEST, "Telegram rejected the bot token").into_response());
         }
     };
@@ -117,6 +85,21 @@ pub(in crate::web::routes) async fn update_telegram_token(
     Ok(Redirect::to(&format!("/agents/{agent_key}/settings")).into_response())
 }
 
+/// `GET /agents/{agent_key}/settings/gateway/telegram/status`
+pub(in crate::web::routes) async fn telegram_gateway_status(
+    State(state): State<Arc<AppState>>,
+    user: AuthenticatedUser,
+    Path(agent_key): Path<String>,
+) -> Result<Response, AppError> {
+    let Some(agent) = get_agent(&state.db_pool, &agent_key).await? else {
+        return Ok((StatusCode::NOT_FOUND, "agent not found").into_response());
+    };
+    let gateway_telegram =
+        load_telegram_gateway_view(&state, &agent.agent_key, user.id, None).await;
+    let html = TelegramGatewayPartialTemplate::render_view(agent, gateway_telegram)?;
+    Ok(Html(html).into_response())
+}
+
 /// `POST /agents/{agent_key}/settings/gateway/telegram/link`
 pub(in crate::web::routes) async fn start_telegram_link(
     State(state): State<Arc<AppState>>,
@@ -133,7 +116,7 @@ pub(in crate::web::routes) async fn start_telegram_link(
             .into_response());
     };
     let config = TelegramGatewayConfig::from_value(&gateway.config);
-    if config.bot_username.is_none() {
+    if !config.is_ready() || config.bot_username.is_none() {
         return Ok((
             StatusCode::BAD_REQUEST,
             "telegram bot token is not configured",
@@ -147,21 +130,34 @@ pub(in crate::web::routes) async fn start_telegram_link(
         )
             .into_response());
     };
-    let prior_tokens: Vec<Uuid> = pending_links
+    let token = pending_links
         .iter()
-        .filter(|entry| entry.agent_key == agent_key && entry.user_id == user.id)
-        .map(|entry| *entry.key())
-        .collect();
-    for token in prior_tokens {
-        pending_links.remove(&token);
-    }
-    let link = gateway::model::PendingLink::new(agent_key.clone(), user.id);
-    let token = link.token;
-    pending_links.insert(token, link);
-    Ok(Redirect::to(&format!(
-        "/agents/{agent_key}/settings?gateway_link={token}#telegram-gateway"
-    ))
-    .into_response())
+        .find(|entry| {
+            entry.agent_key == agent_key && entry.user_id == user.id && !entry.is_expired()
+        })
+        .map(|entry| *entry.key());
+    let token = match token {
+        Some(token) => token,
+        None => {
+            let prior_tokens: Vec<Uuid> = pending_links
+                .iter()
+                .filter(|entry| entry.agent_key == agent_key && entry.user_id == user.id)
+                .map(|entry| *entry.key())
+                .collect();
+            for token in prior_tokens {
+                pending_links.remove(&token);
+            }
+            let link = gateway::model::PendingLink::new(agent_key.clone(), user.id);
+            let token = link.token;
+            pending_links.insert(token, link);
+            token
+        }
+    };
+    let bot_username = config
+        .bot_username
+        .as_deref()
+        .expect("validated Telegram bot username");
+    Ok(Redirect::to(&format!("https://t.me/{bot_username}?start={token}")).into_response())
 }
 
 /// `POST /agents/{agent_key}/settings/gateway/telegram/link/{token}/confirm`
@@ -227,14 +223,24 @@ pub(in crate::web::routes) async fn reject_telegram_link(
     Ok(Redirect::to(&format!("/agents/{agent_key}/settings")).into_response())
 }
 
-/// `POST /agents/{agent_key}/settings/gateway/telegram/unlink`
-pub(in crate::web::routes) async fn unlink_telegram_chat(
+/// `POST /agents/{agent_key}/settings/gateway/telegram/disconnect`
+pub(in crate::web::routes) async fn disconnect_telegram_gateway(
     State(state): State<Arc<AppState>>,
     user: AuthenticatedUser,
     Path(agent_key): Path<String>,
 ) -> Result<Response, AppError> {
     let _ = user;
-    gateway_store::clear_telegram_chat(&state.db_pool, &agent_key).await?;
+    if let Some(pending_links) = state.gateway_pending_links.clone() {
+        let tokens: Vec<Uuid> = pending_links
+            .iter()
+            .filter(|entry| entry.agent_key == agent_key)
+            .map(|entry| *entry.key())
+            .collect();
+        for token in tokens {
+            pending_links.remove(&token);
+        }
+    }
+    gateway_store::disconnect_telegram_gateway(&state.db_pool, &agent_key).await?;
     Ok(Redirect::to(&format!("/agents/{agent_key}/settings")).into_response())
 }
 

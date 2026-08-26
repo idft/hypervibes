@@ -143,6 +143,34 @@ describe("agent currency icons", () => {
   });
 });
 
+describe("Telegram gateway", () => {
+  it("opens and closes the disconnect confirmation modal", () => {
+    document.body.innerHTML = `
+      <section data-telegram-gateway>
+        <button type="button" data-telegram-disconnect-trigger>Disconnect</button>
+        <div data-telegram-disconnect-modal class="hidden" aria-hidden="true">
+          <button type="button" data-telegram-disconnect-close>Cancel</button>
+          <button type="button" data-telegram-disconnect-confirm>Disconnect Telegram</button>
+        </div>
+      </section>
+    `;
+
+    initAgentPage();
+    const trigger = document.querySelector<HTMLButtonElement>("[data-telegram-disconnect-trigger]");
+    const modal = document.querySelector<HTMLElement>("[data-telegram-disconnect-modal]");
+    const cancel = modal?.querySelector<HTMLButtonElement>("[data-telegram-disconnect-close]");
+    if (!trigger || !modal || !cancel) throw new Error("Telegram disconnect controls were not rendered");
+
+    trigger.click();
+    expect(modal.classList.contains("hidden")).toBe(false);
+    expect(modal.getAttribute("aria-hidden")).toBe("false");
+
+    cancel.click();
+    expect(modal.classList.contains("hidden")).toBe(true);
+    expect(modal.getAttribute("aria-hidden")).toBe("true");
+  });
+});
+
 describe("job detail modals", () => {
   it("opens, focuses, and closes the additional instructions modal", () => {
     document.body.innerHTML = `

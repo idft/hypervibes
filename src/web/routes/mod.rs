@@ -74,6 +74,10 @@ pub fn router(state: Arc<AppState>) -> Router {
         )
         .route("/agents/{agent_key}/settings", get(agents_show_settings))
         .route(
+            "/agents/{agent_key}/settings/gateway/telegram/status",
+            get(telegram_gateway_status),
+        )
+        .route(
             "/agents/{agent_key}/settings/toggle-enabled",
             post(agents_set_enabled),
         )
@@ -140,12 +144,8 @@ pub fn router(state: Arc<AppState>) -> Router {
             get(agents_workspace_maintenance_status),
         )
         .route(
-            "/agents/{agent_key}/settings/gateway/telegram/toggle",
-            post(toggle_telegram_gateway),
-        )
-        .route(
             "/agents/{agent_key}/settings/gateway/telegram/token",
-            post(update_telegram_token),
+            post(add_telegram_token),
         )
         .route(
             "/agents/{agent_key}/settings/gateway/telegram/link",
@@ -160,8 +160,8 @@ pub fn router(state: Arc<AppState>) -> Router {
             post(reject_telegram_link),
         )
         .route(
-            "/agents/{agent_key}/settings/gateway/telegram/unlink",
-            post(unlink_telegram_chat),
+            "/agents/{agent_key}/settings/gateway/telegram/disconnect",
+            post(disconnect_telegram_gateway),
         )
         .route(
             "/agents/{agent_key}/sub-agents",

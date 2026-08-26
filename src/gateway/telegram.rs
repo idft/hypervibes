@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use teloxide::{
     prelude::*,
-    types::{AllowedUpdate, ChatId, InlineKeyboardButton, InlineKeyboardMarkup, ParseMode, User},
+    types::{AllowedUpdate, ChatId, InlineKeyboardButton, InlineKeyboardMarkup, ParseMode},
     utils::command::BotCommands,
 };
 
@@ -154,20 +154,6 @@ pub fn parse_command(text: &str, bot_username: &str) -> Result<Option<GatewayCom
     }
 }
 
-/// Convert a [`User`] into a display name suitable for the pending link
-/// record. Prefers the `@username`, then "First Last", then "First", then
-/// the numeric user id.
-pub fn user_display_name(user: &User) -> String {
-    if let Some(username) = user.username.as_deref() {
-        return format!("@{username}");
-    }
-    let first = user.first_name.as_str();
-    if let Some(last) = user.last_name.as_deref() {
-        return format!("{first} {last}");
-    }
-    first.to_string()
-}
-
 /// Determine whether a Telegram chat id is authorized to send messages to
 /// the bot for a given gateway config.
 pub fn is_authorized_chat(config: &TelegramGatewayConfig, chat_id: i64) -> bool {
@@ -177,20 +163,6 @@ pub fn is_authorized_chat(config: &TelegramGatewayConfig, chat_id: i64) -> bool 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use teloxide::types::UserId;
-
-    fn user(username: Option<&str>, first: &str, last: Option<&str>) -> User {
-        User {
-            id: UserId(1),
-            is_bot: false,
-            first_name: first.to_string(),
-            last_name: last.map(ToString::to_string),
-            username: username.map(ToString::to_string),
-            language_code: None,
-            is_premium: false,
-            added_to_attachment_menu: false,
-        }
-    }
 
     #[test]
     fn extract_start_payload_returns_token_when_present() {
@@ -240,24 +212,6 @@ mod tests {
             }
             other => panic!("expected Model, got {other:?}"),
         }
-    }
-
-    #[test]
-    fn user_display_name_prefers_username() {
-        let u = user(Some("alice"), "Alice", Some("Smith"));
-        assert_eq!(user_display_name(&u), "@alice");
-    }
-
-    #[test]
-    fn user_display_name_falls_back_to_first_last() {
-        let u = user(None, "Alice", Some("Smith"));
-        assert_eq!(user_display_name(&u), "Alice Smith");
-    }
-
-    #[test]
-    fn user_display_name_falls_back_to_first_only() {
-        let u = user(None, "Alice", None);
-        assert_eq!(user_display_name(&u), "Alice");
     }
 
     #[test]

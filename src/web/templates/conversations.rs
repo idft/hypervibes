@@ -2,7 +2,8 @@ use askama::Template;
 use uuid::Uuid;
 
 use crate::{
-    agent_conversations::model::AgentConversationListRow, agents::model::AgentDetailRow,
+    agent_conversations::model::{AgentConversationListRow, CONVERSATION_CHANNEL_TELEGRAM},
+    agents::model::AgentDetailRow,
     opencode::client::OpenCodePermissionRequest,
 };
 
@@ -15,15 +16,24 @@ use super::{
 #[derive(Debug, Clone)]
 pub struct AgentConversationListItemView {
     pub title: String,
+    pub is_telegram: bool,
     pub model_text: String,
     pub status_text: String,
     pub selected: bool,
     pub href: String,
 }
 impl AgentConversationListItemView {
-    pub fn from_row(row: &AgentConversationListRow, selected: Option<Uuid>) -> Self {
+    pub fn from_row(
+        row: &AgentConversationListRow,
+        selected: Option<Uuid>,
+        linked_telegram_chat_id: Option<&str>,
+    ) -> Self {
         Self {
             title: row.title.clone(),
+            is_telegram: linked_telegram_chat_id.is_some_and(|chat_id| {
+                row.channel == CONVERSATION_CHANNEL_TELEGRAM
+                    && row.external_conversation_key.as_deref() == Some(chat_id)
+            }),
             model_text: match row.model_variant.as_deref() {
                 Some(variant) => format!("{}/{} - {variant}", row.model_provider_id, row.model_id),
                 None => format!("{}/{}", row.model_provider_id, row.model_id),
@@ -209,9 +219,10 @@ impl AgentConversationEmptyPageTemplate {
 pub fn conversation_items(
     conversations: &[AgentConversationListRow],
     selected: Option<Uuid>,
+    linked_telegram_chat_id: Option<&str>,
 ) -> Vec<AgentConversationListItemView> {
     conversations
         .iter()
-        .map(|row| AgentConversationListItemView::from_row(row, selected))
+        .map(|row| AgentConversationListItemView::from_row(row, selected, linked_telegram_chat_id))
         .collect()
 }

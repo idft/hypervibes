@@ -10,7 +10,6 @@ const PENDING_LINK_TTL: Duration = Duration::from_secs(600);
 #[derive(Debug, Clone, sqlx::FromRow)]
 pub struct AgentGatewayRow {
     pub agent_key: String,
-    pub enabled: bool,
     pub config: serde_json::Value,
 }
 
@@ -68,8 +67,8 @@ pub struct TelegramGatewayConfigView {
 }
 
 /// In-memory pending link entry created when an operator starts the Telegram
-/// chat-binding flow. The token is returned to the operator as a deep link
-/// and must be confirmed in the web UI before it expires.
+/// chat-binding flow. The token is returned to the operator as a deep link and
+/// is consumed when Telegram receives the `/start` message.
 #[derive(Debug, Clone)]
 pub struct PendingLink {
     pub token: Uuid,
@@ -77,7 +76,6 @@ pub struct PendingLink {
     pub user_id: Uuid,
     pub chat_id: Option<i64>,
     pub chat_username: Option<String>,
-    pub chat_display_name: Option<String>,
     pub created_at: Instant,
 }
 
@@ -89,7 +87,6 @@ impl PendingLink {
             user_id,
             chat_id: None,
             chat_username: None,
-            chat_display_name: None,
             created_at: Instant::now(),
         }
     }

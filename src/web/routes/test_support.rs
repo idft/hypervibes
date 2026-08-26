@@ -134,8 +134,8 @@ pub(in crate::web::routes) async fn test_state_with_referral_exchange(
 }
 
 /// Build a test state whose `gateway_pending_links` map is wired to the
-/// returned `Arc<DashMap<...>>` so gateway route tests can drive the full
-/// Telegram link flow (start, confirm, reject) through the HTTP router.
+/// returned `Arc<DashMap<...>>` so gateway route tests can drive the Telegram
+/// link flow (start and reject) through the HTTP router.
 pub(in crate::web::routes) async fn test_state_with_gateway_pending_links() -> (
     Arc<AppState>,
     Arc<dashmap::DashMap<uuid::Uuid, crate::gateway::model::PendingLink>>,

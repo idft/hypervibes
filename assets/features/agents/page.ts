@@ -245,7 +245,36 @@ function initNewJobForm(root: ParentNode) {
   sync();
 }
 
-export function initAgentPage(root: ParentNode = document) { initAgentCreation(root); initPromptEditor(root); initInstrumentSelectors(root); initClickableRows(root); initInlineEditors(root); initJobDetailModals(root); initWorkspaceModal(root); initNewJobForm(root); }
+function initTelegramGateway(root: ParentNode) {
+  const gateway = root instanceof HTMLElement && root.matches("[data-telegram-gateway]")
+    ? root
+    : root.querySelector<HTMLElement>("[data-telegram-gateway]");
+  const modal = gateway?.querySelector<HTMLElement>("[data-telegram-disconnect-modal]");
+  const trigger = gateway?.querySelector<HTMLButtonElement>("[data-telegram-disconnect-trigger]");
+  const confirm = modal?.querySelector<HTMLButtonElement>("[data-telegram-disconnect-confirm]");
+  if (!gateway || !modal || !trigger || !confirm || modal.dataset.bound === "true") return;
+  modal.dataset.bound = "true";
+  const close = () => {
+    modal.classList.add("hidden");
+    modal.classList.remove("flex");
+    modal.setAttribute("aria-hidden", "true");
+    document.body.classList.remove("overflow-hidden");
+    trigger.focus();
+  };
+  const open = () => {
+    modal.classList.remove("hidden");
+    modal.classList.add("flex");
+    modal.setAttribute("aria-hidden", "false");
+    document.body.classList.add("overflow-hidden");
+    confirm.focus();
+  };
+  trigger.addEventListener("click", open);
+  modal.querySelectorAll<HTMLElement>("[data-telegram-disconnect-close]").forEach((button) => button.addEventListener("click", close));
+  modal.addEventListener("click", (event) => { if (event.target === modal) close(); });
+  modal.addEventListener("keydown", (event) => { if (event.key === "Escape") { event.preventDefault(); close(); } });
+}
+
+export function initAgentPage(root: ParentNode = document) { initAgentCreation(root); initPromptEditor(root); initInstrumentSelectors(root); initClickableRows(root); initInlineEditors(root); initJobDetailModals(root); initWorkspaceModal(root); initNewJobForm(root); initTelegramGateway(root); }
 export function installAgentPageLifecycle() {
   installAgentModals();
   document.addEventListener("click", (event) => {

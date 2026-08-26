@@ -33,7 +33,7 @@ use crate::{
         telegram::{
             CALLBACK_PERMISSION, CALLBACK_SWITCH, GatewayCommand, allowed_updates, build_bot,
             edit_permission_message, extract_start_payload, is_authorized_chat, parse_command,
-            send_approval_keyboard, send_conversation_switcher, user_display_name,
+            send_approval_keyboard, send_conversation_switcher,
         },
     },
     harness::in_flight::InFlightTracker,
@@ -55,7 +55,7 @@ const TELEGRAM_TYPING_REFRESH_INTERVAL: Duration = Duration::from_secs(4);
 const TELEGRAM_MESSAGE_MAX_CHARS: usize = 4096;
 const NOTIFICATION_CHANNEL: &str = "notification_created";
 
-/// Supervises one background polling task per enabled Telegram gateway. Also
+/// Supervises one background polling task per configured Telegram gateway. Also
 /// listens for notification events and dispatches them to the bound chat for
 /// each gateway.
 pub struct GatewayService {
@@ -102,7 +102,7 @@ impl GatewayService {
     }
 
     /// Run the supervisor loop until shutdown, spawning one polling task per
-    /// enabled Telegram gateway and one notification dispatcher task. Returns
+    /// configured Telegram gateway and one notification dispatcher task. Returns
     /// `Ok(())` on graceful shutdown.
     pub async fn run(mut self) -> Result<()> {
         info!("gateway service starting");
@@ -114,12 +114,12 @@ impl GatewayService {
                 break;
             }
 
-            match gateway_store::list_enabled_telegram_gateways(&self.pool).await {
+            match gateway_store::list_configured_telegram_gateways(&self.pool).await {
                 Ok(rows) => {
                     self.reconcile_telegram_tasks(&mut tasks, rows).await;
                 }
                 Err(error) => {
-                    error!(error = ?error, "gateway service failed to load enabled gateways");
+                    error!(error = ?error, "gateway service failed to load configured gateways");
                 }
             }
 
@@ -169,7 +169,7 @@ impl GatewayService {
             if !config.is_ready() {
                 warn!(
                     agent_key = %row.agent_key,
-                    "enabled telegram gateway is missing bot token material; skipping"
+                    "configured telegram gateway is missing bot token material; skipping"
                 );
                 continue;
             }
@@ -469,7 +469,7 @@ impl GatewayServiceState {
             return Ok(());
         };
         let existing = self.pending_links.get(&parsed).map(|entry| entry.clone());
-        let Some(mut link) = existing else {
+        let Some(link) = existing else {
             bot.send_message(
                 chat_id,
                 "This link token is unknown or has expired. Start a new link from the web UI.",
@@ -499,13 +499,26 @@ impl GatewayServiceState {
             .ok();
             return Ok(());
         }
-        link.chat_id = Some(chat_id.0);
-        link.chat_username = sender.username.clone();
-        link.chat_display_name = Some(user_display_name(&sender));
-        self.pending_links.insert(parsed, link);
+        let linked = gateway_store::set_telegram_chat(
+            &self.pool,
+            agent_key,
+            chat_id.0,
+            sender.username.as_deref(),
+        )
+        .await?;
+        if !linked {
+            bot.send_message(
+                chat_id,
+                "This Telegram gateway is no longer configured. Start a new link from the web UI.",
+            )
+            .await
+            .ok();
+            return Ok(());
+        }
+        let _ = self.pending_links.remove(&parsed);
         bot.send_message(
             chat_id,
-            "Link token received. Return to the HyperVibes web UI and confirm the link.",
+            "Telegram chat linked. You can now use this chat with HyperVibes.",
         )
         .await
         .ok();
@@ -1393,7 +1406,8 @@ fn telegram_new_session_message(provider_id: &str, model_id: &str) -> String {
 /// when a flow is in progress.
 #[derive(Debug, Clone)]
 pub struct GatewayTelegramView {
-    pub enabled: bool,
+    pub has_token: bool,
+    pub connected: bool,
     pub config: TelegramGatewayConfigView,
     pub pending_token: Option<Uuid>,
 }
@@ -1405,7 +1419,8 @@ impl GatewayTelegramView {
     pub fn from_row(row: &AgentGatewayRow, pending_token: Option<Uuid>) -> Self {
         let config = TelegramGatewayConfig::from_value(&row.config);
         Self {
-            enabled: row.enabled,
+            has_token: config.is_ready(),
+            connected: config.is_ready() && config.chat_id.is_some(),
             config: config.to_view(),
             pending_token,
         }
@@ -1414,7 +1429,8 @@ impl GatewayTelegramView {
     /// Empty view used when the agent has no gateway row yet.
     pub fn empty() -> Self {
         Self {
-            enabled: false,
+            has_token: false,
+            connected: false,
             config: TelegramGatewayConfigView::default(),
             pending_token: None,
         }
@@ -1640,21 +1656,14 @@ mod tests {
         gateway_store::upsert_telegram_config(&pool, &key, &config)
             .await
             .expect("upsert config");
-        gateway_store::set_gateway_enabled(
-            &pool,
-            &key,
-            crate::gateway::model::GATEWAY_TYPE_TELEGRAM,
-            true,
-        )
-        .await
-        .expect("enable gateway");
         let row =
             gateway_store::get_gateway(&pool, &key, crate::gateway::model::GATEWAY_TYPE_TELEGRAM)
                 .await
                 .expect("get gateway")
                 .expect("gateway exists");
         let view = GatewayTelegramView::from_row(&row, None);
-        assert!(view.enabled);
+        assert!(view.has_token);
+        assert!(view.connected);
         assert_eq!(view.config.bot_username.as_deref(), Some("mybot"));
         assert_eq!(view.config.chat_id, Some(42));
         assert_eq!(view.config.chat_username.as_deref(), Some("user"));
@@ -1666,7 +1675,8 @@ mod tests {
     #[tokio::test]
     async fn gateway_telegram_view_empty_is_disabled() {
         let view = GatewayTelegramView::empty();
-        assert!(!view.enabled);
+        assert!(!view.has_token);
+        assert!(!view.connected);
         assert!(view.config.bot_username.is_none());
         assert!(view.config.chat_id.is_none());
     }

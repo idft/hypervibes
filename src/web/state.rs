@@ -51,8 +51,8 @@ pub struct AppState {
     pub shutdown_rx: tokio::sync::watch::Receiver<bool>,
     pub provider_connections: ProviderConnectionsState,
     /// Pending Telegram link tokens shared between the HTTP settings routes
-    /// (which create/confirm/reject tokens) and the `GatewayService`
-    /// supervisor (which consumes `/start` payloads from Telegram).
+    /// (which create/reject tokens) and the `GatewayService` supervisor (which
+    /// consumes `/start` payloads from Telegram).
     /// `None` when the gateway service is not running, such as in tests.
     pub gateway_pending_links: Option<Arc<DashMap<Uuid, PendingLink>>>,
 }

@@ -1,66 +1,31 @@
-<section id="telegram-gateway" class="rounded-2xl border border-zinc-800 bg-[#0d0d10] p-6">
-    <h2 class="text-lg font-medium text-white">Telegram gateway</h2>
-    <p class="mt-1 text-sm text-zinc-400">Link a Telegram chat to this agent so the agent's operator can chat with it and receive notifications outside the web UI.</p>
+<section id="telegram-gateway" data-telegram-gateway class="rounded-2xl border border-zinc-800 bg-[#0d0d10] p-6"{% if gateway_telegram.has_token && !gateway_telegram.connected %} hx-get="/agents/{{ agent.agent_key }}/settings/gateway/telegram/status" hx-trigger="every 2s" hx-target="#telegram-gateway" hx-swap="outerHTML"{% endif %}>
+    <h2 class="flex items-center gap-2 text-lg font-medium text-white"><img src="/static/telegram.svg" alt="" aria-hidden="true" class="h-5 w-5 rounded-full">Telegram gateway</h2>
 
-    <div class="mt-4">
-        <form action="/agents/{{ agent.agent_key }}/settings/gateway/telegram/toggle" method="post" class="flex items-center gap-3">
-            <label class="inline-flex items-center gap-2 text-sm text-zinc-300">
-                <input type="checkbox" name="enabled" value="on" {% if gateway_telegram.enabled %}checked{% endif %} class="h-4 w-4 rounded border-zinc-700 bg-zinc-950 text-white">
-                Enable Telegram gateway
-            </label>
-            <button type="submit" class="cursor-pointer rounded-full border border-zinc-700 bg-zinc-900/70 px-4 py-2 text-sm font-medium text-zinc-200 hover:border-zinc-600 hover:bg-zinc-800 hover:text-white">Save</button>
-        </form>
+    {% if gateway_telegram.connected %}
+    <div class="mt-6 flex flex-col gap-4 rounded-xl border border-emerald-900/60 bg-emerald-950/20 p-4 sm:flex-row sm:items-center sm:justify-between">
+        <p class="text-sm text-zinc-300">
+            Linked to:
+            {% if let Some(chat_username) = gateway_telegram.config.chat_username %}<span class="font-mono text-emerald-200">@{{ chat_username }}</span>{% else %}<span class="font-mono text-emerald-200">chat</span>{% endif %}
+            {% if let Some(chat_id) = gateway_telegram.config.chat_id %}<span class="text-zinc-500">(chat id {{ chat_id }})</span>{% endif %}
+        </p>
+        <button type="button" data-telegram-disconnect-trigger class="cursor-pointer rounded-full border border-red-900/60 bg-red-950/30 px-4 py-2 text-sm font-medium text-red-300 hover:border-red-800 hover:bg-red-950/50">Disconnect</button>
     </div>
-
-    {% if gateway_telegram.enabled %}
+    {% else if gateway_telegram.has_token %}
     <div class="mt-6">
-        <h3 class="text-sm font-medium text-zinc-200">Bot token</h3>
-        <p class="mt-1 text-xs text-zinc-500">Paste the bot token from <a href="https://t.me/BotFather" target="_blank" rel="noopener noreferrer" class="text-violet-300 hover:text-violet-200">@BotFather</a>. The token is encrypted at rest and never rendered back to the UI.</p>
+        {% if let Some(bot_username) = gateway_telegram.config.bot_username %}<p class="text-sm text-zinc-300">Bot: <span class="font-mono text-zinc-200">@{{ bot_username }}</span></p>{% endif %}
+        <p class="mt-2 text-sm text-zinc-400">No Telegram chat is linked yet.</p>
         {% if let Some(bot_username) = gateway_telegram.config.bot_username %}
-        <p class="mt-3 text-xs text-zinc-500">Bot username: <span class="font-mono text-zinc-300">@{{ bot_username }}</span></p>
-        <details class="mt-3">
-            <summary class="cursor-pointer text-sm font-medium text-violet-300 hover:text-violet-200">Update token</summary>
-            <form action="/agents/{{ agent.agent_key }}/settings/gateway/telegram/token" method="post" class="mt-3 flex flex-col gap-3 sm:flex-row sm:items-center">
-                <label class="sr-only" for="telegram-bot-token">New Telegram bot token</label>
-                <input id="telegram-bot-token" type="password" name="bot_token" placeholder="123456:ABC-DEF..." autocomplete="off" class="w-full rounded-xl border border-zinc-800 bg-zinc-950 px-4 py-2.5 font-mono text-sm text-zinc-200 outline-none placeholder:text-zinc-600 focus:border-zinc-700 sm:max-w-md">
-                <button type="submit" class="cursor-pointer rounded-full border border-zinc-700 bg-zinc-900/70 px-4 py-2 text-sm font-medium text-zinc-200 hover:border-zinc-600 hover:bg-zinc-800 hover:text-white">Save token</button>
-            </form>
-        </details>
-        {% else %}
-        <form action="/agents/{{ agent.agent_key }}/settings/gateway/telegram/token" method="post" class="mt-3 flex flex-col gap-3 sm:flex-row sm:items-center">
-            <label class="sr-only" for="telegram-bot-token">Bot token</label>
-            <input id="telegram-bot-token" type="password" name="bot_token" placeholder="123456:ABC-DEF..." autocomplete="off" class="w-full rounded-xl border border-zinc-800 bg-zinc-950 px-4 py-2.5 font-mono text-sm text-zinc-200 outline-none placeholder:text-zinc-600 focus:border-zinc-700 sm:max-w-md">
-            <button type="submit" class="cursor-pointer rounded-full border border-zinc-700 bg-zinc-900/70 px-4 py-2 text-sm font-medium text-zinc-200 hover:border-zinc-600 hover:bg-zinc-800 hover:text-white">Save token</button>
+        {% if gateway_telegram.pending_token.is_none() %}
+        <form action="/agents/{{ agent.agent_key }}/settings/gateway/telegram/link" method="post" class="mt-3 flex flex-col gap-3 sm:flex-row sm:items-center">
+            <p class="text-xs text-zinc-500">Click <em>Connect Telegram</em> to open a secure link and tap Start. The connection completes automatically.</p>
+            <button type="submit" formtarget="_blank" class="cursor-pointer rounded-full bg-violet-600 px-4 py-2 text-sm font-medium text-white hover:bg-violet-500">Connect Telegram</button>
         </form>
         {% endif %}
-    </div>
-
-    <div class="mt-6">
-        <h3 class="text-sm font-medium text-zinc-200">Chat binding</h3>
-        {% if let Some(chat_id) = gateway_telegram.config.chat_id %}
-        <p class="mt-1 text-sm text-zinc-300">
-            Linked to
-            {% if let Some(chat_username) = gateway_telegram.config.chat_username %}<span class="font-mono">@{{ chat_username }}</span>{% endif %}
-            <span class="text-zinc-500">(chat id {{ chat_id }})</span>
-        </p>
-        <form action="/agents/{{ agent.agent_key }}/settings/gateway/telegram/unlink" method="post" class="mt-3">
-            <button type="submit" class="cursor-pointer rounded-full border border-red-900/60 bg-red-950/30 px-4 py-2 text-sm font-medium text-red-300 hover:border-red-800 hover:bg-red-950/50">Unlink chat</button>
-        </form>
-        {% else %}
-        <p class="mt-1 text-sm text-zinc-400">No Telegram chat is linked yet.</p>
-        {% if let Some(bot_username) = gateway_telegram.config.bot_username %}
-        <form action="/agents/{{ agent.agent_key }}/settings/gateway/telegram/link" method="post" class="mt-3 flex flex-col gap-3 sm:flex-row sm:items-center">
-            <p class="text-xs text-zinc-500">Click <em>Start link</em>, open the Telegram deep link from the confirmation page, and confirm the link here after the bot replies.</p>
-            <button type="submit" class="cursor-pointer rounded-full bg-violet-600 px-4 py-2 text-sm font-medium text-white hover:bg-violet-500">Start link</button>
-        </form>
         {% if let Some(token) = gateway_telegram.pending_token %}
         <div class="mt-4 rounded-xl border border-violet-900/60 bg-violet-950/20 px-4 py-3 text-sm text-violet-200">
-            <p>Pending link. Open <a href="https://t.me/{{ bot_username }}?start={{ token }}" target="_blank" rel="noopener noreferrer" class="text-violet-200 underline hover:text-white">@{{ bot_username }}</a> and tap Start so Telegram sends the link code, then confirm below.</p>
+            <p>Pending link. Click <a href="https://t.me/{{ bot_username }}?start={{ token }}" target="_blank" rel="noopener noreferrer" class="text-violet-200 underline hover:text-white">Connect Telegram</a> and tap Start. The connection completes automatically.</p>
             <div class="mt-3 flex flex-col gap-2 sm:flex-row">
-                <a href="https://t.me/{{ bot_username }}?start={{ token }}" target="_blank" rel="noopener noreferrer" class="cursor-pointer rounded-full bg-violet-600 px-4 py-2 text-center text-sm font-medium text-white hover:bg-violet-500">Open Telegram</a>
-                <form action="/agents/{{ agent.agent_key }}/settings/gateway/telegram/link/{{ token }}/confirm" method="post">
-                    <button type="submit" class="cursor-pointer rounded-full border border-violet-900/60 bg-violet-950/30 px-4 py-2 text-sm font-medium text-violet-200 hover:border-violet-800 hover:bg-violet-950/50">Confirm link</button>
-                </form>
+                <a href="https://t.me/{{ bot_username }}?start={{ token }}" target="_blank" rel="noopener noreferrer" class="cursor-pointer rounded-full bg-violet-600 px-4 py-2 text-center text-sm font-medium text-white hover:bg-violet-500">Connect Telegram</a>
                 <form action="/agents/{{ agent.agent_key }}/settings/gateway/telegram/link/{{ token }}/reject" method="post">
                     <button type="submit" class="cursor-pointer rounded-full border border-zinc-700 bg-zinc-900/70 px-4 py-2 text-sm font-medium text-zinc-200 hover:border-zinc-600 hover:bg-zinc-800 hover:text-white">Cancel</button>
                 </form>
@@ -68,9 +33,35 @@
         </div>
         {% endif %}
         {% else %}
-        <p class="mt-2 text-xs text-amber-300">Add a bot token above before linking a chat.</p>
+        <p class="mt-2 text-xs text-amber-300">The Telegram bot username is unavailable. Disconnect and add the token again.</p>
         {% endif %}
+        {% if gateway_telegram.pending_token.is_none() %}
+        <button type="button" data-telegram-disconnect-trigger class="mt-4 cursor-pointer rounded-full border border-red-900/60 bg-red-950/30 px-4 py-2 text-sm font-medium text-red-300 hover:border-red-800 hover:bg-red-950/50">Disconnect</button>
         {% endif %}
     </div>
+    {% else %}
+    <div class="mt-6">
+        <h3 class="text-sm font-medium text-zinc-200">Bot token</h3>
+        <p class="mt-1 text-xs text-zinc-500">Paste the bot token from <a href="https://t.me/BotFather" target="_blank" rel="noopener noreferrer" class="text-violet-300 hover:text-violet-200">@BotFather</a>. The token is encrypted at rest and never rendered back to the UI.</p>
+        <form action="/agents/{{ agent.agent_key }}/settings/gateway/telegram/token" method="post" class="mt-3 flex flex-col gap-3 sm:flex-row sm:items-center">
+            <label class="sr-only" for="telegram-bot-token">Bot token</label>
+            <input id="telegram-bot-token" type="password" name="bot_token" placeholder="123456:ABC-DEF..." autocomplete="off" class="w-full rounded-xl border border-zinc-800 bg-zinc-950 px-4 py-2.5 font-mono text-sm text-zinc-200 outline-none placeholder:text-zinc-600 focus:border-zinc-700 sm:max-w-md">
+            <button type="submit" class="cursor-pointer rounded-full border border-zinc-700 bg-zinc-900/70 px-4 py-2 text-sm font-medium text-zinc-200 hover:border-zinc-600 hover:bg-zinc-800 hover:text-white">Connect</button>
+        </form>
+    </div>
     {% endif %}
+
+    <div data-telegram-disconnect-modal class="fixed inset-0 z-50 hidden items-center justify-center bg-black/70 px-4 backdrop-blur-sm" aria-hidden="true" aria-labelledby="telegram-disconnect-modal-title" aria-modal="true" role="dialog">
+        <button type="button" data-telegram-disconnect-close class="absolute inset-0 cursor-pointer" aria-label="Close Telegram disconnect dialog"></button>
+        <div class="relative w-full max-w-md rounded-2xl border border-zinc-800 bg-[#0d0d10] p-6 shadow-2xl">
+            <h3 id="telegram-disconnect-modal-title" class="text-lg font-semibold text-white">Disconnect Telegram</h3>
+            <p class="mt-2 text-sm leading-6 text-zinc-400">Disconnect this Telegram bot? Its bot token, chat binding, and pending link requests will be removed. Existing conversations and messages will be kept. You can add a new bot token afterward.</p>
+            <div class="mt-6 flex flex-col-reverse gap-3 sm:flex-row sm:justify-end">
+                <button type="button" data-telegram-disconnect-close class="w-full cursor-pointer rounded-full border border-zinc-800 px-4 py-2 text-sm font-medium text-zinc-300 hover:border-zinc-700 hover:text-white sm:w-auto">Cancel</button>
+                <form action="/agents/{{ agent.agent_key }}/settings/gateway/telegram/disconnect" method="post" class="w-full sm:w-auto">
+                    <button type="submit" data-telegram-disconnect-confirm class="w-full cursor-pointer rounded-full bg-red-600 px-4 py-2 text-sm font-medium text-white hover:bg-red-500 sm:w-auto">Disconnect Telegram</button>
+                </form>
+            </div>
+        </div>
+    </div>
 </section>

@@ -2,7 +2,7 @@
     <form action="/agents/{{ agent_key }}/chat/conversations" method="post" class="mb-3"><input type="hidden" name="model_selection" value="{{ new_conversation_model_selection }}"><input type="hidden" name="model_variant" value="{{ new_conversation_model_variant }}"><button class="inline-flex w-full cursor-pointer items-center justify-center rounded-full border border-sky-900/60 bg-sky-950/30 px-3 py-2 text-sm font-medium text-sky-300 hover:border-sky-800 hover:bg-sky-950/50 hover:text-sky-200">New conversation</button></form>
     <div class="dark-scrollbar min-h-0 flex-1 space-y-1 overflow-y-auto">
     {% for conversation in conversations %}
-        <a href="{{ conversation.href }}" class="block cursor-pointer rounded-2xl p-3 {% if conversation.selected %}bg-zinc-800{% else %}hover:bg-zinc-900{% endif %}"><p class="truncate text-sm text-zinc-100">{{ conversation.title }}</p><p class="mt-1 truncate font-mono text-xs text-zinc-500">{{ conversation.model_text }}</p><p class="mt-1 text-xs text-zinc-500">{{ conversation.status_text }}</p></a>
+        <a href="{{ conversation.href }}" class="block cursor-pointer rounded-2xl p-3 {% if conversation.selected %}bg-zinc-800{% else %}hover:bg-zinc-900{% endif %}"><div class="flex min-w-0 items-center gap-2"><p class="min-w-0 flex-1 truncate text-sm text-zinc-100">{{ conversation.title }}</p>{% if conversation.is_telegram %}<img src="/static/telegram.svg" alt="Telegram" title="Telegram" class="h-4 w-4 shrink-0 rounded-full">{% endif %}</div><p class="mt-1 truncate font-mono text-xs text-zinc-500">{{ conversation.model_text }}</p><p class="mt-1 text-xs text-zinc-500">{{ conversation.status_text }}</p></a>
     {% endfor %}
     </div>
 </div>
