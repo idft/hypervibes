@@ -127,6 +127,7 @@ class HyperVibesMcpServerTests(unittest.TestCase):
                 "submit_orders",
                 "cancel_orders",
                 "cancel_all_orders",
+                "send_notification",
                 "coding_validate_candidate",
                 "coding_submit_report",
             }.issubset(registered)
@@ -612,7 +613,7 @@ class HyperVibesMcpServerTests(unittest.TestCase):
         self.assertIn("[redacted]", str(ctx.exception))
 
     def test_send_notification_posts_to_notifications_endpoint(self) -> None:
-        captured: dict[str, object] = {}
+        captured: dict[str, Any] = {}
 
         def fake_request(method, path, *, params=None, json_body=None):
             captured["method"] = method
@@ -639,7 +640,7 @@ class HyperVibesMcpServerTests(unittest.TestCase):
         self.assertEqual(result["id"], "00000000-0000-0000-0000-000000000000")
 
     def test_send_notification_defaults_severity_to_info(self) -> None:
-        captured: dict[str, object] = {}
+        captured: dict[str, Any] = {}
 
         def fake_request(method, path, *, params=None, json_body=None):
             captured["json_body"] = json_body

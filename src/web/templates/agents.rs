@@ -12,6 +12,7 @@ use crate::{
     },
     memory::MemoryRecord,
     model_catalog::options::ModelPickerOption,
+    notifications::model::NotificationHistoryRow,
 };
 
 use super::memories::{
@@ -21,6 +22,7 @@ use super::memories::{
 use super::navbar::Navbar;
 use super::opencode::OpenCodeWorkspaceSettingsView;
 use super::runs::HarnessSubAgentRunView;
+use super::shared::{LocalTimestampView, local_timestamp_view, optional_local_timestamp_view};
 use super::sub_agents::HarnessSubAgentView;
 use super::{account::TradingAccountChoicesView, balance::AccountBalanceView};
 
@@ -50,6 +52,7 @@ impl TelegramGatewayPartialTemplate {
 pub enum AgentShowTab {
     Chat,
     Positions,
+    Notifications,
     Transactions,
     Memories,
     Prompts,
@@ -63,6 +66,7 @@ impl AgentShowTab {
         match self {
             Self::Chat => format!("/agents/{agent_key}/chat"),
             Self::Positions => format!("/agents/{agent_key}"),
+            Self::Notifications => format!("/agents/{agent_key}/notifications"),
             Self::Transactions => format!("/agents/{agent_key}/transactions"),
             Self::Memories => format!("/agents/{agent_key}/memories"),
             Self::Prompts => format!("/agents/{agent_key}/prompts"),
@@ -87,6 +91,7 @@ pub fn build_agent_show_tabs(
     let agent_key = agent.agent_key.as_str();
     [
         ("Positions", AgentShowTab::Positions),
+        ("Notifications", AgentShowTab::Notifications),
         ("Chat", AgentShowTab::Chat),
         ("Transactions", AgentShowTab::Transactions),
         ("Memories", AgentShowTab::Memories),
@@ -281,6 +286,53 @@ pub struct PromptEditorView {
     pub default_prompt: &'static str,
 }
 
+#[derive(Debug, Clone)]
+pub struct AgentNotificationView {
+    pub id: uuid::Uuid,
+    pub title: String,
+    pub body: String,
+    pub severity: String,
+    pub severity_class: &'static str,
+    pub status: String,
+    pub status_class: &'static str,
+    pub created_at: LocalTimestampView,
+    pub sent_at: Option<LocalTimestampView>,
+    pub error: Option<String>,
+}
+
+impl From<NotificationHistoryRow> for AgentNotificationView {
+    fn from(row: NotificationHistoryRow) -> Self {
+        let (severity, severity_class) = match row.severity.as_str() {
+            "warning" => (
+                "Warning",
+                "border-amber-900/60 bg-amber-950/30 text-amber-200",
+            ),
+            "error" => ("Error", "border-red-900/60 bg-red-950/30 text-red-300"),
+            _ => ("Info", "border-sky-900/60 bg-sky-950/30 text-sky-200"),
+        };
+        let (status, status_class) = match row.status.as_str() {
+            "sent" => (
+                "Sent",
+                "border-emerald-900/60 bg-emerald-950/30 text-emerald-300",
+            ),
+            "failed" => ("Failed", "border-red-900/60 bg-red-950/30 text-red-300"),
+            _ => ("Queued", "border-zinc-700 bg-zinc-900/70 text-zinc-300"),
+        };
+        Self {
+            id: row.id,
+            title: row.title,
+            body: row.body,
+            severity: severity.to_string(),
+            severity_class,
+            status: status.to_string(),
+            status_class,
+            created_at: local_timestamp_view(row.created_at),
+            sent_at: optional_local_timestamp_view(row.sent_at),
+            error: row.error,
+        }
+    }
+}
+
 impl PromptEditorView {
     pub fn new(prompt_kind: &str, prompt: String, default_prompt: &'static str) -> Self {
         let (label, description, textarea_id, placeholder) = match prompt_kind {
@@ -397,12 +449,14 @@ pub struct AgentsShowPageTemplate {
     pub tabs: Vec<AgentShowTabLink>,
     pub agent_tabs_use_htmx: bool,
     pub show_positions_tab: bool,
+    pub show_notifications_tab: bool,
     pub show_transactions_tab: bool,
     pub show_memories_tab: bool,
     pub show_prompts_tab: bool,
     pub show_settings_tab: bool,
     pub show_jobs_tab: bool,
     pub operation_notice: Option<String>,
+    pub notifications: Vec<AgentNotificationView>,
     pub transactions: Vec<TransactionView>,
     pub transactions_page: usize,
     pub transactions_total_pages: usize,
@@ -460,12 +514,14 @@ impl AgentsShowPageTemplate {
             tabs,
             agent_tabs_use_htmx: true,
             show_positions_tab: active_tab == AgentShowTab::Positions,
+            show_notifications_tab: active_tab == AgentShowTab::Notifications,
             show_transactions_tab: active_tab == AgentShowTab::Transactions,
             show_memories_tab: active_tab == AgentShowTab::Memories,
             show_prompts_tab: active_tab == AgentShowTab::Prompts,
             show_settings_tab: active_tab == AgentShowTab::Settings,
             show_jobs_tab: active_tab == AgentShowTab::SubAgents,
             operation_notice: None,
+            notifications: Vec::new(),
             agent,
             transactions: Vec::new(),
             transactions_page: 1,
@@ -546,6 +602,10 @@ impl AgentsShowPageTemplate {
 
     pub fn set_prompt_editors(&mut self, prompt_editors: Vec<PromptEditorView>) {
         self.prompt_editors = prompt_editors;
+    }
+
+    pub fn set_notifications(&mut self, rows: Vec<NotificationHistoryRow>) {
+        self.notifications = rows.into_iter().map(AgentNotificationView::from).collect();
     }
 }
 

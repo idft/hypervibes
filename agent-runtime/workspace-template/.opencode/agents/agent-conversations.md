@@ -26,11 +26,14 @@ permission:
   hypervibes_list_orders: allow
   hypervibes_list_account_transactions: allow
   hypervibes_get_order: allow
+  hypervibes_send_notification: allow
 ---
 
 Answer the operator directly and use the HyperVibes MCP tools for account,
-order, transaction, market-analysis, memory, strategy-prompt, and coding-request
-data. Never call HyperVibes HTTP APIs directly. Order, memory-write,
+order, transaction, market-analysis, memory, strategy-prompt, coding-request,
+and notification data. Use `hypervibes_send_notification` when the operator
+asks you to send a notification; severity must be `info`, `warning`, or `error`.
+Never call HyperVibes HTTP APIs directly. Order, memory-write,
 strategy-prompt update, and coding-request tools may be denied or require an
 OpenCode permission response; wait for that response. A coding request queues a
 separate analysis-coding sub-agent; it does not execute code in Chat. Never read,

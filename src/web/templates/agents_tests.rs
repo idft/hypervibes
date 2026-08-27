@@ -131,6 +131,7 @@ fn agents_show_page_renders_base_layout_and_delete_modal() {
         "href=\"/agents/test-agent/chat\" data-agent-tab-link hx-get=\"/agents/test-agent/chat\""
     ));
     assert!(rendered.contains("Transactions"));
+    assert!(rendered.contains("Notifications"));
     assert!(rendered.contains("Memories"));
     assert!(rendered.contains("Prompts"));
     assert!(rendered.contains("Settings"));
@@ -138,6 +139,33 @@ fn agents_show_page_renders_base_layout_and_delete_modal() {
     assert!(rendered.contains("Unrealized"));
     assert!(rendered.contains("Scaled out into strength"));
     assert!(!rendered.contains("Agent setup"));
+}
+
+#[test]
+fn notifications_tab_renders_history_and_statuses() {
+    let mut template =
+        AgentsShowPageTemplate::new(sample_agent_detail_row(), AgentShowTab::Notifications);
+    template.set_notifications(vec![crate::notifications::model::NotificationHistoryRow {
+        id: uuid::Uuid::new_v4(),
+        title: "Position changed".to_string(),
+        body: "BTC position increased from 0.1 to 0.2.".to_string(),
+        severity: "warning".to_string(),
+        status: "failed".to_string(),
+        created_at: Utc::now(),
+        sent_at: None,
+        error: Some("telegram send_message failed".to_string()),
+    }]);
+
+    let rendered = template.render().expect("render notifications template");
+
+    assert!(rendered.contains("id=\"agent-notifications\""));
+    assert!(rendered.contains("Position changed"));
+    assert!(rendered.contains(">Warning<"));
+    assert!(rendered.contains(">Failed<"));
+    assert!(rendered.contains("telegram send_message failed"));
+    assert!(rendered.contains("data-notification-select"));
+    assert!(rendered.contains("data-notifications-select-all"));
+    assert!(rendered.contains("data-notifications-delete-selected"));
 }
 
 #[test]

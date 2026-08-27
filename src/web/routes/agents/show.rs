@@ -36,6 +36,7 @@ use crate::{
     memory::{
         get_latest_agent_memory_by_type, get_memory, list_agent_memory_timeline, memory_expires_at,
     },
+    notifications::store::list_notification_history,
     web::{
         AppState,
         auth::AuthenticatedUser,
@@ -159,6 +160,11 @@ pub(in crate::web::routes) async fn render_agent_show_page(
         AgentShowTab::Workspace => unreachable!("Workspace has its own page route"),
         AgentShowTab::Positions => {
             populate_positions_tab(state, &agent, &mut template).await?;
+        }
+        AgentShowTab::Notifications => {
+            template.set_notifications(
+                list_notification_history(&state.db_pool, &agent.agent_key).await?,
+            );
         }
         AgentShowTab::Transactions => {
             let requested_page = transactions_query

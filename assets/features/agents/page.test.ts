@@ -171,6 +171,28 @@ describe("Telegram gateway", () => {
   });
 });
 
+describe("notifications", () => {
+  it("selects all rows and enables bulk deletion", () => {
+    document.body.innerHTML = `
+      <form data-agent-notifications>
+        <button type="button" data-notifications-select-all>Select all</button>
+        <button type="submit" data-notifications-delete-selected disabled>Delete selected</button>
+        <input type="checkbox" data-notification-select name="notification_id" value="one">
+        <input type="checkbox" data-notification-select name="notification_id" value="two">
+      </form>
+    `;
+
+    initAgentPage();
+    const selectAll = document.querySelector<HTMLButtonElement>("[data-notifications-select-all]");
+    const deleteSelected = document.querySelector<HTMLButtonElement>("[data-notifications-delete-selected]");
+    selectAll?.click();
+
+    expect(document.querySelectorAll<HTMLInputElement>("[data-notification-select]:checked")).toHaveLength(2);
+    expect(deleteSelected?.disabled).toBe(false);
+    expect(deleteSelected?.classList.contains("cursor-pointer")).toBe(true);
+  });
+});
+
 describe("job detail modals", () => {
   it("opens, focuses, and closes the additional instructions modal", () => {
     document.body.innerHTML = `

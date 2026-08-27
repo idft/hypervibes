@@ -245,6 +245,26 @@ function initNewJobForm(root: ParentNode) {
   sync();
 }
 
+function initNotifications(root: ParentNode) {
+  root.querySelectorAll<HTMLFormElement>("[data-agent-notifications]").forEach((form) => {
+    if (form.dataset.bound === "true") return;
+    const selectAll = form.querySelector<HTMLButtonElement>("[data-notifications-select-all]");
+    const deleteSelected = form.querySelector<HTMLButtonElement>("[data-notifications-delete-selected]");
+    const selections = Array.from(form.querySelectorAll<HTMLInputElement>("[data-notification-select]"));
+    if (!selectAll || !deleteSelected || selections.length === 0) return;
+    form.dataset.bound = "true";
+    const sync = () => {
+      const selectedCount = selections.filter((selection) => selection.checked).length;
+      deleteSelected.disabled = selectedCount === 0;
+      deleteSelected.classList.toggle("cursor-pointer", selectedCount > 0);
+      deleteSelected.classList.toggle("cursor-not-allowed", selectedCount === 0);
+    };
+    selectAll.addEventListener("click", () => { selections.forEach((selection) => { selection.checked = true; }); sync(); });
+    selections.forEach((selection) => selection.addEventListener("change", sync));
+    sync();
+  });
+}
+
 function initTelegramGateway(root: ParentNode) {
   const gateway = root instanceof HTMLElement && root.matches("[data-telegram-gateway]")
     ? root
@@ -274,7 +294,7 @@ function initTelegramGateway(root: ParentNode) {
   modal.addEventListener("keydown", (event) => { if (event.key === "Escape") { event.preventDefault(); close(); } });
 }
 
-export function initAgentPage(root: ParentNode = document) { initAgentCreation(root); initPromptEditor(root); initInstrumentSelectors(root); initClickableRows(root); initInlineEditors(root); initJobDetailModals(root); initWorkspaceModal(root); initNewJobForm(root); initTelegramGateway(root); }
+export function initAgentPage(root: ParentNode = document) { initAgentCreation(root); initPromptEditor(root); initInstrumentSelectors(root); initClickableRows(root); initInlineEditors(root); initJobDetailModals(root); initWorkspaceModal(root); initNewJobForm(root); initNotifications(root); initTelegramGateway(root); }
 export function installAgentPageLifecycle() {
   installAgentModals();
   document.addEventListener("click", (event) => {

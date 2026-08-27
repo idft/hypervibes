@@ -10,6 +10,9 @@ mod live_stream_tests;
 mod memories;
 #[cfg(test)]
 mod memories_tests;
+mod notifications;
+#[cfg(test)]
+mod notifications_tests;
 mod operations;
 mod prompts;
 #[cfg(test)]
@@ -37,8 +40,8 @@ mod workspace;
 #[cfg(test)]
 use self::shared::*;
 pub(in crate::web::routes) use self::{
-    chat::*, gateway::*, index::*, live_stream::*, memories::*, operations::*, prompts::*, runs::*,
-    settings::*, show::*, sub_agents::*, transactions::*, workspace::*,
+    chat::*, gateway::*, index::*, live_stream::*, memories::*, notifications::*, operations::*,
+    prompts::*, runs::*, settings::*, show::*, sub_agents::*, transactions::*, workspace::*,
 };
 mod chat;
 #[cfg(test)]

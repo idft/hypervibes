@@ -46,6 +46,10 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/account/subaccounts", post(create_user_subaccount))
         .route("/agents/{agent_key}", get(agents_show))
         .route(
+            "/agents/{agent_key}/notifications",
+            get(agents_show_notifications).post(agents_delete_notifications),
+        )
+        .route(
             "/agents/{agent_key}/transactions",
             get(agents_show_transactions),
         )

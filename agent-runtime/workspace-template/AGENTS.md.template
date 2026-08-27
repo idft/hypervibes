@@ -15,7 +15,7 @@ Writable paths:
 Backend access:
 
 - Use the `hypervibes` MCP tools for account state, memories,
-  and orders.
+  orders, and notifications.
 - Do not call HyperVibes HTTP endpoints directly.
 - Do not write or run Python scripts whose purpose is to call HyperVibes
   APIs.

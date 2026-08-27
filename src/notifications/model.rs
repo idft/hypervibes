@@ -1,3 +1,4 @@
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -14,6 +15,19 @@ pub struct NotificationRow {
     pub body: String,
     pub severity: String,
     pub status: String,
+}
+
+/// Notification fields displayed in an agent's notification history.
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub struct NotificationHistoryRow {
+    pub id: Uuid,
+    pub title: String,
+    pub body: String,
+    pub severity: String,
+    pub status: String,
+    pub created_at: DateTime<Utc>,
+    pub sent_at: Option<DateTime<Utc>>,
+    pub error: Option<String>,
 }
 
 /// Owned notification record produced after inserting a new row.

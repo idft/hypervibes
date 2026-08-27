@@ -8,7 +8,7 @@
 
     {% include "agents/components/tabs.html" %}
 
-    <div id="agent-show-tab-content"{% if show_transactions_tab || show_memories_tab || show_jobs_tab %} class="min-h-0 flex-1"{% endif %}>
+    <div id="agent-show-tab-content"{% if show_notifications_tab || show_transactions_tab || show_memories_tab || show_jobs_tab %} class="min-h-0 flex-1"{% endif %}>
     {% if show_positions_tab && !setup_checklist.is_ready %}
     <section class="mb-2 rounded-2xl border border-violet-900/60 bg-violet-950/20 p-5">
         <div>
@@ -76,6 +76,64 @@
         <section class="rounded-2xl border border-zinc-800 bg-[#0d0d10] p-6">
             <h2 class="text-lg font-medium text-white">Analysis</h2>
             <div data-latest-analysis-summary sse-swap="latest-analysis-summary">{{ latest_analysis_summary_html|safe }}</div>
+        </section>
+    </section>
+    {% else if show_notifications_tab %}
+    <section class="flex h-full min-h-0">
+        <section id="agent-notifications" class="flex min-h-0 flex-1 flex-col rounded-2xl border border-zinc-800 bg-[#0d0d10] p-6">
+            {% if notifications.is_empty() %}
+            <div class="shrink-0">
+                <h2 class="text-lg font-medium text-white">Notifications</h2>
+            </div>
+            <div class="mt-4 rounded-xl border border-zinc-800 bg-zinc-950/70 p-6 text-center">
+                <p class="text-sm text-zinc-400">No notifications have been queued yet.</p>
+            </div>
+            {% else %}
+            <form action="/agents/{{ agent.agent_key }}/notifications" method="post" class="flex min-h-0 flex-1 flex-col" data-agent-notifications>
+                <div class="mb-4 flex shrink-0 items-center justify-between gap-3">
+                    <h2 class="text-lg font-medium text-white">Notifications</h2>
+                    <div class="flex items-center gap-2">
+                        <button type="button" data-notifications-select-all class="cursor-pointer rounded-full border border-zinc-800 px-3 py-1.5 text-xs font-medium text-zinc-300 hover:border-zinc-700 hover:text-white">Select all</button>
+                        <button type="submit" data-notifications-delete-selected disabled class="cursor-not-allowed rounded-full border border-red-900/60 bg-red-950/20 px-3 py-1.5 text-xs font-medium text-red-300 hover:border-red-800 hover:bg-red-950/40 disabled:border-zinc-800 disabled:bg-zinc-900/70 disabled:text-zinc-500">Delete selected</button>
+                    </div>
+                </div>
+                <div class="min-h-0 flex-1 overflow-auto">
+                    <table class="min-w-[44rem] w-full table-fixed text-sm">
+                        <tbody class="divide-y divide-zinc-800">
+                            {% for notification in notifications %}
+                            <tr class="hover:bg-zinc-900/40">
+                                <td class="w-11 px-3 py-3 text-center">
+                                    <input type="checkbox" name="notification_id" value="{{ notification.id }}" data-notification-select class="h-4 w-4 cursor-pointer rounded border-zinc-700 bg-zinc-950 text-white">
+                                </td>
+                                <td class="px-3 py-3">
+                                    <div class="flex min-w-0 items-center gap-2">
+                                        <span class="w-44 shrink-0 truncate font-medium text-zinc-100">{{ notification.title }}</span>
+                                        <span class="inline-flex shrink-0 rounded border px-1.5 py-0.5 text-xs {{ notification.severity_class }}">{{ notification.severity }}</span>
+                                        {% if let Some(sent_at) = notification.sent_at %}
+                                        <span title="Sent {{ sent_at.fallback_text }}" class="inline-flex shrink-0 rounded border px-1.5 py-0.5 text-xs {{ notification.status_class }}">{{ notification.status }}</span>
+                                        {% else if let Some(error) = notification.error %}
+                                        <span title="{{ error }}" class="inline-flex shrink-0 rounded border px-1.5 py-0.5 text-xs {{ notification.status_class }}">{{ notification.status }}</span>
+                                        {% else %}
+                                        <span class="inline-flex shrink-0 rounded border px-1.5 py-0.5 text-xs {{ notification.status_class }}">{{ notification.status }}</span>
+                                        {% endif %}
+                                        <span class="min-w-0 flex-1 truncate text-zinc-400">{{ notification.body }}</span>
+                                    </div>
+                                </td>
+                                <td class="w-40 px-3 py-3 text-right text-xs text-zinc-500">
+                                    <time class="local-datetime" data-local-format="datetime" datetime="{{ notification.created_at.iso }}" title="{{ notification.created_at.fallback_text }}">{{ notification.created_at.fallback_text }}</time>
+                                </td>
+                                <td class="w-11 px-3 py-3 text-right">
+                                    <button type="submit" name="delete_id" value="{{ notification.id }}" class="cursor-pointer rounded-md p-1.5 text-zinc-500 hover:bg-red-950/30 hover:text-red-300" aria-label="Delete notification" title="Delete notification">
+                                        <svg class="h-4 w-4" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="m14.74 7-.346 9.003A2 2 0 0 1 12.396 18H7.604a2 2 0 0 1-1.998-1.997L5.26 7m9.48 0H5.26m9.48 0-1.044-3.044A1 1 0 0 0 12.75 3h-5.5a1 1 0 0 0-.946.676L5.26 7m2.24 3v5m2.5-5v5"></path></svg>
+                                    </button>
+                                </td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            </form>
+            {% endif %}
         </section>
     </section>
     {% else if show_transactions_tab %}

@@ -31,6 +31,7 @@ permission:
   hypervibes_submit_orders: allow
   hypervibes_cancel_orders: allow
   hypervibes_cancel_all_orders: allow
+  hypervibes_send_notification: allow
 ---
 
 You are the trading agent for a HyperVibes OpenCode workspace.

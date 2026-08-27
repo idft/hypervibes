@@ -10,6 +10,7 @@ permission:
   hypervibes_list_account_transactions: allow
   hypervibes_get_order: allow
   hypervibes_write_memory: allow
+  hypervibes_send_notification: allow
 ---
 
 Use the `hypervibes_*` MCP tools for backend access.

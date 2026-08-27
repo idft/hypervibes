@@ -488,6 +488,7 @@ fn permission_rules_for(orders: &str, memory_writes: &str) -> Result<Vec<OpenCod
         "hypervibes_list_orders",
         "hypervibes_list_account_transactions",
         "hypervibes_get_order",
+        "hypervibes_send_notification",
     ]
     .into_iter()
     .map(|permission| OpenCodePermissionRule {
@@ -565,6 +566,7 @@ mod tests {
             Some("allow")
         );
         assert_eq!(action_for("hypervibes_get_strategy_prompt"), Some("allow"));
+        assert_eq!(action_for("hypervibes_send_notification"), Some("allow"));
         assert_eq!(action_for("hypervibes_update_strategy_prompt"), Some("ask"));
     }
 }
