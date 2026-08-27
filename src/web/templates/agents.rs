@@ -82,11 +82,13 @@ pub struct AgentShowTabLink {
     pub label: &'static str,
     pub href: String,
     pub active: bool,
+    pub notification_count: Option<i64>,
 }
 
 pub fn build_agent_show_tabs(
     agent: &AgentDetailRow,
     active_tab: AgentShowTab,
+    notification_count: i64,
 ) -> Vec<AgentShowTabLink> {
     let agent_key = agent.agent_key.as_str();
     [
@@ -105,8 +107,21 @@ pub fn build_agent_show_tabs(
         label,
         href: tab.path(agent_key),
         active: tab == active_tab,
+        notification_count: (tab == AgentShowTab::Notifications).then_some(notification_count),
     })
     .collect()
+}
+
+#[derive(Template)]
+#[template(path = "agents/components/notification-count.html")]
+pub struct AgentNotificationCountPartialTemplate {
+    pub notification_count: i64,
+}
+
+impl AgentNotificationCountPartialTemplate {
+    pub fn render_view(notification_count: i64) -> Result<String, askama::Error> {
+        Self { notification_count }.render()
+    }
 }
 
 /// Row entry shown on the agents index page. Combines the durable
@@ -502,9 +517,9 @@ pub struct AgentsShowPageTemplate {
 }
 
 impl AgentsShowPageTemplate {
-    pub fn new(agent: AgentDetailRow, active_tab: AgentShowTab) -> Self {
+    pub fn new(agent: AgentDetailRow, active_tab: AgentShowTab, notification_count: i64) -> Self {
         let agent_key = agent.agent_key.clone();
-        let tabs = build_agent_show_tabs(&agent, active_tab);
+        let tabs = build_agent_show_tabs(&agent, active_tab, notification_count);
         Self {
             api_key_masked: mask_api_key(&agent.api_key),
             prompt_editors: Vec::new(),

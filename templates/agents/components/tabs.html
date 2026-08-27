@@ -1,4 +1,4 @@
-<nav data-agent-tabs data-agent-rail hx-sync="this:replace" class="agent-rail agent-rail-expanded fixed bottom-0 left-0 top-14 z-30 flex w-12 flex-col border-r border-zinc-800 bg-[#111214] py-2 sm:w-14" aria-label="Agent sections">
+<nav data-agent-tabs data-agent-rail hx-ext="sse" sse-connect="/agents/{{ agent.agent_key }}/notifications/count/stream" hx-sync="this:replace" class="agent-rail agent-rail-expanded fixed bottom-0 left-0 top-14 z-30 flex w-12 flex-col border-r border-zinc-800 bg-[#111214] py-2 sm:w-14" aria-label="Agent sections">
     <div class="flex flex-col items-center gap-1">
         {% for tab in tabs %}
         {% if agent_tabs_use_htmx && tab.label != "Chat" %}
@@ -6,11 +6,17 @@
         <a href="{{ tab.href }}" data-agent-tab-link hx-get="{{ tab.href }}" hx-select="#agent-show-tab-content" hx-target="#agent-show-tab-content" hx-swap="outerHTML" hx-push-url="true" aria-current="page" title="{{ tab.label }}" class="agent-rail-tab inline-flex h-9 w-9 items-center justify-center rounded-lg bg-zinc-800 text-white sm:h-10 sm:w-10">
             {% include "agents/components/tab-icon.html" %}
             <span class="agent-rail-tab-label">{{ tab.label }}</span>
+            {% if let Some(notification_count) = tab.notification_count %}
+            {% include "agents/components/notification-count.html" %}
+            {% endif %}
         </a>
         {% else %}
         <a href="{{ tab.href }}" data-agent-tab-link hx-get="{{ tab.href }}" hx-select="#agent-show-tab-content" hx-target="#agent-show-tab-content" hx-swap="outerHTML" hx-push-url="true" title="{{ tab.label }}" class="agent-rail-tab inline-flex h-9 w-9 items-center justify-center rounded-lg text-zinc-400 hover:bg-zinc-800 hover:text-white sm:h-10 sm:w-10">
             {% include "agents/components/tab-icon.html" %}
             <span class="agent-rail-tab-label">{{ tab.label }}</span>
+            {% if let Some(notification_count) = tab.notification_count %}
+            {% include "agents/components/notification-count.html" %}
+            {% endif %}
         </a>
         {% endif %}
         {% else %}
@@ -18,11 +24,17 @@
         <a href="{{ tab.href }}" data-agent-tab-link aria-current="page" title="{{ tab.label }}" class="agent-rail-tab inline-flex h-9 w-9 items-center justify-center rounded-lg bg-zinc-800 text-white sm:h-10 sm:w-10">
             {% include "agents/components/tab-icon.html" %}
             <span class="agent-rail-tab-label">{{ tab.label }}</span>
+            {% if let Some(notification_count) = tab.notification_count %}
+            {% include "agents/components/notification-count.html" %}
+            {% endif %}
         </a>
         {% else %}
         <a href="{{ tab.href }}" data-agent-tab-link title="{{ tab.label }}" class="agent-rail-tab inline-flex h-9 w-9 items-center justify-center rounded-lg text-zinc-400 hover:bg-zinc-800 hover:text-white sm:h-10 sm:w-10">
             {% include "agents/components/tab-icon.html" %}
             <span class="agent-rail-tab-label">{{ tab.label }}</span>
+            {% if let Some(notification_count) = tab.notification_count %}
+            {% include "agents/components/notification-count.html" %}
+            {% endif %}
         </a>
         {% endif %}
         {% endif %}

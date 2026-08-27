@@ -36,7 +36,7 @@ use crate::{
     memory::{
         get_latest_agent_memory_by_type, get_memory, list_agent_memory_timeline, memory_expires_at,
     },
-    notifications::store::list_notification_history,
+    notifications::store::{count_notifications, list_notification_history},
     web::{
         AppState,
         auth::AuthenticatedUser,
@@ -124,7 +124,8 @@ pub(in crate::web::routes) async fn render_agent_show_page(
         .await?
         .ok_or_else(|| AppError(anyhow::anyhow!("agent disappeared while loading readiness")))?;
 
-    let mut template = AgentsShowPageTemplate::new(agent.clone(), active_tab);
+    let notification_count = count_notifications(&state.db_pool, &agent.agent_key).await?;
+    let mut template = AgentsShowPageTemplate::new(agent.clone(), active_tab, notification_count);
     template.setup_checklist =
         crate::web::templates::AgentSetupChecklistView::from_readiness(&readiness);
     template.operation_notice = operation_notice;

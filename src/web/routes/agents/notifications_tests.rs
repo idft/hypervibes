@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use axum::{
     body::Body,
     http::{Request, StatusCode},
@@ -7,9 +9,12 @@ use tower::util::ServiceExt;
 use crate::{
     gateway::model::NotificationSeverity,
     notifications::store::{
-        create_notification, list_notification_history, mark_failed, mark_sent,
+        create_notification, delete_notification, list_notification_history, mark_failed, mark_sent,
     },
-    web::routes::{router, test_support::*},
+    web::{
+        routes::{router, test_support::*},
+        ui_events::UiEvent,
+    },
 };
 
 #[tokio::test]
@@ -64,6 +69,12 @@ async fn agent_notifications_route_renders_notification_history() {
     assert!(text.contains("data-notifications-select-all"));
     assert!(text.contains("data-notifications-delete-selected"));
     assert!(text.contains("name=\"delete_id\""));
+    assert!(text.contains(&format!(
+        "sse-connect=\"/agents/{agent_key}/notifications/count/stream\""
+    )));
+    assert!(text.contains("id=\"agent-notification-count\""));
+    assert!(text.contains("sse-swap=\"notification-count\" hx-target=\"this\""));
+    assert!(text.contains(">2</span>"));
 }
 
 #[tokio::test]
@@ -92,6 +103,7 @@ async fn agent_notifications_route_renders_empty_state() {
 #[tokio::test]
 async fn agent_notifications_delete_route_removes_one_notification() {
     let state = test_state().await;
+    let mut ui_events = state.ui_events.subscribe();
     let (agent_key, _wallet_address) = insert_test_agent(&state).await.expect("insert agent");
     let notification = create_notification(
         &state.db_pool,
@@ -128,6 +140,12 @@ async fn agent_notifications_delete_route_removes_one_notification() {
             .await
             .expect("list notification history")
             .is_empty()
+    );
+    assert_eq!(
+        ui_events.recv().await.expect("notification deletion event"),
+        UiEvent::NotificationsDeleted {
+            agent_key: agent_key.clone(),
+        }
     );
 }
 
@@ -176,4 +194,84 @@ async fn agent_notifications_delete_route_removes_selected_notifications() {
             .expect("list notification history")
             .is_empty()
     );
+}
+
+#[tokio::test]
+async fn notification_count_stream_refreshes_when_notification_is_queued() {
+    let state = test_state().await;
+    let (agent_key, _wallet_address) = insert_test_agent(&state).await.expect("insert agent");
+    let response = router(Arc::clone(&state))
+        .oneshot(
+            Request::builder()
+                .uri(format!("/agents/{agent_key}/notifications/count/stream"))
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let reader = tokio::spawn(read_sse_chunk(response.into_body(), 1_000));
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+    let notification = create_notification(
+        &state.db_pool,
+        &agent_key,
+        "Orders submitted",
+        "BTC limit entry submitted.",
+        NotificationSeverity::Info,
+    )
+    .await
+    .expect("create notification");
+    state.ui_events.publish(UiEvent::NotificationQueued {
+        agent_key: agent_key.clone(),
+        notification_id: notification.id,
+    });
+
+    let body = reader.await.expect("read notification-count stream");
+    assert!(body.matches("event: notification-count").count() >= 2);
+    assert!(body.contains("id=\"agent-notification-count\""));
+    assert!(body.contains(">0</span>"));
+    assert!(body.contains(">1</span>"));
+}
+
+#[tokio::test]
+async fn notification_count_stream_refreshes_when_notifications_are_deleted() {
+    let state = test_state().await;
+    let (agent_key, _wallet_address) = insert_test_agent(&state).await.expect("insert agent");
+    let notification = create_notification(
+        &state.db_pool,
+        &agent_key,
+        "Orders submitted",
+        "BTC limit entry submitted.",
+        NotificationSeverity::Info,
+    )
+    .await
+    .expect("create notification");
+    let response = router(Arc::clone(&state))
+        .oneshot(
+            Request::builder()
+                .uri(format!("/agents/{agent_key}/notifications/count/stream"))
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let reader = tokio::spawn(read_sse_chunk(response.into_body(), 1_000));
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    assert!(
+        delete_notification(&state.db_pool, &agent_key, notification.id)
+            .await
+            .expect("delete notification")
+    );
+    state.ui_events.publish(UiEvent::NotificationsDeleted {
+        agent_key: agent_key.clone(),
+    });
+
+    let body = reader.await.expect("read notification-count stream");
+    assert!(body.matches("event: notification-count").count() >= 2);
+    assert!(body.contains(">1</span>"));
+    assert!(body.contains(">0</span>"));
 }

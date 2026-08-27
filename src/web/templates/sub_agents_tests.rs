@@ -50,7 +50,10 @@ fn job_detail_page_renders_job_metadata_and_runs() {
             previous_page_url: None,
             next_page_url: None,
         },
-        Navbar::default(),
+        AgentJobPageNavigation {
+            notification_count: 0,
+            navbar: Navbar::default(),
+        },
     )
     .expect("render sub-agent detail page");
 
@@ -132,7 +135,10 @@ fn job_detail_highlights_model_picker_when_setup_needs_a_model() {
             previous_page_url: None,
             next_page_url: None,
         },
-        Navbar::default(),
+        AgentJobPageNavigation {
+            notification_count: 0,
+            navbar: Navbar::default(),
+        },
     )
     .expect("render highlighted sub-agent detail page");
 

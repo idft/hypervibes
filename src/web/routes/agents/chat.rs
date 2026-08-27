@@ -29,6 +29,7 @@ use crate::{
     agents::{store::get_agent, strategy_prompts::is_valid_prompt_kind},
     gateway::{model::TelegramGatewayConfig, store as gateway_store},
     model_catalog::options::parse_model_selection,
+    notifications::store::count_notifications,
     opencode::{client::OpenCodePermissionReply, store::get_session_detail},
     web::{
         AppState,
@@ -352,6 +353,7 @@ pub(in crate::web::routes) async fn agents_show_chat(
             Redirect::to(&format!("/agents/{agent_key}/chat/{}", conversation.id)).into_response(),
         );
     }
+    let notification_count = count_notifications(&state.db_pool, &agent.agent_key).await?;
     let picker = build_model_picker_view(
         "conversation-model-selection",
         "",
@@ -365,6 +367,7 @@ pub(in crate::web::routes) async fn agents_show_chat(
         Vec::new(),
         String::new(),
         String::new(),
+        notification_count,
         navbar,
     )?)
     .into_response())
@@ -386,6 +389,7 @@ pub(in crate::web::routes) async fn agents_new_chat(
             Redirect::to(&format!("/agents/{agent_key}/chat/{}", conversation.id)).into_response(),
         );
     }
+    let notification_count = count_notifications(&state.db_pool, &agent.agent_key).await?;
     let picker = build_model_picker_view(
         "conversation-model-selection",
         "",
@@ -399,6 +403,7 @@ pub(in crate::web::routes) async fn agents_new_chat(
         Vec::new(),
         String::new(),
         String::new(),
+        notification_count,
         navbar,
     )?)
     .into_response())
@@ -416,6 +421,7 @@ pub(in crate::web::routes) async fn agents_show_chat_detail(
     let navbar = load_selected_agent_navbar(&state, user.id, &snapshot.agent)
         .await?
         .0;
+    let notification_count = count_notifications(&state.db_pool, &snapshot.agent.agent_key).await?;
     let html = AgentConversationPageTemplate::render_view(
         crate::web::templates::AgentConversationPageInput {
             agent: snapshot.agent,
@@ -425,6 +431,7 @@ pub(in crate::web::routes) async fn agents_show_chat_detail(
             transcript_html: rendered.transcript,
             composer_html: rendered.composer,
             permissions_html: rendered.permissions,
+            notification_count,
             navbar,
         },
     )?;
@@ -559,12 +566,14 @@ async fn render_empty_error(
         load_model_picker_context(state, &agent).await,
     );
     let navbar = load_selected_agent_navbar(state, user_id, &agent).await?.0;
+    let notification_count = count_notifications(&state.db_pool, &agent.agent_key).await?;
     Ok(Html(AgentConversationEmptyPageTemplate::render_view(
         agent,
         picker,
         vec![error],
         strategy_prompt_kind,
         strategy_prompt,
+        notification_count,
         navbar,
     )?)
     .into_response())

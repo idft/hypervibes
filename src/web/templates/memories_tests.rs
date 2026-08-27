@@ -21,6 +21,7 @@ fn memory_detail_page_renders_agent_navbar_with_memories_active() {
         agent,
         memory,
         memory_detail_html,
+        0,
         Navbar::default(),
     )
     .expect("render memory detail page");

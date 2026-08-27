@@ -152,6 +152,7 @@ impl AgentConversationPageTemplate {
             transcript_html,
             composer_html,
             permissions_html,
+            notification_count,
             navbar,
         } = input;
         let current_path = format!("/agents/{}/chat/{conversation_id}", agent.agent_key);
@@ -161,7 +162,7 @@ impl AgentConversationPageTemplate {
             agent.enabled,
         );
         Self {
-            tabs: build_agent_show_tabs(&agent, AgentShowTab::Chat),
+            tabs: build_agent_show_tabs(&agent, AgentShowTab::Chat, notification_count),
             agent_tabs_use_htmx: false,
             current_path,
             agent,
@@ -185,6 +186,7 @@ pub struct AgentConversationPageInput {
     pub transcript_html: String,
     pub composer_html: String,
     pub permissions_html: String,
+    pub notification_count: i64,
     pub navbar: Navbar,
 }
 impl AgentConversationEmptyPageTemplate {
@@ -194,6 +196,7 @@ impl AgentConversationEmptyPageTemplate {
         errors: Vec<String>,
         strategy_prompt_kind: String,
         strategy_prompt: String,
+        notification_count: i64,
         navbar: Navbar,
     ) -> Result<String, askama::Error> {
         let current_path = format!("/agents/{}/chat", agent.agent_key);
@@ -203,7 +206,7 @@ impl AgentConversationEmptyPageTemplate {
             agent.enabled,
         );
         Self {
-            tabs: build_agent_show_tabs(&agent, AgentShowTab::Chat),
+            tabs: build_agent_show_tabs(&agent, AgentShowTab::Chat, notification_count),
             agent_tabs_use_htmx: false,
             current_path,
             agent,

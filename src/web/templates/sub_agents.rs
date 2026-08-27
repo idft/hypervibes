@@ -192,6 +192,12 @@ pub struct HarnessSubAgentRunsPagination {
     pub next_page_url: Option<String>,
 }
 
+#[derive(Debug, Clone)]
+pub struct AgentJobPageNavigation {
+    pub notification_count: i64,
+    pub navbar: Navbar,
+}
+
 impl AgentJobDetailPageTemplate {
     pub fn render_view(
         agent: AgentDetailRow,
@@ -200,8 +206,12 @@ impl AgentJobDetailPageTemplate {
         job_runs: Vec<HarnessSubAgentRunView>,
         job_runs_loaded: bool,
         pagination: HarnessSubAgentRunsPagination,
-        navbar: Navbar,
+        navigation: AgentJobPageNavigation,
     ) -> Result<String, askama::Error> {
+        let AgentJobPageNavigation {
+            notification_count,
+            navbar,
+        } = navigation;
         let current_path = format!("/agents/{}/sub-agents/{}", agent.agent_key, job.id);
         let navbar = navbar.with_selected_agent(
             agent.agent_key.clone(),
@@ -209,7 +219,7 @@ impl AgentJobDetailPageTemplate {
             agent.enabled,
         );
         Self {
-            tabs: build_agent_show_tabs(&agent, AgentShowTab::SubAgents),
+            tabs: build_agent_show_tabs(&agent, AgentShowTab::SubAgents, notification_count),
             agent_tabs_use_htmx: false,
             agent,
             job,

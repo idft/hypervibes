@@ -15,6 +15,7 @@ use tracing::warn;
 use super::show::load_selected_agent_navbar;
 use crate::{
     agents::store::get_agent,
+    notifications::store::count_notifications,
     web::{
         AppState,
         auth::AuthenticatedUser,
@@ -116,11 +117,13 @@ pub(in crate::web::routes) async fn agents_show_run_detail(
     let navbar = load_selected_agent_navbar(&state, user.id, &snapshot.agent)
         .await?
         .0;
+    let notification_count = count_notifications(&state.db_pool, &snapshot.agent.agent_key).await?;
     let html = AgentRunDetailPageTemplate::render_view(
         snapshot.agent,
         snapshot.run,
         snapshot.session,
         snapshot.session_lookup_attempted,
+        notification_count,
         navbar,
     )?;
     Ok(Html(html).into_response())

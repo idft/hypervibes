@@ -49,14 +49,15 @@ use crate::{
     hyperliquid::live_state::live_agent_snapshot_for_dispatch,
     memory::get_latest_agent_memory_by_type,
     model_catalog::options::parse_model_selection,
+    notifications::store::count_notifications,
     web::{
         AppState,
         auth::AuthenticatedUser,
         run_detail_events::RunDetailDbEvent,
         templates::{
-            AgentJobDetailPageTemplate, AgentJobNewPageTemplate, AgentRecentRunsPartialTemplate,
-            AgentShowTab, CreateHarnessSubAgentFormValues, ModelPickerPartialTemplate,
-            build_agent_show_tabs,
+            AgentJobDetailPageTemplate, AgentJobNewPageTemplate, AgentJobPageNavigation,
+            AgentRecentRunsPartialTemplate, AgentShowTab, CreateHarnessSubAgentFormValues,
+            ModelPickerPartialTemplate, build_agent_show_tabs,
         },
     },
 };
@@ -325,6 +326,7 @@ pub(in crate::web::routes) async fn agents_show_sub_agent_detail(
     );
     model_picker.show_label = false;
     let navbar = load_selected_agent_navbar(&state, user.id, &agent).await?.0;
+    let notification_count = count_notifications(&state.db_pool, &agent.agent_key).await?;
     let html = AgentJobDetailPageTemplate::render_view(
         agent.clone(),
         job_view,
@@ -340,7 +342,10 @@ pub(in crate::web::routes) async fn agents_show_sub_agent_detail(
             previous_page_url: job_runs_previous_page_url,
             next_page_url: job_runs_next_page_url,
         },
-        navbar,
+        AgentJobPageNavigation {
+            notification_count,
+            navbar,
+        },
     )?;
     Ok(Html(html).into_response())
 }
@@ -630,6 +635,7 @@ pub(in crate::web::routes) async fn agents_new_sub_agent(
     let picker = load_model_picker_context(&state, &agent).await;
     let availability = load_new_sub_agent_kind_availability(&state, &agent_key).await?;
     let navbar = load_selected_agent_navbar(&state, user.id, &agent).await?.0;
+    let notification_count = count_notifications(&state.db_pool, &agent.agent_key).await?;
     Ok(render_new_job_form(
         agent,
         CreateHarnessSubAgentForm::defaults().as_template_values(),
@@ -637,7 +643,10 @@ pub(in crate::web::routes) async fn agents_new_sub_agent(
         availability,
         Vec::new(),
         StatusCode::OK,
-        navbar,
+        AgentJobPageNavigation {
+            notification_count,
+            navbar,
+        },
     ))
 }
 pub(in crate::web::routes) async fn agents_create_sub_agent(
@@ -649,6 +658,7 @@ pub(in crate::web::routes) async fn agents_create_sub_agent(
     let Some(agent) = get_agent(&state.db_pool, &agent_key).await? else {
         return Ok((StatusCode::NOT_FOUND, "agent not found").into_response());
     };
+    let notification_count = count_notifications(&state.db_pool, &agent.agent_key).await?;
     let navbar = load_selected_agent_navbar(&state, user.id, &agent).await?.0;
     let availability = load_new_sub_agent_kind_availability(&state, &agent_key).await?;
     let validated = match form.validate() {
@@ -662,7 +672,10 @@ pub(in crate::web::routes) async fn agents_create_sub_agent(
                 availability,
                 errors,
                 StatusCode::UNPROCESSABLE_ENTITY,
-                navbar.clone(),
+                AgentJobPageNavigation {
+                    notification_count,
+                    navbar: navbar.clone(),
+                },
             ));
         }
     };
@@ -679,7 +692,10 @@ pub(in crate::web::routes) async fn agents_create_sub_agent(
                     .expect("only singleton jobs can be unavailable"),
             ],
             StatusCode::UNPROCESSABLE_ENTITY,
-            navbar.clone(),
+            AgentJobPageNavigation {
+                notification_count,
+                navbar: navbar.clone(),
+            },
         ));
     }
 
@@ -701,7 +717,10 @@ pub(in crate::web::routes) async fn agents_create_sub_agent(
                 availability,
                 vec![error],
                 StatusCode::UNPROCESSABLE_ENTITY,
-                navbar.clone(),
+                AgentJobPageNavigation {
+                    notification_count,
+                    navbar: navbar.clone(),
+                },
             ));
         }
     };
@@ -761,7 +780,10 @@ pub(in crate::web::routes) async fn agents_create_sub_agent(
             availability,
             errors,
             StatusCode::UNPROCESSABLE_ENTITY,
-            navbar,
+            AgentJobPageNavigation {
+                notification_count,
+                navbar,
+            },
         ));
     }
 
@@ -1252,8 +1274,12 @@ pub(in crate::web::routes) fn render_new_job_form(
     availability: NewJobKindAvailability,
     errors: Vec<String>,
     status: StatusCode,
-    navbar: crate::web::templates::Navbar,
+    navigation: AgentJobPageNavigation,
 ) -> Response {
+    let AgentJobPageNavigation {
+        notification_count,
+        navbar,
+    } = navigation;
     let current_path = format!("/agents/{}/sub-agents/new", agent.agent_key);
     let mut model_picker = build_model_picker_view(
         "sub-agent-model-selection",
@@ -1262,7 +1288,7 @@ pub(in crate::web::routes) fn render_new_job_form(
         picker,
     );
     model_picker.submit_on_save = false;
-    let tabs = build_agent_show_tabs(&agent, AgentShowTab::SubAgents);
+    let tabs = build_agent_show_tabs(&agent, AgentShowTab::SubAgents, notification_count);
     let navbar = navbar.with_selected_agent(
         agent.agent_key.clone(),
         agent.display_name.clone(),

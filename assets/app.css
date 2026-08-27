@@ -57,6 +57,10 @@ html.agent-rail-initially-collapsed .app-content.has-agent-rail {
   display: none;
 }
 
+.agent-rail-notification-count {
+  display: none;
+}
+
 .agent-rail.agent-rail-expanded {
   width: 14rem;
 }
@@ -75,6 +79,11 @@ html.agent-rail-initially-collapsed .app-content.has-agent-rail {
   white-space: nowrap;
 }
 
+.agent-rail.agent-rail-expanded .agent-rail-notification-count {
+  display: inline-flex;
+  margin-left: auto;
+}
+
 html.agent-rail-initially-collapsed .agent-rail.agent-rail-expanded {
   width: 3rem;
 }
@@ -87,6 +96,10 @@ html.agent-rail-initially-collapsed .agent-rail.agent-rail-expanded .agent-rail-
 }
 
 html.agent-rail-initially-collapsed .agent-rail.agent-rail-expanded .agent-rail-tab-label {
+  display: none;
+}
+
+html.agent-rail-initially-collapsed .agent-rail.agent-rail-expanded .agent-rail-notification-count {
   display: none;
 }
 

@@ -105,7 +105,7 @@ fn agents_show_page_renders_base_layout_and_delete_modal() {
     ];
     let sparklines_html = BalanceSparklinesPartialTemplate::render_view(sparklines).unwrap();
     let mut template =
-        AgentsShowPageTemplate::new(sample_agent_detail_row(), AgentShowTab::Positions);
+        AgentsShowPageTemplate::new(sample_agent_detail_row(), AgentShowTab::Positions, 0);
     template.account_balance_html = account_balance_html;
     template.open_positions_html = open_positions_html;
     template.open_orders_html = open_orders_html;
@@ -144,7 +144,7 @@ fn agents_show_page_renders_base_layout_and_delete_modal() {
 #[test]
 fn notifications_tab_renders_history_and_statuses() {
     let mut template =
-        AgentsShowPageTemplate::new(sample_agent_detail_row(), AgentShowTab::Notifications);
+        AgentsShowPageTemplate::new(sample_agent_detail_row(), AgentShowTab::Notifications, 7);
     template.set_notifications(vec![crate::notifications::model::NotificationHistoryRow {
         id: uuid::Uuid::new_v4(),
         title: "Position changed".to_string(),
@@ -166,12 +166,16 @@ fn notifications_tab_renders_history_and_statuses() {
     assert!(rendered.contains("data-notification-select"));
     assert!(rendered.contains("data-notifications-select-all"));
     assert!(rendered.contains("data-notifications-delete-selected"));
+    assert!(rendered.contains("sse-connect=\"/agents/test-agent/notifications/count/stream\""));
+    assert!(rendered.contains("id=\"agent-notification-count\""));
+    assert!(rendered.contains("sse-swap=\"notification-count\" hx-target=\"this\""));
+    assert!(rendered.contains(">7</span>"));
 }
 
 #[test]
 fn selected_agent_workspace_template_drift_renders_a_settings_warning() {
     let mut template =
-        AgentsShowPageTemplate::new(sample_agent_detail_row(), AgentShowTab::Positions);
+        AgentsShowPageTemplate::new(sample_agent_detail_row(), AgentShowTab::Positions, 0);
     template.navbar = Navbar {
         selected_agent_workspace_template_drift: true,
         ..Default::default()
@@ -201,7 +205,7 @@ fn positions_page_renders_linked_incomplete_agent_setup_checklist() {
     let mut readiness = sample_agent_readiness();
     readiness.has_enabled_trading_job = false;
     let mut template =
-        AgentsShowPageTemplate::new(sample_agent_detail_row(), AgentShowTab::Positions);
+        AgentsShowPageTemplate::new(sample_agent_detail_row(), AgentShowTab::Positions, 0);
     template.setup_checklist = AgentSetupChecklistView::from_readiness(&readiness);
 
     let rendered = template.render().expect("render setup checklist");
@@ -222,7 +226,7 @@ fn positions_page_renders_linked_incomplete_agent_setup_checklist() {
 #[test]
 fn opencode_agent_shows_jobs_tab_with_recent_runs() {
     let mut template =
-        AgentsShowPageTemplate::new(sample_opencode_detail_row(), AgentShowTab::SubAgents);
+        AgentsShowPageTemplate::new(sample_opencode_detail_row(), AgentShowTab::SubAgents, 0);
     template.jobs_loaded = true;
     template.jobs = vec![
         HarnessSubAgentView::from_row(&sample_candle_job_row(1, "analysis-15m", "analysis", true)),
@@ -283,7 +287,7 @@ fn opencode_agent_shows_jobs_tab_with_recent_runs() {
 #[test]
 fn jobs_page_renders_recent_run_rows() {
     let mut template =
-        AgentsShowPageTemplate::new(sample_opencode_detail_row(), AgentShowTab::SubAgents);
+        AgentsShowPageTemplate::new(sample_opencode_detail_row(), AgentShowTab::SubAgents, 0);
     template.recent_runs_section.recent_runs_loaded = true;
     template.recent_runs_section.recent_runs = vec![
         HarnessSubAgentRunView::from_row(&sample_run_row(1, "succeeded", "analysis-15m")),
@@ -313,7 +317,7 @@ fn jobs_page_renders_running_duration_ticker_markup() {
     let fallback = run.duration_text.clone();
 
     let mut template =
-        AgentsShowPageTemplate::new(sample_opencode_detail_row(), AgentShowTab::SubAgents);
+        AgentsShowPageTemplate::new(sample_opencode_detail_row(), AgentShowTab::SubAgents, 0);
     template.recent_runs_section.recent_runs_loaded = true;
     template.recent_runs_section.recent_runs = vec![run];
     let rendered = template.render().expect("render running jobs page");
@@ -326,7 +330,7 @@ fn jobs_page_renders_running_duration_ticker_markup() {
 #[test]
 fn jobs_page_renders_recent_runs_pagination_controls() {
     let mut template =
-        AgentsShowPageTemplate::new(sample_opencode_detail_row(), AgentShowTab::SubAgents);
+        AgentsShowPageTemplate::new(sample_opencode_detail_row(), AgentShowTab::SubAgents, 0);
     template.recent_runs_section.recent_runs_loaded = true;
     template.recent_runs_section.recent_runs = vec![HarnessSubAgentRunView::from_row(
         &sample_run_row(12, "succeeded", "analysis-15m"),
@@ -373,7 +377,7 @@ fn transactions_page_renders_pagination_controls() {
         running_balance: Some(rust_decimal::Decimal::new(5, 0)),
     };
     let mut template =
-        AgentsShowPageTemplate::new(sample_agent_detail_row(), AgentShowTab::Transactions);
+        AgentsShowPageTemplate::new(sample_agent_detail_row(), AgentShowTab::Transactions, 0);
     template.transactions = vec![TransactionView::from_row(row)];
     template.transactions_page = 2;
     template.transactions_total_pages = 3;
@@ -403,7 +407,7 @@ fn transactions_page_renders_pagination_controls() {
 #[test]
 fn jobs_page_links_to_new_job_page() {
     let mut template =
-        AgentsShowPageTemplate::new(sample_opencode_detail_row(), AgentShowTab::SubAgents);
+        AgentsShowPageTemplate::new(sample_opencode_detail_row(), AgentShowTab::SubAgents, 0);
     template.jobs_loaded = true;
     let rendered = template.render().expect("render sub-agents page");
     assert!(rendered.contains("New sub-agent"));
@@ -413,7 +417,7 @@ fn jobs_page_links_to_new_job_page() {
 #[test]
 fn memories_tab_renders_timeline_date_filter_and_markdown_content() {
     let mut template =
-        AgentsShowPageTemplate::new(sample_agent_detail_row(), AgentShowTab::Memories);
+        AgentsShowPageTemplate::new(sample_agent_detail_row(), AgentShowTab::Memories, 0);
     let records = [
         sample_memory_record(
             "BTC",
@@ -456,7 +460,8 @@ fn memories_tab_renders_timeline_date_filter_and_markdown_content() {
 
 #[test]
 fn settings_tab_omits_sync_status_section() {
-    let template = AgentsShowPageTemplate::new(sample_agent_detail_row(), AgentShowTab::Settings);
+    let template =
+        AgentsShowPageTemplate::new(sample_agent_detail_row(), AgentShowTab::Settings, 0);
 
     let rendered = template.render().unwrap();
     assert!(rendered.contains("Settings"));
@@ -466,7 +471,7 @@ fn settings_tab_omits_sync_status_section() {
 #[test]
 fn settings_tab_renders_masked_api_key_with_wallet_actions() {
     let mut template =
-        AgentsShowPageTemplate::new(sample_agent_detail_row(), AgentShowTab::Settings);
+        AgentsShowPageTemplate::new(sample_agent_detail_row(), AgentShowTab::Settings, 0);
     template.is_main_account = false;
     template.subaccount_name = Some("vt-Test Agent".to_string());
 
@@ -489,7 +494,7 @@ fn settings_tab_renders_masked_api_key_with_wallet_actions() {
 #[test]
 fn settings_tab_omits_subaccount_label_for_main_account() {
     let mut template =
-        AgentsShowPageTemplate::new(sample_agent_detail_row(), AgentShowTab::Settings);
+        AgentsShowPageTemplate::new(sample_agent_detail_row(), AgentShowTab::Settings, 0);
     template.is_main_account = true;
 
     let rendered = template.render().unwrap();
@@ -500,7 +505,7 @@ fn settings_tab_omits_subaccount_label_for_main_account() {
 #[test]
 fn settings_tab_renders_workspace_template_drift() {
     let mut template =
-        AgentsShowPageTemplate::new(sample_opencode_detail_row(), AgentShowTab::Settings);
+        AgentsShowPageTemplate::new(sample_opencode_detail_row(), AgentShowTab::Settings, 0);
     template.opencode_workspace = Some(OpenCodeWorkspaceSettingsView {
         template_drift: OpenCodeWorkspaceTemplateDriftView {
             status_text: "Template drift",
@@ -532,7 +537,7 @@ fn settings_tab_renders_workspace_template_drift() {
 #[test]
 fn prompts_tab_renders_strategy_copy_and_reset_defaults_ui() {
     let mut template =
-        AgentsShowPageTemplate::new(sample_agent_detail_row(), AgentShowTab::Prompts);
+        AgentsShowPageTemplate::new(sample_agent_detail_row(), AgentShowTab::Prompts, 0);
     template.set_prompt_editors(vec![
         PromptEditorView::new(
             "analysis",
@@ -675,7 +680,7 @@ fn trading_account_choices_render_subaccount_names() {
 fn new_job_page_renders_agent_navbar_with_jobs_active() {
     let agent = sample_opencode_detail_row();
     let template = AgentJobNewPageTemplate {
-        tabs: build_agent_show_tabs(&agent, AgentShowTab::SubAgents),
+        tabs: build_agent_show_tabs(&agent, AgentShowTab::SubAgents, 0),
         agent_tabs_use_htmx: false,
         agent,
         form: CreateHarnessSubAgentFormValues {
@@ -731,7 +736,7 @@ fn new_job_page_renders_agent_navbar_with_jobs_active() {
 fn workspace_page_renders_escaped_preview_and_htmx_file_link() {
     let agent = sample_agent_detail_row();
     let template = AgentWorkspacePageTemplate {
-        tabs: build_agent_show_tabs(&agent, AgentShowTab::Workspace),
+        tabs: build_agent_show_tabs(&agent, AgentShowTab::Workspace, 0),
         agent_tabs_use_htmx: true,
         agent,
         navbar: Navbar::default(),

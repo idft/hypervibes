@@ -231,6 +231,7 @@ impl AgentMemoryDetailPageTemplate {
         agent: AgentDetailRow,
         memory: MemoryView,
         memory_detail_html: String,
+        notification_count: i64,
         navbar: Navbar,
     ) -> Result<String, askama::Error> {
         let current_path = format!("/agents/{}/memories/{}", agent.agent_key, memory.memory_id);
@@ -240,7 +241,7 @@ impl AgentMemoryDetailPageTemplate {
             agent.enabled,
         );
         Self {
-            tabs: build_agent_show_tabs(&agent, AgentShowTab::Memories),
+            tabs: build_agent_show_tabs(&agent, AgentShowTab::Memories, notification_count),
             agent_tabs_use_htmx: false,
             agent,
             memory,

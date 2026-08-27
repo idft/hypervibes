@@ -333,6 +333,7 @@ impl AgentRunDetailPageTemplate {
         run: HarnessSubAgentRunDetailView,
         session: Option<OpenCodeSessionView>,
         session_lookup_attempted: bool,
+        notification_count: i64,
         navbar: Navbar,
     ) -> Result<String, askama::Error> {
         let current_path = format!("/agents/{}/runs/{}", agent.agent_key, run.id);
@@ -349,7 +350,7 @@ impl AgentRunDetailPageTemplate {
             session_lookup_attempted,
         )?;
         Self {
-            tabs: build_agent_show_tabs(&agent, AgentShowTab::SubAgents),
+            tabs: build_agent_show_tabs(&agent, AgentShowTab::SubAgents, notification_count),
             agent_tabs_use_htmx: false,
             agent,
             run,

@@ -10,13 +10,16 @@ pub enum UiEvent {
         memory_id: Uuid,
     },
     /// Notification was queued by `POST /api/v1/notifications`. The gateway
-    /// service observes this to dispatch the message to the configured
-    /// Telegram chat. The database trigger also emits `notification_created`
-    /// pg_notify, so this hub event is purely for in-process consumers
-    /// that want a typed notification without subscribing to Postgres.
+    /// dispatches from the `notification_created` pg_notify trigger; this
+    /// in-process event lets operator UI streams refresh without a Postgres
+    /// subscription.
     NotificationQueued {
         agent_key: String,
         notification_id: Uuid,
+    },
+    /// One or more notifications were deleted by an operator.
+    NotificationsDeleted {
+        agent_key: String,
     },
 }
 

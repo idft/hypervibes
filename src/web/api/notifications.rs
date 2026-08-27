@@ -19,9 +19,8 @@ use super::error::ApiError;
 /// `POST /api/v1/notifications`
 ///
 /// Queues a notification for the agent's configured gateway. The gateway
-/// service observes the `notification_created` pg_notify event (and the
-/// `UiEvent::NotificationQueued` hub event) and sends the message to the
-/// bound Telegram chat.
+/// service observes the `notification_created` pg_notify event and sends the
+/// message to the bound Telegram chat.
 pub(super) async fn create(
     State(state): State<Arc<AppState>>,
     agent: AuthenticatedAgent,

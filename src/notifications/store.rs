@@ -11,6 +11,16 @@ use crate::{
 
 pub const NOTIFICATION_HISTORY_LIMIT: i64 = 100;
 
+/// Count every notification for an agent, without applying the history-page limit.
+pub async fn count_notifications(pool: &DbPool, agent_key: &str) -> Result<i64> {
+    let (count,): (i64,) = query_as("SELECT COUNT(*) FROM notifications WHERE agent_key = $1")
+        .bind(agent_key)
+        .fetch_one(pool)
+        .await
+        .with_context(|| format!("failed to count notifications for agent {agent_key}"))?;
+    Ok(count)
+}
+
 /// Insert a new queued notification. Returns the new row's id and a typed
 /// record so the caller can broadcast the event without re-querying.
 pub async fn create_notification(
@@ -198,6 +208,60 @@ mod tests {
         assert_eq!(history[0].title, "First notification");
         assert_eq!(history[0].severity, "warning");
         assert_eq!(history[0].status, "queued");
+    }
+
+    #[tokio::test]
+    async fn notification_count_is_exact_and_scoped_to_the_agent() {
+        let pool = test_db::pool().await;
+        let first_key = format!(
+            "note-count-first-{}",
+            chrono::Utc::now().timestamp_nanos_opt().unwrap_or(0)
+        );
+        let second_key = format!(
+            "note-count-second-{}",
+            chrono::Utc::now().timestamp_nanos_opt().unwrap_or(0)
+        );
+        seed_agent(&pool, &first_key).await;
+        seed_agent(&pool, &second_key).await;
+
+        sqlx::query(
+            "INSERT INTO notifications (agent_key, title, body)
+             SELECT $1, 'Notification', 'Body'
+             FROM generate_series(1, 101)",
+        )
+        .bind(&first_key)
+        .execute(&pool)
+        .await
+        .expect("insert notifications for first agent");
+        create_notification(
+            &pool,
+            &second_key,
+            "Other notification",
+            "Other body",
+            NotificationSeverity::Info,
+        )
+        .await
+        .expect("create notification for second agent");
+
+        assert_eq!(
+            count_notifications(&pool, &first_key)
+                .await
+                .expect("count first agent notifications"),
+            101
+        );
+        assert_eq!(
+            count_notifications(&pool, &second_key)
+                .await
+                .expect("count second agent notifications"),
+            1
+        );
+        assert_eq!(
+            list_notification_history(&pool, &first_key)
+                .await
+                .expect("list first agent notification history")
+                .len(),
+            NOTIFICATION_HISTORY_LIMIT as usize
+        );
     }
 
     #[tokio::test]

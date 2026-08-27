@@ -15,6 +15,7 @@ use workspace_store::workspace::{
 
 use crate::{
     agents::store::get_agent,
+    notifications::store::count_notifications,
     web::{
         AppState,
         auth::AuthenticatedUser,
@@ -42,6 +43,7 @@ pub(in crate::web::routes) async fn agents_show_workspace(
     let Some(agent) = get_agent(&state.db_pool, &agent_key).await? else {
         return Ok((StatusCode::NOT_FOUND, "agent not found").into_response());
     };
+    let notification_count = count_notifications(&state.db_pool, &agent.agent_key).await?;
     let navbar = load_selected_agent_navbar(&state, user.id, &agent).await?.0;
     let selected_path = query.file;
     let listing = state
@@ -104,7 +106,7 @@ pub(in crate::web::routes) async fn agents_show_workspace(
     let current_path = workspace_file_url(&agent_key, &selected_path);
     Ok(Html(
         AgentWorkspacePageTemplate {
-            tabs: build_agent_show_tabs(&agent, AgentShowTab::Workspace),
+            tabs: build_agent_show_tabs(&agent, AgentShowTab::Workspace, notification_count),
             agent_tabs_use_htmx: true,
             agent,
             navbar,

@@ -22,6 +22,7 @@ use crate::{
         AGENT_MEMORY_TIMELINE_PAGE_SIZE, MemoryTimelineRecord, get_memory as get_memory_record,
         list_agent_memory_timeline,
     },
+    notifications::store::count_notifications,
     web::{
         AppState,
         auth::AuthenticatedUser,
@@ -92,10 +93,12 @@ pub(in crate::web::routes) async fn agents_show_memory_detail(
         format!("/agents/{}/memories", agent.agent_key),
     )?;
     let navbar = load_selected_agent_navbar(&state, user.id, &agent).await?.0;
+    let notification_count = count_notifications(&state.db_pool, &agent.agent_key).await?;
     let html = AgentMemoryDetailPageTemplate::render_view(
         agent.clone(),
         memory_view,
         memory_detail_html,
+        notification_count,
         navbar,
     )?;
     Ok(Html(html).into_response())
