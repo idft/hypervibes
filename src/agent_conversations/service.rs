@@ -488,7 +488,6 @@ fn permission_rules_for(orders: &str, memory_writes: &str) -> Result<Vec<OpenCod
         "hypervibes_list_orders",
         "hypervibes_list_account_transactions",
         "hypervibes_get_order",
-        "hypervibes_send_notification",
     ]
     .into_iter()
     .map(|permission| OpenCodePermissionRule {
@@ -552,7 +551,7 @@ mod tests {
     }
 
     #[test]
-    fn chat_allows_strategy_prompt_reads_and_confirms_updates() {
+    fn chat_allows_strategy_prompt_reads_without_notification_access() {
         let rules = default_permission_rules();
         let action_for = |permission: &str| {
             rules
@@ -566,7 +565,7 @@ mod tests {
             Some("allow")
         );
         assert_eq!(action_for("hypervibes_get_strategy_prompt"), Some("allow"));
-        assert_eq!(action_for("hypervibes_send_notification"), Some("allow"));
+        assert_eq!(action_for("hypervibes_send_notification"), None);
         assert_eq!(action_for("hypervibes_update_strategy_prompt"), Some("ask"));
     }
 }

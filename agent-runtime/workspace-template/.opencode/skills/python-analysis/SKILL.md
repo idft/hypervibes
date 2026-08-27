@@ -1,44 +1,37 @@
 ---
 name: python-analysis
-description: Use when writing Python analysis scripts in HyperVibes OpenCode workspaces, especially for pandas, numpy, pandas-ta-classic, statistics, plotting, or OHLCV analysis.
+description: Use during an analysis job to run existing quantitative tools against canonical OHLCV input without modifying reusable code.
 ---
 
 # Python Analysis
 
-Use the container-provided Python analysis runtime for market analysis scripts.
+Use the container-provided immutable Python analysis runtime for existing
+quantitative tools. This skill does not authorize creating, editing, or running
+new Python scripts.
 
 ## Runtime
 
-Run scripts with `python`. The `python` executable is provided by the shared
-analysis virtualenv at `/opt/hypervibes/analysis/.venv`.
+The `python` executable is provided by the shared analysis virtualenv at
+`/opt/hypervibes/analysis/.venv`.
 
-Common libraries available:
+The analysis-coding sub-agent owns reusable implementation under `scripts/user/`
+through its separate `analysis-coding` skill. Analysis jobs may only invoke the
+existing canonical analyzer and use its output as evidence.
 
-- `requests`, `httpx`
-- `numpy`, `pandas`, `scipy`, `statsmodels`
-- `pandas_ta_classic` for technical indicators
-- `polars`
-- `matplotlib`, `seaborn`, `plotly`
-- `tabulate`
+## Inputs and Outputs
 
-## Writable Paths
-
-Write reusable analysis scripts under `scripts/user/`.
-
-Write durable analysis outputs under `data/`.
-
-Use `scratch/` for temporary files.
-
-Do not write generated helper scripts outside those paths.
+Use the existing `scripts/user/analyze.py` entrypoint when it is present. Pass
+canonical OHLCV input to its `--input` argument and write its requested output
+under the role-approved `scratch/` path. Do not create temporary helper scripts,
+write durable `data/` outputs, or install packages.
 
 ## Backend Boundary
 
-Do not write Python scripts that call HyperVibes HTTP APIs directly. Use the
-`hypervibes` MCP tools for backend access, memory reads/writes, account state,
-and orders.
+Do not call HyperVibes HTTP APIs directly. Use the `hypervibes` MCP tools for
+backend access, memory reads/writes, account state, and orders.
 
-It is allowed to fetch public market data directly from Hyperliquid using the
-canonical Hyperliquid data skill script.
+Public market data may be fetched only through the canonical Hyperliquid data
+skill script.
 
 ## OHLCV Workflow
 
@@ -53,13 +46,5 @@ such as `--coin`, `--timeframe`, or `--days`.
 
 The command prints a small manifest to stdout and writes candle JSON to
 `scratch/ohlcv-cache/<SYMBOL>/<TIMEFRAME>/...json`. Read the manifest's
-`output_path`, then load that JSON file into pandas for analysis. Do not use
-`--stdout` unless manually debugging; full candle stdout can fill the LLM
-context window.
-
-Example import for technical indicators:
-
-```python
-import pandas as pd
-import pandas_ta_classic as ta
-```
+`output_path`, then pass it directly to the existing analyzer. Do not use
+`--stdout`; full candle stdout can fill the LLM context window.

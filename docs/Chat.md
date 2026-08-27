@@ -61,6 +61,9 @@ Order and memory-write permissions are configured as **Deny**, **Confirm**, or
 tool call continues. Updating a strategy prompt always requires confirmation
 through `hypervibes_update_strategy_prompt`.
 
+Notification sending is denied for Chat until the per-conversation notification
+policy is available.
+
 ## Discuss a prompt
 
 The Prompts tab's **Discuss prompt** action is a shortcut into Chat:

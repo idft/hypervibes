@@ -929,6 +929,174 @@ mod tests {
         }
     }
 
+    #[derive(Debug)]
+    enum PermissionRule {
+        Action(String),
+        Scoped(Vec<(String, String)>),
+    }
+
+    #[derive(Debug)]
+    struct ProfilePermissions {
+        rules: Vec<(String, PermissionRule)>,
+    }
+
+    fn rendered_profile(generated: &GeneratedOpenCodeWorkspace, name: &str) -> ProfilePermissions {
+        let profile = fs::read_to_string(
+            generated
+                .workspace_host_path
+                .join(".opencode/agents")
+                .join(format!("{name}.md")),
+        )
+        .expect("read generated profile");
+        let front_matter = profile
+            .strip_prefix("---\n")
+            .and_then(|profile| {
+                profile
+                    .split_once("\n---\n")
+                    .map(|(front_matter, _)| front_matter)
+            })
+            .expect("profile has YAML front matter");
+        parse_profile_permissions(front_matter)
+    }
+
+    fn parse_profile_permissions(front_matter: &str) -> ProfilePermissions {
+        let lines: Vec<_> = front_matter.lines().collect();
+        let mut index = lines
+            .iter()
+            .position(|line| *line == "permission:")
+            .expect("profile includes permissions")
+            + 1;
+        let mut rules = Vec::new();
+
+        while let Some(line) = lines.get(index) {
+            let Some(entry) = line.strip_prefix("  ") else {
+                break;
+            };
+            if entry.starts_with("  ") {
+                panic!("scoped permission has no parent rule");
+            }
+            let (pattern, action) = parse_permission_entry(entry);
+            index += 1;
+
+            if !action.is_empty() {
+                rules.push((pattern, PermissionRule::Action(action)));
+                continue;
+            }
+
+            let mut scoped_rules = Vec::new();
+            while let Some(scoped) = lines.get(index).and_then(|line| line.strip_prefix("    ")) {
+                scoped_rules.push(parse_permission_entry(scoped));
+                index += 1;
+            }
+            assert!(
+                !scoped_rules.is_empty(),
+                "scoped permission {pattern} must contain rules"
+            );
+            rules.push((pattern, PermissionRule::Scoped(scoped_rules)));
+        }
+
+        ProfilePermissions { rules }
+    }
+
+    fn parse_permission_entry(entry: &str) -> (String, String) {
+        let (pattern, action) = entry
+            .split_once(':')
+            .expect("permission entry has an action separator");
+        (
+            pattern.trim().trim_matches('"').to_string(),
+            action.trim().to_string(),
+        )
+    }
+
+    fn profile_permission_action(
+        profile: &ProfilePermissions,
+        tool: &str,
+        subject: &str,
+    ) -> String {
+        let mut action = None;
+        for (pattern, rule) in &profile.rules {
+            if !wildcard_matches(pattern, tool) {
+                continue;
+            }
+
+            match rule {
+                PermissionRule::Action(rule_action) => action = Some(rule_action.as_str()),
+                PermissionRule::Scoped(scoped_rules) => {
+                    for (scoped_pattern, scoped_action) in scoped_rules {
+                        if wildcard_matches(scoped_pattern, subject) {
+                            action = Some(scoped_action);
+                        }
+                    }
+                }
+            }
+        }
+        action.unwrap_or("allow").to_string()
+    }
+
+    fn profile_permissions_json(profile: &ProfilePermissions) -> Value {
+        let mut permissions = serde_json::Map::new();
+        for (pattern, rule) in &profile.rules {
+            let rule = match rule {
+                PermissionRule::Action(action) => Value::String(action.clone()),
+                PermissionRule::Scoped(scoped_rules) => Value::Object(
+                    scoped_rules
+                        .iter()
+                        .map(|(pattern, action)| (pattern.clone(), Value::String(action.clone())))
+                        .collect(),
+                ),
+            };
+            permissions.insert(pattern.clone(), rule);
+        }
+        Value::Object(permissions)
+    }
+
+    fn wildcard_matches(pattern: &str, value: &str) -> bool {
+        let pattern = pattern.as_bytes();
+        let value = value.as_bytes();
+        let mut pattern_index = 0;
+        let mut value_index = 0;
+        let mut star_index = None;
+        let mut star_value_index = 0;
+
+        while value_index < value.len() {
+            if pattern_index < pattern.len()
+                && (pattern[pattern_index] == b'?' || pattern[pattern_index] == value[value_index])
+            {
+                pattern_index += 1;
+                value_index += 1;
+            } else if pattern_index < pattern.len() && pattern[pattern_index] == b'*' {
+                star_index = Some(pattern_index);
+                pattern_index += 1;
+                star_value_index = value_index;
+            } else if let Some(star_index) = star_index {
+                pattern_index = star_index + 1;
+                star_value_index += 1;
+                value_index = star_value_index;
+            } else {
+                return false;
+            }
+        }
+
+        while pattern_index < pattern.len() && pattern[pattern_index] == b'*' {
+            pattern_index += 1;
+        }
+        pattern_index == pattern.len()
+    }
+
+    fn assert_profile_action(
+        profile_name: &str,
+        profile: &ProfilePermissions,
+        tool: &str,
+        subject: &str,
+        expected: &str,
+    ) {
+        assert_eq!(
+            profile_permission_action(profile, tool, subject),
+            expected,
+            "{profile_name} profile should {expected} {tool} for {subject:?}"
+        );
+    }
+
     #[test]
     fn generates_expected_workspace_layout() {
         let temp = TempDir::new("opencode-layout");
@@ -1067,6 +1235,330 @@ mod tests {
     }
 
     #[test]
+    fn generated_profiles_enforce_the_role_permission_matrix() {
+        let temp = TempDir::new("opencode-profile-permissions");
+        let generated = generate_agent_workspace(
+            &sample_config(&temp.path),
+            &sample_agent(),
+            WorkspaceGenerationMode::CreateNew,
+        )
+        .expect("generate workspace");
+        let analysis = rendered_profile(&generated, "analysis");
+        let market_analysis = rendered_profile(&generated, "market-analysis");
+        let trading = rendered_profile(&generated, "trading");
+        let daily_review = rendered_profile(&generated, "daily-review");
+        let analysis_coding = rendered_profile(&generated, "analysis-coding");
+        let conversations = rendered_profile(&generated, "agent-conversations");
+
+        for (name, profile) in [
+            ("analysis", &analysis),
+            ("market-analysis", &market_analysis),
+            ("trading", &trading),
+            ("daily-review", &daily_review),
+            ("analysis-coding", &analysis_coding),
+            ("agent-conversations", &conversations),
+        ] {
+            assert_profile_action(name, profile, "unlisted_tool", "", "deny");
+            assert_profile_action(name, profile, "todowrite", "", "deny");
+        }
+
+        assert_profile_action(
+            "analysis",
+            &analysis,
+            "bash",
+            "python .opencode/skills/hyperliquid-data/fetch_ohlcv.py BTC 15m",
+            "allow",
+        );
+        assert_profile_action(
+            "analysis",
+            &analysis,
+            "bash",
+            "python scripts/user/analyze.py --symbol BTC",
+            "allow",
+        );
+        assert_profile_action(
+            "analysis",
+            &analysis,
+            "bash",
+            "python -c 'print(1)'",
+            "deny",
+        );
+        assert_profile_action(
+            "analysis",
+            &analysis,
+            "read",
+            "workspaces/agents/btc-2/scratch/ohlcv-cache/BTC/input.json",
+            "allow",
+        );
+        assert_profile_action(
+            "analysis",
+            &analysis,
+            "read",
+            "workspaces/agents/btc-2/scripts/user/analyze.py",
+            "deny",
+        );
+        assert_profile_action("analysis", &analysis, "skill", "hyperliquid-data", "allow");
+        assert_profile_action("analysis", &analysis, "skill", "analysis-coding", "deny");
+        assert_profile_action("analysis", &analysis, "hypervibes_get_account", "", "allow");
+        assert_profile_action(
+            "analysis",
+            &analysis,
+            "hypervibes_send_notification",
+            "",
+            "deny",
+        );
+        assert_profile_action(
+            "analysis",
+            &analysis,
+            "hypervibes_submit_orders",
+            "",
+            "deny",
+        );
+
+        assert_profile_action(
+            "market-analysis",
+            &market_analysis,
+            "hypervibes_get_latest_analysis",
+            "",
+            "allow",
+        );
+        assert_profile_action(
+            "market-analysis",
+            &market_analysis,
+            "hypervibes_write_memory",
+            "",
+            "allow",
+        );
+        assert_profile_action(
+            "market-analysis",
+            &market_analysis,
+            "bash",
+            "python x.py",
+            "deny",
+        );
+        assert_profile_action(
+            "market-analysis",
+            &market_analysis,
+            "edit",
+            "scripts/user/analyze.py",
+            "deny",
+        );
+        assert_profile_action(
+            "market-analysis",
+            &market_analysis,
+            "hypervibes_send_notification",
+            "",
+            "deny",
+        );
+
+        assert_profile_action(
+            "daily-review",
+            &daily_review,
+            "hypervibes_list_account_transactions",
+            "",
+            "allow",
+        );
+        assert_profile_action(
+            "daily-review",
+            &daily_review,
+            "hypervibes_write_memory",
+            "",
+            "allow",
+        );
+        assert_profile_action("daily-review", &daily_review, "bash", "python x.py", "deny");
+        assert_profile_action(
+            "daily-review",
+            &daily_review,
+            "read",
+            "scratch/data.json",
+            "deny",
+        );
+        assert_profile_action(
+            "daily-review",
+            &daily_review,
+            "hypervibes_update_strategy_prompt",
+            "",
+            "deny",
+        );
+        assert_profile_action(
+            "daily-review",
+            &daily_review,
+            "hypervibes_send_notification",
+            "",
+            "deny",
+        );
+
+        assert_profile_action(
+            "analysis-coding",
+            &analysis_coding,
+            "edit",
+            "scripts/user/analyze.py",
+            "allow",
+        );
+        assert_profile_action(
+            "analysis-coding",
+            &analysis_coding,
+            "read",
+            "scripts/user/tests/test_indicator.py",
+            "allow",
+        );
+        assert_profile_action(
+            "analysis-coding",
+            &analysis_coding,
+            "glob",
+            "scripts/user/**",
+            "allow",
+        );
+        assert_profile_action(
+            "analysis-coding",
+            &analysis_coding,
+            "edit",
+            "AGENTS.md",
+            "deny",
+        );
+        assert_profile_action(
+            "analysis-coding",
+            &analysis_coding,
+            "read",
+            "scratch/input.json",
+            "deny",
+        );
+        assert_profile_action(
+            "analysis-coding",
+            &analysis_coding,
+            "bash",
+            "python x.py",
+            "deny",
+        );
+        assert_profile_action(
+            "analysis-coding",
+            &analysis_coding,
+            "skill",
+            "analysis-coding",
+            "allow",
+        );
+        assert_profile_action(
+            "analysis-coding",
+            &analysis_coding,
+            "skill",
+            "python-analysis",
+            "deny",
+        );
+        assert_profile_action(
+            "analysis-coding",
+            &analysis_coding,
+            "hypervibes_coding_validate_candidate",
+            "",
+            "allow",
+        );
+        assert_profile_action(
+            "analysis-coding",
+            &analysis_coding,
+            "hypervibes_update_strategy_prompt",
+            "",
+            "deny",
+        );
+        assert_profile_action(
+            "analysis-coding",
+            &analysis_coding,
+            "hypervibes_send_notification",
+            "",
+            "deny",
+        );
+
+        assert_profile_action(
+            "trading",
+            &trading,
+            "bash",
+            "python .opencode/skills/hyperliquid-data/fetch_ohlcv.py BTC 15m",
+            "allow",
+        );
+        assert_profile_action(
+            "trading",
+            &trading,
+            "read",
+            "workspaces/agents/btc-2/scratch/trading-confirmation/result.json",
+            "allow",
+        );
+        assert_profile_action(
+            "trading",
+            &trading,
+            "read",
+            "workspaces/agents/btc-2/scratch/ohlcv-cache/BTC/input.json",
+            "deny",
+        );
+        assert_profile_action("trading", &trading, "hypervibes_submit_orders", "", "allow");
+        assert_profile_action(
+            "trading",
+            &trading,
+            "hypervibes_send_notification",
+            "",
+            "allow",
+        );
+
+        assert_profile_action(
+            "agent-conversations",
+            &conversations,
+            "read",
+            "AGENTS.md",
+            "deny",
+        );
+        assert_profile_action(
+            "agent-conversations",
+            &conversations,
+            "hypervibes_list_strategy_prompts",
+            "",
+            "allow",
+        );
+        assert_profile_action(
+            "agent-conversations",
+            &conversations,
+            "hypervibes_submit_orders",
+            "",
+            "deny",
+        );
+        assert_profile_action(
+            "agent-conversations",
+            &conversations,
+            "hypervibes_send_notification",
+            "",
+            "deny",
+        );
+    }
+
+    #[test]
+    fn container_chat_profile_matches_workspace_template_permissions() {
+        let temp = TempDir::new("opencode-container-chat-profile");
+        let generated = generate_agent_workspace(
+            &sample_config(&temp.path),
+            &sample_agent(),
+            WorkspaceGenerationMode::CreateNew,
+        )
+        .expect("generate workspace");
+        let workspace_profile = rendered_profile(&generated, "agent-conversations");
+        let workspace_permissions = profile_permissions_json(&workspace_profile);
+
+        let config_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../agent-runtime/container/opencode.jsonc");
+        let config = fs::read_to_string(config_path).expect("read container OpenCode config");
+        let config = config
+            .lines()
+            .filter(|line| !line.trim_start().starts_with("//"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let config: Value = serde_json::from_str(&config).expect("parse container OpenCode config");
+        let container_permissions = config
+            .get("agent")
+            .and_then(Value::as_object)
+            .and_then(|agents| agents.get("agent-conversations"))
+            .and_then(Value::as_object)
+            .and_then(|profile| profile.get("permission"))
+            .expect("container chat permissions");
+
+        assert_eq!(container_permissions, &workspace_permissions);
+    }
+
+    #[test]
     fn renders_agents_template_placeholders() {
         let temp = TempDir::new("opencode-agents-template");
         let generated = generate_agent_workspace(
@@ -1125,7 +1617,7 @@ mod tests {
         .expect("read agent");
 
         assert!(commands.contains("HyperVibes"));
-        assert!(agent.contains("scripts/user/"));
+        assert!(agent.contains("Analysis coding owns reusable quantitative code."));
         assert!(agent.contains("steps: 100"));
     }
 

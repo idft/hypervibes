@@ -3,6 +3,7 @@ description: Reviews agent outcomes and records durable review memories.
 mode: all
 steps: 100
 permission:
+  "*": deny
   hypervibes_*: deny
   hypervibes_list_memories: allow
   hypervibes_get_memory_detail: allow
@@ -10,7 +11,6 @@ permission:
   hypervibes_list_account_transactions: allow
   hypervibes_get_order: allow
   hypervibes_write_memory: allow
-  hypervibes_send_notification: allow
 ---
 
 Use the `hypervibes_*` MCP tools for backend access.

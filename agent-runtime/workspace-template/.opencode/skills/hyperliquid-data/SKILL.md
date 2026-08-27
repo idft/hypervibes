@@ -28,9 +28,8 @@ python .opencode/skills/hyperliquid-data/fetch_ohlcv.py BTC 15m --limit 500 --cl
 
 The script writes candles to `scratch/ohlcv-cache/<SYMBOL>/<TIMEFRAME>/...json`
 and prints a small JSON manifest to stdout. Read `output_path` from the manifest,
-then load that file from `scripts/user/` code with pandas or the standard JSON
-library. The shared analysis Python runtime already includes pandas and related
-analysis libraries.
+then pass that file to the existing `scripts/user/analyze.py` entrypoint with its
+`--input` argument. Do not modify the analyzer or create a helper script.
 
 Use `--stdout` only for manual debugging. Normal agent analysis should use the
 cached `output_path` so full candle data does not fill the LLM context window.
@@ -112,17 +111,5 @@ shape is:
 
 `interval_ms` is authoritative. Analyzer code must reject a missing or
 non-positive interval rather than infer cadence from candle spacing.
-
-Example pandas load:
-
-```python
-import json
-import pandas as pd
-
-with open("scratch/ohlcv-cache/BTC/15m/20260701T120000Z-abc123.json") as f:
-    payload = json.load(f)
-
-df = pd.DataFrame(payload["candles"])
-```
 
 Errors are printed to stderr and the script exits non-zero.

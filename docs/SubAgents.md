@@ -43,6 +43,10 @@ Analysis, market analysis, trading, and daily review can use reusable analysis
 code but cannot modify `scripts/user/`. Analysis coding is the only sub-agent allowed
 to change that tree, and it requires an explicit strong provider and model.
 
+The initial notification capability default permits `hypervibes_send_notification`
+only for trading. Analysis, market analysis, daily review, and analysis coding are
+denied until their per-sub-agent capability controls are introduced.
+
 ## Dispatch and runs
 
 The scheduler claims due sub-agents transactionally and dispatches them through the

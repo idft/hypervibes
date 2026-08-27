@@ -3,6 +3,7 @@ description: Executes HyperVibes market-analysis decisions with narrow condition
 mode: all
 steps: 100
 permission:
+  "*": deny
   bash:
     "*": deny
     "python .opencode/skills/hyperliquid-data/fetch_ohlcv.py *": allow

@@ -15,6 +15,11 @@ type: each sub-agent receives only the tools needed for its role. Chat read tool
 available by default; order actions, memory writes, and prompt updates depend
 on the conversation's permissions and may require confirmation.
 
+`hypervibes:notification_send` is the named capability for queueing a gateway
+notification. Every scheduled role is eligible for the capability once
+per-sub-agent controls are available. Until then, its static default is enabled
+only for trading. It is denied for other scheduled roles and for Chat.
+
 ## Tools
 
 | Tool | Description | Availability |
@@ -36,7 +41,7 @@ on the conversation's permissions and may require confirmation.
 | `hypervibes_submit_orders` | Submit one or more orders through HyperVibes. | Sub-agents: trading; Chat permissions apply |
 | `hypervibes_cancel_orders` | Cancel selected orders. | Sub-agents: trading; Chat permissions apply |
 | `hypervibes_cancel_all_orders` | Cancel all open orders, optionally for one market. | Sub-agents: trading; Chat permissions apply |
-| `hypervibes_send_notification` | Queue a notification for the agent's messaging gateway. A successful call records the notification but does not guarantee delivery. | Operational sub-agents and Chat |
+| `hypervibes_send_notification` | Queue a notification for the agent's messaging gateway. A successful call records the notification but does not guarantee delivery. | Sub-agents: trading only by default |
 
 Tools operate within the current agent's account and data boundaries. The
 MCP server does not receive the user's Hyperliquid private key.

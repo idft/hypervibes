@@ -3,6 +3,7 @@ description: Improves reusable analysis code in an isolated candidate workspace.
 mode: all
 steps: 100
 permission:
+  "*": deny
   bash: deny
   edit:
     "*": deny
@@ -18,6 +19,9 @@ permission:
     "scripts/user/**": allow
   grep: deny
   lsp: allow
+  skill:
+    "*": deny
+    analysis-coding: allow
   external_directory: deny
   webfetch: deny
   task: deny

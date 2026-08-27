@@ -6,11 +6,12 @@ HyperVibes API base URL: `{{api_base_url}}`
 
 Workspace container path: `{{workspace_container_path}}`
 
-Writable paths:
+Role boundaries:
 
-- `scripts/user/`
-- `data/`
-- `scratch/`
+- Only the analysis-coding sub-agent may modify reusable code under
+  `scripts/user/`.
+- Other roles may invoke the existing analyzer only through their approved
+  commands and may access only the workspace paths their profile permits.
 
 Backend access:
 
