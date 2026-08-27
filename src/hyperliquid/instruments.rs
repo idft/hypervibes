@@ -131,6 +131,7 @@ mod tests {
             max_leverage,
             isolated_margin: false,
             margin_mode: None,
+            deployer_fee_scale: None,
             growth_mode: false,
             aligned_quote_token: false,
             table: PriceTick::for_perp(sz_decimals),
