@@ -1282,6 +1282,7 @@ async fn cancel_orders_inner(
             .cancel(
                 BatchCancel {
                     cancels: batch_cancels.clone(),
+                    fast: false,
                 },
                 nonce,
                 account_address,
