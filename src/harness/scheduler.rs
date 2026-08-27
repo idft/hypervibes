@@ -2257,6 +2257,14 @@ mod tests {
         delay: Duration,
         active_calls: Arc<AtomicUsize>,
         max_active_calls: Arc<AtomicUsize>,
+        /// Optional rendezvous used by concurrency-asserting tests. When set,
+        /// each `dispatch()` increments `active_calls`, then waits for every
+        /// party to arrive before recording the call and decrementing. This
+        /// deterministically forces overlap regardless of DB scheduling
+        /// latency: if two dispatches fire they are guaranteed to observe
+        /// `active_calls == 2`, and if only one fires the test stalls on the
+        /// barrier (surfacing as a clear timeout rather than a false pass).
+        barrier: Option<Arc<tokio::sync::Barrier>>,
     }
 
     #[async_trait]
@@ -2268,7 +2276,9 @@ mod tests {
                     .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |current| {
                         (active > current).then_some(active)
                     });
-            if !self.delay.is_zero() {
+            if let Some(barrier) = self.barrier.as_ref() {
+                barrier.wait().await;
+            } else if !self.delay.is_zero() {
                 tokio::time::sleep(self.delay).await;
             }
             self.calls.lock().unwrap().push(request);
@@ -2347,6 +2357,7 @@ mod tests {
                 delay: Duration::ZERO,
                 active_calls: Arc::new(AtomicUsize::new(0)),
                 max_active_calls: Arc::new(AtomicUsize::new(0)),
+                barrier: None,
             }
         }
 
@@ -2356,6 +2367,22 @@ mod tests {
                 delay,
                 active_calls: Arc::new(AtomicUsize::new(0)),
                 max_active_calls: Arc::new(AtomicUsize::new(0)),
+                barrier: None,
+            }
+        }
+
+        /// Build a backend whose `dispatch()` rendezvous at a `parties`-way
+        /// barrier after incrementing `active_calls`. Use this for tests that
+        /// assert concurrent dispatch: the barrier makes overlap
+        /// deterministic instead of relying on a fixed `sleep` window that
+        /// can be missed when DB latency spikes under parallel test load.
+        fn with_barrier(calls: Arc<Mutex<Vec<DispatchRequest>>>, parties: usize) -> Self {
+            Self {
+                calls,
+                delay: Duration::ZERO,
+                active_calls: Arc::new(AtomicUsize::new(0)),
+                max_active_calls: Arc::new(AtomicUsize::new(0)),
+                barrier: Some(Arc::new(tokio::sync::Barrier::new(parties))),
             }
         }
 
@@ -2748,10 +2775,7 @@ mod tests {
         pin_job_due(&pool, trading_id, "5m").await;
 
         let calls: Arc<Mutex<Vec<DispatchRequest>>> = Arc::new(Mutex::new(Vec::new()));
-        let backend_impl = Arc::new(FakeBackend::with_delay(
-            calls.clone(),
-            Duration::from_millis(150),
-        ));
+        let backend_impl = Arc::new(FakeBackend::with_barrier(calls.clone(), 2));
         let backend: Arc<dyn HarnessBackend> = backend_impl.clone();
 
         let live_accounts = Arc::new(crate::hyperliquid::live_state::LiveAccountStore::new());
@@ -2872,10 +2896,7 @@ mod tests {
         }
 
         let calls: Arc<Mutex<Vec<DispatchRequest>>> = Arc::new(Mutex::new(Vec::new()));
-        let backend_impl = Arc::new(FakeBackend::with_delay(
-            calls.clone(),
-            Duration::from_millis(150),
-        ));
+        let backend_impl = Arc::new(FakeBackend::with_barrier(calls.clone(), 2));
         let backend: Arc<dyn HarnessBackend> = backend_impl.clone();
 
         let live_accounts = Arc::new(crate::hyperliquid::live_state::LiveAccountStore::new());
