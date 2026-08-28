@@ -90,6 +90,35 @@ declared closed-candle rules; it cannot derive a new thesis or alter its levels.
 
 Run state is persisted. On startup and periodically thereafter, the scheduler
 resumes queued runs and recovers stale running runs so interrupted dispatches
+do not block subsequent work.
+
+### Isolated Workspace Foundation
+
+Phase 2 persists a versioned run-context snapshot and run-artifact lifecycle
+record before isolated dispatch is enabled. The snapshot carries only run input
+and capability identity; validation rejects sensitive gateway and credential
+fields, including normalized field-name variants and known runtime credential
+forms. Schema version one is a closed, typed JSON contract; adding a nested
+input or capability requires a reviewed schema version rather than an opaque
+metadata field.
+Artifact paths are never stored in Postgres. The workspace controller
+derives them from the owned agent key and run ID as
+`/workspaces/runs/<agent-key>/<run-id>/workspace`.
+
+The controller can idempotently create, inspect, scrub the root runtime `.env`,
+and delete run workspaces. Equivalent state and controller paths exist for an
+internal conversation UUID at
+`/workspaces/conversations/<agent-key>/<conversation-id>/workspace`; external
+channel keys are not filesystem identities. The scheduler and conversation
+service still use the active workspace during this foundation phase. Phase 3
+and Phase 4 respectively adopt these isolated directories for dispatch and
+conversation turns.
+
+Notifications may record a system-supplied run or conversation provenance and
+capability-schema binding. A scoped source must be owned by the agent and have
+the relevant durable notification authority. Provenance never stores a gateway
+token or destination, and deleting a source run or conversation preserves the
+notification record.
 
 Agent conversations are separate from scheduled sub-agents and `harness_sub_agent_runs`. Each
 `agent_conversations` row maps one user or future-gateway conversation to

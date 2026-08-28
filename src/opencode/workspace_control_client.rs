@@ -5,9 +5,21 @@ use async_trait::async_trait;
 use reqwest::{Client, StatusCode, Url};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use uuid::Uuid;
 use workspace_store::{
     coding_workspace::{CandidateInspection, PromotionJournalPhase, PromotionResult},
+    isolated_workspace::{
+        IsolatedWorkspaceCreated, IsolatedWorkspaceInspection, RuntimeSecretsScrubbed,
+    },
     workspace::{WorkspaceBrowserListing, WorkspaceFilePreview, WorkspaceTemplateDrift},
+};
+
+#[cfg(test)]
+use workspace_store::isolated_workspace::{
+    ConversationWorkspacePath, RunWorkspacePath, create_conversation_workspace,
+    create_run_workspace, delete_conversation_workspace, delete_run_workspace,
+    inspect_conversation_workspace, inspect_run_workspace,
+    scrub_conversation_workspace_runtime_secrets, scrub_run_workspace_runtime_secrets,
 };
 
 #[cfg(test)]
@@ -44,6 +56,12 @@ pub struct RecoveryResult {
     pub phase: PromotionJournalPhase,
 }
 
+/// Phase 2 exposes isolated-workspace operations while Phase 3 and Phase 4
+/// retain the existing active-workspace dispatch and conversation callers.
+#[allow(
+    dead_code,
+    reason = "Phase 3 and Phase 4 will invoke the new isolated-workspace controller methods"
+)]
 #[async_trait]
 pub trait WorkspaceController: Send + Sync {
     async fn create_workspace(
@@ -53,6 +71,52 @@ pub trait WorkspaceController: Send + Sync {
         idempotency_key: &str,
     ) -> Result<WorkspaceCreated>;
     async fn delete_workspace(&self, agent_key: &str, idempotency_key: &str) -> Result<bool>;
+    async fn create_run_workspace(
+        &self,
+        agent_key: &str,
+        run_id: i64,
+        idempotency_key: &str,
+    ) -> Result<IsolatedWorkspaceCreated>;
+    async fn inspect_run_workspace(
+        &self,
+        agent_key: &str,
+        run_id: i64,
+    ) -> Result<IsolatedWorkspaceInspection>;
+    async fn scrub_run_workspace_runtime_secrets(
+        &self,
+        agent_key: &str,
+        run_id: i64,
+        idempotency_key: &str,
+    ) -> Result<RuntimeSecretsScrubbed>;
+    async fn delete_run_workspace(
+        &self,
+        agent_key: &str,
+        run_id: i64,
+        idempotency_key: &str,
+    ) -> Result<bool>;
+    async fn create_conversation_workspace(
+        &self,
+        agent_key: &str,
+        conversation_id: Uuid,
+        idempotency_key: &str,
+    ) -> Result<IsolatedWorkspaceCreated>;
+    async fn inspect_conversation_workspace(
+        &self,
+        agent_key: &str,
+        conversation_id: Uuid,
+    ) -> Result<IsolatedWorkspaceInspection>;
+    async fn scrub_conversation_workspace_runtime_secrets(
+        &self,
+        agent_key: &str,
+        conversation_id: Uuid,
+        idempotency_key: &str,
+    ) -> Result<RuntimeSecretsScrubbed>;
+    async fn delete_conversation_workspace(
+        &self,
+        agent_key: &str,
+        conversation_id: Uuid,
+        idempotency_key: &str,
+    ) -> Result<bool>;
     async fn list_workspace_browser_entries(
         &self,
         agent_key: &str,
@@ -136,6 +200,76 @@ impl WorkspaceController for LocalWorkspaceController {
     }
     async fn delete_workspace(&self, agent_key: &str, _idempotency_key: &str) -> Result<bool> {
         workspace_store::workspace::delete_agent_workspace(&self.config, agent_key)
+    }
+    async fn create_run_workspace(
+        &self,
+        agent_key: &str,
+        run_id: i64,
+        _idempotency_key: &str,
+    ) -> Result<IsolatedWorkspaceCreated> {
+        let path = RunWorkspacePath::new(agent_key, run_id)?;
+        create_run_workspace(&self.config, &path)
+    }
+    async fn inspect_run_workspace(
+        &self,
+        agent_key: &str,
+        run_id: i64,
+    ) -> Result<IsolatedWorkspaceInspection> {
+        let path = RunWorkspacePath::new(agent_key, run_id)?;
+        inspect_run_workspace(&self.config, &path)
+    }
+    async fn scrub_run_workspace_runtime_secrets(
+        &self,
+        agent_key: &str,
+        run_id: i64,
+        _idempotency_key: &str,
+    ) -> Result<RuntimeSecretsScrubbed> {
+        let path = RunWorkspacePath::new(agent_key, run_id)?;
+        scrub_run_workspace_runtime_secrets(&self.config, &path)
+    }
+    async fn delete_run_workspace(
+        &self,
+        agent_key: &str,
+        run_id: i64,
+        _idempotency_key: &str,
+    ) -> Result<bool> {
+        let path = RunWorkspacePath::new(agent_key, run_id)?;
+        delete_run_workspace(&self.config, &path)
+    }
+    async fn create_conversation_workspace(
+        &self,
+        agent_key: &str,
+        conversation_id: Uuid,
+        _idempotency_key: &str,
+    ) -> Result<IsolatedWorkspaceCreated> {
+        let path = ConversationWorkspacePath::new(agent_key, conversation_id)?;
+        create_conversation_workspace(&self.config, &path)
+    }
+    async fn inspect_conversation_workspace(
+        &self,
+        agent_key: &str,
+        conversation_id: Uuid,
+    ) -> Result<IsolatedWorkspaceInspection> {
+        let path = ConversationWorkspacePath::new(agent_key, conversation_id)?;
+        inspect_conversation_workspace(&self.config, &path)
+    }
+    async fn scrub_conversation_workspace_runtime_secrets(
+        &self,
+        agent_key: &str,
+        conversation_id: Uuid,
+        _idempotency_key: &str,
+    ) -> Result<RuntimeSecretsScrubbed> {
+        let path = ConversationWorkspacePath::new(agent_key, conversation_id)?;
+        scrub_conversation_workspace_runtime_secrets(&self.config, &path)
+    }
+    async fn delete_conversation_workspace(
+        &self,
+        agent_key: &str,
+        conversation_id: Uuid,
+        _idempotency_key: &str,
+    ) -> Result<bool> {
+        let path = ConversationWorkspacePath::new(agent_key, conversation_id)?;
+        delete_conversation_workspace(&self.config, &path)
     }
     async fn list_workspace_browser_entries(
         &self,
@@ -322,6 +456,138 @@ impl WorkspaceController for HttpWorkspaceController {
     async fn delete_workspace(&self, agent_key: &str, idempotency_key: &str) -> Result<bool> {
         self.delete_response(
             &format!("v1/agent-workspaces/{agent_key}"),
+            idempotency_key.to_string(),
+        )
+        .await
+    }
+
+    async fn create_run_workspace(
+        &self,
+        agent_key: &str,
+        run_id: i64,
+        idempotency_key: &str,
+    ) -> Result<IsolatedWorkspaceCreated> {
+        let response = self
+            .request(
+                reqwest::Method::POST,
+                &format!("v1/run-workspaces/{agent_key}/{run_id}"),
+            )?
+            .header("Idempotency-Key", idempotency_key)
+            .send()
+            .await
+            .context("workspace controller request failed")?;
+        Self::response(response).await
+    }
+
+    async fn inspect_run_workspace(
+        &self,
+        agent_key: &str,
+        run_id: i64,
+    ) -> Result<IsolatedWorkspaceInspection> {
+        let response = self
+            .request(
+                reqwest::Method::GET,
+                &format!("v1/run-workspaces/{agent_key}/{run_id}/inspection"),
+            )?
+            .send()
+            .await
+            .context("workspace controller request failed")?;
+        Self::response(response).await
+    }
+
+    async fn scrub_run_workspace_runtime_secrets(
+        &self,
+        agent_key: &str,
+        run_id: i64,
+        idempotency_key: &str,
+    ) -> Result<RuntimeSecretsScrubbed> {
+        let response = self
+            .request(
+                reqwest::Method::POST,
+                &format!("v1/run-workspaces/{agent_key}/{run_id}/runtime-secrets"),
+            )?
+            .header("Idempotency-Key", idempotency_key)
+            .send()
+            .await
+            .context("workspace controller request failed")?;
+        Self::response(response).await
+    }
+
+    async fn delete_run_workspace(
+        &self,
+        agent_key: &str,
+        run_id: i64,
+        idempotency_key: &str,
+    ) -> Result<bool> {
+        self.delete_response(
+            &format!("v1/run-workspaces/{agent_key}/{run_id}"),
+            idempotency_key.to_string(),
+        )
+        .await
+    }
+
+    async fn create_conversation_workspace(
+        &self,
+        agent_key: &str,
+        conversation_id: Uuid,
+        idempotency_key: &str,
+    ) -> Result<IsolatedWorkspaceCreated> {
+        let response = self
+            .request(
+                reqwest::Method::POST,
+                &format!("v1/conversation-workspaces/{agent_key}/{conversation_id}"),
+            )?
+            .header("Idempotency-Key", idempotency_key)
+            .send()
+            .await
+            .context("workspace controller request failed")?;
+        Self::response(response).await
+    }
+
+    async fn inspect_conversation_workspace(
+        &self,
+        agent_key: &str,
+        conversation_id: Uuid,
+    ) -> Result<IsolatedWorkspaceInspection> {
+        let response = self
+            .request(
+                reqwest::Method::GET,
+                &format!("v1/conversation-workspaces/{agent_key}/{conversation_id}/inspection"),
+            )?
+            .send()
+            .await
+            .context("workspace controller request failed")?;
+        Self::response(response).await
+    }
+
+    async fn scrub_conversation_workspace_runtime_secrets(
+        &self,
+        agent_key: &str,
+        conversation_id: Uuid,
+        idempotency_key: &str,
+    ) -> Result<RuntimeSecretsScrubbed> {
+        let response = self
+            .request(
+                reqwest::Method::POST,
+                &format!(
+                    "v1/conversation-workspaces/{agent_key}/{conversation_id}/runtime-secrets"
+                ),
+            )?
+            .header("Idempotency-Key", idempotency_key)
+            .send()
+            .await
+            .context("workspace controller request failed")?;
+        Self::response(response).await
+    }
+
+    async fn delete_conversation_workspace(
+        &self,
+        agent_key: &str,
+        conversation_id: Uuid,
+        idempotency_key: &str,
+    ) -> Result<bool> {
+        self.delete_response(
+            &format!("v1/conversation-workspaces/{agent_key}/{conversation_id}"),
             idempotency_key.to_string(),
         )
         .await
@@ -538,4 +804,107 @@ struct DeleteResponse {
 #[derive(Deserialize)]
 struct RecoveryResponse {
     recovered: Vec<RecoveryResult>,
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{
+        fs,
+        path::PathBuf,
+        process,
+        time::{SystemTime, UNIX_EPOCH},
+    };
+
+    use super::*;
+
+    fn test_config(root: PathBuf) -> OpenCodeWorkspaceConfig {
+        OpenCodeWorkspaceConfig {
+            source_root: root.clone(),
+            host_workspaces_root: root,
+            container_workspaces_root: "/workspaces".to_string(),
+            api_base_url: String::new(),
+        }
+    }
+
+    fn temp_root() -> PathBuf {
+        let suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("time after unix epoch")
+            .as_nanos();
+        PathBuf::from("/tmp/opencode").join(format!("workspace-client-{}-{suffix}", process::id()))
+    }
+
+    #[tokio::test]
+    async fn local_controller_implements_isolated_workspace_contract() {
+        let root = temp_root();
+        fs::create_dir_all(&root).expect("create temporary workspace root");
+        let controller = LocalWorkspaceController::new(test_config(root.clone()));
+
+        let run = controller
+            .create_run_workspace("agent", 7, "run-create")
+            .await
+            .expect("create local run workspace");
+        assert_eq!(
+            run.workspace_container_path,
+            "/workspaces/runs/agent/7/workspace"
+        );
+        fs::write(root.join("runs/agent/7/workspace/.env"), "secret")
+            .expect("write local runtime secret");
+        assert!(
+            controller
+                .inspect_run_workspace("agent", 7)
+                .await
+                .expect("inspect local run workspace")
+                .runtime_secrets_present
+        );
+        assert!(
+            controller
+                .scrub_run_workspace_runtime_secrets("agent", 7, "run-scrub")
+                .await
+                .expect("scrub local run workspace")
+                .removed
+        );
+        assert!(
+            controller
+                .delete_run_workspace("agent", 7, "run-delete")
+                .await
+                .expect("delete local run workspace")
+        );
+
+        let conversation_id = Uuid::new_v4();
+        let conversation = controller
+            .create_conversation_workspace("agent", conversation_id, "conversation-create")
+            .await
+            .expect("create local conversation workspace");
+        assert_eq!(
+            conversation.workspace_container_path,
+            format!("/workspaces/conversations/agent/{conversation_id}/workspace")
+        );
+        assert!(
+            controller
+                .inspect_conversation_workspace("agent", conversation_id)
+                .await
+                .expect("inspect local conversation workspace")
+                .workspace_exists
+        );
+        assert!(
+            controller
+                .scrub_conversation_workspace_runtime_secrets(
+                    "agent",
+                    conversation_id,
+                    "conversation-scrub",
+                )
+                .await
+                .expect("scrub local conversation workspace")
+                .workspace_exists
+        );
+        assert!(
+            controller
+                .delete_conversation_workspace("agent", conversation_id, "conversation-delete")
+                .await
+                .expect("delete local conversation workspace")
+        );
+
+        fs::remove_dir_all(root).expect("remove temporary workspace root");
+    }
 }

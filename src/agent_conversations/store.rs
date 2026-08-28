@@ -7,8 +7,9 @@ use uuid::Uuid;
 use crate::{
     agent_conversations::model::{
         AgentConversationListRow, AgentConversationRow, AgentConversationToolPolicyRow,
-        CreateAgentConversation, TOOL_GROUP_MEMORY_WRITES, TOOL_GROUP_ORDERS, TOOL_POLICY_ALLOW,
-        TOOL_POLICY_CONFIRM, TOOL_POLICY_DENY, UpdateAgentConversationModel,
+        CreateAgentConversation, TOOL_GROUP_MEMORY_WRITES, TOOL_GROUP_NOTIFICATIONS,
+        TOOL_GROUP_ORDERS, TOOL_POLICY_ALLOW, TOOL_POLICY_CONFIRM, TOOL_POLICY_DENY,
+        UpdateAgentConversationModel,
     },
     db::DbPool,
 };
@@ -88,14 +89,18 @@ pub async fn create_conversation_with_default_policies(
     .context("failed to insert agent conversation")?
     .ok_or_else(|| anyhow!("agent does not exist"))?;
 
-    for tool_group in [TOOL_GROUP_ORDERS, TOOL_GROUP_MEMORY_WRITES] {
+    for (tool_group, policy) in [
+        (TOOL_GROUP_ORDERS, TOOL_POLICY_CONFIRM),
+        (TOOL_GROUP_MEMORY_WRITES, TOOL_POLICY_CONFIRM),
+        (TOOL_GROUP_NOTIFICATIONS, TOOL_POLICY_DENY),
+    ] {
         sqlx::query(
             "INSERT INTO agent_conversation_tool_policies (conversation_id, tool_group, policy) \
              VALUES ($1, $2, $3)",
         )
         .bind(row.id)
         .bind(tool_group)
-        .bind(TOOL_POLICY_CONFIRM)
+        .bind(policy)
         .execute(&mut *tx)
         .await
         .context("failed to insert default agent conversation tool policy")?;
@@ -621,15 +626,17 @@ fn validate_input(validation: Result<(), Vec<String>>) -> Result<()> {
 }
 
 fn validate_tool_policies(policies: &[AgentConversationToolPolicyRow]) -> Result<()> {
-    if policies.len() != 2 {
-        bail!("conversation tool policies must contain both known tool groups exactly once");
+    if policies.len() != 3 {
+        bail!("conversation tool policies must contain all known tool groups exactly once");
     }
     let mut orders = 0;
     let mut memory_writes = 0;
+    let mut notifications = 0;
     for policy in policies {
         match policy.tool_group.trim() {
             TOOL_GROUP_ORDERS => orders += 1,
             TOOL_GROUP_MEMORY_WRITES => memory_writes += 1,
+            TOOL_GROUP_NOTIFICATIONS => notifications += 1,
             other => bail!("unknown conversation tool group: {other}"),
         }
         match policy.policy.trim() {
@@ -637,8 +644,8 @@ fn validate_tool_policies(policies: &[AgentConversationToolPolicyRow]) -> Result
             other => bail!("unknown conversation tool policy: {other}"),
         }
     }
-    if orders != 1 || memory_writes != 1 {
-        bail!("conversation tool policies must contain both known tool groups exactly once");
+    if orders != 1 || memory_writes != 1 || notifications != 1 {
+        bail!("conversation tool policies must contain all known tool groups exactly once");
     }
     Ok(())
 }
@@ -719,7 +726,9 @@ mod tests {
 
     use super::*;
     use crate::{
-        agent_conversations::model::{CONVERSATION_CHANNEL_WEB, TOOL_POLICY_ALLOW},
+        agent_conversations::model::{
+            CONVERSATION_CHANNEL_WEB, TOOL_GROUP_NOTIFICATIONS, TOOL_POLICY_ALLOW, TOOL_POLICY_DENY,
+        },
         agents::{model::AgentRegistryRow, store::insert_agent},
         test_db,
     };
@@ -779,13 +788,17 @@ mod tests {
         .await
         .expect("create conversation");
 
-        assert_eq!(created.tool_policies.len(), 2);
+        assert_eq!(created.tool_policies.len(), 3);
         assert!(
             created
                 .tool_policies
                 .iter()
+                .filter(|policy| policy.tool_group != TOOL_GROUP_NOTIFICATIONS)
                 .all(|policy| policy.policy == TOOL_POLICY_CONFIRM)
         );
+        assert!(created.tool_policies.iter().any(|policy| {
+            policy.tool_group == TOOL_GROUP_NOTIFICATIONS && policy.policy == TOOL_POLICY_DENY
+        }));
         let listed = list_agent_conversations(&pool, &key)
             .await
             .expect("list conversations");

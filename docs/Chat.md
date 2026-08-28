@@ -61,8 +61,10 @@ Order and memory-write permissions are configured as **Deny**, **Confirm**, or
 tool call continues. Updating a strategy prompt always requires confirmation
 through `hypervibes_update_strategy_prompt`.
 
-Notification sending is denied for Chat until the per-conversation notification
-policy is available.
+Each conversation now persists a notification policy that defaults to **Deny**.
+The Chat profile continues to deny notification sending while conversation
+workspace routing and per-session approval scoping are implemented; the stored
+policy is intentionally not rendered into OpenCode permissions until then.
 
 ## Discuss a prompt
 

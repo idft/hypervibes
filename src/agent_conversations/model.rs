@@ -6,6 +6,7 @@ pub const CONVERSATION_CHANNEL_WEB: &str = "web";
 pub const CONVERSATION_CHANNEL_TELEGRAM: &str = "telegram";
 pub const TOOL_GROUP_ORDERS: &str = "orders";
 pub const TOOL_GROUP_MEMORY_WRITES: &str = "memory_writes";
+pub const TOOL_GROUP_NOTIFICATIONS: &str = "notifications";
 pub const TOOL_POLICY_DENY: &str = "deny";
 pub const TOOL_POLICY_CONFIRM: &str = "confirm";
 pub const TOOL_POLICY_ALLOW: &str = "allow";
@@ -69,6 +70,22 @@ pub struct AgentConversationToolPolicyRow {
     pub conversation_id: Uuid,
     pub tool_group: String,
     pub policy: String,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub struct AgentConversationWorkspaceRow {
+    pub conversation_id: Uuid,
+    pub capability_schema_version: i32,
+    pub workspace_status: String,
+    pub workspace_created_at: Option<DateTime<Utc>>,
+    pub runtime_secrets_scrubbed_at: Option<DateTime<Utc>>,
+    pub deletion_started_at: Option<DateTime<Utc>>,
+    pub deleted_at: Option<DateTime<Utc>>,
+    pub observed_size_bytes: Option<i64>,
+    pub observed_file_count: Option<i64>,
+    pub error_summary: Option<String>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }

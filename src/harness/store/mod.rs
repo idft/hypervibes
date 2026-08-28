@@ -1,3 +1,6 @@
+/// Phase 2 persistence primitives. They remain separate from the active
+/// scheduler until Phase 3 materializes isolated workspaces before dispatch.
+pub mod artifacts;
 mod common;
 mod recovery;
 mod runs;

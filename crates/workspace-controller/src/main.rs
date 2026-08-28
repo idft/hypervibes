@@ -1,4 +1,10 @@
-use std::{collections::BTreeMap, env, fs, path::PathBuf, sync::Arc};
+use std::{
+    collections::BTreeMap,
+    env, fs,
+    io::ErrorKind,
+    path::PathBuf,
+    sync::{Arc, Weak},
+};
 
 use anyhow::{Context, Result, bail};
 use axum::{
@@ -19,6 +25,13 @@ use workspace_store::{
         inspect_coding_candidate, list_promotion_journals, prepare_coding_candidate,
         promote_coding_candidate, recover_promotion_journal, store_coding_report,
     },
+    isolated_workspace::{
+        ConversationWorkspacePath, IsolatedWorkspaceCreated, IsolatedWorkspaceInspection,
+        RunWorkspacePath, RuntimeSecretsScrubbed, create_conversation_workspace,
+        create_run_workspace, delete_conversation_workspace, delete_run_workspace,
+        inspect_conversation_workspace, inspect_run_workspace,
+        scrub_conversation_workspace_runtime_secrets, scrub_run_workspace_runtime_secrets,
+    },
     workspace::{
         OpenCodeWorkspaceAgent, OpenCodeWorkspaceConfig, WorkspaceBrowserListing,
         WorkspaceFilePreview, WorkspaceGenerationMode, WorkspaceTemplateDrift,
@@ -27,11 +40,14 @@ use workspace_store::{
     },
 };
 
+type IdempotencyLockMap = Arc<tokio::sync::Mutex<BTreeMap<String, Weak<tokio::sync::Mutex<()>>>>>;
+
 #[derive(Clone)]
 struct App {
     store: OpenCodeWorkspaceConfig,
     api_key: Arc<str>,
     idempotency_root: PathBuf,
+    idempotency_locks: IdempotencyLockMap,
 }
 
 #[derive(Deserialize)]
@@ -224,6 +240,31 @@ fn router(app: Arc<App>) -> Router {
             "/v1/coding-candidates/{agent_key}/{task_id}/promote",
             post(promote_candidate),
         )
+        .route(
+            "/v1/run-workspaces/{agent_key}/{run_id}",
+            post(create_run_workspace_handler).delete(delete_run_workspace_handler),
+        )
+        .route(
+            "/v1/run-workspaces/{agent_key}/{run_id}/inspection",
+            get(inspect_run_workspace_handler),
+        )
+        .route(
+            "/v1/run-workspaces/{agent_key}/{run_id}/runtime-secrets",
+            post(scrub_run_workspace_runtime_secrets_handler),
+        )
+        .route(
+            "/v1/conversation-workspaces/{agent_key}/{conversation_id}",
+            post(create_conversation_workspace_handler)
+                .delete(delete_conversation_workspace_handler),
+        )
+        .route(
+            "/v1/conversation-workspaces/{agent_key}/{conversation_id}/inspection",
+            get(inspect_conversation_workspace_handler),
+        )
+        .route(
+            "/v1/conversation-workspaces/{agent_key}/{conversation_id}/runtime-secrets",
+            post(scrub_conversation_workspace_runtime_secrets_handler),
+        )
         .route("/v1/promotion-recovery", post(recover_promotions))
         .with_state(app)
 }
@@ -260,6 +301,7 @@ fn config_from_env() -> Result<App> {
         },
         api_key: Arc::from(api_key),
         idempotency_root,
+        idempotency_locks: idempotency_locks(),
     })
 }
 
@@ -360,6 +402,146 @@ async fn delete_workspace(
             })
         },
     )
+    .await
+    .map(Json)
+}
+
+async fn create_run_workspace_handler(
+    State(app): State<Arc<App>>,
+    Path((agent_key, run_id)): Path<(String, i64)>,
+    headers: HeaderMap,
+) -> Result<Json<IsolatedWorkspaceCreated>, ApiError> {
+    authorize(&headers, &app)?;
+    let path = RunWorkspacePath::new(agent_key, run_id).map_err(classify)?;
+    let fingerprint = format!("run-workspace:{}:{}", path.agent_key(), path.run_id());
+    idempotent(&app.clone(), &headers, fingerprint, move || {
+        create_run_workspace(&app.store, &path).map_err(classify)
+    })
+    .await
+    .map(Json)
+}
+
+async fn delete_run_workspace_handler(
+    State(app): State<Arc<App>>,
+    Path((agent_key, run_id)): Path<(String, i64)>,
+    headers: HeaderMap,
+) -> Result<Json<DeleteResponse>, ApiError> {
+    authorize(&headers, &app)?;
+    let path = RunWorkspacePath::new(agent_key, run_id).map_err(classify)?;
+    let fingerprint = format!(
+        "delete-run-workspace:{}:{}",
+        path.agent_key(),
+        path.run_id()
+    );
+    idempotent(&app.clone(), &headers, fingerprint, move || {
+        Ok(DeleteResponse {
+            deleted: delete_run_workspace(&app.store, &path).map_err(classify)?,
+        })
+    })
+    .await
+    .map(Json)
+}
+
+async fn inspect_run_workspace_handler(
+    State(app): State<Arc<App>>,
+    Path((agent_key, run_id)): Path<(String, i64)>,
+    headers: HeaderMap,
+) -> Result<Json<IsolatedWorkspaceInspection>, ApiError> {
+    authorize(&headers, &app)?;
+    let path = RunWorkspacePath::new(agent_key, run_id).map_err(classify)?;
+    let config = app.store.clone();
+    let result = spawn_blocking(move || inspect_run_workspace(&config, &path))
+        .await
+        .map_err(|_| ApiError::internal())?
+        .map_err(classify)?;
+    Ok(Json(result))
+}
+
+async fn scrub_run_workspace_runtime_secrets_handler(
+    State(app): State<Arc<App>>,
+    Path((agent_key, run_id)): Path<(String, i64)>,
+    headers: HeaderMap,
+) -> Result<Json<RuntimeSecretsScrubbed>, ApiError> {
+    authorize(&headers, &app)?;
+    let path = RunWorkspacePath::new(agent_key, run_id).map_err(classify)?;
+    let fingerprint = format!("scrub-run-workspace:{}:{}", path.agent_key(), path.run_id());
+    idempotent(&app.clone(), &headers, fingerprint, move || {
+        scrub_run_workspace_runtime_secrets(&app.store, &path).map_err(classify)
+    })
+    .await
+    .map(Json)
+}
+
+async fn create_conversation_workspace_handler(
+    State(app): State<Arc<App>>,
+    Path((agent_key, conversation_id)): Path<(String, String)>,
+    headers: HeaderMap,
+) -> Result<Json<IsolatedWorkspaceCreated>, ApiError> {
+    authorize(&headers, &app)?;
+    let path = ConversationWorkspacePath::parse(agent_key, &conversation_id).map_err(classify)?;
+    let fingerprint = format!(
+        "conversation-workspace:{}:{}",
+        path.agent_key(),
+        path.conversation_id()
+    );
+    idempotent(&app.clone(), &headers, fingerprint, move || {
+        create_conversation_workspace(&app.store, &path).map_err(classify)
+    })
+    .await
+    .map(Json)
+}
+
+async fn delete_conversation_workspace_handler(
+    State(app): State<Arc<App>>,
+    Path((agent_key, conversation_id)): Path<(String, String)>,
+    headers: HeaderMap,
+) -> Result<Json<DeleteResponse>, ApiError> {
+    authorize(&headers, &app)?;
+    let path = ConversationWorkspacePath::parse(agent_key, &conversation_id).map_err(classify)?;
+    let fingerprint = format!(
+        "delete-conversation-workspace:{}:{}",
+        path.agent_key(),
+        path.conversation_id()
+    );
+    idempotent(&app.clone(), &headers, fingerprint, move || {
+        Ok(DeleteResponse {
+            deleted: delete_conversation_workspace(&app.store, &path).map_err(classify)?,
+        })
+    })
+    .await
+    .map(Json)
+}
+
+async fn inspect_conversation_workspace_handler(
+    State(app): State<Arc<App>>,
+    Path((agent_key, conversation_id)): Path<(String, String)>,
+    headers: HeaderMap,
+) -> Result<Json<IsolatedWorkspaceInspection>, ApiError> {
+    authorize(&headers, &app)?;
+    let path = ConversationWorkspacePath::parse(agent_key, &conversation_id).map_err(classify)?;
+    let config = app.store.clone();
+    let result = spawn_blocking(move || inspect_conversation_workspace(&config, &path))
+        .await
+        .map_err(|_| ApiError::internal())?
+        .map_err(classify)?;
+    Ok(Json(result))
+}
+
+async fn scrub_conversation_workspace_runtime_secrets_handler(
+    State(app): State<Arc<App>>,
+    Path((agent_key, conversation_id)): Path<(String, String)>,
+    headers: HeaderMap,
+) -> Result<Json<RuntimeSecretsScrubbed>, ApiError> {
+    authorize(&headers, &app)?;
+    let path = ConversationWorkspacePath::parse(agent_key, &conversation_id).map_err(classify)?;
+    let fingerprint = format!(
+        "scrub-conversation-workspace:{}:{}",
+        path.agent_key(),
+        path.conversation_id()
+    );
+    idempotent(&app.clone(), &headers, fingerprint, move || {
+        scrub_conversation_workspace_runtime_secrets(&app.store, &path).map_err(classify)
+    })
     .await
     .map(Json)
 }
@@ -606,16 +788,24 @@ where
         .filter(|key| !key.is_empty())
         .ok_or_else(ApiError::bad_request)?
         .to_owned();
-    let path = app.idempotency_root.join(hash_json(&Value::String(key)));
+    let key_hash = hash_json(&Value::String(key));
+    let path = app.idempotency_root.join(&key_hash);
+    // Same-key retries share a lock, so lookup, side effects, and publication
+    // remain atomic without serializing unrelated controller operations.
+    let _idempotency_guard = acquire_idempotency_lock(&app.idempotency_locks, &key_hash).await;
     spawn_blocking(move || {
-        if let Ok(bytes) = fs::read(&path) {
-            let record: IdempotencyRecord<T> =
-                serde_json::from_slice(&bytes).map_err(|_| ApiError::internal())?;
-            return if record.fingerprint == fingerprint {
-                Ok(record.response)
-            } else {
-                Err(ApiError::conflict())
-            };
+        match fs::read(&path) {
+            Ok(bytes) => {
+                let record: IdempotencyRecord<T> =
+                    serde_json::from_slice(&bytes).map_err(|_| ApiError::internal())?;
+                return if record.fingerprint == fingerprint {
+                    Ok(record.response)
+                } else {
+                    Err(ApiError::conflict())
+                };
+            }
+            Err(error) if error.kind() == ErrorKind::NotFound => {}
+            Err(_) => return Err(ApiError::internal()),
         }
         let response = operation()?;
         let record = IdempotencyRecordRef {
@@ -633,6 +823,30 @@ where
     })
     .await
     .map_err(|_| ApiError::internal())?
+}
+
+fn idempotency_locks() -> IdempotencyLockMap {
+    Arc::new(tokio::sync::Mutex::new(BTreeMap::new()))
+}
+
+async fn acquire_idempotency_lock(
+    locks: &IdempotencyLockMap,
+    key_hash: &str,
+) -> tokio::sync::OwnedMutexGuard<()> {
+    let lock = {
+        let mut locks = locks.lock().await;
+        // Dead weak references are removed on subsequent requests, bounding
+        // this map by concurrently active idempotency keys.
+        locks.retain(|_, lock| lock.strong_count() > 0);
+        if let Some(lock) = locks.get(key_hash).and_then(Weak::upgrade) {
+            lock
+        } else {
+            let lock = Arc::new(tokio::sync::Mutex::new(()));
+            locks.insert(key_hash.to_string(), Arc::downgrade(&lock));
+            lock
+        }
+    };
+    lock.lock_owned().await
 }
 
 #[derive(Deserialize)]
@@ -664,6 +878,8 @@ fn classify(error: anyhow::Error) -> ApiError {
     } else if message.contains("agent key")
         || message.contains("agent_key")
         || message.contains("task id")
+        || message.contains("run id")
+        || message.contains("conversation id")
         || message.contains("symlink")
         || message.contains("not a regular file")
         || message.contains("not a directory")
@@ -721,6 +937,7 @@ mod tests {
             },
             api_key: Arc::from("controller-key"),
             idempotency_root,
+            idempotency_locks: idempotency_locks(),
         })
     }
 
@@ -731,6 +948,29 @@ mod tests {
             "Bearer controller-key".parse().expect("header value"),
         );
         headers
+    }
+
+    fn idempotent_headers(key: &str) -> HeaderMap {
+        let mut headers = authorized_headers();
+        headers.insert(
+            "idempotency-key",
+            key.parse().expect("idempotency header value"),
+        );
+        headers
+    }
+
+    #[tokio::test]
+    async fn idempotency_locks_are_keyed_and_reclaimed() {
+        let locks = idempotency_locks();
+        let first = acquire_idempotency_lock(&locks, "first").await;
+        let second = acquire_idempotency_lock(&locks, "second").await;
+        assert_eq!(locks.lock().await.len(), 2);
+
+        drop(first);
+        drop(second);
+        let third = acquire_idempotency_lock(&locks, "third").await;
+        assert_eq!(locks.lock().await.len(), 1);
+        drop(third);
     }
 
     #[tokio::test]
@@ -858,6 +1098,133 @@ mod tests {
         .expect_err("unsafe agent key should fail");
         assert_eq!(
             error.into_response().status(),
+            StatusCode::UNPROCESSABLE_ENTITY
+        );
+    }
+
+    #[tokio::test]
+    async fn run_workspace_handlers_recover_partial_state_and_scrub_secrets() {
+        let temp = TempDir::new();
+        let app = browser_test_app(&temp.path);
+        fs::create_dir_all(temp.path.join("runs/agent/42")).expect("create partial run root");
+
+        let Json(created) = create_run_workspace_handler(
+            State(app.clone()),
+            Path(("agent".to_string(), 42)),
+            idempotent_headers("run-create"),
+        )
+        .await
+        .expect("create run workspace");
+        assert_eq!(
+            created.workspace_container_path,
+            "/workspaces/runs/agent/42/workspace"
+        );
+        let workspace = temp.path.join("runs/agent/42/workspace");
+        assert!(workspace.is_dir());
+
+        let Json(repeated) = create_run_workspace_handler(
+            State(app.clone()),
+            Path(("agent".to_string(), 42)),
+            idempotent_headers("run-create"),
+        )
+        .await
+        .expect("repeat run workspace create");
+        assert_eq!(created, repeated);
+
+        fs::write(workspace.join(".env"), "runtime-secret\n").expect("write runtime secret");
+        let Json(before_scrub) = inspect_run_workspace_handler(
+            State(app.clone()),
+            Path(("agent".to_string(), 42)),
+            authorized_headers(),
+        )
+        .await
+        .expect("inspect run workspace");
+        assert!(before_scrub.runtime_secrets_present);
+
+        let Json(scrubbed) = scrub_run_workspace_runtime_secrets_handler(
+            State(app.clone()),
+            Path(("agent".to_string(), 42)),
+            idempotent_headers("run-scrub"),
+        )
+        .await
+        .expect("scrub run workspace");
+        assert!(scrubbed.workspace_exists);
+        assert!(scrubbed.removed);
+        assert!(!workspace.join(".env").exists());
+
+        let Json(deleted) = delete_run_workspace_handler(
+            State(app),
+            Path(("agent".to_string(), 42)),
+            idempotent_headers("run-delete"),
+        )
+        .await
+        .expect("delete run workspace");
+        assert!(deleted.deleted);
+    }
+
+    #[tokio::test]
+    async fn idempotency_key_serializes_conflicting_run_workspace_requests() {
+        let temp = TempDir::new();
+        let app = browser_test_app(&temp.path);
+        let (first, second) = tokio::join!(
+            create_run_workspace_handler(
+                State(app.clone()),
+                Path(("agent".to_string(), 43)),
+                idempotent_headers("shared-run-create"),
+            ),
+            create_run_workspace_handler(
+                State(app),
+                Path(("agent".to_string(), 44)),
+                idempotent_headers("shared-run-create"),
+            )
+        );
+
+        let mut successes = 0;
+        let mut conflicts = 0;
+        for result in [first, second] {
+            match result {
+                Ok(_) => successes += 1,
+                Err(error) => {
+                    assert_eq!(error.into_response().status(), StatusCode::CONFLICT);
+                    conflicts += 1;
+                }
+            }
+        }
+        assert_eq!(successes, 1);
+        assert_eq!(conflicts, 1);
+        assert_ne!(
+            temp.path.join("runs/agent/43").is_dir(),
+            temp.path.join("runs/agent/44").is_dir()
+        );
+    }
+
+    #[tokio::test]
+    async fn conversation_workspace_handlers_use_validated_internal_ids() {
+        let temp = TempDir::new();
+        let app = browser_test_app(&temp.path);
+        let conversation_id = "b3ce59a8-f3b6-448d-a0c8-d44ea9d23a33";
+
+        let Json(created) = create_conversation_workspace_handler(
+            State(app.clone()),
+            Path(("agent".to_string(), conversation_id.to_string())),
+            idempotent_headers("conversation-create"),
+        )
+        .await
+        .expect("create conversation workspace");
+        assert_eq!(
+            created.workspace_container_path,
+            format!("/workspaces/conversations/agent/{conversation_id}/workspace")
+        );
+
+        let invalid = create_conversation_workspace_handler(
+            State(app),
+            Path(("agent".to_string(), "not-a-conversation-id".to_string())),
+            idempotent_headers("conversation-invalid"),
+        )
+        .await
+        .expect_err("invalid conversation id must fail");
+        assert_eq!(
+            invalid.into_response().status(),
             StatusCode::UNPROCESSABLE_ENTITY
         );
     }

@@ -40,6 +40,39 @@ pub struct NotificationRecord {
     pub severity: NotificationSeverity,
 }
 
+/// Provenance is supplied only by a future scoped runtime credential, never by
+/// a model-controlled notification request body.
+#[allow(
+    dead_code,
+    reason = "Phase 3 and Phase 4 scoped runtime credentials will construct provenance before calling the notification API"
+)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NotificationProvenance {
+    Run {
+        run_id: i64,
+        capability_schema_version: i32,
+    },
+    Conversation {
+        conversation_id: Uuid,
+        capability_schema_version: i32,
+    },
+}
+
+impl NotificationProvenance {
+    pub const fn capability_schema_version(self) -> i32 {
+        match self {
+            Self::Run {
+                capability_schema_version,
+                ..
+            }
+            | Self::Conversation {
+                capability_schema_version,
+                ..
+            } => capability_schema_version,
+        }
+    }
+}
+
 impl From<NotificationRow> for NotificationRecord {
     fn from(row: NotificationRow) -> Self {
         Self {

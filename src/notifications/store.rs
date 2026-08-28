@@ -6,7 +6,9 @@ use uuid::Uuid;
 use crate::{
     db::DbPool,
     gateway::model::NotificationSeverity,
-    notifications::model::{NotificationHistoryRow, NotificationRecord, NotificationRow},
+    notifications::model::{
+        NotificationHistoryRow, NotificationProvenance, NotificationRecord, NotificationRow,
+    },
 };
 
 pub const NOTIFICATION_HISTORY_LIMIT: i64 = 100;
@@ -30,19 +32,184 @@ pub async fn create_notification(
     body: &str,
     severity: NotificationSeverity,
 ) -> Result<NotificationRecord> {
+    create_notification_with_optional_provenance(pool, agent_key, title, body, severity, None).await
+}
+
+/// Queue a notification after verifying the source's durable capability
+/// binding. This is intentionally separate from the legacy permanent-agent-key
+/// path until run- and conversation-scoped runtime credentials ship.
+#[allow(
+    dead_code,
+    reason = "Phase 3 and Phase 4 scoped runtime credentials will call this instead of the legacy agent-key path"
+)]
+pub async fn create_notification_with_provenance(
+    pool: &DbPool,
+    agent_key: &str,
+    title: &str,
+    body: &str,
+    severity: NotificationSeverity,
+    provenance: NotificationProvenance,
+) -> Result<NotificationRecord> {
+    create_notification_with_optional_provenance(
+        pool,
+        agent_key,
+        title,
+        body,
+        severity,
+        Some(provenance),
+    )
+    .await
+}
+
+async fn create_notification_with_optional_provenance(
+    pool: &DbPool,
+    agent_key: &str,
+    title: &str,
+    body: &str,
+    severity: NotificationSeverity,
+    provenance: Option<NotificationProvenance>,
+) -> Result<NotificationRecord> {
+    let mut tx = pool
+        .begin()
+        .await
+        .context("failed to begin notification create transaction")?;
+    if let Some(provenance) = provenance {
+        authorize_notification_provenance(&mut tx, agent_key, provenance).await?;
+    }
+    let (source_kind, source_run_id, source_conversation_id, source_capability_schema_version) =
+        match provenance {
+            Some(NotificationProvenance::Run {
+                run_id,
+                capability_schema_version,
+            }) => (
+                Some("run"),
+                Some(run_id),
+                None,
+                Some(capability_schema_version),
+            ),
+            Some(NotificationProvenance::Conversation {
+                conversation_id,
+                capability_schema_version,
+            }) => (
+                Some("conversation"),
+                None,
+                Some(conversation_id),
+                Some(capability_schema_version),
+            ),
+            None => (None, None, None, None),
+        };
     let row = query_as::<_, NotificationRow>(
-        "INSERT INTO notifications (agent_key, title, body, severity)
-         VALUES ($1, $2, $3, $4)
+        "INSERT INTO notifications (
+             agent_key, title, body, severity, source_kind, source_run_id,
+             source_conversation_id, source_capability_schema_version
+         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
           RETURNING id, agent_key, title, body, severity, status",
     )
     .bind(agent_key)
     .bind(title.trim())
     .bind(body.trim())
     .bind(severity.as_str())
-    .fetch_one(pool)
+    .bind(source_kind)
+    .bind(source_run_id)
+    .bind(source_conversation_id)
+    .bind(source_capability_schema_version)
+    .fetch_one(&mut *tx)
     .await
     .context("failed to insert notification")?;
+    tx.commit()
+        .await
+        .context("failed to commit notification create transaction")?;
     Ok(NotificationRecord::from(row))
+}
+
+async fn authorize_notification_provenance(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    agent_key: &str,
+    provenance: NotificationProvenance,
+) -> Result<()> {
+    if !(1..=1_000_000).contains(&provenance.capability_schema_version()) {
+        anyhow::bail!("notification provenance has an invalid capability schema version");
+    }
+    let authorized: Option<(i32,)> = match provenance {
+        NotificationProvenance::Run {
+            run_id,
+            capability_schema_version,
+        } => {
+            let owned: Option<(i64,)> = query_as(
+                "SELECT id
+                   FROM harness_sub_agent_runs
+                  WHERE id = $1 AND agent_key = $2
+                  FOR SHARE",
+            )
+            .bind(run_id)
+            .bind(agent_key)
+            .fetch_optional(&mut **tx)
+            .await
+            .context("failed to lock run notification provenance")?;
+            if owned.is_none() {
+                None
+            } else {
+                query_as(
+                    "SELECT 1
+                       FROM harness_run_workspace_artifacts AS artifacts
+                      WHERE artifacts.run_id = $1
+                        AND artifacts.capability_schema_version = $2
+                        AND artifacts.workspace_status = 'ready'
+                        AND artifacts.capability_snapshot @> $3
+                      FOR SHARE",
+                )
+                .bind(run_id)
+                .bind(capability_schema_version)
+                .bind(serde_json::json!([
+                    crate::harness::model::CAPABILITY_NOTIFICATION_SEND
+                ]))
+                .fetch_optional(&mut **tx)
+                .await
+                .context("failed to lock run notification capability binding")?
+            }
+        }
+        NotificationProvenance::Conversation {
+            conversation_id,
+            capability_schema_version,
+        } => {
+            let owned: Option<(Uuid,)> = query_as(
+                "SELECT id
+                   FROM agent_conversations
+                  WHERE id = $1 AND agent_key = $2
+                  FOR SHARE",
+            )
+            .bind(conversation_id)
+            .bind(agent_key)
+            .fetch_optional(&mut **tx)
+            .await
+            .context("failed to lock conversation notification provenance")?;
+            if owned.is_none() {
+                None
+            } else {
+                query_as(
+                    "SELECT 1
+                       FROM agent_conversation_workspaces AS workspaces
+                       JOIN agent_conversation_tool_policies AS policies
+                         ON policies.conversation_id = workspaces.conversation_id
+                      WHERE workspaces.conversation_id = $1
+                        AND workspaces.capability_schema_version = $2
+                        AND workspaces.workspace_status = 'ready'
+                        AND policies.tool_group = 'notifications'
+                        AND policies.policy = 'allow'
+                      FOR SHARE OF workspaces, policies",
+                )
+                .bind(conversation_id)
+                .bind(capability_schema_version)
+                .fetch_optional(&mut **tx)
+                .await
+                .context("failed to lock conversation notification capability binding")?
+            }
+        }
+    };
+    if authorized.is_none() {
+        anyhow::bail!("notification provenance is not authorized for this agent");
+    }
+    Ok(())
 }
 
 /// List the most recent notifications for an agent's operator history.
@@ -124,8 +291,16 @@ pub async fn mark_failed(pool: &DbPool, id: Uuid, error: &str) -> Result<bool> {
 
 #[cfg(test)]
 mod tests {
+    use serde_json::json;
+
     use super::*;
-    use crate::test_db;
+    use crate::{
+        harness::{
+            model::{CAPABILITY_NOTIFICATION_SEND, RunContextSnapshot},
+            store::artifacts::{mark_run_workspace_ready, prepare_run_workspace_artifact},
+        },
+        test_db,
+    };
 
     async fn seed_agent(pool: &DbPool, key: &str) {
         let now = chrono::Utc::now();
@@ -148,6 +323,32 @@ mod tests {
         )
         .await
         .expect("insert agent");
+    }
+
+    async fn seed_run(pool: &DbPool, agent_key: &str) -> i64 {
+        let (sub_agent_id,): (i64,) = query_as(
+            "INSERT INTO harness_sub_agents (
+                 agent_key, sub_agent_key, sub_agent_kind, timeout_seconds
+             ) VALUES ($1, 'analysis-15m', 'analysis', 60)
+             RETURNING id",
+        )
+        .bind(agent_key)
+        .fetch_one(pool)
+        .await
+        .expect("insert sub-agent");
+        let (run_id,): (i64,) = query_as(
+            "INSERT INTO harness_sub_agent_runs (
+                 sub_agent_id, agent_key, sub_agent_key, sub_agent_kind, status,
+                 scheduled_for, timeout_seconds
+             ) VALUES ($1, $2, 'analysis-15m', 'analysis', 'queued', now(), 60)
+             RETURNING id",
+        )
+        .bind(sub_agent_id)
+        .bind(agent_key)
+        .fetch_one(pool)
+        .await
+        .expect("insert run");
+        run_id
     }
 
     #[tokio::test]
@@ -329,5 +530,116 @@ mod tests {
         .expect("fetch row");
         assert_eq!(status, "failed");
         assert_eq!(error.as_deref(), Some("telegram unreachable"));
+    }
+
+    #[tokio::test]
+    async fn scoped_run_notifications_require_and_preserve_capability_provenance() {
+        let pool = test_db::pool().await;
+        let key = format!(
+            "note-provenance-{}",
+            chrono::Utc::now().timestamp_nanos_opt().unwrap_or(0)
+        );
+        seed_agent(&pool, &key).await;
+        let run_id = seed_run(&pool, &key).await;
+        assert!(
+            sqlx::query(
+                "INSERT INTO notifications (
+                     agent_key, title, body, source_run_id, source_capability_schema_version
+                 ) VALUES ($1, 'invalid', 'invalid', $2, 1)",
+            )
+            .bind(&key)
+            .bind(run_id)
+            .execute(&pool)
+            .await
+            .is_err(),
+            "nullable source_kind must not bypass provenance validation"
+        );
+        prepare_run_workspace_artifact(
+            &pool,
+            &key,
+            run_id,
+            &RunContextSnapshot {
+                schema_version: 1,
+                context: json!({
+                    "provider_id": "test",
+                    "model_id": "test",
+                    "model_variant": null,
+                    "timeout_seconds": 60,
+                    "selected_instruments": [],
+                    "strategy_prompt_revisions": {},
+                    "additional_instructions": "",
+                    "accumulated_learning_memory_id": null,
+                    "system_prompt_version": "v1",
+                    "quantitative_package": null,
+                    "mcp_installations": [],
+                    "notification_send_enabled": true,
+                    "scheduled_candle_boundary": null,
+                    "account_snapshot_metadata": null
+                }),
+                capability_schema_version: 1,
+                enabled_capabilities: vec![CAPABILITY_NOTIFICATION_SEND.to_string()],
+            },
+        )
+        .await
+        .expect("prepare run artifact");
+
+        assert!(
+            create_notification_with_provenance(
+                &pool,
+                &key,
+                "title",
+                "body",
+                NotificationSeverity::Info,
+                NotificationProvenance::Run {
+                    run_id,
+                    capability_schema_version: 1,
+                },
+            )
+            .await
+            .is_err()
+        );
+
+        mark_run_workspace_ready(&pool, &key, run_id)
+            .await
+            .expect("mark run workspace ready");
+        let notification = create_notification_with_provenance(
+            &pool,
+            &key,
+            "title",
+            "body",
+            NotificationSeverity::Info,
+            NotificationProvenance::Run {
+                run_id,
+                capability_schema_version: 1,
+            },
+        )
+        .await
+        .expect("create scoped notification");
+        let (source_kind, source_run_id, source_version): (String, Option<i64>, i32) = query_as(
+            "SELECT source_kind, source_run_id, source_capability_schema_version
+               FROM notifications
+              WHERE id = $1",
+        )
+        .bind(notification.id)
+        .fetch_one(&pool)
+        .await
+        .expect("load notification provenance");
+        assert_eq!(source_kind, "run");
+        assert_eq!(source_run_id, Some(run_id));
+        assert_eq!(source_version, 1);
+
+        sqlx::query("DELETE FROM harness_sub_agent_runs WHERE id = $1")
+            .bind(run_id)
+            .execute(&pool)
+            .await
+            .expect("delete source run");
+        let (retained_kind, removed_run_id): (String, Option<i64>) =
+            query_as("SELECT source_kind, source_run_id FROM notifications WHERE id = $1")
+                .bind(notification.id)
+                .fetch_one(&pool)
+                .await
+                .expect("load retained notification");
+        assert_eq!(retained_kind, "run");
+        assert!(removed_run_id.is_none());
     }
 }

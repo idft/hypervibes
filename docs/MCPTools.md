@@ -20,6 +20,12 @@ notification. Every scheduled role is eligible for the capability once
 per-sub-agent controls are available. Until then, its static default is enabled
 only for trading. It is denied for other scheduled roles and for Chat.
 
+When isolated runtime credentials are enabled, notification provenance and the
+capability schema are derived from the authenticated run or conversation scope,
+not supplied by the model. This provenance never includes a gateway token or
+destination and does not affect durable notification delivery after its source
+workspace is deleted.
+
 ## Tools
 
 | Tool | Description | Availability |

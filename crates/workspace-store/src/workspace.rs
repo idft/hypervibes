@@ -441,7 +441,7 @@ pub fn runtime_config_for_generated_workspace(
     }
 }
 
-fn validate_agent_key(agent_key: &str) -> Result<()> {
+pub(crate) fn validate_agent_key(agent_key: &str) -> Result<()> {
     if agent_key.trim().is_empty() {
         bail!("agent_key must not be empty");
     }

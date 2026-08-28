@@ -1,3 +1,5 @@
+use std::collections::BTreeSet;
+
 use chrono::{DateTime, Utc};
 use serde_json::Value;
 
@@ -13,6 +15,53 @@ pub const RUN_STATUS_SUCCEEDED: &str = "succeeded";
 pub const RUN_STATUS_FAILED: &str = "failed";
 pub const RUN_STATUS_ABORTED: &str = "aborted";
 pub const RUN_STATUS_SKIPPED: &str = "skipped";
+
+// Phase 2 defines the persisted contract before Phase 3 begins creating run
+// snapshots during dispatch.
+#[allow(
+    dead_code,
+    reason = "Phase 3 dispatch materialization will construct versioned snapshots"
+)]
+pub const RUN_CONTEXT_SNAPSHOT_SCHEMA_VERSION: i32 = 1;
+#[allow(
+    dead_code,
+    reason = "Phase 3 dispatch materialization will bind the capability schema"
+)]
+pub const CAPABILITY_SCHEMA_VERSION: i32 = 1;
+pub const CAPABILITY_NOTIFICATION_SEND: &str = "hypervibes:notification_send";
+#[allow(
+    dead_code,
+    reason = "Phase 3 dispatch materialization will validate persisted contexts"
+)]
+pub const MAX_RUN_CONTEXT_SNAPSHOT_BYTES: usize = 1024 * 1024;
+
+// Schema version one intentionally has no catch-all object. Adding a new run
+// input is an explicit snapshot-schema change rather than an unreviewed place
+// to put runtime configuration or secrets.
+const RUN_CONTEXT_SNAPSHOT_V1_FIELDS: &[&str] = &[
+    "account_snapshot_metadata",
+    "additional_instructions",
+    "accumulated_learning_memory_id",
+    "mcp_installations",
+    "model_id",
+    "model_variant",
+    "notification_send_enabled",
+    "provider_id",
+    "quantitative_package",
+    "scheduled_candle_boundary",
+    "selected_instruments",
+    "strategy_prompt_revisions",
+    "system_prompt_version",
+    "timeout_seconds",
+];
+
+const STRATEGY_PROMPT_REVISION_KEYS: &[&str] = &[
+    SUB_AGENT_KIND_ANALYSIS,
+    SUB_AGENT_KIND_MARKET_ANALYSIS,
+    SUB_AGENT_KIND_TRADING,
+    SUB_AGENT_KIND_DAILY_REVIEW,
+    SUB_AGENT_KIND_ANALYSIS_CODING,
+];
 
 pub const MAINTENANCE_TASK_KIND_WORKSPACE_REGENERATE: &str = "workspace_regenerate";
 pub const MAINTENANCE_TASK_KIND_ANALYSIS_CODING: &str = "analysis_coding";
@@ -91,6 +140,367 @@ pub struct HarnessSubAgentRunRow {
     pub started_at: Option<DateTime<Utc>>,
     pub finished_at: Option<DateTime<Utc>>,
     pub timeout_seconds: i32,
+    pub error_summary: Option<String>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+/// Durable, versioned inputs for an isolated run. Runtime credentials and
+/// gateway destinations are deliberately not representable in this snapshot.
+#[allow(
+    dead_code,
+    reason = "Phase 3 will construct this persisted run context at dispatch"
+)]
+#[derive(Debug, Clone, PartialEq)]
+pub struct RunContextSnapshot {
+    pub schema_version: i32,
+    pub context: Value,
+    pub capability_schema_version: i32,
+    pub enabled_capabilities: Vec<String>,
+}
+
+#[allow(
+    dead_code,
+    reason = "Phase 3 will validate and materialize each run context"
+)]
+impl RunContextSnapshot {
+    pub fn validate(&self) -> anyhow::Result<()> {
+        if self.schema_version != RUN_CONTEXT_SNAPSHOT_SCHEMA_VERSION {
+            anyhow::bail!("unsupported run context schema version");
+        }
+        if self.capability_schema_version != CAPABILITY_SCHEMA_VERSION {
+            anyhow::bail!("unsupported capability schema version");
+        }
+        if !self.context.is_object() {
+            anyhow::bail!("run context snapshot must be a JSON object");
+        }
+        if serde_json::to_vec(&self.context)?.len() > MAX_RUN_CONTEXT_SNAPSHOT_BYTES {
+            anyhow::bail!("run context snapshot exceeds the size limit");
+        }
+        let capabilities = self.normalized_enabled_capabilities()?;
+        validate_context_snapshot_v1(
+            &self.context,
+            capabilities
+                .iter()
+                .any(|capability| capability == CAPABILITY_NOTIFICATION_SEND),
+        )?;
+        Ok(())
+    }
+
+    pub fn normalized_enabled_capabilities(&self) -> anyhow::Result<Vec<String>> {
+        let mut capabilities = BTreeSet::new();
+        for capability in &self.enabled_capabilities {
+            let capability = capability.trim();
+            if capability.is_empty()
+                || capability.len() > 128
+                || capability.chars().any(char::is_control)
+            {
+                anyhow::bail!("invalid capability in run context snapshot");
+            }
+            if capability != CAPABILITY_NOTIFICATION_SEND {
+                anyhow::bail!("unsupported capability in run context snapshot");
+            }
+            if !capabilities.insert(capability.to_string()) {
+                anyhow::bail!("duplicate capability in run context snapshot");
+            }
+        }
+        Ok(capabilities.into_iter().collect())
+    }
+
+    pub fn notification_send_enabled(&self) -> bool {
+        self.enabled_capabilities
+            .iter()
+            .any(|capability| capability == CAPABILITY_NOTIFICATION_SEND)
+    }
+}
+
+// V1 is deliberately an exact, closed JSON shape. The database retains JSONB
+// for forwards-compatible storage, but no arbitrary nested configuration can
+// enter a durable artifact under the first schema version.
+fn validate_context_snapshot_v1(
+    value: &Value,
+    notification_send_enabled: bool,
+) -> anyhow::Result<()> {
+    let fields = value
+        .as_object()
+        .ok_or_else(|| anyhow::anyhow!("run context snapshot must be a JSON object"))?;
+    if fields.len() != RUN_CONTEXT_SNAPSHOT_V1_FIELDS.len()
+        || RUN_CONTEXT_SNAPSHOT_V1_FIELDS
+            .iter()
+            .any(|field| !fields.contains_key(*field))
+    {
+        anyhow::bail!("run context snapshot does not match schema version one");
+    }
+
+    validate_identifier(
+        required_context_field(fields, "provider_id")?,
+        "provider_id",
+    )?;
+    validate_identifier(required_context_field(fields, "model_id")?, "model_id")?;
+    validate_optional_identifier(
+        required_context_field(fields, "model_variant")?,
+        "model_variant",
+    )?;
+    validate_positive_integer(
+        required_context_field(fields, "timeout_seconds")?,
+        "timeout_seconds",
+    )?;
+    validate_identifier_array(
+        required_context_field(fields, "selected_instruments")?,
+        "selected_instruments",
+    )?;
+    validate_strategy_prompt_revisions(required_context_field(
+        fields,
+        "strategy_prompt_revisions",
+    )?)?;
+    validate_text(
+        required_context_field(fields, "additional_instructions")?,
+        "additional_instructions",
+    )?;
+    validate_optional_uuid(
+        required_context_field(fields, "accumulated_learning_memory_id")?,
+        "accumulated_learning_memory_id",
+    )?;
+    validate_identifier(
+        required_context_field(fields, "system_prompt_version")?,
+        "system_prompt_version",
+    )?;
+    validate_quantitative_package(required_context_field(fields, "quantitative_package")?)?;
+    validate_mcp_installations(required_context_field(fields, "mcp_installations")?)?;
+    let declared_notification_send = required_context_field(fields, "notification_send_enabled")?
+        .as_bool()
+        .ok_or_else(|| anyhow::anyhow!("notification_send_enabled must be a boolean"))?;
+    if declared_notification_send != notification_send_enabled {
+        anyhow::bail!("run context notification authority does not match capabilities");
+    }
+    validate_optional_timestamp(
+        required_context_field(fields, "scheduled_candle_boundary")?,
+        "scheduled_candle_boundary",
+    )?;
+    validate_account_snapshot_metadata(required_context_field(
+        fields,
+        "account_snapshot_metadata",
+    )?)?;
+    Ok(())
+}
+
+fn required_context_field<'a>(
+    fields: &'a serde_json::Map<String, Value>,
+    field: &str,
+) -> anyhow::Result<&'a Value> {
+    fields
+        .get(field)
+        .ok_or_else(|| anyhow::anyhow!("run context snapshot is missing {field}"))
+}
+
+fn validate_identifier(value: &Value, field: &str) -> anyhow::Result<()> {
+    let value = value
+        .as_str()
+        .ok_or_else(|| anyhow::anyhow!("{field} must be a string"))?;
+    if value.is_empty()
+        || value.len() > 512
+        || value.chars().any(char::is_control)
+        || looks_like_runtime_secret(value)
+    {
+        anyhow::bail!("{field} is invalid");
+    }
+    Ok(())
+}
+
+fn validate_optional_identifier(value: &Value, field: &str) -> anyhow::Result<()> {
+    if value.is_null() {
+        return Ok(());
+    }
+    validate_identifier(value, field)
+}
+
+fn validate_positive_integer(value: &Value, field: &str) -> anyhow::Result<()> {
+    let Some(value) = value.as_u64() else {
+        anyhow::bail!("{field} must be a positive integer");
+    };
+    if value == 0 {
+        anyhow::bail!("{field} must be a positive integer");
+    }
+    Ok(())
+}
+
+fn validate_optional_timestamp(value: &Value, field: &str) -> anyhow::Result<()> {
+    if value.is_null() {
+        return Ok(());
+    }
+    if value.as_u64().is_none() {
+        anyhow::bail!("{field} must be a Unix timestamp in milliseconds or null");
+    }
+    Ok(())
+}
+
+fn validate_identifier_array(value: &Value, field: &str) -> anyhow::Result<()> {
+    let values = value
+        .as_array()
+        .ok_or_else(|| anyhow::anyhow!("{field} must be an array"))?;
+    if values.len() > 256 {
+        anyhow::bail!("{field} contains too many values");
+    }
+    for value in values {
+        validate_identifier(value, field)?;
+    }
+    Ok(())
+}
+
+fn validate_strategy_prompt_revisions(value: &Value) -> anyhow::Result<()> {
+    let revisions = value
+        .as_object()
+        .ok_or_else(|| anyhow::anyhow!("strategy_prompt_revisions must be an object"))?;
+    for (kind, revision) in revisions {
+        if !STRATEGY_PROMPT_REVISION_KEYS.contains(&kind.as_str()) {
+            anyhow::bail!("strategy_prompt_revisions contains an unsupported agent kind");
+        }
+        validate_positive_integer(revision, "strategy prompt revision")?;
+    }
+    Ok(())
+}
+
+fn validate_text(value: &Value, field: &str) -> anyhow::Result<()> {
+    let value = value
+        .as_str()
+        .ok_or_else(|| anyhow::anyhow!("{field} must be a string"))?;
+    if value.len() > 65_536 || looks_like_runtime_secret(value) {
+        anyhow::bail!("{field} is invalid");
+    }
+    Ok(())
+}
+
+fn validate_optional_uuid(value: &Value, field: &str) -> anyhow::Result<()> {
+    if value.is_null() {
+        return Ok(());
+    }
+    let value = value
+        .as_str()
+        .ok_or_else(|| anyhow::anyhow!("{field} must be a UUID or null"))?;
+    uuid::Uuid::parse_str(value).map_err(|_| anyhow::anyhow!("{field} must be a UUID or null"))?;
+    Ok(())
+}
+
+fn validate_quantitative_package(value: &Value) -> anyhow::Result<()> {
+    if value.is_null() {
+        return Ok(());
+    }
+    let package = value
+        .as_object()
+        .ok_or_else(|| anyhow::anyhow!("quantitative_package must be an object or null"))?;
+    if package.len() != 2
+        || !package.contains_key("version")
+        || !package.contains_key("manifest_hash")
+    {
+        anyhow::bail!("quantitative_package does not match schema version one");
+    }
+    validate_identifier(&package["version"], "quantitative_package.version")?;
+    validate_identifier(
+        &package["manifest_hash"],
+        "quantitative_package.manifest_hash",
+    )
+}
+
+fn validate_mcp_installations(value: &Value) -> anyhow::Result<()> {
+    let installations = value
+        .as_array()
+        .ok_or_else(|| anyhow::anyhow!("mcp_installations must be an array"))?;
+    if installations.len() > 64 {
+        anyhow::bail!("mcp_installations contains too many values");
+    }
+    for installation in installations {
+        let installation = installation
+            .as_object()
+            .ok_or_else(|| anyhow::anyhow!("mcp installation must be an object"))?;
+        if installation.len() != 3
+            || !installation.contains_key("installation_id")
+            || !installation.contains_key("version")
+            || !installation.contains_key("tools")
+        {
+            anyhow::bail!("mcp installation does not match schema version one");
+        }
+        validate_identifier(&installation["installation_id"], "mcp installation id")?;
+        validate_identifier(&installation["version"], "mcp installation version")?;
+        validate_identifier_array(&installation["tools"], "mcp installation tools")?;
+    }
+    Ok(())
+}
+
+fn validate_account_snapshot_metadata(value: &Value) -> anyhow::Result<()> {
+    if value.is_null() {
+        return Ok(());
+    }
+    let metadata = value
+        .as_object()
+        .ok_or_else(|| anyhow::anyhow!("account_snapshot_metadata must be an object or null"))?;
+    if metadata.len() != 2
+        || !metadata.contains_key("captured_at_ms")
+        || !metadata.contains_key("account_address")
+    {
+        anyhow::bail!("account_snapshot_metadata does not match schema version one");
+    }
+    validate_optional_timestamp(
+        &metadata["captured_at_ms"],
+        "account_snapshot_metadata.captured_at_ms",
+    )?;
+    validate_identifier(
+        &metadata["account_address"],
+        "account_snapshot_metadata.account_address",
+    )
+}
+
+fn looks_like_runtime_secret(value: &str) -> bool {
+    value.contains("vta_") || value.contains("-----BEGIN") || contains_telegram_bot_token(value)
+}
+
+fn contains_telegram_bot_token(value: &str) -> bool {
+    let bytes = value.as_bytes();
+    let mut start = 0;
+    while start < bytes.len() {
+        if !bytes[start].is_ascii_digit() {
+            start += 1;
+            continue;
+        }
+        let mut bot_id_end = start;
+        while bot_id_end < bytes.len() && bytes[bot_id_end].is_ascii_digit() {
+            bot_id_end += 1;
+        }
+        if bot_id_end - start < 5 || bytes.get(bot_id_end) != Some(&b':') {
+            start = bot_id_end;
+            continue;
+        }
+        let mut token_end = bot_id_end + 1;
+        while token_end < bytes.len()
+            && (bytes[token_end].is_ascii_alphanumeric() || matches!(bytes[token_end], b'_' | b'-'))
+        {
+            token_end += 1;
+        }
+        if token_end - (bot_id_end + 1) >= 20 {
+            return true;
+        }
+        start = token_end;
+    }
+    false
+}
+
+#[allow(
+    dead_code,
+    reason = "Phase 3 will read this lifecycle record while materializing runs"
+)]
+#[derive(Debug, Clone, PartialEq)]
+pub struct RunWorkspaceArtifactRow {
+    pub run_id: i64,
+    pub agent_key: String,
+    pub context: RunContextSnapshot,
+    pub workspace_status: String,
+    pub workspace_created_at: Option<DateTime<Utc>>,
+    pub runtime_secrets_scrubbed_at: Option<DateTime<Utc>>,
+    pub terminalized_at: Option<DateTime<Utc>>,
+    pub expires_at: Option<DateTime<Utc>>,
+    pub deletion_started_at: Option<DateTime<Utc>>,
+    pub deleted_at: Option<DateTime<Utc>>,
+    pub observed_size_bytes: Option<i64>,
+    pub observed_file_count: Option<i64>,
     pub error_summary: Option<String>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,

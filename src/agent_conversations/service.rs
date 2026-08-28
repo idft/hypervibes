@@ -9,8 +9,8 @@ use crate::{
     agent_conversations::{
         model::{
             AgentConversationRow, AgentConversationToolPolicyRow, CreateAgentConversation,
-            TOOL_GROUP_MEMORY_WRITES, TOOL_GROUP_ORDERS, TOOL_POLICY_ALLOW, TOOL_POLICY_CONFIRM,
-            TOOL_POLICY_DENY,
+            TOOL_GROUP_MEMORY_WRITES, TOOL_GROUP_NOTIFICATIONS, TOOL_GROUP_ORDERS,
+            TOOL_POLICY_ALLOW, TOOL_POLICY_CONFIRM, TOOL_POLICY_DENY,
         },
         store,
     },
@@ -462,21 +462,23 @@ pub fn permission_rules(
         .find(|policy| policy.tool_group == TOOL_GROUP_MEMORY_WRITES)
         .map(|policy| policy.policy.as_str())
         .ok_or_else(|| anyhow!("Missing Memory writes policy."))?;
-    if policies.len() != 2 {
-        bail!("Conversation policies must contain Orders and Memory writes exactly once.");
+    let notifications = policies
+        .iter()
+        .find(|policy| policy.tool_group == TOOL_GROUP_NOTIFICATIONS)
+        .map(|policy| policy.policy.as_str())
+        .ok_or_else(|| anyhow!("Missing Notifications policy."))?;
+    if policies.len() != 3 {
+        bail!(
+            "Conversation policies must contain Orders, Memory writes, and Notifications exactly once."
+        );
     }
+    action_for_policy(notifications)?;
     permission_rules_for(orders, memory_writes)
 }
 
 fn permission_rules_for(orders: &str, memory_writes: &str) -> Result<Vec<OpenCodePermissionRule>> {
-    let action = |policy: &str| match policy {
-        TOOL_POLICY_DENY => Ok("deny"),
-        TOOL_POLICY_CONFIRM => Ok("ask"),
-        TOOL_POLICY_ALLOW => Ok("allow"),
-        _ => Err(anyhow!("Invalid conversation tool policy.")),
-    };
-    let orders = action(orders)?;
-    let memory_writes = action(memory_writes)?;
+    let orders = action_for_policy(orders)?;
+    let memory_writes = action_for_policy(memory_writes)?;
     let mut rules = [
         "hypervibes_get_account",
         "hypervibes_list_strategy_prompts",
@@ -525,6 +527,15 @@ fn permission_rules_for(orders: &str, memory_writes: &str) -> Result<Vec<OpenCod
     Ok(rules)
 }
 
+fn action_for_policy(policy: &str) -> Result<&'static str> {
+    match policy {
+        TOOL_POLICY_DENY => Ok("deny"),
+        TOOL_POLICY_CONFIRM => Ok("ask"),
+        TOOL_POLICY_ALLOW => Ok("allow"),
+        _ => Err(anyhow!("Invalid conversation tool policy.")),
+    }
+}
+
 fn workspace_runtime(agent: &AgentDetailRow) -> Result<OpenCodeWorkspaceRuntimeConfig> {
     OpenCodeWorkspaceRuntimeConfig::from_value(&agent.runtime_config)
         .ok_or_else(|| anyhow!("Agent is missing OpenCode workspace metadata."))
@@ -567,5 +578,32 @@ mod tests {
         assert_eq!(action_for("hypervibes_get_strategy_prompt"), Some("allow"));
         assert_eq!(action_for("hypervibes_send_notification"), None);
         assert_eq!(action_for("hypervibes_update_strategy_prompt"), Some("ask"));
+    }
+
+    #[test]
+    fn persisted_notification_policy_is_validated_but_not_rendered_until_phase_four() {
+        let now = chrono::Utc::now();
+        let conversation_id = Uuid::new_v4();
+        let policies = [
+            (TOOL_GROUP_ORDERS, TOOL_POLICY_CONFIRM),
+            (TOOL_GROUP_MEMORY_WRITES, TOOL_POLICY_CONFIRM),
+            (TOOL_GROUP_NOTIFICATIONS, TOOL_POLICY_ALLOW),
+        ]
+        .into_iter()
+        .map(|(tool_group, policy)| AgentConversationToolPolicyRow {
+            conversation_id,
+            tool_group: tool_group.to_string(),
+            policy: policy.to_string(),
+            created_at: now,
+            updated_at: now,
+        })
+        .collect::<Vec<_>>();
+
+        let rules = permission_rules(&policies).expect("validate persisted policies");
+        assert!(
+            rules
+                .iter()
+                .all(|rule| rule.permission != "hypervibes_send_notification")
+        );
     }
 }
