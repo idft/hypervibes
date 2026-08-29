@@ -41,7 +41,7 @@ use crate::{
         scheduler::{
             DispatchRequestInputs, build_dispatch_request, dispatch_analysis_batch_completed_event,
             dispatch_daily_review_coding_event, dispatch_request_from_job,
-            dispatch_run_with_workspace_lease,
+            dispatch_run_in_isolated_workspace_with_workspace_lease,
         },
         store::{self, QueuedSubAgentRun},
         timeframe::{parse_timeframe_seconds, parse_timeout_seconds},
@@ -425,34 +425,43 @@ async fn load_strategy_prompt(
     state: &Arc<AppState>,
     agent_key: &str,
     sub_agent_kind: &str,
-) -> anyhow::Result<String> {
+) -> anyhow::Result<(String, i64)> {
     let prompt_kind = prompt_kind_for_sub_agent_kind(sub_agent_kind)
         .ok_or_else(|| anyhow::anyhow!("unknown job kind {sub_agent_kind}"))?;
-    Ok(
-        get_agent_strategy_prompt(&state.db_pool, agent_key, prompt_kind)
-            .await?
-            .map(|row| row.prompt)
+    let prompt = get_agent_strategy_prompt(&state.db_pool, agent_key, prompt_kind).await?;
+    Ok((
+        prompt
+            .as_ref()
+            .map(|row| row.prompt.clone())
             .unwrap_or_default(),
-    )
+        prompt
+            .as_ref()
+            .map(|row| row.updated_at.timestamp_millis().max(1))
+            .unwrap_or(1),
+    ))
 }
 
 async fn load_accumulated_learnings(
     state: &Arc<AppState>,
     agent_key: &str,
-) -> anyhow::Result<Option<String>> {
+) -> anyhow::Result<(Option<String>, Option<uuid::Uuid>)> {
     Ok(
         get_latest_agent_memory_by_type(&state.db_pool, agent_key, "agent_learnings")
             .await?
             .map(|memory| {
-                format!(
-                    "Summary: {}\nCreated at: {}\nContent: {}",
-                    memory.summary,
-                    memory
-                        .created_at
-                        .to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
-                    memory.content
+                (
+                    format!(
+                        "Summary: {}\nCreated at: {}\nContent: {}",
+                        memory.summary,
+                        memory
+                            .created_at
+                            .to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+                        memory.content
+                    ),
+                    memory.id,
                 )
-            }),
+            })
+            .map_or((None, None), |(content, id)| (Some(content), Some(id))),
     )
 }
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -963,6 +972,10 @@ pub(in crate::web::routes) async fn agents_run_sub_agent_now(
                 } else {
                     None
                 };
+            let (strategy_prompt, strategy_prompt_revision) =
+                load_strategy_prompt(&state, &agent_key, &job.sub_agent_kind).await?;
+            let (accumulated_learnings, accumulated_learning_memory_id) =
+                load_accumulated_learnings(&state, &agent_key).await?;
             let mut request = dispatch_request_from_job(
                 &job,
                 DispatchRequestInputs {
@@ -970,9 +983,10 @@ pub(in crate::web::routes) async fn agents_run_sub_agent_now(
                     scheduled_for,
                     agent,
                     selected_instruments,
-                    strategy_prompt: load_strategy_prompt(&state, &agent_key, &job.sub_agent_kind)
-                        .await?,
-                    accumulated_learnings: load_accumulated_learnings(&state, &agent_key).await?,
+                    strategy_prompt,
+                    strategy_prompt_revision,
+                    accumulated_learnings,
+                    accumulated_learning_memory_id,
                     system_prompt,
                 },
                 account_snapshot,
@@ -990,6 +1004,8 @@ pub(in crate::web::routes) async fn agents_run_sub_agent_now(
             }
             let pool = state.db_pool.clone();
             let backend = state.harness_backend.clone();
+            let workspace_controller = state.workspace_controller.clone();
+            let agent_api_base_url = state.hypervibes_agent_api_base_url.clone();
             let live_accounts = state.live_accounts.clone();
             let workspace_leases = state.workspace_leases.clone();
             let trigger_analysis_event = job.sub_agent_kind == SUB_AGENT_KIND_ANALYSIS;
@@ -1023,9 +1039,11 @@ pub(in crate::web::routes) async fn agents_run_sub_agent_now(
                 let _workspace_lease = workspace_leases
                     .acquire_live_read(&dispatch_agent_key)
                     .await;
-                let result = dispatch_run_with_workspace_lease(
+                let result = dispatch_run_in_isolated_workspace_with_workspace_lease(
                     pool.clone(),
                     backend.clone(),
+                    workspace_controller.clone(),
+                    agent_api_base_url.clone(),
                     request,
                     &workspace_leases,
                 )
@@ -1034,6 +1052,8 @@ pub(in crate::web::routes) async fn agents_run_sub_agent_now(
                     let _ = dispatch_analysis_batch_completed_event(
                         &pool,
                         &backend,
+                        &workspace_controller,
+                        &agent_api_base_url,
                         &live_accounts,
                         &dispatch_agent_key,
                         &workspace_leases,

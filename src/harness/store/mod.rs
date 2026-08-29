@@ -4,6 +4,7 @@ pub mod artifacts;
 mod common;
 mod recovery;
 mod runs;
+mod runtime_credentials;
 mod sub_agents;
 mod workspace;
 
@@ -22,6 +23,10 @@ pub use runs::{
 };
 #[cfg(test)]
 pub use runs::{insert_test_run, list_agent_runs};
+pub use runtime_credentials::{
+    authenticate_run_runtime_credential, issue_run_runtime_credential,
+    revoke_run_runtime_credential,
+};
 #[allow(unused_imports)]
 pub use sub_agents::{
     ClaimedCandleSubAgentRun, claim_due_candle_sub_agent, count_sub_agent_runs,

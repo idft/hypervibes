@@ -611,7 +611,9 @@ pub fn list_promotion_journals(config: &OpenCodeWorkspaceConfig) -> Result<Vec<P
     Ok(journals)
 }
 
-fn copy_user_tree(source: &Path, destination: &Path) -> Result<()> {
+/// Copy the validated quantitative package without following links or carrying
+/// generated Python artifacts into another workspace.
+pub fn copy_user_tree(source: &Path, destination: &Path) -> Result<()> {
     let metadata = fs::symlink_metadata(source)?;
     if metadata.file_type().is_symlink() || !metadata.is_dir() {
         bail!("live scripts/user must be a regular directory");

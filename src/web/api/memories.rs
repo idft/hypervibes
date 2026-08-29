@@ -12,6 +12,7 @@ use uuid::Uuid;
 
 use crate::{
     agents::AuthenticatedAgent,
+    harness::model::RunApiScope,
     memory::{
         CreateMemory, MemoryListFilter, MemoryRecord, memory_expires_at, store as memory_store,
     },
@@ -26,6 +27,7 @@ pub(super) async fn create_memory(
     agent: AuthenticatedAgent,
     Json(input): Json<CreateMemory>,
 ) -> Result<Response, ApiError> {
+    super::require_run_api_scope(&agent, RunApiScope::MemoryWrite)?;
     if let Err(errors) = input.validate() {
         return Err(ApiError::Validation(errors.join(" ")));
     }
@@ -56,6 +58,7 @@ pub(super) async fn list_memories(
     agent: AuthenticatedAgent,
     Query(filter): Query<MemoryListFilter>,
 ) -> Result<Response, ApiError> {
+    super::require_run_api_scope(&agent, RunApiScope::MemoryRead)?;
     // V1: empty `timeframe=` is treated as invalid (a blank-string match is
     //   never useful — callers should omit the param entirely).
     if let Some(tf) = &filter.timeframe
@@ -176,6 +179,7 @@ pub(super) async fn list_latest_memories(
     agent: AuthenticatedAgent,
     Query(query): Query<LatestMemoryQuery>,
 ) -> Result<Response, ApiError> {
+    super::require_run_api_scope(&agent, RunApiScope::MemoryRead)?;
     let LatestMemoryRequest {
         symbol,
         memory_type,
@@ -221,6 +225,7 @@ pub(super) async fn get_memory_by_id(
     Path(id): Path<String>,
     Query(filter): Query<MemoryDetailQuery>,
 ) -> Result<Response, ApiError> {
+    super::require_run_api_scope(&agent, RunApiScope::MemoryRead)?;
     let id = Uuid::parse_str(&id).map_err(|_| ApiError::BadUuid)?;
     let record = memory_store::get_memory(&state.db_pool, &agent.agent_key, id)
         .await

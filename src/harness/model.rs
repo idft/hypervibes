@@ -16,24 +16,83 @@ pub const RUN_STATUS_FAILED: &str = "failed";
 pub const RUN_STATUS_ABORTED: &str = "aborted";
 pub const RUN_STATUS_SKIPPED: &str = "skipped";
 
-// Phase 2 defines the persisted contract before Phase 3 begins creating run
-// snapshots during dispatch.
-#[allow(
-    dead_code,
-    reason = "Phase 3 dispatch materialization will construct versioned snapshots"
-)]
 pub const RUN_CONTEXT_SNAPSHOT_SCHEMA_VERSION: i32 = 1;
-#[allow(
-    dead_code,
-    reason = "Phase 3 dispatch materialization will bind the capability schema"
-)]
 pub const CAPABILITY_SCHEMA_VERSION: i32 = 1;
 pub const CAPABILITY_NOTIFICATION_SEND: &str = "hypervibes:notification_send";
-#[allow(
-    dead_code,
-    reason = "Phase 3 dispatch materialization will validate persisted contexts"
-)]
 pub const MAX_RUN_CONTEXT_SNAPSHOT_BYTES: usize = 1024 * 1024;
+
+/// API actions attached to a short-lived run credential. These are separate
+/// from OpenCode permissions so direct HTTP calls cannot bypass role policy.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RunApiScope {
+    AccountRead,
+    MemoryRead,
+    MemoryWrite,
+    OrderRead,
+    OrderWrite,
+    TransactionRead,
+    NotificationSend,
+}
+
+impl RunApiScope {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::AccountRead => "hypervibes:account_read",
+            Self::MemoryRead => "hypervibes:memory_read",
+            Self::MemoryWrite => "hypervibes:memory_write",
+            Self::OrderRead => "hypervibes:order_read",
+            Self::OrderWrite => "hypervibes:order_write",
+            Self::TransactionRead => "hypervibes:transaction_read",
+            Self::NotificationSend => CAPABILITY_NOTIFICATION_SEND,
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "hypervibes:account_read" => Some(Self::AccountRead),
+            "hypervibes:memory_read" => Some(Self::MemoryRead),
+            "hypervibes:memory_write" => Some(Self::MemoryWrite),
+            "hypervibes:order_read" => Some(Self::OrderRead),
+            "hypervibes:order_write" => Some(Self::OrderWrite),
+            "hypervibes:transaction_read" => Some(Self::TransactionRead),
+            CAPABILITY_NOTIFICATION_SEND => Some(Self::NotificationSend),
+            _ => None,
+        }
+    }
+}
+
+pub fn run_api_scopes_for_sub_agent(
+    sub_agent_kind: &str,
+    notification_send_enabled: bool,
+) -> anyhow::Result<Vec<RunApiScope>> {
+    let mut scopes = match sub_agent_kind {
+        SUB_AGENT_KIND_ANALYSIS => vec![
+            RunApiScope::AccountRead,
+            RunApiScope::MemoryRead,
+            RunApiScope::MemoryWrite,
+        ],
+        SUB_AGENT_KIND_MARKET_ANALYSIS => {
+            vec![RunApiScope::MemoryRead, RunApiScope::MemoryWrite]
+        }
+        SUB_AGENT_KIND_TRADING => vec![
+            RunApiScope::AccountRead,
+            RunApiScope::MemoryRead,
+            RunApiScope::OrderRead,
+            RunApiScope::OrderWrite,
+        ],
+        SUB_AGENT_KIND_DAILY_REVIEW => vec![
+            RunApiScope::MemoryRead,
+            RunApiScope::MemoryWrite,
+            RunApiScope::OrderRead,
+            RunApiScope::TransactionRead,
+        ],
+        _ => anyhow::bail!("unsupported sub-agent kind for run API scopes"),
+    };
+    if notification_send_enabled {
+        scopes.push(RunApiScope::NotificationSend);
+    }
+    Ok(scopes)
+}
 
 // Schema version one intentionally has no catch-all object. Adding a new run
 // input is an explicit snapshot-schema change rather than an unreviewed place
@@ -147,10 +206,6 @@ pub struct HarnessSubAgentRunRow {
 
 /// Durable, versioned inputs for an isolated run. Runtime credentials and
 /// gateway destinations are deliberately not representable in this snapshot.
-#[allow(
-    dead_code,
-    reason = "Phase 3 will construct this persisted run context at dispatch"
-)]
 #[derive(Debug, Clone, PartialEq)]
 pub struct RunContextSnapshot {
     pub schema_version: i32,
@@ -159,10 +214,6 @@ pub struct RunContextSnapshot {
     pub enabled_capabilities: Vec<String>,
 }
 
-#[allow(
-    dead_code,
-    reason = "Phase 3 will validate and materialize each run context"
-)]
 impl RunContextSnapshot {
     pub fn validate(&self) -> anyhow::Result<()> {
         if self.schema_version != RUN_CONTEXT_SNAPSHOT_SCHEMA_VERSION {
@@ -450,7 +501,10 @@ fn validate_account_snapshot_metadata(value: &Value) -> anyhow::Result<()> {
 }
 
 fn looks_like_runtime_secret(value: &str) -> bool {
-    value.contains("vta_") || value.contains("-----BEGIN") || contains_telegram_bot_token(value)
+    value.contains("vta_")
+        || value.contains("vtr_")
+        || value.contains("-----BEGIN")
+        || contains_telegram_bot_token(value)
 }
 
 fn contains_telegram_bot_token(value: &str) -> bool {
@@ -483,10 +537,6 @@ fn contains_telegram_bot_token(value: &str) -> bool {
     false
 }
 
-#[allow(
-    dead_code,
-    reason = "Phase 3 will read this lifecycle record while materializing runs"
-)]
 #[derive(Debug, Clone, PartialEq)]
 pub struct RunWorkspaceArtifactRow {
     pub run_id: i64,
@@ -559,6 +609,7 @@ pub struct HarnessDispatchSubAgentRow {
     pub model_variant: Option<String>,
     pub timeout_seconds: i32,
     pub operator_prompt: String,
+    pub notification_send_enabled: bool,
     pub opencode_base_url: String,
     pub runtime_config: Value,
 }

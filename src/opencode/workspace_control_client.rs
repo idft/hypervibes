@@ -11,7 +11,10 @@ use workspace_store::{
     isolated_workspace::{
         IsolatedWorkspaceCreated, IsolatedWorkspaceInspection, RuntimeSecretsScrubbed,
     },
-    workspace::{WorkspaceBrowserListing, WorkspaceFilePreview, WorkspaceTemplateDrift},
+    workspace::{
+        MaterializedRunWorkspace, QuantitativePackageSnapshot, RunWorkspaceMaterializationInput,
+        WorkspaceBrowserListing, WorkspaceFilePreview, WorkspaceTemplateDrift,
+    },
 };
 
 #[cfg(test)]
@@ -77,6 +80,17 @@ pub trait WorkspaceController: Send + Sync {
         run_id: i64,
         idempotency_key: &str,
     ) -> Result<IsolatedWorkspaceCreated>;
+    async fn inspect_active_quantitative_package(
+        &self,
+        agent_key: &str,
+    ) -> Result<Option<QuantitativePackageSnapshot>>;
+    async fn materialize_run_workspace(
+        &self,
+        agent_key: &str,
+        run_id: i64,
+        input: RunWorkspaceMaterializationInput,
+        idempotency_key: &str,
+    ) -> Result<MaterializedRunWorkspace>;
     async fn inspect_run_workspace(
         &self,
         agent_key: &str,
@@ -209,6 +223,22 @@ impl WorkspaceController for LocalWorkspaceController {
     ) -> Result<IsolatedWorkspaceCreated> {
         let path = RunWorkspacePath::new(agent_key, run_id)?;
         create_run_workspace(&self.config, &path)
+    }
+    async fn inspect_active_quantitative_package(
+        &self,
+        agent_key: &str,
+    ) -> Result<Option<QuantitativePackageSnapshot>> {
+        workspace_store::workspace::inspect_active_quantitative_package(&self.config, agent_key)
+    }
+    async fn materialize_run_workspace(
+        &self,
+        agent_key: &str,
+        run_id: i64,
+        input: RunWorkspaceMaterializationInput,
+        _idempotency_key: &str,
+    ) -> Result<MaterializedRunWorkspace> {
+        let path = RunWorkspacePath::new(agent_key, run_id)?;
+        workspace_store::workspace::materialize_run_workspace(&self.config, &path, &input)
     }
     async fn inspect_run_workspace(
         &self,
@@ -473,6 +503,41 @@ impl WorkspaceController for HttpWorkspaceController {
                 &format!("v1/run-workspaces/{agent_key}/{run_id}"),
             )?
             .header("Idempotency-Key", idempotency_key)
+            .send()
+            .await
+            .context("workspace controller request failed")?;
+        Self::response(response).await
+    }
+
+    async fn inspect_active_quantitative_package(
+        &self,
+        agent_key: &str,
+    ) -> Result<Option<QuantitativePackageSnapshot>> {
+        let response = self
+            .request(
+                reqwest::Method::GET,
+                &format!("v1/agent-workspaces/{agent_key}/quantitative-package"),
+            )?
+            .send()
+            .await
+            .context("workspace controller request failed")?;
+        Self::response(response).await
+    }
+
+    async fn materialize_run_workspace(
+        &self,
+        agent_key: &str,
+        run_id: i64,
+        input: RunWorkspaceMaterializationInput,
+        idempotency_key: &str,
+    ) -> Result<MaterializedRunWorkspace> {
+        let response = self
+            .request(
+                reqwest::Method::POST,
+                &format!("v1/run-workspaces/{agent_key}/{run_id}/materialize"),
+            )?
+            .header("Idempotency-Key", idempotency_key)
+            .json(&input)
             .send()
             .await
             .context("workspace controller request failed")?;

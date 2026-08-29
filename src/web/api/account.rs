@@ -10,6 +10,7 @@ use rust_decimal::Decimal;
 
 use crate::{
     agents::{AuthenticatedAgent, store::get_agent},
+    harness::model::RunApiScope,
     hyperliquid::live_state::{
         AccountKey, AccountLiveState, LiveAccountHealthStatus, LiveConnectionStatus,
         LiveDataStatus, LiveOpenOrder, LivePosition, account_live_health,
@@ -28,6 +29,7 @@ pub(super) async fn get_account(
     State(state): State<Arc<AppState>>,
     agent: AuthenticatedAgent,
 ) -> Result<Response, ApiError> {
+    super::require_run_api_scope(&agent, RunApiScope::AccountRead)?;
     let row = get_agent(&state.db_pool, &agent.agent_key)
         .await
         .map_err(ApiError::Internal)?

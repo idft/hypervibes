@@ -10,6 +10,7 @@ use serde::Deserialize;
 
 use crate::{
     agents::{AuthenticatedAgent, store::get_agent},
+    harness::model::RunApiScope,
     hyperliquid::queries::{AccountTransactionWindow, list_account_transactions_in_window},
     web::AppState,
 };
@@ -35,6 +36,7 @@ pub(super) async fn list_account_transactions(
     agent: AuthenticatedAgent,
     Query(query): Query<TransactionQuery>,
 ) -> Result<Response, ApiError> {
+    super::require_run_api_scope(&agent, RunApiScope::TransactionRead)?;
     if query.until <= query.since {
         return Err(ApiError::Validation("until must be after since".into()));
     }

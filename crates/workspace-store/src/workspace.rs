@@ -13,6 +13,11 @@ use rustix::{
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use super::{
+    coding_workspace::{copy_user_tree, live_user_root, manifest_hash, manifest_tree},
+    isolated_workspace::{RunWorkspacePath, create_run_workspace},
+};
+
 pub const PROFILE_SOURCE_RELATIVE_PATH: &str = "agent-runtime/workspace-template";
 pub const WORKSPACE_BROWSER_MAX_DEPTH: usize = 32;
 pub const WORKSPACE_BROWSER_MAX_ENTRIES: usize = 2_000;
@@ -88,6 +93,34 @@ pub enum WorkspaceGenerationMode {
 pub struct OpenCodeWorkspaceRuntimeConfig {
     pub workspace_container_path: String,
     pub profile_source: String,
+}
+
+/// The currently supported quantitative package bridge. A richer manifest is
+/// intentionally deferred, but every non-empty copied tree is still bound by
+/// its deterministic content hash.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct QuantitativePackageSnapshot {
+    pub version: String,
+    pub manifest_hash: String,
+}
+
+/// Controller input for rendering a scheduled run workspace. The runtime API
+/// key is deliberately absent from every response and idempotency fingerprint.
+#[derive(Clone, Serialize, Deserialize)]
+pub struct RunWorkspaceMaterializationInput {
+    pub display_name: String,
+    pub api_base_url: String,
+    pub runtime_api_key: String,
+    pub credential_id: String,
+    pub sub_agent_kind: String,
+    pub notification_send_enabled: bool,
+    pub expected_quantitative_package: Option<QuantitativePackageSnapshot>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MaterializedRunWorkspace {
+    pub workspace_container_path: String,
+    pub quantitative_package: Option<QuantitativePackageSnapshot>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -198,6 +231,263 @@ pub fn generate_agent_workspace(
         workspace_host_path,
         workspace_container_path,
     })
+}
+
+/// Inspect the active quantitative package before a scheduler binds it into a
+/// run snapshot. The controller derives the source location from the validated
+/// agent key; callers never provide a filesystem path.
+pub fn inspect_active_quantitative_package(
+    config: &OpenCodeWorkspaceConfig,
+    agent_key: &str,
+) -> Result<Option<QuantitativePackageSnapshot>> {
+    let workspace_root = agent_workspace_host_path(config, agent_key)?;
+    let scripts_root = workspace_root.join("scripts");
+    let user_root = live_user_root(config, agent_key)?;
+
+    match fs::symlink_metadata(&workspace_root) {
+        Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_dir() => {
+            bail!("active workspace root is not a regular directory")
+        }
+        Ok(_) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error).context("failed to inspect active workspace root"),
+    }
+    match fs::symlink_metadata(&scripts_root) {
+        Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_dir() => {
+            bail!("active scripts root is not a regular directory")
+        }
+        Ok(_) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error).context("failed to inspect active scripts root"),
+    }
+    match fs::symlink_metadata(&user_root) {
+        Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_dir() => {
+            bail!("active scripts/user is not a regular directory")
+        }
+        Ok(_) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error).context("failed to inspect active scripts/user root"),
+    }
+
+    let manifest = manifest_tree(&user_root)?;
+    if manifest.is_empty() {
+        return Ok(None);
+    }
+    Ok(Some(QuantitativePackageSnapshot {
+        version: "legacy".to_string(),
+        manifest_hash: manifest_hash(&manifest),
+    }))
+}
+
+/// Render a complete run-local workspace from trusted templates and the active
+/// quantitative package. This must run before the OpenCode session is created.
+pub fn materialize_run_workspace(
+    config: &OpenCodeWorkspaceConfig,
+    path: &RunWorkspacePath,
+    input: &RunWorkspaceMaterializationInput,
+) -> Result<MaterializedRunWorkspace> {
+    validate_run_workspace_materialization_input(input)?;
+
+    let active_package = inspect_active_quantitative_package(config, path.agent_key())?;
+    if active_package != input.expected_quantitative_package {
+        bail!("active quantitative package does not match the bound run snapshot");
+    }
+
+    let created = create_run_workspace(config, path)?;
+    let workspace_root = path.workspace_host_path(config);
+    ensure_regular_directory(&workspace_root, "run workspace root")?;
+
+    for relative in [
+        ".opencode/commands",
+        ".opencode/agents",
+        ".opencode/skills",
+        "scripts",
+        "scratch/ohlcv",
+        "scratch/analysis-output",
+        "scratch/downloads",
+        "scratch/tmp",
+        "scratch/trading-confirmation",
+    ] {
+        fs::create_dir_all(workspace_root.join(relative))
+            .with_context(|| format!("failed to create run workspace directory {relative}"))?;
+    }
+
+    let template_agent = OpenCodeWorkspaceAgent {
+        agent_key: path.agent_key().to_string(),
+        display_name: input.display_name.clone(),
+        // Template rendering currently has no API-key placeholder. Keep this
+        // empty so the permanent agent key can never reach a run workspace.
+        api_key: String::new(),
+    };
+    let mut template_config = config.clone();
+    template_config.api_base_url = input.api_base_url.clone();
+    let replacements = template_replacements(
+        &template_config,
+        &template_agent,
+        &created.workspace_container_path,
+    );
+    write_rendered_template(
+        &template_config.source_root.join("opencode.json.template"),
+        &workspace_root.join("opencode.json"),
+        &replacements,
+    )?;
+    write_rendered_template(
+        &template_config.source_root.join("AGENTS.md.template"),
+        &workspace_root.join("AGENTS.md"),
+        &replacements,
+    )?;
+    copy_tree(
+        &template_config.source_root.join(".opencode/commands"),
+        &workspace_root.join(".opencode/commands"),
+    )?;
+    copy_rendered_tree(
+        &template_config.source_root.join(".opencode/agents"),
+        &workspace_root.join(".opencode/agents"),
+        &replacements,
+    )?;
+    copy_tree(
+        &template_config.source_root.join(".opencode/skills"),
+        &workspace_root.join(".opencode/skills"),
+    )?;
+
+    set_run_profile_notification_permission(
+        &workspace_root,
+        &input.sub_agent_kind,
+        input.notification_send_enabled,
+    )?;
+
+    let destination_user_root = workspace_root.join("scripts/user");
+    replace_run_user_tree(&destination_user_root)?;
+    let source_user_root = live_user_root(config, path.agent_key())?;
+    if active_package.is_some() {
+        copy_user_tree(&source_user_root, &destination_user_root)?;
+    }
+
+    write_run_runtime_environment(
+        &workspace_root,
+        &created.workspace_container_path,
+        path,
+        input,
+    )?;
+
+    Ok(MaterializedRunWorkspace {
+        workspace_container_path: created.workspace_container_path,
+        quantitative_package: active_package,
+    })
+}
+
+fn validate_run_workspace_materialization_input(
+    input: &RunWorkspaceMaterializationInput,
+) -> Result<()> {
+    for (name, value) in [
+        ("api_base_url", input.api_base_url.as_str()),
+        ("runtime_api_key", input.runtime_api_key.as_str()),
+        ("credential_id", input.credential_id.as_str()),
+        ("sub_agent_kind", input.sub_agent_kind.as_str()),
+    ] {
+        if value.trim().is_empty() || value.chars().any(char::is_control) {
+            bail!("{name} is invalid");
+        }
+    }
+    uuid::Uuid::parse_str(&input.credential_id).context("credential_id is invalid")?;
+    if !matches!(
+        input.sub_agent_kind.as_str(),
+        "analysis" | "market_analysis" | "trading" | "daily_review"
+    ) {
+        bail!("sub_agent_kind is not supported for a run workspace");
+    }
+    Ok(())
+}
+
+fn ensure_regular_directory(path: &Path, description: &str) -> Result<()> {
+    let metadata =
+        fs::symlink_metadata(path).with_context(|| format!("failed to inspect {description}"))?;
+    if metadata.file_type().is_symlink() || !metadata.is_dir() {
+        bail!("{description} is not a regular directory");
+    }
+    Ok(())
+}
+
+fn replace_run_user_tree(destination: &Path) -> Result<()> {
+    match fs::symlink_metadata(destination) {
+        Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_dir() => {
+            bail!("run scripts/user is not a regular directory")
+        }
+        Ok(_) => fs::remove_dir_all(destination).context("failed to reset run scripts/user")?,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error).context("failed to inspect run scripts/user"),
+    }
+    fs::create_dir_all(destination).context("failed to create run scripts/user")
+}
+
+fn set_run_profile_notification_permission(
+    workspace_root: &Path,
+    sub_agent_kind: &str,
+    notification_send_enabled: bool,
+) -> Result<()> {
+    let profile_name = match sub_agent_kind {
+        "analysis" => "analysis",
+        "market_analysis" => "market-analysis",
+        "trading" => "trading",
+        "daily_review" => "daily-review",
+        _ => bail!("unsupported run profile"),
+    };
+    let profile_path = workspace_root
+        .join(".opencode/agents")
+        .join(format!("{profile_name}.md"));
+    let profile = fs::read_to_string(&profile_path)
+        .with_context(|| format!("failed to read run profile {}", profile_path.display()))?;
+    let mut replaced = 0;
+    let action = if notification_send_enabled {
+        "allow"
+    } else {
+        "deny"
+    };
+    let rendered = profile
+        .lines()
+        .map(|line| {
+            if line
+                .trim_start()
+                .starts_with("hypervibes_send_notification:")
+            {
+                replaced += 1;
+                format!("  hypervibes_send_notification: {action}")
+            } else {
+                line.to_string()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    if replaced != 1 {
+        bail!("run profile must contain exactly one notification permission");
+    }
+    fs::write(&profile_path, format!("{rendered}\n"))
+        .with_context(|| format!("failed to write run profile {}", profile_path.display()))
+}
+
+fn write_run_runtime_environment(
+    workspace_root: &Path,
+    workspace_container_path: &str,
+    path: &RunWorkspacePath,
+    input: &RunWorkspaceMaterializationInput,
+) -> Result<()> {
+    let scratch = format!("{workspace_container_path}/scratch");
+    let contents = format!(
+        "HYPERVIBES_AGENT_KEY={}\nHYPERVIBES_API_BASE_URL={}\nHYPERVIBES_API_KEY={}\nHYPERVIBES_WORKSPACE={}\nHYPERVIBES_RUN_ID={}\nHYPERVIBES_RUNTIME_CREDENTIAL_ID={}\nPYTHONDONTWRITEBYTECODE=1\nHOME={}\nTMPDIR={}/tmp\nMPLCONFIGDIR={}/matplotlib\n",
+        path.agent_key(),
+        input.api_base_url,
+        input.runtime_api_key,
+        workspace_container_path,
+        path.run_id(),
+        input.credential_id,
+        scratch,
+        scratch,
+        scratch,
+    );
+    let temporary = workspace_root.join(".env.run.tmp");
+    fs::write(&temporary, contents).context("failed to write run runtime environment")?;
+    fs::rename(&temporary, workspace_root.join(".env"))
+        .context("failed to publish run runtime environment")
 }
 
 pub fn diff_agent_workspace_from_template(
@@ -1148,6 +1438,44 @@ mod tests {
                 .exists(),
             "root requirements.txt should not be generated into workspaces"
         );
+    }
+
+    #[test]
+    fn materialized_run_workspace_uses_only_the_runtime_credential() {
+        let temp = TempDir::new("opencode-run-materialize");
+        let config = sample_config(&temp.path);
+        generate_agent_workspace(&config, &sample_agent(), WorkspaceGenerationMode::CreateNew)
+            .expect("generate active workspace");
+        let path = RunWorkspacePath::new("btc-2", 42).expect("run path");
+        let runtime_key = "vtr_test_runtime_credential".to_string();
+
+        let materialized = materialize_run_workspace(
+            &config,
+            &path,
+            &RunWorkspaceMaterializationInput {
+                display_name: "BTC 2".to_string(),
+                api_base_url: "http://host.containers.internal:3003".to_string(),
+                runtime_api_key: runtime_key.clone(),
+                credential_id: "b3ce59a8-f3b6-448d-a0c8-d44ea9d23a33".to_string(),
+                sub_agent_kind: "analysis".to_string(),
+                notification_send_enabled: false,
+                expected_quantitative_package: None,
+            },
+        )
+        .expect("materialize run workspace");
+
+        assert_eq!(
+            materialized.workspace_container_path,
+            "/workspaces/runs/btc-2/42/workspace"
+        );
+        let workspace = path.workspace_host_path(&config);
+        let environment = fs::read_to_string(workspace.join(".env")).expect("read run environment");
+        assert!(environment.contains(&runtime_key));
+        assert!(!environment.contains("vta_test_123"));
+        assert!(workspace.join("scripts/user").is_dir());
+        let profile = fs::read_to_string(workspace.join(".opencode/agents/analysis.md"))
+            .expect("read run analysis profile");
+        assert!(profile.contains("hypervibes_send_notification: deny"));
     }
 
     #[test]

@@ -12,6 +12,7 @@ use tracing::error;
 #[derive(Debug)]
 pub(super) enum ApiError {
     BadRequest(String),
+    Forbidden(&'static str),
     NotFound(&'static str),
     Validation(String),
     BadUuid,
@@ -22,6 +23,7 @@ impl ApiError {
     pub(super) fn message(&self) -> String {
         match self {
             ApiError::BadRequest(msg) => msg.clone(),
+            ApiError::Forbidden(msg) => (*msg).to_string(),
             ApiError::NotFound(msg) => (*msg).to_string(),
             ApiError::Validation(msg) => msg.clone(),
             ApiError::BadUuid => "invalid memory id".to_string(),
@@ -32,6 +34,7 @@ impl ApiError {
     pub(super) fn status(&self) -> StatusCode {
         match self {
             ApiError::BadRequest(_) => StatusCode::BAD_REQUEST,
+            ApiError::Forbidden(_) => StatusCode::FORBIDDEN,
             ApiError::NotFound(_) => StatusCode::NOT_FOUND,
             ApiError::Validation(_) => StatusCode::UNPROCESSABLE_ENTITY,
             ApiError::BadUuid => StatusCode::NOT_FOUND,

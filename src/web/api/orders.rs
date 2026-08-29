@@ -14,6 +14,7 @@ use crate::{
         AuthenticatedAgent,
         store::{get_agent, list_agent_instrument_ids},
     },
+    harness::model::RunApiScope,
     hyperliquid::orders::{
         gateway::{
             CancelAllSummary, CancelOutcome, GatewayError, HyperliquidExchange,
@@ -190,6 +191,7 @@ pub(super) async fn place_orders_handler(
     agent: AuthenticatedAgent,
     Json(input): Json<PlaceOrdersRequest>,
 ) -> Result<Response, ApiError> {
+    super::require_run_api_scope(&agent, RunApiScope::OrderWrite)?;
     if let Err(msg) = input.validate() {
         return Err(ApiError::Validation(msg));
     }
@@ -250,6 +252,7 @@ pub(super) async fn list_orders_handler(
     agent: AuthenticatedAgent,
     Query(filter): Query<ListFilterQuery>,
 ) -> Result<Response, ApiError> {
+    super::require_run_api_scope(&agent, RunApiScope::OrderRead)?;
     if let Some(s) = &filter.status
         && s.trim().is_empty()
     {
@@ -277,6 +280,7 @@ pub(super) async fn get_order_handler(
     Path(id): Path<String>,
     Query(filter): Query<ListFilterQuery>,
 ) -> Result<Response, ApiError> {
+    super::require_run_api_scope(&agent, RunApiScope::OrderRead)?;
     let id = Uuid::parse_str(&id).map_err(|_| ApiError::BadUuid)?;
     let row = orders_store::get_order(&state.db_pool, &agent.agent_key, id)
         .await
@@ -308,6 +312,7 @@ pub(super) async fn cancel_orders_handler(
     agent: AuthenticatedAgent,
     Json(input): Json<CancelOrdersRequest>,
 ) -> Result<Response, ApiError> {
+    super::require_run_api_scope(&agent, RunApiScope::OrderWrite)?;
     if input.orders.is_empty() {
         return Err(ApiError::Validation("orders must not be empty".into()));
     }
@@ -341,6 +346,7 @@ pub(super) async fn cancel_all_handler(
     agent: AuthenticatedAgent,
     Query(filter): Query<CancelAllQuery>,
 ) -> Result<Response, ApiError> {
+    super::require_run_api_scope(&agent, RunApiScope::OrderWrite)?;
     let agent_row = get_agent(&state.db_pool, &agent.agent_key)
         .await
         .map_err(ApiError::Internal)?

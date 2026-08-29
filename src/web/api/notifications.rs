@@ -10,7 +10,8 @@ use tracing::info;
 
 use crate::{
     agents::AuthenticatedAgent,
-    notifications::model::{CreateNotification, NotificationResponse},
+    harness::model::RunApiScope,
+    notifications::model::{CreateNotification, NotificationProvenance, NotificationResponse},
     web::{AppState, ui_events::UiEvent},
 };
 
@@ -26,16 +27,35 @@ pub(super) async fn create(
     agent: AuthenticatedAgent,
     Json(payload): Json<CreateNotification>,
 ) -> Result<Response, ApiError> {
+    super::require_run_api_scope(&agent, RunApiScope::NotificationSend)?;
     payload.validate().map_err(ApiError::Validation)?;
     let severity = payload.severity();
-    let record = crate::notifications::store::create_notification(
-        &state.db_pool,
-        &agent.agent_key,
-        &payload.title,
-        &payload.body,
-        severity,
-    )
-    .await
+    let record = match agent.run_provenance() {
+        Some((run_id, capability_schema_version)) => {
+            crate::notifications::store::create_notification_with_provenance(
+                &state.db_pool,
+                &agent.agent_key,
+                &payload.title,
+                &payload.body,
+                severity,
+                NotificationProvenance::Run {
+                    run_id,
+                    capability_schema_version,
+                },
+            )
+            .await
+        }
+        None => {
+            crate::notifications::store::create_notification(
+                &state.db_pool,
+                &agent.agent_key,
+                &payload.title,
+                &payload.body,
+                severity,
+            )
+            .await
+        }
+    }
     .map_err(ApiError::Internal)?;
     state.ui_events.publish(UiEvent::NotificationQueued {
         agent_key: record.agent_key.clone(),

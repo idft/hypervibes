@@ -1,8 +1,3 @@
-#![allow(
-    dead_code,
-    reason = "Phase 2 deliberately persists the artifact contract before Phase 3 dispatch starts invoking it"
-)]
-
 use anyhow::{Context, Result, bail};
 use chrono::{DateTime, Utc};
 use serde_json::Value;
@@ -10,7 +5,10 @@ use sqlx::query_as;
 
 use crate::{
     db::DbPool,
-    harness::model::{RunContextSnapshot, RunWorkspaceArtifactRow},
+    harness::model::{
+        RUN_STATUS_ABORTED, RUN_STATUS_FAILED, RUN_STATUS_SKIPPED, RUN_STATUS_SUCCEEDED,
+        RunContextSnapshot, RunWorkspaceArtifactRow,
+    },
 };
 
 #[derive(Debug, sqlx::FromRow)]
@@ -33,6 +31,14 @@ struct RunWorkspaceArtifactDbRow {
     error_summary: Option<String>,
     created_at: DateTime<Utc>,
     updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub struct RunWorkspaceTerminalizationCandidate {
+    pub run_id: i64,
+    pub agent_key: String,
+    pub status: String,
+    pub backend_run_ref: Option<String>,
 }
 
 /// Insert the durable context binding before asking the workspace controller to
@@ -221,6 +227,74 @@ pub async fn record_run_workspace_stats(
     .await
     .context("failed to record run workspace statistics")?;
     Ok(result.rows_affected() > 0)
+}
+
+/// Make a scrubbed terminal run artifact retainable. Expiration and garbage
+/// collection are deliberately deferred to Phase 5.
+pub async fn mark_run_workspace_terminalized(
+    pool: &DbPool,
+    agent_key: &str,
+    run_id: i64,
+) -> Result<bool> {
+    let result = sqlx::query(
+        "UPDATE harness_run_workspace_artifacts AS artifacts
+            SET workspace_status = 'retained',
+                terminalized_at = COALESCE(terminalized_at, now())
+           FROM harness_sub_agent_runs AS runs
+          WHERE artifacts.run_id = $1
+            AND runs.id = artifacts.run_id
+            AND runs.agent_key = $2
+            AND runs.status = ANY($3)
+            AND artifacts.runtime_secrets_scrubbed_at IS NOT NULL
+            AND artifacts.workspace_status IN ('preparing', 'ready', 'failed', 'retained')",
+    )
+    .bind(run_id)
+    .bind(agent_key)
+    .bind([
+        RUN_STATUS_SUCCEEDED,
+        RUN_STATUS_FAILED,
+        RUN_STATUS_ABORTED,
+        RUN_STATUS_SKIPPED,
+    ])
+    .execute(pool)
+    .await
+    .context("failed to terminalize run workspace artifact")?;
+    Ok(result.rows_affected() > 0)
+}
+
+/// Find terminal runs whose artifact still needs credential revocation or
+/// secret scrubbing. The scheduler reconciles these after restarts and failed
+/// immediate finalization attempts.
+pub async fn list_pending_run_workspace_terminalization(
+    pool: &DbPool,
+    limit: i64,
+) -> Result<Vec<RunWorkspaceTerminalizationCandidate>> {
+    query_as(
+        "SELECT runs.id AS run_id,
+                runs.agent_key,
+                runs.status,
+                runs.backend_run_ref
+           FROM harness_run_workspace_artifacts AS artifacts
+           JOIN harness_sub_agent_runs AS runs ON runs.id = artifacts.run_id
+          WHERE runs.status = ANY($1)
+            AND (
+                artifacts.runtime_secrets_scrubbed_at IS NULL
+                OR artifacts.terminalized_at IS NULL
+                OR artifacts.workspace_status <> 'retained'
+            )
+          ORDER BY runs.finished_at NULLS LAST, runs.id
+          LIMIT $2",
+    )
+    .bind([
+        RUN_STATUS_SUCCEEDED,
+        RUN_STATUS_FAILED,
+        RUN_STATUS_ABORTED,
+        RUN_STATUS_SKIPPED,
+    ])
+    .bind(limit)
+    .fetch_all(pool)
+    .await
+    .context("failed to list pending run workspace terminalization")
 }
 
 async fn get_run_workspace_artifact_in_tx(

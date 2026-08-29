@@ -22,6 +22,7 @@ const WORKSPACE_ROOT: &str = "workspace";
 const MAX_WORKSPACE_TRAVERSAL_DEPTH: usize = 64;
 const MAX_WORKSPACE_TRAVERSAL_ENTRIES: usize = 100_000;
 const MAX_WORKSPACE_TRAVERSAL_DURATION: Duration = Duration::from_secs(30);
+const RUNTIME_SECRET_FILENAMES: &[&str] = &[".env", ".env.run.tmp"];
 
 /// A validated, controller-derived scheduled-run workspace identity. It never
 /// accepts a caller-provided filesystem path.
@@ -284,7 +285,12 @@ fn inspect_isolated_workspace(
         workspace_exists: true,
         size_bytes,
         file_count,
-        runtime_secrets_present: directory_contains_name(&workspace, ".env")?,
+        runtime_secrets_present: RUNTIME_SECRET_FILENAMES
+            .iter()
+            .map(|name| directory_contains_name(&workspace, name))
+            .collect::<Result<Vec<_>>>()?
+            .into_iter()
+            .any(|present| present),
     })
 }
 
@@ -299,23 +305,24 @@ fn scrub_isolated_workspace_runtime_secrets(
         });
     };
 
-    // The generated runtime credential is always the workspace-root `.env`.
-    // Removing the directory entry never follows a malicious `.env` symlink.
-    let secret_path = descriptor_path(&workspace).join(".env");
-    match fs::remove_file(secret_path) {
-        Ok(()) => Ok(RuntimeSecretsScrubbed {
-            workspace_exists: true,
-            removed: true,
-        }),
-        Err(error) if error.kind() == ErrorKind::NotFound => Ok(RuntimeSecretsScrubbed {
-            workspace_exists: true,
-            removed: false,
-        }),
-        Err(error) if error.kind() == ErrorKind::IsADirectory => {
-            bail!("runtime secret path is a directory")
+    // Both names are runtime-only files. The temporary name can remain after a
+    // failed atomic publish, so it must be scrubbed alongside the final `.env`.
+    let mut removed = false;
+    for name in RUNTIME_SECRET_FILENAMES {
+        let secret_path = descriptor_path(&workspace).join(name);
+        match fs::remove_file(secret_path) {
+            Ok(()) => removed = true,
+            Err(error) if error.kind() == ErrorKind::NotFound => {}
+            Err(error) if error.kind() == ErrorKind::IsADirectory => {
+                bail!("runtime secret path is a directory")
+            }
+            Err(error) => return Err(error).context("failed to remove workspace runtime secret"),
         }
-        Err(error) => Err(error).context("failed to remove workspace runtime secret"),
     }
+    Ok(RuntimeSecretsScrubbed {
+        workspace_exists: true,
+        removed,
+    })
 }
 
 fn delete_isolated_workspace(
@@ -732,11 +739,12 @@ mod tests {
         fs::create_dir_all(workspace.join("nested")).expect("create nested directory");
         fs::write(workspace.join("nested/file.txt"), b"data").expect("write data");
         fs::write(workspace.join(".env"), b"credential").expect("write credential");
+        fs::write(workspace.join(".env.run.tmp"), b"pending").expect("write temporary credential");
 
         let inspection = inspect_run_workspace(&config, &path).expect("inspect workspace");
         assert!(inspection.workspace_exists);
-        assert_eq!(inspection.file_count, 2);
-        assert_eq!(inspection.size_bytes, 14);
+        assert_eq!(inspection.file_count, 3);
+        assert_eq!(inspection.size_bytes, 21);
         assert!(inspection.runtime_secrets_present);
 
         assert_eq!(
@@ -747,7 +755,13 @@ mod tests {
             }
         );
         assert!(!workspace.join(".env").exists());
+        assert!(!workspace.join(".env.run.tmp").exists());
         assert!(workspace.join("nested/file.txt").exists());
+        assert!(
+            !inspect_run_workspace(&config, &path)
+                .expect("inspect scrubbed workspace")
+                .runtime_secrets_present
+        );
     }
 
     #[test]

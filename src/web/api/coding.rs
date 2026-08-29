@@ -72,6 +72,7 @@ pub(super) async fn request_analysis_coding(
     agent: AuthenticatedAgent,
     Json(input): Json<CodingRequest>,
 ) -> Result<Response, ApiError> {
+    super::require_permanent_agent_credential(&agent)?;
     let reason = input.reason.trim();
     if reason.is_empty() || reason.chars().count() > 4_000 {
         return Err(ApiError::Validation("invalid coding request reason".into()));
@@ -137,6 +138,7 @@ pub(super) async fn submit_coding_report(
     agent: AuthenticatedAgent,
     Json(input): Json<CodingReportRequest>,
 ) -> Result<Response, ApiError> {
+    super::require_permanent_agent_credential(&agent)?;
     if !owns_coding_task(&state, &agent.agent_key, input.task_id).await? {
         return Ok((StatusCode::NOT_FOUND, "coding task not found").into_response());
     }

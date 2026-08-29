@@ -63,18 +63,42 @@ pub(in crate::web::routes) async fn agents_emergency_stop(
     let mut aborted_runs = 0_usize;
     let mut failures = Vec::new();
     for run in active_runs {
+        let workspace_container_path = (run.sub_agent_kind
+            != crate::harness::model::SUB_AGENT_KIND_ANALYSIS_CODING)
+            .then(|| {
+                format!(
+                    "{}/runs/{}/{}/workspace",
+                    state
+                        .opencode_container_workspaces_root
+                        .trim_end_matches('/'),
+                    agent_key,
+                    run.id
+                )
+            });
         let abort_result = match run.backend_run_ref.as_deref() {
             Some(session_id) => {
-                state
-                    .harness_backend
-                    .abort_session(&state.opencode_base_url, session_id)
-                    .await
+                crate::harness::backend::abort_and_confirm_session_terminated(
+                    &state.harness_backend,
+                    &state.opencode_base_url,
+                    session_id,
+                    workspace_container_path.as_deref(),
+                )
+                .await
             }
             None => Ok(true),
         };
         match abort_result {
             Ok(true) => {
                 mark_run_aborted(&state.db_pool, run.id, "aborted by emergency stop", None).await?;
+                if workspace_container_path.is_some() {
+                    crate::harness::scheduler::terminalize_run_workspace_artifact(
+                        &state.db_pool,
+                        &state.workspace_controller,
+                        &agent_key,
+                        run.id,
+                    )
+                    .await?;
+                }
                 aborted_runs += 1;
             }
             Ok(false) => {

@@ -174,12 +174,26 @@ pub(in crate::web::routes) async fn delete_agent(
     }
 
     for run in list_active_agent_runs(&state.db_pool, &agent_key).await? {
+        let run_workspace_container_path = (run.sub_agent_kind
+            != crate::harness::model::SUB_AGENT_KIND_ANALYSIS_CODING)
+            .then(|| {
+                format!(
+                    "{}/runs/{}/{}/workspace",
+                    state
+                        .opencode_container_workspaces_root
+                        .trim_end_matches('/'),
+                    agent_key,
+                    run.id
+                )
+            });
         if let Some(session_id) = run.backend_run_ref.as_deref()
             && !crate::harness::backend::abort_and_confirm_session_terminated(
                 &state.harness_backend,
                 &state.opencode_base_url,
                 session_id,
-                Some(&workspace.workspace_container_path),
+                run_workspace_container_path
+                    .as_deref()
+                    .or(Some(&workspace.workspace_container_path)),
             )
             .await?
         {
@@ -190,6 +204,15 @@ pub(in crate::web::routes) async fn delete_agent(
                 .into_response());
         }
         mark_run_aborted(&state.db_pool, run.id, "aborted by agent deletion", None).await?;
+        if run_workspace_container_path.is_some() {
+            crate::harness::scheduler::terminalize_run_workspace_artifact(
+                &state.db_pool,
+                &state.workspace_controller,
+                &agent_key,
+                run.id,
+            )
+            .await?;
+        }
     }
 
     let conversation_sessions =

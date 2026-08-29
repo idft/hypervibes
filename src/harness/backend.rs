@@ -48,10 +48,13 @@ pub struct DispatchRequest {
     pub display_name: String,
     pub sub_agent_key: String,
     pub sub_agent_kind: String,
+    pub notification_send_enabled: bool,
     pub timeframe: Option<String>,
     pub operator_prompt: String,
     pub strategy_prompt: String,
+    pub strategy_prompt_revision: i64,
     pub accumulated_learnings: Option<String>,
+    pub accumulated_learning_memory_id: Option<uuid::Uuid>,
     pub system_prompt: String,
     pub environment: String,
     pub selected_instruments: Vec<String>,
@@ -91,6 +94,17 @@ pub trait HarnessBackend: Send + Sync {
     /// transport/server failures.
     async fn abort_session(&self, _base_url: &str, _session_id: &str) -> Result<bool> {
         Ok(false)
+    }
+
+    /// Abort a session through the OpenCode instance selected for one workspace.
+    /// Test fakes that only implement the legacy method retain their behavior.
+    async fn abort_session_in_directory(
+        &self,
+        base_url: &str,
+        session_id: &str,
+        _workspace_container_path: Option<&str>,
+    ) -> Result<bool> {
+        self.abort_session(base_url, session_id).await
     }
 
     /// Probe the live status of a previously-created OpenCode session.
@@ -172,14 +186,27 @@ impl HarnessBackend for OpenCodeBackend {
             "opencode session created"
         );
 
-        store::mark_run_running(&self.pool, request.run_id, Some(&session.id))
+        if !store::mark_run_running(&self.pool, request.run_id, Some(&session.id))
             .await
             .with_context(|| {
                 format!(
                     "failed to persist OpenCode session {} for run {}",
                     session.id, request.run_id
                 )
-            })?;
+            })?
+        {
+            let _ = self
+                .client
+                .abort_session_in_directory(
+                    &request.opencode_base_url,
+                    &session.id,
+                    Some(&workspace_container_path),
+                )
+                .await;
+            return Err(anyhow!(
+                "run was terminalized before OpenCode session was persisted"
+            ));
+        }
 
         let command_arguments = build_command_arguments(&request)?;
 
@@ -228,6 +255,17 @@ impl HarnessBackend for OpenCodeBackend {
 
     async fn abort_session(&self, base_url: &str, session_id: &str) -> Result<bool> {
         self.client.abort_session(base_url, session_id).await
+    }
+
+    async fn abort_session_in_directory(
+        &self,
+        base_url: &str,
+        session_id: &str,
+        workspace_container_path: Option<&str>,
+    ) -> Result<bool> {
+        self.client
+            .abort_session_in_directory(base_url, session_id, workspace_container_path)
+            .await
     }
 
     async fn get_session_status(
@@ -484,7 +522,10 @@ enum TerminationOutcome {
 }
 
 const POST_ABORT_PROBE_ATTEMPTS: usize = 3;
+#[cfg(not(test))]
 const POST_ABORT_PROBE_DELAY: std::time::Duration = std::time::Duration::from_secs(1);
+#[cfg(test)]
+const POST_ABORT_PROBE_DELAY: std::time::Duration = std::time::Duration::from_millis(10);
 
 /// Probe `get_session_status`. If the session is already `Idle` (or
 /// the server does not know about it), return `AlreadyTerminal`.
@@ -508,7 +549,9 @@ async fn confirm_session_terminated(
         return Ok(TerminationOutcome::AlreadyTerminal { provider_error });
     }
 
-    let aborted = backend.abort_session(base_url, session_id).await?;
+    let aborted = backend
+        .abort_session_in_directory(base_url, session_id, workspace_container_path)
+        .await?;
     if !aborted {
         return Ok(TerminationOutcome::StillActive);
     }
@@ -658,10 +701,13 @@ mod tests {
             display_name: "BTC 2".to_string(),
             sub_agent_key: "analysis-15m".to_string(),
             sub_agent_kind: SUB_AGENT_KIND_ANALYSIS.to_string(),
+            notification_send_enabled: false,
             timeframe: Some("15m".to_string()),
             operator_prompt: String::new(),
             strategy_prompt: "Analyze trends.".to_string(),
+            strategy_prompt_revision: 1,
             accumulated_learnings: None,
+            accumulated_learning_memory_id: None,
             system_prompt: "You are a crypto trading assistant.".to_string(),
             environment: "live".to_string(),
             selected_instruments: Vec::new(),
@@ -965,10 +1011,13 @@ mod tests {
             display_name: key.clone(),
             sub_agent_key: "analysis-15m".to_string(),
             sub_agent_kind: SUB_AGENT_KIND_ANALYSIS.to_string(),
+            notification_send_enabled: false,
             timeframe: Some("15m".to_string()),
             operator_prompt: String::new(),
             strategy_prompt: String::new(),
+            strategy_prompt_revision: 1,
             accumulated_learnings: None,
+            accumulated_learning_memory_id: None,
             system_prompt: String::new(),
             environment: "live".to_string(),
             selected_instruments: Vec::new(),
@@ -1038,10 +1087,13 @@ mod tests {
             display_name: key.clone(),
             sub_agent_key: "analysis-15m".to_string(),
             sub_agent_kind: SUB_AGENT_KIND_ANALYSIS.to_string(),
+            notification_send_enabled: false,
             timeframe: Some("15m".to_string()),
             operator_prompt: String::new(),
             strategy_prompt: String::new(),
+            strategy_prompt_revision: 1,
             accumulated_learnings: None,
+            accumulated_learning_memory_id: None,
             system_prompt: String::new(),
             environment: "live".to_string(),
             selected_instruments: Vec::new(),
@@ -1117,10 +1169,13 @@ mod tests {
             display_name: key.clone(),
             sub_agent_key: "analysis-15m".to_string(),
             sub_agent_kind: SUB_AGENT_KIND_ANALYSIS.to_string(),
+            notification_send_enabled: false,
             timeframe: Some("15m".to_string()),
             operator_prompt: String::new(),
             strategy_prompt: String::new(),
+            strategy_prompt_revision: 1,
             accumulated_learnings: None,
+            accumulated_learning_memory_id: None,
             system_prompt: String::new(),
             environment: "live".to_string(),
             selected_instruments: Vec::new(),
@@ -1193,10 +1248,13 @@ mod tests {
             display_name: key.clone(),
             sub_agent_key: "analysis-15m".to_string(),
             sub_agent_kind: SUB_AGENT_KIND_ANALYSIS.to_string(),
+            notification_send_enabled: false,
             timeframe: Some("15m".to_string()),
             operator_prompt: String::new(),
             strategy_prompt: String::new(),
+            strategy_prompt_revision: 1,
             accumulated_learnings: None,
+            accumulated_learning_memory_id: None,
             system_prompt: String::new(),
             environment: "live".to_string(),
             selected_instruments: Vec::new(),

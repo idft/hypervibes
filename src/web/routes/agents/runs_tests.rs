@@ -9,7 +9,10 @@ use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use tower::util::ServiceExt;
 
-use crate::harness::backend::{DispatchRequest, DispatchResult, HarnessBackend};
+use crate::{
+    harness::backend::{DispatchRequest, DispatchResult, HarnessBackend},
+    opencode::client::SessionStatusKind,
+};
 
 struct CancelRecordingBackend {
     cancelled_sessions: Arc<Mutex<Vec<String>>>,
@@ -29,6 +32,23 @@ impl HarnessBackend for CancelRecordingBackend {
             .expect("lock cancelled sessions")
             .push(session_id.to_string());
         Ok(true)
+    }
+
+    async fn get_session_status(
+        &self,
+        _base_url: &str,
+        _session_id: &str,
+    ) -> Result<Option<SessionStatusKind>> {
+        let cancelled = !self
+            .cancelled_sessions
+            .lock()
+            .expect("lock cancelled sessions")
+            .is_empty();
+        Ok(Some(if cancelled {
+            SessionStatusKind::Idle
+        } else {
+            SessionStatusKind::Busy
+        }))
     }
 }
 

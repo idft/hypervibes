@@ -33,10 +33,12 @@ use workspace_store::{
         scrub_conversation_workspace_runtime_secrets, scrub_run_workspace_runtime_secrets,
     },
     workspace::{
-        OpenCodeWorkspaceAgent, OpenCodeWorkspaceConfig, WorkspaceBrowserListing,
+        MaterializedRunWorkspace, OpenCodeWorkspaceAgent, OpenCodeWorkspaceConfig,
+        QuantitativePackageSnapshot, RunWorkspaceMaterializationInput, WorkspaceBrowserListing,
         WorkspaceFilePreview, WorkspaceGenerationMode, WorkspaceTemplateDrift,
         delete_agent_workspace, diff_agent_workspace_from_template, generate_agent_workspace,
-        list_workspace_browser_entries, read_workspace_browser_file,
+        inspect_active_quantitative_package, list_workspace_browser_entries,
+        materialize_run_workspace, read_workspace_browser_file,
     },
 };
 
@@ -217,6 +219,10 @@ fn router(app: Arc<App>) -> Router {
             post(template_drift),
         )
         .route(
+            "/v1/agent-workspaces/{agent_key}/quantitative-package",
+            get(inspect_active_quantitative_package_handler),
+        )
+        .route(
             "/v1/agent-workspaces/{agent_key}/browser",
             get(list_workspace_browser_entries_handler),
         )
@@ -247,6 +253,10 @@ fn router(app: Arc<App>) -> Router {
         .route(
             "/v1/run-workspaces/{agent_key}/{run_id}/inspection",
             get(inspect_run_workspace_handler),
+        )
+        .route(
+            "/v1/run-workspaces/{agent_key}/{run_id}/materialize",
+            post(materialize_run_workspace_handler),
         )
         .route(
             "/v1/run-workspaces/{agent_key}/{run_id}/runtime-secrets",
@@ -416,6 +426,50 @@ async fn create_run_workspace_handler(
     let fingerprint = format!("run-workspace:{}:{}", path.agent_key(), path.run_id());
     idempotent(&app.clone(), &headers, fingerprint, move || {
         create_run_workspace(&app.store, &path).map_err(classify)
+    })
+    .await
+    .map(Json)
+}
+
+async fn inspect_active_quantitative_package_handler(
+    State(app): State<Arc<App>>,
+    Path(agent_key): Path<String>,
+    headers: HeaderMap,
+) -> Result<Json<Option<QuantitativePackageSnapshot>>, ApiError> {
+    authorize(&headers, &app)?;
+    let config = app.store.clone();
+    let result = spawn_blocking(move || inspect_active_quantitative_package(&config, &agent_key))
+        .await
+        .map_err(|_| ApiError::internal())?
+        .map_err(classify)?;
+    Ok(Json(result))
+}
+
+async fn materialize_run_workspace_handler(
+    State(app): State<Arc<App>>,
+    Path((agent_key, run_id)): Path<(String, i64)>,
+    headers: HeaderMap,
+    Json(request): Json<RunWorkspaceMaterializationInput>,
+) -> Result<Json<MaterializedRunWorkspace>, ApiError> {
+    authorize(&headers, &app)?;
+    let path = RunWorkspacePath::new(agent_key, run_id).map_err(classify)?;
+    // The credential value is intentionally excluded: controller idempotency
+    // records are durable filesystem data and must never retain a runtime key.
+    let fingerprint = format!(
+        "run-materialization:{}:{}:{}",
+        path.agent_key(),
+        path.run_id(),
+        hash_json(&serde_json::json!({
+            "display_name": &request.display_name,
+            "api_base_url": &request.api_base_url,
+            "credential_id": &request.credential_id,
+            "sub_agent_kind": &request.sub_agent_kind,
+            "notification_send_enabled": request.notification_send_enabled,
+            "expected_quantitative_package": &request.expected_quantitative_package,
+        }))
+    );
+    idempotent(&app.clone(), &headers, fingerprint, move || {
+        materialize_run_workspace(&app.store, &path, &request).map_err(classify)
     })
     .await
     .map(Json)

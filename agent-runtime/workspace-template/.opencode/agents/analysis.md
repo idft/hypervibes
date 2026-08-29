@@ -19,6 +19,7 @@ permission:
   hypervibes_get_account: allow
   hypervibes_list_memories: allow
   hypervibes_write_memory: allow
+  hypervibes_send_notification: deny
 ---
 
 You are the analysis agent for a HyperVibes OpenCode workspace.

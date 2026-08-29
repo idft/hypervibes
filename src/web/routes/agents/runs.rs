@@ -142,25 +142,44 @@ pub(in crate::web::routes) async fn agents_cancel_run(
     if run.status != crate::harness::model::RUN_STATUS_RUNNING {
         return Ok((StatusCode::CONFLICT, "run is no longer running").into_response());
     }
-    let Some(session_id) = run.backend_run_ref.as_deref() else {
-        return Ok((
-            StatusCode::CONFLICT,
-            "run has not created an OpenCode session yet",
-        )
-            .into_response());
+    let workspace_container_path = format!(
+        "{}/runs/{}/{}/workspace",
+        state
+            .opencode_container_workspaces_root
+            .trim_end_matches('/'),
+        agent_key,
+        run_id
+    );
+
+    let terminated = match run.backend_run_ref.as_deref() {
+        Some(session_id) => {
+            crate::harness::backend::abort_and_confirm_session_terminated(
+                &state.harness_backend,
+                &state.opencode_base_url,
+                session_id,
+                Some(&workspace_container_path),
+            )
+            .await
+        }
+        // Materialization can be in progress before OpenCode creates a session.
+        // Its runtime credential is still safe to revoke after this transition.
+        None => Ok(true),
     };
 
-    match state
-        .harness_backend
-        .abort_session(&state.opencode_base_url, session_id)
-        .await
-    {
+    match terminated {
         Ok(true) => {
             crate::harness::store::mark_run_aborted(
                 &state.db_pool,
                 run_id,
                 "cancelled by operator",
                 None,
+            )
+            .await?;
+            crate::harness::scheduler::terminalize_run_workspace_artifact(
+                &state.db_pool,
+                &state.workspace_controller,
+                &agent_key,
+                run_id,
             )
             .await?;
             Ok(Redirect::to(&format!("/agents/{agent_key}/runs/{run_id}")).into_response())

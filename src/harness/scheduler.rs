@@ -111,7 +111,9 @@ pub struct DispatchRequestInputs {
     pub agent: crate::agents::model::AgentDetailRow,
     pub selected_instruments: Vec<String>,
     pub strategy_prompt: String,
+    pub strategy_prompt_revision: i64,
     pub accumulated_learnings: Option<String>,
+    pub accumulated_learning_memory_id: Option<uuid::Uuid>,
     pub system_prompt: String,
 }
 
@@ -376,6 +378,8 @@ impl HarnessScheduler {
             {
                 let pool = self.pool.clone();
                 let backend = self.backend.clone();
+                let workspace_controller = self.workspace_controller.clone();
+                let agent_api_base_url = self.agent_api_base_url.clone();
                 let live_accounts = self.live_accounts.clone();
                 let agent_key = agent_key.clone();
                 let in_flight = self.in_flight.clone();
@@ -386,6 +390,8 @@ impl HarnessScheduler {
                     process_analysis_lane_for_agent(
                         &pool,
                         &backend,
+                        &workspace_controller,
+                        &agent_api_base_url,
                         &live_accounts,
                         &agent_key,
                         sort_analysis_jobs_for_dispatch(analysis_jobs),
@@ -405,6 +411,8 @@ impl HarnessScheduler {
                 };
                 let pool = self.pool.clone();
                 let backend = self.backend.clone();
+                let workspace_controller = self.workspace_controller.clone();
+                let agent_api_base_url = self.agent_api_base_url.clone();
                 let live_accounts = self.live_accounts.clone();
                 let agent_key = agent_key.clone();
                 let in_flight = self.in_flight.clone();
@@ -415,6 +423,8 @@ impl HarnessScheduler {
                     process_trading_lane_for_agent(
                         &pool,
                         &backend,
+                        &workspace_controller,
+                        &agent_api_base_url,
                         &live_accounts,
                         &agent_key,
                         sort_trading_jobs_for_dispatch(trading_jobs),
@@ -446,6 +456,8 @@ impl HarnessScheduler {
             };
             let pool = self.pool.clone();
             let backend = self.backend.clone();
+            let workspace_controller = self.workspace_controller.clone();
+            let agent_api_base_url = self.agent_api_base_url.clone();
             let live_accounts = self.live_accounts.clone();
             let workspace_leases = self.workspace_leases.clone();
             let opencode_base_url = self.opencode_client.base_url().to_string();
@@ -456,6 +468,8 @@ impl HarnessScheduler {
                 resume_queued_run(
                     &pool,
                     &backend,
+                    &workspace_controller,
+                    &agent_api_base_url,
                     &live_accounts,
                     &workspace_leases,
                     &opencode_base_url,
@@ -600,14 +614,83 @@ impl HarnessScheduler {
         if requeued > 0 {
             warn!(requeued, "requeued stale provider config reload tasks");
         }
+        self.reconcile_terminal_run_workspaces().await?;
         self.last_orphan_recovery_at = Some(now);
+        Ok(())
+    }
+
+    async fn reconcile_terminal_run_workspaces(&self) -> Result<()> {
+        for candidate in
+            store::artifacts::list_pending_run_workspace_terminalization(&self.pool, 50).await?
+        {
+            if let Some(session_id) = candidate.backend_run_ref.as_deref() {
+                let workspace_container_path = format!(
+                    "{}/runs/{}/{}/workspace",
+                    self.container_workspaces_root.trim_end_matches('/'),
+                    candidate.agent_key,
+                    candidate.run_id
+                );
+                match self
+                    .backend
+                    .get_session_status_in_directory(
+                        self.opencode_client.base_url(),
+                        session_id,
+                        Some(&workspace_container_path),
+                    )
+                    .await
+                {
+                    Ok(Some(status)) if status.is_active() => {
+                        warn!(
+                            run_id = candidate.run_id,
+                            agent_key = %candidate.agent_key,
+                            run_status = %candidate.status,
+                            status = ?status,
+                            "terminal run still has an active OpenCode session; retaining runtime secret until recovery"
+                        );
+                        continue;
+                    }
+                    Ok(_) => {}
+                    Err(error) => {
+                        warn!(
+                            run_id = candidate.run_id,
+                            agent_key = %candidate.agent_key,
+                            error = ?error,
+                            "failed to confirm terminal OpenCode session state"
+                        );
+                        continue;
+                    }
+                }
+            }
+            if let Err(error) = terminalize_run_workspace_artifact(
+                &self.pool,
+                &self.workspace_controller,
+                &candidate.agent_key,
+                candidate.run_id,
+            )
+            .await
+            {
+                warn!(
+                    run_id = candidate.run_id,
+                    agent_key = %candidate.agent_key,
+                    run_status = %candidate.status,
+                    error = ?error,
+                    "failed to reconcile terminal run workspace"
+                );
+            }
+        }
         Ok(())
     }
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "resuming a persisted run needs the scheduler dependencies and its durable dispatch identity"
+)]
 async fn resume_queued_run(
     pool: &DbPool,
     backend: &Arc<dyn HarnessBackend>,
+    workspace_controller: &Arc<dyn WorkspaceController>,
+    agent_api_base_url: &str,
     live_accounts: &Arc<LiveAccountStore>,
     workspace_leases: &WorkspaceLeaseManager,
     opencode_base_url: &str,
@@ -682,14 +765,22 @@ async fn resume_queued_run(
             return;
         }
     };
-    let result =
-        dispatch_run_with_workspace_lease(pool.clone(), backend.clone(), request, workspace_leases)
-            .await;
+    let result = dispatch_run_in_isolated_workspace_with_workspace_lease(
+        pool.clone(),
+        backend.clone(),
+        workspace_controller.clone(),
+        agent_api_base_url.to_string(),
+        request,
+        workspace_leases,
+    )
+    .await;
     if queued_run.sub_agent_kind == SUB_AGENT_KIND_ANALYSIS
         && result.succeeded
         && let Err(error) = dispatch_analysis_batch_completed_event(
             pool,
             backend,
+            workspace_controller,
+            agent_api_base_url,
             live_accounts,
             &queued_run.agent_key,
             workspace_leases,
@@ -1506,9 +1597,15 @@ fn maintenance_error_summary(error: &anyhow::Error) -> String {
     }
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the analysis lane keeps scheduler dependencies explicit across spawned tasks"
+)]
 async fn process_analysis_lane_for_agent(
     pool: &DbPool,
     backend: &Arc<dyn HarnessBackend>,
+    workspace_controller: &Arc<dyn WorkspaceController>,
+    agent_api_base_url: &str,
     live_accounts: &Arc<LiveAccountStore>,
     agent_key: &str,
     jobs: Vec<HarnessDispatchSubAgentRow>,
@@ -1526,6 +1623,8 @@ async fn process_analysis_lane_for_agent(
         if process_candle_job_for_agent(
             pool,
             backend,
+            workspace_controller,
+            agent_api_base_url,
             live_accounts,
             agent_key,
             candle_job,
@@ -1542,6 +1641,8 @@ async fn process_analysis_lane_for_agent(
         && let Err(error) = dispatch_analysis_batch_completed_event(
             pool,
             backend,
+            workspace_controller,
+            agent_api_base_url,
             live_accounts,
             agent_key,
             workspace_leases,
@@ -1556,6 +1657,8 @@ async fn process_analysis_lane_for_agent(
         if let Some(run_id) = process_candle_job_for_agent(
             pool,
             backend,
+            workspace_controller,
+            agent_api_base_url,
             live_accounts,
             agent_key,
             candle_job,
@@ -1569,9 +1672,15 @@ async fn process_analysis_lane_for_agent(
     }
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the trading lane keeps scheduler dependencies explicit across spawned tasks"
+)]
 async fn process_trading_lane_for_agent(
     pool: &DbPool,
     backend: &Arc<dyn HarnessBackend>,
+    workspace_controller: &Arc<dyn WorkspaceController>,
+    agent_api_base_url: &str,
     live_accounts: &Arc<LiveAccountStore>,
     agent_key: &str,
     jobs: Vec<HarnessDispatchSubAgentRow>,
@@ -1582,6 +1691,8 @@ async fn process_trading_lane_for_agent(
         let _ = process_candle_job_for_agent(
             pool,
             backend,
+            workspace_controller,
+            agent_api_base_url,
             live_accounts,
             agent_key,
             candle_job,
@@ -1591,13 +1702,19 @@ async fn process_trading_lane_for_agent(
     }
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "a claimed job needs the explicit scheduler dependencies to preserve lane isolation"
+)]
 async fn process_candle_job_for_agent(
     pool: &DbPool,
     backend: &Arc<dyn HarnessBackend>,
+    workspace_controller: &Arc<dyn WorkspaceController>,
+    agent_api_base_url: &str,
     live_accounts: &Arc<LiveAccountStore>,
     agent_key: &str,
     candle_job: HarnessDispatchSubAgentRow,
-    _workspace_leases: &WorkspaceLeaseManager,
+    workspace_leases: &WorkspaceLeaseManager,
 ) -> Option<i64> {
     let sub_agent_id = candle_job.sub_agent_id;
     let sub_agent_key = candle_job.sub_agent_key.clone();
@@ -1655,10 +1772,17 @@ async fn process_candle_job_for_agent(
             match build_dispatch_request(pool, live_accounts, &candle_job, run_id, scheduled_for)
                 .await
             {
-                Ok(Some(request)) => dispatch_run(pool.clone(), backend.clone(), request)
-                    .await
-                    .succeeded
-                    .then_some(run_id),
+                Ok(Some(request)) => dispatch_run_in_isolated_workspace_with_workspace_lease(
+                    pool.clone(),
+                    backend.clone(),
+                    workspace_controller.clone(),
+                    agent_api_base_url.to_string(),
+                    request,
+                    workspace_leases,
+                )
+                .await
+                .succeeded
+                .then_some(run_id),
                 Ok(None) => {
                     warn!(
                         run_id,
@@ -1704,10 +1828,13 @@ pub fn dispatch_request_from_job(
         display_name: candle_job.display_name.clone(),
         sub_agent_key: candle_job.sub_agent_key.clone(),
         sub_agent_kind: candle_job.sub_agent_kind.clone(),
+        notification_send_enabled: candle_job.notification_send_enabled,
         timeframe: candle_job.timeframe.clone(),
         operator_prompt: candle_job.operator_prompt.clone(),
         strategy_prompt: inputs.strategy_prompt,
+        strategy_prompt_revision: inputs.strategy_prompt_revision,
         accumulated_learnings: inputs.accumulated_learnings,
+        accumulated_learning_memory_id: inputs.accumulated_learning_memory_id,
         system_prompt: inputs.system_prompt,
         environment: inputs.agent.environment.clone(),
         selected_instruments: inputs.selected_instruments,
@@ -1746,9 +1873,11 @@ pub async fn build_dispatch_request(
     }
 
     let system_prompt = crate::agents::prompts::SYSTEM_PROMPT.to_string();
-    let strategy_prompt =
-        load_strategy_prompt(pool, &candle_job.agent_key, &candle_job.sub_agent_kind).await?;
-    let accumulated_learnings = load_accumulated_learnings(pool, &candle_job.agent_key).await?;
+    let (strategy_prompt, strategy_prompt_revision) =
+        load_strategy_prompt_snapshot(pool, &candle_job.agent_key, &candle_job.sub_agent_kind)
+            .await?;
+    let (accumulated_learnings, accumulated_learning_memory_id) =
+        load_accumulated_learning_snapshot(pool, &candle_job.agent_key).await?;
 
     let account_snapshot = if candle_job.sub_agent_kind == SUB_AGENT_KIND_TRADING {
         Some(live_agent_snapshot_for_dispatch(
@@ -1768,7 +1897,9 @@ pub async fn build_dispatch_request(
             agent,
             selected_instruments,
             strategy_prompt,
+            strategy_prompt_revision,
             accumulated_learnings,
+            accumulated_learning_memory_id,
             system_prompt,
         },
         account_snapshot,
@@ -1847,9 +1978,10 @@ pub async fn build_event_dispatch_request(
     }
 
     let system_prompt = crate::agents::prompts::SYSTEM_PROMPT.to_string();
-    let strategy_prompt =
-        load_strategy_prompt(pool, &event.agent_key, &event.sub_agent_kind).await?;
-    let accumulated_learnings = load_accumulated_learnings(pool, &event.agent_key).await?;
+    let (strategy_prompt, strategy_prompt_revision) =
+        load_strategy_prompt_snapshot(pool, &event.agent_key, &event.sub_agent_kind).await?;
+    let (accumulated_learnings, accumulated_learning_memory_id) =
+        load_accumulated_learning_snapshot(pool, &event.agent_key).await?;
 
     let mut request = dispatch_request_from_job(
         event,
@@ -1859,7 +1991,9 @@ pub async fn build_event_dispatch_request(
             agent,
             selected_instruments,
             strategy_prompt,
+            strategy_prompt_revision,
             accumulated_learnings,
+            accumulated_learning_memory_id,
             system_prompt,
         },
         None,
@@ -1885,18 +2019,20 @@ fn requires_selected_instruments(sub_agent_kind: &str) -> bool {
     )
 }
 
-async fn load_strategy_prompt(
+async fn load_strategy_prompt_snapshot(
     pool: &DbPool,
     agent_key: &str,
     sub_agent_kind: &str,
-) -> Result<String> {
+) -> Result<(String, i64)> {
     let prompt_kind = prompt_kind_for_sub_agent_kind(sub_agent_kind)
         .ok_or_else(|| anyhow!("unknown prompt kind for job kind {sub_agent_kind}"))?;
-    let stored = get_agent_strategy_prompt(pool, agent_key, prompt_kind)
-        .await?
-        .map(|row| row.prompt)
-        .unwrap_or_default();
-    Ok(effective_strategy_prompt(prompt_kind, stored))
+    let stored = get_agent_strategy_prompt(pool, agent_key, prompt_kind).await?;
+    let revision = stored
+        .as_ref()
+        .map(|row| row.updated_at.timestamp_millis().max(1))
+        .unwrap_or(1);
+    let prompt = stored.map(|row| row.prompt).unwrap_or_default();
+    Ok((effective_strategy_prompt(prompt_kind, prompt), revision))
 }
 
 fn effective_strategy_prompt(prompt_kind: &str, stored: String) -> String {
@@ -1906,26 +2042,39 @@ fn effective_strategy_prompt(prompt_kind: &str, stored: String) -> String {
     stored
 }
 
-async fn load_accumulated_learnings(pool: &DbPool, agent_key: &str) -> Result<Option<String>> {
+async fn load_accumulated_learning_snapshot(
+    pool: &DbPool,
+    agent_key: &str,
+) -> Result<(Option<String>, Option<uuid::Uuid>)> {
     Ok(
         get_latest_agent_memory_by_type(pool, agent_key, "agent_learnings")
             .await?
             .map(|memory| {
-                format!(
-                    "Summary: {}\nCreated at: {}\nContent: {}",
-                    memory.summary,
-                    memory
-                        .created_at
-                        .to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
-                    memory.content
+                (
+                    format!(
+                        "Summary: {}\nCreated at: {}\nContent: {}",
+                        memory.summary,
+                        memory
+                            .created_at
+                            .to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+                        memory.content
+                    ),
+                    memory.id,
                 )
-            }),
+            })
+            .map_or((None, None), |(content, id)| (Some(content), Some(id))),
     )
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the follow-up event dispatch is invoked by both scheduler and manual-run paths"
+)]
 pub async fn dispatch_analysis_batch_completed_event(
     pool: &DbPool,
     backend: &Arc<dyn HarnessBackend>,
+    workspace_controller: &Arc<dyn WorkspaceController>,
+    agent_api_base_url: &str,
     _live_accounts: &Arc<LiveAccountStore>,
     agent_key: &str,
     workspace_leases: &WorkspaceLeaseManager,
@@ -1958,9 +2107,11 @@ pub async fn dispatch_analysis_batch_completed_event(
 
             match build_event_dispatch_request(pool, &event_dispatch, run_id, scheduled_for).await {
                 Ok(Some(request)) => {
-                    let _ = dispatch_run_with_workspace_lease(
+                    let _ = dispatch_run_in_isolated_workspace_with_workspace_lease(
                         pool.clone(),
                         backend.clone(),
+                        workspace_controller.clone(),
+                        agent_api_base_url.to_string(),
                         request,
                         workspace_leases,
                     )
@@ -2016,7 +2167,249 @@ pub struct DispatchRunResult {
     pub succeeded: bool,
 }
 
-pub async fn dispatch_run(
+/// Bind and materialize an isolated workspace before handing a normal run to
+/// OpenCode. The live workspace lease is held by the caller while the source
+/// package is inspected and copied, preventing a coding promotion from racing
+/// the snapshot.
+pub async fn dispatch_run_in_isolated_workspace(
+    pool: DbPool,
+    backend: Arc<dyn HarnessBackend>,
+    workspace_controller: Arc<dyn WorkspaceController>,
+    agent_api_base_url: String,
+    request: DispatchRequest,
+) -> DispatchRunResult {
+    let run_id = request.run_id;
+    let agent_key = request.agent_key.clone();
+    let sub_agent_key = request.sub_agent_key.clone();
+    let request = match materialize_dispatch_run_workspace(
+        &pool,
+        &workspace_controller,
+        &agent_api_base_url,
+        request,
+    )
+    .await
+    {
+        Ok(request) => request,
+        Err(error) => {
+            error!(
+                run_id,
+                agent_key = %agent_key,
+                sub_agent_key = %sub_agent_key,
+                error = ?error,
+                "failed to prepare isolated run workspace"
+            );
+            let _ = store::mark_run_failed(
+                &pool,
+                run_id,
+                "isolated run workspace preparation failed",
+                None,
+            )
+            .await;
+            if let Err(terminalize_error) =
+                terminalize_run_workspace_artifact(&pool, &workspace_controller, &agent_key, run_id)
+                    .await
+            {
+                warn!(
+                    run_id,
+                    agent_key = %agent_key,
+                    error = ?terminalize_error,
+                    "failed to terminalize a failed isolated run workspace"
+                );
+            }
+            return DispatchRunResult { succeeded: false };
+        }
+    };
+
+    let result = dispatch_running_run(pool.clone(), backend, request).await;
+    if let Err(error) =
+        terminalize_run_workspace_artifact(&pool, &workspace_controller, &agent_key, run_id).await
+    {
+        warn!(
+            run_id,
+            agent_key = %agent_key,
+            error = ?error,
+            "failed to terminalize isolated run workspace"
+        );
+    }
+    result
+}
+
+pub async fn dispatch_run_in_isolated_workspace_with_workspace_lease(
+    pool: DbPool,
+    backend: Arc<dyn HarnessBackend>,
+    workspace_controller: Arc<dyn WorkspaceController>,
+    agent_api_base_url: String,
+    request: DispatchRequest,
+    workspace_leases: &WorkspaceLeaseManager,
+) -> DispatchRunResult {
+    let _lease = workspace_leases.acquire_live_read(&request.agent_key).await;
+    dispatch_run_in_isolated_workspace(
+        pool,
+        backend,
+        workspace_controller,
+        agent_api_base_url,
+        request,
+    )
+    .await
+}
+
+async fn materialize_dispatch_run_workspace(
+    pool: &DbPool,
+    workspace_controller: &Arc<dyn WorkspaceController>,
+    agent_api_base_url: &str,
+    mut request: DispatchRequest,
+) -> Result<DispatchRequest> {
+    let quantitative_package = workspace_controller
+        .inspect_active_quantitative_package(&request.agent_key)
+        .await?;
+    let context = build_run_context_snapshot(&request, quantitative_package.clone())?;
+    let artifact = store::artifacts::prepare_run_workspace_artifact(
+        pool,
+        &request.agent_key,
+        request.run_id,
+        &context,
+    )
+    .await?;
+
+    if !store::mark_run_running(pool, request.run_id, None).await? {
+        anyhow::bail!("run is no longer eligible for isolated workspace materialization");
+    }
+    let credential =
+        store::issue_run_runtime_credential(pool, &request.agent_key, request.run_id).await?;
+    let materialized = workspace_controller
+        .materialize_run_workspace(
+            &request.agent_key,
+            request.run_id,
+            workspace_store::workspace::RunWorkspaceMaterializationInput {
+                display_name: request.display_name.clone(),
+                api_base_url: agent_api_base_url.to_string(),
+                runtime_api_key: credential.token,
+                credential_id: credential.credential_id.to_string(),
+                sub_agent_kind: request.sub_agent_kind.clone(),
+                notification_send_enabled: artifact.context.notification_send_enabled(),
+                expected_quantitative_package: quantitative_package,
+            },
+            &format!(
+                "run:{}:materialize:{}",
+                request.run_id, credential.credential_id
+            ),
+        )
+        .await?;
+    if !store::artifacts::mark_run_workspace_ready(pool, &request.agent_key, request.run_id).await?
+    {
+        anyhow::bail!("run workspace artifact could not be marked ready");
+    }
+    request.runtime_config = OpenCodeWorkspaceRuntimeConfig {
+        workspace_container_path: materialized.workspace_container_path,
+        profile_source: "agent-runtime/workspace-template".to_string(),
+    }
+    .into_value();
+    Ok(request)
+}
+
+fn build_run_context_snapshot(
+    request: &DispatchRequest,
+    quantitative_package: Option<workspace_store::workspace::QuantitativePackageSnapshot>,
+) -> Result<crate::harness::model::RunContextSnapshot> {
+    let mut strategy_prompt_revisions = serde_json::Map::new();
+    strategy_prompt_revisions.insert(
+        request.sub_agent_kind.clone(),
+        serde_json::Value::from(request.strategy_prompt_revision),
+    );
+    let account_snapshot_metadata = request
+        .account_snapshot
+        .as_ref()
+        .filter(|snapshot| !snapshot.account_address.trim().is_empty())
+        .map(|snapshot| {
+            serde_json::json!({
+                "captured_at_ms": snapshot.account_data_as_of.map(|value| value.timestamp_millis()),
+                "account_address": snapshot.account_address,
+            })
+        })
+        .unwrap_or(serde_json::Value::Null);
+    let enabled_capabilities = request
+        .notification_send_enabled
+        .then(|| crate::harness::model::CAPABILITY_NOTIFICATION_SEND.to_string())
+        .into_iter()
+        .collect();
+    let context = serde_json::json!({
+        "provider_id": request.model_provider_id.as_deref().unwrap_or("default"),
+        "model_id": request.model_id.as_deref().unwrap_or("default"),
+        "model_variant": request.model_variant,
+        "timeout_seconds": request.timeout_seconds,
+        "selected_instruments": request.selected_instruments,
+        "strategy_prompt_revisions": strategy_prompt_revisions,
+        "additional_instructions": request.operator_prompt,
+        "accumulated_learning_memory_id": request.accumulated_learning_memory_id,
+        "system_prompt_version": "v1",
+        "quantitative_package": quantitative_package,
+        "mcp_installations": [],
+        "notification_send_enabled": request.notification_send_enabled,
+        "scheduled_candle_boundary": request.scheduled_for.timestamp_millis(),
+        "account_snapshot_metadata": account_snapshot_metadata,
+    });
+    Ok(crate::harness::model::RunContextSnapshot {
+        schema_version: crate::harness::model::RUN_CONTEXT_SNAPSHOT_SCHEMA_VERSION,
+        context,
+        capability_schema_version: crate::harness::model::CAPABILITY_SCHEMA_VERSION,
+        enabled_capabilities,
+    })
+}
+
+/// Revoke credentials and remove local runtime secrets after the database run
+/// is terminal. Callers must have already confirmed any OpenCode session ended.
+pub async fn terminalize_run_workspace_artifact(
+    pool: &DbPool,
+    workspace_controller: &Arc<dyn WorkspaceController>,
+    agent_key: &str,
+    run_id: i64,
+) -> Result<bool> {
+    let Some(run) = store::get_run(pool, run_id).await? else {
+        return Ok(false);
+    };
+    if run.agent_key != agent_key
+        || !matches!(
+            run.status.as_str(),
+            crate::harness::model::RUN_STATUS_SUCCEEDED
+                | crate::harness::model::RUN_STATUS_FAILED
+                | crate::harness::model::RUN_STATUS_ABORTED
+                | crate::harness::model::RUN_STATUS_SKIPPED
+        )
+    {
+        return Ok(false);
+    }
+    if store::artifacts::get_run_workspace_artifact(pool, agent_key, run_id)
+        .await?
+        .is_none()
+    {
+        return Ok(false);
+    }
+
+    store::revoke_run_runtime_credential(pool, agent_key, run_id).await?;
+    workspace_controller
+        .scrub_run_workspace_runtime_secrets(agent_key, run_id, &format!("run:{run_id}:scrub"))
+        .await?;
+    let inspection = workspace_controller
+        .inspect_run_workspace(agent_key, run_id)
+        .await?;
+    if inspection.runtime_secrets_present {
+        anyhow::bail!("run workspace still contains runtime secrets after scrub");
+    }
+    store::artifacts::record_run_workspace_secret_scrub(pool, agent_key, run_id).await?;
+    if inspection.workspace_exists {
+        store::artifacts::record_run_workspace_stats(
+            pool,
+            agent_key,
+            run_id,
+            inspection.size_bytes,
+            inspection.file_count,
+        )
+        .await?;
+    }
+    store::artifacts::mark_run_workspace_terminalized(pool, agent_key, run_id).await
+}
+
+async fn dispatch_running_run(
     pool: DbPool,
     backend: Arc<dyn HarnessBackend>,
     request: DispatchRequest,
@@ -2024,16 +2417,27 @@ pub async fn dispatch_run(
     let run_id = request.run_id;
     let agent_key = request.agent_key.clone();
     let sub_agent_key = request.sub_agent_key.clone();
-
-    if let Err(error) = store::mark_run_running(&pool, run_id, None).await {
-        warn!(
-            run_id,
-            agent_key = %agent_key,
-            sub_agent_key = %sub_agent_key,
-            error = ?error,
-            "failed to mark harness run as running"
-        );
-        return DispatchRunResult { succeeded: false };
+    match store::get_run(&pool, run_id).await {
+        Ok(Some(run)) if run.status == crate::harness::model::RUN_STATUS_RUNNING => {}
+        Ok(_) => {
+            warn!(
+                run_id,
+                agent_key = %agent_key,
+                sub_agent_key = %sub_agent_key,
+                "run was terminalized before OpenCode dispatch"
+            );
+            return DispatchRunResult { succeeded: false };
+        }
+        Err(error) => {
+            warn!(
+                run_id,
+                agent_key = %agent_key,
+                sub_agent_key = %sub_agent_key,
+                error = ?error,
+                "failed to verify running run before OpenCode dispatch"
+            );
+            return DispatchRunResult { succeeded: false };
+        }
     }
 
     match dispatch_with_timeout(&pool, backend, request).await {
@@ -2082,19 +2486,6 @@ pub async fn dispatch_run(
             DispatchRunResult { succeeded: false }
         }
     }
-}
-
-/// Dispatch a live-workspace job while holding its agent's shared read lease.
-/// The lease spans the complete OpenCode session, so promotion or regeneration
-/// cannot expose a tree swap to an active session.
-pub async fn dispatch_run_with_workspace_lease(
-    pool: DbPool,
-    backend: Arc<dyn HarnessBackend>,
-    request: DispatchRequest,
-    workspace_leases: &WorkspaceLeaseManager,
-) -> DispatchRunResult {
-    let _lease = workspace_leases.acquire_live_read(&request.agent_key).await;
-    dispatch_run(pool, backend, request).await
 }
 
 fn timeframe_duration_for_sort(candle_job: &HarnessDispatchSubAgentRow) -> i64 {
@@ -2389,6 +2780,92 @@ mod tests {
         fn max_active_calls(&self) -> usize {
             self.max_active_calls.load(Ordering::SeqCst)
         }
+    }
+
+    #[tokio::test]
+    async fn isolated_dispatch_binds_context_and_scrubs_runtime_secret() {
+        let pool = crate::test_db::pool().await;
+        let key = format!(
+            "isolated-dispatch-{}",
+            Utc::now().timestamp_nanos_opt().unwrap_or(0)
+        );
+        seed_test_agent(&pool, &key).await;
+        sqlx::query(
+            "UPDATE harness_sub_agents
+                SET enabled = true
+              WHERE agent_key = $1
+                AND sub_agent_kind = 'analysis'
+                AND timeframe = '15m'",
+        )
+        .bind(&key)
+        .execute(&pool)
+        .await
+        .expect("enable analysis job");
+        let analysis_sub_agent = store::get_enabled_sub_agent(&pool, &key, SUB_AGENT_KIND_ANALYSIS)
+            .await
+            .expect("get analysis job")
+            .expect("analysis job");
+        let job = store::get_dispatch_sub_agent(
+            &pool,
+            &key,
+            analysis_sub_agent.id,
+            "http://localhost:14096",
+        )
+        .await
+        .expect("get dispatch job")
+        .expect("dispatch job");
+        let queued = store::insert_queued_manual_run(&pool, &key, job.sub_agent_id)
+            .await
+            .expect("queue manual run");
+        let (run_id, scheduled_for) = match queued {
+            store::QueuedSubAgentRun::Dispatch {
+                run_id,
+                scheduled_for,
+                ..
+            } => (run_id, scheduled_for),
+            other => panic!("expected dispatchable run, got {other:?}"),
+        };
+        let request = build_dispatch_request(
+            &pool,
+            &Arc::new(LiveAccountStore::default()),
+            &job,
+            run_id,
+            scheduled_for,
+        )
+        .await
+        .expect("build request")
+        .expect("dispatch request");
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let backend = Arc::new(FakeBackend::success(Arc::clone(&calls)));
+        let runtime = scheduler_runtime(InFlightTracker::new());
+        let result = dispatch_run_in_isolated_workspace(
+            pool.clone(),
+            backend,
+            runtime.workspace_controller.clone(),
+            runtime.agent_api_base_url,
+            request,
+        )
+        .await;
+
+        assert!(result.succeeded);
+        let dispatched_path = {
+            let dispatched = calls.lock().expect("lock dispatch calls");
+            assert_eq!(dispatched.len(), 1);
+            OpenCodeWorkspaceRuntimeConfig::from_value(&dispatched[0].runtime_config)
+                .expect("run runtime config")
+                .workspace_container_path
+        };
+        assert_eq!(
+            dispatched_path,
+            format!("/workspaces/runs/{key}/{run_id}/workspace")
+        );
+        let artifact = store::artifacts::get_run_workspace_artifact(&pool, &key, run_id)
+            .await
+            .expect("get artifact")
+            .expect("artifact exists");
+        assert_eq!(artifact.workspace_status, "retained");
+        assert!(artifact.runtime_secrets_scrubbed_at.is_some());
+        assert!(artifact.context.context["notification_send_enabled"] == serde_json::json!(false));
     }
 
     /// Backend whose `dispatch` always returns an error, simulating a

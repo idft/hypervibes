@@ -7,6 +7,7 @@ permission:
   hypervibes_*: deny
   hypervibes_get_latest_analysis: allow
   hypervibes_write_memory: allow
+  hypervibes_send_notification: deny
 ---
 
 You are the market-analysis agent for a HyperVibes OpenCode workspace.

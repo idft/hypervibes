@@ -11,6 +11,7 @@ use tracing::warn;
 
 use crate::{
     agents::store::{resolve_agent_key_by_api_key, touch_api_key_last_used},
+    harness::{model::RunApiScope, store::authenticate_run_runtime_credential},
     web::AppState,
 };
 
@@ -20,6 +21,43 @@ use crate::{
 #[derive(Debug, Clone)]
 pub struct AuthenticatedAgent {
     pub agent_key: String,
+    credential: AuthenticatedAgentCredential,
+}
+
+#[derive(Debug, Clone)]
+enum AuthenticatedAgentCredential {
+    Permanent,
+    Run {
+        run_id: i64,
+        capability_schema_version: i32,
+        api_scopes: Vec<RunApiScope>,
+    },
+}
+
+impl AuthenticatedAgent {
+    /// Permanent agent credentials preserve the existing operator API surface.
+    /// Run credentials are restricted to the scope frozen at materialization.
+    pub fn permits(&self, scope: RunApiScope) -> bool {
+        match &self.credential {
+            AuthenticatedAgentCredential::Permanent => true,
+            AuthenticatedAgentCredential::Run { api_scopes, .. } => api_scopes.contains(&scope),
+        }
+    }
+
+    pub fn run_provenance(&self) -> Option<(i64, i32)> {
+        match &self.credential {
+            AuthenticatedAgentCredential::Permanent => None,
+            AuthenticatedAgentCredential::Run {
+                run_id,
+                capability_schema_version,
+                ..
+            } => Some((*run_id, *capability_schema_version)),
+        }
+    }
+
+    pub fn is_run_credential(&self) -> bool {
+        matches!(self.credential, AuthenticatedAgentCredential::Run { .. })
+    }
 }
 
 impl<S> FromRequestParts<S> for AuthenticatedAgent
@@ -43,6 +81,24 @@ where
             _ => return Err(AuthRejection::missing_or_malformed()),
         };
 
+        let runtime_credential = match authenticate_run_runtime_credential(&pool, &token).await {
+            Ok(credential) => credential,
+            Err(error) => {
+                warn!(error = ?error, "failed to authenticate run runtime credential");
+                return Err(AuthRejection::server_error());
+            }
+        };
+        if let Some(credential) = runtime_credential {
+            return Ok(AuthenticatedAgent {
+                agent_key: credential.agent_key,
+                credential: AuthenticatedAgentCredential::Run {
+                    run_id: credential.run_id,
+                    capability_schema_version: credential.capability_schema_version,
+                    api_scopes: credential.api_scopes,
+                },
+            });
+        }
+
         let agent_key = match resolve_agent_key_by_api_key(&pool, &token).await {
             Ok(Some(key)) => key,
             Ok(None) => return Err(AuthRejection::invalid()),
@@ -56,7 +112,10 @@ where
             warn!(error = ?error, "failed to touch api_key_last_used_at");
         }
 
-        Ok(AuthenticatedAgent { agent_key })
+        Ok(AuthenticatedAgent {
+            agent_key,
+            credential: AuthenticatedAgentCredential::Permanent,
+        })
     }
 }
 

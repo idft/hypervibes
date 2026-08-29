@@ -47,6 +47,7 @@ pub(super) async fn list_strategy_prompts(
     State(state): State<Arc<AppState>>,
     agent: AuthenticatedAgent,
 ) -> Result<Json<Vec<StrategyPromptResponse>>, ApiError> {
+    super::require_permanent_agent_credential(&agent)?;
     let prompts = list_agent_strategy_prompts(&state.db_pool, &agent.agent_key)
         .await
         .map_err(ApiError::Internal)?;
@@ -64,6 +65,7 @@ pub(super) async fn get_strategy_prompt(
     agent: AuthenticatedAgent,
     Path(prompt_kind): Path<String>,
 ) -> Result<Json<StrategyPromptResponse>, ApiError> {
+    super::require_permanent_agent_credential(&agent)?;
     let prompt_kind = validate_prompt_kind(&prompt_kind)?;
     let prompt = get_agent_strategy_prompt(&state.db_pool, &agent.agent_key, prompt_kind)
         .await
@@ -79,6 +81,7 @@ pub(super) async fn update_strategy_prompt(
     Path(prompt_kind): Path<String>,
     Json(input): Json<UpdateStrategyPromptRequest>,
 ) -> Result<Json<StrategyPromptResponse>, ApiError> {
+    super::require_permanent_agent_credential(&agent)?;
     let prompt_kind = validate_prompt_kind(&prompt_kind)?;
     upsert_agent_strategy_prompt(
         &state.db_pool,

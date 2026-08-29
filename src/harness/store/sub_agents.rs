@@ -117,8 +117,8 @@ pub async fn get_enabled_sub_agent(
 ) -> Result<Option<HarnessSubAgentRow>> {
     query_as(
         "SELECT id, agent_key, sub_agent_key, sub_agent_kind, enabled, timeframe,
-                next_run_at, model_provider_id, model_id,
-                model_variant, timeout_seconds, operator_prompt, created_at, updated_at
+                 next_run_at, model_provider_id, model_id,
+                 model_variant, timeout_seconds, operator_prompt, created_at, updated_at
            FROM harness_sub_agents
            WHERE agent_key = $1 AND sub_agent_kind = $2 AND enabled = true",
     )
@@ -149,11 +149,12 @@ async fn insert_default_candle_job(
             sub_agent_kind,
             enabled,
             timeframe,
-            trigger_delay_seconds,
-            next_run_at,
-            timeout_seconds,
-            operator_prompt
-         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+             trigger_delay_seconds,
+             next_run_at,
+             timeout_seconds,
+             operator_prompt,
+             notification_send_enabled
+          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
          ON CONFLICT (agent_key, sub_agent_key) DO NOTHING",
     )
     .bind(agent_key)
@@ -165,6 +166,7 @@ async fn insert_default_candle_job(
     .bind(next_run_at)
     .bind(timeout_seconds)
     .bind("")
+    .bind(sub_agent_kind == SUB_AGENT_KIND_TRADING)
     .execute(pool)
     .await
     .with_context(|| {
@@ -180,8 +182,8 @@ pub async fn list_agent_sub_agents(
 ) -> Result<Vec<HarnessSubAgentRow>> {
     query_as(
         "SELECT id, agent_key, sub_agent_key, sub_agent_kind, enabled, timeframe,
-                next_run_at, model_provider_id, model_id,
-                model_variant, timeout_seconds, operator_prompt, created_at, updated_at
+                 next_run_at, model_provider_id, model_id,
+                 model_variant, timeout_seconds, operator_prompt, created_at, updated_at
            FROM harness_sub_agents
           WHERE agent_key = $1
            ORDER BY next_run_at NULLS LAST, sub_agent_kind, timeframe, id",
@@ -208,10 +210,10 @@ pub async fn get_agent_sub_agent(
                  next_run_at,
                 model_provider_id,
                 model_id,
-                model_variant,
-                timeout_seconds,
-                operator_prompt,
-                created_at,
+                 model_variant,
+                 timeout_seconds,
+                 operator_prompt,
+                  created_at,
                 updated_at
            FROM harness_sub_agents
           WHERE agent_key = $1
@@ -263,11 +265,12 @@ pub async fn insert_candle_sub_agent_with_model_variant(
             trigger_delay_seconds,
             next_run_at,
             model_provider_id,
-            model_id,
-            model_variant,
-            timeout_seconds,
-            operator_prompt
-         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+             model_id,
+             model_variant,
+             timeout_seconds,
+             operator_prompt,
+             notification_send_enabled
+          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
          RETURNING id",
     )
     .bind(agent_key)
@@ -282,6 +285,7 @@ pub async fn insert_candle_sub_agent_with_model_variant(
     .bind(model_variant)
     .bind(timeout_seconds)
     .bind(operator_prompt)
+    .bind(sub_agent_kind == SUB_AGENT_KIND_TRADING)
     .fetch_one(pool)
     .await
     .with_context(|| format!("failed to insert job {sub_agent_key} for agent {agent_key}"))?;
@@ -593,10 +597,11 @@ pub async fn list_due_candle_sub_agents(
                 jobs.next_run_at,
                 jobs.model_provider_id,
                 jobs.model_id,
-                jobs.model_variant,
-                jobs.timeout_seconds,
-                jobs.operator_prompt,
-                $3::text AS opencode_base_url,
+                 jobs.model_variant,
+                 jobs.timeout_seconds,
+                 jobs.operator_prompt,
+                 jobs.notification_send_enabled,
+                 $3::text AS opencode_base_url,
                 agents.runtime_config
            FROM harness_sub_agents AS jobs
            JOIN agents
@@ -640,10 +645,11 @@ pub async fn get_dispatch_sub_agent(
                 jobs.next_run_at,
                 jobs.model_provider_id,
                 jobs.model_id,
-                jobs.model_variant,
-                jobs.timeout_seconds,
-                jobs.operator_prompt,
-                $3::text AS opencode_base_url,
+                 jobs.model_variant,
+                 jobs.timeout_seconds,
+                 jobs.operator_prompt,
+                 jobs.notification_send_enabled,
+                 $3::text AS opencode_base_url,
                 agents.runtime_config
            FROM harness_sub_agents AS jobs
            JOIN agents

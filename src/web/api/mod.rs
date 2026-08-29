@@ -33,6 +33,7 @@ use self::{account::*, coding::*, memories::*, orders::*, strategy_prompts::*, t
 use std::sync::Arc;
 
 use crate::web::AppState;
+use crate::{agents::AuthenticatedAgent, harness::model::RunApiScope};
 use axum::{
     Router,
     routing::{get, post},
@@ -63,6 +64,31 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/orders/cancel-all", post(cancel_all_handler))
         .route("/orders/{id}", get(get_order_handler))
         .with_state(state)
+}
+
+pub(in crate::web::api) fn require_run_api_scope(
+    agent: &AuthenticatedAgent,
+    scope: RunApiScope,
+) -> Result<(), error::ApiError> {
+    if agent.permits(scope) {
+        Ok(())
+    } else {
+        Err(error::ApiError::Forbidden(
+            "run credential does not permit this API action",
+        ))
+    }
+}
+
+pub(in crate::web::api) fn require_permanent_agent_credential(
+    agent: &AuthenticatedAgent,
+) -> Result<(), error::ApiError> {
+    if agent.is_run_credential() {
+        Err(error::ApiError::Forbidden(
+            "run credentials do not permit this API action",
+        ))
+    } else {
+        Ok(())
+    }
 }
 
 /// Wire the `/api/v1` sub-router into a parent router.
