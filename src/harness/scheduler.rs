@@ -46,6 +46,8 @@ use crate::{
 const SCHEDULER_POLL_INTERVAL: Duration = Duration::from_secs(10);
 const OPENCODE_STARTUP_RETRY_INTERVAL: Duration = Duration::from_secs(5);
 const ORPHAN_RECOVERY_INTERVAL: Duration = Duration::from_secs(60);
+const ARTIFACT_GARBAGE_COLLECTION_LIMIT: i64 = 50;
+const ARTIFACT_DELETION_CLAIM_TIMEOUT: chrono::Duration = chrono::Duration::minutes(5);
 const DUE_SCHEDULE_LIMIT: i64 = 20;
 const QUEUED_RUN_RESUME_LIMIT: i64 = 20;
 
@@ -615,6 +617,7 @@ impl HarnessScheduler {
             warn!(requeued, "requeued stale provider config reload tasks");
         }
         self.reconcile_terminal_run_workspaces().await?;
+        self.collect_expired_run_workspace_artifacts(now).await?;
         self.last_orphan_recovery_at = Some(now);
         Ok(())
     }
@@ -676,6 +679,124 @@ impl HarnessScheduler {
                     error = ?error,
                     "failed to reconcile terminal run workspace"
                 );
+            }
+        }
+        Ok(())
+    }
+
+    async fn collect_expired_run_workspace_artifacts(
+        &self,
+        now: chrono::DateTime<Utc>,
+    ) -> Result<()> {
+        let recovered = store::artifacts::release_stale_expired_run_workspace_artifact_claims(
+            &self.pool,
+            now - ARTIFACT_DELETION_CLAIM_TIMEOUT,
+        )
+        .await?;
+        if recovered > 0 {
+            warn!(
+                recovered,
+                "recovered abandoned run workspace artifact deletion claims"
+            );
+        }
+        for artifact in store::artifacts::claim_expired_run_workspace_artifacts(
+            &self.pool,
+            now,
+            ARTIFACT_GARBAGE_COLLECTION_LIMIT,
+        )
+        .await?
+        {
+            if let Some(session_id) = artifact.backend_run_ref.as_deref() {
+                let workspace_container_path = format!(
+                    "{}/runs/{}/{}/workspace",
+                    self.container_workspaces_root.trim_end_matches('/'),
+                    artifact.agent_key,
+                    artifact.run_id
+                );
+                match self
+                    .backend
+                    .get_session_status_in_directory(
+                        self.opencode_client.base_url(),
+                        session_id,
+                        Some(&workspace_container_path),
+                    )
+                    .await
+                {
+                    Ok(Some(status)) if status.is_active() => {
+                        store::artifacts::release_expired_run_workspace_artifact(
+                            &self.pool,
+                            &artifact.agent_key,
+                            artifact.run_id,
+                            "OpenCode session remains active",
+                        )
+                        .await?;
+                        warn!(
+                            run_id = artifact.run_id,
+                            agent_key = %artifact.agent_key,
+                            "skipped expired run artifact deletion because its OpenCode session remains active"
+                        );
+                        continue;
+                    }
+                    Ok(_) => {}
+                    Err(error) => {
+                        let summary =
+                            format!("failed to confirm OpenCode session state: {error:#}");
+                        store::artifacts::release_expired_run_workspace_artifact(
+                            &self.pool,
+                            &artifact.agent_key,
+                            artifact.run_id,
+                            &summary,
+                        )
+                        .await?;
+                        warn!(
+                            run_id = artifact.run_id,
+                            agent_key = %artifact.agent_key,
+                            error = ?error,
+                            "will retry expired run artifact deletion after session status check failure"
+                        );
+                        continue;
+                    }
+                }
+            }
+
+            match self
+                .workspace_controller
+                .delete_run_workspace(
+                    &artifact.agent_key,
+                    artifact.run_id,
+                    &format!("run:{}:delete-expired", artifact.run_id),
+                )
+                .await
+            {
+                Ok(_) => {
+                    store::artifacts::mark_expired_run_workspace_artifact_deleted(
+                        &self.pool,
+                        &artifact.agent_key,
+                        artifact.run_id,
+                    )
+                    .await?;
+                    info!(
+                        run_id = artifact.run_id,
+                        agent_key = %artifact.agent_key,
+                        "deleted expired run workspace artifact"
+                    );
+                }
+                Err(error) => {
+                    let summary = format!("workspace deletion failed: {error:#}");
+                    store::artifacts::release_expired_run_workspace_artifact(
+                        &self.pool,
+                        &artifact.agent_key,
+                        artifact.run_id,
+                        &summary,
+                    )
+                    .await?;
+                    warn!(
+                        run_id = artifact.run_id,
+                        agent_key = %artifact.agent_key,
+                        error = ?error,
+                        "will retry expired run workspace artifact deletion"
+                    );
+                }
             }
         }
         Ok(())

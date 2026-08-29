@@ -11,6 +11,8 @@ use crate::{
     },
 };
 
+pub const RUN_WORKSPACE_ARTIFACT_RETENTION: chrono::Duration = chrono::Duration::days(7);
+
 #[derive(Debug, sqlx::FromRow)]
 struct RunWorkspaceArtifactDbRow {
     run_id: i64,
@@ -38,6 +40,13 @@ pub struct RunWorkspaceTerminalizationCandidate {
     pub run_id: i64,
     pub agent_key: String,
     pub status: String,
+    pub backend_run_ref: Option<String>,
+}
+
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub struct ExpiredRunWorkspaceArtifact {
+    pub run_id: i64,
+    pub agent_key: String,
     pub backend_run_ref: Option<String>,
 }
 
@@ -229,8 +238,7 @@ pub async fn record_run_workspace_stats(
     Ok(result.rows_affected() > 0)
 }
 
-/// Make a scrubbed terminal run artifact retainable. Expiration and garbage
-/// collection are deliberately deferred to Phase 5.
+/// Make a scrubbed terminal run artifact retainable for seven days.
 pub async fn mark_run_workspace_terminalized(
     pool: &DbPool,
     agent_key: &str,
@@ -238,8 +246,12 @@ pub async fn mark_run_workspace_terminalized(
 ) -> Result<bool> {
     let result = sqlx::query(
         "UPDATE harness_run_workspace_artifacts AS artifacts
-            SET workspace_status = 'retained',
-                terminalized_at = COALESCE(terminalized_at, now())
+             SET workspace_status = 'retained',
+                 terminalized_at = COALESCE(terminalized_at, now()),
+                 expires_at = COALESCE(
+                     expires_at,
+                     COALESCE(terminalized_at, now()) + ($4 * interval '1 second')
+                 )
            FROM harness_sub_agent_runs AS runs
           WHERE artifacts.run_id = $1
             AND runs.id = artifacts.run_id
@@ -256,9 +268,117 @@ pub async fn mark_run_workspace_terminalized(
         RUN_STATUS_ABORTED,
         RUN_STATUS_SKIPPED,
     ])
+    .bind(RUN_WORKSPACE_ARTIFACT_RETENTION.num_seconds())
     .execute(pool)
     .await
     .context("failed to terminalize run workspace artifact")?;
+    Ok(result.rows_affected() > 0)
+}
+
+/// Atomically reserve expired retained artifacts for deletion. A worker that
+/// cannot complete deletion must release its claim with
+/// [`release_expired_run_workspace_artifact`] so a later sweep can retry it.
+pub async fn claim_expired_run_workspace_artifacts(
+    pool: &DbPool,
+    now: DateTime<Utc>,
+    limit: i64,
+) -> Result<Vec<ExpiredRunWorkspaceArtifact>> {
+    query_as(
+        "WITH candidates AS (
+             SELECT artifacts.run_id
+               FROM harness_run_workspace_artifacts AS artifacts
+              WHERE artifacts.workspace_status = 'retained'
+                AND artifacts.expires_at <= $1
+              ORDER BY artifacts.expires_at, artifacts.run_id
+              FOR UPDATE SKIP LOCKED
+              LIMIT $2
+         )
+         UPDATE harness_run_workspace_artifacts AS artifacts
+            SET workspace_status = 'deleting',
+                deletion_started_at = now(),
+                error_summary = NULL
+           FROM candidates
+           JOIN harness_sub_agent_runs AS runs ON runs.id = candidates.run_id
+          WHERE artifacts.run_id = candidates.run_id
+         RETURNING artifacts.run_id, runs.agent_key, runs.backend_run_ref",
+    )
+    .bind(now)
+    .bind(limit)
+    .fetch_all(pool)
+    .await
+    .context("failed to claim expired run workspace artifacts")
+}
+
+/// Return abandoned deletion claims to the retained state. This makes a crash
+/// between claiming an artifact and deleting its directory recoverable without
+/// competing with a currently running deletion attempt.
+pub async fn release_stale_expired_run_workspace_artifact_claims(
+    pool: &DbPool,
+    stale_before: DateTime<Utc>,
+) -> Result<u64> {
+    let result = sqlx::query(
+        "UPDATE harness_run_workspace_artifacts
+            SET workspace_status = 'retained',
+                deletion_started_at = NULL,
+                error_summary = 'artifact deletion claim expired before completion'
+          WHERE workspace_status = 'deleting'
+            AND deletion_started_at < $1",
+    )
+    .bind(stale_before)
+    .execute(pool)
+    .await
+    .context("failed to release stale run workspace artifact deletion claims")?;
+    Ok(result.rows_affected())
+}
+
+pub async fn mark_expired_run_workspace_artifact_deleted(
+    pool: &DbPool,
+    agent_key: &str,
+    run_id: i64,
+) -> Result<bool> {
+    let result = sqlx::query(
+        "UPDATE harness_run_workspace_artifacts AS artifacts
+            SET workspace_status = 'deleted',
+                deleted_at = COALESCE(deleted_at, now()),
+                error_summary = NULL
+           FROM harness_sub_agent_runs AS runs
+          WHERE artifacts.run_id = $1
+            AND runs.id = artifacts.run_id
+            AND runs.agent_key = $2
+            AND artifacts.workspace_status = 'deleting'",
+    )
+    .bind(run_id)
+    .bind(agent_key)
+    .execute(pool)
+    .await
+    .context("failed to record expired run workspace artifact deletion")?;
+    Ok(result.rows_affected() > 0)
+}
+
+pub async fn release_expired_run_workspace_artifact(
+    pool: &DbPool,
+    agent_key: &str,
+    run_id: i64,
+    error_summary: &str,
+) -> Result<bool> {
+    let error_summary = truncate_artifact_error_summary(error_summary);
+    let result = sqlx::query(
+        "UPDATE harness_run_workspace_artifacts AS artifacts
+            SET workspace_status = 'retained',
+                deletion_started_at = NULL,
+                error_summary = $3
+           FROM harness_sub_agent_runs AS runs
+          WHERE artifacts.run_id = $1
+            AND runs.id = artifacts.run_id
+            AND runs.agent_key = $2
+            AND artifacts.workspace_status = 'deleting'",
+    )
+    .bind(run_id)
+    .bind(agent_key)
+    .bind(error_summary)
+    .execute(pool)
+    .await
+    .context("failed to release expired run workspace artifact deletion claim")?;
     Ok(result.rows_affected() > 0)
 }
 
@@ -280,7 +400,7 @@ pub async fn list_pending_run_workspace_terminalization(
             AND (
                 artifacts.runtime_secrets_scrubbed_at IS NULL
                 OR artifacts.terminalized_at IS NULL
-                OR artifacts.workspace_status <> 'retained'
+                OR artifacts.workspace_status NOT IN ('retained', 'deleted')
             )
           ORDER BY runs.finished_at NULLS LAST, runs.id
           LIMIT $2",
@@ -372,6 +492,22 @@ fn run_workspace_artifact_from_db(
         created_at: row.created_at,
         updated_at: row.updated_at,
     })
+}
+
+fn truncate_artifact_error_summary(error_summary: &str) -> String {
+    const MAX_ERROR_SUMMARY_BYTES: usize = 1_000;
+    error_summary
+        .chars()
+        .scan(0, |size, character| {
+            let character_size = character.len_utf8();
+            if *size + character_size > MAX_ERROR_SUMMARY_BYTES {
+                None
+            } else {
+                *size += character_size;
+                Some(character)
+            }
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -528,6 +664,161 @@ mod tests {
         assert!(artifact.runtime_secrets_scrubbed_at.is_some());
         assert_eq!(artifact.observed_size_bytes, Some(123));
         assert_eq!(artifact.observed_file_count, Some(4));
+    }
+
+    #[tokio::test]
+    async fn terminalized_artifacts_expire_after_seven_days() {
+        let pool = test_db::pool().await;
+        let agent_key = format!(
+            "artifact-expiry-{}",
+            Utc::now().timestamp_nanos_opt().unwrap_or(0)
+        );
+        let run_id = seed_run(&pool, &agent_key).await;
+        prepare_run_workspace_artifact(&pool, &agent_key, run_id, &snapshot())
+            .await
+            .expect("prepare artifact");
+        mark_run_workspace_ready(&pool, &agent_key, run_id)
+            .await
+            .expect("mark ready");
+        record_run_workspace_secret_scrub(&pool, &agent_key, run_id)
+            .await
+            .expect("record scrub");
+        sqlx::query(
+            "UPDATE harness_sub_agent_runs
+                SET status = 'succeeded', finished_at = now()
+              WHERE id = $1",
+        )
+        .bind(run_id)
+        .execute(&pool)
+        .await
+        .expect("mark run succeeded");
+
+        assert!(
+            mark_run_workspace_terminalized(&pool, &agent_key, run_id)
+                .await
+                .expect("terminalize artifact")
+        );
+        let artifact = get_run_workspace_artifact(&pool, &agent_key, run_id)
+            .await
+            .expect("load artifact")
+            .expect("artifact exists");
+        let terminalized_at = artifact.terminalized_at.expect("terminalized timestamp");
+        assert_eq!(
+            artifact.expires_at,
+            Some(terminalized_at + RUN_WORKSPACE_ARTIFACT_RETENTION)
+        );
+    }
+
+    #[tokio::test]
+    async fn expired_artifact_claims_are_retryable_and_agent_scoped() {
+        let pool = test_db::pool().await;
+        let agent_key = format!(
+            "artifact-gc-{}",
+            Utc::now().timestamp_nanos_opt().unwrap_or(0)
+        );
+        let run_id = seed_run(&pool, &agent_key).await;
+        prepare_run_workspace_artifact(&pool, &agent_key, run_id, &snapshot())
+            .await
+            .expect("prepare artifact");
+        sqlx::query(
+            "UPDATE harness_run_workspace_artifacts
+                SET workspace_status = 'retained',
+                    terminalized_at = now() - interval '8 days',
+                    expires_at = now() - interval '1 second'
+              WHERE run_id = $1",
+        )
+        .bind(run_id)
+        .execute(&pool)
+        .await
+        .expect("expire artifact");
+
+        let claimed = claim_expired_run_workspace_artifacts(&pool, Utc::now(), 10)
+            .await
+            .expect("claim artifact");
+        assert_eq!(claimed.len(), 1);
+        assert_eq!(claimed[0].run_id, run_id);
+        assert_eq!(claimed[0].agent_key, agent_key);
+        assert!(
+            release_expired_run_workspace_artifact(
+                &pool,
+                &agent_key,
+                run_id,
+                &"retry ".repeat(300),
+            )
+            .await
+            .expect("release claim")
+        );
+        let artifact = get_run_workspace_artifact(&pool, &agent_key, run_id)
+            .await
+            .expect("load artifact")
+            .expect("artifact exists");
+        assert_eq!(artifact.workspace_status, "retained");
+        assert!(artifact.error_summary.expect("retry error").len() <= 1_000);
+
+        assert_eq!(
+            claim_expired_run_workspace_artifacts(&pool, Utc::now(), 10)
+                .await
+                .expect("reclaim artifact")
+                .len(),
+            1
+        );
+        assert!(
+            !mark_expired_run_workspace_artifact_deleted(&pool, "other-agent", run_id)
+                .await
+                .expect("scope deletion")
+        );
+        assert!(
+            mark_expired_run_workspace_artifact_deleted(&pool, &agent_key, run_id)
+                .await
+                .expect("mark deleted")
+        );
+        let artifact = get_run_workspace_artifact(&pool, &agent_key, run_id)
+            .await
+            .expect("load deleted artifact")
+            .expect("artifact exists");
+        assert_eq!(artifact.workspace_status, "deleted");
+        assert!(artifact.deleted_at.is_some());
+    }
+
+    #[tokio::test]
+    async fn stale_deletion_claims_are_released_for_recovery() {
+        let pool = test_db::pool().await;
+        let agent_key = format!(
+            "artifact-gc-recovery-{}",
+            Utc::now().timestamp_nanos_opt().unwrap_or(0)
+        );
+        let run_id = seed_run(&pool, &agent_key).await;
+        prepare_run_workspace_artifact(&pool, &agent_key, run_id, &snapshot())
+            .await
+            .expect("prepare artifact");
+        sqlx::query(
+            "UPDATE harness_run_workspace_artifacts
+                SET workspace_status = 'deleting',
+                    terminalized_at = now() - interval '8 days',
+                    expires_at = now() - interval '1 second',
+                    deletion_started_at = now() - interval '6 minutes'
+              WHERE run_id = $1",
+        )
+        .bind(run_id)
+        .execute(&pool)
+        .await
+        .expect("create stale claim");
+
+        assert_eq!(
+            release_stale_expired_run_workspace_artifact_claims(
+                &pool,
+                Utc::now() - chrono::Duration::minutes(5),
+            )
+            .await
+            .expect("release stale claim"),
+            1
+        );
+        let artifact = get_run_workspace_artifact(&pool, &agent_key, run_id)
+            .await
+            .expect("load artifact")
+            .expect("artifact exists");
+        assert_eq!(artifact.workspace_status, "retained");
+        assert!(artifact.deletion_started_at.is_none());
     }
 
     #[test]
