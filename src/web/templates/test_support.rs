@@ -115,6 +115,7 @@ pub fn sample_candle_job_row(
         model_variant: None,
         timeout_seconds: 600,
         operator_prompt: String::new(),
+        notification_send_enabled: sub_agent_kind == "trading",
         created_at: now,
         updated_at: now,
     }
@@ -135,6 +136,7 @@ pub fn sample_event_job_row(id: i64, enabled: bool) -> crate::harness::model::Ha
         model_variant: None,
         timeout_seconds: 600,
         operator_prompt: String::new(),
+        notification_send_enabled: false,
         created_at: now,
         updated_at: now,
     }

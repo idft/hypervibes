@@ -56,6 +56,26 @@
                 {% endif %}
             </dd>
         </div>
+        {% if let Some(artifact) = artifact %}
+        <div>
+            <dt class="text-xs uppercase tracking-[0.16em] text-zinc-500">Artifact</dt>
+            <dd class="mt-2"><span class="inline-flex rounded-full border px-2 py-0.5 text-xs font-medium {{ artifact.status_class }}">{{ artifact.status }}</span></dd>
+        </div>
+        <div>
+            <dt class="text-xs uppercase tracking-[0.16em] text-zinc-500">Artifact size</dt>
+            <dd class="mt-2 font-mono text-sm text-zinc-200">{{ artifact.size_text }} · {{ artifact.file_count_text }} files</dd>
+        </div>
+        {% if let Some(expires_at) = artifact.expires_at %}
+        <div>
+            <dt class="text-xs uppercase tracking-[0.16em] text-zinc-500">Artifact expires</dt>
+            <dd class="mt-2 font-mono text-sm text-zinc-200"><time class="local-datetime" data-local-format="datetime" datetime="{{ expires_at.iso }}" title="{{ expires_at.fallback_text }}">{{ expires_at.fallback_text }}</time></dd>
+        </div>
+        {% endif %}
+        <div>
+            <dt class="text-xs uppercase tracking-[0.16em] text-zinc-500">Runtime secrets</dt>
+            <dd class="mt-2 text-sm {% if artifact.secrets_scrubbed %}text-emerald-300{% else %}text-amber-300{% endif %}">{% if artifact.secrets_scrubbed %}Scrubbed{% else %}Pending scrub{% endif %}</dd>
+        </div>
+        {% endif %}
         {% if let Some(session) = session %}
         <div>
             <dt class="text-xs uppercase tracking-[0.16em] text-zinc-500">Model</dt>

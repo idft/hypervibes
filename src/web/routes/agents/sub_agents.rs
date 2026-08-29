@@ -1230,6 +1230,29 @@ pub(in crate::web::routes) async fn agents_update_sub_agent_operator_prompt(
 }
 
 #[derive(Debug, Default, Deserialize)]
+pub(in crate::web::routes) struct NotificationCapabilityForm {
+    pub enabled: Option<String>,
+}
+
+pub(in crate::web::routes) async fn agents_update_sub_agent_notification_capability(
+    State(state): State<Arc<AppState>>,
+    Path((agent_key, sub_agent_id)): Path<(String, i64)>,
+    Form(form): Form<NotificationCapabilityForm>,
+) -> Result<Response, AppError> {
+    let updated = crate::harness::store::set_sub_agent_notification_send_enabled(
+        &state.db_pool,
+        &agent_key,
+        sub_agent_id,
+        form.enabled.is_some(),
+    )
+    .await?;
+    if !updated {
+        return Ok((StatusCode::NOT_FOUND, "sub-agent not found").into_response());
+    }
+    Ok(Redirect::to(&format!("/agents/{agent_key}/sub-agents/{sub_agent_id}")).into_response())
+}
+
+#[derive(Debug, Default, Deserialize)]
 pub(in crate::web::routes) struct TimeframeForm {
     #[serde(default)]
     pub timeframe: String,

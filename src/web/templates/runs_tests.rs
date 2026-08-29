@@ -39,6 +39,7 @@ fn run_detail_page_renders_opencode_session_sections() {
         agent,
         run,
         Some(session),
+        None,
         true,
         0,
         Navbar::default(),
@@ -69,7 +70,7 @@ fn run_error_renders_in_fixed_summary_not_transcript() {
     row.error_summary = Some("Usage limit reached".to_string());
     let run = HarnessSubAgentRunDetailView::from_row(&row);
 
-    let summary = AgentRunDetailSummaryPartialTemplate::render_view(run.clone(), None)
+    let summary = AgentRunDetailSummaryPartialTemplate::render_view(run.clone(), None, None)
         .expect("render summary");
     let transcript = AgentRunDetailTranscriptPartialTemplate::render_view(run, None, false)
         .expect("render transcript");

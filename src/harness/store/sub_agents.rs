@@ -118,7 +118,8 @@ pub async fn get_enabled_sub_agent(
     query_as(
         "SELECT id, agent_key, sub_agent_key, sub_agent_kind, enabled, timeframe,
                  next_run_at, model_provider_id, model_id,
-                 model_variant, timeout_seconds, operator_prompt, created_at, updated_at
+                  model_variant, timeout_seconds, operator_prompt, notification_send_enabled,
+                  created_at, updated_at
            FROM harness_sub_agents
            WHERE agent_key = $1 AND sub_agent_kind = $2 AND enabled = true",
     )
@@ -183,7 +184,8 @@ pub async fn list_agent_sub_agents(
     query_as(
         "SELECT id, agent_key, sub_agent_key, sub_agent_kind, enabled, timeframe,
                  next_run_at, model_provider_id, model_id,
-                 model_variant, timeout_seconds, operator_prompt, created_at, updated_at
+                  model_variant, timeout_seconds, operator_prompt, notification_send_enabled,
+                  created_at, updated_at
            FROM harness_sub_agents
           WHERE agent_key = $1
            ORDER BY next_run_at NULLS LAST, sub_agent_kind, timeframe, id",
@@ -210,10 +212,11 @@ pub async fn get_agent_sub_agent(
                  next_run_at,
                 model_provider_id,
                 model_id,
-                 model_variant,
-                 timeout_seconds,
-                 operator_prompt,
-                  created_at,
+                  model_variant,
+                  timeout_seconds,
+                  operator_prompt,
+                  notification_send_enabled,
+                   created_at,
                 updated_at
            FROM harness_sub_agents
           WHERE agent_key = $1
@@ -415,6 +418,33 @@ pub async fn set_sub_agent_enabled(
     .execute(pool)
     .await
     .with_context(|| format!("failed to toggle job {sub_agent_id} for agent {agent_key}"))?;
+
+    Ok(result.rows_affected() > 0)
+}
+
+/// Updates the notification capability assignment used by future runs. Existing
+/// run snapshots retain the capability state they were dispatched with.
+pub async fn set_sub_agent_notification_send_enabled(
+    pool: &DbPool,
+    agent_key: &str,
+    sub_agent_id: i64,
+    enabled: bool,
+) -> Result<bool> {
+    let result = sqlx::query(
+        "UPDATE harness_sub_agents
+            SET notification_send_enabled = $3,
+                updated_at = now()
+          WHERE agent_key = $1
+            AND id = $2",
+    )
+    .bind(agent_key)
+    .bind(sub_agent_id)
+    .bind(enabled)
+    .execute(pool)
+    .await
+    .with_context(|| {
+        format!("failed to update notification capability for job {sub_agent_id} agent {agent_key}")
+    })?;
 
     Ok(result.rows_affected() > 0)
 }

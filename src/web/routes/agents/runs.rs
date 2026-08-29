@@ -24,7 +24,7 @@ use crate::{
         templates::{
             AgentRunDetailPageTemplate, AgentRunDetailSummaryPartialTemplate,
             AgentRunDetailTranscriptPartialTemplate, HarnessSubAgentRunDetailView,
-            OpenCodeSessionView,
+            OpenCodeSessionView, RunWorkspaceArtifactView,
         },
     },
 };
@@ -33,6 +33,7 @@ struct RunDetailSnapshot {
     agent: crate::agents::model::AgentDetailRow,
     run: HarnessSubAgentRunDetailView,
     session: Option<OpenCodeSessionView>,
+    artifact: Option<RunWorkspaceArtifactView>,
     session_lookup_attempted: bool,
 }
 
@@ -64,11 +65,20 @@ async fn load_run_detail_snapshot(
     if let Some(session) = session.as_ref() {
         prefer_session_error(&mut run, session);
     }
+    let artifact = crate::harness::store::artifacts::get_run_workspace_artifact(
+        &state.db_pool,
+        agent_key,
+        run_id,
+    )
+    .await?
+    .as_ref()
+    .map(RunWorkspaceArtifactView::from_row);
 
     Ok(Some(RunDetailSnapshot {
         agent,
         run,
         session,
+        artifact,
         session_lookup_attempted,
     }))
 }
@@ -93,6 +103,7 @@ fn render_run_detail_events(snapshot: &RunDetailSnapshot) -> Result<Vec<Event>, 
     let summary = AgentRunDetailSummaryPartialTemplate::render_view(
         snapshot.run.clone(),
         snapshot.session.clone(),
+        snapshot.artifact.clone(),
     )?;
     let transcript = AgentRunDetailTranscriptPartialTemplate::render_view(
         snapshot.run.clone(),
@@ -122,6 +133,7 @@ pub(in crate::web::routes) async fn agents_show_run_detail(
         snapshot.agent,
         snapshot.run,
         snapshot.session,
+        snapshot.artifact,
         snapshot.session_lookup_attempted,
         notification_count,
         navbar,

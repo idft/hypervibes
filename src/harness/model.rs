@@ -169,6 +169,7 @@ pub struct HarnessSubAgentRow {
     pub model_variant: Option<String>,
     pub timeout_seconds: i32,
     pub operator_prompt: String,
+    pub notification_send_enabled: bool,
     // Retained on the row so callers can use persistence timestamps without a new query.
     #[expect(
         dead_code,

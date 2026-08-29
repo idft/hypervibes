@@ -53,6 +53,8 @@ pub struct HarnessSubAgentDetailView {
     pub toggle_action: String,
     pub delete_action: String,
     pub hidden_enabled_value: &'static str,
+    pub notification_send_enabled: bool,
+    pub notification_capability_update_action: String,
 }
 
 #[derive(Debug, Clone)]
@@ -156,6 +158,11 @@ impl HarnessSubAgentDetailView {
             toggle_action: summary.toggle_action,
             delete_action: format!("/agents/{}/sub-agents/{}/delete", row.agent_key, row.id),
             hidden_enabled_value: summary.hidden_enabled_value,
+            notification_send_enabled: row.notification_send_enabled,
+            notification_capability_update_action: format!(
+                "/agents/{}/sub-agents/{}/notification-capability",
+                row.agent_key, row.id
+            ),
         }
     }
 }

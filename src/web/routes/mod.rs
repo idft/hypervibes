@@ -220,6 +220,10 @@ pub fn router(state: Arc<AppState>) -> Router {
             post(agents_update_sub_agent_operator_prompt),
         )
         .route(
+            "/agents/{agent_key}/sub-agents/{sub_agent_id}/notification-capability",
+            post(agents_update_sub_agent_notification_capability),
+        )
+        .route(
             "/agents/{agent_key}/sub-agents/{sub_agent_id}/timeframe",
             post(agents_update_sub_agent_timeframe),
         )
