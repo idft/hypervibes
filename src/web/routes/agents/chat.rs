@@ -23,7 +23,10 @@ use uuid::Uuid;
 
 use crate::{
     agent_conversations::{
-        model::{AgentConversationRow, TOOL_GROUP_MEMORY_WRITES, TOOL_GROUP_ORDERS},
+        model::{
+            AgentConversationRow, TOOL_GROUP_MEMORY_WRITES, TOOL_GROUP_NOTIFICATIONS,
+            TOOL_GROUP_ORDERS,
+        },
         service::{CONVERSATION_MESSAGE_MAX_CHARS, ConversationService},
     },
     agents::{store::get_agent, strategy_prompts::is_valid_prompt_kind},
@@ -89,6 +92,8 @@ pub(in crate::web::routes) struct ConversationSettingsForm {
     orders_policy: String,
     #[serde(default)]
     memory_writes_policy: String,
+    #[serde(default)]
+    notifications_policy: String,
 }
 #[derive(Default, Deserialize)]
 pub(in crate::web::routes) struct PermissionReplyForm {
@@ -112,7 +117,7 @@ fn service(state: &AppState) -> ConversationService<'_> {
         pool: &state.db_pool,
         client: &state.opencode_client,
         base_url: &state.opencode_base_url,
-        workspace_leases: &state.workspace_leases,
+        workspace_controller: state.workspace_controller.as_ref(),
         in_flight: &state.in_flight,
         turn_tracker: &state.conversation_turns,
         shutdown_rx: state.shutdown_rx.clone(),
@@ -183,20 +188,24 @@ async fn load_snapshot(
         .find(|item| item.tool_group == TOOL_GROUP_MEMORY_WRITES)
         .map(|item| item.policy.clone())
         .unwrap_or_else(|| "confirm".to_string());
-    let permissions = match crate::opencode::workspace::OpenCodeWorkspaceRuntimeConfig::from_value(
-        &agent.runtime_config,
-    ) {
-        Some(runtime) => state
-            .opencode_client
-            .list_pending_permissions(&state.opencode_base_url, &runtime.workspace_container_path)
-            .await
-            .unwrap_or_default()
-            .iter()
-            .filter(|request| request.session_id == conversation.opencode_session_id)
-            .map(AgentConversationPermissionRequestView::from)
-            .collect(),
-        None => Vec::new(),
-    };
+    let notifications_policy = conversation
+        .tool_policies
+        .iter()
+        .find(|item| item.tool_group == TOOL_GROUP_NOTIFICATIONS)
+        .map(|item| item.policy.clone())
+        .unwrap_or_else(|| "deny".to_string());
+    let permissions = state
+        .opencode_client
+        .list_pending_permissions(
+            &state.opencode_base_url,
+            &format!("/workspaces/conversations/{agent_key}/{conversation_id}/workspace"),
+        )
+        .await
+        .unwrap_or_default()
+        .iter()
+        .filter(|request| request.session_id == conversation.opencode_session_id)
+        .map(AgentConversationPermissionRequestView::from)
+        .collect();
     Ok(Some(ConversationSnapshot {
         agent,
         conversation,
@@ -208,6 +217,7 @@ async fn load_snapshot(
             model_picker: picker,
             orders_policy,
             memory_writes_policy,
+            notifications_policy,
             disabled: busy,
         },
         permissions,
@@ -704,6 +714,8 @@ pub(in crate::web::routes) async fn agents_update_conversation_settings(
             policy.policy = form.orders_policy.clone();
         } else if policy.tool_group == TOOL_GROUP_MEMORY_WRITES {
             policy.policy = form.memory_writes_policy.clone();
+        } else if policy.tool_group == TOOL_GROUP_NOTIFICATIONS {
+            policy.policy = form.notifications_policy.clone();
         }
     }
     service(&state)

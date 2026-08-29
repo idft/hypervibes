@@ -165,7 +165,7 @@ async fn main() -> Result<()> {
         encryption_key.clone(),
         shutdown_rx.clone(),
         in_flight.clone(),
-        workspace_leases.clone(),
+        Arc::clone(&workspace_controller),
         crate::agent_conversations::service::ConversationTurnTracker::default(),
         Arc::clone(&gateway_pending_links),
     );

@@ -113,6 +113,26 @@ pub async fn create_conversation_with_default_policies(
     Ok(agent_conversation_from_db(row, tool_policies))
 }
 
+pub async fn set_conversation_session_id(
+    pool: &DbPool,
+    agent_key: &str,
+    conversation_id: Uuid,
+    session_id: &str,
+) -> Result<bool> {
+    let result = sqlx::query(
+        "UPDATE agent_conversations
+            SET opencode_session_id = $3, updated_at = now()
+          WHERE id = $1 AND agent_key = $2",
+    )
+    .bind(conversation_id)
+    .bind(agent_key)
+    .bind(session_id)
+    .execute(pool)
+    .await
+    .context("failed to set conversation OpenCode session id")?;
+    Ok(result.rows_affected() > 0)
+}
+
 /// List only app-mapped conversations for an agent. OpenCode mirror fields are
 /// optional because the database plugin can lag session creation.
 pub async fn list_agent_conversations(

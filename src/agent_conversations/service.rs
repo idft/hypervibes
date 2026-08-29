@@ -14,15 +14,15 @@ use crate::{
         },
         store,
     },
-    agents::{model::AgentDetailRow, store::get_agent},
+    agents::store::get_agent,
     db::DbPool,
-    harness::{in_flight::InFlightTracker, workspace_lease::WorkspaceLeaseManager},
+    harness::{in_flight::InFlightTracker, model::CAPABILITY_SCHEMA_VERSION},
     opencode::{
         client::{
             DeleteSessionResult, OpenCodeClient, OpenCodePermissionReply, OpenCodePermissionRule,
             SessionStatusKind,
         },
-        workspace::OpenCodeWorkspaceRuntimeConfig,
+        workspace_control_client::WorkspaceController,
     },
 };
 
@@ -72,7 +72,7 @@ pub struct ConversationService<'a> {
     pub pool: &'a DbPool,
     pub client: &'a OpenCodeClient,
     pub base_url: &'a str,
-    pub workspace_leases: &'a WorkspaceLeaseManager,
+    pub workspace_controller: &'a dyn WorkspaceController,
     pub in_flight: &'a InFlightTracker,
     pub turn_tracker: &'a ConversationTurnTracker,
     pub shutdown_rx: tokio::sync::watch::Receiver<bool>,
@@ -113,20 +113,7 @@ impl<'a> ConversationService<'a> {
         model_id: &str,
         model_variant: Option<&str>,
     ) -> Result<AgentConversationRow> {
-        let agent = self.load_agent_with_workspace(agent_key).await?;
-        let runtime = workspace_runtime(&agent)?;
-        let _lease = self.workspace_leases.acquire_live_read(agent_key).await;
-        let session = self
-            .client
-            .create_conversation_session(
-                self.base_url,
-                &runtime.workspace_container_path,
-                provider_id,
-                model_id,
-                model_variant,
-                default_permission_rules(),
-            )
-            .await?;
+        self.load_agent(agent_key).await?;
         let external_key = if external_conversation_key.trim().is_empty() {
             None
         } else {
@@ -134,7 +121,7 @@ impl<'a> ConversationService<'a> {
         };
         let input = CreateAgentConversation {
             agent_key: agent_key.to_string(),
-            opencode_session_id: session.id.clone(),
+            opencode_session_id: format!("pending_{}", Uuid::new_v4()),
             channel: channel.to_string(),
             external_conversation_key: external_key,
             title: "New conversation".to_string(),
@@ -142,21 +129,97 @@ impl<'a> ConversationService<'a> {
             model_id: model_id.to_string(),
             model_variant: model_variant.map(ToOwned::to_owned),
         };
-        match store::create_conversation_with_default_policies(self.pool, &input).await {
-            Ok(conversation) => Ok(conversation),
-            Err(error) => {
-                if let Err(cleanup_error) = self
-                    .client
-                    .delete_session(
-                        self.base_url,
-                        &runtime.workspace_container_path,
+        let conversation =
+            store::create_conversation_with_default_policies(self.pool, &input).await?;
+        let workspace = async {
+            crate::agent_conversations::workspace::prepare_conversation_workspace(
+                self.pool,
+                agent_key,
+                conversation.id,
+                CAPABILITY_SCHEMA_VERSION,
+            )
+            .await?;
+            let workspace = self
+                .workspace_controller
+                .create_conversation_workspace(
+                    agent_key,
+                    conversation.id,
+                    &format!("conversation-create-{}", conversation.id),
+                )
+                .await?;
+            crate::agent_conversations::workspace::mark_conversation_workspace_ready(
+                self.pool,
+                agent_key,
+                conversation.id,
+            )
+            .await?;
+            Result::<_, anyhow::Error>::Ok(workspace)
+        }
+        .await;
+        match workspace {
+            Ok(workspace) => match self
+                .client
+                .create_conversation_session(
+                    self.base_url,
+                    &workspace.workspace_container_path,
+                    provider_id,
+                    model_id,
+                    model_variant,
+                    default_permission_rules(),
+                )
+                .await
+            {
+                Ok(session) => {
+                    if !store::set_conversation_session_id(
+                        self.pool,
+                        agent_key,
+                        conversation.id,
                         &session.id,
                     )
-                    .await
-                {
-                    warn!(agent_key, session_id = %session.id, error = ?cleanup_error, "failed to clean up unmapped OpenCode conversation session");
+                    .await?
+                    {
+                        let _ = self
+                            .client
+                            .delete_session(
+                                self.base_url,
+                                &workspace.workspace_container_path,
+                                &session.id,
+                            )
+                            .await;
+                        let _ = self
+                            .workspace_controller
+                            .delete_conversation_workspace(
+                                agent_key,
+                                conversation.id,
+                                &format!("conversation-delete-{}", conversation.id),
+                            )
+                            .await;
+                        bail!("Conversation no longer exists.");
+                    }
+                    Ok(AgentConversationRow {
+                        opencode_session_id: session.id,
+                        ..conversation
+                    })
                 }
-                Err(error).context("failed to persist OpenCode conversation mapping")
+                Err(error) => {
+                    let _ = self
+                        .workspace_controller
+                        .delete_conversation_workspace(
+                            agent_key,
+                            conversation.id,
+                            &format!("conversation-delete-{}", conversation.id),
+                        )
+                        .await;
+                    let _ =
+                        store::delete_conversation_mapping(self.pool, agent_key, conversation.id)
+                            .await;
+                    Err(error)
+                }
+            },
+            Err(error) => {
+                let _ =
+                    store::delete_conversation_mapping(self.pool, agent_key, conversation.id).await;
+                Err(error).context("failed to materialize conversation workspace")
             }
         }
     }
@@ -178,8 +241,7 @@ impl<'a> ConversationService<'a> {
         if !message_id.starts_with("msg_") {
             bail!("Invalid message id.");
         }
-        let agent = self.load_agent_with_workspace(agent_key).await?;
-        let runtime = workspace_runtime(&agent)?;
+        self.load_agent(agent_key).await?;
         if crate::harness::store::agent_has_blocking_workspace_maintenance(self.pool, agent_key)
             .await?
         {
@@ -189,13 +251,13 @@ impl<'a> ConversationService<'a> {
         let Some(turn_guard) = self.turn_tracker.try_acquire(conversation_id).await else {
             bail!("This conversation already has a turn in progress.");
         };
-        let lease = self.workspace_leases.acquire_live_read(agent_key).await;
+        let workspace = self.workspace_path(agent_key, conversation_id).await?;
         let status = self
             .client
             .get_session_status_in_directory(
                 self.base_url,
                 &conversation.opencode_session_id,
-                Some(&runtime.workspace_container_path),
+                Some(&workspace),
             )
             .await?;
         if status.as_ref().is_some_and(SessionStatusKind::is_active) {
@@ -204,7 +266,7 @@ impl<'a> ConversationService<'a> {
         self.client
             .send_conversation_prompt_async(
                 self.base_url,
-                &runtime.workspace_container_path,
+                &workspace,
                 &conversation.opencode_session_id,
                 &crate::opencode::client::OpenCodeConversationPrompt {
                     message_id: message_id.to_string(),
@@ -217,7 +279,6 @@ impl<'a> ConversationService<'a> {
             .await?;
         let client = self.client.clone();
         let base_url = self.base_url.to_string();
-        let workspace = runtime.workspace_container_path;
         let conversation_title = first_turn_title(&conversation, text);
         let conversation_agent_key = conversation.agent_key;
         let conversation_id = conversation.id;
@@ -226,7 +287,6 @@ impl<'a> ConversationService<'a> {
         let mut shutdown_rx = self.shutdown_rx.clone();
         let in_flight = self.in_flight.track();
         tokio::spawn(async move {
-            let _lease = lease;
             let _turn_guard = turn_guard;
             let _in_flight = in_flight;
             if let Some(title) = conversation_title {
@@ -279,30 +339,27 @@ impl<'a> ConversationService<'a> {
     }
 
     pub async fn stop_conversation(&self, agent_key: &str, conversation_id: Uuid) -> Result<bool> {
-        let agent = self.load_agent_with_workspace(agent_key).await?;
-        let _runtime = workspace_runtime(&agent)?;
+        self.load_agent(agent_key).await?;
         let conversation = self.load_conversation(agent_key, conversation_id).await?;
-        let _lease = self.workspace_leases.acquire_live_read(agent_key).await;
+        let workspace = self.workspace_path(agent_key, conversation_id).await?;
         self.client
             .abort_session_in_directory(
                 self.base_url,
                 &conversation.opencode_session_id,
-                Some(&_runtime.workspace_container_path),
+                Some(&workspace),
             )
             .await
     }
 
     pub async fn compact_conversation(&self, agent_key: &str, conversation_id: Uuid) -> Result<()> {
-        let agent = self.load_agent_with_workspace(agent_key).await?;
-        let runtime = workspace_runtime(&agent)?;
+        self.load_agent(agent_key).await?;
         let conversation = self.load_conversation(agent_key, conversation_id).await?;
-        let _lease = self.workspace_leases.acquire_live_read(agent_key).await;
-        self.require_idle(&conversation, &runtime.workspace_container_path)
-            .await?;
+        let workspace = self.workspace_path(agent_key, conversation_id).await?;
+        self.require_idle(&conversation, &workspace).await?;
         self.client
             .compact_session(
                 self.base_url,
-                &runtime.workspace_container_path,
+                &workspace,
                 &conversation.opencode_session_id,
                 &conversation.model_provider_id,
                 &conversation.model_id,
@@ -311,23 +368,24 @@ impl<'a> ConversationService<'a> {
     }
 
     pub async fn delete_conversation(&self, agent_key: &str, conversation_id: Uuid) -> Result<()> {
-        let agent = self.load_agent_with_workspace(agent_key).await?;
-        let runtime = workspace_runtime(&agent)?;
+        self.load_agent(agent_key).await?;
         let conversation = self.load_conversation(agent_key, conversation_id).await?;
-        let _lease = self.workspace_leases.acquire_live_read(agent_key).await;
-        self.require_idle(&conversation, &runtime.workspace_container_path)
-            .await?;
+        let workspace = self.workspace_path(agent_key, conversation_id).await?;
+        self.require_idle(&conversation, &workspace).await?;
         match self
             .client
-            .delete_session(
-                self.base_url,
-                &runtime.workspace_container_path,
-                &conversation.opencode_session_id,
-            )
+            .delete_session(self.base_url, &workspace, &conversation.opencode_session_id)
             .await?
         {
             DeleteSessionResult::Deleted | DeleteSessionResult::NotFound => {}
         }
+        self.workspace_controller
+            .delete_conversation_workspace(
+                agent_key,
+                conversation_id,
+                &format!("conversation-delete-{conversation_id}"),
+            )
+            .await?;
         if !store::delete_conversation_mapping(self.pool, agent_key, conversation_id).await? {
             bail!("Conversation no longer exists.");
         }
@@ -343,17 +401,15 @@ impl<'a> ConversationService<'a> {
         model_variant: Option<&str>,
         policies: &[AgentConversationToolPolicyRow],
     ) -> Result<()> {
-        let agent = self.load_agent_with_workspace(agent_key).await?;
-        let runtime = workspace_runtime(&agent)?;
+        self.load_agent(agent_key).await?;
         let conversation = self.load_conversation(agent_key, conversation_id).await?;
-        let _lease = self.workspace_leases.acquire_live_read(agent_key).await;
-        self.require_idle(&conversation, &runtime.workspace_container_path)
-            .await?;
+        let workspace = self.workspace_path(agent_key, conversation_id).await?;
+        self.require_idle(&conversation, &workspace).await?;
         let rules = permission_rules(policies)?;
         self.client
             .update_session_permissions(
                 self.base_url,
-                &runtime.workspace_container_path,
+                &workspace,
                 &conversation.opencode_session_id,
                 rules,
             )
@@ -381,13 +437,13 @@ impl<'a> ConversationService<'a> {
         request_id: &str,
         reply: OpenCodePermissionReply,
     ) -> Result<bool> {
-        let agent = self.load_agent_with_workspace(agent_key).await?;
-        let runtime = workspace_runtime(&agent)?;
+        self.load_agent(agent_key).await?;
         let conversation = self.load_conversation(agent_key, conversation_id).await?;
+        let workspace = self.workspace_path(agent_key, conversation_id).await?;
         self.client
             .reply_to_permission(
                 self.base_url,
-                &runtime.workspace_container_path,
+                &workspace,
                 &conversation.opencode_session_id,
                 request_id,
                 reply,
@@ -395,12 +451,11 @@ impl<'a> ConversationService<'a> {
             .await
     }
 
-    async fn load_agent_with_workspace(&self, agent_key: &str) -> Result<AgentDetailRow> {
-        let agent = get_agent(self.pool, agent_key)
+    async fn load_agent(&self, agent_key: &str) -> Result<()> {
+        get_agent(self.pool, agent_key)
             .await?
             .ok_or_else(|| anyhow!("Agent not found."))?;
-        workspace_runtime(&agent)?;
-        Ok(agent)
+        Ok(())
     }
 
     async fn load_conversation(
@@ -411,6 +466,29 @@ impl<'a> ConversationService<'a> {
         store::get_agent_conversation(self.pool, agent_key, conversation_id)
             .await?
             .ok_or_else(|| anyhow!("Conversation not found."))
+    }
+
+    async fn workspace_path(&self, agent_key: &str, conversation_id: Uuid) -> Result<String> {
+        let workspace = crate::agent_conversations::workspace::get_conversation_workspace(
+            self.pool,
+            agent_key,
+            conversation_id,
+        )
+        .await?
+        .ok_or_else(|| anyhow!("Conversation workspace not found."))?;
+        if workspace.workspace_status != "ready" {
+            bail!("Conversation workspace is not ready.");
+        }
+        let inspection = self
+            .workspace_controller
+            .inspect_conversation_workspace(agent_key, conversation_id)
+            .await?;
+        if !inspection.workspace_exists {
+            bail!("Conversation workspace is missing.");
+        }
+        Ok(format!(
+            "/workspaces/conversations/{agent_key}/{conversation_id}/workspace"
+        ))
     }
 
     async fn require_idle(
@@ -445,7 +523,7 @@ fn first_turn_title(conversation: &AgentConversationRow, text: &str) -> Option<S
 }
 
 pub fn default_permission_rules() -> Vec<OpenCodePermissionRule> {
-    permission_rules_for(TOOL_POLICY_CONFIRM, TOOL_POLICY_CONFIRM)
+    permission_rules_for(TOOL_POLICY_CONFIRM, TOOL_POLICY_CONFIRM, TOOL_POLICY_DENY)
         .expect("confirm is a valid conversation tool policy")
 }
 
@@ -472,13 +550,17 @@ pub fn permission_rules(
             "Conversation policies must contain Orders, Memory writes, and Notifications exactly once."
         );
     }
-    action_for_policy(notifications)?;
-    permission_rules_for(orders, memory_writes)
+    permission_rules_for(orders, memory_writes, notifications)
 }
 
-fn permission_rules_for(orders: &str, memory_writes: &str) -> Result<Vec<OpenCodePermissionRule>> {
+fn permission_rules_for(
+    orders: &str,
+    memory_writes: &str,
+    notifications: &str,
+) -> Result<Vec<OpenCodePermissionRule>> {
     let orders = action_for_policy(orders)?;
     let memory_writes = action_for_policy(memory_writes)?;
+    let notifications = action_for_policy(notifications)?;
     let mut rules = [
         "hypervibes_get_account",
         "hypervibes_list_strategy_prompts",
@@ -510,6 +592,11 @@ fn permission_rules_for(orders: &str, memory_writes: &str) -> Result<Vec<OpenCod
         });
     }
     rules.push(OpenCodePermissionRule {
+        permission: "hypervibes_send_notification".to_string(),
+        pattern: "*".to_string(),
+        action: notifications.to_string(),
+    });
+    rules.push(OpenCodePermissionRule {
         permission: "hypervibes_write_memory".to_string(),
         pattern: "*".to_string(),
         action: memory_writes.to_string(),
@@ -534,11 +621,6 @@ fn action_for_policy(policy: &str) -> Result<&'static str> {
         TOOL_POLICY_ALLOW => Ok("allow"),
         _ => Err(anyhow!("Invalid conversation tool policy.")),
     }
-}
-
-fn workspace_runtime(agent: &AgentDetailRow) -> Result<OpenCodeWorkspaceRuntimeConfig> {
-    OpenCodeWorkspaceRuntimeConfig::from_value(&agent.runtime_config)
-        .ok_or_else(|| anyhow!("Agent is missing OpenCode workspace metadata."))
 }
 
 #[cfg(test)]
@@ -576,12 +658,12 @@ mod tests {
             Some("allow")
         );
         assert_eq!(action_for("hypervibes_get_strategy_prompt"), Some("allow"));
-        assert_eq!(action_for("hypervibes_send_notification"), None);
+        assert_eq!(action_for("hypervibes_send_notification"), Some("deny"));
         assert_eq!(action_for("hypervibes_update_strategy_prompt"), Some("ask"));
     }
 
     #[test]
-    fn persisted_notification_policy_is_validated_but_not_rendered_until_phase_four() {
+    fn persisted_notification_policy_is_rendered() {
         let now = chrono::Utc::now();
         let conversation_id = Uuid::new_v4();
         let policies = [
@@ -600,10 +682,12 @@ mod tests {
         .collect::<Vec<_>>();
 
         let rules = permission_rules(&policies).expect("validate persisted policies");
-        assert!(
+        assert_eq!(
             rules
                 .iter()
-                .all(|rule| rule.permission != "hypervibes_send_notification")
+                .find(|rule| rule.permission == "hypervibes_send_notification")
+                .map(|rule| rule.action.as_str()),
+            Some("allow")
         );
     }
 }

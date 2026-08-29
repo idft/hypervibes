@@ -37,12 +37,11 @@ use crate::{
         },
     },
     harness::in_flight::InFlightTracker,
-    harness::workspace_lease::WorkspaceLeaseManager,
     notifications,
     opencode::{
         client::{OpenCodeClient, OpenCodePermissionReply},
         store::{OpenCodeMessageRow, OpenCodeSessionErrorRow, get_session_detail},
-        workspace::OpenCodeWorkspaceRuntimeConfig,
+        workspace_control_client::WorkspaceController,
     },
 };
 
@@ -65,7 +64,7 @@ pub struct GatewayService {
     encryption_key: EncryptionKey,
     shutdown_rx: watch::Receiver<bool>,
     in_flight: InFlightTracker,
-    workspace_leases: WorkspaceLeaseManager,
+    workspace_controller: Arc<dyn WorkspaceController>,
     conversation_turns: ConversationTurnTracker,
     pending_links: Arc<DashMap<Uuid, PendingLink>>,
 }
@@ -84,7 +83,7 @@ impl GatewayService {
         encryption_key: EncryptionKey,
         shutdown_rx: watch::Receiver<bool>,
         in_flight: InFlightTracker,
-        workspace_leases: WorkspaceLeaseManager,
+        workspace_controller: Arc<dyn WorkspaceController>,
         conversation_turns: ConversationTurnTracker,
         pending_links: Arc<DashMap<Uuid, PendingLink>>,
     ) -> Self {
@@ -95,7 +94,7 @@ impl GatewayService {
             encryption_key,
             shutdown_rx,
             in_flight,
-            workspace_leases,
+            workspace_controller,
             conversation_turns,
             pending_links,
         }
@@ -342,7 +341,7 @@ impl GatewayService {
             encryption_key: self.encryption_key.clone(),
             shutdown_rx: self.shutdown_rx.clone(),
             in_flight: self.in_flight.clone(),
-            workspace_leases: self.workspace_leases.clone(),
+            workspace_controller: Arc::clone(&self.workspace_controller),
             conversation_turns: self.conversation_turns.clone(),
             pending_links: Arc::clone(&self.pending_links),
         }
@@ -360,7 +359,7 @@ struct GatewayServiceState {
     encryption_key: EncryptionKey,
     shutdown_rx: watch::Receiver<bool>,
     in_flight: InFlightTracker,
-    workspace_leases: WorkspaceLeaseManager,
+    workspace_controller: Arc<dyn WorkspaceController>,
     conversation_turns: ConversationTurnTracker,
     pending_links: Arc<DashMap<Uuid, PendingLink>>,
 }
@@ -790,6 +789,7 @@ impl GatewayServiceState {
                 agent_key.to_string(),
                 bot.clone(),
                 chat_id,
+                conversation.id,
                 conversation.opencode_session_id,
                 reply_baseline,
                 typing_indicator.clone(),
@@ -807,11 +807,13 @@ impl GatewayServiceState {
         Ok(())
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn spawn_telegram_reply_forwarder(
         &self,
         agent_key: String,
         bot: Bot,
         chat_id: ChatId,
+        conversation_id: Uuid,
         session_id: String,
         reply_baseline: TelegramTurnBaseline,
         typing_indicator: AbortHandle,
@@ -819,7 +821,12 @@ impl GatewayServiceState {
         let service = self.clone();
         tokio::spawn(async move {
             let reply = service
-                .wait_for_telegram_turn_reply(&agent_key, &session_id, &reply_baseline)
+                .wait_for_telegram_turn_reply(
+                    &agent_key,
+                    conversation_id,
+                    &session_id,
+                    &reply_baseline,
+                )
                 .await;
             typing_indicator.abort();
             let reply = match reply {
@@ -885,14 +892,12 @@ impl GatewayServiceState {
     async fn wait_for_telegram_turn_reply(
         &self,
         agent_key: &str,
+        conversation_id: Uuid,
         session_id: &str,
         reply_baseline: &TelegramTurnBaseline,
     ) -> Result<Option<TelegramTurnReply>> {
-        let agent = crate::agents::store::get_agent(&self.pool, agent_key)
-            .await?
-            .ok_or_else(|| anyhow::anyhow!("agent not found"))?;
-        let runtime = OpenCodeWorkspaceRuntimeConfig::from_value(&agent.runtime_config)
-            .ok_or_else(|| anyhow::anyhow!("agent missing workspace metadata"))?;
+        let workspace =
+            format!("/workspaces/conversations/{agent_key}/{conversation_id}/workspace");
         let mut shutdown_rx = self.shutdown_rx.clone();
         let completed = match tokio::time::timeout(TELEGRAM_REPLY_TIMEOUT, async {
             loop {
@@ -909,7 +914,7 @@ impl GatewayServiceState {
                     .get_session_status_in_directory(
                         &self.opencode_base_url,
                         session_id,
-                        Some(&runtime.workspace_container_path),
+                        Some(&workspace),
                     )
                     .await
                 {
@@ -1125,19 +1130,21 @@ impl GatewayServiceState {
         let Some(chat_id) = config.chat_id else {
             return Ok(());
         };
-        let agent = crate::agents::store::get_agent(&self.pool, agent_key)
-            .await?
-            .ok_or_else(|| anyhow::anyhow!("agent not found"))?;
-        let Some(runtime) = crate::opencode::workspace::OpenCodeWorkspaceRuntimeConfig::from_value(
-            &agent.runtime_config,
-        ) else {
+        let Some(conversation) = self.find_current_conversation(agent_key, chat_id).await? else {
             return Ok(());
         };
+        let workspace = format!(
+            "/workspaces/conversations/{agent_key}/{}/workspace",
+            conversation.id
+        );
         let pending = self
             .opencode_client
-            .list_pending_permissions(&self.opencode_base_url, &runtime.workspace_container_path)
+            .list_pending_permissions(&self.opencode_base_url, &workspace)
             .await?;
         for request in pending {
+            if request.session_id != conversation.opencode_session_id {
+                continue;
+            }
             if seen.contains(&request.id) {
                 continue;
             }
@@ -1168,18 +1175,26 @@ impl GatewayServiceState {
             "reject" => OpenCodePermissionReply::Reject,
             _ => return Ok(()),
         };
-        let agent = crate::agents::store::get_agent(&self.pool, agent_key)
+        let Some(message) = query.regular_message() else {
+            return Ok(());
+        };
+        let Some(conversation) = self
+            .find_current_conversation(agent_key, message.chat.id.0)
             .await?
-            .ok_or_else(|| anyhow::anyhow!("agent not found"))?;
-        let runtime = crate::opencode::workspace::OpenCodeWorkspaceRuntimeConfig::from_value(
-            &agent.runtime_config,
-        )
-        .ok_or_else(|| anyhow::anyhow!("agent missing workspace metadata"))?;
+        else {
+            return Ok(());
+        };
+        let workspace = format!(
+            "/workspaces/conversations/{agent_key}/{}/workspace",
+            conversation.id
+        );
         let pending = self
             .opencode_client
-            .list_pending_permissions(&self.opencode_base_url, &runtime.workspace_container_path)
+            .list_pending_permissions(&self.opencode_base_url, &workspace)
             .await?;
-        let Some(request) = pending.iter().find(|item| item.id == request_id) else {
+        let Some(request) = pending.iter().find(|item| {
+            item.id == request_id && item.session_id == conversation.opencode_session_id
+        }) else {
             let callback_id = query.id.clone();
             bot.answer_callback_query(callback_id)
                 .text("Permission request is no longer pending.")
@@ -1192,7 +1207,7 @@ impl GatewayServiceState {
             .opencode_client
             .reply_to_permission(
                 &self.opencode_base_url,
-                &runtime.workspace_container_path,
+                &workspace,
                 &session_id,
                 request_id,
                 reply,
@@ -1298,7 +1313,7 @@ impl GatewayServiceState {
             pool: &self.pool,
             client: &self.opencode_client,
             base_url: &self.opencode_base_url,
-            workspace_leases: &self.workspace_leases,
+            workspace_controller: self.workspace_controller.as_ref(),
             in_flight: &self.in_flight,
             turn_tracker: &self.conversation_turns,
             shutdown_rx: self.shutdown_rx.clone(),
@@ -1486,7 +1501,19 @@ mod tests {
             ),
             rx,
             InFlightTracker::new(),
-            WorkspaceLeaseManager::new(),
+            Arc::new(
+                crate::opencode::workspace_control_client::LocalWorkspaceController::new(
+                    crate::opencode::workspace::OpenCodeWorkspaceConfig {
+                        source_root: std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                            .join(crate::opencode::workspace::PROFILE_SOURCE_RELATIVE_PATH),
+                        host_workspaces_root: std::path::PathBuf::from(
+                            "/tmp/opencode/hypervibes-gateway",
+                        ),
+                        container_workspaces_root: "/workspaces".to_string(),
+                        api_base_url: "http://host.containers.internal:3003".to_string(),
+                    },
+                ),
+            ),
             ConversationTurnTracker::default(),
             Arc::new(DashMap::new()),
         )

@@ -53,6 +53,7 @@ pub struct AgentConversationSettingsView {
     pub model_picker: ModelPickerView,
     pub orders_policy: String,
     pub memory_writes_policy: String,
+    pub notifications_policy: String,
     pub disabled: bool,
 }
 #[derive(Debug, Clone)]
