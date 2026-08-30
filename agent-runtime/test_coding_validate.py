@@ -48,6 +48,33 @@ os.makedirs(os.path.dirname(args.output), exist_ok=True)
 open(args.output, "w").write(json.dumps(result, sort_keys=True))
 '''
 
+MANIFEST = json.dumps(
+    {
+        "schema_version": 1,
+        "package_version": "test",
+        "tools": [
+            {
+                "id": "analyze",
+                "description": "Test analyzer",
+                "entrypoint": "analyze.py",
+                "input_kind": "ohlcv",
+                "supported_timeframes": list(MODULE.INTERVAL_MS),
+                "minimum_candles": 1,
+                "required_arguments": [
+                    "symbol", "timeframe", "boundary_ms", "input", "output"
+                ],
+                "output_schema": "hypervibes.quantitative.v1",
+                "version": "1",
+            }
+        ],
+    }
+)
+
+
+def write_candidate(user: Path, analyzer: str) -> None:
+    (user / "analyze.py").write_text(analyzer)
+    (user / "manifest.json").write_text(MANIFEST)
+
 
 class CodingValidatorTests(unittest.TestCase):
     def test_canonical_fixture_passes_open_candle_and_causality(self):
@@ -55,7 +82,7 @@ class CodingValidatorTests(unittest.TestCase):
             workspace = Path(temporary)
             user = workspace / "scripts/user"
             user.mkdir(parents=True)
-            (user / "analyze.py").write_text(ANALYZER)
+            write_candidate(user, ANALYZER)
             result = MODULE.validate(workspace)
             self.assertTrue(result["ok"], result)
             self.assertIn("unit tests not provided", result["checks"])
@@ -72,7 +99,7 @@ class CodingValidatorTests(unittest.TestCase):
             workspace = Path(temporary)
             user = workspace / "scripts/user"
             user.mkdir(parents=True)
-            (user / "analyze.py").write_text("import subprocess\n")
+            write_candidate(user, "import subprocess\n")
             self.assertFalse(MODULE.validate(workspace)["ok"])
 
     def test_optional_candidate_tests_run_when_present(self):
@@ -81,7 +108,7 @@ class CodingValidatorTests(unittest.TestCase):
             user = workspace / "scripts/user"
             tests = user / "tests"
             tests.mkdir(parents=True)
-            (user / "analyze.py").write_text(ANALYZER)
+            write_candidate(user, ANALYZER)
             (tests / "test_failure.py").write_text(
                 "import unittest\n"
                 "class Failure(unittest.TestCase):\n"
@@ -102,7 +129,7 @@ class CodingValidatorTests(unittest.TestCase):
             workspace = Path(temporary)
             user = workspace / "scripts/user"
             user.mkdir(parents=True)
-            (user / "analyze.py").write_text(inert_analyzer)
+            write_candidate(user, inert_analyzer)
             result = MODULE.validate(workspace)
             self.assertFalse(result["ok"])
             self.assertIn("eligible-candle sensitivity failed", result["checks"])
@@ -115,7 +142,7 @@ class CodingValidatorTests(unittest.TestCase):
             workspace = Path(temporary)
             user = workspace / "scripts/user"
             user.mkdir(parents=True)
-            (user / "analyze.py").write_text(analyzer)
+            write_candidate(user, analyzer)
             result = MODULE.validate(workspace)
             self.assertFalse(result["ok"])
             self.assertIn("canonical output schema failed", result["checks"])
@@ -128,7 +155,7 @@ class CodingValidatorTests(unittest.TestCase):
             workspace = Path(temporary)
             user = workspace / "scripts/user"
             user.mkdir(parents=True)
-            (user / "analyze.py").write_text(analyzer)
+            write_candidate(user, analyzer)
             result = MODULE.validate(workspace)
             self.assertFalse(result["ok"])
             self.assertTrue(
@@ -145,7 +172,7 @@ class CodingValidatorTests(unittest.TestCase):
             workspace = Path(temporary)
             user = workspace / "scripts/user"
             user.mkdir(parents=True)
-            (user / "analyze.py").write_text(analyzer)
+            write_candidate(user, analyzer)
             result = MODULE.validate(workspace)
             self.assertFalse(result["ok"])
             self.assertIn(

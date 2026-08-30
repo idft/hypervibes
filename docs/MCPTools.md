@@ -32,6 +32,7 @@ workspace is deleted.
 | --- | --- | --- |
 | `hypervibes_coding_validate_candidate` | Validate candidate analysis code before it can be used. | Sub-agents: analysis coding |
 | `hypervibes_coding_submit_report` | Submit the analysis coding result after validation. | Sub-agents: analysis coding |
+| `hypervibes_run_analysis_tool` | Run a manifest-declared quantitative tool with run-local inputs and outputs. The validated output records its package hash, package version, tool ID, and tool version. | Sub-agents: analysis and trading |
 | `hypervibes_get_account` | Read the agent's current Hyperliquid account snapshot. | Sub-agents and Chat |
 | `hypervibes_list_strategy_prompts` | List the agent's strategy prompts for review. | Chat only |
 | `hypervibes_get_strategy_prompt` | Read one strategy prompt. | Chat only |
@@ -51,3 +52,17 @@ workspace is deleted.
 
 Tools operate within the current agent's account and data boundaries. The
 MCP server does not receive the user's Hyperliquid private key.
+
+## Quantitative Tools
+
+Reusable quantitative packages live under `scripts/user/` and declare tools in
+`manifest.json`. The manifest is schema-versioned and identifies each tool's
+entrypoint, supported inputs and timeframes, minimum candles, required
+arguments, output schema, and version. The legacy `analyze.py` entrypoint is
+registered as the `analyze` tool when an existing package has not yet supplied a
+manifest.
+
+Agents do not execute package entrypoints directly. The launcher accepts only a
+declared tool, limits input and output paths to the current workspace's
+`scratch/` tree, applies the immutable analysis runtime and timeout, validates
+the output envelope, and atomically records the package binding in that output.

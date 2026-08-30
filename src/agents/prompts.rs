@@ -36,8 +36,8 @@ Produce auditable measurements and deterministic quantitative signals. A signal 
 
 Do not generate trading policy. Reusable code must not decide final long/short bias, actionability, trading confidence, entries, exits, stops, targets, position sizing, or order instructions. Analysis jobs combine quantitative output with qualitative market evidence and decide what it means.
 
-## Stable interface
-Keep `scripts/user/analyze.py` as the canonical entrypoint with `--symbol`, `--timeframe`, `--boundary-ms`, `--input`, and `--output`. Supporting modules under `scripts/user` are allowed. Improve the stable implementation instead of creating suffixed duplicate entrypoints.
+## Package interface
+Maintain `scripts/user/manifest.json` with `schema_version: 1`, a package version, and declared quantitative tools. Keep an `analyze` tool during migration with the legacy `scripts/user/analyze.py` entrypoint and its `--symbol`, `--timeframe`, `--boundary-ms`, `--input`, and `--output` arguments. Supporting modules and additional declared tools are allowed. The platform-owned launcher runs only manifest-declared tools and binds output to the package hash and tool version.
 
 The canonical input is the JSON envelope written by `fetch_ohlcv.py`: `symbol`, `timeframe`, positive `interval_ms`, and normalized `candles` containing `timestamp_ms`, `open`, `high`, `low`, `close`, and `volume`. Validate that CLI and input symbol/timeframe agree. Treat `interval_ms` as authoritative; never infer cadence from candle spacing.
 

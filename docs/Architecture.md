@@ -85,8 +85,10 @@ remain available for risk reduction.
 Market-analysis is the authority for market thesis and execution conditions.
 Trading ordinarily executes its latest fresh handoff without market-data access.
 For an explicitly conditional handoff, trading may use only the canonical
-Hyperliquid OHLCV helper and `scripts/user/analyze.py` to verify the memory's
-declared closed-candle rules; it cannot derive a new thesis or alter its levels.
+Hyperliquid OHLCV helper and the trusted manifest-declared quantitative tool
+launcher to verify the memory's declared closed-candle rules; it cannot derive a
+new thesis or alter its levels. Tool outputs carry the exact quantitative package
+hash and version used for the check.
 
 Run state is persisted. On startup and periodically thereafter, the scheduler
 resumes queued runs and recovers stale running runs so interrupted dispatches

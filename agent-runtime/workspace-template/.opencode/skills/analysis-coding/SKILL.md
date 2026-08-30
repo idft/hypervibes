@@ -8,7 +8,21 @@ description: Use only for the analysis-coding sub-agent to modify the canonical 
 This skill defines the stable interface for `scripts/user/`. Use it only in an
 isolated coding candidate workspace through the available MCP tools.
 
-## Canonical Interface
+## Package Manifest
+
+`scripts/user/manifest.json` is required. It has `schema_version: 1`, a
+nonblank `package_version`, and a `tools` array. Keep an `analyze` tool during
+migration so existing behavior remains available. Its declaration must include
+`id`, `description`, `entrypoint`, `input_kind: "ohlcv"`, all canonical
+timeframes, positive `minimum_candles`, the five required arguments (`symbol`,
+`timeframe`, `boundary_ms`, `input`, `output`),
+`output_schema: "hypervibes.quantitative.v1"`, and a nonblank `version`.
+
+The trusted platform launcher executes only declared tools, validates their
+arguments and output envelope, and binds output to the package hash and tool
+version. Do not invoke a package tool with arbitrary shell commands.
+
+## Legacy Analyze Interface
 
 The entrypoint is `scripts/user/analyze.py`:
 
@@ -105,7 +119,8 @@ authoritative:
 
 - In bootstrap mode, create the canonical `analyze.py` if it is absent. A
   bootstrap run must not return `no_change` merely because the tree is empty.
-- Preserve this CLI and schema; extend fields without renaming required ones.
+- Preserve this CLI and schema for the `analyze` manifest tool; extend fields
+  without renaming required ones.
 - Supporting modules under `scripts/user` are allowed.
 - Use focused edits and Pyright LSP diagnostics; do not replace a whole
   large file when a local edit is enough. Resolve every reported Pyright error

@@ -20,9 +20,10 @@ existing canonical analyzer and use its output as evidence.
 
 ## Inputs and Outputs
 
-Use the existing `scripts/user/analyze.py` entrypoint when it is present. Pass
-canonical OHLCV input to its `--input` argument and write its requested output
-under the role-approved `scratch/` path. Do not create temporary helper scripts,
+Use `hypervibes_run_analysis_tool` to invoke a tool declared by
+`scripts/user/manifest.json`. Pass canonical OHLCV input and output paths under
+the role-approved `scratch/` path. The platform validates the output and binds
+it to the package and tool versions. Do not create temporary helper scripts,
 write durable `data/` outputs, or install packages.
 
 ## Backend Boundary
@@ -44,7 +45,6 @@ python .opencode/skills/hyperliquid-data/fetch_ohlcv.py <SYMBOL> <TIMEFRAME> --l
 `SYMBOL` and `TIMEFRAME` are positional arguments. Do not use unsupported flags
 such as `--coin`, `--timeframe`, or `--days`.
 
-The command prints a small manifest to stdout and writes candle JSON to
-`scratch/ohlcv-cache/<SYMBOL>/<TIMEFRAME>/...json`. Read the manifest's
-`output_path`, then pass it directly to the existing analyzer. Do not use
+The command prints a small manifest to stdout. Read its `output_path`, then pass
+it directly to the declared analysis tool. Do not use
 `--stdout`; full candle stdout can fill the LLM context window.

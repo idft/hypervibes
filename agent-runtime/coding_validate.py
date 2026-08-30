@@ -37,6 +37,14 @@ INTERVAL_MS = {
 }
 BOUNDARY_MS = 1_700_000_900_000
 MAX_DIAGNOSTIC_CHARS = 4_000
+MANIFEST_FILENAME = "manifest.json"
+REQUIRED_TOOL_ARGUMENTS = {
+    "symbol",
+    "timeframe",
+    "boundary_ms",
+    "input",
+    "output",
+}
 
 
 def _diagnostic(completed: subprocess.CompletedProcess[Any]) -> str:
@@ -233,16 +241,65 @@ def _validate_known_signals(output: dict[str, Any] | None) -> str | None:
     return None
 
 
+def _validate_manifest(user: Path) -> tuple[Path | None, str | None]:
+    try:
+        manifest = json.loads((user / MANIFEST_FILENAME).read_text())
+    except (OSError, json.JSONDecodeError):
+        return None, "analysis-tool manifest is missing or invalid"
+    if (
+        not isinstance(manifest, dict)
+        or manifest.get("schema_version") != 1
+        or not isinstance(manifest.get("package_version"), str)
+        or not manifest["package_version"].strip()
+        or not isinstance(manifest.get("tools"), list)
+    ):
+        return None, "analysis-tool manifest schema failed"
+    tools = [tool for tool in manifest["tools"] if isinstance(tool, dict)]
+    if len(tools) != len(manifest["tools"]):
+        return None, "analysis-tool manifest contains an invalid tool"
+    tool_ids = [tool.get("id") for tool in tools]
+    if (
+        any(not isinstance(tool_id, str) or not tool_id.strip() for tool_id in tool_ids)
+        or len(set(tool_ids)) != len(tool_ids)
+    ):
+        return None, "analysis-tool manifest tool IDs are invalid"
+    analyzer = next((tool for tool in tools if tool.get("id") == "analyze"), None)
+    if analyzer is None:
+        return None, "analysis-tool manifest does not declare analyze"
+    entrypoint = analyzer.get("entrypoint")
+    if (
+        not isinstance(entrypoint, str)
+        or Path(entrypoint).is_absolute()
+        or ".." in Path(entrypoint).parts
+        or not isinstance(analyzer.get("description"), str)
+        or not analyzer["description"].strip()
+        or analyzer.get("input_kind") != "ohlcv"
+        or analyzer.get("output_schema") != "hypervibes.quantitative.v1"
+        or set(analyzer.get("required_arguments", [])) != REQUIRED_TOOL_ARGUMENTS
+        or not isinstance(analyzer.get("version"), str)
+        or not analyzer["version"].strip()
+        or not isinstance(analyzer.get("minimum_candles"), int)
+        or analyzer["minimum_candles"] < 1
+        or not isinstance(analyzer.get("supported_timeframes"), list)
+        or set(INTERVAL_MS) - set(analyzer["supported_timeframes"])
+    ):
+        return None, "analysis-tool analyze declaration is invalid"
+    implementation = (user / entrypoint).resolve()
+    if not implementation.is_relative_to(user.resolve()) or not implementation.is_file():
+        return None, "analysis-tool entrypoint is missing"
+    return implementation, None
+
+
 def validate(workspace: Path) -> dict[str, object]:
     user = (workspace / "scripts" / "user").resolve()
     if not user.is_dir():
         return {"ok": False, "checks": ["scripts/user is missing"]}
 
     checks: list[str] = []
-    implementation = user / "analyze.py"
+    implementation, manifest_error = _validate_manifest(user)
     fixture = Path(__file__).with_name("coding_fixture.json")
-    if not implementation.is_file() or not fixture.is_file():
-        return _failure(checks, "canonical implementation or fixture is missing")
+    if manifest_error is not None or implementation is None or not fixture.is_file():
+        return _failure(checks, manifest_error or "analysis fixture is missing")
 
     try:
         fixture_data = json.loads(fixture.read_text())
@@ -257,6 +314,7 @@ def validate(workspace: Path) -> dict[str, object]:
             finally:
                 sys.pycache_prefix = previous_pycache_prefix
             checks.append("compile")
+            checks.append("analysis-tool manifest")
 
             environment = os.environ.copy()
             environment["PYTHONHASHSEED"] = "0"

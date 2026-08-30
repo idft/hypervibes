@@ -95,14 +95,32 @@ pub struct OpenCodeWorkspaceRuntimeConfig {
     pub profile_source: String,
 }
 
-/// The currently supported quantitative package bridge. A richer manifest is
-/// intentionally deferred, but every non-empty copied tree is still bound by
-/// its deterministic content hash.
+/// Immutable identity of the quantitative package copied into a run workspace.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct QuantitativePackageSnapshot {
     pub version: String,
     pub manifest_hash: String,
 }
+
+const ANALYSIS_TOOL_MANIFEST: &str = "manifest.json";
+const LEGACY_ANALYSIS_TOOL_MANIFEST: &str = r#"{
+  "schema_version": 1,
+  "package_version": "legacy-analyze.py",
+  "tools": [
+    {
+      "id": "analyze",
+      "description": "Canonical quantitative OHLCV analysis",
+      "entrypoint": "analyze.py",
+      "input_kind": "ohlcv",
+      "supported_timeframes": ["1m", "3m", "5m", "15m", "30m", "1h", "2h", "4h", "8h", "12h", "1d", "3d", "1w", "1M"],
+      "minimum_candles": 1,
+      "required_arguments": ["symbol", "timeframe", "boundary_ms", "input", "output"],
+      "output_schema": "hypervibes.quantitative.v1",
+      "version": "1"
+    }
+  ]
+}
+"#;
 
 /// Controller input for rendering a scheduled run workspace. The runtime API
 /// key is deliberately absent from every response and idempotency fingerprint.
@@ -269,14 +287,41 @@ pub fn inspect_active_quantitative_package(
         Err(error) => return Err(error).context("failed to inspect active scripts/user root"),
     }
 
+    ensure_analysis_tool_manifest(&user_root)?;
     let manifest = manifest_tree(&user_root)?;
     if manifest.is_empty() {
         return Ok(None);
     }
     Ok(Some(QuantitativePackageSnapshot {
-        version: "legacy".to_string(),
+        version: analysis_package_version(&user_root)?,
         manifest_hash: manifest_hash(&manifest),
     }))
+}
+
+/// Registers the pre-manifest canonical analyzer without changing its CLI. New
+/// coding candidates must maintain this manifest explicitly.
+fn ensure_analysis_tool_manifest(user_root: &Path) -> Result<()> {
+    let analyzer = user_root.join("analyze.py");
+    let manifest = user_root.join(ANALYSIS_TOOL_MANIFEST);
+    if !analyzer.is_file() || manifest.exists() {
+        return Ok(());
+    }
+    fs::write(&manifest, LEGACY_ANALYSIS_TOOL_MANIFEST)
+        .context("failed to create legacy analysis-tool manifest")
+}
+
+fn analysis_package_version(user_root: &Path) -> Result<String> {
+    let manifest_path = user_root.join(ANALYSIS_TOOL_MANIFEST);
+    let manifest: Value = serde_json::from_slice(
+        &fs::read(&manifest_path).context("failed to read analysis-tool manifest")?,
+    )
+    .context("analysis-tool manifest is invalid JSON")?;
+    manifest
+        .get("package_version")
+        .and_then(Value::as_str)
+        .filter(|version| !version.trim().is_empty())
+        .map(ToString::to_string)
+        .context("analysis-tool manifest has no package_version")
 }
 
 /// Render a complete run-local workspace from trusted templates and the active
@@ -1547,7 +1592,8 @@ mod tests {
         assert!(profile.contains(
             "\"*\": deny\n    \"python .opencode/skills/hyperliquid-data/fetch_ohlcv.py *\": allow"
         ));
-        assert!(profile.contains("\"python scripts/user/analyze.py *\": allow"));
+        assert!(!profile.contains("\"python scripts/user/analyze.py *\": allow"));
+        assert!(profile.contains("hypervibes_run_analysis_tool: allow"));
         assert!(
             profile.contains("\"workspaces/agents/btc-2/scratch/trading-confirmation\": allow")
         );
@@ -1602,7 +1648,7 @@ mod tests {
             &analysis,
             "bash",
             "python scripts/user/analyze.py --symbol BTC",
-            "allow",
+            "deny",
         );
         assert_profile_action(
             "analysis",
@@ -1628,6 +1674,13 @@ mod tests {
         assert_profile_action("analysis", &analysis, "skill", "hyperliquid-data", "allow");
         assert_profile_action("analysis", &analysis, "skill", "analysis-coding", "deny");
         assert_profile_action("analysis", &analysis, "hypervibes_get_account", "", "allow");
+        assert_profile_action(
+            "analysis",
+            &analysis,
+            "hypervibes_run_analysis_tool",
+            "",
+            "allow",
+        );
         assert_profile_action(
             "analysis",
             &analysis,
@@ -1663,6 +1716,14 @@ mod tests {
             "bash",
             "python x.py",
             "deny",
+        );
+
+        assert_profile_action(
+            "trading",
+            &trading,
+            "hypervibes_run_analysis_tool",
+            "",
+            "allow",
         );
         assert_profile_action(
             "market-analysis",
