@@ -199,7 +199,7 @@ fn build_daily_review_prompt(request: &DispatchRequest) -> Result<String> {
     body.push_str("- List orders and account transactions using this review window's exact start and end. Include unfilled, rejected, canceled, open, and filled orders plus fills, fees, realized PnL, funding, and ledger events. Page `list_account_transactions` with a fixed limit and increasing offset until a page returns fewer rows than the limit.\n");
     body.push_str("- Do not make unbounded or out-of-window memory, order, or transaction queries. Do not mention or assess records outside this review window; the injected Accumulated learnings are the sole exception and must be carried forward when updated.\n");
     body.push_str("- Connect orders to `market_analysis` using `memory_record_ids`, and follow `memory.links` from market analysis back to analysis when those links exist.\n");
-    body.push_str("- Identify failures, good patterns, stale assumptions, and prompt improvement suggestions. Keep prompt-edit suggestions inside the `daily_review` memory content.\n");
+    body.push_str("- Identify failures, good patterns, stale assumptions, and prompt improvement opportunities. When evidence justifies a material change, use `hypervibes_submit_prompt_revision` exactly once with the current base revision IDs, rationale, and same-agent evidence memory IDs. It may revise only `analysis`, `market_analysis`, and `trading`; it activates all submitted changes atomically.\n");
     body.push_str(
         "- Never edit `scripts/user/`, `data/`, or `scratch/`; daily review is diagnosis-only.\n",
     );
@@ -208,7 +208,7 @@ fn build_daily_review_prompt(request: &DispatchRequest) -> Result<String> {
     body.push_str("- If learnings changed, write a new `agent_learnings` memory with `symbol = \"__agent__\"`, no timeframe, and summary exactly `Accumulated agent learnings`. Its content must be a complete replacement snapshot: retain every still-valid learning from the Accumulated learnings section, add new learnings, and explicitly mark any superseded rules as removed or replaced. Then link the daily review memory to it with `link_type = \"updates_learnings\"`.\n");
     body.push_str("- The daily-review memory metadata must include `schema_version`, `source_sub_agent_run_id` set exactly to the Harness run ID above, `review_window_start`, `review_window_end`, `analysis_coding_requested` (always present as true or false), `analysis_coding_reason`, `candidate_components`, and `evidence_memory_ids`.\n");
     body.push_str("- Do not place or cancel orders.\n");
-    body.push_str("- Do not edit strategy prompts directly.\n");
+    body.push_str("- Do not use generic strategy-prompt replacement. Submit no revision when evidence is insufficient.\n");
     Ok(body)
 }
 

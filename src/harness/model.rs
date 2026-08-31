@@ -31,6 +31,8 @@ pub enum RunApiScope {
     OrderRead,
     OrderWrite,
     TransactionRead,
+    PromptRead,
+    PromptRevisionSubmit,
     NotificationSend,
 }
 
@@ -43,6 +45,8 @@ impl RunApiScope {
             Self::OrderRead => "hypervibes:order_read",
             Self::OrderWrite => "hypervibes:order_write",
             Self::TransactionRead => "hypervibes:transaction_read",
+            Self::PromptRead => "hypervibes:prompt_read",
+            Self::PromptRevisionSubmit => "hypervibes:prompt_revision_submit",
             Self::NotificationSend => CAPABILITY_NOTIFICATION_SEND,
         }
     }
@@ -55,6 +59,8 @@ impl RunApiScope {
             "hypervibes:order_read" => Some(Self::OrderRead),
             "hypervibes:order_write" => Some(Self::OrderWrite),
             "hypervibes:transaction_read" => Some(Self::TransactionRead),
+            "hypervibes:prompt_read" => Some(Self::PromptRead),
+            "hypervibes:prompt_revision_submit" => Some(Self::PromptRevisionSubmit),
             CAPABILITY_NOTIFICATION_SEND => Some(Self::NotificationSend),
             _ => None,
         }
@@ -85,6 +91,8 @@ pub fn run_api_scopes_for_sub_agent(
             RunApiScope::MemoryWrite,
             RunApiScope::OrderRead,
             RunApiScope::TransactionRead,
+            RunApiScope::PromptRead,
+            RunApiScope::PromptRevisionSubmit,
         ],
         _ => anyhow::bail!("unsupported sub-agent kind for run API scopes"),
     };

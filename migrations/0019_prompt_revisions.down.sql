@@ -1,0 +1,7 @@
+SET search_path TO public;
+
+DROP TABLE agent_strategy_prompt_revision_evidence;
+DROP TABLE agent_strategy_prompt_active_revisions;
+DROP TABLE agent_strategy_prompt_revisions;
+DROP TABLE agent_strategy_prompt_revision_batches;
+ALTER TABLE agents DROP COLUMN daily_review_prompt_improvement_enabled;

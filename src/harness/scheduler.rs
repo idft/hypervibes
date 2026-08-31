@@ -2148,10 +2148,7 @@ async fn load_strategy_prompt_snapshot(
     let prompt_kind = prompt_kind_for_sub_agent_kind(sub_agent_kind)
         .ok_or_else(|| anyhow!("unknown prompt kind for job kind {sub_agent_kind}"))?;
     let stored = get_agent_strategy_prompt(pool, agent_key, prompt_kind).await?;
-    let revision = stored
-        .as_ref()
-        .map(|row| row.updated_at.timestamp_millis().max(1))
-        .unwrap_or(1);
+    let revision = stored.as_ref().map(|row| row.revision_id).unwrap_or(1);
     let prompt = stored.map(|row| row.prompt).unwrap_or_default();
     Ok((effective_strategy_prompt(prompt_kind, prompt), revision))
 }

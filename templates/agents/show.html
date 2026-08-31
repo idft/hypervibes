@@ -293,6 +293,21 @@
                 </div>
             </div>
         </section>
+        <section class="rounded-2xl border border-zinc-800 bg-[#0d0d10] p-6">
+            <h2 class="text-lg font-medium text-white">Prompt Revision History</h2>
+            <p class="mt-1 text-sm text-zinc-400">Rollbacks create a new revision and preserve this timeline.</p>
+            <form action="/agents/{{ agent.agent_key }}/prompts/improvement" method="post" class="mt-3"><label class="flex items-center gap-2 text-sm text-zinc-300"><input type="hidden" name="enabled" value="false"><input type="checkbox" name="enabled" value="true" {% if prompt_improvement_enabled %}checked{% endif %} onchange="this.form.submit()"> Allow daily review to improve eligible prompts automatically</label></form>
+            <div class="mt-4 space-y-2">
+                {% for revision in prompt_revision_history %}
+                <div class="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-zinc-800 bg-zinc-950/60 px-3 py-2 text-sm">
+                    <div class="min-w-0 text-zinc-300"><span class="font-mono text-zinc-500">#{{ revision.id }}</span> {{ revision.prompt_kind }} <span class="text-zinc-500">{{ revision.source_type }}{% if let Some(run_id) = revision.source_run_id %} · run {{ run_id }}{% endif %} · {{ revision.created_at }}</span>{% if !revision.rationale.is_empty() %}<span class="block truncate text-xs text-zinc-500">{{ revision.rationale }}</span>{% endif %}<details class="mt-1 text-xs text-zinc-500"><summary class="cursor-pointer">View revision text</summary><pre class="mt-1 whitespace-pre-wrap text-zinc-400">{{ revision.prompt }}</pre></details></div>
+                    <form action="/agents/{{ agent.agent_key }}/prompts/rollback" method="post"><input type="hidden" name="revision_id" value="{{ revision.id }}"><button type="submit" class="cursor-pointer rounded-full border border-zinc-700 px-3 py-1 text-xs text-zinc-300 hover:border-zinc-500 hover:text-white">Rollback</button></form>
+                </div>
+                {% else %}
+                <p class="text-sm text-zinc-500">No prompt revisions recorded.</p>
+                {% endfor %}
+            </div>
+        </section>
     </section>
     {% else if show_settings_tab %}
     <section class="mt-2 space-y-2">

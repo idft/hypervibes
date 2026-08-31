@@ -206,7 +206,8 @@ def _require_strategy_prompt_kind(prompt_kind: str) -> str:
 def _require_strategy_prompt_response(value: Any) -> dict[str, Any]:
     if (
         not isinstance(value, dict)
-        or set(value) != {"prompt_kind", "prompt", "updated_at"}
+        or set(value) != {"revision_id", "prompt_kind", "prompt", "updated_at"}
+        or not isinstance(value["revision_id"], int)
         or not isinstance(value["prompt_kind"], str)
         or not isinstance(value["prompt"], str)
         or not isinstance(value["updated_at"], str)
@@ -615,6 +616,34 @@ def update_strategy_prompt(prompt_kind: str, prompt: str) -> dict[str, Any]:
         json_body={"prompt": prompt},
     )
     return _require_strategy_prompt_response(result)
+
+
+@mcp.tool()
+def submit_prompt_revision(
+    rationale: str,
+    evidence_memory_ids: list[str],
+    changes: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Submit one evidence-backed daily-review revision batch for eligible prompts."""
+    _require_nonblank("rationale", rationale)
+    if not isinstance(evidence_memory_ids, list) or not all(
+        isinstance(value, str) and value.strip() for value in evidence_memory_ids
+    ):
+        raise ValueError("evidence_memory_ids must contain nonblank IDs")
+    if not isinstance(changes, list) or not changes:
+        raise ValueError("changes must be a non-empty list")
+    result = _request(
+        "POST",
+        "/api/v1/strategy-prompts/revisions",
+        json_body={
+            "rationale": rationale,
+            "evidence_memory_ids": evidence_memory_ids,
+            "changes": changes,
+        },
+    )
+    if not isinstance(result, dict) or set(result) != {"batch_id"} or not isinstance(result["batch_id"], int):
+        raise RuntimeError("HyperVibes prompt revision returned unexpected shape")
+    return result
 
 
 @mcp.tool()

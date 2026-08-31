@@ -147,7 +147,6 @@ class HyperVibesMcpServerTests(unittest.TestCase):
             "analysis.md",
             "market-analysis.md",
             "trading.md",
-            "daily-review.md",
             "analysis-coding.md",
         ]:
             profile = (profiles / profile_name).read_text(encoding="utf-8")
@@ -155,6 +154,11 @@ class HyperVibesMcpServerTests(unittest.TestCase):
             self.assertNotIn("hypervibes_list_strategy_prompts:", profile, profile_name)
             self.assertNotIn("hypervibes_get_strategy_prompt:", profile, profile_name)
             self.assertNotIn("hypervibes_update_strategy_prompt:", profile, profile_name)
+        daily_review = (profiles / "daily-review.md").read_text(encoding="utf-8")
+        self.assertIn("hypervibes_list_strategy_prompts: allow", daily_review)
+        self.assertIn("hypervibes_get_strategy_prompt: allow", daily_review)
+        self.assertIn("hypervibes_submit_prompt_revision: allow", daily_review)
+        self.assertNotIn("hypervibes_update_strategy_prompt:", daily_review)
 
     def test_strategy_prompt_tools_use_authenticated_api_paths(self) -> None:
         captured: list[dict[str, object]] = []
@@ -169,6 +173,7 @@ class HyperVibesMcpServerTests(unittest.TestCase):
                 }
             )
             response = {
+                "revision_id": 1,
                 "prompt_kind": "analysis",
                 "prompt": "Review market structure.",
                 "updated_at": "2026-08-20T00:00:00Z",

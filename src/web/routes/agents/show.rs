@@ -23,7 +23,7 @@ use crate::{
         strategy_prompts::{
             PROMPT_KIND_ANALYSIS, PROMPT_KIND_ANALYSIS_CODING, PROMPT_KIND_DAILY_REVIEW,
             PROMPT_KIND_MARKET_ANALYSIS, PROMPT_KIND_TRADING, default_prompt_for_kind,
-            list_agent_strategy_prompts,
+            list_agent_strategy_prompts, list_prompt_revision_history,
         },
     },
     hyperliquid::{
@@ -264,6 +264,24 @@ pub(in crate::web::routes) async fn render_agent_show_page(
                             default_prompt_for_kind(PROMPT_KIND_ANALYSIS_CODING),
                         ),
                     ]);
+                    template.prompt_revision_history =
+                        list_prompt_revision_history(&state.db_pool, &agent.agent_key)
+                            .await
+                            .unwrap_or_default()
+                            .into_iter()
+                            .map(|row| crate::web::templates::PromptRevisionHistoryView {
+                                id: row.id,
+                                prompt_kind: row.prompt_kind,
+                                prompt: row.prompt,
+                                source_type: row.source_type,
+                                source_run_id: row.source_run_id,
+                                rationale: row.rationale,
+                                created_at: row.created_at.to_rfc3339(),
+                            })
+                            .collect();
+                    template.prompt_improvement_enabled = sqlx::query_scalar(
+                        "SELECT daily_review_prompt_improvement_enabled FROM agents WHERE agent_key = $1",
+                    ).bind(&agent.agent_key).fetch_one(&state.db_pool).await.unwrap_or(true);
                 }
                 Err(error) => {
                     warn!(

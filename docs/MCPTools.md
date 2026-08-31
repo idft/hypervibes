@@ -34,9 +34,10 @@ workspace is deleted.
 | `hypervibes_coding_submit_report` | Submit the analysis coding result after validation. | Sub-agents: analysis coding |
 | `hypervibes_run_analysis_tool` | Run a manifest-declared quantitative tool with run-local inputs and outputs. The validated output records its package hash, package version, tool ID, and tool version. | Sub-agents: analysis and trading |
 | `hypervibes_get_account` | Read the agent's current Hyperliquid account snapshot. | Sub-agents and Chat |
-| `hypervibes_list_strategy_prompts` | List the agent's strategy prompts for review. | Chat only |
-| `hypervibes_get_strategy_prompt` | Read one strategy prompt. | Chat only |
+| `hypervibes_list_strategy_prompts` | List the agent's strategy prompts for review. | Chat and daily review |
+| `hypervibes_get_strategy_prompt` | Read one strategy prompt. | Chat and daily review |
 | `hypervibes_update_strategy_prompt` | Update one strategy prompt. | Chat only; confirmation required |
+| `hypervibes_submit_prompt_revision` | Submit one evidence-backed atomic revision batch for eligible prompts. | Daily review only |
 | `hypervibes_get_latest_analysis` | Read recent analysis memories for a market. | Sub-agents: market analysis; Chat |
 | `hypervibes_get_market_analysis` | Read the latest market-analysis handoff for a market. | Sub-agents: trading; Chat |
 | `hypervibes_get_memory_detail` | Read one memory and its links. | Sub-agents: daily review and analysis coding; Chat |

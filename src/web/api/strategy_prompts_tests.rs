@@ -37,7 +37,8 @@ async fn strategy_prompts_list_returns_only_safe_prompt_fields() {
     let prompts = body.as_array().expect("prompt list");
     assert_eq!(prompts.len(), 5);
     for prompt in prompts {
-        assert_eq!(prompt.as_object().expect("prompt object").len(), 3);
+        assert_eq!(prompt.as_object().expect("prompt object").len(), 4);
+        assert!(prompt["revision_id"].is_i64());
         assert!(prompt["prompt_kind"].is_string());
         assert!(prompt["prompt"].is_string());
         assert!(prompt["updated_at"].is_string());
@@ -70,7 +71,8 @@ async fn strategy_prompt_get_and_update_are_scoped_to_authenticated_agent() {
     assert_eq!(body["prompt_kind"], "trading");
     assert_eq!(body["prompt"], "Trade only liquid breakouts.");
     assert!(body["updated_at"].is_string());
-    assert_eq!(body.as_object().expect("prompt object").len(), 3);
+    assert!(body["revision_id"].is_i64());
+    assert_eq!(body.as_object().expect("prompt object").len(), 4);
 
     let (status, second_prompt) =
         get_json_response(&state, &second_api_key, "/strategy-prompts/trading").await;

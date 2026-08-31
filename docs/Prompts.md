@@ -35,8 +35,14 @@ with the current draft as its opening context.
 
 The discussion uses the most recent Chat model. If the agent has no previous
 Chat model, select one before the conversation is created. Saving a prompt from
-the editor writes it directly; requesting an update from Chat requires a
-one-time OpenCode confirmation.
+the editor creates an immutable revision; requesting an update from Chat requires
+a one-time OpenCode confirmation.
+
+The tab shows revision history and supports explicit rollback. A rollback creates
+a new revision rather than deleting history. Daily review may automatically submit
+an evidence-backed, atomic revision batch for `analysis`, `market_analysis`, and
+`trading` when the per-agent toggle is enabled. It cannot revise its own or the
+analysis-coding prompt.
 
 ## Prompt boundaries
 

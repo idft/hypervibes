@@ -80,6 +80,14 @@ pub fn router(state: Arc<AppState>) -> Router {
             "/agents/{agent_key}/prompts/update",
             post(agents_update_prompt),
         )
+        .route(
+            "/agents/{agent_key}/prompts/rollback",
+            post(agents_rollback_prompt_revision),
+        )
+        .route(
+            "/agents/{agent_key}/prompts/improvement",
+            post(agents_update_prompt_improvement),
+        )
         .route("/agents/{agent_key}/settings", get(agents_show_settings))
         .route(
             "/agents/{agent_key}/settings/gateway/telegram/status",

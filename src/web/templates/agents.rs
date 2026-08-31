@@ -302,6 +302,17 @@ pub struct PromptEditorView {
 }
 
 #[derive(Debug, Clone)]
+pub struct PromptRevisionHistoryView {
+    pub id: i64,
+    pub prompt_kind: String,
+    pub prompt: String,
+    pub source_type: String,
+    pub source_run_id: Option<i64>,
+    pub rationale: String,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone)]
 pub struct AgentNotificationView {
     pub id: uuid::Uuid,
     pub title: String,
@@ -504,6 +515,8 @@ pub struct AgentsShowPageTemplate {
     pub sparklines_html: String,
     pub api_key_masked: String,
     pub prompt_editors: Vec<PromptEditorView>,
+    pub prompt_revision_history: Vec<PromptRevisionHistoryView>,
+    pub prompt_improvement_enabled: bool,
     pub current_path: String,
     pub is_main_account: bool,
     pub subaccount_name: Option<String>,
@@ -523,6 +536,8 @@ impl AgentsShowPageTemplate {
         Self {
             api_key_masked: mask_api_key(&agent.api_key),
             prompt_editors: Vec::new(),
+            prompt_revision_history: Vec::new(),
+            prompt_improvement_enabled: true,
             current_path: active_tab.path(&agent_key),
             is_main_account: false,
             subaccount_name: None,

@@ -52,6 +52,7 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/coding/requests", post(request_analysis_coding))
         .route("/coding/report", post(submit_coding_report))
         .route("/strategy-prompts", get(list_strategy_prompts))
+        .route("/strategy-prompts/revisions", post(submit_prompt_revision))
         .route(
             "/strategy-prompts/{prompt_kind}",
             get(get_strategy_prompt).put(update_strategy_prompt),

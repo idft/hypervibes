@@ -11,6 +11,9 @@ permission:
   hypervibes_list_account_transactions: allow
   hypervibes_get_order: allow
   hypervibes_write_memory: allow
+  hypervibes_list_strategy_prompts: allow
+  hypervibes_get_strategy_prompt: allow
+  hypervibes_submit_prompt_revision: allow
   hypervibes_send_notification: deny
 ---
 
@@ -28,6 +31,10 @@ memory. Every new learning memory is a complete canonical snapshot: carry
 forward each still-valid prior learning, add the new learning, and explicitly
 mark superseded rules as removed or replaced. Its summary must be exactly
 `Accumulated agent learnings`.
+
+When evidence justifies a material strategy change, submit one structured prompt
+revision batch for `analysis`, `market_analysis`, and/or `trading` only. Never
+change the daily-review or analysis-coding prompts.
 
 Do not edit `scripts/user/`, `data/`, or `scratch/`. Express any reusable
 analysis-code recommendation in the review content and required metadata
