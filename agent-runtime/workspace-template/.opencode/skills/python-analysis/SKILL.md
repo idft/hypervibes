@@ -39,7 +39,7 @@ skill script.
 Fetch candles with:
 
 ```bash
-python .opencode/skills/hyperliquid-data/fetch_ohlcv.py <SYMBOL> <TIMEFRAME> --limit <N>
+python .opencode/skills/hyperliquid-data/fetch_ohlcv.py <SYMBOL> <TIMEFRAME> --limit <N> --closed-before <BOUNDARY_MS> --output-dir scratch/ohlcv
 ```
 
 `SYMBOL` and `TIMEFRAME` are positional arguments. Do not use unsupported flags

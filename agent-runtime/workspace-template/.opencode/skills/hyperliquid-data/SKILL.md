@@ -12,7 +12,7 @@ Fetch OHLCV candle data directly from Hyperliquid's public REST API.
 Run the script from the agent workspace root:
 
 ```bash
-python .opencode/skills/hyperliquid-data/fetch_ohlcv.py <SYMBOL> <TIMEFRAME> [--limit N] [--start-time EPOCH_MS] [--end-time EPOCH_MS] [--closed-before EPOCH_MS]
+python .opencode/skills/hyperliquid-data/fetch_ohlcv.py <SYMBOL> <TIMEFRAME> [--limit N] [--start-time EPOCH_MS] [--end-time EPOCH_MS] [--closed-before EPOCH_MS] [--output-dir scratch/PATH]
 ```
 
 `SYMBOL` and `TIMEFRAME` are positional arguments. Do not use unsupported flags
@@ -21,22 +21,20 @@ such as `--coin`, `--symbol`, `--timeframe`, or `--days`.
 Examples:
 
 ```bash
-python .opencode/skills/hyperliquid-data/fetch_ohlcv.py BTC 15m --limit 100
+python .opencode/skills/hyperliquid-data/fetch_ohlcv.py BTC 15m --limit 100 --closed-before 1783114200000 --output-dir scratch/ohlcv
 python .opencode/skills/hyperliquid-data/fetch_ohlcv.py ETH 1h --start-time 1710000000000 --end-time 1710100000000
-python .opencode/skills/hyperliquid-data/fetch_ohlcv.py BTC 15m --limit 500 --closed-before 1783114200000
+python .opencode/skills/hyperliquid-data/fetch_ohlcv.py BTC 15m --limit 500 --closed-before 1783114200000 --output-dir scratch/ohlcv
 ```
 
-The script writes candles to `scratch/ohlcv-cache/<SYMBOL>/<TIMEFRAME>/...json`
-and prints a small JSON manifest to stdout. Read `output_path` from the manifest,
-then pass that file to the existing `scripts/user/analyze.py` entrypoint with its
-`--input` argument. Do not modify the analyzer or create a helper script.
+The script writes candles to `scratch/ohlcv/` by default and prints a small JSON
+manifest to stdout. Use `--output-dir` to select another directory under
+`scratch/`; absolute paths and paths outside `scratch/` are rejected. Read
+`output_path` from the manifest, then pass that file to the existing
+`scripts/user/analyze.py` entrypoint with its `--input` argument. Do not modify
+the analyzer or create a helper script.
 
 Use `--stdout` only for manual debugging. Normal agent analysis should use the
-cached `output_path` so full candle data does not fill the LLM context window.
-
-On each invocation, the script prunes only the cache directory for the requested
-symbol and timeframe. Files older than `--ttl-hours` are removed; the default TTL
-is 24 hours. Use `--no-prune` only for debugging.
+run-local `output_path` so full candle data does not fill the LLM context window.
 
 ## Environment
 
@@ -56,14 +54,17 @@ Set `HYPERLIQUID_ENVIRONMENT` to `mainnet` or `testnet`. Defaults to `mainnet`.
   avoid leaking unclosed data into deterministic analysis.
 - For a sub-agent anchored to boundary `B`, always fetch with
   `--closed-before B_ms`. The script derives the candle close timestamp
-  locally from `start + interval_ms` (the Hyperliquid API omits a reliable
-  close field) and keeps only candles whose close is strictly less than
-  `B_ms`. This matters for shorter jobs fetching longer-timeframe data:
+   locally from `start + interval_ms` (the Hyperliquid API omits a reliable
+   close field) and keeps candles whose close is at or before `B_ms`. This
+   matters for shorter jobs fetching longer-timeframe data:
   a 15-minute sub-agent at the half-hour boundary `B` requesting 1-hour candles
-  must exclude the 1-hour candle that opened at `B - interval_ms` (because
-  it has not closed at `B`).
+   includes the 1-hour candle that opened at `B - interval_ms`, because it
+   closes exactly at `B`, but excludes later candles.
 - Do not pair `--end-time` with `--closed-before`; the local close filter
-  is what guarantees no future-leakage.
+   is what guarantees no future-leakage.
+- With `--closed-before`, `--limit` is the minimum number of eligible candles.
+  The helper expands its fetch window when needed, then saves the most recent
+  eligible candles. It fails rather than returning fewer than requested.
 
 ## Output
 
@@ -75,12 +76,9 @@ Small JSON manifest to stdout:
   "timeframe": "15m",
   "interval_ms": 900000,
   "candles": 100,
-  "output_path": "scratch/ohlcv-cache/BTC/15m/20260701T120000Z-abc123.json",
-  "ttl_hours": 24.0,
-  "pruned_files": 0,
+  "output_path": "scratch/ohlcv/20260701T120000Z-abc123.json",
   "requested_boundary_ms": 1783114200000,
-  "actual_max_close_ms": 1783113300000,
-  "filtered_out_by_boundary": 2
+  "actual_max_close_ms": 1783114200000
 }
 ```
 

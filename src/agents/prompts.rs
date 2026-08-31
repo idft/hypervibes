@@ -51,9 +51,9 @@ Production code may use the immutable analysis runtime, including NumPy, pandas,
 Candidate tests are optional. Add a focused standard-library `unittest` regression when fixing a demonstrated bug or implementing nontrivial custom quantitative math. Do not recreate the platform contract tests or generate a comprehensive suite by default.
 
 ## Future-data discipline
-Every candle path must exclude candles whose complete close time is not strictly before `--boundary-ms`. Candle timestamps are start times, so use the requested timeframe duration when determining close time. Treat the boundary as authoritative.
+Every candle path must exclude candles whose complete close time is after `--boundary-ms`. Candle timestamps are start times, so use the requested timeframe duration when determining close time. Treat the boundary as authoritative.
 
-The exact eligibility rule is `timestamp_ms + interval_ms < boundary_ms`; a candle closing exactly at the boundary is excluded. Reject invalid context, missing intervals, unsupported input, and calculation failures with a non-zero exit rather than emitting a successful empty measurement set.
+The exact eligibility rule is `timestamp_ms + interval_ms <= boundary_ms`; a candle closing exactly at the boundary is included. Reject invalid context, missing intervals, unsupported input, and calculation failures with a non-zero exit rather than emitting a successful empty measurement set.
 
 ## Safety
 Use Pyright LSP diagnostics for Python. Never call HyperVibes APIs, place or cancel orders, edit prompts, access another workspace, or hard-code agent-specific paths. Run fixed validation and submit exactly one structured report."#;

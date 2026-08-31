@@ -44,10 +44,10 @@ normalized candles with `timestamp_ms`, `open`, `high`, `low`, `close`, and
 `timestamp_ms + interval_ms`. A candle is eligible only when:
 
 ```text
-timestamp_ms + interval_ms < boundary_ms
+timestamp_ms + interval_ms <= boundary_ms
 ```
 
-A candle closing exactly at the boundary is excluded. Apply this rule before
+A candle closing exactly at the boundary is included. Apply this rule before
 every calculation. Never infer cadence from candle spacing, and never fall back
 to comparing the open timestamp alone. Reject missing/invalid intervals,
 context mismatches, unsupported input, and calculation failures with a non-zero
@@ -98,7 +98,7 @@ analytics after the stable interface passes validation.
 
 The fixed validator supplies local deterministic fixtures; it does not need
 network data, a fetched input, or files under `scratch/`. It checks one-candle
-operation, every supported interval, strict boundary exclusion, context
+operation, every supported interval, inclusive boundary eligibility, context
 mismatch rejection, deterministic output, finite non-empty measurements,
 eligible-candle sensitivity, input-order invariance, known signal semantics,
 and creation of a missing parent directory for the requested atomic output.

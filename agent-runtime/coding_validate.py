@@ -355,7 +355,7 @@ def validate(workspace: Path) -> dict[str, object]:
                 suffix="baseline",
                 environment=environment,
             )
-            error = _validate_output(baseline, timeframe="15m", expected_count=1)
+            error = _validate_output(baseline, timeframe="15m", expected_count=2)
             if completed.returncode != 0 or error is not None:
                 return _failure(checks, error or "canonical CLI failed", completed)
             checks.append("CLI, context, and output schema")
@@ -505,8 +505,8 @@ def validate(workspace: Path) -> dict[str, object]:
             checks.append("known signal semantics")
 
             changed_data = json.loads(json.dumps(fixture_data))
-            changed_data["candles"][0]["close"] = 150
-            changed_data["candles"][0]["high"] = 151
+            changed_data["candles"][1]["close"] = 150
+            changed_data["candles"][1]["high"] = 151
             _, changed_output = _run_analyzer(
                 implementation,
                 workspace,
@@ -545,7 +545,7 @@ def validate(workspace: Path) -> dict[str, object]:
                 error = _validate_output(
                     interval_output,
                     timeframe=timeframe,
-                    expected_count=1,
+                    expected_count=2,
                 )
                 if interval_run.returncode != 0 or error is not None:
                     return _failure(

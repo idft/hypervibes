@@ -95,38 +95,36 @@ class FilterClosedBeforeTests(unittest.TestCase):
         """A 15-minute sub-agent fetching 1-hour data at the half-hour boundary
         must exclude the still-open 1-hour candle that opened at the top
         of the hour. The 1-hour candle that opened at ``B - 1h`` closes
-        exactly at ``B`` and is also excluded by the strict
-        ``close < B`` rule."""
+        exactly at ``B`` and is included by the ``close <= B`` rule."""
         module = self.module
         interval_ms = 3_600_000  # 1h
         boundary = 1_783_960_200_000  # arbitrary half-hour boundary
         candles = [
             _candle(boundary - 4 * interval_ms),  # closes 1h before boundary
             _candle(boundary - 3 * interval_ms),  # closes at boundary - 2h (still open by old code)
-            _candle(boundary - interval_ms),      # closes AT boundary (strictly open at boundary)
+            _candle(boundary - interval_ms),      # closes AT boundary
             _candle(boundary),                    # closes 1h AFTER boundary
         ]
 
         kept = module.filter_closed_before(candles, interval_ms, boundary)
 
-        # Only candles that close strictly before boundary survive.
+        # Candles that close at or before boundary survive.
         kept_starts = [module.candle_start_ms(c) for c in kept]
-        self.assertEqual(kept_starts, [boundary - 4 * interval_ms, boundary - 3 * interval_ms])
-        # The still-open candle that starts AT boundary - 1h is excluded.
-        self.assertNotIn(boundary - interval_ms, kept_starts)
+        self.assertEqual(
+            kept_starts,
+            [boundary - 4 * interval_ms, boundary - 3 * interval_ms, boundary - interval_ms],
+        )
         # The candle that starts AT the boundary is excluded.
         self.assertNotIn(boundary, kept_starts)
 
-    def test_filter_excludes_candle_closing_exactly_at_boundary(self) -> None:
-        """Strict ``close < B``: a candle closing *at* the boundary is
-        considered open at the boundary and is excluded."""
+    def test_filter_includes_candle_closing_exactly_at_boundary(self) -> None:
         module = self.module
         interval_ms = 3_600_000
         b = 1_784_000_000_000
         # Candle that opens at boundary - interval_ms closes exactly at boundary.
         edge = _candle(b - interval_ms)
         self.assertEqual(module.candle_close_ms(edge, interval_ms), b)
-        self.assertEqual(module.filter_closed_before([edge], interval_ms, b), [])
+        self.assertEqual(module.filter_closed_before([edge], interval_ms, b), [edge])
 
     def test_filter_returns_empty_for_all_open_candles(self) -> None:
         module = self.module
@@ -165,6 +163,90 @@ class MaximumCloseMsTests(unittest.TestCase):
         interval_ms = 900_000
         candles = [_candle(100), _candle(300), _candle(200)]
         self.assertEqual(module.maximum_close_ms(candles, interval_ms), 300 + interval_ms)
+
+
+class ClosedFetchTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.module = _load_module()
+
+    def test_expands_window_until_requested_eligible_count_is_available(self) -> None:
+        module = self.module
+        interval_ms = module.INTERVAL_MS["15m"]
+        boundary = 1_784_000_000_000
+        calls: list[int] = []
+
+        def fake_fetch(symbol, timeframe, *, limit=None, start_time=None, end_time=None):
+            assert end_time == boundary
+            assert start_time is not None
+            calls.append(start_time)
+            if len(calls) == 1:
+                return [_candle(boundary - interval_ms)]
+            return [
+                _candle(boundary - 3 * interval_ms),
+                _candle(boundary - 2 * interval_ms),
+                _candle(boundary - interval_ms),
+                _candle(boundary),
+            ]
+
+        from unittest import mock
+
+        with mock.patch.object(module, "fetch_ohlcv", side_effect=fake_fetch):
+            candles = module.fetch_closed_ohlcv(
+                "BTC", "15m", limit=3, start_time=None, closed_before_ms=boundary
+            )
+
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(
+            [module.candle_start_ms(candle) for candle in candles],
+            [boundary - 3 * interval_ms, boundary - 2 * interval_ms, boundary - interval_ms],
+        )
+
+    def test_rejects_insufficient_fixed_start_window(self) -> None:
+        module = self.module
+        interval_ms = module.INTERVAL_MS["15m"]
+        boundary = 1_784_000_000_000
+
+        from unittest import mock
+
+        with mock.patch.object(
+            module,
+            "fetch_ohlcv",
+            return_value=[_candle(boundary - interval_ms)],
+        ):
+            with self.assertRaisesRegex(RuntimeError, "fewer than 2 candles"):
+                module.fetch_closed_ohlcv(
+                    "BTC",
+                    "15m",
+                    limit=2,
+                    start_time=boundary - 2 * interval_ms,
+                    closed_before_ms=boundary,
+                )
+
+
+class OutputDirectoryTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.module = _load_module()
+
+    def test_accepts_output_directory_beneath_scratch(self) -> None:
+        import os
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as temporary:
+            original_cwd = os.getcwd()
+            os.chdir(temporary)
+            try:
+                self.assertEqual(
+                    self.module.output_dir_from_argument("scratch/ohlcv/custom"),
+                    Path(temporary) / "scratch/ohlcv/custom",
+                )
+            finally:
+                os.chdir(original_cwd)
+
+    def test_rejects_output_directory_outside_scratch(self) -> None:
+        with self.assertRaisesRegex(RuntimeError, "under scratch"):
+            self.module.output_dir_from_argument("../outside")
 
 
 class ManifestIncludesBoundaryTests(unittest.TestCase):
@@ -233,18 +315,15 @@ class ManifestIncludesBoundaryTests(unittest.TestCase):
         future_candle = _candle(b)
 
         manifest = self._run_main(
-            ["fetch_ohlcv.py", "BTC", "1h", "--closed-before", str(b)],
+            ["fetch_ohlcv.py", "BTC", "1h", "--limit", "2", "--closed-before", str(b)],
             fake_candles=[closed_candle, boundary_close_candle, future_candle],
         )
 
         self.assertEqual(manifest["requested_boundary_ms"], b)
         self.assertEqual(manifest["timeframe"], "1h")
         self.assertEqual(manifest["interval_ms"], interval_ms)
-        self.assertEqual(manifest["candles"], 1)
-        # Only the closed candle (started 3h before boundary, closed 2h before)
-        # survived filtering.
-        self.assertEqual(manifest["actual_max_close_ms"], b - 3 * interval_ms + interval_ms)
-        self.assertEqual(manifest["filtered_out_by_boundary"], 2)
+        self.assertEqual(manifest["candles"], 2)
+        self.assertEqual(manifest["actual_max_close_ms"], b)
 
     def test_manifest_records_null_boundary_without_closed_before(self) -> None:
         module = self.module
@@ -255,7 +334,6 @@ class ManifestIncludesBoundaryTests(unittest.TestCase):
         )
         self.assertIsNone(manifest["requested_boundary_ms"])
         self.assertEqual(manifest["actual_max_close_ms"], 200 + 900_000)
-        self.assertEqual(manifest["filtered_out_by_boundary"], 0)
 
     def test_cached_file_is_canonical_analyzer_input(self) -> None:
         manifest = self._run_main(

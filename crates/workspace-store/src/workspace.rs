@@ -1661,7 +1661,7 @@ mod tests {
             "analysis",
             &analysis,
             "read",
-            "workspaces/agents/btc-2/scratch/ohlcv-cache/BTC/input.json",
+            "workspaces/agents/btc-2/scratch/ohlcv/input.json",
             "allow",
         );
         assert_profile_action(
@@ -1873,7 +1873,7 @@ mod tests {
             "trading",
             &trading,
             "read",
-            "workspaces/agents/btc-2/scratch/ohlcv-cache/BTC/input.json",
+            "workspaces/agents/btc-2/scratch/ohlcv/input.json",
             "deny",
         );
         assert_profile_action("trading", &trading, "hypervibes_submit_orders", "", "allow");

@@ -29,8 +29,8 @@ INTERVAL_MS = {
     "1M": 2_592_000_000,
 }
 
-DEFAULT_TTL_HOURS = 24.0
-CACHE_ROOT = Path("scratch/ohlcv-cache")
+DEFAULT_OUTPUT_DIR = Path("scratch/ohlcv")
+MAX_FETCH_ATTEMPTS = 8
 
 
 def base_url() -> str:
@@ -142,16 +142,16 @@ def fetch_ohlcv(
 def filter_closed_before(
     candles: list[dict[str, Any]], interval_ms: int, closed_before_ms: int
 ) -> list[dict[str, Any]]:
-    """Return only candles that are fully closed strictly before the boundary.
+    """Return only candles that are fully closed at or before the boundary.
 
     A candle is "fully closed" when its close timestamp (start + interval_ms)
-    is strictly less than ``closed_before_ms``. Candles that merely *open*
+    is less than or equal to ``closed_before_ms``. Candles that merely *open*
     before the boundary but have not yet closed are excluded; this is the
     behaviour that callers such as a 15-minute sub-agent fetching 1-hour data at
     a half-hour boundary require (the still-open 1-hour candle would
     otherwise leak future data into the analysis).
     """
-    return [c for c in candles if candle_close_ms(c, interval_ms) < closed_before_ms]
+    return [c for c in candles if candle_close_ms(c, interval_ms) <= closed_before_ms]
 
 
 def maximum_close_ms(candles: list[dict[str, Any]], interval_ms: int) -> int | None:
@@ -161,21 +161,26 @@ def maximum_close_ms(candles: list[dict[str, Any]], interval_ms: int) -> int | N
     return max(candle_close_ms(c, interval_ms) for c in candles)
 
 
-def safe_path_component(value: str) -> str:
-    safe = "".join(ch if ch.isalnum() or ch in "._:@-" else "_" for ch in value.strip())
-    return safe or "unknown"
+def output_dir_from_argument(value: str) -> Path:
+    """Resolve a caller-selected directory confined to this run's scratch tree."""
+    requested = Path(value)
+    if requested.is_absolute():
+        raise RuntimeError("--output-dir must be relative to the workspace scratch directory")
+
+    scratch_root = (Path.cwd() / "scratch").resolve()
+    output_dir = (Path.cwd() / requested).resolve()
+    try:
+        output_dir.relative_to(scratch_root)
+    except ValueError as exc:
+        raise RuntimeError("--output-dir must remain under scratch/") from exc
+    return output_dir
 
 
-def cache_dir_for(symbol: str, timeframe: str) -> Path:
-    return CACHE_ROOT / safe_path_component(symbol) / safe_path_component(timeframe)
-
-
-def write_cached_candles(symbol: str, timeframe: str, payload: dict[str, Any]) -> Path:
-    cache_dir = cache_dir_for(symbol, timeframe)
-    cache_dir.mkdir(parents=True, exist_ok=True)
+def write_candles(output_dir: Path, payload: dict[str, Any]) -> Path:
+    output_dir.mkdir(parents=True, exist_ok=True)
 
     timestamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
-    output_path = cache_dir / f"{timestamp}-{uuid.uuid4().hex[:12]}.json"
+    output_path = output_dir / f"{timestamp}-{uuid.uuid4().hex[:12]}.json"
     temp_path = output_path.with_name(f".{output_path.name}.tmp")
 
     with temp_path.open("w", encoding="utf-8") as f:
@@ -185,31 +190,43 @@ def write_cached_candles(symbol: str, timeframe: str, payload: dict[str, Any]) -
     return output_path
 
 
-def prune_cache_dir(symbol: str, timeframe: str, ttl_hours: float, keep_path: Path | None) -> int:
-    if ttl_hours < 0:
-        raise RuntimeError("--ttl-hours must be non-negative")
+def fetch_closed_ohlcv(
+    symbol: str,
+    timeframe: str,
+    *,
+    limit: int,
+    start_time: int | None,
+    closed_before_ms: int,
+) -> list[dict[str, Any]]:
+    """Fetch at least ``limit`` eligible candles, expanding the request window.
 
-    cache_dir = cache_dir_for(symbol, timeframe)
-    if not cache_dir.exists():
-        return 0
-
-    cutoff = time.time() - (ttl_hours * 3600)
-    removed = 0
-    keep_resolved = keep_path.resolve() if keep_path is not None and keep_path.exists() else None
-
-    for path in cache_dir.glob("*.json"):
-        try:
-            if keep_resolved is not None and path.resolve() == keep_resolved:
-                continue
-            if path.stat().st_mtime >= cutoff:
-                continue
-            path.unlink()
-            removed += 1
-        except OSError:
-            # Best-effort cleanup; do not fail the data fetch because a concurrent
-            # process moved or deleted a cache file first.
-            continue
-    return removed
+    Hyperliquid can include a candle that is open at the requested boundary, so
+    fetch limits are only hints. The local close-time filter is authoritative.
+    """
+    interval_ms = INTERVAL_MS[timeframe]
+    window_candles = limit + 1
+    for _ in range(MAX_FETCH_ATTEMPTS):
+        requested_start = (
+            start_time
+            if start_time is not None
+            else max(0, closed_before_ms - window_candles * interval_ms)
+        )
+        candles = fetch_ohlcv(
+            symbol,
+            timeframe,
+            start_time=requested_start,
+            end_time=closed_before_ms,
+        )
+        closed = filter_closed_before(candles, interval_ms, closed_before_ms)
+        closed.sort(key=candle_start_ms)
+        if len(closed) >= limit:
+            return closed[-limit:]
+        if start_time is not None or requested_start == 0:
+            break
+        window_candles *= 2
+    raise RuntimeError(
+        f"fewer than {limit} candles closed at or before {closed_before_ms} were available"
+    )
 
 
 def main() -> None:
@@ -223,69 +240,70 @@ def main() -> None:
         "--closed-before",
         type=int,
         help=(
-            "Restrict returned candles to those that fully closed strictly "
-            "before this epoch millisecond boundary. Filtering is applied "
+            "Restrict returned candles to those that fully closed at or before "
+            "this epoch millisecond boundary. Filtering is applied "
             "internally using candle close time (start + interval), so candles "
             "that merely opened before the boundary but have not closed yet "
             "are excluded."
         ),
     )
     parser.add_argument(
-        "--ttl-hours",
-        type=float,
-        default=DEFAULT_TTL_HOURS,
-        help="Delete cached files for this symbol/timeframe older than this many hours",
-    )
-    parser.add_argument(
-        "--no-prune",
-        action="store_true",
-        help="Do not prune old cache files for this symbol/timeframe",
+        "--output-dir",
+        default=DEFAULT_OUTPUT_DIR.as_posix(),
+        help="Run-local output directory beneath scratch/ (default: scratch/ohlcv)",
     )
     parser.add_argument(
         "--stdout",
         action="store_true",
-        help="Print full candle JSON to stdout instead of writing a cache file",
+        help="Print full candle JSON to stdout instead of writing an output file",
     )
     args = parser.parse_args()
 
-    if args.ttl_hours < 0:
-        parser.error("--ttl-hours must be non-negative")
-
     if args.timeframe not in INTERVAL_MS:
         parser.error(f"unsupported timeframe {args.timeframe!r}")
+    if args.limit is not None and args.limit <= 0:
+        parser.error("--limit must be greater than zero")
 
     interval_ms = INTERVAL_MS[args.timeframe]
     closed_before_ms = args.closed_before
+    limit: int | None = None
 
     if closed_before_ms is not None:
         if closed_before_ms <= 0:
             parser.error("--closed-before must be greater than zero")
         if args.end_time is not None:
             parser.error("--closed-before cannot be combined with --end-time")
-        # Request up to the boundary; the server may still return a candle
-        # whose start falls at or before the boundary but which has not
-        # closed by it. We filter those locally after the fetch completes.
-        end_time = closed_before_ms - 1
+        limit = 200 if args.limit is None else args.limit
+        if not isinstance(limit, int):
+            parser.error("--limit must be an integer")
+        end_time = closed_before_ms
     else:
         end_time = args.end_time
 
     try:
-        candles = fetch_ohlcv(
-            args.symbol,
-            args.timeframe,
-            limit=args.limit,
-            start_time=args.start_time,
-            end_time=end_time,
-        )
+        if closed_before_ms is not None:
+            if limit is None:
+                raise RuntimeError("closed-candle fetch limit was not initialized")
+            candles = fetch_closed_ohlcv(
+                args.symbol,
+                args.timeframe,
+                limit=limit,
+                start_time=args.start_time,
+                closed_before_ms=closed_before_ms,
+            )
+        else:
+            candles = fetch_ohlcv(
+                args.symbol,
+                args.timeframe,
+                limit=args.limit,
+                start_time=args.start_time,
+                end_time=end_time,
+            )
     except RuntimeError as exc:
         print(str(exc), file=sys.stderr)
         sys.exit(1)
 
     requested_boundary_ms = closed_before_ms
-    pre_count = len(candles)
-    if closed_before_ms is not None:
-        candles = filter_closed_before(candles, interval_ms, closed_before_ms)
-    filtered_out = pre_count - len(candles)
     actual_max_close_ms = maximum_close_ms(candles, interval_ms)
     try:
         payload = canonical_payload(args.symbol, args.timeframe, interval_ms, candles)
@@ -294,21 +312,16 @@ def main() -> None:
         sys.exit(1)
 
     if args.stdout:
-        if not args.no_prune:
-            prune_cache_dir(args.symbol, args.timeframe, args.ttl_hours, None)
         print(json.dumps(payload, indent=2))
         return
 
     try:
-        output_path = write_cached_candles(args.symbol, args.timeframe, payload)
-        pruned_files = 0
-        if not args.no_prune:
-            pruned_files = prune_cache_dir(args.symbol, args.timeframe, args.ttl_hours, output_path)
+        output_path = write_candles(output_dir_from_argument(args.output_dir), payload)
     except RuntimeError as exc:
         print(str(exc), file=sys.stderr)
         sys.exit(1)
     except OSError as exc:
-        print(f"failed to write OHLCV cache file: {exc}", file=sys.stderr)
+        print(f"failed to write OHLCV output file: {exc}", file=sys.stderr)
         sys.exit(1)
 
     manifest = {
@@ -316,12 +329,9 @@ def main() -> None:
         "timeframe": args.timeframe,
         "interval_ms": interval_ms,
         "candles": len(candles),
-        "output_path": output_path.as_posix(),
-        "ttl_hours": args.ttl_hours,
-        "pruned_files": pruned_files,
+        "output_path": output_path.relative_to(Path.cwd().resolve()).as_posix(),
         "requested_boundary_ms": requested_boundary_ms,
         "actual_max_close_ms": actual_max_close_ms,
-        "filtered_out_by_boundary": filtered_out,
     }
     print(json.dumps(manifest, indent=2))
 

@@ -29,7 +29,7 @@ data = json.loads(open(args.input).read())
 if data["symbol"] != args.symbol or data["timeframe"] != args.timeframe:
     raise ValueError("CLI/input context mismatch")
 interval = data["interval_ms"]
-closed = [c for c in data["candles"] if c["timestamp_ms"] + interval < args.boundary_ms]
+closed = [c for c in data["candles"] if c["timestamp_ms"] + interval <= args.boundary_ms]
 closed.sort(key=lambda candle: candle["timestamp_ms"])
 result = {
     "symbol": args.symbol,

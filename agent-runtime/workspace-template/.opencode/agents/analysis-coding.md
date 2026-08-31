@@ -61,7 +61,7 @@ You are the analysis-coding agent for a HyperVibes OpenCode workspace.
   bug or nontrivial custom calculation.
 - `timestamp_ms` is candle open time. Require the canonical input's positive
   `interval_ms` and include a candle only when
-  `timestamp_ms + interval_ms < boundary_ms`. Never infer candle cadence. Sort
+   `timestamp_ms + interval_ms <= boundary_ms`. Never infer candle cadence. Sort
   eligible candles by timestamp before calculations.
 - Prefer focused edits over replacing a complete large file. Use Pyright
   LSP diagnostics while reading and editing Python, and resolve every reported

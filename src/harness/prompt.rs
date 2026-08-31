@@ -48,7 +48,7 @@ fn build_analysis_prompt(request: &DispatchRequest) -> String {
         body.push_str(&section);
     }
     body.push_str("\n\n## Instructions\n");
-    body.push_str("- Fetch OHLCV with `python .opencode/skills/hyperliquid-data/fetch_ohlcv.py <SYMBOL> <TIMEFRAME> --closed-before <BOUNDARY_MS>`. Use the exact boundary milliseconds above and the `hyperliquid-data` skill for details.\n");
+    body.push_str("- Fetch OHLCV with `python .opencode/skills/hyperliquid-data/fetch_ohlcv.py <SYMBOL> <TIMEFRAME> --closed-before <BOUNDARY_MS> --output-dir scratch/ohlcv`. Use the exact boundary milliseconds above and the `hyperliquid-data` skill for details.\n");
     body.push_str("- The fetch manifest's `output_path` is already the canonical input envelope for the `analyze` tool; do not reshape the candles.\n");
     body.push_str("- When a quantitative package is available, invoke its declared `analyze` tool with `hypervibes_run_analysis_tool`, this sub-agent's symbol, timeframe, exact boundary milliseconds, the fetch manifest's `output_path`, and a scratch output path. Treat its version-bound output as quantitative evidence.\n");
     body.push_str(
@@ -137,7 +137,7 @@ fn build_trading_prompt(request: &DispatchRequest) -> String {
         format_utc(request.scheduled_for),
         request.scheduled_for.timestamp_millis()
     ));
-    body.push_str("- For every permitted confirmation timeframe, a candle is eligible only when `start_ms + interval_ms < boundary_ms`; a candle closing exactly at the boundary is excluded.\n");
+    body.push_str("- For every permitted confirmation timeframe, a candle is eligible when `start_ms + interval_ms <= boundary_ms`; a candle closing exactly at the boundary is included.\n");
     body.push_str("- Fetch confirmation candles with `--closed-before <boundary_ms>` and never use `--stdout` or an open candle.\n");
     body.push_str("\n\n## Instructions\n");
     body.push_str("- Call `hypervibes_get_market_analysis(symbol)` for each selected symbol before placing any trades.\n");
@@ -296,13 +296,13 @@ fn closed_candle_cutoff_section(request: &DispatchRequest) -> Option<String> {
         format_utc(boundary)
     ));
     body.push_str(&format!("- Boundary milliseconds: {boundary_ms}.\n"));
-    body.push_str("- A candle is eligible only when `start_ms + interval_ms < boundary_ms`; a candle closing exactly at the boundary is excluded.\n");
+    body.push_str("- A candle is eligible only when `start_ms + interval_ms <= boundary_ms`; a candle closing exactly at the boundary is included.\n");
 
     match parse_timeframe_seconds(timeframe) {
         Ok(timeframe_seconds) => {
             let exact_boundary_start = boundary - Duration::seconds(timeframe_seconds);
             body.push_str(&format!(
-                "- For timeframe {timeframe}, exclude a candle starting at or after {} because it closes at or after the boundary.\n",
+                "- For timeframe {timeframe}, exclude a candle starting after {} because it closes after the boundary.\n",
                 format_utc(exact_boundary_start)
             ));
             body.push_str(&format!(
@@ -421,7 +421,7 @@ mod tests {
             "`--closed-before {}`",
             request.scheduled_for.timestamp_millis()
         )));
-        assert!(prompt.contains("a candle closing exactly at the boundary is excluded"));
+        assert!(prompt.contains("a candle closing exactly at the boundary is included"));
         assert!(prompt.contains("already the canonical input envelope"));
         assert!(prompt.contains("hypervibes_run_analysis_tool"));
         assert!(prompt.contains("python .opencode/skills/hyperliquid-data/fetch_ohlcv.py"));
