@@ -6,10 +6,7 @@ use uuid::Uuid;
 
 use crate::{
     db::DbPool,
-    harness::model::{
-        CAPABILITY_NOTIFICATION_SEND, CAPABILITY_SCHEMA_VERSION, RunApiScope,
-        run_api_scopes_for_sub_agent,
-    },
+    harness::model::{CAPABILITY_SCHEMA_VERSION, RunApiScope, run_api_scopes_for_sub_agent},
 };
 
 const RUN_CREDENTIAL_GRACE_SECONDS: i64 = 300;
@@ -36,7 +33,8 @@ struct RunCredentialIssueRow {
     timeout_seconds: i32,
     sub_agent_kind: String,
     capability_schema_version: i32,
-    notification_send_enabled: bool,
+    #[sqlx(json)]
+    enabled_capabilities: Vec<String>,
 }
 
 #[derive(sqlx::FromRow)]
@@ -59,7 +57,7 @@ pub async fn issue_run_runtime_credential(
     let row: Option<RunCredentialIssueRow> = query_as(
         "SELECT runs.timeout_seconds,
                 runs.sub_agent_kind,
-                artifacts.capability_snapshot @> $3 AS notification_send_enabled,
+                 artifacts.capability_snapshot AS enabled_capabilities,
                 artifacts.capability_schema_version
            FROM harness_sub_agent_runs AS runs
            JOIN harness_run_workspace_artifacts AS artifacts
@@ -72,7 +70,6 @@ pub async fn issue_run_runtime_credential(
     )
     .bind(run_id)
     .bind(agent_key)
-    .bind(serde_json::json!([CAPABILITY_NOTIFICATION_SEND]))
     .fetch_optional(&mut *tx)
     .await
     .context("failed to lock run runtime credential issue")?;
@@ -82,8 +79,7 @@ pub async fn issue_run_runtime_credential(
     if row.capability_schema_version != CAPABILITY_SCHEMA_VERSION {
         bail!("run has an unsupported capability schema version");
     }
-    let api_scopes =
-        run_api_scopes_for_sub_agent(&row.sub_agent_kind, row.notification_send_enabled)?;
+    let api_scopes = run_api_scopes_for_sub_agent(&row.sub_agent_kind, &row.enabled_capabilities)?;
     let api_scope_snapshot = serde_json::Value::Array(
         api_scopes
             .iter()

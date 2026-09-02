@@ -67,10 +67,60 @@ impl RunApiScope {
     }
 }
 
+pub fn validate_sub_agent_capabilities(
+    sub_agent_kind: &str,
+    enabled_capabilities: &[String],
+) -> anyhow::Result<Vec<String>> {
+    let mut capabilities = BTreeSet::new();
+    for capability in enabled_capabilities {
+        let capability = capability.trim();
+        if capability.is_empty()
+            || capability.len() > 128
+            || capability.chars().any(char::is_control)
+            || !is_valid_capability(capability)
+        {
+            anyhow::bail!("invalid sub-agent capability");
+        }
+        if capability.starts_with("custom-mcp:")
+            && matches!(
+                sub_agent_kind,
+                SUB_AGENT_KIND_TRADING | SUB_AGENT_KIND_ANALYSIS_CODING
+            )
+        {
+            anyhow::bail!("custom MCP capabilities are not eligible for this sub-agent role");
+        }
+        if !capabilities.insert(capability.to_string()) {
+            anyhow::bail!("duplicate sub-agent capability");
+        }
+    }
+    Ok(capabilities.into_iter().collect())
+}
+
+fn is_valid_capability(capability: &str) -> bool {
+    capability == CAPABILITY_NOTIFICATION_SEND
+        || capability
+            .strip_prefix("custom-mcp:")
+            .is_some_and(valid_custom_mcp_capability)
+}
+
+fn valid_custom_mcp_capability(value: &str) -> bool {
+    let Some((installation_id, tool_name)) = value.split_once(':') else {
+        return false;
+    };
+    uuid::Uuid::parse_str(installation_id).is_ok()
+        && !tool_name.is_empty()
+        && tool_name.len() <= 64
+        && tool_name
+            .chars()
+            .all(|character| character.is_ascii_alphanumeric() || matches!(character, '_' | '-'))
+}
+
 pub fn run_api_scopes_for_sub_agent(
     sub_agent_kind: &str,
-    notification_send_enabled: bool,
+    enabled_capabilities: &[String],
 ) -> anyhow::Result<Vec<RunApiScope>> {
+    let enabled_capabilities =
+        validate_sub_agent_capabilities(sub_agent_kind, enabled_capabilities)?;
     let mut scopes = match sub_agent_kind {
         SUB_AGENT_KIND_ANALYSIS => vec![
             RunApiScope::AccountRead,
@@ -96,7 +146,10 @@ pub fn run_api_scopes_for_sub_agent(
         ],
         _ => anyhow::bail!("unsupported sub-agent kind for run API scopes"),
     };
-    if notification_send_enabled {
+    if enabled_capabilities
+        .iter()
+        .any(|capability| capability == CAPABILITY_NOTIFICATION_SEND)
+    {
         scopes.push(RunApiScope::NotificationSend);
     }
     Ok(scopes)
@@ -177,7 +230,8 @@ pub struct HarnessSubAgentRow {
     pub model_variant: Option<String>,
     pub timeout_seconds: i32,
     pub operator_prompt: String,
-    pub notification_send_enabled: bool,
+    #[sqlx(json)]
+    pub enabled_capabilities: Vec<String>,
     // Retained on the row so callers can use persistence timestamps without a new query.
     #[expect(
         dead_code,
@@ -254,23 +308,15 @@ impl RunContextSnapshot {
             if capability.is_empty()
                 || capability.len() > 128
                 || capability.chars().any(char::is_control)
+                || !is_valid_capability(capability)
             {
                 anyhow::bail!("invalid capability in run context snapshot");
-            }
-            if capability != CAPABILITY_NOTIFICATION_SEND {
-                anyhow::bail!("unsupported capability in run context snapshot");
             }
             if !capabilities.insert(capability.to_string()) {
                 anyhow::bail!("duplicate capability in run context snapshot");
             }
         }
         Ok(capabilities.into_iter().collect())
-    }
-
-    pub fn notification_send_enabled(&self) -> bool {
-        self.enabled_capabilities
-            .iter()
-            .any(|capability| capability == CAPABILITY_NOTIFICATION_SEND)
     }
 }
 
@@ -618,7 +664,43 @@ pub struct HarnessDispatchSubAgentRow {
     pub model_variant: Option<String>,
     pub timeout_seconds: i32,
     pub operator_prompt: String,
-    pub notification_send_enabled: bool,
+    #[sqlx(json)]
+    pub enabled_capabilities: Vec<String>,
     pub opencode_base_url: String,
     pub runtime_config: Value,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn capabilities_accept_notification_and_future_custom_mcp_tools() {
+        let custom = "custom-mcp:550e8400-e29b-41d4-a716-446655440000:search".to_string();
+        assert_eq!(
+            validate_sub_agent_capabilities(
+                SUB_AGENT_KIND_ANALYSIS,
+                &[CAPABILITY_NOTIFICATION_SEND.to_string(), custom.clone()],
+            )
+            .expect("analysis capabilities are valid"),
+            vec![custom, CAPABILITY_NOTIFICATION_SEND.to_string()]
+        );
+    }
+
+    #[test]
+    fn capabilities_enforce_custom_mcp_role_ceiling() {
+        let custom = "custom-mcp:550e8400-e29b-41d4-a716-446655440000:search".to_string();
+        assert!(validate_sub_agent_capabilities(SUB_AGENT_KIND_TRADING, &[custom]).is_err());
+    }
+
+    #[test]
+    fn capabilities_reject_invalid_custom_mcp_identifiers() {
+        assert!(
+            validate_sub_agent_capabilities(
+                SUB_AGENT_KIND_ANALYSIS,
+                &["custom-mcp:not-a-uuid:search".to_string()],
+            )
+            .is_err()
+        );
+    }
 }

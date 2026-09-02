@@ -1949,7 +1949,7 @@ pub fn dispatch_request_from_job(
         display_name: candle_job.display_name.clone(),
         sub_agent_key: candle_job.sub_agent_key.clone(),
         sub_agent_kind: candle_job.sub_agent_kind.clone(),
-        notification_send_enabled: candle_job.notification_send_enabled,
+        enabled_capabilities: candle_job.enabled_capabilities.clone(),
         timeframe: candle_job.timeframe.clone(),
         operator_prompt: candle_job.operator_prompt.clone(),
         strategy_prompt: inputs.strategy_prompt,
@@ -2404,7 +2404,7 @@ async fn materialize_dispatch_run_workspace(
                 runtime_api_key: credential.token,
                 credential_id: credential.credential_id.to_string(),
                 sub_agent_kind: request.sub_agent_kind.clone(),
-                notification_send_enabled: artifact.context.notification_send_enabled(),
+                enabled_capabilities: artifact.context.normalized_enabled_capabilities()?,
                 expected_quantitative_package: quantitative_package,
             },
             &format!(
@@ -2445,11 +2445,10 @@ fn build_run_context_snapshot(
             })
         })
         .unwrap_or(serde_json::Value::Null);
-    let enabled_capabilities = request
-        .notification_send_enabled
-        .then(|| crate::harness::model::CAPABILITY_NOTIFICATION_SEND.to_string())
-        .into_iter()
-        .collect();
+    let enabled_capabilities = crate::harness::model::validate_sub_agent_capabilities(
+        &request.sub_agent_kind,
+        &request.enabled_capabilities,
+    )?;
     let context = serde_json::json!({
         "provider_id": request.model_provider_id.as_deref().unwrap_or("default"),
         "model_id": request.model_id.as_deref().unwrap_or("default"),
@@ -2462,7 +2461,7 @@ fn build_run_context_snapshot(
         "system_prompt_version": "v1",
         "quantitative_package": quantitative_package,
         "mcp_installations": [],
-        "notification_send_enabled": request.notification_send_enabled,
+        "notification_send_enabled": enabled_capabilities.iter().any(|capability| capability == crate::harness::model::CAPABILITY_NOTIFICATION_SEND),
         "scheduled_candle_boundary": request.scheduled_for.timestamp_millis(),
         "account_snapshot_metadata": account_snapshot_metadata,
     });

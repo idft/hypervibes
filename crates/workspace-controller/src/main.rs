@@ -464,7 +464,7 @@ async fn materialize_run_workspace_handler(
             "api_base_url": &request.api_base_url,
             "credential_id": &request.credential_id,
             "sub_agent_kind": &request.sub_agent_kind,
-            "notification_send_enabled": request.notification_send_enabled,
+            "enabled_capabilities": &request.enabled_capabilities,
             "expected_quantitative_package": &request.expected_quantitative_package,
         }))
     );

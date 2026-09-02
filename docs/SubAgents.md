@@ -33,6 +33,7 @@ The Sub-agents tab lets a user configure each sub-agent's:
 - provider, model, and optional thinking mode
 - timeout
 - Additional Instructions
+- capabilities
 
 An enabled scheduled sub-agent must have an explicit model. Additional Instructions
 are specific to that sub-agent and are appended to its selected strategy prompt; they
@@ -43,9 +44,16 @@ Analysis, market analysis, trading, and daily review can use reusable analysis
 code but cannot modify `scripts/user/`. Analysis coding is the only sub-agent allowed
 to change that tree, and it requires an explicit strong provider and model.
 
-The initial notification capability default permits `hypervibes_send_notification`
-only for trading. Analysis, market analysis, daily review, and analysis coding are
-denied until their per-sub-agent capability controls are introduced.
+Capabilities are named assignments rather than raw OpenCode permission rules. The
+Notifications control configures `hypervibes:notification_send`, which permits a
+run to queue a best-effort gateway notification. Trading enables it by default;
+all other scheduled roles start disabled. The saved capability set is checked
+against the sub-agent role, rendered into the run's OpenCode permissions, and
+snapshotted with the run. A queued notification does not guarantee delivery.
+
+The capability model also reserves `custom-mcp:<installation-id>:<tool-name>`
+identifiers for future custom MCP tools. Those identifiers can be persisted and
+audited, but custom MCP execution and configuration are not available yet.
 
 ## Dispatch and runs
 

@@ -131,7 +131,7 @@ pub struct RunWorkspaceMaterializationInput {
     pub runtime_api_key: String,
     pub credential_id: String,
     pub sub_agent_kind: String,
-    pub notification_send_enabled: bool,
+    pub enabled_capabilities: Vec<String>,
     pub expected_quantitative_package: Option<QuantitativePackageSnapshot>,
 }
 
@@ -395,10 +395,10 @@ pub fn materialize_run_workspace(
         &workspace_root.join(".opencode/skills"),
     )?;
 
-    set_run_profile_notification_permission(
+    render_run_capability_permissions(
         &workspace_root,
         &input.sub_agent_kind,
-        input.notification_send_enabled,
+        &input.enabled_capabilities,
     )?;
 
     let destination_user_root = workspace_root.join("scripts/user");
@@ -465,11 +465,16 @@ fn replace_run_user_tree(destination: &Path) -> Result<()> {
     fs::create_dir_all(destination).context("failed to create run scripts/user")
 }
 
-fn set_run_profile_notification_permission(
+fn render_run_capability_permissions(
     workspace_root: &Path,
     sub_agent_kind: &str,
-    notification_send_enabled: bool,
+    enabled_capabilities: &[String],
 ) -> Result<()> {
+    if enabled_capabilities.iter().any(|capability| {
+        capability != "hypervibes:notification_send" && !capability.starts_with("custom-mcp:")
+    }) {
+        bail!("run workspace has an unsupported capability");
+    }
     let profile_name = match sub_agent_kind {
         "analysis" => "analysis",
         "market_analysis" => "market-analysis",
@@ -483,7 +488,10 @@ fn set_run_profile_notification_permission(
     let profile = fs::read_to_string(&profile_path)
         .with_context(|| format!("failed to read run profile {}", profile_path.display()))?;
     let mut replaced = 0;
-    let action = if notification_send_enabled {
+    let action = if enabled_capabilities
+        .iter()
+        .any(|capability| capability == "hypervibes:notification_send")
+    {
         "allow"
     } else {
         "deny"
@@ -1503,7 +1511,7 @@ mod tests {
                 runtime_api_key: runtime_key.clone(),
                 credential_id: "b3ce59a8-f3b6-448d-a0c8-d44ea9d23a33".to_string(),
                 sub_agent_kind: "analysis".to_string(),
-                notification_send_enabled: false,
+                enabled_capabilities: Vec::new(),
                 expected_quantitative_package: None,
             },
         )

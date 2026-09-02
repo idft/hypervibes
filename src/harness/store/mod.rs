@@ -34,7 +34,7 @@ pub use sub_agents::{
     insert_candle_sub_agent_with_model_variant, insert_default_harness_sub_agents,
     insert_unscheduled_sub_agent_with_model_variant, list_agent_sub_agents,
     list_due_candle_sub_agents, list_sub_agent_runs_page, set_candle_sub_agent_timeframe,
-    set_sub_agent_enabled, set_sub_agent_model_with_variant,
+    set_sub_agent_capabilities, set_sub_agent_enabled, set_sub_agent_model_with_variant,
     set_sub_agent_notification_send_enabled, set_sub_agent_operator_prompt, set_sub_agent_timeout,
 };
 pub use workspace::agent_has_blocking_workspace_maintenance;

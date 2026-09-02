@@ -118,7 +118,8 @@ pub async fn get_enabled_sub_agent(
     query_as(
         "SELECT id, agent_key, sub_agent_key, sub_agent_kind, enabled, timeframe,
                  next_run_at, model_provider_id, model_id,
-                  model_variant, timeout_seconds, operator_prompt, notification_send_enabled,
+                   model_variant, timeout_seconds, operator_prompt,
+                  enabled_capabilities,
                   created_at, updated_at
            FROM harness_sub_agents
            WHERE agent_key = $1 AND sub_agent_kind = $2 AND enabled = true",
@@ -154,8 +155,9 @@ async fn insert_default_candle_job(
              next_run_at,
              timeout_seconds,
              operator_prompt,
-             notification_send_enabled
-          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+              notification_send_enabled,
+              enabled_capabilities
+          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
          ON CONFLICT (agent_key, sub_agent_key) DO NOTHING",
     )
     .bind(agent_key)
@@ -168,6 +170,13 @@ async fn insert_default_candle_job(
     .bind(timeout_seconds)
     .bind("")
     .bind(sub_agent_kind == SUB_AGENT_KIND_TRADING)
+    .bind(serde_json::json!(
+        if sub_agent_kind == SUB_AGENT_KIND_TRADING {
+            vec!["hypervibes:notification_send"]
+        } else {
+            Vec::<&str>::new()
+        }
+    ))
     .execute(pool)
     .await
     .with_context(|| {
@@ -184,7 +193,8 @@ pub async fn list_agent_sub_agents(
     query_as(
         "SELECT id, agent_key, sub_agent_key, sub_agent_kind, enabled, timeframe,
                  next_run_at, model_provider_id, model_id,
-                  model_variant, timeout_seconds, operator_prompt, notification_send_enabled,
+                   model_variant, timeout_seconds, operator_prompt,
+                  enabled_capabilities,
                   created_at, updated_at
            FROM harness_sub_agents
           WHERE agent_key = $1
@@ -215,7 +225,7 @@ pub async fn get_agent_sub_agent(
                   model_variant,
                   timeout_seconds,
                   operator_prompt,
-                  notification_send_enabled,
+                   enabled_capabilities,
                    created_at,
                 updated_at
            FROM harness_sub_agents
@@ -272,8 +282,9 @@ pub async fn insert_candle_sub_agent_with_model_variant(
              model_variant,
              timeout_seconds,
              operator_prompt,
-             notification_send_enabled
-          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+              notification_send_enabled,
+              enabled_capabilities
+          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
          RETURNING id",
     )
     .bind(agent_key)
@@ -289,6 +300,13 @@ pub async fn insert_candle_sub_agent_with_model_variant(
     .bind(timeout_seconds)
     .bind(operator_prompt)
     .bind(sub_agent_kind == SUB_AGENT_KIND_TRADING)
+    .bind(serde_json::json!(
+        if sub_agent_kind == SUB_AGENT_KIND_TRADING {
+            vec!["hypervibes:notification_send"]
+        } else {
+            Vec::<&str>::new()
+        }
+    ))
     .fetch_one(pool)
     .await
     .with_context(|| format!("failed to insert job {sub_agent_key} for agent {agent_key}"))?;
@@ -430,16 +448,43 @@ pub async fn set_sub_agent_notification_send_enabled(
     sub_agent_id: i64,
     enabled: bool,
 ) -> Result<bool> {
+    let capabilities = enabled
+        .then(|| "hypervibes:notification_send".to_string())
+        .into_iter()
+        .collect();
+    set_sub_agent_capabilities(pool, agent_key, sub_agent_id, capabilities).await
+}
+
+/// Replaces the named capability assignment for future runs. Role ceilings are
+/// validated before persistence; current run snapshots remain unchanged.
+pub async fn set_sub_agent_capabilities(
+    pool: &DbPool,
+    agent_key: &str,
+    sub_agent_id: i64,
+    enabled_capabilities: Vec<String>,
+) -> Result<bool> {
+    let Some(job) = get_agent_sub_agent(pool, agent_key, sub_agent_id).await? else {
+        return Ok(false);
+    };
+    let enabled_capabilities = crate::harness::model::validate_sub_agent_capabilities(
+        &job.sub_agent_kind,
+        &enabled_capabilities,
+    )?;
+    let notification_send_enabled = enabled_capabilities
+        .iter()
+        .any(|capability| capability == "hypervibes:notification_send");
     let result = sqlx::query(
-        "UPDATE harness_sub_agents
-            SET notification_send_enabled = $3,
-                updated_at = now()
-          WHERE agent_key = $1
-            AND id = $2",
+        r#"UPDATE harness_sub_agents
+              SET notification_send_enabled = $3,
+                  enabled_capabilities = $4,
+                 updated_at = now()
+           WHERE agent_key = $1
+             AND id = $2"#,
     )
     .bind(agent_key)
     .bind(sub_agent_id)
-    .bind(enabled)
+    .bind(notification_send_enabled)
+    .bind(serde_json::json!(enabled_capabilities))
     .execute(pool)
     .await
     .with_context(|| {
@@ -630,7 +675,7 @@ pub async fn list_due_candle_sub_agents(
                  jobs.model_variant,
                  jobs.timeout_seconds,
                  jobs.operator_prompt,
-                 jobs.notification_send_enabled,
+                   jobs.enabled_capabilities,
                  $3::text AS opencode_base_url,
                 agents.runtime_config
            FROM harness_sub_agents AS jobs
@@ -678,7 +723,7 @@ pub async fn get_dispatch_sub_agent(
                  jobs.model_variant,
                  jobs.timeout_seconds,
                  jobs.operator_prompt,
-                 jobs.notification_send_enabled,
+                   jobs.enabled_capabilities,
                  $3::text AS opencode_base_url,
                 agents.runtime_config
            FROM harness_sub_agents AS jobs

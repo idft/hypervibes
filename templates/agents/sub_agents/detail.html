@@ -169,8 +169,8 @@
             </div>
             <form action="{{ job.notification_capability_update_action }}" method="post" class="flex items-center justify-between gap-4 border border-zinc-800 bg-zinc-950/50 p-5">
                 <div>
-                    <p class="text-xs uppercase tracking-[0.16em] text-zinc-500">Notifications</p>
-                    <p class="mt-2 text-sm text-zinc-300">Allow this sub-agent to queue best-effort notifications for future runs.</p>
+                    <p class="text-xs uppercase tracking-[0.16em] text-zinc-500">Capabilities</p>
+                    <p class="mt-2 text-sm text-zinc-300">Allow notification sending. It queues a best-effort delivery for future runs.</p>
                 </div>
                 <label class="inline-flex shrink-0 cursor-pointer items-center gap-2 text-sm text-zinc-200">
                     <input type="checkbox" name="enabled" value="on" {% if job.notification_send_enabled %}checked{% endif %} class="size-4 cursor-pointer rounded border-zinc-700 bg-zinc-950 text-sky-500 focus:ring-sky-500">

@@ -610,7 +610,13 @@ mod tests {
 
         assert_eq!(first, second);
         assert_eq!(first.workspace_status, "preparing");
-        assert!(first.context.notification_send_enabled());
+        assert!(
+            first
+                .context
+                .normalized_enabled_capabilities()
+                .expect("capability snapshot is valid")
+                .contains(&CAPABILITY_NOTIFICATION_SEND.to_string())
+        );
         assert!(
             prepare_run_workspace_artifact(&pool, &agent_key, run_id, &{
                 let mut changed = snapshot();

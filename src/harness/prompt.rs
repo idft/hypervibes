@@ -370,7 +370,7 @@ mod tests {
             display_name: "BTC 2".to_string(),
             sub_agent_key: "analysis-15m".to_string(),
             sub_agent_kind: sub_agent_kind.to_string(),
-            notification_send_enabled: false,
+            enabled_capabilities: Vec::new(),
             timeframe: Some("15m".to_string()),
             operator_prompt: "Focus on BTC.".to_string(),
             strategy_prompt: "Analyze trends.".to_string(),

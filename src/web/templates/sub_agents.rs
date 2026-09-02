@@ -158,7 +158,10 @@ impl HarnessSubAgentDetailView {
             toggle_action: summary.toggle_action,
             delete_action: format!("/agents/{}/sub-agents/{}/delete", row.agent_key, row.id),
             hidden_enabled_value: summary.hidden_enabled_value,
-            notification_send_enabled: row.notification_send_enabled,
+            notification_send_enabled: row
+                .enabled_capabilities
+                .iter()
+                .any(|capability| capability == "hypervibes:notification_send"),
             notification_capability_update_action: format!(
                 "/agents/{}/sub-agents/{}/notification-capability",
                 row.agent_key, row.id
