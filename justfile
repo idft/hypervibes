@@ -33,7 +33,7 @@ release version:
         exit 1
     fi
 
-    current_version="$(sed -nE '0,/^version = "[0-9]+\.[0-9]+\.[0-9]+"/{s/^version = "([0-9]+\.[0-9]+\.[0-9]+)"/\1/p;}' Cargo.toml)"
+    current_version="$(sed -nE '/^\[workspace\.package\]$/,/^\[/{s/^version = "([0-9]+\.[0-9]+\.[0-9]+)"/\1/p;}' Cargo.toml)"
     if [[ -z "${current_version}" ]]; then
         printf '%s\n' 'Could not determine the application version from Cargo.toml.' >&2
         exit 1
@@ -43,12 +43,12 @@ release version:
         exit 1
     fi
 
-    sed -i -E "0,/^version = \"[0-9]+\.[0-9]+\.[0-9]+\"/{s//version = \"${version}\"/;}" Cargo.toml
+    sed -i -E '/^\[workspace\.package\]$/,/^\[/{s/^version = "[0-9]+\.[0-9]+\.[0-9]+"$/version = "'"${version}"'"/;}' Cargo.toml
     npm pkg set "version=${version}" >/dev/null
     sed -i -E "s#(ghcr.io/idft/hypervibes:)[^[:space:]]+#\1${version}#g" podman-compose.yaml
 
-    # Cargo updates the root package entry in Cargo.lock without changing the
-    # dependency resolution.
+    # Cargo updates the workspace package entries in Cargo.lock without
+    # changing the dependency resolution.
     cargo check --workspace
 
     cargo fmt --check
@@ -59,9 +59,17 @@ release version:
         cargo metadata --no-deps --format-version=1 --locked \
             | node -e 'let data = ""; process.stdin.on("data", (chunk) => data += chunk); process.stdin.on("end", () => { const pkg = JSON.parse(data).packages.find((item) => item.name === "hypervibes"); process.stdout.write(pkg.version); });'
     )"
+    workspace_controller_version="$(
+        cargo metadata --no-deps --format-version=1 --locked \
+            | node -e 'let data = ""; process.stdin.on("data", (chunk) => data += chunk); process.stdin.on("end", () => { const pkg = JSON.parse(data).packages.find((item) => item.name === "workspace-controller"); process.stdout.write(pkg.version); });'
+    )"
+    workspace_store_version="$(
+        cargo metadata --no-deps --format-version=1 --locked \
+            | node -e 'let data = ""; process.stdin.on("data", (chunk) => data += chunk); process.stdin.on("end", () => { const pkg = JSON.parse(data).packages.find((item) => item.name === "workspace-store"); process.stdout.write(pkg.version); });'
+    )"
     package_version="$(node -p 'require("./package.json").version')"
 
-    if [[ "${cargo_version}" != "${version}" || "${package_version}" != "${version}" ]]; then
+    if [[ "${cargo_version}" != "${version}" || "${workspace_controller_version}" != "${version}" || "${workspace_store_version}" != "${version}" || "${package_version}" != "${version}" ]]; then
         printf 'Version mismatch after release preparation.\n' >&2
         exit 1
     fi
