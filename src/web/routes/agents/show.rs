@@ -280,7 +280,13 @@ pub(in crate::web::routes) async fn render_agent_show_page(
                             })
                             .collect();
                     template.prompt_improvement_enabled = sqlx::query_scalar(
-                        "SELECT daily_review_prompt_improvement_enabled FROM agents WHERE agent_key = $1",
+                        "SELECT EXISTS (
+                            SELECT 1
+                            FROM harness_sub_agents
+                            WHERE agent_key = $1
+                              AND sub_agent_kind = 'daily_review'
+                              AND enabled_capabilities @> '[\"hypervibes:prompt_revision_submit\"]'::jsonb
+                        )",
                     ).bind(&agent.agent_key).fetch_one(&state.db_pool).await.unwrap_or(true);
                 }
                 Err(error) => {

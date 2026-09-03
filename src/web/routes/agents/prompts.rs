@@ -13,6 +13,7 @@ use crate::{
     agents::strategy_prompts::{
         is_valid_prompt_kind, rollback_prompt_revision, upsert_agent_strategy_prompt,
     },
+    harness::model::CAPABILITY_PROMPT_REVISION_SUBMIT,
     web::{AppState, auth::AuthenticatedUser, templates::AgentShowTab},
 };
 pub(in crate::web::routes) async fn agents_show_prompts(
@@ -53,10 +54,21 @@ pub(in crate::web::routes) async fn agents_update_prompt_improvement(
     Form(form): Form<PromptImprovementForm>,
 ) -> Result<Response, AppError> {
     sqlx::query(
-        "UPDATE agents SET daily_review_prompt_improvement_enabled = $2 WHERE agent_key = $1",
+        "UPDATE harness_sub_agents
+            SET enabled_capabilities = CASE
+                WHEN $2 THEN CASE
+                    WHEN enabled_capabilities @> jsonb_build_array($3::text) THEN enabled_capabilities
+                    ELSE enabled_capabilities || jsonb_build_array($3::text)
+                END
+                ELSE enabled_capabilities - $3
+            END,
+            updated_at = now()
+          WHERE agent_key = $1
+            AND sub_agent_kind = 'daily_review'",
     )
     .bind(&agent_key)
     .bind(form.enabled.as_deref() == Some("true"))
+    .bind(CAPABILITY_PROMPT_REVISION_SUBMIT)
     .execute(&state.db_pool)
     .await?;
     Ok(Redirect::to(&format!("/agents/{agent_key}/prompts")).into_response())

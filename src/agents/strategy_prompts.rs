@@ -79,8 +79,6 @@ pub async fn rollback_prompt_revision(
         .bind(batch_id).bind(agent_key).bind(&prompt_kind).bind(current.revision_id).bind(revision_id).bind(&prompt).fetch_one(&mut *tx).await?;
     sqlx::query("UPDATE agent_strategy_prompt_active_revisions SET revision_id = $3, activated_at = now() WHERE agent_key = $1 AND prompt_kind = $2")
         .bind(agent_key).bind(&prompt_kind).bind(new_revision).execute(&mut *tx).await?;
-    sqlx::query("UPDATE agent_strategy_prompts SET prompt = $3, updated_at = now() WHERE agent_key = $1 AND prompt_kind = $2")
-        .bind(agent_key).bind(&prompt_kind).bind(&prompt).execute(&mut *tx).await?;
     tx.commit().await?;
     Ok(true)
 }
@@ -129,13 +127,6 @@ pub async fn submit_daily_review_revisions(
         is_daily_review,
         "source run is not an owned daily-review run"
     );
-    let enabled: bool = sqlx::query_scalar(
-        "SELECT daily_review_prompt_improvement_enabled FROM agents WHERE agent_key = $1 FOR SHARE",
-    )
-    .bind(agent_key)
-    .fetch_one(&mut *tx)
-    .await?;
-    anyhow::ensure!(enabled, "automatic prompt improvement is disabled");
     for memory_id in evidence_memory_ids {
         let exists: bool = sqlx::query_scalar(
             "SELECT EXISTS (SELECT 1 FROM memory.records WHERE id = $1 AND agent_key = $2)",
@@ -169,8 +160,6 @@ pub async fn submit_daily_review_revisions(
             .bind(batch_id).bind(agent_key).bind(&change.prompt_kind).bind(current.revision_id).bind(&change.prompt).fetch_one(&mut *tx).await?;
         sqlx::query("UPDATE agent_strategy_prompt_active_revisions SET revision_id = $3, activated_at = now() WHERE agent_key = $1 AND prompt_kind = $2")
             .bind(agent_key).bind(&change.prompt_kind).bind(revision_id).execute(&mut *tx).await?;
-        sqlx::query("UPDATE agent_strategy_prompts SET prompt = $3, updated_at = now() WHERE agent_key = $1 AND prompt_kind = $2")
-            .bind(agent_key).bind(&change.prompt_kind).bind(&change.prompt).execute(&mut *tx).await?;
     }
     tx.commit().await?;
     Ok(batch_id)
@@ -318,8 +307,6 @@ pub async fn create_prompt_revision(
     .bind(batch_id).bind(agent_key).bind(prompt_kind).bind(current.revision_id).bind(prompt).fetch_one(&mut *transaction).await?;
     sqlx::query("UPDATE agent_strategy_prompt_active_revisions SET revision_id = $3, activated_at = now() WHERE agent_key = $1 AND prompt_kind = $2")
         .bind(agent_key).bind(prompt_kind).bind(revision_id).execute(&mut *transaction).await?;
-    sqlx::query("UPDATE agent_strategy_prompts SET prompt = $3, updated_at = now() WHERE agent_key = $1 AND prompt_kind = $2")
-        .bind(agent_key).bind(prompt_kind).bind(prompt).execute(&mut *transaction).await?;
     transaction.commit().await?;
     Ok(revision_id)
 }
@@ -328,39 +315,23 @@ pub async fn insert_default_strategy_prompts_for_agent(
     pool: &DbPool,
     agent_key: &str,
 ) -> Result<()> {
-    for prompt_kind in all_prompt_kinds() {
-        sqlx::query(
-            "INSERT INTO agent_strategy_prompts (
-                agent_key,
-                prompt_kind,
-                prompt
-             ) VALUES ($1, $2, $3)
-             ON CONFLICT (agent_key, prompt_kind) DO NOTHING",
-        )
-        .bind(agent_key)
-        .bind(prompt_kind)
-        .bind(default_prompt_for_kind(prompt_kind))
-        .execute(pool)
-        .await
-        .with_context(|| {
-            format!("failed to insert default strategy prompt {prompt_kind} for {agent_key}")
-        })?;
-    }
-
-    let missing: Vec<(String, String)> = sqlx::query_as(
-        "SELECT prompts.prompt_kind, prompts.prompt FROM agent_strategy_prompts prompts
-         LEFT JOIN agent_strategy_prompt_active_revisions active
-           ON active.agent_key = prompts.agent_key AND active.prompt_kind = prompts.prompt_kind
-         WHERE prompts.agent_key = $1 AND active.revision_id IS NULL",
+    let existing: Vec<String> = sqlx::query_scalar(
+        "SELECT prompt_kind FROM agent_strategy_prompt_active_revisions WHERE agent_key = $1",
     )
     .bind(agent_key)
     .fetch_all(pool)
     .await?;
-    for (prompt_kind, prompt) in missing {
+    for prompt_kind in all_prompt_kinds() {
+        if existing
+            .iter()
+            .any(|existing_kind| existing_kind == prompt_kind)
+        {
+            continue;
+        }
         let batch_id: i64 = sqlx::query_scalar("INSERT INTO agent_strategy_prompt_revision_batches (agent_key, source_type, rationale) VALUES ($1, 'migration', 'Initial strategy prompt') RETURNING id")
             .bind(agent_key).fetch_one(pool).await?;
         let revision_id: i64 = sqlx::query_scalar("INSERT INTO agent_strategy_prompt_revisions (batch_id, agent_key, prompt_kind, prompt) VALUES ($1, $2, $3, $4) RETURNING id")
-            .bind(batch_id).bind(agent_key).bind(&prompt_kind).bind(prompt).fetch_one(pool).await?;
+            .bind(batch_id).bind(agent_key).bind(prompt_kind).bind(default_prompt_for_kind(prompt_kind)).fetch_one(pool).await?;
         sqlx::query("INSERT INTO agent_strategy_prompt_active_revisions (agent_key, prompt_kind, revision_id) VALUES ($1, $2, $3)")
             .bind(agent_key).bind(prompt_kind).bind(revision_id).execute(pool).await?;
     }

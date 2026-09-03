@@ -48,3 +48,8 @@ DROP TRIGGER IF EXISTS set_harness_run_workspace_artifacts_updated_at
 DROP FUNCTION IF EXISTS public.set_harness_run_workspace_artifacts_updated_at();
 DROP INDEX IF EXISTS harness_run_workspace_artifacts_expiry_idx;
 DROP TABLE IF EXISTS harness_run_workspace_artifacts;
+
+ALTER TABLE agent_conversations
+    DROP CONSTRAINT IF EXISTS agent_conversations_id_agent_key_unique;
+ALTER TABLE harness_sub_agent_runs
+    DROP CONSTRAINT IF EXISTS harness_sub_agent_runs_id_agent_key_unique;

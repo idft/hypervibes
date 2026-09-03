@@ -104,6 +104,12 @@ SELECT id, 'notifications', 'deny'
 FROM agent_conversations
 ON CONFLICT (conversation_id, tool_group) DO NOTHING;
 
+ALTER TABLE harness_sub_agent_runs
+    ADD CONSTRAINT harness_sub_agent_runs_id_agent_key_unique UNIQUE (id, agent_key);
+
+ALTER TABLE agent_conversations
+    ADD CONSTRAINT agent_conversations_id_agent_key_unique UNIQUE (id, agent_key);
+
 ALTER TABLE notifications
     ADD COLUMN source_kind TEXT,
     ADD COLUMN source_run_id BIGINT,
@@ -132,13 +138,13 @@ ALTER TABLE notifications
             AND source_capability_schema_version IS NOT NULL)
     ) IS TRUE),
     ADD CONSTRAINT notifications_source_run_id_fkey
-    FOREIGN KEY (source_run_id)
-    REFERENCES harness_sub_agent_runs(id)
-    ON DELETE SET NULL,
+    FOREIGN KEY (source_run_id, agent_key)
+    REFERENCES harness_sub_agent_runs(id, agent_key)
+    ON DELETE SET NULL (source_run_id),
     ADD CONSTRAINT notifications_source_conversation_id_fkey
-    FOREIGN KEY (source_conversation_id)
-    REFERENCES agent_conversations(id)
-    ON DELETE SET NULL;
+    FOREIGN KEY (source_conversation_id, agent_key)
+    REFERENCES agent_conversations(id, agent_key)
+    ON DELETE SET NULL (source_conversation_id);
 
 CREATE INDEX notifications_source_run_idx
     ON notifications (source_run_id)

@@ -1,16 +1,21 @@
 SET search_path TO public;
 
 ALTER TABLE harness_sub_agents
-    ADD COLUMN notification_send_enabled BOOLEAN NOT NULL DEFAULT false;
+    ADD COLUMN enabled_capabilities JSONB NOT NULL DEFAULT '[]'::jsonb,
+    ADD CONSTRAINT harness_sub_agents_enabled_capabilities_check
+        CHECK (jsonb_typeof(enabled_capabilities) = 'array');
 
--- Existing trading schedules retain their established notification default;
--- every other role stays denied until an explicit capability setting exists.
+-- Existing trading schedules retain their established notification capability;
+-- every other role stays denied until explicitly configured.
 UPDATE harness_sub_agents
-   SET notification_send_enabled = true
- WHERE sub_agent_kind = 'trading';
+   SET enabled_capabilities = CASE sub_agent_kind
+        WHEN 'trading' THEN '["hypervibes:notification_send"]'::jsonb
+        WHEN 'daily_review' THEN '["hypervibes:prompt_revision_submit"]'::jsonb
+        ELSE '[]'::jsonb
+    END;
 
 CREATE TABLE harness_run_runtime_credentials (
-    run_id BIGINT PRIMARY KEY REFERENCES harness_sub_agent_runs(id) ON DELETE CASCADE,
+    run_id BIGINT PRIMARY KEY,
     agent_key TEXT NOT NULL,
     credential_id UUID NOT NULL UNIQUE,
     token_hash TEXT NOT NULL UNIQUE,
@@ -24,9 +29,9 @@ CREATE TABLE harness_run_runtime_credentials (
     CONSTRAINT harness_run_runtime_credentials_api_scopes_check
         CHECK (jsonb_typeof(api_scopes) = 'array'),
     CONSTRAINT harness_run_runtime_credentials_expiry_check
-        CHECK (expires_at > issued_at)
+        CHECK (expires_at > issued_at),
+    CONSTRAINT harness_run_runtime_credentials_run_agent_fkey
+        FOREIGN KEY (run_id, agent_key)
+        REFERENCES harness_sub_agent_runs(id, agent_key)
+        ON DELETE CASCADE
 );
-
-CREATE INDEX harness_run_runtime_credentials_active_token_idx
-    ON harness_run_runtime_credentials (token_hash)
-    WHERE revoked_at IS NULL;

@@ -19,6 +19,7 @@ pub const RUN_STATUS_SKIPPED: &str = "skipped";
 pub const RUN_CONTEXT_SNAPSHOT_SCHEMA_VERSION: i32 = 1;
 pub const CAPABILITY_SCHEMA_VERSION: i32 = 1;
 pub const CAPABILITY_NOTIFICATION_SEND: &str = "hypervibes:notification_send";
+pub const CAPABILITY_PROMPT_REVISION_SUBMIT: &str = "hypervibes:prompt_revision_submit";
 pub const MAX_RUN_CONTEXT_SNAPSHOT_BYTES: usize = 1024 * 1024;
 
 /// API actions attached to a short-lived run credential. These are separate
@@ -46,7 +47,7 @@ impl RunApiScope {
             Self::OrderWrite => "hypervibes:order_write",
             Self::TransactionRead => "hypervibes:transaction_read",
             Self::PromptRead => "hypervibes:prompt_read",
-            Self::PromptRevisionSubmit => "hypervibes:prompt_revision_submit",
+            Self::PromptRevisionSubmit => CAPABILITY_PROMPT_REVISION_SUBMIT,
             Self::NotificationSend => CAPABILITY_NOTIFICATION_SEND,
         }
     }
@@ -60,7 +61,7 @@ impl RunApiScope {
             "hypervibes:order_write" => Some(Self::OrderWrite),
             "hypervibes:transaction_read" => Some(Self::TransactionRead),
             "hypervibes:prompt_read" => Some(Self::PromptRead),
-            "hypervibes:prompt_revision_submit" => Some(Self::PromptRevisionSubmit),
+            CAPABILITY_PROMPT_REVISION_SUBMIT => Some(Self::PromptRevisionSubmit),
             CAPABILITY_NOTIFICATION_SEND => Some(Self::NotificationSend),
             _ => None,
         }
@@ -89,6 +90,11 @@ pub fn validate_sub_agent_capabilities(
         {
             anyhow::bail!("custom MCP capabilities are not eligible for this sub-agent role");
         }
+        if capability == CAPABILITY_PROMPT_REVISION_SUBMIT
+            && sub_agent_kind != SUB_AGENT_KIND_DAILY_REVIEW
+        {
+            anyhow::bail!("prompt revision submission is only eligible for daily review");
+        }
         if !capabilities.insert(capability.to_string()) {
             anyhow::bail!("duplicate sub-agent capability");
         }
@@ -98,6 +104,7 @@ pub fn validate_sub_agent_capabilities(
 
 fn is_valid_capability(capability: &str) -> bool {
     capability == CAPABILITY_NOTIFICATION_SEND
+        || capability == CAPABILITY_PROMPT_REVISION_SUBMIT
         || capability
             .strip_prefix("custom-mcp:")
             .is_some_and(valid_custom_mcp_capability)
@@ -142,7 +149,6 @@ pub fn run_api_scopes_for_sub_agent(
             RunApiScope::OrderRead,
             RunApiScope::TransactionRead,
             RunApiScope::PromptRead,
-            RunApiScope::PromptRevisionSubmit,
         ],
         _ => anyhow::bail!("unsupported sub-agent kind for run API scopes"),
     };
@@ -151,6 +157,12 @@ pub fn run_api_scopes_for_sub_agent(
         .any(|capability| capability == CAPABILITY_NOTIFICATION_SEND)
     {
         scopes.push(RunApiScope::NotificationSend);
+    }
+    if enabled_capabilities
+        .iter()
+        .any(|capability| capability == CAPABILITY_PROMPT_REVISION_SUBMIT)
+    {
+        scopes.push(RunApiScope::PromptRevisionSubmit);
     }
     Ok(scopes)
 }
@@ -699,6 +711,24 @@ mod tests {
             validate_sub_agent_capabilities(
                 SUB_AGENT_KIND_ANALYSIS,
                 &["custom-mcp:not-a-uuid:search".to_string()],
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn prompt_revision_submission_is_limited_to_daily_review() {
+        assert!(
+            validate_sub_agent_capabilities(
+                SUB_AGENT_KIND_DAILY_REVIEW,
+                &[CAPABILITY_PROMPT_REVISION_SUBMIT.to_string()],
+            )
+            .is_ok()
+        );
+        assert!(
+            validate_sub_agent_capabilities(
+                SUB_AGENT_KIND_ANALYSIS,
+                &[CAPABILITY_PROMPT_REVISION_SUBMIT.to_string()],
             )
             .is_err()
         );

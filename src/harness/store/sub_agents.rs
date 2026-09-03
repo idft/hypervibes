@@ -6,6 +6,7 @@ use crate::{
     db::DbPool,
     harness::{
         model::{
+            CAPABILITY_NOTIFICATION_SEND, CAPABILITY_PROMPT_REVISION_SUBMIT,
             HarnessDispatchSubAgentRow, HarnessSubAgentRow, HarnessSubAgentRunRow,
             RUN_STATUS_QUEUED, RUN_STATUS_SKIPPED, SUB_AGENT_KIND_ANALYSIS,
             SUB_AGENT_KIND_ANALYSIS_CODING, SUB_AGENT_KIND_DAILY_REVIEW,
@@ -94,14 +95,18 @@ async fn insert_default_unscheduled_sub_agent(
     let sub_agent_key = build_generated_event_sub_agent_key(sub_agent_kind);
     sqlx::query(
         "INSERT INTO harness_sub_agents (
-            agent_key, sub_agent_key, sub_agent_kind, enabled, timeout_seconds, operator_prompt
-         ) VALUES ($1, $2, $3, false, $4, '')
+            agent_key, sub_agent_key, sub_agent_kind, enabled, timeout_seconds, operator_prompt,
+            enabled_capabilities
+         ) VALUES ($1, $2, $3, false, $4, '', $5)
          ON CONFLICT (agent_key, sub_agent_key) DO NOTHING",
     )
     .bind(agent_key)
     .bind(sub_agent_key)
     .bind(sub_agent_kind)
     .bind(timeout_seconds)
+    .bind(serde_json::json!(default_capabilities_for_kind(
+        sub_agent_kind
+    )))
     .execute(pool)
     .await
     .with_context(|| {
@@ -154,10 +159,9 @@ async fn insert_default_candle_job(
              trigger_delay_seconds,
              next_run_at,
              timeout_seconds,
-             operator_prompt,
-              notification_send_enabled,
+              operator_prompt,
               enabled_capabilities
-          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+           ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
          ON CONFLICT (agent_key, sub_agent_key) DO NOTHING",
     )
     .bind(agent_key)
@@ -169,14 +173,9 @@ async fn insert_default_candle_job(
     .bind(next_run_at)
     .bind(timeout_seconds)
     .bind("")
-    .bind(sub_agent_kind == SUB_AGENT_KIND_TRADING)
-    .bind(serde_json::json!(
-        if sub_agent_kind == SUB_AGENT_KIND_TRADING {
-            vec!["hypervibes:notification_send"]
-        } else {
-            Vec::<&str>::new()
-        }
-    ))
+    .bind(serde_json::json!(default_capabilities_for_kind(
+        sub_agent_kind
+    )))
     .execute(pool)
     .await
     .with_context(|| {
@@ -281,10 +280,9 @@ pub async fn insert_candle_sub_agent_with_model_variant(
              model_id,
              model_variant,
              timeout_seconds,
-             operator_prompt,
-              notification_send_enabled,
+              operator_prompt,
               enabled_capabilities
-          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+           ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
          RETURNING id",
     )
     .bind(agent_key)
@@ -299,14 +297,9 @@ pub async fn insert_candle_sub_agent_with_model_variant(
     .bind(model_variant)
     .bind(timeout_seconds)
     .bind(operator_prompt)
-    .bind(sub_agent_kind == SUB_AGENT_KIND_TRADING)
-    .bind(serde_json::json!(
-        if sub_agent_kind == SUB_AGENT_KIND_TRADING {
-            vec!["hypervibes:notification_send"]
-        } else {
-            Vec::<&str>::new()
-        }
-    ))
+    .bind(serde_json::json!(default_capabilities_for_kind(
+        sub_agent_kind
+    )))
     .fetch_one(pool)
     .await
     .with_context(|| format!("failed to insert job {sub_agent_key} for agent {agent_key}"))?;
@@ -330,8 +323,9 @@ pub async fn insert_unscheduled_sub_agent_with_model_variant(
     let row: (i64,) = query_as(
         "INSERT INTO harness_sub_agents (
             agent_key, sub_agent_key, sub_agent_kind, enabled,
-            model_provider_id, model_id, model_variant, timeout_seconds, operator_prompt
-         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+            model_provider_id, model_id, model_variant, timeout_seconds, operator_prompt,
+            enabled_capabilities
+         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
          RETURNING id",
     )
     .bind(agent_key)
@@ -343,6 +337,9 @@ pub async fn insert_unscheduled_sub_agent_with_model_variant(
     .bind(model_variant)
     .bind(timeout_seconds)
     .bind(operator_prompt)
+    .bind(serde_json::json!(default_capabilities_for_kind(
+        sub_agent_kind
+    )))
     .fetch_one(pool)
     .await
     .with_context(|| format!("failed to insert event job for agent {agent_key}"))?;
@@ -448,10 +445,14 @@ pub async fn set_sub_agent_notification_send_enabled(
     sub_agent_id: i64,
     enabled: bool,
 ) -> Result<bool> {
-    let capabilities = enabled
-        .then(|| "hypervibes:notification_send".to_string())
-        .into_iter()
-        .collect();
+    let Some(job) = get_agent_sub_agent(pool, agent_key, sub_agent_id).await? else {
+        return Ok(false);
+    };
+    let mut capabilities = job.enabled_capabilities;
+    capabilities.retain(|capability| capability != CAPABILITY_NOTIFICATION_SEND);
+    if enabled {
+        capabilities.push(CAPABILITY_NOTIFICATION_SEND.to_string());
+    }
     set_sub_agent_capabilities(pool, agent_key, sub_agent_id, capabilities).await
 }
 
@@ -470,20 +471,15 @@ pub async fn set_sub_agent_capabilities(
         &job.sub_agent_kind,
         &enabled_capabilities,
     )?;
-    let notification_send_enabled = enabled_capabilities
-        .iter()
-        .any(|capability| capability == "hypervibes:notification_send");
     let result = sqlx::query(
         r#"UPDATE harness_sub_agents
-              SET notification_send_enabled = $3,
-                  enabled_capabilities = $4,
-                 updated_at = now()
+               SET enabled_capabilities = $3,
+                  updated_at = now()
            WHERE agent_key = $1
              AND id = $2"#,
     )
     .bind(agent_key)
     .bind(sub_agent_id)
-    .bind(notification_send_enabled)
     .bind(serde_json::json!(enabled_capabilities))
     .execute(pool)
     .await
@@ -492,6 +488,14 @@ pub async fn set_sub_agent_capabilities(
     })?;
 
     Ok(result.rows_affected() > 0)
+}
+
+fn default_capabilities_for_kind(sub_agent_kind: &str) -> Vec<&'static str> {
+    match sub_agent_kind {
+        SUB_AGENT_KIND_TRADING => vec![CAPABILITY_NOTIFICATION_SEND],
+        SUB_AGENT_KIND_DAILY_REVIEW => vec![CAPABILITY_PROMPT_REVISION_SUBMIT],
+        _ => Vec::new(),
+    }
 }
 
 pub async fn set_sub_agent_model_with_variant(

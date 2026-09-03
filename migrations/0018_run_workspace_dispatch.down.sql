@@ -1,7 +1,7 @@
 SET search_path TO public;
 
-DROP INDEX IF EXISTS harness_run_runtime_credentials_active_token_idx;
 DROP TABLE IF EXISTS harness_run_runtime_credentials;
 
 ALTER TABLE harness_sub_agents
-    DROP COLUMN IF EXISTS notification_send_enabled;
+    DROP CONSTRAINT IF EXISTS harness_sub_agents_enabled_capabilities_check,
+    DROP COLUMN IF EXISTS enabled_capabilities;

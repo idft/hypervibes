@@ -267,12 +267,13 @@ async fn post_agents_creates_agent_active_with_default_prompts_and_jobs() {
             .is_empty(),
         "expected activate_new_agent to populate runtime_config"
     );
-    let prompt_count: (i64,) =
-        sqlx::query_as("SELECT COUNT(*) FROM agent_strategy_prompts WHERE agent_key = $1")
-            .bind(&agent_key)
-            .fetch_one(&state.db_pool)
-            .await
-            .expect("count prompts");
+    let prompt_count: (i64,) = sqlx::query_as(
+        "SELECT COUNT(*) FROM agent_strategy_prompt_active_revisions WHERE agent_key = $1",
+    )
+    .bind(&agent_key)
+    .fetch_one(&state.db_pool)
+    .await
+    .expect("count prompts");
     assert!(
         prompt_count.0 > 0,
         "expected default strategy prompts to be inserted"
