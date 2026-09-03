@@ -10,15 +10,10 @@ use axum::body::Body;
 use chrono::Utc;
 use rust_decimal::Decimal;
 
-use crate::agents::{
-    keys::derive_wallet_address,
-    model::slugify_agent_key,
-    store::{get_agent, insert_agent},
-};
+use crate::agents::{keys::derive_wallet_address, model::slugify_agent_key, store::insert_agent};
 use crate::{
     agents::{
         crypto::EncryptionKey,
-        store::update_agent_runtime_config,
         strategy_prompts::{
             PROMPT_KIND_ANALYSIS, PROMPT_KIND_TRADING, insert_default_strategy_prompts_for_agent,
             upsert_agent_strategy_prompt,
@@ -30,10 +25,6 @@ use crate::{
         referral::{ReferralExchange, ReferralFuture},
     },
     memory::CreateMemory,
-    opencode::workspace::{
-        OpenCodeWorkspaceAgent, WorkspaceGenerationMode, generate_agent_workspace,
-        runtime_config_for_generated_workspace,
-    },
     test_db,
     web::{AppState, run_detail_events::RunDetailEventHub, ui_events::UiEventHub},
 };
@@ -398,49 +389,6 @@ pub(in crate::web::routes) async fn insert_test_opencode_agent(
     .await
     .expect("set test event-job models");
     Some((agent_key, wallet_address))
-}
-pub(in crate::web::routes) async fn seed_workspace_runtime_config(
-    state: &Arc<AppState>,
-    agent_key: &str,
-) {
-    update_agent_runtime_config(
-        &state.db_pool,
-        agent_key,
-        serde_json::json!({
-            "workspace_host_path": format!("workspaces/agents/{agent_key}"),
-            "workspace_container_path": format!("/workspaces/agents/{agent_key}"),
-            "profile_source": "agent-runtime/workspace-template"
-        }),
-    )
-    .await
-    .expect("seed workspace runtime config");
-}
-
-pub(in crate::web::routes) async fn generate_test_agent_workspace(
-    state: &Arc<AppState>,
-    agent_key: &str,
-) {
-    let agent = get_agent(&state.db_pool, agent_key)
-        .await
-        .expect("load test agent")
-        .expect("test agent exists");
-    let generated = generate_agent_workspace(
-        &state.opencode_workspace_config,
-        &OpenCodeWorkspaceAgent {
-            agent_key: agent.agent_key,
-            display_name: agent.display_name,
-            api_key: agent.api_key,
-        },
-        WorkspaceGenerationMode::CreateNew,
-    )
-    .expect("generate test workspace");
-    update_agent_runtime_config(
-        &state.db_pool,
-        agent_key,
-        runtime_config_for_generated_workspace(&generated).into_value(),
-    )
-    .await
-    .expect("store test workspace metadata");
 }
 pub(in crate::web::routes) async fn insert_test_agent_with_text(
     state: &Arc<AppState>,

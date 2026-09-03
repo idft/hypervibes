@@ -125,9 +125,7 @@ pub(in crate::web::routes) async fn agents_show_run_detail(
         return Ok((StatusCode::NOT_FOUND, "run not found").into_response());
     };
 
-    let navbar = load_selected_agent_navbar(&state, user.id, &snapshot.agent)
-        .await?
-        .0;
+    let navbar = load_selected_agent_navbar(&state, user.id, &snapshot.agent).await?;
     let notification_count = count_notifications(&state.db_pool, &snapshot.agent.agent_key).await?;
     let html = AgentRunDetailPageTemplate::render_view(
         snapshot.agent,
@@ -242,7 +240,7 @@ pub(in crate::web::routes) async fn agents_retry_run(
         }
         crate::harness::store::QueuedSubAgentRun::BlockedByMaintenance => Ok((
             StatusCode::CONFLICT,
-            "workspace maintenance is active; retry is unavailable",
+            "Coding promotion is active; retry is unavailable",
         )
             .into_response()),
     }

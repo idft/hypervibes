@@ -22,8 +22,9 @@ use tracing::{info, warn};
 use workspace_store::{
     coding_workspace::{
         CandidateInspection, PromotionJournalPhase, PromotionResult, delete_coding_candidate,
-        inspect_coding_candidate, list_promotion_journals, prepare_coding_candidate,
-        promote_coding_candidate, recover_promotion_journal, store_coding_report,
+        delete_coding_resources, inspect_coding_candidate, list_promotion_journals,
+        prepare_coding_candidate, promote_coding_candidate, recover_promotion_journal,
+        store_coding_report,
     },
     isolated_workspace::{
         ConversationWorkspacePath, IsolatedWorkspaceCreated, IsolatedWorkspaceInspection,
@@ -33,10 +34,8 @@ use workspace_store::{
         scrub_conversation_workspace_runtime_secrets, scrub_run_workspace_runtime_secrets,
     },
     workspace::{
-        MaterializedRunWorkspace, OpenCodeWorkspaceAgent, OpenCodeWorkspaceConfig,
-        QuantitativePackageSnapshot, RunWorkspaceMaterializationInput, WorkspaceBrowserListing,
-        WorkspaceFilePreview, WorkspaceGenerationMode, WorkspaceTemplateDrift,
-        delete_agent_workspace, diff_agent_workspace_from_template, generate_agent_workspace,
+        MaterializedRunWorkspace, OpenCodeWorkspaceConfig, QuantitativePackageSnapshot,
+        RunWorkspaceMaterializationInput, WorkspaceBrowserListing, WorkspaceFilePreview,
         inspect_active_quantitative_package, list_workspace_browser_entries,
         materialize_run_workspace, read_workspace_browser_file,
     },
@@ -50,27 +49,6 @@ struct App {
     api_key: Arc<str>,
     idempotency_root: PathBuf,
     idempotency_locks: IdempotencyLockMap,
-}
-
-#[derive(Deserialize)]
-struct WorkspaceRequest {
-    mode: WorkspaceMode,
-    display_name: String,
-    agent_api_key: String,
-    api_base_url: String,
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "snake_case")]
-enum WorkspaceMode {
-    CreateNew,
-    Regenerate,
-}
-
-#[derive(Serialize, Deserialize)]
-struct WorkspaceResponse {
-    workspace_container_path: String,
-    profile_source: String,
 }
 
 #[derive(Deserialize)]
@@ -102,7 +80,7 @@ struct PromoteRequest {
     candidate_manifest_hash: String,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 struct DeleteResponse {
     deleted: bool,
 }
@@ -211,23 +189,16 @@ fn router(app: Arc<App>) -> Router {
     Router::new()
         .route("/health", get(|| async { StatusCode::NO_CONTENT }))
         .route(
-            "/v1/agent-workspaces/{agent_key}",
-            post(create_workspace).delete(delete_workspace),
+            "/v1/agent-coding-packages/{agent_key}",
+            get(inspect_active_quantitative_package_handler)
+                .delete(delete_coding_resources_handler),
         )
         .route(
-            "/v1/agent-workspaces/{agent_key}/template-drift",
-            post(template_drift),
-        )
-        .route(
-            "/v1/agent-workspaces/{agent_key}/quantitative-package",
-            get(inspect_active_quantitative_package_handler),
-        )
-        .route(
-            "/v1/agent-workspaces/{agent_key}/browser",
+            "/v1/agent-coding-packages/{agent_key}/browser",
             get(list_workspace_browser_entries_handler),
         )
         .route(
-            "/v1/agent-workspaces/{agent_key}/browser/file",
+            "/v1/agent-coding-packages/{agent_key}/browser/file",
             get(read_workspace_browser_file_handler),
         )
         .route(
@@ -357,65 +328,6 @@ fn constant_time_eq(left: &[u8], right: &[u8]) -> bool {
     difference == 0
 }
 
-async fn create_workspace(
-    State(app): State<Arc<App>>,
-    Path(agent_key): Path<String>,
-    headers: HeaderMap,
-    Json(request): Json<WorkspaceRequest>,
-) -> Result<Json<WorkspaceResponse>, ApiError> {
-    authorize(&headers, &app)?;
-    let fingerprint = format!(
-        "workspace:{agent_key}:{}:{}:{}:{}",
-        request.display_name,
-        request.agent_api_key,
-        request.api_base_url,
-        matches!(request.mode, WorkspaceMode::CreateNew)
-    );
-    idempotent(&app.clone(), &headers, fingerprint, move || {
-        let mut config = app.store.clone();
-        config.api_base_url = request.api_base_url;
-        let generated = generate_agent_workspace(
-            &config,
-            &OpenCodeWorkspaceAgent {
-                agent_key,
-                display_name: request.display_name,
-                api_key: request.agent_api_key,
-            },
-            match request.mode {
-                WorkspaceMode::CreateNew => WorkspaceGenerationMode::CreateNew,
-                WorkspaceMode::Regenerate => WorkspaceGenerationMode::Regenerate,
-            },
-        )
-        .map_err(classify)?;
-        Ok(WorkspaceResponse {
-            workspace_container_path: generated.workspace_container_path,
-            profile_source: "agent-runtime/workspace-template".into(),
-        })
-    })
-    .await
-    .map(Json)
-}
-
-async fn delete_workspace(
-    State(app): State<Arc<App>>,
-    Path(agent_key): Path<String>,
-    headers: HeaderMap,
-) -> Result<Json<DeleteResponse>, ApiError> {
-    authorize(&headers, &app)?;
-    idempotent(
-        &app.clone(),
-        &headers,
-        format!("delete-workspace:{agent_key}"),
-        move || {
-            Ok(DeleteResponse {
-                deleted: delete_agent_workspace(&app.store, &agent_key).map_err(classify)?,
-            })
-        },
-    )
-    .await
-    .map(Json)
-}
-
 async fn create_run_workspace_handler(
     State(app): State<Arc<App>>,
     Path((agent_key, run_id)): Path<(String, i64)>,
@@ -443,6 +355,25 @@ async fn inspect_active_quantitative_package_handler(
         .map_err(|_| ApiError::internal())?
         .map_err(classify)?;
     Ok(Json(result))
+}
+
+async fn delete_coding_resources_handler(
+    State(app): State<Arc<App>>,
+    Path(agent_key): Path<String>,
+    headers: HeaderMap,
+) -> Result<Json<DeleteResponse>, ApiError> {
+    authorize(&headers, &app)?;
+    idempotent(
+        &app.clone(),
+        &headers,
+        format!("delete-coding-resources:{agent_key}"),
+        move || {
+            delete_coding_resources(&app.store, &agent_key).map_err(classify)?;
+            Ok(DeleteResponse { deleted: true })
+        },
+    )
+    .await
+    .map(Json)
 }
 
 async fn materialize_run_workspace_handler(
@@ -598,31 +529,6 @@ async fn scrub_conversation_workspace_runtime_secrets_handler(
     })
     .await
     .map(Json)
-}
-
-async fn template_drift(
-    State(app): State<Arc<App>>,
-    Path(agent_key): Path<String>,
-    headers: HeaderMap,
-    Json(request): Json<CandidateRequest>,
-) -> Result<Json<WorkspaceTemplateDrift>, ApiError> {
-    authorize(&headers, &app)?;
-    let mut config = app.store.clone();
-    config.api_base_url = request.api_base_url;
-    let result = spawn_blocking(move || {
-        diff_agent_workspace_from_template(
-            &config,
-            &OpenCodeWorkspaceAgent {
-                agent_key,
-                display_name: request.display_name,
-                api_key: request.agent_api_key,
-            },
-        )
-    })
-    .await
-    .map_err(|_| ApiError::internal())?
-    .map_err(classify)?;
-    Ok(Json(result))
 }
 
 async fn list_workspace_browser_entries_handler(
@@ -936,6 +842,7 @@ fn classify(error: anyhow::Error) -> ApiError {
         || message.contains("conversation id")
         || message.contains("symlink")
         || message.contains("not a regular file")
+        || message.contains("not a regular directory")
         || message.contains("not a directory")
         || message.contains("unsupported")
         || message.contains("invalid")
@@ -951,6 +858,7 @@ fn classify(error: anyhow::Error) -> ApiError {
 mod tests {
     use std::{
         process,
+        sync::atomic::{AtomicU64, Ordering},
         time::{SystemTime, UNIX_EPOCH},
     };
 
@@ -960,14 +868,19 @@ mod tests {
         path: PathBuf,
     }
 
+    static TEMP_DIR_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+
     impl TempDir {
         fn new() -> Self {
             let suffix = SystemTime::now()
                 .duration_since(UNIX_EPOCH)
                 .expect("time after unix epoch")
                 .as_nanos();
-            let path = PathBuf::from("/tmp/opencode")
-                .join(format!("workspace-controller-{}-{suffix}", process::id()));
+            let sequence = TEMP_DIR_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+            let path = PathBuf::from("/tmp/opencode").join(format!(
+                "workspace-controller-{}-{suffix}-{sequence}",
+                process::id()
+            ));
             fs::create_dir_all(&path).expect("create temp directory");
             Self { path }
         }
@@ -1013,6 +926,13 @@ mod tests {
         headers
     }
 
+    fn package_file(root: &std::path::Path, agent_key: &str, name: &str) -> PathBuf {
+        let package = root.join("packages").join(agent_key);
+        fs::create_dir_all(&package).expect("create package directory");
+        fs::write(package.join(name), "contents\n").expect("write package file");
+        package
+    }
+
     #[tokio::test]
     async fn idempotency_locks_are_keyed_and_reclaimed() {
         let locks = idempotency_locks();
@@ -1028,7 +948,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn workspace_browser_handlers_require_authentication() {
+    async fn package_browser_handlers_require_authentication() {
         let temp = TempDir::new();
         let app = browser_test_app(&temp.path);
 
@@ -1061,12 +981,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn workspace_browser_handlers_return_typed_results_without_idempotency() {
+    async fn package_browser_handlers_return_typed_results_without_idempotency() {
         let temp = TempDir::new();
         let app = browser_test_app(&temp.path);
-        let workspace = temp.path.join("agents/agent");
-        fs::create_dir_all(&workspace).expect("create workspace");
-        fs::write(workspace.join("file.txt"), "contents\n").expect("write workspace file");
+        package_file(&temp.path, "agent", "file.txt");
         let headers = authorized_headers();
 
         let Json(listing) = list_workspace_browser_entries_handler(
@@ -1075,7 +993,7 @@ mod tests {
             headers.clone(),
         )
         .await
-        .expect("list workspace");
+        .expect("list package");
         assert!(listing.workspace_exists);
         assert_eq!(listing.entries[0].path, "file.txt");
 
@@ -1088,14 +1006,14 @@ mod tests {
             }),
         )
         .await
-        .expect("read workspace file");
+        .expect("read package file");
         assert_eq!(
             preview.status,
             workspace_store::workspace::WorkspaceFilePreviewStatus::Text
         );
         assert_eq!(preview.text.as_deref(), Some("contents\n"));
 
-        fs::remove_file(workspace.join("file.txt")).expect("remove workspace file");
+        fs::remove_file(temp.path.join("packages/agent/file.txt")).expect("remove package file");
         let Json(missing) = read_workspace_browser_file_handler(
             State(app.clone()),
             Path("agent".to_string()),
@@ -1105,7 +1023,7 @@ mod tests {
             }),
         )
         .await
-        .expect("read removed workspace file");
+        .expect("read removed package file");
         assert_eq!(
             missing.status,
             workspace_store::workspace::WorkspaceFilePreviewStatus::Missing
@@ -1119,12 +1037,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn workspace_browser_handler_rejects_unsafe_file_paths() {
+    async fn package_browser_handler_rejects_unsafe_file_paths() {
         let temp = TempDir::new();
         let app = browser_test_app(&temp.path);
-        let workspace = temp.path.join("agents/agent");
-        fs::create_dir_all(workspace.join("directory")).expect("create workspace directory");
-        fs::write(workspace.join(".env"), "secret\n").expect("write env");
+        let package = package_file(&temp.path, "agent", ".env");
+        fs::create_dir_all(package.join("directory")).expect("create package directory");
 
         for path in [".env", "../.env", "directory"] {
             let error = read_workspace_browser_file_handler(
@@ -1154,6 +1071,100 @@ mod tests {
             error.into_response().status(),
             StatusCode::UNPROCESSABLE_ENTITY
         );
+        assert!(package.is_dir());
+    }
+
+    #[tokio::test]
+    async fn package_browser_never_exposes_files_outside_the_package_root() {
+        let temp = TempDir::new();
+        let app = browser_test_app(&temp.path);
+        package_file(&temp.path, "agent", "manifest.json");
+        fs::create_dir_all(temp.path.join("runs/agent/9/workspace")).expect("create run workspace");
+        fs::write(temp.path.join("runs/agent/9/workspace/.env"), "secret")
+            .expect("write run secret");
+
+        for path in [
+            "../runs/agent/9/workspace/.env",
+            "../coding/agent/1/workspace",
+            "../versions/agent/1/package",
+            "../agents/agent",
+        ] {
+            let error = read_workspace_browser_file_handler(
+                State(app.clone()),
+                Path("agent".to_string()),
+                authorized_headers(),
+                Query(WorkspaceBrowserFileQuery {
+                    path: path.to_string(),
+                }),
+            )
+            .await
+            .expect_err("escape attempt should fail");
+            assert_eq!(
+                error.into_response().status(),
+                StatusCode::UNPROCESSABLE_ENTITY
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn coding_resources_cleanup_removes_agent_owned_roots() {
+        let temp = TempDir::new();
+        let app = browser_test_app(&temp.path);
+        for relative in ["packages", "coding", "versions"] {
+            fs::create_dir_all(temp.path.join(format!("{relative}/agent/keep")))
+                .expect("create coding resource");
+        }
+        fs::create_dir_all(temp.path.join("runs/agent/9/workspace")).expect("create run workspace");
+        fs::create_dir_all(temp.path.join("packages/other")).expect("create other package");
+
+        let Json(response) = delete_coding_resources_handler(
+            State(app.clone()),
+            Path("agent".to_string()),
+            idempotent_headers("cleanup"),
+        )
+        .await
+        .expect("delete coding resources");
+        assert!(response.deleted);
+
+        assert!(!temp.path.join("packages/agent").exists());
+        assert!(!temp.path.join("coding/agent").exists());
+        assert!(!temp.path.join("versions/agent").exists());
+        assert!(temp.path.join("runs/agent/9/workspace").exists());
+        assert!(temp.path.join("packages/other").exists());
+    }
+
+    #[tokio::test]
+    async fn coding_resources_cleanup_rejects_symlinked_roots() {
+        let temp = TempDir::new();
+        let app = browser_test_app(&temp.path);
+        fs::create_dir_all(temp.path.join("victim")).expect("create victim directory");
+        fs::write(temp.path.join("victim/keep.txt"), "keep").expect("write victim file");
+        fs::create_dir_all(temp.path.join("packages")).expect("create packages root");
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink("../victim", temp.path.join("packages/agent"))
+                .expect("create symlinked package root");
+        }
+
+        let result = delete_coding_resources_handler(
+            State(app),
+            Path("agent".to_string()),
+            idempotent_headers("cleanup-symlink"),
+        )
+        .await;
+        #[cfg(unix)]
+        {
+            let error = result.expect_err("symlinked root should fail");
+            assert_eq!(
+                error.into_response().status(),
+                StatusCode::UNPROCESSABLE_ENTITY
+            );
+            assert!(temp.path.join("victim/keep.txt").exists());
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = result;
+        }
     }
 
     #[tokio::test]

@@ -13,7 +13,7 @@ use workspace_store::{
     },
     workspace::{
         MaterializedRunWorkspace, QuantitativePackageSnapshot, RunWorkspaceMaterializationInput,
-        WorkspaceBrowserListing, WorkspaceFilePreview, WorkspaceTemplateDrift,
+        WorkspaceBrowserListing, WorkspaceFilePreview,
     },
 };
 
@@ -25,11 +25,6 @@ use workspace_store::isolated_workspace::{
     scrub_conversation_workspace_runtime_secrets, scrub_run_workspace_runtime_secrets,
 };
 
-#[cfg(test)]
-use workspace_store::workspace::{
-    OpenCodeWorkspaceAgent, OpenCodeWorkspaceConfig, WorkspaceGenerationMode,
-};
-
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 
 #[derive(Debug, Clone)]
@@ -38,12 +33,6 @@ pub struct WorkspaceAgentInput {
     pub display_name: String,
     pub agent_api_key: String,
     pub api_base_url: String,
-}
-
-#[derive(Debug, Clone)]
-pub struct WorkspaceCreated {
-    pub workspace_container_path: String,
-    pub profile_source: String,
 }
 
 #[derive(Debug, Clone)]
@@ -59,21 +48,8 @@ pub struct RecoveryResult {
     pub phase: PromotionJournalPhase,
 }
 
-/// Phase 2 exposes isolated-workspace operations while Phase 3 and Phase 4
-/// retain the existing active-workspace dispatch and conversation callers.
-#[allow(
-    dead_code,
-    reason = "Phase 3 and Phase 4 will invoke the new isolated-workspace controller methods"
-)]
 #[async_trait]
 pub trait WorkspaceController: Send + Sync {
-    async fn create_workspace(
-        &self,
-        input: WorkspaceAgentInput,
-        regenerate: bool,
-        idempotency_key: &str,
-    ) -> Result<WorkspaceCreated>;
-    async fn delete_workspace(&self, agent_key: &str, idempotency_key: &str) -> Result<bool>;
     async fn create_run_workspace(
         &self,
         agent_key: &str,
@@ -140,7 +116,6 @@ pub trait WorkspaceController: Send + Sync {
         agent_key: &str,
         relative_path: &str,
     ) -> Result<WorkspaceFilePreview>;
-    async fn template_drift(&self, input: WorkspaceAgentInput) -> Result<WorkspaceTemplateDrift>;
     async fn create_candidate(
         &self,
         input: WorkspaceAgentInput,
@@ -158,6 +133,7 @@ pub trait WorkspaceController: Send + Sync {
     ) -> Result<PromotionResult>;
     async fn delete_candidate(&self, agent_key: &str, task_id: i64) -> Result<bool>;
     async fn recover_promotions(&self) -> Result<Vec<RecoveryResult>>;
+    async fn delete_coding_resources(&self, agent_key: &str, idempotency_key: &str) -> Result<()>;
 }
 
 pub struct HttpWorkspaceController {
@@ -168,16 +144,19 @@ pub struct HttpWorkspaceController {
 
 #[cfg(test)]
 pub struct LocalWorkspaceController {
-    config: OpenCodeWorkspaceConfig,
+    config: workspace_store::workspace::OpenCodeWorkspaceConfig,
 }
 
 #[cfg(test)]
 impl LocalWorkspaceController {
-    pub fn new(config: OpenCodeWorkspaceConfig) -> Self {
+    pub fn new(config: workspace_store::workspace::OpenCodeWorkspaceConfig) -> Self {
         Self { config }
     }
 
-    fn config_for(&self, api_base_url: String) -> OpenCodeWorkspaceConfig {
+    fn config_for(
+        &self,
+        api_base_url: String,
+    ) -> workspace_store::workspace::OpenCodeWorkspaceConfig {
         let mut config = self.config.clone();
         config.api_base_url = api_base_url;
         config
@@ -187,34 +166,6 @@ impl LocalWorkspaceController {
 #[cfg(test)]
 #[async_trait]
 impl WorkspaceController for LocalWorkspaceController {
-    async fn create_workspace(
-        &self,
-        input: WorkspaceAgentInput,
-        regenerate: bool,
-        _idempotency_key: &str,
-    ) -> Result<WorkspaceCreated> {
-        let config = self.config_for(input.api_base_url);
-        let generated = workspace_store::workspace::generate_agent_workspace(
-            &config,
-            &OpenCodeWorkspaceAgent {
-                agent_key: input.agent_key,
-                display_name: input.display_name,
-                api_key: input.agent_api_key,
-            },
-            if regenerate {
-                WorkspaceGenerationMode::Regenerate
-            } else {
-                WorkspaceGenerationMode::CreateNew
-            },
-        )?;
-        Ok(WorkspaceCreated {
-            workspace_container_path: generated.workspace_container_path,
-            profile_source: "agent-runtime/workspace-template".to_string(),
-        })
-    }
-    async fn delete_workspace(&self, agent_key: &str, _idempotency_key: &str) -> Result<bool> {
-        workspace_store::workspace::delete_agent_workspace(&self.config, agent_key)
-    }
     async fn create_run_workspace(
         &self,
         agent_key: &str,
@@ -318,17 +269,6 @@ impl WorkspaceController for LocalWorkspaceController {
             relative_path,
         )
     }
-    async fn template_drift(&self, input: WorkspaceAgentInput) -> Result<WorkspaceTemplateDrift> {
-        let config = self.config_for(input.api_base_url);
-        workspace_store::workspace::diff_agent_workspace_from_template(
-            &config,
-            &OpenCodeWorkspaceAgent {
-                agent_key: input.agent_key,
-                display_name: input.display_name,
-                api_key: input.agent_api_key,
-            },
-        )
-    }
     async fn create_candidate(
         &self,
         input: WorkspaceAgentInput,
@@ -403,6 +343,9 @@ impl WorkspaceController for LocalWorkspaceController {
             })
             .collect()
     }
+    async fn delete_coding_resources(&self, agent_key: &str, _idempotency_key: &str) -> Result<()> {
+        workspace_store::coding_workspace::delete_coding_resources(&self.config, agent_key)
+    }
 }
 
 impl HttpWorkspaceController {
@@ -460,37 +403,6 @@ impl HttpWorkspaceController {
 
 #[async_trait]
 impl WorkspaceController for HttpWorkspaceController {
-    async fn create_workspace(
-        &self,
-        input: WorkspaceAgentInput,
-        regenerate: bool,
-        idempotency_key: &str,
-    ) -> Result<WorkspaceCreated> {
-        let response = self
-            .request(
-                reqwest::Method::POST,
-                &format!("v1/agent-workspaces/{}", input.agent_key),
-            )?
-            .header("Idempotency-Key", idempotency_key)
-            .json(&WorkspaceRequest::from_input(input, regenerate))
-            .send()
-            .await
-            .context("workspace controller request failed")?;
-        let response: WorkspaceResponse = Self::response(response).await?;
-        Ok(WorkspaceCreated {
-            workspace_container_path: response.workspace_container_path,
-            profile_source: response.profile_source,
-        })
-    }
-
-    async fn delete_workspace(&self, agent_key: &str, idempotency_key: &str) -> Result<bool> {
-        self.delete_response(
-            &format!("v1/agent-workspaces/{agent_key}"),
-            idempotency_key.to_string(),
-        )
-        .await
-    }
-
     async fn create_run_workspace(
         &self,
         agent_key: &str,
@@ -516,7 +428,7 @@ impl WorkspaceController for HttpWorkspaceController {
         let response = self
             .request(
                 reqwest::Method::GET,
-                &format!("v1/agent-workspaces/{agent_key}/quantitative-package"),
+                &format!("v1/agent-coding-packages/{agent_key}"),
             )?
             .send()
             .await
@@ -665,7 +577,7 @@ impl WorkspaceController for HttpWorkspaceController {
         let response = self
             .request(
                 reqwest::Method::GET,
-                &format!("v1/agent-workspaces/{agent_key}/browser"),
+                &format!("v1/agent-coding-packages/{agent_key}/browser"),
             )?
             .send()
             .await
@@ -680,24 +592,15 @@ impl WorkspaceController for HttpWorkspaceController {
     ) -> Result<WorkspaceFilePreview> {
         let mut url = self
             .base_url
-            .join(&format!("v1/agent-workspaces/{agent_key}/browser/file"))
+            .join(&format!(
+                "v1/agent-coding-packages/{agent_key}/browser/file"
+            ))
             .context("failed to build workspace controller request URL")?;
         url.query_pairs_mut().append_pair("path", relative_path);
         let response = self
             .client
             .request(reqwest::Method::GET, url)
             .bearer_auth(self.api_key.as_ref())
-            .send()
-            .await
-            .context("workspace controller request failed")?;
-        Self::response(response).await
-    }
-
-    async fn template_drift(&self, input: WorkspaceAgentInput) -> Result<WorkspaceTemplateDrift> {
-        let path = format!("v1/agent-workspaces/{}/template-drift", input.agent_key);
-        let response = self
-            .request(reqwest::Method::POST, &path)?
-            .json(&CandidateRequest::from_input(input))
             .send()
             .await
             .context("workspace controller request failed")?;
@@ -805,29 +708,25 @@ impl WorkspaceController for HttpWorkspaceController {
             .await?
             .recovered)
     }
-}
 
-#[derive(Serialize)]
-struct WorkspaceRequest {
-    mode: &'static str,
-    display_name: String,
-    agent_api_key: String,
-    api_base_url: String,
-}
-impl WorkspaceRequest {
-    fn from_input(input: WorkspaceAgentInput, regenerate: bool) -> Self {
-        Self {
-            mode: if regenerate {
-                "regenerate"
-            } else {
-                "create_new"
-            },
-            display_name: input.display_name,
-            agent_api_key: input.agent_api_key,
-            api_base_url: input.api_base_url,
+    async fn delete_coding_resources(&self, agent_key: &str, idempotency_key: &str) -> Result<()> {
+        let response = self
+            .request(
+                reqwest::Method::DELETE,
+                &format!("v1/agent-coding-packages/{agent_key}"),
+            )?
+            .header("Idempotency-Key", idempotency_key)
+            .send()
+            .await
+            .context("workspace controller request failed")?;
+        let status = response.status();
+        if !status.is_success() {
+            bail!("workspace controller returned {}", status.as_u16());
         }
+        Ok(())
     }
 }
+
 #[derive(Serialize)]
 struct CandidateRequest {
     display_name: String,
@@ -842,11 +741,6 @@ impl CandidateRequest {
             api_base_url: input.api_base_url,
         }
     }
-}
-#[derive(Deserialize)]
-struct WorkspaceResponse {
-    workspace_container_path: String,
-    profile_source: String,
 }
 #[derive(Deserialize)]
 struct CandidateResponse {
@@ -882,8 +776,8 @@ mod tests {
 
     use super::*;
 
-    fn test_config(root: PathBuf) -> OpenCodeWorkspaceConfig {
-        OpenCodeWorkspaceConfig {
+    fn test_config(root: PathBuf) -> workspace_store::workspace::OpenCodeWorkspaceConfig {
+        workspace_store::workspace::OpenCodeWorkspaceConfig {
             source_root: root.clone(),
             host_workspaces_root: root,
             container_workspaces_root: "/workspaces".to_string(),
@@ -899,11 +793,29 @@ mod tests {
         PathBuf::from("/tmp/opencode").join(format!("workspace-client-{}-{suffix}", process::id()))
     }
 
+    fn write_package(root: &std::path::Path, agent_key: &str) {
+        let package = root.join("packages").join(agent_key);
+        fs::create_dir_all(package.join("strategies")).expect("create package root");
+        fs::write(
+            package.join("manifest.json"),
+            r#"{"schema_version": 1, "package_version": "v1", "tools": [{"id":"trend","description":"Trend target","entrypoint":"strategies/trend.py","input_kind":"ohlcv","supported_timeframes":["15m"],"minimum_candles":1,"required_arguments":["symbol","timeframe","boundary_ms","input","output"],"output_schema":"hypervibes.quantitative.v1","version":"1"}]}"#,
+        )
+        .expect("write manifest");
+        fs::write(package.join("strategies/trend.py"), b"print('trend')\n").expect("write target");
+    }
+
     #[tokio::test]
     async fn local_controller_implements_isolated_workspace_contract() {
         let root = temp_root();
         fs::create_dir_all(&root).expect("create temporary workspace root");
         let controller = LocalWorkspaceController::new(test_config(root.clone()));
+        write_package(&root, "agent");
+
+        let package = controller
+            .inspect_active_quantitative_package("agent")
+            .await
+            .expect("inspect local package");
+        assert_eq!(package.expect("package snapshot").version, "v1".to_string());
 
         let run = controller
             .create_run_workspace("agent", 7, "run-create")
@@ -969,6 +881,23 @@ mod tests {
                 .await
                 .expect("delete local conversation workspace")
         );
+
+        let listing = controller
+            .list_workspace_browser_entries("agent")
+            .await
+            .expect("list local package");
+        assert!(listing.workspace_exists);
+        let preview = controller
+            .read_workspace_browser_file("agent", "manifest.json")
+            .await
+            .expect("preview local package file");
+        assert!(preview.text.is_some());
+
+        controller
+            .delete_coding_resources("agent", "cleanup")
+            .await
+            .expect("delete local coding resources");
+        assert!(!root.join("packages/agent").exists());
 
         fs::remove_dir_all(root).expect("remove temporary workspace root");
     }

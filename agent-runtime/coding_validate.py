@@ -17,7 +17,7 @@ from typing import Any
 
 
 FORBIDDEN_SOURCE = re.compile(
-    r"https?://|/workspaces/agents/|subprocess|os\.system|pip\s+install|package\.json"
+    r"https?://|/workspaces/|subprocess|os\.system|pip\s+install|package\.json"
 )
 INTERVAL_MS = {
     "1m": 60_000,
@@ -132,7 +132,7 @@ def _fixture_for_interval(timeframe: str, interval_ms: int) -> dict[str, Any]:
     }
 
 
-def _run_analyzer(
+def _run_target(
     implementation: Path,
     workspace: Path,
     run_root: Path,
@@ -161,14 +161,21 @@ def _run_analyzer(
         "--output",
         str(output_path),
     ]
-    completed = subprocess.run(
-        command,
-        cwd=workspace,
-        capture_output=True,
-        text=True,
-        timeout=30,
-        env=environment,
-    )
+    try:
+        completed = subprocess.run(
+            command,
+            cwd=workspace,
+            capture_output=True,
+            text=True,
+            timeout=30,
+            env=environment,
+        )
+    except subprocess.TimeoutExpired as error:
+        stdout = error.stdout if isinstance(error.stdout, str) else ""
+        stderr = error.stderr if isinstance(error.stderr, str) else ""
+        return subprocess.CompletedProcess(command, 124, stdout, stderr), None
+    except OSError as error:
+        return subprocess.CompletedProcess(command, 127, "", str(error)), None
     if completed.returncode != 0 or not output_path.is_file():
         return completed, None
     try:
@@ -194,25 +201,25 @@ def _validate_output(
         "warnings",
     }
     if not isinstance(output, dict) or not required.issubset(output):
-        return "canonical output schema failed"
+        return "output schema failed"
     if output["symbol"] != "BTC" or output["timeframe"] != timeframe:
-        return "canonical output context failed"
+        return "output context failed"
     if output["boundary_ms"] != BOUNDARY_MS:
-        return "canonical output boundary failed"
+        return "output boundary failed"
     if not isinstance(output["code_version"], str) or not output["code_version"].strip():
-        return "canonical code_version failed"
+        return "code_version failed"
     if not isinstance(output["source_range"], dict):
-        return "canonical source_range type failed"
+        return "source_range type failed"
     if output["source_range"].get("count") != expected_count:
-        return "canonical closed-candle count failed"
+        return "closed-candle count failed"
     if not isinstance(output["measurements"], dict) or not output["measurements"]:
-        return "canonical measurements must be non-empty"
+        return "measurements must be non-empty"
     if not isinstance(output["warnings"], list):
-        return "canonical warnings type failed"
+        return "warnings type failed"
     if "signals" in output and not isinstance(output["signals"], (dict, list)):
-        return "canonical signals type failed"
+        return "signals type failed"
     if not _all_finite(output):
-        return "canonical output contains non-finite numbers"
+        return "output contains non-finite numbers"
     return None
 
 
@@ -241,53 +248,281 @@ def _validate_known_signals(output: dict[str, Any] | None) -> str | None:
     return None
 
 
-def _validate_manifest(user: Path) -> tuple[Path | None, str | None]:
+def _validate_manifest(
+    user: Path,
+) -> tuple[list[tuple[str, Path, list[str]]], str | None]:
     try:
         manifest = json.loads((user / MANIFEST_FILENAME).read_text())
     except (OSError, json.JSONDecodeError):
-        return None, "analysis-tool manifest is missing or invalid"
+        return [], "package manifest is missing or invalid"
     if (
         not isinstance(manifest, dict)
         or manifest.get("schema_version") != 1
         or not isinstance(manifest.get("package_version"), str)
         or not manifest["package_version"].strip()
         or not isinstance(manifest.get("tools"), list)
+        or not manifest["tools"]
     ):
-        return None, "analysis-tool manifest schema failed"
-    tools = [tool for tool in manifest["tools"] if isinstance(tool, dict)]
-    if len(tools) != len(manifest["tools"]):
-        return None, "analysis-tool manifest contains an invalid tool"
-    tool_ids = [tool.get("id") for tool in tools]
-    if (
-        any(not isinstance(tool_id, str) or not tool_id.strip() for tool_id in tool_ids)
-        or len(set(tool_ids)) != len(tool_ids)
-    ):
-        return None, "analysis-tool manifest tool IDs are invalid"
-    analyzer = next((tool for tool in tools if tool.get("id") == "analyze"), None)
-    if analyzer is None:
-        return None, "analysis-tool manifest does not declare analyze"
-    entrypoint = analyzer.get("entrypoint")
-    if (
-        not isinstance(entrypoint, str)
-        or Path(entrypoint).is_absolute()
-        or ".." in Path(entrypoint).parts
-        or not isinstance(analyzer.get("description"), str)
-        or not analyzer["description"].strip()
-        or analyzer.get("input_kind") != "ohlcv"
-        or analyzer.get("output_schema") != "hypervibes.quantitative.v1"
-        or set(analyzer.get("required_arguments", [])) != REQUIRED_TOOL_ARGUMENTS
-        or not isinstance(analyzer.get("version"), str)
-        or not analyzer["version"].strip()
-        or not isinstance(analyzer.get("minimum_candles"), int)
-        or analyzer["minimum_candles"] < 1
-        or not isinstance(analyzer.get("supported_timeframes"), list)
-        or set(INTERVAL_MS) - set(analyzer["supported_timeframes"])
-    ):
-        return None, "analysis-tool analyze declaration is invalid"
-    implementation = (user / entrypoint).resolve()
-    if not implementation.is_relative_to(user.resolve()) or not implementation.is_file():
-        return None, "analysis-tool entrypoint is missing"
-    return implementation, None
+        return [], "package manifest schema failed"
+    targets: list[tuple[str, Path, list[str]]] = []
+    seen_ids: set[str] = set()
+    for tool in manifest["tools"]:
+        if not isinstance(tool, dict):
+            return [], "package manifest contains an invalid tool"
+        target_id = tool.get("id")
+        entrypoint = tool.get("entrypoint")
+        entrypoint_path = Path(entrypoint) if isinstance(entrypoint, str) else None
+        required_arguments = tool.get("required_arguments")
+        supported_timeframes = tool.get("supported_timeframes")
+        if (
+            not isinstance(target_id, str)
+            or not target_id.strip()
+            or any(character.isspace() for character in target_id)
+            or target_id in seen_ids
+            or not isinstance(entrypoint, str)
+            or entrypoint_path is None
+            or entrypoint_path.is_absolute()
+            or ".." in entrypoint_path.parts
+            or "\\" in entrypoint
+            or entrypoint_path.suffix.lower() != ".py"
+            or not isinstance(tool.get("description"), str)
+            or not tool["description"].strip()
+            or tool.get("input_kind") != "ohlcv"
+            or tool.get("output_schema") != "hypervibes.quantitative.v1"
+            or not isinstance(required_arguments, list)
+            or any(not isinstance(argument, str) for argument in required_arguments)
+            or set(required_arguments) != REQUIRED_TOOL_ARGUMENTS
+            or not isinstance(tool.get("version"), str)
+            or not tool["version"].strip()
+            or isinstance(tool.get("minimum_candles"), bool)
+            or not isinstance(tool.get("minimum_candles"), int)
+            or tool["minimum_candles"] < 1
+            or not isinstance(supported_timeframes, list)
+            or not supported_timeframes
+            or any(not isinstance(timeframe, str) for timeframe in supported_timeframes)
+            or any(
+                timeframe not in INTERVAL_MS for timeframe in supported_timeframes
+            )
+        ):
+            return [], f"package manifest target {target_id!r} declaration is invalid"
+        implementation = (user / entrypoint_path).resolve()
+        if not implementation.is_relative_to(user.resolve()) or not implementation.is_file():
+            return [], f"package manifest target {target_id!r} entrypoint is missing"
+        seen_ids.add(target_id)
+        targets.append((target_id, implementation, list(supported_timeframes)))
+    return targets, None
+
+
+def _validate_target_suite(
+    checks: list[str],
+    target_id: str,
+    implementation: Path,
+    workspace: Path,
+    run_root: Path,
+    fixture_data: dict[str, Any],
+    declared_timeframes: list[str],
+    environment: dict[str, str],
+) -> dict[str, object] | None:
+    def failure(message: str, completed: subprocess.CompletedProcess[Any] | None = None) -> dict[str, object]:
+        return _failure(checks, f"target {target_id!r}: {message}", completed)
+
+    def invariance_failure(message: str, expected: Any, actual: Any) -> dict[str, object]:
+        difference = _first_difference(expected, actual) or "$"
+        return _failure(
+            checks, f"target {target_id!r}: {message}; output differs at {difference}"
+        )
+
+    baseline_timeframe = declared_timeframes[0]
+    baseline_data = (
+        fixture_data
+        if baseline_timeframe == fixture_data.get("timeframe")
+        else _fixture_for_interval(baseline_timeframe, INTERVAL_MS[baseline_timeframe])
+    )
+    completed, baseline = _run_target(
+        implementation,
+        workspace,
+        run_root,
+        baseline_data,
+        timeframe=baseline_timeframe,
+        suffix=f"{target_id}-baseline",
+        environment=environment,
+    )
+    error = _validate_output(baseline, timeframe=baseline_timeframe, expected_count=2)
+    if completed.returncode != 0 or error is not None:
+        return failure(error or "CLI failed", completed)
+    checks.append(f"{target_id}: CLI, context, and output schema")
+
+    _, repeated = _run_target(
+        implementation,
+        workspace,
+        run_root,
+        baseline_data,
+        timeframe=baseline_timeframe,
+        suffix=f"{target_id}-repeat",
+        environment=environment,
+    )
+    if repeated != baseline:
+        return failure("deterministic output failed")
+    checks.append(f"{target_id}: deterministic output")
+
+    interval_ms = INTERVAL_MS[baseline_timeframe]
+    open_data = dict(baseline_data)
+    open_data["candles"] = list(baseline_data["candles"]) + [
+        {
+            "timestamp_ms": BOUNDARY_MS - interval_ms // 2,
+            "open": 1000,
+            "high": 1001,
+            "low": 999,
+            "close": 1000,
+            "volume": 999,
+        }
+    ]
+    _, open_output = _run_target(
+        implementation,
+        workspace,
+        run_root,
+        open_data,
+        timeframe=baseline_timeframe,
+        suffix=f"{target_id}-open",
+        environment=environment,
+    )
+    if open_output != baseline:
+        return invariance_failure("open-candle rejection failed", baseline, open_output)
+    checks.append(f"{target_id}: open-candle rejection")
+
+    future_data = dict(baseline_data)
+    future_data["candles"] = list(baseline_data["candles"]) + [
+        {
+            "timestamp_ms": BOUNDARY_MS + interval_ms,
+            "open": 1000,
+            "high": 1001,
+            "low": 999,
+            "close": 1000,
+            "volume": 999,
+        }
+    ]
+    _, future_output = _run_target(
+        implementation,
+        workspace,
+        run_root,
+        future_data,
+        timeframe=baseline_timeframe,
+        suffix=f"{target_id}-future",
+        environment=environment,
+    )
+    if future_output != baseline:
+        return invariance_failure("future-candle causality failed", baseline, future_output)
+    checks.append(f"{target_id}: future-candle causality")
+
+    ordering_data = _fixture_for_interval(baseline_timeframe, interval_ms)
+    ordering_data["candles"] = [
+        dict(ordering_data["candles"][0], timestamp_ms=BOUNDARY_MS - 4 * interval_ms, close=100),
+        dict(ordering_data["candles"][0], timestamp_ms=BOUNDARY_MS - 3 * interval_ms, close=101),
+        ordering_data["candles"][1],
+    ]
+    _, ordered_output = _run_target(
+        implementation,
+        workspace,
+        run_root,
+        ordering_data,
+        timeframe=baseline_timeframe,
+        suffix=f"{target_id}-ordered",
+        environment=environment,
+    )
+    shuffled_data = json.loads(json.dumps(ordering_data))
+    shuffled_data["candles"] = list(reversed(shuffled_data["candles"]))
+    _, shuffled_output = _run_target(
+        implementation,
+        workspace,
+        run_root,
+        shuffled_data,
+        timeframe=baseline_timeframe,
+        suffix=f"{target_id}-shuffled",
+        environment=environment,
+    )
+    if ordered_output is None or shuffled_output != ordered_output:
+        return invariance_failure(
+            "candle-order invariance failed",
+            ordered_output,
+            shuffled_output,
+        )
+    checks.append(f"{target_id}: candle-order invariance")
+
+    body_data = _fixture_for_interval(baseline_timeframe, interval_ms)
+    body_data["candles"] = [
+        dict(body_data["candles"][0], timestamp_ms=BOUNDARY_MS - 4 * interval_ms, close=100),
+        dict(body_data["candles"][0], timestamp_ms=BOUNDARY_MS - 3 * interval_ms, open=110, high=111, low=104, close=105),
+    ]
+    body_run, body_output = _run_target(
+        implementation,
+        workspace,
+        run_root,
+        body_data,
+        timeframe=baseline_timeframe,
+        suffix=f"{target_id}-body-signal",
+        environment=environment,
+    )
+    error = _validate_output(body_output, timeframe=baseline_timeframe, expected_count=2)
+    if body_run.returncode != 0 or error is not None:
+        return failure(error or "body-signal fixture failed", body_run)
+    error = _validate_known_signals(body_output)
+    if error is not None:
+        return failure(error)
+    checks.append(f"{target_id}: known signal semantics")
+
+    changed_data = json.loads(json.dumps(baseline_data))
+    changed_data["candles"][1]["close"] = 150
+    changed_data["candles"][1]["high"] = 151
+    _, changed_output = _run_target(
+        implementation,
+        workspace,
+        run_root,
+        changed_data,
+        timeframe=baseline_timeframe,
+        suffix=f"{target_id}-sensitivity",
+        environment=environment,
+    )
+    if changed_output is None or changed_output == baseline:
+        return failure("eligible-candle sensitivity failed")
+    checks.append(f"{target_id}: eligible-candle sensitivity")
+
+    mismatch, _ = _run_target(
+        implementation,
+        workspace,
+        run_root,
+        baseline_data,
+        symbol="ETH",
+        timeframe=baseline_timeframe,
+        suffix=f"{target_id}-context-mismatch",
+        environment=environment,
+    )
+    if mismatch.returncode == 0:
+        return failure("CLI/input context mismatch was accepted")
+    checks.append(f"{target_id}: CLI/input context mismatch rejection")
+
+    for timeframe in declared_timeframes:
+        interval_ms = INTERVAL_MS[timeframe]
+        interval_fixture = _fixture_for_interval(timeframe, interval_ms)
+        interval_run, interval_output = _run_target(
+            implementation,
+            workspace,
+            run_root,
+            interval_fixture,
+            suffix=f"{target_id}-interval-{timeframe}",
+            environment=environment,
+        )
+        error = _validate_output(
+            interval_output,
+            timeframe=timeframe,
+            expected_count=2,
+        )
+        if interval_run.returncode != 0 or error is not None:
+            return failure(
+                f"declared timeframe {timeframe} failed: {error or 'execution failed'}",
+                interval_run,
+            )
+    checks.append(f"{target_id}: declared timeframes")
+    return None
 
 
 def validate(workspace: Path) -> dict[str, object]:
@@ -296,9 +531,9 @@ def validate(workspace: Path) -> dict[str, object]:
         return {"ok": False, "checks": ["scripts/user is missing"]}
 
     checks: list[str] = []
-    implementation, manifest_error = _validate_manifest(user)
+    targets, manifest_error = _validate_manifest(user)
     fixture = Path(__file__).with_name("coding_fixture.json")
-    if manifest_error is not None or implementation is None or not fixture.is_file():
+    if manifest_error is not None or not targets or not fixture.is_file():
         return _failure(checks, manifest_error or "analysis fixture is missing")
 
     try:
@@ -314,7 +549,7 @@ def validate(workspace: Path) -> dict[str, object]:
             finally:
                 sys.pycache_prefix = previous_pycache_prefix
             checks.append("compile")
-            checks.append("analysis-tool manifest")
+            checks.append("package manifest")
 
             environment = os.environ.copy()
             environment["PYTHONHASHSEED"] = "0"
@@ -347,215 +582,21 @@ def validate(workspace: Path) -> dict[str, object]:
                         return _failure(checks, f"forbidden source in {path.name}")
             checks.append("source scan")
 
-            completed, baseline = _run_analyzer(
-                implementation,
-                workspace,
-                run_root,
-                fixture_data,
-                suffix="baseline",
-                environment=environment,
-            )
-            error = _validate_output(baseline, timeframe="15m", expected_count=2)
-            if completed.returncode != 0 or error is not None:
-                return _failure(checks, error or "canonical CLI failed", completed)
-            checks.append("CLI, context, and output schema")
-
-            _, repeated = _run_analyzer(
-                implementation,
-                workspace,
-                run_root,
-                fixture_data,
-                suffix="repeat",
-                environment=environment,
-            )
-            if repeated != baseline:
-                return _failure(checks, "deterministic output failed")
-            checks.append("deterministic output")
-
-            open_data = dict(fixture_data)
-            open_data["candles"] = list(fixture_data["candles"]) + [
-                {
-                    "timestamp_ms": BOUNDARY_MS - 450_000,
-                    "open": 1000,
-                    "high": 1001,
-                    "low": 999,
-                    "close": 1000,
-                    "volume": 999,
-                }
-            ]
-            _, open_output = _run_analyzer(
-                implementation,
-                workspace,
-                run_root,
-                open_data,
-                suffix="open",
-                environment=environment,
-            )
-            if open_output != baseline:
-                return _invariance_failure(
-                    checks, "open-candle rejection failed", baseline, open_output
-                )
-            checks.append("open-candle rejection")
-
-            future_data = dict(fixture_data)
-            future_data["candles"] = list(fixture_data["candles"]) + [
-                {
-                    "timestamp_ms": BOUNDARY_MS + 1_800_000,
-                    "open": 1000,
-                    "high": 1001,
-                    "low": 999,
-                    "close": 1000,
-                    "volume": 999,
-                }
-            ]
-            _, future_output = _run_analyzer(
-                implementation,
-                workspace,
-                run_root,
-                future_data,
-                suffix="future",
-                environment=environment,
-            )
-            if future_output != baseline:
-                return _invariance_failure(
-                    checks, "future-candle causality failed", baseline, future_output
-                )
-            checks.append("future-candle causality")
-
-            ordering_data = _fixture_for_interval("15m", INTERVAL_MS["15m"])
-            ordering_data["candles"] = [
-                {
-                    "timestamp_ms": BOUNDARY_MS - 4 * INTERVAL_MS["15m"],
-                    "open": 99,
-                    "high": 101,
-                    "low": 98,
-                    "close": 100,
-                    "volume": 9,
-                },
-                {
-                    "timestamp_ms": BOUNDARY_MS - 3 * INTERVAL_MS["15m"],
-                    "open": 100,
-                    "high": 102,
-                    "low": 99,
-                    "close": 101,
-                    "volume": 10,
-                },
-                ordering_data["candles"][1],
-            ]
-            _, ordered_output = _run_analyzer(
-                implementation,
-                workspace,
-                run_root,
-                ordering_data,
-                suffix="ordered",
-                environment=environment,
-            )
-            shuffled_data = json.loads(json.dumps(ordering_data))
-            shuffled_data["candles"] = list(reversed(shuffled_data["candles"]))
-            _, shuffled_output = _run_analyzer(
-                implementation,
-                workspace,
-                run_root,
-                shuffled_data,
-                suffix="shuffled",
-                environment=environment,
-            )
-            if ordered_output is None or shuffled_output != ordered_output:
-                return _invariance_failure(
+            for target_id, implementation, declared_timeframes in targets:
+                failure = _validate_target_suite(
                     checks,
-                    "candle-order invariance failed",
-                    ordered_output,
-                    shuffled_output,
-                )
-            checks.append("candle-order invariance")
-
-            body_data = _fixture_for_interval("15m", INTERVAL_MS["15m"])
-            body_data["candles"] = [
-                {
-                    "timestamp_ms": BOUNDARY_MS - 4 * INTERVAL_MS["15m"],
-                    "open": 99,
-                    "high": 101,
-                    "low": 98,
-                    "close": 100,
-                    "volume": 9,
-                },
-                {
-                    "timestamp_ms": BOUNDARY_MS - 3 * INTERVAL_MS["15m"],
-                    "open": 110,
-                    "high": 111,
-                    "low": 104,
-                    "close": 105,
-                    "volume": 10,
-                },
-            ]
-            body_run, body_output = _run_analyzer(
-                implementation,
-                workspace,
-                run_root,
-                body_data,
-                suffix="body-signal",
-                environment=environment,
-            )
-            error = _validate_output(body_output, timeframe="15m", expected_count=2)
-            if body_run.returncode != 0 or error is not None:
-                return _failure(checks, error or "body-signal fixture failed", body_run)
-            error = _validate_known_signals(body_output)
-            if error is not None:
-                return _failure(checks, error)
-            checks.append("known signal semantics")
-
-            changed_data = json.loads(json.dumps(fixture_data))
-            changed_data["candles"][1]["close"] = 150
-            changed_data["candles"][1]["high"] = 151
-            _, changed_output = _run_analyzer(
-                implementation,
-                workspace,
-                run_root,
-                changed_data,
-                suffix="sensitivity",
-                environment=environment,
-            )
-            if changed_output is None or changed_output == baseline:
-                return _failure(checks, "eligible-candle sensitivity failed")
-            checks.append("eligible-candle sensitivity")
-
-            mismatch, _ = _run_analyzer(
-                implementation,
-                workspace,
-                run_root,
-                fixture_data,
-                symbol="ETH",
-                suffix="context-mismatch",
-                environment=environment,
-            )
-            if mismatch.returncode == 0:
-                return _failure(checks, "CLI/input context mismatch was accepted")
-            checks.append("CLI/input context mismatch rejection")
-
-            for timeframe, interval_ms in INTERVAL_MS.items():
-                interval_fixture = _fixture_for_interval(timeframe, interval_ms)
-                interval_run, interval_output = _run_analyzer(
+                    target_id,
                     implementation,
                     workspace,
                     run_root,
-                    interval_fixture,
-                    suffix=f"interval-{timeframe}",
-                    environment=environment,
+                    fixture_data,
+                    declared_timeframes,
+                    environment,
                 )
-                error = _validate_output(
-                    interval_output,
-                    timeframe=timeframe,
-                    expected_count=2,
-                )
-                if interval_run.returncode != 0 or error is not None:
-                    return _failure(
-                        checks,
-                        f"supported interval {timeframe} failed: {error or 'execution failed'}",
-                        interval_run,
-                    )
-            checks.append("supported intervals")
+                if failure is not None:
+                    return failure
     except (OSError, ValueError, json.JSONDecodeError, subprocess.SubprocessError) as error:
-        return _failure(checks, f"canonical validation error: {error}")
+        return _failure(checks, f"coding validation error: {error}")
     return {"ok": True, "checks": checks}
 
 

@@ -293,21 +293,6 @@
                 </div>
             </div>
         </section>
-        <section class="rounded-2xl border border-zinc-800 bg-[#0d0d10] p-6">
-            <h2 class="text-lg font-medium text-white">Prompt Revision History</h2>
-            <p class="mt-1 text-sm text-zinc-400">Rollbacks create a new revision and preserve this timeline.</p>
-            <form action="/agents/{{ agent.agent_key }}/prompts/improvement" method="post" class="mt-3"><label class="flex items-center gap-2 text-sm text-zinc-300"><input type="hidden" name="enabled" value="false"><input type="checkbox" name="enabled" value="true" {% if prompt_improvement_enabled %}checked{% endif %} onchange="this.form.submit()"> Allow daily review to improve eligible prompts automatically</label></form>
-            <div class="mt-4 space-y-2">
-                {% for revision in prompt_revision_history %}
-                <div class="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-zinc-800 bg-zinc-950/60 px-3 py-2 text-sm">
-                    <div class="min-w-0 text-zinc-300"><span class="font-mono text-zinc-500">#{{ revision.id }}</span> {{ revision.prompt_kind }} <span class="text-zinc-500">{{ revision.source_type }}{% if let Some(run_id) = revision.source_run_id %} · run {{ run_id }}{% endif %} · {{ revision.created_at }}</span>{% if !revision.rationale.is_empty() %}<span class="block truncate text-xs text-zinc-500">{{ revision.rationale }}</span>{% endif %}<details class="mt-1 text-xs text-zinc-500"><summary class="cursor-pointer">View revision text</summary><pre class="mt-1 whitespace-pre-wrap text-zinc-400">{{ revision.prompt }}</pre></details></div>
-                    <form action="/agents/{{ agent.agent_key }}/prompts/rollback" method="post"><input type="hidden" name="revision_id" value="{{ revision.id }}"><button type="submit" class="cursor-pointer rounded-full border border-zinc-700 px-3 py-1 text-xs text-zinc-300 hover:border-zinc-500 hover:text-white">Rollback</button></form>
-                </div>
-                {% else %}
-                <p class="text-sm text-zinc-500">No prompt revisions recorded.</p>
-                {% endfor %}
-            </div>
-        </section>
     </section>
     {% else if show_settings_tab %}
     <section class="mt-2 space-y-2">
@@ -409,7 +394,21 @@
             </form>
         </section>
 
-        {% include "agents/components/workspace-section.html" %}
+        {% if let Some(notice) = settings_notice %}
+        <div class="rounded-xl border border-emerald-900/60 bg-emerald-950/30 px-4 py-3 text-sm text-emerald-200">
+            {{ notice }}
+        </div>
+        {% endif %}
+
+        <section class="rounded-2xl border border-red-900/60 bg-red-950/20 p-6">
+            <h2 class="text-lg font-medium text-white">Reset memories</h2>
+            <p class="mt-2 max-w-3xl text-sm leading-6 text-zinc-400">Permanently delete all memories stored for this agent. Runs, conversations, and the Coding package are not affected. This action cannot be undone.</p>
+            <div class="mt-6 flex justify-end">
+                <button type="button" data-reset-memories-trigger class="cursor-pointer rounded-full border border-red-900/60 bg-red-950/30 px-4 py-2 text-sm font-medium text-red-300 hover:border-red-800 hover:bg-red-950/50">
+                    Reset memories
+                </button>
+            </div>
+        </section>
 
         {% if let Some(gateway_telegram) = gateway_telegram %}
         {% include "agents/components/gateway-telegram.html" %}
@@ -576,42 +575,20 @@
     </div>
 </div>
 
-<!-- Re-generate workspace confirmation modal -->
-<div id="regenerate-workspace-modal" class="fixed inset-0 z-50 hidden items-center justify-center bg-black/70 backdrop-blur-sm px-4" aria-modal="true" role="dialog">
-    <div class="w-full max-w-lg rounded-2xl border border-zinc-800 bg-[#0d0d10] p-6 shadow-2xl">
-        <h3 class="text-lg font-semibold text-white">Re-generate workspace</h3>
+<!-- Reset memories confirmation modal -->
+<div id="reset-memories-modal" class="fixed inset-0 z-50 hidden items-center justify-center bg-black/70 backdrop-blur-sm px-4" aria-modal="true" role="dialog">
+    <div class="w-full max-w-md rounded-2xl border border-zinc-800 bg-[#0d0d10] p-6 shadow-2xl">
+        <h3 class="text-lg font-semibold text-white">Reset memories</h3>
         <p class="mt-2 text-sm leading-6 text-zinc-400">
-            Queue workspace maintenance for <span class="font-medium text-zinc-200">{{ agent.display_name }}</span>.
+            Are you sure you want to delete all memories stored for <span class="font-medium text-zinc-200">{{ agent.display_name }}</span>? This permanently removes every memory for this agent and cannot be undone.
         </p>
-        <p class="mt-3 text-sm leading-6 text-zinc-400">
-            Regular re-generation refreshes template-managed files and preserves <code class="font-mono text-xs text-zinc-300">scripts/user/</code>, <code class="font-mono text-xs text-zinc-300">data/</code>, and <code class="font-mono text-xs text-zinc-300">scratch/</code>.
-        </p>
-        <p class="mt-3 text-sm leading-6 text-zinc-400">
-            Hard reset deletes the full workspace first, including user-managed and agent-generated files, before recreating it from the template.
-        </p>
-        <div class="mt-4 rounded-xl border border-zinc-800 bg-zinc-950/70 p-4">
-            <label class="flex items-start gap-3 text-sm text-zinc-200">
-                <input id="hard-reset-workspace" type="checkbox" name="hard_reset" value="on" form="regenerate-workspace-form" class="mt-0.5 h-4 w-4 rounded border-zinc-700 bg-zinc-950 text-white">
-                <span>
-                    <span class="block font-medium text-white">Hard-reset workspace</span>
-                    <span class="mt-1 block text-xs leading-5 text-zinc-500">Delete the full workspace before recreating it from the template. This removes user-managed and agent-generated files.</span>
-                </span>
-            </label>
-            <label id="reset-memories-option" class="mt-3 ml-7 flex items-start gap-3 text-sm text-zinc-500">
-                <input id="reset-memories" type="checkbox" name="reset_memories" value="on" form="regenerate-workspace-form" disabled class="mt-0.5 h-4 w-4 rounded border-zinc-700 bg-zinc-950 text-white disabled:cursor-not-allowed disabled:opacity-50">
-                <span>
-                    <span id="reset-memories-title" class="block font-medium text-zinc-400">Reset memories</span>
-                    <span id="reset-memories-description" class="mt-1 block text-xs leading-5 text-zinc-600">Delete all memories stored for this agent.</span>
-                </span>
-            </label>
-        </div>
         <div class="mt-6 flex flex-col-reverse gap-3 sm:flex-row sm:justify-end">
-            <button type="button" id="cancel-regenerate-workspace-btn" class="w-full cursor-pointer rounded-full border border-zinc-800 px-4 py-2 text-sm font-medium text-zinc-300 hover:border-zinc-700 hover:text-white sm:w-auto">
+            <button type="button" id="cancel-reset-memories-btn" class="w-full cursor-pointer rounded-full border border-zinc-800 px-4 py-2 text-sm font-medium text-zinc-300 hover:border-zinc-700 hover:text-white sm:w-auto">
                 Cancel
             </button>
-            <form id="regenerate-workspace-form" action="/agents/{{ agent.agent_key }}/settings/regenerate-workspace" method="post" class="w-full sm:w-auto">
-                    <button type="submit" class="w-full cursor-pointer rounded-full bg-violet-600 px-4 py-2 text-sm font-medium text-white hover:bg-violet-500 sm:w-auto">
-                    Re-generate workspace
+            <form action="/agents/{{ agent.agent_key }}/settings/reset-memories" method="post" class="w-full sm:w-auto">
+                <button type="submit" class="w-full cursor-pointer rounded-full bg-red-600 px-4 py-2 text-sm font-medium text-white hover:bg-red-500 sm:w-auto">
+                    Reset memories
                 </button>
             </form>
         </div>
@@ -1084,88 +1061,6 @@
             });
         }
 
-        function closeRegenerateWorkspaceModal() {
-            const modal = document.getElementById('regenerate-workspace-modal');
-            if (!modal) {
-                return;
-            }
-
-            modal.classList.add('hidden');
-            modal.classList.remove('flex');
-        }
-
-        function openRegenerateWorkspaceModal() {
-            const modal = document.getElementById('regenerate-workspace-modal');
-            if (!modal) {
-                return;
-            }
-
-            modal.classList.remove('hidden');
-            modal.classList.add('flex');
-        }
-
-        function initRegenerateWorkspaceModal() {
-            const modal = document.getElementById('regenerate-workspace-modal');
-            const cancelBtn = document.getElementById('cancel-regenerate-workspace-btn');
-            const hardReset = document.getElementById('hard-reset-workspace');
-            const resetMemories = document.getElementById('reset-memories');
-            const resetMemoriesOption = document.getElementById('reset-memories-option');
-            const resetMemoriesTitle = document.getElementById('reset-memories-title');
-            const resetMemoriesDescription = document.getElementById('reset-memories-description');
-
-            function syncResetMemoriesOption() {
-                if (!hardReset || !resetMemories || !resetMemoriesOption || !resetMemoriesTitle || !resetMemoriesDescription) {
-                    return;
-                }
-
-                resetMemories.disabled = !hardReset.checked;
-                if (!hardReset.checked) {
-                    resetMemories.checked = false;
-                }
-                resetMemoriesOption.classList.toggle('text-zinc-500', !hardReset.checked);
-                resetMemoriesOption.classList.toggle('text-zinc-200', hardReset.checked);
-                resetMemoriesTitle.classList.toggle('text-zinc-400', !hardReset.checked);
-                resetMemoriesTitle.classList.toggle('text-white', hardReset.checked);
-                resetMemoriesDescription.classList.toggle('text-zinc-600', !hardReset.checked);
-                resetMemoriesDescription.classList.toggle('text-zinc-400', hardReset.checked);
-            }
-
-            if (hardReset && hardReset.dataset.resetMemoriesBound !== 'true') {
-                hardReset.dataset.resetMemoriesBound = 'true';
-                hardReset.addEventListener('change', syncResetMemoriesOption);
-            }
-            syncResetMemoriesOption();
-
-            if (modal && modal.dataset.regenerateWorkspaceModalBound !== 'true') {
-                modal.dataset.regenerateWorkspaceModalBound = 'true';
-                modal.addEventListener('click', function (event) {
-                    if (event.target === modal) {
-                        closeRegenerateWorkspaceModal();
-                    }
-                });
-
-                document.addEventListener('keydown', function (event) {
-                    if (event.key === 'Escape' && modal.classList.contains('flex')) {
-                        closeRegenerateWorkspaceModal();
-                    }
-                });
-            }
-
-            if (cancelBtn && cancelBtn.dataset.regenerateWorkspaceModalBound !== 'true') {
-                cancelBtn.dataset.regenerateWorkspaceModalBound = 'true';
-                cancelBtn.addEventListener('click', closeRegenerateWorkspaceModal);
-            }
-
-            document.querySelectorAll('[data-regenerate-workspace-trigger]').forEach(function (button) {
-                if (button.dataset.regenerateWorkspaceModalBound === 'true') {
-                    return;
-                }
-
-                button.dataset.regenerateWorkspaceModalBound = 'true';
-                button.addEventListener('click', openRegenerateWorkspaceModal);
-            });
-        }
-
         function readLatestTradeExecutionSummaryValue(container) {
             return container.innerHTML.trim();
         }
@@ -1206,7 +1101,6 @@
             initClickableRows();
             initDeleteModal();
             initAgentJobDeleteModal();
-            initRegenerateWorkspaceModal();
             seedLatestTradeExecutionSummary();
         }
 

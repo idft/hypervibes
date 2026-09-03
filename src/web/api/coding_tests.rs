@@ -93,7 +93,7 @@ async fn coding_report_is_scoped_to_the_authenticated_agent() {
         "outcome": "changed",
         "summary": "Changed analyzer",
         "rationale": "Added quantitative measurements",
-        "changed_paths": ["scripts/user/analyze.py"],
+        "changed_paths": ["scripts/user/strategies/trend.py"],
         "evidence_memory_ids": [],
         "validation_notes": "Passed"
     });

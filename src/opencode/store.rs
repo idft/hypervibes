@@ -313,29 +313,6 @@ pub async fn count_active_opencode_sessions(pool: &DbPool) -> Result<i64> {
     Ok(row.0)
 }
 
-/// Count every active session in one workspace. Unlike the sidebar-oriented
-/// session listing, this query has no limit so maintenance cannot miss an
-/// older active conversation.
-pub async fn count_active_opencode_sessions_for_directory(
-    pool: &DbPool,
-    directory: &str,
-) -> Result<i64> {
-    let row: (i64,) = query_as(
-        "SELECT count(*)
-           FROM opencode.sessions
-          WHERE directory = $1
-            AND status = ANY($2)",
-    )
-    .bind(directory)
-    .bind(["busy", "retry"])
-    .fetch_one(pool)
-    .await
-    .with_context(|| {
-        format!("failed to count active OpenCode sessions for directory {directory}")
-    })?;
-    Ok(row.0)
-}
-
 #[cfg(test)]
 mod tests {
     use serde_json::json;

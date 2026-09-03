@@ -129,7 +129,6 @@ class HyperVibesMcpServerTests(unittest.TestCase):
                 "cancel_orders",
                 "cancel_all_orders",
                 "send_notification",
-                "run_analysis_tool",
                 "coding_validate_candidate",
                 "coding_submit_report",
             }.issubset(registered)
@@ -517,8 +516,8 @@ class HyperVibesMcpServerTests(unittest.TestCase):
         )
         with tempfile.TemporaryDirectory() as tmp:
             workspace = Path(tmp) / "workspace"
-            (workspace / "scripts/user").mkdir(parents=True)
-            (workspace / "scripts/user/analyze.py").write_text("print(1)")
+            (workspace / "scripts/user/strategies").mkdir(parents=True)
+            (workspace / "scripts/user/strategies/trend.py").write_text("print(1)")
             completed = subprocess.CompletedProcess(
                 args=[],
                 returncode=0,
@@ -545,80 +544,9 @@ class HyperVibesMcpServerTests(unittest.TestCase):
                 command = run.call_args.args[0]
                 self.assertEqual(command[0], coding.CODING_VALIDATOR_PYTHON)
                 self.assertEqual(command[1], coding.CODING_VALIDATOR_SCRIPT)
+                self.assertNotIn("timeout", run.call_args.kwargs)
             finally:
                 os.chdir(prior)
-
-    def test_analysis_launcher_binds_output_to_declared_package(self) -> None:
-        launcher = _load_server(
-            {
-                "HYPERVIBES_API_BASE_URL": "http://example.test",
-                "HYPERVIBES_API_KEY": "k",
-                "HYPERVIBES_AGENT_KEY": "a",
-            }
-        )
-        with tempfile.TemporaryDirectory() as tmp:
-            workspace = Path(tmp) / "workspace"
-            user = workspace / "scripts/user"
-            scratch = workspace / "scratch"
-            user.mkdir(parents=True)
-            scratch.mkdir()
-            (user / "analyze.py").write_text("# invoked by mocked subprocess\n")
-            (user / "manifest.json").write_text(
-                json.dumps(
-                    {
-                        "schema_version": 1,
-                        "package_version": "test-package",
-                        "tools": [
-                            {
-                                "id": "analyze",
-                                "description": "Test tool",
-                                "entrypoint": "analyze.py",
-                                "input_kind": "ohlcv",
-                                "supported_timeframes": ["15m"],
-                                "minimum_candles": 1,
-                                "required_arguments": [
-                                    "symbol", "timeframe", "boundary_ms", "input", "output"
-                                ],
-                                "output_schema": "hypervibes.quantitative.v1",
-                                "version": "2",
-                            }
-                        ],
-                    }
-                )
-            )
-            (scratch / "input.json").write_text("{}")
-
-            def run_tool(command, **_kwargs):
-                output = Path(command[-1])
-                output.write_text(
-                    json.dumps(
-                        {
-                            "symbol": "BTC",
-                            "timeframe": "15m",
-                            "boundary_ms": 1,
-                            "source_range": {"count": 1},
-                            "code_version": "test",
-                            "measurements": {"close": 1},
-                            "warnings": [],
-                        }
-                    )
-                )
-                return subprocess.CompletedProcess(command, 0, "", "")
-
-            prior = os.getcwd()
-            os.chdir(workspace)
-            try:
-                with mock.patch.object(launcher.subprocess, "run", side_effect=run_tool):
-                    result = launcher.run_analysis_tool(
-                        "analyze", "BTC", "15m", 1, "scratch/input.json", "scratch/output.json"
-                    )
-            finally:
-                os.chdir(prior)
-            self.assertEqual(result["package_version"], "test-package")
-            self.assertEqual(result["tool_version"], "2")
-            written = json.loads((scratch / "output.json").read_text())
-            self.assertEqual(written["quantitative_package"]["tool_id"], "analyze")
-            self.assertEqual(len(written["quantitative_package"]["package_manifest_hash"]), 64)
 
     def test_coding_manifest_rejects_unapproved_extension(self) -> None:
         coding = _load_server(

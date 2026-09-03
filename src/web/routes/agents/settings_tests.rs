@@ -4,108 +4,31 @@ use crate::web::routes::test_support::*;
 
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
-use std::{fs, sync::Arc};
+use std::sync::Arc;
 use tower::util::ServiceExt;
 
-use crate::{
-    agents::store::{list_agent_instrument_ids, replace_agent_instruments},
-    opencode::workspace::agent_workspace_host_path,
-};
+use crate::agents::store::{list_agent_instrument_ids, replace_agent_instruments};
 
 #[tokio::test]
-async fn post_regenerate_workspace_queues_regular_maintenance_task() {
+async fn post_reset_memories_deletes_only_that_agents_memories() {
     let state = test_state().await;
     let app = router(Arc::clone(&state));
     let (agent_key, _) = insert_test_opencode_agent(&state)
         .await
         .expect("insert agent");
-    generate_test_agent_workspace(&state, &agent_key).await;
+    let (other_agent_key, _) = insert_test_opencode_agent(&state)
+        .await
+        .expect("insert other agent");
+    seed_memory(&state, &agent_key, "mine", "mine content").await;
+    seed_memory_with_type(&state, &agent_key, "analysis", "mine-2", "content").await;
+    seed_memory(&state, &other_agent_key, "other", "other content").await;
 
     let response = app
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri(format!("/agents/{agent_key}/settings/regenerate-workspace"))
-                .header("content-type", "application/x-www-form-urlencoded")
-                .body(Body::from(""))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-
-    assert_eq!(response.status(), StatusCode::SEE_OTHER);
-    assert_eq!(
-        response
-            .headers()
-            .get("location")
-            .and_then(|value| value.to_str().ok()),
-        Some(format!("/agents/{agent_key}/settings").as_str())
-    );
-
-    let task =
-        crate::harness::store::get_latest_workspace_regenerate_task(&state.db_pool, &agent_key)
-            .await
-            .expect("load maintenance task")
-            .expect("maintenance task present");
-    assert_eq!(
-        task.status,
-        crate::harness::model::MAINTENANCE_STATUS_QUEUED
-    );
-    assert!(!task.parameter_bool("hard_reset"));
-}
-#[tokio::test]
-async fn post_regenerate_workspace_with_hard_reset_and_memory_reset_queues_both_options() {
-    let state = test_state().await;
-    let app = router(Arc::clone(&state));
-    let (agent_key, _) = insert_test_opencode_agent(&state)
-        .await
-        .expect("insert agent");
-    generate_test_agent_workspace(&state, &agent_key).await;
-
-    let response = app
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri(format!("/agents/{agent_key}/settings/regenerate-workspace"))
-                .header("content-type", "application/x-www-form-urlencoded")
-                .body(Body::from("hard_reset=on&reset_memories=on"))
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-
-    assert_eq!(response.status(), StatusCode::SEE_OTHER);
-    let task =
-        crate::harness::store::get_latest_workspace_regenerate_task(&state.db_pool, &agent_key)
-            .await
-            .expect("load maintenance task")
-            .expect("maintenance task present");
-    assert!(task.parameter_bool("hard_reset"));
-    assert!(task.parameter_bool("reset_memories"));
-}
-#[tokio::test]
-async fn post_regenerate_workspace_redirects_with_warning_when_task_already_exists() {
-    let state = test_state().await;
-    let app = router(Arc::clone(&state));
-    let (agent_key, _) = insert_test_opencode_agent(&state)
-        .await
-        .expect("insert agent");
-    crate::harness::store::insert_workspace_regenerate_task(
-        &state.db_pool,
-        &agent_key,
-        false,
-        false,
-    )
-    .await
-    .expect("seed maintenance task");
-
-    let response = app
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri(format!("/agents/{agent_key}/settings/regenerate-workspace"))
-                .header("content-type", "application/x-www-form-urlencoded")
-                .body(Body::from(""))
+                .uri(format!("/agents/{agent_key}/settings/reset-memories"))
+                .body(Body::empty())
                 .unwrap(),
         )
         .await
@@ -116,33 +39,104 @@ async fn post_regenerate_workspace_redirects_with_warning_when_task_already_exis
         .headers()
         .get("location")
         .and_then(|value| value.to_str().ok())
-        .expect("redirect location");
-    assert!(location.contains("workspace_warning="));
+        .expect("redirect location")
+        .to_string();
+    assert!(location.starts_with(&format!("/agents/{agent_key}/settings?notice=")));
+    let notice = urldecode(
+        location
+            .split("notice=")
+            .nth(1)
+            .unwrap_or_default()
+            .as_bytes(),
+    );
+    assert!(notice.contains("were deleted"));
+
+    let (mine_count,): (i64,) =
+        sqlx::query_as("SELECT COUNT(*) FROM memory.records WHERE agent_key = $1")
+            .bind(&agent_key)
+            .fetch_one(&state.db_pool)
+            .await
+            .expect("count agent memories");
+    assert_eq!(mine_count, 0, "agent memories must be deleted");
+    let (other_count,): (i64,) =
+        sqlx::query_as("SELECT COUNT(*) FROM memory.records WHERE agent_key = $1")
+            .bind(&other_agent_key)
+            .fetch_one(&state.db_pool)
+            .await
+            .expect("count other agent memories");
+    assert_eq!(other_count, 1, "other agents' memories must be untouched");
 }
+
 #[tokio::test]
-async fn settings_page_and_partial_render_workspace_maintenance_status() {
+async fn post_reset_memories_reports_success_when_no_memories_exist() {
     let state = test_state().await;
     let app = router(Arc::clone(&state));
     let (agent_key, _) = insert_test_opencode_agent(&state)
         .await
         .expect("insert agent");
-    seed_workspace_runtime_config(&state, &agent_key).await;
-    let task_id = match crate::harness::store::insert_workspace_regenerate_task(
-        &state.db_pool,
-        &agent_key,
-        true,
-        false,
-    )
-    .await
-    .expect("seed maintenance task")
-    {
-        crate::harness::store::InsertWorkspaceMaintenanceTaskOutcome::Inserted { task_id } => {
-            task_id
-        }
-        other => panic!("expected inserted maintenance task, got {other:?}"),
-    };
 
-    let settings_response = app
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/agents/{agent_key}/settings/reset-memories"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+    let location = response
+        .headers()
+        .get("location")
+        .and_then(|value| value.to_str().ok())
+        .expect("redirect location")
+        .to_string();
+    assert!(location.contains("notice="));
+    assert!(!location.contains("were%20deleted"));
+}
+
+#[tokio::test]
+async fn post_reset_memories_does_not_insert_maintenance_task() {
+    let state = test_state().await;
+    let app = router(Arc::clone(&state));
+    let (agent_key, _) = insert_test_opencode_agent(&state)
+        .await
+        .expect("insert agent");
+    seed_memory(&state, &agent_key, "mine", "mine content").await;
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/agents/{agent_key}/settings/reset-memories"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+
+    let (task_count,): (i64,) =
+        sqlx::query_as("SELECT COUNT(*) FROM harness_maintenance_tasks WHERE agent_key = $1")
+            .bind(&agent_key)
+            .fetch_one(&state.db_pool)
+            .await
+            .expect("count maintenance tasks");
+    assert_eq!(task_count, 0, "memory reset must not queue a task");
+}
+
+#[tokio::test]
+async fn settings_page_renders_reset_memories_action_and_no_workspace_section() {
+    let state = test_state().await;
+    let app = router(Arc::clone(&state));
+    let (agent_key, _) = insert_test_opencode_agent(&state)
+        .await
+        .expect("insert agent");
+    seed_memory(&state, &agent_key, "mine", "mine content").await;
+
+    let response = app
         .clone()
         .oneshot(
             Request::builder()
@@ -152,52 +146,31 @@ async fn settings_page_and_partial_render_workspace_maintenance_status() {
         )
         .await
         .unwrap();
-    assert_eq!(settings_response.status(), StatusCode::OK);
-    let settings_text = response_text(settings_response).await;
-    assert!(settings_text.contains("Workspace maintenance"));
-    assert!(settings_text.contains("Waiting for active sub-agents and sessions to finish"));
-    assert!(settings_text.contains("Hard reset"));
+    assert_eq!(response.status(), StatusCode::OK);
+    let text = response_text(response).await;
+    assert!(text.contains("data-reset-memories-trigger"));
+    assert!(text.contains("reset-memories-modal"));
+    assert!(!text.contains("regenerate-workspace-modal"));
+    assert!(!text.contains("regenerate-workspace-form"));
+    assert!(!text.contains("agent-workspace-section"));
+    assert!(!text.contains("workspace-maintenance-status"));
+    assert!(!text.contains("Template drift"));
+    assert!(!text.contains("Re-generate workspace"));
 
-    let partial_response = app
-        .clone()
+    // Deleted regeneration route must be absent.
+    let gone = app
         .oneshot(
             Request::builder()
-                .uri(format!(
-                    "/agents/{agent_key}/settings/workspace-maintenance-status"
-                ))
+                .method("POST")
+                .uri(format!("/agents/{agent_key}/settings/regenerate-workspace"))
                 .body(Body::empty())
                 .unwrap(),
         )
         .await
         .unwrap();
-    assert_eq!(partial_response.status(), StatusCode::OK);
-    let partial_text = response_text(partial_response).await;
-    assert!(partial_text.contains("id=\"agent-workspace-section\""));
-    assert!(partial_text.contains("hx-trigger=\"every 2s\""));
-
-    assert!(
-        crate::harness::store::mark_maintenance_task_succeeded(&state.db_pool, task_id,)
-            .await
-            .expect("mark maintenance succeeded")
-    );
-
-    let completed_response = app
-        .oneshot(
-            Request::builder()
-                .uri(format!(
-                    "/agents/{agent_key}/settings/workspace-maintenance-status"
-                ))
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(completed_response.status(), StatusCode::OK);
-    let completed_text = response_text(completed_response).await;
-    assert!(completed_text.contains("id=\"agent-workspace-section\""));
-    assert!(!completed_text.contains("Workspace maintenance"));
-    assert!(!completed_text.contains("hx-trigger=\"every 2s\""));
+    assert_eq!(gone.status(), StatusCode::NOT_FOUND);
 }
+
 #[tokio::test]
 async fn agent_settings_route_renders_currency_controls() {
     let state = test_state().await;
@@ -236,62 +209,7 @@ async fn agent_settings_route_renders_currency_controls() {
     assert!(text.contains("Select all"));
     assert!(text.contains("Select none"));
 }
-#[tokio::test]
-async fn opencode_agent_settings_route_renders_workspace_state() {
-    let state = test_state().await;
-    let app = router(Arc::clone(&state));
-    let (agent_key, _) = insert_test_opencode_agent(&state)
-        .await
-        .expect("insert agent");
-    generate_test_agent_workspace(&state, &agent_key).await;
 
-    let response = app
-        .oneshot(
-            Request::builder()
-                .uri(format!("/agents/{agent_key}/settings"))
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-
-    assert_eq!(response.status(), StatusCode::OK);
-    let text = response_text(response).await;
-    assert!(text.contains(">Workspace</h2>"));
-    assert!(!text.contains("Container workspace path"));
-    assert!(!text.contains("Profile source"));
-    assert!(!text.contains("Workspace .env"));
-    assert!(text.contains("In sync"));
-}
-#[tokio::test]
-async fn opencode_agent_settings_route_renders_workspace_template_drift() {
-    let state = test_state().await;
-    let app = router(Arc::clone(&state));
-    let (agent_key, _) = insert_test_opencode_agent(&state)
-        .await
-        .expect("insert agent");
-    generate_test_agent_workspace(&state, &agent_key).await;
-
-    let workspace_path = agent_workspace_host_path(&state.opencode_workspace_config, &agent_key)
-        .expect("workspace path");
-    fs::write(workspace_path.join("AGENTS.md"), "user-modified\n").expect("modify AGENTS.md");
-
-    let response = app
-        .oneshot(
-            Request::builder()
-                .uri(format!("/agents/{agent_key}/settings"))
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-
-    assert_eq!(response.status(), StatusCode::OK);
-    let text = response_text(response).await;
-    assert!(text.contains("Template drift"));
-    assert!(text.contains("AGENTS.md"));
-    assert!(text.contains("Only files generated from the workspace template are compared."));
-}
 #[tokio::test]
 async fn post_agent_instruments_updates_selection_and_redirects() {
     let state = test_state().await;
@@ -333,6 +251,7 @@ async fn post_agent_instruments_updates_selection_and_redirects() {
     assert_eq!(selected, vec!["BTC".to_string(), "ETH".to_string()]);
     drop(guard);
 }
+
 #[tokio::test]
 async fn post_agent_instruments_without_values_clears_selection_and_redirects() {
     let state = test_state().await;
@@ -367,4 +286,32 @@ async fn post_agent_instruments_without_values_clears_selection_and_redirects() 
         .expect("list selected instruments");
     assert!(selected.is_empty());
     drop(guard);
+}
+
+fn urldecode(raw: &[u8]) -> String {
+    let mut output = Vec::with_capacity(raw.len());
+    let mut index = 0;
+    while index < raw.len() {
+        match raw[index] {
+            b'%' if index + 2 < raw.len() => {
+                let hex = std::str::from_utf8(&raw[index + 1..index + 3]).unwrap_or("");
+                if let Ok(byte) = u8::from_str_radix(hex, 16) {
+                    output.push(byte);
+                    index += 3;
+                    continue;
+                }
+                output.push(raw[index]);
+                index += 1;
+            }
+            b'+' => {
+                output.push(b' ');
+                index += 1;
+            }
+            byte => {
+                output.push(byte);
+                index += 1;
+            }
+        }
+    }
+    String::from_utf8_lossy(&output).into_owned()
 }

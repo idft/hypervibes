@@ -27,11 +27,7 @@ use crate::{
     },
     harness::store::{list_active_agent_runs, mark_run_aborted},
     hyperliquid::live_state::{AccountKey, AccountLiveState, LiveConnectionStatus},
-    opencode::{
-        client::{DeleteSessionResult, SessionStatusKind},
-        workspace::OpenCodeWorkspaceRuntimeConfig,
-        workspace_control_client::WorkspaceAgentInput,
-    },
+    opencode::client::{DeleteSessionResult, SessionStatusKind},
     web::{
         AppState,
         auth::{AuthenticatedUser, get_user_api_wallet},
@@ -160,12 +156,6 @@ pub(in crate::web::routes) async fn delete_agent(
     let Some(trading_account_address) = agent.trading_account_address.as_deref() else {
         return Ok((StatusCode::CONFLICT, "agent has no trading account").into_response());
     };
-    let workspace =
-        OpenCodeWorkspaceRuntimeConfig::from_value(&agent.runtime_config).ok_or_else(|| {
-            AppError(anyhow::anyhow!(
-                "agent is missing OpenCode workspace metadata"
-            ))
-        })?;
 
     // Disable first so the execution lock waits for an in-flight placement and
     // prevents further order submissions or job dispatch while deletion runs.
@@ -173,27 +163,45 @@ pub(in crate::web::routes) async fn delete_agent(
         return Ok((StatusCode::NOT_FOUND, "agent not found").into_response());
     }
 
+    let coding_task_by_run_id =
+        crate::harness::store::analysis_coding_task_ids_for_agent_runs(&state.db_pool, &agent_key)
+            .await?;
+
     for run in list_active_agent_runs(&state.db_pool, &agent_key).await? {
-        let run_workspace_container_path = (run.sub_agent_kind
-            != crate::harness::model::SUB_AGENT_KIND_ANALYSIS_CODING)
-            .then(|| {
-                format!(
+        // Normal runs execute in their isolated run workspace. Analysis-coding
+        // runs execute in the coding candidate workspace owned by their
+        // maintenance task.
+        let run_workspace_container_path =
+            if run.sub_agent_kind != crate::harness::model::SUB_AGENT_KIND_ANALYSIS_CODING {
+                Some(format!(
                     "{}/runs/{}/{}/workspace",
                     state
                         .opencode_container_workspaces_root
                         .trim_end_matches('/'),
                     agent_key,
                     run.id
-                )
-            });
+                ))
+            } else {
+                let task_id = coding_task_by_run_id.get(&run.id).ok_or_else(|| {
+                    AppError(anyhow::anyhow!(
+                        "coding run {} has no owning maintenance task",
+                        run.id
+                    ))
+                })?;
+                Some(format!(
+                    "{}/coding/{}/{task_id}/workspace",
+                    state
+                        .opencode_container_workspaces_root
+                        .trim_end_matches('/'),
+                    agent_key,
+                ))
+            };
         if let Some(session_id) = run.backend_run_ref.as_deref()
             && !crate::harness::backend::abort_and_confirm_session_terminated(
                 &state.harness_backend,
                 &state.opencode_base_url,
                 session_id,
-                run_workspace_container_path
-                    .as_deref()
-                    .or(Some(&workspace.workspace_container_path)),
+                run_workspace_container_path.as_deref(),
             )
             .await?
         {
@@ -204,7 +212,7 @@ pub(in crate::web::routes) async fn delete_agent(
                 .into_response());
         }
         mark_run_aborted(&state.db_pool, run.id, "aborted by agent deletion", None).await?;
-        if run_workspace_container_path.is_some() {
+        if run.sub_agent_kind != crate::harness::model::SUB_AGENT_KIND_ANALYSIS_CODING {
             crate::harness::scheduler::terminalize_run_workspace_artifact(
                 &state.db_pool,
                 &state.workspace_controller,
@@ -216,18 +224,26 @@ pub(in crate::web::routes) async fn delete_agent(
     }
 
     let conversation_sessions =
-        crate::agent_conversations::store::list_agent_conversation_opencode_session_ids(
+        crate::agent_conversations::store::list_agent_conversation_ids_and_session_ids(
             &state.db_pool,
             &agent_key,
         )
         .await?;
-    for session_id in conversation_sessions {
+    let conversation_workspace_container_path = |conversation_id: uuid::Uuid| {
+        format!(
+            "{}/conversations/{agent_key}/{conversation_id}/workspace",
+            state
+                .opencode_container_workspaces_root
+                .trim_end_matches('/'),
+        )
+    };
+    for (conversation_id, session_id) in &conversation_sessions {
         if !state
             .opencode_client
             .abort_and_confirm_session_terminated_in_directory(
                 &state.opencode_base_url,
-                &session_id,
-                &workspace.workspace_container_path,
+                session_id,
+                &conversation_workspace_container_path(*conversation_id),
             )
             .await?
         {
@@ -243,18 +259,18 @@ pub(in crate::web::routes) async fn delete_agent(
     // Once the write lease is held, no new workspace work can begin.
     let _workspace_lease = state.workspace_leases.acquire_live_write(&agent_key).await;
     let conversation_sessions =
-        crate::agent_conversations::store::list_agent_conversation_opencode_session_ids(
+        crate::agent_conversations::store::list_agent_conversation_ids_and_session_ids(
             &state.db_pool,
             &agent_key,
         )
         .await?;
-    for session_id in conversation_sessions {
+    for (conversation_id, session_id) in &conversation_sessions {
         let status = state
             .opencode_client
             .get_session_status_in_directory(
                 &state.opencode_base_url,
-                &session_id,
-                Some(&workspace.workspace_container_path),
+                session_id,
+                Some(&conversation_workspace_container_path(*conversation_id)),
             )
             .await?;
         if status.as_ref().is_some_and(SessionStatusKind::is_active) {
@@ -268,8 +284,8 @@ pub(in crate::web::routes) async fn delete_agent(
             .opencode_client
             .delete_session(
                 &state.opencode_base_url,
-                &workspace.workspace_container_path,
-                &session_id,
+                &conversation_workspace_container_path(*conversation_id),
+                session_id,
             )
             .await?
         {
@@ -277,9 +293,11 @@ pub(in crate::web::routes) async fn delete_agent(
         }
     }
 
+    // Sessions have stopped. Remove the agent's durable Coding resources
+    // (package root, coding candidates, retained versions).
     state
         .workspace_controller
-        .delete_workspace(
+        .delete_coding_resources(
             &agent.agent_key,
             &format!("delete-agent:{}", agent.agent_key),
         )
@@ -349,38 +367,7 @@ pub(in crate::web::routes) async fn create_agent(
         runtime_config: serde_json::json!({}),
     };
 
-    let generated = state
-        .workspace_controller
-        .create_workspace(
-            WorkspaceAgentInput {
-                agent_key: agent_key.clone(),
-                display_name: row.display_name.clone(),
-                agent_api_key: api_key.clone(),
-                api_base_url: state.hypervibes_agent_api_base_url.clone(),
-            },
-            false,
-            &format!("create-agent:{agent_key}"),
-        )
-        .await?;
-    let mut row = row;
-    row.runtime_config = OpenCodeWorkspaceRuntimeConfig {
-        workspace_container_path: generated.workspace_container_path,
-        profile_source: generated.profile_source,
-    }
-    .into_value();
-
     if let Err(e) = insert_agent(&state.db_pool, &row).await {
-        if let Err(error) = state
-            .workspace_controller
-            .delete_workspace(
-                &row.agent_key,
-                &format!("create-agent:{}:db-cleanup", row.agent_key),
-            )
-            .await
-        {
-            error!(agent_key = %row.agent_key, error = ?error, "failed to clean up newly created workspace after agent insert failure");
-        }
-
         let errors = match unique_violation_message(&e) {
             Some(msg) => vec![msg],
             None => {
@@ -399,16 +386,6 @@ pub(in crate::web::routes) async fn create_agent(
         error!(agent_key = %agent_key, error = ?error, "failed to activate newly created agent");
         if let Err(cleanup_error) = delete_agent_in_store(&state.db_pool, &agent_key).await {
             error!(agent_key = %agent_key, error = ?cleanup_error, "failed to clean up newly created agent after activation failure");
-        }
-        if let Err(cleanup_error) = state
-            .workspace_controller
-            .delete_workspace(
-                &agent_key,
-                &format!("create-agent:{agent_key}:activation-cleanup"),
-            )
-            .await
-        {
-            error!(agent_key = %agent_key, error = ?cleanup_error, "failed to clean up newly created workspace after activation failure");
         }
         return Err(AppError(error));
     }

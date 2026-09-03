@@ -163,7 +163,7 @@ function installModal(trigger: string, modalId: string, cancelId: string, config
 function installAgentModals() {
   installModal("[data-delete-agent-trigger]", "delete-modal", "cancel-delete-btn");
   installModal("[data-agent-sub-agent-delete-trigger]", "agent-sub-agent-delete-modal", "cancel-agent-sub-agent-delete-btn", (button) => { const form = document.getElementById("agent-sub-agent-delete-form") as HTMLFormElement | null; const kind = button.dataset.deleteKind ?? "sub-agent"; if (form) form.action = button.dataset.deleteAction ?? ""; const title = document.getElementById("agent-sub-agent-delete-modal-title"); const confirm = document.getElementById("confirm-agent-sub-agent-delete-btn"); const body = document.getElementById("agent-sub-agent-delete-modal-body"); if (title) title.textContent = `Delete ${kind}`; if (confirm) confirm.textContent = `Delete ${kind}`; if (body) body.textContent = `Are you sure you want to delete ${button.dataset.deleteLabel ?? kind}? This action cannot be undone.`; });
-  installModal("[data-regenerate-workspace-trigger]", "regenerate-workspace-modal", "cancel-regenerate-workspace-btn");
+  installModal("[data-reset-memories-trigger]", "reset-memories-modal", "cancel-reset-memories-btn");
 }
 
 function initInlineEditors(root: ParentNode) {
@@ -208,26 +208,6 @@ function initJobDetailModals(root: ParentNode) {
   });
 }
 
-function initWorkspaceModal(root: ParentNode) {
-  const modal = root.querySelector<HTMLElement>("#regenerate-workspace-modal");
-  const hardReset = modal?.querySelector<HTMLInputElement>("#hard-reset-workspace");
-  const resetMemories = modal?.querySelector<HTMLInputElement>("#reset-memories");
-  const option = modal?.querySelector<HTMLElement>("#reset-memories-option");
-  const title = modal?.querySelector<HTMLElement>("#reset-memories-title");
-  const description = modal?.querySelector<HTMLElement>("#reset-memories-description");
-  if (!modal || !hardReset || !resetMemories || !option || !title || !description || modal.dataset.workspaceBound === "true") return;
-  modal.dataset.workspaceBound = "true";
-  const sync = () => {
-    const enabled = hardReset.checked;
-    resetMemories.disabled = !enabled;
-    if (!enabled) resetMemories.checked = false;
-    option.classList.toggle("text-zinc-500", !enabled); option.classList.toggle("text-zinc-200", enabled);
-    title.classList.toggle("text-zinc-400", !enabled); title.classList.toggle("text-white", enabled);
-    description.classList.toggle("text-zinc-600", !enabled); description.classList.toggle("text-zinc-400", enabled);
-  };
-  hardReset.addEventListener("change", sync);
-  sync();
-}
 
 function initNewJobForm(root: ParentNode) {
   const form = root.querySelector<HTMLElement>("[data-new-sub-agent-form]");
@@ -294,7 +274,7 @@ function initTelegramGateway(root: ParentNode) {
   modal.addEventListener("keydown", (event) => { if (event.key === "Escape") { event.preventDefault(); close(); } });
 }
 
-export function initAgentPage(root: ParentNode = document) { initAgentCreation(root); initPromptEditor(root); initInstrumentSelectors(root); initClickableRows(root); initInlineEditors(root); initJobDetailModals(root); initWorkspaceModal(root); initNewJobForm(root); initNotifications(root); initTelegramGateway(root); }
+export function initAgentPage(root: ParentNode = document) { initAgentCreation(root); initPromptEditor(root); initInstrumentSelectors(root); initClickableRows(root); initInlineEditors(root); initJobDetailModals(root); initNewJobForm(root); initNotifications(root); initTelegramGateway(root); }
 export function installAgentPageLifecycle() {
   installAgentModals();
   document.addEventListener("click", (event) => {

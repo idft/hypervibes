@@ -128,7 +128,7 @@ pub(super) async fn request_analysis_coding(
             Ok((StatusCode::CONFLICT, "analysis coding is already queued").into_response())
         }
         store::InsertAnalysisCodingTaskOutcome::BlockedByMaintenance => {
-            Ok((StatusCode::CONFLICT, "workspace maintenance is active").into_response())
+            Ok((StatusCode::CONFLICT, "Coding promotion is active").into_response())
         }
     }
 }

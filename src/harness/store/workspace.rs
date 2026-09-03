@@ -2,6 +2,7 @@ use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use serde_json::json;
 use sqlx::{Error as SqlxError, Postgres, Transaction, query_as};
+use std::collections::HashMap;
 use uuid::Uuid;
 
 use crate::{
@@ -11,7 +12,7 @@ use crate::{
         MAINTENANCE_PHASE_COMPLETED, MAINTENANCE_STATUS_FAILED, MAINTENANCE_STATUS_QUEUED,
         MAINTENANCE_STATUS_RUNNING, MAINTENANCE_STATUS_SUCCEEDED,
         MAINTENANCE_TASK_KIND_ANALYSIS_CODING, MAINTENANCE_TASK_KIND_PROVIDER_CONFIG_RELOAD,
-        MAINTENANCE_TASK_KIND_WORKSPACE_REGENERATE, RUN_STATUS_QUEUED,
+        RUN_STATUS_QUEUED,
     },
 };
 
@@ -22,12 +23,6 @@ use super::common::{
 
 const ACTIVE_MAINTENANCE_STATUSES: [&str; 2] =
     [MAINTENANCE_STATUS_QUEUED, MAINTENANCE_STATUS_RUNNING];
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum InsertWorkspaceMaintenanceTaskOutcome {
-    Inserted { task_id: i64 },
-    DuplicateActiveTask,
-}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum InsertAnalysisCodingTaskOutcome {
@@ -238,98 +233,32 @@ pub async fn insert_analysis_coding_task_and_run(
     })
 }
 
-pub async fn insert_workspace_regenerate_task(
+/// Map the analysis-coding runs of one agent to the maintenance task id that
+/// owns each run. Used to resolve the isolated candidate workspace directory
+/// of a coding run without parsing agent runtime metadata.
+pub async fn analysis_coding_task_ids_for_agent_runs(
     pool: &DbPool,
     agent_key: &str,
-    hard_reset: bool,
-    reset_memories: bool,
-) -> Result<InsertWorkspaceMaintenanceTaskOutcome> {
-    let parameters = json!({
-        "hard_reset": hard_reset,
-        "reset_memories": hard_reset && reset_memories,
-    });
-    let mut tx = pool
-        .begin()
-        .await
-        .context("failed to begin workspace maintenance insert")?;
-    lock_agent_coordination_tx(&mut tx, agent_key).await?;
-    let row: Result<(i64,), SqlxError> = query_as(
-        "INSERT INTO harness_maintenance_tasks (
-            agent_key,
-            task_kind,
-            parameters,
-            status
-         ) VALUES ($1, $2, $3, $4)
-         RETURNING id",
-    )
-    .bind(agent_key)
-    .bind(MAINTENANCE_TASK_KIND_WORKSPACE_REGENERATE)
-    .bind(parameters)
-    .bind(MAINTENANCE_STATUS_QUEUED)
-    .fetch_one(&mut *tx)
-    .await;
-
-    match row {
-        Ok((task_id,)) => {
-            tx.commit()
-                .await
-                .context("failed to commit workspace maintenance insert")?;
-            Ok(InsertWorkspaceMaintenanceTaskOutcome::Inserted { task_id })
-        }
-        Err(SqlxError::Database(db_err)) if db_err.is_unique_violation() => {
-            tx.rollback()
-                .await
-                .context("failed to roll back duplicate workspace maintenance insert")?;
-            Ok(InsertWorkspaceMaintenanceTaskOutcome::DuplicateActiveTask)
-        }
-        Err(error) => {
-            tx.rollback().await.ok();
-            Err(error).with_context(|| {
-                format!("failed to insert workspace regenerate task for agent {agent_key}")
-            })
-        }
-    }
-}
-
-#[cfg(test)]
-pub async fn get_latest_workspace_regenerate_task(
-    pool: &DbPool,
-    agent_key: &str,
-) -> Result<Option<AgentMaintenanceTaskRow>> {
-    let row = query_as::<_, AgentMaintenanceTaskRow>(
-        "SELECT id,
-                agent_key,
-                task_kind,
-                parameters,
-                status,
-                 phase,
-                 error_summary,
-                 sub_agent_id,
-                 run_id,
-                source_sub_agent_run_id,
-                source_memory_id,
-                heartbeat_at,
-                attempt_count,
-                created_at,
-                updated_at,
-                started_at,
-                finished_at
+) -> Result<HashMap<i64, i64>> {
+    let rows: Vec<(i64, i64)> = query_as(
+        "SELECT run_id, id
            FROM harness_maintenance_tasks
           WHERE agent_key = $1
             AND task_kind = $2
-          ORDER BY created_at DESC, id DESC
-          LIMIT 1",
+            AND run_id IS NOT NULL",
     )
     .bind(agent_key)
-    .bind(MAINTENANCE_TASK_KIND_WORKSPACE_REGENERATE)
-    .fetch_optional(pool)
+    .bind(MAINTENANCE_TASK_KIND_ANALYSIS_CODING)
+    .fetch_all(pool)
     .await
-    .with_context(|| format!("failed to load latest workspace maintenance task for {agent_key}"))?;
-
-    Ok(row)
+    .with_context(|| format!("failed to map analysis-coding runs to tasks for {agent_key}"))?;
+    Ok(rows.into_iter().collect())
 }
 
-pub async fn get_latest_maintenance_task(
+/// Return the most recent `analysis_coding` maintenance task for one agent.
+/// Only coding tasks are considered: provider reload or other task kinds are
+/// never returned.
+pub async fn get_latest_analysis_coding_task(
     pool: &DbPool,
     agent_key: &str,
 ) -> Result<Option<AgentMaintenanceTaskRow>> {
@@ -340,13 +269,15 @@ pub async fn get_latest_maintenance_task(
                 started_at, finished_at
            FROM harness_maintenance_tasks
           WHERE agent_key = $1
+            AND task_kind = $2
           ORDER BY created_at DESC, id DESC
           LIMIT 1",
     )
     .bind(agent_key)
+    .bind(MAINTENANCE_TASK_KIND_ANALYSIS_CODING)
     .fetch_optional(pool)
     .await
-    .with_context(|| format!("failed to load latest maintenance task for {agent_key}"))
+    .with_context(|| format!("failed to load latest analysis-coding task for {agent_key}"))
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -436,42 +367,6 @@ pub async fn requeue_stale_provider_config_reload_tasks(
     .context("failed to requeue stale provider config reload tasks")?;
 
     Ok(result.rows_affected())
-}
-
-pub async fn get_next_queued_workspace_regenerate_task(
-    pool: &DbPool,
-) -> Result<Option<AgentMaintenanceTaskRow>> {
-    let row = query_as::<_, AgentMaintenanceTaskRow>(
-        "SELECT id,
-                agent_key,
-                task_kind,
-                parameters,
-                status,
-                 phase,
-                 error_summary,
-                 sub_agent_id,
-                 run_id,
-                source_sub_agent_run_id,
-                source_memory_id,
-                heartbeat_at,
-                attempt_count,
-                created_at,
-                updated_at,
-                started_at,
-                finished_at
-           FROM harness_maintenance_tasks
-          WHERE task_kind = $1
-            AND status = $2
-          ORDER BY created_at ASC, id ASC
-          LIMIT 1",
-    )
-    .bind(MAINTENANCE_TASK_KIND_WORKSPACE_REGENERATE)
-    .bind(MAINTENANCE_STATUS_QUEUED)
-    .fetch_optional(pool)
-    .await
-    .context("failed to load next queued workspace maintenance task")?;
-
-    Ok(row)
 }
 
 pub async fn list_queued_maintenance_candidates(
@@ -649,20 +544,18 @@ pub(crate) async fn agent_has_blocking_workspace_maintenance_tx(
         "SELECT 1
            FROM harness_maintenance_tasks
          WHERE agent_key = $1
-           AND (
-                 (task_kind = $2 AND status = ANY($3))
-              OR (task_kind = $4 AND phase = ANY($5) AND status = ANY($3))
-           )
-           LIMIT 1",
+           AND task_kind = $2
+           AND phase = ANY($3)
+           AND status = ANY($4)
+         LIMIT 1",
     )
     .bind(agent_key)
-    .bind(MAINTENANCE_TASK_KIND_WORKSPACE_REGENERATE)
-    .bind(ACTIVE_MAINTENANCE_STATUSES)
     .bind(MAINTENANCE_TASK_KIND_ANALYSIS_CODING)
     .bind(CODING_PROMOTION_PHASES)
+    .bind(ACTIVE_MAINTENANCE_STATUSES)
     .fetch_optional(&mut **tx)
     .await
-    .with_context(|| format!("failed to check workspace maintenance state for {agent_key}"))?;
+    .with_context(|| format!("failed to check Coding promotion state for {agent_key}"))?;
 
     Ok(row.is_some())
 }
@@ -673,36 +566,18 @@ pub(crate) async fn agent_has_blocking_workspace_maintenance_for_mode_tx(
     mode: EventRunInsertMode,
 ) -> Result<bool> {
     let row: Option<(i32,)> = match mode {
-        EventRunInsertMode::Manual => {
+        EventRunInsertMode::Manual | EventRunInsertMode::AnalysisContinuation => {
             query_as(
                 "SELECT 1 FROM harness_maintenance_tasks
               WHERE agent_key = $1
-                AND ((task_kind = $2 AND status = ANY($3))
-                  OR (task_kind = $4 AND phase = ANY($5) AND status = ANY($3)))
+                AND task_kind = $2
+                AND phase = ANY($3)
+                AND status = ANY($4)
               LIMIT 1",
             )
             .bind(agent_key)
-            .bind(MAINTENANCE_TASK_KIND_WORKSPACE_REGENERATE)
-            .bind(ACTIVE_MAINTENANCE_STATUSES)
             .bind(MAINTENANCE_TASK_KIND_ANALYSIS_CODING)
             .bind(CODING_PROMOTION_PHASES)
-            .fetch_optional(&mut **tx)
-            .await?
-        }
-        EventRunInsertMode::AnalysisContinuation => {
-            query_as(
-                "SELECT 1 FROM harness_maintenance_tasks
-              WHERE agent_key = $1
-                AND task_kind = $2 AND phase = ANY($3) AND status = ANY($4)
-              LIMIT 1",
-            )
-            .bind(agent_key)
-            .bind(MAINTENANCE_TASK_KIND_ANALYSIS_CODING)
-            .bind([
-                crate::harness::model::MAINTENANCE_PHASE_PROMOTING,
-                crate::harness::model::MAINTENANCE_PHASE_SMOKE_TESTING,
-                crate::harness::model::MAINTENANCE_PHASE_ROLLING_BACK,
-            ])
             .bind(ACTIVE_MAINTENANCE_STATUSES)
             .fetch_optional(&mut **tx)
             .await?

@@ -67,4 +67,5 @@ candidate write, patch, or deletion invalidates that result.
 
 Coding reports are accepted only after successful fixed validation.
 Reported paths are relative to the candidate's `scripts/user` root, such as
-`analyze.py`, rather than workspace-relative `scripts/user/analyze.py`.
+`strategies/trend.py`, rather than workspace-relative
+`scripts/user/strategies/trend.py`.

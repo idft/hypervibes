@@ -280,10 +280,9 @@ pub async fn get_agent(pool: &DbPool, agent_key: &str) -> Result<Option<AgentDet
                  agents.agent_key,
                  agents.enabled,
                  agents.lifecycle,
-                   trading_account_address,
+                  trading_account_address,
                  environment,
-                 api_key,
-                 agents.runtime_config
+                  api_key
            FROM agents
            WHERE agents.agent_key = $1",
     )
@@ -510,26 +509,6 @@ pub async fn delete_agent(pool: &DbPool, agent_key: &str) -> Result<bool> {
     Ok(true)
 }
 
-pub async fn update_agent_runtime_config(
-    pool: &DbPool,
-    agent_key: &str,
-    runtime_config: serde_json::Value,
-) -> Result<bool> {
-    let result = sqlx::query(
-        "UPDATE agents
-            SET runtime_config = $2,
-                updated_at = now()
-          WHERE agent_key = $1",
-    )
-    .bind(agent_key)
-    .bind(runtime_config)
-    .execute(pool)
-    .await
-    .context("failed to update agent runtime config")?;
-
-    Ok(result.rows_affected() > 0)
-}
-
 /// Resolve an `agent_key` from the API key presented in the
 /// `Authorization: Bearer <api_key>` header.
 ///
@@ -727,37 +706,6 @@ mod tests {
             !agent_belongs_to_user(&pool, &foreign_key, owner)
                 .await
                 .expect("reject foreign owner")
-        );
-    }
-
-    #[tokio::test]
-    async fn update_agent_runtime_config_persists_json() {
-        let pool = test_db::pool().await;
-        let key = format!("runtime-config-test-{}", Utc::now().timestamp_millis());
-        let row = sample_agent(&key);
-        insert_agent(&pool, &row).await.expect("insert agent");
-
-        let updated = update_agent_runtime_config(
-            &pool,
-            &key,
-            serde_json::json!({
-                "workspace_host_path": "workspaces/agents/runtime-config-test",
-                "workspace_container_path": "/workspaces/agents/runtime-config-test",
-                "profile_source": "agent-runtime/workspace-template"
-            }),
-        )
-        .await
-        .expect("update runtime config");
-
-        assert!(updated);
-
-        let stored = get_agent(&pool, &key)
-            .await
-            .expect("get agent")
-            .expect("agent present");
-        assert_eq!(
-            stored.runtime_config["workspace_container_path"],
-            serde_json::json!("/workspaces/agents/runtime-config-test")
         );
     }
 

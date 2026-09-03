@@ -62,26 +62,43 @@ pub(in crate::web::routes) async fn agents_emergency_stop(
 
     let mut aborted_runs = 0_usize;
     let mut failures = Vec::new();
+    let coding_task_by_run_id =
+        crate::harness::store::analysis_coding_task_ids_for_agent_runs(&state.db_pool, &agent_key)
+            .await?;
     for run in active_runs {
-        let workspace_container_path = (run.sub_agent_kind
-            != crate::harness::model::SUB_AGENT_KIND_ANALYSIS_CODING)
-            .then(|| {
-                format!(
+        // Normal runs execute in their isolated run workspace; analysis-coding
+        // runs execute in the candidate workspace owned by their task.
+        let run_workspace_container_path =
+            if run.sub_agent_kind != crate::harness::model::SUB_AGENT_KIND_ANALYSIS_CODING {
+                Some(format!(
                     "{}/runs/{}/{}/workspace",
                     state
                         .opencode_container_workspaces_root
                         .trim_end_matches('/'),
                     agent_key,
                     run.id
-                )
-            });
+                ))
+            } else {
+                let task_id = coding_task_by_run_id.get(&run.id).ok_or_else(|| {
+                    AppError(anyhow::anyhow!(
+                        "coding run {} has no owning maintenance task",
+                        run.id
+                    ))
+                })?;
+                Some(format!(
+                    "{}/coding/{agent_key}/{task_id}/workspace",
+                    state
+                        .opencode_container_workspaces_root
+                        .trim_end_matches('/'),
+                ))
+            };
         let abort_result = match run.backend_run_ref.as_deref() {
             Some(session_id) => {
                 crate::harness::backend::abort_and_confirm_session_terminated(
                     &state.harness_backend,
                     &state.opencode_base_url,
                     session_id,
-                    workspace_container_path.as_deref(),
+                    run_workspace_container_path.as_deref(),
                 )
                 .await
             }
@@ -90,7 +107,7 @@ pub(in crate::web::routes) async fn agents_emergency_stop(
         match abort_result {
             Ok(true) => {
                 mark_run_aborted(&state.db_pool, run.id, "aborted by emergency stop", None).await?;
-                if workspace_container_path.is_some() {
+                if run.sub_agent_kind != crate::harness::model::SUB_AGENT_KIND_ANALYSIS_CODING {
                     crate::harness::scheduler::terminalize_run_workspace_artifact(
                         &state.db_pool,
                         &state.workspace_controller,

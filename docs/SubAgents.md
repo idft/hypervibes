@@ -40,9 +40,11 @@ are specific to that sub-agent and are appended to its selected strategy prompt;
 are not part of the saved strategy prompt and are not exposed through the agent
 API or MCP.
 
-Analysis, market analysis, trading, and daily review can use reusable analysis
-code but cannot modify `scripts/user/`. Analysis coding is the only sub-agent allowed
-to change that tree, and it requires an explicit strong provider and model.
+Analysis can inspect and directly execute the read-only Coding package copied
+into its run workspace under `scripts/user/`; market analysis, trading, and
+daily review have no package access. Analysis coding is the only sub-agent
+allowed to change the durable package, and it requires an explicit strong
+provider and model.
 
 Capabilities are named assignments rather than raw OpenCode permission rules. The
 Notifications control configures `hypervibes:notification_send`, which permits a
@@ -69,16 +71,10 @@ interrupted process does not permanently block later work for the same agent.
 Run details include the OpenCode transcript, tool activity, errors, token and
 context telemetry, and cost when those records are available.
 
-Sub-agents are held while per-agent workspace maintenance is queued or running. A
-maintenance task waits for active runs and busy OpenCode sessions to finish;
-then scheduled work remains due and can run after maintenance completes.
-
-Workspace maintenance includes regular regeneration and hard resets. Regular
-regeneration refreshes generated files while preserving user-managed files in
-`scripts/user/`, `data/`, and `scratch/`. A hard reset removes the complete
-workspace before regenerating it. Only one maintenance task can be queued or
-running for an agent, and the agent settings page reports drift in
-template-managed files.
+Runs are held while an analysis-coding task is in its promotion window. A
+promotion waits for active live runs to finish; scheduled work remains due and
+can run after promotion completes. Only one maintenance task can be queued or
+running for an agent.
 
 See [Prompts](Prompts.md) for the content passed to each sub-agent and
 [Architecture](/docs/development/architecture) for the runtime lifecycle.

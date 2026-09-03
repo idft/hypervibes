@@ -12,7 +12,6 @@ use tracing::warn;
 
 use super::super::account::agent_subaccount_name;
 use super::memories::{AgentMemoriesQuery, parse_memory_date_filter, prepare_memory_timeline_page};
-use super::settings::build_opencode_workspace_settings_view;
 use super::transactions::apply_live_cash_balance_anchor;
 use crate::{
     agents::{
@@ -23,7 +22,7 @@ use crate::{
         strategy_prompts::{
             PROMPT_KIND_ANALYSIS, PROMPT_KIND_ANALYSIS_CODING, PROMPT_KIND_DAILY_REVIEW,
             PROMPT_KIND_MARKET_ANALYSIS, PROMPT_KIND_TRADING, default_prompt_for_kind,
-            list_agent_strategy_prompts, list_prompt_revision_history,
+            list_agent_strategy_prompts,
         },
     },
     hyperliquid::{
@@ -45,9 +44,8 @@ use crate::{
             AccountBalancePartialTemplate, AccountBalanceView, AgentRecentRunsView, AgentShowTab,
             AgentsShowPageTemplate, BalanceSparklinesPartialTemplate,
             LatestAnalysisSummaryPartialTemplate, LatestTradeExecutionSummaryPartialTemplate,
-            OpenCodeWorkspaceTemplateDriftView, OpenOrdersPartialTemplate, OpenOrdersView,
-            OpenPositionsPartialTemplate, OpenPositionsView, SparklineView, TransactionView,
-            load_navbar,
+            OpenOrdersPartialTemplate, OpenOrdersView, OpenPositionsPartialTemplate,
+            OpenPositionsView, SparklineView, TransactionView, load_navbar,
         },
     },
 };
@@ -84,7 +82,7 @@ pub(in crate::web::routes) struct AgentTransactionsQuery {
 #[derive(Debug, Clone, Default, Deserialize)]
 pub(in crate::web::routes) struct AgentSettingsQuery {
     #[serde(default)]
-    pub workspace_warning: Option<String>,
+    pub notice: Option<String>,
     #[serde(default)]
     pub gateway_link: Option<uuid::Uuid>,
 }
@@ -129,8 +127,7 @@ pub(in crate::web::routes) async fn render_agent_show_page(
     template.setup_checklist =
         crate::web::templates::AgentSetupChecklistView::from_readiness(&readiness);
     template.operation_notice = operation_notice;
-    let (navbar, template_drift) = load_selected_agent_navbar(state, user.id, &agent).await?;
-    template.navbar = navbar;
+    template.navbar = load_selected_agent_navbar(state, user.id, &agent).await?;
     if let Some(address) = agent.trading_account_address.as_deref() {
         let is_main = address.eq_ignore_ascii_case(&user.wallet_address);
         template.is_main_account = is_main;
@@ -158,7 +155,7 @@ pub(in crate::web::routes) async fn render_agent_show_page(
 
     match active_tab {
         AgentShowTab::Chat => unreachable!("Chat has its own page route"),
-        AgentShowTab::Workspace => unreachable!("Workspace has its own page route"),
+        AgentShowTab::Coding => unreachable!("Coding has its own page route"),
         AgentShowTab::Positions => {
             populate_positions_tab(state, &agent, &mut template).await?;
         }
@@ -264,30 +261,6 @@ pub(in crate::web::routes) async fn render_agent_show_page(
                             default_prompt_for_kind(PROMPT_KIND_ANALYSIS_CODING),
                         ),
                     ]);
-                    template.prompt_revision_history =
-                        list_prompt_revision_history(&state.db_pool, &agent.agent_key)
-                            .await
-                            .unwrap_or_default()
-                            .into_iter()
-                            .map(|row| crate::web::templates::PromptRevisionHistoryView {
-                                id: row.id,
-                                prompt_kind: row.prompt_kind,
-                                prompt: row.prompt,
-                                source_type: row.source_type,
-                                source_run_id: row.source_run_id,
-                                rationale: row.rationale,
-                                created_at: row.created_at.to_rfc3339(),
-                            })
-                            .collect();
-                    template.prompt_improvement_enabled = sqlx::query_scalar(
-                        "SELECT EXISTS (
-                            SELECT 1
-                            FROM harness_sub_agents
-                            WHERE agent_key = $1
-                              AND sub_agent_kind = 'daily_review'
-                              AND enabled_capabilities @> '[\"hypervibes:prompt_revision_submit\"]'::jsonb
-                        )",
-                    ).bind(&agent.agent_key).fetch_one(&state.db_pool).await.unwrap_or(true);
                 }
                 Err(error) => {
                     warn!(
@@ -299,11 +272,9 @@ pub(in crate::web::routes) async fn render_agent_show_page(
             }
         }
         AgentShowTab::Settings => {
-            template.settings_workspace_warning = settings_query
+            template.settings_notice = settings_query
                 .as_ref()
-                .and_then(|query| query.workspace_warning.clone());
-            template.opencode_workspace =
-                build_opencode_workspace_settings_view(state, &agent, template_drift).await;
+                .and_then(|query| query.notice.clone());
             let gateway_link = settings_query.as_ref().and_then(|query| query.gateway_link);
             template.gateway_telegram = Some(
                 super::gateway::load_telegram_gateway_view(
@@ -337,45 +308,17 @@ pub(in crate::web::routes) async fn load_selected_agent_navbar(
     state: &Arc<AppState>,
     user_id: uuid::Uuid,
     agent: &crate::agents::model::AgentDetailRow,
-) -> Result<
-    (
-        crate::web::templates::Navbar,
-        OpenCodeWorkspaceTemplateDriftView,
-    ),
-    AppError,
-> {
-    let template_drift = load_workspace_template_drift(state, agent).await;
-    let mut navbar = load_navbar(&state.db_pool, user_id)
-        .await?
-        .with_selected_agent(
-            agent.agent_key.clone(),
-            agent.display_name.clone(),
-            agent.enabled,
-        );
-    navbar.selected_agent_workspace_template_drift = template_drift.has_changes();
-    Ok((navbar, template_drift))
-}
-
-pub(in crate::web::routes) async fn load_workspace_template_drift(
-    state: &Arc<AppState>,
-    agent: &crate::agents::model::AgentDetailRow,
-) -> OpenCodeWorkspaceTemplateDriftView {
-    let workspace_agent = crate::opencode::workspace_control_client::WorkspaceAgentInput {
-        agent_key: agent.agent_key.clone(),
-        display_name: agent.display_name.clone(),
-        agent_api_key: agent.api_key.clone(),
-        api_base_url: state.hypervibes_agent_api_base_url.clone(),
-    };
-    state
-        .workspace_controller
-        .template_drift(workspace_agent)
+) -> Result<crate::web::templates::Navbar, AppError> {
+    load_navbar(&state.db_pool, user_id)
         .await
-        .inspect_err(|error| {
-            warn!(agent_key = %agent.agent_key, error = ?error, "failed to diff OpenCode workspace template for selected-agent navbar");
+        .map(|navbar| {
+            navbar.with_selected_agent(
+                agent.agent_key.clone(),
+                agent.display_name.clone(),
+                agent.enabled,
+            )
         })
-        .ok()
-        .map(OpenCodeWorkspaceTemplateDriftView::from_diff)
-        .unwrap_or_else(OpenCodeWorkspaceTemplateDriftView::unavailable)
+        .map_err(AppError)
 }
 const RUNS_PER_PAGE: usize = 10;
 

@@ -20,7 +20,6 @@ use super::memories::{
     MemoryView, TransactionView, build_memory_timeline,
 };
 use super::navbar::Navbar;
-use super::opencode::OpenCodeWorkspaceSettingsView;
 use super::runs::HarnessSubAgentRunView;
 use super::shared::{LocalTimestampView, local_timestamp_view, optional_local_timestamp_view};
 use super::sub_agents::HarnessSubAgentView;
@@ -56,7 +55,7 @@ pub enum AgentShowTab {
     Transactions,
     Memories,
     Prompts,
-    Workspace,
+    Coding,
     Settings,
     SubAgents,
 }
@@ -70,7 +69,7 @@ impl AgentShowTab {
             Self::Transactions => format!("/agents/{agent_key}/transactions"),
             Self::Memories => format!("/agents/{agent_key}/memories"),
             Self::Prompts => format!("/agents/{agent_key}/prompts"),
-            Self::Workspace => format!("/agents/{agent_key}/workspace"),
+            Self::Coding => format!("/agents/{agent_key}/coding"),
             Self::Settings => format!("/agents/{agent_key}/settings"),
             Self::SubAgents => format!("/agents/{agent_key}/sub-agents"),
         }
@@ -98,7 +97,7 @@ pub fn build_agent_show_tabs(
         ("Transactions", AgentShowTab::Transactions),
         ("Memories", AgentShowTab::Memories),
         ("Prompts", AgentShowTab::Prompts),
-        ("Workspace", AgentShowTab::Workspace),
+        ("Coding", AgentShowTab::Coding),
         ("Sub-agents", AgentShowTab::SubAgents),
         ("Settings", AgentShowTab::Settings),
     ]
@@ -302,17 +301,6 @@ pub struct PromptEditorView {
 }
 
 #[derive(Debug, Clone)]
-pub struct PromptRevisionHistoryView {
-    pub id: i64,
-    pub prompt_kind: String,
-    pub prompt: String,
-    pub source_type: String,
-    pub source_run_id: Option<i64>,
-    pub rationale: String,
-    pub created_at: String,
-}
-
-#[derive(Debug, Clone)]
 pub struct AgentNotificationView {
     pub id: uuid::Uuid,
     pub title: String,
@@ -503,8 +491,7 @@ pub struct AgentsShowPageTemplate {
     pub instrument_options_loaded: bool,
     pub has_selected_instruments: bool,
     pub setup_checklist: AgentSetupChecklistView,
-    pub opencode_workspace: Option<OpenCodeWorkspaceSettingsView>,
-    pub settings_workspace_warning: Option<String>,
+    pub settings_notice: Option<String>,
     pub gateway_telegram: Option<GatewayTelegramView>,
     pub live_account_health_html: String,
     pub account_balance_html: String,
@@ -515,8 +502,6 @@ pub struct AgentsShowPageTemplate {
     pub sparklines_html: String,
     pub api_key_masked: String,
     pub prompt_editors: Vec<PromptEditorView>,
-    pub prompt_revision_history: Vec<PromptRevisionHistoryView>,
-    pub prompt_improvement_enabled: bool,
     pub current_path: String,
     pub is_main_account: bool,
     pub subaccount_name: Option<String>,
@@ -536,8 +521,6 @@ impl AgentsShowPageTemplate {
         Self {
             api_key_masked: mask_api_key(&agent.api_key),
             prompt_editors: Vec::new(),
-            prompt_revision_history: Vec::new(),
-            prompt_improvement_enabled: true,
             current_path: active_tab.path(&agent_key),
             is_main_account: false,
             subaccount_name: None,
@@ -576,8 +559,7 @@ impl AgentsShowPageTemplate {
                 is_ready: false,
                 steps: Vec::new(),
             },
-            opencode_workspace: None,
-            settings_workspace_warning: None,
+            settings_notice: None,
             gateway_telegram: None,
             live_account_health_html: String::new(),
             account_balance_html: String::new(),

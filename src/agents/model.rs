@@ -53,7 +53,6 @@ pub struct AgentDetailRow {
     pub trading_account_address: Option<String>,
     pub environment: String,
     pub api_key: String,
-    pub runtime_config: serde_json::Value,
 }
 
 impl AgentDetailRow {

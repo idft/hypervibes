@@ -59,17 +59,15 @@ pub struct CandidateInspection {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PromotionResult {
     pub manifest_hash: String,
-    pub retained_version: String,
+    pub retained_version: Option<String>,
 }
 
-pub fn live_user_root(config: &OpenCodeWorkspaceConfig, agent_key: &str) -> Result<PathBuf> {
-    validate_agent_key(agent_key)?;
-    Ok(config
-        .host_workspaces_root
-        .join("agents")
-        .join(agent_key)
-        .join("scripts")
-        .join("user"))
+/// The validated direct durable Coding package root for one agent:
+/// `<host_workspaces_root>/packages/<agent-key>`. The agent key is validated
+/// here; callers never provide a filesystem path.
+pub fn package_root(config: &OpenCodeWorkspaceConfig, agent_key: &str) -> Result<PathBuf> {
+    super::workspace::validate_agent_key(agent_key)?;
+    Ok(config.host_workspaces_root.join("packages").join(agent_key))
 }
 
 pub fn candidate_root(
@@ -77,7 +75,7 @@ pub fn candidate_root(
     agent_key: &str,
     task_id: i64,
 ) -> Result<PathBuf> {
-    validate_agent_key(agent_key)?;
+    super::workspace::validate_agent_key(agent_key)?;
     if task_id <= 0 {
         bail!("coding task id must be positive");
     }
@@ -94,7 +92,7 @@ pub fn candidate_container_root(
     agent_key: &str,
     task_id: i64,
 ) -> Result<String> {
-    validate_agent_key(agent_key)?;
+    super::workspace::validate_agent_key(agent_key)?;
     if task_id <= 0 {
         bail!("coding task id must be positive");
     }
@@ -111,7 +109,7 @@ pub fn promotion_journal_path(
     agent_key: &str,
     task_id: i64,
 ) -> Result<PathBuf> {
-    validate_agent_key(agent_key)?;
+    super::workspace::validate_agent_key(agent_key)?;
     if task_id <= 0 {
         bail!("coding task id must be positive");
     }
@@ -220,9 +218,9 @@ pub fn prepare_coding_candidate(
         ),
     )?;
     let user_root = root.join("scripts/user");
-    let live_root = live_user_root(config, agent_key)?;
-    if live_root.exists() {
-        copy_user_tree(&live_root, &user_root)?;
+    let package = package_root(config, agent_key)?;
+    if package.exists() {
+        copy_user_tree(&package, &user_root)?;
     }
     let base_manifest = manifest_tree(&user_root)?;
     Ok(CodingCandidate {
@@ -273,11 +271,11 @@ pub fn promote_coding_candidate(
         bail!("candidate scripts/user changed after validation");
     }
 
-    promote_user_tree(config, agent_key, task_id, expected_base)?;
-    let live = live_user_root(config, agent_key)?;
-    let promoted_hash = manifest_hash(&manifest_tree(&live)?);
+    promote_package_tree(config, agent_key, task_id, expected_base)?;
+    let package = package_root(config, agent_key)?;
+    let promoted_hash = manifest_hash(&manifest_tree(&package)?);
     if promoted_hash != expected_candidate_hash {
-        rollback_user_tree(config, agent_key, task_id)?;
+        rollback_package_tree(config, agent_key, task_id)?;
         update_promotion_journal_phase(
             config,
             agent_key,
@@ -294,11 +292,13 @@ pub fn promote_coding_candidate(
         PromotionJournalPhase::SmokeTestPassed,
     )?;
     let retained = retain_successful_version(config, agent_key, task_id)?;
-    set_promotion_journal_retained_version(config, agent_key, task_id, retained.clone())?;
+    if let Some(retained) = retained.as_ref() {
+        set_promotion_journal_retained_version(config, agent_key, task_id, retained.clone())?;
+    }
     update_promotion_journal_phase(config, agent_key, task_id, PromotionJournalPhase::Completed)?;
     Ok(PromotionResult {
         manifest_hash: promoted_hash,
-        retained_version: retained.to_string_lossy().into_owned(),
+        retained_version: retained.map(|path| path.to_string_lossy().into_owned()),
     })
 }
 
@@ -373,8 +373,13 @@ fn add_candidate_permission_scope(root: &Path, container_root: &str) -> Result<(
 pub fn manifest_tree(root: &Path) -> Result<BTreeMap<String, String>> {
     let mut manifest = BTreeMap::new();
     let mut total = 0_u64;
-    if !root.exists() {
-        return Ok(manifest);
+    match fs::symlink_metadata(root) {
+        Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_dir() => {
+            bail!("Coding package tree is not a regular directory")
+        }
+        Ok(_) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(manifest),
+        Err(error) => return Err(error).context("failed to inspect Coding package tree"),
     }
     collect_files(root, root, &mut manifest, &mut total)?;
     Ok(manifest)
@@ -404,25 +409,31 @@ pub fn manifest_hash(manifest: &BTreeMap<String, String>) -> String {
     format!("{:x}", hasher.finalize())
 }
 
-/// Atomically swap the candidate's `scripts/user` directory into the live
-/// workspace. Callers must hold the agent's exclusive workspace lease and
+/// Atomically swap the candidate's `scripts/user` directory into the durable
+/// package root. Callers must hold the agent's exclusive workspace lease and
 /// verify the promoted tree matches the validated candidate hash before
 /// deleting the returned backup directory.
-pub fn promote_user_tree(
+pub fn promote_package_tree(
     config: &OpenCodeWorkspaceConfig,
     agent_key: &str,
     task_id: i64,
     expected_base: &BTreeMap<String, String>,
 ) -> Result<PathBuf> {
-    let live = live_user_root(config, agent_key)?;
+    let package = package_root(config, agent_key)?;
     let candidate = candidate_root(config, agent_key, task_id)?.join("scripts/user");
     let backup = config
         .host_workspaces_root
         .join("coding")
         .join(agent_key)
         .join(task_id.to_string())
-        .join("backup-user");
-    if manifest_tree(&live)? != *expected_base {
+        .join("backup-package");
+    ensure_directory_path(
+        package
+            .parent()
+            .context("package root path has no parent")?,
+        "Coding package parent",
+    )?;
+    if manifest_tree(&package)? != *expected_base {
         bail!("live scripts/user changed while coding was running");
     }
     if !candidate.exists() {
@@ -443,8 +454,8 @@ pub fn promote_user_tree(
     };
     write_promotion_journal(config, &journal)?;
     fs::create_dir_all(backup.parent().expect("backup has task parent"))?;
-    if live.exists() {
-        fs::rename(&live, &backup).context("failed to move live user tree to backup")?;
+    if package.exists() {
+        fs::rename(&package, &backup).context("failed to move package root to backup")?;
         update_promotion_journal_phase(
             config,
             agent_key,
@@ -452,9 +463,9 @@ pub fn promote_user_tree(
             PromotionJournalPhase::LiveBackedUp,
         )?;
     }
-    if let Err(error) = fs::rename(&candidate, &live) {
+    if let Err(error) = fs::rename(&candidate, &package) {
         if backup.exists() {
-            let _ = fs::rename(&backup, &live);
+            let _ = fs::rename(&backup, &package);
         }
         let _ = update_promotion_journal_phase(
             config,
@@ -473,24 +484,55 @@ pub fn promote_user_tree(
     Ok(backup)
 }
 
-pub fn rollback_user_tree(
+fn ensure_directory_path(path: &Path, description: &str) -> Result<()> {
+    match fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_dir() => {
+            bail!("{description} is not a regular directory")
+        }
+        Ok(_) => return Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => {
+            return Err(error).with_context(|| format!("failed to inspect {description}"));
+        }
+    }
+
+    let parent = path.parent().context("directory path has no parent")?;
+    ensure_directory_path(parent, description)?;
+    match fs::create_dir(path) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+            match fs::symlink_metadata(path) {
+                Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_dir() => {
+                    bail!("{description} is not a regular directory")
+                }
+                Ok(_) => Ok(()),
+                Err(error) => {
+                    Err(error).with_context(|| format!("failed to inspect {description}"))
+                }
+            }
+        }
+        Err(error) => Err(error).with_context(|| format!("failed to create {description}")),
+    }
+}
+
+pub fn rollback_package_tree(
     config: &OpenCodeWorkspaceConfig,
     agent_key: &str,
     task_id: i64,
 ) -> Result<()> {
-    let live = live_user_root(config, agent_key)?;
+    let package = package_root(config, agent_key)?;
     let task_root = candidate_root(config, agent_key, task_id)?;
     let backup = task_root
         .parent()
         .context("coding task path has no parent")?
-        .join("backup-user");
+        .join("backup-package");
     if !backup.exists() {
-        bail!("coding backup user tree is missing");
+        bail!("coding backup package tree is missing");
     }
-    if live.exists() {
-        fs::remove_dir_all(&live).context("failed to remove failed promoted user tree")?;
+    if package.exists() {
+        fs::remove_dir_all(&package).context("failed to remove failed promoted package tree")?;
     }
-    fs::rename(backup, live).context("failed to restore coding backup")?;
+    fs::rename(backup, package).context("failed to restore coding backup")?;
     Ok(())
 }
 
@@ -498,15 +540,15 @@ pub fn retain_successful_version(
     config: &OpenCodeWorkspaceConfig,
     agent_key: &str,
     task_id: i64,
-) -> Result<PathBuf> {
-    validate_agent_key(agent_key)?;
+) -> Result<Option<PathBuf>> {
+    super::workspace::validate_agent_key(agent_key)?;
     let task_root = candidate_root(config, agent_key, task_id)?;
     let backup = task_root
         .parent()
         .context("coding task path has no parent")?
-        .join("backup-user");
+        .join("backup-package");
     if !backup.exists() {
-        bail!("coding backup user tree is missing");
+        return Ok(None);
     }
     let versions_root = config.host_workspaces_root.join("versions").join(agent_key);
     let version_root = versions_root.join(task_id.to_string());
@@ -514,10 +556,10 @@ pub fn retain_successful_version(
         bail!("retained coding version already exists");
     }
     fs::create_dir_all(&versions_root)?;
-    fs::rename(&backup, version_root.join("user")).or_else(|error| {
+    fs::rename(&backup, version_root.join("package")).or_else(|error| {
         if error.kind() == std::io::ErrorKind::NotFound {
             fs::create_dir_all(&version_root)?;
-            fs::rename(&backup, version_root.join("user"))
+            fs::rename(&backup, version_root.join("package"))
         } else {
             Err(error)
         }
@@ -534,12 +576,12 @@ pub fn retain_successful_version(
         let (_, old) = versions.remove(0);
         fs::remove_dir_all(old)?;
     }
-    Ok(version_root)
+    Ok(Some(version_root))
 }
 
 /// Recover a journal after a process restart. Any phase before a verified
 /// completed state is treated conservatively: if a backup exists, restore it
-/// as the live tree rather than guessing that an unverified candidate is safe.
+/// as the package root rather than guessing that an unverified candidate is safe.
 pub fn recover_promotion_journal(
     config: &OpenCodeWorkspaceConfig,
     journal: &PromotionJournal,
@@ -557,20 +599,24 @@ pub fn recover_promotion_journal(
         PromotionJournalPhase::LiveBackedUp | PromotionJournalPhase::CandidatePromoted => {}
     }
 
-    let live = live_user_root(config, &journal.agent_key)?;
+    let package = package_root(config, &journal.agent_key)?;
     let task_root = candidate_root(config, &journal.agent_key, journal.task_id)?;
     let backup = task_root
         .parent()
         .context("coding task path has no parent")?
-        .join("backup-user");
+        .join("backup-package");
     if backup.exists() {
-        if live.exists() {
-            fs::remove_dir_all(&live)
+        if package.exists() {
+            fs::remove_dir_all(&package)
                 .context("failed to remove unverified promoted tree during recovery")?;
         }
-        fs::create_dir_all(live.parent().context("live workspace path has no parent")?)?;
-        fs::rename(&backup, &live)
-            .context("failed to restore live tree during promotion recovery")?;
+        fs::create_dir_all(
+            package
+                .parent()
+                .context("package root path has no parent")?,
+        )?;
+        fs::rename(&backup, &package)
+            .context("failed to restore package root during promotion recovery")?;
         update_promotion_journal_phase(
             config,
             &journal.agent_key,
@@ -611,12 +657,12 @@ pub fn list_promotion_journals(config: &OpenCodeWorkspaceConfig) -> Result<Vec<P
     Ok(journals)
 }
 
-/// Copy the validated quantitative package without following links or carrying
+/// Copy the validated Coding package without following links or carrying
 /// generated Python artifacts into another workspace.
 pub fn copy_user_tree(source: &Path, destination: &Path) -> Result<()> {
     let metadata = fs::symlink_metadata(source)?;
     if metadata.file_type().is_symlink() || !metadata.is_dir() {
-        bail!("live scripts/user must be a regular directory");
+        bail!("Coding package root must be a regular directory");
     }
     for entry in fs::read_dir(source)? {
         let entry = entry?;
@@ -640,6 +686,40 @@ pub fn copy_user_tree(source: &Path, destination: &Path) -> Result<()> {
             fs::copy(entry.path(), target)?;
         } else {
             bail!("unsupported file type in scripts/user: {name}");
+        }
+    }
+    Ok(())
+}
+
+/// Delete every durable Coding resource owned by one agent after its
+/// sessions have stopped: the package root, coding candidates, and retained
+/// versions. The agent key is validated and symlinks are rejected before any
+/// recursive deletion. Isolated run and conversation workspaces are not
+/// touched; their own lifecycle methods own those directories.
+pub fn delete_coding_resources(config: &OpenCodeWorkspaceConfig, agent_key: &str) -> Result<()> {
+    super::workspace::validate_agent_key(agent_key)?;
+    for relative in ["packages", "coding", "versions"] {
+        let root = config.host_workspaces_root.join(relative).join(agent_key);
+        match fs::symlink_metadata(&root) {
+            Ok(metadata) if metadata.file_type().is_symlink() => {
+                bail!("coding resource path is a symlink: {}", root.display());
+            }
+            Ok(metadata) if !metadata.is_dir() => {
+                bail!(
+                    "coding resource path is not a directory: {}",
+                    root.display()
+                );
+            }
+            Ok(_) => {
+                fs::remove_dir_all(&root)
+                    .with_context(|| format!("failed to delete {}", root.display()))?;
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => {
+                return Err(error).with_context(|| {
+                    format!("failed to inspect coding resource path {}", root.display())
+                });
+            }
         }
     }
     Ok(())
@@ -770,18 +850,6 @@ fn collect_files(
     Ok(())
 }
 
-fn validate_agent_key(agent_key: &str) -> Result<()> {
-    if agent_key.is_empty()
-        || agent_key == "."
-        || agent_key == ".."
-        || agent_key.contains('/')
-        || agent_key.contains('\\')
-    {
-        bail!("invalid agent key");
-    }
-    Ok(())
-}
-
 fn validate_relative_path(path: &str) -> Result<()> {
     let parsed = Path::new(path);
     if parsed.is_absolute()
@@ -811,15 +879,21 @@ mod tests {
         }
     }
 
-    #[test]
-    fn manifests_are_deterministic_and_report_changes() {
+    fn temp_dir(prefix: &str) -> PathBuf {
         let root = std::env::temp_dir().join(format!(
-            "coding-{}",
+            "{prefix}-{}",
             SystemTime::now()
                 .duration_since(UNIX_EPOCH)
                 .unwrap()
                 .as_nanos()
         ));
+        fs::create_dir_all(&root).unwrap();
+        root
+    }
+
+    #[test]
+    fn manifests_are_deterministic_and_report_changes() {
+        let root = temp_dir("coding");
         fs::create_dir_all(root.join("scripts/user")).unwrap();
         fs::write(root.join("scripts/user/a.py"), b"one").unwrap();
         let first = manifest_tree(&root.join("scripts/user")).unwrap();
@@ -831,14 +905,7 @@ mod tests {
 
     #[test]
     fn manifest_rejects_unapproved_file_extensions() {
-        let root = std::env::temp_dir().join(format!(
-            "coding-extension-{}",
-            SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        fs::create_dir_all(&root).unwrap();
+        let root = temp_dir("coding-extension");
         fs::write(root.join("notes.txt"), b"not allowed").unwrap();
 
         assert!(manifest_tree(&root).is_err());
@@ -854,13 +921,7 @@ mod tests {
 
     #[test]
     fn candidate_template_copy_excludes_test_files() {
-        let root = std::env::temp_dir().join(format!(
-            "coding-template-{}",
-            SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
+        let root = temp_dir("coding-template");
         let source = root.join("source");
         let destination = root.join("destination");
         fs::create_dir_all(&source).unwrap();
@@ -876,13 +937,7 @@ mod tests {
 
     #[test]
     fn candidate_profile_allows_only_its_scoped_user_tree() {
-        let root = std::env::temp_dir().join(format!(
-            "coding-permissions-{}",
-            SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
+        let root = temp_dir("coding-permissions");
         let profile_path = root.join(CODING_AGENT_PATH);
         fs::create_dir_all(profile_path.parent().unwrap()).unwrap();
         fs::write(
@@ -914,14 +969,7 @@ mod tests {
 
     #[test]
     fn promotion_journal_round_trips_atomically() {
-        let root = std::env::temp_dir().join(format!(
-            "coding-journal-{}",
-            SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        fs::create_dir_all(&root).unwrap();
+        let root = temp_dir("coding-journal");
         let config = config(root.clone());
         let journal = PromotionJournal {
             task_id: 7,
@@ -942,15 +990,9 @@ mod tests {
 
     #[test]
     fn recovery_restores_backup_after_candidate_swap_crash() {
-        let root = std::env::temp_dir().join(format!(
-            "coding-recovery-{}",
-            SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
+        let root = temp_dir("coding-recovery");
         let config = config(root.clone());
-        let live = live_user_root(&config, "agent").unwrap();
+        let package = package_root(&config, "agent").unwrap();
         let candidate = candidate_root(&config, "agent", 9)
             .unwrap()
             .join("scripts/user");
@@ -961,13 +1003,13 @@ mod tests {
             .unwrap()
             .parent()
             .unwrap()
-            .join("backup-user");
-        fs::create_dir_all(&live).unwrap();
+            .join("backup-package");
+        fs::create_dir_all(&package).unwrap();
         fs::create_dir_all(&candidate).unwrap();
-        fs::write(live.join("old.py"), b"old").unwrap();
+        fs::write(package.join("old.py"), b"old").unwrap();
         fs::write(candidate.join("new.py"), b"new").unwrap();
-        fs::rename(&live, &backup).unwrap();
-        fs::rename(&candidate, &live).unwrap();
+        fs::rename(&package, &backup).unwrap();
+        fs::rename(&candidate, &package).unwrap();
         let journal = PromotionJournal {
             task_id: 9,
             agent_key: "agent".into(),
@@ -982,33 +1024,31 @@ mod tests {
             recover_promotion_journal(&config, &journal).unwrap(),
             PromotionJournalPhase::RolledBack
         );
-        assert!(live.join("old.py").exists());
-        assert!(!live.join("new.py").exists());
+        assert!(package.join("old.py").exists());
+        assert!(!package.join("new.py").exists());
         fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
     fn promotion_rejects_live_manifest_drift() {
-        let root = std::env::temp_dir().join(format!(
-            "coding-drift-{}",
-            SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
+        let root = temp_dir("coding-drift");
         let config = config(root.clone());
-        let live = live_user_root(&config, "agent").unwrap();
+        let package = package_root(&config, "agent").unwrap();
         let candidate = candidate_root(&config, "agent", 11)
             .unwrap()
             .join("scripts/user");
-        fs::create_dir_all(&live).unwrap();
-        fs::create_dir_all(&candidate).unwrap();
-        fs::write(live.join("analyze.py"), b"changed-after-snapshot").unwrap();
-        fs::write(candidate.join("analyze.py"), b"candidate").unwrap();
-        let expected = BTreeMap::from([("analyze.py".to_string(), "stale".to_string())]);
-        assert!(promote_user_tree(&config, "agent", 11, &expected).is_err());
+        fs::create_dir_all(package.join("strategies")).unwrap();
+        fs::create_dir_all(candidate.join("strategies")).unwrap();
+        fs::write(
+            package.join("strategies/trend.py"),
+            b"changed-after-snapshot",
+        )
+        .unwrap();
+        fs::write(candidate.join("strategies/trend.py"), b"candidate").unwrap();
+        let expected = BTreeMap::from([("strategies/trend.py".to_string(), "stale".to_string())]);
+        assert!(promote_package_tree(&config, "agent", 11, &expected).is_err());
         assert_eq!(
-            fs::read(live.join("analyze.py")).unwrap(),
+            fs::read(package.join("strategies/trend.py")).unwrap(),
             b"changed-after-snapshot"
         );
         fs::remove_dir_all(root).unwrap();
@@ -1016,64 +1056,131 @@ mod tests {
 
     #[test]
     fn promotion_removes_ignored_python_artifacts() {
-        let root = std::env::temp_dir().join(format!(
-            "coding-clean-promotion-{}",
-            SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
+        let root = temp_dir("coding-clean-promotion");
         let config = config(root.clone());
-        let live = live_user_root(&config, "agent").unwrap();
+        let package = package_root(&config, "agent").unwrap();
         let candidate = candidate_root(&config, "agent", 12)
             .unwrap()
             .join("scripts/user");
-        fs::create_dir_all(&live).unwrap();
-        fs::write(live.join("analyze.py"), b"old").unwrap();
+        fs::create_dir_all(package.join("strategies")).unwrap();
+        fs::write(package.join("strategies/trend.py"), b"old").unwrap();
         fs::create_dir_all(candidate.join("analysis/__pycache__")).unwrap();
-        fs::write(candidate.join("analyze.py"), b"new").unwrap();
+        fs::create_dir_all(candidate.join("strategies")).unwrap();
+        fs::write(candidate.join("strategies/trend.py"), b"new").unwrap();
         fs::write(
             candidate.join("analysis/__pycache__/module.cpython-313.pyc"),
             b"cache",
         )
         .unwrap();
-        let expected = manifest_tree(&live).unwrap();
+        let expected = manifest_tree(&package).unwrap();
 
-        promote_user_tree(&config, "agent", 12, &expected).unwrap();
+        promote_package_tree(&config, "agent", 12, &expected).unwrap();
 
-        assert_eq!(fs::read(live.join("analyze.py")).unwrap(), b"new");
-        assert!(!live.join("analysis/__pycache__").exists());
+        assert_eq!(
+            fs::read(package.join("strategies/trend.py")).unwrap(),
+            b"new"
+        );
+        assert!(!package.join("analysis/__pycache__").exists());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn first_promotion_creates_the_direct_package_parent() {
+        let root = temp_dir("coding-first-promotion");
+        let config = config(root.clone());
+        let candidate = candidate_root(&config, "agent", 13)
+            .unwrap()
+            .join("scripts/user");
+        fs::create_dir_all(candidate.join("strategies")).unwrap();
+        fs::write(candidate.join("manifest.json"), b"manifest").unwrap();
+        fs::write(candidate.join("strategies/trend.py"), b"candidate").unwrap();
+
+        promote_package_tree(&config, "agent", 13, &BTreeMap::new()).unwrap();
+
+        assert_eq!(
+            fs::read(
+                package_root(&config, "agent")
+                    .unwrap()
+                    .join("strategies/trend.py")
+            )
+            .unwrap(),
+            b"candidate"
+        );
         fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
     fn retention_keeps_only_five_versions() {
-        let root = std::env::temp_dir().join(format!(
-            "coding-retention-{}",
-            SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
+        let root = temp_dir("coding-retention");
         let config = config(root.clone());
         let versions = root.join("versions/agent");
         fs::create_dir_all(&versions).unwrap();
         for id in 1..=5 {
-            fs::create_dir_all(versions.join(id.to_string()).join("user")).unwrap();
+            fs::create_dir_all(versions.join(id.to_string()).join("package")).unwrap();
         }
         let task_root = candidate_root(&config, "agent", 6).unwrap();
         fs::create_dir_all(task_root.parent().unwrap()).unwrap();
-        fs::create_dir_all(task_root.parent().unwrap().join("backup-user")).unwrap();
+        fs::create_dir_all(
+            task_root
+                .parent()
+                .unwrap()
+                .join("backup-package/strategies"),
+        )
+        .unwrap();
         fs::write(
-            task_root.parent().unwrap().join("backup-user/analyze.py"),
+            task_root
+                .parent()
+                .unwrap()
+                .join("backup-package/strategies/trend.py"),
             b"old",
         )
         .unwrap();
-        retain_successful_version(&config, "agent", 6).unwrap();
+        retain_successful_version(&config, "agent", 6)
+            .unwrap()
+            .expect("previous package is retained");
         let remaining: Vec<_> = fs::read_dir(&versions).unwrap().collect();
         assert_eq!(remaining.len(), 5);
         assert!(!versions.join("1").exists());
-        assert!(versions.join("6/user/analyze.py").exists());
+        assert!(versions.join("6/package/strategies/trend.py").exists());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn deleting_coding_resources_removes_only_agent_owned_roots() {
+        let root = temp_dir("coding-cleanup");
+        let config = config(root.clone());
+        let package = package_root(&config, "agent").unwrap();
+        fs::create_dir_all(package.join("strategies")).unwrap();
+        fs::write(package.join("manifest.json"), b"{}").unwrap();
+        fs::create_dir_all(root.join("coding/agent/3/workspace")).unwrap();
+        fs::create_dir_all(root.join("versions/agent/3/package")).unwrap();
+        fs::create_dir_all(root.join("runs/agent/9/workspace")).unwrap();
+        fs::create_dir_all(root.join("packages/other-agent")).unwrap();
+
+        delete_coding_resources(&config, "agent").unwrap();
+
+        assert!(!package.exists());
+        assert!(!root.join("coding/agent").exists());
+        assert!(!root.join("versions/agent").exists());
+        assert!(root.join("runs/agent/9/workspace").exists());
+        assert!(root.join("packages/other-agent").exists());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn deleting_coding_resources_rejects_symlinks_and_unsafe_keys() {
+        let root = temp_dir("coding-cleanup-safety");
+        let config = config(root.clone());
+        fs::create_dir_all(root.join("victim")).unwrap();
+        fs::write(root.join("victim/keep.txt"), b"keep").unwrap();
+        #[cfg(unix)]
+        {
+            fs::create_dir_all(root.join("packages")).unwrap();
+            std::os::unix::fs::symlink("../victim", root.join("packages/agent")).unwrap();
+            assert!(delete_coding_resources(&config, "agent").is_err());
+            assert!(root.join("victim/keep.txt").exists());
+        }
+        assert!(delete_coding_resources(&config, "../escape").is_err());
         fs::remove_dir_all(root).unwrap();
     }
 }

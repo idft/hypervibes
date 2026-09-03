@@ -18,10 +18,10 @@ use tokio::sync::broadcast;
 use tracing::warn;
 
 use super::shared::{
-    ModelPickerContext, ModelSelectionForm, SERVER_SHUTTING_DOWN_WARNING, TimeoutForm,
-    ToggleJobForm, WORKSPACE_MAINTENANCE_ACTIVE_WARNING, build_model_picker_view, is_htmx_request,
-    load_model_picker_context, parse_positive_job_seconds, sub_agents_warning_redirect,
-    timeout_error_redirect, validate_model_selection_for_agent,
+    ANALYSIS_CODING_ACTIVE_WARNING, ModelPickerContext, ModelSelectionForm,
+    SERVER_SHUTTING_DOWN_WARNING, TimeoutForm, ToggleJobForm, build_model_picker_view,
+    is_htmx_request, load_model_picker_context, parse_positive_job_seconds,
+    sub_agents_warning_redirect, timeout_error_redirect, validate_model_selection_for_agent,
 };
 use super::show::{
     AgentShowQueries, AgentSubAgentsQuery, build_agent_recent_runs_view,
@@ -87,9 +87,9 @@ pub(in crate::web::routes) async fn agent_sub_agent_recent_runs_stream(
 ) -> Result<Response, AppError> {
     let requested_page = parse_positive_page(&query.page);
     let receiver = state.run_detail_events.subscribe();
-    if get_agent(&state.db_pool, &agent_key).await?.is_none() {
+    let Some(_agent) = get_agent(&state.db_pool, &agent_key).await? else {
         return Ok((StatusCode::NOT_FOUND, "agent not found").into_response());
-    }
+    };
 
     let shutdown_rx = state.shutdown_rx.clone();
     let recent_runs_section =
@@ -325,7 +325,7 @@ pub(in crate::web::routes) async fn agents_show_sub_agent_detail(
         picker,
     );
     model_picker.show_label = false;
-    let navbar = load_selected_agent_navbar(&state, user.id, &agent).await?.0;
+    let navbar = load_selected_agent_navbar(&state, user.id, &agent).await?;
     let notification_count = count_notifications(&state.db_pool, &agent.agent_key).await?;
     let html = AgentJobDetailPageTemplate::render_view(
         agent.clone(),
@@ -643,7 +643,7 @@ pub(in crate::web::routes) async fn agents_new_sub_agent(
     };
     let picker = load_model_picker_context(&state, &agent).await;
     let availability = load_new_sub_agent_kind_availability(&state, &agent_key).await?;
-    let navbar = load_selected_agent_navbar(&state, user.id, &agent).await?.0;
+    let navbar = load_selected_agent_navbar(&state, user.id, &agent).await?;
     let notification_count = count_notifications(&state.db_pool, &agent.agent_key).await?;
     Ok(render_new_job_form(
         agent,
@@ -668,7 +668,7 @@ pub(in crate::web::routes) async fn agents_create_sub_agent(
         return Ok((StatusCode::NOT_FOUND, "agent not found").into_response());
     };
     let notification_count = count_notifications(&state.db_pool, &agent.agent_key).await?;
-    let navbar = load_selected_agent_navbar(&state, user.id, &agent).await?.0;
+    let navbar = load_selected_agent_navbar(&state, user.id, &agent).await?;
     let availability = load_new_sub_agent_kind_availability(&state, &agent_key).await?;
     let validated = match form.validate() {
         Ok(validated) => validated,
@@ -710,7 +710,6 @@ pub(in crate::web::routes) async fn agents_create_sub_agent(
 
     let validated_model_selection = match validate_model_selection_for_agent(
         &state,
-        &agent,
         validated.model_selection.clone(),
         &validated.model_variant,
     )
@@ -861,6 +860,7 @@ pub(in crate::web::routes) async fn agents_delete_sub_agent(
         &state.opencode_client,
         &state.workspace_leases,
         &state.opencode_base_url,
+        &state.opencode_container_workspaces_root,
         &agent_key,
         sub_agent_id,
     )
@@ -924,7 +924,7 @@ pub(in crate::web::routes) async fn agents_run_sub_agent_now(
                 sub_agents_warning_redirect(&agent_key, "Analysis coding is already queued."),
             ),
             store::InsertAnalysisCodingTaskOutcome::BlockedByMaintenance => Ok(
-                sub_agents_warning_redirect(&agent_key, WORKSPACE_MAINTENANCE_ACTIVE_WARNING),
+                sub_agents_warning_redirect(&agent_key, ANALYSIS_CODING_ACTIVE_WARNING),
             ),
         };
     }
@@ -1076,7 +1076,7 @@ pub(in crate::web::routes) async fn agents_run_sub_agent_now(
         }
         QueuedSubAgentRun::BlockedByMaintenance => Ok(sub_agents_warning_redirect(
             &agent_key,
-            WORKSPACE_MAINTENANCE_ACTIVE_WARNING,
+            ANALYSIS_CODING_ACTIVE_WARNING,
         )),
     }
 }
@@ -1087,7 +1087,7 @@ pub(in crate::web::routes) async fn agents_update_sub_agent_model(
     Form(form): Form<ModelSelectionForm>,
 ) -> Result<Response, AppError> {
     let detail_url = format!("/agents/{agent_key}/sub-agents/{sub_agent_id}");
-    let Some(agent) = get_agent(&state.db_pool, &agent_key).await? else {
+    let Some(_agent) = get_agent(&state.db_pool, &agent_key).await? else {
         return Ok((StatusCode::NOT_FOUND, "agent not found").into_response());
     };
     let Some(_job) =
@@ -1102,8 +1102,7 @@ pub(in crate::web::routes) async fn agents_update_sub_agent_model(
         Err(message) => return Ok(model_error_response(&headers, &detail_url, &message)),
     };
     let validated =
-        match validate_model_selection_for_agent(&state, &agent, parsed, &form.model_variant).await
-        {
+        match validate_model_selection_for_agent(&state, parsed, &form.model_variant).await {
             Ok(validated) => validated,
             Err(message) => return Ok(model_error_response(&headers, &detail_url, &message)),
         };

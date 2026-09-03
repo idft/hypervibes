@@ -45,7 +45,6 @@ pub fn sample_agent_detail_row() -> AgentDetailRow {
         trading_account_address: Some("0x1234567890abcdef".to_string()),
         environment: "live".to_string(),
         api_key: "vt_test_key".to_string(),
-        runtime_config: serde_json::json!({}),
     }
 }
 
@@ -81,13 +80,7 @@ pub fn sample_memory_record(
 }
 
 pub fn sample_opencode_detail_row() -> AgentDetailRow {
-    let mut row = sample_agent_detail_row();
-    row.runtime_config = serde_json::json!({
-        "workspace_host_path": "workspaces/agents/test-agent",
-        "workspace_container_path": "/workspaces/agents/test-agent",
-        "profile_source": "agent-runtime/workspace-template"
-    });
-    row
+    sample_agent_detail_row()
 }
 
 pub fn sample_candle_job_row(

@@ -34,6 +34,7 @@ async fn agent_prompts_route_renders_prompt_fields() {
     assert!(text.contains("Trade breakouts only after confirmation."));
     assert!(text.contains("Market Analysis"));
     assert!(text.contains("Daily Review"));
+    assert!(!text.contains("Prompt Revision History"));
 }
 #[tokio::test]
 async fn post_agent_analysis_prompt_updates_only_analysis() {

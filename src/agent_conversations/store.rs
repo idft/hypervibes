@@ -466,6 +466,26 @@ pub async fn list_agent_conversation_opencode_session_ids(
     Ok(rows.into_iter().map(|(session_id,)| session_id).collect())
 }
 
+/// List the internal conversation ids and OpenCode session ids of every
+/// conversation for one agent so callers can address each session inside its
+/// isolated conversation workspace directory.
+pub async fn list_agent_conversation_ids_and_session_ids(
+    pool: &DbPool,
+    agent_key: &str,
+) -> Result<Vec<(Uuid, String)>> {
+    let rows: Vec<(Uuid, String)> = query_as(
+        "SELECT id, opencode_session_id
+           FROM agent_conversations
+          WHERE agent_key = $1
+          ORDER BY created_at DESC, id DESC",
+    )
+    .bind(agent_key)
+    .fetch_all(pool)
+    .await
+    .context("failed to list agent conversations with session ids")?;
+    Ok(rows)
+}
+
 /// Find a conversation by its channel and external conversation key. Used by
 /// gateways (e.g. Telegram) to resolve the conversation bound to a particular
 /// chat id without exposing the lookup to the public API.

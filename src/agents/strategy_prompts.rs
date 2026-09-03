@@ -33,28 +33,6 @@ pub struct PromptRevisionChange {
     pub prompt: String,
 }
 
-#[derive(Debug, Clone, sqlx::FromRow)]
-pub struct PromptRevisionHistoryRow {
-    pub id: i64,
-    pub prompt_kind: String,
-    pub prompt: String,
-    pub source_type: String,
-    pub source_run_id: Option<i64>,
-    pub rationale: String,
-    pub created_at: DateTime<Utc>,
-}
-
-pub async fn list_prompt_revision_history(
-    pool: &DbPool,
-    agent_key: &str,
-) -> Result<Vec<PromptRevisionHistoryRow>> {
-    query_as("SELECT revisions.id, revisions.prompt_kind, revisions.prompt, batches.source_type, batches.source_run_id, batches.rationale, revisions.created_at
-              FROM agent_strategy_prompt_revisions revisions
-              JOIN agent_strategy_prompt_revision_batches batches ON batches.id = revisions.batch_id
-             WHERE revisions.agent_key = $1 ORDER BY revisions.id DESC")
-        .bind(agent_key).fetch_all(pool).await.context("failed to list prompt revision history")
-}
-
 pub async fn rollback_prompt_revision(
     pool: &DbPool,
     agent_key: &str,

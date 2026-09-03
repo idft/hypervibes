@@ -6,7 +6,7 @@ import { initRunTranscripts, installAgentLiveLifecycle } from "./features/agents
 import { initMemoryTimelines, installMemoryLifecycle } from "./features/agents/memories";
 import { initModelPickers, installModelPickerLifecycle } from "./features/agents/model-picker";
 import { installAgentNavigation } from "./features/agents/navigation";
-import { initWorkspaceExplorers } from "./features/agents/workspace";
+import { initCodingExplorers } from "./features/agents/coding";
 import { initProviders } from "./features/providers";
 import { installCopyButtons } from "./shared/clipboard";
 import { initClickableRows } from "./shared/clickable-rows";
@@ -24,7 +24,7 @@ function initialize(root: ParentNode = document) {
   initModelPickers(root);
   initProviders(root);
   initRunTranscripts(root);
-  initWorkspaceExplorers(root);
+  initCodingExplorers(root);
 }
 
 function start() {

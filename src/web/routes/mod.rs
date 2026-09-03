@@ -74,8 +74,12 @@ pub fn router(state: Arc<AppState>) -> Router {
             "/agents/{agent_key}/memories/{memory_id}/delete",
             post(agents_delete_memory),
         )
+        .route("/agents/{agent_key}/coding", get(agents_show_coding))
+        .route(
+            "/agents/{agent_key}/coding/task-status",
+            get(agents_coding_task_status),
+        )
         .route("/agents/{agent_key}/prompts", get(agents_show_prompts))
-        .route("/agents/{agent_key}/workspace", get(agents_show_workspace))
         .route(
             "/agents/{agent_key}/prompts/update",
             post(agents_update_prompt),
@@ -152,12 +156,8 @@ pub fn router(state: Arc<AppState>) -> Router {
             post(agents_update_instruments),
         )
         .route(
-            "/agents/{agent_key}/settings/regenerate-workspace",
-            post(agents_regenerate_workspace),
-        )
-        .route(
-            "/agents/{agent_key}/settings/workspace-maintenance-status",
-            get(agents_workspace_maintenance_status),
+            "/agents/{agent_key}/settings/reset-memories",
+            post(agents_reset_memories),
         )
         .route(
             "/agents/{agent_key}/settings/gateway/telegram/token",

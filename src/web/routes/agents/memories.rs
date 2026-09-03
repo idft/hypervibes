@@ -92,7 +92,7 @@ pub(in crate::web::routes) async fn agents_show_memory_detail(
         memory_view.clone(),
         format!("/agents/{}/memories", agent.agent_key),
     )?;
-    let navbar = load_selected_agent_navbar(&state, user.id, &agent).await?.0;
+    let navbar = load_selected_agent_navbar(&state, user.id, &agent).await?;
     let notification_count = count_notifications(&state.db_pool, &agent.agent_key).await?;
     let html = AgentMemoryDetailPageTemplate::render_view(
         agent.clone(),

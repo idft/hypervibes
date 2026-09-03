@@ -1,12 +1,8 @@
 use anyhow::{Result, anyhow};
 
 use crate::{
-    agents::model::AgentDetailRow,
     model_catalog::models_dev::{ModelsDevCatalog, ModelsDevModel, ModelsDevProvider},
-    opencode::{
-        client::{OpenCodeClient, OpenCodeProviderInfo, OpenCodeProvidersResponse},
-        workspace::OpenCodeWorkspaceRuntimeConfig,
-    },
+    opencode::client::{OpenCodeClient, OpenCodeProviderInfo, OpenCodeProvidersResponse},
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -22,15 +18,16 @@ pub struct ModelPickerOption {
 }
 
 pub async fn build_model_picker_options(
-    agent: &AgentDetailRow,
+    opencode_directory: &str,
     opencode_base_url: &str,
     opencode_client: &OpenCodeClient,
     model_catalog: &ModelsDevCatalog,
 ) -> Result<Vec<ModelPickerOption>> {
-    let workspace = OpenCodeWorkspaceRuntimeConfig::from_value(&agent.runtime_config)
-        .ok_or_else(|| anyhow!("OpenCode workspace metadata is missing for this agent"))?;
+    if opencode_directory.trim().is_empty() {
+        return Err(anyhow!("OpenCode directory is missing for model discovery"));
+    }
     let response = opencode_client
-        .list_providers(opencode_base_url, &workspace.workspace_container_path)
+        .list_providers(opencode_base_url, opencode_directory)
         .await?;
     let snapshot = model_catalog.snapshot().await.ok();
     Ok(build_model_picker_options_from_response(

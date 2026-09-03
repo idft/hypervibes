@@ -195,7 +195,6 @@ const STRATEGY_PROMPT_REVISION_KEYS: &[&str] = &[
     SUB_AGENT_KIND_ANALYSIS_CODING,
 ];
 
-pub const MAINTENANCE_TASK_KIND_WORKSPACE_REGENERATE: &str = "workspace_regenerate";
 pub const MAINTENANCE_TASK_KIND_ANALYSIS_CODING: &str = "analysis_coding";
 pub const MAINTENANCE_TASK_KIND_PROVIDER_CONFIG_RELOAD: &str = "provider_config_reload";
 
@@ -205,9 +204,9 @@ pub const MAINTENANCE_STATUS_SUCCEEDED: &str = "succeeded";
 pub const MAINTENANCE_STATUS_FAILED: &str = "failed";
 pub const MAINTENANCE_STATUS_ABORTED: &str = "aborted";
 
-/// Phase enum values for `harness_maintenance_tasks.phase`. The
-/// workspace regeneration flow only ever enters `queued`/
-/// `running`/`completed`; coding uses the full state machine.
+/// Phase enum values for `harness_maintenance_tasks.phase`. Analysis-coding
+/// tasks use the full state machine; provider reload tasks only ever enter
+/// `queued`/`running`/`completed`.
 pub const MAINTENANCE_PHASE_QUEUED: &str = "queued";
 pub const MAINTENANCE_PHASE_PREPARING: &str = "preparing";
 pub const MAINTENANCE_PHASE_GENERATING: &str = "generating";
@@ -639,13 +638,6 @@ pub struct AgentMaintenanceTaskRow {
 }
 
 impl AgentMaintenanceTaskRow {
-    pub fn parameter_bool(&self, name: &str) -> bool {
-        self.parameters
-            .get(name)
-            .and_then(Value::as_bool)
-            .unwrap_or(false)
-    }
-
     /// Convenience accessor for the coding promotion phase check.
     pub fn is_in_promotion_window(&self) -> bool {
         CODING_PROMOTION_PHASES.contains(&self.phase.as_str())

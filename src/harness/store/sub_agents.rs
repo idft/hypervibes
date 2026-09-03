@@ -764,8 +764,8 @@ pub enum ClaimedCandleSubAgentRun {
     /// The job was no longer due (concurrent claim, disabled,
     /// missing, etc.). No row was written.
     NotDue,
-    /// The job remained due, but queued/running workspace maintenance
-    /// prevents dispatch until the agent is available again.
+    /// The job remained due, but an active Coding promotion prevents dispatch
+    /// until the agent is available again.
     BlockedByMaintenance,
 }
 

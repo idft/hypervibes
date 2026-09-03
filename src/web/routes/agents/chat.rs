@@ -370,7 +370,7 @@ pub(in crate::web::routes) async fn agents_show_chat(
         None,
         load_model_picker_context(&state, &agent).await,
     );
-    let navbar = load_selected_agent_navbar(&state, user.id, &agent).await?.0;
+    let navbar = load_selected_agent_navbar(&state, user.id, &agent).await?;
     Ok(Html(AgentConversationEmptyPageTemplate::render_view(
         agent,
         picker,
@@ -406,7 +406,7 @@ pub(in crate::web::routes) async fn agents_new_chat(
         None,
         load_model_picker_context(&state, &agent).await,
     );
-    let navbar = load_selected_agent_navbar(&state, user.id, &agent).await?.0;
+    let navbar = load_selected_agent_navbar(&state, user.id, &agent).await?;
     Ok(Html(AgentConversationEmptyPageTemplate::render_view(
         agent,
         picker,
@@ -428,9 +428,7 @@ pub(in crate::web::routes) async fn agents_show_chat_detail(
         return Ok((StatusCode::NOT_FOUND, "conversation not found").into_response());
     };
     let rendered = render_snapshot(&snapshot, String::new(), None)?;
-    let navbar = load_selected_agent_navbar(&state, user.id, &snapshot.agent)
-        .await?
-        .0;
+    let navbar = load_selected_agent_navbar(&state, user.id, &snapshot.agent).await?;
     let notification_count = count_notifications(&state.db_pool, &snapshot.agent.agent_key).await?;
     let html = AgentConversationPageTemplate::render_view(
         crate::web::templates::AgentConversationPageInput {
@@ -500,9 +498,7 @@ pub(in crate::web::routes) async fn agents_create_conversation(
         }
     };
     let selection =
-        match validate_model_selection_for_agent(&state, &agent, Some(selection), &model_variant)
-            .await
-        {
+        match validate_model_selection_for_agent(&state, Some(selection), &model_variant).await {
             Ok(Some(selection)) => selection,
             Ok(None) | Err(_) => {
                 return render_empty_error(
@@ -575,7 +571,7 @@ async fn render_empty_error(
         None,
         load_model_picker_context(state, &agent).await,
     );
-    let navbar = load_selected_agent_navbar(state, user_id, &agent).await?.0;
+    let navbar = load_selected_agent_navbar(state, user_id, &agent).await?;
     let notification_count = count_notifications(&state.db_pool, &agent.agent_key).await?;
     Ok(Html(AgentConversationEmptyPageTemplate::render_view(
         agent,
@@ -690,14 +686,14 @@ pub(in crate::web::routes) async fn agents_update_conversation_settings(
     Path((agent_key, conversation_id)): Path<(String, Uuid)>,
     Form(form): Form<ConversationSettingsForm>,
 ) -> Result<Response, AppError> {
-    let Some(agent) = get_agent(&state.db_pool, &agent_key).await? else {
+    let Some(_agent) = get_agent(&state.db_pool, &agent_key).await? else {
         return Ok((StatusCode::NOT_FOUND, "agent not found").into_response());
     };
     let selection = parse_model_selection(&form.model_selection)
         .map_err(anyhow::Error::msg)?
         .ok_or_else(|| AppError(anyhow::anyhow!("Select a model.")))?;
     let selection =
-        validate_model_selection_for_agent(&state, &agent, Some(selection), &form.model_variant)
+        validate_model_selection_for_agent(&state, Some(selection), &form.model_variant)
             .await
             .map_err(|error| AppError(anyhow::anyhow!(error)))?
             .ok_or_else(|| AppError(anyhow::anyhow!("Select a model.")))?;

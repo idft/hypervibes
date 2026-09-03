@@ -24,7 +24,7 @@ pub const DEFAULT_DAILY_REVIEW_STRATEGY_PROMPT: &str = "## Review goal\nReview t
 /// quantitative code, while analysis jobs retain responsibility for market
 /// interpretation and trading conclusions.
 pub const DEFAULT_ANALYSIS_CODING_STRATEGY_PROMPT: &str = r#"## Role
-Improve the agent's reusable quantitative analysis code under `scripts/user` only when the analysis strategy or accumulated evidence supports a change.
+    Improve the agent's reusable quantitative analysis code under `scripts/user` only when the analysis strategy or accumulated evidence supports a change.
 
 ## Required survey
 - Inspect the current analysis strategy for calculations or custom indicators that reusable code can support.
@@ -37,7 +37,7 @@ Produce auditable measurements and deterministic quantitative signals. A signal 
 Do not generate trading policy. Reusable code must not decide final long/short bias, actionability, trading confidence, entries, exits, stops, targets, position sizing, or order instructions. Analysis jobs combine quantitative output with qualitative market evidence and decide what it means.
 
 ## Package interface
-Maintain `scripts/user/manifest.json` with `schema_version: 1`, a package version, and declared quantitative tools. Keep an `analyze` tool during migration with the legacy `scripts/user/analyze.py` entrypoint and its `--symbol`, `--timeframe`, `--boundary-ms`, `--input`, and `--output` arguments. Supporting modules and additional declared tools are allowed. The platform-owned launcher runs only manifest-declared tools and binds output to the package hash and tool version.
+    Maintain `scripts/user/manifest.json` with `schema_version: 1`, a package version, and one or more declared validation targets. Choose each target's ID, Python entrypoint, module layout, and version. Every target uses the `--symbol`, `--timeframe`, `--boundary-ms`, `--input`, and `--output` arguments and emits the documented output envelope; the manifest tells fixed validation which targets must pass and does not authorize normal analysis execution.
 
 The canonical input is the JSON envelope written by `fetch_ohlcv.py`: `symbol`, `timeframe`, positive `interval_ms`, and normalized `candles` containing `timestamp_ms`, `open`, `high`, `low`, `close`, and `volume`. Validate that CLI and input symbol/timeframe agree. Treat `interval_ms` as authoritative; never infer cadence from candle spacing.
 

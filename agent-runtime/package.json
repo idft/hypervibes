@@ -1,0 +1,8 @@
+{
+  "name": "hypervibes-agent-runtime",
+  "version": "0.3.2",
+  "private": true,
+  "scripts": {
+    "test": "python test_coding_validate.py && python mcp/test_server.py"
+  }
+}

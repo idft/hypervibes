@@ -12,9 +12,7 @@ use axum::{
 use serde::Deserialize;
 use std::sync::Arc;
 use tracing::warn;
-pub(in crate::web::routes) const WORKSPACE_MAINTENANCE_ACTIVE_WARNING: &str = "Workspace maintenance is queued or running for this agent. Run now is unavailable until it completes.";
-pub(in crate::web::routes) const WORKSPACE_MAINTENANCE_DUPLICATE_WARNING: &str =
-    "A workspace maintenance task is already queued or running for this agent.";
+pub(in crate::web::routes) const ANALYSIS_CODING_ACTIVE_WARNING: &str = "An analysis-coding task is queued or running for this agent. Run now is unavailable until it completes.";
 pub(in crate::web::routes) const SERVER_SHUTTING_DOWN_WARNING: &str =
     "Server is shutting down. Run now is unavailable until the next start.";
 #[derive(Debug, Clone)]
@@ -80,7 +78,7 @@ pub(in crate::web::routes) async fn load_model_picker_context(
     agent: &crate::agents::model::AgentDetailRow,
 ) -> ModelPickerContext {
     match build_model_picker_options(
-        agent,
+        &state.opencode_container_workspaces_root,
         &state.opencode_base_url,
         &state.opencode_client,
         &state.model_catalog,
@@ -175,7 +173,6 @@ fn build_provider_groups(options: &[ModelPickerOption]) -> Vec<ModelPickerProvid
 }
 pub(in crate::web::routes) async fn validate_model_selection_for_agent(
     state: &Arc<AppState>,
-    agent: &crate::agents::model::AgentDetailRow,
     selection: Option<(String, String)>,
     variant: &str,
 ) -> Result<Option<(String, String, Option<String>)>, String> {
@@ -189,7 +186,7 @@ pub(in crate::web::routes) async fn validate_model_selection_for_agent(
     };
 
     let options = build_model_picker_options(
-        agent,
+        &state.opencode_container_workspaces_root,
         &state.opencode_base_url,
         &state.opencode_client,
         &state.model_catalog,

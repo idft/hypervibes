@@ -335,7 +335,7 @@ class ManifestIncludesBoundaryTests(unittest.TestCase):
         self.assertIsNone(manifest["requested_boundary_ms"])
         self.assertEqual(manifest["actual_max_close_ms"], 200 + 900_000)
 
-    def test_cached_file_is_canonical_analyzer_input(self) -> None:
+    def test_cached_file_is_canonical_package_script_input(self) -> None:
         manifest = self._run_main(
             ["fetch_ohlcv.py", "BTC", "2h", "--limit", "1"],
             fake_candles=[_candle(100, close_price=3.0)],

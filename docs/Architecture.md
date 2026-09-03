@@ -28,7 +28,7 @@ in-flight OpenCode MCP server can finish its API calls.
 | Subsystem | Responsibility |
 | --- | --- |
 | `agents` | Agent registry, API keys, OpenCode workspaces, selected instruments, and strategy prompts. User-owned encrypted Hyperliquid signing material lives with authentication records. |
-| `harness` | Persisted unified sub-agents/runs, workspace maintenance, recovery of orphaned runs, and OpenCode dispatch. |
+| `harness` | Persisted unified sub-agents/runs, analysis-coding and provider-reload maintenance, recovery of orphaned runs, and OpenCode dispatch. |
 
 ## Harness sub-agents
 
@@ -70,10 +70,9 @@ different agents to run concurrently. Built-in work includes:
 - scheduled `analysis`, `trading`, and `daily_review` sub-agents
 - an `analysis_batch_completed` hook that can dispatch `market_analysis`
 - request-gated `analysis_coding` follow-up work after a daily review
-- queued workspace regeneration or hard reset
 
-For a dispatch, the OpenCode backend creates a session in the agent workspace
-and invokes the appropriate OpenCode command. The initial prompt contains the
+For a dispatch, the OpenCode backend creates a session in the isolated run or
+candidate workspace and invokes the appropriate OpenCode command. The initial prompt contains the
 agent and sub-agent context, selected instruments, the sub-agent-specific strategy prompt,
 the latest `agent_learnings` memory, the global prompt, and a live
 account snapshot for trading work. That snapshot includes per-stream data
@@ -83,12 +82,9 @@ clearinghouse and open-orders streams are current, while reduce-only orders
 remain available for risk reduction.
 
 Market-analysis is the authority for market thesis and execution conditions.
-Trading ordinarily executes its latest fresh handoff without market-data access.
-For an explicitly conditional handoff, trading may use only the canonical
-Hyperliquid OHLCV helper and the trusted manifest-declared quantitative tool
-launcher to verify the memory's declared closed-candle rules; it cannot derive a
-new thesis or alter its levels. Tool outputs carry the exact quantitative package
-hash and version used for the check.
+Trading executes its latest fresh handoff without market-data access or package
+code; it bases order and position management on memories, account and order
+state, and its approved HyperVibes MCP tools only.
 
 Run state is persisted. On startup and periodically thereafter, the scheduler
 resumes queued runs and recovers stale running runs so interrupted dispatches
@@ -146,19 +142,31 @@ database runtime rows.
 
 ## Coding Isolation
 
-Analysis coding runs in a candidate workspace under the configured
-workspace root. The model receives path-scoped native OpenCode filesystem
-permissions that can edit only approved files under candidate `scripts/user`.
-Pyright supplies Python diagnostics for those native reads and edits. Normal analysis, trading, and review sub-agents hold read
-leases on the live workspace; coding holds a write lease only while
-promoting a validated candidate and verifying that the promoted tree has the
-same hash.
+An agent's only durable filesystem state is its Coding package at
+`packages/<agent-key>/` under the configured workspace root. It contains
+`manifest.json` plus any coding-agent-defined files, and it is created by the
+first successful coding promotion. Analysis coding runs in an isolated
+candidate workspace under `coding/<agent-key>/<task-id>/workspace`; candidate
+creation copies the package root into the candidate's `scripts/user/` tree.
+The model receives path-scoped native OpenCode filesystem permissions that can
+edit only approved files under candidate `scripts/user`.
+Pyright supplies Python diagnostics for those native reads and edits. Runs and
+conversations use their own isolated directories; coding holds a write lease
+only while promoting a validated candidate and verifying that the promoted
+tree has the same hash.
+
+The manifest is a validation registry, not a runtime authorization list: the
+analysis agent may inspect and directly execute any Python file below its
+run-local `scripts/user/` copy of the package, and trading may not read or
+execute package code.
 
 Candidate validation runs through a fixed local MCP tool in the OpenCode
 analysis runtime, not through a HyperVibes HTTP endpoint. The tool accepts no
 executable or path arguments and records a task-scoped result bound to the
-candidate tree hash. The worker recomputes that hash after generation, so any
-write after validation fails promotion closed.
+candidate tree hash. The validator compiles and scans the complete candidate
+tree and runs the complete deterministic fixture suite for every declared
+validation target, naming the target in each check. The worker recomputes the
+hash after generation, so any write after validation fails promotion closed.
 
 Promotion swaps directories, never individual files. A JSON journal records
 each swap phase, and startup recovery restores the previous tree when a process

@@ -29,9 +29,9 @@ python .opencode/skills/hyperliquid-data/fetch_ohlcv.py BTC 15m --limit 500 --cl
 The script writes candles to `scratch/ohlcv/` by default and prints a small JSON
 manifest to stdout. Use `--output-dir` to select another directory under
 `scratch/`; absolute paths and paths outside `scratch/` are rejected. Read
-`output_path` from the manifest, then pass that file to the existing
-`scripts/user/analyze.py` entrypoint with its `--input` argument. Do not modify
-the analyzer or create a helper script.
+`output_path` from the manifest, then pass that file directly to the package
+script you choose under `scripts/user/` with its `--input` argument. Do not
+modify package code or create a helper script.
 
 Use `--stdout` only for manual debugging. Normal agent analysis should use the
 run-local `output_path` so full candle data does not fill the LLM context window.
@@ -85,9 +85,9 @@ Small JSON manifest to stdout:
 `requested_boundary_ms` is `null` when `--closed-before` is not supplied;
 `actual_max_close_ms` is `null` when no candles pass the filter.
 
-The saved JSON file is the canonical input for `scripts/user/analyze.py`. Pass
-the manifest's `output_path` directly to that program's `--input` argument. Its
-shape is:
+The saved JSON file is the canonical input for the package script you choose.
+Pass the manifest's `output_path` directly to that program's `--input`
+argument. Its shape is:
 
 ```json
 {

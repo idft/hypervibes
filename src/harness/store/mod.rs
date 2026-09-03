@@ -15,7 +15,7 @@ pub(crate) use common::{ACTIVE_STATUSES, lock_agent_coordination_tx};
 pub use recovery::recover_inactive_runs_all;
 #[allow(unused_imports)]
 pub use runs::{
-    QueuedRunForDispatch, QueuedSubAgentRun, agent_has_active_runs, count_agent_runs, get_run,
+    QueuedRunForDispatch, QueuedSubAgentRun, count_agent_runs, get_run,
     has_prior_active_run_in_lane, insert_queued_event_run,
     insert_queued_event_run_for_automatic_dispatch, insert_queued_manual_run,
     list_active_agent_runs, list_agent_runs_page, list_queued_runs_for_dispatch, mark_run_aborted,
@@ -38,21 +38,20 @@ pub use sub_agents::{
     set_sub_agent_notification_send_enabled, set_sub_agent_operator_prompt, set_sub_agent_timeout,
 };
 pub use workspace::agent_has_blocking_workspace_maintenance;
-#[cfg(test)]
-pub use workspace::get_latest_workspace_regenerate_task;
-#[allow(unused_imports)]
 pub use workspace::{
     AnalysisCodingTaskRequest, CodingTriggerMode, InsertAnalysisCodingTaskOutcome,
-    InsertGlobalMaintenanceTaskOutcome, InsertWorkspaceMaintenanceTaskOutcome,
-    agent_has_active_live_runs, compare_and_set_maintenance_phase, get_latest_maintenance_task,
+    agent_has_active_live_runs, analysis_coding_task_ids_for_agent_runs,
+    compare_and_set_maintenance_phase, get_latest_analysis_coding_task,
     get_latest_provider_config_reload_task, get_next_queued_provider_config_reload_task,
-    get_next_queued_workspace_regenerate_task, heartbeat_maintenance_task,
-    insert_analysis_coding_task_and_run, insert_provider_config_reload_task,
-    insert_workspace_regenerate_task, list_queued_maintenance_candidates,
+    heartbeat_maintenance_task, insert_analysis_coding_task_and_run,
+    insert_provider_config_reload_task, list_queued_maintenance_candidates,
     list_stale_running_maintenance_tasks, mark_maintenance_task_failed,
     mark_maintenance_task_running, mark_maintenance_task_succeeded,
     requeue_stale_provider_config_reload_tasks,
 };
+
+#[cfg(test)]
+pub use workspace::InsertGlobalMaintenanceTaskOutcome;
 
 #[cfg(test)]
 mod test_support;

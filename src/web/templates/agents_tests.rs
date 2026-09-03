@@ -173,34 +173,6 @@ fn notifications_tab_renders_history_and_statuses() {
 }
 
 #[test]
-fn selected_agent_workspace_template_drift_renders_a_settings_warning() {
-    let mut template =
-        AgentsShowPageTemplate::new(sample_agent_detail_row(), AgentShowTab::Positions, 0);
-    template.navbar = Navbar {
-        selected_agent_workspace_template_drift: true,
-        ..Default::default()
-    }
-    .with_selected_agent("test-agent".to_string(), "Test Agent".to_string(), true);
-
-    let rendered = template.render().expect("render template");
-
-    assert!(rendered.contains("data-navbar-workspace-template-drift"));
-    assert!(rendered.contains("href=\"/agents/test-agent/settings\""));
-    assert!(
-        rendered
-            .contains("title=\"Workspace template drift detected. Review workspace settings.\"")
-    );
-    assert!(
-        rendered.contains(
-            "aria-label=\"Workspace template drift detected. Review workspace settings.\""
-        )
-    );
-    assert!(rendered.contains(
-        "data-navbar-workspace-template-drift class=\"ml-auto inline-flex h-9 w-9 cursor-pointer"
-    ));
-}
-
-#[test]
 fn positions_page_renders_linked_incomplete_agent_setup_checklist() {
     let mut readiness = sample_agent_readiness();
     readiness.has_enabled_trading_job = false;
@@ -503,38 +475,6 @@ fn settings_tab_omits_subaccount_label_for_main_account() {
 }
 
 #[test]
-fn settings_tab_renders_workspace_template_drift() {
-    let mut template =
-        AgentsShowPageTemplate::new(sample_opencode_detail_row(), AgentShowTab::Settings, 0);
-    template.opencode_workspace = Some(OpenCodeWorkspaceSettingsView {
-        template_drift: OpenCodeWorkspaceTemplateDriftView {
-            status_text: "Template drift",
-            status_class: "border-amber-900/60 bg-amber-950/30 text-amber-300",
-            changed_files: vec![OpenCodeWorkspaceTemplateFileChangeView {
-                status_code: "M",
-                path: "AGENTS.md".to_string(),
-                added_lines: 3,
-                removed_lines: 1,
-            }],
-            is_missing: false,
-        },
-        maintenance_html: OpenCodeWorkspaceMaintenanceStatusTemplate::render_view(
-            OpenCodeWorkspaceMaintenanceView::idle("test-agent"),
-        )
-        .expect("render maintenance partial"),
-        maintenance: OpenCodeWorkspaceMaintenanceView::idle("test-agent"),
-    });
-
-    let rendered = template.render().unwrap();
-    assert!(rendered.contains("id=\"agent-workspace-section\""));
-    assert!(rendered.contains("Template drift"));
-    assert!(rendered.contains("AGENTS.md"));
-    assert!(rendered.contains("+3"));
-    assert!(rendered.contains("-1"));
-    assert!(rendered.contains("Only files generated from the workspace template are compared."));
-}
-
-#[test]
 fn prompts_tab_renders_strategy_copy_and_reset_defaults_ui() {
     let mut template =
         AgentsShowPageTemplate::new(sample_agent_detail_row(), AgentShowTab::Prompts, 0);
@@ -563,6 +503,8 @@ fn prompts_tab_renders_strategy_copy_and_reset_defaults_ui() {
 
     let rendered = template.render().unwrap();
     assert!(rendered.contains("Strategy Prompts"));
+    assert!(!rendered.contains("Prompt Revision History"));
+    assert!(!rendered.contains("Allow daily review to improve eligible prompts automatically"));
     assert!(rendered.contains("Discuss prompt"));
     assert!(rendered.contains("formaction=\"/agents/test-agent/chat/conversations\""));
     assert!(rendered.contains("Analysis"));
@@ -733,43 +675,47 @@ fn new_job_page_renders_agent_navbar_with_jobs_active() {
 }
 
 #[test]
-fn workspace_page_renders_escaped_preview_and_htmx_file_link() {
+fn coding_page_renders_escaped_preview_and_htmx_file_link() {
     let agent = sample_agent_detail_row();
-    let template = AgentWorkspacePageTemplate {
-        tabs: build_agent_show_tabs(&agent, AgentShowTab::Workspace, 0),
+    let template = AgentCodingPageTemplate {
+        tabs: build_agent_show_tabs(&agent, AgentShowTab::Coding, 0),
         agent_tabs_use_htmx: true,
         agent,
         navbar: Navbar::default(),
-        current_path: "/agents/test-agent/workspace?file=scripts%2Fstrategy%20%23%201.rs"
-            .to_string(),
-        entries: vec![WorkspaceTreeEntryView {
-            path: "scripts/strategy # 1.rs".to_string(),
-            name: "strategy # 1.rs".to_string(),
-            href: "/agents/test-agent/workspace?file=scripts%2Fstrategy%20%23%201.rs".to_string(),
+        current_path: "/agents/test-agent/coding?file=strategies%2Ftrend%20%23%201.py".to_string(),
+        entries: vec![CodingTreeEntryView {
+            path: "strategies/trend # 1.py".to_string(),
+            name: "trend # 1.py".to_string(),
+            href: "/agents/test-agent/coding?file=strategies%2Ftrend%20%23%201.py".to_string(),
             depth: 1,
             is_directory: false,
             selected: true,
             initially_hidden: false,
         }],
-        workspace_exists: true,
+        package_exists: true,
+        package_status: CodingPackageStatusView::Valid {
+            version: "v1".to_string(),
+            manifest_hash: "abc".to_string(),
+        },
         listing_truncated: false,
         max_entries: 2_000,
         max_depth: 32,
         controller_unavailable: false,
-        selected_path: "scripts/strategy # 1.rs".to_string(),
+        selected_path: "strategies/trend # 1.py".to_string(),
         preview_text: Some("<script>unsafe</script>".to_string()),
         preview_missing: false,
         preview_binary: false,
         preview_too_large: false,
+        task_status_html: String::new(),
     };
 
-    let rendered = template.render().expect("render workspace page");
+    let rendered = template.render().expect("render coding page");
 
-    assert!(rendered.contains("Workspace"));
+    assert!(rendered.contains("Coding"));
+    assert!(rendered.contains("Valid package"));
     assert!(
-        rendered.contains(
-            "hx-get=\"/agents/test-agent/workspace?file=scripts%2Fstrategy%20%23%201.rs\""
-        )
+        rendered
+            .contains("hx-get=\"/agents/test-agent/coding?file=strategies%2Ftrend%20%23%201.py\"")
     );
     assert!(rendered.contains("hx-select=\"#agent-show-tab-content\""));
     assert!(rendered.contains("unsafe"));

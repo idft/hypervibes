@@ -20,6 +20,7 @@ import json
 import logging
 import os
 import secrets
+import stat
 import subprocess
 import sys
 from pathlib import Path
@@ -237,22 +238,16 @@ CODING_MAX_FILE_BYTES = 1024 * 1024
 CODING_MAX_TOTAL_BYTES = 20 * 1024 * 1024
 CODING_VALIDATOR_PYTHON = "/opt/hypervibes/analysis/.venv/bin/python"
 CODING_VALIDATOR_SCRIPT = "/opt/hypervibes/coding/coding_validate.py"
-CODING_VALIDATOR_TIMEOUT_SECONDS = 65
-ANALYSIS_RUNTIME_PYTHON = "/opt/hypervibes/analysis/.venv/bin/python"
-ANALYSIS_TOOL_TIMEOUT_SECONDS = 30
-ANALYSIS_TOOL_MANIFEST = "manifest.json"
-ANALYSIS_TOOL_REQUIRED_ARGUMENTS = {
-    "symbol",
-    "timeframe",
-    "boundary_ms",
-    "input",
-    "output",
-}
 
 
 def _coding_user_root() -> Path:
-    root = (Path.cwd() / "scripts" / "user").resolve()
-    root.mkdir(parents=True, exist_ok=True)
+    root = Path.cwd() / "scripts" / "user"
+    try:
+        metadata = root.lstat()
+    except FileNotFoundError:
+        return root
+    if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISDIR(metadata.st_mode):
+        raise RuntimeError("candidate scripts/user must be a regular directory")
     return root
 
 
@@ -304,178 +299,6 @@ def _coding_validation_path() -> Path:
     return Path.cwd().resolve().parent / "coding-validation.json"
 
 
-def _analysis_user_root() -> Path:
-    root = (Path.cwd() / "scripts" / "user").resolve()
-    if not root.is_dir() or root.parent.parent != Path.cwd().resolve():
-        raise RuntimeError("analysis package root is unavailable")
-    return root
-
-
-def _analysis_manifest() -> tuple[dict[str, Any], Path]:
-    root = _analysis_user_root()
-    path = root / ANALYSIS_TOOL_MANIFEST
-    try:
-        manifest = json.loads(path.read_text())
-    except (OSError, json.JSONDecodeError) as exc:
-        raise RuntimeError("analysis-tool manifest is missing or invalid") from exc
-    if (
-        not isinstance(manifest, dict)
-        or manifest.get("schema_version") != 1
-        or not isinstance(manifest.get("package_version"), str)
-        or not manifest["package_version"].strip()
-        or not isinstance(manifest.get("tools"), list)
-    ):
-        raise RuntimeError("analysis-tool manifest has an invalid schema")
-    return manifest, root
-
-
-def _analysis_package_hash(root: Path) -> str:
-    return _coding_manifest_hash_for_root(root)
-
-
-def _coding_manifest_hash_for_root(root: Path) -> str:
-    files: list[tuple[str, str]] = []
-    for path in sorted(root.rglob("*")):
-        if path.name == "__pycache__" or path.name.endswith((".pyc", "~")):
-            continue
-        if path.is_symlink():
-            raise RuntimeError("analysis package symlinks are not allowed")
-        if path.is_file():
-            files.append((path.relative_to(root).as_posix(), _coding_hash(path)))
-    digest = hashlib.sha256()
-    for relative, file_hash in files:
-        digest.update(relative.encode())
-        digest.update(b"\0")
-        digest.update(file_hash.encode())
-        digest.update(b"\0")
-    return digest.hexdigest()
-
-
-def _analysis_scratch_path(value: str, name: str) -> Path:
-    if not isinstance(value, str) or not value.strip():
-        raise ValueError(f"{name} must be a nonblank scratch-relative path")
-    workspace = Path.cwd().resolve()
-    scratch = (workspace / "scratch").resolve()
-    path = (workspace / value).resolve()
-    if scratch.parent != workspace or not path.is_relative_to(scratch):
-        raise ValueError(f"{name} must remain under scratch/")
-    return path
-
-
-def _validate_analysis_output(
-    output: Any, symbol: str, timeframe: str, boundary_ms: int
-) -> None:
-    required = {
-        "symbol",
-        "timeframe",
-        "boundary_ms",
-        "source_range",
-        "code_version",
-        "measurements",
-        "warnings",
-    }
-    if not isinstance(output, dict) or not required.issubset(output):
-        raise RuntimeError("analysis tool returned an invalid output envelope")
-    if output["symbol"] != symbol or output["timeframe"] != timeframe:
-        raise RuntimeError("analysis tool output context does not match requested tool input")
-    if output["boundary_ms"] != boundary_ms:
-        raise RuntimeError("analysis tool output boundary does not match requested tool input")
-    if not isinstance(output["source_range"], dict) or not isinstance(
-        output["source_range"].get("count"), int
-    ):
-        raise RuntimeError("analysis tool output source range is invalid")
-    if not isinstance(output["measurements"], dict) or not output["measurements"]:
-        raise RuntimeError("analysis tool output measurements are invalid")
-    if not isinstance(output["warnings"], list):
-        raise RuntimeError("analysis tool output warnings are invalid")
-
-
-@mcp.tool()
-def run_analysis_tool(
-    tool_id: str,
-    symbol: str,
-    timeframe: str,
-    boundary_ms: int,
-    input_path: str,
-    output_path: str,
-) -> dict[str, Any]:
-    """Run one manifest-declared quantitative tool in the current workspace.
-
-    Inputs and outputs must be run-local paths beneath scratch/. The tool result
-    is validated and bound to the exact package version and content hash.
-    """
-    manifest, root = _analysis_manifest()
-    tool = next(
-        (item for item in manifest["tools"] if isinstance(item, dict) and item.get("id") == tool_id),
-        None,
-    )
-    if tool is None:
-        raise ValueError("analysis tool is not declared by the package manifest")
-    if (
-        not isinstance(tool.get("description"), str)
-        or not tool["description"].strip()
-        or not isinstance(tool.get("entrypoint"), str)
-        or Path(tool["entrypoint"]).is_absolute()
-        or ".." in Path(tool["entrypoint"]).parts
-        or not isinstance(tool.get("version"), str)
-        or not tool["version"].strip()
-        or not isinstance(tool.get("required_arguments"), list)
-        or set(tool["required_arguments"]) != ANALYSIS_TOOL_REQUIRED_ARGUMENTS
-        or tool.get("input_kind") != "ohlcv"
-        or tool.get("output_schema") != "hypervibes.quantitative.v1"
-        or not isinstance(tool.get("supported_timeframes"), list)
-        or timeframe not in tool.get("supported_timeframes", [])
-        or not isinstance(tool.get("minimum_candles"), int)
-        or tool["minimum_candles"] < 1
-    ):
-        raise RuntimeError("analysis tool declaration is invalid")
-    entrypoint = (root / tool["entrypoint"]).resolve()
-    if not entrypoint.is_relative_to(root) or not entrypoint.is_file():
-        raise RuntimeError("analysis tool entrypoint is unavailable")
-    input_file = _analysis_scratch_path(input_path, "input_path")
-    output_file = _analysis_scratch_path(output_path, "output_path")
-    if not input_file.is_file():
-        raise ValueError("input_path does not name an existing regular file")
-    output_file.parent.mkdir(parents=True, exist_ok=True)
-    environment = {
-        "HOME": str((Path.cwd() / "scratch").resolve()),
-        "TMPDIR": str((Path.cwd() / "scratch" / "tmp").resolve()),
-        "PYTHONDONTWRITEBYTECODE": "1",
-        "PYTHONHASHSEED": "0",
-        "PATH": str(Path(ANALYSIS_RUNTIME_PYTHON).parent),
-    }
-    try:
-        completed = subprocess.run(
-            [
-                ANALYSIS_RUNTIME_PYTHON, str(entrypoint), "--symbol", symbol,
-                "--timeframe", timeframe, "--boundary-ms", str(boundary_ms),
-                "--input", str(input_file), "--output", str(output_file),
-            ],
-            cwd=Path.cwd(), capture_output=True, text=True,
-            timeout=ANALYSIS_TOOL_TIMEOUT_SECONDS, env=environment,
-        )
-    except (OSError, subprocess.SubprocessError) as exc:
-        raise RuntimeError(f"analysis tool could not run: {exc}") from exc
-    if completed.returncode != 0 or not output_file.is_file():
-        raise RuntimeError("analysis tool failed to produce output")
-    try:
-        output = json.loads(output_file.read_text())
-    except (OSError, json.JSONDecodeError) as exc:
-        raise RuntimeError("analysis tool produced invalid JSON") from exc
-    _validate_analysis_output(output, symbol, timeframe, boundary_ms)
-    binding = {
-        "package_version": manifest["package_version"],
-        "package_manifest_hash": _analysis_package_hash(root),
-        "tool_id": tool_id,
-        "tool_version": tool["version"],
-    }
-    output["quantitative_package"] = binding
-    temporary = output_file.with_suffix(output_file.suffix + ".tmp")
-    temporary.write_text(json.dumps(output, sort_keys=True) + "\n")
-    os.replace(temporary, output_file)
-    return {"output_path": output_path, **binding}
-
-
 def _invalidate_coding_validation() -> None:
     _coding_validation_path().unlink(missing_ok=True)
 
@@ -503,7 +326,6 @@ def coding_validate_candidate() -> dict[str, Any]:
             cwd=workspace,
             capture_output=True,
             text=True,
-            timeout=CODING_VALIDATOR_TIMEOUT_SECONDS,
             env=environment,
         )
     except (OSError, subprocess.SubprocessError) as exc:
@@ -552,14 +374,19 @@ def coding_submit_report(
         raise ValueError("outcome must be changed or no_change")
     if any(
         not isinstance(path, str)
+        or not path
+        or path in {".", ".."}
         or path.startswith("/")
+        or "\\" in path
         or ".." in Path(path).parts
+        or "." in Path(path).parts
+        or "\x00" in path
         or Path(path).parts[:2] == ("scripts", "user")
         for path in changed_paths
     ):
         raise ValueError(
             "changed paths must be relative to scripts/user "
-            "(for example analyze.py, not scripts/user/analyze.py)"
+            "(for example strategies/trend.py, not scripts/user/strategies/trend.py)"
         )
     result = _request(
         "POST",

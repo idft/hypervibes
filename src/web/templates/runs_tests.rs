@@ -81,6 +81,31 @@ fn run_error_renders_in_fixed_summary_not_transcript() {
 }
 
 #[test]
+fn run_detail_summary_omits_artifact_stats() {
+    let run =
+        HarnessSubAgentRunDetailView::from_row(&sample_run_row(10, "succeeded", "analysis-15m"));
+    let artifact = RunWorkspaceArtifactView {
+        status: "Retained".to_string(),
+        status_class: "status-class",
+        expires_at: Some(LocalTimestampView {
+            iso: "2026-06-27T00:01:00Z".to_string(),
+            fallback_text: "2026-06-27 00:01 UTC".to_string(),
+        }),
+        size_text: "12 B".to_string(),
+        file_count_text: "1".to_string(),
+        secrets_scrubbed: true,
+    };
+
+    let rendered = AgentRunDetailSummaryPartialTemplate::render_view(run, None, Some(artifact))
+        .expect("render summary");
+
+    assert!(!rendered.contains(">Artifact</dt>"));
+    assert!(!rendered.contains(">Artifact size</dt>"));
+    assert!(!rendered.contains(">Runtime secrets</dt>"));
+    assert!(rendered.contains(">Artifact expires</dt>"));
+}
+
+#[test]
 fn event_run_detail_view_uses_dash_timeframe_and_job_url() {
     let mut row = sample_run_row(8, "succeeded", "market-analysis");
     row.sub_agent_id = 3;

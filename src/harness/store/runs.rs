@@ -92,10 +92,6 @@ pub async fn list_active_agent_runs(
     Ok(rows)
 }
 
-pub async fn agent_has_active_runs(pool: &DbPool, agent_key: &str) -> Result<bool> {
-    Ok(!list_active_agent_runs(pool, agent_key).await?.is_empty())
-}
-
 /// List the most recent runs for an agent.
 #[cfg(test)]
 pub async fn list_agent_runs(

@@ -10,8 +10,10 @@ Role boundaries:
 
 - Only the analysis-coding sub-agent may modify reusable code under
   `scripts/user/`.
-- Other roles may invoke the existing analyzer only through their approved
-  commands and may access only the workspace paths their profile permits.
+- Analysis roles may inspect and directly execute the read-only Coding package
+  under `scripts/user/` through their approved commands; other roles may not
+  read or execute package code. Every role may access only the workspace paths
+  its profile permits.
 
 Backend access:
 

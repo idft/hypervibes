@@ -49,10 +49,10 @@ fn build_analysis_prompt(request: &DispatchRequest) -> String {
     }
     body.push_str("\n\n## Instructions\n");
     body.push_str("- Fetch OHLCV with `python .opencode/skills/hyperliquid-data/fetch_ohlcv.py <SYMBOL> <TIMEFRAME> --closed-before <BOUNDARY_MS> --output-dir scratch/ohlcv`. Use the exact boundary milliseconds above and the `hyperliquid-data` skill for details.\n");
-    body.push_str("- The fetch manifest's `output_path` is already the canonical input envelope for the `analyze` tool; do not reshape the candles.\n");
-    body.push_str("- When a quantitative package is available, invoke its declared `analyze` tool with `hypervibes_run_analysis_tool`, this sub-agent's symbol, timeframe, exact boundary milliseconds, the fetch manifest's `output_path`, and a scratch output path. Treat its version-bound output as quantitative evidence.\n");
+    body.push_str("- The fetch manifest's `output_path` is the canonical input envelope for package analysis; read that exact file rather than enumerating `scratch/`, and do not reshape the candles.\n");
+    body.push_str("- When a Coding package is available, inspect `scripts/user/` and directly execute whichever existing package Python is useful for this analysis. If `scripts/user/` is empty, no package is available; do not create a fallback script. Pass the fetched input path and write transient outputs only beneath the approved run-local `scratch/` directories. The package is read-only during this job.\n");
     body.push_str(
-        "- Use the shared `python-analysis` runtime for indicator and statistical work.\n",
+        "- Use the shared `python-analysis` runtime only through direct execution of an existing package script. Do not run inline Python, shell composition, or temporary helper programs.\n",
     );
     body.push_str(
         "- Write a memory record with `hypervibes_write_memory` summarizing your analysis so the trading job can consume it.\n",
@@ -98,8 +98,7 @@ fn build_market_analysis_prompt(request: &DispatchRequest) -> String {
     body.push_str("- When you write a market-analysis memory, attach `links` with `link_type = \"derived_from\"` to the source analysis memory IDs used for the synthesis.\n");
     body.push_str("- Use a concise summary title of no more than 12 words. Include the symbol, directional bias or no-trade status, and the key reason or next step. Never include a date, time, timestamp, timeframe, or other metadata in the title.\n");
     body.push_str("- Include actionable entries, exits, invalidation, confidence, and risk notes in the memory content and metadata.\n");
-    body.push_str("- Set metadata `execution_state` to exactly one of `execute`, `conditional`, `wait`, `manage_existing`, or `cancel_entries`. Use `execute` only when the latest source analyses already establish every required entry condition. Use `conditional` only when trading may verify a finite set of stated quantitative conditions against fresh closed candles. Use `wait` when later analysis is required before opening exposure.\n");
-    body.push_str("- For `conditional`, include metadata `confirmation_timeframes` as the exact timeframes trading may fetch and `confirmation_rules` as an array of machine-readable rules. Each rule must name its timeframe, a stable analyzer `measurement` or `signal`, its comparison or expected value, and `minimum_candles` needed for that calculation. Trading must be able to verify the rules without creating indicators, changing parameters, or inferring additional conditions.\n");
+    body.push_str("- Set metadata `execution_state` to exactly one of `execute`, `wait`, `manage_existing`, or `cancel_entries`. Use `execute` only when the latest source analyses establish every required entry condition. Use `wait` when later analysis is required before opening exposure.\n");
     body.push_str("- If the source analyses conflict, are stale, or are insufficiently actionable, write a neutral market analysis that explicitly tells trading not to open new exposure.\n");
     body.push_str("- Do not place or cancel orders.\n");
     body
@@ -131,14 +130,6 @@ fn build_trading_prompt(request: &DispatchRequest) -> String {
     body.push_str(&account_state_section(request.account_snapshot.as_ref()));
     body.push_str("\n\n## Selected instruments\n");
     body.push_str(&selected_instruments_section(&request.selected_instruments));
-    body.push_str("\n\n## Conditional-confirmation candle cutoff\n");
-    body.push_str(&format!(
-        "- If and only if the selected market analysis has `execution_state = \"conditional\"`, confirmation data is anchored to {} ({} milliseconds).\n",
-        format_utc(request.scheduled_for),
-        request.scheduled_for.timestamp_millis()
-    ));
-    body.push_str("- For every permitted confirmation timeframe, a candle is eligible when `start_ms + interval_ms <= boundary_ms`; a candle closing exactly at the boundary is included.\n");
-    body.push_str("- Fetch confirmation candles with `--closed-before <boundary_ms>` and never use `--stdout` or an open candle.\n");
     body.push_str("\n\n## Instructions\n");
     body.push_str("- Call `hypervibes_get_market_analysis(symbol)` for each selected symbol before placing any trades.\n");
     body.push_str(
@@ -151,10 +142,8 @@ fn build_trading_prompt(request: &DispatchRequest) -> String {
     );
     body.push_str("- Do not fall back to raw timeframe `analysis` memories for execution decisions. Raw analysis can be consulted only for diagnostics when the operator prompt explicitly asks for it.\n");
     body.push_str("- Treat the selected market analysis's direction, confidence, entry zone, invalidation, targets, and execution state as immutable. Do not discover a setup, alter the thesis, or add a condition.\n");
-    body.push_str("- If `execution_state` is missing or unrecognized, do not fetch market data, run the analyzer, or open new exposure.\n");
-    body.push_str("- For `execution_state = \"execute\"`, do not fetch market data or run the analyzer; reconcile and execute only the stated plan. For `wait`, `manage_existing`, or `cancel_entries`, do not fetch market data or run the analyzer; take only the stated non-opening action.\n");
-    body.push_str("- Only for `execution_state = \"conditional\"`, load the `hyperliquid-data` skill and fetch only the selected symbol, exact `confirmation_timeframes`, and declared `minimum_candles` using the cutoff above. Invoke only the manifest-declared `analyze` tool through `hypervibes_run_analysis_tool` against each fetched canonical input, writing output beneath `scratch/trading-confirmation/`.\n");
-    body.push_str("- For conditional execution, compare only the analyzer measurements and signals named in `confirmation_rules` to their declared values. If a rule, analyzer, input, output, or required measurement is missing or fails, do not open new exposure. Do not derive a new indicator, use another timeframe, or reinterpret a failed condition.\n");
+    body.push_str("- If `execution_state` is missing or unrecognized, do not fetch market data, run package code, or open new exposure.\n");
+    body.push_str("- Do not fetch market data or run package code in a trading job. For `execute`, reconcile and execute only the stated plan; for `wait`, `manage_existing`, or `cancel_entries`, take only the stated non-opening action.\n");
     body.push_str("- Submit and cancel orders only through the `hypervibes` MCP trading tools.\n");
     body.push_str("- Do not trade instruments that are not in the selected list.\n");
     body
@@ -258,18 +247,18 @@ fn build_analysis_coding_prompt(request: &DispatchRequest) -> String {
     body.push_str("- Work only in the isolated candidate workspace provided by the trusted worker. Never edit the live workspace.\n");
     body.push_str("- Do not edit `.env`, `.opencode/`, strategy prompts, backend templates, runtime dependencies, or another agent's workspace.\n");
     body.push_str("- Do not place, cancel, or modify orders. Do not install packages or run arbitrary shell commands.\n");
-    body.push_str("- Maintain `scripts/user/manifest.json` with schema version 1 and an `analyze` tool declaration. Preserve the legacy `scripts/user/analyze.py` CLI and output envelope during migration; supporting modules and additional declared tools are allowed.\n");
-    body.push_str("- The output `source_range` object must contain integer `count`, exactly equal to the number of eligible candles used in calculations. The analyzer must produce finite, non-empty, candle-sensitive measurements with only one eligible candle and for every supported input interval.\n");
+    body.push_str("- Maintain `scripts/user/manifest.json` with schema version 1, a nonblank package version, and one or more declared validation targets. Choose every target ID, Python entrypoint, module, and version; each target must preserve the required deterministic CLI and output envelope. The manifest tells fixed validation which targets must pass and does not authorize normal analysis execution.\n");
+    body.push_str("- The output `source_range` object must contain integer `count`, exactly equal to the number of eligible candles used in calculations. Each declared target must produce finite, non-empty, candle-sensitive measurements with only one eligible candle and for every supported input interval.\n");
     body.push_str("- Sort eligible candles by `timestamp_ms` before calculations. Output must be unchanged when input order changes or when any ineligible open/future candle is appended; optional source metadata may describe eligible candles only.\n");
     body.push_str("- Create missing parent directories for the requested atomic output path. If a `last_candle_body` signal is emitted, calculate `up`/`down`/`flat` from that candle's close versus open, not from change versus the previous close.\n");
     body.push_str("- Use focused edits and Pyright LSP diagnostics instead of replacing a whole large file. Resolve every reported Pyright error before final validation.\n");
     body.push_str("- Generate auditable quantitative measurements and calculation-derived signals, not final bias, actionability, trading confidence, entries, exits, stops, targets, sizing, or orders.\n");
     body.push_str("- The preinstalled analysis libraries may be used; the standard-library-only rule applies to the optional `unittest` framework, not production code.\n");
     body.push_str("- Add focused tests only for demonstrated bugs or nontrivial custom math. Do not generate a comprehensive suite by default.\n");
-    body.push_str("- In bootstrap mode, create both `scripts/user/manifest.json` and `scripts/user/analyze.py` when absent; an empty tree is not a no-change result.\n");
+    body.push_str("- In bootstrap mode, create both `scripts/user/manifest.json` and at least one declared Python validation target when absent; choose an arbitrary package layout and an empty tree is not a no-change result.\n");
     body.push_str("- In bootstrap mode, implement the smallest validator-ready baseline first instead of every indicator in the analysis strategy. Simple eligible-count and last-close measurements are sufficient; do not add platform-contract tests, temporary diagnostics, or placeholder files.\n");
     body.push_str("- The fixed validator is entirely local and fixture-based. Treat every failed check as a candidate or contract defect, use its diagnostics, and rerun it. Never classify a failed validation as environmental.\n");
-    body.push_str("- Submit the coding report only after fixed validation returns `ok: true` for the final tree. Report changed paths relative to `scripts/user`, such as `analyze.py`, not `scripts/user/analyze.py`.\n");
+    body.push_str("- Submit the coding report only after fixed validation returns `ok: true` for the final tree. Report changed paths relative to `scripts/user`, such as `strategies/trend.py`, not `scripts/user/strategies/trend.py`.\n");
     body.push_str("- Before ending the session, call the coding report tool exactly once.\n");
     body.push_str("- Submit exactly one structured changed/no_change report. `no_change` is correct when evidence does not justify a change.\n");
     body
@@ -422,11 +411,18 @@ mod tests {
             request.scheduled_for.timestamp_millis()
         )));
         assert!(prompt.contains("a candle closing exactly at the boundary is included"));
-        assert!(prompt.contains("already the canonical input envelope"));
-        assert!(prompt.contains("hypervibes_run_analysis_tool"));
+        assert!(prompt.contains("canonical input envelope for package analysis"));
+        assert!(prompt.contains("rather than enumerating `scratch/`"));
+        assert!(prompt.contains("directly execute whichever existing package Python is useful"));
+        assert!(prompt.contains("If `scripts/user/` is empty, no package is available"));
         assert!(prompt.contains("python .opencode/skills/hyperliquid-data/fetch_ohlcv.py"));
         assert!(prompt.contains("`hyperliquid-data` skill"));
-        assert!(prompt.contains("`python-analysis` runtime"));
+        assert!(prompt.contains("`python-analysis` runtime only through direct execution"));
+        assert!(
+            prompt.contains(
+                "Do not run inline Python, shell composition, or temporary helper programs"
+            )
+        );
         assert!(prompt.contains("Sub-agent-specific strategy is additive"));
         assert!(prompt.contains("## Completion requirements"));
         assert!(
@@ -491,14 +487,9 @@ mod tests {
         assert!(prompt.contains("- Available to trade USD: 750"));
         assert!(prompt.contains("hypervibes_get_market_analysis(symbol)"));
         assert!(prompt.contains("Do not fall back to raw timeframe `analysis` memories"));
-        assert!(prompt.contains("## Conditional-confirmation candle cutoff"));
-        assert!(prompt.contains("2026-07-03T21:30:00Z (1783114200000 milliseconds)"));
-        assert!(prompt.contains("`execution_state = \"conditional\"`"));
-        assert!(prompt.contains("`confirmation_timeframes`"));
-        assert!(prompt.contains("manifest-declared `analyze` tool"));
-        assert!(prompt.contains("hypervibes_run_analysis_tool"));
+        assert!(!prompt.contains("Conditional-confirmation"));
         assert!(prompt.contains("If `execution_state` is missing or unrecognized"));
-        assert!(prompt.contains("never use `--stdout` or an open candle"));
+        assert!(prompt.contains("Do not fetch market data or run package code"));
         assert!(!prompt.contains("Fetch current OHLCV and public market data"));
         assert!(prompt.contains("Sub-agent-specific strategy is additive"));
     }
@@ -521,8 +512,7 @@ mod tests {
         assert!(prompt.contains("memory_type = \"market_analysis\""));
         assert!(prompt.contains("link_type = \"derived_from\""));
         assert!(prompt.contains("metadata `execution_state`"));
-        assert!(prompt.contains("`confirmation_timeframes`"));
-        assert!(prompt.contains("`confirmation_rules`"));
+        assert!(prompt.contains("`execution_state` to exactly one of `execute`, `wait`"));
         assert!(
             prompt.contains("Do not pass a `timeframe` argument at all; leave it out entirely")
         );

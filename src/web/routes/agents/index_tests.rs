@@ -19,7 +19,6 @@ use crate::{
     harness::backend::{DispatchRequest, DispatchResult, HarnessBackend},
     hyperliquid::live_state::{AccountKey, AccountLiveState, LiveConnectionStatus},
     opencode::client::SessionStatusKind,
-    opencode::workspace::delete_agent_workspace,
 };
 
 struct RefusingDeleteAbortBackend;
@@ -259,13 +258,16 @@ async fn post_agents_creates_agent_active_with_default_prompts_and_jobs() {
             .expect("list default instruments"),
         vec!["BTC".to_string()]
     );
-    assert!(
-        !agent
-            .runtime_config
-            .as_object()
-            .expect("runtime config object")
-            .is_empty(),
-        "expected activate_new_agent to populate runtime_config"
+    let (runtime_config,): (serde_json::Value,) =
+        sqlx::query_as("SELECT runtime_config FROM agents WHERE agent_key = $1")
+            .bind(&agent_key)
+            .fetch_one(&state.db_pool)
+            .await
+            .expect("load runtime config");
+    assert_eq!(
+        runtime_config,
+        serde_json::json!({}),
+        "agent creation must leave runtime_config empty"
     );
     let prompt_count: (i64,) = sqlx::query_as(
         "SELECT COUNT(*) FROM agent_strategy_prompt_active_revisions WHERE agent_key = $1",
@@ -289,7 +291,33 @@ async fn post_delete_agent_removes_agent_and_redirects() {
     let (agent_key, _) = insert_test_opencode_agent(&state)
         .await
         .expect("insert agent");
-    generate_test_agent_workspace(&state, &agent_key).await;
+
+    // Seed durable Coding resources that must be removed by agent deletion.
+    let packages_root = state
+        .opencode_workspace_config
+        .host_workspaces_root
+        .join("packages")
+        .join(&agent_key);
+    let versions_root = state
+        .opencode_workspace_config
+        .host_workspaces_root
+        .join("versions")
+        .join(&agent_key);
+    let coding_root = state
+        .opencode_workspace_config
+        .host_workspaces_root
+        .join("coding")
+        .join(&agent_key);
+    fs::create_dir_all(packages_root.join("strategies")).expect("create package");
+    fs::write(packages_root.join("manifest.json"), "{}").expect("write package manifest");
+    fs::create_dir_all(versions_root.join("3/package")).expect("create retained version");
+    fs::create_dir_all(coding_root.join("3/workspace")).expect("create coding candidate");
+    let runs_root = state
+        .opencode_workspace_config
+        .host_workspaces_root
+        .join("runs")
+        .join(&agent_key);
+    fs::create_dir_all(runs_root.join("9/workspace")).expect("create run workspace");
 
     let stored = get_agent(&pool, &agent_key)
         .await
@@ -300,17 +328,6 @@ async fn post_delete_agent_removes_agent_and_redirects() {
         .as_deref()
         .expect("trading account");
     let live_account_key = AccountKey::new(trading_account, &stored.environment);
-    let workspace_path = crate::opencode::workspace::agent_workspace_host_path(
-        &state.opencode_workspace_config,
-        &agent_key,
-    )
-    .expect("workspace path");
-    assert!(workspace_path.exists());
-    fs::write(
-        workspace_path.join("scratch/delete-sentinel.txt"),
-        "cleanup",
-    )
-    .expect("write delete sentinel");
     state.live_accounts.replace(
         live_account_key.clone(),
         AccountLiveState {
@@ -369,23 +386,20 @@ async fn post_delete_agent_removes_agent_and_redirects() {
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::NOT_FOUND);
-    assert!(!workspace_path.exists());
+    assert!(!packages_root.exists(), "Coding package must be deleted");
+    assert!(!versions_root.exists(), "retained versions must be deleted");
+    assert!(!coding_root.exists(), "coding candidates must be deleted");
+    // Isolated run workspaces are owned by their own lifecycle.
+    assert!(runs_root.join("9/workspace").exists());
     assert!(state.live_accounts.get(&live_account_key).is_none());
 }
 
 #[tokio::test]
-async fn agents_index_omits_selected_agent_workspace_template_drift_warning() {
+async fn agents_index_omits_retired_workspace_template_drift_warning() {
     let state = test_state().await;
-    let (agent_key, _) = insert_test_opencode_agent(&state)
+    insert_test_opencode_agent(&state)
         .await
         .expect("insert agent");
-    generate_test_agent_workspace(&state, &agent_key).await;
-    let workspace_path = crate::opencode::workspace::agent_workspace_host_path(
-        &state.opencode_workspace_config,
-        &agent_key,
-    )
-    .expect("workspace path");
-    fs::write(workspace_path.join("AGENTS.md"), "user-modified\n").expect("modify AGENTS.md");
 
     let response = router(state)
         .oneshot(
@@ -412,7 +426,6 @@ async fn post_delete_agent_aborts_queued_run_before_deleting() {
     let (agent_key, _) = insert_test_opencode_agent(&state)
         .await
         .expect("insert agent");
-    generate_test_agent_workspace(&state, &agent_key).await;
     let sub_agent_id = crate::harness::store::list_agent_sub_agents(&pool, &agent_key)
         .await
         .expect("list jobs")
@@ -450,7 +463,6 @@ async fn post_delete_agent_preserves_disabled_agent_when_run_cannot_abort() {
     let (agent_key, _) = insert_test_opencode_agent(&state)
         .await
         .expect("insert agent");
-    generate_test_agent_workspace(&state, &agent_key).await;
     let sub_agent_id = crate::harness::store::list_agent_sub_agents(&pool, &agent_key)
         .await
         .expect("list jobs")
@@ -486,22 +498,18 @@ async fn post_delete_agent_preserves_disabled_agent_when_run_cannot_abort() {
     );
 }
 #[tokio::test]
-async fn post_agents_creates_the_opencode_workspace() {
+async fn post_agents_creates_agent_without_workspace_or_runtime_config() {
     let state = test_state().await;
     let pool = state.db_pool.clone();
     let app = router(state.clone());
     let timestamp = chrono::Utc::now().timestamp_millis();
-    let display_name = format!("FreshWorkspace{}", timestamp);
+    let display_name = format!("FreshAgent{}", timestamp);
     let agent_key = slugify_agent_key(&display_name);
-    let workspace_path = state
+    let legacy_agent_root = state
         .opencode_workspace_config
         .host_workspaces_root
         .join("agents")
         .join(&agent_key);
-    assert!(
-        !workspace_path.exists(),
-        "workspace must not exist pre-create"
-    );
 
     let body = format!("display_name={display_name}&trading_account_selection=main");
 
@@ -518,61 +526,23 @@ async fn post_agents_creates_the_opencode_workspace() {
         .unwrap();
 
     assert_eq!(response.status(), StatusCode::SEE_OTHER);
-    assert!(
-        get_agent(&pool, &agent_key)
-            .await
-            .expect("get agent")
-            .is_some()
-    );
-    assert!(
-        workspace_path.exists(),
-        "create_agent should generate the workspace"
-    );
-}
-
-#[tokio::test]
-async fn post_agents_does_not_persist_agent_when_workspace_already_exists() {
-    let state = test_state().await;
-    let pool = state.db_pool.clone();
-    let app = router(state.clone());
-    let timestamp = chrono::Utc::now().timestamp_millis();
-    let display_name = format!("ExistingWorkspace{}", timestamp);
-    let agent_key = slugify_agent_key(&display_name);
-    let workspace_path = state
-        .opencode_workspace_config
-        .host_workspaces_root
-        .join("agents")
-        .join(&agent_key);
-    fs::create_dir_all(&workspace_path).expect("create existing workspace");
-    let sentinel_path = workspace_path.join("sentinel.txt");
-    fs::write(&sentinel_path, "keep").expect("write workspace sentinel");
-
-    let body = format!("display_name={display_name}&trading_account_selection=main");
-    let response = app
-        .oneshot(
-            Request::builder()
-                .method("POST")
-                .uri("/agents")
-                .header("content-type", "application/x-www-form-urlencoded")
-                .body(Body::from(body))
-                .unwrap(),
-        )
+    get_agent(&pool, &agent_key)
         .await
-        .unwrap();
-
-    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        .expect("get agent")
+        .expect("agent present");
     assert!(
-        get_agent(&pool, &agent_key)
+        !legacy_agent_root.exists(),
+        "agent creation must not create /workspaces/agents/<key>"
+    );
+    let (runtime_config,): (serde_json::Value,) =
+        sqlx::query_as("SELECT runtime_config FROM agents WHERE agent_key = $1")
+            .bind(&agent_key)
+            .fetch_one(&pool)
             .await
-            .expect("get failed agent")
-            .is_none(),
-        "agent row must not survive workspace creation failure"
+            .expect("load runtime config");
+    assert_eq!(
+        runtime_config,
+        serde_json::json!({}),
+        "agent creation must leave runtime_config empty"
     );
-    assert!(
-        sentinel_path.exists(),
-        "existing workspace must be preserved"
-    );
-
-    delete_agent_workspace(&state.opencode_workspace_config, &agent_key)
-        .expect("clean up existing workspace");
 }

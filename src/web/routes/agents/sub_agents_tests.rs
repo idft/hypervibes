@@ -14,7 +14,7 @@ use crate::{
 };
 
 #[tokio::test]
-async fn manual_job_run_redirects_with_warning_during_workspace_maintenance() {
+async fn manual_job_run_redirects_with_warning_during_analysis_coding_promotion() {
     let state = test_state().await;
     let app = router(Arc::clone(&state));
     let (agent_key, _) = insert_test_opencode_agent(&state)
@@ -28,14 +28,53 @@ async fn manual_job_run_redirects_with_warning_during_workspace_maintenance() {
         .find(|row| row.sub_agent_key == "analysis-15m")
         .expect("analysis job present")
         .id;
-    crate::harness::store::insert_workspace_regenerate_task(
+    sqlx::query(
+        "UPDATE harness_sub_agents
+            SET enabled = true,
+                model_provider_id = 'test',
+                model_id = 'strong'
+          WHERE agent_key = $1
+            AND sub_agent_kind = 'analysis_coding'",
+    )
+    .bind(&agent_key)
+    .execute(&state.db_pool)
+    .await
+    .expect("configure coding event job");
+    let coding_sub_agent_id: (i64,) = sqlx::query_as(
+        "SELECT id FROM harness_sub_agents WHERE agent_key = $1 AND sub_agent_kind = 'analysis_coding'",
+    )
+    .bind(&agent_key)
+    .fetch_one(&state.db_pool)
+    .await
+    .expect("load coding event job");
+    let task_id = match crate::harness::store::insert_analysis_coding_task_and_run(
         &state.db_pool,
-        &agent_key,
-        false,
-        false,
+        crate::harness::store::AnalysisCodingTaskRequest {
+            agent_key: &agent_key,
+            sub_agent_id: coding_sub_agent_id.0,
+            trigger_mode: crate::harness::store::CodingTriggerMode::Manual,
+            request_origin: "manual",
+            source_sub_agent_run_id: None,
+            source_memory_id: None,
+            operator_prompt: None,
+            requested_mode: Some("auto"),
+        },
     )
     .await
-    .expect("seed maintenance task");
+    .expect("queue coding task")
+    {
+        crate::harness::store::InsertAnalysisCodingTaskOutcome::Inserted { task_id, .. } => task_id,
+        other => panic!("expected Inserted, got {other:?}"),
+    };
+    sqlx::query(
+        "UPDATE harness_maintenance_tasks
+            SET phase = 'promoting', status = 'running'
+          WHERE id = $1",
+    )
+    .bind(task_id)
+    .execute(&state.db_pool)
+    .await
+    .expect("place coding task into promotion phase");
 
     let response = app
         .oneshot(

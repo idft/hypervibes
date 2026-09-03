@@ -11,7 +11,7 @@ use tracing::{debug, error, info, warn};
 
 use crate::{
     agents::{
-        store::{get_agent, list_agent_instrument_ids, update_agent_runtime_config},
+        store::{get_agent, list_agent_instrument_ids},
         strategy_prompts::{
             PROMPT_KIND_ANALYSIS, PROMPT_KIND_ANALYSIS_CODING, default_prompt_for_kind,
             get_agent_strategy_prompt, prompt_kind_for_sub_agent_kind,
@@ -25,16 +25,15 @@ use crate::{
         },
         in_flight::{InFlightTracker, SHUTDOWN_IN_FLIGHT_GRACE},
         model::{
-            HarnessDispatchSubAgentRow, MAINTENANCE_STATUS_QUEUED, SUB_AGENT_KIND_ANALYSIS,
-            SUB_AGENT_KIND_ANALYSIS_CODING, SUB_AGENT_KIND_DAILY_REVIEW,
-            SUB_AGENT_KIND_MARKET_ANALYSIS, SUB_AGENT_KIND_TRADING,
+            HarnessDispatchSubAgentRow, SUB_AGENT_KIND_ANALYSIS, SUB_AGENT_KIND_ANALYSIS_CODING,
+            SUB_AGENT_KIND_DAILY_REVIEW, SUB_AGENT_KIND_MARKET_ANALYSIS, SUB_AGENT_KIND_TRADING,
         },
         store,
         timeframe::{boundary_for_due_at, parse_timeframe_seconds},
         workspace_lease::WorkspaceLeaseManager,
     },
     hyperliquid::live_state::{LiveAccountStore, live_agent_snapshot_for_dispatch},
-    memory::{delete_memories_for_agent, get_latest_agent_memory_by_type},
+    memory::get_latest_agent_memory_by_type,
     opencode::{
         client::OpenCodeClient,
         coding_workspace::{changed_paths, manifest_hash},
@@ -303,15 +302,6 @@ impl HarnessScheduler {
         }
 
         self.maybe_recover_orphans().await?;
-
-        process_workspace_maintenance_tasks(
-            &self.pool,
-            &self.workspace_controller,
-            &self.agent_api_base_url,
-            &self.opencode_client,
-            &self.workspace_leases,
-        )
-        .await?;
 
         process_provider_config_reload_tasks(
             &self.pool,
@@ -920,149 +910,6 @@ async fn resume_queued_run(
     }
 }
 
-async fn process_workspace_maintenance_tasks(
-    pool: &DbPool,
-    workspace_controller: &Arc<dyn WorkspaceController>,
-    agent_api_base_url: &str,
-    opencode_client: &Arc<OpenCodeClient>,
-    workspace_leases: &WorkspaceLeaseManager,
-) -> Result<()> {
-    let Some(task) = store::get_next_queued_workspace_regenerate_task(pool).await? else {
-        return Ok(());
-    };
-
-    let Some(agent) = get_agent(pool, &task.agent_key).await? else {
-        let _ = store::mark_maintenance_task_failed(
-            pool,
-            task.id,
-            "agent disappeared before maintenance",
-        )
-        .await;
-        return Ok(());
-    };
-
-    if store::agent_has_active_runs(pool, &task.agent_key).await? {
-        debug!(
-            task_id = task.id,
-            agent_key = %task.agent_key,
-            status = MAINTENANCE_STATUS_QUEUED,
-            "workspace maintenance remains queued while agent runs are active"
-        );
-        return Ok(());
-    }
-
-    let Some(workspace_runtime) = OpenCodeWorkspaceRuntimeConfig::from_value(&agent.runtime_config)
-    else {
-        let _ = store::mark_maintenance_task_failed(
-            pool,
-            task.id,
-            "agent is missing OpenCode workspace metadata",
-        )
-        .await;
-        return Ok(());
-    };
-
-    let active_sessions = crate::opencode::store::count_active_opencode_sessions_for_directory(
-        pool,
-        &workspace_runtime.workspace_container_path,
-    )
-    .await?;
-    if active_sessions > 0 {
-        debug!(
-            task_id = task.id,
-            agent_key = %task.agent_key,
-            active_sessions,
-            "workspace maintenance remains queued while an OpenCode session is active"
-        );
-        return Ok(());
-    }
-
-    if !store::mark_maintenance_task_running(pool, task.id).await? {
-        debug!(
-            task_id = task.id,
-            agent_key = %task.agent_key,
-            "workspace maintenance task was claimed concurrently before execution"
-        );
-        return Ok(());
-    }
-
-    let hard_reset = task.parameter_bool("hard_reset");
-    let reset_memories = task.parameter_bool("reset_memories");
-    let maintenance_result = async {
-        let _lease = workspace_leases.acquire_live_write(&agent.agent_key).await;
-        let workspace_agent = WorkspaceAgentInput {
-            agent_key: agent.agent_key.clone(),
-            display_name: agent.display_name.clone(),
-            agent_api_key: agent.api_key.clone(),
-            api_base_url: agent_api_base_url.to_string(),
-        };
-
-        if hard_reset {
-            let _ = workspace_controller
-                .delete_workspace(
-                    &agent.agent_key,
-                    &format!("maintenance:{}:hard-reset", task.id),
-                )
-                .await?;
-        }
-
-        let generated = workspace_controller
-            .create_workspace(
-                workspace_agent,
-                true,
-                &format!("maintenance:{}:regenerate", task.id),
-            )
-            .await?;
-        let runtime_config = OpenCodeWorkspaceRuntimeConfig {
-            workspace_container_path: generated.workspace_container_path.clone(),
-            profile_source: generated.profile_source,
-        }
-        .into_value();
-        if !update_agent_runtime_config(pool, &agent.agent_key, runtime_config).await? {
-            anyhow::bail!("agent disappeared before workspace metadata update");
-        }
-        opencode_client
-            .dispose_workspace_instance(
-                opencode_client.base_url(),
-                &generated.workspace_container_path,
-            )
-            .await?;
-        if reset_memories {
-            delete_memories_for_agent(pool, &agent.agent_key).await?;
-        }
-
-        Ok::<(), anyhow::Error>(())
-    }
-    .await;
-
-    match maintenance_result {
-        Ok(()) => {
-            store::mark_maintenance_task_succeeded(pool, task.id).await?;
-            info!(
-                task_id = task.id,
-                agent_key = %task.agent_key,
-                hard_reset,
-                reset_memories,
-                "workspace maintenance completed"
-            );
-        }
-        Err(error) => {
-            error!(
-                task_id = task.id,
-                agent_key = %task.agent_key,
-                hard_reset,
-                reset_memories,
-                error = ?error,
-                "workspace maintenance failed"
-            );
-            let summary = maintenance_error_summary(&error);
-            store::mark_maintenance_task_failed(pool, task.id, &summary).await?;
-        }
-    }
-
-    Ok(())
-}
-
 /// Process a queued `provider_config_reload` maintenance task. The task
 /// disposes all OpenCode instances so newly stored (or removed) provider
 /// credentials are reflected in the `/provider` response. It waits until
@@ -1193,29 +1040,39 @@ async fn run_coding_task(
         return Ok(());
     };
 
-    let existing_candidate = workspace_controller
-        .inspect_candidate(&task.agent_key, task.id)
-        .await
-        .ok();
-    let canonical_exists = existing_candidate
-        .as_ref()
-        .is_some_and(|candidate| candidate.manifest.contains_key("analyze.py"));
+    // Resolve the requested coding mode from the inspected durable package:
+    // a valid package is suitable for manual improvement, a missing package
+    // needs bootstrap, and an invalid package uses bootstrap instructions
+    // that rebuild a valid manifest while preserving useful files.
     let requested_mode = task
         .parameters
         .get("mode")
         .and_then(serde_json::Value::as_str)
         .unwrap_or("auto");
-    let effective_mode = match requested_mode {
-        "auto" if canonical_exists => "manual_improvement",
-        "auto" => "bootstrap",
-        "bootstrap" => "bootstrap",
-        "manual_improvement" if canonical_exists => "manual_improvement",
-        "manual_improvement" => {
+    let package_state = workspace_controller
+        .inspect_active_quantitative_package(&task.agent_key)
+        .await;
+    let effective_mode = match (&package_state, requested_mode) {
+        (Ok(Some(_)), "auto" | "manual_improvement") => "manual_improvement",
+        (Ok(None) | Err(_), "auto") => "bootstrap",
+        (Ok(None), "bootstrap") => "bootstrap",
+        (Ok(None), "manual_improvement") => {
             fail_coding_task(
                 pool,
                 task.id,
                 run_id,
-                "manual improvement requires scripts/user/analyze.py",
+                "manual improvement requires a valid Coding package",
+            )
+            .await?;
+            return Ok(());
+        }
+        (Err(_), "bootstrap") => "bootstrap",
+        (Err(_), "manual_improvement") => {
+            fail_coding_task(
+                pool,
+                task.id,
+                run_id,
+                "manual improvement requires a valid Coding package",
             )
             .await?;
             return Ok(());
@@ -1712,7 +1569,7 @@ async fn write_coding_result_memory(
 fn maintenance_error_summary(error: &anyhow::Error) -> String {
     let summary = error.root_cause().to_string();
     if summary.trim().is_empty() {
-        "workspace maintenance failed".to_string()
+        "maintenance task failed".to_string()
     } else {
         summary
     }
@@ -1875,7 +1732,7 @@ async fn process_candle_job_for_agent(
                 sub_agent_id,
                 agent_key,
                 sub_agent_key = %sub_agent_key,
-                "scheduled dispatch held because workspace maintenance is queued or running"
+                "scheduled dispatch held because Coding promotion is queued or running"
             );
             None
         }
@@ -2744,7 +2601,8 @@ mod tests {
         let candidate = root.join("workspace");
         let user = candidate.join("scripts/user");
         fs::create_dir_all(&user).expect("create candidate user tree");
-        fs::write(user.join("analyze.py"), "print('ok')\n").expect("write candidate");
+        fs::create_dir_all(user.join("strategies")).expect("create strategy directory");
+        fs::write(user.join("strategies/trend.py"), "print('ok')\n").expect("write candidate");
         let candidate_hash = "candidate-hash";
         let validation = json!({
             "schema_version": 1,
@@ -2827,35 +2685,6 @@ mod tests {
             opencode_client: sample_opencode_client(),
             in_flight,
         }
-    }
-
-    async fn workspace_maintenance_runtime(
-        in_flight: InFlightTracker,
-    ) -> (HarnessSchedulerRuntime, tokio::task::JoinHandle<()>) {
-        use axum::{Json, Router, routing::post};
-
-        let app = Router::new().route("/instance/dispose", post(|| async { Json(true) }));
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
-            .await
-            .expect("bind workspace instance dispose test server");
-        let base_url = format!("http://{}", listener.local_addr().expect("local address"));
-        let server = tokio::spawn(async move {
-            axum::serve(listener, app)
-                .await
-                .expect("serve workspace instance dispose test server");
-        });
-        let mut runtime = scheduler_runtime(in_flight);
-        runtime.opencode_client = Arc::new(
-            OpenCodeClient::new(
-                crate::opencode::client::OpenCodeClientConfig::new_with_base_url(
-                    "opencode".to_string(),
-                    None,
-                    base_url,
-                ),
-            )
-            .expect("build OpenCode client"),
-        );
-        (runtime, server)
     }
 
     impl FakeBackend {
@@ -3572,264 +3401,6 @@ mod tests {
             skipped.error_summary.as_deref(),
             Some("previous run still active")
         );
-    }
-
-    #[tokio::test]
-    async fn tick_leaves_workspace_maintenance_queued_while_agent_run_is_active() {
-        let pool = test_db::pool().await;
-        let key = format!(
-            "maint-busy-{}",
-            Utc::now().timestamp_nanos_opt().unwrap_or(0)
-        );
-        seed_test_agent(&pool, &key).await;
-
-        let (sub_agent_id,): (i64,) = sqlx::query_as(
-            "SELECT id FROM harness_sub_agents
-              WHERE agent_key = $1 AND sub_agent_key = 'analysis-15m'",
-        )
-        .bind(&key)
-        .fetch_one(&pool)
-        .await
-        .expect("fetch candle_job id");
-        insert_test_run(&pool, sub_agent_id, "running")
-            .await
-            .expect("seed active run");
-        store::insert_workspace_regenerate_task(&pool, &key, false, false)
-            .await
-            .expect("insert maintenance task");
-
-        let backend: Arc<dyn HarnessBackend> =
-            Arc::new(FakeBackend::success(Arc::new(Mutex::new(Vec::new()))));
-        let live_accounts = Arc::new(crate::hyperliquid::live_state::LiveAccountStore::new());
-        let (_tx, rx) = watch::channel(false);
-        let (_force_tx, force_rx) = watch::channel(false);
-        let mut scheduler = HarnessScheduler::new(
-            pool.clone(),
-            rx,
-            force_rx,
-            backend,
-            live_accounts,
-            scheduler_runtime(InFlightTracker::new()),
-        );
-        scheduler.tick().await.expect("tick");
-
-        let task = store::get_latest_workspace_regenerate_task(&pool, &key)
-            .await
-            .expect("load maintenance task")
-            .expect("maintenance task present");
-        assert_eq!(
-            task.status,
-            crate::harness::model::MAINTENANCE_STATUS_QUEUED
-        );
-    }
-
-    #[tokio::test]
-    async fn tick_leaves_workspace_maintenance_queued_while_live_session_is_active() {
-        let pool = test_db::pool().await;
-        let key = format!(
-            "maint-session-{}",
-            Utc::now().timestamp_nanos_opt().unwrap_or(0)
-        );
-        seed_test_agent(&pool, &key).await;
-        store::insert_workspace_regenerate_task(&pool, &key, false, false)
-            .await
-            .expect("insert maintenance task");
-
-        let session_id = format!(
-            "ses-maint-{}",
-            Utc::now().timestamp_nanos_opt().unwrap_or(0)
-        );
-        let directory = format!("/workspaces/agents/{key}");
-        sqlx::query(
-            "INSERT INTO opencode.sessions (id, directory, status, updated_at)
-             VALUES ($1, $2, 'busy', now())",
-        )
-        .bind(&session_id)
-        .bind(&directory)
-        .execute(&pool)
-        .await
-        .expect("insert active session row");
-
-        let backend: Arc<dyn HarnessBackend> =
-            Arc::new(FakeBackend::success(Arc::new(Mutex::new(Vec::new()))));
-        let live_accounts = Arc::new(crate::hyperliquid::live_state::LiveAccountStore::new());
-        let (_tx, rx) = watch::channel(false);
-        let (_force_tx, force_rx) = watch::channel(false);
-        let mut scheduler = HarnessScheduler::new(
-            pool.clone(),
-            rx,
-            force_rx,
-            backend,
-            live_accounts,
-            scheduler_runtime(InFlightTracker::new()),
-        );
-        scheduler.tick().await.expect("tick");
-
-        let task = store::get_latest_workspace_regenerate_task(&pool, &key)
-            .await
-            .expect("load maintenance task")
-            .expect("maintenance task present");
-        assert_eq!(
-            task.status,
-            crate::harness::model::MAINTENANCE_STATUS_QUEUED
-        );
-    }
-
-    #[tokio::test]
-    async fn tick_runs_workspace_maintenance_once_agent_is_idle() {
-        let pool = test_db::pool().await;
-        let key = format!(
-            "maint-idle-{}",
-            Utc::now().timestamp_nanos_opt().unwrap_or(0)
-        );
-        seed_test_agent(&pool, &key).await;
-        sqlx::query(
-            "INSERT INTO memory.records (
-                id, agent_key, symbol, memory_type, summary, content
-             ) VALUES ($1, $2, 'BTC', 'observation', 'memory', 'memory content')",
-        )
-        .bind(uuid::Uuid::new_v4())
-        .bind(&key)
-        .execute(&pool)
-        .await
-        .expect("insert memory");
-        store::insert_workspace_regenerate_task(&pool, &key, true, true)
-            .await
-            .expect("insert maintenance task");
-
-        let backend: Arc<dyn HarnessBackend> =
-            Arc::new(FakeBackend::success(Arc::new(Mutex::new(Vec::new()))));
-        let live_accounts = Arc::new(crate::hyperliquid::live_state::LiveAccountStore::new());
-        let (_tx, rx) = watch::channel(false);
-        let (_force_tx, force_rx) = watch::channel(false);
-        let (runtime, server) = workspace_maintenance_runtime(InFlightTracker::new()).await;
-        let mut scheduler =
-            HarnessScheduler::new(pool.clone(), rx, force_rx, backend, live_accounts, runtime);
-        scheduler.tick().await.expect("tick");
-
-        let task = store::get_latest_workspace_regenerate_task(&pool, &key)
-            .await
-            .expect("load maintenance task")
-            .expect("maintenance task present");
-        assert_eq!(
-            task.status,
-            crate::harness::model::MAINTENANCE_STATUS_SUCCEEDED
-        );
-
-        let agent = get_agent(&pool, &key)
-            .await
-            .expect("get agent")
-            .expect("agent present");
-        let workspace = OpenCodeWorkspaceRuntimeConfig::from_value(&agent.runtime_config)
-            .expect("updated workspace runtime config");
-        assert_eq!(
-            workspace.workspace_container_path,
-            format!("/workspaces/agents/{key}")
-        );
-
-        let (memory_count,): (i64,) =
-            sqlx::query_as("SELECT COUNT(*) FROM memory.records WHERE agent_key = $1")
-                .bind(&key)
-                .fetch_one(&pool)
-                .await
-                .expect("count memories");
-        assert_eq!(memory_count, 0);
-        server.abort();
-    }
-
-    #[tokio::test]
-    async fn tick_ignores_idle_workspace_sessions_when_running_maintenance() {
-        let pool = test_db::pool().await;
-        let key = format!(
-            "maint-idle-session-{}",
-            Utc::now().timestamp_nanos_opt().unwrap_or(0)
-        );
-        seed_test_agent(&pool, &key).await;
-        store::insert_workspace_regenerate_task(&pool, &key, false, false)
-            .await
-            .expect("insert maintenance task");
-
-        let session_id = format!(
-            "ses-idle-maint-{}",
-            Utc::now().timestamp_nanos_opt().unwrap_or(0)
-        );
-        let directory = format!("/workspaces/agents/{key}");
-        sqlx::query(
-            "INSERT INTO opencode.sessions (id, directory, status, updated_at)
-             VALUES ($1, $2, 'idle', now())",
-        )
-        .bind(&session_id)
-        .bind(&directory)
-        .execute(&pool)
-        .await
-        .expect("insert idle session row");
-
-        let backend: Arc<dyn HarnessBackend> =
-            Arc::new(FakeBackend::success(Arc::new(Mutex::new(Vec::new()))));
-        let live_accounts = Arc::new(crate::hyperliquid::live_state::LiveAccountStore::new());
-        let (_tx, rx) = watch::channel(false);
-        let (_force_tx, force_rx) = watch::channel(false);
-        let (runtime, server) = workspace_maintenance_runtime(InFlightTracker::new()).await;
-        let mut scheduler =
-            HarnessScheduler::new(pool.clone(), rx, force_rx, backend, live_accounts, runtime);
-        scheduler.tick().await.expect("tick");
-
-        let task = store::get_latest_workspace_regenerate_task(&pool, &key)
-            .await
-            .expect("load maintenance task")
-            .expect("maintenance task present");
-        assert_eq!(
-            task.status,
-            crate::harness::model::MAINTENANCE_STATUS_SUCCEEDED
-        );
-        server.abort();
-    }
-
-    #[tokio::test]
-    async fn tick_ignores_workspace_sessions_without_an_active_status_when_running_maintenance() {
-        let pool = test_db::pool().await;
-        let key = format!(
-            "maint-unknown-session-{}",
-            Utc::now().timestamp_nanos_opt().unwrap_or(0)
-        );
-        seed_test_agent(&pool, &key).await;
-        store::insert_workspace_regenerate_task(&pool, &key, false, false)
-            .await
-            .expect("insert maintenance task");
-
-        let directory = format!("/workspaces/agents/{key}");
-        sqlx::query(
-            "INSERT INTO opencode.sessions (id, directory, updated_at)
-             VALUES ($1, $2, now())",
-        )
-        .bind(format!(
-            "ses-unknown-maint-{}",
-            Utc::now().timestamp_nanos_opt().unwrap_or(0)
-        ))
-        .bind(&directory)
-        .execute(&pool)
-        .await
-        .expect("insert session without status");
-
-        let backend: Arc<dyn HarnessBackend> =
-            Arc::new(FakeBackend::success(Arc::new(Mutex::new(Vec::new()))));
-        let live_accounts = Arc::new(crate::hyperliquid::live_state::LiveAccountStore::new());
-        let (_tx, rx) = watch::channel(false);
-        let (_force_tx, force_rx) = watch::channel(false);
-        let (runtime, server) = workspace_maintenance_runtime(InFlightTracker::new()).await;
-        let mut scheduler =
-            HarnessScheduler::new(pool.clone(), rx, force_rx, backend, live_accounts, runtime);
-        scheduler.tick().await.expect("tick");
-
-        let task = store::get_latest_workspace_regenerate_task(&pool, &key)
-            .await
-            .expect("load maintenance task")
-            .expect("maintenance task present");
-        assert_eq!(
-            task.status,
-            crate::harness::model::MAINTENANCE_STATUS_SUCCEEDED
-        );
-        server.abort();
     }
 
     #[tokio::test]
