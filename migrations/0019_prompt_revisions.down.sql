@@ -1,9 +1,9 @@
 SET search_path TO public;
 
-DROP INDEX IF EXISTS memory_instrument_targets_target_idx;
-DROP INDEX IF EXISTS memory_records_type_idx;
-DROP INDEX IF EXISTS memory_records_source_run_idx;
-DROP INDEX IF EXISTS memory_records_owner_scope_idx;
+DROP INDEX IF EXISTS memory.memory_instrument_targets_target_idx;
+DROP INDEX IF EXISTS memory.memory_records_type_idx;
+DROP INDEX IF EXISTS memory.memory_records_source_run_idx;
+DROP INDEX IF EXISTS memory.memory_records_owner_scope_idx;
 
 DROP TABLE IF EXISTS memory.instrument_targets;
 
@@ -22,12 +22,12 @@ CREATE UNIQUE INDEX harness_sub_agents_kind_timeframe_idx
     ON harness_sub_agents (agent_key, sub_agent_kind, timeframe)
     WHERE timeframe IS NOT NULL;
 
-DROP INDEX IF EXISTS harness_sub_agents_singleton_kind_idx;
-
-ALTER TABLE harness_sub_agents
-    DROP CONSTRAINT IF EXISTS harness_sub_agents_id_agent_key_unique;
-
 DROP TABLE IF EXISTS agent_strategy_prompt_revision_evidence;
 DROP TABLE IF EXISTS agent_strategy_prompt_active_revisions;
 DROP TABLE IF EXISTS agent_strategy_prompt_revisions;
 DROP TABLE IF EXISTS agent_strategy_prompt_revision_batches;
+
+DROP INDEX IF EXISTS harness_sub_agents_singleton_kind_idx;
+
+ALTER TABLE harness_sub_agents
+    DROP CONSTRAINT IF EXISTS harness_sub_agents_id_agent_key_unique;

@@ -147,6 +147,10 @@ CREATE INDEX memory_records_source_run_idx
     ON memory.records (agent_key, source_run_id)
     WHERE source_run_id IS NOT NULL;
 
+-- Replace the index left by pre-finalization migration drafts with the
+-- definitive lookup index.
+DROP INDEX IF EXISTS memory.memory_records_type_idx;
+
 CREATE INDEX memory_records_type_idx
     ON memory.records (agent_key, memory_type, created_at DESC);
 
