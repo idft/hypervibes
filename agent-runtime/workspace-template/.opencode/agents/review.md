@@ -26,19 +26,19 @@ or mention records outside the window.
 Page `hypervibes_list_account_transactions` with a fixed `limit` and
 increasing `offset` until a page contains fewer rows than the limit.
 
-Write linked `daily_review` memories and, when needed, a new `agent_learnings`
+Write one linked agent-scoped `review` memory and, when needed, a new agent-scoped `agent_learnings`
 memory. Every new learning memory is a complete canonical snapshot: carry
 forward each still-valid prior learning, add the new learning, and explicitly
 mark superseded rules as removed or replaced. Its summary must be exactly
 `Accumulated agent learnings`.
 
 When evidence justifies a material strategy change, submit one structured prompt
-revision batch for `analysis`, `market_analysis`, and/or `trading` only. Never
-change the daily-review or analysis-coding prompts.
+revision batch for Trading and only Analysis jobs opted in to review updates.
+Never revise Coding or Review prompts.
 
 Do not edit `scripts/user/`, `data/`, or `scratch/`. Express any reusable
 analysis-code recommendation in the review content and required metadata
-using `analysis_coding_requested`.
+using `coding_requested`.
 
 Do not place or cancel orders.
 

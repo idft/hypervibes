@@ -16,8 +16,7 @@ pub use recovery::recover_inactive_runs_all;
 #[allow(unused_imports)]
 pub use runs::{
     QueuedRunForDispatch, QueuedSubAgentRun, count_agent_runs, get_run,
-    has_prior_active_run_in_lane, insert_queued_event_run,
-    insert_queued_event_run_for_automatic_dispatch, insert_queued_manual_run,
+    has_prior_active_run_in_lane, insert_queued_event_run, insert_queued_manual_run,
     list_active_agent_runs, list_agent_runs_page, list_queued_runs_for_dispatch, mark_run_aborted,
     mark_run_failed, mark_run_running, mark_run_succeeded, set_run_error_summary,
 };
@@ -27,14 +26,16 @@ pub use runtime_credentials::{
     authenticate_run_runtime_credential, issue_run_runtime_credential,
     revoke_run_runtime_credential,
 };
+#[cfg(test)]
+pub use sub_agents::list_agent_sub_agents;
 #[allow(unused_imports)]
 pub use sub_agents::{
     ClaimedCandleSubAgentRun, claim_due_candle_sub_agent, count_sub_agent_runs,
-    get_agent_sub_agent, get_dispatch_sub_agent, get_enabled_sub_agent,
-    insert_candle_sub_agent_with_model_variant, insert_default_harness_sub_agents,
-    insert_unscheduled_sub_agent_with_model_variant, list_agent_sub_agents,
-    list_due_candle_sub_agents, list_sub_agent_runs_page, set_candle_sub_agent_timeframe,
-    set_sub_agent_capabilities, set_sub_agent_enabled, set_sub_agent_model_with_variant,
+    get_agent_sub_agent, get_dispatch_sub_agent, get_enabled_sub_agent, get_singleton_sub_agent,
+    insert_analysis_sub_agent_with_model_variant, insert_default_harness_sub_agents,
+    insert_singleton_sub_agent, list_analysis_sub_agents, list_due_candle_sub_agents,
+    list_sub_agent_runs_page, set_candle_sub_agent_timeframe, set_sub_agent_capabilities,
+    set_sub_agent_enabled, set_sub_agent_model_with_variant,
     set_sub_agent_notification_send_enabled, set_sub_agent_operator_prompt, set_sub_agent_timeout,
 };
 pub use workspace::agent_has_blocking_workspace_maintenance;

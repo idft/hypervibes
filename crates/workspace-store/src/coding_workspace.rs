@@ -16,7 +16,7 @@ use super::workspace::OpenCodeWorkspaceConfig;
 pub const MAX_FILE_BYTES: u64 = 1024 * 1024;
 pub const MAX_TREE_BYTES: u64 = 20 * 1024 * 1024;
 pub const MAX_TREE_FILES: usize = 500;
-const CODING_AGENT_PATH: &str = ".opencode/agents/analysis-coding.md";
+const CODING_AGENT_PATH: &str = ".opencode/agents/coding.md";
 const USER_DESCENDANT_PERMISSION: &str = "    \"scripts/user/**\": allow";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -942,9 +942,7 @@ mod tests {
         fs::create_dir_all(profile_path.parent().unwrap()).unwrap();
         fs::write(
             &profile_path,
-            include_str!(
-                "../../../agent-runtime/workspace-template/.opencode/agents/analysis-coding.md"
-            ),
+            include_str!("../../../agent-runtime/workspace-template/.opencode/agents/coding.md"),
         )
         .unwrap();
 

@@ -15,9 +15,7 @@ pub struct AgentReadiness {
     pub enabled: bool,
     pub has_selected_instruments: bool,
     pub has_enabled_analysis_job: bool,
-    pub has_enabled_market_analysis_job: bool,
     pub has_enabled_trading_job: bool,
-    pub market_analysis_sub_agent_id: Option<i64>,
     pub trading_sub_agent_id: Option<i64>,
 }
 
@@ -27,7 +25,6 @@ impl AgentReadiness {
             && self.enabled
             && self.has_selected_instruments
             && self.has_enabled_analysis_job
-            && self.has_enabled_market_analysis_job
             && self.has_enabled_trading_job
     }
 }
@@ -180,17 +177,15 @@ mod tests {
     }
 
     #[test]
-    fn agent_readiness_requires_the_complete_trading_chain() {
+    fn agent_readiness_requires_enabled_analysis_and_trading() {
         let mut readiness = AgentReadiness {
             agent_key: "test-agent".to_string(),
             active: true,
             enabled: true,
             has_selected_instruments: true,
             has_enabled_analysis_job: true,
-            has_enabled_market_analysis_job: true,
             has_enabled_trading_job: false,
-            market_analysis_sub_agent_id: Some(2),
-            trading_sub_agent_id: Some(3),
+            trading_sub_agent_id: Some(2),
         };
 
         assert!(!readiness.is_ready_for_agent_trading());

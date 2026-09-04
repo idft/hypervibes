@@ -1,6 +1,6 @@
 Run HyperVibes analysis for this agent.
 
-- Perform the analysis described in the Analysis strategy for each selected symbol.
+- Perform the research described in this Analysis job's strategy.
 - Use the `hyperliquid-data` skill to fetch public OHLCV candles and the
   `python-analysis` skill for indicator/statistical work.
 - Treat Hyperliquid candle timestamps as candle start times and follow the sub-agent prompt's closed-candle cutoff.

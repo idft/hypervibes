@@ -12,13 +12,7 @@ use rust_decimal::Decimal;
 
 use crate::agents::{keys::derive_wallet_address, model::slugify_agent_key, store::insert_agent};
 use crate::{
-    agents::{
-        crypto::EncryptionKey,
-        strategy_prompts::{
-            PROMPT_KIND_ANALYSIS, PROMPT_KIND_TRADING, insert_default_strategy_prompts_for_agent,
-            upsert_agent_strategy_prompt,
-        },
-    },
+    agents::{crypto::EncryptionKey, strategy_prompts::upsert_agent_strategy_prompt},
     harness::backend::{DispatchRequest, DispatchResult, HarnessBackend},
     hyperliquid::{
         builder_fee::{BuilderFeeCache, BuilderFeeLookup, LookupFuture},
@@ -80,9 +74,12 @@ impl HarnessBackend for NoopHarnessBackend {
         })
     }
 }
+
+/// Backend used by route tests that need to observe dispatched runs.
 pub(in crate::web::routes) struct RecordingHarnessBackend {
     pub calls: Arc<Mutex<Vec<DispatchRequest>>>,
 }
+
 #[async_trait]
 impl HarnessBackend for RecordingHarnessBackend {
     async fn dispatch(&self, request: DispatchRequest) -> Result<DispatchResult> {
@@ -280,7 +277,8 @@ pub(in crate::web::routes) async fn seed_memory_with_type(
         &state.db_pool,
         agent_key,
         &CreateMemory {
-            symbol: "BTC".to_string(),
+            scope_kind: crate::memory::model::MEMORY_SCOPE_AGENT.to_string(),
+            instrument_ids: Vec::new(),
             timeframe: Some("1h".to_string()),
             memory_type: memory_type.to_string(),
             summary: summary.to_string(),
@@ -288,6 +286,7 @@ pub(in crate::web::routes) async fn seed_memory_with_type(
             metadata: Some(serde_json::json!({ "confidence": 0.8 })),
             links: None,
         },
+        None,
     )
     .await
     .expect("insert memory")
@@ -364,9 +363,6 @@ pub(in crate::web::routes) async fn insert_test_opencode_agent(
     if insert_agent(&state.db_pool, &row).await.is_err() {
         return None;
     }
-    insert_default_strategy_prompts_for_agent(&state.db_pool, &agent_key)
-        .await
-        .expect("insert default prompts");
     crate::harness::store::insert_default_harness_sub_agents(&state.db_pool, &agent_key)
         .await
         .expect("insert default schedules");
@@ -421,25 +417,29 @@ pub(in crate::web::routes) async fn insert_test_agent_with_text(
     if insert_agent(&state.db_pool, &row).await.is_err() {
         return None;
     }
-    insert_default_strategy_prompts_for_agent(&state.db_pool, &agent_key)
+    crate::harness::store::insert_default_harness_sub_agents(&state.db_pool, &agent_key)
         .await
-        .expect("insert default prompts");
-    upsert_agent_strategy_prompt(
-        &state.db_pool,
-        &agent_key,
-        PROMPT_KIND_ANALYSIS,
-        &analysis_prompt,
+        .expect("insert default schedules");
+    let analysis_id: i64 = sqlx::query_scalar(
+        "SELECT id FROM harness_sub_agents WHERE agent_key = $1 AND sub_agent_key = 'technical-15m'",
     )
+    .bind(&agent_key)
+    .fetch_one(&state.db_pool)
     .await
-    .expect("seed analysis prompt");
-    upsert_agent_strategy_prompt(
-        &state.db_pool,
-        &agent_key,
-        PROMPT_KIND_TRADING,
-        &trading_prompt,
+    .expect("load analysis job");
+    let trading_id: i64 = sqlx::query_scalar(
+        "SELECT id FROM harness_sub_agents WHERE agent_key = $1 AND sub_agent_kind = 'trading'",
     )
+    .bind(&agent_key)
+    .fetch_one(&state.db_pool)
     .await
-    .expect("seed trading prompt");
+    .expect("load trading job");
+    upsert_agent_strategy_prompt(&state.db_pool, &agent_key, analysis_id, &analysis_prompt)
+        .await
+        .expect("seed analysis prompt");
+    upsert_agent_strategy_prompt(&state.db_pool, &agent_key, trading_id, &trading_prompt)
+        .await
+        .expect("seed trading prompt");
     Some((agent_key, wallet_address))
 }
 pub(in crate::web::routes) fn random_private_key() -> String {

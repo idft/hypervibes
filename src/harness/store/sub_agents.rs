@@ -8,9 +8,8 @@ use crate::{
         model::{
             CAPABILITY_NOTIFICATION_SEND, CAPABILITY_PROMPT_REVISION_SUBMIT,
             HarnessDispatchSubAgentRow, HarnessSubAgentRow, HarnessSubAgentRunRow,
-            RUN_STATUS_QUEUED, RUN_STATUS_SKIPPED, SUB_AGENT_KIND_ANALYSIS,
-            SUB_AGENT_KIND_ANALYSIS_CODING, SUB_AGENT_KIND_DAILY_REVIEW,
-            SUB_AGENT_KIND_MARKET_ANALYSIS, SUB_AGENT_KIND_TRADING,
+            RUN_STATUS_QUEUED, RUN_STATUS_SKIPPED, SUB_AGENT_KIND_ANALYSIS, SUB_AGENT_KIND_CODING,
+            SUB_AGENT_KIND_REVIEW, SUB_AGENT_KIND_TRADING,
         },
         sub_agent_key::{build_generated_event_sub_agent_key, build_generated_sub_agent_key},
         timeframe::{
@@ -28,34 +27,20 @@ use super::workspace::agent_has_blocking_workspace_maintenance_tx;
 pub(crate) const DEFAULT_ANALYSIS_TIMEFRAME: &str = "15m";
 const DEFAULT_ANALYSIS_TIMEFRAMES: [&str; 3] = ["15m", "1h", "1d"];
 pub(crate) const DEFAULT_TRADING_TIMEFRAME: &str = "5m";
-pub(crate) const DEFAULT_DAILY_REVIEW_TIMEFRAME: &str = "1d";
+pub(crate) const DEFAULT_REVIEW_TIMEFRAME: &str = "1d";
 pub(crate) const DEFAULT_ANALYSIS_TIMEOUT_SECONDS: i32 = 900;
 pub(crate) const DEFAULT_TRADING_TIMEOUT_SECONDS: i32 = 900;
-pub(crate) const DEFAULT_DAILY_REVIEW_TIMEOUT_SECONDS: i32 = 900;
-
-#[cfg(test)]
-pub(crate) fn default_analysis_sub_agent_key() -> String {
-    build_generated_sub_agent_key(SUB_AGENT_KIND_ANALYSIS, DEFAULT_ANALYSIS_TIMEFRAME)
-}
+pub(crate) const DEFAULT_REVIEW_TIMEOUT_SECONDS: i32 = 900;
 
 /// Seed the canonical default sub-agents for a newly-created OpenCode agent.
 ///
-/// This is idempotent: existing `(agent_key, sub_agent_kind, timeframe)` rows
-/// are left untouched, and the default market-analysis event is inserted only
-/// when it does not already exist. New agents always get disabled
-/// `analysis-15m`, `analysis-1h`, `analysis-1d`, and `trading-5m` rows plus
-/// a disabled `market-analysis` event.
+/// This is idempotent: existing rows keyed by `(agent_key, sub_agent_key)`
+/// are left untouched. New agents always get disabled
+/// `technical-15m`, `technical-1h`, `technical-1d` Analysis jobs, a
+/// `trading-5m` job, a `review-1d` job, and a `coding` on-demand job.
 pub async fn insert_default_harness_sub_agents(pool: &DbPool, agent_key: &str) -> Result<()> {
     for timeframe in DEFAULT_ANALYSIS_TIMEFRAMES {
-        insert_default_candle_job(
-            pool,
-            agent_key,
-            SUB_AGENT_KIND_ANALYSIS,
-            timeframe,
-            false,
-            DEFAULT_ANALYSIS_TIMEOUT_SECONDS,
-        )
-        .await?;
+        insert_default_analysis_job(pool, agent_key, timeframe).await?;
     }
 
     insert_default_candle_job(
@@ -71,17 +56,60 @@ pub async fn insert_default_harness_sub_agents(pool: &DbPool, agent_key: &str) -
     insert_default_candle_job(
         pool,
         agent_key,
-        SUB_AGENT_KIND_DAILY_REVIEW,
-        DEFAULT_DAILY_REVIEW_TIMEFRAME,
+        SUB_AGENT_KIND_REVIEW,
+        DEFAULT_REVIEW_TIMEFRAME,
         false,
-        DEFAULT_DAILY_REVIEW_TIMEOUT_SECONDS,
+        DEFAULT_REVIEW_TIMEOUT_SECONDS,
     )
     .await?;
 
-    insert_default_unscheduled_sub_agent(pool, agent_key, SUB_AGENT_KIND_MARKET_ANALYSIS, 900)
+    insert_default_unscheduled_sub_agent(pool, agent_key, SUB_AGENT_KIND_CODING, 1800).await?;
+
+    // Every durable role owns an active revision, including disabled defaults.
+    // This runs after the rows exist so it is also safe for partially-created
+    // development agents from before prompt revisions were introduced.
+    crate::agents::strategy_prompts::insert_default_strategy_prompts_for_agent(pool, agent_key)
         .await?;
-    insert_default_unscheduled_sub_agent(pool, agent_key, SUB_AGENT_KIND_ANALYSIS_CODING, 1800)
-        .await?;
+
+    Ok(())
+}
+
+async fn insert_default_analysis_job(
+    pool: &DbPool,
+    agent_key: &str,
+    timeframe: &str,
+) -> Result<()> {
+    let sub_agent_key = format!("technical-{timeframe}");
+    let now = Utc::now();
+    let next_run_at = next_due_after(now, timeframe, DEFAULT_TRIGGER_DELAY_SECONDS)
+        .with_context(|| format!("invalid default timeframe {timeframe:?}"))?;
+
+    sqlx::query(
+        "INSERT INTO harness_sub_agents (
+            agent_key,
+            sub_agent_key,
+            sub_agent_kind,
+            enabled,
+            timeframe,
+             trigger_delay_seconds,
+             next_run_at,
+             timeout_seconds,
+              operator_prompt,
+              enabled_capabilities
+           ) VALUES ($1, $2, 'analysis', false, $3, $4, $5, $6, '', '[]'::jsonb)
+         ON CONFLICT (agent_key, sub_agent_key) DO NOTHING",
+    )
+    .bind(agent_key)
+    .bind(&sub_agent_key)
+    .bind(timeframe)
+    .bind(DEFAULT_TRIGGER_DELAY_SECONDS)
+    .bind(next_run_at)
+    .bind(DEFAULT_ANALYSIS_TIMEOUT_SECONDS)
+    .execute(pool)
+    .await
+    .with_context(|| {
+        format!("failed to insert default {sub_agent_key} job for agent {agent_key}")
+    })?;
 
     Ok(())
 }
@@ -113,6 +141,210 @@ async fn insert_default_unscheduled_sub_agent(
         format!("failed to insert default unscheduled sub-agent for agent {agent_key}")
     })?;
     Ok(())
+}
+
+/// Create a user-configured Analysis job. The `sub_agent_key` is the durable
+/// identity of the job and must be a bounded ASCII slug. Multiple Analysis
+/// jobs may share a schedule/timeframe.
+#[allow(clippy::too_many_arguments)]
+pub async fn insert_analysis_sub_agent_with_model_variant(
+    pool: &DbPool,
+    agent_key: &str,
+    sub_agent_key: &str,
+    enabled: bool,
+    timeframe: &str,
+    trigger_delay_seconds: i32,
+    model_provider_id: Option<&str>,
+    model_id: Option<&str>,
+    model_variant: Option<&str>,
+    timeout_seconds: i32,
+    operator_prompt: &str,
+) -> Result<i64> {
+    parse_timeframe_seconds(timeframe)
+        .with_context(|| format!("invalid timeframe {timeframe:?}"))?;
+    if trigger_delay_seconds < 0 {
+        return Err(anyhow::anyhow!(
+            "trigger_delay_seconds must be non-negative"
+        ));
+    }
+    let sub_agent_key = sub_agent_key.trim();
+    anyhow::ensure!(
+        crate::harness::sub_agent_key::is_valid_user_sub_agent_key(sub_agent_key),
+        "sub-agent key must be a bounded ASCII slug of letters, digits, hyphens, and underscores"
+    );
+
+    let now = Utc::now();
+    let next_run_at = next_due_after(now, timeframe, trigger_delay_seconds)
+        .with_context(|| format!("failed to compute next_run_at for {timeframe:?}"))?;
+
+    let row: (i64,) = query_as(
+        "INSERT INTO harness_sub_agents (
+            agent_key,
+            sub_agent_key,
+            sub_agent_kind,
+            enabled,
+            timeframe,
+            trigger_delay_seconds,
+            next_run_at,
+            model_provider_id,
+             model_id,
+             model_variant,
+             timeout_seconds,
+              operator_prompt,
+              enabled_capabilities
+           ) VALUES ($1, $2, 'analysis', $3, $4, $5, $6, $7, $8, $9, $10, $11, '[]'::jsonb)
+         RETURNING id",
+    )
+    .bind(agent_key)
+    .bind(sub_agent_key)
+    .bind(enabled)
+    .bind(timeframe)
+    .bind(trigger_delay_seconds)
+    .bind(next_run_at)
+    .bind(model_provider_id)
+    .bind(model_id)
+    .bind(model_variant)
+    .bind(timeout_seconds)
+    .bind(operator_prompt)
+    .fetch_one(pool)
+    .await
+    .with_context(|| format!("failed to insert job {sub_agent_key} for agent {agent_key}"))?;
+
+    Ok(row.0)
+}
+
+/// List only the Analysis jobs owned by an agent.
+pub async fn list_analysis_sub_agents(
+    pool: &DbPool,
+    agent_key: &str,
+) -> Result<Vec<HarnessSubAgentRow>> {
+    query_as(
+        "SELECT id, agent_key, sub_agent_key, sub_agent_kind, enabled, timeframe,
+                 next_run_at, model_provider_id, model_id,
+                   model_variant, timeout_seconds, operator_prompt,
+                  enabled_capabilities,
+                  created_at, updated_at
+           FROM harness_sub_agents
+          WHERE agent_key = $1
+            AND sub_agent_kind = 'analysis'
+           ORDER BY sub_agent_key",
+    )
+    .bind(agent_key)
+    .fetch_all(pool)
+    .await
+    .with_context(|| format!("failed to list analysis jobs for agent {agent_key}"))
+}
+
+#[cfg(test)]
+pub async fn list_agent_sub_agents(
+    pool: &DbPool,
+    agent_key: &str,
+) -> Result<Vec<HarnessSubAgentRow>> {
+    query_as(
+        "SELECT id, agent_key, sub_agent_key, sub_agent_kind, enabled, timeframe,
+                 next_run_at, model_provider_id, model_id, model_variant,
+                 timeout_seconds, operator_prompt, enabled_capabilities, created_at, updated_at
+           FROM harness_sub_agents
+          WHERE agent_key = $1
+          ORDER BY next_run_at NULLS LAST, sub_agent_kind, timeframe, id",
+    )
+    .bind(agent_key)
+    .fetch_all(pool)
+    .await
+    .with_context(|| format!("failed to list harness jobs for agent {agent_key}"))
+}
+
+/// Load the singleton job of a given durable role (`trading`, `coding`,
+/// `review`) for an agent.
+pub async fn get_singleton_sub_agent(
+    pool: &DbPool,
+    agent_key: &str,
+    sub_agent_kind: &str,
+) -> Result<Option<HarnessSubAgentRow>> {
+    anyhow::ensure!(
+        matches!(
+            sub_agent_kind,
+            SUB_AGENT_KIND_TRADING | SUB_AGENT_KIND_CODING | SUB_AGENT_KIND_REVIEW
+        ),
+        "unsupported singleton sub-agent kind"
+    );
+    query_as(
+        "SELECT id, agent_key, sub_agent_key, sub_agent_kind, enabled, timeframe,
+                 next_run_at, model_provider_id, model_id,
+                   model_variant, timeout_seconds, operator_prompt,
+                  enabled_capabilities,
+                  created_at, updated_at
+           FROM harness_sub_agents
+          WHERE agent_key = $1
+            AND sub_agent_kind = $2",
+    )
+    .bind(agent_key)
+    .bind(sub_agent_kind)
+    .fetch_optional(pool)
+    .await
+    .with_context(|| format!("failed to load {sub_agent_kind} job for agent {agent_key}"))
+}
+
+/// Create the missing singleton job for a durable role. Returns an error if
+/// one already exists.
+pub async fn insert_singleton_sub_agent(
+    pool: &DbPool,
+    agent_key: &str,
+    sub_agent_kind: &str,
+    timeout_seconds: i32,
+) -> Result<i64> {
+    anyhow::ensure!(
+        matches!(
+            sub_agent_kind,
+            SUB_AGENT_KIND_TRADING | SUB_AGENT_KIND_CODING | SUB_AGENT_KIND_REVIEW
+        ),
+        "unsupported singleton sub-agent kind"
+    );
+    let sub_agent_key = match sub_agent_kind {
+        SUB_AGENT_KIND_TRADING => {
+            build_generated_sub_agent_key(SUB_AGENT_KIND_TRADING, DEFAULT_TRADING_TIMEFRAME)
+        }
+        SUB_AGENT_KIND_REVIEW => {
+            build_generated_sub_agent_key(SUB_AGENT_KIND_REVIEW, DEFAULT_REVIEW_TIMEFRAME)
+        }
+        _ => build_generated_event_sub_agent_key(sub_agent_kind),
+    };
+    let timeframe = match sub_agent_kind {
+        SUB_AGENT_KIND_CODING => None,
+        SUB_AGENT_KIND_TRADING => Some(DEFAULT_TRADING_TIMEFRAME),
+        _ => Some(DEFAULT_REVIEW_TIMEFRAME),
+    };
+    let now = Utc::now();
+    let next_run_at = timeframe
+        .map(|timeframe| {
+            next_due_after(now, timeframe, DEFAULT_TRIGGER_DELAY_SECONDS)
+                .with_context(|| format!("invalid default timeframe {timeframe:?}"))
+        })
+        .transpose()?;
+    let row: (i64,) = query_as(
+        "INSERT INTO harness_sub_agents (
+            agent_key, sub_agent_key, sub_agent_kind, enabled, timeframe,
+            trigger_delay_seconds, next_run_at, timeout_seconds, operator_prompt,
+            enabled_capabilities
+         ) VALUES ($1, $2, $3, false, $4, $5, $6, $7, '', $8)
+         RETURNING id",
+    )
+    .bind(agent_key)
+    .bind(&sub_agent_key)
+    .bind(sub_agent_kind)
+    .bind(timeframe)
+    .bind(DEFAULT_TRIGGER_DELAY_SECONDS)
+    .bind(next_run_at)
+    .bind(timeout_seconds)
+    .bind(serde_json::json!(default_capabilities_for_kind(
+        sub_agent_kind
+    )))
+    .fetch_one(pool)
+    .await
+    .with_context(|| {
+        format!("failed to insert {sub_agent_kind} singleton for agent {agent_key}")
+    })?;
+    Ok(row.0)
 }
 
 pub async fn get_enabled_sub_agent(
@@ -185,26 +417,6 @@ async fn insert_default_candle_job(
     Ok(())
 }
 
-pub async fn list_agent_sub_agents(
-    pool: &DbPool,
-    agent_key: &str,
-) -> Result<Vec<HarnessSubAgentRow>> {
-    query_as(
-        "SELECT id, agent_key, sub_agent_key, sub_agent_kind, enabled, timeframe,
-                 next_run_at, model_provider_id, model_id,
-                   model_variant, timeout_seconds, operator_prompt,
-                  enabled_capabilities,
-                  created_at, updated_at
-           FROM harness_sub_agents
-          WHERE agent_key = $1
-           ORDER BY next_run_at NULLS LAST, sub_agent_kind, timeframe, id",
-    )
-    .bind(agent_key)
-    .fetch_all(pool)
-    .await
-    .with_context(|| format!("failed to list harness jobs for agent {agent_key}"))
-}
-
 /// Load a single job row for an agent.
 pub async fn get_agent_sub_agent(
     pool: &DbPool,
@@ -238,112 +450,6 @@ pub async fn get_agent_sub_agent(
     .with_context(|| format!("failed to load job {sub_agent_id} for agent {agent_key}"))?;
 
     Ok(row)
-}
-
-#[allow(clippy::too_many_arguments)]
-pub async fn insert_candle_sub_agent_with_model_variant(
-    pool: &DbPool,
-    agent_key: &str,
-    sub_agent_kind: &str,
-    enabled: bool,
-    timeframe: &str,
-    trigger_delay_seconds: i32,
-    model_provider_id: Option<&str>,
-    model_id: Option<&str>,
-    model_variant: Option<&str>,
-    timeout_seconds: i32,
-    operator_prompt: &str,
-) -> Result<i64> {
-    parse_timeframe_seconds(timeframe)
-        .with_context(|| format!("invalid timeframe {timeframe:?}"))?;
-    if trigger_delay_seconds < 0 {
-        return Err(anyhow::anyhow!(
-            "trigger_delay_seconds must be non-negative"
-        ));
-    }
-
-    let sub_agent_key = build_generated_sub_agent_key(sub_agent_kind, timeframe);
-    let now = Utc::now();
-    let next_run_at = next_due_after(now, timeframe, trigger_delay_seconds)
-        .with_context(|| format!("failed to compute next_run_at for {timeframe:?}"))?;
-
-    let row: (i64,) = query_as(
-        "INSERT INTO harness_sub_agents (
-            agent_key,
-            sub_agent_key,
-            sub_agent_kind,
-            enabled,
-            timeframe,
-            trigger_delay_seconds,
-            next_run_at,
-            model_provider_id,
-             model_id,
-             model_variant,
-             timeout_seconds,
-              operator_prompt,
-              enabled_capabilities
-           ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
-         RETURNING id",
-    )
-    .bind(agent_key)
-    .bind(&sub_agent_key)
-    .bind(sub_agent_kind)
-    .bind(enabled)
-    .bind(timeframe)
-    .bind(trigger_delay_seconds)
-    .bind(next_run_at)
-    .bind(model_provider_id)
-    .bind(model_id)
-    .bind(model_variant)
-    .bind(timeout_seconds)
-    .bind(operator_prompt)
-    .bind(serde_json::json!(default_capabilities_for_kind(
-        sub_agent_kind
-    )))
-    .fetch_one(pool)
-    .await
-    .with_context(|| format!("failed to insert job {sub_agent_key} for agent {agent_key}"))?;
-
-    Ok(row.0)
-}
-
-#[allow(clippy::too_many_arguments)]
-pub async fn insert_unscheduled_sub_agent_with_model_variant(
-    pool: &DbPool,
-    agent_key: &str,
-    sub_agent_kind: &str,
-    enabled: bool,
-    model_provider_id: Option<&str>,
-    model_id: Option<&str>,
-    model_variant: Option<&str>,
-    timeout_seconds: i32,
-    operator_prompt: &str,
-) -> Result<i64> {
-    let sub_agent_key = build_generated_event_sub_agent_key(sub_agent_kind);
-    let row: (i64,) = query_as(
-        "INSERT INTO harness_sub_agents (
-            agent_key, sub_agent_key, sub_agent_kind, enabled,
-            model_provider_id, model_id, model_variant, timeout_seconds, operator_prompt,
-            enabled_capabilities
-         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-         RETURNING id",
-    )
-    .bind(agent_key)
-    .bind(sub_agent_key)
-    .bind(sub_agent_kind)
-    .bind(enabled)
-    .bind(model_provider_id)
-    .bind(model_id)
-    .bind(model_variant)
-    .bind(timeout_seconds)
-    .bind(operator_prompt)
-    .bind(serde_json::json!(default_capabilities_for_kind(
-        sub_agent_kind
-    )))
-    .fetch_one(pool)
-    .await
-    .with_context(|| format!("failed to insert event job for agent {agent_key}"))?;
-    Ok(row.0)
 }
 
 /// List a page of the most recent runs for a single job.
@@ -493,7 +599,7 @@ pub async fn set_sub_agent_capabilities(
 fn default_capabilities_for_kind(sub_agent_kind: &str) -> Vec<&'static str> {
     match sub_agent_kind {
         SUB_AGENT_KIND_TRADING => vec![CAPABILITY_NOTIFICATION_SEND],
-        SUB_AGENT_KIND_DAILY_REVIEW => vec![CAPABILITY_PROMPT_REVISION_SUBMIT],
+        SUB_AGENT_KIND_REVIEW => vec![CAPABILITY_PROMPT_REVISION_SUBMIT],
         _ => Vec::new(),
     }
 }
@@ -591,6 +697,8 @@ pub async fn set_sub_agent_operator_prompt(
 /// Change a job's timeframe and re-anchor its next run to the next
 /// boundary for that timeframe. Keeping these fields together prevents an
 /// edited job from firing at a boundary from its previous cadence.
+/// Analysis jobs keep their user-provided sub-agent key; other candle jobs
+/// derive their key from kind and timeframe.
 pub async fn set_candle_sub_agent_timeframe(
     pool: &DbPool,
     agent_key: &str,
@@ -628,10 +736,14 @@ pub async fn set_candle_sub_agent_timeframe(
     };
 
     let next_run_at = next_due_after(Utc::now(), timeframe, trigger_delay_seconds)?;
-    let sub_agent_key = build_generated_sub_agent_key(&sub_agent_kind, timeframe);
-    sqlx::query(
+    let sub_agent_key = if sub_agent_kind == SUB_AGENT_KIND_ANALYSIS {
+        None
+    } else {
+        Some(build_generated_sub_agent_key(&sub_agent_kind, timeframe))
+    };
+    let updated = sqlx::query(
         "UPDATE harness_sub_agents
-            SET sub_agent_key = $3,
+            SET sub_agent_key = COALESCE($3, sub_agent_key),
                 timeframe = $4,
                 next_run_at = $5,
                 updated_at = now()
@@ -640,14 +752,20 @@ pub async fn set_candle_sub_agent_timeframe(
     )
     .bind(agent_key)
     .bind(sub_agent_id)
-    .bind(&sub_agent_key)
+    .bind(sub_agent_key)
     .bind(timeframe)
     .bind(next_run_at)
     .execute(&mut *tx)
-    .await
-    .with_context(|| {
-        format!("failed to update timeframe for job {sub_agent_id} agent {agent_key}")
-    })?;
+    .await;
+    match updated {
+        Ok(_) => {}
+        Err(sqlx::Error::Database(error))
+            if error.is_unique_violation() && sub_agent_kind == SUB_AGENT_KIND_ANALYSIS =>
+        {
+            anyhow::bail!("another analysis job already uses this sub-agent key");
+        }
+        Err(error) => return Err(error).context("failed to update analysis job timeframe"),
+    }
     tx.commit()
         .await
         .context("failed to commit job timeframe update")?;

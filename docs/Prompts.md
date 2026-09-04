@@ -4,56 +4,47 @@ slug: /concepts/prompts
 
 # Prompts
 
-Prompts describe an agent's trading strategy and the role of each sub-agent. They are
-separate from sub-agent configuration, model selection, and per-sub-agent Additional
-Instructions.
+Prompts define a sub-agent's role. They are separate from its configuration,
+model, and per-job Additional Instructions.
 
-## Strategy prompts
+## Prompt targets
 
-Each agent has one saved prompt for each of these kinds:
+Every sub-agent has an immutable-revisioned full prompt. An agent has many
+Analysis prompt targets and one target for each singleton role.
 
-| Prompt | Used by |
+| Target | Used by |
 | --- | --- |
-| `analysis` | Scheduled market analysis at a selected timeframe. |
-| `market_analysis` | The follow-up that turns analysis memories into an execution handoff. |
-| `trading` | The sub-agent that acts on the current market-analysis handoff. |
-| `daily_review` | The performance and learning review. |
-| `analysis_coding` | The request-gated sub-agent that maintains the durable Coding package. |
+| Analysis | A user-configured research job identified by its sub-agent key. |
+| Trading | Research synthesis and order management. |
+| Coding | Durable Coding package maintenance. |
+| Review | Performance and learning review. |
 
-Each prompt belongs to one agent and is not shared between agents.
+Prompt targets belong to one agent and are never shared. The global prompt is
+an application setting included in sub-agent context. Additional Instructions
+remain web-only, are appended to one sub-agent's prompt, and are not part of its
+saved revision.
 
-The global prompt is separate. It is an application setting included in sub-agent
-context, while a strategy prompt describes one agent's strategy role. A sub-agent's
-Additional Instructions are also separate: they apply only to that sub-agent and are
-editable in the web interface.
+## Editing and revisions
 
-## Edit a prompt
+Each role page edits its prompt; an Analysis job detail edits that specific job's
+prompt. **Discuss prompt** opens Chat with the current draft as opening context.
+Saving creates an immutable revision. Chat changes require one-time OpenCode
+confirmation.
 
-The Prompts tab lets a user edit and save each strategy prompt. It identifies
-the sub-agent role and provides **Discuss prompt**, which starts a Chat conversation
-with the current draft as its opening context.
+Review may submit an evidence-backed atomic revision batch for Trading and only
+Analysis jobs that opted in. It snapshots permitted targets and their base
+revisions when dispatched, and cannot revise its own or Coding's prompt.
 
-The discussion uses the most recent Chat model. If the agent has no previous
-Chat model, select one before the conversation is created. Saving a prompt from
-the editor creates an immutable revision; requesting an update from Chat requires
-a one-time OpenCode confirmation.
+## Role boundaries
 
-Prompt changes still create immutable revisions for auditability. Revision history
-and rollback are not displayed on the Prompts tab. Daily review may automatically
-submit an evidence-backed, atomic revision batch for `analysis`, `market_analysis`,
-and `trading` when the per-agent capability is enabled. It cannot revise its own or
-the analysis-coding prompt.
+The Analysis framework is generic: individual prompts and granted capabilities
+define research method and output types. It does not require OHLCV, package
+execution, a fixed output type, or one memory per selected instrument.
 
-## Prompt boundaries
+Trading reads current Analysis context and owns synthesis and execution. It
+should write a `trading_decision` for each evaluated instrument when possible,
+including no-trade and position-management outcomes, linked to the evidence it
+considered.
 
-Scheduled sub-agents use their selected prompt but cannot edit it. Chat sessions can
-read and update prompts belonging to their own agent. Additional Instructions
-remain editable only in the web interface and apply only to the sub-agent where they
-are entered.
-
-Trading consumes the latest `market_analysis` memory rather than developing a
-new thesis. Trading cannot change that memory's thesis, levels, indicators, or
-execution plan, and it bases order and position management on memories,
-account and order state, and its approved HyperVibes MCP tools only.
-
-See [Sub-agents](SubAgents.md) for scheduling and [Chat](Chat.md) for prompt discussions.
+Scheduled sub-agents receive their prompt as input but cannot modify it. See
+[Sub-agents](SubAgents.md) and [Chat](Chat.md).

@@ -61,6 +61,15 @@ html.agent-rail-initially-collapsed .app-content.has-agent-rail {
   display: none;
 }
 
+.agent-rail-section-label {
+  display: none;
+}
+
+.agent-rail-section-divider {
+  border-top: 1px solid rgb(39 39 42);
+  padding-top: 0.5rem;
+}
+
 .agent-rail.agent-rail-expanded {
   width: 14rem;
 }
@@ -77,6 +86,15 @@ html.agent-rail-initially-collapsed .app-content.has-agent-rail {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.agent-rail.agent-rail-expanded .agent-rail-section-label {
+  display: block;
+}
+
+.agent-rail.agent-rail-expanded .agent-rail-section-divider {
+  border-top: 0;
+  padding-top: 0;
 }
 
 .agent-rail.agent-rail-expanded .agent-rail-notification-count {
@@ -97,6 +115,15 @@ html.agent-rail-initially-collapsed .agent-rail.agent-rail-expanded .agent-rail-
 
 html.agent-rail-initially-collapsed .agent-rail.agent-rail-expanded .agent-rail-tab-label {
   display: none;
+}
+
+html.agent-rail-initially-collapsed .agent-rail.agent-rail-expanded .agent-rail-section-label {
+  display: none;
+}
+
+html.agent-rail-initially-collapsed .agent-rail.agent-rail-expanded .agent-rail-section-divider {
+  border-top: 1px solid rgb(39 39 42);
+  padding-top: 0.5rem;
 }
 
 html.agent-rail-initially-collapsed .agent-rail.agent-rail-expanded .agent-rail-notification-count {

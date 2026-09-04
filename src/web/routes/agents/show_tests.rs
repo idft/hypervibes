@@ -12,7 +12,7 @@ async fn agent_positions_route_renders_latest_trade_execution_summary_under_open
     seed_memory_with_type(
         &state,
         &agent_key,
-        "trade_execution",
+        "trading_decision",
         "Scaled out into strength",
         "Took profit on the upper band.",
     )
@@ -49,7 +49,7 @@ async fn agent_positions_route_renders_latest_analysis_summary_under_open_orders
     let analysis = seed_memory_with_type(
         &state,
         &agent_key,
-        "market_analysis",
+        "analysis",
         "BTC bullish continuation above 67k",
         "## Thesis\nReclaimed intraday support.",
     )
@@ -75,12 +75,11 @@ async fn agent_positions_route_renders_latest_analysis_summary_under_open_orders
 
     assert_eq!(response.status(), StatusCode::OK);
     let text = response_text(response).await;
-    assert!(text.contains(">Analysis<"));
-    assert!(text.contains("BTC bullish continuation above 67k"));
+    assert!(!text.contains("BTC bullish continuation above 67k"));
     assert!(!text.contains("Older plan"));
     assert!(
-        text.contains(&format!("/agents/{agent_key}/memories/{}", analysis.id)),
-        "analysis summary should link to the memory detail page"
+        !text.contains(&format!("/agents/{agent_key}/memories/{}", analysis.id)),
+        "analysis evidence belongs in the Analysis role, not the positions summary"
     );
 }
 

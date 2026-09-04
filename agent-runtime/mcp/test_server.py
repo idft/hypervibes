@@ -117,8 +117,7 @@ class HyperVibesMcpServerTests(unittest.TestCase):
                 "list_strategy_prompts",
                 "get_strategy_prompt",
                 "update_strategy_prompt",
-                "get_latest_analysis",
-                "get_market_analysis",
+                "get_trading_context",
                 "get_memory_detail",
                 "list_memories",
                 "list_orders",
@@ -133,8 +132,11 @@ class HyperVibesMcpServerTests(unittest.TestCase):
                 "coding_submit_report",
             }.issubset(registered)
         )
+        self.assertNotIn("get_latest_analysis", registered)
+        self.assertNotIn("get_market_analysis", registered)
+        self.assertNotIn("request_analysis_coding", registered)
 
-    def test_automated_job_profiles_deny_strategy_prompt_tools(self) -> None:
+    def test_role_profiles_have_expected_memory_and_prompt_permissions(self) -> None:
         profiles = (
             Path(__file__).parents[2]
             / "agent-runtime"
@@ -142,22 +144,20 @@ class HyperVibesMcpServerTests(unittest.TestCase):
             / ".opencode"
             / "agents"
         )
-        for profile_name in [
-            "analysis.md",
-            "market-analysis.md",
-            "trading.md",
-            "analysis-coding.md",
-        ]:
+        for profile_name in ["analysis.md", "trading.md", "coding.md"]:
             profile = (profiles / profile_name).read_text(encoding="utf-8")
             self.assertIn("hypervibes_*: deny", profile, profile_name)
             self.assertNotIn("hypervibes_list_strategy_prompts:", profile, profile_name)
             self.assertNotIn("hypervibes_get_strategy_prompt:", profile, profile_name)
             self.assertNotIn("hypervibes_update_strategy_prompt:", profile, profile_name)
-        daily_review = (profiles / "daily-review.md").read_text(encoding="utf-8")
-        self.assertIn("hypervibes_list_strategy_prompts: allow", daily_review)
-        self.assertIn("hypervibes_get_strategy_prompt: allow", daily_review)
-        self.assertIn("hypervibes_submit_prompt_revision: allow", daily_review)
-        self.assertNotIn("hypervibes_update_strategy_prompt:", daily_review)
+        trading = (profiles / "trading.md").read_text(encoding="utf-8")
+        self.assertIn("hypervibes_get_trading_context: allow", trading)
+        self.assertIn("hypervibes_write_memory: allow", trading)
+        review = (profiles / "review.md").read_text(encoding="utf-8")
+        self.assertIn("hypervibes_list_strategy_prompts: allow", review)
+        self.assertIn("hypervibes_get_strategy_prompt: allow", review)
+        self.assertIn("hypervibes_submit_prompt_revision: allow", review)
+        self.assertNotIn("hypervibes_update_strategy_prompt:", review)
 
     def test_strategy_prompt_tools_use_authenticated_api_paths(self) -> None:
         captured: list[dict[str, object]] = []
@@ -173,7 +173,8 @@ class HyperVibesMcpServerTests(unittest.TestCase):
             )
             response = {
                 "revision_id": 1,
-                "prompt_kind": "analysis",
+                "target_sub_agent_id": 7,
+                "target_sub_agent_key": "technical-1h",
                 "prompt": "Review market structure.",
                 "updated_at": "2026-08-20T00:00:00Z",
             }
@@ -181,11 +182,11 @@ class HyperVibesMcpServerTests(unittest.TestCase):
 
         with mock.patch.object(self.server, "_request", side_effect=fake_request):
             listed = self.server.list_strategy_prompts()
-            fetched = self.server.get_strategy_prompt("analysis")
-            updated = self.server.update_strategy_prompt("analysis", "  Keep it concise.  ")
+            fetched = self.server.get_strategy_prompt(7)
+            updated = self.server.update_strategy_prompt(7, "  Keep it concise.  ")
 
         self.assertEqual(len(listed), 1)
-        self.assertEqual(fetched["prompt_kind"], "analysis")
+        self.assertEqual(fetched["target_sub_agent_key"], "technical-1h")
         self.assertEqual(updated["prompt"], "Review market structure.")
         self.assertEqual(
             captured,
@@ -198,13 +199,13 @@ class HyperVibesMcpServerTests(unittest.TestCase):
                 },
                 {
                     "method": "GET",
-                    "path": "/api/v1/strategy-prompts/analysis",
+                    "path": "/api/v1/strategy-prompts/7",
                     "params": None,
                     "json_body": None,
                 },
                 {
                     "method": "PUT",
-                    "path": "/api/v1/strategy-prompts/analysis",
+                    "path": "/api/v1/strategy-prompts/7",
                     "params": None,
                     "json_body": {"prompt": "  Keep it concise.  "},
                 },
@@ -213,12 +214,12 @@ class HyperVibesMcpServerTests(unittest.TestCase):
 
     def test_strategy_prompt_tools_validate_inputs_and_response_shape(self) -> None:
         with self.assertRaises(ValueError):
-            self.server.get_strategy_prompt("invalid")
+            self.server.get_strategy_prompt(0)
         with self.assertRaises(ValueError):
-            self.server.update_strategy_prompt("analysis", None)  # type: ignore[arg-type]
+            self.server.update_strategy_prompt(7, None)  # type: ignore[arg-type]
         with mock.patch.object(self.server, "_request", return_value={"prompt": "missing"}):
             with self.assertRaisesRegex(RuntimeError, "unexpected shape"):
-                self.server.get_strategy_prompt("analysis")
+                self.server.get_strategy_prompt(7)
 
     def test_logger_has_a_stderr_handler(self) -> None:
         self.assertTrue(
@@ -255,7 +256,7 @@ class HyperVibesMcpServerTests(unittest.TestCase):
             headers = self.server._headers()
         self.assertEqual(headers, {"Authorization": "Bearer vta_secret"})
 
-    def test_get_latest_analysis_query_construction(self) -> None:
+    def test_get_trading_context_query_construction(self) -> None:
         captured: dict[str, object] = {}
 
         def fake_request(method, path, *, params=None, json_body=None):
@@ -263,7 +264,7 @@ class HyperVibesMcpServerTests(unittest.TestCase):
             captured["path"] = path
             captured["params"] = params
             captured["json_body"] = json_body
-            return []
+            return {"instrument_id": "BTC", "evidence": []}
 
         with mock.patch.dict(
             os.environ,
@@ -276,69 +277,17 @@ class HyperVibesMcpServerTests(unittest.TestCase):
         ):
             setattr(self.server, "CONFIG", self.server._load_config())
             with mock.patch.object(self.server, "_request", side_effect=fake_request):
-                self.server.get_latest_analysis("BTC", limit=3)
+                self.server.get_trading_context("BTC")
         self.assertEqual(captured["method"], "GET")
-        self.assertEqual(captured["path"], "/api/v1/memories/latest")
+        self.assertEqual(captured["path"], "/api/v1/memories/trading-context")
         self.assertEqual(
             captured["params"],
-            {"symbol": "BTC", "memory_type": "analysis", "limit": 3},
+            {"instrument_id": "BTC"},
         )
 
-    def test_validation_rejects_blank_symbol(self) -> None:
+    def test_trading_context_rejects_blank_instrument_id(self) -> None:
         with self.assertRaises(ValueError):
-            self.server.get_latest_analysis("   ")
-
-    def test_get_market_analysis_query_construction(self) -> None:
-        captured: dict[str, object] = {}
-
-        def fake_request(method, path, *, params=None, json_body=None):
-            captured["method"] = method
-            captured["path"] = path
-            captured["params"] = params
-            captured["json_body"] = json_body
-            return []
-
-        with mock.patch.dict(
-            os.environ,
-            {
-                "HYPERVIBES_API_BASE_URL": "http://example.test",
-                "HYPERVIBES_API_KEY": "k",
-                "HYPERVIBES_AGENT_KEY": "a",
-            },
-            clear=True,
-        ):
-            setattr(self.server, "CONFIG", self.server._load_config())
-            with mock.patch.object(self.server, "_request", side_effect=fake_request):
-                self.server.get_market_analysis("BTC")
-        self.assertEqual(captured["method"], "GET")
-        self.assertEqual(captured["path"], "/api/v1/memories")
-        self.assertEqual(
-            captured["params"],
-            {"symbol": "BTC", "memory_type": "market_analysis", "limit": 1},
-        )
-
-    def test_get_market_analysis_rejects_blank_symbol(self) -> None:
-        with self.assertRaises(ValueError):
-            self.server.get_market_analysis("   ")
-
-    def test_get_market_analysis_returns_none_for_no_rows(self) -> None:
-        with self.assertLogs(self.server.LOGGER, level="INFO") as logs:
-            with mock.patch.object(self.server, "_request", return_value=[]):
-                self.assertIsNone(self.server.get_market_analysis("BTC"))
-        self.assertIn(
-            "hypervibes_mcp_market_analysis symbol=BTC found=false",
-            logs.output[0],
-        )
-
-    def test_get_market_analysis_returns_first_row(self) -> None:
-        row = {"symbol": "BTC", "memory_type": "market_analysis"}
-        with self.assertLogs(self.server.LOGGER, level="INFO") as logs:
-            with mock.patch.object(self.server, "_request", return_value=[row]):
-                self.assertEqual(self.server.get_market_analysis("BTC"), row)
-        self.assertIn(
-            "hypervibes_mcp_market_analysis symbol=BTC found=true",
-            logs.output[0],
-        )
+            self.server.get_trading_context("   ")
 
     def test_request_logs_safe_response_shape(self) -> None:
         response = mock.Mock()
@@ -350,17 +299,13 @@ class HyperVibesMcpServerTests(unittest.TestCase):
                 result = self.server._request(
                     "GET",
                     "/api/v1/memories",
-                    params={"symbol": "BTC", "memory_type": "market_analysis"},
+                    params={"instrument_id": "BTC"},
                 )
         self.assertEqual(result, [])
         self.assertIn("path=/api/v1/memories", logs.output[0])
         self.assertIn("response=list:0", logs.output[0])
 
-    def test_validation_rejects_zero_limit(self) -> None:
-        with self.assertRaises(ValueError):
-            self.server.get_latest_analysis("BTC", limit=0)
-
-    def test_list_memories_builds_historical_daily_review_query(self) -> None:
+    def test_list_memories_builds_agent_scoped_review_query(self) -> None:
         captured: dict[str, object] = {}
 
         def fake_request(method, path, *, params=None, json_body=None):
@@ -371,8 +316,8 @@ class HyperVibesMcpServerTests(unittest.TestCase):
 
         with mock.patch.object(self.server, "_request", side_effect=fake_request):
             self.server.list_memories(
-                symbol="__agent__",
-                memory_type="daily_review",
+                scope_kind="agent",
+                memory_type="review",
                 include_expired=True,
                 limit=1,
             )
@@ -381,8 +326,8 @@ class HyperVibesMcpServerTests(unittest.TestCase):
         self.assertEqual(
             captured["params"],
             {
-                "symbol": "__agent__",
-                "memory_type": "daily_review",
+                "scope_kind": "agent",
+                "memory_type": "review",
                 "include_expired": "true",
                 "limit": 1,
             },
@@ -450,16 +395,18 @@ class HyperVibesMcpServerTests(unittest.TestCase):
             setattr(self.server, "CONFIG", self.server._load_config())
             with mock.patch.object(self.server, "_request", side_effect=fake_request):
                 self.server.write_memory(
-                    symbol="BTC",
-                    memory_type="analysis",
+                    scope_kind="instruments",
+                    instrument_ids=["BTC"],
+                    memory_type="trend_analysis",
                     summary="summary",
                     content="content",
                 )
         self.assertEqual(
             captured["json_body"],
             {
-                "symbol": "BTC",
-                "memory_type": "analysis",
+                "scope_kind": "instruments",
+                "instrument_ids": ["BTC"],
+                "memory_type": "trend_analysis",
                 "summary": "summary",
                 "content": "content",
                 "metadata": {},
@@ -469,21 +416,46 @@ class HyperVibesMcpServerTests(unittest.TestCase):
     def test_write_memory_rejects_non_object_metadata(self) -> None:
         with self.assertRaises(ValueError):
             self.server.write_memory(
-                symbol="BTC",
+                scope_kind="agent",
                 memory_type="analysis",
                 summary="s",
                 content="c",
                 metadata=["not", "a", "dict"],
             )
 
-    def test_write_memory_rejects_blank_timeframe(self) -> None:
+    def test_write_memory_validates_scope_and_targets(self) -> None:
         with self.assertRaises(ValueError):
             self.server.write_memory(
-                symbol="BTC",
-                memory_type="market_analysis",
+                scope_kind="agent",
+                instrument_ids=["BTC"],
+                memory_type="review",
                 summary="summary",
                 content="content",
-                timeframe="   ",
+            )
+        with self.assertRaises(ValueError):
+            self.server.write_memory(
+                scope_kind="instruments",
+                instrument_ids=["BTC", "BTC"],
+                memory_type="trend_analysis",
+                summary="summary",
+                content="content",
+            )
+        with self.assertRaises(ValueError):
+            self.server.write_memory(
+                scope_kind="instruments",
+                memory_type="trend_analysis",
+                summary="summary",
+                content="content",
+            )
+
+    def test_write_memory_rejects_spoofed_run_provenance(self) -> None:
+        with self.assertRaisesRegex(ValueError, "provenance"):
+            self.server.write_memory(
+                scope_kind="agent",
+                memory_type="review",
+                summary="summary",
+                content="content",
+                metadata={"source_run_id": 42},
             )
 
     def test_submit_orders_requires_non_empty_list(self) -> None:

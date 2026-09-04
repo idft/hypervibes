@@ -6,7 +6,9 @@ ALTER TABLE harness_sub_agents
         CHECK (jsonb_typeof(enabled_capabilities) = 'array');
 
 -- Existing trading schedules retain their established notification capability;
--- every other role stays denied until explicitly configured.
+-- every other role stays denied until explicitly configured. The daily_review
+-- seed below is converted to `review` by migration 0019, and its capability
+-- string remains valid under the Review role.
 UPDATE harness_sub_agents
    SET enabled_capabilities = CASE sub_agent_kind
         WHEN 'trading' THEN '["hypervibes:notification_send"]'::jsonb
@@ -25,7 +27,7 @@ CREATE TABLE harness_run_runtime_credentials (
     expires_at TIMESTAMPTZ NOT NULL,
     revoked_at TIMESTAMPTZ,
     CONSTRAINT harness_run_runtime_credentials_capability_schema_version_check
-        CHECK (capability_schema_version = 1),
+        CHECK (capability_schema_version = 2),
     CONSTRAINT harness_run_runtime_credentials_api_scopes_check
         CHECK (jsonb_typeof(api_scopes) = 'array'),
     CONSTRAINT harness_run_runtime_credentials_expiry_check

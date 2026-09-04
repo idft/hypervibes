@@ -109,10 +109,12 @@ fn agents_show_page_renders_base_layout_and_delete_modal() {
     template.account_balance_html = account_balance_html;
     template.open_positions_html = open_positions_html;
     template.open_orders_html = open_orders_html;
-    template.latest_trade_execution_summary_html =
-        LatestTradeExecutionSummaryPartialTemplate::render_view(
+    template.latest_trade_decision_summary_html =
+        LatestTradeDecisionSummaryPartialTemplate::render_view(
             Some("Scaled out into strength".to_string()),
+            None,
             Some(Utc::now()),
+            None,
         )
         .unwrap();
     template.sparklines_html = sparklines_html;
@@ -133,7 +135,8 @@ fn agents_show_page_renders_base_layout_and_delete_modal() {
     assert!(rendered.contains("Transactions"));
     assert!(rendered.contains("Notifications"));
     assert!(rendered.contains("Memories"));
-    assert!(rendered.contains("Prompts"));
+    assert!(rendered.contains("Analysis"));
+    assert!(rendered.contains("Trading"));
     assert!(rendered.contains("Settings"));
     assert!(rendered.contains("Balance"));
     assert!(rendered.contains("Unrealized"));
@@ -191,17 +194,16 @@ fn positions_page_renders_linked_incomplete_agent_setup_checklist() {
     assert!(rendered.contains("Select currencies to trade"));
     assert!(rendered.contains("BTC is selected by default"));
     assert!(rendered.contains("Enable Trading sub-agent"));
-    assert!(rendered.contains("href=\"/agents/test-agent/sub-agents/2?setup=true\""));
     assert!(rendered.contains("href=\"/agents/test-agent/sub-agents/3?setup=true\""));
 }
 
 #[test]
 fn opencode_agent_shows_jobs_tab_with_recent_runs() {
     let mut template =
-        AgentsShowPageTemplate::new(sample_opencode_detail_row(), AgentShowTab::SubAgents, 0);
+        AgentsShowPageTemplate::new(sample_opencode_detail_row(), AgentShowTab::Analysis, 0);
     template.jobs_loaded = true;
     template.jobs = vec![
-        HarnessSubAgentView::from_row(&sample_candle_job_row(1, "analysis-15m", "analysis", true)),
+        HarnessSubAgentView::from_row(&sample_candle_job_row(1, "technical-15m", "analysis", true)),
         HarnessSubAgentView::from_row(&sample_candle_job_row(2, "trading-5m", "trading", false)),
         HarnessSubAgentView::from_row(&sample_event_job_row(3, true)),
     ];
@@ -209,22 +211,21 @@ fn opencode_agent_shows_jobs_tab_with_recent_runs() {
     template.can_disable_all_jobs = true;
     template.recent_runs_section.recent_runs_loaded = true;
     template.recent_runs_section.recent_runs = vec![HarnessSubAgentRunView::from_row(
-        &sample_run_row(1, "succeeded", "analysis-15m"),
+        &sample_run_row(1, "succeeded", "technical-15m"),
     )];
-    let rendered = template.render().expect("render sub-agents tab");
+    let rendered = template.render().expect("render analysis tab");
     assert!(rendered.contains("/agents/test-agent/sub-agents"));
     assert!(rendered.contains("Enable all"));
     assert!(rendered.contains("Disable all"));
     assert!(rendered.contains("Recent Runs"));
     assert!(rendered.contains("local-datetime-ready"));
-    assert!(rendered.contains("analysis-15m"));
+    assert!(rendered.contains("technical-15m"));
     assert!(rendered.contains("trading-5m"));
-    assert!(rendered.contains("market-analysis"));
+    assert!(rendered.contains("coding"));
     assert!(rendered.contains("15m"));
     assert!(rendered.contains("5m"));
     assert!(!rendered.contains(">10m<"));
     assert!(!rendered.contains(">Timeout<"));
-    assert!(!rendered.contains(">Delay</th>"));
     let disabled_job_row = rendered
         .split_once("data-row-href=\"/agents/test-agent/sub-agents/2\"")
         .and_then(|(_, remainder)| remainder.split_once("</tr>"))
@@ -238,13 +239,11 @@ fn opencode_agent_shows_jobs_tab_with_recent_runs() {
         .and_then(|(_, remainder)| remainder.split_once("</tr>"))
         .map(|(row, _)| row)
         .expect("render event job row");
-    assert!(event_job_row.contains("analysis batch"));
+    assert!(event_job_row.contains("On demand"));
     assert!(!event_job_row.contains("local-datetime"));
     assert!(rendered.contains("anthropic/claude-3-5-sonnet"));
     assert!(rendered.contains("Run now"));
-    assert!(!rendered.contains("Operator prompt</th>"));
     assert!(rendered.contains("/agents/test-agent/sub-agents/1/run"));
-    assert!(rendered.contains("/agents/test-agent/sub-agents/3/run"));
     assert!(rendered.contains("/agents/test-agent/sub-agents/3"));
     assert!(rendered.contains("/agents/test-agent/runs/1"));
     assert!(rendered.contains("id=\"agent-recent-runs-stream\" hx-ext=\"sse\""));
@@ -259,7 +258,7 @@ fn opencode_agent_shows_jobs_tab_with_recent_runs() {
 #[test]
 fn jobs_page_renders_recent_run_rows() {
     let mut template =
-        AgentsShowPageTemplate::new(sample_opencode_detail_row(), AgentShowTab::SubAgents, 0);
+        AgentsShowPageTemplate::new(sample_opencode_detail_row(), AgentShowTab::Analysis, 0);
     template.recent_runs_section.recent_runs_loaded = true;
     template.recent_runs_section.recent_runs = vec![
         HarnessSubAgentRunView::from_row(&sample_run_row(1, "succeeded", "analysis-15m")),
@@ -289,7 +288,7 @@ fn jobs_page_renders_running_duration_ticker_markup() {
     let fallback = run.duration_text.clone();
 
     let mut template =
-        AgentsShowPageTemplate::new(sample_opencode_detail_row(), AgentShowTab::SubAgents, 0);
+        AgentsShowPageTemplate::new(sample_opencode_detail_row(), AgentShowTab::Analysis, 0);
     template.recent_runs_section.recent_runs_loaded = true;
     template.recent_runs_section.recent_runs = vec![run];
     let rendered = template.render().expect("render running jobs page");
@@ -302,7 +301,7 @@ fn jobs_page_renders_running_duration_ticker_markup() {
 #[test]
 fn jobs_page_renders_recent_runs_pagination_controls() {
     let mut template =
-        AgentsShowPageTemplate::new(sample_opencode_detail_row(), AgentShowTab::SubAgents, 0);
+        AgentsShowPageTemplate::new(sample_opencode_detail_row(), AgentShowTab::Analysis, 0);
     template.recent_runs_section.recent_runs_loaded = true;
     template.recent_runs_section.recent_runs = vec![HarnessSubAgentRunView::from_row(
         &sample_run_row(12, "succeeded", "analysis-15m"),
@@ -379,11 +378,11 @@ fn transactions_page_renders_pagination_controls() {
 #[test]
 fn jobs_page_links_to_new_job_page() {
     let mut template =
-        AgentsShowPageTemplate::new(sample_opencode_detail_row(), AgentShowTab::SubAgents, 0);
+        AgentsShowPageTemplate::new(sample_opencode_detail_row(), AgentShowTab::Analysis, 0);
     template.jobs_loaded = true;
     let rendered = template.render().expect("render sub-agents page");
     assert!(rendered.contains("New sub-agent"));
-    assert!(rendered.contains("/agents/test-agent/sub-agents/new"));
+    assert!(rendered.contains("/agents/test-agent/analysis/new"));
 }
 
 #[test]
@@ -475,62 +474,47 @@ fn settings_tab_omits_subaccount_label_for_main_account() {
 }
 
 #[test]
-fn prompts_tab_renders_strategy_copy_and_reset_defaults_ui() {
-    let mut template =
-        AgentsShowPageTemplate::new(sample_agent_detail_row(), AgentShowTab::Prompts, 0);
-    template.set_prompt_editors(vec![
-        PromptEditorView::new(
-            "analysis",
-            "Beep boop analysis.".to_string(),
-            crate::agents::prompts::DEFAULT_ANALYSIS_STRATEGY_PROMPT,
-        ),
-        PromptEditorView::new(
-            "market_analysis",
-            "Beep boop market analysis.".to_string(),
-            crate::agents::prompts::DEFAULT_MARKET_ANALYSIS_STRATEGY_PROMPT,
-        ),
-        PromptEditorView::new(
+fn role_page_template_renders_strategy_prompt_editor_and_history() {
+    let agent = sample_agent_detail_row();
+    let template = crate::web::templates::AgentRolePageTemplate {
+        current_path: "/agents/test-agent/trading".to_string(),
+        tabs: build_agent_show_tabs(&agent, AgentShowTab::Trading, 0),
+        agent_tabs_use_htmx: true,
+        agent,
+        active_role_label: "Trading",
+        role_page_path: "/agents/test-agent/trading".to_string(),
+        role_description: "Reads the latest research context and manages orders.",
+        job: Some(HarnessSubAgentDetailView::from_row(&sample_candle_job_row(
+            2,
+            "trading-5m",
             "trading",
-            "Beep boop trading.".to_string(),
-            crate::agents::prompts::DEFAULT_TRADING_STRATEGY_PROMPT,
-        ),
-        PromptEditorView::new(
-            "daily_review",
-            "Beep boop review.".to_string(),
-            crate::agents::prompts::DEFAULT_DAILY_REVIEW_STRATEGY_PROMPT,
-        ),
-    ]);
+            false,
+        ))),
+        sub_agent_id: 2,
+        model_picker: ModelPickerView::default(),
+        prompt_view: crate::web::templates::RolePromptView {
+            revision_id: 4,
+            prompt: "Beep boop trading.".to_string(),
+            prompt_error: None,
+            history: vec![crate::web::templates::RoleRevisionView {
+                revision_id: 1,
+                created_at: local_timestamp_view(Utc::now()),
+            }],
+        },
+        review_prompt_improvement_enabled: Some(false),
+        navbar: Navbar::default(),
+    };
 
     let rendered = template.render().unwrap();
-    assert!(rendered.contains("Strategy Prompts"));
-    assert!(!rendered.contains("Prompt Revision History"));
-    assert!(!rendered.contains("Allow daily review to improve eligible prompts automatically"));
-    assert!(rendered.contains("Discuss prompt"));
-    assert!(rendered.contains("formaction=\"/agents/test-agent/chat/conversations\""));
-    assert!(rendered.contains("Analysis"));
-    assert!(rendered.contains("Runs on a fixed schedule"));
-    assert!(rendered.contains("Market Analysis"));
-    assert!(rendered.contains("Runs after analysis sub-agents complete"));
+    assert!(rendered.contains("id=\"agent-show-tab-content\""));
     assert!(rendered.contains("Trading"));
-    assert!(rendered.contains("Manages positions and orders based on market-analysis memories"));
-    assert!(rendered.contains("Daily Review"));
-    assert!(rendered.contains("Directs the daily review"));
-    assert!(rendered.contains("data-agent-prompt-form=\"analysis\""));
-    assert!(rendered.contains("data-agent-prompt-form=\"market_analysis\""));
-    assert!(rendered.contains("data-agent-prompt-form=\"trading\""));
-    assert!(rendered.contains("data-agent-prompt-form=\"daily_review\""));
-    assert!(rendered.contains("data-agent-prompt-reset=\"analysis\""));
-    assert!(rendered.contains("data-agent-prompt-reset=\"market_analysis\""));
-    assert!(rendered.contains("data-agent-prompt-reset=\"trading\""));
-    assert!(rendered.contains("data-agent-prompt-reset=\"daily_review\""));
-    assert!(rendered.contains("data-agent-prompt-save=\"analysis\""));
-    assert!(rendered.contains("data-agent-prompt-save=\"market_analysis\""));
-    assert!(rendered.contains("data-agent-prompt-save=\"trading\""));
-    assert!(rendered.contains("data-agent-prompt-save=\"daily_review\""));
-    assert!(rendered.contains("default-analysis-strategy-prompt-value"));
-    assert!(rendered.contains("default-market_analysis-strategy-prompt-value"));
-    assert!(rendered.contains("Default analysis validity"));
-    assert!(rendered.contains("Time-in-force"));
+    assert!(rendered.contains("Save prompt"));
+    assert!(rendered.contains("Revision history"));
+    assert!(rendered.contains("Revision 1"));
+    assert!(rendered.contains("Roll back here"));
+    assert!(rendered.contains("name=\"base_revision_id\" value=\"4\""));
+    assert!(rendered.contains("Review prompt updates"));
+    assert!(rendered.contains("Enable Review prompt updates"));
 }
 
 #[test]
@@ -622,11 +606,11 @@ fn trading_account_choices_render_subaccount_names() {
 fn new_job_page_renders_agent_navbar_with_jobs_active() {
     let agent = sample_opencode_detail_row();
     let template = AgentJobNewPageTemplate {
-        tabs: build_agent_show_tabs(&agent, AgentShowTab::SubAgents, 0),
+        tabs: build_agent_show_tabs(&agent, AgentShowTab::Analysis, 0),
         agent_tabs_use_htmx: false,
         agent,
-        form: CreateHarnessSubAgentFormValues {
-            sub_agent_kind: "analysis".to_string(),
+        form: CreateAnalysisJobFormValues {
+            sub_agent_key: "technical-15m".to_string(),
             timeframe: "15m".to_string(),
             timeout_seconds: "900".to_string(),
             model_selection: "anthropic/claude-sonnet-4".to_string(),
@@ -655,9 +639,6 @@ fn new_job_page_renders_agent_navbar_with_jobs_active() {
             submit_on_save: true,
             lazy_options_url: None,
         },
-        market_analysis_available: false,
-        analysis_coding_available: false,
-        show_timeframe: true,
         errors: Vec::new(),
         current_path: "/agents/test-agent/sub-agents/new".to_string(),
         navbar: Navbar::default(),
@@ -670,8 +651,8 @@ fn new_job_page_renders_agent_navbar_with_jobs_active() {
     assert!(rendered.contains("agent-rail agent-rail-expanded"));
     assert!(rendered.contains("data-agent-rail-toggle"));
     assert!(rendered.contains("Expand agent navigation"));
-    assert!(rendered.contains("Create sub-agent"));
-    assert!(rendered.contains("action=\"/agents/test-agent/sub-agents\""));
+    assert!(rendered.contains("Create analysis job"));
+    assert!(rendered.contains("action=\"/agents/test-agent/analysis\""));
 }
 
 #[test]

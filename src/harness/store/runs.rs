@@ -349,7 +349,7 @@ pub async fn list_queued_runs_for_dispatch(
                 scheduled_for
            FROM harness_sub_agent_runs
           WHERE status = $1
-            AND sub_agent_kind <> 'analysis_coding'
+             AND sub_agent_kind <> 'coding'
           ORDER BY created_at ASC, id ASC
           LIMIT $2",
     )
@@ -501,20 +501,6 @@ pub async fn insert_queued_event_run(
 ) -> Result<QueuedSubAgentRun> {
     insert_queued_event_run_with_mode(pool, agent_key, sub_agent_id, EventRunInsertMode::Manual)
         .await
-}
-
-pub async fn insert_queued_event_run_for_automatic_dispatch(
-    pool: &DbPool,
-    agent_key: &str,
-    sub_agent_id: i64,
-) -> Result<QueuedSubAgentRun> {
-    insert_queued_event_run_with_mode(
-        pool,
-        agent_key,
-        sub_agent_id,
-        EventRunInsertMode::AnalysisContinuation,
-    )
-    .await
 }
 
 pub(crate) async fn insert_queued_event_run_with_mode(

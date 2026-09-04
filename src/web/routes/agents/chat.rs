@@ -29,7 +29,7 @@ use crate::{
         },
         service::{CONVERSATION_MESSAGE_MAX_CHARS, ConversationService},
     },
-    agents::{store::get_agent, strategy_prompts::is_valid_prompt_kind},
+    agents::store::get_agent,
     gateway::{model::TelegramGatewayConfig, store as gateway_store},
     model_catalog::options::parse_model_selection,
     notifications::store::count_notifications,
@@ -460,10 +460,22 @@ pub(in crate::web::routes) async fn agents_create_conversation(
             .await?;
     let (strategy_prompt_kind, strategy_prompt) = form.strategy_prompt_context();
     let strategy_prompt_kind = strategy_prompt_kind.to_string();
-    if !strategy_prompt_kind.is_empty() && !is_valid_prompt_kind(&strategy_prompt_kind) {
-        return Ok((StatusCode::BAD_REQUEST, "invalid strategy prompt kind").into_response());
-    }
     let strategy_prompt = strategy_prompt.to_string();
+    if !strategy_prompt_kind.is_empty() {
+        // Prompt context is addressed by the target sub-agent key; verify an
+        // owned job with that key exists before seeding the conversation.
+        let known: bool = sqlx::query_scalar(
+            "SELECT EXISTS (SELECT 1 FROM harness_sub_agents WHERE agent_key = $1 AND sub_agent_key = $2)",
+        )
+        .bind(&agent_key)
+        .bind(strategy_prompt_kind.trim())
+        .fetch_one(&state.db_pool)
+        .await
+        ?;
+        if !known {
+            return Ok((StatusCode::BAD_REQUEST, "unknown strategy prompt target").into_response());
+        }
+    }
     let (model_selection, model_variant) = if form.model_selection.trim().is_empty() {
         conversations
             .first()
@@ -535,15 +547,8 @@ pub(in crate::web::routes) async fn agents_create_conversation(
 }
 
 pub(super) fn strategy_prompt_chat_message(prompt_kind: &str, prompt: &str) -> String {
-    let label = match prompt_kind {
-        "analysis" => "Analysis",
-        "market_analysis" => "Market Analysis",
-        "trading" => "Trading",
-        "daily_review" => "Daily Review",
-        "analysis_coding" => "Analysis Coding",
-        _ => "Strategy",
-    };
-    let intro = format!("We are discussing this agent's {label} strategy prompt:\n\n```text\n");
+    let label = prompt_kind.trim();
+    let intro = format!("We are discussing this agent's `{label}` strategy prompt:\n\n```text\n");
     let outro = "\n```";
     if intro.chars().count() + prompt.chars().count() + outro.chars().count()
         <= CONVERSATION_MESSAGE_MAX_CHARS
@@ -552,7 +557,7 @@ pub(super) fn strategy_prompt_chat_message(prompt_kind: &str, prompt: &str) -> S
     }
 
     format!(
-        "We are discussing this agent's {label} strategy prompt. It is too long to include in this message, so use `hypervibes_get_strategy_prompt` with prompt kind `{prompt_kind}` to load the saved prompt."
+        "We are discussing this agent's `{label}` strategy prompt. It is too long to include in this message, so use `hypervibes_list_strategy_prompts` to find its target and load the saved prompt."
     )
 }
 

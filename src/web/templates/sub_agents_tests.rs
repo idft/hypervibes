@@ -89,7 +89,7 @@ fn job_detail_page_renders_job_metadata_and_runs() {
 fn event_job_view_has_no_next_run() {
     let view = HarnessSubAgentView::from_row(&sample_event_job_row(3, true));
 
-    assert!(view.trigger_text.contains("analysis batch"));
+    assert_eq!(view.trigger_text, "On demand");
     assert!(view.next_run_at.is_none());
 }
 

@@ -188,28 +188,20 @@ def _require_nonblank(name: str, value: str) -> str:
     return value
 
 
-STRATEGY_PROMPT_KINDS = {
-    "analysis",
-    "market_analysis",
-    "trading",
-    "daily_review",
-    "analysis_coding",
-}
-
-
-def _require_strategy_prompt_kind(prompt_kind: str) -> str:
-    if not isinstance(prompt_kind, str) or prompt_kind not in STRATEGY_PROMPT_KINDS:
-        allowed = ", ".join(sorted(STRATEGY_PROMPT_KINDS))
-        raise ValueError(f"prompt_kind must be one of: {allowed}")
-    return prompt_kind
+def _require_sub_agent_id(sub_agent_id: int) -> int:
+    if not isinstance(sub_agent_id, int) or isinstance(sub_agent_id, bool) or sub_agent_id <= 0:
+        raise ValueError("sub_agent_id must be a positive integer")
+    return sub_agent_id
 
 
 def _require_strategy_prompt_response(value: Any) -> dict[str, Any]:
     if (
         not isinstance(value, dict)
-        or set(value) != {"revision_id", "prompt_kind", "prompt", "updated_at"}
+        or set(value)
+        != {"revision_id", "target_sub_agent_id", "target_sub_agent_key", "prompt", "updated_at"}
         or not isinstance(value["revision_id"], int)
-        or not isinstance(value["prompt_kind"], str)
+        or not isinstance(value["target_sub_agent_id"], int)
+        or not isinstance(value["target_sub_agent_key"], str)
         or not isinstance(value["prompt"], str)
         or not isinstance(value["updated_at"], str)
     ):
@@ -424,22 +416,22 @@ def list_strategy_prompts() -> list[dict[str, Any]]:
 
 
 @mcp.tool()
-def get_strategy_prompt(prompt_kind: str) -> dict[str, Any]:
+def get_strategy_prompt(sub_agent_id: int) -> dict[str, Any]:
     """Get one editable strategy prompt for chat review."""
-    prompt_kind = _require_strategy_prompt_kind(prompt_kind)
-    result = _request("GET", f"/api/v1/strategy-prompts/{prompt_kind}")
+    sub_agent_id = _require_sub_agent_id(sub_agent_id)
+    result = _request("GET", f"/api/v1/strategy-prompts/{sub_agent_id}")
     return _require_strategy_prompt_response(result)
 
 
 @mcp.tool()
-def update_strategy_prompt(prompt_kind: str, prompt: str) -> dict[str, Any]:
+def update_strategy_prompt(sub_agent_id: int, prompt: str) -> dict[str, Any]:
     """Update one strategy prompt from chat; blank prompts are allowed."""
-    prompt_kind = _require_strategy_prompt_kind(prompt_kind)
+    sub_agent_id = _require_sub_agent_id(sub_agent_id)
     if not isinstance(prompt, str):
         raise ValueError("prompt must be a string")
     result = _request(
         "PUT",
-        f"/api/v1/strategy-prompts/{prompt_kind}",
+        f"/api/v1/strategy-prompts/{sub_agent_id}",
         json_body={"prompt": prompt},
     )
     return _require_strategy_prompt_response(result)
@@ -451,7 +443,7 @@ def submit_prompt_revision(
     evidence_memory_ids: list[str],
     changes: list[dict[str, Any]],
 ) -> dict[str, Any]:
-    """Submit one evidence-backed daily-review revision batch for eligible prompts."""
+    """Submit one evidence-backed review revision batch for eligible prompts."""
     _require_nonblank("rationale", rationale)
     if not isinstance(evidence_memory_ids, list) or not all(
         isinstance(value, str) and value.strip() for value in evidence_memory_ids
@@ -474,44 +466,17 @@ def submit_prompt_revision(
 
 
 @mcp.tool()
-def get_latest_analysis(symbol: str, limit: int | None = None) -> list[dict[str, Any]]:
-    """Return the latest analysis memory rows for ``symbol``.
-
-    ``limit`` is optional; when provided it must be ``>= 1``. The
-    ``memory_type`` filter is fixed to ``"analysis"`` on the server.
-    """
-    symbol = _require_nonblank("symbol", symbol)
-    _require_limit(limit)
-    params: dict[str, Any] = {"symbol": symbol, "memory_type": "analysis"}
-    if limit is not None:
-        params["limit"] = limit
-    result = _request("GET", "/api/v1/memories/latest", params=params)
-    if not isinstance(result, list):
-        raise RuntimeError(
-            "HyperVibes /memories/latest returned unexpected shape"
-        )
-    return result
-
-
-@mcp.tool()
-def get_market_analysis(symbol: str) -> dict[str, Any] | None:
-    """Return the latest fresh market-analysis memory row for ``symbol``."""
-    symbol = _require_nonblank("symbol", symbol)
+def get_trading_context(instrument_id: str) -> dict[str, Any]:
+    """Return current analysis evidence and analyst status for one instrument."""
+    instrument_id = _require_nonblank("instrument_id", instrument_id)
     result = _request(
         "GET",
-        "/api/v1/memories",
-        params={"symbol": symbol, "memory_type": "market_analysis", "limit": 1},
+        "/api/v1/memories/trading-context",
+        params={"instrument_id": instrument_id},
     )
-    if not isinstance(result, list):
-        raise RuntimeError("HyperVibes /memories returned unexpected shape")
-    if not result:
-        LOGGER.info("hypervibes_mcp_market_analysis symbol=%s found=false", symbol)
-        return None
-    first = result[0]
-    if not isinstance(first, dict):
-        raise RuntimeError("HyperVibes /memories returned unexpected shape")
-    LOGGER.info("hypervibes_mcp_market_analysis symbol=%s found=true", symbol)
-    return first
+    if not isinstance(result, dict):
+        raise RuntimeError("HyperVibes trading context returned unexpected shape")
+    return result
 
 
 @mcp.tool()
@@ -530,7 +495,8 @@ def get_memory_detail(memory_id: str) -> dict[str, Any]:
 
 @mcp.tool()
 def list_memories(
-    symbol: str | None = None,
+    scope_kind: str | None = None,
+    instrument_id: str | None = None,
     timeframe: str | None = None,
     memory_type: str | None = None,
     since: str | None = None,
@@ -543,13 +509,16 @@ def list_memories(
     All filters are optional. ``include_expired`` defaults to ``False`` to
     match the backend's default staleness hiding.
 
-    Use ``memory_type="daily_review"`` and ``symbol="__agent__"`` for an
-    agent's daily reviews; set ``include_expired=True`` for historical reviews.
-    ``agent_learnings`` is a separate durable learning-memory type.
+    Use ``scope_kind="agent"`` for agent-wide records. ``agent_learnings`` is
+    a separate durable learning-memory type.
     """
     params: dict[str, Any] = {}
-    if symbol is not None:
-        params["symbol"] = _require_nonblank("symbol", symbol)
+    if scope_kind is not None:
+        if scope_kind not in {"agent", "instruments"}:
+            raise ValueError("scope_kind must be agent or instruments")
+        params["scope_kind"] = scope_kind
+    if instrument_id is not None:
+        params["instrument_id"] = _require_nonblank("instrument_id", instrument_id)
     if timeframe is not None:
         params["timeframe"] = _require_nonblank("timeframe", timeframe)
     if memory_type is not None:
@@ -654,24 +623,41 @@ def get_order(order_id: str, include_events: bool = False) -> dict[str, Any]:
 
 @mcp.tool()
 def write_memory(
-    symbol: str,
+    scope_kind: str,
     memory_type: str,
     summary: str,
     content: str,
+    instrument_ids: list[str] | None = None,
     timeframe: str | None = None,
     metadata: dict[str, Any] | None = None,
     links: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Persist a memory for this agent.
 
-    Required: ``symbol``, ``memory_type``, ``summary``, ``content``.
+    Required: ``scope_kind``, ``memory_type``, ``summary``, ``content``.
+    Use ``scope_kind="agent"`` with no instrument IDs for agent-wide records,
+    or ``scope_kind="instruments"`` with one or more unique canonical IDs.
     ``timeframe`` is optional. For a general memory, omit the ``timeframe``
     argument entirely; do not pass an empty string. ``metadata`` must be a
     JSON object when provided; ``None`` is stored as an empty object. ``links``
     may be a list of objects with ``target_memory_id``, ``link_type``, and an
     optional object ``metadata``.
     """
-    symbol = _require_nonblank("symbol", symbol)
+    if scope_kind not in {"agent", "instruments"}:
+        raise ValueError("scope_kind must be agent or instruments")
+    if instrument_ids is None:
+        instrument_ids = []
+    if not isinstance(instrument_ids, list) or not all(
+        isinstance(instrument_id, str) and instrument_id.strip()
+        for instrument_id in instrument_ids
+    ):
+        raise ValueError("instrument_ids must contain nonblank IDs")
+    if len(set(instrument_ids)) != len(instrument_ids):
+        raise ValueError("instrument_ids must not contain duplicates")
+    if scope_kind == "agent" and instrument_ids:
+        raise ValueError("instrument_ids must be empty for agent scope")
+    if scope_kind == "instruments" and not instrument_ids:
+        raise ValueError("instrument_ids is required for instruments scope")
     memory_type = _require_nonblank("memory_type", memory_type)
     summary = _require_nonblank("summary", summary)
     content = _require_nonblank("content", content)
@@ -679,6 +665,12 @@ def write_memory(
         timeframe = _require_nonblank("timeframe", timeframe)
     if metadata is not None and not isinstance(metadata, dict):
         raise ValueError("metadata must be a JSON object")
+    if metadata is not None and {
+        "source_run_id",
+        "source_sub_agent_id",
+        "source_sub_agent_key",
+    }.intersection(metadata):
+        raise ValueError("metadata must not include source run or sub-agent provenance")
     if links is not None:
         if not isinstance(links, list):
             raise ValueError("links must be a list")
@@ -686,7 +678,8 @@ def write_memory(
             if not isinstance(link, dict):
                 raise ValueError(f"links[{index}] must be a JSON object")
     body: dict[str, Any] = {
-        "symbol": symbol,
+        "scope_kind": scope_kind,
+        "instrument_ids": instrument_ids,
         "memory_type": memory_type,
         "summary": summary,
         "content": content,
@@ -703,8 +696,8 @@ def write_memory(
 
 
 @mcp.tool()
-def request_analysis_coding(reason: str, mode: str = "auto") -> dict[str, Any]:
-    """Queue an on-demand analysis-coding sub-agent run.
+def request_coding(reason: str, mode: str = "auto") -> dict[str, Any]:
+    """Queue an on-demand Coding sub-agent run.
 
     This returns after the durable task is queued; it does not wait for model
     execution, validation, or candidate promotion. ``reason`` must explain the
@@ -737,8 +730,8 @@ def submit_orders(orders: list[dict[str, Any]]) -> dict[str, Any]:
     """Submit one or more orders through the HyperVibes backend.
 
     ``orders`` is the same list shape the backend expects on
-    ``POST /api/v1/orders``. Opening agent orders should include the selected
-    fresh market-analysis memory ID in ``memory_record_ids``. This is a real
+    ``POST /api/v1/orders``. Opening agent orders should include the relevant
+    trading-decision memory ID in ``memory_record_ids``. This is a real
     backend action: the server selects instruments, signs the request, and
     submits to Hyperliquid. The MCP server does not hold or use any private key.
     """

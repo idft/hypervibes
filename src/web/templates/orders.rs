@@ -169,64 +169,32 @@ impl OpenOrdersPartialTemplate {
 }
 
 #[derive(Template)]
-#[template(path = "agents/fragments/latest-trade-execution-summary.html")]
-pub struct LatestTradeExecutionSummaryPartialTemplate {
-    pub summary: Option<String>,
-    /// `created_at` of the latest `trade_execution` memory formatted as
-    /// an ISO 8601 / RFC 3339 string with a `Z` suffix, suitable for the
-    /// `datetime` attribute of a `<time>` element consumed by
-    /// `timeago.js`. Empty when no memory exists yet.
-    pub created_at_iso: String,
-    /// `created_at` of the latest `trade_execution` memory formatted as
-    /// `YYYY-MM-DD HH:MM UTC`. Used as the timeago fallback so the
-    /// timestamp is meaningful even before client-side JS hydrates.
-    /// Empty when no memory exists yet.
-    pub created_at_fallback_text: String,
-}
-
-impl LatestTradeExecutionSummaryPartialTemplate {
-    pub fn render_view(
-        summary: Option<String>,
-        created_at: Option<DateTime<Utc>>,
-    ) -> Result<String, askama::Error> {
-        Self {
-            summary,
-            created_at_iso: created_at.map(format_timestamp_iso).unwrap_or_default(),
-            created_at_fallback_text: created_at.map(format_timestamp_utc).unwrap_or_default(),
-        }
-        .render()
-    }
-}
-
-#[derive(Template)]
-#[template(path = "agents/fragments/latest-analysis-summary.html")]
-pub struct LatestAnalysisSummaryPartialTemplate {
+#[template(path = "agents/fragments/latest-trade-decision-summary.html")]
+pub struct LatestTradeDecisionSummaryPartialTemplate {
     pub summary: Option<String>,
     pub detail_url: Option<String>,
-    /// `created_at` of the latest `market_analysis` memory formatted as an
+    /// `created_at` of the latest `trading_decision` memory formatted as an
     /// ISO 8601 / RFC 3339 string with a `Z` suffix, suitable for the
     /// `datetime` attribute of a `<time>` element consumed by
     /// `timeago.js`. Empty when no memory exists yet.
     pub created_at_iso: String,
-    /// `created_at` of the latest `market_analysis` memory formatted as
+    /// `created_at` of the latest `trading_decision` memory formatted as
     /// `YYYY-MM-DD HH:MM UTC`. Used as the timeago fallback so the
     /// timestamp is meaningful even before client-side JS hydrates.
     /// Empty when no memory exists yet.
     pub created_at_fallback_text: String,
-    /// `expires_at` of the latest `market_analysis` memory (resolved from
-    /// `stale_after` / `valid_for_seconds` / per-timeframe defaults)
-    /// formatted as an ISO 8601 / RFC 3339 string, suitable for the
-    /// `title` attribute of a `<time>` element. Empty when the row has
-    /// no explicit or implicit expiration.
+    /// `expires_at` of the latest `trading_decision` memory (resolved from
+    /// `stale_after` / `valid_for_seconds` metadata) formatted as an ISO
+    /// 8601 / RFC 3339 string, suitable for the `title` attribute of a
+    /// `<time>` element. Empty when the row has no explicit expiration.
     pub expires_at_iso: String,
     /// `true` when `expires_at` is at or before the server's `now`. The
     /// agent page uses this to highlight the timestamp and surface a
-    /// warning icon, since the trading loop will treat the market analysis
-    /// as stale and the operator should investigate the gap.
+    /// warning icon so the operator can investigate the decision gap.
     pub is_expired: bool,
 }
 
-impl LatestAnalysisSummaryPartialTemplate {
+impl LatestTradeDecisionSummaryPartialTemplate {
     pub fn render_view(
         summary: Option<String>,
         detail_url: Option<String>,

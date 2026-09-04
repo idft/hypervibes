@@ -3,16 +3,14 @@ use rust_decimal::Decimal;
 use uuid::Uuid;
 
 use crate::{
-    agents::model::{AgentDetailRow, AgentListRow, AgentReadiness},
-    hyperliquid::queries::BalancePoint,
-    memory::MemoryRecord,
+    agents::model::AgentDetailRow, hyperliquid::queries::BalancePoint, memory::MemoryRecord,
     model_catalog::options::ModelPickerOption,
 };
 
 use super::*;
 
-pub fn sample_agent_list_row() -> AgentListRow {
-    AgentListRow {
+pub fn sample_agent_list_row() -> crate::agents::model::AgentListRow {
+    crate::agents::model::AgentListRow {
         display_name: "Test Agent".to_string(),
         agent_key: "test-agent".to_string(),
         enabled: true,
@@ -22,16 +20,14 @@ pub fn sample_agent_list_row() -> AgentListRow {
     }
 }
 
-pub fn sample_agent_readiness() -> AgentReadiness {
-    AgentReadiness {
+pub fn sample_agent_readiness() -> crate::agents::model::AgentReadiness {
+    crate::agents::model::AgentReadiness {
         agent_key: "test-agent".to_string(),
         active: true,
         enabled: true,
         has_selected_instruments: true,
         has_enabled_analysis_job: true,
-        has_enabled_market_analysis_job: true,
         has_enabled_trading_job: true,
-        market_analysis_sub_agent_id: Some(2),
         trading_sub_agent_id: Some(3),
     }
 }
@@ -67,7 +63,11 @@ pub fn sample_memory_record(
         id: Uuid::from_u128(content.len() as u128 + summary.len() as u128),
         created_at: Utc::now(),
         agent_key: "test-agent".to_string(),
-        symbol: symbol.to_string(),
+        scope_kind: if symbol == "__agent__" {
+            crate::memory::model::MEMORY_SCOPE_AGENT.to_string()
+        } else {
+            crate::memory::model::MEMORY_SCOPE_INSTRUMENTS.to_string()
+        },
         timeframe: timeframe.map(str::to_string),
         memory_type: memory_type.to_string(),
         summary: summary.to_string(),
@@ -76,6 +76,7 @@ pub fn sample_memory_record(
             "confidence": "high",
             "source": "test",
         }),
+        source_run_id: None,
     }
 }
 
@@ -123,8 +124,8 @@ pub fn sample_event_job_row(id: i64, enabled: bool) -> crate::harness::model::Ha
     crate::harness::model::HarnessSubAgentRow {
         id,
         agent_key: "test-agent".to_string(),
-        sub_agent_key: "market-analysis".to_string(),
-        sub_agent_kind: crate::harness::model::SUB_AGENT_KIND_MARKET_ANALYSIS.to_string(),
+        sub_agent_key: "coding".to_string(),
+        sub_agent_kind: crate::harness::model::SUB_AGENT_KIND_CODING.to_string(),
         enabled,
         timeframe: None,
         next_run_at: None,

@@ -4,65 +4,58 @@ slug: /mcp-tools
 
 # MCP Tools
 
-HyperVibes provides custom MCP tools that let agents inspect account data,
-read and write memory, review strategy context, manage orders, and send
-notifications through the configured messaging gateway.
+HyperVibes MCP tools let authorized roles inspect account data, use memory,
+manage orders, maintain the Coding package, revise prompts, and send gateway
+notifications. Tools are always scoped to the authenticated agent; the MCP
+server never receives a Hyperliquid private key.
 
-## Availability
+## Role availability
 
-Tools are available to scheduled sub-agents, Chat, or both. Sub-agent access varies by
-type: each sub-agent receives only the tools needed for its role. Chat read tools are
-available by default; order actions, memory writes, and prompt updates depend
-on the conversation's permissions and may require confirmation.
+| Tool | Availability |
+| --- | --- |
+| `hypervibes_coding_validate_candidate` | Coding |
+| `hypervibes_coding_submit_report` | Coding |
+| `hypervibes_get_account` | Sub-agents and Chat |
+| `hypervibes_list_strategy_prompts` | Chat and Review |
+| `hypervibes_get_strategy_prompt` | Chat and Review |
+| `hypervibes_update_strategy_prompt` | Chat only; confirmation required |
+| `hypervibes_submit_prompt_revision` | Review only, for snapshotted permitted targets |
+| `hypervibes_get_trading_context` | Trading and Chat |
+| `hypervibes_get_memory_detail` | Review, Coding, and Chat |
+| `hypervibes_list_memories` | Analysis, Review, Coding, and Chat |
+| `hypervibes_write_memory` | Analysis, Trading, Review, and permitted Chat |
+| `hypervibes_list_orders` | Trading, Review, Coding, and Chat |
+| `hypervibes_list_account_transactions` | Review and Chat |
+| `hypervibes_get_order` | Trading, Review, Coding, and Chat |
+| `hypervibes_submit_orders` | Trading and permitted Chat |
+| `hypervibes_cancel_orders` | Trading and permitted Chat |
+| `hypervibes_cancel_all_orders` | Trading and permitted Chat |
+| `hypervibes_send_notification` | Trading by default |
+
+`market_analysis`, `hypervibes_get_latest_analysis`, and
+`hypervibes_get_market_analysis` are not available.
 
 `hypervibes:notification_send` is the named capability for queueing a gateway
-notification. Every scheduled role is eligible for the capability once
-per-sub-agent controls are available. Until then, its static default is enabled
-only for trading. It is denied for other scheduled roles and for Chat.
+notification. Trading enables it by default; other scheduled roles and Chat are
+denied by default. Notification provenance and capability schema derive from the
+authenticated run or conversation, never model-supplied data.
 
-When isolated runtime credentials are enabled, notification provenance and the
-capability schema are derived from the authenticated run or conversation scope,
-not supplied by the model. This provenance never includes a gateway token or
-destination and does not affect durable notification delivery after its source
-workspace is deleted.
+## Memory tools
 
-## Tools
+`hypervibes_write_memory` accepts `scope_kind` of `agent` or `instruments`.
+Agent scope requires no instrument IDs; instrument scope requires one or more
+unique selected canonical instrument IDs. The server stamps source-run
+provenance and never accepts source run or sub-agent identity from metadata.
 
-| Tool | Description | Availability |
-| --- | --- | --- |
-| `hypervibes_coding_validate_candidate` | Validate candidate analysis code before it can be used. | Sub-agents: analysis coding |
-| `hypervibes_coding_submit_report` | Submit the analysis coding result after validation. | Sub-agents: analysis coding |
-| `hypervibes_get_account` | Read the agent's current Hyperliquid account snapshot. | Sub-agents and Chat |
-| `hypervibes_list_strategy_prompts` | List the agent's strategy prompts for review. | Chat and daily review |
-| `hypervibes_get_strategy_prompt` | Read one strategy prompt. | Chat and daily review |
-| `hypervibes_update_strategy_prompt` | Update one strategy prompt. | Chat only; confirmation required |
-| `hypervibes_submit_prompt_revision` | Submit one evidence-backed atomic revision batch for eligible prompts. | Daily review only |
-| `hypervibes_get_latest_analysis` | Read recent analysis memories for a market. | Sub-agents: market analysis; Chat |
-| `hypervibes_get_market_analysis` | Read the latest market-analysis handoff for a market. | Sub-agents: trading; Chat |
-| `hypervibes_get_memory_detail` | Read one memory and its links. | Sub-agents: daily review and analysis coding; Chat |
-| `hypervibes_list_memories` | List memories visible to the agent. | Sub-agents: analysis, daily review, and analysis coding; Chat |
-| `hypervibes_list_orders` | List orders visible to the agent. | Sub-agents: trading, daily review, and analysis coding; Chat |
-| `hypervibes_list_account_transactions` | Read fills, funding, and ledger events for the account. | Sub-agents: daily review; Chat |
-| `hypervibes_get_order` | Read one order and optionally its event history. | Sub-agents: trading, daily review, and analysis coding; Chat |
-| `hypervibes_write_memory` | Save a memory for the agent. | Sub-agents: analysis, market analysis, and daily review; Chat permissions apply |
-| `hypervibes_submit_orders` | Submit one or more orders through HyperVibes. | Sub-agents: trading; Chat permissions apply |
-| `hypervibes_cancel_orders` | Cancel selected orders. | Sub-agents: trading; Chat permissions apply |
-| `hypervibes_cancel_all_orders` | Cancel all open orders, optionally for one market. | Sub-agents: trading; Chat permissions apply |
-| `hypervibes_send_notification` | Queue a notification for the agent's messaging gateway. A successful call records the notification but does not guarantee delivery. | Sub-agents: trading only by default |
+`hypervibes_get_trading_context(instrument_id)` returns the latest fresh output
+per `(Analysis producer, memory type, scope)`, including agent-scoped records
+and records targeting that instrument. It includes evidence provenance, type,
+scope and targets, expiry, and producer status: `fresh`, `stale`, `missing`,
+`failed`, or `disabled`.
 
-Tools operate within the current agent's account and data boundaries. The
-MCP server does not receive the user's Hyperliquid private key.
+## Coding package
 
-## Coding Package
-
-The durable Coding package lives at `packages/<agent-key>/` with
-`manifest.json` plus any coding-agent-defined files. The manifest is a
-validation registry: it identifies the package version and declares validation
-targets with their entrypoints, supported inputs and timeframes, minimum
-candles, required arguments, output schema, and version. A declared target is
-not an execution allow-list.
-
-Analysis agents may inspect and directly execute any Python file below their
-run-local `scripts/user/` copy of the package, declared or not, writing only to
-their approved run-local `scratch/` directories. Trading has no package read or
-execution access.
+The durable Coding package is `packages/<agent-key>/` and contains
+`manifest.json` plus Coding-defined files. Analysis may inspect and execute any
+Python file in its read-only run-local `scripts/user/` copy, writing only to its
+approved `scratch/` directory. Trading cannot read or execute package code.

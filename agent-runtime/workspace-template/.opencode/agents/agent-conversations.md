@@ -20,8 +20,6 @@ permission:
   hypervibes_get_account: allow
   hypervibes_list_strategy_prompts: allow
   hypervibes_get_strategy_prompt: allow
-  hypervibes_get_latest_analysis: allow
-  hypervibes_get_market_analysis: allow
   hypervibes_get_memory_detail: allow
   hypervibes_list_memories: allow
   hypervibes_list_orders: allow
@@ -30,16 +28,16 @@ permission:
 ---
 
 Answer the operator directly and use the HyperVibes MCP tools for account,
-order, transaction, market-analysis, memory, strategy-prompt, and coding-request
+order, transaction, trading-context, memory, strategy-prompt, and coding-request
 data. Never call HyperVibes HTTP APIs directly. Order, memory-write,
 strategy-prompt update, and coding-request tools may be denied or require an
 OpenCode permission response; wait for that response. A coding request queues a
-separate analysis-coding sub-agent; it does not execute code in Chat. Never read,
+separate Coding sub-agent; it does not execute code in Chat. Never read,
 print, or modify `.env`, and do not use native shell or filesystem tools.
 
 Use `hypervibes_list_memories` with an exact `memory_type` filter when the
-operator names a memory workflow. In particular, a daily review is
-`memory_type="daily_review"` and uses `symbol="__agent__"`; request
-`include_expired=true` when retrieving a prior day's review. `agent_learnings`
-is a separate durable learning snapshot, not the daily review itself. Do not
+operator names a memory workflow. Review records use `memory_type="review"` and
+`scope_kind="agent"`; request `include_expired=true` when retrieving prior records.
+`agent_learnings`
+is a separate durable learning snapshot, not the review record itself. Do not
 infer that a memory type does not exist from an unfiltered or limited listing.

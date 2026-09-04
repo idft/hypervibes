@@ -12,7 +12,6 @@ use crate::{
     agents::store::replace_agent_instruments,
     hyperliquid::live_state::{AccountKey, AccountLiveState, LiveConnectionStatus},
     hyperliquid::market_data::MarketPrice,
-    memory::CreateMemory,
 };
 use std::{collections::HashMap, sync::Arc};
 
@@ -458,119 +457,14 @@ async fn open_orders_stream_emits_initial_rows_when_state_present() {
     assert!(text.contains("limit"));
 }
 #[tokio::test]
-async fn latest_trade_execution_summary_event_renders_latest_summary() {
-    let state = test_state().await;
-    let (agent_key, _wallet_address) = insert_test_agent(&state).await.expect("insert agent");
-    seed_memory_with_type(
-        &state,
-        &agent_key,
-        "trade_execution",
-        "Scaled out into strength",
-        "Took profit on the upper band.",
-    )
-    .await;
-
-    let event = render_latest_trade_execution_summary_event(&state.db_pool, &agent_key)
-        .await
-        .expect("render latest trade execution summary event");
-    let text = format!("{event:?}");
-
-    assert!(text.contains("latest-trade-execution-summary"));
-    assert!(text.contains("Scaled out into strength"));
-    assert!(text.contains("timeago"));
-    assert!(text.contains("datetime="));
-    // Trade execution summaries never carry the warning treatment —
-    // only the analysis section can turn amber.
-    assert!(!text.contains("text-amber-400"));
-}
-#[tokio::test]
-async fn latest_analysis_summary_event_renders_latest_summary() {
-    let state = test_state().await;
-    let (agent_key, _wallet_address) = insert_test_agent(&state).await.expect("insert agent");
-    let analysis = seed_memory_with_type(
-        &state,
-        &agent_key,
-        "market_analysis",
-        "BTC bullish continuation above 67k",
-        "## Thesis\nReclaimed intraday support.",
-    )
-    .await;
-
-    let event = render_latest_analysis_summary_event(&state.db_pool, &agent_key)
-        .await
-        .expect("render latest analysis summary event");
-    let text = format!("{event:?}");
-
-    assert!(text.contains("latest-analysis-summary"));
-    assert!(text.contains("BTC bullish continuation above 67k"));
-    assert!(text.contains(&format!("/agents/{agent_key}/memories/{}", analysis.id)));
-    assert!(text.contains("timeago"));
-    assert!(text.contains("datetime="));
-    // The row we just inserted is brand new, so it should not be flagged
-    // as expired or carry a warning icon.
-    assert!(!text.contains("text-amber-400"));
-    assert!(!text.contains("(expired"));
-}
-#[tokio::test]
-async fn latest_analysis_summary_event_marks_expired_memory_with_warning() {
-    let state = test_state().await;
-    let (agent_key, _wallet_address) = insert_test_agent(&state).await.expect("insert agent");
-    // `valid_for_seconds: 1` + no sleep on a slow CI machine still
-    // lands the row in the past by the time we read it back.
-    let _analysis = crate::memory::insert_memory(
-        &state.db_pool,
-        &agent_key,
-        &CreateMemory {
-            symbol: "BTC".to_string(),
-            timeframe: None,
-            memory_type: "market_analysis".to_string(),
-            summary: "Stale breakout call".to_string(),
-            content: "## Thesis\nBid got pulled.".to_string(),
-            metadata: Some(serde_json::json!({ "valid_for_seconds": 1 })),
-            links: None,
-        },
-    )
-    .await
-    .expect("insert memory");
-    // Make sure the row's created_at is comfortably in the past so
-    // `expires_at <= now` is unambiguous regardless of clock skew.
-    sqlx::query("UPDATE memory.records SET created_at = NOW() - INTERVAL '5 minutes'")
-        .execute(&state.db_pool)
-        .await
-        .expect("backdate memory");
-
-    let event = render_latest_analysis_summary_event(&state.db_pool, &agent_key)
-        .await
-        .expect("render latest analysis summary event");
-    let text = format!("{event:?}");
-
-    assert!(text.contains("Stale breakout call"));
-    assert!(
-        text.contains("text-amber-400"),
-        "expired market analysis should turn the timestamp amber"
-    );
-    assert!(
-        text.contains("(expired"),
-        "expired market analysis should annotate the title"
-    );
-    // The inline warning triangle is the visual signal that the market
-    // analysis has aged past `valid_for_seconds` / `stale_after`.
-    assert!(
-        text.contains("viewBox=\\\"0 0 20 20\\\""),
-        "expired market analysis should render a warning icon"
-    );
-}
-#[tokio::test]
-async fn latest_analysis_summary_event_renders_empty_when_no_market_analysis_memory() {
+async fn latest_trade_decision_summary_event_renders_empty_without_a_decision() {
     let state = test_state().await;
     let (agent_key, _wallet_address) = insert_test_agent(&state).await.expect("insert agent");
 
-    let event = render_latest_analysis_summary_event(&state.db_pool, &agent_key)
+    let event = render_latest_trade_decision_summary_event(&state.db_pool, &agent_key)
         .await
-        .expect("render latest analysis summary event");
+        .expect("render latest trade decision summary event");
     let text = format!("{event:?}");
 
-    assert!(text.contains("latest-analysis-summary"));
-    // Empty placeholder — no summary text leaks through.
-    assert!(!text.contains("Reclaimed intraday support"));
+    assert!(text.contains("latest-trade-decision-summary"));
 }

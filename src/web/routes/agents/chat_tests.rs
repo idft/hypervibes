@@ -39,7 +39,7 @@ fn htmx_message_submission_returns_an_hx_redirect() {
 fn prompt_chat_message_includes_the_current_editor_draft() {
     let message = strategy_prompt_chat_message("analysis", "Favor trend continuation.");
 
-    assert!(message.contains("Analysis strategy prompt"));
+    assert!(message.contains("`analysis` strategy prompt"));
     assert!(message.contains("Favor trend continuation."));
     assert!(message.starts_with("We are discussing"));
 }

@@ -16,6 +16,21 @@ async fn response_json(response: axum::response::Response) -> serde_json::Value 
     serde_json::from_slice(&bytes).expect("JSON response")
 }
 
+async fn default_sub_agent_id(
+    state: &Arc<crate::web::AppState>,
+    agent_key: &str,
+    kind: &str,
+) -> i64 {
+    sqlx::query_scalar(
+        "SELECT id FROM harness_sub_agents WHERE agent_key = $1 AND sub_agent_kind = $2",
+    )
+    .bind(agent_key)
+    .bind(kind)
+    .fetch_one(&state.db_pool)
+    .await
+    .expect("load default sub-agent")
+}
+
 #[tokio::test]
 async fn strategy_prompts_list_returns_only_safe_prompt_fields() {
     let state = test_state().await;
@@ -35,11 +50,12 @@ async fn strategy_prompts_list_returns_only_safe_prompt_fields() {
     assert_eq!(response.status(), StatusCode::OK);
     let body = response_json(response).await;
     let prompts = body.as_array().expect("prompt list");
-    assert_eq!(prompts.len(), 5);
+    assert_eq!(prompts.len(), 6);
     for prompt in prompts {
-        assert_eq!(prompt.as_object().expect("prompt object").len(), 4);
+        assert_eq!(prompt.as_object().expect("prompt object").len(), 5);
         assert!(prompt["revision_id"].is_i64());
-        assert!(prompt["prompt_kind"].is_string());
+        assert!(prompt["target_sub_agent_id"].is_i64());
+        assert!(prompt["target_sub_agent_key"].is_string());
         assert!(prompt["prompt"].is_string());
         assert!(prompt["updated_at"].is_string());
         assert!(prompt.get("agent_key").is_none());
@@ -49,14 +65,16 @@ async fn strategy_prompts_list_returns_only_safe_prompt_fields() {
 #[tokio::test]
 async fn strategy_prompt_get_and_update_are_scoped_to_authenticated_agent() {
     let state = test_state().await;
-    let (_first_agent_key, first_api_key) = seed_agent(&state, "prompts-first").await;
-    let (_second_agent_key, second_api_key) = seed_agent(&state, "prompts-second").await;
+    let (first_agent_key, first_api_key) = seed_agent(&state, "prompts-first").await;
+    let (second_agent_key, second_api_key) = seed_agent(&state, "prompts-second").await;
+    let first_trading_id = default_sub_agent_id(&state, &first_agent_key, "trading").await;
+    let second_trading_id = default_sub_agent_id(&state, &second_agent_key, "trading").await;
 
     let body = json!({"prompt": "  Trade only liquid breakouts.  "});
     let (headers, body) = json_body(&body);
     let mut request = Request::builder()
         .method("PUT")
-        .uri("/strategy-prompts/trading")
+        .uri(format!("/strategy-prompts/{first_trading_id}"))
         .header("authorization", format!("Bearer {first_api_key}"));
     if let Some((name, value)) = headers {
         request = request.header(name, value);
@@ -68,14 +86,19 @@ async fn strategy_prompt_get_and_update_are_scoped_to_authenticated_agent() {
 
     assert_eq!(response.status(), StatusCode::OK);
     let body = response_json(response).await;
-    assert_eq!(body["prompt_kind"], "trading");
+    assert_eq!(body["target_sub_agent_id"], first_trading_id);
+    assert_eq!(body["target_sub_agent_key"], "trading-5m");
     assert_eq!(body["prompt"], "Trade only liquid breakouts.");
     assert!(body["updated_at"].is_string());
     assert!(body["revision_id"].is_i64());
-    assert_eq!(body.as_object().expect("prompt object").len(), 4);
+    assert_eq!(body.as_object().expect("prompt object").len(), 5);
 
-    let (status, second_prompt) =
-        get_json_response(&state, &second_api_key, "/strategy-prompts/trading").await;
+    let (status, second_prompt) = get_json_response(
+        &state,
+        &second_api_key,
+        &format!("/strategy-prompts/{second_trading_id}"),
+    )
+    .await;
     assert_eq!(status, StatusCode::OK);
     assert_ne!(second_prompt["prompt"], "Trade only liquid breakouts.");
 }
@@ -83,11 +106,12 @@ async fn strategy_prompt_get_and_update_are_scoped_to_authenticated_agent() {
 #[tokio::test]
 async fn strategy_prompt_update_allows_an_empty_trimmed_prompt() {
     let state = test_state().await;
-    let (_agent_key, api_key) = seed_agent(&state, "prompts-empty").await;
+    let (agent_key, api_key) = seed_agent(&state, "prompts-empty").await;
+    let analysis_id = default_sub_agent_id(&state, &agent_key, "analysis").await;
     let (headers, body) = json_body(&json!({"prompt": "   "}));
     let mut request = Request::builder()
         .method("PUT")
-        .uri("/strategy-prompts/analysis")
+        .uri(format!("/strategy-prompts/{analysis_id}"))
         .header("authorization", format!("Bearer {api_key}"));
     if let Some((name, value)) = headers {
         request = request.header(name, value);
@@ -102,18 +126,27 @@ async fn strategy_prompt_update_allows_an_empty_trimmed_prompt() {
 }
 
 #[tokio::test]
-async fn strategy_prompt_rejects_invalid_kind_and_agent_key_input() {
+async fn strategy_prompt_rejects_invalid_sub_agent_id_and_unknown_input() {
     let state = test_state().await;
-    let (_agent_key, api_key) = seed_agent(&state, "prompts-invalid").await;
+    let (agent_key, api_key) = seed_agent(&state, "prompts-invalid").await;
+    let analysis_id = default_sub_agent_id(&state, &agent_key, "analysis").await;
 
-    let (status, body) = get_json_response(&state, &api_key, "/strategy-prompts/not-a-kind").await;
-    assert_eq!(status, StatusCode::BAD_REQUEST);
-    assert_eq!(body["error"], "invalid prompt kind");
+    let response = app(Arc::clone(&state))
+        .oneshot(
+            Request::builder()
+                .uri("/strategy-prompts/not-an-id")
+                .header("authorization", format!("Bearer {api_key}"))
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
 
     let (headers, body) = json_body(&json!({"prompt": "updated", "agent_key": "other"}));
     let mut request = Request::builder()
         .method("PUT")
-        .uri("/strategy-prompts/analysis")
+        .uri(format!("/strategy-prompts/{analysis_id}"))
         .header("authorization", format!("Bearer {api_key}"));
     if let Some((name, value)) = headers {
         request = request.header(name, value);

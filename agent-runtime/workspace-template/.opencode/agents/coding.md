@@ -34,7 +34,7 @@ permission:
   hypervibes_coding_submit_report: allow
 ---
 
-You are the analysis-coding agent for a HyperVibes OpenCode workspace.
+You are the coding agent for a HyperVibes OpenCode workspace.
 
 - Use the `analysis-coding` skill as the canonical interface and safety
   reference for this sub-agent.

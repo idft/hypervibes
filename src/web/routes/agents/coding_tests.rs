@@ -161,14 +161,14 @@ async fn coding_task_status_polls_only_active_tasks() {
                 model_provider_id = 'test',
                 model_id = 'strong'
           WHERE agent_key = $1
-            AND sub_agent_kind = 'analysis_coding'",
+             AND sub_agent_kind = 'coding'",
     )
     .bind(&agent_key)
     .execute(&state.db_pool)
     .await
     .expect("configure coding event job");
     let coding_sub_agent_id: (i64,) = sqlx::query_as(
-        "SELECT id FROM harness_sub_agents WHERE agent_key = $1 AND sub_agent_kind = 'analysis_coding'",
+        "SELECT id FROM harness_sub_agents WHERE agent_key = $1 AND sub_agent_kind = 'coding'",
     )
     .bind(&agent_key)
     .fetch_one(&state.db_pool)

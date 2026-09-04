@@ -9,11 +9,10 @@ use crate::memory::MemoryRecord;
 ///    producer when it knows the data goes stale at a wall-clock instant.
 /// 2. `metadata.valid_for_seconds` — a relative duration added to
 ///    `created_at`.
-/// 3. For `memory_type == "analysis"` rows with neither of the above,
-///    fall back to the per-timeframe defaults documented in
-///    [`analysis_default_valid_for`]. These are intentionally **2x the
-///    schedule interval** so the trading loop has a one-cycle fallback if
-///    the next analysis is delayed.
+/// 3. For analysis-produced research rows with neither of the above, fall
+///    back to the producing analyst's schedule. The source run's timeframe
+///    drives the default validity window, and rows produced by an
+///    unscheduled producer use the conservative 30-minute fallback.
 ///
 /// Returns `None` when the row has no implicit or explicit expiration
 /// (e.g. an `observation` memory with no `valid_for_seconds`).
@@ -24,7 +23,10 @@ pub fn memory_expires_at(row: &MemoryRecord) -> Option<DateTime<Utc>> {
                 .map(|seconds| row.created_at + Duration::seconds(seconds))
         })
         .or_else(|| {
-            if row.memory_type == "analysis" {
+            // Only analysis-originated research rows get a schedule-based
+            // default; framework log types (trading decisions, reviews,
+            // learnings) are durable audit records and never implicitly expire.
+            if is_analysis_originated(row) {
                 Some(
                     row.created_at
                         + analysis_default_valid_for(row.timeframe.as_deref().unwrap_or("")),
@@ -33,6 +35,17 @@ pub fn memory_expires_at(row: &MemoryRecord) -> Option<DateTime<Utc>> {
                 None
             }
         })
+}
+
+/// Research rows published by an analysis producer. The provenance column
+/// names the source run; rows created before provenance existed or by
+/// non-analysis producers only expire when they provide explicit validity.
+fn is_analysis_originated(row: &MemoryRecord) -> bool {
+    row.source_run_id.is_some()
+        && !matches!(
+            row.memory_type.as_str(),
+            "trading_decision" | "review" | "agent_learnings"
+        )
 }
 
 fn valid_for_seconds(metadata: &serde_json::Value) -> Option<i64> {
@@ -67,16 +80,16 @@ fn stale_after(metadata: &serde_json::Value) -> Option<DateTime<Utc>> {
         .map(|value| value.with_timezone(&Utc))
 }
 
-/// Default validity for an analysis memory that has no explicit
-/// `valid_for_seconds` or `stale_after` in its metadata.
+/// Default validity for an analysis-produced research memory that has no
+/// explicit `valid_for_seconds` or `stale_after` in its metadata.
 ///
 /// The values are intentionally **2x the schedule interval**: an analysis
-/// loop is expected to run on every schedule tick, but the next analysis
-/// may be delayed (model latency, provider 429s, a missed cron tick, etc).
-/// Keeping the memory valid for a full second cycle gives the trading
-/// loop a one-cycle fallback instead of going `[SILENT]` on the first
-/// delay. New analyses still supersede older ones, so the longer window
-/// adds tolerance, not stale signal.
+/// job is expected to run on every schedule tick, but the next run may be
+/// delayed (model latency, provider 429s, a missed cron tick, etc). Keeping
+/// the memory valid for a full second cycle gives the trading loop a
+/// one-cycle fallback instead of going `[SILENT]` on the first delay. New
+/// research still supersedes older output, so the longer window adds
+/// tolerance, not stale signal.
 fn analysis_default_valid_for(timeframe: &str) -> Duration {
     match timeframe {
         "15m" => Duration::minutes(30),

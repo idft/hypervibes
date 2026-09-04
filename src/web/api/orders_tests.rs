@@ -131,7 +131,7 @@ async fn post_orders_rejects_when_no_currencies_are_selected() {
     let body: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
     assert_eq!(
         body["error"],
-        json!("no currencies are selected for this agent; order placement is disabled")
+        json!("new exposure is blocked until live account monitoring is current")
     );
 }
 

@@ -90,24 +90,9 @@ pub async fn list_agent_readiness_for_user(
                     SELECT 1
                       FROM harness_sub_agents
                      WHERE harness_sub_agents.agent_key = agents.agent_key
-                       AND harness_sub_agents.sub_agent_kind = 'market_analysis'
-                       AND harness_sub_agents.enabled = true
-                ) AS has_enabled_market_analysis_job,
-                EXISTS (
-                    SELECT 1
-                      FROM harness_sub_agents
-                     WHERE harness_sub_agents.agent_key = agents.agent_key
                        AND harness_sub_agents.sub_agent_kind = 'trading'
                        AND harness_sub_agents.enabled = true
                 ) AS has_enabled_trading_job,
-                (
-                    SELECT id
-                     FROM harness_sub_agents
-                     WHERE harness_sub_agents.agent_key = agents.agent_key
-                       AND harness_sub_agents.sub_agent_kind = 'market_analysis'
-                     ORDER BY id
-                     LIMIT 1
-                ) AS market_analysis_sub_agent_id,
                 (
                     SELECT id
                       FROM harness_sub_agents
@@ -163,23 +148,9 @@ async fn list_agent_readiness_for_agent_key(
                 EXISTS (
                     SELECT 1 FROM harness_sub_agents
                      WHERE harness_sub_agents.agent_key = agents.agent_key
-                       AND harness_sub_agents.sub_agent_kind = 'market_analysis'
-                       AND harness_sub_agents.enabled = true
-                ) AS has_enabled_market_analysis_job,
-                EXISTS (
-                    SELECT 1 FROM harness_sub_agents
-                     WHERE harness_sub_agents.agent_key = agents.agent_key
                        AND harness_sub_agents.sub_agent_kind = 'trading'
                        AND harness_sub_agents.enabled = true
                 ) AS has_enabled_trading_job,
-                (
-                    SELECT id
-                      FROM harness_sub_agents
-                     WHERE harness_sub_agents.agent_key = agents.agent_key
-                       AND harness_sub_agents.sub_agent_kind = 'market_analysis'
-                     ORDER BY id
-                     LIMIT 1
-                ) AS market_analysis_sub_agent_id,
                 (
                     SELECT id
                       FROM harness_sub_agents
@@ -633,7 +604,6 @@ mod tests {
         assert!(initial.enabled);
         assert!(!initial.has_selected_instruments);
         assert!(!initial.has_enabled_analysis_job);
-        assert!(!initial.has_enabled_market_analysis_job);
         assert!(!initial.has_enabled_trading_job);
         assert!(!initial.is_ready_for_agent_trading());
 
@@ -647,7 +617,7 @@ mod tests {
                     model_id = 'test-model',
                     enabled = true
               WHERE agent_key = $1
-                AND sub_agent_kind IN ('analysis', 'market_analysis', 'trading')",
+                AND sub_agent_kind IN ('analysis', 'trading')",
         )
         .bind(&key)
         .execute(&pool)
@@ -660,7 +630,6 @@ mod tests {
             .expect("agent readiness");
         assert!(readiness.has_selected_instruments);
         assert!(readiness.has_enabled_analysis_job);
-        assert!(readiness.has_enabled_market_analysis_job);
         assert!(readiness.has_enabled_trading_job);
         assert!(readiness.is_ready_for_agent_trading());
 

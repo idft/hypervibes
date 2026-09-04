@@ -11,20 +11,11 @@ async fn coding_report_is_scoped_to_the_authenticated_agent() {
     let state = test_state().await;
     let (agent_key, api_key) = seed_agent(&state, "coding-report").await;
     let (_other_agent, other_key) = seed_agent(&state, "coding-other").await;
-    sqlx::query(
-        "INSERT INTO harness_sub_agents
-            (agent_key, sub_agent_key, sub_agent_kind, enabled, timeout_seconds, operator_prompt)
-         VALUES ($1, 'analysis-coding', 'analysis_coding', false, 1800, '')",
-    )
-    .bind(&agent_key)
-    .execute(&state.db_pool)
-    .await
-    .unwrap();
     let sub_agent_id = crate::harness::store::list_agent_sub_agents(&state.db_pool, &agent_key)
         .await
         .unwrap()
         .into_iter()
-        .find(|job| job.sub_agent_kind == "analysis_coding")
+        .find(|job| job.sub_agent_kind == "coding")
         .expect("coding job")
         .id;
     sqlx::query(

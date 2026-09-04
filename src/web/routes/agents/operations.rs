@@ -69,7 +69,7 @@ pub(in crate::web::routes) async fn agents_emergency_stop(
         // Normal runs execute in their isolated run workspace; analysis-coding
         // runs execute in the candidate workspace owned by their task.
         let run_workspace_container_path =
-            if run.sub_agent_kind != crate::harness::model::SUB_AGENT_KIND_ANALYSIS_CODING {
+            if run.sub_agent_kind != crate::harness::model::SUB_AGENT_KIND_CODING {
                 Some(format!(
                     "{}/runs/{}/{}/workspace",
                     state
@@ -107,7 +107,7 @@ pub(in crate::web::routes) async fn agents_emergency_stop(
         match abort_result {
             Ok(true) => {
                 mark_run_aborted(&state.db_pool, run.id, "aborted by emergency stop", None).await?;
-                if run.sub_agent_kind != crate::harness::model::SUB_AGENT_KIND_ANALYSIS_CODING {
+                if run.sub_agent_kind != crate::harness::model::SUB_AGENT_KIND_CODING {
                     crate::harness::scheduler::terminalize_run_workspace_artifact(
                         &state.db_pool,
                         &state.workspace_controller,

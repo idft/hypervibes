@@ -5,7 +5,7 @@ use crate::{
     agents::store::get_agent,
     db::DbPool,
     harness::{
-        model::SUB_AGENT_KIND_ANALYSIS_CODING,
+        model::SUB_AGENT_KIND_CODING,
         store::{
             ACTIVE_STATUSES, analysis_coding_task_ids_for_agent_runs, lock_agent_coordination_tx,
         },
@@ -77,7 +77,7 @@ pub async fn delete_idle_job(
         let Some(session_id) = backend_run_ref.as_deref() else {
             continue;
         };
-        let directory = if sub_agent_kind == SUB_AGENT_KIND_ANALYSIS_CODING {
+        let directory = if sub_agent_kind == SUB_AGENT_KIND_CODING {
             let task_id = coding_task_by_run_id
                 .get(run_id)
                 .ok_or_else(|| anyhow!("coding run {run_id} has no owning maintenance task"))?;
@@ -106,6 +106,37 @@ pub async fn delete_idle_job(
         }
     }
 
+    // Prompt revisions are owned by their target job. Remove the active pointer
+    // and self-references before removing that target and its revision history.
+    sqlx::query(
+        "DELETE FROM agent_strategy_prompt_active_revisions
+          WHERE agent_key = $1 AND target_sub_agent_id = $2",
+    )
+    .bind(agent_key)
+    .bind(sub_agent_id)
+    .execute(&mut *tx)
+    .await
+    .context("failed to delete active prompt revision")?;
+    sqlx::query(
+        "UPDATE agent_strategy_prompt_revisions
+            SET parent_revision_id = NULL,
+                rollback_of_revision_id = NULL
+          WHERE agent_key = $1 AND target_sub_agent_id = $2",
+    )
+    .bind(agent_key)
+    .bind(sub_agent_id)
+    .execute(&mut *tx)
+    .await
+    .context("failed to detach prompt revision history")?;
+    sqlx::query(
+        "DELETE FROM agent_strategy_prompt_revisions
+          WHERE agent_key = $1 AND target_sub_agent_id = $2",
+    )
+    .bind(agent_key)
+    .bind(sub_agent_id)
+    .execute(&mut *tx)
+    .await
+    .context("failed to delete prompt revision history")?;
     sqlx::query("DELETE FROM harness_sub_agents WHERE agent_key = $1 AND id = $2")
         .bind(agent_key)
         .bind(sub_agent_id)

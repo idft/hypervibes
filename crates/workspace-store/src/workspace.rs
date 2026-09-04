@@ -397,7 +397,7 @@ fn validate_run_workspace_materialization_input(
     uuid::Uuid::parse_str(&input.credential_id).context("credential_id is invalid")?;
     if !matches!(
         input.sub_agent_kind.as_str(),
-        "analysis" | "market_analysis" | "trading" | "daily_review"
+        "analysis" | "trading" | "review"
     ) {
         bail!("sub_agent_kind is not supported for a run workspace");
     }
@@ -431,15 +431,19 @@ fn render_run_capability_permissions(
     enabled_capabilities: &[String],
 ) -> Result<()> {
     if enabled_capabilities.iter().any(|capability| {
-        capability != "hypervibes:notification_send" && !capability.starts_with("custom-mcp:")
+        !matches!(
+            capability.as_str(),
+            "hypervibes:notification_send"
+                | "hypervibes:prompt_revision_submit"
+                | "hypervibes:review_prompt_update"
+        ) && !capability.starts_with("custom-mcp:")
     }) {
         bail!("run workspace has an unsupported capability");
     }
     let profile_name = match sub_agent_kind {
         "analysis" => "analysis",
-        "market_analysis" => "market-analysis",
         "trading" => "trading",
-        "daily_review" => "daily-review",
+        "review" => "review",
         _ => bail!("unsupported run profile"),
     };
     let profile_path = workspace_root
@@ -1343,6 +1347,21 @@ mod tests {
     }
 
     #[test]
+    fn review_workspace_accepts_prompt_revision_capability() {
+        let temp = TempDir::new("opencode-review-prompt-revision");
+        let config = sample_config(&temp.path);
+        write_package(&config, "btc-2");
+        let path = RunWorkspacePath::new("btc-2", 48).expect("run path");
+        let mut input = valid_materialization_input();
+        input.sub_agent_kind = "review".to_string();
+        input.enabled_capabilities = vec!["hypervibes:prompt_revision_submit".to_string()];
+        input.expected_quantitative_package =
+            inspect_active_quantitative_package(&config, "btc-2").expect("inspect package");
+
+        materialize_run_workspace(&config, &path, &input).expect("materialize review workspace");
+    }
+
+    #[test]
     fn generated_profiles_enforce_the_role_permission_matrix() {
         let temp = TempDir::new("opencode-profile-permissions");
         let config = sample_config(&temp.path);
@@ -1354,15 +1373,13 @@ mod tests {
         materialize_run_workspace(&config, &path, &input).expect("materialize run workspace");
         let workspace_root = path.workspace_host_path(&config);
         let analysis = rendered_profile_from(&workspace_root, "analysis");
-        let market_analysis = rendered_profile_from(&workspace_root, "market-analysis");
         let trading = rendered_profile_from(&workspace_root, "trading");
-        let daily_review = rendered_profile_from(&workspace_root, "daily-review");
+        let review = rendered_profile_from(&workspace_root, "review");
 
         for (name, profile) in [
             ("analysis", &analysis),
-            ("market-analysis", &market_analysis),
             ("trading", &trading),
-            ("daily-review", &daily_review),
+            ("review", &review),
         ] {
             assert_profile_action(name, profile, "unlisted_tool", "", "deny");
             assert_profile_action(name, profile, "todowrite", "", "deny");
@@ -1429,73 +1446,25 @@ mod tests {
         );
 
         assert_profile_action(
-            "market-analysis",
-            &market_analysis,
-            "hypervibes_get_latest_analysis",
-            "",
-            "allow",
-        );
-        assert_profile_action(
-            "market-analysis",
-            &market_analysis,
-            "hypervibes_write_memory",
-            "",
-            "allow",
-        );
-        assert_profile_action(
-            "market-analysis",
-            &market_analysis,
-            "bash",
-            "python x.py",
-            "deny",
-        );
-        assert_profile_action(
-            "market-analysis",
-            &market_analysis,
-            "edit",
-            "workspaces/runs/btc-2/47/workspace/scripts/user/strategies/trend.py",
-            "deny",
-        );
-        assert_profile_action(
-            "market-analysis",
-            &market_analysis,
-            "hypervibes_send_notification",
-            "",
-            "deny",
-        );
-
-        assert_profile_action(
-            "daily-review",
-            &daily_review,
+            "review",
+            &review,
             "hypervibes_list_account_transactions",
             "",
             "allow",
         );
+        assert_profile_action("review", &review, "hypervibes_write_memory", "", "allow");
+        assert_profile_action("review", &review, "bash", "python x.py", "deny");
+        assert_profile_action("review", &review, "read", "scratch/data.json", "deny");
         assert_profile_action(
-            "daily-review",
-            &daily_review,
-            "hypervibes_write_memory",
-            "",
-            "allow",
-        );
-        assert_profile_action("daily-review", &daily_review, "bash", "python x.py", "deny");
-        assert_profile_action(
-            "daily-review",
-            &daily_review,
-            "read",
-            "scratch/data.json",
-            "deny",
-        );
-        assert_profile_action(
-            "daily-review",
-            &daily_review,
+            "review",
+            &review,
             "hypervibes_update_strategy_prompt",
             "",
             "deny",
         );
         assert_profile_action(
-            "daily-review",
-            &daily_review,
+            "review",
+            &review,
             "hypervibes_send_notification",
             "",
             "deny",
@@ -1610,15 +1579,13 @@ mod tests {
         materialize_run_workspace(&config, &path, &input).expect("materialize run workspace");
         let workspace_root = path.workspace_host_path(&config);
 
-        let commands = fs::read_to_string(
-            workspace_root.join(".opencode/commands/hypervibes-market-analysis.md"),
-        )
-        .expect("read command");
-        let agent = fs::read_to_string(workspace_root.join(".opencode/agents/market-analysis.md"))
+        let commands =
+            fs::read_to_string(workspace_root.join(".opencode/commands/hypervibes-trading.md"))
+                .expect("read command");
+        let agent = fs::read_to_string(workspace_root.join(".opencode/agents/trading.md"))
             .expect("read agent");
 
         assert!(commands.contains("HyperVibes"));
-        assert!(agent.contains("Analysis coding owns reusable quantitative code."));
         assert!(agent.contains("steps: 100"));
     }
 

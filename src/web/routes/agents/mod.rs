@@ -17,7 +17,6 @@ mod notifications;
 #[cfg(test)]
 mod notifications_tests;
 mod operations;
-mod prompts;
 #[cfg(test)]
 mod prompts_tests;
 #[cfg(test)]
@@ -39,12 +38,13 @@ mod transactions;
 #[cfg(test)]
 mod transactions_tests;
 
-#[cfg(test)]
-use self::shared::*;
 pub(in crate::web::routes) use self::{
     chat::*, coding::*, gateway::*, index::*, live_stream::*, memories::*, notifications::*,
-    operations::*, prompts::*, runs::*, settings::*, show::*, sub_agents::*, transactions::*,
+    operations::*, runs::*, settings::*, show::*, sub_agents::*, transactions::*,
 };
 mod chat;
+#[cfg(test)]
+use self::shared::*;
+
 #[cfg(test)]
 mod chat_tests;

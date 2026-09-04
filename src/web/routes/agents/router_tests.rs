@@ -34,6 +34,47 @@ async fn agent_chat_route_renders_empty_state() {
 }
 
 #[tokio::test]
+async fn role_tabs_swap_content_with_htmx() {
+    let state = test_state().await;
+    let (agent_key, _wallet_address) = insert_test_agent(&state).await.expect("insert agent");
+
+    let response = router(state.clone())
+        .oneshot(
+            Request::builder()
+                .uri(format!("/agents/{agent_key}"))
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response_text(response).await;
+    for role in ["trading", "review"] {
+        let link = format!("href=\"/agents/{agent_key}/{role}\" data-agent-tab-link");
+        assert!(body.contains(&format!(
+            "{link} hx-get=\"/agents/{agent_key}/{role}\" hx-select=\"#agent-show-tab-content\" hx-target=\"#agent-show-tab-content\" hx-swap=\"outerHTML\" hx-push-url=\"true\""
+        )));
+
+        let response = router(state.clone())
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/agents/{agent_key}/{role}"))
+                    .body(Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+        assert_eq!(response.status(), StatusCode::OK);
+        assert!(
+            response_text(response)
+                .await
+                .contains("id=\"agent-show-tab-content\"")
+        );
+    }
+}
+
+#[tokio::test]
 async fn new_chat_route_redirects_to_the_latest_existing_conversation() {
     let state = test_state().await;
     let (agent_key, _wallet_address) = insert_test_agent(&state).await.expect("insert agent");

@@ -134,7 +134,7 @@ async fn retry_failed_run_creates_a_new_queued_run() {
         .await
         .expect("list jobs")
         .iter()
-        .find(|job| job.sub_agent_key == "analysis-15m")
+        .find(|job| job.sub_agent_key == "technical-15m")
         .expect("analysis job")
         .id;
     let failed_run_id = crate::harness::store::insert_test_run(&pool, sub_agent_id, "running")

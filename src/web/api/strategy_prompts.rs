@@ -11,8 +11,7 @@ use crate::{
         AuthenticatedAgent,
         strategy_prompts::{
             AgentStrategyPromptRow, PromptRevisionChange, get_agent_strategy_prompt,
-            is_valid_prompt_kind, list_agent_strategy_prompts, submit_daily_review_revisions,
-            upsert_agent_strategy_prompt,
+            list_agent_strategy_prompts, submit_review_revisions, upsert_agent_strategy_prompt,
         },
     },
     harness::model::RunApiScope,
@@ -24,7 +23,8 @@ use super::error::ApiError;
 #[derive(Debug, serde::Serialize)]
 pub(super) struct StrategyPromptResponse {
     revision_id: i64,
-    prompt_kind: String,
+    target_sub_agent_id: i64,
+    target_sub_agent_key: String,
     prompt: String,
     updated_at: DateTime<Utc>,
 }
@@ -33,7 +33,8 @@ impl From<AgentStrategyPromptRow> for StrategyPromptResponse {
     fn from(row: AgentStrategyPromptRow) -> Self {
         Self {
             revision_id: row.revision_id,
-            prompt_kind: row.prompt_kind,
+            target_sub_agent_id: row.target_sub_agent_id,
+            target_sub_agent_key: row.target_sub_agent_key,
             prompt: row.prompt,
             updated_at: row.updated_at,
         }
@@ -57,7 +58,7 @@ pub(super) struct SubmitPromptRevisionRequest {
 #[derive(Debug, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct SubmitPromptRevisionChange {
-    prompt_kind: String,
+    target_sub_agent_id: i64,
     base_revision_id: i64,
     prompt: String,
 }
@@ -81,41 +82,39 @@ pub(super) async fn list_strategy_prompts(
     ))
 }
 
-/// `GET /api/v1/strategy-prompts/{prompt_kind}`
+/// `GET /api/v1/strategy-prompts/{sub_agent_id}`
 pub(super) async fn get_strategy_prompt(
     State(state): State<Arc<AppState>>,
     agent: AuthenticatedAgent,
-    Path(prompt_kind): Path<String>,
+    Path(sub_agent_id): Path<i64>,
 ) -> Result<Json<StrategyPromptResponse>, ApiError> {
     if agent.is_run_credential() {
         super::require_run_api_scope(&agent, RunApiScope::PromptRead)?;
     }
-    let prompt_kind = validate_prompt_kind(&prompt_kind)?;
-    let prompt = get_agent_strategy_prompt(&state.db_pool, &agent.agent_key, prompt_kind)
+    let prompt = get_agent_strategy_prompt(&state.db_pool, &agent.agent_key, sub_agent_id)
         .await
         .map_err(ApiError::Internal)?
         .ok_or(ApiError::NotFound("strategy prompt not found"))?;
     Ok(Json(prompt.into()))
 }
 
-/// `PUT /api/v1/strategy-prompts/{prompt_kind}`
+/// `PUT /api/v1/strategy-prompts/{sub_agent_id}`
 pub(super) async fn update_strategy_prompt(
     State(state): State<Arc<AppState>>,
     agent: AuthenticatedAgent,
-    Path(prompt_kind): Path<String>,
+    Path(sub_agent_id): Path<i64>,
     Json(input): Json<UpdateStrategyPromptRequest>,
 ) -> Result<Json<StrategyPromptResponse>, ApiError> {
     super::require_permanent_agent_credential(&agent)?;
-    let prompt_kind = validate_prompt_kind(&prompt_kind)?;
     upsert_agent_strategy_prompt(
         &state.db_pool,
         &agent.agent_key,
-        prompt_kind,
+        sub_agent_id,
         input.prompt.trim(),
     )
     .await
     .map_err(ApiError::Internal)?;
-    let prompt = get_agent_strategy_prompt(&state.db_pool, &agent.agent_key, prompt_kind)
+    let prompt = get_agent_strategy_prompt(&state.db_pool, &agent.agent_key, sub_agent_id)
         .await
         .map_err(ApiError::Internal)?
         .ok_or(ApiError::NotFound("strategy prompt not found"))?;
@@ -136,12 +135,12 @@ pub(super) async fn submit_prompt_revision(
         .changes
         .into_iter()
         .map(|change| PromptRevisionChange {
-            prompt_kind: change.prompt_kind,
+            target_sub_agent_id: change.target_sub_agent_id,
             base_revision_id: change.base_revision_id,
             prompt: change.prompt,
         })
         .collect::<Vec<_>>();
-    let batch_id = submit_daily_review_revisions(
+    let batch_id = submit_review_revisions(
         &state.db_pool,
         &agent.agent_key,
         source_run_id,
@@ -152,12 +151,4 @@ pub(super) async fn submit_prompt_revision(
     .await
     .map_err(|error| ApiError::BadRequest(error.to_string()))?;
     Ok(Json(serde_json::json!({"batch_id": batch_id})))
-}
-
-fn validate_prompt_kind(prompt_kind: &str) -> Result<&str, ApiError> {
-    if is_valid_prompt_kind(prompt_kind) {
-        Ok(prompt_kind)
-    } else {
-        Err(ApiError::BadRequest("invalid prompt kind".to_string()))
-    }
 }

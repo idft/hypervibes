@@ -19,11 +19,11 @@ CREATE TABLE harness_run_workspace_artifacts (
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     CONSTRAINT harness_run_workspace_artifacts_context_schema_version_check
-        CHECK (context_schema_version = 1),
+        CHECK (context_schema_version = 2),
     CONSTRAINT harness_run_workspace_artifacts_context_snapshot_check
         CHECK (jsonb_typeof(context_snapshot) = 'object'),
     CONSTRAINT harness_run_workspace_artifacts_capability_schema_version_check
-        CHECK (capability_schema_version = 1),
+        CHECK (capability_schema_version = 2),
     CONSTRAINT harness_run_workspace_artifacts_capability_snapshot_check
         CHECK (jsonb_typeof(capability_snapshot) = 'array'),
     CONSTRAINT harness_run_workspace_artifacts_status_check
@@ -57,7 +57,7 @@ CREATE TRIGGER set_harness_run_workspace_artifacts_updated_at
 
 CREATE TABLE agent_conversation_workspaces (
     conversation_id UUID PRIMARY KEY REFERENCES agent_conversations(id) ON DELETE CASCADE,
-    capability_schema_version INTEGER NOT NULL DEFAULT 1,
+    capability_schema_version INTEGER NOT NULL DEFAULT 2,
     workspace_status TEXT NOT NULL DEFAULT 'preparing',
     workspace_created_at TIMESTAMPTZ,
     runtime_secrets_scrubbed_at TIMESTAMPTZ,
@@ -69,7 +69,7 @@ CREATE TABLE agent_conversation_workspaces (
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     CONSTRAINT agent_conversation_workspaces_capability_schema_version_check
-        CHECK (capability_schema_version = 1),
+        CHECK (capability_schema_version = 2),
     CONSTRAINT agent_conversation_workspaces_status_check
         CHECK (workspace_status IN ('preparing', 'ready', 'deleting', 'deleted', 'failed')),
     CONSTRAINT agent_conversation_workspaces_deletion_check
@@ -120,10 +120,10 @@ ALTER TABLE notifications
     ADD CONSTRAINT notifications_source_kind_check
     CHECK (source_kind IS NULL OR source_kind IN ('run', 'conversation')),
     ADD CONSTRAINT notifications_source_capability_schema_version_check
-    CHECK (
-        source_capability_schema_version IS NULL
-        OR source_capability_schema_version = 1
-    ),
+        CHECK (
+            source_capability_schema_version IS NULL
+            OR source_capability_schema_version = 2
+        ),
     ADD CONSTRAINT notifications_source_provenance_check
     CHECK ((
         (source_kind IS NULL

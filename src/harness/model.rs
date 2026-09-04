@@ -4,10 +4,9 @@ use chrono::{DateTime, Utc};
 use serde_json::Value;
 
 pub const SUB_AGENT_KIND_ANALYSIS: &str = "analysis";
-pub const SUB_AGENT_KIND_MARKET_ANALYSIS: &str = "market_analysis";
 pub const SUB_AGENT_KIND_TRADING: &str = "trading";
-pub const SUB_AGENT_KIND_DAILY_REVIEW: &str = "daily_review";
-pub const SUB_AGENT_KIND_ANALYSIS_CODING: &str = "analysis_coding";
+pub const SUB_AGENT_KIND_CODING: &str = "coding";
+pub const SUB_AGENT_KIND_REVIEW: &str = "review";
 
 pub const RUN_STATUS_QUEUED: &str = "queued";
 pub const RUN_STATUS_RUNNING: &str = "running";
@@ -16,10 +15,11 @@ pub const RUN_STATUS_FAILED: &str = "failed";
 pub const RUN_STATUS_ABORTED: &str = "aborted";
 pub const RUN_STATUS_SKIPPED: &str = "skipped";
 
-pub const RUN_CONTEXT_SNAPSHOT_SCHEMA_VERSION: i32 = 1;
-pub const CAPABILITY_SCHEMA_VERSION: i32 = 1;
+pub const RUN_CONTEXT_SNAPSHOT_SCHEMA_VERSION: i32 = 2;
+pub const CAPABILITY_SCHEMA_VERSION: i32 = 2;
 pub const CAPABILITY_NOTIFICATION_SEND: &str = "hypervibes:notification_send";
 pub const CAPABILITY_PROMPT_REVISION_SUBMIT: &str = "hypervibes:prompt_revision_submit";
+pub const CAPABILITY_REVIEW_PROMPT_UPDATE: &str = "hypervibes:review_prompt_update";
 pub const MAX_RUN_CONTEXT_SNAPSHOT_BYTES: usize = 1024 * 1024;
 
 /// API actions attached to a short-lived run credential. These are separate
@@ -85,15 +85,20 @@ pub fn validate_sub_agent_capabilities(
         if capability.starts_with("custom-mcp:")
             && matches!(
                 sub_agent_kind,
-                SUB_AGENT_KIND_TRADING | SUB_AGENT_KIND_ANALYSIS_CODING
+                SUB_AGENT_KIND_TRADING | SUB_AGENT_KIND_CODING
             )
         {
             anyhow::bail!("custom MCP capabilities are not eligible for this sub-agent role");
         }
         if capability == CAPABILITY_PROMPT_REVISION_SUBMIT
-            && sub_agent_kind != SUB_AGENT_KIND_DAILY_REVIEW
+            && sub_agent_kind != SUB_AGENT_KIND_REVIEW
         {
-            anyhow::bail!("prompt revision submission is only eligible for daily review");
+            anyhow::bail!("prompt revision submission is only eligible for review");
+        }
+        if capability == CAPABILITY_REVIEW_PROMPT_UPDATE
+            && sub_agent_kind != SUB_AGENT_KIND_ANALYSIS
+        {
+            anyhow::bail!("review prompt updates are only eligible for analysis jobs");
         }
         if !capabilities.insert(capability.to_string()) {
             anyhow::bail!("duplicate sub-agent capability");
@@ -105,6 +110,7 @@ pub fn validate_sub_agent_capabilities(
 fn is_valid_capability(capability: &str) -> bool {
     capability == CAPABILITY_NOTIFICATION_SEND
         || capability == CAPABILITY_PROMPT_REVISION_SUBMIT
+        || capability == CAPABILITY_REVIEW_PROMPT_UPDATE
         || capability
             .strip_prefix("custom-mcp:")
             .is_some_and(valid_custom_mcp_capability)
@@ -134,16 +140,14 @@ pub fn run_api_scopes_for_sub_agent(
             RunApiScope::MemoryRead,
             RunApiScope::MemoryWrite,
         ],
-        SUB_AGENT_KIND_MARKET_ANALYSIS => {
-            vec![RunApiScope::MemoryRead, RunApiScope::MemoryWrite]
-        }
         SUB_AGENT_KIND_TRADING => vec![
             RunApiScope::AccountRead,
             RunApiScope::MemoryRead,
+            RunApiScope::MemoryWrite,
             RunApiScope::OrderRead,
             RunApiScope::OrderWrite,
         ],
-        SUB_AGENT_KIND_DAILY_REVIEW => vec![
+        SUB_AGENT_KIND_REVIEW => vec![
             RunApiScope::MemoryRead,
             RunApiScope::MemoryWrite,
             RunApiScope::OrderRead,
@@ -167,10 +171,12 @@ pub fn run_api_scopes_for_sub_agent(
     Ok(scopes)
 }
 
-// Schema version one intentionally has no catch-all object. Adding a new run
+// Schema version two intentionally has no catch-all object. Adding a new run
 // input is an explicit snapshot-schema change rather than an unreviewed place
-// to put runtime configuration or secrets.
-const RUN_CONTEXT_SNAPSHOT_V1_FIELDS: &[&str] = &[
+// to put runtime configuration or secrets. V2 changes the
+// `strategy_prompt_revisions` shape from prompt-kind keyed to
+// sub-agent-target keyed objects.
+const RUN_CONTEXT_SNAPSHOT_V2_FIELDS: &[&str] = &[
     "account_snapshot_metadata",
     "additional_instructions",
     "accumulated_learning_memory_id",
@@ -182,17 +188,9 @@ const RUN_CONTEXT_SNAPSHOT_V1_FIELDS: &[&str] = &[
     "quantitative_package",
     "scheduled_candle_boundary",
     "selected_instruments",
-    "strategy_prompt_revisions",
+    "strategy_prompt_revision",
     "system_prompt_version",
     "timeout_seconds",
-];
-
-const STRATEGY_PROMPT_REVISION_KEYS: &[&str] = &[
-    SUB_AGENT_KIND_ANALYSIS,
-    SUB_AGENT_KIND_MARKET_ANALYSIS,
-    SUB_AGENT_KIND_TRADING,
-    SUB_AGENT_KIND_DAILY_REVIEW,
-    SUB_AGENT_KIND_ANALYSIS_CODING,
 ];
 
 pub const MAINTENANCE_TASK_KIND_ANALYSIS_CODING: &str = "analysis_coding";
@@ -303,7 +301,7 @@ impl RunContextSnapshot {
             anyhow::bail!("run context snapshot exceeds the size limit");
         }
         let capabilities = self.normalized_enabled_capabilities()?;
-        validate_context_snapshot_v1(
+        validate_context_snapshot_v2(
             &self.context,
             capabilities
                 .iter()
@@ -331,22 +329,22 @@ impl RunContextSnapshot {
     }
 }
 
-// V1 is deliberately an exact, closed JSON shape. The database retains JSONB
+// V2 is deliberately an exact, closed JSON shape. The database retains JSONB
 // for forwards-compatible storage, but no arbitrary nested configuration can
-// enter a durable artifact under the first schema version.
-fn validate_context_snapshot_v1(
+// enter a durable artifact under the current schema version.
+fn validate_context_snapshot_v2(
     value: &Value,
     notification_send_enabled: bool,
 ) -> anyhow::Result<()> {
     let fields = value
         .as_object()
         .ok_or_else(|| anyhow::anyhow!("run context snapshot must be a JSON object"))?;
-    if fields.len() != RUN_CONTEXT_SNAPSHOT_V1_FIELDS.len()
-        || RUN_CONTEXT_SNAPSHOT_V1_FIELDS
+    if fields.len() != RUN_CONTEXT_SNAPSHOT_V2_FIELDS.len()
+        || RUN_CONTEXT_SNAPSHOT_V2_FIELDS
             .iter()
             .any(|field| !fields.contains_key(*field))
     {
-        anyhow::bail!("run context snapshot does not match schema version one");
+        anyhow::bail!("run context snapshot does not match schema version two");
     }
 
     validate_identifier(
@@ -366,10 +364,7 @@ fn validate_context_snapshot_v1(
         required_context_field(fields, "selected_instruments")?,
         "selected_instruments",
     )?;
-    validate_strategy_prompt_revisions(required_context_field(
-        fields,
-        "strategy_prompt_revisions",
-    )?)?;
+    validate_strategy_prompt_revision(required_context_field(fields, "strategy_prompt_revision")?)?;
     validate_text(
         required_context_field(fields, "additional_instructions")?,
         "additional_instructions",
@@ -464,17 +459,24 @@ fn validate_identifier_array(value: &Value, field: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn validate_strategy_prompt_revisions(value: &Value) -> anyhow::Result<()> {
-    let revisions = value
+fn validate_strategy_prompt_revision(value: &Value) -> anyhow::Result<()> {
+    let revision = value
         .as_object()
-        .ok_or_else(|| anyhow::anyhow!("strategy_prompt_revisions must be an object"))?;
-    for (kind, revision) in revisions {
-        if !STRATEGY_PROMPT_REVISION_KEYS.contains(&kind.as_str()) {
-            anyhow::bail!("strategy_prompt_revisions contains an unsupported agent kind");
-        }
-        validate_positive_integer(revision, "strategy prompt revision")?;
+        .ok_or_else(|| anyhow::anyhow!("strategy_prompt_revision must be an object"))?;
+    if revision.len() != 2
+        || !revision.contains_key("target_sub_agent_id")
+        || !revision.contains_key("revision_id")
+    {
+        anyhow::bail!("strategy_prompt_revision does not match schema version two");
     }
-    Ok(())
+    validate_positive_integer(
+        &revision["target_sub_agent_id"],
+        "strategy_prompt_revision.target_sub_agent_id",
+    )?;
+    validate_positive_integer(
+        &revision["revision_id"],
+        "strategy_prompt_revision.revision_id",
+    )
 }
 
 fn validate_text(value: &Value, field: &str) -> anyhow::Result<()> {
@@ -709,10 +711,10 @@ mod tests {
     }
 
     #[test]
-    fn prompt_revision_submission_is_limited_to_daily_review() {
+    fn prompt_revision_submission_is_limited_to_review() {
         assert!(
             validate_sub_agent_capabilities(
-                SUB_AGENT_KIND_DAILY_REVIEW,
+                SUB_AGENT_KIND_REVIEW,
                 &[CAPABILITY_PROMPT_REVISION_SUBMIT.to_string()],
             )
             .is_ok()
@@ -721,6 +723,24 @@ mod tests {
             validate_sub_agent_capabilities(
                 SUB_AGENT_KIND_ANALYSIS,
                 &[CAPABILITY_PROMPT_REVISION_SUBMIT.to_string()],
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn review_prompt_update_is_limited_to_analysis_jobs() {
+        assert!(
+            validate_sub_agent_capabilities(
+                SUB_AGENT_KIND_ANALYSIS,
+                &[CAPABILITY_REVIEW_PROMPT_UPDATE.to_string()],
+            )
+            .is_ok()
+        );
+        assert!(
+            validate_sub_agent_capabilities(
+                SUB_AGENT_KIND_TRADING,
+                &[CAPABILITY_REVIEW_PROMPT_UPDATE.to_string()],
             )
             .is_err()
         );

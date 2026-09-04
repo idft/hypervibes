@@ -28,10 +28,18 @@ as a callable argument.
 
 Chat sessions can review and edit their own per-agent strategy prompts through
 `list_strategy_prompts`, `get_strategy_prompt`, and `update_strategy_prompt`.
-The available prompt kinds are `analysis`, `market_analysis`, `trading`,
-`daily_review`, and `analysis_coding`. These tools are chat-only: scheduled
-sub-agents receive their selected strategy prompt but do not edit it. Updates require
-the chat operator's one-time OpenCode approval.
+Prompt responses identify their target by `target_sub_agent_id` and
+`target_sub_agent_key`; pass the numeric ID to the get and update tools. These
+tools are chat-only: scheduled sub-agents receive their selected strategy prompt
+but do not edit it. Updates require the chat operator's one-time OpenCode approval.
+
+## Memories
+
+`write_memory` uses explicit scope: use `scope_kind="agent"` with no targets
+for agent-wide records, or `scope_kind="instruments"` with one or more selected
+canonical `instrument_ids`. The backend stamps run provenance; callers cannot
+supply it. Trading uses `get_trading_context(instrument_id)` to retrieve fresh
+analysis evidence and analyst status, then writes `trading_decision` records.
 
 ## Operator Logs
 
@@ -48,7 +56,7 @@ MCP tools instead.
 
 The MCP server registers its full API for every workspace. OpenCode agent
 permissions select the MCP tools available to each sub-agent session. The
-`analysis-coding` agent permits only agent-scoped evidence reads, candidate
+Coding agent permits only agent-scoped evidence reads, candidate
 filesystem operations through path-scoped native OpenCode tools, fixed local
 validation, and one structured report submission.
 

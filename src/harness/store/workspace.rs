@@ -123,7 +123,8 @@ pub async fn insert_analysis_coding_task_and_run(
     else {
         anyhow::bail!("coding job not found")
     };
-    if job_agent_key != agent_key || sub_agent_kind != "analysis_coding" {
+    if job_agent_key != agent_key || sub_agent_kind != crate::harness::model::SUB_AGENT_KIND_CODING
+    {
         anyhow::bail!("job is not an analysis coding job")
     }
     if trigger_mode == CodingTriggerMode::Automatic && !enabled {
@@ -134,7 +135,7 @@ pub async fn insert_analysis_coding_task_and_run(
     {
         anyhow::bail!("invalid analysis coding mode")
     }
-    if !matches!(request_origin, "daily_review" | "chat" | "manual") {
+    if !matches!(request_origin, "review" | "chat" | "manual") {
         anyhow::bail!("invalid analysis coding request origin");
     }
     let (Some(provider), Some(model)) = (provider, model) else {
@@ -484,7 +485,7 @@ pub async fn agent_has_active_live_runs(pool: &DbPool, agent_key: &str) -> Resul
     )
     .bind(agent_key)
     .bind(crate::harness::store::common::ACTIVE_STATUSES)
-    .bind(crate::harness::model::SUB_AGENT_KIND_ANALYSIS_CODING)
+    .bind(crate::harness::model::SUB_AGENT_KIND_CODING)
     .fetch_one(pool)
     .await
     .context("failed to check active live runs")?;
@@ -566,7 +567,7 @@ pub(crate) async fn agent_has_blocking_workspace_maintenance_for_mode_tx(
     mode: EventRunInsertMode,
 ) -> Result<bool> {
     let row: Option<(i32,)> = match mode {
-        EventRunInsertMode::Manual | EventRunInsertMode::AnalysisContinuation => {
+        EventRunInsertMode::Manual => {
             query_as(
                 "SELECT 1 FROM harness_maintenance_tasks
               WHERE agent_key = $1

@@ -580,7 +580,7 @@ mod tests {
                 "model_variant": null,
                 "timeout_seconds": 60,
                 "selected_instruments": ["BTC"],
-                "strategy_prompt_revisions": {"analysis": 1},
+                "strategy_prompt_revision": {"target_sub_agent_id": 1, "revision_id": 1},
                 "additional_instructions": "",
                 "accumulated_learning_memory_id": null,
                 "system_prompt_version": "v1",

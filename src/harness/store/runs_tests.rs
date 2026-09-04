@@ -35,14 +35,14 @@ async fn insert_queued_manual_run_returns_blocked_by_maintenance() {
                 model_provider_id = 'test',
                 model_id = 'strong'
           WHERE agent_key = $1
-            AND sub_agent_kind = 'analysis_coding'",
+             AND sub_agent_kind = 'coding'",
     )
     .bind(&key)
     .execute(&pool)
     .await
     .expect("configure coding event job");
     let coding_sub_agent_id: (i64,) = query_as(
-        "SELECT id FROM harness_sub_agents WHERE agent_key = $1 AND sub_agent_kind = 'analysis_coding'",
+        "SELECT id FROM harness_sub_agents WHERE agent_key = $1 AND sub_agent_kind = 'coding'",
     )
     .bind(&key)
     .fetch_one(&pool)

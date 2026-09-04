@@ -1,21 +1,33 @@
 SET search_path TO public;
 
-CREATE TABLE agent_strategy_prompts (
-    agent_key TEXT NOT NULL REFERENCES agents(agent_key) ON DELETE CASCADE,
-    prompt_kind TEXT NOT NULL,
-    prompt TEXT NOT NULL DEFAULT '',
-    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-    PRIMARY KEY (agent_key, prompt_kind),
-    CHECK (prompt_kind IN ('analysis', 'market_analysis', 'trading', 'daily_review', 'analysis_coding'))
-);
+DROP INDEX IF EXISTS memory_instrument_targets_target_idx;
+DROP INDEX IF EXISTS memory_records_type_idx;
+DROP INDEX IF EXISTS memory_records_source_run_idx;
+DROP INDEX IF EXISTS memory_records_owner_scope_idx;
 
-INSERT INTO agent_strategy_prompts (agent_key, prompt_kind, prompt, created_at, updated_at)
-SELECT active.agent_key, active.prompt_kind, revisions.prompt, revisions.created_at, active.activated_at
-FROM agent_strategy_prompt_active_revisions AS active
-JOIN agent_strategy_prompt_revisions AS revisions ON revisions.id = active.revision_id;
+DROP TABLE IF EXISTS memory.instrument_targets;
 
-DROP TABLE agent_strategy_prompt_revision_evidence;
-DROP TABLE agent_strategy_prompt_active_revisions;
-DROP TABLE agent_strategy_prompt_revisions;
-DROP TABLE agent_strategy_prompt_revision_batches;
+ALTER TABLE memory.records
+    DROP CONSTRAINT IF EXISTS memory_records_source_run_agent_fkey,
+    DROP COLUMN IF EXISTS source_run_id,
+    DROP COLUMN IF EXISTS scope_kind;
+
+-- Restore the legacy NOT NULL on `symbol`; the forward migration relaxed it
+-- because scoped writes no longer populate the column.
+ALTER TABLE memory.records
+    ALTER COLUMN symbol SET NOT NULL;
+
+-- Restore the replaced singleton index before dropping the revision tables.
+CREATE UNIQUE INDEX harness_sub_agents_kind_timeframe_idx
+    ON harness_sub_agents (agent_key, sub_agent_kind, timeframe)
+    WHERE timeframe IS NOT NULL;
+
+DROP INDEX IF EXISTS harness_sub_agents_singleton_kind_idx;
+
+ALTER TABLE harness_sub_agents
+    DROP CONSTRAINT IF EXISTS harness_sub_agents_id_agent_key_unique;
+
+DROP TABLE IF EXISTS agent_strategy_prompt_revision_evidence;
+DROP TABLE IF EXISTS agent_strategy_prompt_active_revisions;
+DROP TABLE IF EXISTS agent_strategy_prompt_revisions;
+DROP TABLE IF EXISTS agent_strategy_prompt_revision_batches;

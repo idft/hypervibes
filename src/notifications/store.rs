@@ -296,7 +296,10 @@ mod tests {
     use super::*;
     use crate::{
         harness::{
-            model::{CAPABILITY_NOTIFICATION_SEND, RunContextSnapshot},
+            model::{
+                CAPABILITY_NOTIFICATION_SEND, CAPABILITY_SCHEMA_VERSION,
+                RUN_CONTEXT_SNAPSHOT_SCHEMA_VERSION, RunContextSnapshot,
+            },
             store::artifacts::{mark_run_workspace_ready, prepare_run_workspace_artifact},
         },
         test_db,
@@ -559,14 +562,14 @@ mod tests {
             &key,
             run_id,
             &RunContextSnapshot {
-                schema_version: 1,
+                schema_version: RUN_CONTEXT_SNAPSHOT_SCHEMA_VERSION,
                 context: json!({
                     "provider_id": "test",
                     "model_id": "test",
                     "model_variant": null,
                     "timeout_seconds": 60,
                     "selected_instruments": [],
-                    "strategy_prompt_revisions": {},
+                    "strategy_prompt_revision": {"target_sub_agent_id": 1, "revision_id": 1},
                     "additional_instructions": "",
                     "accumulated_learning_memory_id": null,
                     "system_prompt_version": "v1",
@@ -576,7 +579,7 @@ mod tests {
                     "scheduled_candle_boundary": null,
                     "account_snapshot_metadata": null
                 }),
-                capability_schema_version: 1,
+                capability_schema_version: CAPABILITY_SCHEMA_VERSION,
                 enabled_capabilities: vec![CAPABILITY_NOTIFICATION_SEND.to_string()],
             },
         )
@@ -592,7 +595,7 @@ mod tests {
                 NotificationSeverity::Info,
                 NotificationProvenance::Run {
                     run_id,
-                    capability_schema_version: 1,
+                    capability_schema_version: CAPABILITY_SCHEMA_VERSION,
                 },
             )
             .await
@@ -610,7 +613,7 @@ mod tests {
             NotificationSeverity::Info,
             NotificationProvenance::Run {
                 run_id,
-                capability_schema_version: 1,
+                capability_schema_version: CAPABILITY_SCHEMA_VERSION,
             },
         )
         .await
@@ -626,7 +629,7 @@ mod tests {
         .expect("load notification provenance");
         assert_eq!(source_kind, "run");
         assert_eq!(source_run_id, Some(run_id));
-        assert_eq!(source_version, 1);
+        assert_eq!(source_version, CAPABILITY_SCHEMA_VERSION);
 
         sqlx::query("DELETE FROM harness_sub_agent_runs WHERE id = $1")
             .bind(run_id)

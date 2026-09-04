@@ -403,7 +403,7 @@ impl AgentRunDetailPageTemplate {
             session_lookup_attempted,
         )?;
         Self {
-            tabs: build_agent_show_tabs(&agent, AgentShowTab::SubAgents, notification_count),
+            tabs: build_agent_show_tabs(&agent, AgentShowTab::Analysis, notification_count),
             agent_tabs_use_htmx: false,
             agent,
             run,

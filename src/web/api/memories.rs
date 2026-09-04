@@ -1,4 +1,4 @@
-use std::{collections::HashSet, sync::Arc};
+use std::sync::Arc;
 
 use axum::{
     Json,
@@ -12,14 +12,63 @@ use uuid::Uuid;
 
 use crate::{
     agents::AuthenticatedAgent,
-    harness::model::RunApiScope,
+    harness::model::{RunApiScope, SUB_AGENT_KIND_ANALYSIS, SUB_AGENT_KIND_TRADING},
     memory::{
-        CreateMemory, MemoryListFilter, MemoryRecord, memory_expires_at, store as memory_store,
+        CreateMemory, MemoryListFilter, MemoryRecord, MemorySourceRun, RESERVED_MEMORY_TYPES,
+        memory_expires_at, store as memory_store,
     },
     web::{AppState, ui_events::UiEvent},
 };
 
 use super::error::ApiError;
+
+/// Resolve the memory-type restriction for the authenticated credential by
+/// inspecting the source run's sub-agent kind. Analysis may write any valid
+/// non-reserved type; Trading owns `trading_decision`; Review owns `review`
+/// and `agent_learnings`.
+async fn required_memory_type_for_credential(
+    state: &AppState,
+    agent: &AuthenticatedAgent,
+) -> Result<Option<String>, ApiError> {
+    let Some((run_id, _)) = agent.run_provenance() else {
+        return Ok(None);
+    };
+    let sub_agent_kind: Option<String> = sqlx::query_scalar(
+        "SELECT sub_agent_kind FROM harness_sub_agent_runs WHERE id = $1 AND agent_key = $2",
+    )
+    .bind(run_id)
+    .bind(&agent.agent_key)
+    .fetch_optional(&state.db_pool)
+    .await?;
+    match sub_agent_kind.as_deref() {
+        Some(kind) if kind == SUB_AGENT_KIND_TRADING => Ok(Some("trading_decision".to_string())),
+        Some(kind) if kind == SUB_AGENT_KIND_ANALYSIS => Ok(None),
+        Some("review") => Ok(None),
+        Some("coding") => Ok(None),
+        _ => Err(ApiError::Forbidden("this run role cannot write memories")),
+    }
+}
+
+fn check_reserved_memory_type(
+    input: &CreateMemory,
+    required_type: Option<&String>,
+) -> Result<(), ApiError> {
+    let requested = input.memory_type.trim();
+    if let Some(required) = required_type {
+        if requested != required {
+            return Err(ApiError::Validation(format!(
+                "this run role may only write `{required}` memories"
+            )));
+        }
+        return Ok(());
+    }
+    if RESERVED_MEMORY_TYPES.contains(&requested) {
+        return Err(ApiError::Validation(format!(
+            "memory type `{requested}` is reserved for the framework"
+        )));
+    }
+    Ok(())
+}
 
 /// `POST /api/v1/memories`
 pub(super) async fn create_memory(
@@ -31,10 +80,22 @@ pub(super) async fn create_memory(
     if let Err(errors) = input.validate() {
         return Err(ApiError::Validation(errors.join(" ")));
     }
+    let required_type = required_memory_type_for_credential(&state, &agent).await?;
+    check_reserved_memory_type(&input, required_type.as_ref())?;
 
-    let record = memory_store::insert_memory(&state.db_pool, &agent.agent_key, &input)
+    // Provenance is stamped from the authenticated run credential; request
+    // metadata can never supply or override it.
+    let source_run = agent
+        .run_provenance()
+        .map(|(run_id, _)| MemorySourceRun { run_id });
+
+    let record = memory_store::insert_memory(&state.db_pool, &agent.agent_key, &input, source_run)
         .await
         .map_err(ApiError::Internal)?;
+    let instrument_targets =
+        memory_store::list_memory_instrument_targets(&state.db_pool, &agent.agent_key, record.id)
+            .await
+            .map_err(ApiError::Internal)?;
     state.ui_events.publish(UiEvent::MemoryCreated {
         agent_key: record.agent_key.clone(),
         memory_id: record.id,
@@ -47,7 +108,7 @@ pub(super) async fn create_memory(
 
     Ok((
         StatusCode::CREATED,
-        Json(MemoryRecordResponse::from(record)),
+        Json(MemoryRecordResponse::from_row(record, instrument_targets)),
     )
         .into_response())
 }
@@ -66,6 +127,13 @@ pub(super) async fn list_memories(
     {
         return Err(ApiError::Validation("timeframe must not be empty".into()));
     }
+    if let Some(scope_kind) = &filter.scope_kind
+        && !matches!(scope_kind.as_str(), "agent" | "instruments")
+    {
+        return Err(ApiError::Validation(
+            "scope_kind must be `agent` or `instruments`".into(),
+        ));
+    }
 
     let rows = memory_store::list_memories(&state.db_pool, &agent.agent_key, &filter)
         .await
@@ -80,19 +148,22 @@ pub(super) async fn list_memories(
     let include_expired = filter.include_expired;
     let matched_count = rows.len();
     let mut expired_count = 0;
-    let bodies: Vec<MemoryRecordResponse> = rows
-        .into_iter()
-        .filter_map(|row| {
-            if !include_expired && memory_expires_at(&row).is_some_and(|value| value <= now) {
-                expired_count += 1;
-                return None;
-            }
-            Some(MemoryRecordResponse::from(row))
-        })
-        .collect();
+    let mut bodies: Vec<MemoryRecordResponse> = Vec::with_capacity(rows.len());
+    for row in rows {
+        let instrument_targets =
+            memory_store::list_memory_instrument_targets(&state.db_pool, &agent.agent_key, row.id)
+                .await
+                .map_err(ApiError::Internal)?;
+        if !include_expired && memory_expires_at(&row).is_some_and(|value| value <= now) {
+            expired_count += 1;
+            continue;
+        }
+        bodies.push(MemoryRecordResponse::from_row(row, instrument_targets));
+    }
     info!(
         agent_key = %agent.agent_key,
-        symbol = ?filter.symbol,
+        scope_kind = ?filter.scope_kind,
+        instrument_id = ?filter.instrument_id,
         timeframe = ?filter.timeframe,
         memory_type = ?filter.memory_type,
         since = ?filter.since,
@@ -109,14 +180,14 @@ pub(super) async fn list_memories(
 
 #[derive(Debug, Default, serde::Deserialize)]
 pub(super) struct LatestMemoryQuery {
-    symbol: Option<String>,
+    instrument_id: Option<String>,
     memory_type: Option<String>,
     limit: Option<String>,
 }
 
 #[derive(Debug)]
 pub(super) struct LatestMemoryRequest {
-    pub(super) symbol: String,
+    pub(super) instrument_id: String,
     pub(super) memory_type: String,
     pub(super) limit: Option<usize>,
 }
@@ -124,17 +195,17 @@ pub(super) struct LatestMemoryRequest {
 impl LatestMemoryQuery {
     pub(super) fn validate(self) -> Result<LatestMemoryRequest, ApiError> {
         let Self {
-            symbol,
+            instrument_id,
             memory_type,
             limit,
         } = self;
         let mut errors = Vec::new();
 
-        let symbol = symbol
+        let instrument_id = instrument_id
             .map(|value| value.trim().to_string())
             .filter(|value| !value.is_empty())
             .or_else(|| {
-                errors.push("symbol is required.".to_string());
+                errors.push("instrument_id is required.".to_string());
                 None
             });
 
@@ -146,9 +217,9 @@ impl LatestMemoryQuery {
                 None
             });
 
-        match (symbol, memory_type) {
-            (Some(symbol), Some(memory_type)) => Ok(LatestMemoryRequest {
-                symbol,
+        match (instrument_id, memory_type) {
+            (Some(instrument_id), Some(memory_type)) => Ok(LatestMemoryRequest {
+                instrument_id,
                 memory_type,
                 limit: parse_latest_memories_limit(limit.as_deref())?,
             }),
@@ -181,21 +252,21 @@ pub(super) async fn list_latest_memories(
 ) -> Result<Response, ApiError> {
     super::require_run_api_scope(&agent, RunApiScope::MemoryRead)?;
     let LatestMemoryRequest {
-        symbol,
+        instrument_id,
         memory_type,
         limit,
     } = query.validate()?;
     let rows = memory_store::list_latest_memory_candidates(
         &state.db_pool,
         &agent.agent_key,
-        &symbol,
+        &instrument_id,
         &memory_type,
     )
     .await
     .map_err(ApiError::Internal)?;
 
     let now = Utc::now();
-    let mut seen_timeframes = HashSet::new();
+    let mut seen_timeframes = std::collections::HashSet::new();
     let mut bodies = Vec::new();
 
     for row in rows {
@@ -218,6 +289,39 @@ pub(super) async fn list_latest_memories(
     Ok(Json(bodies).into_response())
 }
 
+#[derive(Debug, Default, serde::Deserialize)]
+pub(super) struct TradingContextQuery {
+    pub(super) instrument_id: Option<String>,
+}
+
+/// `GET /api/v1/memories/trading-context?instrument_id=`
+pub(super) async fn get_trading_context(
+    State(state): State<Arc<AppState>>,
+    agent: AuthenticatedAgent,
+    Query(query): Query<TradingContextQuery>,
+) -> Result<Response, ApiError> {
+    super::require_run_api_scope(&agent, RunApiScope::MemoryRead)?;
+    let instrument_id = query
+        .instrument_id
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| ApiError::Validation("instrument_id is required.".into()))?;
+    let now = Utc::now();
+    let evidence = memory_store::get_trading_context_evidence(
+        &state.db_pool,
+        &agent.agent_key,
+        &instrument_id,
+        now,
+    )
+    .await
+    .map_err(ApiError::Internal)?;
+    Ok(Json(serde_json::json!({
+        "instrument_id": instrument_id,
+        "evidence": evidence,
+    }))
+    .into_response())
+}
+
 /// `GET /api/v1/memories/{id}`
 pub(super) async fn get_memory_by_id(
     State(state): State<Arc<AppState>>,
@@ -233,8 +337,13 @@ pub(super) async fn get_memory_by_id(
 
     match record {
         Some(r) => {
-            let mut body = serde_json::to_value(MemoryRecordResponse::from(r))
-                .map_err(|e| ApiError::Internal(anyhow::anyhow!(e)))?;
+            let instrument_targets =
+                memory_store::list_memory_instrument_targets(&state.db_pool, &agent.agent_key, id)
+                    .await
+                    .map_err(ApiError::Internal)?;
+            let mut body =
+                serde_json::to_value(MemoryRecordResponse::from_row(r, instrument_targets))
+                    .map_err(|e| ApiError::Internal(anyhow::anyhow!(e)))?;
             if filter.includes("links") {
                 let outgoing =
                     memory_store::list_memory_links_from(&state.db_pool, &agent.agent_key, id)
@@ -276,47 +385,55 @@ impl MemoryDetailQuery {
     }
 }
 
-/// Response shape returned to agents. Today it mirrors [`MemoryRecord`]
-/// 1:1, but keeping a dedicated type lets us evolve the wire format
-/// without breaking the DB row struct.
+/// Response shape returned to agents. Keeping a dedicated type lets the wire
+/// format evolve without breaking the DB row struct.
 #[derive(Debug, serde::Serialize)]
 pub struct MemoryRecordResponse {
     pub id: Uuid,
     pub created_at: chrono::DateTime<chrono::Utc>,
     pub agent_key: String,
-    pub symbol: String,
+    pub scope_kind: String,
+    pub instrument_targets: Vec<String>,
     pub timeframe: Option<String>,
     pub memory_type: String,
     pub summary: String,
     pub content: String,
     pub metadata: serde_json::Value,
+    pub source_run_id: Option<i64>,
     /// RFC 3339 timestamp at which this memory becomes stale, or `null`
     /// if the row has no explicit or implicit expiration (e.g. an
-    /// observation memory with no `valid_for_seconds` / `stale_after`).
+    /// `observation` memory with no `valid_for_seconds` / `stale_after`).
     ///
-    /// For `memory_type="analysis"` the same defaults documented for
-    /// `GET /api/v1/memories/latest` apply (`15m` => 30m, `1h` => 120m,
-    /// `1d` => 48h, unknown => 30m — all 2x the schedule interval so the
-    /// trading loop has a one-cycle fallback if the next analysis is
-    /// delayed).
+    /// Analysis-produced research rows use the schedule-derived defaults
+    /// (`15m` => 30m, `1h` => 120m, `1d` => 48h, unknown => 30m — all 2x the
+    /// schedule interval so the trading loop has a one-cycle fallback if the
+    /// next analysis is delayed).
     pub expires_at: Option<DateTime<Utc>>,
 }
 
-impl From<MemoryRecord> for MemoryRecordResponse {
-    fn from(r: MemoryRecord) -> Self {
+impl MemoryRecordResponse {
+    pub fn from_row(r: MemoryRecord, instrument_targets: Vec<String>) -> Self {
         let expires_at = memory_expires_at(&r);
         Self {
             id: r.id,
             created_at: r.created_at,
             agent_key: r.agent_key,
-            symbol: r.symbol,
+            scope_kind: r.scope_kind,
+            instrument_targets,
             timeframe: r.timeframe,
             memory_type: r.memory_type,
             summary: r.summary,
             content: r.content,
             metadata: r.metadata,
+            source_run_id: r.source_run_id,
             expires_at,
         }
+    }
+}
+
+impl From<MemoryRecord> for MemoryRecordResponse {
+    fn from(r: MemoryRecord) -> Self {
+        Self::from_row(r, Vec::new())
     }
 }
 
@@ -325,7 +442,8 @@ pub(super) struct LatestMemoryResponse {
     id: Uuid,
     created_at: DateTime<Utc>,
     agent_key: String,
-    symbol: String,
+    scope_kind: String,
+    instrument_targets: Vec<String>,
     timeframe: Option<String>,
     memory_type: String,
     summary: String,
@@ -340,7 +458,8 @@ impl LatestMemoryResponse {
             id: record.id,
             created_at: record.created_at,
             agent_key: record.agent_key,
-            symbol: record.symbol,
+            scope_kind: record.scope_kind,
+            instrument_targets: Vec::new(),
             timeframe: record.timeframe,
             memory_type: record.memory_type,
             summary: record.summary,

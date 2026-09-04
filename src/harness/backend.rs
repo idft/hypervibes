@@ -10,8 +10,8 @@ use crate::{
     db::DbPool,
     harness::{
         model::{
-            SUB_AGENT_KIND_ANALYSIS, SUB_AGENT_KIND_ANALYSIS_CODING, SUB_AGENT_KIND_DAILY_REVIEW,
-            SUB_AGENT_KIND_MARKET_ANALYSIS, SUB_AGENT_KIND_TRADING,
+            SUB_AGENT_KIND_ANALYSIS, SUB_AGENT_KIND_CODING, SUB_AGENT_KIND_REVIEW,
+            SUB_AGENT_KIND_TRADING,
         },
         store,
     },
@@ -29,12 +29,10 @@ const RETRY_STATUS_POLL_INTERVAL: std::time::Duration = std::time::Duration::fro
 const RETRY_STATUS_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_millis(10);
 const DEFAULT_ANALYSIS_AGENT: &str = "analysis";
 const DEFAULT_ANALYSIS_COMMAND: &str = "hypervibes-analysis";
-const DEFAULT_MARKET_ANALYSIS_AGENT: &str = "market-analysis";
-const DEFAULT_MARKET_ANALYSIS_COMMAND: &str = "hypervibes-market-analysis";
-const DEFAULT_DAILY_REVIEW_AGENT: &str = "daily-review";
-const DEFAULT_DAILY_REVIEW_COMMAND: &str = "hypervibes-daily-review";
-const DEFAULT_ANALYSIS_CODING_AGENT: &str = "analysis-coding";
-const DEFAULT_ANALYSIS_CODING_COMMAND: &str = "hypervibes-analysis-coding";
+const DEFAULT_DAILY_REVIEW_AGENT: &str = "review";
+const DEFAULT_DAILY_REVIEW_COMMAND: &str = "hypervibes-review";
+const DEFAULT_ANALYSIS_CODING_AGENT: &str = "coding";
+const DEFAULT_ANALYSIS_CODING_COMMAND: &str = "hypervibes-coding";
 const DEFAULT_TRADING_AGENT: &str = "trading";
 const DEFAULT_TRADING_COMMAND: &str = "hypervibes-trading";
 const MODEL_ACTIVITY_POLL_ATTEMPTS: usize = 10;
@@ -303,14 +301,8 @@ async fn wait_for_model_activity(pool: &DbPool, session_id: &str) -> Result<bool
 fn resolve_opencode_sub_agent(sub_agent_kind: &str) -> Result<(&'static str, &'static str)> {
     match sub_agent_kind {
         SUB_AGENT_KIND_ANALYSIS => Ok((DEFAULT_ANALYSIS_AGENT, DEFAULT_ANALYSIS_COMMAND)),
-        SUB_AGENT_KIND_MARKET_ANALYSIS => Ok((
-            DEFAULT_MARKET_ANALYSIS_AGENT,
-            DEFAULT_MARKET_ANALYSIS_COMMAND,
-        )),
-        SUB_AGENT_KIND_DAILY_REVIEW => {
-            Ok((DEFAULT_DAILY_REVIEW_AGENT, DEFAULT_DAILY_REVIEW_COMMAND))
-        }
-        SUB_AGENT_KIND_ANALYSIS_CODING => Ok((
+        SUB_AGENT_KIND_REVIEW => Ok((DEFAULT_DAILY_REVIEW_AGENT, DEFAULT_DAILY_REVIEW_COMMAND)),
+        SUB_AGENT_KIND_CODING => Ok((
             DEFAULT_ANALYSIS_CODING_AGENT,
             DEFAULT_ANALYSIS_CODING_COMMAND,
         )),
@@ -739,14 +731,11 @@ mod tests {
             (DEFAULT_TRADING_AGENT, DEFAULT_TRADING_COMMAND)
         );
         assert_eq!(
-            resolve_opencode_sub_agent(SUB_AGENT_KIND_MARKET_ANALYSIS).unwrap(),
-            (
-                DEFAULT_MARKET_ANALYSIS_AGENT,
-                DEFAULT_MARKET_ANALYSIS_COMMAND,
-            )
+            resolve_opencode_sub_agent(SUB_AGENT_KIND_REVIEW).unwrap(),
+            (DEFAULT_DAILY_REVIEW_AGENT, DEFAULT_DAILY_REVIEW_COMMAND)
         );
         assert_eq!(
-            resolve_opencode_sub_agent(SUB_AGENT_KIND_ANALYSIS_CODING).unwrap(),
+            resolve_opencode_sub_agent(SUB_AGENT_KIND_CODING).unwrap(),
             (
                 DEFAULT_ANALYSIS_CODING_AGENT,
                 DEFAULT_ANALYSIS_CODING_COMMAND,
@@ -760,7 +749,7 @@ mod tests {
         let request = make_request();
         let args = build_command_arguments(&request).expect("build args");
         assert!(args.contains("Agent key: btc-2"));
-        assert!(args.contains("## Analysis strategy"));
+        assert!(args.contains("## Research strategy"));
         assert!(args.contains("Analyze trends."));
         assert!(args.contains("## Instructions"));
         assert!(args.contains("(none)"));
@@ -956,7 +945,7 @@ mod tests {
 
         let (sub_agent_id,): (i64,) = sqlx::query_as(
             "SELECT id FROM harness_sub_agents
-              WHERE agent_key = $1 AND sub_agent_key = 'analysis-15m'",
+              WHERE agent_key = $1 AND sub_agent_key = 'technical-15m'",
         )
         .bind(key)
         .fetch_one(pool)
@@ -969,7 +958,7 @@ mod tests {
             "INSERT INTO harness_sub_agent_runs (
                  sub_agent_id, agent_key, sub_agent_key, sub_agent_kind, timeframe,
                   status, scheduled_for, timeout_seconds
-             ) VALUES ($1, $2, 'analysis-15m', 'analysis', '15m',
+             ) VALUES ($1, $2, 'technical-15m', 'analysis', '15m',
                         'queued', now(), $3)
              RETURNING id",
         )

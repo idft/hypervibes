@@ -31,6 +31,7 @@ Frontend assets are managed with `pnpm` and built via `esbuild` and Tailwind CSS
 ## Testing
 
 * Run `cargo test` from the repo root. Tests use the dedicated `test-postgres` service from `podman-compose.dev.yaml` via `TEST_DATABASE_URL=postgres://hypervibes:hypervibes@127.0.0.1:15433/postgres`. `src/test_db.rs` creates isolated databases for test helper calls against that service and runs migrations in each one so database setup can happen concurrently. The dev stack's Postgres at `localhost:15432` (u: hypervibes, p: hypervibes, db: hypervibes) is never touched by tests.
+* use a 240 second timeout for tests
 
 ## UI Rules
 

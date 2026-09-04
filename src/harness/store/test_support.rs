@@ -39,7 +39,6 @@ pub fn sample_agent(key: &str) -> AgentRegistryRow {
 
 pub async fn seed_agent_and_job(pool: &DbPool, key: &str, sub_agent_id_offset: i64) -> i64 {
     use super::insert_default_harness_sub_agents;
-    use super::sub_agents::default_analysis_sub_agent_key;
 
     insert_agent(pool, &sample_agent(key))
         .await
@@ -57,7 +56,7 @@ pub async fn seed_agent_and_job(pool: &DbPool, key: &str, sub_agent_id_offset: i
              AND sub_agent_key = $2",
     )
     .bind(key)
-    .bind(default_analysis_sub_agent_key())
+    .bind("technical-15m")
     .execute(pool)
     .await
     .expect("enable seeded analysis job");
@@ -81,7 +80,7 @@ pub async fn seed_agent_and_job(pool: &DbPool, key: &str, sub_agent_id_offset: i
             AND sub_agent_key = $2",
     )
     .bind(key)
-    .bind(default_analysis_sub_agent_key())
+    .bind("technical-15m")
     .fetch_one(pool)
     .await
     .expect("fetch job id");

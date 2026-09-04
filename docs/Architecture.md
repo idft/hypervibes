@@ -27,26 +27,26 @@ in-flight OpenCode MCP server can finish its API calls.
 
 | Subsystem | Responsibility |
 | --- | --- |
-| `agents` | Agent registry, API keys, OpenCode workspaces, selected instruments, and strategy prompts. User-owned encrypted Hyperliquid signing material lives with authentication records. |
-| `harness` | Persisted unified sub-agents/runs, analysis-coding and provider-reload maintenance, recovery of orphaned runs, and OpenCode dispatch. |
+| `agents` | Agent registry, API keys, OpenCode workspaces, selected instruments, and sub-agent-targeted prompt revisions. User-owned encrypted Hyperliquid signing material lives with authentication records. |
+| `harness` | Persisted unified sub-agents/runs, Coding and provider-reload maintenance, recovery of orphaned runs, and OpenCode dispatch. |
 
 ## Harness sub-agents
 
-`harness_sub_agents` is the single configuration record for every OpenCode sub-agent and
-`harness_sub_agent_runs` is its durable execution queue. Candle sub-agents use the
-`candle_closed` trigger, which the scheduler owns and advances at UTC candle
-boundaries after the configured settling delay. The fixed event sub-agents use
-`analysis_batch_completed` and `daily_review_completed`; they are dispatched
-directly after their qualifying predecessor and deliberately have no event
-outbox. `harness_maintenance_tasks` remains separate for workspace work,
-analysis-coding promotion, and provider reloads.
+`harness_sub_agents` is the single configuration record for every OpenCode
+sub-agent and `harness_sub_agent_runs` is its durable execution queue. The
+durable roles are many `analysis` jobs plus singleton `trading`, `coding`, and
+`review` jobs. Candle sub-agents use the `candle_closed` trigger, which the
+scheduler owns and advances at UTC candle boundaries after the configured
+settling delay. Coding is on demand and Review keeps its daily schedule.
+`harness_maintenance_tasks` remains separate for workspace work, Coding
+promotion, and provider reloads.
 
 Sub-agents can be deleted only while their runs and OpenCode sessions are idle.
 Deletion first removes terminal sessions through the OpenCode API, then deletes
 the sub-agent and cascades its runs and coding maintenance rows. Conversations remain
 separate from harness sub-agents and runs.
 | `opencode` | OpenCode HTTP client, session persistence access, and generated agent workspaces. |
-| `memory` | Append-only, agent-owned analysis and review records plus links between records. |
+| `memory` | Append-only, agent-owned scoped records, source-run provenance, and links between records. |
 | `hyperliquid` | Instrument reference data, account-history journal, live account state, signed order gateway, and order reconciliation. |
 | `web` | Askama-rendered web interface, HTMX/SSE updates, static assets, and `/api/v1` agent endpoints. |
 | `settings` | Global application settings, including the base OpenCode system prompt. |
@@ -67,24 +67,25 @@ The scheduler polls every 10 seconds. It claims due work transactionally and
 uses independent analysis and trading lanes per agent, while allowing work for
 different agents to run concurrently. Built-in work includes:
 
-- scheduled `analysis`, `trading`, and `daily_review` sub-agents
-- an `analysis_batch_completed` hook that can dispatch `market_analysis`
-- request-gated `analysis_coding` follow-up work after a daily review
+- scheduled Analysis jobs, Trading, and Review
+- on-demand Coding maintenance work
 
 For a dispatch, the OpenCode backend creates a session in the isolated run or
 candidate workspace and invokes the appropriate OpenCode command. The initial prompt contains the
-agent and sub-agent context, selected instruments, the sub-agent-specific strategy prompt,
-the latest `agent_learnings` memory, the global prompt, and a live
-account snapshot for trading work. That snapshot includes per-stream data
+agent and sub-agent context, selected instruments, the sub-agent's current prompt
+revision, the latest `agent_learnings` memory, the global prompt, and a live
+account snapshot for Trading work. That snapshot includes per-stream data
 authority and monitor health; unavailable data is never represented as an
 empty account. The order gateway rejects new agent exposure until the
 clearinghouse and open-orders streams are current, while reduce-only orders
 remain available for risk reduction.
 
-Market-analysis is the authority for market thesis and execution conditions.
-Trading executes its latest fresh handoff without market-data access or package
-code; it bases order and position management on memories, account and order
-state, and its approved HyperVibes MCP tools only.
+Analysis jobs publish discoverable research memories with agent-wide or
+instrument-targeted scope. Trading owns research synthesis and execution: it
+reads fresh context for an instrument from each enabled Analysis producer,
+records a `trading_decision` memory when possible, and manages orders. Missing,
+stale, or failed analyst output is context rather than a scheduler or
+order-gateway block. Trading has no package read or execution access.
 
 Run state is persisted. On startup and periodically thereafter, the scheduler
 resumes queued runs and recovers stale running runs so interrupted dispatches
@@ -92,11 +93,11 @@ do not block subsequent work.
 
 ### Isolated Workspace Foundation
 
-Phase 2 persists a versioned run-context snapshot and run-artifact lifecycle
+The runtime persists a versioned run-context snapshot and run-artifact lifecycle
 record before isolated dispatch is enabled. The snapshot carries only run input
 and capability identity; validation rejects sensitive gateway and credential
 fields, including normalized field-name variants and known runtime credential
-forms. Schema version one is a closed, typed JSON contract; adding a nested
+forms. Schema version two is a closed, typed JSON contract; adding a nested
 input or capability requires a reviewed schema version rather than an opaque
 metadata field.
 Artifact paths are never stored in Postgres. The workspace controller
@@ -145,7 +146,7 @@ database runtime rows.
 An agent's only durable filesystem state is its Coding package at
 `packages/<agent-key>/` under the configured workspace root. It contains
 `manifest.json` plus any coding-agent-defined files, and it is created by the
-first successful coding promotion. Analysis coding runs in an isolated
+first successful Coding promotion. Coding runs in an isolated
 candidate workspace under `coding/<agent-key>/<task-id>/workspace`; candidate
 creation copies the package root into the candidate's `scripts/user/` tree.
 The model receives path-scoped native OpenCode filesystem permissions that can

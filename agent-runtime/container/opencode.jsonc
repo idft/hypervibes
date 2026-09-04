@@ -31,8 +31,6 @@
         "hypervibes_get_account": "allow",
         "hypervibes_list_strategy_prompts": "allow",
         "hypervibes_get_strategy_prompt": "allow",
-        "hypervibes_get_latest_analysis": "allow",
-        "hypervibes_get_market_analysis": "allow",
         "hypervibes_get_memory_detail": "allow",
         "hypervibes_list_memories": "allow",
         "hypervibes_list_orders": "allow",

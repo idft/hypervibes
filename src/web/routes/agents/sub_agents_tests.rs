@@ -10,11 +10,67 @@ use tower::util::ServiceExt;
 
 use crate::{
     agents::store::replace_agent_instruments,
-    harness::model::{SUB_AGENT_KIND_ANALYSIS, SUB_AGENT_KIND_TRADING},
+    harness::model::{
+        SUB_AGENT_KIND_ANALYSIS, SUB_AGENT_KIND_CODING, SUB_AGENT_KIND_REVIEW,
+        SUB_AGENT_KIND_TRADING,
+    },
 };
 
+struct ReviewCodingEventBackend {
+    calls: Arc<Mutex<Vec<crate::harness::backend::DispatchRequest>>>,
+    pool: Mutex<Option<crate::db::DbPool>>,
+}
+
+#[async_trait::async_trait]
+impl crate::harness::backend::HarnessBackend for ReviewCodingEventBackend {
+    async fn dispatch(
+        &self,
+        request: crate::harness::backend::DispatchRequest,
+    ) -> anyhow::Result<crate::harness::backend::DispatchResult> {
+        let pool = self
+            .pool
+            .lock()
+            .expect("review test backend pool lock")
+            .clone()
+            .expect("review test backend pool configured");
+        let agent_key = request.agent_key.clone();
+        let run_id = request.run_id;
+        let is_review = request.sub_agent_kind == SUB_AGENT_KIND_REVIEW;
+        self.calls
+            .lock()
+            .expect("review test backend calls lock")
+            .push(request);
+
+        if is_review {
+            crate::memory::insert_memory(
+                &pool,
+                &agent_key,
+                &crate::memory::CreateMemory {
+                    scope_kind: crate::memory::model::MEMORY_SCOPE_AGENT.to_string(),
+                    instrument_ids: Vec::new(),
+                    timeframe: None,
+                    memory_type: "review".to_string(),
+                    summary: "Review requests a coding improvement".to_string(),
+                    content: "The analysis helper needs a targeted improvement.".to_string(),
+                    metadata: Some(serde_json::json!({
+                        "coding_requested": true,
+                        "coding_reason": "Improve the analysis helper."
+                    })),
+                    links: None,
+                },
+                Some(crate::memory::store::MemorySourceRun { run_id }),
+            )
+            .await?;
+        }
+
+        Ok(crate::harness::backend::DispatchResult {
+            backend_run_ref: "ses_review_coding_event".to_string(),
+        })
+    }
+}
+
 #[tokio::test]
-async fn manual_job_run_redirects_with_warning_during_analysis_coding_promotion() {
+async fn manual_job_run_redirects_with_warning_during_coding_promotion() {
     let state = test_state().await;
     let app = router(Arc::clone(&state));
     let (agent_key, _) = insert_test_opencode_agent(&state)
@@ -25,7 +81,7 @@ async fn manual_job_run_redirects_with_warning_during_analysis_coding_promotion(
         .expect("list jobs");
     let sub_agent_id = jobs
         .iter()
-        .find(|row| row.sub_agent_key == "analysis-15m")
+        .find(|row| row.sub_agent_key == "technical-15m")
         .expect("analysis job present")
         .id;
     sqlx::query(
@@ -34,14 +90,14 @@ async fn manual_job_run_redirects_with_warning_during_analysis_coding_promotion(
                 model_provider_id = 'test',
                 model_id = 'strong'
           WHERE agent_key = $1
-            AND sub_agent_kind = 'analysis_coding'",
+            AND sub_agent_kind = 'coding'",
     )
     .bind(&agent_key)
     .execute(&state.db_pool)
     .await
     .expect("configure coding event job");
     let coding_sub_agent_id: (i64,) = sqlx::query_as(
-        "SELECT id FROM harness_sub_agents WHERE agent_key = $1 AND sub_agent_kind = 'analysis_coding'",
+        "SELECT id FROM harness_sub_agents WHERE agent_key = $1 AND sub_agent_kind = 'coding'",
     )
     .bind(&agent_key)
     .fetch_one(&state.db_pool)
@@ -93,7 +149,7 @@ async fn manual_job_run_redirects_with_warning_during_analysis_coding_promotion(
         .get("location")
         .and_then(|value| value.to_str().ok())
         .expect("redirect location");
-    assert!(location.contains("/sub-agents?warning="));
+    assert!(location.contains("/analysis?warning="));
 }
 
 #[tokio::test]
@@ -117,7 +173,7 @@ async fn jobs_route_is_not_registered() {
 }
 
 #[tokio::test]
-async fn sub_agents_route_renders_create_sub_agent_button_and_runs_section() {
+async fn sub_agents_route_is_not_registered() {
     let state = test_state().await;
     let (agent_key, _wallet_address) = insert_test_opencode_agent(&state)
         .await
@@ -133,10 +189,31 @@ async fn sub_agents_route_renders_create_sub_agent_button_and_runs_section() {
         .await
         .unwrap();
 
+    // The generic sub-agents list route was replaced by role pages.
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn analysis_route_renders_create_sub_agent_button_and_runs_section() {
+    let state = test_state().await;
+    let (agent_key, _wallet_address) = insert_test_opencode_agent(&state)
+        .await
+        .expect("insert opencode agent");
+
+    let response = router(state.clone())
+        .oneshot(
+            Request::builder()
+                .uri(format!("/agents/{agent_key}/analysis"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
     assert_eq!(response.status(), StatusCode::OK);
     let text = response_text(response).await;
     assert!(text.contains("New sub-agent"));
-    assert!(text.contains(&format!("/agents/{agent_key}/sub-agents/new")));
+    assert!(text.contains(&format!("/agents/{agent_key}/analysis/new")));
     assert!(text.contains("Enable all"));
     assert!(!text.contains("Disable all"));
     assert!(text.contains("Recent Runs"));
@@ -181,7 +258,7 @@ async fn jobs_route_paginates_recent_runs() {
     let page_one = router(state.clone())
         .oneshot(
             Request::builder()
-                .uri(format!("/agents/{agent_key}/sub-agents"))
+                .uri(format!("/agents/{agent_key}/analysis"))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -191,12 +268,12 @@ async fn jobs_route_paginates_recent_runs() {
     let page_one_text = response_text(page_one).await;
     assert!(page_one_text.contains("Showing 1-10 of 12 runs"));
     assert!(page_one_text.contains("Page 1 of 2"));
-    assert!(page_one_text.contains(&format!("/agents/{agent_key}/sub-agents?page=2")));
+    assert!(page_one_text.contains(&format!("/agents/{agent_key}/analysis?page=2")));
 
     let page_two = router(state.clone())
         .oneshot(
             Request::builder()
-                .uri(format!("/agents/{agent_key}/sub-agents?page=2"))
+                .uri(format!("/agents/{agent_key}/analysis?page=2"))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -206,7 +283,7 @@ async fn jobs_route_paginates_recent_runs() {
     let page_two_text = response_text(page_two).await;
     assert!(page_two_text.contains("Showing 11-12 of 12 runs"));
     assert!(page_two_text.contains("Page 2 of 2"));
-    assert!(page_two_text.contains(&format!("/agents/{agent_key}/sub-agents?page=1")));
+    assert!(page_two_text.contains(&format!("/agents/{agent_key}/analysis?page=1")));
 }
 
 #[tokio::test]
@@ -470,7 +547,7 @@ async fn post_job_run_now_queues_and_dispatches_run() {
         .expect("seed instruments");
     let sub_agent_id = jobs
         .iter()
-        .find(|row| row.sub_agent_key == "analysis-15m")
+        .find(|row| row.sub_agent_key == "technical-15m")
         .map(|row| row.id)
         .expect("analysis job id");
 
@@ -511,7 +588,7 @@ async fn post_job_run_now_queues_and_dispatches_run() {
         assert_eq!(recorded.len(), 1);
         assert_eq!(recorded[0].sub_agent_id, sub_agent_id);
         assert_eq!(recorded[0].agent_key, agent_key);
-        assert_eq!(recorded[0].sub_agent_key, "analysis-15m");
+        assert_eq!(recorded[0].sub_agent_key, "technical-15m");
     }
 
     let runs = crate::harness::store::list_agent_runs(&pool, &agent_key, 10)
@@ -520,13 +597,19 @@ async fn post_job_run_now_queues_and_dispatches_run() {
     assert!(runs.iter().any(|run| run.sub_agent_id == sub_agent_id));
 }
 #[tokio::test]
-async fn post_analysis_job_run_now_triggers_market_analysis_event_after_success() {
+async fn post_review_job_run_now_triggers_coding_event_after_success() {
     let calls = Arc::new(Mutex::new(Vec::new()));
-    let backend = Arc::new(RecordingHarnessBackend {
+    let backend = Arc::new(ReviewCodingEventBackend {
         calls: Arc::clone(&calls),
+        pool: Mutex::new(None),
     });
-    let state = test_state_with_backend(backend).await;
+    let harness_backend: Arc<dyn crate::harness::backend::HarnessBackend> = backend.clone();
+    let state = test_state_with_backend(harness_backend).await;
     let pool = state.db_pool.clone();
+    *backend
+        .pool
+        .lock()
+        .expect("configure review test backend pool") = Some(pool.clone());
     let (agent_key, _wallet_address) = insert_test_opencode_agent(&state)
         .await
         .expect("insert opencode agent");
@@ -534,23 +617,31 @@ async fn post_analysis_job_run_now_triggers_market_analysis_event_after_success(
     replace_agent_instruments(&pool, &agent_key, &["BTC".to_string()])
         .await
         .expect("seed instruments");
-    let event_sub_agent_id = crate::harness::store::list_agent_sub_agents(&pool, &agent_key)
+    let coding_sub_agent_id = crate::harness::store::list_agent_sub_agents(&pool, &agent_key)
         .await
         .expect("list jobs")
         .into_iter()
-        .find(|job| job.sub_agent_kind == "market_analysis")
-        .expect("default event job present")
+        .find(|job| job.sub_agent_kind == SUB_AGENT_KIND_CODING)
+        .expect("coding job present")
         .id;
-    crate::harness::store::set_sub_agent_enabled(&pool, &agent_key, event_sub_agent_id, true)
-        .await
-        .expect("enable default event job");
+    sqlx::query(
+        "UPDATE harness_sub_agents
+            SET enabled = true,
+                model_provider_id = 'test',
+                model_id = 'strong'
+          WHERE id = $1",
+    )
+    .bind(coding_sub_agent_id)
+    .execute(&pool)
+    .await
+    .expect("configure coding job");
     let sub_agent_id = crate::harness::store::list_agent_sub_agents(&pool, &agent_key)
         .await
         .expect("list jobs")
         .into_iter()
-        .find(|row| row.sub_agent_key == "analysis-15m")
+        .find(|job| job.sub_agent_kind == SUB_AGENT_KIND_REVIEW)
         .map(|row| row.id)
-        .expect("analysis job id");
+        .expect("review job id");
 
     let response = router(state.clone())
         .oneshot(
@@ -564,26 +655,75 @@ async fn post_analysis_job_run_now_triggers_market_analysis_event_after_success(
         .unwrap();
 
     assert_eq!(response.status(), StatusCode::SEE_OTHER);
+    assert!(
+        response
+            .headers()
+            .get("location")
+            .and_then(|value| value.to_str().ok())
+            .is_some_and(|location| location.starts_with(&format!("/agents/{agent_key}/runs/"))),
+        "review Run now should queue a dispatch"
+    );
 
     let deadline = tokio::time::Instant::now() + tokio::time::Duration::from_secs(1);
     loop {
-        if calls.lock().unwrap().len() >= 2 {
+        if !calls
+            .lock()
+            .expect("review test backend calls lock")
+            .is_empty()
+        {
+            break;
+        }
+        if tokio::time::Instant::now() >= deadline {
+            let run = crate::harness::store::list_agent_runs(&pool, &agent_key, 10)
+                .await
+                .expect("load review run")
+                .into_iter()
+                .find(|run| run.sub_agent_id == sub_agent_id)
+                .expect("review run queued");
+            panic!(
+                "review dispatch was not spawned; status: {}, error: {:?}",
+                run.status, run.error_summary
+            );
+        }
+        tokio::time::sleep(tokio::time::Duration::from_millis(20)).await;
+    }
+    let review_run_id = calls.lock().expect("review test backend calls lock")[0].run_id;
+    assert!(
+        crate::memory::get_review_memory_for_run(&pool, &agent_key, review_run_id)
+            .await
+            .expect("load review memory")
+            .is_some(),
+        "review dispatch should write a coding-request memory"
+    );
+
+    loop {
+        if crate::harness::store::get_latest_analysis_coding_task(&pool, &agent_key)
+            .await
+            .expect("load queued coding task")
+            .is_some()
+        {
             break;
         }
         assert!(
             tokio::time::Instant::now() < deadline,
-            "analysis event dispatch was not spawned"
+            "review coding event was not queued"
         );
         tokio::time::sleep(tokio::time::Duration::from_millis(20)).await;
     }
 
-    let recorded = calls.lock().unwrap();
-    let sub_agent_keys: Vec<&str> = recorded
-        .iter()
-        .map(|request| request.sub_agent_key.as_str())
-        .collect();
-    assert!(sub_agent_keys.contains(&"analysis-15m"));
-    assert!(sub_agent_keys.contains(&"market-analysis"));
+    let dispatched_review_run_id = {
+        let recorded = calls.lock().expect("review test backend calls lock");
+        assert_eq!(recorded.len(), 1);
+        assert_eq!(recorded[0].sub_agent_kind, SUB_AGENT_KIND_REVIEW);
+        recorded[0].run_id
+    };
+
+    let task = crate::harness::store::get_latest_analysis_coding_task(&pool, &agent_key)
+        .await
+        .expect("load queued coding task")
+        .expect("coding task queued");
+    assert_eq!(task.sub_agent_id, Some(coding_sub_agent_id));
+    assert_eq!(task.source_sub_agent_run_id, Some(dispatched_review_run_id));
 }
 
 #[tokio::test]
@@ -605,7 +745,7 @@ async fn post_job_run_now_rejected_after_shutdown_signal() {
         .await
         .expect("list jobs")
         .into_iter()
-        .find(|row| row.sub_agent_key == "analysis-15m")
+        .find(|row| row.sub_agent_key == "technical-15m")
         .map(|row| row.id)
         .expect("analysis job id");
 
@@ -627,7 +767,7 @@ async fn post_job_run_now_rejected_after_shutdown_signal() {
         .and_then(|value| value.to_str().ok())
         .expect("redirect location");
     assert!(
-        location.contains("/sub-agents?warning="),
+        location.contains("/analysis?warning="),
         "expected shutdown warning redirect, got: {location}"
     );
     assert!(
@@ -661,7 +801,7 @@ async fn post_job_run_now_rejected_after_shutdown_signal() {
     );
 }
 #[tokio::test]
-async fn post_analysis_job_run_now_skipped_does_not_trigger_market_analysis_event() {
+async fn post_review_job_run_now_skipped_does_not_trigger_coding_event() {
     let calls = Arc::new(Mutex::new(Vec::new()));
     let backend = Arc::new(RecordingHarnessBackend {
         calls: Arc::clone(&calls),
@@ -671,23 +811,23 @@ async fn post_analysis_job_run_now_skipped_does_not_trigger_market_analysis_even
     let (agent_key, _wallet_address) = insert_test_opencode_agent(&state)
         .await
         .expect("insert opencode agent");
-    let event_sub_agent_id = crate::harness::store::list_agent_sub_agents(&pool, &agent_key)
+    let coding_sub_agent_id = crate::harness::store::list_agent_sub_agents(&pool, &agent_key)
         .await
         .expect("list jobs")
         .into_iter()
-        .find(|job| job.sub_agent_kind == "market_analysis")
-        .expect("default event job present")
+        .find(|job| job.sub_agent_kind == SUB_AGENT_KIND_CODING)
+        .expect("coding job present")
         .id;
-    crate::harness::store::set_sub_agent_enabled(&pool, &agent_key, event_sub_agent_id, true)
+    crate::harness::store::set_sub_agent_enabled(&pool, &agent_key, coding_sub_agent_id, true)
         .await
-        .expect("enable default event job");
+        .expect("enable coding job");
     let sub_agent_id = crate::harness::store::list_agent_sub_agents(&pool, &agent_key)
         .await
         .expect("list jobs")
         .into_iter()
-        .find(|row| row.sub_agent_key == "analysis-15m")
+        .find(|job| job.sub_agent_kind == SUB_AGENT_KIND_REVIEW)
         .map(|row| row.id)
-        .expect("analysis job id");
+        .expect("review job id");
     let active_run_id = crate::harness::store::insert_test_run(&pool, sub_agent_id, "running")
         .await
         .expect("insert active run");
@@ -711,7 +851,7 @@ async fn post_analysis_job_run_now_skipped_does_not_trigger_market_analysis_even
     assert!(calls.lock().unwrap().is_empty());
 }
 #[tokio::test]
-async fn post_trading_job_run_now_does_not_trigger_market_analysis_event() {
+async fn post_trading_job_run_now_does_not_trigger_coding_event() {
     let calls = Arc::new(Mutex::new(Vec::new()));
     let backend = Arc::new(RecordingHarnessBackend {
         calls: Arc::clone(&calls),
@@ -725,21 +865,21 @@ async fn post_trading_job_run_now_does_not_trigger_market_analysis_event() {
     replace_agent_instruments(&pool, &agent_key, &["BTC".to_string()])
         .await
         .expect("seed instruments");
-    let event_sub_agent_id = crate::harness::store::list_agent_sub_agents(&pool, &agent_key)
+    let coding_sub_agent_id = crate::harness::store::list_agent_sub_agents(&pool, &agent_key)
         .await
         .expect("list jobs")
         .into_iter()
-        .find(|job| job.sub_agent_kind == "market_analysis")
-        .expect("default event job present")
+        .find(|job| job.sub_agent_kind == SUB_AGENT_KIND_CODING)
+        .expect("coding job present")
         .id;
-    crate::harness::store::set_sub_agent_enabled(&pool, &agent_key, event_sub_agent_id, true)
+    crate::harness::store::set_sub_agent_enabled(&pool, &agent_key, coding_sub_agent_id, true)
         .await
-        .expect("enable default event job");
+        .expect("enable coding job");
     let sub_agent_id = crate::harness::store::list_agent_sub_agents(&pool, &agent_key)
         .await
         .expect("list jobs")
         .into_iter()
-        .find(|row| row.sub_agent_key == "trading-5m")
+        .find(|job| job.sub_agent_kind == SUB_AGENT_KIND_TRADING)
         .map(|row| row.id)
         .expect("trading job id");
 
@@ -776,7 +916,7 @@ async fn post_trading_job_run_now_does_not_trigger_market_analysis_event() {
     assert_eq!(recorded[0].sub_agent_kind, SUB_AGENT_KIND_TRADING);
 }
 #[tokio::test]
-async fn new_sub_agent_page_renders_for_opencode_agent() {
+async fn new_analysis_job_page_renders_for_opencode_agent() {
     let state = test_state().await;
     let (agent_key, _wallet_address) = insert_test_opencode_agent(&state)
         .await
@@ -785,7 +925,7 @@ async fn new_sub_agent_page_renders_for_opencode_agent() {
     let response = router(state.clone())
         .oneshot(
             Request::builder()
-                .uri(format!("/agents/{agent_key}/sub-agents/new"))
+                .uri(format!("/agents/{agent_key}/analysis/new"))
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -794,21 +934,19 @@ async fn new_sub_agent_page_renders_for_opencode_agent() {
 
     assert_eq!(response.status(), StatusCode::OK);
     let text = response_text(response).await;
-    assert!(text.contains("Create sub-agent"));
-    assert!(!text.contains("name=\"sub_agent_key\""));
-    assert!(text.contains("name=\"sub_agent_kind\""));
+    assert!(text.contains("Create analysis job"));
+    assert!(text.contains("name=\"sub_agent_key\""));
+    assert!(!text.contains("name=\"sub_agent_kind\""));
     assert!(!text.contains("name=\"trigger_type\""));
     assert!(text.contains("name=\"timeframe\""));
     assert!(text.contains("name=\"timeout_seconds\""));
     assert!(text.contains("data-model-picker-modal"));
-    assert!(!text.contains("data-model-picker-submit-on-save"));
-    assert!(!text.contains("value=\"market_analysis\""));
-    assert!(!text.contains("value=\"analysis_coding\""));
+    assert!(text.contains("data-model-picker-submit-on-save"));
     assert!(text.contains("Additional Instructions"));
     assert!(!text.contains("Operator prompt"));
 }
 #[tokio::test]
-async fn post_job_creates_new_job_and_redirects() {
+async fn post_analysis_job_creates_new_job_and_redirects() {
     let state = test_state().await;
     let pool = state.db_pool.clone();
     let (agent_key, _wallet_address) = insert_test_opencode_agent(&state)
@@ -819,10 +957,10 @@ async fn post_job_creates_new_job_and_redirects() {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri(format!("/agents/{agent_key}/sub-agents"))
+                .uri(format!("/agents/{agent_key}/analysis"))
                 .header("content-type", "application/x-www-form-urlencoded")
                 .body(Body::from(
-                    "trigger_type=daily_review_completed&sub_agent_kind=analysis&timeframe=4h&timeout_seconds=600&model_selection=&operator_prompt=Check+higher+timeframe+structure",
+                    "sub_agent_key=technical-4h&timeframe=4h&timeout_seconds=600&model_selection=&operator_prompt=Check+higher+timeframe+structure",
                 ))
                 .unwrap(),
         )
@@ -835,7 +973,7 @@ async fn post_job_creates_new_job_and_redirects() {
             .headers()
             .get("location")
             .and_then(|value| value.to_str().ok()),
-        Some(format!("/agents/{agent_key}/sub-agents").as_str())
+        Some(format!("/agents/{agent_key}/analysis").as_str())
     );
 
     let jobs = crate::harness::store::list_agent_sub_agents(&pool, &agent_key)
@@ -843,7 +981,7 @@ async fn post_job_creates_new_job_and_redirects() {
         .expect("list jobs");
     let job = jobs
         .iter()
-        .find(|row| row.sub_agent_key == "analysis-4h")
+        .find(|row| row.sub_agent_key == "technical-4h")
         .expect("custom job present");
     assert_eq!(job.sub_agent_kind, SUB_AGENT_KIND_ANALYSIS);
     assert!(!job.enabled);
@@ -854,44 +992,58 @@ async fn post_job_creates_new_job_and_redirects() {
     assert_eq!(job.operator_prompt, "Check higher timeframe structure");
 }
 #[tokio::test]
-async fn post_job_recreates_missing_singleton_event_job() {
+async fn post_role_page_recreates_missing_trading_singleton() {
     let state = test_state().await;
     let pool = state.db_pool.clone();
     let (agent_key, _wallet_address) = insert_test_opencode_agent(&state)
         .await
         .expect("insert opencode agent");
 
-    sqlx::query("DELETE FROM harness_sub_agents WHERE agent_key = $1 AND sub_agent_kind = 'market_analysis'")
-        .bind(&agent_key)
-        .execute(&pool)
+    let trading_sub_agent_id = crate::harness::store::list_agent_sub_agents(&pool, &agent_key)
         .await
-        .expect("delete default market analysis job");
+        .expect("list jobs")
+        .into_iter()
+        .find(|job| job.sub_agent_kind == SUB_AGENT_KIND_TRADING)
+        .expect("default trading singleton")
+        .id;
+    let deleted = crate::harness::service::delete_idle_job(
+        &pool,
+        &state.opencode_client,
+        &state.workspace_leases,
+        &state.opencode_base_url,
+        &state.opencode_container_workspaces_root,
+        &agent_key,
+        trading_sub_agent_id,
+    )
+    .await
+    .expect("delete default trading singleton");
+    assert!(matches!(
+        deleted,
+        crate::harness::service::DeleteJobOutcome::Deleted
+    ));
 
-    let new_job_page = router(state.clone())
+    let role_page = router(state.clone())
         .oneshot(
             Request::builder()
-                .uri(format!("/agents/{agent_key}/sub-agents/new"))
+                .uri(format!("/agents/{agent_key}/trading"))
                 .body(Body::empty())
                 .unwrap(),
         )
         .await
         .unwrap();
-    assert_eq!(new_job_page.status(), StatusCode::OK);
+    assert_eq!(role_page.status(), StatusCode::OK);
     assert!(
-        response_text(new_job_page)
+        response_text(role_page)
             .await
-            .contains("value=\"market_analysis\"")
+            .contains("No Trading sub-agent")
     );
 
     let response = router(state.clone())
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri(format!("/agents/{agent_key}/sub-agents"))
-                .header("content-type", "application/x-www-form-urlencoded")
-                .body(Body::from(
-                    "sub_agent_kind=market_analysis&timeout_seconds=600&model_selection=",
-                ))
+                .uri(format!("/agents/{agent_key}/trading"))
+                .body(Body::empty())
                 .unwrap(),
         )
         .await
@@ -903,9 +1055,9 @@ async fn post_job_recreates_missing_singleton_event_job() {
         .expect("list jobs");
     let job = jobs
         .iter()
-        .find(|row| row.sub_agent_kind == "market_analysis")
-        .expect("market analysis job recreated");
-    assert_eq!(job.timeframe, None);
+        .find(|row| row.sub_agent_kind == SUB_AGENT_KIND_TRADING)
+        .expect("trading singleton recreated");
+    assert_eq!(job.timeframe.as_deref(), Some("5m"));
 }
 #[tokio::test]
 async fn post_toggle_all_jobs_updates_all_jobs() {
@@ -932,7 +1084,7 @@ async fn post_toggle_all_jobs_updates_all_jobs() {
         .await
         .expect("list jobs");
     for job in &jobs {
-        if job.sub_agent_kind == crate::harness::model::SUB_AGENT_KIND_ANALYSIS_CODING {
+        if job.sub_agent_kind == crate::harness::model::SUB_AGENT_KIND_CODING {
             assert!(
                 !job.enabled,
                 "coding job {} must remain disabled after bulk enable",
@@ -979,10 +1131,10 @@ async fn post_sub_agent_with_duplicate_type_timeframe_returns_validation_error()
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri(format!("/agents/{agent_key}/sub-agents"))
+                .uri(format!("/agents/{agent_key}/analysis"))
                 .header("content-type", "application/x-www-form-urlencoded")
                 .body(Body::from(
-                    "trigger_type=candle_closed&sub_agent_kind=analysis&timeframe=15m&timeout_seconds=600&model_selection=",
+                    "sub_agent_key=technical-15m&timeframe=4h&timeout_seconds=600&model_selection=",
                 ))
                 .unwrap(),
         )
@@ -991,9 +1143,7 @@ async fn post_sub_agent_with_duplicate_type_timeframe_returns_validation_error()
 
     assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
     let text = response_text(response).await;
-    assert!(
-        text.contains("A sub-agent with this type and timeframe already exists for this agent.")
-    );
+    assert!(text.contains("A sub-agent with this key already exists for this agent."));
 }
 #[tokio::test]
 async fn job_detail_page_renders_job_specific_runs() {
@@ -1008,7 +1158,7 @@ async fn job_detail_page_renders_job_specific_runs() {
         .expect("list jobs");
     let sub_agent_id = jobs
         .iter()
-        .find(|job| job.sub_agent_key == "analysis-15m")
+        .find(|job| job.sub_agent_key == "technical-15m")
         .expect("analysis candle job")
         .id;
     let run_id = crate::harness::store::insert_test_run(&pool, sub_agent_id, "running")
@@ -1311,7 +1461,7 @@ async fn post_job_timeout_updates_and_redirects() {
     assert_eq!(job.timeout_seconds, 20 * 60);
 }
 #[tokio::test]
-async fn post_job_timeframe_reanchors_job_and_regenerates_sub_agent_key() {
+async fn post_job_timeframe_keeps_durable_analysis_key() {
     let state = test_state().await;
     let pool = state.db_pool.clone();
     let (agent_key, _wallet_address) = insert_test_opencode_agent(&state)
@@ -1321,7 +1471,7 @@ async fn post_job_timeframe_reanchors_job_and_regenerates_sub_agent_key() {
         .await
         .expect("list jobs")
         .into_iter()
-        .find(|job| job.sub_agent_key == "analysis-15m")
+        .find(|job| job.sub_agent_key == "technical-15m")
         .expect("analysis job present");
 
     let response = router(state.clone())
@@ -1353,7 +1503,9 @@ async fn post_job_timeframe_reanchors_job_and_regenerates_sub_agent_key() {
         .expect("get job")
         .expect("job present");
     assert_eq!(updated.timeframe.as_deref(), Some("4h"));
-    assert_eq!(updated.sub_agent_key, "analysis-4h");
+    // Analysis keys are durable user identities; a timeframe change must
+    // not regenerate them.
+    assert_eq!(updated.sub_agent_key, "technical-15m");
     let next_run_at = updated.next_run_at.expect("candle job has next run time");
     assert!(next_run_at > chrono::Utc::now());
     assert_eq!(

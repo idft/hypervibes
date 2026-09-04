@@ -15,14 +15,14 @@ use crate::web::error::AppError;
 use crate::{
     agents::store::{get_agent, list_agent_instrument_ids},
     hyperliquid::live_state::{AccountKey, AccountLiveState, LiveConnectionStatus},
-    memory::{get_latest_agent_memory_by_type, get_memory as get_memory_record, memory_expires_at},
+    memory::{get_latest_trading_decision, get_memory as get_memory_record, memory_expires_at},
     web::{
         AppState,
         templates::{
             AccountBalancePartialTemplate, AccountBalanceView,
-            LatestAnalysisSummaryPartialTemplate, LatestTradeExecutionSummaryPartialTemplate,
-            LiveAccountHealthPartialTemplate, LiveAccountHealthView, OpenOrdersPartialTemplate,
-            OpenOrdersView, OpenPositionsPartialTemplate, OpenPositionsView,
+            LatestTradeDecisionSummaryPartialTemplate, LiveAccountHealthPartialTemplate,
+            LiveAccountHealthView, OpenOrdersPartialTemplate, OpenOrdersView,
+            OpenPositionsPartialTemplate, OpenPositionsView,
         },
         ui_events::UiEvent,
     },
@@ -80,9 +80,7 @@ pub(in crate::web::routes) async fn agent_live_stream(
         &agent.agent_key,
     )?;
     initial_events
-        .push(render_latest_trade_execution_summary_event(&state.db_pool, &agent.agent_key).await?);
-    initial_events
-        .push(render_latest_analysis_summary_event(&state.db_pool, &agent.agent_key).await?);
+        .push(render_latest_trade_decision_summary_event(&state.db_pool, &agent.agent_key).await?);
 
     let account_key_filter = account_key.clone();
     let account_key_for_notifications = account_key.clone();
@@ -155,43 +153,30 @@ pub(in crate::web::routes) async fn agent_live_stream(
             let db_pool = summary_db_pool.clone();
             let agent_key = summary_agent_key_render.clone();
             async move {
-                let (needs_trade_execution, needs_analysis) = match notification {
+                let needs_decision_update = match notification {
                     MemoryNotification::Some(memory_id) => {
                         match get_memory_record(&db_pool, &agent_key, memory_id).await {
-                            Ok(Some(memory)) => match memory.memory_type.as_str() {
-                                "trade_execution" => (true, false),
-                                "market_analysis" => (false, true),
-                                _ => (false, false),
-                            },
-                            Ok(None) => (false, false),
+                            Ok(Some(memory)) => memory.memory_type == "trading_decision",
+                            Ok(None) => false,
                             Err(error) => {
                                 warn!(agent_key = %agent_key, error = ?error, "failed to inspect memory event for live summary update");
-                                (false, false)
+                                false
                             }
                         }
                     }
                     MemoryNotification::Lagged => {
-                        // Lagged notification: we may have missed a memory
-                        // of either type, so re-render both summaries to
-                        // catch up.
-                        (true, true)
+                        // Lagged notification: we may have missed a decision
+                        // memory, so re-render the summary to catch up.
+                        true
                     }
                 };
 
                 let mut events = Vec::new();
-                if needs_trade_execution {
-                    match render_latest_trade_execution_summary_event(&db_pool, &agent_key).await {
+                if needs_decision_update {
+                    match render_latest_trade_decision_summary_event(&db_pool, &agent_key).await {
                         Ok(event) => events.push(Ok::<Event, Infallible>(event)),
                         Err(error) => {
-                            warn!(agent_key = %agent_key, error = ?error, "failed to render latest trade execution summary SSE event");
-                        }
-                    }
-                }
-                if needs_analysis {
-                    match render_latest_analysis_summary_event(&db_pool, &agent_key).await {
-                        Ok(event) => events.push(Ok::<Event, Infallible>(event)),
-                        Err(error) => {
-                            warn!(agent_key = %agent_key, error = ?error, "failed to render latest analysis summary SSE event");
+                            warn!(agent_key = %agent_key, error = ?error, "failed to render latest trade decision summary SSE event");
                         }
                     }
                 }
@@ -313,31 +298,21 @@ pub(in crate::web::routes) fn render_open_orders_event(
     let html = OpenOrdersPartialTemplate::render_view(view)?;
     Ok(Event::default().event("orders").data(html))
 }
-pub(in crate::web::routes) async fn render_latest_trade_execution_summary_event(
+pub(in crate::web::routes) async fn render_latest_trade_decision_summary_event(
     pool: &crate::db::DbPool,
     agent_key: &str,
 ) -> Result<Event, AppError> {
-    let latest = get_latest_agent_memory_by_type(pool, agent_key, "trade_execution").await?;
-    let summary = latest.as_ref().map(|memory| memory.summary.clone());
-    let created_at = latest.as_ref().map(|memory| memory.created_at);
-    let html = LatestTradeExecutionSummaryPartialTemplate::render_view(summary, created_at)?;
-    Ok(Event::default()
-        .event("latest-trade-execution-summary")
-        .data(html))
-}
-pub(in crate::web::routes) async fn render_latest_analysis_summary_event(
-    pool: &crate::db::DbPool,
-    agent_key: &str,
-) -> Result<Event, AppError> {
-    let latest = get_latest_agent_memory_by_type(pool, agent_key, "market_analysis").await?;
+    let latest = get_latest_trading_decision(pool, agent_key).await?;
     let detail_url = latest
         .as_ref()
         .map(|memory| format!("/agents/{agent_key}/memories/{}", memory.id));
     let summary = latest.as_ref().map(|memory| memory.summary.clone());
     let created_at = latest.as_ref().map(|memory| memory.created_at);
     let expires_at = latest.as_ref().and_then(memory_expires_at);
-    let html = LatestAnalysisSummaryPartialTemplate::render_view(
+    let html = LatestTradeDecisionSummaryPartialTemplate::render_view(
         summary, detail_url, created_at, expires_at,
     )?;
-    Ok(Event::default().event("latest-analysis-summary").data(html))
+    Ok(Event::default()
+        .event("latest-trade-decision-summary")
+        .data(html))
 }

@@ -10,13 +10,7 @@ use tokio::sync::{Mutex as AsyncMutex, OwnedMutexGuard, Semaphore, watch};
 use tracing::{debug, error, info, warn};
 
 use crate::{
-    agents::{
-        store::{get_agent, list_agent_instrument_ids},
-        strategy_prompts::{
-            PROMPT_KIND_ANALYSIS, PROMPT_KIND_ANALYSIS_CODING, default_prompt_for_kind,
-            get_agent_strategy_prompt, prompt_kind_for_sub_agent_kind,
-        },
-    },
+    agents::store::{get_agent, list_agent_instrument_ids},
     db::DbPool,
     harness::{
         backend::{
@@ -25,8 +19,8 @@ use crate::{
         },
         in_flight::{InFlightTracker, SHUTDOWN_IN_FLIGHT_GRACE},
         model::{
-            HarnessDispatchSubAgentRow, SUB_AGENT_KIND_ANALYSIS, SUB_AGENT_KIND_ANALYSIS_CODING,
-            SUB_AGENT_KIND_DAILY_REVIEW, SUB_AGENT_KIND_MARKET_ANALYSIS, SUB_AGENT_KIND_TRADING,
+            HarnessDispatchSubAgentRow, SUB_AGENT_KIND_ANALYSIS, SUB_AGENT_KIND_CODING,
+            SUB_AGENT_KIND_REVIEW, SUB_AGENT_KIND_TRADING,
         },
         store,
         timeframe::{boundary_for_due_at, parse_timeframe_seconds},
@@ -57,7 +51,7 @@ const QUEUED_RUN_RESUME_LIMIT: i64 = 20;
 /// fake implementation. In production this is `OpenCodeBackend`.
 ///
 /// CandleSubAgents for the same agent run in two independent lanes:
-/// analysis-lane work (`analysis` plus `market_analysis` events) and
+/// analysis-lane work (Analysis and Review) and
 /// trading-lane work (`trading`). Different agents may also run
 /// concurrently.
 pub struct HarnessScheduler {
@@ -352,18 +346,18 @@ impl HarnessScheduler {
             }
 
             let mut analysis_jobs = Vec::new();
-            let mut daily_review_jobs = Vec::new();
+            let mut review_jobs = Vec::new();
             let mut trading_jobs = Vec::new();
             for candle_job in jobs {
                 match candle_job.sub_agent_kind.as_str() {
                     SUB_AGENT_KIND_ANALYSIS => analysis_jobs.push(candle_job),
-                    SUB_AGENT_KIND_DAILY_REVIEW => daily_review_jobs.push(candle_job),
+                    SUB_AGENT_KIND_REVIEW => review_jobs.push(candle_job),
                     SUB_AGENT_KIND_TRADING => trading_jobs.push(candle_job),
                     _ => {}
                 }
             }
 
-            if (!analysis_jobs.is_empty() || !daily_review_jobs.is_empty())
+            if (!analysis_jobs.is_empty() || !review_jobs.is_empty())
                 && let Some(lane_guard) = self
                     .lane_locks
                     .try_acquire(&agent_key, CandleSubAgentrLane::Analysis)
@@ -387,7 +381,7 @@ impl HarnessScheduler {
                         &live_accounts,
                         &agent_key,
                         sort_analysis_jobs_for_dispatch(analysis_jobs),
-                        sort_analysis_jobs_for_dispatch(daily_review_jobs),
+                        sort_analysis_jobs_for_dispatch(review_jobs),
                         &workspace_leases,
                     )
                     .await;
@@ -438,9 +432,7 @@ impl HarnessScheduler {
         {
             let lane = match run.sub_agent_kind.as_str() {
                 SUB_AGENT_KIND_TRADING => CandleSubAgentrLane::Trading,
-                SUB_AGENT_KIND_ANALYSIS
-                | SUB_AGENT_KIND_MARKET_ANALYSIS
-                | SUB_AGENT_KIND_DAILY_REVIEW => CandleSubAgentrLane::Analysis,
+                SUB_AGENT_KIND_ANALYSIS | SUB_AGENT_KIND_REVIEW => CandleSubAgentrLane::Analysis,
                 _ => continue,
             };
             let Some(lane_guard) = self.lane_locks.try_acquire(&run.agent_key, lane) else {
@@ -885,28 +877,11 @@ async fn resume_queued_run(
         workspace_leases,
     )
     .await;
-    if queued_run.sub_agent_kind == SUB_AGENT_KIND_ANALYSIS
+    if queued_run.sub_agent_kind == SUB_AGENT_KIND_REVIEW
         && result.succeeded
-        && let Err(error) = dispatch_analysis_batch_completed_event(
-            pool,
-            backend,
-            workspace_controller,
-            agent_api_base_url,
-            live_accounts,
-            &queued_run.agent_key,
-            workspace_leases,
-            opencode_base_url,
-        )
-        .await
+        && let Err(error) = dispatch_review_coding_event(pool, &queued_run.agent_key, run_id).await
     {
-        warn!(run_id, error = ?error, "failed to dispatch queued analysis follow-up");
-    }
-    if queued_run.sub_agent_kind == SUB_AGENT_KIND_DAILY_REVIEW
-        && result.succeeded
-        && let Err(error) =
-            dispatch_daily_review_coding_event(pool, &queued_run.agent_key, run_id).await
-    {
-        warn!(run_id, error = ?error, "failed to dispatch queued daily-review follow-up");
+        warn!(run_id, error = ?error, "failed to dispatch queued review follow-up");
     }
 }
 
@@ -1114,16 +1089,23 @@ async fn run_coding_task(
         fail_coding_task(pool, task.id, run_id, "coding request could not be built").await?;
         return Ok(());
     };
-    let analysis_strategy_prompt =
-        get_agent_strategy_prompt(pool, &task.agent_key, PROMPT_KIND_ANALYSIS)
-            .await?
-            .map(|row| row.prompt);
+    let analysis_strategy_prompts = load_enabled_analysis_prompt_context(pool, &task.agent_key)
+        .await?
+        .map(|context| {
+            anyhow::ensure!(
+                context.len() <= ANALYSIS_PROMPT_CONTEXT_MAX_CHARS,
+                "aggregate enabled analysis prompt context exceeds the dispatch limit"
+            );
+            Ok(context)
+        })
+        .transpose()?
+        .unwrap_or_default();
     request.runtime_config = serde_json::json!({
         "workspace_container_path": candidate.workspace_container_path,
         "profile_source": "agent-runtime/workspace-template",
         "coding_task_id": task.id,
         "coding_mode": effective_mode,
-        "analysis_strategy_prompt": analysis_strategy_prompt,
+        "analysis_strategy_prompts": analysis_strategy_prompts,
     });
     let outcome = dispatch_coding_model(pool, backend.clone(), request, task.id).await?;
     if !outcome.succeeded {
@@ -1525,9 +1507,10 @@ async fn write_coding_result_memory(
         }
     }));
     let input = crate::memory::CreateMemory {
-        symbol: "__agent__".to_string(),
+        scope_kind: crate::memory::model::MEMORY_SCOPE_AGENT.to_string(),
+        instrument_ids: Vec::new(),
         timeframe: None,
-        memory_type: "analysis_coding".to_string(),
+        memory_type: "coding_result".to_string(),
         summary: result.summary.to_string(),
         content: format!(
             "Coding task {} finished with outcome {}.\n\nModel summary: {}\n\nRationale: {}\n\nValidation notes: {}",
@@ -1543,8 +1526,8 @@ async fn write_coding_result_memory(
             "run_id": task.run_id,
             "source_sub_agent_run_id": task.source_sub_agent_run_id,
             "source_memory_id": task.source_memory_id,
-            "source_daily_review_run_id": task.source_sub_agent_run_id,
-            "source_daily_review_memory_id": task.source_memory_id,
+            "source_review_run_id": task.source_sub_agent_run_id,
+            "source_review_memory_id": task.source_memory_id,
             "outcome": result.outcome,
             "mode": task.parameters.get("mode"),
             "changed_paths": result.changed_paths,
@@ -1562,7 +1545,7 @@ async fn write_coding_result_memory(
         })),
         links: Some(links),
     };
-    crate::memory::insert_memory(pool, &task.agent_key, &input).await?;
+    crate::memory::insert_memory(pool, &task.agent_key, &input, None).await?;
     Ok(())
 }
 
@@ -1587,18 +1570,12 @@ async fn process_analysis_lane_for_agent(
     live_accounts: &Arc<LiveAccountStore>,
     agent_key: &str,
     jobs: Vec<HarnessDispatchSubAgentRow>,
-    daily_review_jobs: Vec<HarnessDispatchSubAgentRow>,
+    review_jobs: Vec<HarnessDispatchSubAgentRow>,
     workspace_leases: &WorkspaceLeaseManager,
 ) {
-    let opencode_base_url = jobs
-        .first()
-        .or_else(|| daily_review_jobs.first())
-        .map(|candle_job| candle_job.opencode_base_url.clone())
-        .unwrap_or_else(|| "http://localhost:14096".to_string());
     let _lease = workspace_leases.acquire_live_read(agent_key).await;
-    let mut any_succeeded = false;
     for candle_job in jobs {
-        if process_candle_job_for_agent(
+        let _ = process_candle_job_for_agent(
             pool,
             backend,
             workspace_controller,
@@ -1608,30 +1585,10 @@ async fn process_analysis_lane_for_agent(
             candle_job,
             workspace_leases,
         )
-        .await
-        .is_some()
-        {
-            any_succeeded = true;
-        }
+        .await;
     }
 
-    if any_succeeded
-        && let Err(error) = dispatch_analysis_batch_completed_event(
-            pool,
-            backend,
-            workspace_controller,
-            agent_api_base_url,
-            live_accounts,
-            agent_key,
-            workspace_leases,
-            &opencode_base_url,
-        )
-        .await
-    {
-        warn!(agent_key, error = ?error, "failed to dispatch analysis batch completed event");
-    }
-
-    for candle_job in daily_review_jobs {
+    for candle_job in review_jobs {
         if let Some(run_id) = process_candle_job_for_agent(
             pool,
             backend,
@@ -1643,9 +1600,9 @@ async fn process_analysis_lane_for_agent(
             workspace_leases,
         )
         .await
-            && let Err(error) = dispatch_daily_review_coding_event(pool, agent_key, run_id).await
+            && let Err(error) = dispatch_review_coding_event(pool, agent_key, run_id).await
         {
-            warn!(agent_key, error = ?error, "failed to process daily-review coding request");
+            warn!(agent_key, error = ?error, "failed to process review coding request");
         }
     }
 }
@@ -1851,9 +1808,13 @@ pub async fn build_dispatch_request(
     }
 
     let system_prompt = crate::agents::prompts::SYSTEM_PROMPT.to_string();
-    let (strategy_prompt, strategy_prompt_revision) =
-        load_strategy_prompt_snapshot(pool, &candle_job.agent_key, &candle_job.sub_agent_kind)
-            .await?;
+    let (strategy_prompt, strategy_prompt_revision) = load_strategy_prompt_snapshot(
+        pool,
+        &candle_job.agent_key,
+        candle_job.sub_agent_id,
+        &candle_job.sub_agent_kind,
+    )
+    .await?;
     let (accumulated_learnings, accumulated_learning_memory_id) =
         load_accumulated_learning_snapshot(pool, &candle_job.agent_key).await?;
 
@@ -1888,31 +1849,29 @@ pub async fn build_dispatch_request(
     Ok(Some(request))
 }
 
-pub(crate) async fn dispatch_daily_review_coding_event(
+pub(crate) async fn dispatch_review_coding_event(
     pool: &DbPool,
     agent_key: &str,
     source_sub_agent_run_id: i64,
 ) -> Result<()> {
     let Some(memory) =
-        crate::memory::get_daily_review_memory_for_run(pool, agent_key, source_sub_agent_run_id)
-            .await?
+        crate::memory::get_review_memory_for_run(pool, agent_key, source_sub_agent_run_id).await?
     else {
         debug!(
             agent_key,
-            source_sub_agent_run_id, "daily review wrote no linked memory"
+            source_sub_agent_run_id, "review wrote no linked memory"
         );
         return Ok(());
     };
     let requested = memory
         .metadata
-        .get("analysis_coding_requested")
+        .get("coding_requested")
         .and_then(serde_json::Value::as_bool)
         .unwrap_or(false);
     if !requested {
         return Ok(());
     }
-    let Some(event) =
-        store::get_enabled_sub_agent(pool, agent_key, SUB_AGENT_KIND_ANALYSIS_CODING).await?
+    let Some(event) = store::get_enabled_sub_agent(pool, agent_key, SUB_AGENT_KIND_CODING).await?
     else {
         debug!(agent_key, "coding event is disabled or missing");
         return Ok(());
@@ -1923,12 +1882,12 @@ pub(crate) async fn dispatch_daily_review_coding_event(
             agent_key,
             sub_agent_id: event.id,
             trigger_mode: store::CodingTriggerMode::Automatic,
-            request_origin: "daily_review",
+            request_origin: "review",
             source_sub_agent_run_id: Some(source_sub_agent_run_id),
             source_memory_id: Some(memory.id),
             operator_prompt: memory
                 .metadata
-                .get("analysis_coding_reason")
+                .get("coding_reason")
                 .and_then(serde_json::Value::as_str),
             requested_mode: Some("auto"),
         },
@@ -1956,8 +1915,13 @@ pub async fn build_event_dispatch_request(
     }
 
     let system_prompt = crate::agents::prompts::SYSTEM_PROMPT.to_string();
-    let (strategy_prompt, strategy_prompt_revision) =
-        load_strategy_prompt_snapshot(pool, &event.agent_key, &event.sub_agent_kind).await?;
+    let (strategy_prompt, strategy_prompt_revision) = load_strategy_prompt_snapshot(
+        pool,
+        &event.agent_key,
+        event.sub_agent_id,
+        &event.sub_agent_kind,
+    )
+    .await?;
     let (accumulated_learnings, accumulated_learning_memory_id) =
         load_accumulated_learning_snapshot(pool, &event.agent_key).await?;
 
@@ -1990,29 +1954,71 @@ async fn apply_run_model_snapshot(pool: &DbPool, request: &mut DispatchRequest) 
     Ok(())
 }
 
+/// Bound the aggregate Coding context built from every enabled Analysis
+/// job's current prompt. Dispatch fails rather than silently truncating it.
+const ANALYSIS_PROMPT_CONTEXT_MAX_CHARS: usize = 400_000;
+
+/// Build the aggregate read-only Analysis prompt context handed to Coding
+/// jobs: every enabled Analysis job's sub-agent key, active revision, and
+/// full prompt.
+async fn load_enabled_analysis_prompt_context(
+    pool: &DbPool,
+    agent_key: &str,
+) -> Result<Option<String>> {
+    let jobs: Vec<(i64, String)> = sqlx::query_as(
+        "SELECT id, sub_agent_key FROM harness_sub_agents
+          WHERE agent_key = $1 AND sub_agent_kind = 'analysis' AND enabled = true
+          ORDER BY sub_agent_key",
+    )
+    .bind(agent_key)
+    .fetch_all(pool)
+    .await
+    .context("failed to list enabled analysis jobs for coding context")?;
+    if jobs.is_empty() {
+        return Ok(None);
+    }
+    let mut context = String::new();
+    for (sub_agent_id, sub_agent_key) in jobs {
+        let prompt = crate::agents::strategy_prompts::get_agent_strategy_prompt(
+            pool,
+            agent_key,
+            sub_agent_id,
+        )
+        .await?
+        .context("enabled analysis job is missing an active prompt revision")?;
+        context.push_str(&format!(
+            "### Analysis job `{sub_agent_key}` (revision {})\n\n{}\n\n",
+            prompt.revision_id, prompt.prompt
+        ));
+    }
+    Ok(Some(context))
+}
+
 fn requires_selected_instruments(sub_agent_kind: &str) -> bool {
     matches!(
         sub_agent_kind,
-        SUB_AGENT_KIND_ANALYSIS | SUB_AGENT_KIND_MARKET_ANALYSIS | SUB_AGENT_KIND_TRADING
+        SUB_AGENT_KIND_ANALYSIS | SUB_AGENT_KIND_TRADING
     )
 }
 
 async fn load_strategy_prompt_snapshot(
     pool: &DbPool,
     agent_key: &str,
+    sub_agent_id: i64,
     sub_agent_kind: &str,
 ) -> Result<(String, i64)> {
-    let prompt_kind = prompt_kind_for_sub_agent_kind(sub_agent_kind)
-        .ok_or_else(|| anyhow!("unknown prompt kind for job kind {sub_agent_kind}"))?;
-    let stored = get_agent_strategy_prompt(pool, agent_key, prompt_kind).await?;
+    let stored =
+        crate::agents::strategy_prompts::get_agent_strategy_prompt(pool, agent_key, sub_agent_id)
+            .await?;
     let revision = stored.as_ref().map(|row| row.revision_id).unwrap_or(1);
     let prompt = stored.map(|row| row.prompt).unwrap_or_default();
-    Ok((effective_strategy_prompt(prompt_kind, prompt), revision))
+    Ok((effective_strategy_prompt(sub_agent_kind, prompt), revision))
 }
 
-fn effective_strategy_prompt(prompt_kind: &str, stored: String) -> String {
-    if prompt_kind == PROMPT_KIND_ANALYSIS_CODING && stored.trim().is_empty() {
-        return default_prompt_for_kind(prompt_kind).to_string();
+fn effective_strategy_prompt(sub_agent_kind: &str, stored: String) -> String {
+    if sub_agent_kind == SUB_AGENT_KIND_CODING && stored.trim().is_empty() {
+        return crate::agents::strategy_prompts::default_prompt_for_role(sub_agent_kind)
+            .to_string();
     }
     stored
 }
@@ -2039,100 +2045,6 @@ async fn load_accumulated_learning_snapshot(
             })
             .map_or((None, None), |(content, id)| (Some(content), Some(id))),
     )
-}
-
-#[expect(
-    clippy::too_many_arguments,
-    reason = "the follow-up event dispatch is invoked by both scheduler and manual-run paths"
-)]
-pub async fn dispatch_analysis_batch_completed_event(
-    pool: &DbPool,
-    backend: &Arc<dyn HarnessBackend>,
-    workspace_controller: &Arc<dyn WorkspaceController>,
-    agent_api_base_url: &str,
-    _live_accounts: &Arc<LiveAccountStore>,
-    agent_key: &str,
-    workspace_leases: &WorkspaceLeaseManager,
-    opencode_base_url: &str,
-) -> Result<()> {
-    let Some(event) =
-        store::get_enabled_sub_agent(pool, agent_key, SUB_AGENT_KIND_MARKET_ANALYSIS).await?
-    else {
-        debug!(
-            agent_key,
-            "no enabled analysis batch completed event configured"
-        );
-        return Ok(());
-    };
-
-    match store::insert_queued_event_run_for_automatic_dispatch(pool, agent_key, event.id).await? {
-        store::QueuedSubAgentRun::Dispatch {
-            run_id,
-            scheduled_for,
-            ..
-        } => {
-            let Some(event_dispatch) =
-                store::get_dispatch_sub_agent(pool, agent_key, event.id, opencode_base_url).await?
-            else {
-                let _ =
-                    store::mark_run_failed(pool, run_id, "event disappeared before dispatch", None)
-                        .await;
-                return Ok(());
-            };
-
-            match build_event_dispatch_request(pool, &event_dispatch, run_id, scheduled_for).await {
-                Ok(Some(request)) => {
-                    let _ = dispatch_run_in_isolated_workspace_with_workspace_lease(
-                        pool.clone(),
-                        backend.clone(),
-                        workspace_controller.clone(),
-                        agent_api_base_url.to_string(),
-                        request,
-                        workspace_leases,
-                    )
-                    .await;
-                }
-                Ok(None) => {
-                    let _ = store::mark_run_failed(
-                        pool,
-                        run_id,
-                        "no currencies selected for agent; job skipped",
-                        None,
-                    )
-                    .await;
-                }
-                Err(error) => {
-                    let _ = store::mark_run_failed(pool, run_id, "dispatch request errored", None)
-                        .await;
-                    return Err(error);
-                }
-            }
-        }
-        store::QueuedSubAgentRun::Skipped { run_id } => {
-            info!(
-                agent_key,
-                sub_agent_id = event.id,
-                run_id,
-                "event run skipped because previous analysis-lane run is still active"
-            );
-        }
-        store::QueuedSubAgentRun::Missing => {
-            debug!(
-                agent_key,
-                sub_agent_id = event.id,
-                "event disappeared before queue insert"
-            );
-        }
-        store::QueuedSubAgentRun::BlockedByMaintenance => {
-            warn!(
-                agent_key,
-                sub_agent_id = event.id,
-                "automatic follow-up event was unexpectedly blocked by maintenance"
-            );
-        }
-    }
-
-    Ok(())
 }
 
 /// Run a single dispatch through the backend, awaiting its completion.
@@ -2286,11 +2198,6 @@ fn build_run_context_snapshot(
     request: &DispatchRequest,
     quantitative_package: Option<workspace_store::workspace::QuantitativePackageSnapshot>,
 ) -> Result<crate::harness::model::RunContextSnapshot> {
-    let mut strategy_prompt_revisions = serde_json::Map::new();
-    strategy_prompt_revisions.insert(
-        request.sub_agent_kind.clone(),
-        serde_json::Value::from(request.strategy_prompt_revision),
-    );
     let account_snapshot_metadata = request
         .account_snapshot
         .as_ref()
@@ -2312,7 +2219,10 @@ fn build_run_context_snapshot(
         "model_variant": request.model_variant,
         "timeout_seconds": request.timeout_seconds,
         "selected_instruments": request.selected_instruments,
-        "strategy_prompt_revisions": strategy_prompt_revisions,
+        "strategy_prompt_revision": {
+            "target_sub_agent_id": request.sub_agent_id,
+            "revision_id": request.strategy_prompt_revision,
+        },
         "additional_instructions": request.operator_prompt,
         "accumulated_learning_memory_id": request.accumulated_learning_memory_id,
         "system_prompt_version": "v1",
@@ -2580,11 +2490,11 @@ mod tests {
     #[test]
     fn blank_coding_strategy_uses_safe_default() {
         assert_eq!(
-            effective_strategy_prompt(PROMPT_KIND_ANALYSIS_CODING, String::new()),
-            default_prompt_for_kind(PROMPT_KIND_ANALYSIS_CODING)
+            effective_strategy_prompt(SUB_AGENT_KIND_CODING, String::new()),
+            crate::agents::strategy_prompts::default_prompt_for_role(SUB_AGENT_KIND_CODING)
         );
         assert_eq!(
-            effective_strategy_prompt(PROMPT_KIND_ANALYSIS, String::new()),
+            effective_strategy_prompt(SUB_AGENT_KIND_ANALYSIS, String::new()),
             ""
         );
     }
@@ -2968,7 +2878,7 @@ mod tests {
 
         let (sub_agent_id,): (i64,) = sqlx::query_as(
             "SELECT id FROM harness_sub_agents
-              WHERE agent_key = $1 AND sub_agent_key = 'analysis-15m'",
+              WHERE agent_key = $1 AND sub_agent_key = 'technical-15m'",
         )
         .bind(&key)
         .fetch_one(&pool)
@@ -2999,7 +2909,7 @@ mod tests {
             assert_eq!(guard.len(), 1);
             let request = &guard[0];
             assert_eq!(request.agent_key, key);
-            assert_eq!(request.sub_agent_key, "analysis-15m");
+            assert_eq!(request.sub_agent_key, "technical-15m");
             assert_eq!(request.timeframe.as_deref(), Some("15m"));
             assert_eq!(
                 request.scheduled_for,
@@ -3038,7 +2948,7 @@ mod tests {
         seed_test_agent(&pool, &key).await;
         let (sub_agent_id,): (i64,) = sqlx::query_as(
             "SELECT id FROM harness_sub_agents
-              WHERE agent_key = $1 AND sub_agent_key = 'analysis-1h'",
+              WHERE agent_key = $1 AND sub_agent_key = 'technical-1h'",
         )
         .bind(&key)
         .fetch_one(&pool)
@@ -3069,7 +2979,7 @@ mod tests {
             let calls = calls.lock().expect("lock dispatch calls");
             assert_eq!(calls.len(), 1);
             assert_eq!(calls[0].run_id, run_id);
-            assert_eq!(calls[0].sub_agent_key, "analysis-1h");
+            assert_eq!(calls[0].sub_agent_key, "technical-1h");
         }
         run_until(|| async {
             store::get_run(&pool, run_id)
@@ -3093,7 +3003,7 @@ mod tests {
         // Force both analysis jobs to be due at the same boundary.
         let (fifteen_m_id,): (i64,) = sqlx::query_as(
             "SELECT id FROM harness_sub_agents
-              WHERE agent_key = $1 AND sub_agent_key = 'analysis-15m'",
+              WHERE agent_key = $1 AND sub_agent_key = 'technical-15m'",
         )
         .bind(&key)
         .fetch_one(&pool)
@@ -3101,7 +3011,7 @@ mod tests {
         .expect("fetch 15m candle_job id");
         let (one_h_id,): (i64,) = sqlx::query_as(
             "SELECT id FROM harness_sub_agents
-              WHERE agent_key = $1 AND sub_agent_key = 'analysis-1h'",
+              WHERE agent_key = $1 AND sub_agent_key = 'technical-1h'",
         )
         .bind(&key)
         .fetch_one(&pool)
@@ -3161,7 +3071,7 @@ mod tests {
                 .collect()
         };
         // 15m is shorter than 1h, so it should dispatch first.
-        assert_eq!(order, vec!["analysis-15m", "analysis-1h"]);
+        assert_eq!(order, vec!["technical-15m", "technical-1h"]);
 
         let runs = store::list_agent_runs(&pool, &key, 10)
             .await
@@ -3180,7 +3090,7 @@ mod tests {
 
         let (analysis_id,): (i64,) = sqlx::query_as(
             "SELECT id FROM harness_sub_agents
-              WHERE agent_key = $1 AND sub_agent_key = 'analysis-15m'",
+              WHERE agent_key = $1 AND sub_agent_key = 'technical-15m'",
         )
         .bind(&key)
         .fetch_one(&pool)
@@ -3220,7 +3130,7 @@ mod tests {
         let mut jobs: Vec<&str> = guard.iter().map(|r| r.sub_agent_key.as_str()).collect();
         jobs.sort();
         assert!(
-            jobs == vec!["analysis-15m", "trading-5m"],
+            jobs == vec!["technical-15m", "trading-5m"],
             "expected both lanes to dispatch, got {jobs:?}"
         );
         assert!(
@@ -3228,62 +3138,6 @@ mod tests {
             "expected same-agent lanes to overlap, max active calls was {}",
             backend_impl.max_active_calls()
         );
-    }
-
-    #[tokio::test]
-    async fn tick_dispatches_market_analysis_event_after_successful_analysis_batch() {
-        let pool = test_db::pool().await;
-        let key = format!(
-            "sched-event-{}",
-            Utc::now().timestamp_nanos_opt().unwrap_or(0)
-        );
-        seed_test_agent(&pool, &key).await;
-
-        let sub_agent_id = store::list_agent_sub_agents(&pool, &key)
-            .await
-            .expect("list jobs")
-            .into_iter()
-            .find(|job| job.sub_agent_kind == SUB_AGENT_KIND_MARKET_ANALYSIS)
-            .expect("default event present")
-            .id;
-        store::set_sub_agent_enabled(&pool, &key, sub_agent_id, true)
-            .await
-            .expect("enable default event");
-
-        let (sub_agent_id,): (i64,) = sqlx::query_as(
-            "SELECT id FROM harness_sub_agents
-              WHERE agent_key = $1 AND sub_agent_key = 'analysis-15m'",
-        )
-        .bind(&key)
-        .fetch_one(&pool)
-        .await
-        .expect("fetch analysis id");
-        pin_job_due(&pool, sub_agent_id, "15m").await;
-
-        let calls: Arc<Mutex<Vec<DispatchRequest>>> = Arc::new(Mutex::new(Vec::new()));
-        let backend: Arc<dyn HarnessBackend> = Arc::new(FakeBackend::success(calls.clone()));
-        let live_accounts = Arc::new(crate::hyperliquid::live_state::LiveAccountStore::new());
-        let (_tx, rx) = watch::channel(false);
-        let (_force_tx, force_rx) = watch::channel(false);
-        let mut scheduler = HarnessScheduler::new(
-            pool.clone(),
-            rx,
-            force_rx,
-            backend,
-            live_accounts,
-            scheduler_runtime(InFlightTracker::new()),
-        );
-        scheduler.tick().await.expect("tick");
-
-        run_until(|| async { calls.lock().map(|guard| guard.len() >= 2).unwrap_or(false) }).await;
-
-        let guard = calls.lock().unwrap();
-        let mut jobs: Vec<&str> = guard
-            .iter()
-            .map(|request| request.sub_agent_key.as_str())
-            .collect();
-        jobs.sort();
-        assert_eq!(jobs, vec!["analysis-15m", "market-analysis"]);
     }
 
     #[tokio::test]
@@ -3309,7 +3163,7 @@ mod tests {
         for key in [&key_a, &key_b] {
             let (sub_agent_id,): (i64,) = sqlx::query_as(
                 "SELECT id FROM harness_sub_agents
-                  WHERE agent_key = $1 AND sub_agent_key = 'analysis-15m'",
+                  WHERE agent_key = $1 AND sub_agent_key = 'technical-15m'",
             )
             .bind(key)
             .fetch_one(&pool)
@@ -3360,7 +3214,7 @@ mod tests {
 
         let (sub_agent_id,): (i64,) = sqlx::query_as(
             "SELECT id FROM harness_sub_agents
-              WHERE agent_key = $1 AND sub_agent_key = 'analysis-15m'",
+              WHERE agent_key = $1 AND sub_agent_key = 'technical-15m'",
         )
         .bind(&key)
         .fetch_one(&pool)
@@ -3414,7 +3268,7 @@ mod tests {
 
         let (sub_agent_id,): (i64,) = sqlx::query_as(
             "SELECT id FROM harness_sub_agents
-              WHERE agent_key = $1 AND sub_agent_key = 'analysis-15m'",
+              WHERE agent_key = $1 AND sub_agent_key = 'technical-15m'",
         )
         .bind(&key)
         .fetch_one(&pool)
@@ -3452,7 +3306,7 @@ mod tests {
 
         let (sub_agent_id,): (i64,) = sqlx::query_as(
             "SELECT id FROM harness_sub_agents
-              WHERE agent_key = $1 AND sub_agent_key = 'analysis-15m'",
+              WHERE agent_key = $1 AND sub_agent_key = 'technical-15m'",
         )
         .bind(&key)
         .fetch_one(&pool)
@@ -3494,7 +3348,7 @@ mod tests {
 
         let (sub_agent_id,): (i64,) = sqlx::query_as(
             "SELECT id FROM harness_sub_agents
-              WHERE agent_key = $1 AND sub_agent_key = 'analysis-15m'",
+              WHERE agent_key = $1 AND sub_agent_key = 'technical-15m'",
         )
         .bind(&key)
         .fetch_one(&pool)
@@ -3566,7 +3420,7 @@ mod tests {
 
         let (sub_agent_id,): (i64,) = sqlx::query_as(
             "SELECT id FROM harness_sub_agents
-              WHERE agent_key = $1 AND sub_agent_key = 'analysis-15m'",
+              WHERE agent_key = $1 AND sub_agent_key = 'technical-15m'",
         )
         .bind(&key)
         .fetch_one(&pool)
@@ -3667,11 +3521,10 @@ mod tests {
     }
 
     /// Regression test for the dispatch-outcome handling: a failed
-    /// analysis dispatch must not be reported as success, and the
-    /// `analysis_batch_completed` market-analysis follow-up event must
-    /// not fire when the analysis batch itself failed.
+    /// analysis dispatch must not be reported as success, and no
+    /// follow-up work may be triggered by a failed analysis run.
     #[tokio::test]
-    async fn tick_failed_dispatch_does_not_trigger_analysis_batch_completed_event() {
+    async fn tick_failed_dispatch_does_not_trigger_follow_up_work() {
         let pool = test_db::pool().await;
         let key = format!(
             "sched-fail-{}",
@@ -3679,22 +3532,9 @@ mod tests {
         );
         seed_test_agent(&pool, &key).await;
 
-        // Enable the default market-analysis event so we can verify it
-        // is NOT triggered by a failed analysis batch.
-        let sub_agent_id = store::list_agent_sub_agents(&pool, &key)
-            .await
-            .expect("list jobs")
-            .into_iter()
-            .find(|job| job.sub_agent_kind == SUB_AGENT_KIND_MARKET_ANALYSIS)
-            .expect("default event present")
-            .id;
-        store::set_sub_agent_enabled(&pool, &key, sub_agent_id, true)
-            .await
-            .expect("enable default event");
-
         let (sub_agent_id,): (i64,) = sqlx::query_as(
             "SELECT id FROM harness_sub_agents
-              WHERE agent_key = $1 AND sub_agent_key = 'analysis-15m'",
+              WHERE agent_key = $1 AND sub_agent_key = 'technical-15m'",
         )
         .bind(&key)
         .fetch_one(&pool)
@@ -3702,7 +3542,8 @@ mod tests {
         .expect("fetch analysis id");
         pin_job_due(&pool, sub_agent_id, "15m").await;
 
-        let calls: Arc<Mutex<Vec<DispatchRequest>>> = Arc::new(Mutex::new(Vec::new()));
+        // A failing backend must not be reported as success and no
+        // follow-up event call should be issued.
         let failing: Arc<dyn HarnessBackend> = Arc::new(FailingBackend);
         let live_accounts = Arc::new(crate::hyperliquid::live_state::LiveAccountStore::new());
         let (_tx, rx) = watch::channel(false);
@@ -3726,24 +3567,24 @@ mod tests {
         })
         .await;
 
-        // No dispatch should have succeeded and no follow-up event call
-        // should have been issued.
+        // The failing dispatch must not be reported as success and no
+        // follow-up event call should have been issued.
         assert!(
-            calls.lock().unwrap().is_empty(),
+            store::list_agent_runs(&pool, &key, 20)
+                .await
+                .expect("list runs")
+                .iter()
+                .all(|run| run.status != crate::harness::model::RUN_STATUS_SUCCEEDED),
             "failing backend must not produce successful dispatches or event calls"
         );
 
-        // Only the failed analysis run should exist; no market-analysis run.
+        // Only the failed analysis run should exist.
         let runs = store::list_agent_runs(&pool, &key, 20)
             .await
             .expect("list runs");
         let sub_agent_keys: Vec<String> = runs.iter().map(|r| r.sub_agent_key.clone()).collect();
         assert!(
-            !sub_agent_keys.iter().any(|k| k == "market-analysis"),
-            "market-analysis event must not fire after a failed analysis batch, got {sub_agent_keys:?}"
-        );
-        assert!(
-            sub_agent_keys.iter().any(|k| k == "analysis-15m"),
+            sub_agent_keys.iter().any(|k| k == "technical-15m"),
             "analysis run should be present, got {sub_agent_keys:?}"
         );
     }

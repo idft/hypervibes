@@ -1,7 +1,6 @@
 use crate::harness::backend::DispatchRequest;
 use crate::harness::model::{
-    SUB_AGENT_KIND_ANALYSIS, SUB_AGENT_KIND_ANALYSIS_CODING, SUB_AGENT_KIND_DAILY_REVIEW,
-    SUB_AGENT_KIND_MARKET_ANALYSIS, SUB_AGENT_KIND_TRADING,
+    SUB_AGENT_KIND_ANALYSIS, SUB_AGENT_KIND_CODING, SUB_AGENT_KIND_REVIEW, SUB_AGENT_KIND_TRADING,
 };
 use crate::harness::timeframe::parse_timeframe_seconds;
 use anyhow::{Result, anyhow};
@@ -10,10 +9,9 @@ use chrono::{Duration, SecondsFormat, Utc};
 pub fn build_prompt(request: &DispatchRequest) -> Result<String> {
     match request.sub_agent_kind.as_str() {
         SUB_AGENT_KIND_ANALYSIS => Ok(build_analysis_prompt(request)),
-        SUB_AGENT_KIND_MARKET_ANALYSIS => Ok(build_market_analysis_prompt(request)),
         SUB_AGENT_KIND_TRADING => Ok(build_trading_prompt(request)),
-        SUB_AGENT_KIND_DAILY_REVIEW => Ok(build_daily_review_prompt(request)?),
-        SUB_AGENT_KIND_ANALYSIS_CODING => Ok(build_analysis_coding_prompt(request)),
+        SUB_AGENT_KIND_REVIEW => Ok(build_review_prompt(request)?),
+        SUB_AGENT_KIND_CODING => Ok(build_coding_prompt(request)),
         other => Err(anyhow!("unknown job kind for prompt building: {other}")),
     }
 }
@@ -34,7 +32,7 @@ fn build_analysis_prompt(request: &DispatchRequest) -> String {
     ));
     body.push_str("\n## Accumulated learnings\n");
     body.push_str(&accumulated_learnings_section(request));
-    body.push_str("\n## Analysis strategy\n");
+    body.push_str("\n## Research strategy\n");
     body.push_str(&request.strategy_prompt);
     body.push_str("\n\n## Sub-agent-specific strategy\n");
     body.push_str(&operator_prompt_section(&request.operator_prompt));
@@ -48,59 +46,24 @@ fn build_analysis_prompt(request: &DispatchRequest) -> String {
         body.push_str(&section);
     }
     body.push_str("\n\n## Instructions\n");
-    body.push_str("- Fetch OHLCV with `python .opencode/skills/hyperliquid-data/fetch_ohlcv.py <SYMBOL> <TIMEFRAME> --closed-before <BOUNDARY_MS> --output-dir scratch/ohlcv`. Use the exact boundary milliseconds above and the `hyperliquid-data` skill for details.\n");
-    body.push_str("- The fetch manifest's `output_path` is the canonical input envelope for package analysis; read that exact file rather than enumerating `scratch/`, and do not reshape the candles.\n");
-    body.push_str("- When a Coding package is available, inspect `scripts/user/` and directly execute whichever existing package Python is useful for this analysis. If `scripts/user/` is empty, no package is available; do not create a fallback script. Pass the fetched input path and write transient outputs only beneath the approved run-local `scratch/` directories. The package is read-only during this job.\n");
+    body.push_str("- This job's research method is defined by its strategy and its capabilities. Decide what market evidence to gather from your allowed tools, or reason from the evidence already available to you.\n");
+    body.push_str("- Public OHLCV may be fetched with `python .opencode/skills/hyperliquid-data/fetch_ohlcv.py <SYMBOL> <TIMEFRAME> --closed-before <BOUNDARY_MS> --output-dir scratch/ohlcv` using the exact boundary milliseconds above and the `hyperliquid-data` skill for details. The fetch manifest's `output_path` is the canonical input envelope; read that exact file rather than enumerating `scratch/`, and do not reshape the candles.\n");
+    body.push_str("- When a Coding package is available, inspect `scripts/user/` and directly execute whichever existing package Python is useful for this research. If `scripts/user/` is empty, no package is available; do not create a fallback script. Pass the fetched input path and write transient outputs only beneath the approved run-local `scratch/` directories. The package is read-only during this job.\n");
     body.push_str(
         "- Use the shared `python-analysis` runtime only through direct execution of an existing package script. Do not run inline Python, shell composition, or temporary helper programs.\n",
     );
     body.push_str(
-        "- Write a memory record with `hypervibes_write_memory` summarizing your analysis so the trading job can consume it.\n",
+        "- Publish your research findings as memory records with `hypervibes_write_memory` so the Trading job can consume them.\n",
     );
     body.push_str("\n## Completion requirements\n");
     body.push_str("- Do not stop after planning, loading skills, fetching candles, or updating a todo list. Those are intermediate steps only.\n");
-    body.push_str("- The analysis job is incomplete until `hypervibes_write_memory` succeeds for every selected symbol.\n");
-    body.push_str("- For each selected symbol, write exactly one timeframe-specific memory with `memory_type = \"analysis\"` and `timeframe` set to this sub-agent's timeframe.\n");
-    body.push_str("- If there is no actionable setup, still write the analysis memory with a neutral or mixed bias and explicitly state that there is no trade.\n");
+    body.push_str("- The analysis job is incomplete until `hypervibes_write_memory` has succeeded at least once.\n");
+    body.push_str("- Choose your own memory type names; they must describe the kind of research you performed (for example `trend_analysis`, `news_summary`, `volatility_regime`). Never use `trading_decision`, `review`, or `agent_learnings`; those types are reserved for other sub-agents.\n");
+    body.push_str("- Scope each memory with `scope_kind = \"agent\"` when it applies to the whole agent, or `scope_kind = \"instruments\"` with the `instrument_ids` it applies to. Never invent a placeholder symbol for agent-wide research.\n");
+    body.push_str("- If there is no actionable setup, still record your research with an explicit no-trade or neutral conclusion.\n");
     body.push_str(
         "- If you use `todowrite`, finish with no remaining items in `pending` or `in_progress`.\n",
     );
-    body
-}
-
-fn build_market_analysis_prompt(request: &DispatchRequest) -> String {
-    let mut body = String::new();
-    body.push_str(&request.system_prompt);
-    body.push_str(
-        "\n\nYou are running a **market-analysis event job** for the HyperVibes agent system. This job runs after an analysis batch completes.\n\n",
-    );
-    body.push_str("## Agent\n");
-    body.push_str(&format!("- Agent key: {}\n", request.agent_key));
-    body.push_str(&format!("- Display name: {}\n", request.display_name));
-    body.push_str(&format!("- Environment: {}\n", request.environment));
-    body.push_str(&format!("- Sub-agent key: {}\n", request.sub_agent_key));
-    body.push_str(&format!("- Harness run ID: {}\n", request.run_id));
-    body.push_str("- Trigger: analysis_batch_completed\n");
-    body.push_str("\n## Accumulated learnings\n");
-    body.push_str(&accumulated_learnings_section(request));
-    body.push_str("\n## Market-analysis strategy\n");
-    body.push_str(&request.strategy_prompt);
-    body.push_str("\n\n## Sub-agent-specific strategy\n");
-    body.push_str(&operator_prompt_section(&request.operator_prompt));
-    body.push_str("\n\n## Selected instruments\n");
-    body.push_str(&selected_instruments_section(&request.selected_instruments));
-    body.push_str("\n\n## Instructions\n");
-    body.push_str("- For each selected symbol, read the latest valid timeframe analysis memories with `hypervibes_get_latest_analysis(symbol)`.\n");
-    body.push_str("- Synthesize those timeframe-specific analysis memories into exactly one execution-facing market analysis per symbol.\n");
-    body.push_str("- Write exactly one memory per symbol with `hypervibes_write_memory`.\n");
-    body.push_str("- Use `memory_type = \"market_analysis\"`. Do not pass a `timeframe` argument at all; leave it out entirely so the memory is general rather than timeframe-specific. Never use a placeholder such as `__omit__`, `none`, `null`, or an empty string; the backend rejects a timeframe on market-analysis memories.\n");
-    body.push_str("- Include metadata with `schema_version = 1`, `analysis_kind = \"market_analysis\"`, `valid_for_seconds = 1800` unless the operator prompt explicitly requires a different validity, plus `source_memory_ids` and `source_timeframes`.\n");
-    body.push_str("- When you write a market-analysis memory, attach `links` with `link_type = \"derived_from\"` to the source analysis memory IDs used for the synthesis.\n");
-    body.push_str("- Use a concise summary title of no more than 12 words. Include the symbol, directional bias or no-trade status, and the key reason or next step. Never include a date, time, timestamp, timeframe, or other metadata in the title.\n");
-    body.push_str("- Include actionable entries, exits, invalidation, confidence, and risk notes in the memory content and metadata.\n");
-    body.push_str("- Set metadata `execution_state` to exactly one of `execute`, `wait`, `manage_existing`, or `cancel_entries`. Use `execute` only when the latest source analyses establish every required entry condition. Use `wait` when later analysis is required before opening exposure.\n");
-    body.push_str("- If the source analyses conflict, are stale, or are insufficiently actionable, write a neutral market analysis that explicitly tells trading not to open new exposure.\n");
-    body.push_str("- Do not place or cancel orders.\n");
     body
 }
 
@@ -131,25 +94,20 @@ fn build_trading_prompt(request: &DispatchRequest) -> String {
     body.push_str("\n\n## Selected instruments\n");
     body.push_str(&selected_instruments_section(&request.selected_instruments));
     body.push_str("\n\n## Instructions\n");
-    body.push_str("- Call `hypervibes_get_market_analysis(symbol)` for each selected symbol before placing any trades.\n");
-    body.push_str(
-        "- Do not open new exposure when no fresh market analysis exists for the symbol.\n",
-    );
-    body.push_str("- Before opening new exposure, verify that the selected market analysis is fresh for the symbol. Every non-reduce-only opening order must include that selected fresh market-analysis memory ID in `memory_record_ids` for execution traceability.\n");
-    body.push_str("- Reduce-only or risk-reduction orders may omit `memory_record_ids`.\n");
+    body.push_str("- Call `hypervibes_get_trading_context(instrument_id)` for each selected instrument before making trading decisions. It returns the latest fresh research evidence per analysis producer, memory type, and scope, plus which evidence is stale or missing.\n");
+    body.push_str("- Missing, stale, or failed research for an analyst is context for your decision, never a reason to skip evaluating the instrument. Record a no-trade decision when the evidence does not support exposure.\n");
+    body.push_str("- Write a `trading_decision` memory with `hypervibes_write_memory` for every evaluated instrument, including no-trade and position-management outcomes. Use `scope_kind = \"instruments\"` with that instrument's ID, or `scope_kind = \"agent\"` for agent-wide decisions. Link the decision to every evidence memory you considered with `link_type = \"based_on\"`.\n");
+    body.push_str("- When you open new exposure, include the `trading_decision` memory ID in each opening order's `memory_record_ids` for execution traceability. Reduce-only orders never require it. If recording the decision failed, continue with the order workflow without it.\n");
     body.push_str(
         "- Agent-submitted orders should use the default `attribution_source = \"agent\"`.\n",
     );
-    body.push_str("- Do not fall back to raw timeframe `analysis` memories for execution decisions. Raw analysis can be consulted only for diagnostics when the operator prompt explicitly asks for it.\n");
-    body.push_str("- Treat the selected market analysis's direction, confidence, entry zone, invalidation, targets, and execution state as immutable. Do not discover a setup, alter the thesis, or add a condition.\n");
-    body.push_str("- If `execution_state` is missing or unrecognized, do not fetch market data, run package code, or open new exposure.\n");
-    body.push_str("- Do not fetch market data or run package code in a trading job. For `execute`, reconcile and execute only the stated plan; for `wait`, `manage_existing`, or `cancel_entries`, take only the stated non-opening action.\n");
+    body.push_str("- Do not fetch market data or run package code in a trading job. Base every order and position decision on the research evidence, account state, and approved MCP tools.\n");
     body.push_str("- Submit and cancel orders only through the `hypervibes` MCP trading tools.\n");
     body.push_str("- Do not trade instruments that are not in the selected list.\n");
     body
 }
 
-fn build_daily_review_prompt(request: &DispatchRequest) -> Result<String> {
+fn build_review_prompt(request: &DispatchRequest) -> Result<String> {
     let review_window_start = request
         .review_window_start
         .unwrap_or_else(|| request.scheduled_for - Duration::days(1));
@@ -160,9 +118,7 @@ fn build_daily_review_prompt(request: &DispatchRequest) -> Result<String> {
 
     let mut body = String::new();
     body.push_str(&request.system_prompt);
-    body.push_str(
-        "\n\nYou are running a **daily-review job** for the HyperVibes agent system.\n\n",
-    );
+    body.push_str("\n\nYou are running a **review job** for the HyperVibes agent system.\n\n");
     body.push_str("## Agent\n");
     body.push_str(&format!("- Agent key: {}\n", request.agent_key));
     body.push_str(&format!("- Display name: {}\n", request.display_name));
@@ -177,39 +133,36 @@ fn build_daily_review_prompt(request: &DispatchRequest) -> Result<String> {
     }
     body.push_str("\n## Accumulated learnings\n");
     body.push_str(&accumulated_learnings_section(request));
-    body.push_str("\n## Daily-review strategy\n");
+    body.push_str("\n## Review strategy\n");
     body.push_str(&request.strategy_prompt);
     body.push_str("\n\n## Sub-agent-specific strategy\n");
     body.push_str(&operator_prompt_section(&request.operator_prompt));
     body.push_str("\n\n## Selected instruments\n");
     body.push_str(&selected_instruments_section(&request.selected_instruments));
     body.push_str("\n\n## Instructions\n");
-    body.push_str("- List `analysis`, `market_analysis`, and `daily_review` memories using this review window's exact start and end. The Accumulated learnings section above is the canonical prior learning set; do not query historical `agent_learnings` outside this review window.\n");
+    body.push_str("- List research memories, `trading_decision` memories, and review memories using this review window's exact start and end. The Accumulated learnings section above is the canonical prior learning set; do not query historical `agent_learnings` outside this review window.\n");
     body.push_str("- List orders and account transactions using this review window's exact start and end. Include unfilled, rejected, canceled, open, and filled orders plus fills, fees, realized PnL, funding, and ledger events. Page `list_account_transactions` with a fixed limit and increasing offset until a page returns fewer rows than the limit.\n");
     body.push_str("- Do not make unbounded or out-of-window memory, order, or transaction queries. Do not mention or assess records outside this review window; the injected Accumulated learnings are the sole exception and must be carried forward when updated.\n");
-    body.push_str("- Connect orders to `market_analysis` using `memory_record_ids`, and follow `memory.links` from market analysis back to analysis when those links exist.\n");
-    body.push_str("- Identify failures, good patterns, stale assumptions, and prompt improvement opportunities. When evidence justifies a material change, use `hypervibes_submit_prompt_revision` exactly once with the current base revision IDs, rationale, and same-agent evidence memory IDs. It may revise only `analysis`, `market_analysis`, and `trading`; it activates all submitted changes atomically.\n");
+    body.push_str("- Trace orders through their `memory_record_ids` to the linked `trading_decision` memories, and follow `memory.links` from decisions back to the research evidence they were based on.\n");
+    body.push_str("- Identify failures, good patterns, stale assumptions, and prompt improvement opportunities. When evidence justifies a material change, use `hypervibes_submit_prompt_revision` exactly once with the current base revision IDs, rationale, and same-agent evidence memory IDs. It may revise only the Trading prompt and those Analysis prompts whose configuration opted in to review updates; it activates all submitted changes atomically.\n");
     body.push_str(
-        "- Never edit `scripts/user/`, `data/`, or `scratch/`; daily review is diagnosis-only.\n",
+        "- Never edit `scripts/user/`, `data/`, or `scratch/`; review is diagnosis-only.\n",
     );
-    body.push_str("- If reusable analysis code should change, set `analysis_coding_requested` to true in the required review metadata and explain why. Set it to false when no code work is justified.\n");
-    body.push_str("- Write exactly one `daily_review` memory with `symbol = \"__agent__\"`, no timeframe, and `links` of type `reviews` to the memories you reviewed.\n");
-    body.push_str("- If learnings changed, write a new `agent_learnings` memory with `symbol = \"__agent__\"`, no timeframe, and summary exactly `Accumulated agent learnings`. Its content must be a complete replacement snapshot: retain every still-valid learning from the Accumulated learnings section, add new learnings, and explicitly mark any superseded rules as removed or replaced. Then link the daily review memory to it with `link_type = \"updates_learnings\"`.\n");
-    body.push_str("- The daily-review memory metadata must include `schema_version`, `source_sub_agent_run_id` set exactly to the Harness run ID above, `review_window_start`, `review_window_end`, `analysis_coding_requested` (always present as true or false), `analysis_coding_reason`, `candidate_components`, and `evidence_memory_ids`.\n");
+    body.push_str("- If reusable analysis code should change, set `coding_requested` to true in the required review metadata and explain why. Set it to false when no code work is justified.\n");
+    body.push_str("- Write exactly one `review` memory with `scope_kind = \"agent\"` and `links` of type `reviews` to the memories you reviewed.\n");
+    body.push_str("- If learnings changed, write a new `agent_learnings` memory with `scope_kind = \"agent\"` and summary exactly `Accumulated agent learnings`. Its content must be a complete replacement snapshot: retain every still-valid learning from the Accumulated learnings section, add new learnings, and explicitly mark any superseded rules as removed or replaced. Then link the review memory to it with `link_type = \"updates_learnings\"`.\n");
+    body.push_str("- The review memory metadata must include `schema_version`, `source_run_id` (leave null; the server stamps provenance), `review_window_start`, `review_window_end`, `coding_requested` (always present as true or false), `coding_reason`, `candidate_components`, and `evidence_memory_ids`.\n");
     body.push_str("- Do not place or cancel orders.\n");
     body.push_str("- Do not use generic strategy-prompt replacement. Submit no revision when evidence is insufficient.\n");
     Ok(body)
 }
 
-fn build_analysis_coding_prompt(request: &DispatchRequest) -> String {
+fn build_coding_prompt(request: &DispatchRequest) -> String {
     let mut body = String::new();
     body.push_str(&request.system_prompt);
-    body.push_str(
-        "\n\nYou are running an **analysis-coding job** for the HyperVibes agent system.\n\n",
-    );
+    body.push_str("\n\nYou are running a **coding job** for the HyperVibes agent system.\n\n");
     body.push_str("## Agent\n");
     body.push_str(&format!("- Agent key: {}\n", request.agent_key));
-    body.push_str(&format!("- Display name: {}\n", request.display_name));
     body.push_str(&format!("- Harness run ID: {}\n", request.run_id));
     body.push_str(&format!("- Sub-agent key: {}\n", request.sub_agent_key));
     if let Some(task_id) = request
@@ -231,7 +184,7 @@ fn build_analysis_coding_prompt(request: &DispatchRequest) -> String {
     body.push_str(&request.strategy_prompt);
     if let Some(analysis_strategy) = request
         .runtime_config
-        .get("analysis_strategy_prompt")
+        .get("analysis_strategy_prompts")
         .and_then(serde_json::Value::as_str)
     {
         body.push_str("\n\n## Analysis strategy context\n");
@@ -337,7 +290,7 @@ fn account_state_section(
 ) -> String {
     match snapshot {
         Some(s) => format!("{}\n", s.to_markdown()),
-        None => "Account state unavailable. Do not place new opening orders.\n".to_string(),
+        None => "Account state unavailable. Do not place new opening orders.".to_string(),
     }
 }
 
@@ -357,7 +310,7 @@ mod tests {
             sub_agent_id: 2,
             agent_key: "btc-2".to_string(),
             display_name: "BTC 2".to_string(),
-            sub_agent_key: "analysis-15m".to_string(),
+            sub_agent_key: "technical-15m".to_string(),
             sub_agent_kind: sub_agent_kind.to_string(),
             enabled_capabilities: Vec::new(),
             timeframe: Some("15m".to_string()),
@@ -393,11 +346,11 @@ mod tests {
         assert!(prompt.contains("Agent key: btc-2"));
         assert!(prompt.contains("Display name: BTC 2"));
         assert!(prompt.contains("Environment: live"));
-        assert!(prompt.contains("Sub-agent key: analysis-15m"));
+        assert!(prompt.contains("Sub-agent key: technical-15m"));
         assert!(prompt.contains("Timeframe: 15m"));
         assert!(prompt.contains("BTC, ETH"));
         assert!(prompt.contains("## Accumulated learnings"));
-        assert!(prompt.contains("## Analysis strategy"));
+        assert!(prompt.contains("## Research strategy"));
         assert!(prompt.contains("## Sub-agent-specific strategy"));
         assert!(prompt.contains("## Closed-candle cutoff"));
         assert!(prompt.contains("## Instructions"));
@@ -411,7 +364,7 @@ mod tests {
             request.scheduled_for.timestamp_millis()
         )));
         assert!(prompt.contains("a candle closing exactly at the boundary is included"));
-        assert!(prompt.contains("canonical input envelope for package analysis"));
+        assert!(prompt.contains("canonical input envelope"));
         assert!(prompt.contains("rather than enumerating `scratch/`"));
         assert!(prompt.contains("directly execute whichever existing package Python is useful"));
         assert!(prompt.contains("If `scripts/user/` is empty, no package is available"));
@@ -425,18 +378,17 @@ mod tests {
         );
         assert!(prompt.contains("Sub-agent-specific strategy is additive"));
         assert!(prompt.contains("## Completion requirements"));
-        assert!(
-            prompt.contains(
-                "The analysis job is incomplete until `hypervibes_write_memory` succeeds"
-            )
-        );
-        assert!(prompt.contains("`memory_type = \"analysis\"`"));
+        assert!(prompt.contains(
+            "The analysis job is incomplete until `hypervibes_write_memory` has succeeded"
+        ));
+        assert!(prompt.contains("Choose your own memory type names"));
+        assert!(prompt.contains("scope_kind = \"instruments\""));
     }
 
     #[test]
     fn trading_prompt_contains_expected_sections() {
         let mut request = sample_request(SUB_AGENT_KIND_TRADING);
-        request.sub_agent_key = "trading-15m".to_string();
+        request.sub_agent_key = "trading-5m".to_string();
         request.strategy_prompt = "Trade breakouts.".to_string();
         request.scheduled_for = Utc
             .with_ymd_and_hms(2026, 7, 3, 21, 30, 0)
@@ -475,7 +427,7 @@ mod tests {
         assert!(prompt.contains("Agent key: btc-2"));
         assert!(prompt.contains("Display name: BTC 2"));
         assert!(prompt.contains("Environment: live"));
-        assert!(prompt.contains("Sub-agent key: trading-15m"));
+        assert!(prompt.contains("Sub-agent key: trading-5m"));
         assert!(prompt.contains("Timeframe: 15m"));
         assert!(prompt.contains("BTC, ETH"));
         assert!(prompt.contains("## Accumulated learnings"));
@@ -485,47 +437,19 @@ mod tests {
         assert!(prompt.contains("Trade breakouts."));
         assert!(prompt.contains("- Account: 0xabc"));
         assert!(prompt.contains("- Available to trade USD: 750"));
-        assert!(prompt.contains("hypervibes_get_market_analysis(symbol)"));
-        assert!(prompt.contains("Do not fall back to raw timeframe `analysis` memories"));
-        assert!(!prompt.contains("Conditional-confirmation"));
-        assert!(prompt.contains("If `execution_state` is missing or unrecognized"));
+        assert!(prompt.contains("hypervibes_get_trading_context(instrument_id)"));
+        assert!(prompt.contains("Write a `trading_decision` memory"));
+        assert!(prompt.contains("link_type = \"based_on\""));
+        assert!(prompt.contains("include the `trading_decision` memory ID"));
+        assert!(prompt.contains("Reduce-only orders never require it"));
         assert!(prompt.contains("Do not fetch market data or run package code"));
         assert!(!prompt.contains("Fetch current OHLCV and public market data"));
         assert!(prompt.contains("Sub-agent-specific strategy is additive"));
     }
 
     #[test]
-    fn market_analysis_prompt_contains_expected_sections() {
-        let mut request = sample_request(SUB_AGENT_KIND_MARKET_ANALYSIS);
-        request.sub_agent_key = "market-analysis".to_string();
-        request.timeframe = None;
-        let prompt = build_prompt(&request).expect("build market-analysis prompt");
-        assert!(prompt.contains("Agent key: btc-2"));
-        assert!(prompt.contains("Display name: BTC 2"));
-        assert!(prompt.contains("Environment: live"));
-        assert!(prompt.contains("Sub-agent key: market-analysis"));
-        assert!(prompt.contains("BTC, ETH"));
-        assert!(prompt.contains("## Accumulated learnings"));
-        assert!(prompt.contains("market-analysis event job"));
-        assert!(prompt.contains("hypervibes_get_latest_analysis(symbol)"));
-        assert!(prompt.contains("source_memory_ids"));
-        assert!(prompt.contains("memory_type = \"market_analysis\""));
-        assert!(prompt.contains("link_type = \"derived_from\""));
-        assert!(prompt.contains("metadata `execution_state`"));
-        assert!(prompt.contains("`execution_state` to exactly one of `execute`, `wait`"));
-        assert!(
-            prompt.contains("Do not pass a `timeframe` argument at all; leave it out entirely")
-        );
-        assert!(prompt.contains("Never use a placeholder such as `__omit__`"));
-        assert!(prompt.contains("Use a concise summary title of no more than 12 words"));
-        assert!(prompt.contains("Never include a date, time, timestamp, timeframe"));
-        assert!(prompt.contains("valid_for_seconds = 1800"));
-        assert!(prompt.contains("Do not place or cancel orders."));
-    }
-
-    #[test]
-    fn manual_daily_review_prompt_marks_day_to_date_window_as_partial() {
-        let mut request = sample_request(SUB_AGENT_KIND_DAILY_REVIEW);
+    fn manual_review_prompt_marks_day_to_date_window_as_partial() {
+        let mut request = sample_request(SUB_AGENT_KIND_REVIEW);
         request.scheduled_for = Utc
             .with_ymd_and_hms(2026, 7, 18, 0, 0, 0)
             .single()
@@ -541,16 +465,16 @@ mod tests {
                 .expect("valid end"),
         );
 
-        let prompt = build_prompt(&request).expect("build daily review prompt");
+        let prompt = build_prompt(&request).expect("build review prompt");
         assert!(prompt.contains("Start: 2026-07-17T00:00:00Z"));
         assert!(prompt.contains("End: 2026-07-17T20:00:00Z"));
         assert!(prompt.contains("Partial UTC day"));
     }
 
     #[test]
-    fn daily_review_prompt_contains_expected_sections() {
-        let mut request = sample_request(SUB_AGENT_KIND_DAILY_REVIEW);
-        request.sub_agent_key = "daily-review-1d".to_string();
+    fn review_prompt_contains_expected_sections() {
+        let mut request = sample_request(SUB_AGENT_KIND_REVIEW);
+        request.sub_agent_key = "review-1d".to_string();
         request.timeframe = Some("1d".to_string());
         request.review_window_start = Some(
             Utc.with_ymd_and_hms(2026, 7, 2, 0, 0, 0)
@@ -562,27 +486,29 @@ mod tests {
                 .single()
                 .expect("valid end"),
         );
-        let prompt = build_prompt(&request).expect("build daily review prompt");
-        assert!(prompt.contains("daily-review job"));
+        let prompt = build_prompt(&request).expect("build review prompt");
+        assert!(prompt.contains("review job"));
         assert!(prompt.contains("Harness run ID: 1"));
         assert!(prompt.contains("Start: 2026-07-02T00:00:00Z"));
         assert!(prompt.contains("End: 2026-07-03T00:00:00Z"));
-        assert!(prompt.contains("`daily_review` memory"));
+        assert!(prompt.contains("`review` memory"));
         assert!(prompt.contains("`agent_learnings` memory"));
         assert!(prompt.contains("summary exactly `Accumulated agent learnings`"));
         assert!(prompt.contains("increasing offset"));
         assert!(prompt.contains("Do not make unbounded or out-of-window"));
         assert!(prompt.contains("scripts/user/`"));
         assert!(prompt.contains("Do not place or cancel orders."));
+        assert!(prompt.contains("`trading_decision` memories"));
+        assert!(prompt.contains("coding_requested"));
     }
 
     #[test]
     fn coding_prompt_requires_bootstrap_and_includes_target_prompts() {
-        let mut request = sample_request(SUB_AGENT_KIND_ANALYSIS_CODING);
+        let mut request = sample_request(SUB_AGENT_KIND_CODING);
         request.runtime_config = serde_json::json!({
             "coding_task_id": 1,
             "coding_mode": "bootstrap",
-            "analysis_strategy_prompt": "Analyze structure."
+            "analysis_strategy_prompts": "Analyze structure."
         });
 
         let prompt = build_prompt(&request).expect("build coding prompt");

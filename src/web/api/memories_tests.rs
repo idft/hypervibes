@@ -18,7 +18,8 @@ async fn post_memories_creates_record() {
     let (agent_key, api_key) = seed_agent(&state, "create").await;
 
     let body = serde_json::json!({
-        "symbol": "BTC",
+        "scope_kind": "instruments",
+        "instrument_ids": ["BTC"],
         "timeframe": "1h",
         "memory_type": "plan",
         "summary": "buy pullback",
@@ -52,7 +53,8 @@ async fn post_memories_creates_record() {
         .await
         .unwrap();
     let body: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
-    assert_eq!(body["symbol"], "BTC");
+    assert_eq!(body["scope_kind"], "instruments");
+    assert_eq!(body["instrument_targets"], json!(["BTC"]));
     assert_eq!(body["timeframe"], "1h");
     assert_eq!(body["summary"], "buy pullback");
     assert_eq!(body["metadata"]["confidence"], 0.72);
@@ -76,7 +78,8 @@ async fn post_memories_response_includes_expires_at_from_valid_for_seconds() {
     let (_agent_key, api_key) = seed_agent(&state, "create-exp").await;
 
     let body = serde_json::json!({
-        "symbol": "BTC",
+        "scope_kind": "instruments",
+        "instrument_ids": ["BTC"],
         "timeframe": "15m",
         "memory_type": "analysis",
         "summary": "btc analysis",
@@ -118,12 +121,13 @@ async fn post_memories_response_includes_expires_at_from_valid_for_seconds() {
 }
 
 #[tokio::test]
-async fn post_memories_response_uses_analysis_default_when_no_valid_for_seconds() {
+async fn post_memories_response_has_no_default_expiry_without_analysis_provenance() {
     let state = test_state().await;
     let (_agent_key, api_key) = seed_agent(&state, "create-default-exp").await;
 
     let body = serde_json::json!({
-        "symbol": "BTC",
+        "scope_kind": "instruments",
+        "instrument_ids": ["BTC"],
         "timeframe": "15m",
         "memory_type": "analysis",
         "summary": "btc analysis no meta",
@@ -146,23 +150,7 @@ async fn post_memories_response_uses_analysis_default_when_no_valid_for_seconds(
         .await
         .unwrap();
     let body: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
-    // 15m analysis default is 30m (2x the 15m schedule interval), so
-    // expires_at = created_at + 30m.
-    let expires_at = body["expires_at"]
-        .as_str()
-        .expect("analysis with no valid_for_seconds still has a default expires_at");
-    let created_at: DateTime<Utc> =
-        DateTime::parse_from_rfc3339(body["created_at"].as_str().unwrap())
-            .unwrap()
-            .with_timezone(&Utc);
-    let expires_at_parsed: DateTime<Utc> = DateTime::parse_from_rfc3339(expires_at)
-        .unwrap()
-        .with_timezone(&Utc);
-    let delta = (expires_at_parsed - created_at).num_minutes();
-    assert_eq!(
-        delta, 30,
-        "15m analysis default validity is 30m (2x schedule interval)"
-    );
+    assert!(body["expires_at"].is_null());
 }
 
 #[tokio::test]
@@ -170,7 +158,8 @@ async fn post_memories_without_auth_returns_401_json() {
     let state = test_state().await;
 
     let body = serde_json::json!({
-        "symbol": "BTC",
+        "scope_kind": "instruments",
+        "instrument_ids": ["BTC"],
         "memory_type": "plan",
         "summary": "x",
         "content": "y"
@@ -197,7 +186,8 @@ async fn post_memories_with_invalid_bearer_returns_401_json() {
     let state = test_state().await;
 
     let body = serde_json::json!({
-        "symbol": "BTC",
+        "scope_kind": "instruments",
+        "instrument_ids": ["BTC"],
         "memory_type": "plan",
         "summary": "x",
         "content": "y"
@@ -224,7 +214,8 @@ async fn post_memories_empty_field_returns_422_json() {
     let (_agent_key, api_key) = seed_agent(&state, "val").await;
 
     let body = serde_json::json!({
-        "symbol": "BTC",
+        "scope_kind": "instruments",
+        "instrument_ids": ["BTC"],
         "memory_type": "plan",
         "summary": "  ",
         "content": "y"
@@ -250,12 +241,13 @@ async fn post_memories_empty_field_returns_422_json() {
 }
 
 #[tokio::test]
-async fn post_market_analysis_with_timeframe_returns_422() {
+async fn post_market_analysis_with_timeframe_creates_scoped_memory() {
     let state = test_state().await;
     let (_agent_key, api_key) = seed_agent(&state, "market-analysis-timeframe").await;
 
     let body = serde_json::json!({
-        "symbol": "BTC",
+        "scope_kind": "instruments",
+        "instrument_ids": ["BTC"],
         "timeframe": "__omit__",
         "memory_type": "market_analysis",
         "summary": "invalid market analysis",
@@ -273,17 +265,13 @@ async fn post_market_analysis_with_timeframe_returns_422() {
         .oneshot(builder.body(body).unwrap())
         .await
         .unwrap();
-    assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(response.status(), StatusCode::CREATED);
     let body = axum::body::to_bytes(response.into_body(), 16 * 1024)
         .await
         .unwrap();
     let body: serde_json::Value = serde_json::from_slice(&body).unwrap();
-    assert!(
-        body["error"]
-            .as_str()
-            .expect("validation error")
-            .contains("market_analysis memories must omit timeframe")
-    );
+    assert_eq!(body["scope_kind"], "instruments");
+    assert_eq!(body["instrument_targets"], json!(["BTC"]));
 }
 
 #[tokio::test]
@@ -293,7 +281,8 @@ async fn post_memories_non_object_metadata_returns_422() {
     let (_agent_key, api_key) = seed_agent(&state, "meta").await;
 
     let body = serde_json::json!({
-        "symbol": "BTC",
+        "scope_kind": "instruments",
+        "instrument_ids": ["BTC"],
         "memory_type": "plan",
         "summary": "x",
         "content": "y",
@@ -321,7 +310,8 @@ async fn auth_touches_api_key_last_used_at() {
     let (agent_key, api_key) = seed_agent(&state, "touch").await;
 
     let body = serde_json::json!({
-        "symbol": "BTC",
+        "scope_kind": "instruments",
+        "instrument_ids": ["BTC"],
         "memory_type": "plan",
         "summary": "x",
         "content": "y"
@@ -357,7 +347,8 @@ async fn list_memories_filters_and_orders_desc() {
 
     for summary in ["a", "b", "c"] {
         let body = serde_json::json!({
-            "symbol": "BTC",
+            "scope_kind": "instruments",
+            "instrument_ids": ["BTC"],
             "timeframe": "1h",
             "memory_type": "plan",
             "summary": summary,
@@ -378,9 +369,10 @@ async fn list_memories_filters_and_orders_desc() {
         assert_eq!(response.status(), StatusCode::CREATED);
     }
 
-    // Also insert a general (NULL timeframe) memory.
+    // Also insert an agent-scoped memory with a NULL timeframe.
     let body = serde_json::json!({
-        "symbol": "BTC",
+        "scope_kind": "agent",
+        "instrument_ids": [],
         "memory_type": "plan",
         "summary": "general",
         "content": "general"
@@ -401,7 +393,7 @@ async fn list_memories_filters_and_orders_desc() {
 
     // List the 1h timeframe: should return the 3 plan memories in DESC order.
     let request = Request::builder()
-        .uri("/memories?symbol=BTC&timeframe=1h&limit=10")
+        .uri("/memories?instrument_id=BTC&timeframe=1h&limit=10")
         .header("authorization", format!("Bearer {api_key}"))
         .body(Body::empty())
         .unwrap();
@@ -418,9 +410,10 @@ async fn list_memories_filters_and_orders_desc() {
         .collect();
     assert_eq!(summaries, vec!["c", "b", "a"]);
 
-    // No timeframe => all timeframes (including NULL) in newest-first order.
+    // The instrument filter returns only its target rows in newest-first
+    // order, excluding the agent-scoped row.
     let request = Request::builder()
-        .uri("/memories?symbol=BTC")
+        .uri("/memories?instrument_id=BTC")
         .header("authorization", format!("Bearer {api_key}"))
         .body(Body::empty())
         .unwrap();
@@ -429,22 +422,26 @@ async fn list_memories_filters_and_orders_desc() {
         .await
         .unwrap();
     let rows: Vec<serde_json::Value> = serde_json::from_slice(&body_bytes).unwrap();
-    assert_eq!(rows.len(), 4, "omitted timeframe returns all timeframes");
+    assert_eq!(
+        rows.len(),
+        3,
+        "instrument filter excludes agent-scoped memories"
+    );
     let summaries: Vec<&str> = rows
         .iter()
         .map(|r| r["summary"].as_str().unwrap())
         .collect();
-    assert_eq!(summaries, vec!["general", "c", "b", "a"]);
-    let first = rows.first().expect("at least one row");
+    assert_eq!(summaries, vec!["c", "b", "a"]);
+    assert!(rows.iter().all(|row| row["scope_kind"] == "instruments"));
     assert!(
-        first["timeframe"].is_null(),
-        "newest NULL-timeframe row remains in the set"
+        rows.iter()
+            .all(|row| row["instrument_targets"] == json!(["BTC"])),
     );
 
     // Scope check: another agent must not see any of these rows.
     let (_other_key, other_api_key) = seed_agent(&state, "other").await;
     let request = Request::builder()
-        .uri("/memories?symbol=BTC&timeframe=1h")
+        .uri("/memories?instrument_id=BTC&timeframe=1h")
         .header("authorization", format!("Bearer {other_api_key}"))
         .body(Body::empty())
         .unwrap();
@@ -462,7 +459,8 @@ async fn list_memories_returns_fresh_null_timeframe_market_analysis() {
     let (_agent_key, api_key) = seed_agent(&state, "market-analysis-list").await;
 
     let body = serde_json::json!({
-        "symbol": "BTC",
+        "scope_kind": "instruments",
+        "instrument_ids": ["BTC"],
         "memory_type": "market_analysis",
         "summary": "wait for confirmation",
         "content": "No new exposure.",
@@ -485,12 +483,14 @@ async fn list_memories_returns_fresh_null_timeframe_market_analysis() {
     let (status, body) = get_json_response(
         &state,
         &api_key,
-        "/memories?symbol=BTC&memory_type=market_analysis&limit=1",
+        "/memories?instrument_id=BTC&memory_type=market_analysis&limit=1",
     )
     .await;
     assert_eq!(status, StatusCode::OK);
     let rows = body.as_array().expect("array response");
     assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0]["scope_kind"], "instruments");
+    assert_eq!(rows[0]["instrument_targets"], json!(["BTC"]));
     assert!(rows[0]["timeframe"].is_null());
     assert_eq!(rows[0]["summary"], "wait for confirmation");
     assert!(rows[0]["expires_at"].is_string());
@@ -528,7 +528,7 @@ async fn list_memories_orders_before_filtering_expired_legacy_timeframe_rows() {
     let (status, body) = get_json_response(
         &state,
         &api_key,
-        "/memories?symbol=BTC&memory_type=market_analysis&limit=1",
+        "/memories?instrument_id=BTC&memory_type=market_analysis&limit=1",
     )
     .await;
     assert_eq!(status, StatusCode::OK);
@@ -575,7 +575,7 @@ async fn list_memories_hides_expired_by_default_and_include_expired_returns_them
     let (status, body) = get_json_response(
         &state,
         &api_key,
-        "/memories?symbol=BTC&memory_type=analysis",
+        "/memories?instrument_id=BTC&memory_type=analysis",
     )
     .await;
     assert_eq!(status, StatusCode::OK);
@@ -587,7 +587,7 @@ async fn list_memories_hides_expired_by_default_and_include_expired_returns_them
     let (status, body) = get_json_response(
         &state,
         &api_key,
-        "/memories?symbol=BTC&memory_type=analysis&include_expired=false",
+        "/memories?instrument_id=BTC&memory_type=analysis&include_expired=false",
     )
     .await;
     assert_eq!(status, StatusCode::OK);
@@ -599,7 +599,7 @@ async fn list_memories_hides_expired_by_default_and_include_expired_returns_them
     let (status, body) = get_json_response(
         &state,
         &api_key,
-        "/memories?symbol=BTC&memory_type=analysis&include_expired=true",
+        "/memories?instrument_id=BTC&memory_type=analysis&include_expired=true",
     )
     .await;
     assert_eq!(status, StatusCode::OK);
@@ -622,7 +622,8 @@ async fn list_memories_include_expired_keeps_explicit_valid_for_seconds() {
     // The default analysis validity window (30m) would consider it
     // fresh, but the explicit valid_for_seconds wins, so it's expired.
     let body = serde_json::json!({
-        "symbol": "BTC",
+        "scope_kind": "instruments",
+        "instrument_ids": ["BTC"],
         "timeframe": "15m",
         "memory_type": "analysis",
         "summary": "explicit-short",
@@ -654,7 +655,7 @@ async fn list_memories_include_expired_keeps_explicit_valid_for_seconds() {
     let (status, body) = get_json_response(
         &state,
         &api_key,
-        "/memories?symbol=BTC&memory_type=analysis",
+        "/memories?instrument_id=BTC&memory_type=analysis",
     )
     .await;
     assert_eq!(status, StatusCode::OK);
@@ -668,7 +669,7 @@ async fn list_memories_include_expired_keeps_explicit_valid_for_seconds() {
     let (status, body) = get_json_response(
         &state,
         &api_key,
-        "/memories?symbol=BTC&memory_type=analysis&include_expired=true",
+        "/memories?instrument_id=BTC&memory_type=analysis&include_expired=true",
     )
     .await;
     assert_eq!(status, StatusCode::OK);
@@ -729,13 +730,14 @@ async fn latest_memories_returns_latest_valid_per_timeframe() {
     let (status, body) = latest_memories_response(
         &state,
         &api_key,
-        "/memories/latest?symbol=BTC&memory_type=analysis",
+        "/memories/latest?instrument_id=BTC&memory_type=analysis",
     )
     .await;
     assert_eq!(status, StatusCode::OK);
 
     let rows = body.as_array().expect("array response");
     assert_eq!(rows.len(), 3);
+    assert!(rows.iter().all(|row| row["scope_kind"] == "instruments"));
     let summaries: Vec<&str> = rows
         .iter()
         .map(|row| row["summary"].as_str().unwrap())
@@ -798,13 +800,14 @@ async fn latest_memories_applies_limit_after_grouping() {
     let (status, body) = latest_memories_response(
         &state,
         &api_key,
-        "/memories/latest?symbol=BTC&memory_type=analysis&limit=2",
+        "/memories/latest?instrument_id=BTC&memory_type=analysis&limit=2",
     )
     .await;
     assert_eq!(status, StatusCode::OK);
 
     let rows = body.as_array().expect("array response");
     assert_eq!(rows.len(), 2);
+    assert!(rows.iter().all(|row| row["scope_kind"] == "instruments"));
     let summaries: Vec<&str> = rows
         .iter()
         .map(|row| row["summary"].as_str().unwrap())
@@ -833,7 +836,7 @@ async fn latest_memories_excludes_stale_analysis() {
     let (status, body) = latest_memories_response(
         &state,
         &api_key,
-        "/memories/latest?symbol=BTC&memory_type=analysis",
+        "/memories/latest?instrument_id=BTC&memory_type=analysis",
     )
     .await;
     assert_eq!(status, StatusCode::OK);
@@ -863,7 +866,7 @@ async fn latest_memories_uses_analysis_timeframe_defaults() {
     let (status, body) = latest_memories_response(
         &state,
         &api_key,
-        "/memories/latest?symbol=BTC&memory_type=analysis",
+        "/memories/latest?instrument_id=BTC&memory_type=analysis",
     )
     .await;
     assert_eq!(status, StatusCode::OK);
@@ -902,7 +905,7 @@ async fn latest_memories_filters_by_memory_type() {
     let (status, body) = latest_memories_response(
         &state,
         &api_key,
-        "/memories/latest?symbol=BTC&memory_type=analysis",
+        "/memories/latest?instrument_id=BTC&memory_type=analysis",
     )
     .await;
     assert_eq!(status, StatusCode::OK);
@@ -911,6 +914,7 @@ async fn latest_memories_filters_by_memory_type() {
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0]["summary"], "analysis-row");
     assert_eq!(rows[0]["memory_type"], "analysis");
+    assert_eq!(rows[0]["scope_kind"], "instruments");
 }
 
 #[tokio::test]
@@ -933,7 +937,7 @@ async fn latest_memories_excludes_null_timeframe() {
     let (status, body) = latest_memories_response(
         &state,
         &api_key,
-        "/memories/latest?symbol=BTC&memory_type=analysis",
+        "/memories/latest?instrument_id=BTC&memory_type=analysis",
     )
     .await;
     assert_eq!(status, StatusCode::OK);
@@ -941,7 +945,7 @@ async fn latest_memories_excludes_null_timeframe() {
 }
 
 #[tokio::test]
-async fn latest_memories_requires_symbol_and_memory_type() {
+async fn latest_memories_requires_instrument_id_and_memory_type() {
     let state = test_state().await;
     let (_agent_key, api_key) = seed_agent(&state, "latest-validate").await;
 
@@ -951,7 +955,7 @@ async fn latest_memories_requires_symbol_and_memory_type() {
         body["error"]
             .as_str()
             .unwrap()
-            .contains("symbol is required")
+            .contains("instrument_id is required")
     );
     assert!(
         body["error"]
@@ -963,7 +967,7 @@ async fn latest_memories_requires_symbol_and_memory_type() {
     let (status, body) = latest_memories_response(
         &state,
         &api_key,
-        "/memories/latest?symbol=%20%20&memory_type=%20%20",
+        "/memories/latest?instrument_id=%20%20&memory_type=%20%20",
     )
     .await;
     assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
@@ -971,7 +975,7 @@ async fn latest_memories_requires_symbol_and_memory_type() {
         body["error"]
             .as_str()
             .unwrap()
-            .contains("symbol is required")
+            .contains("instrument_id is required")
     );
     assert!(
         body["error"]
@@ -987,9 +991,9 @@ async fn latest_memories_rejects_invalid_limit() {
     let (_agent_key, api_key) = seed_agent(&state, "latest-bad-limit").await;
 
     for uri in [
-        "/memories/latest?symbol=BTC&memory_type=analysis&limit=0",
-        "/memories/latest?symbol=BTC&memory_type=analysis&limit=-1",
-        "/memories/latest?symbol=BTC&memory_type=analysis&limit=abc",
+        "/memories/latest?instrument_id=BTC&memory_type=analysis&limit=0",
+        "/memories/latest?instrument_id=BTC&memory_type=analysis&limit=-1",
+        "/memories/latest?instrument_id=BTC&memory_type=analysis&limit=abc",
     ] {
         let (status, body) = latest_memories_response(&state, &api_key, uri).await;
         assert_eq!(status, StatusCode::BAD_REQUEST);
@@ -1030,7 +1034,7 @@ async fn latest_memories_is_scoped_to_authenticated_agent() {
     let (status, body) = latest_memories_response(
         &state,
         &agent_a_api_key,
-        "/memories/latest?symbol=BTC&memory_type=analysis",
+        "/memories/latest?instrument_id=BTC&memory_type=analysis",
     )
     .await;
     assert_eq!(status, StatusCode::OK);
@@ -1039,6 +1043,7 @@ async fn latest_memories_is_scoped_to_authenticated_agent() {
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0]["summary"], "agent-a");
     assert_eq!(rows[0]["agent_key"], agent_a_key);
+    assert_eq!(rows[0]["scope_kind"], "instruments");
 }
 
 #[tokio::test]
@@ -1049,7 +1054,8 @@ async fn get_memory_by_id_returns_200_or_404() {
     let (_other_key, other_api_key) = seed_agent(&state, "get-other").await;
 
     let body = serde_json::json!({
-        "symbol": "BTC",
+        "scope_kind": "instruments",
+        "instrument_ids": ["BTC"],
         "timeframe": "1h",
         "memory_type": "plan",
         "summary": "x",
@@ -1087,6 +1093,8 @@ async fn get_memory_by_id_returns_200_or_404() {
         .unwrap();
     let fetched: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
     assert_eq!(fetched["id"], created["id"]);
+    assert_eq!(fetched["scope_kind"], "instruments");
+    assert_eq!(fetched["instrument_targets"], json!(["BTC"]));
 
     // Another agent gets 404 (do not leak existence).
     let request = Request::builder()

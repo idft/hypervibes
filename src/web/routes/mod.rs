@@ -79,18 +79,25 @@ pub fn router(state: Arc<AppState>) -> Router {
             "/agents/{agent_key}/coding/task-status",
             get(agents_coding_task_status),
         )
-        .route("/agents/{agent_key}/prompts", get(agents_show_prompts))
         .route(
-            "/agents/{agent_key}/prompts/update",
-            post(agents_update_prompt),
+            "/agents/{agent_key}/sub-agents/recent-runs/stream",
+            get(agent_sub_agent_recent_runs_stream),
         )
         .route(
-            "/agents/{agent_key}/prompts/rollback",
-            post(agents_rollback_prompt_revision),
+            "/agents/{agent_key}/analysis",
+            get(agents_show_analysis).post(agents_create_analysis_job),
         )
         .route(
-            "/agents/{agent_key}/prompts/improvement",
-            post(agents_update_prompt_improvement),
+            "/agents/{agent_key}/analysis/new",
+            get(agents_new_analysis_job),
+        )
+        .route(
+            "/agents/{agent_key}/trading",
+            get(agents_show_trading).post(agents_create_trading_singleton),
+        )
+        .route(
+            "/agents/{agent_key}/review",
+            get(agents_show_review).post(agents_create_review_singleton),
         )
         .route("/agents/{agent_key}/settings", get(agents_show_settings))
         .route(
@@ -180,18 +187,6 @@ pub fn router(state: Arc<AppState>) -> Router {
             post(disconnect_telegram_gateway),
         )
         .route(
-            "/agents/{agent_key}/sub-agents",
-            get(agents_show_sub_agents).post(agents_create_sub_agent),
-        )
-        .route(
-            "/agents/{agent_key}/sub-agents/recent-runs/stream",
-            get(agent_sub_agent_recent_runs_stream),
-        )
-        .route(
-            "/agents/{agent_key}/sub-agents/new",
-            get(agents_new_sub_agent),
-        )
-        .route(
             "/agents/{agent_key}/sub-agents/toggle-all",
             post(agents_toggle_all_sub_agents),
         )
@@ -234,6 +229,18 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route(
             "/agents/{agent_key}/sub-agents/{sub_agent_id}/timeframe",
             post(agents_update_sub_agent_timeframe),
+        )
+        .route(
+            "/agents/{agent_key}/sub-agents/{sub_agent_id}/prompt",
+            post(agents_update_sub_agent_prompt),
+        )
+        .route(
+            "/agents/{agent_key}/sub-agents/{sub_agent_id}/prompt/rollback",
+            post(agents_rollback_sub_agent_prompt),
+        )
+        .route(
+            "/agents/{agent_key}/sub-agents/{sub_agent_id}/review-prompt-update",
+            post(agents_update_sub_agent_review_prompt_update),
         )
         .route(
             "/agents/{agent_key}/runs/{run_id}",

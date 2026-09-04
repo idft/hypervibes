@@ -4,77 +4,61 @@ slug: /concepts/sub-agents
 
 # Sub-agents
 
-Sub-agents are the durable schedules and follow-up tasks an agent dispatches to
-run OpenCode sessions. HyperVibes stores both the sub-agent configuration and each run,
-so users can inspect work that is queued, running, completed, or failed.
+Sub-agents are durable OpenCode jobs. HyperVibes persists each job's
+configuration and runs so queued, running, completed, and failed work can be
+inspected.
 
-## Sub-agent types
+## Roles
 
-Each new OpenCode agent receives seven disabled sub-agents: three analysis schedules,
-one trading schedule, one daily review schedule, and two follow-up hooks.
+Each new agent receives six disabled sub-agents: three independent Analysis
+jobs and singleton Trading, Coding, and Review jobs.
 
-| Sub-agent | Default schedule or trigger | Purpose |
+| Role | Default schedule | Purpose |
 | --- | --- | --- |
-| Analysis | Candle close at 15m, 1h, or 1d | Runs strategy analysis for selected markets and saves the results as memory. |
-| Market analysis | `analysis_batch_completed` | Combines the latest analysis memories into a market-level execution handoff. |
-| Trading | Candle close at 5m | Reviews the current market-analysis handoff, places or manages orders, and manages exits. |
-| Daily review | Candle close at 1d | Reviews agent performance and records accumulated learnings. |
-| Analysis coding | On demand | Generates or improves user analysis code after a daily-review request, an approved Chat request, or a manual run. It is disabled by default. |
+| Analysis | Candle close at 15m, 1h, or 1d | User-configured research that publishes discoverable memories. |
+| Trading | Candle close at 5m | Synthesizes Analysis context, records decisions, and manages orders. |
+| Coding | On demand | Maintains the durable quantitative package. |
+| Review | Candle close at 1d | Reviews outcomes, records learnings, and can revise permitted prompts. |
 
-Candle-close sub-agents are driven by UTC candle boundaries after the configured
-settling delay. Market analysis is a direct analysis follow-up. Analysis coding
-is queued on demand and never waits for the requesting session.
+Candle-close jobs run at UTC candle boundaries after the configured settling
+delay. Coding is queued on demand and does not wait for its requesting session.
+Analysis and Trading retain the selected-instrument gate; Coding and Review do
+not use that gate.
 
-## Configure a sub-agent
+Analysis has many independently keyed jobs. Defaults use `technical-15m`,
+`technical-1h`, and `technical-1d`; user-created jobs provide a unique bounded
+ASCII-slug key and may share a schedule or timeframe with another job. Each
+Analysis job owns an independent full prompt revision and Additional
+Instructions. New Analysis jobs opt out of Review prompt revisions; the job
+detail can explicitly opt in.
 
-The Sub-agents tab lets a user configure each sub-agent's:
+## Configuration
 
-- enabled state
-- provider, model, and optional thinking mode
-- timeout
-- Additional Instructions
-- capabilities
+The Analysis, Trading, Coding, and Review pages configure each role's enabled
+state, provider, model, optional thinking mode, timeout, Additional
+Instructions, and capabilities. Enabled scheduled jobs require an explicit
+model. Additional Instructions are appended to that job's prompt and are not
+part of the saved prompt revision or exposed through the agent API or MCP.
 
-An enabled scheduled sub-agent must have an explicit model. Additional Instructions
-are specific to that sub-agent and are appended to its selected strategy prompt; they
-are not part of the saved strategy prompt and are not exposed through the agent
-API or MCP.
-
-Analysis can inspect and directly execute the read-only Coding package copied
-into its run workspace under `scripts/user/`; market analysis, trading, and
-daily review have no package access. Analysis coding is the only sub-agent
-allowed to change the durable package, and it requires an explicit strong
+Analysis may inspect and execute the read-only Coding package copied into its
+run workspace under `scripts/user/`. Trading and Review have no package access.
+Only Coding can change the durable package and it requires an explicit strong
 provider and model.
 
-Capabilities are named assignments rather than raw OpenCode permission rules. The
-Notifications control configures `hypervibes:notification_send`, which permits a
-run to queue a best-effort gateway notification. Trading enables it by default;
-all other scheduled roles start disabled. The saved capability set is checked
-against the sub-agent role, rendered into the run's OpenCode permissions, and
-snapshotted with the run. A queued notification does not guarantee delivery.
-
-The capability model also reserves `custom-mcp:<installation-id>:<tool-name>`
-identifiers for future custom MCP tools. Those identifiers can be persisted and
-audited, but custom MCP execution and configuration are not available yet.
+Capabilities are named assignments and are snapshotted with a run. The Review
+prompt-update capability is permitted only on Analysis jobs and is not an
+Analysis workspace tool permission. Review snapshots its opted-in Analysis
+targets, their base revisions, and Trading's base revision at dispatch.
 
 ## Dispatch and runs
 
-The scheduler claims due sub-agents transactionally and dispatches them through the
-OpenCode backend. Before a run starts, HyperVibes snapshots its provider,
-model, optional thinking mode, selected instruments, sub-agent-specific prompt,
-latest agent learnings, global prompt, and trading account snapshot when
-applicable.
+Before dispatch, HyperVibes snapshots the provider, model, thinking mode,
+selected instruments, sub-agent prompt revision, latest learnings, and global
+prompt. Trading also receives a live account snapshot. Run status remains
+independent of the OpenCode session, and recovery reconciles stale active runs.
 
-The run keeps its HyperVibes status independently from the OpenCode session.
-On startup and during periodic recovery, stale active runs are reconciled so an
-interrupted process does not permanently block later work for the same agent.
-Run details include the OpenCode transcript, tool activity, errors, token and
-context telemetry, and cost when those records are available.
+Runs are held while a Coding task is promoted. Promotion waits for active live
+runs to finish; scheduled work stays due and can run afterwards. Only one
+maintenance task can be queued or running for an agent.
 
-Runs are held while an analysis-coding task is in its promotion window. A
-promotion waits for active live runs to finish; scheduled work remains due and
-can run after promotion completes. Only one maintenance task can be queued or
-running for an agent.
-
-See [Prompts](Prompts.md) for the content passed to each sub-agent and
-[Architecture](/docs/development/architecture) for the runtime lifecycle.
+See [Prompts](Prompts.md) and [Architecture](/docs/development/architecture).

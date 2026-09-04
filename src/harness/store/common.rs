@@ -4,7 +4,7 @@ use sqlx::query_as;
 
 use crate::{
     db::DbPool,
-    harness::model::{RUN_STATUS_QUEUED, RUN_STATUS_RUNNING, SUB_AGENT_KIND_ANALYSIS_CODING},
+    harness::model::{RUN_STATUS_QUEUED, RUN_STATUS_RUNNING, SUB_AGENT_KIND_CODING},
 };
 
 pub(crate) const ACTIVE_STATUSES: [&str; 2] = [RUN_STATUS_QUEUED, RUN_STATUS_RUNNING];
@@ -14,7 +14,6 @@ pub(crate) const ERROR_SUMMARY_MAX_CHARS: usize = 500;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum EventRunInsertMode {
     Manual,
-    AnalysisContinuation,
     CodingTrigger,
 }
 
@@ -41,7 +40,7 @@ pub(crate) async fn lock_agent_coordination_tx(
 ///
 /// Bulk enable is intentionally conservative with respect to autonomous
 /// code modification: bulk enabling jobs must
-/// NOT enable the `analysis_coding` event. That event has to be
+/// NOT enable the Coding role. That role has to be
 /// enabled by hand and pinned to an explicit strong provider/model
 /// before any automatic code coding can fire. Bulk disable still
 /// turns every event (including coding) off.
@@ -69,7 +68,7 @@ pub async fn set_all_agent_sub_agents_enabled(
     )
     .bind(agent_key)
     .bind(enabled)
-    .bind(SUB_AGENT_KIND_ANALYSIS_CODING)
+    .bind(SUB_AGENT_KIND_CODING)
     .execute(&mut *tx)
     .await
     .with_context(|| format!("failed to toggle sub-agents for agent {agent_key}"))?;

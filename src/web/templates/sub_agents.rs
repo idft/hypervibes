@@ -32,6 +32,7 @@ pub struct HarnessSubAgentView {
 pub struct HarnessSubAgentDetailView {
     pub id: i64,
     pub sub_agent_key: String,
+    pub sub_agent_kind: String,
     pub enabled: bool,
     pub enabled_label: &'static str,
     pub enabled_class: &'static str,
@@ -48,6 +49,7 @@ pub struct HarnessSubAgentDetailView {
     pub model_error: Option<String>,
     pub highlight_model_selector: bool,
     pub model_selection: String,
+    pub model_text: String,
     pub model_update_action: String,
     pub run_now_action: String,
     pub toggle_action: String,
@@ -55,6 +57,8 @@ pub struct HarnessSubAgentDetailView {
     pub hidden_enabled_value: &'static str,
     pub notification_send_enabled: bool,
     pub notification_capability_update_action: String,
+    pub review_prompt_update_enabled: bool,
+    pub review_prompt_update_action: String,
 }
 
 #[derive(Debug, Clone)]
@@ -87,10 +91,7 @@ impl HarnessSubAgentView {
 
         let (is_candle_job, trigger_text) = match row.timeframe.as_deref() {
             Some(timeframe) => (true, format!("At {timeframe} candle close")),
-            None if row.sub_agent_kind == "market_analysis" => {
-                (false, "After analysis batch completes".to_string())
-            }
-            None if row.sub_agent_kind == "analysis_coding" => (false, "On demand".to_string()),
+            None if row.sub_agent_kind == "coding" => (false, "On demand".to_string()),
             None => (false, "Unscheduled".to_string()),
         };
 
@@ -122,6 +123,7 @@ impl HarnessSubAgentDetailView {
         Self {
             id: row.id,
             sub_agent_key: row.sub_agent_key.clone(),
+            sub_agent_kind: row.sub_agent_kind.clone(),
             enabled: row.enabled,
             enabled_label: summary.enabled_label,
             enabled_class: summary.enabled_class,
@@ -153,6 +155,7 @@ impl HarnessSubAgentDetailView {
                 (Some(provider), Some(model)) => format!("{provider}/{model}"),
                 _ => String::new(),
             },
+            model_text: summary.model_text,
             model_update_action: format!("/agents/{}/sub-agents/{}/model", row.agent_key, row.id),
             run_now_action: summary.run_now_action,
             toggle_action: summary.toggle_action,
@@ -164,6 +167,14 @@ impl HarnessSubAgentDetailView {
                 .any(|capability| capability == "hypervibes:notification_send"),
             notification_capability_update_action: format!(
                 "/agents/{}/sub-agents/{}/notification-capability",
+                row.agent_key, row.id
+            ),
+            review_prompt_update_enabled: row
+                .enabled_capabilities
+                .iter()
+                .any(|capability| capability == "hypervibes:review_prompt_update"),
+            review_prompt_update_action: format!(
+                "/agents/{}/sub-agents/{}/review-prompt-update",
                 row.agent_key, row.id
             ),
         }
@@ -229,7 +240,11 @@ impl AgentJobDetailPageTemplate {
             agent.enabled,
         );
         Self {
-            tabs: build_agent_show_tabs(&agent, AgentShowTab::SubAgents, notification_count),
+            tabs: build_agent_show_tabs(
+                &agent,
+                detail_tab_for_kind(&job.sub_agent_kind),
+                notification_count,
+            ),
             agent_tabs_use_htmx: false,
             agent,
             job,
@@ -260,4 +275,46 @@ impl ModelPickerPartialTemplate {
     pub fn render_view(model_picker: ModelPickerView) -> Result<String, askama::Error> {
         Self { model_picker }.render()
     }
+}
+
+/// Map a sub-agent kind to the left-rail tab that owns its page.
+fn detail_tab_for_kind(sub_agent_kind: &str) -> AgentShowTab {
+    match sub_agent_kind {
+        "trading" => AgentShowTab::Trading,
+        "review" => AgentShowTab::Review,
+        "coding" => AgentShowTab::Coding,
+        _ => AgentShowTab::Analysis,
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct RoleRevisionView {
+    pub revision_id: i64,
+    pub created_at: LocalTimestampView,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct RolePromptView {
+    pub revision_id: i64,
+    pub prompt: String,
+    pub prompt_error: Option<String>,
+    pub history: Vec<RoleRevisionView>,
+}
+
+#[derive(Template)]
+#[template(path = "agents/sub_agents/role.html")]
+pub struct AgentRolePageTemplate {
+    pub agent: AgentDetailRow,
+    pub tabs: Vec<super::agents::AgentShowTabLink>,
+    pub agent_tabs_use_htmx: bool,
+    pub active_role_label: &'static str,
+    pub role_page_path: String,
+    pub role_description: &'static str,
+    pub job: Option<HarnessSubAgentDetailView>,
+    pub sub_agent_id: i64,
+    pub model_picker: super::agents::ModelPickerView,
+    pub prompt_view: RolePromptView,
+    pub review_prompt_improvement_enabled: Option<bool>,
+    pub current_path: String,
+    pub navbar: Navbar,
 }

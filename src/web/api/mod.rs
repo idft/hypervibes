@@ -45,6 +45,10 @@ pub fn router(state: Arc<AppState>) -> Router {
     Router::new()
         .route("/memories", post(create_memory).get(list_memories))
         .route("/memories/latest", get(list_latest_memories))
+        .route(
+            "/memories/trading-context",
+            get(memories::get_trading_context),
+        )
         .route("/memories/{id}", get(get_memory_by_id))
         .route("/notifications", post(create_notification))
         .route("/account", get(get_account))
@@ -54,7 +58,7 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/strategy-prompts", get(list_strategy_prompts))
         .route("/strategy-prompts/revisions", post(submit_prompt_revision))
         .route(
-            "/strategy-prompts/{prompt_kind}",
+            "/strategy-prompts/{sub_agent_id}",
             get(get_strategy_prompt).put(update_strategy_prompt),
         )
         .route(

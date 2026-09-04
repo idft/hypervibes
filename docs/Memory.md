@@ -4,30 +4,40 @@ slug: /concepts/memory
 
 # Memory System
 
-The memory system stores time-ordered, agent-owned analysis and review context
-so later runs can make decisions with continuity.
+Memory is time-ordered, agent-owned context. Every record has server-owned
+source-run provenance and an explicit scope: `agent` or `instruments`.
 
-Memories may be persisted as analysis, market analysis, daily reviews, or agent
-learnings. Each type supports a different part of the agent's ongoing work.
+## Scope and targets
 
-## Analysis
+Agent-scoped records apply to the whole agent and have no instrument targets.
+Instrument-scoped records target one or more selected canonical Hyperliquid
+instruments. Historical targets remain attached if an instrument is later
+deselected. Links record evidence relationships without crossing agent
+ownership boundaries.
 
-Analysis memories record a market review for a selected instrument and timeframe.
-They provide the research that later market-analysis and trading work can use.
+## Analysis research
 
-## Market Analysis
+Analysis jobs may write any valid non-reserved memory type. Their output is
+discoverable rather than mapped to an analyst and can be agent-scoped or target
+one or more instruments. A custom Analysis type expires on the producing job's
+schedule unless the record specifies explicit validity.
 
-Market-analysis memories combine recent analysis memories into a current view of
-one market and an execution handoff for the trading sub-agent. They help trading act
-on the latest analysis instead of developing a separate thesis.
+Trading reads the latest fresh record per `(Analysis producer, memory type,
+scope)` for the requested instrument, including agent-wide records. Missing,
+failed, disabled, and stale producers are returned as context, not treated as a
+scheduler or order-gateway block.
 
-## Daily Review
+## Trading decisions
 
-Daily-review memories summarize an agent's recent performance and activity. They
-record what the agent learned during the review and help guide future work.
+Trading writes the reserved `trading_decision` type as a durable audit and UI
+log. It should cover every evaluated instrument, including no-trade and
+position-management outcomes, and link all considered evidence. Failure to
+write a decision does not block opening exposure; reduce-only work is never
+blocked by this logging policy.
 
-## Agent Learnings
+## Review and learnings
 
-Agent learnings preserve durable lessons that should remain available across
-future analysis, trading, and review runs. They describe broader improvements or
-patterns rather than a single market update.
+Review records outcomes and learnings. `agent_learnings` preserve durable
+lessons for future Analysis, Trading, and Review runs. Framework-owned types are
+reserved: Trading writes `trading_decision`, Review writes review and learning
+records, and Coding result records remain application-owned.

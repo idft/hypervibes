@@ -172,7 +172,7 @@ pub(in crate::web::routes) async fn delete_agent(
         // runs execute in the coding candidate workspace owned by their
         // maintenance task.
         let run_workspace_container_path =
-            if run.sub_agent_kind != crate::harness::model::SUB_AGENT_KIND_ANALYSIS_CODING {
+            if run.sub_agent_kind != crate::harness::model::SUB_AGENT_KIND_CODING {
                 Some(format!(
                     "{}/runs/{}/{}/workspace",
                     state
@@ -212,7 +212,7 @@ pub(in crate::web::routes) async fn delete_agent(
                 .into_response());
         }
         mark_run_aborted(&state.db_pool, run.id, "aborted by agent deletion", None).await?;
-        if run.sub_agent_kind != crate::harness::model::SUB_AGENT_KIND_ANALYSIS_CODING {
+        if run.sub_agent_kind != crate::harness::model::SUB_AGENT_KIND_CODING {
             crate::harness::scheduler::terminalize_run_workspace_artifact(
                 &state.db_pool,
                 &state.workspace_controller,
@@ -401,11 +401,6 @@ async fn activate_new_agent(state: &Arc<AppState>, agent_key: &str) -> Result<()
     {
         replace_agent_instruments(&state.db_pool, agent_key, &["BTC".to_string()]).await?;
     }
-    crate::agents::strategy_prompts::insert_default_strategy_prompts_for_agent(
-        &state.db_pool,
-        agent_key,
-    )
-    .await?;
     crate::harness::store::insert_default_harness_sub_agents(&state.db_pool, agent_key).await?;
     Ok(())
 }

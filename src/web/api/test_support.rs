@@ -14,10 +14,7 @@ use crate::{
         keys::derive_wallet_address,
         model::AgentRegistryRow,
         store::{insert_agent, replace_agent_instruments},
-        strategy_prompts::{
-            PROMPT_KIND_ANALYSIS, PROMPT_KIND_TRADING, insert_default_strategy_prompts_for_agent,
-            upsert_agent_strategy_prompt,
-        },
+        strategy_prompts::upsert_agent_strategy_prompt,
     },
     harness::backend::{DispatchRequest, DispatchResult, HarnessBackend},
     hyperliquid::{
@@ -148,25 +145,32 @@ pub async fn seed_agent_with_prompts(
     insert_agent(&state.db_pool, &row)
         .await
         .expect("insert agent");
-    insert_default_strategy_prompts_for_agent(&state.db_pool, &agent_key)
+    crate::harness::store::insert_default_harness_sub_agents(&state.db_pool, &agent_key)
         .await
-        .expect("insert default prompts");
-    upsert_agent_strategy_prompt(
-        &state.db_pool,
-        &agent_key,
-        PROMPT_KIND_ANALYSIS,
-        analysis_prompt,
+        .expect("insert default jobs");
+    let analysis_id: i64 = sqlx::query_scalar(
+        "SELECT id FROM harness_sub_agents WHERE agent_key = $1 AND sub_agent_key = 'technical-15m'",
     )
+    .bind(&agent_key)
+    .fetch_one(&state.db_pool)
     .await
-    .expect("seed analysis prompt");
-    upsert_agent_strategy_prompt(
-        &state.db_pool,
-        &agent_key,
-        PROMPT_KIND_TRADING,
-        trading_prompt,
+    .expect("load analysis job");
+    let trading_id: i64 = sqlx::query_scalar(
+        "SELECT id FROM harness_sub_agents WHERE agent_key = $1 AND sub_agent_kind = 'trading'",
     )
+    .bind(&agent_key)
+    .fetch_one(&state.db_pool)
     .await
-    .expect("seed trading prompt");
+    .expect("load trading job");
+    upsert_agent_strategy_prompt(&state.db_pool, &agent_key, analysis_id, analysis_prompt)
+        .await
+        .expect("seed analysis prompt");
+    upsert_agent_strategy_prompt(&state.db_pool, &agent_key, trading_id, trading_prompt)
+        .await
+        .expect("seed trading prompt");
+    // Memory API tests target the canonical BTC test instrument by default.
+    seed_instrument(state, "BTC", true).await;
+    select_instruments(state, &agent_key, &["BTC"]).await;
     (agent_key, api_key)
 }
 
@@ -229,30 +233,65 @@ pub async fn insert_memory_at(
     state: &Arc<AppState>,
     agent_key: &str,
     created_at: chrono::DateTime<Utc>,
-    symbol: &str,
+    instrument_id: &str,
     timeframe: Option<&str>,
     memory_type: &str,
     summary: &str,
     metadata: serde_json::Value,
 ) -> Uuid {
     let id = Uuid::new_v4();
+    seed_instrument(state, instrument_id, true).await;
+    sqlx::query(
+        "INSERT INTO agent_instruments (agent_key, instrument_id) VALUES ($1, $2) ON CONFLICT DO NOTHING",
+    )
+    .bind(agent_key)
+    .bind(instrument_id)
+    .execute(&state.db_pool)
+    .await
+    .expect("select memory target instrument");
+    let analysis_job_id: i64 = sqlx::query_scalar(
+        "SELECT id FROM harness_sub_agents WHERE agent_key = $1 AND sub_agent_key = 'technical-15m'",
+    )
+    .bind(agent_key)
+    .fetch_one(&state.db_pool)
+    .await
+    .expect("load analysis job for memory");
+    let source_run_id = crate::harness::store::insert_test_run(
+        &state.db_pool,
+        analysis_job_id,
+        crate::harness::model::RUN_STATUS_SUCCEEDED,
+    )
+    .await
+    .expect("insert analysis source run for memory");
     sqlx::query(
         "INSERT INTO memory.records (
-            id, created_at, agent_key, symbol, timeframe, memory_type, summary, content, metadata
-         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
+             id, created_at, agent_key, scope_kind, timeframe, memory_type, summary, content, metadata,
+             source_run_id
+         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)",
     )
     .bind(id)
     .bind(created_at)
     .bind(agent_key)
-    .bind(symbol)
+    .bind(crate::memory::model::MEMORY_SCOPE_INSTRUMENTS)
     .bind(timeframe)
     .bind(memory_type)
     .bind(summary)
     .bind(format!("body for {summary}"))
     .bind(metadata)
+    .bind(source_run_id)
     .execute(&state.db_pool)
     .await
     .expect("insert memory record");
+    sqlx::query(
+        "INSERT INTO memory.instrument_targets (memory_id, agent_key, instrument_id)
+         VALUES ($1, $2, $3)",
+    )
+    .bind(id)
+    .bind(agent_key)
+    .bind(instrument_id)
+    .execute(&state.db_pool)
+    .await
+    .expect("insert memory target");
     id
 }
 

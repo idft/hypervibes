@@ -178,6 +178,19 @@
                 </label>
                 <button type="submit" class="cursor-pointer rounded-full border border-zinc-700 px-3 py-1.5 text-xs font-medium text-zinc-200 hover:border-zinc-600 hover:text-white">Save</button>
             </form>
+            {% if job.sub_agent_kind == "analysis" %}
+            <form action="{{ job.review_prompt_update_action }}" method="post" class="flex items-center justify-between gap-4 border border-zinc-800 bg-zinc-950/50 p-5">
+                <div>
+                    <p class="text-xs uppercase tracking-[0.16em] text-zinc-500">Review prompt updates</p>
+                    <p class="mt-2 text-sm text-zinc-300">Allow Review to revise this Analysis job's prompt.</p>
+                </div>
+                <label class="inline-flex shrink-0 cursor-pointer items-center gap-2 text-sm text-zinc-200">
+                    <input type="checkbox" name="enabled" value="on" {% if job.review_prompt_update_enabled %}checked{% endif %} class="size-4 cursor-pointer rounded border-zinc-700 bg-zinc-950 text-sky-500 focus:ring-sky-500">
+                    Enabled
+                </label>
+                <button type="submit" class="cursor-pointer rounded-full border border-zinc-700 px-3 py-1.5 text-xs font-medium text-zinc-200 hover:border-zinc-600 hover:text-white">Save</button>
+            </form>
+            {% endif %}
             <div class="flex flex-wrap items-center gap-3">
                 <button type="button" data-sub-agent-detail-modal-trigger="additional-instructions-modal" aria-controls="additional-instructions-modal"
                     class="cursor-pointer rounded-full border border-zinc-800 bg-zinc-950/50 px-4 py-2 text-sm font-medium text-zinc-300 hover:border-zinc-700 hover:text-white">

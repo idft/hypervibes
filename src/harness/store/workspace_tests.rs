@@ -31,14 +31,14 @@ async fn coding_queue_deduplicates_source_memory() {
                 model_provider_id = 'test',
                 model_id = 'strong'
           WHERE agent_key = $1
-            AND sub_agent_kind = 'analysis_coding'",
+             AND sub_agent_kind = 'coding'",
     )
     .bind(&key)
     .execute(&pool)
     .await
     .expect("configure coding event job");
     let sub_agent_id: (i64,) = sqlx::query_as(
-        "SELECT id FROM harness_sub_agents WHERE agent_key = $1 AND sub_agent_kind = 'analysis_coding'",
+        "SELECT id FROM harness_sub_agents WHERE agent_key = $1 AND sub_agent_kind = 'coding'",
     )
     .bind(&key)
     .fetch_one(&pool)
@@ -46,8 +46,8 @@ async fn coding_queue_deduplicates_source_memory() {
     .expect("load coding event job");
     let source_memory = Uuid::new_v4();
     sqlx::query(
-        "INSERT INTO memory.records (id, agent_key, symbol, memory_type, summary, content, metadata)
-         VALUES ($1, $2, '__agent__', 'daily_review', 'review', 'review', '{}'::jsonb)",
+        "INSERT INTO memory.records (id, agent_key, scope_kind, memory_type, summary, content, metadata)
+         VALUES ($1, $2, 'agent', 'review', 'review', 'review', '{}'::jsonb)",
     )
     .bind(source_memory)
     .bind(&key)
@@ -126,14 +126,14 @@ async fn agent_has_blocking_workspace_maintenance_only_during_coding_promotion()
                 model_provider_id = 'test',
                 model_id = 'strong'
           WHERE agent_key = $1
-            AND sub_agent_kind = 'analysis_coding'",
+             AND sub_agent_kind = 'coding'",
     )
     .bind(&key)
     .execute(&pool)
     .await
     .expect("configure coding event job");
     let sub_agent_id: (i64,) = sqlx::query_as(
-        "SELECT id FROM harness_sub_agents WHERE agent_key = $1 AND sub_agent_kind = 'analysis_coding'",
+        "SELECT id FROM harness_sub_agents WHERE agent_key = $1 AND sub_agent_kind = 'coding'",
     )
     .bind(&key)
     .fetch_one(&pool)
@@ -214,14 +214,14 @@ async fn mark_maintenance_task_failed_preserves_error_summary() {
                 model_provider_id = 'test',
                 model_id = 'strong'
           WHERE agent_key = $1
-            AND sub_agent_kind = 'analysis_coding'",
+             AND sub_agent_kind = 'coding'",
     )
     .bind(&key)
     .execute(&pool)
     .await
     .expect("configure coding event job");
     let sub_agent_id: (i64,) = sqlx::query_as(
-        "SELECT id FROM harness_sub_agents WHERE agent_key = $1 AND sub_agent_kind = 'analysis_coding'",
+        "SELECT id FROM harness_sub_agents WHERE agent_key = $1 AND sub_agent_kind = 'coding'",
     )
     .bind(&key)
     .fetch_one(&pool)

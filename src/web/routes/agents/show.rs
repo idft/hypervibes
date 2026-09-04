@@ -14,16 +14,8 @@ use super::super::account::agent_subaccount_name;
 use super::memories::{AgentMemoriesQuery, parse_memory_date_filter, prepare_memory_timeline_page};
 use super::transactions::apply_live_cash_balance_anchor;
 use crate::{
-    agents::{
-        store::{
-            get_agent, get_agent_readiness, list_agent_instrument_ids,
-            list_agent_instrument_options,
-        },
-        strategy_prompts::{
-            PROMPT_KIND_ANALYSIS, PROMPT_KIND_ANALYSIS_CODING, PROMPT_KIND_DAILY_REVIEW,
-            PROMPT_KIND_MARKET_ANALYSIS, PROMPT_KIND_TRADING, default_prompt_for_kind,
-            list_agent_strategy_prompts,
-        },
+    agents::store::{
+        get_agent, get_agent_readiness, list_agent_instrument_ids, list_agent_instrument_options,
     },
     hyperliquid::{
         live_state::{AccountKey, AccountLiveState, LiveConnectionStatus},
@@ -33,7 +25,7 @@ use crate::{
         },
     },
     memory::{
-        get_latest_agent_memory_by_type, get_memory, list_agent_memory_timeline, memory_expires_at,
+        get_latest_trading_decision, get_memory, list_agent_memory_timeline, memory_expires_at,
     },
     notifications::store::{count_notifications, list_notification_history},
     web::{
@@ -43,9 +35,9 @@ use crate::{
         templates::{
             AccountBalancePartialTemplate, AccountBalanceView, AgentRecentRunsView, AgentShowTab,
             AgentsShowPageTemplate, BalanceSparklinesPartialTemplate,
-            LatestAnalysisSummaryPartialTemplate, LatestTradeExecutionSummaryPartialTemplate,
-            OpenOrdersPartialTemplate, OpenOrdersView, OpenPositionsPartialTemplate,
-            OpenPositionsView, SparklineView, TransactionView, load_navbar,
+            LatestTradeDecisionSummaryPartialTemplate, OpenOrdersPartialTemplate, OpenOrdersView,
+            OpenPositionsPartialTemplate, OpenPositionsView, SparklineView, TransactionView,
+            load_navbar,
         },
     },
 };
@@ -156,6 +148,9 @@ pub(in crate::web::routes) async fn render_agent_show_page(
     match active_tab {
         AgentShowTab::Chat => unreachable!("Chat has its own page route"),
         AgentShowTab::Coding => unreachable!("Coding has its own page route"),
+        AgentShowTab::Trading | AgentShowTab::Review => {
+            unreachable!("Trading and Review have their own page routes")
+        }
         AgentShowTab::Positions => {
             populate_positions_tab(state, &agent, &mut template).await?;
         }
@@ -209,68 +204,6 @@ pub(in crate::web::routes) async fn render_agent_show_page(
                 }
             }
         }
-        AgentShowTab::Prompts => {
-            match list_agent_strategy_prompts(&state.db_pool, &agent.agent_key).await {
-                Ok(rows) => {
-                    let prompt_map: std::collections::BTreeMap<String, String> = rows
-                        .into_iter()
-                        .map(|row| (row.prompt_kind, row.prompt))
-                        .collect();
-                    template.set_prompt_editors(vec![
-                        crate::web::templates::PromptEditorView::new(
-                            PROMPT_KIND_ANALYSIS,
-                            prompt_map
-                                .get(PROMPT_KIND_ANALYSIS)
-                                .cloned()
-                                .unwrap_or_default(),
-                            default_prompt_for_kind(PROMPT_KIND_ANALYSIS),
-                        ),
-                        crate::web::templates::PromptEditorView::new(
-                            PROMPT_KIND_MARKET_ANALYSIS,
-                            prompt_map
-                                .get(PROMPT_KIND_MARKET_ANALYSIS)
-                                .cloned()
-                                .unwrap_or_default(),
-                            default_prompt_for_kind(PROMPT_KIND_MARKET_ANALYSIS),
-                        ),
-                        crate::web::templates::PromptEditorView::new(
-                            PROMPT_KIND_TRADING,
-                            prompt_map
-                                .get(PROMPT_KIND_TRADING)
-                                .cloned()
-                                .unwrap_or_default(),
-                            default_prompt_for_kind(PROMPT_KIND_TRADING),
-                        ),
-                        crate::web::templates::PromptEditorView::new(
-                            PROMPT_KIND_DAILY_REVIEW,
-                            prompt_map
-                                .get(PROMPT_KIND_DAILY_REVIEW)
-                                .cloned()
-                                .unwrap_or_default(),
-                            default_prompt_for_kind(PROMPT_KIND_DAILY_REVIEW),
-                        ),
-                        crate::web::templates::PromptEditorView::new(
-                            PROMPT_KIND_ANALYSIS_CODING,
-                            prompt_map
-                                .get(PROMPT_KIND_ANALYSIS_CODING)
-                                .filter(|prompt| !prompt.trim().is_empty())
-                                .cloned()
-                                .unwrap_or_else(|| {
-                                    default_prompt_for_kind(PROMPT_KIND_ANALYSIS_CODING).to_string()
-                                }),
-                            default_prompt_for_kind(PROMPT_KIND_ANALYSIS_CODING),
-                        ),
-                    ]);
-                }
-                Err(error) => {
-                    warn!(
-                        agent_key = %agent.agent_key,
-                        error = ?error,
-                        "failed to list strategy prompts for operator page"
-                    );
-                }
-            }
-        }
         AgentShowTab::Settings => {
             template.settings_notice = settings_query
                 .as_ref()
@@ -289,7 +222,7 @@ pub(in crate::web::routes) async fn render_agent_show_page(
                 template.instrument_options = rows;
             }
         }
-        AgentShowTab::SubAgents => {
+        AgentShowTab::Analysis | AgentShowTab::SubAgentsHeading => {
             let requested_page = sub_agents_query
                 .as_ref()
                 .map(|query| parse_positive_page(&query.page))
@@ -347,9 +280,9 @@ pub(in crate::web::routes) async fn build_agent_recent_runs_view(
             view.recent_runs_total_pages = total_pages;
             view.recent_runs_total_count = total_count;
             view.recent_runs_previous_page_url = (current_page > 1)
-                .then(|| format!("/agents/{agent_key}/sub-agents?page={}", current_page - 1));
+                .then(|| format!("/agents/{agent_key}/analysis?page={}", current_page - 1));
             view.recent_runs_next_page_url = (total_pages > 0 && current_page < total_pages)
-                .then(|| format!("/agents/{agent_key}/sub-agents?page={}", current_page + 1));
+                .then(|| format!("/agents/{agent_key}/analysis?page={}", current_page + 1));
             view.stream_url =
                 format!("/agents/{agent_key}/sub-agents/recent-runs/stream?page={current_page}");
 
@@ -404,7 +337,7 @@ pub(in crate::web::routes) async fn populate_sub_agents_tab(
     template: &mut AgentsShowPageTemplate,
     requested_runs_page: usize,
 ) {
-    match crate::harness::store::list_agent_sub_agents(&state.db_pool, &agent.agent_key).await {
+    match crate::harness::store::list_analysis_sub_agents(&state.db_pool, &agent.agent_key).await {
         Ok(rows) => {
             template.jobs_loaded = true;
             template.jobs = rows
@@ -601,37 +534,20 @@ pub(in crate::web::routes) async fn populate_positions_tab(
     template.open_orders_html =
         OpenOrdersPartialTemplate::render_view(open_orders_view).map_err(anyhow::Error::from)?;
 
-    let latest_trade_execution =
-        get_latest_agent_memory_by_type(&state.db_pool, &agent.agent_key, "trade_execution")
-            .await?;
-    template.latest_trade_execution_summary_html =
-        LatestTradeExecutionSummaryPartialTemplate::render_view(
-            latest_trade_execution
-                .as_ref()
-                .map(|memory| memory.summary.clone()),
-            latest_trade_execution
-                .as_ref()
-                .map(|memory| memory.created_at),
-        )
-        .map_err(anyhow::Error::from)?;
-
-    let latest_market_analysis =
-        get_latest_agent_memory_by_type(&state.db_pool, &agent.agent_key, "market_analysis")
-            .await?;
-    let analysis_detail_url = latest_market_analysis
+    let latest_decision = get_latest_trading_decision(&state.db_pool, &agent.agent_key).await?;
+    let decision_detail_url = latest_decision
         .as_ref()
         .map(|memory| format!("/agents/{}/memories/{}", agent.agent_key, memory.id));
-    template.latest_analysis_summary_html = LatestAnalysisSummaryPartialTemplate::render_view(
-        latest_market_analysis
-            .as_ref()
-            .map(|memory| memory.summary.clone()),
-        analysis_detail_url,
-        latest_market_analysis
-            .as_ref()
-            .map(|memory| memory.created_at),
-        latest_market_analysis.as_ref().and_then(memory_expires_at),
-    )
-    .map_err(anyhow::Error::from)?;
+    template.latest_trade_decision_summary_html =
+        LatestTradeDecisionSummaryPartialTemplate::render_view(
+            latest_decision
+                .as_ref()
+                .map(|memory| memory.summary.clone()),
+            decision_detail_url,
+            latest_decision.as_ref().map(|memory| memory.created_at),
+            latest_decision.as_ref().and_then(memory_expires_at),
+        )
+        .map_err(anyhow::Error::from)?;
 
     let now = Utc::now();
     let since_24h = now - chrono::Duration::hours(24);

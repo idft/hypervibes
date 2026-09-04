@@ -12,7 +12,7 @@ use serde_json::Value;
 
 use crate::{
     agents::AuthenticatedAgent,
-    harness::{model::SUB_AGENT_KIND_ANALYSIS_CODING, store},
+    harness::{model::SUB_AGENT_KIND_CODING, store},
     web::AppState,
 };
 
@@ -83,13 +83,10 @@ pub(super) async fn request_analysis_coding(
     ) {
         return Err(ApiError::Validation("invalid coding request mode".into()));
     }
-    let Some(sub_agent) = store::get_enabled_sub_agent(
-        &state.db_pool,
-        &agent.agent_key,
-        SUB_AGENT_KIND_ANALYSIS_CODING,
-    )
-    .await
-    .map_err(ApiError::Internal)?
+    let Some(sub_agent) =
+        store::get_enabled_sub_agent(&state.db_pool, &agent.agent_key, SUB_AGENT_KIND_CODING)
+            .await
+            .map_err(ApiError::Internal)?
     else {
         return Ok((
             StatusCode::CONFLICT,

@@ -48,7 +48,7 @@ pub struct MemoryView {
     pub memory_id: String,
     pub created_at_iso: String,
     pub created_at_fallback_text: String,
-    pub symbol: String,
+    pub scope: String,
     pub timeframe: String,
     pub memory_type: String,
     pub summary: String,
@@ -71,7 +71,7 @@ impl MemoryView {
             memory_id: row.id.to_string(),
             created_at_iso: format_timestamp_iso(row.created_at),
             created_at_fallback_text: format_timestamp_utc(row.created_at),
-            symbol: row.symbol,
+            scope: row.scope_kind,
             timeframe: row.timeframe.unwrap_or_else(|| "general".to_string()),
             memory_type: row.memory_type,
             summary: row.summary,
@@ -89,7 +89,7 @@ pub struct MemoryTimelineItem {
     pub detail_url: String,
     pub created_at_iso: String,
     pub created_at_fallback_text: String,
-    pub symbol: String,
+    pub scope: String,
     pub timeframe: String,
     pub memory_type: String,
     pub summary: String,
@@ -123,7 +123,7 @@ pub(super) fn build_memory_timeline(
                 memory_id: memory_id.clone(),
                 created_at_iso: format_timestamp_iso(row.created_at),
                 created_at_fallback_text: format_timestamp_utc(row.created_at),
-                symbol: row.symbol.clone(),
+                scope: row.scope_kind.clone(),
                 timeframe: row
                     .timeframe
                     .clone()

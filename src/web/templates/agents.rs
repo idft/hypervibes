@@ -5,10 +5,6 @@ use crate::{
     agents::{
         model::{AgentDetailRow, AgentListRow, AgentReadiness, CreateAgentForm},
         store::AgentInstrumentOptionRow,
-        strategy_prompts::{
-            PROMPT_KIND_ANALYSIS, PROMPT_KIND_ANALYSIS_CODING, PROMPT_KIND_DAILY_REVIEW,
-            PROMPT_KIND_MARKET_ANALYSIS, PROMPT_KIND_TRADING,
-        },
     },
     memory::MemoryRecord,
     model_catalog::options::ModelPickerOption,
@@ -54,10 +50,12 @@ pub enum AgentShowTab {
     Notifications,
     Transactions,
     Memories,
-    Prompts,
+    SubAgentsHeading,
+    Analysis,
+    Trading,
     Coding,
+    Review,
     Settings,
-    SubAgents,
 }
 
 impl AgentShowTab {
@@ -68,10 +66,12 @@ impl AgentShowTab {
             Self::Notifications => format!("/agents/{agent_key}/notifications"),
             Self::Transactions => format!("/agents/{agent_key}/transactions"),
             Self::Memories => format!("/agents/{agent_key}/memories"),
-            Self::Prompts => format!("/agents/{agent_key}/prompts"),
+            Self::Analysis => format!("/agents/{agent_key}/analysis"),
+            Self::Trading => format!("/agents/{agent_key}/trading"),
             Self::Coding => format!("/agents/{agent_key}/coding"),
+            Self::Review => format!("/agents/{agent_key}/review"),
             Self::Settings => format!("/agents/{agent_key}/settings"),
-            Self::SubAgents => format!("/agents/{agent_key}/sub-agents"),
+            Self::SubAgentsHeading => format!("/agents/{agent_key}"),
         }
     }
 }
@@ -82,6 +82,11 @@ pub struct AgentShowTabLink {
     pub href: String,
     pub active: bool,
     pub notification_count: Option<i64>,
+    /// Non-clickable section heading (the `Sub-agents` label). Headings are
+    /// never marked active and never render as links.
+    pub is_heading: bool,
+    /// Indented beneath its section heading.
+    pub indented: bool,
 }
 
 pub fn build_agent_show_tabs(
@@ -91,22 +96,26 @@ pub fn build_agent_show_tabs(
 ) -> Vec<AgentShowTabLink> {
     let agent_key = agent.agent_key.as_str();
     [
-        ("Positions", AgentShowTab::Positions),
-        ("Notifications", AgentShowTab::Notifications),
-        ("Chat", AgentShowTab::Chat),
-        ("Transactions", AgentShowTab::Transactions),
-        ("Memories", AgentShowTab::Memories),
-        ("Prompts", AgentShowTab::Prompts),
-        ("Coding", AgentShowTab::Coding),
-        ("Sub-agents", AgentShowTab::SubAgents),
-        ("Settings", AgentShowTab::Settings),
+        ("Positions", AgentShowTab::Positions, false, false),
+        ("Transactions", AgentShowTab::Transactions, false, false),
+        ("Chat", AgentShowTab::Chat, false, false),
+        ("Notifications", AgentShowTab::Notifications, false, false),
+        ("Memories", AgentShowTab::Memories, false, false),
+        ("Sub-agents", AgentShowTab::SubAgentsHeading, true, false),
+        ("Analysis", AgentShowTab::Analysis, false, true),
+        ("Trading", AgentShowTab::Trading, false, true),
+        ("Coding", AgentShowTab::Coding, false, true),
+        ("Review", AgentShowTab::Review, false, true),
+        ("Settings", AgentShowTab::Settings, false, false),
     ]
     .into_iter()
-    .map(|(label, tab)| AgentShowTabLink {
+    .map(|(label, tab, is_heading, indented)| AgentShowTabLink {
         label,
         href: tab.path(agent_key),
-        active: tab == active_tab,
+        active: !is_heading && tab == active_tab,
         notification_count: (tab == AgentShowTab::Notifications).then_some(notification_count),
+        is_heading,
+        indented,
     })
     .collect()
 }
@@ -194,26 +203,15 @@ impl AgentSetupChecklistView {
                 },
                 AgentSetupChecklistStepView {
                     label: "Enable an Analysis sub-agent",
-                    description: "Enable at least one modeled analysis sub-agent to produce the trading inputs.",
-                    href: format!("/agents/{agent_key}/sub-agents"),
+                    description: "Enable at least one modeled analysis sub-agent to produce the research inputs.",
+                    href: format!("/agents/{agent_key}/analysis"),
                     complete: readiness.has_enabled_analysis_job,
                 },
                 AgentSetupChecklistStepView {
-                    label: "Enable Market Analysis",
-                    description: "Enable the modeled market-analysis follow-up after analysis completes.",
-                    href: readiness.market_analysis_sub_agent_id.map_or_else(
-                        || format!("/agents/{agent_key}/sub-agents"),
-                        |sub_agent_id| {
-                            format!("/agents/{agent_key}/sub-agents/{sub_agent_id}?setup=true")
-                        },
-                    ),
-                    complete: readiness.has_enabled_market_analysis_job,
-                },
-                AgentSetupChecklistStepView {
                     label: "Enable Trading sub-agent",
-                    description: "Enable the modeled trading sub-agent to evaluate the latest market analysis.",
+                    description: "Enable the modeled trading sub-agent to act on the latest research.",
                     href: readiness.trading_sub_agent_id.map_or_else(
-                        || format!("/agents/{agent_key}/sub-agents"),
+                        || format!("/agents/{agent_key}/trading"),
                         |sub_agent_id| {
                             format!("/agents/{agent_key}/sub-agents/{sub_agent_id}?setup=true")
                         },
@@ -252,9 +250,11 @@ pub struct AgentTradingAccountChoicesTemplate {
     pub selected_account: String,
 }
 
+/// Role-scoped creation form for Analysis jobs: no kind selector, and the
+/// sub-agent key is a user-provided durable identity.
 #[derive(Debug, Clone, Default, Deserialize)]
-pub struct CreateHarnessSubAgentFormValues {
-    pub sub_agent_kind: String,
+pub struct CreateAnalysisJobFormValues {
+    pub sub_agent_key: String,
     pub timeframe: String,
     pub timeout_seconds: String,
     pub model_selection: String,
@@ -271,7 +271,7 @@ pub struct ModelPickerProviderGroup {
     pub options: Vec<ModelPickerOption>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct ModelPickerView {
     pub input_id: String,
     pub input_name: String,
@@ -287,17 +287,6 @@ pub struct ModelPickerView {
     pub show_label: bool,
     pub submit_on_save: bool,
     pub lazy_options_url: Option<String>,
-}
-
-#[derive(Debug, Clone)]
-pub struct PromptEditorView {
-    pub prompt_kind: String,
-    pub label: &'static str,
-    pub description: &'static str,
-    pub textarea_id: &'static str,
-    pub placeholder: &'static str,
-    pub prompt: String,
-    pub default_prompt: &'static str,
 }
 
 #[derive(Debug, Clone)]
@@ -347,64 +336,14 @@ impl From<NotificationHistoryRow> for AgentNotificationView {
     }
 }
 
-impl PromptEditorView {
-    pub fn new(prompt_kind: &str, prompt: String, default_prompt: &'static str) -> Self {
-        let (label, description, textarea_id, placeholder) = match prompt_kind {
-            PROMPT_KIND_ANALYSIS => (
-                "Analysis",
-                "Runs on a fixed schedule to develop an analysis of enabled currencies. It can execute previously generated strategy code or invoke other tools as needed. The result is saved as a memory.",
-                "analysis_prompt",
-                "Assets, timeframes, analysis methods, confidence thresholds, validity, and trade blockers.",
-            ),
-            PROMPT_KIND_MARKET_ANALYSIS => (
-                "Market Analysis",
-                "Runs after analysis sub-agents complete to develop an overall market assessment from their results. The assessment is saved as a memory for trading.",
-                "market_analysis_prompt",
-                "How timeframe analyses should be synthesized into one execution-facing market view.",
-            ),
-            PROMPT_KIND_TRADING => (
-                "Trading",
-                "Manages positions and orders based on market-analysis memories. Describe desired position sizes, order sizes, and take-profit and stop-loss orders.",
-                "trading_prompt",
-                "Sizing, laddering, time-in-force preference, max orders, stale-order policy, and scaling rules.",
-            ),
-            PROMPT_KIND_DAILY_REVIEW => (
-                "Daily Review",
-                "Directs the daily review of decisions, outcomes, and durable agent learnings.",
-                "daily_review_prompt",
-                "What the daily review should inspect, how it should record learnings, and what patterns to emphasize.",
-            ),
-            PROMPT_KIND_ANALYSIS_CODING => (
-                "Analysis Coding",
-                "Guides improvements to reusable quantitative analysis code; it does not set market bias or place trades.",
-                "analysis_coding_prompt",
-                "How the coding sub-agent should improve reusable analysis code, what constraints it must obey, and how to report changes.",
-            ),
-            _ => ("Strategy", "", "strategy_prompt", ""),
-        };
-        Self {
-            prompt_kind: prompt_kind.to_string(),
-            label,
-            description,
-            textarea_id,
-            placeholder,
-            prompt,
-            default_prompt,
-        }
-    }
-}
-
 #[derive(Template)]
 #[template(path = "agents/sub_agents/new.html")]
 pub struct AgentJobNewPageTemplate {
     pub agent: AgentDetailRow,
     pub tabs: Vec<AgentShowTabLink>,
     pub agent_tabs_use_htmx: bool,
-    pub form: CreateHarnessSubAgentFormValues,
+    pub form: CreateAnalysisJobFormValues,
     pub model_picker: ModelPickerView,
-    pub market_analysis_available: bool,
-    pub analysis_coding_available: bool,
-    pub show_timeframe: bool,
     pub errors: Vec<String>,
     pub current_path: String,
     pub navbar: Navbar,
@@ -466,7 +405,6 @@ pub struct AgentsShowPageTemplate {
     pub show_notifications_tab: bool,
     pub show_transactions_tab: bool,
     pub show_memories_tab: bool,
-    pub show_prompts_tab: bool,
     pub show_settings_tab: bool,
     pub show_jobs_tab: bool,
     pub operation_notice: Option<String>,
@@ -497,11 +435,9 @@ pub struct AgentsShowPageTemplate {
     pub account_balance_html: String,
     pub open_positions_html: String,
     pub open_orders_html: String,
-    pub latest_trade_execution_summary_html: String,
-    pub latest_analysis_summary_html: String,
+    pub latest_trade_decision_summary_html: String,
     pub sparklines_html: String,
     pub api_key_masked: String,
-    pub prompt_editors: Vec<PromptEditorView>,
     pub current_path: String,
     pub is_main_account: bool,
     pub subaccount_name: Option<String>,
@@ -520,7 +456,6 @@ impl AgentsShowPageTemplate {
         let tabs = build_agent_show_tabs(&agent, active_tab, notification_count);
         Self {
             api_key_masked: mask_api_key(&agent.api_key),
-            prompt_editors: Vec::new(),
             current_path: active_tab.path(&agent_key),
             is_main_account: false,
             subaccount_name: None,
@@ -530,9 +465,8 @@ impl AgentsShowPageTemplate {
             show_notifications_tab: active_tab == AgentShowTab::Notifications,
             show_transactions_tab: active_tab == AgentShowTab::Transactions,
             show_memories_tab: active_tab == AgentShowTab::Memories,
-            show_prompts_tab: active_tab == AgentShowTab::Prompts,
             show_settings_tab: active_tab == AgentShowTab::Settings,
-            show_jobs_tab: active_tab == AgentShowTab::SubAgents,
+            show_jobs_tab: active_tab == AgentShowTab::Analysis,
             operation_notice: None,
             notifications: Vec::new(),
             agent,
@@ -565,8 +499,7 @@ impl AgentsShowPageTemplate {
             account_balance_html: String::new(),
             open_positions_html: String::new(),
             open_orders_html: String::new(),
-            latest_trade_execution_summary_html: String::new(),
-            latest_analysis_summary_html: String::new(),
+            latest_trade_decision_summary_html: String::new(),
             sparklines_html: String::new(),
             jobs: Vec::new(),
             jobs_loaded: false,
@@ -610,10 +543,6 @@ impl AgentsShowPageTemplate {
             next_page_url,
         )
         .unwrap_or_default();
-    }
-
-    pub fn set_prompt_editors(&mut self, prompt_editors: Vec<PromptEditorView>) {
-        self.prompt_editors = prompt_editors;
     }
 
     pub fn set_notifications(&mut self, rows: Vec<NotificationHistoryRow>) {

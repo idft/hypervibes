@@ -1,0 +1,175 @@
+{% extends "layouts/base.html" %}
+
+{% block title %}{{ active_role_label }} · {{ agent.display_name }} · HyperVibes{% endblock %}
+
+{% block content %}
+<div class="mx-auto max-w-5xl">
+    {% include "agents/components/page-header.html" %}
+
+    {% include "agents/components/tabs.html" %}
+
+    <div id="agent-show-tab-content">
+    <header class="mt-4 border-b border-zinc-800 pb-6">
+        <div class="flex items-center gap-3 text-sm text-zinc-500">
+            <a href="/agents/{{ agent.agent_key }}" class="hover:text-zinc-300">{{ agent.display_name }}</a>
+            <span>/</span>
+            <span>{{ active_role_label }}</span>
+        </div>
+        <div class="mt-4 flex flex-wrap items-center justify-between gap-4">
+            <div>
+                <h2 class="text-3xl font-semibold tracking-tight text-white">{{ active_role_label }}</h2>
+                <p class="mt-2 max-w-2xl text-sm leading-6 text-zinc-400">{{ role_description }}</p>
+            </div>
+        </div>
+    </header>
+
+    {% if let Some(job) = job %}
+    <div class="mt-6 space-y-6">
+        <section class="rounded-2xl border border-zinc-800 bg-[#0d0d10] p-6">
+            <div class="flex flex-wrap items-center justify-between gap-4">
+                <div class="flex items-center gap-3">
+                    <span class="inline-flex items-center rounded-full border px-3 py-1 text-xs font-medium {% if job.enabled %}border-emerald-900/60 bg-emerald-950/30 text-emerald-300{% else %}border-zinc-700 bg-zinc-900/60 text-zinc-300{% endif %}">{% if job.enabled %}Enabled{% else %}Disabled{% endif %}</span>
+                    <span class="font-mono text-sm text-zinc-400">{{ job.sub_agent_key }}</span>
+                </div>
+                <div class="flex flex-wrap items-center gap-3">
+                    <form action="{{ job.run_now_action }}" method="post">
+                        <button type="submit" class="cursor-pointer rounded-full bg-white px-4 py-2 text-sm font-medium text-black hover:bg-zinc-200">Run now</button>
+                    </form>
+                    <form action="{{ job.toggle_action }}" method="post">
+                        <input type="hidden" name="enabled" value="{{ job.hidden_enabled_value }}">
+                        <button type="submit" class="cursor-pointer rounded-full border border-zinc-700 bg-zinc-900/70 px-4 py-2 text-sm font-medium text-zinc-200 hover:border-zinc-600 hover:bg-zinc-800 hover:text-white">
+                            {% if job.enabled %}Disable{% else %}Enable{% endif %}
+                        </button>
+                    </form>
+                </div>
+            </div>
+
+            <dl class="mt-6 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+                <div>
+                    <dt class="text-xs uppercase tracking-[0.16em] text-zinc-500">Trigger</dt>
+                    <dd class="mt-1 text-sm text-zinc-300">{{ job.trigger_text }}</dd>
+                </div>
+                <div>
+                    <dt class="text-xs uppercase tracking-[0.16em] text-zinc-500">Next run</dt>
+                    <dd class="mt-1 text-sm text-zinc-300">{% if let Some(next) = job.next_run_at %}{{ next.fallback_text }}{% else %}(not scheduled){% endif %}</dd>
+                </div>
+                <div>
+                    <dt class="text-xs uppercase tracking-[0.16em] text-zinc-500">Model</dt>
+                    <dd class="mt-1 text-sm text-zinc-300">{{ job.model_text }}</dd>
+                </div>
+                <div>
+                    <dt class="text-xs uppercase tracking-[0.16em] text-zinc-500">Timeout</dt>
+                    <dd class="mt-1">
+                        <form action="{{ job.timeout_editor.action }}" method="post" class="flex items-center gap-2">
+                            <input type="text" name="timeout" value="{{ job.timeout_editor.edit_text }}" data-inline-editor-input class="w-28 rounded-lg border border-zinc-800 bg-zinc-950 px-2 py-1 font-mono text-sm text-white {% if let Some(error) = job.timeout_editor.error %}border-red-800{% endif %}" aria-label="Timeout seconds">
+                            <button type="submit" class="cursor-pointer rounded-md border border-zinc-800 px-2 py-1 text-xs text-zinc-300 hover:border-zinc-600 hover:text-white">Save</button>
+                            {% if let Some(error) = job.timeout_editor.error %}<span class="text-xs text-red-400">{{ error }}</span>{% endif %}
+                        </form>
+                    </dd>
+                </div>
+            </dl>
+        </section>
+
+        <section class="rounded-2xl border border-zinc-800 bg-[#0d0d10] p-6">
+            <h3 class="text-lg font-medium text-white">Model</h3>
+            <form action="{{ job.model_update_action }}" method="post" hx-post="{{ job.model_update_action }}" hx-swap="none">
+                {% include "agents/components/model-picker-partial.html" %}
+            </form>
+            {% if let Some(error) = job.model_error %}
+            <p class="mt-2 text-sm text-red-400">{{ error }}</p>
+            {% endif %}
+        </section>
+
+        <section class="rounded-2xl border border-zinc-800 bg-[#0d0d10] p-6">
+            <h3 class="text-lg font-medium text-white">Prompt</h3>
+            {% if let Some(error) = prompt_view.prompt_error %}
+            <p class="mt-2 rounded-xl border border-red-900/60 bg-red-950/20 p-3 text-sm text-red-300">{{ error }}</p>
+            {% endif %}
+            <form action="/agents/{{ agent.agent_key }}/sub-agents/{{ sub_agent_id }}/prompt" method="post" class="mt-4 space-y-4">
+                <input type="hidden" name="base_revision_id" value="{{ prompt_view.revision_id }}">
+                <textarea name="prompt" rows="16" class="w-full rounded-xl border border-zinc-800 bg-zinc-950/70 px-4 py-3 font-mono text-sm leading-6 text-zinc-200 outline-none focus:border-zinc-700">{{ prompt_view.prompt }}</textarea>
+                <div class="flex flex-wrap items-center justify-end gap-3">
+                    <button type="submit" class="cursor-pointer rounded-full bg-white px-4 py-2 text-sm font-medium text-black hover:bg-zinc-200">Save prompt</button>
+                </div>
+            </form>
+            {% if !prompt_view.history.is_empty() %}
+            <div class="mt-6 border-t border-zinc-800 pt-4">
+                <h4 class="text-sm font-medium text-zinc-300">Revision history</h4>
+                <ul class="mt-2 space-y-2">
+                    {% for revision in prompt_view.history %}
+                    <li class="flex items-center justify-between gap-3 rounded-lg border border-zinc-800 bg-zinc-950/60 px-3 py-2">
+                        <span class="text-xs text-zinc-500">Revision {{ revision.revision_id }} · {{ revision.created_at.fallback_text }}</span>
+                        <form action="/agents/{{ agent.agent_key }}/sub-agents/{{ sub_agent_id }}/prompt/rollback" method="post">
+                            <input type="hidden" name="revision_id" value="{{ revision.revision_id }}">
+                            <button type="submit" class="cursor-pointer rounded-full border border-zinc-800 px-3 py-1 text-xs text-zinc-300 hover:border-zinc-600 hover:text-white">Roll back here</button>
+                        </form>
+                    </li>
+                    {% endfor %}
+                </ul>
+            </div>
+            {% endif %}
+        </section>
+
+        {% if let Some(review_enabled) = review_prompt_improvement_enabled %}
+        <section class="rounded-2xl border border-zinc-800 bg-[#0d0d10] p-6">
+            <h3 class="text-lg font-medium text-white">Review prompt updates</h3>
+            <p class="mt-2 text-sm text-zinc-400">When enabled, the Review sub-agent may revise the Trading prompt based on reviewed evidence.</p>
+            <form action="/agents/{{ agent.agent_key }}/sub-agents/{{ sub_agent_id }}/review-prompt-update" method="post" class="mt-4 flex items-center gap-3">
+                {% if review_enabled %}
+                <input type="hidden" name="enabled" value="off">
+                <button type="submit" class="cursor-pointer rounded-full border border-zinc-700 bg-zinc-900/70 px-4 py-2 text-sm font-medium text-zinc-200 hover:border-zinc-600 hover:bg-zinc-800 hover:text-white">Disable Review prompt updates</button>
+                {% else %}
+                <button type="submit" class="cursor-pointer rounded-full bg-emerald-600 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-500">Enable Review prompt updates</button>
+                {% endif %}
+            </form>
+        </section>
+        {% endif %}
+
+        <section class="rounded-2xl border border-zinc-800 bg-[#0d0d10] p-6">
+            <h3 class="text-lg font-medium text-white">Notifications</h3>
+            <p class="mt-2 text-sm text-zinc-400">Allow this sub-agent to send notifications through the agent's messaging gateway.</p>
+            <form action="{{ job.notification_capability_update_action }}" method="post" class="mt-4 flex items-center gap-3">
+                {% if job.notification_send_enabled %}
+                <input type="hidden" name="enabled" value="off">
+                <button type="submit" class="cursor-pointer rounded-full border border-zinc-700 bg-zinc-900/70 px-4 py-2 text-sm font-medium text-zinc-200 hover:border-zinc-600 hover:bg-zinc-800 hover:text-white">Disable notifications</button>
+                {% else %}
+                <button type="submit" name="enabled" value="on" class="cursor-pointer rounded-full bg-emerald-600 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-500">Enable notifications</button>
+                {% endif %}
+            </form>
+        </section>
+
+        <section class="rounded-2xl border border-zinc-800 bg-[#0d0d10] p-6">
+            <h3 class="text-lg font-medium text-white">Additional Instructions</h3>
+            <form action="{{ job.operator_prompt_update_action }}" method="post" class="mt-4 space-y-4">
+                <textarea name="operator_prompt" rows="6" placeholder="Optional extra instructions for this sub-agent."
+                    class="w-full rounded-xl border border-zinc-800 bg-zinc-950 px-3 py-2 text-sm leading-6 text-white placeholder-zinc-600 focus:border-zinc-600 focus:outline-none">{{ job.operator_prompt }}</textarea>
+                <div class="flex justify-end">
+                    <button type="submit" class="cursor-pointer rounded-full bg-white px-4 py-2 text-sm font-medium text-black hover:bg-zinc-200">Save instructions</button>
+                </div>
+            </form>
+        </section>
+
+        <section class="rounded-2xl border border-zinc-800 bg-[#0d0d10] p-6">
+            <h3 class="text-lg font-medium text-white">Prompt preview</h3>
+            {% if let Some(error) = job.prompt_preview_error %}
+            <p class="mt-4 rounded-xl border border-amber-900/60 bg-amber-950/20 p-4 text-sm text-amber-200">{{ error }}</p>
+            {% else %}
+            <pre class="mt-4 max-h-96 overflow-auto whitespace-pre-wrap rounded-xl border border-zinc-800 bg-zinc-950/70 p-4 text-xs leading-6 text-zinc-300">{{ job.prompt_preview_text }}</pre>
+            {% endif %}
+        </section>
+    </div>
+    {% else %}
+    <section class="mt-6 rounded-2xl border border-zinc-800 bg-[#0d0d10] p-6">
+        <h3 class="text-lg font-medium text-white">No {{ active_role_label }} sub-agent</h3>
+        <p class="mt-2 text-sm text-zinc-400">This agent has no {{ active_role_label }} sub-agent yet. Create it to get started.</p>
+        <form action="{{ role_page_path }}" method="post" class="mt-4">
+            <button type="submit" class="cursor-pointer rounded-full bg-white px-4 py-2 text-sm font-medium text-black hover:bg-zinc-200">Create {{ active_role_label }} sub-agent</button>
+        </form>
+    </section>
+    {% endif %}
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+{% endblock %}

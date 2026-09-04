@@ -68,7 +68,7 @@ pub(in crate::web::routes) fn sub_agents_warning_redirect(
     message: &str,
 ) -> Response {
     Redirect::to(&format!(
-        "/agents/{agent_key}/sub-agents?warning={}",
+        "/agents/{agent_key}/analysis?warning={}",
         urlencode(message)
     ))
     .into_response()
