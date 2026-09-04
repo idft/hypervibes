@@ -162,6 +162,7 @@ async fn main() -> Result<()> {
         pool.clone(),
         Arc::clone(&opencode_client),
         config.opencode_base_url.clone(),
+        config.hypervibes_agent_api_base_url.clone(),
         encryption_key.clone(),
         shutdown_rx.clone(),
         in_flight.clone(),

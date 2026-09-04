@@ -72,6 +72,7 @@ pub struct ConversationService<'a> {
     pub pool: &'a DbPool,
     pub client: &'a OpenCodeClient,
     pub base_url: &'a str,
+    pub agent_api_base_url: &'a str,
     pub workspace_controller: &'a dyn WorkspaceController,
     pub in_flight: &'a InFlightTracker,
     pub turn_tracker: &'a ConversationTurnTracker,
@@ -113,7 +114,7 @@ impl<'a> ConversationService<'a> {
         model_id: &str,
         model_variant: Option<&str>,
     ) -> Result<AgentConversationRow> {
-        self.load_agent(agent_key).await?;
+        let agent = self.load_agent(agent_key).await?;
         let external_key = if external_conversation_key.trim().is_empty() {
             None
         } else {
@@ -141,10 +142,15 @@ impl<'a> ConversationService<'a> {
             .await?;
             let workspace = self
                 .workspace_controller
-                .create_conversation_workspace(
+                .materialize_conversation_workspace(
                     agent_key,
                     conversation.id,
-                    &format!("conversation-create-{}", conversation.id),
+                    workspace_store::workspace::ConversationWorkspaceMaterializationInput {
+                        display_name: agent.display_name.clone(),
+                        api_base_url: self.agent_api_base_url.to_string(),
+                        api_key: agent.api_key.clone(),
+                    },
+                    &format!("conversation-materialize-{}", conversation.id),
                 )
                 .await?;
             crate::agent_conversations::workspace::mark_conversation_workspace_ready(
@@ -451,11 +457,10 @@ impl<'a> ConversationService<'a> {
             .await
     }
 
-    async fn load_agent(&self, agent_key: &str) -> Result<()> {
+    async fn load_agent(&self, agent_key: &str) -> Result<crate::agents::model::AgentDetailRow> {
         get_agent(self.pool, agent_key)
             .await?
-            .ok_or_else(|| anyhow!("Agent not found."))?;
-        Ok(())
+            .ok_or_else(|| anyhow!("Agent not found."))
     }
 
     async fn load_conversation(

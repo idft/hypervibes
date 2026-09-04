@@ -117,6 +117,7 @@ fn service(state: &AppState) -> ConversationService<'_> {
         pool: &state.db_pool,
         client: &state.opencode_client,
         base_url: &state.opencode_base_url,
+        agent_api_base_url: &state.hypervibes_agent_api_base_url,
         workspace_controller: state.workspace_controller.as_ref(),
         in_flight: &state.in_flight,
         turn_tracker: &state.conversation_turns,

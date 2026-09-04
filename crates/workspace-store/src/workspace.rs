@@ -15,7 +15,10 @@ use serde_json::Value;
 
 use super::{
     coding_workspace::{copy_user_tree, manifest_hash, manifest_tree, package_root},
-    isolated_workspace::{RunWorkspacePath, create_run_workspace},
+    isolated_workspace::{
+        ConversationWorkspacePath, RunWorkspacePath, create_conversation_workspace,
+        create_run_workspace,
+    },
 };
 
 /// Path of the rendered workspace template, relative to the repository root.
@@ -127,6 +130,20 @@ pub struct RunWorkspaceMaterializationInput {
 pub struct MaterializedRunWorkspace {
     pub workspace_container_path: String,
     pub quantitative_package: Option<QuantitativePackageSnapshot>,
+}
+
+/// Controller input for rendering a conversation workspace. The API key is
+/// deliberately absent from every response and idempotency fingerprint.
+#[derive(Clone, Serialize, Deserialize)]
+pub struct ConversationWorkspaceMaterializationInput {
+    pub display_name: String,
+    pub api_base_url: String,
+    pub api_key: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MaterializedConversationWorkspace {
+    pub workspace_container_path: String,
 }
 
 /// Inspect the durable Coding package before a scheduler binds it into a run
@@ -379,6 +396,111 @@ pub fn materialize_run_workspace(
         workspace_container_path: created.workspace_container_path,
         quantitative_package: active_package,
     })
+}
+
+/// Render a complete conversation-local workspace from trusted templates. This
+/// must run before the OpenCode conversation session is created so the session
+/// directory registers the HyperVibes MCP server and carries the runtime
+/// credential the MCP server reads from `.env`.
+pub fn materialize_conversation_workspace(
+    config: &OpenCodeWorkspaceConfig,
+    path: &ConversationWorkspacePath,
+    input: &ConversationWorkspaceMaterializationInput,
+) -> Result<MaterializedConversationWorkspace> {
+    validate_conversation_workspace_materialization_input(input)?;
+
+    let created = create_conversation_workspace(config, path)?;
+    let workspace_root = path.workspace_host_path(config);
+    ensure_regular_directory(&workspace_root, "conversation workspace root")?;
+
+    for relative in [".opencode/commands", ".opencode/agents", ".opencode/skills"] {
+        fs::create_dir_all(workspace_root.join(relative)).with_context(|| {
+            format!("failed to create conversation workspace directory {relative}")
+        })?;
+    }
+
+    let template_agent = OpenCodeWorkspaceAgent {
+        agent_key: path.agent_key().to_string(),
+        display_name: input.display_name.clone(),
+        // Template rendering currently has no API-key placeholder. Keep this
+        // empty so the permanent agent key can never reach a conversation
+        // workspace.
+        api_key: String::new(),
+    };
+    let mut template_config = config.clone();
+    template_config.api_base_url = input.api_base_url.clone();
+    let replacements = template_replacements(
+        &template_config,
+        &template_agent,
+        &created.workspace_container_path,
+    );
+    write_rendered_template(
+        &template_config.source_root.join("opencode.json.template"),
+        &workspace_root.join("opencode.json"),
+        &replacements,
+    )?;
+    write_rendered_template(
+        &template_config.source_root.join("AGENTS.md.template"),
+        &workspace_root.join("AGENTS.md"),
+        &replacements,
+    )?;
+    copy_tree(
+        &template_config.source_root.join(".opencode/commands"),
+        &workspace_root.join(".opencode/commands"),
+    )?;
+    copy_rendered_tree(
+        &template_config.source_root.join(".opencode/agents"),
+        &workspace_root.join(".opencode/agents"),
+        &replacements,
+    )?;
+    copy_tree(
+        &template_config.source_root.join(".opencode/skills"),
+        &workspace_root.join(".opencode/skills"),
+    )?;
+
+    write_conversation_runtime_environment(
+        &workspace_root,
+        &created.workspace_container_path,
+        path,
+        input,
+    )?;
+
+    Ok(MaterializedConversationWorkspace {
+        workspace_container_path: created.workspace_container_path,
+    })
+}
+
+fn validate_conversation_workspace_materialization_input(
+    input: &ConversationWorkspaceMaterializationInput,
+) -> Result<()> {
+    for (name, value) in [
+        ("api_base_url", input.api_base_url.as_str()),
+        ("api_key", input.api_key.as_str()),
+    ] {
+        if value.trim().is_empty() || value.chars().any(char::is_control) {
+            bail!("{name} is invalid");
+        }
+    }
+    Ok(())
+}
+
+fn write_conversation_runtime_environment(
+    workspace_root: &Path,
+    workspace_container_path: &str,
+    path: &ConversationWorkspacePath,
+    input: &ConversationWorkspaceMaterializationInput,
+) -> Result<()> {
+    let contents = format!(
+        "HYPERVIBES_AGENT_KEY={}\nHYPERVIBES_API_BASE_URL={}\nHYPERVIBES_API_KEY={}\nHYPERVIBES_WORKSPACE={}\n",
+        path.agent_key(),
+        input.api_base_url,
+        input.api_key,
+        workspace_container_path,
+    );
+    let temporary = workspace_root.join(".env.conversation.tmp");
+    fs::write(&temporary, contents).context("failed to write conversation runtime environment")?;
+    fs::rename(&temporary, workspace_root.join(".env"))
+        .context("failed to publish conversation runtime environment")
 }
 
 fn validate_run_workspace_materialization_input(
@@ -1547,6 +1669,46 @@ mod tests {
             .expect("container chat permissions");
 
         assert_eq!(container_permissions, &workspace_permissions);
+    }
+
+    #[test]
+    fn materialized_conversation_workspace_registers_mcp_and_runtime_env() {
+        let temp = TempDir::new("opencode-conversation-materialize");
+        let config = sample_config(&temp.path);
+        let id = uuid::Uuid::parse_str("b3ce59a8-f3b6-448d-a0c8-d44ea9d23a33").expect("parse uuid");
+        let path = ConversationWorkspacePath::new("btc-2", id).expect("conversation path");
+        let input = ConversationWorkspaceMaterializationInput {
+            display_name: "BTC 2".to_string(),
+            api_base_url: "http://host.containers.internal:3003".to_string(),
+            api_key: "vta_test_123".to_string(),
+        };
+
+        let materialized =
+            materialize_conversation_workspace(&config, &path, &input).expect("materialize");
+        assert_eq!(
+            materialized.workspace_container_path,
+            "/workspaces/conversations/btc-2/b3ce59a8-f3b6-448d-a0c8-d44ea9d23a33/workspace"
+        );
+
+        let workspace = path.workspace_host_path(&config);
+        let raw = fs::read_to_string(workspace.join("opencode.json")).expect("read opencode.json");
+        let parsed: serde_json::Value = serde_json::from_str(&raw).expect("parse opencode.json");
+        let mcp = parsed
+            .get("mcp")
+            .and_then(serde_json::Value::as_object)
+            .expect("mcp object");
+        assert!(mcp.get("hypervibes").is_some());
+
+        let environment = fs::read_to_string(workspace.join(".env")).expect("read .env");
+        assert!(environment.contains("HYPERVIBES_AGENT_KEY=btc-2"));
+        assert!(environment.contains("HYPERVIBES_API_KEY=vta_test_123"));
+        assert!(environment.contains(
+            "HYPERVIBES_API_BASE_URL=http://host.containers.internal:3003"
+        ));
+
+        let profile = fs::read_to_string(workspace.join(".opencode/agents/agent-conversations.md"))
+            .expect("read conversation profile");
+        assert!(profile.contains("hypervibes_list_memories: allow"));
     }
 
     #[test]

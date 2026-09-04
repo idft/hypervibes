@@ -34,10 +34,12 @@ use workspace_store::{
         scrub_conversation_workspace_runtime_secrets, scrub_run_workspace_runtime_secrets,
     },
     workspace::{
+        ConversationWorkspaceMaterializationInput, MaterializedConversationWorkspace,
         MaterializedRunWorkspace, OpenCodeWorkspaceConfig, QuantitativePackageSnapshot,
         RunWorkspaceMaterializationInput, WorkspaceBrowserListing, WorkspaceFilePreview,
         inspect_active_quantitative_package, list_workspace_browser_entries,
-        materialize_run_workspace, read_workspace_browser_file,
+        materialize_conversation_workspace, materialize_run_workspace,
+        read_workspace_browser_file,
     },
 };
 
@@ -237,6 +239,10 @@ fn router(app: Arc<App>) -> Router {
             "/v1/conversation-workspaces/{agent_key}/{conversation_id}",
             post(create_conversation_workspace_handler)
                 .delete(delete_conversation_workspace_handler),
+        )
+        .route(
+            "/v1/conversation-workspaces/{agent_key}/{conversation_id}/materialize",
+            post(materialize_conversation_workspace_handler),
         )
         .route(
             "/v1/conversation-workspaces/{agent_key}/{conversation_id}/inspection",
@@ -471,6 +477,32 @@ async fn create_conversation_workspace_handler(
     );
     idempotent(&app.clone(), &headers, fingerprint, move || {
         create_conversation_workspace(&app.store, &path).map_err(classify)
+    })
+    .await
+    .map(Json)
+}
+
+async fn materialize_conversation_workspace_handler(
+    State(app): State<Arc<App>>,
+    Path((agent_key, conversation_id)): Path<(String, String)>,
+    headers: HeaderMap,
+    Json(request): Json<ConversationWorkspaceMaterializationInput>,
+) -> Result<Json<MaterializedConversationWorkspace>, ApiError> {
+    authorize(&headers, &app)?;
+    let path = ConversationWorkspacePath::parse(agent_key, &conversation_id).map_err(classify)?;
+    // The credential value is intentionally excluded: controller idempotency
+    // records are durable filesystem data and must never retain an API key.
+    let fingerprint = format!(
+        "conversation-materialization:{}:{}:{}",
+        path.agent_key(),
+        path.conversation_id(),
+        hash_json(&serde_json::json!({
+            "display_name": &request.display_name,
+            "api_base_url": &request.api_base_url,
+        }))
+    );
+    idempotent(&app.clone(), &headers, fingerprint, move || {
+        materialize_conversation_workspace(&app.store, &path, &request).map_err(classify)
     })
     .await
     .map(Json)

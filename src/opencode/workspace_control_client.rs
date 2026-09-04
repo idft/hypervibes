@@ -12,6 +12,7 @@ use workspace_store::{
         IsolatedWorkspaceCreated, IsolatedWorkspaceInspection, RuntimeSecretsScrubbed,
     },
     workspace::{
+        ConversationWorkspaceMaterializationInput, MaterializedConversationWorkspace,
         MaterializedRunWorkspace, QuantitativePackageSnapshot, RunWorkspaceMaterializationInput,
         WorkspaceBrowserListing, WorkspaceFilePreview,
     },
@@ -90,6 +91,13 @@ pub trait WorkspaceController: Send + Sync {
         conversation_id: Uuid,
         idempotency_key: &str,
     ) -> Result<IsolatedWorkspaceCreated>;
+    async fn materialize_conversation_workspace(
+        &self,
+        agent_key: &str,
+        conversation_id: Uuid,
+        input: ConversationWorkspaceMaterializationInput,
+        idempotency_key: &str,
+    ) -> Result<MaterializedConversationWorkspace>;
     async fn inspect_conversation_workspace(
         &self,
         agent_key: &str,
@@ -225,6 +233,16 @@ impl WorkspaceController for LocalWorkspaceController {
     ) -> Result<IsolatedWorkspaceCreated> {
         let path = ConversationWorkspacePath::new(agent_key, conversation_id)?;
         create_conversation_workspace(&self.config, &path)
+    }
+    async fn materialize_conversation_workspace(
+        &self,
+        agent_key: &str,
+        conversation_id: Uuid,
+        input: ConversationWorkspaceMaterializationInput,
+        _idempotency_key: &str,
+    ) -> Result<MaterializedConversationWorkspace> {
+        let path = ConversationWorkspacePath::new(agent_key, conversation_id)?;
+        workspace_store::workspace::materialize_conversation_workspace(&self.config, &path, &input)
     }
     async fn inspect_conversation_workspace(
         &self,
@@ -515,6 +533,28 @@ impl WorkspaceController for HttpWorkspaceController {
                 &format!("v1/conversation-workspaces/{agent_key}/{conversation_id}"),
             )?
             .header("Idempotency-Key", idempotency_key)
+            .send()
+            .await
+            .context("workspace controller request failed")?;
+        Self::response(response).await
+    }
+
+    async fn materialize_conversation_workspace(
+        &self,
+        agent_key: &str,
+        conversation_id: Uuid,
+        input: ConversationWorkspaceMaterializationInput,
+        idempotency_key: &str,
+    ) -> Result<MaterializedConversationWorkspace> {
+        let response = self
+            .request(
+                reqwest::Method::POST,
+                &format!(
+                    "v1/conversation-workspaces/{agent_key}/{conversation_id}/materialize"
+                ),
+            )?
+            .header("Idempotency-Key", idempotency_key)
+            .json(&input)
             .send()
             .await
             .context("workspace controller request failed")?;
