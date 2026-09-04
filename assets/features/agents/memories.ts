@@ -28,10 +28,10 @@ export function initMemoryTimelines(root: ParentNode = document) {
   root.querySelectorAll<HTMLElement>(".memory-timeline-scroll").forEach((container) => {
     if (container.dataset.dragScrollBound === "true") return;
     container.dataset.dragScrollBound = "true";
-    let startX = 0; let startScrollLeft = 0; let dragging = false;
-    container.addEventListener("pointerdown", (event) => { if (event.button !== 0) return; startX = event.clientX; startScrollLeft = container.scrollLeft; dragging = false; container.setPointerCapture(event.pointerId); });
-    container.addEventListener("pointermove", (event) => { if (!container.hasPointerCapture(event.pointerId)) return; const delta = event.clientX - startX; if (Math.abs(delta) > 6) { dragging = true; container.dataset.dragging = "true"; container.scrollLeft = startScrollLeft - delta; } });
-    container.addEventListener("pointerup", (event) => { if (container.hasPointerCapture(event.pointerId)) container.releasePointerCapture(event.pointerId); window.setTimeout(() => { dragging = false; container.dataset.dragging = "false"; }, 0); });
+    let startX: number | null = null; let startScrollLeft = 0; let dragging = false;
+    container.addEventListener("pointerdown", (event) => { if (event.button !== 0) return; startX = event.clientX; startScrollLeft = container.scrollLeft; dragging = false; });
+    container.addEventListener("pointermove", (event) => { if (startX === null) return; const delta = event.clientX - startX; if (Math.abs(delta) > 6) { if (!dragging) { dragging = true; container.dataset.dragging = "true"; container.setPointerCapture(event.pointerId); } container.scrollLeft = startScrollLeft - delta; } });
+    container.addEventListener("pointerup", (event) => { if (container.hasPointerCapture(event.pointerId)) container.releasePointerCapture(event.pointerId); startX = null; window.setTimeout(() => { dragging = false; container.dataset.dragging = "false"; }, 0); });
     container.addEventListener("click", (event) => { if (dragging) { event.preventDefault(); event.stopPropagation(); } }, true);
   });
   restoreSelectedMemoryItems(root);

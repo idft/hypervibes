@@ -1,5 +1,5 @@
 {% for item in memory_timeline %}
-<button type="button" data-memory-timeline-item data-memory-id="{{ item.memory_id }}" aria-pressed="{% if item.selected %}true{% else %}false{% endif %}" hx-get="{{ item.detail_url }}" hx-target="#memory-detail" hx-swap="outerHTML" hx-sync="closest [data-agent-memories]:replace" hx-indicator="[data-memory-detail-loading]" class="memory-timeline-card block w-64 shrink-0 rounded-2xl border border-zinc-800 bg-[#0d0d10] p-4 text-left hover:border-zinc-700 hover:bg-zinc-950/80">
+<button type="button" data-memory-timeline-item data-memory-id="{{ item.memory_id }}" aria-pressed="{% if item.selected %}true{% else %}false{% endif %}" hx-get="{{ item.detail_url }}" hx-target="#memory-detail" hx-swap="outerHTML" hx-sync="closest [data-agent-memories]:replace" hx-indicator="[data-memory-detail-loading]" class="memory-timeline-card block w-64 shrink-0 cursor-pointer rounded-2xl border border-zinc-800 bg-[#0d0d10] p-4 text-left hover:border-zinc-700 hover:bg-zinc-950/80">
     <div class="text-[11px] uppercase tracking-[0.16em] text-zinc-500">
         <time class="local-datetime" data-local-format="datetime" datetime="{{ item.created_at_iso }}" title="{{ item.created_at_fallback_text }}">{{ item.created_at_fallback_text }}</time>
     </div>
