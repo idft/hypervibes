@@ -18,13 +18,14 @@ use tokio::sync::broadcast;
 use tracing::warn;
 
 use super::shared::{
-    ANALYSIS_CODING_ACTIVE_WARNING, ModelSelectionForm, SERVER_SHUTTING_DOWN_WARNING, TimeoutForm,
-    ToggleJobForm, build_model_picker_view, is_htmx_request, load_model_picker_context,
-    parse_positive_job_seconds, sub_agents_warning_redirect, timeout_error_redirect, urlencode,
+    ANALYSIS_CODING_ACTIVE_WARNING, ModelPickerContext, ModelSelectionForm,
+    SERVER_SHUTTING_DOWN_WARNING, TimeoutForm, ToggleJobForm, build_model_picker_view,
+    is_htmx_request, load_model_picker_context, parse_positive_job_seconds,
+    sub_agents_warning_redirect, timeout_error_redirect, urlencode,
     validate_model_selection_for_agent,
 };
 use super::show::{
-    AgentShowQueries, AgentSubAgentsQuery, build_agent_recent_runs_view,
+    AgentShowQueries, AgentSubAgentsQuery, build_agent_recent_runs_view_for_kind,
     load_selected_agent_navbar, parse_positive_page, render_agent_show_page,
 };
 use crate::web::error::AppError;
@@ -58,8 +59,9 @@ use crate::{
         run_detail_events::RunDetailDbEvent,
         templates::{
             AgentJobDetailPageTemplate, AgentJobNewPageTemplate, AgentJobPageNavigation,
-            AgentRecentRunsPartialTemplate, AgentShowTab, CreateAnalysisJobFormValues,
-            ModelPickerPartialTemplate, build_agent_show_tabs,
+            AgentRecentRunsPartialTemplate, AgentRoleEditPageTemplate, AgentShowTab,
+            AgentSingletonRoleNewPageTemplate, CreateAnalysisJobFormValues,
+            CreateSingletonRoleFormValues, ModelPickerPartialTemplate, build_agent_show_tabs,
         },
     },
 };
@@ -89,18 +91,35 @@ pub(in crate::web::routes) async fn agent_sub_agent_recent_runs_stream(
     Query(query): Query<AgentSubAgentsQuery>,
 ) -> Result<Response, AppError> {
     let requested_page = parse_positive_page(&query.page);
+    let sub_agent_kind = match query.kind.as_str() {
+        "trading" => SUB_AGENT_KIND_TRADING,
+        "review" => SUB_AGENT_KIND_REVIEW,
+        _ => SUB_AGENT_KIND_ANALYSIS,
+    };
     let receiver = state.run_detail_events.subscribe();
     let Some(_agent) = get_agent(&state.db_pool, &agent_key).await? else {
         return Ok((StatusCode::NOT_FOUND, "agent not found").into_response());
     };
 
     let shutdown_rx = state.shutdown_rx.clone();
-    let recent_runs_section =
-        build_agent_recent_runs_view(&state, &agent_key, requested_page).await;
+    let page_path = match sub_agent_kind {
+        SUB_AGENT_KIND_TRADING => format!("/agents/{agent_key}/trading"),
+        SUB_AGENT_KIND_REVIEW => format!("/agents/{agent_key}/review"),
+        _ => format!("/agents/{agent_key}/analysis"),
+    };
+    let recent_runs_section = build_agent_recent_runs_view_for_kind(
+        &state,
+        &agent_key,
+        sub_agent_kind,
+        &page_path,
+        requested_page,
+    )
+    .await;
     let initial_html = AgentRecentRunsPartialTemplate::render_view(recent_runs_section)?;
     let stream_state = AgentRecentRunsStreamState {
         state,
         agent_key,
+        sub_agent_kind: sub_agent_kind.to_string(),
         requested_page,
         receiver,
         shutdown_rx,
@@ -119,6 +138,7 @@ pub(in crate::web::routes) async fn agent_sub_agent_recent_runs_stream(
 struct AgentRecentRunsStreamState {
     state: Arc<AppState>,
     agent_key: String,
+    sub_agent_kind: String,
     requested_page: usize,
     receiver: broadcast::Receiver<RunDetailDbEvent>,
     shutdown_rx: tokio::sync::watch::Receiver<bool>,
@@ -151,7 +171,10 @@ async fn next_agent_recent_runs_event(
         let matches = match event {
             RunDetailDbEvent::RunChanged { run_id } => {
                 match crate::harness::store::get_run(&stream_state.state.db_pool, run_id).await {
-                    Ok(Some(run)) => run.agent_key == stream_state.agent_key,
+                    Ok(Some(run)) => {
+                        run.agent_key == stream_state.agent_key
+                            && run.sub_agent_kind == stream_state.sub_agent_kind
+                    }
                     Ok(None) => false,
                     Err(error) => {
                         warn!(
@@ -172,9 +195,16 @@ async fn next_agent_recent_runs_event(
             continue;
         }
 
-        let recent_runs_section = build_agent_recent_runs_view(
+        let page_path = match stream_state.sub_agent_kind.as_str() {
+            SUB_AGENT_KIND_TRADING => format!("/agents/{}/trading", stream_state.agent_key),
+            SUB_AGENT_KIND_REVIEW => format!("/agents/{}/review", stream_state.agent_key),
+            _ => format!("/agents/{}/analysis", stream_state.agent_key),
+        };
+        let recent_runs_section = build_agent_recent_runs_view_for_kind(
             &stream_state.state,
             &stream_state.agent_key,
+            &stream_state.sub_agent_kind,
+            &page_path,
             stream_state.requested_page,
         )
         .await;
@@ -298,6 +328,13 @@ pub(in crate::web::routes) async fn agents_show_sub_agent_detail(
 
     let mut job_view = crate::web::templates::HarnessSubAgentDetailView::from_row(&job);
     job_view.highlight_model_selector = query.setup && !job_view.has_model;
+    job_view.prompt_error = query.prompt_error;
+    if let Some(prompt) =
+        get_agent_strategy_prompt(&state.db_pool, &agent_key, sub_agent_id).await?
+    {
+        job_view.strategy_prompt = prompt.prompt;
+        job_view.strategy_prompt_revision = prompt.revision_id;
+    }
     if let Some(error) = query.timeout_error {
         job_view.timeout_editor.error = Some(error);
     }
@@ -458,7 +495,7 @@ pub(in crate::web::routes) struct CreateAnalysisJobForm {
     #[serde(default)]
     pub model_variant: String,
     #[serde(default)]
-    pub operator_prompt: String,
+    pub prompt: String,
     pub enabled: Option<String>,
 }
 #[derive(Debug)]
@@ -469,7 +506,7 @@ pub(in crate::web::routes) struct ValidatedCreateAnalysisJob {
     pub timeout_seconds: i32,
     pub model_selection: Option<(String, String)>,
     pub model_variant: String,
-    pub operator_prompt: String,
+    pub prompt: String,
     pub enabled: bool,
 }
 impl CreateAnalysisJobForm {
@@ -477,6 +514,10 @@ impl CreateAnalysisJobForm {
         Self {
             timeframe: "15m".to_string(),
             timeout_seconds: "900".to_string(),
+            prompt: crate::agents::strategy_prompts::default_prompt_for_role(
+                SUB_AGENT_KIND_ANALYSIS,
+            )
+            .to_string(),
             enabled: Some("on".to_string()),
             ..Self::default()
         }
@@ -493,7 +534,7 @@ impl CreateAnalysisJobForm {
             timeout_seconds: self.timeout_seconds.clone(),
             model_selection: self.model_selection.clone(),
             model_variant: self.model_variant.clone(),
-            operator_prompt: self.operator_prompt.clone(),
+            prompt: self.prompt.clone(),
             enabled: self.enabled(),
         }
     }
@@ -532,6 +573,11 @@ impl CreateAnalysisJobForm {
             errors.push("A model is required to enable a sub-agent.".to_string());
         }
 
+        let prompt = self.prompt.trim().to_string();
+        if prompt.is_empty() {
+            errors.push("Prompt must not be empty.".to_string());
+        }
+
         if errors.is_empty() {
             Ok(ValidatedCreateAnalysisJob {
                 sub_agent_key,
@@ -540,7 +586,7 @@ impl CreateAnalysisJobForm {
                 timeout_seconds: timeout_seconds.expect("validated timeout seconds"),
                 model_selection,
                 model_variant: self.model_variant.clone(),
-                operator_prompt: self.operator_prompt.trim().to_string(),
+                prompt,
                 enabled: self.enabled(),
             })
         } else {
@@ -679,7 +725,6 @@ pub(in crate::web::routes) async fn agents_create_analysis_job(
         model_id,
         model_variant,
         validated.timeout_seconds,
-        &validated.operator_prompt,
     )
     .await;
     let inserted_id = match result {
@@ -709,7 +754,7 @@ pub(in crate::web::routes) async fn agents_create_analysis_job(
         &agent_key,
         inserted_id,
         &validated.sub_agent_key,
-        crate::agents::strategy_prompts::default_prompt_for_role(SUB_AGENT_KIND_ANALYSIS),
+        &validated.prompt,
     )
     .await
     {
@@ -782,6 +827,13 @@ pub(in crate::web::routes) async fn agents_delete_sub_agent(
     let Some(_agent) = get_agent(&state.db_pool, &agent_key).await? else {
         return Ok((StatusCode::NOT_FOUND, "agent not found").into_response());
     };
+    let Some(job) =
+        crate::harness::store::get_agent_sub_agent(&state.db_pool, &agent_key, sub_agent_id)
+            .await?
+    else {
+        return Ok((StatusCode::NOT_FOUND, "sub-agent not found").into_response());
+    };
+    let redirect_url = role_page_url(&agent_key, &job.sub_agent_kind);
     match crate::harness::service::delete_idle_job(
         &state.db_pool,
         &state.opencode_client,
@@ -799,7 +851,7 @@ pub(in crate::web::routes) async fn agents_delete_sub_agent(
         }
     }
 
-    Ok(Redirect::to(&role_list_redirect(&state, &agent_key, sub_agent_id).await).into_response())
+    Ok(Redirect::to(&redirect_url).into_response())
 }
 
 /// Resolve the role page a mutation on `sub_agent_id` should return to.
@@ -853,7 +905,7 @@ pub(in crate::web::routes) async fn agents_run_sub_agent_now(
                 request_origin: "manual",
                 source_sub_agent_run_id: None,
                 source_memory_id: None,
-                operator_prompt: None,
+                task_instructions: None,
                 requested_mode: None,
             },
         )
@@ -1124,32 +1176,6 @@ pub(in crate::web::routes) async fn agents_update_sub_agent_timeout(
 }
 
 #[derive(Debug, Default, Deserialize)]
-pub(in crate::web::routes) struct OperatorPromptForm {
-    #[serde(default)]
-    pub operator_prompt: String,
-}
-
-pub(in crate::web::routes) async fn agents_update_sub_agent_operator_prompt(
-    State(state): State<Arc<AppState>>,
-    Path((agent_key, sub_agent_id)): Path<(String, i64)>,
-    Form(form): Form<OperatorPromptForm>,
-) -> Result<Response, AppError> {
-    let detail_url = format!("/agents/{agent_key}/sub-agents/{sub_agent_id}");
-    if !crate::harness::store::set_sub_agent_operator_prompt(
-        &state.db_pool,
-        &agent_key,
-        sub_agent_id,
-        form.operator_prompt.trim(),
-    )
-    .await?
-    {
-        return Ok((StatusCode::NOT_FOUND, "sub-agent not found").into_response());
-    }
-
-    Ok(Redirect::to(&detail_url).into_response())
-}
-
-#[derive(Debug, Default, Deserialize)]
 pub(in crate::web::routes) struct NotificationCapabilityForm {
     pub enabled: Option<String>,
 }
@@ -1169,7 +1195,14 @@ pub(in crate::web::routes) async fn agents_update_sub_agent_notification_capabil
     if !updated {
         return Ok((StatusCode::NOT_FOUND, "sub-agent not found").into_response());
     }
-    Ok(Redirect::to(&format!("/agents/{agent_key}/sub-agents/{sub_agent_id}")).into_response())
+    let redirect_url =
+        match crate::harness::store::get_agent_sub_agent(&state.db_pool, &agent_key, sub_agent_id)
+            .await?
+        {
+            Some(job) => prompt_page_url(&agent_key, sub_agent_id, &job.sub_agent_kind),
+            None => format!("/agents/{agent_key}/sub-agents/{sub_agent_id}"),
+        };
+    Ok(Redirect::to(&redirect_url).into_response())
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -1184,7 +1217,6 @@ pub(in crate::web::routes) async fn agents_update_sub_agent_review_prompt_update
     Path((agent_key, sub_agent_id)): Path<(String, i64)>,
     Form(form): Form<ReviewPromptUpdateForm>,
 ) -> Result<Response, AppError> {
-    let detail_url = format!("/agents/{agent_key}/sub-agents/{sub_agent_id}");
     let Some(job) =
         crate::harness::store::get_agent_sub_agent(&state.db_pool, &agent_key, sub_agent_id)
             .await?
@@ -1211,7 +1243,12 @@ pub(in crate::web::routes) async fn agents_update_sub_agent_review_prompt_update
     if !updated {
         return Ok((StatusCode::NOT_FOUND, "sub-agent not found").into_response());
     }
-    Ok(Redirect::to(&detail_url).into_response())
+    Ok(Redirect::to(&prompt_page_url(
+        &agent_key,
+        sub_agent_id,
+        &job.sub_agent_kind,
+    ))
+    .into_response())
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -1230,6 +1267,8 @@ pub(in crate::web::routes) struct JobDetailQuery {
     pub timeframe_error: Option<String>,
     #[serde(default)]
     pub model_error: Option<String>,
+    #[serde(default)]
+    pub prompt_error: Option<String>,
     #[serde(default)]
     pub setup: bool,
 }
@@ -1307,10 +1346,12 @@ pub(in crate::web::routes) async fn agents_update_sub_agent_prompt(
         .await);
     }
     if prompt == current.prompt {
-        return Ok(
-            Redirect::to(&role_page_url(&agent_key, &current.target_sub_agent_kind))
-                .into_response(),
-        );
+        return Ok(Redirect::to(&prompt_page_url(
+            &agent_key,
+            sub_agent_id,
+            &current.target_sub_agent_kind,
+        ))
+        .into_response());
     }
     let base_revision_id: i64 = match form.base_revision_id.trim().parse() {
         Ok(value) if value > 0 => value,
@@ -1349,7 +1390,12 @@ pub(in crate::web::routes) async fn agents_update_sub_agent_prompt(
             prompt_error_redirect(&state, &agent_key, sub_agent_id, format!("{error:#}")).await,
         );
     }
-    Ok(Redirect::to(&role_page_url(&agent_key, &current.target_sub_agent_kind)).into_response())
+    Ok(Redirect::to(&prompt_page_url(
+        &agent_key,
+        sub_agent_id,
+        &current.target_sub_agent_kind,
+    ))
+    .into_response())
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -1382,7 +1428,12 @@ pub(in crate::web::routes) async fn agents_rollback_sub_agent_prompt(
     else {
         return Ok((StatusCode::NOT_FOUND, "strategy prompt not found").into_response());
     };
-    Ok(Redirect::to(&role_page_url(&agent_key, &current.target_sub_agent_kind)).into_response())
+    Ok(Redirect::to(&prompt_page_url(
+        &agent_key,
+        sub_agent_id,
+        &current.target_sub_agent_kind,
+    ))
+    .into_response())
 }
 
 async fn prompt_error_redirect(
@@ -1391,8 +1442,32 @@ async fn prompt_error_redirect(
     sub_agent_id: i64,
     message: String,
 ) -> Response {
-    let role_page = role_list_redirect(state, agent_key, sub_agent_id).await;
-    Redirect::to(&format!("{role_page}?prompt_error={}", urlencode(&message))).into_response()
+    let prompt_page =
+        match crate::harness::store::get_agent_sub_agent(&state.db_pool, agent_key, sub_agent_id)
+            .await
+            .ok()
+            .flatten()
+        {
+            Some(job) => prompt_page_url(agent_key, sub_agent_id, &job.sub_agent_kind),
+            None => role_list_redirect(state, agent_key, sub_agent_id).await,
+        };
+    Redirect::to(&format!(
+        "{prompt_page}?prompt_error={}",
+        urlencode(&message)
+    ))
+    .into_response()
+}
+
+fn prompt_page_url(agent_key: &str, sub_agent_id: i64, kind: &str) -> String {
+    if kind == SUB_AGENT_KIND_ANALYSIS {
+        format!("/agents/{agent_key}/sub-agents/{sub_agent_id}")
+    } else {
+        singleton_edit_page_url(agent_key, kind)
+    }
+}
+
+fn singleton_edit_page_url(agent_key: &str, kind: &str) -> String {
+    format!("{}/edit", role_page_url(agent_key, kind))
 }
 
 fn role_page_url(agent_key: &str, kind: &str) -> String {
@@ -1444,6 +1519,8 @@ async fn load_strategy_prompt(
 #[derive(Debug, Default, Deserialize)]
 pub(in crate::web::routes) struct RolePageQuery {
     #[serde(default)]
+    pub page: String,
+    #[serde(default)]
     pub prompt_error: Option<String>,
     #[serde(default)]
     pub timeout_error: Option<String>,
@@ -1455,6 +1532,7 @@ struct RolePageContext {
     role_label: &'static str,
     role_page_path: &'static str,
     role_description: &'static str,
+    default_timeframe: &'static str,
     sub_agent_kind: &'static str,
     active_tab: AgentShowTab,
 }
@@ -1463,6 +1541,7 @@ const TRADING_ROLE: RolePageContext = RolePageContext {
     role_label: "Trading",
     role_page_path: "/trading",
     role_description: "Reads the latest research context, records a trading decision for every evaluated instrument, and manages orders.",
+    default_timeframe: store::DEFAULT_TRADING_TIMEFRAME,
     sub_agent_kind: SUB_AGENT_KIND_TRADING,
     active_tab: AgentShowTab::Trading,
 };
@@ -1471,9 +1550,289 @@ const REVIEW_ROLE: RolePageContext = RolePageContext {
     role_label: "Review",
     role_page_path: "/review",
     role_description: "Reviews outcomes, records durable learnings, and may revise the prompts that opted in.",
+    default_timeframe: store::DEFAULT_REVIEW_TIMEFRAME,
     sub_agent_kind: SUB_AGENT_KIND_REVIEW,
     active_tab: AgentShowTab::Review,
 };
+
+#[derive(Debug, Clone, Default, Deserialize)]
+pub(in crate::web::routes) struct CreateSingletonRoleForm {
+    #[serde(default)]
+    pub timeframe: String,
+    #[serde(default)]
+    pub timeout_seconds: String,
+    #[serde(default)]
+    pub model_selection: String,
+    #[serde(default)]
+    pub model_variant: String,
+    #[serde(default)]
+    pub prompt: String,
+    pub enabled: Option<String>,
+}
+
+#[derive(Debug)]
+struct ValidatedCreateSingletonRole {
+    timeframe: String,
+    timeout_seconds: i32,
+    model_selection: Option<(String, String)>,
+    model_variant: String,
+    prompt: String,
+    enabled: bool,
+}
+
+impl CreateSingletonRoleForm {
+    fn defaults(sub_agent_kind: &str, timeframe: &str) -> Self {
+        Self {
+            timeframe: timeframe.to_string(),
+            timeout_seconds: "900".to_string(),
+            prompt: crate::agents::strategy_prompts::default_prompt_for_role(sub_agent_kind)
+                .to_string(),
+            enabled: Some("on".to_string()),
+            ..Self::default()
+        }
+    }
+
+    fn enabled(&self) -> bool {
+        self.enabled.is_some()
+    }
+
+    fn as_template_values(&self) -> CreateSingletonRoleFormValues {
+        CreateSingletonRoleFormValues {
+            timeframe: self.timeframe.clone(),
+            timeout_seconds: self.timeout_seconds.clone(),
+            model_selection: self.model_selection.clone(),
+            model_variant: self.model_variant.clone(),
+            prompt: self.prompt.clone(),
+            enabled: self.enabled(),
+        }
+    }
+
+    fn validate(&self) -> Result<ValidatedCreateSingletonRole, Vec<String>> {
+        let mut errors = Vec::new();
+        let timeframe = self.timeframe.trim().to_string();
+        if parse_timeframe_seconds(&timeframe).is_err() {
+            errors.push(
+                "Timeframe must be a positive integer with unit m, h, or d (e.g. 15m, 1h, 1d)."
+                    .to_string(),
+            );
+        }
+        let timeout_seconds =
+            parse_positive_job_seconds(&self.timeout_seconds, "Timeout", &mut errors);
+        let model_selection = match parse_model_selection(&self.model_selection) {
+            Ok(selection) => selection,
+            Err(error) => {
+                errors.push(error);
+                None
+            }
+        };
+        if self.enabled() && model_selection.is_none() {
+            errors.push("A model is required to enable a sub-agent.".to_string());
+        }
+        let prompt = self.prompt.trim().to_string();
+        if prompt.is_empty() {
+            errors.push("Prompt must not be empty.".to_string());
+        }
+
+        if errors.is_empty() {
+            Ok(ValidatedCreateSingletonRole {
+                timeframe,
+                timeout_seconds: timeout_seconds.expect("validated timeout seconds"),
+                model_selection,
+                model_variant: self.model_variant.clone(),
+                prompt,
+                enabled: self.enabled(),
+            })
+        } else {
+            Err(errors)
+        }
+    }
+}
+
+fn render_new_singleton_role_form(
+    agent: crate::agents::model::AgentDetailRow,
+    context: &RolePageContext,
+    form: CreateSingletonRoleFormValues,
+    picker: super::shared::ModelPickerContext,
+    errors: Vec<String>,
+    status: StatusCode,
+    navigation: AgentJobPageNavigation,
+) -> Response {
+    let mut model_picker = build_model_picker_view(
+        "sub-agent-model-selection",
+        &form.model_selection,
+        (!form.model_variant.is_empty()).then_some(form.model_variant.as_str()),
+        picker,
+    );
+    model_picker.submit_on_save = false;
+    let role_page_path = format!("/agents/{}{}", agent.agent_key, context.role_page_path);
+    let html = AgentSingletonRoleNewPageTemplate {
+        tabs: build_agent_show_tabs(&agent, context.active_tab, navigation.notification_count),
+        agent_tabs_use_htmx: false,
+        current_path: format!("{role_page_path}/new"),
+        agent,
+        role_label: context.role_label,
+        role_description: context.role_description,
+        role_page_path,
+        form,
+        model_picker,
+        errors,
+        navbar: navigation.navbar,
+    }
+    .render()
+    .expect("singleton role form template must render");
+    (status, Html(html)).into_response()
+}
+
+async fn agents_new_singleton_role(
+    state: Arc<AppState>,
+    user: AuthenticatedUser,
+    agent_key: String,
+    context: &RolePageContext,
+) -> Result<Response, AppError> {
+    let Some(agent) = get_agent(&state.db_pool, &agent_key).await? else {
+        return Ok((StatusCode::NOT_FOUND, "agent not found").into_response());
+    };
+    if store::get_singleton_sub_agent(&state.db_pool, &agent_key, context.sub_agent_kind)
+        .await?
+        .is_some()
+    {
+        return Ok(
+            Redirect::to(&format!("/agents/{agent_key}{}", context.role_page_path)).into_response(),
+        );
+    }
+    let picker = load_model_picker_context(&state, &agent).await;
+    let navbar = load_selected_agent_navbar(&state, user.id, &agent).await?;
+    let notification_count = count_notifications(&state.db_pool, &agent.agent_key).await?;
+    Ok(render_new_singleton_role_form(
+        agent,
+        context,
+        CreateSingletonRoleForm::defaults(context.sub_agent_kind, context.default_timeframe)
+            .as_template_values(),
+        picker,
+        Vec::new(),
+        StatusCode::OK,
+        AgentJobPageNavigation {
+            notification_count,
+            navbar,
+        },
+    ))
+}
+
+async fn agents_create_singleton_role(
+    state: Arc<AppState>,
+    user: AuthenticatedUser,
+    agent_key: String,
+    context: &RolePageContext,
+    form: CreateSingletonRoleForm,
+) -> Result<Response, AppError> {
+    let Some(agent) = get_agent(&state.db_pool, &agent_key).await? else {
+        return Ok((StatusCode::NOT_FOUND, "agent not found").into_response());
+    };
+    let navigation = AgentJobPageNavigation {
+        notification_count: count_notifications(&state.db_pool, &agent.agent_key).await?,
+        navbar: load_selected_agent_navbar(&state, user.id, &agent).await?,
+    };
+    let validated = match form.validate() {
+        Ok(validated) => validated,
+        Err(errors) => {
+            let picker = load_model_picker_context(&state, &agent).await;
+            return Ok(render_new_singleton_role_form(
+                agent,
+                context,
+                form.as_template_values(),
+                picker,
+                errors,
+                StatusCode::UNPROCESSABLE_ENTITY,
+                navigation,
+            ));
+        }
+    };
+    let validated_model_selection = match validate_model_selection_for_agent(
+        &state,
+        validated.model_selection.clone(),
+        &validated.model_variant,
+    )
+    .await
+    {
+        Ok(selection) => selection,
+        Err(error) => {
+            let picker = load_model_picker_context(&state, &agent).await;
+            return Ok(render_new_singleton_role_form(
+                agent,
+                context,
+                form.as_template_values(),
+                picker,
+                vec![error],
+                StatusCode::UNPROCESSABLE_ENTITY,
+                navigation,
+            ));
+        }
+    };
+    let model_provider_id = validated_model_selection
+        .as_ref()
+        .map(|(provider, _, _)| provider.as_str());
+    let model_id = validated_model_selection
+        .as_ref()
+        .map(|(_, model, _)| model.as_str());
+    let model_variant = validated_model_selection
+        .as_ref()
+        .and_then(|(_, _, variant)| variant.as_deref());
+    let inserted = match store::insert_singleton_sub_agent(
+        &state.db_pool,
+        &agent_key,
+        context.sub_agent_kind,
+        store::SingletonSubAgentConfig {
+            enabled: validated.enabled,
+            timeframe: &validated.timeframe,
+            model_provider_id,
+            model_id,
+            model_variant,
+            timeout_seconds: validated.timeout_seconds,
+        },
+    )
+    .await
+    {
+        Ok(id) => id,
+        Err(error) => {
+            let errors = match job_unique_violation_message(&error) {
+                Some(message) => vec![message],
+                None => return Err(AppError(error)),
+            };
+            let picker = load_model_picker_context(&state, &agent).await;
+            return Ok(render_new_singleton_role_form(
+                agent,
+                context,
+                form.as_template_values(),
+                picker,
+                errors,
+                StatusCode::UNPROCESSABLE_ENTITY,
+                navigation,
+            ));
+        }
+    };
+    let (sub_agent_key,): (String,) =
+        sqlx::query_as("SELECT sub_agent_key FROM harness_sub_agents WHERE id = $1")
+            .bind(inserted)
+            .fetch_one(&state.db_pool)
+            .await?;
+    if let Err(error) = seed_initial_prompt_revision(
+        &state.db_pool,
+        &agent_key,
+        inserted,
+        &sub_agent_key,
+        &validated.prompt,
+    )
+    .await
+    {
+        warn!(
+            agent_key,
+            sub_agent_id = inserted,
+            error = ?error,
+            "failed to seed initial prompt for singleton role"
+        );
+    }
+    Ok(Redirect::to(&format!("/agents/{agent_key}{}", context.role_page_path)).into_response())
+}
 
 async fn render_role_page(
     state: &Arc<AppState>,
@@ -1499,13 +1858,18 @@ async fn render_role_page(
             tabs,
             agent_tabs_use_htmx: true,
             active_role_label: context.role_label,
-            role_page_path,
+            role_page_path: role_page_path.clone(),
             role_description: context.role_description,
             job: None,
-            sub_agent_id: 0,
             model_picker: crate::web::templates::ModelPickerView::default(),
-            prompt_view: crate::web::templates::RolePromptView::default(),
-            review_prompt_improvement_enabled: None,
+            recent_runs_section: build_agent_recent_runs_view_for_kind(
+                state,
+                agent_key,
+                context.sub_agent_kind,
+                &role_page_path,
+                1,
+            )
+            .await,
             navbar,
         }
         .render()?;
@@ -1519,45 +1883,30 @@ async fn render_role_page(
     if let Some(error) = query.model_error {
         job_view.model_error = Some(error);
     }
-    match build_job_prompt_preview(state, &agent, &job).await {
-        Ok(text) => job_view.prompt_preview_text = text,
-        Err(error) => {
-            job_view.prompt_preview_error = Some(format!("{error:#}"));
-        }
-    }
-
-    let picker = load_model_picker_context(state, &agent).await;
     let mut model_picker = build_model_picker_view(
         "sub-agent-model-selection",
         &job_view.model_selection,
         job.model_variant.as_deref(),
-        picker,
+        ModelPickerContext {
+            options: Vec::new(),
+            warning: None,
+        },
     );
     model_picker.show_label = false;
+    model_picker.lazy_options_url = Some(format!(
+        "/agents/{agent_key}/sub-agents/{}/model-picker",
+        job.id
+    ));
 
-    let prompt_view = match get_agent_strategy_prompt(&state.db_pool, agent_key, job.id).await {
-        Ok(Some(row)) => crate::web::templates::RolePromptView {
-            revision_id: row.revision_id,
-            prompt: row.prompt,
-            prompt_error: query.prompt_error,
-            history: Vec::new(),
-        },
-        Ok(None) => crate::web::templates::RolePromptView::default(),
-        Err(error) => {
-            warn!(
-                agent_key,
-                error = ?error,
-                "failed to load role page strategy prompt"
-            );
-            crate::web::templates::RolePromptView {
-                prompt_error: Some("Strategy prompt could not be loaded.".to_string()),
-                ..Default::default()
-            }
-        }
-    };
-
-    let review_prompt_improvement_enabled =
-        (context.sub_agent_kind == SUB_AGENT_KIND_TRADING).then_some(false);
+    let requested_runs_page = parse_positive_page(&query.page);
+    let recent_runs_section = build_agent_recent_runs_view_for_kind(
+        state,
+        agent_key,
+        context.sub_agent_kind,
+        &role_page_path,
+        requested_runs_page,
+    )
+    .await;
 
     let html = crate::web::templates::AgentRolePageTemplate {
         current_path: role_page_path.clone(),
@@ -1568,10 +1917,67 @@ async fn render_role_page(
         role_page_path,
         role_description: context.role_description,
         job: Some(job_view),
-        sub_agent_id: job.id,
         model_picker,
+        recent_runs_section,
+        navbar,
+    }
+    .render()?;
+    Ok(Html(html).into_response())
+}
+
+async fn render_role_edit_page(
+    state: &Arc<AppState>,
+    user: &AuthenticatedUser,
+    agent_key: &str,
+    context: &RolePageContext,
+    query: RolePageQuery,
+) -> Result<Response, AppError> {
+    let Some(agent) = get_agent(&state.db_pool, agent_key).await? else {
+        return Ok((StatusCode::NOT_FOUND, "agent not found").into_response());
+    };
+    let Some(job) =
+        store::get_singleton_sub_agent(&state.db_pool, agent_key, context.sub_agent_kind).await?
+    else {
+        return Ok(
+            Redirect::to(&format!("/agents/{agent_key}{}", context.role_page_path)).into_response(),
+        );
+    };
+
+    let prompt_view = match get_agent_strategy_prompt(&state.db_pool, agent_key, job.id).await {
+        Ok(Some(row)) => crate::web::templates::RolePromptView {
+            revision_id: row.revision_id,
+            prompt: row.prompt,
+            prompt_error: query.prompt_error,
+        },
+        Ok(None) => crate::web::templates::RolePromptView {
+            prompt_error: query.prompt_error,
+            ..Default::default()
+        },
+        Err(error) => {
+            warn!(
+                agent_key,
+                error = ?error,
+                "failed to load singleton strategy prompt for edit page"
+            );
+            crate::web::templates::RolePromptView {
+                prompt_error: Some("Strategy prompt could not be loaded.".to_string()),
+                ..Default::default()
+            }
+        }
+    };
+    let notification_count = count_notifications(&state.db_pool, &agent.agent_key).await?;
+    let navbar = load_selected_agent_navbar(state, user.id, &agent).await?;
+    let role_page_path = format!("/agents/{agent_key}{}", context.role_page_path);
+    let tabs = build_agent_show_tabs(&agent, context.active_tab, notification_count);
+    let html = AgentRoleEditPageTemplate {
+        current_path: format!("{role_page_path}/edit"),
+        agent,
+        tabs,
+        agent_tabs_use_htmx: false,
+        active_role_label: context.role_label,
+        role_page_path,
+        job: crate::web::templates::HarnessSubAgentDetailView::from_row(&job),
         prompt_view,
-        review_prompt_improvement_enabled,
         navbar,
     }
     .render()?;
@@ -1596,55 +2002,54 @@ pub(in crate::web::routes) async fn agents_show_review(
     render_role_page(&state, &user, &agent_key, &REVIEW_ROLE, query).await
 }
 
-/// Create the missing singleton for a durable role. Used by the role page's
-/// missing-state creation button.
-pub(in crate::web::routes) async fn create_singleton_role_page(
-    state: &Arc<AppState>,
-    agent_key: &str,
-    sub_agent_kind: &str,
-) -> Result<i64, AppError> {
-    let inserted =
-        store::insert_singleton_sub_agent(&state.db_pool, agent_key, sub_agent_kind, 900)
-            .await
-            .map_err(AppError)?;
-    let (sub_agent_key,): (String,) =
-        sqlx::query_as("SELECT sub_agent_key FROM harness_sub_agents WHERE id = $1")
-            .bind(inserted)
-            .fetch_one(&state.db_pool)
-            .await?;
-    if let Err(error) = seed_initial_prompt_revision(
-        &state.db_pool,
-        agent_key,
-        inserted,
-        &sub_agent_key,
-        crate::agents::strategy_prompts::default_prompt_for_role(sub_agent_kind),
-    )
-    .await
-    {
-        warn!(
-            agent_key,
-            sub_agent_id = inserted,
-            error = ?error,
-            "failed to seed initial prompt for singleton role"
-        );
-    }
-    Ok(inserted)
+pub(in crate::web::routes) async fn agents_edit_trading_singleton(
+    State(state): State<Arc<AppState>>,
+    user: AuthenticatedUser,
+    Path(agent_key): Path<String>,
+    Query(query): Query<RolePageQuery>,
+) -> Result<Response, AppError> {
+    render_role_edit_page(&state, &user, &agent_key, &TRADING_ROLE, query).await
+}
+
+pub(in crate::web::routes) async fn agents_edit_review_singleton(
+    State(state): State<Arc<AppState>>,
+    user: AuthenticatedUser,
+    Path(agent_key): Path<String>,
+    Query(query): Query<RolePageQuery>,
+) -> Result<Response, AppError> {
+    render_role_edit_page(&state, &user, &agent_key, &REVIEW_ROLE, query).await
+}
+
+pub(in crate::web::routes) async fn agents_new_trading_singleton(
+    State(state): State<Arc<AppState>>,
+    user: AuthenticatedUser,
+    Path(agent_key): Path<String>,
+) -> Result<Response, AppError> {
+    agents_new_singleton_role(state, user, agent_key, &TRADING_ROLE).await
+}
+
+pub(in crate::web::routes) async fn agents_new_review_singleton(
+    State(state): State<Arc<AppState>>,
+    user: AuthenticatedUser,
+    Path(agent_key): Path<String>,
+) -> Result<Response, AppError> {
+    agents_new_singleton_role(state, user, agent_key, &REVIEW_ROLE).await
 }
 
 pub(in crate::web::routes) async fn agents_create_trading_singleton(
     State(state): State<Arc<AppState>>,
-    _user: AuthenticatedUser,
+    user: AuthenticatedUser,
     Path(agent_key): Path<String>,
+    Form(form): Form<CreateSingletonRoleForm>,
 ) -> Result<Response, AppError> {
-    create_singleton_role_page(&state, &agent_key, SUB_AGENT_KIND_TRADING).await?;
-    Ok(Redirect::to(&format!("/agents/{agent_key}/trading")).into_response())
+    agents_create_singleton_role(state, user, agent_key, &TRADING_ROLE, form).await
 }
 
 pub(in crate::web::routes) async fn agents_create_review_singleton(
     State(state): State<Arc<AppState>>,
-    _user: AuthenticatedUser,
+    user: AuthenticatedUser,
     Path(agent_key): Path<String>,
+    Form(form): Form<CreateSingletonRoleForm>,
 ) -> Result<Response, AppError> {
-    create_singleton_role_page(&state, &agent_key, SUB_AGENT_KIND_REVIEW).await?;
-    Ok(Redirect::to(&format!("/agents/{agent_key}/review")).into_response())
+    agents_create_singleton_role(state, user, agent_key, &REVIEW_ROLE, form).await
 }

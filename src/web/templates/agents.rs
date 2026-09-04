@@ -259,7 +259,7 @@ pub struct CreateAnalysisJobFormValues {
     pub timeout_seconds: String,
     pub model_selection: String,
     pub model_variant: String,
-    pub operator_prompt: String,
+    pub prompt: String,
     pub enabled: bool,
 }
 
@@ -287,6 +287,13 @@ pub struct ModelPickerView {
     pub show_label: bool,
     pub submit_on_save: bool,
     pub lazy_options_url: Option<String>,
+}
+
+impl ModelPickerView {
+    pub fn selected_provider_logo_url(&self) -> Option<String> {
+        let (provider, _) = self.selected_value.split_once('/')?;
+        (!provider.is_empty()).then(|| format!("/model-catalog/logos/{provider}"))
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -365,6 +372,10 @@ pub struct AgentRecentRunsView {
 
 impl AgentRecentRunsView {
     pub fn new(agent_key: &str, page: usize) -> Self {
+        Self::new_for_kind(agent_key, page, "analysis")
+    }
+
+    pub fn new_for_kind(agent_key: &str, page: usize, sub_agent_kind: &str) -> Self {
         Self {
             recent_runs: Vec::new(),
             recent_runs_loaded: false,
@@ -375,7 +386,9 @@ impl AgentRecentRunsView {
             recent_runs_range_end: 0,
             recent_runs_previous_page_url: None,
             recent_runs_next_page_url: None,
-            stream_url: format!("/agents/{agent_key}/sub-agents/recent-runs/stream?page={page}"),
+            stream_url: format!(
+                "/agents/{agent_key}/sub-agents/recent-runs/stream?page={page}&kind={sub_agent_kind}"
+            ),
         }
     }
 }

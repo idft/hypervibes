@@ -1,5 +1,5 @@
 //! Tests for the sub-agent strategy prompt endpoints owned by the agent
-//! routes: role pages render prompt editors and the sub-agent prompt update,
+//! routes: singleton edit pages render prompt editors and the sub-agent prompt update,
 //! rollback, and review-prompt-update handlers manage revisions.
 use crate::web::routes::router;
 use crate::web::routes::test_support::*;
@@ -25,7 +25,7 @@ async fn sub_agent_id_for(
 }
 
 #[tokio::test]
-async fn role_pages_render_prompt_editors() {
+async fn singleton_edit_pages_render_prompt_editors() {
     let state = test_state().await;
     let (agent_key, _wallet_address) = insert_test_agent_with_text(
         &state,
@@ -42,6 +42,22 @@ async fn role_pages_render_prompt_editors() {
             .oneshot(
                 Request::builder()
                     .uri(format!("/agents/{agent_key}/{role}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let detail_text = response_text(response).await;
+        assert!(detail_text.contains(&format!("/agents/{agent_key}/{role}/edit")));
+        assert!(detail_text.contains("Recent Runs"));
+        assert!(!detail_text.contains("Save prompt"));
+        assert!(!detail_text.contains("Preview Prompt"));
+
+        let response = router(state.clone())
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/agents/{agent_key}/{role}/edit"))
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -110,7 +126,7 @@ async fn post_analysis_prompt_updates_only_analysis_target() {
         .unwrap();
 
     assert_eq!(response.status(), StatusCode::SEE_OTHER);
-    let expected_location = format!("/agents/{agent_key}/analysis");
+    let expected_location = format!("/agents/{agent_key}/sub-agents/{analysis_id}");
     assert_eq!(
         response
             .headers()
@@ -167,7 +183,7 @@ async fn post_trading_prompt_updates_only_trading_target() {
         .unwrap();
 
     assert_eq!(response.status(), StatusCode::SEE_OTHER);
-    let expected_location = format!("/agents/{agent_key}/trading");
+    let expected_location = format!("/agents/{agent_key}/trading/edit");
     assert_eq!(
         response
             .headers()

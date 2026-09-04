@@ -183,7 +183,7 @@ async fn coding_task_status_polls_only_active_tasks() {
             request_origin: "manual",
             source_sub_agent_run_id: None,
             source_memory_id: None,
-            operator_prompt: None,
+            task_instructions: None,
             requested_mode: Some("auto"),
         },
     )

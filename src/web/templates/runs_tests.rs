@@ -39,7 +39,6 @@ fn run_detail_page_renders_opencode_session_sections() {
         agent,
         run,
         Some(session),
-        None,
         true,
         0,
         Navbar::default(),
@@ -70,7 +69,7 @@ fn run_error_renders_in_fixed_summary_not_transcript() {
     row.error_summary = Some("Usage limit reached".to_string());
     let run = HarnessSubAgentRunDetailView::from_row(&row);
 
-    let summary = AgentRunDetailSummaryPartialTemplate::render_view(run.clone(), None, None)
+    let summary = AgentRunDetailSummaryPartialTemplate::render_view(run.clone(), None)
         .expect("render summary");
     let transcript = AgentRunDetailTranscriptPartialTemplate::render_view(run, None, false)
         .expect("render transcript");
@@ -78,31 +77,6 @@ fn run_error_renders_in_fixed_summary_not_transcript() {
     assert!(summary.contains(">Error</h2>"));
     assert!(summary.contains("Usage limit reached"));
     assert!(!transcript.contains("Usage limit reached"));
-}
-
-#[test]
-fn run_detail_summary_omits_artifact_stats() {
-    let run =
-        HarnessSubAgentRunDetailView::from_row(&sample_run_row(10, "succeeded", "analysis-15m"));
-    let artifact = RunWorkspaceArtifactView {
-        status: "Retained".to_string(),
-        status_class: "status-class",
-        expires_at: Some(LocalTimestampView {
-            iso: "2026-06-27T00:01:00Z".to_string(),
-            fallback_text: "2026-06-27 00:01 UTC".to_string(),
-        }),
-        size_text: "12 B".to_string(),
-        file_count_text: "1".to_string(),
-        secrets_scrubbed: true,
-    };
-
-    let rendered = AgentRunDetailSummaryPartialTemplate::render_view(run, None, Some(artifact))
-        .expect("render summary");
-
-    assert!(!rendered.contains(">Artifact</dt>"));
-    assert!(!rendered.contains(">Artifact size</dt>"));
-    assert!(!rendered.contains(">Runtime secrets</dt>"));
-    assert!(rendered.contains(">Artifact expires</dt>"));
 }
 
 #[test]

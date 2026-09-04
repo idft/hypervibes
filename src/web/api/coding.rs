@@ -103,7 +103,7 @@ pub(super) async fn request_analysis_coding(
             request_origin: "chat",
             source_sub_agent_run_id: None,
             source_memory_id: None,
-            operator_prompt: Some(reason),
+            task_instructions: Some(reason),
             requested_mode: Some(&input.mode),
         },
     )

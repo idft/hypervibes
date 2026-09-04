@@ -212,7 +212,7 @@ async fn post_user_subaccounts_requires_a_ready_signer() {
 }
 
 #[tokio::test]
-async fn post_agents_creates_agent_active_with_default_prompts_and_jobs() {
+async fn post_agents_creates_active_agent_without_sub_agents() {
     let state = test_state().await;
     seed_instrument(&state, "BTC", true).await;
     let guard = state
@@ -269,6 +269,16 @@ async fn post_agents_creates_agent_active_with_default_prompts_and_jobs() {
         serde_json::json!({}),
         "agent creation must leave runtime_config empty"
     );
+    let sub_agent_count: (i64,) =
+        sqlx::query_as("SELECT COUNT(*) FROM harness_sub_agents WHERE agent_key = $1")
+            .bind(&agent_key)
+            .fetch_one(&state.db_pool)
+            .await
+            .expect("count sub-agents");
+    assert_eq!(
+        sub_agent_count.0, 0,
+        "agent creation must not insert default sub-agents"
+    );
     let prompt_count: (i64,) = sqlx::query_as(
         "SELECT COUNT(*) FROM agent_strategy_prompt_active_revisions WHERE agent_key = $1",
     )
@@ -276,9 +286,9 @@ async fn post_agents_creates_agent_active_with_default_prompts_and_jobs() {
     .fetch_one(&state.db_pool)
     .await
     .expect("count prompts");
-    assert!(
-        prompt_count.0 > 0,
-        "expected default strategy prompts to be inserted"
+    assert_eq!(
+        prompt_count.0, 0,
+        "agent creation must not insert prompt revisions without sub-agents"
     );
     drop(guard);
 }

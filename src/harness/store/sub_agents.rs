@@ -25,17 +25,31 @@ use super::workspace::agent_has_blocking_workspace_maintenance_tx;
 
 #[cfg(test)]
 pub(crate) const DEFAULT_ANALYSIS_TIMEFRAME: &str = "15m";
+#[cfg(test)]
 const DEFAULT_ANALYSIS_TIMEFRAMES: [&str; 3] = ["15m", "1h", "1d"];
-pub(crate) const DEFAULT_TRADING_TIMEFRAME: &str = "5m";
-pub(crate) const DEFAULT_REVIEW_TIMEFRAME: &str = "1d";
+pub const DEFAULT_TRADING_TIMEFRAME: &str = "5m";
+pub const DEFAULT_REVIEW_TIMEFRAME: &str = "1d";
+#[cfg(test)]
 pub(crate) const DEFAULT_ANALYSIS_TIMEOUT_SECONDS: i32 = 900;
+#[cfg(test)]
 pub(crate) const DEFAULT_TRADING_TIMEOUT_SECONDS: i32 = 900;
+#[cfg(test)]
 pub(crate) const DEFAULT_REVIEW_TIMEOUT_SECONDS: i32 = 900;
 
-/// Seed the canonical default sub-agents for a newly-created OpenCode agent.
+pub struct SingletonSubAgentConfig<'a> {
+    pub enabled: bool,
+    pub timeframe: &'a str,
+    pub model_provider_id: Option<&'a str>,
+    pub model_id: Option<&'a str>,
+    pub model_variant: Option<&'a str>,
+    pub timeout_seconds: i32,
+}
+
+#[cfg(test)]
+/// Seed the canonical default sub-agents used by test fixtures.
 ///
 /// This is idempotent: existing rows keyed by `(agent_key, sub_agent_key)`
-/// are left untouched. New agents always get disabled
+/// are left untouched. The fixture gets disabled
 /// `technical-15m`, `technical-1h`, `technical-1d` Analysis jobs, a
 /// `trading-5m` job, a `review-1d` job, and a `coding` on-demand job.
 pub async fn insert_default_harness_sub_agents(pool: &DbPool, agent_key: &str) -> Result<()> {
@@ -74,6 +88,7 @@ pub async fn insert_default_harness_sub_agents(pool: &DbPool, agent_key: &str) -
     Ok(())
 }
 
+#[cfg(test)]
 async fn insert_default_analysis_job(
     pool: &DbPool,
     agent_key: &str,
@@ -94,9 +109,8 @@ async fn insert_default_analysis_job(
              trigger_delay_seconds,
              next_run_at,
              timeout_seconds,
-              operator_prompt,
-              enabled_capabilities
-           ) VALUES ($1, $2, 'analysis', false, $3, $4, $5, $6, '', '[]'::jsonb)
+             enabled_capabilities
+            ) VALUES ($1, $2, 'analysis', false, $3, $4, $5, $6, '[]'::jsonb)
          ON CONFLICT (agent_key, sub_agent_key) DO NOTHING",
     )
     .bind(agent_key)
@@ -114,6 +128,7 @@ async fn insert_default_analysis_job(
     Ok(())
 }
 
+#[cfg(test)]
 async fn insert_default_unscheduled_sub_agent(
     pool: &DbPool,
     agent_key: &str,
@@ -123,9 +138,9 @@ async fn insert_default_unscheduled_sub_agent(
     let sub_agent_key = build_generated_event_sub_agent_key(sub_agent_kind);
     sqlx::query(
         "INSERT INTO harness_sub_agents (
-            agent_key, sub_agent_key, sub_agent_kind, enabled, timeout_seconds, operator_prompt,
+            agent_key, sub_agent_key, sub_agent_kind, enabled, timeout_seconds,
             enabled_capabilities
-         ) VALUES ($1, $2, $3, false, $4, '', $5)
+         ) VALUES ($1, $2, $3, false, $4, $5)
          ON CONFLICT (agent_key, sub_agent_key) DO NOTHING",
     )
     .bind(agent_key)
@@ -158,7 +173,6 @@ pub async fn insert_analysis_sub_agent_with_model_variant(
     model_id: Option<&str>,
     model_variant: Option<&str>,
     timeout_seconds: i32,
-    operator_prompt: &str,
 ) -> Result<i64> {
     parse_timeframe_seconds(timeframe)
         .with_context(|| format!("invalid timeframe {timeframe:?}"))?;
@@ -189,10 +203,9 @@ pub async fn insert_analysis_sub_agent_with_model_variant(
             model_provider_id,
              model_id,
              model_variant,
-             timeout_seconds,
-              operator_prompt,
-              enabled_capabilities
-           ) VALUES ($1, $2, 'analysis', $3, $4, $5, $6, $7, $8, $9, $10, $11, '[]'::jsonb)
+              timeout_seconds,
+               enabled_capabilities
+            ) VALUES ($1, $2, 'analysis', $3, $4, $5, $6, $7, $8, $9, $10, '[]'::jsonb)
          RETURNING id",
     )
     .bind(agent_key)
@@ -205,7 +218,6 @@ pub async fn insert_analysis_sub_agent_with_model_variant(
     .bind(model_id)
     .bind(model_variant)
     .bind(timeout_seconds)
-    .bind(operator_prompt)
     .fetch_one(pool)
     .await
     .with_context(|| format!("failed to insert job {sub_agent_key} for agent {agent_key}"))?;
@@ -221,7 +233,7 @@ pub async fn list_analysis_sub_agents(
     query_as(
         "SELECT id, agent_key, sub_agent_key, sub_agent_kind, enabled, timeframe,
                  next_run_at, model_provider_id, model_id,
-                   model_variant, timeout_seconds, operator_prompt,
+                   model_variant, timeout_seconds,
                   enabled_capabilities,
                   created_at, updated_at
            FROM harness_sub_agents
@@ -243,7 +255,7 @@ pub async fn list_agent_sub_agents(
     query_as(
         "SELECT id, agent_key, sub_agent_key, sub_agent_kind, enabled, timeframe,
                  next_run_at, model_provider_id, model_id, model_variant,
-                 timeout_seconds, operator_prompt, enabled_capabilities, created_at, updated_at
+                  timeout_seconds, enabled_capabilities, created_at, updated_at
            FROM harness_sub_agents
           WHERE agent_key = $1
           ORDER BY next_run_at NULLS LAST, sub_agent_kind, timeframe, id",
@@ -271,7 +283,7 @@ pub async fn get_singleton_sub_agent(
     query_as(
         "SELECT id, agent_key, sub_agent_key, sub_agent_kind, enabled, timeframe,
                  next_run_at, model_provider_id, model_id,
-                   model_variant, timeout_seconds, operator_prompt,
+                   model_variant, timeout_seconds,
                   enabled_capabilities,
                   created_at, updated_at
            FROM harness_sub_agents
@@ -291,7 +303,7 @@ pub async fn insert_singleton_sub_agent(
     pool: &DbPool,
     agent_key: &str,
     sub_agent_kind: &str,
-    timeout_seconds: i32,
+    config: SingletonSubAgentConfig<'_>,
 ) -> Result<i64> {
     anyhow::ensure!(
         matches!(
@@ -301,18 +313,15 @@ pub async fn insert_singleton_sub_agent(
         "unsupported singleton sub-agent kind"
     );
     let sub_agent_key = match sub_agent_kind {
-        SUB_AGENT_KIND_TRADING => {
-            build_generated_sub_agent_key(SUB_AGENT_KIND_TRADING, DEFAULT_TRADING_TIMEFRAME)
-        }
-        SUB_AGENT_KIND_REVIEW => {
-            build_generated_sub_agent_key(SUB_AGENT_KIND_REVIEW, DEFAULT_REVIEW_TIMEFRAME)
+        SUB_AGENT_KIND_TRADING | SUB_AGENT_KIND_REVIEW => {
+            build_generated_sub_agent_key(sub_agent_kind, config.timeframe)
         }
         _ => build_generated_event_sub_agent_key(sub_agent_kind),
     };
     let timeframe = match sub_agent_kind {
         SUB_AGENT_KIND_CODING => None,
-        SUB_AGENT_KIND_TRADING => Some(DEFAULT_TRADING_TIMEFRAME),
-        _ => Some(DEFAULT_REVIEW_TIMEFRAME),
+        SUB_AGENT_KIND_TRADING | SUB_AGENT_KIND_REVIEW => Some(config.timeframe),
+        _ => None,
     };
     let now = Utc::now();
     let next_run_at = timeframe
@@ -324,18 +333,23 @@ pub async fn insert_singleton_sub_agent(
     let row: (i64,) = query_as(
         "INSERT INTO harness_sub_agents (
             agent_key, sub_agent_key, sub_agent_kind, enabled, timeframe,
-            trigger_delay_seconds, next_run_at, timeout_seconds, operator_prompt,
+            trigger_delay_seconds, next_run_at, model_provider_id, model_id,
+            model_variant, timeout_seconds,
             enabled_capabilities
-         ) VALUES ($1, $2, $3, false, $4, $5, $6, $7, '', $8)
+         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
          RETURNING id",
     )
     .bind(agent_key)
     .bind(&sub_agent_key)
     .bind(sub_agent_kind)
+    .bind(config.enabled)
     .bind(timeframe)
     .bind(DEFAULT_TRIGGER_DELAY_SECONDS)
     .bind(next_run_at)
-    .bind(timeout_seconds)
+    .bind(config.model_provider_id)
+    .bind(config.model_id)
+    .bind(config.model_variant)
+    .bind(config.timeout_seconds)
     .bind(serde_json::json!(default_capabilities_for_kind(
         sub_agent_kind
     )))
@@ -355,7 +369,7 @@ pub async fn get_enabled_sub_agent(
     query_as(
         "SELECT id, agent_key, sub_agent_key, sub_agent_kind, enabled, timeframe,
                  next_run_at, model_provider_id, model_id,
-                   model_variant, timeout_seconds, operator_prompt,
+                  model_variant, timeout_seconds,
                   enabled_capabilities,
                   created_at, updated_at
            FROM harness_sub_agents
@@ -368,6 +382,7 @@ pub async fn get_enabled_sub_agent(
     .with_context(|| format!("failed to load enabled event job for agent {agent_key}"))
 }
 
+#[cfg(test)]
 async fn insert_default_candle_job(
     pool: &DbPool,
     agent_key: &str,
@@ -390,10 +405,9 @@ async fn insert_default_candle_job(
             timeframe,
              trigger_delay_seconds,
              next_run_at,
-             timeout_seconds,
-              operator_prompt,
-              enabled_capabilities
-           ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+              timeout_seconds,
+               enabled_capabilities
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
          ON CONFLICT (agent_key, sub_agent_key) DO NOTHING",
     )
     .bind(agent_key)
@@ -404,7 +418,6 @@ async fn insert_default_candle_job(
     .bind(DEFAULT_TRIGGER_DELAY_SECONDS)
     .bind(next_run_at)
     .bind(timeout_seconds)
-    .bind("")
     .bind(serde_json::json!(default_capabilities_for_kind(
         sub_agent_kind
     )))
@@ -435,7 +448,6 @@ pub async fn get_agent_sub_agent(
                 model_id,
                   model_variant,
                   timeout_seconds,
-                  operator_prompt,
                    enabled_capabilities,
                    created_at,
                 updated_at
@@ -665,35 +677,6 @@ pub async fn set_sub_agent_timeout(
     Ok(result.rows_affected() > 0)
 }
 
-/// Update the optional, per-job instructions supplied by the operator.
-///
-/// Returns `true` when a row was updated, `false` when the (agent_key,
-/// sub_agent_id) pair did not match an existing row.
-pub async fn set_sub_agent_operator_prompt(
-    pool: &DbPool,
-    agent_key: &str,
-    sub_agent_id: i64,
-    operator_prompt: &str,
-) -> Result<bool> {
-    let result = sqlx::query(
-        "UPDATE harness_sub_agents
-            SET operator_prompt = $3,
-                updated_at = now()
-          WHERE agent_key = $1
-            AND id = $2",
-    )
-    .bind(agent_key)
-    .bind(sub_agent_id)
-    .bind(operator_prompt)
-    .execute(pool)
-    .await
-    .with_context(|| {
-        format!("failed to update additional instructions for job {sub_agent_id} agent {agent_key}")
-    })?;
-
-    Ok(result.rows_affected() > 0)
-}
-
 /// Change a job's timeframe and re-anchor its next run to the next
 /// boundary for that timeframe. Keeping these fields together prevents an
 /// edited job from firing at a boundary from its previous cadence.
@@ -795,8 +778,7 @@ pub async fn list_due_candle_sub_agents(
                 jobs.model_provider_id,
                 jobs.model_id,
                  jobs.model_variant,
-                 jobs.timeout_seconds,
-                 jobs.operator_prompt,
+                  jobs.timeout_seconds,
                    jobs.enabled_capabilities,
                  $3::text AS opencode_base_url,
                 agents.runtime_config
@@ -843,8 +825,7 @@ pub async fn get_dispatch_sub_agent(
                 jobs.model_provider_id,
                 jobs.model_id,
                  jobs.model_variant,
-                 jobs.timeout_seconds,
-                 jobs.operator_prompt,
+                  jobs.timeout_seconds,
                    jobs.enabled_capabilities,
                  $3::text AS opencode_base_url,
                 agents.runtime_config

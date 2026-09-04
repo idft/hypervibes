@@ -56,7 +56,6 @@ pub(in crate::web::routes) async fn agent_live_stream(
     let Some(trading_account_address) = agent.trading_account_address.as_deref() else {
         return Ok(StatusCode::NOT_FOUND.into_response());
     };
-    state.market_data.refresh(&configured_coins).await;
     let account_key = AccountKey::new(trading_account_address, &agent.environment);
     let live_accounts = Arc::clone(&state.live_accounts);
 
@@ -190,21 +189,29 @@ pub(in crate::web::routes) async fn agent_live_stream(
     let live_accounts_refresh = Arc::clone(&live_accounts);
     let refresh_account_key = account_key.clone();
     let refresh_configured_coins = configured_coins.clone();
-    let refresh_market_coins = refresh_configured_coins.clone();
     let refresh_agent_key = agent.agent_key.clone();
-    let refresh_market_data = Arc::clone(&state.market_data);
-    let freshness_refresh = tokio_stream::wrappers::IntervalStream::new(tokio::time::interval(
+    let initial_market_coins = configured_coins.clone();
+    let initial_market_data = Arc::clone(&state.market_data);
+    let initial_market_refresh = futures::stream::once(async move {
+        initial_market_data.refresh(&initial_market_coins).await;
+        initial_market_data.snapshot()
+    });
+    let periodic_market_coins = configured_coins.clone();
+    let periodic_market_data = Arc::clone(&state.market_data);
+    let periodic_market_refresh = tokio_stream::wrappers::IntervalStream::new(tokio::time::interval(
         std::time::Duration::from_secs(15),
     ))
     .skip(1)
     .then(move |_| {
-        let market_data = Arc::clone(&refresh_market_data);
-        let configured_coins = refresh_market_coins.clone();
+        let market_data = Arc::clone(&periodic_market_data);
+        let configured_coins = periodic_market_coins.clone();
         async move {
             market_data.refresh(&configured_coins).await;
             market_data.snapshot()
         }
-    })
+    });
+    let freshness_refresh = initial_market_refresh
+    .chain(periodic_market_refresh)
     .flat_map(move |market_data| {
         let events = live_accounts_refresh
             .get(&refresh_account_key)

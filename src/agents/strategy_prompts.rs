@@ -336,6 +336,7 @@ pub async fn seed_initial_prompt_revision(
     Ok(revision_id)
 }
 
+#[cfg(test)]
 pub async fn insert_default_strategy_prompts_for_agent(
     pool: &DbPool,
     agent_key: &str,

@@ -57,7 +57,7 @@ async fn insert_queued_manual_run_returns_blocked_by_maintenance() {
             request_origin: "manual",
             source_sub_agent_run_id: None,
             source_memory_id: None,
-            operator_prompt: None,
+            task_instructions: None,
             requested_mode: Some("auto"),
         },
     )

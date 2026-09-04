@@ -63,7 +63,7 @@ async fn coding_queue_deduplicates_source_memory() {
             request_origin: "manual",
             source_sub_agent_run_id: None,
             source_memory_id: Some(source_memory),
-            operator_prompt: Some("review"),
+            task_instructions: Some("review"),
             requested_mode: Some("auto"),
         },
     )
@@ -82,7 +82,7 @@ async fn coding_queue_deduplicates_source_memory() {
             request_origin: "manual",
             source_sub_agent_run_id: None,
             source_memory_id: None,
-            operator_prompt: Some("review"),
+            task_instructions: Some("review"),
             requested_mode: Some("auto"),
         },
     )
@@ -101,7 +101,7 @@ async fn coding_queue_deduplicates_source_memory() {
             request_origin: "manual",
             source_sub_agent_run_id: None,
             source_memory_id: Some(source_memory),
-            operator_prompt: Some("review"),
+            task_instructions: Some("review"),
             requested_mode: Some("auto"),
         },
     )
@@ -155,7 +155,7 @@ async fn agent_has_blocking_workspace_maintenance_only_during_coding_promotion()
             request_origin: "manual",
             source_sub_agent_run_id: None,
             source_memory_id: None,
-            operator_prompt: None,
+            task_instructions: None,
             requested_mode: Some("auto"),
         },
     )
@@ -236,7 +236,7 @@ async fn mark_maintenance_task_failed_preserves_error_summary() {
             request_origin: "manual",
             source_sub_agent_run_id: None,
             source_memory_id: None,
-            operator_prompt: None,
+            task_instructions: None,
             requested_mode: Some("auto"),
         },
     )

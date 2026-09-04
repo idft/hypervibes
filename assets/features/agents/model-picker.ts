@@ -1,3 +1,5 @@
+let lifecycleInstalled = false;
+
 function initPicker(picker: HTMLElement) {
   if (picker.dataset.modelPickerBound === "true") return;
   const input = picker.parentElement?.querySelector<HTMLInputElement>('input[name="model_selection"]');
@@ -153,6 +155,33 @@ export function initModelPickers(root: ParentNode = document) {
 }
 
 export function installModelPickerLifecycle() {
+  if (lifecycleInstalled) return;
+  lifecycleInstalled = true;
+  document.addEventListener("click", (event) => {
+    const button = (event.target as Element | null)?.closest<HTMLElement>("[data-model-picker-close], [data-model-picker-cancel]");
+    const modal = button?.closest<HTMLElement>("[data-model-picker-modal]");
+    if (!modal) return;
+
+    // This fallback also closes a picker whose local handlers were removed by a swap.
+    modal.classList.add("hidden");
+    document.body.classList.remove("overflow-hidden");
+  });
+  document.addEventListener("htmx:beforeSwap", (event) => {
+    const detail = (event as CustomEvent<{ target?: unknown; shouldSwap?: boolean }>).detail;
+    const target = detail.target;
+    if (!(target instanceof Element) || !target.matches("#conversation-summary")) return;
+
+    // A Chat SSE update replaces this subtree. Do not discard an active modal
+    // because its close handler is responsible for releasing the page lock.
+    if (target.querySelector("[data-model-picker-modal]:not(.hidden)")) detail.shouldSwap = false;
+  });
+  document.addEventListener("htmx:beforeCleanupElement", (event) => {
+    const element = (event as CustomEvent<{ elt?: unknown }>).detail.elt;
+    if (!(element instanceof Element)) return;
+    if (element.matches("[data-model-picker-modal]:not(.hidden)") || element.querySelector("[data-model-picker-modal]:not(.hidden)")) {
+      document.body.classList.remove("overflow-hidden");
+    }
+  });
   document.addEventListener("keydown", (event) => {
     if (event.key !== "Escape") return;
     const modals = document.querySelectorAll<HTMLElement>("[data-model-picker-modal]:not(.hidden)");

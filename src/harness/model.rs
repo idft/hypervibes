@@ -238,7 +238,6 @@ pub struct HarnessSubAgentRow {
     pub model_id: Option<String>,
     pub model_variant: Option<String>,
     pub timeout_seconds: i32,
-    pub operator_prompt: String,
     #[sqlx(json)]
     pub enabled_capabilities: Vec<String>,
     // Retained on the row so callers can use persistence timestamps without a new query.
@@ -669,7 +668,6 @@ pub struct HarnessDispatchSubAgentRow {
     pub model_id: Option<String>,
     pub model_variant: Option<String>,
     pub timeout_seconds: i32,
-    pub operator_prompt: String,
     #[sqlx(json)]
     pub enabled_capabilities: Vec<String>,
     pub opencode_base_url: String,

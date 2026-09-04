@@ -48,7 +48,7 @@ pub struct DispatchRequest {
     pub sub_agent_kind: String,
     pub enabled_capabilities: Vec<String>,
     pub timeframe: Option<String>,
-    pub operator_prompt: String,
+    pub task_instructions: String,
     pub strategy_prompt: String,
     pub strategy_prompt_revision: i64,
     pub accumulated_learnings: Option<String>,
@@ -695,7 +695,7 @@ mod tests {
             sub_agent_kind: SUB_AGENT_KIND_ANALYSIS.to_string(),
             enabled_capabilities: Vec::new(),
             timeframe: Some("15m".to_string()),
-            operator_prompt: String::new(),
+            task_instructions: String::new(),
             strategy_prompt: "Analyze trends.".to_string(),
             strategy_prompt_revision: 1,
             accumulated_learnings: None,
@@ -752,7 +752,6 @@ mod tests {
         assert!(args.contains("## Research strategy"));
         assert!(args.contains("Analyze trends."));
         assert!(args.contains("## Instructions"));
-        assert!(args.contains("(none)"));
         // Ensure no api-key-like token is present
         assert!(!args.contains("HYPERVIBES_API_KEY"));
         assert!(!args.contains("vta_"));
@@ -1002,7 +1001,7 @@ mod tests {
             sub_agent_kind: SUB_AGENT_KIND_ANALYSIS.to_string(),
             enabled_capabilities: Vec::new(),
             timeframe: Some("15m".to_string()),
-            operator_prompt: String::new(),
+            task_instructions: String::new(),
             strategy_prompt: String::new(),
             strategy_prompt_revision: 1,
             accumulated_learnings: None,
@@ -1078,7 +1077,7 @@ mod tests {
             sub_agent_kind: SUB_AGENT_KIND_ANALYSIS.to_string(),
             enabled_capabilities: Vec::new(),
             timeframe: Some("15m".to_string()),
-            operator_prompt: String::new(),
+            task_instructions: String::new(),
             strategy_prompt: String::new(),
             strategy_prompt_revision: 1,
             accumulated_learnings: None,
@@ -1160,7 +1159,7 @@ mod tests {
             sub_agent_kind: SUB_AGENT_KIND_ANALYSIS.to_string(),
             enabled_capabilities: Vec::new(),
             timeframe: Some("15m".to_string()),
-            operator_prompt: String::new(),
+            task_instructions: String::new(),
             strategy_prompt: String::new(),
             strategy_prompt_revision: 1,
             accumulated_learnings: None,
@@ -1239,7 +1238,7 @@ mod tests {
             sub_agent_kind: SUB_AGENT_KIND_ANALYSIS.to_string(),
             enabled_capabilities: Vec::new(),
             timeframe: Some("15m".to_string()),
-            operator_prompt: String::new(),
+            task_instructions: String::new(),
             strategy_prompt: String::new(),
             strategy_prompt_revision: 1,
             accumulated_learnings: None,

@@ -48,16 +48,16 @@
         {% endif %}
         {% endfor %}
     </div>
-    <div class="mt-auto border-t border-zinc-800 pt-2">
+    <div class="mt-auto flex flex-col items-center gap-1 border-t border-zinc-800 pt-2">
         {% for tab in tabs %}
         {% if tab.label == "Settings" %}
-        <a href="{{ tab.href }}" data-agent-tab-link {% if agent_tabs_use_htmx %}hx-get="{{ tab.href }}" hx-select="#agent-show-tab-content" hx-target="#agent-show-tab-content" hx-swap="outerHTML" hx-push-url="true"{% endif %} {% if tab.active %}aria-current="page"{% endif %} title="{{ tab.label }}" class="agent-rail-tab mx-auto inline-flex h-9 w-9 items-center justify-center rounded-lg {% if tab.active %}bg-zinc-800 text-white hover:bg-zinc-700{% else %}text-zinc-400 hover:bg-zinc-800 hover:text-white{% endif %} sm:h-10 sm:w-10">
+        <a href="{{ tab.href }}" data-agent-tab-link {% if agent_tabs_use_htmx %}hx-get="{{ tab.href }}" hx-select="#agent-show-tab-content" hx-target="#agent-show-tab-content" hx-swap="outerHTML" hx-push-url="true"{% endif %} {% if tab.active %}aria-current="page"{% endif %} title="{{ tab.label }}" class="agent-rail-tab inline-flex h-9 w-9 items-center justify-center rounded-lg {% if tab.active %}bg-zinc-800 text-white hover:bg-zinc-700{% else %}text-zinc-400 hover:bg-zinc-800 hover:text-white{% endif %} sm:h-10 sm:w-10">
             {% include "agents/components/tab-icon.html" %}
             <span class="agent-rail-tab-label">{{ tab.label }}</span>
         </a>
         {% endif %}
         {% endfor %}
-        <button type="button" data-agent-rail-toggle aria-label="Expand agent navigation" title="Expand agent navigation" aria-expanded="false" class="agent-rail-toggle mx-auto flex h-9 w-9 cursor-pointer items-center justify-center rounded-lg text-zinc-400 hover:bg-zinc-800 hover:text-white sm:h-10 sm:w-10">
+        <button type="button" data-agent-rail-toggle aria-label="Expand agent navigation" title="Expand agent navigation" aria-expanded="false" class="agent-rail-toggle flex h-9 w-9 cursor-pointer items-center justify-center rounded-lg text-zinc-400 hover:bg-zinc-800 hover:text-white sm:h-10 sm:w-10">
             <svg data-agent-rail-expand-icon class="h-5 w-5" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="m8 4 6 6-6 6"></path></svg>
             <svg data-agent-rail-collapse-icon class="hidden h-5 w-5" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="m12 4-6 6 6 6"></path></svg>
         </button>

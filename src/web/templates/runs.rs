@@ -48,48 +48,6 @@ pub struct HarnessSubAgentRunDetailView {
 }
 
 #[derive(Debug, Clone)]
-pub struct RunWorkspaceArtifactView {
-    pub status: String,
-    pub status_class: &'static str,
-    pub expires_at: Option<LocalTimestampView>,
-    pub size_text: String,
-    pub file_count_text: String,
-    pub secrets_scrubbed: bool,
-}
-
-impl RunWorkspaceArtifactView {
-    pub fn from_row(row: &crate::harness::model::RunWorkspaceArtifactRow) -> Self {
-        let (status, status_class) = match row.workspace_status.as_str() {
-            "retained" => (
-                "Retained",
-                "border-emerald-900/60 bg-emerald-950/30 text-emerald-300",
-            ),
-            "deleting" => (
-                "Deleting",
-                "border-amber-900/60 bg-amber-950/30 text-amber-300",
-            ),
-            "deleted" => ("Deleted", "border-zinc-700 bg-zinc-900/60 text-zinc-400"),
-            "ready" => ("Active", "border-sky-900/60 bg-sky-950/30 text-sky-300"),
-            _ => ("Preparing", "border-zinc-700 bg-zinc-900/60 text-zinc-300"),
-        };
-        Self {
-            status: status.to_string(),
-            status_class,
-            expires_at: optional_local_timestamp_view(row.expires_at),
-            size_text: row
-                .observed_size_bytes
-                .map(|bytes| format!("{bytes} B"))
-                .unwrap_or_else(|| "—".to_string()),
-            file_count_text: row
-                .observed_file_count
-                .map(|count| add_thousands_separators(&count.to_string()))
-                .unwrap_or_else(|| "—".to_string()),
-            secrets_scrubbed: row.runtime_secrets_scrubbed_at.is_some(),
-        }
-    }
-}
-
-#[derive(Debug, Clone)]
 pub struct OpenCodeSessionView {
     pub model_text: String,
     pub input_tokens_text: String,
@@ -335,7 +293,6 @@ pub struct AgentRunDetailPageTemplate {
 pub struct AgentRunDetailSummaryPartialTemplate {
     pub run: HarnessSubAgentRunDetailView,
     pub session: Option<OpenCodeSessionView>,
-    pub artifact: Option<RunWorkspaceArtifactView>,
 }
 
 #[derive(Template)]
@@ -350,14 +307,8 @@ impl AgentRunDetailSummaryPartialTemplate {
     pub fn render_view(
         run: HarnessSubAgentRunDetailView,
         session: Option<OpenCodeSessionView>,
-        artifact: Option<RunWorkspaceArtifactView>,
     ) -> Result<String, askama::Error> {
-        Self {
-            run,
-            session,
-            artifact,
-        }
-        .render()
+        Self { run, session }.render()
     }
 }
 
@@ -381,7 +332,6 @@ impl AgentRunDetailPageTemplate {
         agent: AgentDetailRow,
         run: HarnessSubAgentRunDetailView,
         session: Option<OpenCodeSessionView>,
-        artifact: Option<RunWorkspaceArtifactView>,
         session_lookup_attempted: bool,
         notification_count: i64,
         navbar: Navbar,
@@ -392,11 +342,8 @@ impl AgentRunDetailPageTemplate {
             agent.display_name.clone(),
             agent.enabled,
         );
-        let summary_html = AgentRunDetailSummaryPartialTemplate::render_view(
-            run.clone(),
-            session.clone(),
-            artifact,
-        )?;
+        let summary_html =
+            AgentRunDetailSummaryPartialTemplate::render_view(run.clone(), session.clone())?;
         let transcript_html = AgentRunDetailTranscriptPartialTemplate::render_view(
             run.clone(),
             session.clone(),

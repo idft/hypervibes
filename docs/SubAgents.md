@@ -28,17 +28,16 @@ not use that gate.
 Analysis has many independently keyed jobs. Defaults use `technical-15m`,
 `technical-1h`, and `technical-1d`; user-created jobs provide a unique bounded
 ASCII-slug key and may share a schedule or timeframe with another job. Each
-Analysis job owns an independent full prompt revision and Additional
-Instructions. New Analysis jobs opt out of Review prompt revisions; the job
-detail can explicitly opt in.
+Analysis sub-agent owns an independent full prompt revision. New Analysis
+sub-agents opt out of Review prompt revisions; the sub-agent detail can
+explicitly opt in.
 
 ## Configuration
 
 The Analysis, Trading, Coding, and Review pages configure each role's enabled
-state, provider, model, optional thinking mode, timeout, Additional
-Instructions, and capabilities. Enabled scheduled jobs require an explicit
-model. Additional Instructions are appended to that job's prompt and are not
-part of the saved prompt revision or exposed through the agent API or MCP.
+state, provider, model, optional thinking mode, timeout, prompt, and
+capabilities. Enabled scheduled jobs require an explicit model. The prompt is
+the complete strategy input saved for that sub-agent.
 
 Analysis may inspect and execute the read-only Coding package copied into its
 run workspace under `scripts/user/`. Trading and Review have no package access.

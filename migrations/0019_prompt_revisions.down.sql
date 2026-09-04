@@ -30,4 +30,7 @@ DROP TABLE IF EXISTS agent_strategy_prompt_revision_batches;
 DROP INDEX IF EXISTS harness_sub_agents_singleton_kind_idx;
 
 ALTER TABLE harness_sub_agents
+    ADD COLUMN operator_prompt TEXT NOT NULL DEFAULT '';
+
+ALTER TABLE harness_sub_agents
     DROP CONSTRAINT IF EXISTS harness_sub_agents_id_agent_key_unique;

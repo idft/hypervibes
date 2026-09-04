@@ -108,7 +108,6 @@ pub fn sample_candle_job_row(
         model_id: Some("claude-3-5-sonnet".to_string()),
         model_variant: None,
         timeout_seconds: 600,
-        operator_prompt: String::new(),
         enabled_capabilities: if sub_agent_kind == "trading" {
             vec!["hypervibes:notification_send".to_string()]
         } else {
@@ -133,7 +132,6 @@ pub fn sample_event_job_row(id: i64, enabled: bool) -> crate::harness::model::Ha
         model_id: Some("claude-3-5-sonnet".to_string()),
         model_variant: None,
         timeout_seconds: 600,
-        operator_prompt: String::new(),
         enabled_capabilities: Vec::new(),
         created_at: now,
         updated_at: now,

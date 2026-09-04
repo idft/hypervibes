@@ -17,6 +17,7 @@ use crate::{
     agents::store::{
         get_agent, get_agent_readiness, list_agent_instrument_ids, list_agent_instrument_options,
     },
+    harness::model::SUB_AGENT_KIND_ANALYSIS,
     hyperliquid::{
         live_state::{AccountKey, AccountLiveState, LiveConnectionStatus},
         queries::{
@@ -65,6 +66,8 @@ pub(in crate::web::routes) struct AgentSubAgentsQuery {
     pub page: String,
     #[serde(default)]
     pub warning: Option<String>,
+    #[serde(default)]
+    pub kind: String,
 }
 #[derive(Debug, Clone, Default, Deserialize)]
 pub(in crate::web::routes) struct AgentTransactionsQuery {
@@ -260,9 +263,33 @@ pub(in crate::web::routes) async fn build_agent_recent_runs_view(
     agent_key: &str,
     requested_runs_page: usize,
 ) -> AgentRecentRunsView {
-    let mut view = AgentRecentRunsView::new(agent_key, requested_runs_page);
+    build_agent_recent_runs_view_for_kind(
+        state,
+        agent_key,
+        SUB_AGENT_KIND_ANALYSIS,
+        &format!("/agents/{agent_key}/analysis"),
+        requested_runs_page,
+    )
+    .await
+}
 
-    match crate::harness::store::count_agent_runs(&state.db_pool, agent_key).await {
+pub(in crate::web::routes) async fn build_agent_recent_runs_view_for_kind(
+    state: &Arc<AppState>,
+    agent_key: &str,
+    sub_agent_kind: &str,
+    page_path: &str,
+    requested_runs_page: usize,
+) -> AgentRecentRunsView {
+    let mut view =
+        AgentRecentRunsView::new_for_kind(agent_key, requested_runs_page, sub_agent_kind);
+
+    match crate::harness::store::count_agent_runs_for_kind(
+        &state.db_pool,
+        agent_key,
+        sub_agent_kind,
+    )
+    .await
+    {
         Ok(total_count) => {
             let total_count = total_count as usize;
             let total_pages = if total_count == 0 {
@@ -279,12 +306,10 @@ pub(in crate::web::routes) async fn build_agent_recent_runs_view(
             view.recent_runs_page = current_page;
             view.recent_runs_total_pages = total_pages;
             view.recent_runs_total_count = total_count;
-            view.recent_runs_previous_page_url = (current_page > 1)
-                .then(|| format!("/agents/{agent_key}/analysis?page={}", current_page - 1));
+            view.recent_runs_previous_page_url =
+                (current_page > 1).then(|| format!("{page_path}?page={}", current_page - 1));
             view.recent_runs_next_page_url = (total_pages > 0 && current_page < total_pages)
-                .then(|| format!("/agents/{agent_key}/analysis?page={}", current_page + 1));
-            view.stream_url =
-                format!("/agents/{agent_key}/sub-agents/recent-runs/stream?page={current_page}");
+                .then(|| format!("{page_path}?page={}", current_page + 1));
 
             if total_count == 0 {
                 view.recent_runs_loaded = true;
@@ -292,9 +317,10 @@ pub(in crate::web::routes) async fn build_agent_recent_runs_view(
             }
 
             let offset = ((current_page - 1) * RUNS_PER_PAGE) as i64;
-            match crate::harness::store::list_agent_runs_page(
+            match crate::harness::store::list_agent_runs_page_for_kind(
                 &state.db_pool,
                 agent_key,
+                sub_agent_kind,
                 RUNS_PER_PAGE as i64,
                 offset,
             )
@@ -493,7 +519,6 @@ pub(in crate::web::routes) async fn populate_positions_tab(
             Vec::new()
         }
     };
-    state.market_data.refresh(&configured_coins).await;
     let market_data = state.market_data.snapshot();
 
     let Some(account_address) = agent.trading_account_address.as_deref() else {

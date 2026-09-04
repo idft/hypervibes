@@ -141,6 +141,10 @@ fn agents_show_page_renders_base_layout_and_delete_modal() {
     assert!(rendered.contains("Balance"));
     assert!(rendered.contains("Unrealized"));
     assert!(rendered.contains("Scaled out into strength"));
+    assert!(rendered.contains("sse-swap=\"health\" hx-swap=\"innerHTML\""));
+    assert!(rendered.contains("sse-swap=\"balance\" hx-swap=\"innerHTML\""));
+    assert!(rendered.contains("sse-swap=\"positions\" hx-swap=\"innerHTML\""));
+    assert!(rendered.contains("sse-swap=\"orders\" hx-swap=\"innerHTML\""));
     assert!(!rendered.contains("Agent setup"));
 }
 
@@ -248,7 +252,7 @@ fn opencode_agent_shows_jobs_tab_with_recent_runs() {
     assert!(rendered.contains("/agents/test-agent/runs/1"));
     assert!(rendered.contains("id=\"agent-recent-runs-stream\" hx-ext=\"sse\""));
     assert!(rendered.contains(&format!(
-        "sse-connect=\"/agents/{}/sub-agents/recent-runs/stream?page=1\"",
+        "sse-connect=\"/agents/{}/sub-agents/recent-runs/stream?page=1",
         "test-agent"
     )));
     assert!(rendered.contains("sse-swap=\"recent-runs\""));
@@ -476,7 +480,7 @@ fn settings_tab_omits_subaccount_label_for_main_account() {
 #[test]
 fn role_page_template_renders_strategy_prompt_editor_and_history() {
     let agent = sample_agent_detail_row();
-    let template = crate::web::templates::AgentRolePageTemplate {
+    let mut template = crate::web::templates::AgentRolePageTemplate {
         current_path: "/agents/test-agent/trading".to_string(),
         tabs: build_agent_show_tabs(&agent, AgentShowTab::Trading, 0),
         agent_tabs_use_htmx: true,
@@ -490,31 +494,40 @@ fn role_page_template_renders_strategy_prompt_editor_and_history() {
             "trading",
             false,
         ))),
-        sub_agent_id: 2,
         model_picker: ModelPickerView::default(),
-        prompt_view: crate::web::templates::RolePromptView {
-            revision_id: 4,
-            prompt: "Beep boop trading.".to_string(),
-            prompt_error: None,
-            history: vec![crate::web::templates::RoleRevisionView {
-                revision_id: 1,
-                created_at: local_timestamp_view(Utc::now()),
-            }],
-        },
-        review_prompt_improvement_enabled: Some(false),
+        recent_runs_section: crate::web::templates::AgentRecentRunsView::new("test-agent", 1),
         navbar: Navbar::default(),
     };
 
     let rendered = template.render().unwrap();
     assert!(rendered.contains("id=\"agent-show-tab-content\""));
     assert!(rendered.contains("Trading"));
-    assert!(rendered.contains("Save prompt"));
-    assert!(rendered.contains("Revision history"));
-    assert!(rendered.contains("Revision 1"));
-    assert!(rendered.contains("Roll back here"));
-    assert!(rendered.contains("name=\"base_revision_id\" value=\"4\""));
-    assert!(rendered.contains("Review prompt updates"));
-    assert!(rendered.contains("Enable Review prompt updates"));
+    assert!(rendered.contains("Recent Runs"));
+    assert!(rendered.contains("Edit"));
+    assert!(!rendered.contains("Save prompt"));
+    assert!(!rendered.contains("Prompt preview"));
+    assert!(rendered.contains("hx-sync=\"this:replace\""));
+    assert!(rendered.contains("data-model-picker-modal"));
+    assert!(!rendered.contains("data-model-picker-lazy-result"));
+
+    template.job = None;
+    let empty_rendered = template.render().unwrap();
+    assert!(empty_rendered.contains("Create Trading sub-agent"));
+    assert!(!empty_rendered.contains("No Trading sub-agent"));
+    assert!(!empty_rendered.contains("This agent has no Trading sub-agent yet"));
+}
+
+#[test]
+fn model_picker_derives_the_selected_provider_logo_url() {
+    let picker = ModelPickerView {
+        selected_value: "anthropic/claude-sonnet-4".to_string(),
+        ..Default::default()
+    };
+
+    assert_eq!(
+        picker.selected_provider_logo_url().as_deref(),
+        Some("/model-catalog/logos/anthropic")
+    );
 }
 
 #[test]
@@ -615,7 +628,7 @@ fn new_job_page_renders_agent_navbar_with_jobs_active() {
             timeout_seconds: "900".to_string(),
             model_selection: "anthropic/claude-sonnet-4".to_string(),
             model_variant: String::new(),
-            operator_prompt: "Focus on clean continuation setups".to_string(),
+            prompt: "Focus on clean continuation setups".to_string(),
             enabled: true,
         },
         model_picker: ModelPickerView {
@@ -651,7 +664,7 @@ fn new_job_page_renders_agent_navbar_with_jobs_active() {
     assert!(rendered.contains("agent-rail agent-rail-expanded"));
     assert!(rendered.contains("data-agent-rail-toggle"));
     assert!(rendered.contains("Expand agent navigation"));
-    assert!(rendered.contains("Create analysis job"));
+    assert!(rendered.contains("Create Analysis sub-agent"));
     assert!(rendered.contains("action=\"/agents/test-agent/analysis\""));
 }
 

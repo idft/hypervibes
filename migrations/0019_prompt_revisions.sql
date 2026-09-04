@@ -6,6 +6,11 @@ SET search_path TO public;
 ALTER TABLE harness_sub_agents
     ADD CONSTRAINT harness_sub_agents_id_agent_key_unique UNIQUE (id, agent_key);
 
+-- Each sub-agent now owns its complete versioned strategy prompt. The legacy
+-- operator prompt was only needed to differentiate jobs sharing one prompt.
+ALTER TABLE harness_sub_agents
+    DROP COLUMN operator_prompt;
+
 -- ============================================================================
 -- Prompt revisions become sub-agent targeted. A revision records the
 -- `harness_sub_agents.id` it applies to (owned by the same agent) plus the

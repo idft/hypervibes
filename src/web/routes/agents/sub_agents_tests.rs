@@ -112,7 +112,7 @@ async fn manual_job_run_redirects_with_warning_during_coding_promotion() {
             request_origin: "manual",
             source_sub_agent_run_id: None,
             source_memory_id: None,
-            operator_prompt: None,
+            task_instructions: None,
             requested_mode: Some("auto"),
         },
     )
@@ -218,7 +218,6 @@ async fn analysis_route_renders_create_sub_agent_button_and_runs_section() {
     assert!(!text.contains("Disable all"));
     assert!(text.contains("Recent Runs"));
     assert!(text.contains("Run now"));
-    assert!(!text.contains("Operator prompt"));
 }
 #[tokio::test]
 async fn jobs_route_paginates_recent_runs() {
@@ -230,8 +229,8 @@ async fn jobs_route_paginates_recent_runs() {
         .await
         .expect("list jobs")
         .into_iter()
-        .next()
-        .expect("default job")
+        .find(|job| job.sub_agent_kind == SUB_AGENT_KIND_ANALYSIS)
+        .expect("analysis job")
         .id;
 
     let base_time = chrono::Utc::now();
@@ -284,6 +283,56 @@ async fn jobs_route_paginates_recent_runs() {
     assert!(page_two_text.contains("Showing 11-12 of 12 runs"));
     assert!(page_two_text.contains("Page 2 of 2"));
     assert!(page_two_text.contains(&format!("/agents/{agent_key}/analysis?page=1")));
+}
+
+#[tokio::test]
+async fn analysis_page_shows_only_analysis_runs() {
+    let state = test_state().await;
+    let (agent_key, _wallet_address) = insert_test_opencode_agent(&state)
+        .await
+        .expect("insert opencode agent");
+    let jobs = crate::harness::store::list_agent_sub_agents(&state.db_pool, &agent_key)
+        .await
+        .expect("list jobs");
+    let analysis_sub_agent_id = jobs
+        .iter()
+        .find(|job| job.sub_agent_kind == SUB_AGENT_KIND_ANALYSIS)
+        .expect("analysis job")
+        .id;
+    let trading_sub_agent_id = jobs
+        .iter()
+        .find(|job| job.sub_agent_kind == SUB_AGENT_KIND_TRADING)
+        .expect("trading job")
+        .id;
+    let analysis_run_id =
+        crate::harness::store::insert_test_run(&state.db_pool, analysis_sub_agent_id, "succeeded")
+            .await
+            .expect("insert analysis run");
+    let trading_run_id =
+        crate::harness::store::insert_test_run(&state.db_pool, trading_sub_agent_id, "succeeded")
+            .await
+            .expect("insert trading run");
+
+    let response = router(state)
+        .oneshot(
+            Request::builder()
+                .uri(format!("/agents/{agent_key}/analysis"))
+                .body(Body::empty())
+                .expect("build analysis request"),
+        )
+        .await
+        .expect("analysis response");
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response_text(response).await;
+    let runs_section = body
+        .split_once("id=\"agent-recent-runs\"")
+        .and_then(|(_, section)| section.split_once("</section>"))
+        .map(|(section, _)| section)
+        .expect("recent runs section");
+    assert!(runs_section.contains(&format!("/agents/{agent_key}/runs/{analysis_run_id}")));
+    assert!(!runs_section.contains(&format!("/agents/{agent_key}/runs/{trading_run_id}")));
+    assert!(runs_section.contains("Showing 1-1 of 1 runs"));
 }
 
 #[tokio::test]
@@ -353,8 +402,9 @@ async fn recent_runs_stream_emits_initial_snapshot_and_matching_update() {
     let sub_agent_id = crate::harness::store::list_agent_sub_agents(&pool, &agent_key)
         .await
         .expect("list jobs")
-        .first()
-        .expect("default job")
+        .into_iter()
+        .find(|job| job.sub_agent_kind == SUB_AGENT_KIND_ANALYSIS)
+        .expect("analysis job")
         .id;
     let run_id = crate::harness::store::insert_test_run(&pool, sub_agent_id, "queued")
         .await
@@ -455,8 +505,9 @@ async fn recent_runs_stream_resync_preserves_page_and_refreshes_pagination() {
     let sub_agent_id = crate::harness::store::list_agent_sub_agents(&pool, &agent_key)
         .await
         .expect("list jobs")
-        .first()
-        .expect("default job")
+        .into_iter()
+        .find(|job| job.sub_agent_kind == SUB_AGENT_KIND_ANALYSIS)
+        .expect("analysis job")
         .id;
     for _ in 0..12 {
         crate::harness::store::insert_test_run(&pool, sub_agent_id, "succeeded")
@@ -934,7 +985,7 @@ async fn new_analysis_job_page_renders_for_opencode_agent() {
 
     assert_eq!(response.status(), StatusCode::OK);
     let text = response_text(response).await;
-    assert!(text.contains("Create analysis job"));
+    assert!(text.contains("Create Analysis sub-agent"));
     assert!(text.contains("name=\"sub_agent_key\""));
     assert!(!text.contains("name=\"sub_agent_kind\""));
     assert!(!text.contains("name=\"trigger_type\""));
@@ -942,8 +993,8 @@ async fn new_analysis_job_page_renders_for_opencode_agent() {
     assert!(text.contains("name=\"timeout_seconds\""));
     assert!(text.contains("data-model-picker-modal"));
     assert!(text.contains("data-model-picker-submit-on-save"));
-    assert!(text.contains("Additional Instructions"));
-    assert!(!text.contains("Operator prompt"));
+    assert!(text.contains("Prompt"));
+    assert!(text.contains("Conservative swing trading research."));
 }
 #[tokio::test]
 async fn post_analysis_job_creates_new_job_and_redirects() {
@@ -960,7 +1011,7 @@ async fn post_analysis_job_creates_new_job_and_redirects() {
                 .uri(format!("/agents/{agent_key}/analysis"))
                 .header("content-type", "application/x-www-form-urlencoded")
                 .body(Body::from(
-                    "sub_agent_key=technical-4h&timeframe=4h&timeout_seconds=600&model_selection=&operator_prompt=Check+higher+timeframe+structure",
+                    "sub_agent_key=technical-4h&timeframe=4h&timeout_seconds=600&model_selection=&prompt=Check+higher+timeframe+structure",
                 ))
                 .unwrap(),
         )
@@ -989,10 +1040,17 @@ async fn post_analysis_job_creates_new_job_and_redirects() {
     assert_eq!(job.timeout_seconds, 600);
     assert_eq!(job.model_provider_id.as_deref(), None);
     assert_eq!(job.model_id.as_deref(), None);
-    assert_eq!(job.operator_prompt, "Check higher timeframe structure");
+    assert_eq!(
+        crate::agents::strategy_prompts::get_agent_strategy_prompt(&pool, &agent_key, job.id,)
+            .await
+            .expect("load strategy prompt")
+            .expect("strategy prompt present")
+            .prompt,
+        "Check higher timeframe structure"
+    );
 }
 #[tokio::test]
-async fn post_role_page_recreates_missing_trading_singleton() {
+async fn trading_singleton_is_created_from_its_new_page() {
     let state = test_state().await;
     let pool = state.db_pool.clone();
     let (agent_key, _wallet_address) = insert_test_opencode_agent(&state)
@@ -1035,15 +1093,36 @@ async fn post_role_page_recreates_missing_trading_singleton() {
     assert!(
         response_text(role_page)
             .await
-            .contains("No Trading sub-agent")
+            .contains(&format!("/agents/{agent_key}/trading/new"))
     );
+
+    let new_page = router(state.clone())
+        .oneshot(
+            Request::builder()
+                .uri(format!("/agents/{agent_key}/trading/new"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(new_page.status(), StatusCode::OK);
+    let new_page_text = response_text(new_page).await;
+    assert!(new_page_text.contains("New Trading sub-agent"));
+    assert!(new_page_text.contains("Create Trading sub-agent"));
+    assert!(new_page_text.contains("name=\"timeframe\""));
+    assert!(new_page_text.contains("name=\"timeout_seconds\""));
+    assert!(new_page_text.contains("name=\"prompt\""));
+    assert!(!new_page_text.contains("data-model-picker-submit-on-save=\"true\""));
 
     let response = router(state.clone())
         .oneshot(
             Request::builder()
                 .method("POST")
                 .uri(format!("/agents/{agent_key}/trading"))
-                .body(Body::empty())
+                .header("content-type", "application/x-www-form-urlencoded")
+                .body(Body::from(
+                    "timeframe=15m&timeout_seconds=600&model_selection=&prompt=Trade+with+defined+risk",
+                ))
                 .unwrap(),
         )
         .await
@@ -1057,7 +1136,140 @@ async fn post_role_page_recreates_missing_trading_singleton() {
         .iter()
         .find(|row| row.sub_agent_kind == SUB_AGENT_KIND_TRADING)
         .expect("trading singleton recreated");
-    assert_eq!(job.timeframe.as_deref(), Some("5m"));
+    assert_eq!(job.sub_agent_key, "trading-15m");
+    assert_eq!(job.timeframe.as_deref(), Some("15m"));
+    assert_eq!(job.timeout_seconds, 600);
+    assert!(!job.enabled);
+    assert_eq!(
+        crate::agents::strategy_prompts::get_agent_strategy_prompt(&pool, &agent_key, job.id)
+            .await
+            .expect("load trading prompt")
+            .expect("trading prompt present")
+            .prompt,
+        "Trade with defined risk"
+    );
+
+    let trading_page = router(state.clone())
+        .oneshot(
+            Request::builder()
+                .uri(format!("/agents/{agent_key}/trading"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(trading_page.status(), StatusCode::OK);
+    let trading_page_text = response_text(trading_page).await;
+    assert!(trading_page_text.contains("data-detail-delete-trigger"));
+    assert!(trading_page_text.contains("data-model-picker-lazy"));
+    assert!(trading_page_text.contains(&format!(
+        "hx-get=\"/agents/{agent_key}/sub-agents/{}/model-picker\"",
+        job.id
+    )));
+    assert!(!trading_page_text.contains("data-model-picker-lazy-result"));
+    assert!(
+        trading_page_text.contains(&format!("/agents/{agent_key}/sub-agents/{}/delete", job.id))
+    );
+
+    let response = router(state.clone())
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/agents/{agent_key}/sub-agents/{}/delete", job.id))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+    assert_eq!(
+        response
+            .headers()
+            .get("location")
+            .and_then(|value| value.to_str().ok()),
+        Some(format!("/agents/{agent_key}/trading").as_str())
+    );
+}
+
+#[tokio::test]
+async fn review_singleton_is_created_from_its_new_page() {
+    let state = test_state().await;
+    let pool = state.db_pool.clone();
+    let (agent_key, _) = insert_test_opencode_agent(&state)
+        .await
+        .expect("insert agent");
+    let review_sub_agent_id = crate::harness::store::list_agent_sub_agents(&pool, &agent_key)
+        .await
+        .expect("list jobs")
+        .into_iter()
+        .find(|job| job.sub_agent_kind == SUB_AGENT_KIND_REVIEW)
+        .expect("default review singleton")
+        .id;
+    crate::harness::service::delete_idle_job(
+        &pool,
+        &state.opencode_client,
+        &state.workspace_leases,
+        &state.opencode_base_url,
+        &state.opencode_container_workspaces_root,
+        &agent_key,
+        review_sub_agent_id,
+    )
+    .await
+    .expect("delete default review singleton");
+
+    let new_page = router(state.clone())
+        .oneshot(
+            Request::builder()
+                .uri(format!("/agents/{agent_key}/review/new"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(new_page.status(), StatusCode::OK);
+    let new_page_text = response_text(new_page).await;
+    assert!(new_page_text.contains("New Review sub-agent"));
+    assert!(new_page_text.contains("Create Review sub-agent"));
+    assert!(new_page_text.contains("name=\"timeframe\""));
+
+    let response = router(state.clone())
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/agents/{agent_key}/review"))
+                .header("content-type", "application/x-www-form-urlencoded")
+                .body(Body::from(
+                    "timeframe=4h&timeout_seconds=1200&model_selection=&prompt=Review+the+trading+outcomes",
+                ))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+    assert_eq!(
+        response
+            .headers()
+            .get("location")
+            .and_then(|value| value.to_str().ok()),
+        Some(format!("/agents/{agent_key}/review").as_str())
+    );
+    let job =
+        crate::harness::store::get_singleton_sub_agent(&pool, &agent_key, SUB_AGENT_KIND_REVIEW)
+            .await
+            .expect("load review singleton")
+            .expect("review singleton created");
+    assert_eq!(job.sub_agent_key, "review-4h");
+    assert_eq!(job.timeframe.as_deref(), Some("4h"));
+    assert_eq!(job.timeout_seconds, 1200);
+    assert!(!job.enabled);
+    assert_eq!(
+        crate::agents::strategy_prompts::get_agent_strategy_prompt(&pool, &agent_key, job.id)
+            .await
+            .expect("load review prompt")
+            .expect("review prompt present")
+            .prompt,
+        "Review the trading outcomes"
+    );
 }
 #[tokio::test]
 async fn post_toggle_all_jobs_updates_all_jobs() {
@@ -1134,7 +1346,7 @@ async fn post_sub_agent_with_duplicate_type_timeframe_returns_validation_error()
                 .uri(format!("/agents/{agent_key}/analysis"))
                 .header("content-type", "application/x-www-form-urlencoded")
                 .body(Body::from(
-                    "sub_agent_key=technical-15m&timeframe=4h&timeout_seconds=600&model_selection=",
+                    "sub_agent_key=technical-15m&timeframe=4h&timeout_seconds=600&model_selection=&prompt=Use+the+default+research+strategy",
                 ))
                 .unwrap(),
         )
@@ -1194,12 +1406,11 @@ async fn job_detail_page_renders_job_specific_runs() {
     assert!(text.contains("cursor-pointer"));
     assert!(text.contains("data-model-picker-modal"));
     assert!(!text.contains("data-model-picker-lazy-open data-model-picker-url"));
-    assert!(text.contains("Additional Instructions"));
+    assert!(text.contains("Prompt"));
     assert!(text.contains("Preview Prompt"));
     assert!(text.contains(&format!(
-        "/agents/{agent_key}/sub-agents/{sub_agent_id}/operator-prompt"
+        "/agents/{agent_key}/sub-agents/{sub_agent_id}/prompt"
     )));
-    assert!(!text.contains("Operator prompt"));
 
     let response = router(state.clone())
         .oneshot(
@@ -1218,7 +1429,7 @@ async fn job_detail_page_renders_job_specific_runs() {
     assert!(text.contains("Could not load configured OpenCode models"));
 }
 #[tokio::test]
-async fn post_job_additional_instructions_trims_and_allows_blank() {
+async fn post_job_prompt_updates_strategy_prompt() {
     let state = test_state().await;
     let pool = state.db_pool.clone();
     let (agent_key, _wallet_address) = insert_test_opencode_agent(&state)
@@ -1227,10 +1438,17 @@ async fn post_job_additional_instructions_trims_and_allows_blank() {
     let sub_agent_id = crate::harness::store::list_agent_sub_agents(&pool, &agent_key)
         .await
         .expect("list jobs")
-        .first()
+        .into_iter()
+        .find(|job| job.sub_agent_kind == SUB_AGENT_KIND_ANALYSIS)
         .expect("default job present")
         .id;
-    let url = format!("/agents/{agent_key}/sub-agents/{sub_agent_id}/operator-prompt");
+    let base_revision =
+        crate::agents::strategy_prompts::get_agent_strategy_prompt(&pool, &agent_key, sub_agent_id)
+            .await
+            .expect("load strategy prompt")
+            .expect("strategy prompt present")
+            .revision_id;
+    let url = format!("/agents/{agent_key}/sub-agents/{sub_agent_id}/prompt");
 
     let response = router(state.clone())
         .oneshot(
@@ -1238,7 +1456,9 @@ async fn post_job_additional_instructions_trims_and_allows_blank() {
                 .method("POST")
                 .uri(&url)
                 .header("content-type", "application/x-www-form-urlencoded")
-                .body(Body::from("operator_prompt=++Focus+on+BTC++"))
+                .body(Body::from(format!(
+                    "base_revision_id={base_revision}&prompt=++Focus+on+BTC++"
+                )))
                 .unwrap(),
         )
         .await
@@ -1252,11 +1472,11 @@ async fn post_job_additional_instructions_trims_and_allows_blank() {
         Some(format!("/agents/{agent_key}/sub-agents/{sub_agent_id}").as_str())
     );
     assert_eq!(
-        crate::harness::store::get_agent_sub_agent(&pool, &agent_key, sub_agent_id)
+        crate::agents::strategy_prompts::get_agent_strategy_prompt(&pool, &agent_key, sub_agent_id)
             .await
-            .expect("load job")
-            .expect("job present")
-            .operator_prompt,
+            .expect("load strategy prompt")
+            .expect("strategy prompt present")
+            .prompt,
         "Focus on BTC"
     );
 
@@ -1266,20 +1486,21 @@ async fn post_job_additional_instructions_trims_and_allows_blank() {
                 .method("POST")
                 .uri(&url)
                 .header("content-type", "application/x-www-form-urlencoded")
-                .body(Body::from("operator_prompt=+++"))
+                .body(Body::from(format!(
+                    "base_revision_id={base_revision}&prompt=+++"
+                )))
                 .unwrap(),
         )
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::SEE_OTHER);
-    assert!(
-        crate::harness::store::get_agent_sub_agent(&pool, &agent_key, sub_agent_id)
+    let prompt =
+        crate::agents::strategy_prompts::get_agent_strategy_prompt(&pool, &agent_key, sub_agent_id)
             .await
-            .expect("load job")
-            .expect("job present")
-            .operator_prompt
-            .is_empty()
-    );
+            .expect("load strategy prompt")
+            .expect("strategy prompt present")
+            .prompt;
+    assert!(!prompt.is_empty());
 }
 #[tokio::test]
 async fn post_job_model_htmx_updates_without_redirect() {

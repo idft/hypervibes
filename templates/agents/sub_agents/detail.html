@@ -192,9 +192,9 @@
             </form>
             {% endif %}
             <div class="flex flex-wrap items-center gap-3">
-                <button type="button" data-sub-agent-detail-modal-trigger="additional-instructions-modal" aria-controls="additional-instructions-modal"
+                <button type="button" data-sub-agent-detail-modal-trigger="prompt-modal" aria-controls="prompt-modal"
                     class="cursor-pointer rounded-full border border-zinc-800 bg-zinc-950/50 px-4 py-2 text-sm font-medium text-zinc-300 hover:border-zinc-700 hover:text-white">
-                    Additional Instructions
+                    Prompt
                 </button>
                 <button type="button" data-sub-agent-detail-modal-trigger="prompt-preview-modal" aria-controls="prompt-preview-modal"
                     class="cursor-pointer rounded-full border border-zinc-800 bg-zinc-950/50 px-4 py-2 text-sm font-medium text-zinc-300 hover:border-zinc-700 hover:text-white">
@@ -203,21 +203,25 @@
             </div>
         </div>
 
-        <div id="additional-instructions-modal" data-sub-agent-detail-modal class="fixed inset-0 z-50 hidden items-start justify-center overflow-y-auto p-4 sm:items-center" aria-hidden="true" aria-labelledby="additional-instructions-modal-title" aria-modal="true" role="dialog">
-            <button type="button" data-sub-agent-detail-modal-close class="absolute inset-0 cursor-pointer bg-black/70 backdrop-blur-sm" aria-label="Close additional instructions dialog"></button>
-            <form action="{{ job.operator_prompt_update_action }}" method="post" class="relative my-auto w-full max-w-2xl rounded-2xl border border-zinc-800 bg-[#0d0d10] shadow-2xl shadow-black/50">
+        <div id="prompt-modal" data-sub-agent-detail-modal class="fixed inset-0 z-50 hidden items-start justify-center overflow-y-auto p-4 sm:items-center" aria-hidden="true" aria-labelledby="prompt-modal-title" aria-modal="true" role="dialog">
+            <button type="button" data-sub-agent-detail-modal-close class="absolute inset-0 cursor-pointer bg-black/70 backdrop-blur-sm" aria-label="Close prompt dialog"></button>
+            <form action="{{ job.strategy_prompt_update_action }}" method="post" class="relative my-auto w-full max-w-2xl rounded-2xl border border-zinc-800 bg-[#0d0d10] shadow-2xl shadow-black/50">
+                <input type="hidden" name="base_revision_id" value="{{ job.strategy_prompt_revision }}">
                 <div class="flex items-start justify-between gap-4 border-b border-zinc-800 px-6 py-5">
                     <div>
-                        <h3 id="additional-instructions-modal-title" class="text-lg font-medium text-white">Additional Instructions</h3>
-                        <p id="additional-instructions-modal-description" class="mt-1 text-sm text-zinc-500">Optional details for this specific sub-agent. They add to its strategy prompt without replacing it.</p>
+                        <h3 id="prompt-modal-title" class="text-lg font-medium text-white">Prompt</h3>
+                        <p id="prompt-modal-description" class="mt-1 text-sm text-zinc-500">The complete strategy prompt for this sub-agent.</p>
                     </div>
-                    <button type="button" data-sub-agent-detail-modal-close class="cursor-pointer rounded-full p-2 text-zinc-500 hover:bg-zinc-900 hover:text-zinc-200" aria-label="Close additional instructions dialog">
+                    <button type="button" data-sub-agent-detail-modal-close class="cursor-pointer rounded-full p-2 text-zinc-500 hover:bg-zinc-900 hover:text-zinc-200" aria-label="Close prompt dialog">
                         <svg class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true"><path fill-rule="evenodd" d="M4.22 4.22a.75.75 0 0 1 1.06 0L10 8.94l4.72-4.72a.75.75 0 1 1 1.06 1.06L11.06 10l4.72 4.72a.75.75 0 0 1-1.06 1.06L10 11.06l-4.72 4.72a.75.75 0 0 1-1.06-1.06L8.94 10 4.22 5.28a.75.75 0 0 1 0-1.06Z" clip-rule="evenodd"></path></svg>
                     </button>
                 </div>
                 <div class="p-6">
-                    <label for="sub-agent-operator-prompt" class="sr-only">Additional Instructions</label>
-                    <textarea id="sub-agent-operator-prompt" name="operator_prompt" rows="12" data-sub-agent-detail-modal-initial-focus aria-describedby="additional-instructions-modal-description" class="block w-full rounded-xl border border-zinc-800 bg-zinc-950 px-3 py-2 text-sm leading-6 text-white placeholder-zinc-600 focus:border-zinc-600 focus:outline-none">{{ job.operator_prompt }}</textarea>
+                    {% if let Some(error) = job.prompt_error %}
+                    <p class="mb-4 rounded-xl border border-red-900/60 bg-red-950/20 p-3 text-sm text-red-300" role="alert">{{ error }}</p>
+                    {% endif %}
+                    <label for="sub-agent-prompt" class="sr-only">Prompt</label>
+                    <textarea id="sub-agent-prompt" name="prompt" rows="12" required data-sub-agent-detail-modal-initial-focus aria-describedby="prompt-modal-description" class="block w-full rounded-xl border border-zinc-800 bg-zinc-950 px-3 py-2 font-mono text-sm leading-6 text-white placeholder-zinc-600 focus:border-zinc-600 focus:outline-none">{{ job.strategy_prompt }}</textarea>
                 </div>
                 <div class="flex flex-wrap justify-end gap-3 border-t border-zinc-800 px-6 py-4">
                     <button type="button" data-sub-agent-detail-modal-close class="cursor-pointer rounded-full border border-zinc-800 px-4 py-2 text-sm font-medium text-zinc-300 hover:border-zinc-700 hover:text-white">Cancel</button>

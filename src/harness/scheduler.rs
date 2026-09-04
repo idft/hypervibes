@@ -1765,7 +1765,7 @@ pub fn dispatch_request_from_job(
         sub_agent_kind: candle_job.sub_agent_kind.clone(),
         enabled_capabilities: candle_job.enabled_capabilities.clone(),
         timeframe: candle_job.timeframe.clone(),
-        operator_prompt: candle_job.operator_prompt.clone(),
+        task_instructions: String::new(),
         strategy_prompt: inputs.strategy_prompt,
         strategy_prompt_revision: inputs.strategy_prompt_revision,
         accumulated_learnings: inputs.accumulated_learnings,
@@ -1885,7 +1885,7 @@ pub(crate) async fn dispatch_review_coding_event(
             request_origin: "review",
             source_sub_agent_run_id: Some(source_sub_agent_run_id),
             source_memory_id: Some(memory.id),
-            operator_prompt: memory
+            task_instructions: memory
                 .metadata
                 .get("coding_reason")
                 .and_then(serde_json::Value::as_str),
@@ -2223,7 +2223,7 @@ fn build_run_context_snapshot(
             "target_sub_agent_id": request.sub_agent_id,
             "revision_id": request.strategy_prompt_revision,
         },
-        "additional_instructions": request.operator_prompt,
+        "additional_instructions": request.task_instructions,
         "accumulated_learning_memory_id": request.accumulated_learning_memory_id,
         "system_prompt_version": "v1",
         "quantitative_package": quantitative_package,

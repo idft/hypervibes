@@ -42,8 +42,10 @@ pub struct HarnessSubAgentDetailView {
     pub candle_trigger_editor: CandleTriggerEditorView,
     pub timeout_editor: TimeoutEditorView,
     pub next_run_at: Option<LocalTimestampView>,
-    pub operator_prompt: String,
-    pub operator_prompt_update_action: String,
+    pub strategy_prompt: String,
+    pub strategy_prompt_revision: i64,
+    pub strategy_prompt_update_action: String,
+    pub prompt_error: Option<String>,
     pub prompt_preview_text: String,
     pub prompt_preview_error: Option<String>,
     pub model_error: Option<String>,
@@ -142,11 +144,13 @@ impl HarnessSubAgentDetailView {
                 error: None,
             },
             next_run_at: summary.next_run_at,
-            operator_prompt: row.operator_prompt.clone(),
-            operator_prompt_update_action: format!(
-                "/agents/{}/sub-agents/{}/operator-prompt",
+            strategy_prompt: String::new(),
+            strategy_prompt_revision: 0,
+            strategy_prompt_update_action: format!(
+                "/agents/{}/sub-agents/{}/prompt",
                 row.agent_key, row.id
             ),
+            prompt_error: None,
             prompt_preview_text: String::new(),
             prompt_preview_error: None,
             model_error: None,
@@ -287,18 +291,37 @@ fn detail_tab_for_kind(sub_agent_kind: &str) -> AgentShowTab {
     }
 }
 
-#[derive(Debug, Clone)]
-pub struct RoleRevisionView {
-    pub revision_id: i64,
-    pub created_at: LocalTimestampView,
-}
-
 #[derive(Debug, Clone, Default)]
 pub struct RolePromptView {
     pub revision_id: i64,
     pub prompt: String,
     pub prompt_error: Option<String>,
-    pub history: Vec<RoleRevisionView>,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct CreateSingletonRoleFormValues {
+    pub timeframe: String,
+    pub timeout_seconds: String,
+    pub model_selection: String,
+    pub model_variant: String,
+    pub prompt: String,
+    pub enabled: bool,
+}
+
+#[derive(Template)]
+#[template(path = "agents/sub_agents/new-role.html")]
+pub struct AgentSingletonRoleNewPageTemplate {
+    pub agent: AgentDetailRow,
+    pub tabs: Vec<super::agents::AgentShowTabLink>,
+    pub agent_tabs_use_htmx: bool,
+    pub role_label: &'static str,
+    pub role_description: &'static str,
+    pub role_page_path: String,
+    pub form: CreateSingletonRoleFormValues,
+    pub model_picker: super::agents::ModelPickerView,
+    pub errors: Vec<String>,
+    pub current_path: String,
+    pub navbar: Navbar,
 }
 
 #[derive(Template)]
@@ -311,10 +334,22 @@ pub struct AgentRolePageTemplate {
     pub role_page_path: String,
     pub role_description: &'static str,
     pub job: Option<HarnessSubAgentDetailView>,
-    pub sub_agent_id: i64,
     pub model_picker: super::agents::ModelPickerView,
+    pub recent_runs_section: super::agents::AgentRecentRunsView,
+    pub current_path: String,
+    pub navbar: Navbar,
+}
+
+#[derive(Template)]
+#[template(path = "agents/sub_agents/edit.html")]
+pub struct AgentRoleEditPageTemplate {
+    pub agent: AgentDetailRow,
+    pub tabs: Vec<super::agents::AgentShowTabLink>,
+    pub agent_tabs_use_htmx: bool,
+    pub active_role_label: &'static str,
+    pub role_page_path: String,
+    pub job: HarnessSubAgentDetailView,
     pub prompt_view: RolePromptView,
-    pub review_prompt_improvement_enabled: Option<bool>,
     pub current_path: String,
     pub navbar: Navbar,
 }

@@ -103,6 +103,7 @@ pub async fn list_agent_runs(
 }
 
 /// List a page of recent runs for an agent.
+#[cfg(test)]
 pub async fn list_agent_runs_page(
     pool: &DbPool,
     agent_key: &str,
@@ -144,7 +145,53 @@ pub async fn list_agent_runs_page(
     Ok(rows)
 }
 
+/// List a page of recent runs for an agent and sub-agent kind.
+pub async fn list_agent_runs_page_for_kind(
+    pool: &DbPool,
+    agent_key: &str,
+    sub_agent_kind: &str,
+    limit: i64,
+    offset: i64,
+) -> Result<Vec<HarnessSubAgentRunRow>> {
+    let rows = query_as::<_, HarnessSubAgentRunRow>(
+        "SELECT id,
+                sub_agent_id,
+                agent_key,
+                sub_agent_key,
+                sub_agent_kind,
+                timeframe,
+                status,
+                backend_run_ref,
+                model_provider_id,
+                model_id,
+                model_variant,
+                scheduled_for,
+                started_at,
+                finished_at,
+                timeout_seconds,
+                error_summary,
+                created_at,
+                updated_at
+           FROM harness_sub_agent_runs
+          WHERE agent_key = $1
+            AND sub_agent_kind = $2
+          ORDER BY created_at DESC
+          LIMIT $3
+         OFFSET $4",
+    )
+    .bind(agent_key)
+    .bind(sub_agent_kind)
+    .bind(limit)
+    .bind(offset)
+    .fetch_all(pool)
+    .await
+    .with_context(|| format!("failed to list {sub_agent_kind} runs for agent {agent_key}"))?;
+
+    Ok(rows)
+}
+
 /// Count runs recorded for an agent.
+#[cfg(test)]
 pub async fn count_agent_runs(pool: &DbPool, agent_key: &str) -> Result<i64> {
     let (count,): (i64,) =
         query_as("SELECT COUNT(*) FROM harness_sub_agent_runs WHERE agent_key = $1")
@@ -152,6 +199,27 @@ pub async fn count_agent_runs(pool: &DbPool, agent_key: &str) -> Result<i64> {
             .fetch_one(pool)
             .await
             .with_context(|| format!("failed to count runs for agent {agent_key}"))?;
+
+    Ok(count)
+}
+
+/// Count runs recorded for an agent and sub-agent kind.
+pub async fn count_agent_runs_for_kind(
+    pool: &DbPool,
+    agent_key: &str,
+    sub_agent_kind: &str,
+) -> Result<i64> {
+    let (count,): (i64,) = query_as(
+        "SELECT COUNT(*)
+           FROM harness_sub_agent_runs
+          WHERE agent_key = $1
+            AND sub_agent_kind = $2",
+    )
+    .bind(agent_key)
+    .bind(sub_agent_kind)
+    .fetch_one(pool)
+    .await
+    .with_context(|| format!("failed to count {sub_agent_kind} runs for agent {agent_key}"))?;
 
     Ok(count)
 }

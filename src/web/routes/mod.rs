@@ -96,8 +96,24 @@ pub fn router(state: Arc<AppState>) -> Router {
             get(agents_show_trading).post(agents_create_trading_singleton),
         )
         .route(
+            "/agents/{agent_key}/trading/new",
+            get(agents_new_trading_singleton),
+        )
+        .route(
+            "/agents/{agent_key}/trading/edit",
+            get(agents_edit_trading_singleton),
+        )
+        .route(
             "/agents/{agent_key}/review",
             get(agents_show_review).post(agents_create_review_singleton),
+        )
+        .route(
+            "/agents/{agent_key}/review/new",
+            get(agents_new_review_singleton),
+        )
+        .route(
+            "/agents/{agent_key}/review/edit",
+            get(agents_edit_review_singleton),
         )
         .route("/agents/{agent_key}/settings", get(agents_show_settings))
         .route(
@@ -217,10 +233,6 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route(
             "/agents/{agent_key}/sub-agents/{sub_agent_id}/timeout",
             post(agents_update_sub_agent_timeout),
-        )
-        .route(
-            "/agents/{agent_key}/sub-agents/{sub_agent_id}/operator-prompt",
-            post(agents_update_sub_agent_operator_prompt),
         )
         .route(
             "/agents/{agent_key}/sub-agents/{sub_agent_id}/notification-capability",

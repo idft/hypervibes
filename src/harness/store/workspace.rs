@@ -57,7 +57,7 @@ pub struct AnalysisCodingTaskRequest<'a> {
     pub request_origin: &'a str,
     pub source_sub_agent_run_id: Option<i64>,
     pub source_memory_id: Option<Uuid>,
-    pub operator_prompt: Option<&'a str>,
+    pub task_instructions: Option<&'a str>,
     pub requested_mode: Option<&'a str>,
 }
 
@@ -71,7 +71,6 @@ type CodingSubAgentRow = (
     Option<String>,
     Option<String>,
     i32,
-    String,
 );
 
 /// Queue an coding run and its durable maintenance task atomically.
@@ -87,7 +86,7 @@ pub async fn insert_analysis_coding_task_and_run(
         request_origin,
         source_sub_agent_run_id,
         source_memory_id,
-        operator_prompt,
+        task_instructions,
         requested_mode,
     } = request;
     let mut tx = pool
@@ -98,7 +97,7 @@ pub async fn insert_analysis_coding_task_and_run(
 
     let job: Option<CodingSubAgentRow> = query_as(
         "SELECT id, agent_key, sub_agent_key, sub_agent_kind, enabled,
-                    model_provider_id, model_id, model_variant, timeout_seconds, operator_prompt
+                    model_provider_id, model_id, model_variant, timeout_seconds
                FROM harness_sub_agents
               WHERE agent_key = $1 AND id = $2
               FOR UPDATE",
@@ -118,7 +117,6 @@ pub async fn insert_analysis_coding_task_and_run(
         model,
         model_variant,
         timeout_seconds,
-        job_prompt,
     )) = job
     else {
         anyhow::bail!("coding job not found")
@@ -198,8 +196,7 @@ pub async fn insert_analysis_coding_task_and_run(
         "trigger_mode": trigger_mode.as_str(),
         "request_origin": request_origin,
         "mode": requested_mode.unwrap_or("auto"),
-        "operator_prompt": operator_prompt.unwrap_or(""),
-        "job_prompt": job_prompt,
+        "task_instructions": task_instructions.unwrap_or(""),
         "timeout_seconds": timeout_seconds,
         "model_provider_id": provider,
         "model_id": model,

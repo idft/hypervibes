@@ -1,91 +1,89 @@
 {% extends "layouts/base.html" %}
 
-{% block title %}New analysis job · {{ agent.display_name }} · HyperVibes{% endblock %}
+{% block title %}New Analysis sub-agent · {{ agent.display_name }} · HyperVibes{% endblock %}
 
 {% block content %}
-<div class="mx-auto max-w-3xl">
+<div class="mx-auto flex h-full min-h-0 max-w-[1500px] flex-col overflow-hidden">
     {% include "agents/components/page-header.html" %}
 
     {% include "agents/components/tabs.html" %}
 
-    <header class="mt-4 border-b border-zinc-800 pb-6">
-        <div class="flex items-center gap-3 text-sm text-zinc-500">
-            <a href="/agents/{{ agent.agent_key }}/analysis" class="hover:text-zinc-300">Analysis</a>
-            <span>/</span>
-            <span>New analysis job</span>
+    <section class="mt-4 overflow-y-auto rounded-2xl border border-zinc-800 bg-[#0d0d10] p-6">
+        <header class="border-b border-zinc-800 pb-6">
+            <h1 class="text-lg font-medium text-white">New Analysis sub-agent</h1>
+            <p class="mt-2 max-w-3xl text-sm leading-6 text-zinc-400">
+                Add a user-configured research job for <span class="font-medium text-zinc-200">{{ agent.display_name }}</span>. The sub-agent key is the job's durable identity; multiple analysis jobs may share the same schedule.
+            </p>
+        </header>
+
+        {% if !errors.is_empty() %}
+        <div class="mt-6 rounded-2xl border border-red-900/60 bg-red-950/20 p-4">
+            <div class="text-sm font-medium text-red-200">Please fix the following errors:</div>
+            <ul class="mt-2 list-inside list-disc space-y-1 text-sm text-red-300">
+                {% for error in errors %}
+                <li>{{ error }}</li>
+                {% endfor %}
+            </ul>
         </div>
-        <h2 class="mt-4 text-3xl font-semibold tracking-tight text-white">New analysis job</h2>
-        <p class="mt-2 text-sm leading-6 text-zinc-400">
-            Add a user-configured research job for <span class="font-medium text-zinc-200">{{ agent.display_name }}</span>. The sub-agent key is the job's durable identity; multiple analysis jobs may share the same schedule.
-        </p>
-    </header>
+        {% endif %}
 
-    {% if !errors.is_empty() %}
-    <div class="mt-6 rounded-2xl border border-red-900/60 bg-red-950/20 p-4">
-        <div class="text-sm font-medium text-red-200">Please fix the following errors:</div>
-        <ul class="mt-2 list-inside list-disc space-y-1 text-sm text-red-300">
-            {% for error in errors %}
-            <li>{{ error }}</li>
-            {% endfor %}
-        </ul>
-    </div>
-    {% endif %}
-
-    <form method="post" action="/agents/{{ agent.agent_key }}/analysis" class="mt-6 space-y-6">
-        <div>
-            <label for="sub_agent_key" class="block text-sm font-medium text-zinc-300">Sub-agent key</label>
-            <input type="text" id="sub_agent_key" name="sub_agent_key" value="{{ form.sub_agent_key }}" required placeholder="trend-scout"
-                class="mt-2 block w-full rounded-xl border border-zinc-800 bg-zinc-950 px-3 py-2 font-mono text-sm text-white placeholder-zinc-600 focus:border-zinc-600 focus:outline-none">
-            <p class="mt-1 text-xs text-zinc-500">Letters, digits, hyphens, and underscores (max 64 characters). This key identifies the job on the Analysis page and in run history.</p>
-        </div>
-
-        <div class="grid gap-6 sm:grid-cols-2">
+        <form method="post" action="/agents/{{ agent.agent_key }}/analysis" class="mt-6 space-y-6">
             <div>
-                <label for="timeframe" class="block text-sm font-medium text-zinc-300">Timeframe</label>
-                <input type="text" id="timeframe" name="timeframe" value="{{ form.timeframe }}" required placeholder="15m" list="timeframe-options"
-                    class="mt-2 block w-full rounded-xl border border-zinc-800 bg-zinc-950 px-3 py-2 text-sm text-white placeholder-zinc-600 focus:border-zinc-600 focus:outline-none">
-                <datalist id="timeframe-options">
-                    <option value="1m"></option>
-                    <option value="5m"></option>
-                    <option value="15m"></option>
-                    <option value="1h"></option>
-                    <option value="4h"></option>
-                    <option value="1d"></option>
-                </datalist>
-                <p class="mt-1 text-xs text-zinc-500">Positive integer with unit <code class="font-mono">m</code>, <code class="font-mono">h</code>, or <code class="font-mono">d</code>. Runs fire on UTC candle boundaries plus a close delay.</p>
+                <label for="sub_agent_key" class="block text-sm font-medium text-zinc-300">Sub-agent key</label>
+                <input type="text" id="sub_agent_key" name="sub_agent_key" value="{{ form.sub_agent_key }}" required placeholder="trend-scout"
+                    class="mt-2 block w-full rounded-xl border border-zinc-800 bg-zinc-950 px-3 py-2 font-mono text-sm text-white placeholder-zinc-600 focus:border-zinc-600 focus:outline-none">
+                <p class="mt-1 text-xs text-zinc-500">Letters, digits, hyphens, and underscores (max 64 characters). This key identifies the job on the Analysis page and in run history.</p>
             </div>
 
-            <div>
-                <label for="timeout_seconds" class="block text-sm font-medium text-zinc-300">Timeout seconds</label>
-                <input type="number" id="timeout_seconds" name="timeout_seconds" value="{{ form.timeout_seconds }}" min="1" step="1" required
-                    class="mt-2 block w-full rounded-xl border border-zinc-800 bg-zinc-950 px-3 py-2 text-sm text-white focus:border-zinc-600 focus:outline-none">
+            <div class="grid gap-6 sm:grid-cols-2">
+                <div>
+                    <label for="timeframe" class="block text-sm font-medium text-zinc-300">Timeframe</label>
+                    <input type="text" id="timeframe" name="timeframe" value="{{ form.timeframe }}" required placeholder="15m" list="timeframe-options"
+                        class="mt-2 block w-full rounded-xl border border-zinc-800 bg-zinc-950 px-3 py-2 text-sm text-white placeholder-zinc-600 focus:border-zinc-600 focus:outline-none">
+                    <datalist id="timeframe-options">
+                        <option value="1m"></option>
+                        <option value="5m"></option>
+                        <option value="15m"></option>
+                        <option value="1h"></option>
+                        <option value="4h"></option>
+                        <option value="1d"></option>
+                    </datalist>
+                    <p class="mt-1 text-xs text-zinc-500">Positive integer with unit <code class="font-mono">m</code>, <code class="font-mono">h</code>, or <code class="font-mono">d</code>. Runs fire on UTC candle boundaries plus a close delay.</p>
+                </div>
+
+                <div>
+                    <label for="timeout_seconds" class="block text-sm font-medium text-zinc-300">Timeout seconds</label>
+                    <input type="number" id="timeout_seconds" name="timeout_seconds" value="{{ form.timeout_seconds }}" min="1" step="1" required
+                        class="mt-2 block w-full rounded-xl border border-zinc-800 bg-zinc-950 px-3 py-2 text-sm text-white focus:border-zinc-600 focus:outline-none">
+                </div>
             </div>
-        </div>
 
-        {% include "agents/components/model-picker.html" %}
+            {% include "agents/components/model-picker.html" %}
 
-        <div>
-            <label for="operator_prompt" class="block text-sm font-medium text-zinc-300">Additional Instructions</label>
-            <textarea id="operator_prompt" name="operator_prompt" rows="8" placeholder="Optional extra instructions for this specific job."
-                class="mt-2 block w-full rounded-xl border border-zinc-800 bg-zinc-950 px-3 py-2 text-sm leading-6 text-white placeholder-zinc-600 focus:border-zinc-600 focus:outline-none">{{ form.operator_prompt }}</textarea>
-        </div>
+            <div>
+                <label for="prompt" class="block text-sm font-medium text-zinc-300">Prompt</label>
+                <p class="mt-1 text-xs text-zinc-500">The main instructions for this Analysis sub-agent. This prompt is saved with the sub-agent and can be revised later.</p>
+                <textarea id="prompt" name="prompt" rows="16" required
+                    class="mt-2 block w-full rounded-xl border border-zinc-800 bg-zinc-950 px-3 py-2 font-mono text-sm leading-6 text-white placeholder-zinc-600 focus:border-zinc-600 focus:outline-none">{{ form.prompt }}</textarea>
+            </div>
 
-        <div class="flex items-center gap-3">
-            <input type="checkbox" id="enabled" name="enabled" {% if form.enabled %}checked{% endif %}
-                class="h-4 w-4 rounded border-zinc-700 bg-zinc-950 text-zinc-100 focus:ring-zinc-600">
-            <label for="enabled" class="text-sm text-zinc-300">Enabled</label>
-        </div>
+            <div class="flex items-center gap-3">
+                <input type="checkbox" id="enabled" name="enabled" {% if form.enabled %}checked{% endif %}
+                    class="h-4 w-4 cursor-pointer rounded border-zinc-700 bg-zinc-950 text-zinc-100 focus:ring-zinc-600">
+                <label for="enabled" class="cursor-pointer text-sm text-zinc-300">Enabled</label>
+            </div>
 
-        <div class="flex items-center gap-3 border-t border-zinc-800 pt-6">
-            <button type="submit" class="inline-flex cursor-pointer items-center gap-2 rounded-full border border-zinc-700 bg-zinc-900/70 px-5 py-2 text-sm font-medium text-zinc-200 hover:border-zinc-600 hover:bg-zinc-800 hover:text-white">
-                <svg class="h-4 w-4" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
-                    <path d="M10 4a1 1 0 0 1 1 1v4h4a1 1 0 1 1 0 2h-4v4a1 1 0 1 1-2 0v-4H5a1 1 0 1 1 0-2h4V5a1 1 0 0 1 1-1Z"></path>
-                </svg>
-                Create analysis job
-            </button>
-            <a href="/agents/{{ agent.agent_key }}/analysis" class="rounded-full border border-zinc-800 px-5 py-2 text-sm font-medium text-zinc-300 hover:border-zinc-700 hover:text-white">Cancel</a>
-        </div>
-    </form>
+            <div class="flex items-center gap-3 border-t border-zinc-800 pt-6">
+                <button type="submit" class="inline-flex cursor-pointer items-center gap-2 rounded-full border border-zinc-700 bg-zinc-900/70 px-5 py-2 text-sm font-medium text-zinc-200 hover:border-zinc-600 hover:bg-zinc-800 hover:text-white">
+                    <svg class="h-4 w-4" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
+                        <path d="M10 4a1 1 0 0 1 1 1v4h4a1 1 0 1 1 0 2h-4v4a1 1 0 1 1-2 0v-4H5a1 1 0 1 1 0-2h4V5a1 1 0 0 1 1-1Z"></path>
+                    </svg>
+                    Create Analysis sub-agent
+                </button>
+                <a href="/agents/{{ agent.agent_key }}/analysis" class="cursor-pointer rounded-full border border-zinc-800 px-5 py-2 text-sm font-medium text-zinc-300 hover:border-zinc-700 hover:text-white">Cancel</a>
+            </div>
+        </form>
+    </section>
 </div>
 {% endblock %}
 

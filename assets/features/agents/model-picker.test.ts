@@ -1,9 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { initModelPickers } from "./model-picker";
+import { initModelPickers, installModelPickerLifecycle } from "./model-picker";
 
 afterEach(() => {
   document.body.replaceChildren();
+  document.body.classList.remove("overflow-hidden");
 });
 
 describe("model picker", () => {
@@ -101,10 +102,14 @@ describe("model picker", () => {
     if (!form) throw new Error("Model picker form was not rendered");
     const submit = vi.spyOn(form, "requestSubmit").mockImplementation(() => {});
     document.querySelector<HTMLElement>("[data-model-picker-open]")?.click();
+    expect(document.querySelector<HTMLElement>("[data-model-picker-modal]")?.classList.contains("hidden")).toBe(false);
+    expect(document.body.classList.contains("overflow-hidden")).toBe(true);
     document.querySelector<HTMLElement>('[data-model-picker-option][data-value="anthropic/claude"]')?.click();
     document.querySelector<HTMLElement>("[data-model-picker-cancel]")?.click();
     expect(document.querySelector<HTMLInputElement>('input[name="model_selection"]')?.value).toBe("openai/gpt-4o");
     expect(document.querySelector<HTMLInputElement>('input[name="model_variant"]')?.value).toBe("high");
+    expect(document.querySelector<HTMLElement>("[data-model-picker-modal]")?.classList.contains("hidden")).toBe(true);
+    expect(document.body.classList.contains("overflow-hidden")).toBe(false);
     document.querySelector<HTMLElement>("[data-model-picker-open]")?.click();
     document.querySelector<HTMLElement>('[data-model-picker-option][data-value="anthropic/claude"]')?.click();
     const select = document.querySelector<HTMLSelectElement>('[data-model-value="anthropic/claude"] select');
@@ -150,5 +155,48 @@ describe("model picker", () => {
     expect(document.querySelector("[data-model-picker-variant-warning]")?.textContent).toContain("no longer available");
     expect(submit).not.toHaveBeenCalled();
     expect(document.querySelector<HTMLInputElement>('input[name="model_variant"]')?.value).toBe("retired");
+  });
+
+  it("keeps an open Chat model picker during a summary SSE swap", () => {
+    document.body.innerHTML = `
+      <div id="conversation-summary"><div data-model-picker-modal></div></div>
+    `;
+    installModelPickerLifecycle();
+
+    const summary = document.getElementById("conversation-summary");
+    if (!summary) throw new Error("Conversation summary was not rendered");
+    const event = new CustomEvent<{ target: Element; shouldSwap: boolean }>("htmx:beforeSwap", {
+      detail: { target: summary, shouldSwap: true },
+    });
+    document.dispatchEvent(event);
+
+    expect(event.detail.shouldSwap).toBe(false);
+  });
+
+  it("releases the page lock when a swapped picker cancel control is clicked", () => {
+    document.body.innerHTML = `
+      <div data-model-picker-modal><button type="button" data-model-picker-cancel></button></div>
+    `;
+    document.body.classList.add("overflow-hidden");
+    installModelPickerLifecycle();
+
+    document.querySelector<HTMLElement>("[data-model-picker-cancel]")?.click();
+
+    expect(document.querySelector<HTMLElement>("[data-model-picker-modal]")?.classList.contains("hidden")).toBe(true);
+    expect(document.body.classList.contains("overflow-hidden")).toBe(false);
+  });
+
+  it("releases the page lock when HTMX removes an open picker", () => {
+    document.body.innerHTML = `
+      <div id="agent-show-tab-content"><div data-model-picker-modal></div></div>
+    `;
+    document.body.classList.add("overflow-hidden");
+    installModelPickerLifecycle();
+
+    const content = document.getElementById("agent-show-tab-content");
+    if (!content) throw new Error("Agent tab content was not rendered");
+    document.dispatchEvent(new CustomEvent("htmx:beforeCleanupElement", { detail: { elt: content } }));
+
+    expect(document.body.classList.contains("overflow-hidden")).toBe(false);
   });
 });

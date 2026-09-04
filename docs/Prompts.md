@@ -4,8 +4,8 @@ slug: /concepts/prompts
 
 # Prompts
 
-Prompts define a sub-agent's role. They are separate from its configuration,
-model, and per-job Additional Instructions.
+Prompts define a sub-agent's role. They are separate from its configuration
+and model, and each sub-agent owns its complete prompt.
 
 ## Prompt targets
 
@@ -20,16 +20,15 @@ Analysis prompt targets and one target for each singleton role.
 | Review | Performance and learning review. |
 
 Prompt targets belong to one agent and are never shared. The global prompt is
-an application setting included in sub-agent context. Additional Instructions
-remain web-only, are appended to one sub-agent's prompt, and are not part of its
-saved revision.
+an application setting included in sub-agent context.
 
 ## Editing and revisions
 
-Each role page edits its prompt; an Analysis job detail edits that specific job's
-prompt. **Discuss prompt** opens Chat with the current draft as opening context.
-Saving creates an immutable revision. Chat changes require one-time OpenCode
-confirmation.
+Each role page edits its prompt; an Analysis sub-agent detail edits that
+specific sub-agent's prompt. New Analysis sub-agents start with the default
+Analysis prompt, which can be customized during creation. **Discuss prompt**
+opens Chat with the current draft as opening context. Saving creates an
+immutable revision. Chat changes require one-time OpenCode confirmation.
 
 Review may submit an evidence-backed atomic revision batch for Trading and only
 Analysis jobs that opted in. It snapshots permitted targets and their base
