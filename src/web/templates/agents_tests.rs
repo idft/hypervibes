@@ -487,14 +487,12 @@ fn role_page_template_renders_strategy_prompt_editor_and_history() {
         agent,
         active_role_label: "Trading",
         role_page_path: "/agents/test-agent/trading".to_string(),
-        role_description: "Reads the latest research context and manages orders.",
         job: Some(HarnessSubAgentDetailView::from_row(&sample_candle_job_row(
             2,
             "trading-5m",
             "trading",
             false,
         ))),
-        model_picker: ModelPickerView::default(),
         recent_runs_section: crate::web::templates::AgentRecentRunsView::new("test-agent", 1),
         navbar: Navbar::default(),
     };
@@ -503,11 +501,12 @@ fn role_page_template_renders_strategy_prompt_editor_and_history() {
     assert!(rendered.contains("id=\"agent-show-tab-content\""));
     assert!(rendered.contains("Trading"));
     assert!(rendered.contains("Recent Runs"));
-    assert!(rendered.contains("Edit"));
+    assert!(rendered.contains("data-row-href=\"/agents/test-agent/trading/edit\""));
+    assert!(rendered.contains(">Trigger<"));
+    assert!(rendered.contains(">trading-5m<"));
     assert!(!rendered.contains("Save prompt"));
     assert!(!rendered.contains("Prompt preview"));
-    assert!(rendered.contains("hx-sync=\"this:replace\""));
-    assert!(rendered.contains("data-model-picker-modal"));
+    assert!(!rendered.contains("data-model-picker-modal"));
     assert!(!rendered.contains("data-model-picker-lazy-result"));
 
     template.job = None;

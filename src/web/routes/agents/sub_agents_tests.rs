@@ -1160,15 +1160,28 @@ async fn trading_singleton_is_created_from_its_new_page() {
         .unwrap();
     assert_eq!(trading_page.status(), StatusCode::OK);
     let trading_page_text = response_text(trading_page).await;
-    assert!(trading_page_text.contains("data-detail-delete-trigger"));
-    assert!(trading_page_text.contains("data-model-picker-lazy"));
     assert!(trading_page_text.contains(&format!(
-        "hx-get=\"/agents/{agent_key}/sub-agents/{}/model-picker\"",
-        job.id
+        "data-row-href=\"/agents/{agent_key}/trading/edit\""
     )));
-    assert!(!trading_page_text.contains("data-model-picker-lazy-result"));
+    assert!(trading_page_text.contains(">Trigger<"));
+    assert!(trading_page_text.contains(">trading-15m<"));
+    assert!(!trading_page_text.contains("data-detail-delete-trigger"));
+    assert!(!trading_page_text.contains("data-model-picker-lazy"));
+
+    let edit_page = router(state.clone())
+        .oneshot(
+            Request::builder()
+                .uri(format!("/agents/{agent_key}/trading/edit"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(edit_page.status(), StatusCode::OK);
+    let edit_page_text = response_text(edit_page).await;
+    assert!(edit_page_text.contains("data-detail-delete-trigger"));
     assert!(
-        trading_page_text.contains(&format!("/agents/{agent_key}/sub-agents/{}/delete", job.id))
+        edit_page_text.contains(&format!("/agents/{agent_key}/sub-agents/{}/delete", job.id))
     );
 
     let response = router(state.clone())

@@ -11,7 +11,6 @@ use super::shared::{LocalTimestampView, TimeoutEditorView, format_duration, loca
 #[derive(Debug, Clone)]
 pub struct HarnessSubAgentView {
     pub sub_agent_key: String,
-    pub sub_agent_kind: String,
     pub enabled: bool,
     pub enabled_label: &'static str,
     pub enabled_class: &'static str,
@@ -37,6 +36,7 @@ pub struct HarnessSubAgentDetailView {
     pub enabled_label: &'static str,
     pub enabled_class: &'static str,
     pub has_model: bool,
+    pub model_logo_url: Option<String>,
     pub is_candle_job: bool,
     pub trigger_text: String,
     pub candle_trigger_editor: CandleTriggerEditorView,
@@ -99,7 +99,6 @@ impl HarnessSubAgentView {
 
         Self {
             sub_agent_key: row.sub_agent_key.clone(),
-            sub_agent_kind: row.sub_agent_kind.clone(),
             enabled: row.enabled,
             enabled_label,
             enabled_class,
@@ -130,6 +129,7 @@ impl HarnessSubAgentDetailView {
             enabled_label: summary.enabled_label,
             enabled_class: summary.enabled_class,
             has_model: summary.has_model,
+            model_logo_url: summary.model_logo_url,
             is_candle_job: summary.is_candle_job,
             trigger_text: summary.trigger_text.clone(),
             candle_trigger_editor: CandleTriggerEditorView {
@@ -332,9 +332,7 @@ pub struct AgentRolePageTemplate {
     pub agent_tabs_use_htmx: bool,
     pub active_role_label: &'static str,
     pub role_page_path: String,
-    pub role_description: &'static str,
     pub job: Option<HarnessSubAgentDetailView>,
-    pub model_picker: super::agents::ModelPickerView,
     pub recent_runs_section: super::agents::AgentRecentRunsView,
     pub current_path: String,
     pub navbar: Navbar,

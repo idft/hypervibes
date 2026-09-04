@@ -18,10 +18,9 @@ use tokio::sync::broadcast;
 use tracing::warn;
 
 use super::shared::{
-    ANALYSIS_CODING_ACTIVE_WARNING, ModelPickerContext, ModelSelectionForm,
-    SERVER_SHUTTING_DOWN_WARNING, TimeoutForm, ToggleJobForm, build_model_picker_view,
-    is_htmx_request, load_model_picker_context, parse_positive_job_seconds,
-    sub_agents_warning_redirect, timeout_error_redirect, urlencode,
+    ANALYSIS_CODING_ACTIVE_WARNING, ModelSelectionForm, SERVER_SHUTTING_DOWN_WARNING, TimeoutForm,
+    ToggleJobForm, build_model_picker_view, is_htmx_request, load_model_picker_context,
+    parse_positive_job_seconds, sub_agents_warning_redirect, timeout_error_redirect, urlencode,
     validate_model_selection_for_agent,
 };
 use super::show::{
@@ -1859,9 +1858,7 @@ async fn render_role_page(
             agent_tabs_use_htmx: true,
             active_role_label: context.role_label,
             role_page_path: role_page_path.clone(),
-            role_description: context.role_description,
             job: None,
-            model_picker: crate::web::templates::ModelPickerView::default(),
             recent_runs_section: build_agent_recent_runs_view_for_kind(
                 state,
                 agent_key,
@@ -1883,20 +1880,6 @@ async fn render_role_page(
     if let Some(error) = query.model_error {
         job_view.model_error = Some(error);
     }
-    let mut model_picker = build_model_picker_view(
-        "sub-agent-model-selection",
-        &job_view.model_selection,
-        job.model_variant.as_deref(),
-        ModelPickerContext {
-            options: Vec::new(),
-            warning: None,
-        },
-    );
-    model_picker.show_label = false;
-    model_picker.lazy_options_url = Some(format!(
-        "/agents/{agent_key}/sub-agents/{}/model-picker",
-        job.id
-    ));
 
     let requested_runs_page = parse_positive_page(&query.page);
     let recent_runs_section = build_agent_recent_runs_view_for_kind(
@@ -1915,9 +1898,7 @@ async fn render_role_page(
         agent_tabs_use_htmx: true,
         active_role_label: context.role_label,
         role_page_path,
-        role_description: context.role_description,
         job: Some(job_view),
-        model_picker,
         recent_runs_section,
         navbar,
     }

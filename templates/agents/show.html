@@ -430,7 +430,6 @@
                         <thead class="bg-zinc-950/60 text-left text-xs uppercase tracking-[0.16em] text-zinc-500">
                             <tr>
                                  <th class="px-4 py-3 font-medium">Key</th>
-                                 <th class="px-4 py-3 font-medium">Kind</th>
                                   <th class="px-4 py-3 font-medium">Trigger</th>
                                   <th class="px-4 py-3 font-medium">Status</th>
                                  <th class="px-4 py-3 font-medium">Next run</th>
@@ -442,7 +441,6 @@
                             {% for row in jobs %}
                             <tr data-row-href="{{ row.detail_url }}" tabindex="0" role="link" class="cursor-pointer hover:bg-zinc-900/50">
                                  <td class="px-4 py-3 align-top font-mono text-xs text-zinc-200">{{ row.sub_agent_key }}</td>
-                                 <td class="px-4 py-3 align-top text-zinc-300">{{ row.sub_agent_kind }}</td>
                                   <td class="px-4 py-3 align-top text-xs text-zinc-300">{{ row.trigger_text }}</td>
                                  <td class="px-4 py-3 align-top">
                                      <span class="inline-flex rounded-full border px-2 py-0.5 text-xs font-medium {{ row.enabled_class }}">{{ row.enabled_label }}</span>
