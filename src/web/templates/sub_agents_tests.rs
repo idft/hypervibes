@@ -60,7 +60,7 @@ fn job_detail_page_renders_job_metadata_and_runs() {
     assert!(rendered.contains("Agent sections"));
     assert!(
         rendered
-            .contains("href=\"/agents/test-agent/sub-agents\" aria-label=\"Back\" title=\"Back\"")
+            .contains("href=\"/agents/test-agent/analysis\" aria-label=\"Back\" title=\"Back\"")
     );
     assert!(rendered.contains("d=\"M10.5 19.5 3 12m0 0 7.5-7.5M3 12h18\""));
     assert!(!rendered.contains(">Back<"));

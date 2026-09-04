@@ -3,28 +3,19 @@
 {% block title %}{{ active_role_label }} · {{ agent.display_name }} · HyperVibes{% endblock %}
 
 {% block content %}
-<div class="mx-auto max-w-5xl">
+<div class="mx-auto flex h-full min-h-0 max-w-[1500px] flex-col overflow-hidden">
     {% include "agents/components/page-header.html" %}
 
     {% include "agents/components/tabs.html" %}
 
-    <div id="agent-show-tab-content">
-    <header class="mt-4 border-b border-zinc-800 pb-6">
-        <div class="flex items-center gap-3 text-sm text-zinc-500">
-            <a href="/agents/{{ agent.agent_key }}" class="hover:text-zinc-300">{{ agent.display_name }}</a>
-            <span>/</span>
-            <span>{{ active_role_label }}</span>
-        </div>
-        <div class="mt-4 flex flex-wrap items-center justify-between gap-4">
-            <div>
-                <h2 class="text-3xl font-semibold tracking-tight text-white">{{ active_role_label }}</h2>
-                <p class="mt-2 max-w-2xl text-sm leading-6 text-zinc-400">{{ role_description }}</p>
-            </div>
-        </div>
+    <div id="agent-show-tab-content" class="min-h-0 flex-1">
+    <header class="shrink-0 rounded-2xl border border-zinc-800 bg-[#0d0d10] p-6">
+        <h1 class="text-lg font-medium text-white">{{ active_role_label }}</h1>
+        <p class="mt-2 max-w-3xl text-sm leading-6 text-zinc-400">{{ role_description }}</p>
     </header>
 
     {% if let Some(job) = job %}
-    <div class="mt-6 space-y-6">
+    <div class="mt-4 space-y-6 pb-4">
         <section class="rounded-2xl border border-zinc-800 bg-[#0d0d10] p-6">
             <div class="flex flex-wrap items-center justify-between gap-4">
                 <div class="flex items-center gap-3">
@@ -159,7 +150,7 @@
         </section>
     </div>
     {% else %}
-    <section class="mt-6 rounded-2xl border border-zinc-800 bg-[#0d0d10] p-6">
+    <section class="mt-4 rounded-2xl border border-zinc-800 bg-[#0d0d10] p-6">
         <h3 class="text-lg font-medium text-white">No {{ active_role_label }} sub-agent</h3>
         <p class="mt-2 text-sm text-zinc-400">This agent has no {{ active_role_label }} sub-agent yet. Create it to get started.</p>
         <form action="{{ role_page_path }}" method="post" class="mt-4">

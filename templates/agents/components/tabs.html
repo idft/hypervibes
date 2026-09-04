@@ -9,7 +9,7 @@
         {% else %}
         {% if agent_tabs_use_htmx && tab.label != "Chat" %}
         {% if tab.active %}
-        <a href="{{ tab.href }}" data-agent-tab-link hx-get="{{ tab.href }}" hx-select="#agent-show-tab-content" hx-target="#agent-show-tab-content" hx-swap="outerHTML" hx-push-url="true" aria-current="page" title="{{ tab.label }}" class="agent-rail-tab {% if tab.indented %}ml-2{% endif %} inline-flex h-9 w-9 items-center justify-center rounded-lg bg-zinc-800 text-white sm:h-10 sm:w-10">
+        <a href="{{ tab.href }}" data-agent-tab-link hx-get="{{ tab.href }}" hx-select="#agent-show-tab-content" hx-target="#agent-show-tab-content" hx-swap="outerHTML" hx-push-url="true" aria-current="page" title="{{ tab.label }}" class="agent-rail-tab {% if tab.indented %}ml-2{% endif %} inline-flex h-9 w-9 items-center justify-center rounded-lg bg-zinc-800 text-white hover:bg-zinc-700 sm:h-10 sm:w-10">
             {% include "agents/components/tab-icon.html" %}
             <span class="agent-rail-tab-label">{{ tab.label }}</span>
             {% if let Some(notification_count) = tab.notification_count %}
@@ -27,7 +27,7 @@
         {% endif %}
         {% else %}
         {% if tab.active %}
-        <a href="{{ tab.href }}" data-agent-tab-link aria-current="page" title="{{ tab.label }}" class="agent-rail-tab {% if tab.indented %}ml-2{% endif %} inline-flex h-9 w-9 items-center justify-center rounded-lg bg-zinc-800 text-white sm:h-10 sm:w-10">
+        <a href="{{ tab.href }}" data-agent-tab-link aria-current="page" title="{{ tab.label }}" class="agent-rail-tab {% if tab.indented %}ml-2{% endif %} inline-flex h-9 w-9 items-center justify-center rounded-lg bg-zinc-800 text-white hover:bg-zinc-700 sm:h-10 sm:w-10">
             {% include "agents/components/tab-icon.html" %}
             <span class="agent-rail-tab-label">{{ tab.label }}</span>
             {% if let Some(notification_count) = tab.notification_count %}
@@ -51,7 +51,7 @@
     <div class="mt-auto border-t border-zinc-800 pt-2">
         {% for tab in tabs %}
         {% if tab.label == "Settings" %}
-        <a href="{{ tab.href }}" data-agent-tab-link {% if agent_tabs_use_htmx %}hx-get="{{ tab.href }}" hx-select="#agent-show-tab-content" hx-target="#agent-show-tab-content" hx-swap="outerHTML" hx-push-url="true"{% endif %} {% if tab.active %}aria-current="page"{% endif %} title="{{ tab.label }}" class="agent-rail-tab inline-flex h-9 w-9 items-center justify-center rounded-lg {% if tab.active %}bg-zinc-800 text-white{% else %}text-zinc-400 hover:bg-zinc-800 hover:text-white{% endif %} sm:h-10 sm:w-10">
+        <a href="{{ tab.href }}" data-agent-tab-link {% if agent_tabs_use_htmx %}hx-get="{{ tab.href }}" hx-select="#agent-show-tab-content" hx-target="#agent-show-tab-content" hx-swap="outerHTML" hx-push-url="true"{% endif %} {% if tab.active %}aria-current="page"{% endif %} title="{{ tab.label }}" class="agent-rail-tab mx-auto inline-flex h-9 w-9 items-center justify-center rounded-lg {% if tab.active %}bg-zinc-800 text-white hover:bg-zinc-700{% else %}text-zinc-400 hover:bg-zinc-800 hover:text-white{% endif %} sm:h-10 sm:w-10">
             {% include "agents/components/tab-icon.html" %}
             <span class="agent-rail-tab-label">{{ tab.label }}</span>
         </a>

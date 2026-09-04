@@ -346,13 +346,27 @@
         </div>
         {% endif %}
 
-        <section class="rounded-2xl border border-red-900/60 bg-red-950/20 p-6">
-            <h2 class="text-lg font-medium text-white">Reset memories</h2>
-            <p class="mt-2 max-w-3xl text-sm leading-6 text-zinc-400">Permanently delete all memories stored for this agent. Runs, conversations, and the Coding package are not affected. This action cannot be undone.</p>
-            <div class="mt-6 flex justify-end">
-                <button type="button" data-reset-memories-trigger class="cursor-pointer rounded-full border border-red-900/60 bg-red-950/30 px-4 py-2 text-sm font-medium text-red-300 hover:border-red-800 hover:bg-red-950/50">
-                    Reset memories
-                </button>
+        <section class="rounded-2xl border border-red-900/60 bg-red-950/30 p-6">
+            <h2 class="text-lg font-medium text-white">Danger Zone</h2>
+            <div class="mt-4 divide-y divide-red-900/60">
+                <div class="flex flex-col gap-3 py-4 first:pt-0 sm:flex-row sm:items-center sm:justify-between">
+                    <div>
+                        <h3 class="text-sm font-medium text-red-200">Reset memories</h3>
+                        <p class="mt-1 max-w-3xl text-sm leading-6 text-zinc-400">Permanently delete all memories stored for this agent. Runs, conversations, and the Coding package are not affected. This action cannot be undone.</p>
+                    </div>
+                    <button type="button" data-reset-memories-trigger class="w-fit cursor-pointer rounded-full border border-red-900/60 bg-red-950/30 px-4 py-2 text-sm font-medium text-red-300 hover:border-red-800 hover:bg-red-950/50">
+                        Reset memories
+                    </button>
+                </div>
+                <div class="flex flex-col gap-3 py-4 last:pb-0 sm:flex-row sm:items-center sm:justify-between">
+                    <div>
+                        <h3 class="text-sm font-medium text-red-200">Delete agent</h3>
+                        <p class="mt-1 max-w-3xl text-sm leading-6 text-zinc-400">Permanently delete this agent, its workspace, conversations, and all local records, including locally synchronized Hyperliquid orders, fills, and history. The Hyperliquid account, open orders, positions, and funds remain on Hyperliquid. Open orders may still execute after deletion.</p>
+                    </div>
+                    <button type="button" id="delete-agent-btn" data-delete-agent-trigger class="w-fit cursor-pointer rounded-full border border-red-900/60 bg-red-950/30 px-4 py-2 text-sm font-medium text-red-300 hover:border-red-800 hover:bg-red-950/50">
+                        Delete agent
+                    </button>
+                </div>
             </div>
         </section>
 
@@ -360,15 +374,6 @@
         {% include "agents/components/gateway-telegram.html" %}
         {% endif %}
 
-        <section class="rounded-2xl border border-red-900/60 bg-red-950/20 p-6">
-            <h2 class="text-lg font-medium text-white">Delete agent</h2>
-            <p class="mt-2 max-w-3xl text-sm leading-6 text-zinc-400">Permanently delete this agent, its workspace, conversations, and all local records, including locally synchronized Hyperliquid orders, fills, and history. The Hyperliquid account, open orders, positions, and funds remain on Hyperliquid. Open orders may still execute after deletion.</p>
-            <div class="mt-6 flex justify-end">
-                <button type="button" id="delete-agent-btn" data-delete-agent-trigger class="cursor-pointer rounded-full border border-red-900/60 bg-red-950/30 px-4 py-2 text-sm font-medium text-red-300 hover:border-red-800 hover:bg-red-950/50">
-                    Delete agent
-                </button>
-            </div>
-        </section>
     </section>
     {% else if show_jobs_tab %}
     <section class="grid h-full min-h-0 grid-rows-2 gap-2 xl:grid-rows-[auto_minmax(0,1fr)]" data-agent-sub-agents>
@@ -379,7 +384,7 @@
             </div>
             {% endif %}
             <div class="shrink-0 flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-                <h2 class="text-lg font-medium text-white">Sub-agents</h2>
+            <h2 class="text-lg font-medium text-white">Analysis Sub-Agents</h2>
                 <div class="flex flex-wrap items-center gap-2">
                     {% if can_enable_all_jobs %}
                     <form action="/agents/{{ agent.agent_key }}/sub-agents/toggle-all" method="post">

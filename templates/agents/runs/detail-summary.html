@@ -1,6 +1,6 @@
 <header class="flex shrink-0 flex-col gap-2 pb-6">
     <div class="flex items-center gap-3">
-        <a href="{% if let Some(job_url) = run.job_url %}{{ job_url }}{% else %}/agents/{{ run.agent_key }}/sub-agents{% endif %}" class="inline-flex h-9 w-9 shrink-0 cursor-pointer items-center justify-center rounded-full border border-zinc-800 text-zinc-300 hover:border-zinc-700 hover:text-white" aria-label="{% if let Some(_job_url) = run.job_url %}Back to {{ run.job_label }}{% else %}Back to sub-agents{% endif %}" title="{% if let Some(_job_url) = run.job_url %}Back to {{ run.job_label }}{% else %}Back to sub-agents{% endif %}">
+        <a href="{% if let Some(job_url) = run.job_url %}{{ job_url }}{% else %}/agents/{{ run.agent_key }}/analysis{% endif %}" class="inline-flex h-9 w-9 shrink-0 cursor-pointer items-center justify-center rounded-full border border-zinc-800 text-zinc-300 hover:border-zinc-700 hover:text-white" aria-label="{% if let Some(_job_url) = run.job_url %}Back to {{ run.job_label }}{% else %}Back to Analysis{% endif %}" title="{% if let Some(_job_url) = run.job_url %}Back to {{ run.job_label }}{% else %}Back to Analysis{% endif %}">
             <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="M10 19l-7-7m0 0l7-7m-7 7h18"></path></svg>
         </a>
         <h2 class="text-lg font-medium text-white">{{ run.sub_agent_key }} · Run {{ run.id }}</h2>
