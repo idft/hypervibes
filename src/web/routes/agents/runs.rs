@@ -225,11 +225,6 @@ pub(in crate::web::routes) async fn agents_retry_run(
         crate::harness::store::QueuedSubAgentRun::Missing => {
             Ok((StatusCode::NOT_FOUND, "sub-agent not found").into_response())
         }
-        crate::harness::store::QueuedSubAgentRun::BlockedByMaintenance => Ok((
-            StatusCode::CONFLICT,
-            "Coding promotion is active; retry is unavailable",
-        )
-            .into_response()),
     }
 }
 

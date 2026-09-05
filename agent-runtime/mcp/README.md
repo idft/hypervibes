@@ -24,6 +24,14 @@ server is a thin transport layer; it does not hold any Hyperliquid private
 keys, and its tool schemas never expose `api_key` (or any other credential)
 as a callable argument.
 
+## Scheduled Roles
+
+The official scheduled sub-agent roles are Analysis, Trading, and Review.
+Analysis uses approved data tools and publishes scoped research memory. Trading
+reads that published context and manages orders. Review records outcomes and
+learnings and may submit permitted prompt revisions. There is no separate
+market-analysis role.
+
 ## Strategy Prompts
 
 Chat sessions can review and edit their own per-agent strategy prompts through
@@ -51,29 +59,3 @@ authorization headers, request bodies, or memory content.
 If you are an agent reading this file from inside a generated workspace:
 do not edit, import, or invoke this module directly. Use the `hypervibes`
 MCP tools instead.
-
-## Coding Sessions
-
-The MCP server registers its full API for every workspace. OpenCode agent
-permissions select the MCP tools available to each sub-agent session. The
-Coding agent permits only agent-scoped evidence reads, candidate
-filesystem operations through path-scoped native OpenCode tools, fixed local
-validation, and one structured report submission.
-
-Coding candidate workspaces set only `HYPERVIBES_CODING_TASK_ID`.
-Candidate file operations are not MCP calls: generated OpenCode native
-read/edit/glob permissions restrict them to the current candidate's
-`scripts/user/` tree, including the root-relative path OpenCode uses for non-Git
-projects. This lets native edit events receive Pyright LSP diagnostics.
-Independent worker manifests reject symlinks, unapproved extensions, oversized
-files, and any post-validation tree change.
-The coding MCP surface is reserved for operations ordinary filesystem
-tools cannot provide. Validation runs the fixed container-global validator, accepts no
-model-supplied command or path, and records a task-scoped result bound to the
-candidate tree hash. Validation failures include bounded diagnostics. Any later
-candidate write, patch, or deletion invalidates that result.
-
-Coding reports are accepted only after successful fixed validation.
-Reported paths are relative to the candidate's `scripts/user` root, such as
-`strategies/trend.py`, rather than workspace-relative
-`scripts/user/strategies/trend.py`.

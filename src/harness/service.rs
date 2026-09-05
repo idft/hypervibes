@@ -5,10 +5,7 @@ use crate::{
     agents::store::get_agent,
     db::DbPool,
     harness::{
-        model::SUB_AGENT_KIND_CODING,
-        store::{
-            ACTIVE_STATUSES, analysis_coding_task_ids_for_agent_runs, lock_agent_coordination_tx,
-        },
+        store::{ACTIVE_STATUSES, lock_agent_coordination_tx},
         workspace_lease::WorkspaceLeaseManager,
     },
     opencode::client::{DeleteSessionResult, OpenCodeClient, SessionStatusKind},
@@ -50,7 +47,7 @@ pub async fn delete_idle_job(
     }
 
     let runs: Vec<(i64, String, Option<String>)> = query_as(
-        "SELECT id, sub_agent_kind, backend_run_ref
+        "SELECT id, status, backend_run_ref
            FROM harness_sub_agent_runs
           WHERE agent_key = $1 AND sub_agent_id = $2
           FOR UPDATE",
@@ -67,24 +64,13 @@ pub async fn delete_idle_job(
         anyhow::bail!("job has queued or running runs");
     }
 
-    // Each session lives in its isolated workspace directory: normal runs in
-    // their run workspace, coding runs in the candidate workspace owned by
-    // their maintenance task. There is no agent workspace fallback.
-    let coding_task_by_run_id = analysis_coding_task_ids_for_agent_runs(pool, agent_key).await?;
     let container_root = container_workspaces_root.trim_end_matches('/');
     let mut sessions = Vec::with_capacity(runs.len());
-    for (run_id, sub_agent_kind, backend_run_ref) in &runs {
+    for (run_id, _, backend_run_ref) in &runs {
         let Some(session_id) = backend_run_ref.as_deref() else {
             continue;
         };
-        let directory = if sub_agent_kind == SUB_AGENT_KIND_CODING {
-            let task_id = coding_task_by_run_id
-                .get(run_id)
-                .ok_or_else(|| anyhow!("coding run {run_id} has no owning maintenance task"))?;
-            format!("{container_root}/coding/{agent_key}/{task_id}/workspace")
-        } else {
-            format!("{container_root}/runs/{agent_key}/{run_id}/workspace")
-        };
+        let directory = format!("{container_root}/runs/{agent_key}/{run_id}/workspace");
         sessions.push((session_id, directory));
     }
 

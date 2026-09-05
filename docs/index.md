@@ -37,17 +37,15 @@ agent's positions, orders, and account activity separate.
 
 Agent sub-agents run automatically. The available sub-agent types are:
 
-- **Analysis** - Runs on a fixed schedule tied to candle closings, such as 5m,
-  15m, or 1h. It executes strategy code written by the coding agent and saves
-  the results as memory.
-- **Market analysis** - Compiles an overall analysis of one market from
-   previously saved memories. It runs after each batch of analysis sub-agents.
-- **Trading** - Runs more frequently, defaulting to every 5 minutes. It
-  reviews the current market-analysis state, places orders, manages positions,
-  and manages stop-loss and take-profit orders.
-- **Daily review** - Reviews agent performance and updates memory with
-  accumulated learnings.
-- **Coding** - Writes Python code for technical analysis and custom
-  indicators.
+- **Analysis** - Runs on a fixed schedule tied to candle closings, such as 15m,
+  1h, or 1d. It uses approved data tools for research and publishes the results
+  as scoped memory.
+- **Trading** - Runs more frequently, defaulting to every 5 minutes. It reads
+  published Analysis memory, places orders, and manages positions.
+- **Review** - Runs daily to review agent performance and publish accumulated
+  learnings.
+
+Custom indicator support is a separate future follow-up and is not currently
+implemented.
 
 Prompts for each sub-agent type can be edited to describe your trading strategy.

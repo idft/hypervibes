@@ -338,33 +338,6 @@ pub async fn get_latest_trading_decision(
     get_latest_agent_memory_by_type(pool, agent_key, "trading_decision").await
 }
 
-pub async fn get_review_memory_for_run(
-    pool: &DbPool,
-    agent_key: &str,
-    run_id: i64,
-) -> Result<Option<MemoryRecord>> {
-    let rows = sqlx::query_as::<_, MemoryRecord>(
-        "SELECT id, created_at, agent_key, scope_kind, timeframe, memory_type,
-                summary, content, metadata, source_run_id
-           FROM memory.records
-          WHERE agent_key = $1
-            AND scope_kind = 'agent'
-            AND memory_type = 'review'
-            AND source_run_id = $2
-          ORDER BY created_at DESC, id DESC
-          LIMIT 2",
-    )
-    .bind(agent_key)
-    .bind(run_id)
-    .fetch_all(pool)
-    .await
-    .context("failed to fetch review memory for run")?;
-    if rows.len() > 1 {
-        anyhow::bail!("multiple review memories match harness run {run_id}");
-    }
-    Ok(rows.into_iter().next())
-}
-
 pub async fn list_memory_instrument_targets(
     pool: &DbPool,
     agent_key: &str,

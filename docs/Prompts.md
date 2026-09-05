@@ -16,7 +16,6 @@ Analysis prompt targets and one target for each singleton role.
 | --- | --- |
 | Analysis | A user-configured research job identified by its sub-agent key. |
 | Trading | Research synthesis and order management. |
-| Coding | Durable Coding package maintenance. |
 | Review | Performance and learning review. |
 
 Prompt targets belong to one agent and are never shared. The global prompt is
@@ -32,13 +31,15 @@ immutable revision. Chat changes require one-time OpenCode confirmation.
 
 Review may submit an evidence-backed atomic revision batch for Trading and only
 Analysis jobs that opted in. It snapshots permitted targets and their base
-revisions when dispatched, and cannot revise its own or Coding's prompt.
+revisions when dispatched, and cannot revise its own prompt.
 
 ## Role boundaries
 
-The Analysis framework is generic: individual prompts and granted capabilities
-define research method and output types. It does not require OHLCV, package
-execution, a fixed output type, or one memory per selected instrument.
+Analysis uses approved data tools, including the closed-candle market-data
+helper, and publishes research memories. Individual prompts and granted
+capabilities define the research method and output types; Analysis does not
+author reusable code. Custom indicators are a separate future follow-up and are
+not currently implemented.
 
 Trading reads current Analysis context and owns synthesis and execution. It
 should write a `trading_decision` for each evaluated instrument when possible,

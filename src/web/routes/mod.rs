@@ -74,11 +74,6 @@ pub fn router(state: Arc<AppState>) -> Router {
             "/agents/{agent_key}/memories/{memory_id}/delete",
             post(agents_delete_memory),
         )
-        .route("/agents/{agent_key}/coding", get(agents_show_coding))
-        .route(
-            "/agents/{agent_key}/coding/task-status",
-            get(agents_coding_task_status),
-        )
         .route(
             "/agents/{agent_key}/sub-agents/recent-runs/stream",
             get(agent_sub_agent_recent_runs_stream),

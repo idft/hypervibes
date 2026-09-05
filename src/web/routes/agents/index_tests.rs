@@ -302,26 +302,6 @@ async fn post_delete_agent_removes_agent_and_redirects() {
         .await
         .expect("insert agent");
 
-    // Seed durable Coding resources that must be removed by agent deletion.
-    let packages_root = state
-        .opencode_workspace_config
-        .host_workspaces_root
-        .join("packages")
-        .join(&agent_key);
-    let versions_root = state
-        .opencode_workspace_config
-        .host_workspaces_root
-        .join("versions")
-        .join(&agent_key);
-    let coding_root = state
-        .opencode_workspace_config
-        .host_workspaces_root
-        .join("coding")
-        .join(&agent_key);
-    fs::create_dir_all(packages_root.join("strategies")).expect("create package");
-    fs::write(packages_root.join("manifest.json"), "{}").expect("write package manifest");
-    fs::create_dir_all(versions_root.join("3/package")).expect("create retained version");
-    fs::create_dir_all(coding_root.join("3/workspace")).expect("create coding candidate");
     let runs_root = state
         .opencode_workspace_config
         .host_workspaces_root
@@ -396,9 +376,6 @@ async fn post_delete_agent_removes_agent_and_redirects() {
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::NOT_FOUND);
-    assert!(!packages_root.exists(), "Coding package must be deleted");
-    assert!(!versions_root.exists(), "retained versions must be deleted");
-    assert!(!coding_root.exists(), "coding candidates must be deleted");
     // Isolated run workspaces are owned by their own lifecycle.
     assert!(runs_root.join("9/workspace").exists());
     assert!(state.live_accounts.get(&live_account_key).is_none());

@@ -39,5 +39,5 @@ blocked by this logging policy.
 
 Review records outcomes and learnings. `agent_learnings` preserve durable
 lessons for future Analysis, Trading, and Review runs. Framework-owned types are
-reserved: Trading writes `trading_decision`, Review writes review and learning
-records, and Coding result records remain application-owned.
+reserved: Trading writes `trading_decision`, and Review writes review and
+learning records.

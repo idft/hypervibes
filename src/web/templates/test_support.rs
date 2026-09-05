@@ -123,8 +123,8 @@ pub fn sample_event_job_row(id: i64, enabled: bool) -> crate::harness::model::Ha
     crate::harness::model::HarnessSubAgentRow {
         id,
         agent_key: "test-agent".to_string(),
-        sub_agent_key: "coding".to_string(),
-        sub_agent_kind: crate::harness::model::SUB_AGENT_KIND_CODING.to_string(),
+        sub_agent_key: "review".to_string(),
+        sub_agent_kind: crate::harness::model::SUB_AGENT_KIND_REVIEW.to_string(),
         enabled,
         timeframe: None,
         next_run_at: None,

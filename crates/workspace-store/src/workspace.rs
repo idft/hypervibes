@@ -1,73 +1,18 @@
 use std::{
-    collections::BTreeSet,
     fs,
-    io::Read,
     path::{Path, PathBuf},
 };
 
+use super::isolated_workspace::{
+    ConversationWorkspacePath, RunWorkspacePath, create_conversation_workspace,
+    create_run_workspace,
+};
 use anyhow::{Context, Result, bail};
-use rustix::{
-    fs::{Mode, OFlags, open, openat},
-    io::Errno,
-};
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
-
-use super::{
-    coding_workspace::{copy_user_tree, manifest_hash, manifest_tree, package_root},
-    isolated_workspace::{
-        ConversationWorkspacePath, RunWorkspacePath, create_conversation_workspace,
-        create_run_workspace,
-    },
-};
 
 /// Path of the rendered workspace template, relative to the repository root.
-/// The coding candidate and run workspaces render from this source tree; it
-/// is not an operator-maintained per-agent workspace.
+/// Run and conversation workspaces render from this source tree.
 pub const PROFILE_SOURCE_RELATIVE_PATH: &str = "agent-runtime/workspace-template";
-pub const WORKSPACE_BROWSER_MAX_DEPTH: usize = 32;
-pub const WORKSPACE_BROWSER_MAX_ENTRIES: usize = 2_000;
-pub const WORKSPACE_BROWSER_MAX_FILENAME_BYTES: usize = 255;
-pub const WORKSPACE_BROWSER_MAX_PREVIEW_BYTES: u64 = 1024 * 1024;
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct WorkspaceBrowserListing {
-    pub workspace_exists: bool,
-    pub entries: Vec<WorkspaceBrowserEntry>,
-    pub truncated: bool,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct WorkspaceBrowserEntry {
-    pub path: String,
-    pub kind: WorkspaceBrowserEntryKind,
-    pub size_bytes: Option<u64>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum WorkspaceBrowserEntryKind {
-    Directory,
-    File,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct WorkspaceFilePreview {
-    pub path: String,
-    pub size_bytes: u64,
-    pub status: WorkspaceFilePreviewStatus,
-    pub text: Option<String>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum WorkspaceFilePreviewStatus {
-    Text,
-    Binary,
-    TooLarge,
-    Missing,
-}
-
 #[derive(Debug, Clone)]
 pub struct OpenCodeWorkspaceConfig {
     pub source_root: PathBuf,
@@ -83,17 +28,9 @@ pub struct OpenCodeWorkspaceAgent {
     pub api_key: String,
 }
 
-/// Immutable identity of the durable Coding package copied into a run
-/// workspace.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct QuantitativePackageSnapshot {
-    pub version: String,
-    pub manifest_hash: String,
-}
-
 /// Request-scoped OpenCode runtime directory configuration. The harness
 /// backend derives the `workspace_container_path` of a specific run or
-/// candidate OpenCode session from this value; it is never agent-level
+/// conversation OpenCode session from this value; it is never agent-level
 /// durable metadata.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct OpenCodeWorkspaceRuntimeConfig {
@@ -111,8 +48,6 @@ impl OpenCodeWorkspaceRuntimeConfig {
     }
 }
 
-const PACKAGE_MANIFEST: &str = "manifest.json";
-
 /// Controller input for rendering a scheduled run workspace. The runtime API
 /// key is deliberately absent from every response and idempotency fingerprint.
 #[derive(Clone, Serialize, Deserialize)]
@@ -123,13 +58,11 @@ pub struct RunWorkspaceMaterializationInput {
     pub credential_id: String,
     pub sub_agent_kind: String,
     pub enabled_capabilities: Vec<String>,
-    pub expected_quantitative_package: Option<QuantitativePackageSnapshot>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MaterializedRunWorkspace {
     pub workspace_container_path: String,
-    pub quantitative_package: Option<QuantitativePackageSnapshot>,
 }
 
 /// Controller input for rendering a conversation workspace. The API key is
@@ -146,174 +79,14 @@ pub struct MaterializedConversationWorkspace {
     pub workspace_container_path: String,
 }
 
-/// Inspect the durable Coding package before a scheduler binds it into a run
-/// snapshot. The controller derives the source location from the validated
-/// agent key; callers never provide a filesystem path.
-///
-/// A missing package root is valid and produces `None`. A nonempty but
-/// invalid package is an error. Inspection is side-effect free: it never
-/// synthesizes, repairs, or writes a manifest.
-pub fn inspect_active_quantitative_package(
-    config: &OpenCodeWorkspaceConfig,
-    agent_key: &str,
-) -> Result<Option<QuantitativePackageSnapshot>> {
-    let package = package_root(config, agent_key)?;
-    match fs::symlink_metadata(&package) {
-        Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_dir() => {
-            bail!("Coding package root is not a regular directory")
-        }
-        Ok(_) => {}
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(error) => return Err(error).context("failed to inspect Coding package root"),
-    }
-
-    let manifest = manifest_tree(&package)?;
-    if manifest.is_empty() {
-        bail!("Coding package is invalid: package tree is empty");
-    }
-    if !manifest.contains_key(PACKAGE_MANIFEST) {
-        bail!("Coding package is invalid: manifest.json is missing");
-    }
-    Ok(Some(QuantitativePackageSnapshot {
-        version: package_version(&package)?,
-        manifest_hash: manifest_hash(&manifest),
-    }))
-}
-
-fn package_version(package_root_path: &Path) -> Result<String> {
-    let manifest_path = package_root_path.join(PACKAGE_MANIFEST);
-    let manifest: Value = serde_json::from_slice(
-        &fs::read(&manifest_path).context("failed to read Coding package manifest")?,
-    )
-    .context("Coding package manifest is invalid JSON")?;
-    let manifest_object = manifest
-        .as_object()
-        .context("Coding package manifest must be an object")?;
-    if manifest_object.get("schema_version") != Some(&Value::from(1)) {
-        bail!("Coding package manifest schema_version must be 1");
-    }
-    let tools = manifest_object
-        .get("tools")
-        .and_then(Value::as_array)
-        .filter(|tools| !tools.is_empty())
-        .context("Coding package manifest must declare validation targets")?;
-    let mut target_ids = BTreeSet::new();
-    for target in tools {
-        validate_manifest_target(package_root_path, target, &mut target_ids)?;
-    }
-    manifest
-        .get("package_version")
-        .and_then(serde_json::Value::as_str)
-        .filter(|version| !version.trim().is_empty())
-        .map(ToString::to_string)
-        .context("Coding package manifest has no package_version")
-}
-
-fn validate_manifest_target(
-    package_root_path: &Path,
-    value: &Value,
-    target_ids: &mut BTreeSet<String>,
-) -> Result<()> {
-    let target = value
-        .as_object()
-        .context("Coding package manifest contains an invalid target")?;
-    let target_id = manifest_string(target.get("id"), "target id")?;
-    if !target_ids.insert(target_id.to_string()) {
-        bail!("Coding package manifest contains duplicate target IDs");
-    }
-    manifest_string(target.get("description"), "target description")?;
-    if target.get("input_kind") != Some(&Value::from("ohlcv"))
-        || target.get("output_schema") != Some(&Value::from("hypervibes.quantitative.v1"))
-    {
-        bail!("Coding package manifest target {target_id} has invalid schema metadata");
-    }
-
-    let entrypoint = manifest_string(target.get("entrypoint"), "target entrypoint")?;
-    let entrypoint_path = Path::new(entrypoint);
-    if entrypoint_path.is_absolute()
-        || entrypoint.contains('\\')
-        || entrypoint_path
-            .extension()
-            .and_then(|extension| extension.to_str())
-            != Some("py")
-        || entrypoint_path
-            .components()
-            .any(|component| matches!(component, std::path::Component::ParentDir))
-    {
-        bail!("Coding package target {target_id} has an unsafe entrypoint");
-    }
-    let implementation = package_root_path.join(entrypoint_path);
-    let metadata = fs::symlink_metadata(&implementation)
-        .with_context(|| format!("Coding package target {target_id} entrypoint is missing"))?;
-    if metadata.file_type().is_symlink() || !metadata.is_file() {
-        bail!("Coding package target {target_id} entrypoint is not a regular file");
-    }
-
-    let supported_timeframes = target
-        .get("supported_timeframes")
-        .and_then(Value::as_array)
-        .filter(|timeframes| !timeframes.is_empty())
-        .context("Coding package target has no supported timeframes")?;
-    if supported_timeframes.iter().any(|timeframe| {
-        timeframe
-            .as_str()
-            .is_none_or(|timeframe| !SUPPORTED_CODING_TIMEFRAMES.contains(&timeframe))
-    }) {
-        bail!("Coding package target {target_id} has invalid supported timeframes");
-    }
-
-    let minimum_candles = target
-        .get("minimum_candles")
-        .and_then(Value::as_u64)
-        .filter(|value| *value > 0)
-        .context("Coding package target has invalid minimum_candles")?;
-    let _ = minimum_candles;
-    let required_arguments = target
-        .get("required_arguments")
-        .and_then(Value::as_array)
-        .context("Coding package target has invalid required_arguments")?;
-    let required_arguments = required_arguments
-        .iter()
-        .map(|argument| argument.as_str())
-        .collect::<Option<Vec<_>>>()
-        .context("Coding package target required_arguments must be strings")?;
-    let required_arguments_set = required_arguments.iter().copied().collect::<BTreeSet<_>>();
-    if required_arguments.len() != REQUIRED_CODING_ARGUMENTS.len()
-        || required_arguments_set != REQUIRED_CODING_ARGUMENTS.iter().copied().collect()
-    {
-        bail!("Coding package target {target_id} has invalid required_arguments");
-    }
-    manifest_string(target.get("version"), "target version")?;
-    Ok(())
-}
-
-fn manifest_string<'a>(value: Option<&'a Value>, field: &str) -> Result<&'a str> {
-    value
-        .and_then(Value::as_str)
-        .filter(|value| !value.trim().is_empty() && !value.chars().any(char::is_control))
-        .with_context(|| format!("Coding package manifest has invalid {field}"))
-}
-
-const REQUIRED_CODING_ARGUMENTS: &[&str] =
-    &["symbol", "timeframe", "boundary_ms", "input", "output"];
-const SUPPORTED_CODING_TIMEFRAMES: &[&str] = &[
-    "1m", "3m", "5m", "15m", "30m", "1h", "2h", "4h", "8h", "12h", "1d", "3d", "1w", "1M",
-];
-
-/// Render a complete run-local workspace from trusted templates and the
-/// durable Coding package. This must run before the OpenCode session is
-/// created.
+/// Render a complete run-local workspace from trusted templates. This must run
+/// before the OpenCode session is created.
 pub fn materialize_run_workspace(
     config: &OpenCodeWorkspaceConfig,
     path: &RunWorkspacePath,
     input: &RunWorkspaceMaterializationInput,
 ) -> Result<MaterializedRunWorkspace> {
     validate_run_workspace_materialization_input(input)?;
-
-    let active_package = inspect_active_quantitative_package(config, path.agent_key())?;
-    if active_package != input.expected_quantitative_package {
-        bail!("active quantitative package does not match the bound run snapshot");
-    }
 
     let created = create_run_workspace(config, path)?;
     let workspace_root = path.workspace_host_path(config);
@@ -323,7 +96,6 @@ pub fn materialize_run_workspace(
         ".opencode/commands",
         ".opencode/agents",
         ".opencode/skills",
-        "scripts",
         "scratch/ohlcv",
         "scratch/analysis-output",
         "scratch/downloads",
@@ -378,13 +150,6 @@ pub fn materialize_run_workspace(
         &input.enabled_capabilities,
     )?;
 
-    let destination_user_root = workspace_root.join("scripts/user");
-    replace_run_user_tree(&destination_user_root)?;
-    let source_package_root = package_root(config, path.agent_key())?;
-    if active_package.is_some() {
-        copy_user_tree(&source_package_root, &destination_user_root)?;
-    }
-
     write_run_runtime_environment(
         &workspace_root,
         &created.workspace_container_path,
@@ -394,7 +159,6 @@ pub fn materialize_run_workspace(
 
     Ok(MaterializedRunWorkspace {
         workspace_container_path: created.workspace_container_path,
-        quantitative_package: active_package,
     })
 }
 
@@ -535,18 +299,6 @@ fn ensure_regular_directory(path: &Path, description: &str) -> Result<()> {
     Ok(())
 }
 
-fn replace_run_user_tree(destination: &Path) -> Result<()> {
-    match fs::symlink_metadata(destination) {
-        Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_dir() => {
-            bail!("run scripts/user is not a regular directory")
-        }
-        Ok(_) => fs::remove_dir_all(destination).context("failed to reset run scripts/user")?,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-        Err(error) => return Err(error).context("failed to inspect run scripts/user"),
-    }
-    fs::create_dir_all(destination).context("failed to create run scripts/user")
-}
-
 fn render_run_capability_permissions(
     workspace_root: &Path,
     sub_agent_kind: &str,
@@ -629,130 +381,6 @@ fn write_run_runtime_environment(
         .context("failed to publish run runtime environment")
 }
 
-/// List the files of the durable Coding package for one agent. Paths in the
-/// listing are relative to the package root.
-pub fn list_workspace_browser_entries(
-    config: &OpenCodeWorkspaceConfig,
-    agent_key: &str,
-) -> Result<WorkspaceBrowserListing> {
-    let package = package_root(config, agent_key)?;
-    let root = match open_workspace_browser_root(&package) {
-        Ok(root) => root,
-        Err(Errno::NOENT) => {
-            return Ok(WorkspaceBrowserListing {
-                workspace_exists: false,
-                entries: Vec::new(),
-                truncated: false,
-            });
-        }
-        Err(Errno::LOOP) => bail!("Coding package root is a symlink"),
-        Err(error) => return Err(error.into()),
-    };
-    let mut entries = Vec::new();
-    let mut truncated = false;
-    list_workspace_browser_directory(&root, "", 0, &mut entries, &mut truncated)?;
-    Ok(WorkspaceBrowserListing {
-        workspace_exists: true,
-        entries,
-        truncated,
-    })
-}
-
-/// Preview one file of the durable Coding package. The path is relative to
-/// the package root.
-pub fn read_workspace_browser_file(
-    config: &OpenCodeWorkspaceConfig,
-    agent_key: &str,
-    relative_path: &str,
-) -> Result<WorkspaceFilePreview> {
-    let components = workspace_browser_path_components(relative_path)?;
-    let package = package_root(config, agent_key)?;
-    let mut directory = match open_workspace_browser_root(&package) {
-        Ok(root) => root,
-        Err(Errno::NOENT) => return Ok(missing_workspace_file_preview(relative_path)),
-        Err(Errno::LOOP) => bail!("Coding package root is a symlink"),
-        Err(error) => return Err(error.into()),
-    };
-
-    for component in &components[..components.len() - 1] {
-        directory = match openat(
-            &directory,
-            *component,
-            OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
-            Mode::empty(),
-        ) {
-            Ok(directory) => fs::File::from(directory),
-            Err(Errno::NOENT) => return Ok(missing_workspace_file_preview(relative_path)),
-            Err(Errno::LOOP) => bail!("workspace browser path component is a symlink"),
-            Err(error) => return Err(error.into()),
-        };
-        if !directory.metadata()?.is_dir() {
-            bail!("workspace browser path component is not a directory");
-        }
-    }
-
-    let file = match openat(
-        &directory,
-        *components
-            .last()
-            .expect("validated path has a final component"),
-        OFlags::RDONLY | OFlags::NONBLOCK | OFlags::NOFOLLOW | OFlags::CLOEXEC,
-        Mode::empty(),
-    ) {
-        Ok(file) => fs::File::from(file),
-        Err(Errno::NOENT) => return Ok(missing_workspace_file_preview(relative_path)),
-        Err(Errno::LOOP) => bail!("workspace browser path is a symlink"),
-        Err(error) => return Err(error.into()),
-    };
-    let metadata = file.metadata()?;
-    if !metadata.is_file() {
-        bail!("workspace browser path is not a regular file");
-    }
-    let size_bytes = metadata.len();
-    if size_bytes > WORKSPACE_BROWSER_MAX_PREVIEW_BYTES {
-        return Ok(WorkspaceFilePreview {
-            path: relative_path.to_owned(),
-            size_bytes,
-            status: WorkspaceFilePreviewStatus::TooLarge,
-            text: None,
-        });
-    }
-
-    let mut contents = Vec::with_capacity(size_bytes as usize + 1);
-    file.take(WORKSPACE_BROWSER_MAX_PREVIEW_BYTES + 1)
-        .read_to_end(&mut contents)?;
-    if contents.len() as u64 > WORKSPACE_BROWSER_MAX_PREVIEW_BYTES {
-        return Ok(WorkspaceFilePreview {
-            path: relative_path.to_owned(),
-            size_bytes: contents.len() as u64,
-            status: WorkspaceFilePreviewStatus::TooLarge,
-            text: None,
-        });
-    }
-    if contents.contains(&0) {
-        return Ok(WorkspaceFilePreview {
-            path: relative_path.to_owned(),
-            size_bytes: contents.len() as u64,
-            status: WorkspaceFilePreviewStatus::Binary,
-            text: None,
-        });
-    }
-    match String::from_utf8(contents) {
-        Ok(text) => Ok(WorkspaceFilePreview {
-            path: relative_path.to_owned(),
-            size_bytes: text.len() as u64,
-            status: WorkspaceFilePreviewStatus::Text,
-            text: Some(text),
-        }),
-        Err(error) => Ok(WorkspaceFilePreview {
-            path: relative_path.to_owned(),
-            size_bytes: error.into_bytes().len() as u64,
-            status: WorkspaceFilePreviewStatus::Binary,
-            text: None,
-        }),
-    }
-}
-
 pub(crate) fn validate_agent_key(agent_key: &str) -> Result<()> {
     if agent_key.trim().is_empty() {
         bail!("agent_key must not be empty");
@@ -765,154 +393,6 @@ pub(crate) fn validate_agent_key(agent_key: &str) -> Result<()> {
         bail!("agent_key contains unsafe path characters");
     }
     Ok(())
-}
-
-fn open_workspace_browser_root(root: &Path) -> rustix::io::Result<fs::File> {
-    open(
-        root,
-        OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
-        Mode::empty(),
-    )
-    .map(fs::File::from)
-}
-
-fn list_workspace_browser_directory(
-    directory: &fs::File,
-    prefix: &str,
-    depth: usize,
-    entries: &mut Vec<WorkspaceBrowserEntry>,
-    truncated: &mut bool,
-) -> Result<()> {
-    // Reading through this descriptor path keeps enumeration anchored to the
-    // already opened directory even if its name is concurrently renamed.
-    let descriptor_path = format!(
-        "/proc/self/fd/{}",
-        std::os::fd::AsRawFd::as_raw_fd(directory)
-    );
-    let mut candidates = Vec::new();
-    for entry in fs::read_dir(descriptor_path)? {
-        let entry = entry?;
-        let Ok(name) = entry.file_name().into_string() else {
-            continue;
-        };
-        if !is_workspace_browser_name_allowed(&name) {
-            continue;
-        }
-        let probe = match openat(
-            directory,
-            &name,
-            OFlags::PATH | OFlags::NOFOLLOW | OFlags::CLOEXEC,
-            Mode::empty(),
-        ) {
-            Ok(probe) => fs::File::from(probe),
-            Err(Errno::NOENT) => continue,
-            Err(error) => return Err(error.into()),
-        };
-        let metadata = probe.metadata()?;
-        let kind = if metadata.is_dir() {
-            WorkspaceBrowserEntryKind::Directory
-        } else if metadata.is_file() {
-            WorkspaceBrowserEntryKind::File
-        } else {
-            continue;
-        };
-        let opened = if kind == WorkspaceBrowserEntryKind::Directory {
-            match openat(
-                directory,
-                &name,
-                OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
-                Mode::empty(),
-            ) {
-                Ok(opened) => Some(fs::File::from(opened)),
-                Err(Errno::NOENT) | Err(Errno::LOOP) => continue,
-                Err(error) => return Err(error.into()),
-            }
-        } else {
-            None
-        };
-        candidates.push((name, kind, metadata.len(), opened));
-    }
-    candidates.sort_by(|left, right| {
-        let left_kind = matches!(left.1, WorkspaceBrowserEntryKind::File);
-        let right_kind = matches!(right.1, WorkspaceBrowserEntryKind::File);
-        left_kind
-            .cmp(&right_kind)
-            .then_with(|| left.0.as_bytes().cmp(right.0.as_bytes()))
-    });
-
-    for (name, kind, size_bytes, opened) in candidates {
-        if entries.len() == WORKSPACE_BROWSER_MAX_ENTRIES {
-            *truncated = true;
-            return Ok(());
-        }
-        let path = if prefix.is_empty() {
-            name
-        } else {
-            format!("{prefix}/{name}")
-        };
-        entries.push(WorkspaceBrowserEntry {
-            path: path.clone(),
-            kind,
-            size_bytes: (kind == WorkspaceBrowserEntryKind::File).then_some(size_bytes),
-        });
-        if kind == WorkspaceBrowserEntryKind::Directory {
-            if depth == WORKSPACE_BROWSER_MAX_DEPTH {
-                *truncated = true;
-            } else {
-                list_workspace_browser_directory(
-                    opened
-                        .as_ref()
-                        .expect("directories have an open descriptor"),
-                    &path,
-                    depth + 1,
-                    entries,
-                    truncated,
-                )?;
-                if *truncated {
-                    return Ok(());
-                }
-            }
-        }
-    }
-    Ok(())
-}
-
-fn workspace_browser_path_components(relative_path: &str) -> Result<Vec<&str>> {
-    if relative_path.is_empty()
-        || Path::new(relative_path).is_absolute()
-        || relative_path.contains('\\')
-    {
-        bail!("invalid workspace browser path");
-    }
-    let components: Vec<_> = relative_path.split('/').collect();
-    if components
-        .iter()
-        .any(|component| !is_workspace_browser_name_allowed(component))
-    {
-        bail!("invalid workspace browser path");
-    }
-    Ok(components)
-}
-
-fn is_workspace_browser_name_allowed(name: &str) -> bool {
-    !name.is_empty()
-        && name != "."
-        && name != ".."
-        && name != ".env"
-        && !matches!(name, ".node_modules" | "node_modules")
-        && !name.contains('/')
-        && !name.contains('\\')
-        && !name.contains('\0')
-        && name.len() <= WORKSPACE_BROWSER_MAX_FILENAME_BYTES
-}
-
-fn missing_workspace_file_preview(path: &str) -> WorkspaceFilePreview {
-    WorkspaceFilePreview {
-        path: path.to_owned(),
-        size_bytes: 0,
-        status: WorkspaceFilePreviewStatus::Missing,
-        text: None,
-    }
 }
 
 fn template_replacements(
@@ -1105,27 +585,6 @@ mod tests {
         }
     }
 
-    fn sample_agent() -> OpenCodeWorkspaceAgent {
-        OpenCodeWorkspaceAgent {
-            agent_key: "btc-2".to_string(),
-            display_name: "BTC 2".to_string(),
-            api_key: "vta_test_123".to_string(),
-        }
-    }
-
-    fn write_package(config: &OpenCodeWorkspaceConfig, agent_key: &str) -> PathBuf {
-        let package = package_root(config, agent_key).expect("package root");
-        fs::create_dir_all(package.join("strategies")).expect("create package directories");
-        fs::write(
-            package.join("manifest.json"),
-            r#"{"schema_version": 1, "package_version": "v1", "tools": [{"id":"trend","description":"Trend target","entrypoint":"strategies/trend.py","input_kind":"ohlcv","supported_timeframes":["15m"],"minimum_candles":1,"required_arguments":["symbol","timeframe","boundary_ms","input","output"],"output_schema":"hypervibes.quantitative.v1","version":"1"}]}"#,
-        )
-        .expect("write manifest");
-        fs::write(package.join("strategies/trend.py"), b"print('trend')\n")
-            .expect("write strategy");
-        package
-    }
-
     fn valid_materialization_input() -> RunWorkspaceMaterializationInput {
         RunWorkspaceMaterializationInput {
             display_name: "BTC 2".to_string(),
@@ -1134,7 +593,6 @@ mod tests {
             credential_id: "b3ce59a8-f3b6-448d-a0c8-d44ea9d23a33".to_string(),
             sub_agent_kind: "analysis".to_string(),
             enabled_capabilities: Vec::new(),
-            expected_quantitative_package: None,
         }
     }
 
@@ -1311,13 +769,10 @@ mod tests {
     fn materialized_run_workspace_uses_only_the_runtime_credential() {
         let temp = TempDir::new("opencode-run-materialize");
         let config = sample_config(&temp.path);
-        write_package(&config, "btc-2");
         let path = RunWorkspacePath::new("btc-2", 42).expect("run path");
         let runtime_key = "vtr_test_runtime_credential".to_string();
         let mut input = valid_materialization_input();
         input.runtime_api_key = runtime_key.clone();
-        input.expected_quantitative_package =
-            inspect_active_quantitative_package(&config, "btc-2").expect("inspect package");
 
         let materialized =
             materialize_run_workspace(&config, &path, &input).expect("materialize run workspace");
@@ -1330,67 +785,18 @@ mod tests {
         let environment = fs::read_to_string(workspace.join(".env")).expect("read run environment");
         assert!(environment.contains(&runtime_key));
         assert!(!environment.contains("vta_test_123"));
-        assert!(workspace.join("scripts/user").is_dir());
-        assert!(workspace.join("scripts/user/strategies/trend.py").is_file());
-        assert!(workspace.join("scripts/user/manifest.json").is_file());
+        assert!(!workspace.join("scripts/user").exists());
         let profile = fs::read_to_string(workspace.join(".opencode/agents/analysis.md"))
             .expect("read run analysis profile");
         assert!(profile.contains("hypervibes_send_notification: deny"));
     }
 
     #[test]
-    fn materialization_rejects_stale_package_snapshot() {
-        let temp = TempDir::new("opencode-run-stale-package");
-        let config = sample_config(&temp.path);
-        write_package(&config, "btc-2");
-        let path = RunWorkspacePath::new("btc-2", 43).expect("run path");
-        let input = valid_materialization_input();
-
-        let error = materialize_run_workspace(&config, &path, &input)
-            .expect_err("stale snapshot should fail");
-
-        assert!(
-            error
-                .to_string()
-                .contains("does not match the bound run snapshot")
-        );
-    }
-
-    #[test]
-    fn later_promotion_does_not_alter_a_materialized_run_copy() {
-        let temp = TempDir::new("opencode-run-package-frozen");
-        let config = sample_config(&temp.path);
-        let package = write_package(&config, "btc-2");
-        let path = RunWorkspacePath::new("btc-2", 44).expect("run path");
-        let mut input = valid_materialization_input();
-        input.expected_quantitative_package =
-            inspect_active_quantitative_package(&config, "btc-2").expect("inspect package");
-        let materialized =
-            materialize_run_workspace(&config, &path, &input).expect("materialize run workspace");
-        assert_eq!(
-            materialized.quantitative_package,
-            input.expected_quantitative_package
-        );
-
-        fs::write(package.join("strategies/trend.py"), b"print('changed')\n")
-            .expect("mutate durable package after materialization");
-        let workspace = path.workspace_host_path(&config);
-        assert_eq!(
-            fs::read(workspace.join("scripts/user/strategies/trend.py"))
-                .expect("read run-local strategy"),
-            b"print('trend')\n"
-        );
-    }
-
-    #[test]
     fn generated_opencode_json_registers_hypervibes_mcp_server() {
         let temp = TempDir::new("opencode-mcp-config");
         let config = sample_config(&temp.path);
-        write_package(&config, "btc-2");
         let path = RunWorkspacePath::new("btc-2", 45).expect("run path");
-        let mut input = valid_materialization_input();
-        input.expected_quantitative_package =
-            inspect_active_quantitative_package(&config, "btc-2").expect("inspect package");
+        let input = valid_materialization_input();
         materialize_run_workspace(&config, &path, &input).expect("materialize run workspace");
 
         let raw = fs::read_to_string(path.workspace_host_path(&config).join("opencode.json"))
@@ -1444,15 +850,12 @@ mod tests {
     }
 
     #[test]
-    fn generated_trading_profile_denies_package_access() {
+    fn generated_trading_profile_preserves_restrictions() {
         let temp = TempDir::new("opencode-trading-permissions");
         let config = sample_config(&temp.path);
-        write_package(&config, "btc-2");
         let path = RunWorkspacePath::new("btc-2", 46).expect("run path");
         let mut input = valid_materialization_input();
         input.sub_agent_kind = "trading".to_string();
-        input.expected_quantitative_package =
-            inspect_active_quantitative_package(&config, "btc-2").expect("inspect package");
         materialize_run_workspace(&config, &path, &input).expect("materialize run workspace");
         let profile = fs::read_to_string(
             path.workspace_host_path(&config)
@@ -1472,13 +875,10 @@ mod tests {
     fn review_workspace_accepts_prompt_revision_capability() {
         let temp = TempDir::new("opencode-review-prompt-revision");
         let config = sample_config(&temp.path);
-        write_package(&config, "btc-2");
         let path = RunWorkspacePath::new("btc-2", 48).expect("run path");
         let mut input = valid_materialization_input();
         input.sub_agent_kind = "review".to_string();
         input.enabled_capabilities = vec!["hypervibes:prompt_revision_submit".to_string()];
-        input.expected_quantitative_package =
-            inspect_active_quantitative_package(&config, "btc-2").expect("inspect package");
 
         materialize_run_workspace(&config, &path, &input).expect("materialize review workspace");
     }
@@ -1487,11 +887,8 @@ mod tests {
     fn generated_profiles_enforce_the_role_permission_matrix() {
         let temp = TempDir::new("opencode-profile-permissions");
         let config = sample_config(&temp.path);
-        write_package(&config, "btc-2");
         let path = RunWorkspacePath::new("btc-2", 47).expect("run path");
-        let mut input = valid_materialization_input();
-        input.expected_quantitative_package =
-            inspect_active_quantitative_package(&config, "btc-2").expect("inspect package");
+        let input = valid_materialization_input();
         materialize_run_workspace(&config, &path, &input).expect("materialize run workspace");
         let workspace_root = path.workspace_host_path(&config);
         let analysis = rendered_profile_from(&workspace_root, "analysis");
@@ -1524,30 +921,9 @@ mod tests {
         assert_profile_action(
             "analysis",
             &analysis,
-            "bash",
-            "python scripts/user/strategies/trend.py --symbol BTC",
-            "allow",
-        );
-        assert_profile_action(
-            "analysis",
-            &analysis,
             "read",
             "workspaces/runs/btc-2/47/workspace/scratch/ohlcv/input.json",
             "allow",
-        );
-        assert_profile_action(
-            "analysis",
-            &analysis,
-            "read",
-            "workspaces/runs/btc-2/47/workspace/scripts/user/strategies/trend.py",
-            "allow",
-        );
-        assert_profile_action(
-            "analysis",
-            &analysis,
-            "edit",
-            "workspaces/runs/btc-2/47/workspace/scripts/user/strategies/trend.py",
-            "deny",
         );
         assert_profile_action("analysis", &analysis, "skill", "hyperliquid-data", "allow");
         assert_profile_action("analysis", &analysis, "skill", "analysis-coding", "deny");
@@ -1613,20 +989,6 @@ mod tests {
             &trading,
             "read",
             "workspaces/runs/btc-2/47/workspace/scratch/ohlcv/input.json",
-            "deny",
-        );
-        assert_profile_action(
-            "trading",
-            &trading,
-            "read",
-            "workspaces/runs/btc-2/47/workspace/scripts/user/strategies/trend.py",
-            "deny",
-        );
-        assert_profile_action(
-            "trading",
-            &trading,
-            "bash",
-            "python scripts/user/strategies/trend.py",
             "deny",
         );
         assert_profile_action(
@@ -1702,9 +1064,9 @@ mod tests {
         let environment = fs::read_to_string(workspace.join(".env")).expect("read .env");
         assert!(environment.contains("HYPERVIBES_AGENT_KEY=btc-2"));
         assert!(environment.contains("HYPERVIBES_API_KEY=vta_test_123"));
-        assert!(environment.contains(
-            "HYPERVIBES_API_BASE_URL=http://host.containers.internal:3003"
-        ));
+        assert!(
+            environment.contains("HYPERVIBES_API_BASE_URL=http://host.containers.internal:3003")
+        );
 
         let profile = fs::read_to_string(workspace.join(".opencode/agents/agent-conversations.md"))
             .expect("read conversation profile");
@@ -1715,11 +1077,8 @@ mod tests {
     fn renders_agents_template_placeholders() {
         let temp = TempDir::new("opencode-agents-template");
         let config = sample_config(&temp.path);
-        write_package(&config, "btc-2");
         let path = RunWorkspacePath::new("btc-2", 49).expect("run path");
-        let mut input = valid_materialization_input();
-        input.expected_quantitative_package =
-            inspect_active_quantitative_package(&config, "btc-2").expect("inspect package");
+        let input = valid_materialization_input();
         materialize_run_workspace(&config, &path, &input).expect("materialize run workspace");
         let rendered = fs::read_to_string(path.workspace_host_path(&config).join("AGENTS.md"))
             .expect("read AGENTS.md");
@@ -1733,11 +1092,8 @@ mod tests {
     fn copies_commands_and_agents_into_project_opencode_dir() {
         let temp = TempDir::new("opencode-copy");
         let config = sample_config(&temp.path);
-        write_package(&config, "btc-2");
         let path = RunWorkspacePath::new("btc-2", 50).expect("run path");
-        let mut input = valid_materialization_input();
-        input.expected_quantitative_package =
-            inspect_active_quantitative_package(&config, "btc-2").expect("inspect package");
+        let input = valid_materialization_input();
         materialize_run_workspace(&config, &path, &input).expect("materialize run workspace");
         let workspace_root = path.workspace_host_path(&config);
 
@@ -1749,17 +1105,6 @@ mod tests {
 
         assert!(commands.contains("HyperVibes"));
         assert!(agent.contains("steps: 100"));
-    }
-
-    #[test]
-    fn rejects_unsafe_agent_keys() {
-        let temp = TempDir::new("opencode-unsafe");
-        let config = sample_config(&temp.path);
-
-        for bad_key in ["../btc", "btc/2", ""] {
-            let error = package_root(&config, bad_key).expect_err("unsafe key should fail");
-            assert!(error.to_string().contains("agent_key"));
-        }
     }
 
     #[test]
@@ -1788,8 +1133,7 @@ mod tests {
         fs::write(source_root.join(".opencode/agents/analysis.md"), "test\n").expect("write agent");
 
         let path = RunWorkspacePath::new("btc-2", 51).expect("run path");
-        let mut input = valid_materialization_input();
-        input.expected_quantitative_package = None;
+        let input = valid_materialization_input();
         let error = materialize_run_workspace(
             &OpenCodeWorkspaceConfig {
                 source_root,
@@ -1809,11 +1153,8 @@ mod tests {
     fn renders_opencode_json_without_workspace_plugin_config() {
         let temp = TempDir::new("opencode-json");
         let config = sample_config(&temp.path);
-        write_package(&config, "btc-2");
         let path = RunWorkspacePath::new("btc-2", 52).expect("run path");
-        let mut input = valid_materialization_input();
-        input.expected_quantitative_package =
-            inspect_active_quantitative_package(&config, "btc-2").expect("inspect package");
+        let input = valid_materialization_input();
         materialize_run_workspace(&config, &path, &input).expect("materialize run workspace");
         let rendered = fs::read_to_string(path.workspace_host_path(&config).join("opencode.json"))
             .expect("read opencode.json");
@@ -1821,226 +1162,6 @@ mod tests {
         assert!(rendered.contains("https://opencode.ai/config.json"));
         assert!(!rendered.contains("@aeondave/opencode-dotenv@latest"));
         assert!(rendered.contains("hypervibes"));
-    }
-
-    #[test]
-    fn package_inspection_reports_missing_valid_and_invalid_packages() {
-        let temp = TempDir::new("package-inspection");
-        let config = sample_config(&temp.path);
-
-        let missing =
-            inspect_active_quantitative_package(&config, "btc-2").expect("inspect missing package");
-        assert_eq!(missing, None);
-
-        write_package(&config, "btc-2");
-        let valid =
-            inspect_active_quantitative_package(&config, "btc-2").expect("inspect valid package");
-        let snapshot = valid.expect("valid package snapshot");
-        assert_eq!(snapshot.version, "v1");
-        assert_eq!(snapshot.manifest_hash.len(), 64);
-        assert_eq!(snapshot, snapshot.clone());
-
-        let package = package_root(&config, "btc-2").expect("package root");
-        fs::write(package.join("manifest.json"), "not-json").expect("corrupt the manifest");
-        let error = inspect_active_quantitative_package(&config, "btc-2")
-            .expect_err("corrupt package should fail");
-        assert!(error.to_string().contains("invalid"));
-        assert!(package.join("strategies/trend.py").exists());
-
-        fs::remove_dir_all(&package).expect("remove package");
-        fs::create_dir_all(&package).expect("recreate empty package");
-        let empty = inspect_active_quantitative_package(&config, "btc-2")
-            .expect_err("empty non-missing package should fail");
-        assert!(empty.to_string().contains("invalid"));
-    }
-
-    #[test]
-    fn package_inspection_never_writes_a_manifest() {
-        let temp = TempDir::new("package-inspection-side-effect-free");
-        let config = sample_config(&temp.path);
-        let package = package_root(&config, "btc-2").expect("package root");
-        fs::create_dir_all(package.join("strategies")).expect("create package");
-        fs::write(package.join("strategies/trend.py"), b"print('trend')\n")
-            .expect("write strategy without a manifest");
-
-        let error = inspect_active_quantitative_package(&config, "btc-2")
-            .expect_err("manifest-less package should fail");
-
-        assert!(error.to_string().contains("manifest.json is missing"));
-        assert!(!package.join("manifest.json").exists());
-    }
-
-    fn browser_workspace(config: &OpenCodeWorkspaceConfig) -> PathBuf {
-        let path = package_root(config, &sample_agent().agent_key).expect("package root");
-        fs::create_dir_all(&path).expect("create browser package");
-        path
-    }
-
-    #[test]
-    fn workspace_browser_lists_safe_entries_in_stable_order() {
-        let temp = TempDir::new("workspace-browser-list");
-        let config = sample_config(&temp.path);
-        let package = browser_workspace(&config);
-        fs::create_dir_all(package.join("nested")).expect("create nested directory");
-        fs::write(package.join("nested/file.txt"), "nested\n").expect("write nested file");
-        fs::write(package.join("root.txt"), "root\n").expect("write root file");
-        fs::write(package.join(".env"), "secret\n").expect("write root env");
-        fs::write(package.join("nested/.env"), "secret\n").expect("write nested env");
-        fs::create_dir_all(package.join("node_modules/package")).expect("create node modules");
-        fs::write(package.join("node_modules/package/index.js"), "hidden\n")
-            .expect("write node module");
-
-        let listing = list_workspace_browser_entries(&config, "btc-2").expect("list package");
-
-        assert!(listing.workspace_exists);
-        assert!(!listing.truncated);
-        assert_eq!(
-            listing
-                .entries
-                .iter()
-                .map(|entry| entry.path.as_str())
-                .collect::<Vec<_>>(),
-            ["nested", "nested/file.txt", "root.txt"]
-        );
-        assert_eq!(
-            listing.entries[0].kind,
-            WorkspaceBrowserEntryKind::Directory
-        );
-        assert_eq!(listing.entries[1].size_bytes, Some(7));
-        assert!(
-            listing
-                .entries
-                .iter()
-                .all(|entry| !entry.path.starts_with("node_modules"))
-        );
-    }
-
-    #[test]
-    fn workspace_browser_lists_package_relative_paths() {
-        let temp = TempDir::new("workspace-browser-package-paths");
-        let config = sample_config(&temp.path);
-        write_package(&config, "btc-2");
-
-        let listing = list_workspace_browser_entries(&config, "btc-2").expect("list package");
-
-        assert!(listing.workspace_exists);
-        let paths: Vec<&str> = listing
-            .entries
-            .iter()
-            .map(|entry| entry.path.as_str())
-            .collect();
-        assert!(paths.contains(&"strategies"));
-        assert!(paths.contains(&"strategies/trend.py"));
-        assert!(paths.contains(&"manifest.json"));
-        assert!(paths.iter().all(|path| !path.starts_with("scripts/user")));
-    }
-
-    #[test]
-    fn workspace_browser_file_previews_report_text_binary_large_and_missing() {
-        let temp = TempDir::new("workspace-browser-preview");
-        let config = sample_config(&temp.path);
-        let package = browser_workspace(&config);
-        fs::write(package.join("text.txt"), "hello\n").expect("write text");
-        fs::write(package.join("binary.bin"), [b'a', 0, b'b']).expect("write binary");
-        fs::write(
-            package.join("large.txt"),
-            vec![b'x'; WORKSPACE_BROWSER_MAX_PREVIEW_BYTES as usize + 1],
-        )
-        .expect("write large file");
-
-        let text = read_workspace_browser_file(&config, "btc-2", "text.txt").expect("read text");
-        assert_eq!(text.status, WorkspaceFilePreviewStatus::Text);
-        assert_eq!(text.text.as_deref(), Some("hello\n"));
-
-        let binary =
-            read_workspace_browser_file(&config, "btc-2", "binary.bin").expect("read binary");
-        assert_eq!(binary.status, WorkspaceFilePreviewStatus::Binary);
-        assert!(binary.text.is_none());
-
-        let large = read_workspace_browser_file(&config, "btc-2", "large.txt").expect("read large");
-        assert_eq!(large.status, WorkspaceFilePreviewStatus::TooLarge);
-        assert!(large.text.is_none());
-
-        let missing =
-            read_workspace_browser_file(&config, "btc-2", "missing.txt").expect("read missing");
-        assert_eq!(missing.status, WorkspaceFilePreviewStatus::Missing);
-    }
-
-    #[test]
-    fn workspace_browser_rejects_unsafe_paths_and_agent_keys() {
-        let temp = TempDir::new("workspace-browser-invalid");
-        let config = sample_config(&temp.path);
-        browser_workspace(&config);
-
-        for path in [
-            "",
-            "/text.txt",
-            "nested//text.txt",
-            "./text.txt",
-            "../text.txt",
-            ".env",
-            "a/\0b",
-        ] {
-            assert!(
-                read_workspace_browser_file(&config, "btc-2", path).is_err(),
-                "path should be rejected: {path:?}"
-            );
-        }
-        for agent_key in [".", "..", "../btc", "btc/2", ""] {
-            assert!(
-                list_workspace_browser_entries(&config, agent_key).is_err(),
-                "agent key should be rejected: {agent_key:?}"
-            );
-        }
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn workspace_browser_omits_and_rejects_symlinks() {
-        use std::os::unix::fs::symlink;
-
-        let temp = TempDir::new("workspace-browser-symlink");
-        let config = sample_config(&temp.path);
-        let package = browser_workspace(&config);
-        let outside = temp.path.join("outside.txt");
-        fs::write(&outside, "outside\n").expect("write outside file");
-        symlink(&outside, package.join("outside-link")).expect("create outside symlink");
-
-        let listing = list_workspace_browser_entries(&config, "btc-2").expect("list package");
-        assert!(listing.entries.is_empty());
-        assert!(read_workspace_browser_file(&config, "btc-2", "outside-link").is_err());
-    }
-
-    #[test]
-    fn workspace_browser_reports_missing_workspace_and_truncated_trees() {
-        let temp = TempDir::new("workspace-browser-limits");
-        let config = sample_config(&temp.path);
-        let missing = list_workspace_browser_entries(&config, "btc-2").expect("list missing");
-        assert!(!missing.workspace_exists);
-        assert_eq!(
-            read_workspace_browser_file(&config, "btc-2", "missing.txt")
-                .expect("read missing package")
-                .status,
-            WorkspaceFilePreviewStatus::Missing
-        );
-
-        let package = browser_workspace(&config);
-        for index in 0..=WORKSPACE_BROWSER_MAX_ENTRIES {
-            fs::write(package.join(format!("{index:03}.txt")), "x").expect("write entry");
-        }
-        let entry_limited = list_workspace_browser_entries(&config, "btc-2").expect("list entries");
-        assert!(entry_limited.truncated);
-        assert_eq!(entry_limited.entries.len(), WORKSPACE_BROWSER_MAX_ENTRIES);
-
-        fs::remove_dir_all(&package).expect("remove entry-limited package");
-        fs::create_dir_all(&package).expect("recreate package");
-        let mut nested = package;
-        for index in 0..=WORKSPACE_BROWSER_MAX_DEPTH {
-            nested = nested.join(format!("level-{index}"));
-            fs::create_dir_all(&nested).expect("create nested directory");
-        }
-        let depth_limited = list_workspace_browser_entries(&config, "btc-2").expect("list depth");
-        assert!(depth_limited.truncated);
     }
 
     #[test]

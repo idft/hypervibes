@@ -53,7 +53,6 @@ pub enum AgentShowTab {
     SubAgentsHeading,
     Analysis,
     Trading,
-    Coding,
     Review,
     Settings,
 }
@@ -68,7 +67,6 @@ impl AgentShowTab {
             Self::Memories => format!("/agents/{agent_key}/memories"),
             Self::Analysis => format!("/agents/{agent_key}/analysis"),
             Self::Trading => format!("/agents/{agent_key}/trading"),
-            Self::Coding => format!("/agents/{agent_key}/coding"),
             Self::Review => format!("/agents/{agent_key}/review"),
             Self::Settings => format!("/agents/{agent_key}/settings"),
             Self::SubAgentsHeading => format!("/agents/{agent_key}"),
@@ -104,7 +102,6 @@ pub fn build_agent_show_tabs(
         ("Sub-agents", AgentShowTab::SubAgentsHeading, true, false),
         ("Analysis", AgentShowTab::Analysis, false, true),
         ("Trading", AgentShowTab::Trading, false, true),
-        ("Coding", AgentShowTab::Coding, false, true),
         ("Review", AgentShowTab::Review, false, true),
         ("Settings", AgentShowTab::Settings, false, false),
     ]

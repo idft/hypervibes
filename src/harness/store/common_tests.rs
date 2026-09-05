@@ -7,7 +7,6 @@ use super::test_support::sample_agent;
 use super::{
     insert_default_harness_sub_agents, list_agent_sub_agents, set_all_agent_sub_agents_enabled,
 };
-use crate::harness::model::SUB_AGENT_KIND_CODING;
 
 #[tokio::test]
 async fn set_all_agent_sub_agents_enabled_toggles_jobs_together() {
@@ -38,21 +37,7 @@ async fn set_all_agent_sub_agents_enabled_toggles_jobs_together() {
         .expect("enable all");
 
     let jobs = list_agent_sub_agents(&pool, &key).await.expect("list jobs");
-    for job in &jobs {
-        if job.sub_agent_kind == SUB_AGENT_KIND_CODING {
-            assert!(
-                !job.enabled,
-                "coding job {} must stay disabled after bulk enable",
-                job.id
-            );
-        } else {
-            assert!(
-                job.enabled,
-                "job {} ({}) should be enabled",
-                job.id, job.sub_agent_kind
-            );
-        }
-    }
+    assert!(jobs.iter().all(|job| job.enabled));
 
     set_all_agent_sub_agents_enabled(&pool, &key, false)
         .await

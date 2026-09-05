@@ -9,10 +9,7 @@ use tracing::{info, warn};
 use crate::{
     db::DbPool,
     harness::{
-        model::{
-            SUB_AGENT_KIND_ANALYSIS, SUB_AGENT_KIND_CODING, SUB_AGENT_KIND_REVIEW,
-            SUB_AGENT_KIND_TRADING,
-        },
+        model::{SUB_AGENT_KIND_ANALYSIS, SUB_AGENT_KIND_REVIEW, SUB_AGENT_KIND_TRADING},
         store,
     },
     opencode::{
@@ -31,8 +28,6 @@ const DEFAULT_ANALYSIS_AGENT: &str = "analysis";
 const DEFAULT_ANALYSIS_COMMAND: &str = "hypervibes-analysis";
 const DEFAULT_DAILY_REVIEW_AGENT: &str = "review";
 const DEFAULT_DAILY_REVIEW_COMMAND: &str = "hypervibes-review";
-const DEFAULT_ANALYSIS_CODING_AGENT: &str = "coding";
-const DEFAULT_ANALYSIS_CODING_COMMAND: &str = "hypervibes-coding";
 const DEFAULT_TRADING_AGENT: &str = "trading";
 const DEFAULT_TRADING_COMMAND: &str = "hypervibes-trading";
 const MODEL_ACTIVITY_POLL_ATTEMPTS: usize = 10;
@@ -302,10 +297,6 @@ fn resolve_opencode_sub_agent(sub_agent_kind: &str) -> Result<(&'static str, &'s
     match sub_agent_kind {
         SUB_AGENT_KIND_ANALYSIS => Ok((DEFAULT_ANALYSIS_AGENT, DEFAULT_ANALYSIS_COMMAND)),
         SUB_AGENT_KIND_REVIEW => Ok((DEFAULT_DAILY_REVIEW_AGENT, DEFAULT_DAILY_REVIEW_COMMAND)),
-        SUB_AGENT_KIND_CODING => Ok((
-            DEFAULT_ANALYSIS_CODING_AGENT,
-            DEFAULT_ANALYSIS_CODING_COMMAND,
-        )),
         SUB_AGENT_KIND_TRADING => Ok((DEFAULT_TRADING_AGENT, DEFAULT_TRADING_COMMAND)),
         other => Err(anyhow!("unknown job kind: {other}")),
     }
@@ -337,25 +328,13 @@ pub async fn dispatch_with_timeout(
     backend: Arc<dyn HarnessBackend>,
     request: DispatchRequest,
 ) -> Result<DispatchOutcome> {
-    dispatch_with_timeout_mode(pool, backend, request, true).await
-}
-
-/// Execute an coding model session without terminalizing success. The
-/// coding worker owns final success/failure after report validation and
-/// promotion; timeout and backend failures still become terminal immediately.
-pub async fn dispatch_with_timeout_for_coding(
-    pool: &crate::db::DbPool,
-    backend: Arc<dyn HarnessBackend>,
-    request: DispatchRequest,
-) -> Result<DispatchOutcome> {
-    dispatch_with_timeout_mode(pool, backend, request, false).await
+    dispatch_with_timeout_mode(pool, backend, request).await
 }
 
 async fn dispatch_with_timeout_mode(
     pool: &crate::db::DbPool,
     backend: Arc<dyn HarnessBackend>,
     request: DispatchRequest,
-    finalize_success: bool,
 ) -> Result<DispatchOutcome> {
     let run_id = request.run_id;
     let timeout_seconds = request.timeout_seconds;
@@ -409,14 +388,7 @@ async fn dispatch_with_timeout_mode(
 
     match dispatch_result {
         Ok(Ok(result)) => {
-            if finalize_success {
-                if !store::mark_run_succeeded(pool, run_id, Some(&result.backend_run_ref)).await? {
-                    return Ok(DispatchOutcome::Cancelled);
-                }
-            } else if !store::get_run(pool, run_id)
-                .await?
-                .is_some_and(|run| run.status == crate::harness::model::RUN_STATUS_RUNNING)
-            {
+            if !store::mark_run_succeeded(pool, run_id, Some(&result.backend_run_ref)).await? {
                 return Ok(DispatchOutcome::Cancelled);
             }
             Ok(DispatchOutcome::Succeeded {
@@ -733,13 +705,6 @@ mod tests {
         assert_eq!(
             resolve_opencode_sub_agent(SUB_AGENT_KIND_REVIEW).unwrap(),
             (DEFAULT_DAILY_REVIEW_AGENT, DEFAULT_DAILY_REVIEW_COMMAND)
-        );
-        assert_eq!(
-            resolve_opencode_sub_agent(SUB_AGENT_KIND_CODING).unwrap(),
-            (
-                DEFAULT_ANALYSIS_CODING_AGENT,
-                DEFAULT_ANALYSIS_CODING_COMMAND,
-            )
         );
         assert!(resolve_opencode_sub_agent("unknown").is_err());
     }

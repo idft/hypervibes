@@ -248,11 +248,6 @@ impl<'a> ConversationService<'a> {
             bail!("Invalid message id.");
         }
         self.load_agent(agent_key).await?;
-        if crate::harness::store::agent_has_blocking_workspace_maintenance(self.pool, agent_key)
-            .await?
-        {
-            bail!("Workspace maintenance is in progress. Send a message after it finishes.");
-        }
         let conversation = self.load_conversation(agent_key, conversation_id).await?;
         let Some(turn_guard) = self.turn_tracker.try_acquire(conversation_id).await else {
             bail!("This conversation already has a turn in progress.");
@@ -608,11 +603,6 @@ fn permission_rules_for(
     });
     rules.push(OpenCodePermissionRule {
         permission: "hypervibes_update_strategy_prompt".to_string(),
-        pattern: "*".to_string(),
-        action: "ask".to_string(),
-    });
-    rules.push(OpenCodePermissionRule {
-        permission: "hypervibes_request_analysis_coding".to_string(),
         pattern: "*".to_string(),
         action: "ask".to_string(),
     });

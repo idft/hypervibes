@@ -28,23 +28,22 @@ in-flight OpenCode MCP server can finish its API calls.
 | Subsystem | Responsibility |
 | --- | --- |
 | `agents` | Agent registry, API keys, OpenCode workspaces, selected instruments, and sub-agent-targeted prompt revisions. User-owned encrypted Hyperliquid signing material lives with authentication records. |
-| `harness` | Persisted unified sub-agents/runs, Coding and provider-reload maintenance, recovery of orphaned runs, and OpenCode dispatch. |
+| `harness` | Persisted unified sub-agents/runs, provider-reload maintenance, recovery of orphaned runs, and OpenCode dispatch. |
 
 ## Harness sub-agents
 
 `harness_sub_agents` is the single configuration record for every OpenCode
 sub-agent and `harness_sub_agent_runs` is its durable execution queue. The
-durable roles are many `analysis` jobs plus singleton `trading`, `coding`, and
-`review` jobs. Candle sub-agents use the `candle_closed` trigger, which the
-scheduler owns and advances at UTC candle boundaries after the configured
-settling delay. Coding is on demand and Review keeps its daily schedule.
-`harness_maintenance_tasks` remains separate for workspace work, Coding
-promotion, and provider reloads.
+durable roles are many `analysis` jobs plus singleton `trading` and `review`
+jobs. Candle sub-agents use the `candle_closed` trigger, which the scheduler
+owns and advances at UTC candle boundaries after the configured settling delay.
+Review keeps its daily schedule. `harness_maintenance_tasks` remains separate
+for provider configuration reloads.
 
 Sub-agents can be deleted only while their runs and OpenCode sessions are idle.
 Deletion first removes terminal sessions through the OpenCode API, then deletes
-the sub-agent and cascades its runs and coding maintenance rows. Conversations remain
-separate from harness sub-agents and runs.
+the sub-agent and cascades its runs. Conversations remain separate from harness
+sub-agents and runs.
 | `opencode` | OpenCode HTTP client, session persistence access, and generated agent workspaces. |
 | `memory` | Append-only, agent-owned scoped records, source-run provenance, and links between records. |
 | `hyperliquid` | Instrument reference data, account-history journal, live account state, signed order gateway, and order reconciliation. |
@@ -61,31 +60,31 @@ schema for registry and orchestration tables, and `memory`, `hyperliquid`, and
 A user first configures and approves one user-owned Hyperliquid trading
 signer on the Account page. Agent creation then selects an exclusive main or
 sub-account, creates an agent API key, creates default prompts and schedules,
-and generates the agent workspace after funding is completed or skipped.
+and is ready to create isolated run or conversation workspaces when needed.
 
 The scheduler polls every 10 seconds. It claims due work transactionally and
 uses independent analysis and trading lanes per agent, while allowing work for
 different agents to run concurrently. Built-in work includes:
 
 - scheduled Analysis jobs, Trading, and Review
-- on-demand Coding maintenance work
 
-For a dispatch, the OpenCode backend creates a session in the isolated run or
-candidate workspace and invokes the appropriate OpenCode command. The initial prompt contains the
-agent and sub-agent context, selected instruments, the sub-agent's current prompt
-revision, the latest `agent_learnings` memory, the global prompt, and a live
-account snapshot for Trading work. That snapshot includes per-stream data
-authority and monitor health; unavailable data is never represented as an
+For a dispatch, the OpenCode backend creates a session in the isolated run
+workspace and invokes the appropriate OpenCode command. The initial prompt
+contains the agent and sub-agent context, selected instruments, the sub-agent's
+current prompt revision, the latest `agent_learnings` memory, the global prompt,
+and a live account snapshot for Trading work. That snapshot includes per-stream
+data authority and monitor health; unavailable data is never represented as an
 empty account. The order gateway rejects new agent exposure until the
 clearinghouse and open-orders streams are current, while reduce-only orders
 remain available for risk reduction.
 
-Analysis jobs publish discoverable research memories with agent-wide or
-instrument-targeted scope. Trading owns research synthesis and execution: it
+Analysis jobs use approved data tools for research and publish discoverable
+memories with agent-wide or instrument-targeted scope. They do not author or
+execute reusable analysis code. Trading owns research synthesis and execution: it
 reads fresh context for an instrument from each enabled Analysis producer,
 records a `trading_decision` memory when possible, and manages orders. Missing,
 stale, or failed analyst output is context rather than a scheduler or
-order-gateway block. Trading has no package read or execution access.
+order-gateway block.
 
 Run state is persisted. On startup and periodically thereafter, the scheduler
 resumes queued runs and recovers stale running runs so interrupted dispatches
@@ -140,39 +139,6 @@ is the data-ownership boundary for account, memory, and order operations.
 OpenCode is the sole execution backend. Its HTTP endpoint is configured at the
 application level with `OPENCODE_BASE_URL`, rather than being assigned through
 database runtime rows.
-
-## Coding Isolation
-
-An agent's only durable filesystem state is its Coding package at
-`packages/<agent-key>/` under the configured workspace root. It contains
-`manifest.json` plus any coding-agent-defined files, and it is created by the
-first successful Coding promotion. Coding runs in an isolated
-candidate workspace under `coding/<agent-key>/<task-id>/workspace`; candidate
-creation copies the package root into the candidate's `scripts/user/` tree.
-The model receives path-scoped native OpenCode filesystem permissions that can
-edit only approved files under candidate `scripts/user`.
-Pyright supplies Python diagnostics for those native reads and edits. Runs and
-conversations use their own isolated directories; coding holds a write lease
-only while promoting a validated candidate and verifying that the promoted
-tree has the same hash.
-
-The manifest is a validation registry, not a runtime authorization list: the
-analysis agent may inspect and directly execute any Python file below its
-run-local `scripts/user/` copy of the package, and trading may not read or
-execute package code.
-
-Candidate validation runs through a fixed local MCP tool in the OpenCode
-analysis runtime, not through a HyperVibes HTTP endpoint. The tool accepts no
-executable or path arguments and records a task-scoped result bound to the
-candidate tree hash. The validator compiles and scans the complete candidate
-tree and runs the complete deterministic fixture suite for every declared
-validation target, naming the target in each check. The worker recomputes the
-hash after generation, so any write after validation fails promotion closed.
-
-Promotion swaps directories, never individual files. A JSON journal records
-each swap phase, and startup recovery restores the previous tree when a process
-stops before a verified completion. The maintenance task and linked harness
-run remain the durable lifecycle record in Postgres.
 
 ## Configuration
 

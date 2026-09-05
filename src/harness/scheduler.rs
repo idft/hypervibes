@@ -6,21 +6,18 @@ use std::{
 
 use anyhow::{Context, Result, anyhow};
 use chrono::Utc;
-use tokio::sync::{Mutex as AsyncMutex, OwnedMutexGuard, Semaphore, watch};
+use tokio::sync::{Mutex as AsyncMutex, OwnedMutexGuard, watch};
 use tracing::{debug, error, info, warn};
 
 use crate::{
     agents::store::{get_agent, list_agent_instrument_ids},
     db::DbPool,
     harness::{
-        backend::{
-            DispatchOutcome, DispatchRequest, HarnessBackend, dispatch_with_timeout,
-            dispatch_with_timeout_for_coding,
-        },
+        backend::{DispatchOutcome, DispatchRequest, HarnessBackend, dispatch_with_timeout},
         in_flight::{InFlightTracker, SHUTDOWN_IN_FLIGHT_GRACE},
         model::{
-            HarnessDispatchSubAgentRow, SUB_AGENT_KIND_ANALYSIS, SUB_AGENT_KIND_CODING,
-            SUB_AGENT_KIND_REVIEW, SUB_AGENT_KIND_TRADING,
+            HarnessDispatchSubAgentRow, SUB_AGENT_KIND_ANALYSIS, SUB_AGENT_KIND_REVIEW,
+            SUB_AGENT_KIND_TRADING,
         },
         store,
         timeframe::{boundary_for_due_at, parse_timeframe_seconds},
@@ -29,15 +26,12 @@ use crate::{
     hyperliquid::live_state::{LiveAccountStore, live_agent_snapshot_for_dispatch},
     memory::get_latest_agent_memory_by_type,
     opencode::{
-        client::OpenCodeClient,
-        coding_workspace::{changed_paths, manifest_hash},
-        workspace::OpenCodeWorkspaceRuntimeConfig,
-        workspace_control_client::{WorkspaceAgentInput, WorkspaceController},
+        client::OpenCodeClient, workspace::OpenCodeWorkspaceRuntimeConfig,
+        workspace_control_client::WorkspaceController,
     },
 };
 
 const SCHEDULER_POLL_INTERVAL: Duration = Duration::from_secs(10);
-const OPENCODE_STARTUP_RETRY_INTERVAL: Duration = Duration::from_secs(5);
 const ORPHAN_RECOVERY_INTERVAL: Duration = Duration::from_secs(60);
 const ARTIFACT_GARBAGE_COLLECTION_LIMIT: i64 = 50;
 const ARTIFACT_DELETION_CLAIM_TIMEOUT: chrono::Duration = chrono::Duration::minutes(5);
@@ -67,7 +61,6 @@ pub struct HarnessScheduler {
     last_orphan_recovery_at: Option<chrono::DateTime<Utc>>,
     in_flight: InFlightTracker,
     workspace_leases: WorkspaceLeaseManager,
-    coding_semaphore: Arc<Semaphore>,
     lane_locks: CandleSubAgentrLaneLockManager,
 }
 
@@ -177,7 +170,6 @@ impl HarnessScheduler {
             last_orphan_recovery_at: None,
             in_flight: runtime.in_flight,
             workspace_leases,
-            coding_semaphore: Arc::new(Semaphore::new(1)),
             lane_locks: CandleSubAgentrLaneLockManager::default(),
         }
     }
@@ -194,49 +186,9 @@ impl HarnessScheduler {
     /// instead of waiting for the 30-minute grace to elapse.
     pub async fn run(mut self) -> Result<()> {
         info!("harness scheduler starting");
-        let mut promotion_recovery_pending = !*self.shutdown_rx.borrow();
         loop {
             if *self.shutdown_rx.borrow() {
                 break;
-            }
-
-            if promotion_recovery_pending {
-                match self.workspace_controller.recover_promotions().await {
-                    Ok(journals) => {
-                        let mut recovered = 0;
-                        for journal in journals {
-                            match journal.phase {
-                                workspace_store::coding_workspace::PromotionJournalPhase::Completed => {
-                                    let _ = store::mark_maintenance_task_succeeded(
-                                        &self.pool,
-                                        journal.task_id,
-                                    )
-                                    .await;
-                                    recovered += 1;
-                                }
-                                workspace_store::coding_workspace::PromotionJournalPhase::RolledBack => {
-                                    let _ = store::mark_maintenance_task_failed(
-                                        &self.pool,
-                                        journal.task_id,
-                                        "promotion was rolled back during startup recovery",
-                                    )
-                                    .await;
-                                    recovered += 1;
-                                }
-                                _ => {}
-                            }
-                        }
-                        if recovered > 0 {
-                            info!(recovered, "reconciled promotion journals at startup");
-                        }
-                        promotion_recovery_pending = false;
-                    }
-                    Err(error) => warn!(
-                        error = ?error,
-                        retry_in = ?OPENCODE_STARTUP_RETRY_INTERVAL,
-                        "promotion journal recovery failed; will retry"
-                    ),
-                }
             }
 
             if let Err(error) = self.tick().await {
@@ -244,11 +196,7 @@ impl HarnessScheduler {
             }
 
             tokio::select! {
-                _ = tokio::time::sleep(if promotion_recovery_pending {
-                    OPENCODE_STARTUP_RETRY_INTERVAL
-                } else {
-                    SCHEDULER_POLL_INTERVAL
-                }) => {}
+                _ = tokio::time::sleep(SCHEDULER_POLL_INTERVAL) => {}
                 _ = self.shutdown_rx.changed() => break,
             }
         }
@@ -300,18 +248,6 @@ impl HarnessScheduler {
         process_provider_config_reload_tasks(
             &self.pool,
             &self.opencode_client,
-            self.opencode_client.base_url(),
-        )
-        .await?;
-
-        spawn_coding_workers(
-            &self.pool,
-            &self.backend,
-            &self.workspace_controller,
-            &self.agent_api_base_url,
-            &self.in_flight,
-            &self.coding_semaphore,
-            &self.workspace_leases,
             self.opencode_client.base_url(),
         )
         .await?;
@@ -493,106 +429,6 @@ impl HarnessScheduler {
             );
         }
         let stale_before = now - chrono::Duration::minutes(2);
-        for task in
-            store::list_stale_running_maintenance_tasks(&self.pool, stale_before, 20).await?
-        {
-            if task.task_kind != crate::harness::model::MAINTENANCE_TASK_KIND_ANALYSIS_CODING {
-                continue;
-            }
-            let candidate_directory = format!(
-                "{}/coding/{}/{}/workspace",
-                self.container_workspaces_root.trim_end_matches('/'),
-                task.agent_key,
-                task.id
-            );
-            if let Some(run_id) = task.run_id
-                && let Some(run) = store::get_run(&self.pool, run_id).await?
-                && coding_run_exceeded_timeout(run.started_at, run.timeout_seconds, now)
-            {
-                let mut summary =
-                    format!("coding run exceeded timeout of {}s", run.timeout_seconds);
-                if let Some(session_id) = run.backend_run_ref
-                    && let Some(sub_agent_id) = task.sub_agent_id
-                    && let Some(event) = store::get_dispatch_sub_agent(
-                        &self.pool,
-                        &task.agent_key,
-                        sub_agent_id,
-                        self.opencode_client.base_url(),
-                    )
-                    .await?
-                {
-                    match self
-                        .backend
-                        .abort_session(&event.opencode_base_url, &session_id)
-                        .await
-                    {
-                        Ok(true) => summary.push_str("; OpenCode session aborted"),
-                        Ok(false) => summary.push_str("; OpenCode declined session abort"),
-                        Err(error) => {
-                            warn!(task_id = task.id, session_id, error = ?error, "failed to abort overdue coding session");
-                            summary.push_str("; failed to abort OpenCode session");
-                        }
-                    }
-                }
-                warn!(task_id = task.id, run_id, summary = %summary, "recovering overdue coding task");
-                store::mark_maintenance_task_failed(&self.pool, task.id, &summary).await?;
-                store::mark_run_failed(&self.pool, run_id, &summary, None).await?;
-                continue;
-            }
-            if task.phase == crate::harness::model::MAINTENANCE_PHASE_GENERATING
-                && let Some(run_id) = task.run_id
-                && let Some(run) = store::get_run(&self.pool, run_id).await?
-                && let Some(session_id) = run.backend_run_ref
-                && let Some(sub_agent_id) = task.sub_agent_id
-                && let Some(event) = store::get_dispatch_sub_agent(
-                    &self.pool,
-                    &task.agent_key,
-                    sub_agent_id,
-                    self.opencode_client.base_url(),
-                )
-                .await?
-                && let Some(status) = self
-                    .backend
-                    .get_session_status_in_directory(
-                        &event.opencode_base_url,
-                        &session_id,
-                        Some(&candidate_directory),
-                    )
-                    .await?
-                && status.is_active()
-            {
-                debug!(task_id = task.id, session_id = %session_id, "coding session remains active during stale-task sweep");
-                continue;
-            }
-            warn!(task_id = task.id, phase = %task.phase, "recovering stale coding task");
-            if task.is_in_promotion_window() {
-                let recovered = self.workspace_controller.recover_promotions().await?;
-                if let Some(journal) = recovered
-                    .into_iter()
-                    .find(|item| item.agent_key == task.agent_key && item.task_id == task.id)
-                {
-                    match journal.phase {
-                        workspace_store::coding_workspace::PromotionJournalPhase::Completed => {
-                            store::mark_maintenance_task_succeeded(&self.pool, task.id).await?;
-                            if let Some(run_id) = task.run_id {
-                                store::mark_run_succeeded(&self.pool, run_id, None).await?;
-                            }
-                            continue;
-                        }
-                        workspace_store::coding_workspace::PromotionJournalPhase::RolledBack => {
-                            // Fall through to terminal failure after restoring the
-                            // previous live tree.
-                        }
-                        _ => {}
-                    }
-                }
-            }
-            let summary = format!("stale coding task recovered during {} phase", task.phase);
-            store::mark_maintenance_task_failed(&self.pool, task.id, &summary).await?;
-            if let Some(run_id) = task.run_id {
-                store::mark_run_failed(&self.pool, run_id, &summary, None).await?;
-            }
-        }
         let requeued =
             store::requeue_stale_provider_config_reload_tasks(&self.pool, stale_before).await?;
         if requeued > 0 {
@@ -868,7 +704,7 @@ async fn resume_queued_run(
             return;
         }
     };
-    let result = dispatch_run_in_isolated_workspace_with_workspace_lease(
+    let _result = dispatch_run_in_isolated_workspace_with_workspace_lease(
         pool.clone(),
         backend.clone(),
         workspace_controller.clone(),
@@ -877,12 +713,6 @@ async fn resume_queued_run(
         workspace_leases,
     )
     .await;
-    if queued_run.sub_agent_kind == SUB_AGENT_KIND_REVIEW
-        && result.succeeded
-        && let Err(error) = dispatch_review_coding_event(pool, &queued_run.agent_key, run_id).await
-    {
-        warn!(run_id, error = ?error, "failed to dispatch queued review follow-up");
-    }
 }
 
 /// Process a queued `provider_config_reload` maintenance task. The task
@@ -933,622 +763,6 @@ async fn process_provider_config_reload_tasks(
     Ok(())
 }
 
-const CODING_QUEUE_LIMIT: i64 = 4;
-const CODING_DISPATCH_HEARTBEAT_INTERVAL: Duration = Duration::from_secs(5);
-
-#[allow(clippy::too_many_arguments)]
-async fn spawn_coding_workers(
-    pool: &DbPool,
-    backend: &Arc<dyn HarnessBackend>,
-    workspace_controller: &Arc<dyn WorkspaceController>,
-    agent_api_base_url: &str,
-    in_flight: &InFlightTracker,
-    semaphore: &Arc<Semaphore>,
-    workspace_leases: &WorkspaceLeaseManager,
-    opencode_base_url: &str,
-) -> Result<()> {
-    let tasks = store::list_queued_maintenance_candidates(pool, CODING_QUEUE_LIMIT).await?;
-    for task in tasks {
-        if task.task_kind != crate::harness::model::MAINTENANCE_TASK_KIND_ANALYSIS_CODING {
-            continue;
-        }
-        let pool = pool.clone();
-        let backend = backend.clone();
-        let workspace_controller = workspace_controller.clone();
-        let agent_api_base_url = agent_api_base_url.to_string();
-        let in_flight = in_flight.clone();
-        let semaphore = semaphore.clone();
-        let workspace_leases = workspace_leases.clone();
-        let opencode_base_url = opencode_base_url.to_string();
-        tokio::spawn(async move {
-            let Ok(_permit) = semaphore.acquire_owned().await else {
-                return;
-            };
-            let _guard = in_flight.track();
-            if let Err(error) = run_coding_task(
-                &pool,
-                &backend,
-                &workspace_controller,
-                &agent_api_base_url,
-                &workspace_leases,
-                &opencode_base_url,
-                task,
-            )
-            .await
-            {
-                warn!(error = ?error, "coding task worker failed");
-            }
-        });
-    }
-    Ok(())
-}
-
-async fn run_coding_task(
-    pool: &DbPool,
-    backend: &Arc<dyn HarnessBackend>,
-    workspace_controller: &Arc<dyn WorkspaceController>,
-    agent_api_base_url: &str,
-    workspace_leases: &WorkspaceLeaseManager,
-    opencode_base_url: &str,
-    task: crate::harness::model::AgentMaintenanceTaskRow,
-) -> Result<()> {
-    let Some(run_id) = task.run_id else {
-        store::mark_maintenance_task_failed(pool, task.id, "coding task has no run").await?;
-        return Ok(());
-    };
-    if !store::mark_maintenance_task_running(pool, task.id).await? {
-        return Ok(());
-    }
-    let Some(agent) = get_agent(pool, &task.agent_key).await? else {
-        fail_coding_task(pool, task.id, run_id, "agent disappeared before coding").await?;
-        return Ok(());
-    };
-    let Some(sub_agent_id) = task.sub_agent_id else {
-        fail_coding_task(pool, task.id, run_id, "coding task has no job").await?;
-        return Ok(());
-    };
-    let Some(event) =
-        store::get_dispatch_sub_agent(pool, &task.agent_key, sub_agent_id, opencode_base_url)
-            .await?
-    else {
-        fail_coding_task(pool, task.id, run_id, "coding event disappeared").await?;
-        return Ok(());
-    };
-
-    // Resolve the requested coding mode from the inspected durable package:
-    // a valid package is suitable for manual improvement, a missing package
-    // needs bootstrap, and an invalid package uses bootstrap instructions
-    // that rebuild a valid manifest while preserving useful files.
-    let requested_mode = task
-        .parameters
-        .get("mode")
-        .and_then(serde_json::Value::as_str)
-        .unwrap_or("auto");
-    let package_state = workspace_controller
-        .inspect_active_quantitative_package(&task.agent_key)
-        .await;
-    let effective_mode = match (&package_state, requested_mode) {
-        (Ok(Some(_)), "auto" | "manual_improvement") => "manual_improvement",
-        (Ok(None) | Err(_), "auto") => "bootstrap",
-        (Ok(None), "bootstrap") => "bootstrap",
-        (Ok(None), "manual_improvement") => {
-            fail_coding_task(
-                pool,
-                task.id,
-                run_id,
-                "manual improvement requires a valid Coding package",
-            )
-            .await?;
-            return Ok(());
-        }
-        (Err(_), "bootstrap") => "bootstrap",
-        (Err(_), "manual_improvement") => {
-            fail_coding_task(
-                pool,
-                task.id,
-                run_id,
-                "manual improvement requires a valid Coding package",
-            )
-            .await?;
-            return Ok(());
-        }
-        _ => {
-            fail_coding_task(pool, task.id, run_id, "invalid coding mode").await?;
-            return Ok(());
-        }
-    };
-
-    let candidate = match workspace_controller
-        .create_candidate(
-            WorkspaceAgentInput {
-                agent_key: task.agent_key.clone(),
-                display_name: agent.display_name.clone(),
-                agent_api_key: agent.api_key.clone(),
-                api_base_url: agent_api_base_url.to_string(),
-            },
-            task.id,
-        )
-        .await
-    {
-        Ok(candidate) => candidate,
-        Err(error) => {
-            fail_coding_task(pool, task.id, run_id, &error.to_string()).await?;
-            return Ok(());
-        }
-    };
-    store::compare_and_set_maintenance_phase(
-        pool,
-        task.id,
-        crate::harness::model::MAINTENANCE_PHASE_PREPARING,
-        crate::harness::model::MAINTENANCE_PHASE_GENERATING,
-    )
-    .await?;
-
-    let Some(mut request) = build_event_dispatch_request(pool, &event, run_id, Utc::now()).await?
-    else {
-        fail_coding_task(pool, task.id, run_id, "coding request could not be built").await?;
-        return Ok(());
-    };
-    let analysis_strategy_prompts = load_enabled_analysis_prompt_context(pool, &task.agent_key)
-        .await?
-        .map(|context| {
-            anyhow::ensure!(
-                context.len() <= ANALYSIS_PROMPT_CONTEXT_MAX_CHARS,
-                "aggregate enabled analysis prompt context exceeds the dispatch limit"
-            );
-            Ok(context)
-        })
-        .transpose()?
-        .unwrap_or_default();
-    request.runtime_config = serde_json::json!({
-        "workspace_container_path": candidate.workspace_container_path,
-        "profile_source": "agent-runtime/workspace-template",
-        "coding_task_id": task.id,
-        "coding_mode": effective_mode,
-        "analysis_strategy_prompts": analysis_strategy_prompts,
-    });
-    let outcome = dispatch_coding_model(pool, backend.clone(), request, task.id).await?;
-    if !outcome.succeeded {
-        fail_coding_task(
-            pool,
-            task.id,
-            run_id,
-            outcome
-                .failure_summary
-                .as_deref()
-                .unwrap_or("coding model dispatch failed"),
-        )
-        .await?;
-        return Ok(());
-    }
-
-    let inspection = workspace_controller
-        .inspect_candidate(&task.agent_key, task.id)
-        .await?;
-    let candidate_manifest = inspection.manifest;
-    let actual_changes = changed_paths(&candidate.base_manifest, &candidate_manifest);
-    let report = match inspection.report.as_ref() {
-        Some(report) => match validate_coding_report(report, &actual_changes) {
-            Ok(outcome) => outcome,
-            Err(error) => {
-                fail_coding_task(pool, task.id, run_id, &error.to_string()).await?;
-                return Ok(());
-            }
-        },
-        None => {
-            fail_coding_task(
-                pool,
-                task.id,
-                run_id,
-                "coding model did not submit a report",
-            )
-            .await?;
-            return Ok(());
-        }
-    };
-    if report.outcome == "no_change" && !actual_changes.is_empty()
-        || report.outcome == "changed" && actual_changes.is_empty()
-    {
-        fail_coding_task(
-            pool,
-            task.id,
-            run_id,
-            "coding report outcome does not match candidate diff",
-        )
-        .await?;
-        return Ok(());
-    }
-    if report.outcome == "no_change" {
-        store::mark_maintenance_task_succeeded(pool, task.id).await?;
-        if let Err(error) = write_coding_result_memory(
-            pool,
-            &task,
-            CodingResultMemory {
-                outcome: "no_change",
-                summary: "Candidate produced no reusable code changes",
-                changed_paths: &actual_changes,
-                report: &report,
-                base_manifest_hash: &manifest_hash(&candidate.base_manifest),
-                promoted_manifest_hash: &manifest_hash(&candidate_manifest),
-            },
-        )
-        .await
-        {
-            fail_coding_task(
-                pool,
-                task.id,
-                run_id,
-                &format!("result memory failed: {error:#}"),
-            )
-            .await?;
-            return Ok(());
-        }
-        store::mark_run_succeeded(pool, run_id, None).await?;
-        let _ = workspace_controller
-            .delete_candidate(&task.agent_key, task.id)
-            .await;
-    } else {
-        store::compare_and_set_maintenance_phase(
-            pool,
-            task.id,
-            crate::harness::model::MAINTENANCE_PHASE_GENERATING,
-            crate::harness::model::MAINTENANCE_PHASE_VALIDATING,
-        )
-        .await?;
-        let candidate_manifest_hash = manifest_hash(&candidate_manifest);
-        let validation_result = inspection
-            .validation
-            .as_ref()
-            .map(|validation| {
-                require_coding_validation(validation, task.id, &candidate_manifest_hash)
-            })
-            .unwrap_or_else(|| {
-                Err(anyhow!(
-                    "coding model did not run fixed candidate validation"
-                ))
-            });
-        if let Err(error) = validation_result {
-            fail_coding_task(pool, task.id, run_id, &error.to_string()).await?;
-            return Ok(());
-        }
-        store::compare_and_set_maintenance_phase(
-            pool,
-            task.id,
-            crate::harness::model::MAINTENANCE_PHASE_VALIDATING,
-            crate::harness::model::MAINTENANCE_PHASE_WAITING_FOR_PROMOTION,
-        )
-        .await?;
-        if store::agent_has_active_live_runs(pool, &task.agent_key).await? {
-            fail_coding_task(pool, task.id, run_id, "live runs remain active").await?;
-            return Ok(());
-        }
-        let _lease = workspace_leases.acquire_live_write(&task.agent_key).await;
-        if store::agent_has_active_live_runs(pool, &task.agent_key).await? {
-            fail_coding_task(pool, task.id, run_id, "live runs started before promotion").await?;
-            return Ok(());
-        }
-        store::compare_and_set_maintenance_phase(
-            pool,
-            task.id,
-            crate::harness::model::MAINTENANCE_PHASE_WAITING_FOR_PROMOTION,
-            crate::harness::model::MAINTENANCE_PHASE_PROMOTING,
-        )
-        .await?;
-        let promotion = match workspace_controller
-            .promote_candidate(
-                &task.agent_key,
-                task.id,
-                candidate.base_manifest.clone(),
-                candidate_manifest_hash.clone(),
-            )
-            .await
-        {
-            Ok(result) => result,
-            Err(error) => {
-                fail_coding_task(pool, task.id, run_id, &error.to_string()).await?;
-                return Ok(());
-            }
-        };
-        store::compare_and_set_maintenance_phase(
-            pool,
-            task.id,
-            crate::harness::model::MAINTENANCE_PHASE_PROMOTING,
-            crate::harness::model::MAINTENANCE_PHASE_SMOKE_TESTING,
-        )
-        .await?;
-        let promoted_manifest_hash = promotion.manifest_hash;
-        store::mark_maintenance_task_succeeded(pool, task.id).await?;
-        if let Err(error) = write_coding_result_memory(
-            pool,
-            &task,
-            CodingResultMemory {
-                outcome: "changed",
-                summary: "Candidate validated and was promoted",
-                changed_paths: &actual_changes,
-                report: &report,
-                base_manifest_hash: &manifest_hash(&candidate.base_manifest),
-                promoted_manifest_hash: &promoted_manifest_hash,
-            },
-        )
-        .await
-        {
-            fail_coding_task(
-                pool,
-                task.id,
-                run_id,
-                &format!("result memory failed: {error:#}"),
-            )
-            .await?;
-            return Ok(());
-        }
-        store::mark_run_succeeded(pool, run_id, None).await?;
-        let _ = workspace_controller
-            .delete_candidate(&task.agent_key, task.id)
-            .await;
-    }
-    Ok(())
-}
-
-async fn fail_coding_task(pool: &DbPool, task_id: i64, run_id: i64, summary: &str) -> Result<()> {
-    store::mark_maintenance_task_failed(pool, task_id, summary).await?;
-    store::mark_run_failed(pool, run_id, summary, None).await?;
-    Ok(())
-}
-
-async fn dispatch_coding_model(
-    pool: &DbPool,
-    backend: Arc<dyn HarnessBackend>,
-    request: DispatchRequest,
-    task_id: i64,
-) -> Result<CodingDispatchResult> {
-    store::mark_run_running(pool, request.run_id, None).await?;
-    let dispatch = dispatch_with_timeout_for_coding(pool, Arc::clone(&backend), request);
-    tokio::pin!(dispatch);
-    let mut heartbeat = tokio::time::interval(CODING_DISPATCH_HEARTBEAT_INTERVAL);
-    let outcome = loop {
-        tokio::select! {
-            result = &mut dispatch => break result?,
-            _ = heartbeat.tick() => {
-                let _ = store::heartbeat_maintenance_task(pool, task_id).await;
-            }
-        }
-    };
-    match outcome {
-        DispatchOutcome::Succeeded { backend_run_ref } => {
-            debug!(task_id, backend_run_ref, "coding model dispatch finished");
-            Ok(CodingDispatchResult {
-                succeeded: true,
-                failure_summary: None,
-            })
-        }
-        DispatchOutcome::Cancelled => Ok(CodingDispatchResult {
-            succeeded: false,
-            failure_summary: Some("coding run was cancelled".to_string()),
-        }),
-        DispatchOutcome::Failed { summary } => {
-            debug!(task_id, summary, "coding model dispatch failed");
-            Ok(CodingDispatchResult {
-                succeeded: false,
-                failure_summary: Some(summary),
-            })
-        }
-    }
-}
-
-struct CodingDispatchResult {
-    succeeded: bool,
-    failure_summary: Option<String>,
-}
-
-fn coding_run_exceeded_timeout(
-    started_at: Option<chrono::DateTime<Utc>>,
-    timeout_seconds: i32,
-    now: chrono::DateTime<Utc>,
-) -> bool {
-    started_at.is_some_and(|started_at| {
-        started_at + chrono::Duration::seconds(i64::from(timeout_seconds.max(0))) <= now
-    })
-}
-
-struct CodingReport {
-    outcome: String,
-    summary: String,
-    rationale: String,
-    validation_notes: String,
-    evidence_memory_ids: Vec<uuid::Uuid>,
-}
-
-fn require_coding_validation(
-    validation: &serde_json::Value,
-    task_id: i64,
-    candidate_manifest_hash: &str,
-) -> Result<()> {
-    if validation
-        .get("schema_version")
-        .and_then(serde_json::Value::as_u64)
-        != Some(1)
-        || validation
-            .get("task_id")
-            .and_then(serde_json::Value::as_i64)
-            != Some(task_id)
-    {
-        anyhow::bail!("coding validation identity is invalid");
-    }
-    if validation.get("ok").and_then(serde_json::Value::as_bool) != Some(true) {
-        anyhow::bail!("coding candidate failed fixed validation");
-    }
-    if validation
-        .get("candidate_manifest_sha256")
-        .and_then(serde_json::Value::as_str)
-        != Some(candidate_manifest_hash)
-    {
-        anyhow::bail!("coding candidate changed after fixed validation");
-    }
-    Ok(())
-}
-
-fn validate_coding_report(
-    report: &serde_json::Value,
-    actual_changes: &[String],
-) -> Result<CodingReport> {
-    if report
-        .get("schema_version")
-        .and_then(serde_json::Value::as_u64)
-        != Some(1)
-    {
-        anyhow::bail!("coding report schema version is invalid");
-    }
-    let outcome = report
-        .get("outcome")
-        .and_then(serde_json::Value::as_str)
-        .context("coding report has no outcome")?;
-    if !matches!(outcome, "changed" | "no_change") {
-        anyhow::bail!("coding report outcome is invalid");
-    }
-    let mut reported_changes: Vec<String> = report
-        .get("changed_paths")
-        .and_then(serde_json::Value::as_array)
-        .context("coding report has no changed_paths")?
-        .iter()
-        .map(|path| path.as_str().map(ToString::to_string))
-        .collect::<Option<Vec<_>>>()
-        .context("coding report changed_paths are invalid")?;
-    reported_changes.sort();
-    if reported_changes != actual_changes {
-        anyhow::bail!("coding report paths do not match candidate diff");
-    }
-    let evidence_memory_ids = report
-        .get("evidence_memory_ids")
-        .and_then(serde_json::Value::as_array)
-        .context("coding report has no evidence_memory_ids")?
-        .iter()
-        .map(|id| {
-            let value = id
-                .as_str()
-                .context("coding evidence memory id is not a string")?;
-            uuid::Uuid::parse_str(value).context("coding evidence memory id is invalid")
-        })
-        .collect::<Result<Vec<_>>>()?;
-    let summary = report
-        .get("summary")
-        .and_then(serde_json::Value::as_str)
-        .context("coding report has no summary")?;
-    let rationale = report
-        .get("rationale")
-        .and_then(serde_json::Value::as_str)
-        .context("coding report has no rationale")?;
-    let validation_notes = report
-        .get("validation_notes")
-        .and_then(serde_json::Value::as_str)
-        .context("coding report has no validation_notes")?;
-    for (name, value) in [
-        ("summary", summary),
-        ("rationale", rationale),
-        ("validation_notes", validation_notes),
-    ] {
-        if value.chars().count() > 4_000 {
-            anyhow::bail!("coding report {name} is too long");
-        }
-    }
-    Ok(CodingReport {
-        outcome: outcome.to_string(),
-        summary: summary.to_string(),
-        rationale: rationale.to_string(),
-        validation_notes: validation_notes.to_string(),
-        evidence_memory_ids,
-    })
-}
-
-struct CodingResultMemory<'a> {
-    outcome: &'a str,
-    summary: &'a str,
-    changed_paths: &'a [String],
-    report: &'a CodingReport,
-    base_manifest_hash: &'a str,
-    promoted_manifest_hash: &'a str,
-}
-
-async fn write_coding_result_memory(
-    pool: &DbPool,
-    task: &crate::harness::model::AgentMaintenanceTaskRow,
-    result: CodingResultMemory<'_>,
-) -> Result<()> {
-    let existing: (bool,) = sqlx::query_as(
-        "SELECT EXISTS (
-             SELECT 1 FROM memory.records
-              WHERE agent_key = $1
-                AND memory_type = 'analysis_coding'
-                AND metadata->>'task_id' = $2
-         )",
-    )
-    .bind(&task.agent_key)
-    .bind(task.id.to_string())
-    .fetch_one(pool)
-    .await
-    .context("failed to check coding result memory idempotency")?;
-    if existing.0 {
-        return Ok(());
-    }
-    let mut links = task
-        .source_memory_id
-        .map(|id| {
-            vec![crate::memory::CreateMemoryLink {
-                target_memory_id: id,
-                link_type: "responds_to".to_string(),
-                metadata: Some(serde_json::json!({ "task_id": task.id })),
-            }]
-        })
-        .unwrap_or_default();
-    links.extend(result.report.evidence_memory_ids.iter().map(|id| {
-        crate::memory::CreateMemoryLink {
-            target_memory_id: *id,
-            link_type: "derived_from".to_string(),
-            metadata: Some(serde_json::json!({ "task_id": task.id })),
-        }
-    }));
-    let input = crate::memory::CreateMemory {
-        scope_kind: crate::memory::model::MEMORY_SCOPE_AGENT.to_string(),
-        instrument_ids: Vec::new(),
-        timeframe: None,
-        memory_type: "coding_result".to_string(),
-        summary: result.summary.to_string(),
-        content: format!(
-            "Coding task {} finished with outcome {}.\n\nModel summary: {}\n\nRationale: {}\n\nValidation notes: {}",
-            task.id,
-            result.outcome,
-            result.report.summary,
-            result.report.rationale,
-            result.report.validation_notes
-        ),
-        metadata: Some(serde_json::json!({
-            "schema_version": 1,
-            "task_id": task.id,
-            "run_id": task.run_id,
-            "source_sub_agent_run_id": task.source_sub_agent_run_id,
-            "source_memory_id": task.source_memory_id,
-            "source_review_run_id": task.source_sub_agent_run_id,
-            "source_review_memory_id": task.source_memory_id,
-            "outcome": result.outcome,
-            "mode": task.parameters.get("mode"),
-            "changed_paths": result.changed_paths,
-            "base_manifest_sha256": result.base_manifest_hash,
-            "promoted_manifest_sha256": result.promoted_manifest_hash,
-            "validation": if result.outcome == "changed" {
-                serde_json::json!({
-                    "fixed_contract": "passed",
-                    "candidate_tests": "optional",
-                    "promotion_hash": "passed"
-                })
-            } else {
-                serde_json::json!({ "fixed_contract": "not_run" })
-            },
-        })),
-        links: Some(links),
-    };
-    crate::memory::insert_memory(pool, &task.agent_key, &input, None).await?;
-    Ok(())
-}
-
 fn maintenance_error_summary(error: &anyhow::Error) -> String {
     let summary = error.root_cause().to_string();
     if summary.trim().is_empty() {
@@ -1589,7 +803,7 @@ async fn process_analysis_lane_for_agent(
     }
 
     for candle_job in review_jobs {
-        if let Some(run_id) = process_candle_job_for_agent(
+        process_candle_job_for_agent(
             pool,
             backend,
             workspace_controller,
@@ -1599,11 +813,7 @@ async fn process_analysis_lane_for_agent(
             candle_job,
             workspace_leases,
         )
-        .await
-            && let Err(error) = dispatch_review_coding_event(pool, agent_key, run_id).await
-        {
-            warn!(agent_key, error = ?error, "failed to process review coding request");
-        }
+        .await;
     }
 }
 
@@ -1650,7 +860,7 @@ async fn process_candle_job_for_agent(
     agent_key: &str,
     candle_job: HarnessDispatchSubAgentRow,
     workspace_leases: &WorkspaceLeaseManager,
-) -> Option<i64> {
+) {
     let sub_agent_id = candle_job.sub_agent_id;
     let sub_agent_key = candle_job.sub_agent_key.clone();
     let scheduled_for = boundary_for_due_at(
@@ -1672,7 +882,7 @@ async fn process_candle_job_for_agent(
                 error = ?error,
                 "failed to claim due candle_job"
             );
-            return None;
+            return;
         }
     };
 
@@ -1682,16 +892,6 @@ async fn process_candle_job_for_agent(
                 sub_agent_id,
                 agent_key, "candle_job no longer due at claim time"
             );
-            None
-        }
-        store::ClaimedCandleSubAgentRun::BlockedByMaintenance => {
-            info!(
-                sub_agent_id,
-                agent_key,
-                sub_agent_key = %sub_agent_key,
-                "scheduled dispatch held because Coding promotion is queued or running"
-            );
-            None
         }
         store::ClaimedCandleSubAgentRun::Skipped { run_id } => {
             info!(
@@ -1701,23 +901,22 @@ async fn process_candle_job_for_agent(
                 sub_agent_key = %sub_agent_key,
                 "harness run skipped because previous run still active"
             );
-            None
         }
         store::ClaimedCandleSubAgentRun::Dispatch { run_id } => {
             match build_dispatch_request(pool, live_accounts, &candle_job, run_id, scheduled_for)
                 .await
             {
-                Ok(Some(request)) => dispatch_run_in_isolated_workspace_with_workspace_lease(
-                    pool.clone(),
-                    backend.clone(),
-                    workspace_controller.clone(),
-                    agent_api_base_url.to_string(),
-                    request,
-                    workspace_leases,
-                )
-                .await
-                .succeeded
-                .then_some(run_id),
+                Ok(Some(request)) => {
+                    let _ = dispatch_run_in_isolated_workspace_with_workspace_lease(
+                        pool.clone(),
+                        backend.clone(),
+                        workspace_controller.clone(),
+                        agent_api_base_url.to_string(),
+                        request,
+                        workspace_leases,
+                    )
+                    .await;
+                }
                 Ok(None) => {
                     warn!(
                         run_id,
@@ -1732,7 +931,6 @@ async fn process_candle_job_for_agent(
                         None,
                     )
                     .await;
-                    None
                 }
                 Err(error) => {
                     error!(
@@ -1744,7 +942,6 @@ async fn process_candle_job_for_agent(
                     );
                     let _ = store::mark_run_failed(pool, run_id, "dispatch request errored", None)
                         .await;
-                    None
                 }
             }
         }
@@ -1808,13 +1005,8 @@ pub async fn build_dispatch_request(
     }
 
     let system_prompt = crate::agents::prompts::SYSTEM_PROMPT.to_string();
-    let (strategy_prompt, strategy_prompt_revision) = load_strategy_prompt_snapshot(
-        pool,
-        &candle_job.agent_key,
-        candle_job.sub_agent_id,
-        &candle_job.sub_agent_kind,
-    )
-    .await?;
+    let (strategy_prompt, strategy_prompt_revision) =
+        load_strategy_prompt_snapshot(pool, &candle_job.agent_key, candle_job.sub_agent_id).await?;
     let (accumulated_learnings, accumulated_learning_memory_id) =
         load_accumulated_learning_snapshot(pool, &candle_job.agent_key).await?;
 
@@ -1849,101 +1041,6 @@ pub async fn build_dispatch_request(
     Ok(Some(request))
 }
 
-pub(crate) async fn dispatch_review_coding_event(
-    pool: &DbPool,
-    agent_key: &str,
-    source_sub_agent_run_id: i64,
-) -> Result<()> {
-    let Some(memory) =
-        crate::memory::get_review_memory_for_run(pool, agent_key, source_sub_agent_run_id).await?
-    else {
-        debug!(
-            agent_key,
-            source_sub_agent_run_id, "review wrote no linked memory"
-        );
-        return Ok(());
-    };
-    let requested = memory
-        .metadata
-        .get("coding_requested")
-        .and_then(serde_json::Value::as_bool)
-        .unwrap_or(false);
-    if !requested {
-        return Ok(());
-    }
-    let Some(event) = store::get_enabled_sub_agent(pool, agent_key, SUB_AGENT_KIND_CODING).await?
-    else {
-        debug!(agent_key, "coding event is disabled or missing");
-        return Ok(());
-    };
-    store::insert_analysis_coding_task_and_run(
-        pool,
-        store::AnalysisCodingTaskRequest {
-            agent_key,
-            sub_agent_id: event.id,
-            trigger_mode: store::CodingTriggerMode::Automatic,
-            request_origin: "review",
-            source_sub_agent_run_id: Some(source_sub_agent_run_id),
-            source_memory_id: Some(memory.id),
-            task_instructions: memory
-                .metadata
-                .get("coding_reason")
-                .and_then(serde_json::Value::as_str),
-            requested_mode: Some("auto"),
-        },
-    )
-    .await
-    .map(|_| ())
-}
-
-pub async fn build_event_dispatch_request(
-    pool: &DbPool,
-    event: &HarnessDispatchSubAgentRow,
-    run_id: i64,
-    scheduled_for: chrono::DateTime<Utc>,
-) -> Result<Option<DispatchRequest>> {
-    let agent = get_agent(pool, &event.agent_key)
-        .await?
-        .context("agent not found while building event dispatch request")?;
-    if agent.lifecycle != crate::agents::model::AGENT_LIFECYCLE_ACTIVE {
-        return Ok(None);
-    }
-
-    let selected_instruments = list_agent_instrument_ids(pool, &event.agent_key).await?;
-    if selected_instruments.is_empty() && requires_selected_instruments(&event.sub_agent_kind) {
-        return Ok(None);
-    }
-
-    let system_prompt = crate::agents::prompts::SYSTEM_PROMPT.to_string();
-    let (strategy_prompt, strategy_prompt_revision) = load_strategy_prompt_snapshot(
-        pool,
-        &event.agent_key,
-        event.sub_agent_id,
-        &event.sub_agent_kind,
-    )
-    .await?;
-    let (accumulated_learnings, accumulated_learning_memory_id) =
-        load_accumulated_learning_snapshot(pool, &event.agent_key).await?;
-
-    let mut request = dispatch_request_from_job(
-        event,
-        DispatchRequestInputs {
-            run_id,
-            scheduled_for,
-            agent,
-            selected_instruments,
-            strategy_prompt,
-            strategy_prompt_revision,
-            accumulated_learnings,
-            accumulated_learning_memory_id,
-            system_prompt,
-        },
-        None,
-    );
-    apply_run_model_snapshot(pool, &mut request).await?;
-    Ok(Some(request))
-}
-
 async fn apply_run_model_snapshot(pool: &DbPool, request: &mut DispatchRequest) -> Result<()> {
     let run = store::get_run(pool, request.run_id)
         .await?
@@ -1952,46 +1049,6 @@ async fn apply_run_model_snapshot(pool: &DbPool, request: &mut DispatchRequest) 
     request.model_id = run.model_id;
     request.model_variant = run.model_variant;
     Ok(())
-}
-
-/// Bound the aggregate Coding context built from every enabled Analysis
-/// job's current prompt. Dispatch fails rather than silently truncating it.
-const ANALYSIS_PROMPT_CONTEXT_MAX_CHARS: usize = 400_000;
-
-/// Build the aggregate read-only Analysis prompt context handed to Coding
-/// jobs: every enabled Analysis job's sub-agent key, active revision, and
-/// full prompt.
-async fn load_enabled_analysis_prompt_context(
-    pool: &DbPool,
-    agent_key: &str,
-) -> Result<Option<String>> {
-    let jobs: Vec<(i64, String)> = sqlx::query_as(
-        "SELECT id, sub_agent_key FROM harness_sub_agents
-          WHERE agent_key = $1 AND sub_agent_kind = 'analysis' AND enabled = true
-          ORDER BY sub_agent_key",
-    )
-    .bind(agent_key)
-    .fetch_all(pool)
-    .await
-    .context("failed to list enabled analysis jobs for coding context")?;
-    if jobs.is_empty() {
-        return Ok(None);
-    }
-    let mut context = String::new();
-    for (sub_agent_id, sub_agent_key) in jobs {
-        let prompt = crate::agents::strategy_prompts::get_agent_strategy_prompt(
-            pool,
-            agent_key,
-            sub_agent_id,
-        )
-        .await?
-        .context("enabled analysis job is missing an active prompt revision")?;
-        context.push_str(&format!(
-            "### Analysis job `{sub_agent_key}` (revision {})\n\n{}\n\n",
-            prompt.revision_id, prompt.prompt
-        ));
-    }
-    Ok(Some(context))
 }
 
 fn requires_selected_instruments(sub_agent_kind: &str) -> bool {
@@ -2005,22 +1062,13 @@ async fn load_strategy_prompt_snapshot(
     pool: &DbPool,
     agent_key: &str,
     sub_agent_id: i64,
-    sub_agent_kind: &str,
 ) -> Result<(String, i64)> {
     let stored =
         crate::agents::strategy_prompts::get_agent_strategy_prompt(pool, agent_key, sub_agent_id)
             .await?;
     let revision = stored.as_ref().map(|row| row.revision_id).unwrap_or(1);
     let prompt = stored.map(|row| row.prompt).unwrap_or_default();
-    Ok((effective_strategy_prompt(sub_agent_kind, prompt), revision))
-}
-
-fn effective_strategy_prompt(sub_agent_kind: &str, stored: String) -> String {
-    if sub_agent_kind == SUB_AGENT_KIND_CODING && stored.trim().is_empty() {
-        return crate::agents::strategy_prompts::default_prompt_for_role(sub_agent_kind)
-            .to_string();
-    }
-    stored
+    Ok((prompt, revision))
 }
 
 async fn load_accumulated_learning_snapshot(
@@ -2050,14 +1098,11 @@ async fn load_accumulated_learning_snapshot(
 /// Run a single dispatch through the backend, awaiting its completion.
 /// Sequential schedulers should call this so that the next candle_job
 /// for the same agent is not processed until the current run finishes.
-pub struct DispatchRunResult {
-    pub succeeded: bool,
-}
+pub struct DispatchRunResult;
 
 /// Bind and materialize an isolated workspace before handing a normal run to
 /// OpenCode. The live workspace lease is held by the caller while the source
-/// package is inspected and copied, preventing a coding promotion from racing
-/// the snapshot.
+/// package is inspected and copied.
 pub async fn dispatch_run_in_isolated_workspace(
     pool: DbPool,
     backend: Arc<dyn HarnessBackend>,
@@ -2103,7 +1148,7 @@ pub async fn dispatch_run_in_isolated_workspace(
                     "failed to terminalize a failed isolated run workspace"
                 );
             }
-            return DispatchRunResult { succeeded: false };
+            return DispatchRunResult;
         }
     };
 
@@ -2146,10 +1191,7 @@ async fn materialize_dispatch_run_workspace(
     agent_api_base_url: &str,
     mut request: DispatchRequest,
 ) -> Result<DispatchRequest> {
-    let quantitative_package = workspace_controller
-        .inspect_active_quantitative_package(&request.agent_key)
-        .await?;
-    let context = build_run_context_snapshot(&request, quantitative_package.clone())?;
+    let context = build_run_context_snapshot(&request)?;
     let artifact = store::artifacts::prepare_run_workspace_artifact(
         pool,
         &request.agent_key,
@@ -2174,7 +1216,6 @@ async fn materialize_dispatch_run_workspace(
                 credential_id: credential.credential_id.to_string(),
                 sub_agent_kind: request.sub_agent_kind.clone(),
                 enabled_capabilities: artifact.context.normalized_enabled_capabilities()?,
-                expected_quantitative_package: quantitative_package,
             },
             &format!(
                 "run:{}:materialize:{}",
@@ -2196,7 +1237,6 @@ async fn materialize_dispatch_run_workspace(
 
 fn build_run_context_snapshot(
     request: &DispatchRequest,
-    quantitative_package: Option<workspace_store::workspace::QuantitativePackageSnapshot>,
 ) -> Result<crate::harness::model::RunContextSnapshot> {
     let account_snapshot_metadata = request
         .account_snapshot
@@ -2226,7 +1266,6 @@ fn build_run_context_snapshot(
         "additional_instructions": request.task_instructions,
         "accumulated_learning_memory_id": request.accumulated_learning_memory_id,
         "system_prompt_version": "v1",
-        "quantitative_package": quantitative_package,
         "mcp_installations": [],
         "notification_send_enabled": enabled_capabilities.iter().any(|capability| capability == crate::harness::model::CAPABILITY_NOTIFICATION_SEND),
         "scheduled_candle_boundary": request.scheduled_for.timestamp_millis(),
@@ -2310,7 +1349,7 @@ async fn dispatch_running_run(
                 sub_agent_key = %sub_agent_key,
                 "run was terminalized before OpenCode dispatch"
             );
-            return DispatchRunResult { succeeded: false };
+            return DispatchRunResult;
         }
         Err(error) => {
             warn!(
@@ -2320,7 +1359,7 @@ async fn dispatch_running_run(
                 error = ?error,
                 "failed to verify running run before OpenCode dispatch"
             );
-            return DispatchRunResult { succeeded: false };
+            return DispatchRunResult;
         }
     }
 
@@ -2333,7 +1372,7 @@ async fn dispatch_running_run(
                 backend_run_ref,
                 "harness dispatch finished"
             );
-            DispatchRunResult { succeeded: true }
+            DispatchRunResult
         }
         Ok(DispatchOutcome::Cancelled) => {
             debug!(
@@ -2342,7 +1381,7 @@ async fn dispatch_running_run(
                 sub_agent_key = %sub_agent_key,
                 "harness dispatch was cancelled; follow-up events will not fire"
             );
-            DispatchRunResult { succeeded: false }
+            DispatchRunResult
         }
         Ok(DispatchOutcome::Failed { summary }) => {
             // `dispatch_with_timeout` already persisted the terminal
@@ -2356,7 +1395,7 @@ async fn dispatch_running_run(
                 summary,
                 "harness dispatch failed; follow-up events will not fire"
             );
-            DispatchRunResult { succeeded: false }
+            DispatchRunResult
         }
         Err(error) => {
             error!(
@@ -2367,7 +1406,7 @@ async fn dispatch_running_run(
                 "harness dispatch errored"
             );
             let _ = store::mark_run_failed(&pool, run_id, "dispatch task errored", None).await;
-            DispatchRunResult { succeeded: false }
+            DispatchRunResult
         }
     }
 }
@@ -2442,11 +1481,7 @@ mod tests {
 
     use super::*;
 
-    use std::{
-        fs,
-        sync::{Arc, Mutex},
-        time::{SystemTime, UNIX_EPOCH},
-    };
+    use std::sync::{Arc, Mutex};
 
     use async_trait::async_trait;
     use chrono::Utc;
@@ -2470,63 +1505,6 @@ mod tests {
         },
         test_db,
     };
-
-    #[test]
-    fn coding_run_timeout_uses_the_run_deadline() {
-        let now = Utc::now();
-        assert!(coding_run_exceeded_timeout(
-            Some(now - chrono::Duration::seconds(601)),
-            600,
-            now,
-        ));
-        assert!(!coding_run_exceeded_timeout(
-            Some(now - chrono::Duration::seconds(599)),
-            600,
-            now,
-        ));
-        assert!(!coding_run_exceeded_timeout(None, 600, now));
-    }
-
-    #[test]
-    fn blank_coding_strategy_uses_safe_default() {
-        assert_eq!(
-            effective_strategy_prompt(SUB_AGENT_KIND_CODING, String::new()),
-            crate::agents::strategy_prompts::default_prompt_for_role(SUB_AGENT_KIND_CODING)
-        );
-        assert_eq!(
-            effective_strategy_prompt(SUB_AGENT_KIND_ANALYSIS, String::new()),
-            ""
-        );
-    }
-
-    #[test]
-    fn coding_validation_is_bound_to_task_and_candidate_hash() {
-        let root = std::env::temp_dir().join(format!(
-            "coding-validation-{}",
-            SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .expect("system clock")
-                .as_nanos()
-        ));
-        let candidate = root.join("workspace");
-        let user = candidate.join("scripts/user");
-        fs::create_dir_all(&user).expect("create candidate user tree");
-        fs::create_dir_all(user.join("strategies")).expect("create strategy directory");
-        fs::write(user.join("strategies/trend.py"), "print('ok')\n").expect("write candidate");
-        let candidate_hash = "candidate-hash";
-        let validation = json!({
-            "schema_version": 1,
-            "task_id": 42,
-            "ok": true,
-            "candidate_manifest_sha256": candidate_hash,
-        });
-
-        require_coding_validation(&validation, 42, candidate_hash).expect("matching validation");
-        assert!(require_coding_validation(&validation, 43, candidate_hash).is_err());
-        assert!(require_coding_validation(&validation, 42, "stale").is_err());
-
-        fs::remove_dir_all(root).expect("remove validation fixture");
-    }
 
     struct FakeBackend {
         calls: Arc<Mutex<Vec<DispatchRequest>>>,
@@ -2694,7 +1672,7 @@ mod tests {
         let calls = Arc::new(Mutex::new(Vec::new()));
         let backend = Arc::new(FakeBackend::success(Arc::clone(&calls)));
         let runtime = scheduler_runtime(InFlightTracker::new());
-        let result = dispatch_run_in_isolated_workspace(
+        dispatch_run_in_isolated_workspace(
             pool.clone(),
             backend,
             runtime.workspace_controller.clone(),
@@ -2703,7 +1681,6 @@ mod tests {
         )
         .await;
 
-        assert!(result.succeeded);
         let dispatched_path = {
             let dispatched = calls.lock().expect("lock dispatch calls");
             assert_eq!(dispatched.len(), 1);

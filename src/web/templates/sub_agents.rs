@@ -93,7 +93,6 @@ impl HarnessSubAgentView {
 
         let (is_candle_job, trigger_text) = match row.timeframe.as_deref() {
             Some(timeframe) => (true, format!("At {timeframe} candle close")),
-            None if row.sub_agent_kind == "coding" => (false, "On demand".to_string()),
             None => (false, "Unscheduled".to_string()),
         };
 
@@ -286,7 +285,6 @@ fn detail_tab_for_kind(sub_agent_kind: &str) -> AgentShowTab {
     match sub_agent_kind {
         "trading" => AgentShowTab::Trading,
         "review" => AgentShowTab::Review,
-        "coding" => AgentShowTab::Coding,
         _ => AgentShowTab::Analysis,
     }
 }

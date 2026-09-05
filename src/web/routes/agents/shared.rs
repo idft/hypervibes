@@ -12,7 +12,6 @@ use axum::{
 use serde::Deserialize;
 use std::sync::Arc;
 use tracing::warn;
-pub(in crate::web::routes) const ANALYSIS_CODING_ACTIVE_WARNING: &str = "An analysis-coding task is queued or running for this agent. Run now is unavailable until it completes.";
 pub(in crate::web::routes) const SERVER_SHUTTING_DOWN_WARNING: &str =
     "Server is shutting down. Run now is unavailable until the next start.";
 #[derive(Debug, Clone)]

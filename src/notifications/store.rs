@@ -573,7 +573,6 @@ mod tests {
                     "additional_instructions": "",
                     "accumulated_learning_memory_id": null,
                     "system_prompt_version": "v1",
-                    "quantitative_package": null,
                     "mcp_installations": [],
                     "notification_send_enabled": true,
                     "scheduled_candle_boundary": null,

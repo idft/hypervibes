@@ -15,13 +15,8 @@ The server:
 
 from __future__ import annotations
 
-import hashlib
-import json
 import logging
 import os
-import secrets
-import stat
-import subprocess
 import sys
 from pathlib import Path
 from typing import Any
@@ -223,178 +218,6 @@ def _require_offset(offset: int | None) -> int | None:
     if offset < 0:
         raise ValueError("offset must be >= 0")
     return offset
-
-
-CODING_ALLOWED_SUFFIXES = {".py", ".json", ".md"}
-CODING_MAX_FILE_BYTES = 1024 * 1024
-CODING_MAX_TOTAL_BYTES = 20 * 1024 * 1024
-CODING_VALIDATOR_PYTHON = "/opt/hypervibes/analysis/.venv/bin/python"
-CODING_VALIDATOR_SCRIPT = "/opt/hypervibes/coding/coding_validate.py"
-
-
-def _coding_user_root() -> Path:
-    root = Path.cwd() / "scripts" / "user"
-    try:
-        metadata = root.lstat()
-    except FileNotFoundError:
-        return root
-    if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISDIR(metadata.st_mode):
-        raise RuntimeError("candidate scripts/user must be a regular directory")
-    return root
-
-
-def _coding_task_id() -> int:
-    value = os.getenv("HYPERVIBES_CODING_TASK_ID", "").strip()
-    try:
-        task_id = int(value)
-    except ValueError as exc:
-        raise RuntimeError("coding task id is missing or invalid") from exc
-    if task_id <= 0:
-        raise RuntimeError("coding task id must be positive")
-    return task_id
-
-
-def _coding_hash(path: Path) -> str:
-    return hashlib.sha256(path.read_bytes()).hexdigest()
-
-
-def _coding_manifest_hash() -> str:
-    root = _coding_user_root()
-    files: list[tuple[str, str]] = []
-    total = 0
-    for path in sorted(root.rglob("*")):
-        if path.name == "__pycache__" or path.name.endswith((".pyc", "~")):
-            continue
-        if path.is_symlink():
-            raise RuntimeError("candidate symlinks are not allowed")
-        if not path.is_file():
-            continue
-        if path.suffix.lower() not in CODING_ALLOWED_SUFFIXES:
-            raise RuntimeError(f"candidate file extension is not allowed: {path.name}")
-        size = path.stat().st_size
-        if size > CODING_MAX_FILE_BYTES:
-            raise RuntimeError("candidate file exceeds size limit")
-        total += size
-        if total > CODING_MAX_TOTAL_BYTES:
-            raise RuntimeError("candidate tree exceeds size limit")
-        files.append((path.relative_to(root).as_posix(), _coding_hash(path)))
-    digest = hashlib.sha256()
-    for relative, file_hash in files:
-        digest.update(relative.encode())
-        digest.update(b"\0")
-        digest.update(file_hash.encode())
-        digest.update(b"\0")
-    return digest.hexdigest()
-
-
-def _coding_validation_path() -> Path:
-    return Path.cwd().resolve().parent / "coding-validation.json"
-
-
-def _invalidate_coding_validation() -> None:
-    _coding_validation_path().unlink(missing_ok=True)
-
-
-@mcp.tool()
-def coding_validate_candidate() -> dict[str, Any]:
-    """Run the fixed validator and bind its result to the candidate tree."""
-    task_id = _coding_task_id()
-    workspace = Path.cwd().resolve()
-    _invalidate_coding_validation()
-    before = _coding_manifest_hash()
-    environment = {
-        "HOME": "/tmp",
-        "PATH": str(Path(CODING_VALIDATOR_PYTHON).parent),
-        "PYTHONHASHSEED": "0",
-    }
-    try:
-        completed = subprocess.run(
-            [
-                CODING_VALIDATOR_PYTHON,
-                CODING_VALIDATOR_SCRIPT,
-                "--workspace",
-                str(workspace),
-            ],
-            cwd=workspace,
-            capture_output=True,
-            text=True,
-            env=environment,
-        )
-    except (OSError, subprocess.SubprocessError) as exc:
-        raise RuntimeError(f"fixed coding validator could not run: {exc}") from exc
-    try:
-        result = json.loads(completed.stdout.strip())
-    except json.JSONDecodeError as exc:
-        raise RuntimeError("fixed coding validator returned invalid JSON") from exc
-    if not isinstance(result, dict) or not isinstance(result.get("ok"), bool):
-        raise RuntimeError("fixed coding validator returned unexpected output")
-    after = _coding_manifest_hash()
-    if before != after:
-        result = {
-            "ok": False,
-            "checks": list(result.get("checks", [])) + ["candidate changed during validation"],
-        }
-    if completed.returncode == 0 and not result["ok"]:
-        raise RuntimeError("fixed coding validator status disagrees with its report")
-    if completed.returncode != 0 and result["ok"]:
-        raise RuntimeError("fixed coding validator status disagrees with its report")
-    validation = {
-        **result,
-        "schema_version": 1,
-        "task_id": task_id,
-        "validation_id": secrets.token_hex(16),
-        "candidate_manifest_sha256": after,
-    }
-    path = _coding_validation_path()
-    temporary = path.with_suffix(".json.tmp")
-    temporary.write_text(json.dumps(validation, sort_keys=True, indent=2) + "\n")
-    os.replace(temporary, path)
-    return validation
-
-
-@mcp.tool()
-def coding_submit_report(
-    outcome: str,
-    summary: str,
-    rationale: str,
-    changed_paths: list[str],
-    evidence_memory_ids: list[str],
-    validation_notes: str,
-) -> dict[str, Any]:
-    """Submit one report after validation; paths are relative to scripts/user."""
-    if outcome not in {"changed", "no_change"}:
-        raise ValueError("outcome must be changed or no_change")
-    if any(
-        not isinstance(path, str)
-        or not path
-        or path in {".", ".."}
-        or path.startswith("/")
-        or "\\" in path
-        or ".." in Path(path).parts
-        or "." in Path(path).parts
-        or "\x00" in path
-        or Path(path).parts[:2] == ("scripts", "user")
-        for path in changed_paths
-    ):
-        raise ValueError(
-            "changed paths must be relative to scripts/user "
-            "(for example strategies/trend.py, not scripts/user/strategies/trend.py)"
-        )
-    result = _request(
-        "POST",
-        "/api/v1/coding/report",
-        json_body={
-            "task_id": _coding_task_id(),
-            "schema_version": 1,
-            "outcome": outcome,
-            "summary": summary,
-            "rationale": rationale,
-            "changed_paths": changed_paths,
-            "evidence_memory_ids": evidence_memory_ids,
-            "validation_notes": validation_notes,
-        },
-    )
-    return result if isinstance(result, dict) else {"submitted": True}
 
 
 @mcp.tool()
@@ -692,36 +515,6 @@ def write_memory(
     result = _request("POST", "/api/v1/memories", json_body=body)
     if not isinstance(result, dict):
         raise RuntimeError("HyperVibes /memories POST returned unexpected shape")
-    return result
-
-
-@mcp.tool()
-def request_coding(reason: str, mode: str = "auto") -> dict[str, Any]:
-    """Queue an on-demand Coding sub-agent run.
-
-    This returns after the durable task is queued; it does not wait for model
-    execution, validation, or candidate promotion. ``reason`` must explain the
-    requested reusable analysis-code improvement. ``mode`` is ``auto``,
-    ``bootstrap``, or ``manual_improvement``.
-    """
-    reason = _require_nonblank("reason", reason)
-    if len(reason) > 4_000:
-        raise ValueError("reason must be at most 4000 characters")
-    if mode not in {"auto", "bootstrap", "manual_improvement"}:
-        raise ValueError("mode must be auto, bootstrap, or manual_improvement")
-    result = _request(
-        "POST",
-        "/api/v1/coding/requests",
-        json_body={"reason": reason, "mode": mode},
-    )
-    if (
-        not isinstance(result, dict)
-        or set(result) != {"task_id", "run_id", "status"}
-        or not isinstance(result["task_id"], int)
-        or not isinstance(result["run_id"], int)
-        or result["status"] != "queued"
-    ):
-        raise RuntimeError("HyperVibes coding request returned unexpected shape")
     return result
 
 

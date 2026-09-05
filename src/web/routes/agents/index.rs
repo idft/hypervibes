@@ -163,39 +163,15 @@ pub(in crate::web::routes) async fn delete_agent(
         return Ok((StatusCode::NOT_FOUND, "agent not found").into_response());
     }
 
-    let coding_task_by_run_id =
-        crate::harness::store::analysis_coding_task_ids_for_agent_runs(&state.db_pool, &agent_key)
-            .await?;
-
     for run in list_active_agent_runs(&state.db_pool, &agent_key).await? {
-        // Normal runs execute in their isolated run workspace. Analysis-coding
-        // runs execute in the coding candidate workspace owned by their
-        // maintenance task.
-        let run_workspace_container_path =
-            if run.sub_agent_kind != crate::harness::model::SUB_AGENT_KIND_CODING {
-                Some(format!(
-                    "{}/runs/{}/{}/workspace",
-                    state
-                        .opencode_container_workspaces_root
-                        .trim_end_matches('/'),
-                    agent_key,
-                    run.id
-                ))
-            } else {
-                let task_id = coding_task_by_run_id.get(&run.id).ok_or_else(|| {
-                    AppError(anyhow::anyhow!(
-                        "coding run {} has no owning maintenance task",
-                        run.id
-                    ))
-                })?;
-                Some(format!(
-                    "{}/coding/{}/{task_id}/workspace",
-                    state
-                        .opencode_container_workspaces_root
-                        .trim_end_matches('/'),
-                    agent_key,
-                ))
-            };
+        let run_workspace_container_path = Some(format!(
+            "{}/runs/{}/{}/workspace",
+            state
+                .opencode_container_workspaces_root
+                .trim_end_matches('/'),
+            agent_key,
+            run.id
+        ));
         if let Some(session_id) = run.backend_run_ref.as_deref()
             && !crate::harness::backend::abort_and_confirm_session_terminated(
                 &state.harness_backend,
@@ -212,15 +188,13 @@ pub(in crate::web::routes) async fn delete_agent(
                 .into_response());
         }
         mark_run_aborted(&state.db_pool, run.id, "aborted by agent deletion", None).await?;
-        if run.sub_agent_kind != crate::harness::model::SUB_AGENT_KIND_CODING {
-            crate::harness::scheduler::terminalize_run_workspace_artifact(
-                &state.db_pool,
-                &state.workspace_controller,
-                &agent_key,
-                run.id,
-            )
-            .await?;
-        }
+        crate::harness::scheduler::terminalize_run_workspace_artifact(
+            &state.db_pool,
+            &state.workspace_controller,
+            &agent_key,
+            run.id,
+        )
+        .await?;
     }
 
     let conversation_sessions =
@@ -292,16 +266,6 @@ pub(in crate::web::routes) async fn delete_agent(
             DeleteSessionResult::Deleted | DeleteSessionResult::NotFound => {}
         }
     }
-
-    // Sessions have stopped. Remove the agent's durable Coding resources
-    // (package root, coding candidates, retained versions).
-    state
-        .workspace_controller
-        .delete_coding_resources(
-            &agent.agent_key,
-            &format!("delete-agent:{}", agent.agent_key),
-        )
-        .await?;
 
     let account_key = AccountKey::new(trading_account_address, &agent.environment);
     let deleted = delete_agent_in_store(&state.db_pool, &agent_key).await?;

@@ -4,18 +4,12 @@ use sqlx::query_as;
 
 use crate::{
     db::DbPool,
-    harness::model::{RUN_STATUS_QUEUED, RUN_STATUS_RUNNING, SUB_AGENT_KIND_CODING},
+    harness::model::{RUN_STATUS_QUEUED, RUN_STATUS_RUNNING},
 };
 
 pub(crate) const ACTIVE_STATUSES: [&str; 2] = [RUN_STATUS_QUEUED, RUN_STATUS_RUNNING];
 
 pub(crate) const ERROR_SUMMARY_MAX_CHARS: usize = 500;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum EventRunInsertMode {
-    Manual,
-    CodingTrigger,
-}
 
 /// Serialize state transitions that can start work or activate maintenance
 /// for one agent. Callers must acquire this before locking a schedule, event,
@@ -37,13 +31,6 @@ pub(crate) async fn lock_agent_coordination_tx(
 }
 
 /// Toggle every sub-agent for an agent to the same enabled state.
-///
-/// Bulk enable is intentionally conservative with respect to autonomous
-/// code modification: bulk enabling jobs must
-/// NOT enable the Coding role. That role has to be
-/// enabled by hand and pinned to an explicit strong provider/model
-/// before any automatic code coding can fire. Bulk disable still
-/// turns every event (including coding) off.
 pub async fn set_all_agent_sub_agents_enabled(
     pool: &DbPool,
     agent_key: &str,
@@ -60,15 +47,13 @@ pub async fn set_all_agent_sub_agents_enabled(
             SET enabled = $2,
                 updated_at = now()
           WHERE agent_key = $1
-            AND ($2 = false OR (
+                AND ($2 = false OR (
                 model_provider_id IS NOT NULL
                 AND model_id IS NOT NULL
-                AND sub_agent_kind <> $3
             ))",
     )
     .bind(agent_key)
     .bind(enabled)
-    .bind(SUB_AGENT_KIND_CODING)
     .execute(&mut *tx)
     .await
     .with_context(|| format!("failed to toggle sub-agents for agent {agent_key}"))?;

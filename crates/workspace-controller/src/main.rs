@@ -9,10 +9,10 @@ use std::{
 use anyhow::{Context, Result, bail};
 use axum::{
     Json, Router,
-    extract::{Path, Query, State},
+    extract::{Path, State},
     http::{HeaderMap, StatusCode},
     response::{IntoResponse, Response},
-    routing::{get, post, put},
+    routing::{get, post},
 };
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_json::Value;
@@ -20,12 +20,6 @@ use sha2::{Digest, Sha256};
 use tokio::task::spawn_blocking;
 use tracing::{info, warn};
 use workspace_store::{
-    coding_workspace::{
-        CandidateInspection, PromotionJournalPhase, PromotionResult, delete_coding_candidate,
-        delete_coding_resources, inspect_coding_candidate, list_promotion_journals,
-        prepare_coding_candidate, promote_coding_candidate, recover_promotion_journal,
-        store_coding_report,
-    },
     isolated_workspace::{
         ConversationWorkspacePath, IsolatedWorkspaceCreated, IsolatedWorkspaceInspection,
         RunWorkspacePath, RuntimeSecretsScrubbed, create_conversation_workspace,
@@ -35,11 +29,8 @@ use workspace_store::{
     },
     workspace::{
         ConversationWorkspaceMaterializationInput, MaterializedConversationWorkspace,
-        MaterializedRunWorkspace, OpenCodeWorkspaceConfig, QuantitativePackageSnapshot,
-        RunWorkspaceMaterializationInput, WorkspaceBrowserListing, WorkspaceFilePreview,
-        inspect_active_quantitative_package, list_workspace_browser_entries,
+        MaterializedRunWorkspace, OpenCodeWorkspaceConfig, RunWorkspaceMaterializationInput,
         materialize_conversation_workspace, materialize_run_workspace,
-        read_workspace_browser_file,
     },
 };
 
@@ -53,50 +44,9 @@ struct App {
     idempotency_locks: IdempotencyLockMap,
 }
 
-#[derive(Deserialize)]
-struct CandidateRequest {
-    display_name: String,
-    agent_api_key: String,
-    api_base_url: String,
-}
-
-#[derive(Deserialize)]
-struct WorkspaceBrowserFileQuery {
-    path: String,
-}
-
-#[derive(Serialize, Deserialize)]
-struct CandidateResponse {
-    workspace_container_path: String,
-    base_manifest: BTreeMap<String, String>,
-}
-
-#[derive(Deserialize)]
-struct ReportRequest {
-    report: Value,
-}
-
-#[derive(Deserialize)]
-struct PromoteRequest {
-    expected_base_manifest: BTreeMap<String, String>,
-    candidate_manifest_hash: String,
-}
-
 #[derive(Debug, Serialize, Deserialize)]
 struct DeleteResponse {
     deleted: bool,
-}
-
-#[derive(Serialize, Deserialize)]
-struct RecoveryResponse {
-    recovered: Vec<RecoveryTask>,
-}
-
-#[derive(Serialize, Deserialize)]
-struct RecoveryTask {
-    agent_key: String,
-    task_id: i64,
-    phase: PromotionJournalPhase,
 }
 
 #[derive(Serialize)]
@@ -175,7 +125,6 @@ async fn main() -> Result<()> {
         )
         .init();
     let app = Arc::new(config_from_env()?);
-    recover_at_startup(&app).await;
     let listener = tokio::net::TcpListener::bind(
         env::var("WORKSPACE_CONTROL_BIND_ADDR").unwrap_or_else(|_| "0.0.0.0:14097".into()),
     )
@@ -190,35 +139,6 @@ async fn main() -> Result<()> {
 fn router(app: Arc<App>) -> Router {
     Router::new()
         .route("/health", get(|| async { StatusCode::NO_CONTENT }))
-        .route(
-            "/v1/agent-coding-packages/{agent_key}",
-            get(inspect_active_quantitative_package_handler)
-                .delete(delete_coding_resources_handler),
-        )
-        .route(
-            "/v1/agent-coding-packages/{agent_key}/browser",
-            get(list_workspace_browser_entries_handler),
-        )
-        .route(
-            "/v1/agent-coding-packages/{agent_key}/browser/file",
-            get(read_workspace_browser_file_handler),
-        )
-        .route(
-            "/v1/coding-candidates/{agent_key}/{task_id}",
-            post(create_candidate).delete(delete_candidate),
-        )
-        .route(
-            "/v1/coding-candidates/{agent_key}/{task_id}/report",
-            put(store_report),
-        )
-        .route(
-            "/v1/coding-candidates/{agent_key}/{task_id}/inspection",
-            get(inspect_candidate),
-        )
-        .route(
-            "/v1/coding-candidates/{agent_key}/{task_id}/promote",
-            post(promote_candidate),
-        )
         .route(
             "/v1/run-workspaces/{agent_key}/{run_id}",
             post(create_run_workspace_handler).delete(delete_run_workspace_handler),
@@ -252,7 +172,6 @@ fn router(app: Arc<App>) -> Router {
             "/v1/conversation-workspaces/{agent_key}/{conversation_id}/runtime-secrets",
             post(scrub_conversation_workspace_runtime_secrets_handler),
         )
-        .route("/v1/promotion-recovery", post(recover_promotions))
         .with_state(app)
 }
 
@@ -349,39 +268,6 @@ async fn create_run_workspace_handler(
     .map(Json)
 }
 
-async fn inspect_active_quantitative_package_handler(
-    State(app): State<Arc<App>>,
-    Path(agent_key): Path<String>,
-    headers: HeaderMap,
-) -> Result<Json<Option<QuantitativePackageSnapshot>>, ApiError> {
-    authorize(&headers, &app)?;
-    let config = app.store.clone();
-    let result = spawn_blocking(move || inspect_active_quantitative_package(&config, &agent_key))
-        .await
-        .map_err(|_| ApiError::internal())?
-        .map_err(classify)?;
-    Ok(Json(result))
-}
-
-async fn delete_coding_resources_handler(
-    State(app): State<Arc<App>>,
-    Path(agent_key): Path<String>,
-    headers: HeaderMap,
-) -> Result<Json<DeleteResponse>, ApiError> {
-    authorize(&headers, &app)?;
-    idempotent(
-        &app.clone(),
-        &headers,
-        format!("delete-coding-resources:{agent_key}"),
-        move || {
-            delete_coding_resources(&app.store, &agent_key).map_err(classify)?;
-            Ok(DeleteResponse { deleted: true })
-        },
-    )
-    .await
-    .map(Json)
-}
-
 async fn materialize_run_workspace_handler(
     State(app): State<Arc<App>>,
     Path((agent_key, run_id)): Path<(String, i64)>,
@@ -402,7 +288,6 @@ async fn materialize_run_workspace_handler(
             "credential_id": &request.credential_id,
             "sub_agent_kind": &request.sub_agent_kind,
             "enabled_capabilities": &request.enabled_capabilities,
-            "expected_quantitative_package": &request.expected_quantitative_package,
         }))
     );
     idempotent(&app.clone(), &headers, fingerprint, move || {
@@ -561,207 +446,6 @@ async fn scrub_conversation_workspace_runtime_secrets_handler(
     })
     .await
     .map(Json)
-}
-
-async fn list_workspace_browser_entries_handler(
-    State(app): State<Arc<App>>,
-    Path(agent_key): Path<String>,
-    headers: HeaderMap,
-) -> Result<Json<WorkspaceBrowserListing>, ApiError> {
-    authorize(&headers, &app)?;
-    let config = app.store.clone();
-    let result = spawn_blocking(move || list_workspace_browser_entries(&config, &agent_key))
-        .await
-        .map_err(|_| ApiError::internal())?
-        .map_err(classify)?;
-    Ok(Json(result))
-}
-
-async fn read_workspace_browser_file_handler(
-    State(app): State<Arc<App>>,
-    Path(agent_key): Path<String>,
-    headers: HeaderMap,
-    Query(query): Query<WorkspaceBrowserFileQuery>,
-) -> Result<Json<WorkspaceFilePreview>, ApiError> {
-    authorize(&headers, &app)?;
-    let config = app.store.clone();
-    let result =
-        spawn_blocking(move || read_workspace_browser_file(&config, &agent_key, &query.path))
-            .await
-            .map_err(|_| ApiError::internal())?
-            .map_err(classify)?;
-    Ok(Json(result))
-}
-
-async fn create_candidate(
-    State(app): State<Arc<App>>,
-    Path((agent_key, task_id)): Path<(String, i64)>,
-    headers: HeaderMap,
-    Json(request): Json<CandidateRequest>,
-) -> Result<Json<CandidateResponse>, ApiError> {
-    authorize(&headers, &app)?;
-    idempotent(
-        &app.clone(),
-        &headers,
-        format!(
-            "candidate:{agent_key}:{task_id}:{}:{}",
-            request.display_name, request.agent_api_key
-        ),
-        move || {
-            let mut config = app.store.clone();
-            config.api_base_url = request.api_base_url;
-            let candidate = prepare_coding_candidate(
-                &config,
-                &agent_key,
-                task_id,
-                &request.display_name,
-                &request.agent_api_key,
-            )
-            .map_err(classify)?;
-            let workspace_container_path =
-                workspace_store::coding_workspace::candidate_container_root(
-                    &config, &agent_key, task_id,
-                )
-                .map_err(classify)?;
-            Ok(CandidateResponse {
-                workspace_container_path,
-                base_manifest: candidate.base_manifest,
-            })
-        },
-    )
-    .await
-    .map(Json)
-}
-
-async fn store_report(
-    State(app): State<Arc<App>>,
-    Path((agent_key, task_id)): Path<(String, i64)>,
-    headers: HeaderMap,
-    Json(request): Json<ReportRequest>,
-) -> Result<StatusCode, ApiError> {
-    authorize(&headers, &app)?;
-    idempotent(
-        &app.clone(),
-        &headers,
-        format!(
-            "report:{agent_key}:{task_id}:{}",
-            hash_json(&request.report)
-        ),
-        move || {
-            store_coding_report(&app.store, &agent_key, task_id, &request.report)
-                .map_err(classify)?;
-            Ok(())
-        },
-    )
-    .await?;
-    Ok(StatusCode::CREATED)
-}
-
-async fn inspect_candidate(
-    State(app): State<Arc<App>>,
-    Path((agent_key, task_id)): Path<(String, i64)>,
-    headers: HeaderMap,
-) -> Result<Json<CandidateInspection>, ApiError> {
-    authorize(&headers, &app)?;
-    let config = app.store.clone();
-    let result = spawn_blocking(move || inspect_coding_candidate(&config, &agent_key, task_id))
-        .await
-        .map_err(|_| ApiError::internal())?
-        .map_err(classify)?;
-    Ok(Json(result))
-}
-
-async fn promote_candidate(
-    State(app): State<Arc<App>>,
-    Path((agent_key, task_id)): Path<(String, i64)>,
-    headers: HeaderMap,
-    Json(request): Json<PromoteRequest>,
-) -> Result<Json<PromotionResult>, ApiError> {
-    authorize(&headers, &app)?;
-    idempotent(
-        &app.clone(),
-        &headers,
-        format!(
-            "promote:{agent_key}:{task_id}:{}",
-            request.candidate_manifest_hash
-        ),
-        move || {
-            promote_coding_candidate(
-                &app.store,
-                &agent_key,
-                task_id,
-                &request.expected_base_manifest,
-                &request.candidate_manifest_hash,
-            )
-            .map_err(classify)
-        },
-    )
-    .await
-    .map(Json)
-}
-
-async fn delete_candidate(
-    State(app): State<Arc<App>>,
-    Path((agent_key, task_id)): Path<(String, i64)>,
-    headers: HeaderMap,
-) -> Result<Json<DeleteResponse>, ApiError> {
-    authorize(&headers, &app)?;
-    idempotent(
-        &app.clone(),
-        &headers,
-        format!("delete-candidate:{agent_key}:{task_id}"),
-        move || {
-            Ok(DeleteResponse {
-                deleted: delete_coding_candidate(&app.store, &agent_key, task_id)
-                    .map_err(classify)?,
-            })
-        },
-    )
-    .await
-    .map(Json)
-}
-
-async fn recover_promotions(
-    State(app): State<Arc<App>>,
-    headers: HeaderMap,
-) -> Result<Json<RecoveryResponse>, ApiError> {
-    authorize(&headers, &app)?;
-    idempotent(
-        &app.clone(),
-        &headers,
-        "promotion-recovery".to_string(),
-        move || {
-            let recovered = list_promotion_journals(&app.store)
-                .map_err(classify)?
-                .into_iter()
-                .map(|journal| {
-                    let phase =
-                        recover_promotion_journal(&app.store, &journal).map_err(classify)?;
-                    Ok(RecoveryTask {
-                        agent_key: journal.agent_key,
-                        task_id: journal.task_id,
-                        phase,
-                    })
-                })
-                .collect::<Result<Vec<_>, ApiError>>()?;
-            Ok(RecoveryResponse { recovered })
-        },
-    )
-    .await
-    .map(Json)
-}
-
-async fn recover_at_startup(app: &App) {
-    let config = app.store.clone();
-    let _ = spawn_blocking(move || {
-        let journals = list_promotion_journals(&config)?;
-        for journal in journals {
-            let _ = recover_promotion_journal(&config, &journal)?;
-        }
-        Ok::<(), anyhow::Error>(())
-    })
-    .await
-    .inspect_err(|error| warn!(error = ?error, "workspace recovery task failed"));
 }
 
 async fn idempotent<T, F>(
@@ -924,7 +608,7 @@ mod tests {
         }
     }
 
-    fn browser_test_app(root: &std::path::Path) -> Arc<App> {
+    fn test_app(root: &std::path::Path) -> Arc<App> {
         let idempotency_root = root.join("idempotency");
         fs::create_dir_all(&idempotency_root).expect("create idempotency directory");
         Arc::new(App {
@@ -958,13 +642,6 @@ mod tests {
         headers
     }
 
-    fn package_file(root: &std::path::Path, agent_key: &str, name: &str) -> PathBuf {
-        let package = root.join("packages").join(agent_key);
-        fs::create_dir_all(&package).expect("create package directory");
-        fs::write(package.join(name), "contents\n").expect("write package file");
-        package
-    }
-
     #[tokio::test]
     async fn idempotency_locks_are_keyed_and_reclaimed() {
         let locks = idempotency_locks();
@@ -980,229 +657,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn package_browser_handlers_require_authentication() {
-        let temp = TempDir::new();
-        let app = browser_test_app(&temp.path);
-
-        let list_error = list_workspace_browser_entries_handler(
-            State(app.clone()),
-            Path("agent".to_string()),
-            HeaderMap::new(),
-        )
-        .await
-        .expect_err("list without auth should fail");
-        assert_eq!(
-            list_error.into_response().status(),
-            StatusCode::UNAUTHORIZED
-        );
-
-        let file_error = read_workspace_browser_file_handler(
-            State(app),
-            Path("agent".to_string()),
-            HeaderMap::new(),
-            Query(WorkspaceBrowserFileQuery {
-                path: "file.txt".to_string(),
-            }),
-        )
-        .await
-        .expect_err("file without auth should fail");
-        assert_eq!(
-            file_error.into_response().status(),
-            StatusCode::UNAUTHORIZED
-        );
-    }
-
-    #[tokio::test]
-    async fn package_browser_handlers_return_typed_results_without_idempotency() {
-        let temp = TempDir::new();
-        let app = browser_test_app(&temp.path);
-        package_file(&temp.path, "agent", "file.txt");
-        let headers = authorized_headers();
-
-        let Json(listing) = list_workspace_browser_entries_handler(
-            State(app.clone()),
-            Path("agent".to_string()),
-            headers.clone(),
-        )
-        .await
-        .expect("list package");
-        assert!(listing.workspace_exists);
-        assert_eq!(listing.entries[0].path, "file.txt");
-
-        let Json(preview) = read_workspace_browser_file_handler(
-            State(app.clone()),
-            Path("agent".to_string()),
-            headers,
-            Query(WorkspaceBrowserFileQuery {
-                path: "file.txt".to_string(),
-            }),
-        )
-        .await
-        .expect("read package file");
-        assert_eq!(
-            preview.status,
-            workspace_store::workspace::WorkspaceFilePreviewStatus::Text
-        );
-        assert_eq!(preview.text.as_deref(), Some("contents\n"));
-
-        fs::remove_file(temp.path.join("packages/agent/file.txt")).expect("remove package file");
-        let Json(missing) = read_workspace_browser_file_handler(
-            State(app.clone()),
-            Path("agent".to_string()),
-            authorized_headers(),
-            Query(WorkspaceBrowserFileQuery {
-                path: "file.txt".to_string(),
-            }),
-        )
-        .await
-        .expect("read removed package file");
-        assert_eq!(
-            missing.status,
-            workspace_store::workspace::WorkspaceFilePreviewStatus::Missing
-        );
-        assert_eq!(
-            fs::read_dir(&app.idempotency_root)
-                .expect("read idempotency directory")
-                .count(),
-            0
-        );
-    }
-
-    #[tokio::test]
-    async fn package_browser_handler_rejects_unsafe_file_paths() {
-        let temp = TempDir::new();
-        let app = browser_test_app(&temp.path);
-        let package = package_file(&temp.path, "agent", ".env");
-        fs::create_dir_all(package.join("directory")).expect("create package directory");
-
-        for path in [".env", "../.env", "directory"] {
-            let error = read_workspace_browser_file_handler(
-                State(app.clone()),
-                Path("agent".to_string()),
-                authorized_headers(),
-                Query(WorkspaceBrowserFileQuery {
-                    path: path.to_string(),
-                }),
-            )
-            .await
-            .expect_err("unsafe browser read should fail");
-            assert_eq!(
-                error.into_response().status(),
-                StatusCode::UNPROCESSABLE_ENTITY
-            );
-        }
-
-        let error = list_workspace_browser_entries_handler(
-            State(app),
-            Path("../agent".to_string()),
-            authorized_headers(),
-        )
-        .await
-        .expect_err("unsafe agent key should fail");
-        assert_eq!(
-            error.into_response().status(),
-            StatusCode::UNPROCESSABLE_ENTITY
-        );
-        assert!(package.is_dir());
-    }
-
-    #[tokio::test]
-    async fn package_browser_never_exposes_files_outside_the_package_root() {
-        let temp = TempDir::new();
-        let app = browser_test_app(&temp.path);
-        package_file(&temp.path, "agent", "manifest.json");
-        fs::create_dir_all(temp.path.join("runs/agent/9/workspace")).expect("create run workspace");
-        fs::write(temp.path.join("runs/agent/9/workspace/.env"), "secret")
-            .expect("write run secret");
-
-        for path in [
-            "../runs/agent/9/workspace/.env",
-            "../coding/agent/1/workspace",
-            "../versions/agent/1/package",
-            "../agents/agent",
-        ] {
-            let error = read_workspace_browser_file_handler(
-                State(app.clone()),
-                Path("agent".to_string()),
-                authorized_headers(),
-                Query(WorkspaceBrowserFileQuery {
-                    path: path.to_string(),
-                }),
-            )
-            .await
-            .expect_err("escape attempt should fail");
-            assert_eq!(
-                error.into_response().status(),
-                StatusCode::UNPROCESSABLE_ENTITY
-            );
-        }
-    }
-
-    #[tokio::test]
-    async fn coding_resources_cleanup_removes_agent_owned_roots() {
-        let temp = TempDir::new();
-        let app = browser_test_app(&temp.path);
-        for relative in ["packages", "coding", "versions"] {
-            fs::create_dir_all(temp.path.join(format!("{relative}/agent/keep")))
-                .expect("create coding resource");
-        }
-        fs::create_dir_all(temp.path.join("runs/agent/9/workspace")).expect("create run workspace");
-        fs::create_dir_all(temp.path.join("packages/other")).expect("create other package");
-
-        let Json(response) = delete_coding_resources_handler(
-            State(app.clone()),
-            Path("agent".to_string()),
-            idempotent_headers("cleanup"),
-        )
-        .await
-        .expect("delete coding resources");
-        assert!(response.deleted);
-
-        assert!(!temp.path.join("packages/agent").exists());
-        assert!(!temp.path.join("coding/agent").exists());
-        assert!(!temp.path.join("versions/agent").exists());
-        assert!(temp.path.join("runs/agent/9/workspace").exists());
-        assert!(temp.path.join("packages/other").exists());
-    }
-
-    #[tokio::test]
-    async fn coding_resources_cleanup_rejects_symlinked_roots() {
-        let temp = TempDir::new();
-        let app = browser_test_app(&temp.path);
-        fs::create_dir_all(temp.path.join("victim")).expect("create victim directory");
-        fs::write(temp.path.join("victim/keep.txt"), "keep").expect("write victim file");
-        fs::create_dir_all(temp.path.join("packages")).expect("create packages root");
-        #[cfg(unix)]
-        {
-            std::os::unix::fs::symlink("../victim", temp.path.join("packages/agent"))
-                .expect("create symlinked package root");
-        }
-
-        let result = delete_coding_resources_handler(
-            State(app),
-            Path("agent".to_string()),
-            idempotent_headers("cleanup-symlink"),
-        )
-        .await;
-        #[cfg(unix)]
-        {
-            let error = result.expect_err("symlinked root should fail");
-            assert_eq!(
-                error.into_response().status(),
-                StatusCode::UNPROCESSABLE_ENTITY
-            );
-            assert!(temp.path.join("victim/keep.txt").exists());
-        }
-        #[cfg(not(unix))]
-        {
-            let _ = result;
-        }
-    }
-
-    #[tokio::test]
     async fn run_workspace_handlers_recover_partial_state_and_scrub_secrets() {
         let temp = TempDir::new();
-        let app = browser_test_app(&temp.path);
+        let app = test_app(&temp.path);
         fs::create_dir_all(temp.path.join("runs/agent/42")).expect("create partial run root");
 
         let Json(created) = create_run_workspace_handler(
@@ -1262,7 +719,7 @@ mod tests {
     #[tokio::test]
     async fn idempotency_key_serializes_conflicting_run_workspace_requests() {
         let temp = TempDir::new();
-        let app = browser_test_app(&temp.path);
+        let app = test_app(&temp.path);
         let (first, second) = tokio::join!(
             create_run_workspace_handler(
                 State(app.clone()),
@@ -1298,7 +755,7 @@ mod tests {
     #[tokio::test]
     async fn conversation_workspace_handlers_use_validated_internal_ids() {
         let temp = TempDir::new();
-        let app = browser_test_app(&temp.path);
+        let app = test_app(&temp.path);
         let conversation_id = "b3ce59a8-f3b6-448d-a0c8-d44ea9d23a33";
 
         let Json(created) = create_conversation_workspace_handler(

@@ -5,7 +5,6 @@ use serde_json::Value;
 
 pub const SUB_AGENT_KIND_ANALYSIS: &str = "analysis";
 pub const SUB_AGENT_KIND_TRADING: &str = "trading";
-pub const SUB_AGENT_KIND_CODING: &str = "coding";
 pub const SUB_AGENT_KIND_REVIEW: &str = "review";
 
 pub const RUN_STATUS_QUEUED: &str = "queued";
@@ -15,7 +14,7 @@ pub const RUN_STATUS_FAILED: &str = "failed";
 pub const RUN_STATUS_ABORTED: &str = "aborted";
 pub const RUN_STATUS_SKIPPED: &str = "skipped";
 
-pub const RUN_CONTEXT_SNAPSHOT_SCHEMA_VERSION: i32 = 2;
+pub const RUN_CONTEXT_SNAPSHOT_SCHEMA_VERSION: i32 = 3;
 pub const CAPABILITY_SCHEMA_VERSION: i32 = 2;
 pub const CAPABILITY_NOTIFICATION_SEND: &str = "hypervibes:notification_send";
 pub const CAPABILITY_PROMPT_REVISION_SUBMIT: &str = "hypervibes:prompt_revision_submit";
@@ -82,11 +81,7 @@ pub fn validate_sub_agent_capabilities(
         {
             anyhow::bail!("invalid sub-agent capability");
         }
-        if capability.starts_with("custom-mcp:")
-            && matches!(
-                sub_agent_kind,
-                SUB_AGENT_KIND_TRADING | SUB_AGENT_KIND_CODING
-            )
+        if capability.starts_with("custom-mcp:") && matches!(sub_agent_kind, SUB_AGENT_KIND_TRADING)
         {
             anyhow::bail!("custom MCP capabilities are not eligible for this sub-agent role");
         }
@@ -171,12 +166,12 @@ pub fn run_api_scopes_for_sub_agent(
     Ok(scopes)
 }
 
-// Schema version two intentionally has no catch-all object. Adding a new run
+// Schema version three intentionally has no catch-all object. Adding a new run
 // input is an explicit snapshot-schema change rather than an unreviewed place
 // to put runtime configuration or secrets. V2 changes the
 // `strategy_prompt_revisions` shape from prompt-kind keyed to
-// sub-agent-target keyed objects.
-const RUN_CONTEXT_SNAPSHOT_V2_FIELDS: &[&str] = &[
+// sub-agent-target keyed objects. V3 removes the retired package snapshot.
+const RUN_CONTEXT_SNAPSHOT_V3_FIELDS: &[&str] = &[
     "account_snapshot_metadata",
     "additional_instructions",
     "accumulated_learning_memory_id",
@@ -185,7 +180,6 @@ const RUN_CONTEXT_SNAPSHOT_V2_FIELDS: &[&str] = &[
     "model_variant",
     "notification_send_enabled",
     "provider_id",
-    "quantitative_package",
     "scheduled_candle_boundary",
     "selected_instruments",
     "strategy_prompt_revision",
@@ -193,37 +187,16 @@ const RUN_CONTEXT_SNAPSHOT_V2_FIELDS: &[&str] = &[
     "timeout_seconds",
 ];
 
-pub const MAINTENANCE_TASK_KIND_ANALYSIS_CODING: &str = "analysis_coding";
 pub const MAINTENANCE_TASK_KIND_PROVIDER_CONFIG_RELOAD: &str = "provider_config_reload";
 
 pub const MAINTENANCE_STATUS_QUEUED: &str = "queued";
 pub const MAINTENANCE_STATUS_RUNNING: &str = "running";
 pub const MAINTENANCE_STATUS_SUCCEEDED: &str = "succeeded";
 pub const MAINTENANCE_STATUS_FAILED: &str = "failed";
-pub const MAINTENANCE_STATUS_ABORTED: &str = "aborted";
 
-/// Phase enum values for `harness_maintenance_tasks.phase`. Analysis-coding
-/// tasks use the full state machine; provider reload tasks only ever enter
-/// `queued`/`running`/`completed`.
-pub const MAINTENANCE_PHASE_QUEUED: &str = "queued";
-pub const MAINTENANCE_PHASE_PREPARING: &str = "preparing";
-pub const MAINTENANCE_PHASE_GENERATING: &str = "generating";
-pub const MAINTENANCE_PHASE_VALIDATING: &str = "validating";
-pub const MAINTENANCE_PHASE_WAITING_FOR_PROMOTION: &str = "waiting_for_promotion";
-pub const MAINTENANCE_PHASE_PROMOTING: &str = "promoting";
-pub const MAINTENANCE_PHASE_SMOKE_TESTING: &str = "smoke_testing";
-pub const MAINTENANCE_PHASE_ROLLING_BACK: &str = "rolling_back";
+/// Phase values for `harness_maintenance_tasks.phase` used by provider reload
+/// tasks.
 pub const MAINTENANCE_PHASE_COMPLETED: &str = "completed";
-
-/// Coding phases that hold an exclusive live-workspace lease and
-/// therefore block normal scheduled/manual dispatch while they
-/// execute.
-pub const CODING_PROMOTION_PHASES: &[&str] = &[
-    MAINTENANCE_PHASE_WAITING_FOR_PROMOTION,
-    MAINTENANCE_PHASE_PROMOTING,
-    MAINTENANCE_PHASE_SMOKE_TESTING,
-    MAINTENANCE_PHASE_ROLLING_BACK,
-];
 
 #[derive(Debug, Clone, sqlx::FromRow)]
 pub struct HarnessSubAgentRow {
@@ -300,7 +273,7 @@ impl RunContextSnapshot {
             anyhow::bail!("run context snapshot exceeds the size limit");
         }
         let capabilities = self.normalized_enabled_capabilities()?;
-        validate_context_snapshot_v2(
+        validate_context_snapshot_v3(
             &self.context,
             capabilities
                 .iter()
@@ -328,22 +301,22 @@ impl RunContextSnapshot {
     }
 }
 
-// V2 is deliberately an exact, closed JSON shape. The database retains JSONB
+// V3 is deliberately an exact, closed JSON shape. The database retains JSONB
 // for forwards-compatible storage, but no arbitrary nested configuration can
 // enter a durable artifact under the current schema version.
-fn validate_context_snapshot_v2(
+fn validate_context_snapshot_v3(
     value: &Value,
     notification_send_enabled: bool,
 ) -> anyhow::Result<()> {
     let fields = value
         .as_object()
         .ok_or_else(|| anyhow::anyhow!("run context snapshot must be a JSON object"))?;
-    if fields.len() != RUN_CONTEXT_SNAPSHOT_V2_FIELDS.len()
-        || RUN_CONTEXT_SNAPSHOT_V2_FIELDS
+    if fields.len() != RUN_CONTEXT_SNAPSHOT_V3_FIELDS.len()
+        || RUN_CONTEXT_SNAPSHOT_V3_FIELDS
             .iter()
             .any(|field| !fields.contains_key(*field))
     {
-        anyhow::bail!("run context snapshot does not match schema version two");
+        anyhow::bail!("run context snapshot does not match schema version three");
     }
 
     validate_identifier(
@@ -376,7 +349,6 @@ fn validate_context_snapshot_v2(
         required_context_field(fields, "system_prompt_version")?,
         "system_prompt_version",
     )?;
-    validate_quantitative_package(required_context_field(fields, "quantitative_package")?)?;
     validate_mcp_installations(required_context_field(fields, "mcp_installations")?)?;
     let declared_notification_send = required_context_field(fields, "notification_send_enabled")?
         .as_bool()
@@ -466,7 +438,7 @@ fn validate_strategy_prompt_revision(value: &Value) -> anyhow::Result<()> {
         || !revision.contains_key("target_sub_agent_id")
         || !revision.contains_key("revision_id")
     {
-        anyhow::bail!("strategy_prompt_revision does not match schema version two");
+        anyhow::bail!("strategy_prompt_revision does not match its closed schema");
     }
     validate_positive_integer(
         &revision["target_sub_agent_id"],
@@ -497,26 +469,6 @@ fn validate_optional_uuid(value: &Value, field: &str) -> anyhow::Result<()> {
         .ok_or_else(|| anyhow::anyhow!("{field} must be a UUID or null"))?;
     uuid::Uuid::parse_str(value).map_err(|_| anyhow::anyhow!("{field} must be a UUID or null"))?;
     Ok(())
-}
-
-fn validate_quantitative_package(value: &Value) -> anyhow::Result<()> {
-    if value.is_null() {
-        return Ok(());
-    }
-    let package = value
-        .as_object()
-        .ok_or_else(|| anyhow::anyhow!("quantitative_package must be an object or null"))?;
-    if package.len() != 2
-        || !package.contains_key("version")
-        || !package.contains_key("manifest_hash")
-    {
-        anyhow::bail!("quantitative_package does not match schema version one");
-    }
-    validate_identifier(&package["version"], "quantitative_package.version")?;
-    validate_identifier(
-        &package["manifest_hash"],
-        "quantitative_package.manifest_hash",
-    )
 }
 
 fn validate_mcp_installations(value: &Value) -> anyhow::Result<()> {
@@ -621,28 +573,6 @@ pub struct RunWorkspaceArtifactRow {
     pub error_summary: Option<String>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
-}
-
-#[derive(Debug, Clone, sqlx::FromRow)]
-pub struct AgentMaintenanceTaskRow {
-    pub id: i64,
-    pub agent_key: String,
-    pub task_kind: String,
-    pub parameters: Value,
-    pub status: String,
-    pub phase: String,
-    pub error_summary: Option<String>,
-    pub sub_agent_id: Option<i64>,
-    pub run_id: Option<i64>,
-    pub source_sub_agent_run_id: Option<i64>,
-    pub source_memory_id: Option<uuid::Uuid>,
-}
-
-impl AgentMaintenanceTaskRow {
-    /// Convenience accessor for the coding promotion phase check.
-    pub fn is_in_promotion_window(&self) -> bool {
-        CODING_PROMOTION_PHASES.contains(&self.phase.as_str())
-    }
 }
 
 /// Row for a global (non-agent-scoped) maintenance task such as

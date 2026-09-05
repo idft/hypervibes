@@ -198,9 +198,9 @@ pub(in crate::web::routes) async fn agent_live_stream(
     });
     let periodic_market_coins = configured_coins.clone();
     let periodic_market_data = Arc::clone(&state.market_data);
-    let periodic_market_refresh = tokio_stream::wrappers::IntervalStream::new(tokio::time::interval(
-        std::time::Duration::from_secs(15),
-    ))
+    let periodic_market_refresh = tokio_stream::wrappers::IntervalStream::new(
+        tokio::time::interval(std::time::Duration::from_secs(15)),
+    )
     .skip(1)
     .then(move |_| {
         let market_data = Arc::clone(&periodic_market_data);
@@ -211,25 +211,25 @@ pub(in crate::web::routes) async fn agent_live_stream(
         }
     });
     let freshness_refresh = initial_market_refresh
-    .chain(periodic_market_refresh)
-    .flat_map(move |market_data| {
-        let events = live_accounts_refresh
-            .get(&refresh_account_key)
-            .map(|snapshot| {
-                render_live_events(
-                    &snapshot,
-                    &refresh_configured_coins,
-                    &market_data,
-                    &refresh_agent_key,
-                )
-                .unwrap_or_else(|error| {
-                    warn!(error = ?error, "failed to render live freshness SSE events");
-                    Vec::new()
+        .chain(periodic_market_refresh)
+        .flat_map(move |market_data| {
+            let events = live_accounts_refresh
+                .get(&refresh_account_key)
+                .map(|snapshot| {
+                    render_live_events(
+                        &snapshot,
+                        &refresh_configured_coins,
+                        &market_data,
+                        &refresh_agent_key,
+                    )
+                    .unwrap_or_else(|error| {
+                        warn!(error = ?error, "failed to render live freshness SSE events");
+                        Vec::new()
+                    })
                 })
-            })
-            .unwrap_or_default();
-        tokio_stream::iter(events.into_iter().map(Ok::<Event, Infallible>))
-    });
+                .unwrap_or_default();
+            tokio_stream::iter(events.into_iter().map(Ok::<Event, Infallible>))
+        });
 
     let mut shutdown_rx = state.shutdown_rx.clone();
     let shutdown = async move {

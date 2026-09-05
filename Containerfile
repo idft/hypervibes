@@ -1,4 +1,4 @@
-ARG OPENCODE_TAG=1.18.27
+ARG OPENCODE_TAG=1.18.28
 
 FROM docker.io/library/rust:1.96-alpine AS builder
 
@@ -59,8 +59,6 @@ RUN uv python install 3.13
 COPY agent-runtime/container/opencode.jsonc /opt/hypervibes/opencode/opencode.jsonc
 COPY agent-runtime/workspace-template /opt/hypervibes/workspace-template
 COPY agent-runtime/analysis/requirements.txt /opt/hypervibes/analysis/requirements.txt
-COPY agent-runtime/coding_validate.py /opt/hypervibes/coding/coding_validate.py
-COPY agent-runtime/coding_fixture.json /opt/hypervibes/coding/coding_fixture.json
 COPY agent-runtime/mcp /opt/hypervibes/mcp
 COPY --from=builder /build/target/release/hypervibes /usr/local/bin/hypervibes
 COPY --from=builder /build/target/release/workspace-controller /usr/local/bin/workspace-controller

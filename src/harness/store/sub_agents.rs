@@ -8,8 +8,8 @@ use crate::{
         model::{
             CAPABILITY_NOTIFICATION_SEND, CAPABILITY_PROMPT_REVISION_SUBMIT,
             HarnessDispatchSubAgentRow, HarnessSubAgentRow, HarnessSubAgentRunRow,
-            RUN_STATUS_QUEUED, RUN_STATUS_SKIPPED, SUB_AGENT_KIND_ANALYSIS, SUB_AGENT_KIND_CODING,
-            SUB_AGENT_KIND_REVIEW, SUB_AGENT_KIND_TRADING,
+            RUN_STATUS_QUEUED, RUN_STATUS_SKIPPED, SUB_AGENT_KIND_ANALYSIS, SUB_AGENT_KIND_REVIEW,
+            SUB_AGENT_KIND_TRADING,
         },
         sub_agent_key::{build_generated_event_sub_agent_key, build_generated_sub_agent_key},
         timeframe::{
@@ -21,7 +21,6 @@ use crate::{
 
 use super::common::{insert_run_with_model_variant_in_tx, lock_agent_coordination_tx};
 use super::recovery::has_active_run_in_lane_tx;
-use super::workspace::agent_has_blocking_workspace_maintenance_tx;
 
 #[cfg(test)]
 pub(crate) const DEFAULT_ANALYSIS_TIMEFRAME: &str = "15m";
@@ -51,7 +50,7 @@ pub struct SingletonSubAgentConfig<'a> {
 /// This is idempotent: existing rows keyed by `(agent_key, sub_agent_key)`
 /// are left untouched. The fixture gets disabled
 /// `technical-15m`, `technical-1h`, `technical-1d` Analysis jobs, a
-/// `trading-5m` job, a `review-1d` job, and a `coding` on-demand job.
+/// `trading-5m` job, and a `review-1d` job.
 pub async fn insert_default_harness_sub_agents(pool: &DbPool, agent_key: &str) -> Result<()> {
     for timeframe in DEFAULT_ANALYSIS_TIMEFRAMES {
         insert_default_analysis_job(pool, agent_key, timeframe).await?;
@@ -76,8 +75,6 @@ pub async fn insert_default_harness_sub_agents(pool: &DbPool, agent_key: &str) -
         DEFAULT_REVIEW_TIMEOUT_SECONDS,
     )
     .await?;
-
-    insert_default_unscheduled_sub_agent(pool, agent_key, SUB_AGENT_KIND_CODING, 1800).await?;
 
     // Every durable role owns an active revision, including disabled defaults.
     // This runs after the rows exist so it is also safe for partially-created
@@ -125,36 +122,6 @@ async fn insert_default_analysis_job(
         format!("failed to insert default {sub_agent_key} job for agent {agent_key}")
     })?;
 
-    Ok(())
-}
-
-#[cfg(test)]
-async fn insert_default_unscheduled_sub_agent(
-    pool: &DbPool,
-    agent_key: &str,
-    sub_agent_kind: &str,
-    timeout_seconds: i32,
-) -> Result<()> {
-    let sub_agent_key = build_generated_event_sub_agent_key(sub_agent_kind);
-    sqlx::query(
-        "INSERT INTO harness_sub_agents (
-            agent_key, sub_agent_key, sub_agent_kind, enabled, timeout_seconds,
-            enabled_capabilities
-         ) VALUES ($1, $2, $3, false, $4, $5)
-         ON CONFLICT (agent_key, sub_agent_key) DO NOTHING",
-    )
-    .bind(agent_key)
-    .bind(sub_agent_key)
-    .bind(sub_agent_kind)
-    .bind(timeout_seconds)
-    .bind(serde_json::json!(default_capabilities_for_kind(
-        sub_agent_kind
-    )))
-    .execute(pool)
-    .await
-    .with_context(|| {
-        format!("failed to insert default unscheduled sub-agent for agent {agent_key}")
-    })?;
     Ok(())
 }
 
@@ -266,8 +233,7 @@ pub async fn list_agent_sub_agents(
     .with_context(|| format!("failed to list harness jobs for agent {agent_key}"))
 }
 
-/// Load the singleton job of a given durable role (`trading`, `coding`,
-/// `review`) for an agent.
+/// Load the singleton job of a given durable role (`trading` or `review`).
 pub async fn get_singleton_sub_agent(
     pool: &DbPool,
     agent_key: &str,
@@ -276,7 +242,7 @@ pub async fn get_singleton_sub_agent(
     anyhow::ensure!(
         matches!(
             sub_agent_kind,
-            SUB_AGENT_KIND_TRADING | SUB_AGENT_KIND_CODING | SUB_AGENT_KIND_REVIEW
+            SUB_AGENT_KIND_TRADING | SUB_AGENT_KIND_REVIEW
         ),
         "unsupported singleton sub-agent kind"
     );
@@ -308,7 +274,7 @@ pub async fn insert_singleton_sub_agent(
     anyhow::ensure!(
         matches!(
             sub_agent_kind,
-            SUB_AGENT_KIND_TRADING | SUB_AGENT_KIND_CODING | SUB_AGENT_KIND_REVIEW
+            SUB_AGENT_KIND_TRADING | SUB_AGENT_KIND_REVIEW
         ),
         "unsupported singleton sub-agent kind"
     );
@@ -319,7 +285,6 @@ pub async fn insert_singleton_sub_agent(
         _ => build_generated_event_sub_agent_key(sub_agent_kind),
     };
     let timeframe = match sub_agent_kind {
-        SUB_AGENT_KIND_CODING => None,
         SUB_AGENT_KIND_TRADING | SUB_AGENT_KIND_REVIEW => Some(config.timeframe),
         _ => None,
     };
@@ -359,27 +324,6 @@ pub async fn insert_singleton_sub_agent(
         format!("failed to insert {sub_agent_kind} singleton for agent {agent_key}")
     })?;
     Ok(row.0)
-}
-
-pub async fn get_enabled_sub_agent(
-    pool: &DbPool,
-    agent_key: &str,
-    sub_agent_kind: &str,
-) -> Result<Option<HarnessSubAgentRow>> {
-    query_as(
-        "SELECT id, agent_key, sub_agent_key, sub_agent_kind, enabled, timeframe,
-                 next_run_at, model_provider_id, model_id,
-                  model_variant, timeout_seconds,
-                  enabled_capabilities,
-                  created_at, updated_at
-           FROM harness_sub_agents
-           WHERE agent_key = $1 AND sub_agent_kind = $2 AND enabled = true",
-    )
-    .bind(agent_key)
-    .bind(sub_agent_kind)
-    .fetch_optional(pool)
-    .await
-    .with_context(|| format!("failed to load enabled event job for agent {agent_key}"))
 }
 
 #[cfg(test)]
@@ -462,6 +406,30 @@ pub async fn get_agent_sub_agent(
     .with_context(|| format!("failed to load job {sub_agent_id} for agent {agent_key}"))?;
 
     Ok(row)
+}
+
+#[cfg(test)]
+pub async fn get_enabled_sub_agent(
+    pool: &DbPool,
+    agent_key: &str,
+    sub_agent_kind: &str,
+) -> Result<Option<HarnessSubAgentRow>> {
+    query_as(
+        "SELECT id, agent_key, sub_agent_key, sub_agent_kind, enabled, timeframe,
+                 next_run_at, model_provider_id, model_id, model_variant,
+                 timeout_seconds, enabled_capabilities, created_at, updated_at
+           FROM harness_sub_agents
+          WHERE agent_key = $1
+            AND sub_agent_kind = $2
+            AND enabled = true
+          ORDER BY id
+          LIMIT 1",
+    )
+    .bind(agent_key)
+    .bind(sub_agent_kind)
+    .fetch_optional(pool)
+    .await
+    .with_context(|| format!("failed to load enabled {sub_agent_kind} job for agent {agent_key}"))
 }
 
 /// List a page of the most recent runs for a single job.
@@ -863,9 +831,6 @@ pub enum ClaimedCandleSubAgentRun {
     /// The job was no longer due (concurrent claim, disabled,
     /// missing, etc.). No row was written.
     NotDue,
-    /// The job remained due, but an active Coding promotion prevents dispatch
-    /// until the agent is available again.
-    BlockedByMaintenance,
 }
 
 /// Atomically advance the job, optionally inserting a `queued` or
@@ -961,13 +926,6 @@ pub async fn claim_due_candle_sub_agent(
             .await
             .context("failed to commit stale-skip claim")?;
         return Ok(ClaimedCandleSubAgentRun::NotDue);
-    }
-
-    if agent_has_blocking_workspace_maintenance_tx(&mut tx, &job.agent_key).await? {
-        tx.rollback()
-            .await
-            .context("failed to roll back maintenance-blocked claim")?;
-        return Ok(ClaimedCandleSubAgentRun::BlockedByMaintenance);
     }
 
     let scheduled_for = boundary_for_due_at(job.next_run_at, trigger_delay_seconds);

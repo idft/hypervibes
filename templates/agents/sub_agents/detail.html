@@ -13,7 +13,7 @@
         <div class="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
             <div>
                 <div class="flex items-center gap-3">
-                    <a href="{% if job.sub_agent_kind == "trading" %}/agents/{{ agent.agent_key }}/trading{% else if job.sub_agent_kind == "review" %}/agents/{{ agent.agent_key }}/review{% else if job.sub_agent_kind == "coding" %}/agents/{{ agent.agent_key }}/coding{% else %}/agents/{{ agent.agent_key }}/analysis{% endif %}" aria-label="Back" title="Back" class="inline-flex w-fit shrink-0 cursor-pointer items-center rounded-full border border-zinc-800 p-2 text-zinc-300 hover:border-zinc-700 hover:text-white">
+                    <a href="{% if job.sub_agent_kind == "trading" %}/agents/{{ agent.agent_key }}/trading{% else if job.sub_agent_kind == "review" %}/agents/{{ agent.agent_key }}/review{% else %}/agents/{{ agent.agent_key }}/analysis{% endif %}" aria-label="Back" title="Back" class="inline-flex w-fit shrink-0 cursor-pointer items-center rounded-full border border-zinc-800 p-2 text-zinc-300 hover:border-zinc-700 hover:text-white">
                         <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="size-6" aria-hidden="true">
                             <path stroke-linecap="round" stroke-linejoin="round" d="M10.5 19.5 3 12m0 0 7.5-7.5M3 12h18" />
                         </svg>

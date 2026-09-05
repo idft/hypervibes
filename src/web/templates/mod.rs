@@ -1,7 +1,6 @@
 mod account;
 mod agents;
 mod balance;
-mod coding;
 mod conversations;
 mod live_health;
 mod memories;
@@ -20,7 +19,6 @@ use self::shared::*;
 pub use account::*;
 pub use agents::*;
 pub use balance::*;
-pub use coding::*;
 pub use conversations::*;
 pub use live_health::*;
 pub use memories::*;

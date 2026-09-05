@@ -88,7 +88,7 @@ def canonical_payload(
     interval_ms: int,
     candles: list[dict[str, Any]],
 ) -> dict[str, Any]:
-    """Build the stable input envelope consumed by Coding package scripts."""
+    """Build the stable input envelope consumed by Python analysis scripts."""
     return {
         "symbol": symbol,
         "timeframe": timeframe,

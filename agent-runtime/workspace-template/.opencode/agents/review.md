@@ -34,11 +34,10 @@ mark superseded rules as removed or replaced. Its summary must be exactly
 
 When evidence justifies a material strategy change, submit one structured prompt
 revision batch for Trading and only Analysis jobs opted in to review updates.
-Never revise Coding or Review prompts.
+Never revise Review prompts.
 
-Do not edit `scripts/user/`, `data/`, or `scratch/`. Express any reusable
-analysis-code recommendation in the review content and required metadata
-using `coding_requested`.
+Do not edit `data/`, `scratch/`, or runtime files. Express any improvement
+recommendation in the review content.
 
 Do not place or cancel orders.
 

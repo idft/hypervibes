@@ -50,7 +50,7 @@ async fn strategy_prompts_list_returns_only_safe_prompt_fields() {
     assert_eq!(response.status(), StatusCode::OK);
     let body = response_json(response).await;
     let prompts = body.as_array().expect("prompt list");
-    assert_eq!(prompts.len(), 6);
+    assert_eq!(prompts.len(), 5);
     for prompt in prompts {
         assert_eq!(prompt.as_object().expect("prompt object").len(), 5);
         assert!(prompt["revision_id"].is_i64());

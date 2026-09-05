@@ -15,15 +15,11 @@ use crate::{
 };
 
 use super::common::{
-    ACTIVE_STATUSES, EventRunInsertMode, insert_run_with_model_variant_in_tx,
-    lock_agent_coordination_tx, truncate_error_summary,
+    ACTIVE_STATUSES, insert_run_with_model_variant_in_tx, lock_agent_coordination_tx,
+    truncate_error_summary,
 };
 use super::recovery::{has_active_run_in_lane_tx, recover_inactive_agent_runs_tx};
 use super::sub_agents::CandleSubAgentForUpdate;
-use super::workspace::{
-    agent_has_blocking_workspace_maintenance_for_mode_tx,
-    agent_has_blocking_workspace_maintenance_tx,
-};
 
 #[derive(sqlx::FromRow)]
 struct UnscheduledSubAgentForUpdate {
@@ -188,19 +184,6 @@ pub async fn list_agent_runs_page_for_kind(
     .with_context(|| format!("failed to list {sub_agent_kind} runs for agent {agent_key}"))?;
 
     Ok(rows)
-}
-
-/// Count runs recorded for an agent.
-#[cfg(test)]
-pub async fn count_agent_runs(pool: &DbPool, agent_key: &str) -> Result<i64> {
-    let (count,): (i64,) =
-        query_as("SELECT COUNT(*) FROM harness_sub_agent_runs WHERE agent_key = $1")
-            .bind(agent_key)
-            .fetch_one(pool)
-            .await
-            .with_context(|| format!("failed to count runs for agent {agent_key}"))?;
-
-    Ok(count)
 }
 
 /// Count runs recorded for an agent and sub-agent kind.
@@ -404,7 +387,6 @@ pub struct QueuedRunForDispatch {
 }
 
 /// List persisted queued runs that need a scheduler dispatch worker.
-/// Analysis-coding runs are owned by maintenance tasks instead.
 pub async fn list_queued_runs_for_dispatch(
     pool: &DbPool,
     limit: i64,
@@ -416,8 +398,7 @@ pub async fn list_queued_runs_for_dispatch(
                 sub_agent_kind,
                 scheduled_for
            FROM harness_sub_agent_runs
-          WHERE status = $1
-             AND sub_agent_kind <> 'coding'
+           WHERE status = $1
           ORDER BY created_at ASC, id ASC
           LIMIT $2",
     )
@@ -477,13 +458,6 @@ pub async fn insert_queued_manual_run(
         return Ok(QueuedSubAgentRun::Missing);
     };
 
-    if agent_has_blocking_workspace_maintenance_tx(&mut tx, &job.agent_key).await? {
-        tx.rollback()
-            .await
-            .context("failed to roll back maintenance-blocked manual run")?;
-        return Ok(QueuedSubAgentRun::BlockedByMaintenance);
-    }
-
     let now = Utc::now();
     let scheduled_for = latest_due_at_or_before(now, &job.timeframe, job.trigger_delay_seconds)?
         .map(|due| boundary_for_due_at(due, job.trigger_delay_seconds))
@@ -533,7 +507,6 @@ pub enum QueuedSubAgentRun {
         run_id: i64,
     },
     Missing,
-    BlockedByMaintenance,
 }
 
 /// Whether a manual queued run must wait for an earlier run in its lane.
@@ -567,15 +540,13 @@ pub async fn insert_queued_event_run(
     agent_key: &str,
     sub_agent_id: i64,
 ) -> Result<QueuedSubAgentRun> {
-    insert_queued_event_run_with_mode(pool, agent_key, sub_agent_id, EventRunInsertMode::Manual)
-        .await
+    insert_queued_event_run_with_mode(pool, agent_key, sub_agent_id).await
 }
 
-pub(crate) async fn insert_queued_event_run_with_mode(
+async fn insert_queued_event_run_with_mode(
     pool: &DbPool,
     agent_key: &str,
     sub_agent_id: i64,
-    mode: EventRunInsertMode,
 ) -> Result<QueuedSubAgentRun> {
     let mut tx = pool
         .begin()
@@ -610,14 +581,6 @@ pub(crate) async fn insert_queued_event_run_with_mode(
             .context("failed to roll back missing-event manual run")?;
         return Ok(QueuedSubAgentRun::Missing);
     };
-
-    if agent_has_blocking_workspace_maintenance_for_mode_tx(&mut tx, &event.agent_key, mode).await?
-    {
-        tx.rollback()
-            .await
-            .context("failed to roll back maintenance-blocked manual event run")?;
-        return Ok(QueuedSubAgentRun::BlockedByMaintenance);
-    }
 
     let now = Utc::now();
     let outcome = if has_active_run_in_lane_tx(

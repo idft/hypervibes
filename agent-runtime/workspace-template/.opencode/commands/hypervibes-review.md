@@ -17,6 +17,5 @@ and explicitly mark replaced rules. Link the review to it with
 
 Do not place or cancel orders.
 
-Do not edit `scripts/user/`, `data/`, or `scratch/`. If reusable analysis
-code should improve, record `coding_requested` and its reason
-in the review metadata for the separate Coding sub-agent.
+Do not edit `data/`, `scratch/`, or runtime files. If an improvement is needed,
+describe the recommendation and its reason in the review memory.

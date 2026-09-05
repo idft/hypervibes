@@ -1,5 +1,4 @@
 mod account;
-mod coding;
 mod error;
 mod memories;
 mod notifications;
@@ -12,8 +11,6 @@ mod test_support;
 
 #[cfg(test)]
 mod account_tests;
-#[cfg(test)]
-mod coding_tests;
 #[cfg(test)]
 mod memories_tests;
 #[cfg(test)]
@@ -28,7 +25,7 @@ mod transactions_tests;
 // Re-export so handlers are reachable by bare name from `router()` below,
 // and so test code can reference them via `super::*` if needed.
 use self::notifications::create as create_notification;
-use self::{account::*, coding::*, memories::*, orders::*, strategy_prompts::*, transactions::*};
+use self::{account::*, memories::*, orders::*, strategy_prompts::*, transactions::*};
 
 use std::sync::Arc;
 
@@ -53,8 +50,6 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/notifications", post(create_notification))
         .route("/account", get(get_account))
         .route("/account/transactions", get(list_account_transactions))
-        .route("/coding/requests", post(request_analysis_coding))
-        .route("/coding/report", post(submit_coding_report))
         .route("/strategy-prompts", get(list_strategy_prompts))
         .route("/strategy-prompts/revisions", post(submit_prompt_revision))
         .route(

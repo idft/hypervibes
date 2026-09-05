@@ -15,74 +15,9 @@ use crate::{
 use super::common::ERROR_SUMMARY_MAX_CHARS;
 use super::test_support::seed_agent_and_job;
 use super::{
-    AnalysisCodingTaskRequest, CodingTriggerMode, InsertAnalysisCodingTaskOutcome,
-    QueuedSubAgentRun, count_agent_runs, get_run, insert_analysis_coding_task_and_run,
-    insert_queued_manual_run, insert_test_run, mark_run_aborted, mark_run_failed, mark_run_running,
-    mark_run_succeeded, set_run_error_summary,
+    QueuedSubAgentRun, get_run, insert_queued_manual_run, insert_test_run, mark_run_aborted,
+    mark_run_failed, mark_run_running, mark_run_succeeded, set_run_error_summary,
 };
-
-#[tokio::test]
-async fn insert_queued_manual_run_returns_blocked_by_maintenance() {
-    let pool = test_db::pool().await;
-    let key = format!(
-        "manual-maint-{}",
-        Utc::now().timestamp_nanos_opt().unwrap_or(0)
-    );
-    let sub_agent_id = seed_agent_and_job(&pool, &key, 0).await;
-    sqlx::query(
-        "UPDATE harness_sub_agents
-            SET enabled = true,
-                model_provider_id = 'test',
-                model_id = 'strong'
-          WHERE agent_key = $1
-             AND sub_agent_kind = 'coding'",
-    )
-    .bind(&key)
-    .execute(&pool)
-    .await
-    .expect("configure coding event job");
-    let coding_sub_agent_id: (i64,) = query_as(
-        "SELECT id FROM harness_sub_agents WHERE agent_key = $1 AND sub_agent_kind = 'coding'",
-    )
-    .bind(&key)
-    .fetch_one(&pool)
-    .await
-    .expect("load coding event job");
-    let task_id = match insert_analysis_coding_task_and_run(
-        &pool,
-        AnalysisCodingTaskRequest {
-            agent_key: &key,
-            sub_agent_id: coding_sub_agent_id.0,
-            trigger_mode: CodingTriggerMode::Manual,
-            request_origin: "manual",
-            source_sub_agent_run_id: None,
-            source_memory_id: None,
-            task_instructions: None,
-            requested_mode: Some("auto"),
-        },
-    )
-    .await
-    .expect("queue coding task")
-    {
-        InsertAnalysisCodingTaskOutcome::Inserted { task_id, .. } => task_id,
-        other => panic!("expected Inserted, got {other:?}"),
-    };
-    sqlx::query(
-        "UPDATE harness_maintenance_tasks
-            SET phase = 'promoting', status = 'running'
-          WHERE id = $1",
-    )
-    .bind(task_id)
-    .execute(&pool)
-    .await
-    .expect("place coding task into promotion phase");
-
-    let outcome = insert_queued_manual_run(&pool, &key, sub_agent_id)
-        .await
-        .expect("manual run");
-    assert!(matches!(outcome, QueuedSubAgentRun::BlockedByMaintenance));
-    assert_eq!(count_agent_runs(&pool, &key).await.expect("count runs"), 1);
-}
 
 #[tokio::test]
 async fn insert_queued_manual_run_inserts_manual_dispatch_run_and_does_not_advance_job() {

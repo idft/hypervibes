@@ -44,7 +44,6 @@ async fn required_memory_type_for_credential(
         Some(kind) if kind == SUB_AGENT_KIND_TRADING => Ok(Some("trading_decision".to_string())),
         Some(kind) if kind == SUB_AGENT_KIND_ANALYSIS => Ok(None),
         Some("review") => Ok(None),
-        Some("coding") => Ok(None),
         _ => Err(ApiError::Forbidden("this run role cannot write memories")),
     }
 }

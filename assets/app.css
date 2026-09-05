@@ -184,17 +184,6 @@ html.agent-rail-initially-collapsed .agent-rail.agent-rail-expanded .agent-rail-
   cursor: grab;
 }
 
-@media (min-width: 768px) {
-  .coding-file-pane {
-    width: var(--coding-file-pane-width, 20rem);
-  }
-}
-
-[data-coding-explorer][data-coding-resizing="true"] {
-  cursor: col-resize;
-  user-select: none;
-}
-
 [data-run-transcript-scroll] {
   overflow-anchor: none;
 }

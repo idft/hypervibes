@@ -225,7 +225,7 @@ fn opencode_agent_shows_jobs_tab_with_recent_runs() {
     assert!(rendered.contains("local-datetime-ready"));
     assert!(rendered.contains("technical-15m"));
     assert!(rendered.contains("trading-5m"));
-    assert!(rendered.contains("coding"));
+    assert!(rendered.contains("review"));
     assert!(rendered.contains("15m"));
     assert!(rendered.contains("5m"));
     assert!(!rendered.contains(">10m<"));
@@ -243,7 +243,7 @@ fn opencode_agent_shows_jobs_tab_with_recent_runs() {
         .and_then(|(_, remainder)| remainder.split_once("</tr>"))
         .map(|(row, _)| row)
         .expect("render event job row");
-    assert!(event_job_row.contains("On demand"));
+    assert!(event_job_row.contains("Unscheduled"));
     assert!(!event_job_row.contains("local-datetime"));
     assert!(rendered.contains("anthropic/claude-3-5-sonnet"));
     assert!(rendered.contains("Run now"));
@@ -665,52 +665,4 @@ fn new_job_page_renders_agent_navbar_with_jobs_active() {
     assert!(rendered.contains("Expand agent navigation"));
     assert!(rendered.contains("Create Analysis sub-agent"));
     assert!(rendered.contains("action=\"/agents/test-agent/analysis\""));
-}
-
-#[test]
-fn coding_page_renders_escaped_preview_and_htmx_file_link() {
-    let agent = sample_agent_detail_row();
-    let template = AgentCodingPageTemplate {
-        tabs: build_agent_show_tabs(&agent, AgentShowTab::Coding, 0),
-        agent_tabs_use_htmx: true,
-        agent,
-        navbar: Navbar::default(),
-        current_path: "/agents/test-agent/coding?file=strategies%2Ftrend%20%23%201.py".to_string(),
-        entries: vec![CodingTreeEntryView {
-            path: "strategies/trend # 1.py".to_string(),
-            name: "trend # 1.py".to_string(),
-            href: "/agents/test-agent/coding?file=strategies%2Ftrend%20%23%201.py".to_string(),
-            depth: 1,
-            is_directory: false,
-            selected: true,
-            initially_hidden: false,
-        }],
-        package_exists: true,
-        package_status: CodingPackageStatusView::Valid {
-            version: "v1".to_string(),
-            manifest_hash: "abc".to_string(),
-        },
-        listing_truncated: false,
-        max_entries: 2_000,
-        max_depth: 32,
-        controller_unavailable: false,
-        selected_path: "strategies/trend # 1.py".to_string(),
-        preview_text: Some("<script>unsafe</script>".to_string()),
-        preview_missing: false,
-        preview_binary: false,
-        preview_too_large: false,
-        task_status_html: String::new(),
-    };
-
-    let rendered = template.render().expect("render coding page");
-
-    assert!(rendered.contains("Coding"));
-    assert!(rendered.contains("Valid package"));
-    assert!(
-        rendered
-            .contains("hx-get=\"/agents/test-agent/coding?file=strategies%2Ftrend%20%23%201.py\"")
-    );
-    assert!(rendered.contains("hx-select=\"#agent-show-tab-content\""));
-    assert!(rendered.contains("unsafe"));
-    assert!(!rendered.contains("<script>unsafe</script>"));
 }

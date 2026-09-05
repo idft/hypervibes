@@ -150,7 +150,6 @@ pub(in crate::web::routes) async fn render_agent_show_page(
 
     match active_tab {
         AgentShowTab::Chat => unreachable!("Chat has its own page route"),
-        AgentShowTab::Coding => unreachable!("Coding has its own page route"),
         AgentShowTab::Trading | AgentShowTab::Review => {
             unreachable!("Trading and Review have their own page routes")
         }

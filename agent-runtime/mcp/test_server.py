@@ -12,9 +12,7 @@ from __future__ import annotations
 
 import importlib
 import importlib.util
-import json
 import os
-import subprocess
 import sys
 import tempfile
 import types
@@ -109,7 +107,7 @@ class HyperVibesMcpServerTests(unittest.TestCase):
         self.assertEqual(api_key, "vta_test_xyz")
         self.assertEqual(agent_key, "btc-2")
 
-    def test_server_registers_the_full_tool_set(self) -> None:
+    def test_server_registers_the_non_coding_tool_set(self) -> None:
         registered = set(self.server.mcp.tools)
         self.assertTrue(
             {
@@ -128,13 +126,14 @@ class HyperVibesMcpServerTests(unittest.TestCase):
                 "cancel_orders",
                 "cancel_all_orders",
                 "send_notification",
-                "coding_validate_candidate",
-                "coding_submit_report",
             }.issubset(registered)
         )
         self.assertNotIn("get_latest_analysis", registered)
         self.assertNotIn("get_market_analysis", registered)
         self.assertNotIn("request_analysis_coding", registered)
+        self.assertNotIn("request_coding", registered)
+        self.assertNotIn("coding_validate_candidate", registered)
+        self.assertNotIn("coding_submit_report", registered)
 
     def test_role_profiles_have_expected_memory_and_prompt_permissions(self) -> None:
         profiles = (
@@ -144,9 +143,14 @@ class HyperVibesMcpServerTests(unittest.TestCase):
             / ".opencode"
             / "agents"
         )
-        for profile_name in ["analysis.md", "trading.md", "coding.md"]:
+        for profile_name in ["analysis.md", "trading.md", "review.md", "agent-conversations.md"]:
             profile = (profiles / profile_name).read_text(encoding="utf-8")
             self.assertIn("hypervibes_*: deny", profile, profile_name)
+            self.assertNotIn("coding", profile.lower(), profile_name)
+            self.assertNotIn("analysis-coding", profile, profile_name)
+            self.assertNotIn("python-analysis", profile, profile_name)
+        for profile_name in ["analysis.md", "trading.md"]:
+            profile = (profiles / profile_name).read_text(encoding="utf-8")
             self.assertNotIn("hypervibes_list_strategy_prompts:", profile, profile_name)
             self.assertNotIn("hypervibes_get_strategy_prompt:", profile, profile_name)
             self.assertNotIn("hypervibes_update_strategy_prompt:", profile, profile_name)
@@ -476,94 +480,6 @@ class HyperVibesMcpServerTests(unittest.TestCase):
         self.assertEqual(result["id"], "memory")
         self.assertEqual(captured["path"], "/api/v1/memories/memory-id")
         self.assertEqual(captured["params"], {"include": "links"})
-
-    def test_coding_validation_runs_fixed_local_validator(self) -> None:
-        coding = _load_server(
-            {
-                "HYPERVIBES_API_BASE_URL": "http://example.test",
-                "HYPERVIBES_API_KEY": "k",
-                "HYPERVIBES_AGENT_KEY": "a",
-                "HYPERVIBES_CODING_TASK_ID": "42",
-            }
-        )
-        with tempfile.TemporaryDirectory() as tmp:
-            workspace = Path(tmp) / "workspace"
-            (workspace / "scripts/user/strategies").mkdir(parents=True)
-            (workspace / "scripts/user/strategies/trend.py").write_text("print(1)")
-            completed = subprocess.CompletedProcess(
-                args=[],
-                returncode=0,
-                stdout='{"ok": true, "checks": ["compile", "contract"]}',
-                stderr="",
-            )
-            prior = os.getcwd()
-            os.chdir(workspace)
-            try:
-                with mock.patch.dict(
-                    os.environ,
-                    {"HYPERVIBES_CODING_TASK_ID": "42"},
-                ):
-                    with mock.patch.object(
-                        coding.subprocess, "run", return_value=completed
-                    ) as run:
-                        result = coding.coding_validate_candidate()
-                self.assertTrue(result["ok"])
-                self.assertEqual(result["task_id"], 42)
-                self.assertEqual(len(result["candidate_manifest_sha256"]), 64)
-                self.assertTrue(
-                    (workspace.parent / "coding-validation.json").is_file()
-                )
-                command = run.call_args.args[0]
-                self.assertEqual(command[0], coding.CODING_VALIDATOR_PYTHON)
-                self.assertEqual(command[1], coding.CODING_VALIDATOR_SCRIPT)
-                self.assertNotIn("timeout", run.call_args.kwargs)
-            finally:
-                os.chdir(prior)
-
-    def test_coding_manifest_rejects_unapproved_extension(self) -> None:
-        coding = _load_server(
-            {
-                "HYPERVIBES_API_BASE_URL": "http://example.test",
-                "HYPERVIBES_API_KEY": "k",
-                "HYPERVIBES_AGENT_KEY": "a",
-            }
-        )
-        with tempfile.TemporaryDirectory() as tmp:
-            workspace = Path(tmp)
-            user = workspace / "scripts/user"
-            user.mkdir(parents=True)
-            (user / "notes.txt").write_text("not approved")
-            prior = os.getcwd()
-            os.chdir(workspace)
-            try:
-                with self.assertRaisesRegex(RuntimeError, "extension is not allowed"):
-                    coding._coding_manifest_hash()
-            finally:
-                os.chdir(prior)
-
-    def test_coding_report_uses_task_id_from_environment(self) -> None:
-        coding = _load_server(
-            {
-                "HYPERVIBES_API_BASE_URL": "http://example.test",
-                "HYPERVIBES_API_KEY": "k",
-                "HYPERVIBES_AGENT_KEY": "a",
-                "HYPERVIBES_CODING_TASK_ID": "42",
-            }
-        )
-        captured: dict[str, object] = {}
-
-        def fake_request(method, path, **kwargs):
-            captured.update(method=method, path=path, **kwargs)
-            return {"submitted": True}
-
-        with mock.patch.dict(os.environ, {"HYPERVIBES_CODING_TASK_ID": "42"}):
-            with mock.patch.object(coding, "_request", side_effect=fake_request):
-                result = coding.coding_submit_report(
-                    "no_change", "none", "no evidence", [], [], "tests passed"
-                )
-        self.assertEqual(result, {"submitted": True})
-        self.assertEqual(captured["path"], "/api/v1/coding/report")
-        self.assertEqual(captured["json_body"]["task_id"], 42)  # type: ignore[index]
 
     def test_error_message_redacts_api_key(self) -> None:
         with mock.patch.dict(

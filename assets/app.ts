@@ -7,7 +7,6 @@ import { initMemoryTimelines, installMemoryLifecycle } from "./features/agents/m
 import { initModelPickers, installModelPickerLifecycle } from "./features/agents/model-picker";
 import { initSingletonRoleForms } from "./features/agents/singleton-role-form";
 import { installAgentNavigation } from "./features/agents/navigation";
-import { initCodingExplorers } from "./features/agents/coding";
 import { initProviders } from "./features/providers";
 import { installCopyButtons } from "./shared/clipboard";
 import { initClickableRows } from "./shared/clickable-rows";
@@ -26,7 +25,6 @@ function initialize(root: ParentNode = document) {
   initSingletonRoleForms(root);
   initProviders(root);
   initRunTranscripts(root);
-  initCodingExplorers(root);
 }
 
 function start() {

@@ -18,8 +18,8 @@ use tokio::sync::broadcast;
 use tracing::warn;
 
 use super::shared::{
-    ANALYSIS_CODING_ACTIVE_WARNING, ModelSelectionForm, SERVER_SHUTTING_DOWN_WARNING, TimeoutForm,
-    ToggleJobForm, build_model_picker_view, is_htmx_request, load_model_picker_context,
+    ModelSelectionForm, SERVER_SHUTTING_DOWN_WARNING, TimeoutForm, ToggleJobForm,
+    build_model_picker_view, is_htmx_request, load_model_picker_context,
     parse_positive_job_seconds, sub_agents_warning_redirect, timeout_error_redirect, urlencode,
     validate_model_selection_for_agent,
 };
@@ -38,12 +38,12 @@ use crate::{
     },
     harness::{
         model::{
-            CAPABILITY_REVIEW_PROMPT_UPDATE, SUB_AGENT_KIND_ANALYSIS, SUB_AGENT_KIND_CODING,
-            SUB_AGENT_KIND_REVIEW, SUB_AGENT_KIND_TRADING,
+            CAPABILITY_REVIEW_PROMPT_UPDATE, SUB_AGENT_KIND_ANALYSIS, SUB_AGENT_KIND_REVIEW,
+            SUB_AGENT_KIND_TRADING,
         },
         scheduler::{
             DispatchRequestInputs, build_dispatch_request, dispatch_request_from_job,
-            dispatch_review_coding_event, dispatch_run_in_isolated_workspace_with_workspace_lease,
+            dispatch_run_in_isolated_workspace_with_workspace_lease,
         },
         store::{self, QueuedSubAgentRun},
         timeframe::{parse_timeframe_seconds, parse_timeout_seconds},
@@ -894,34 +894,6 @@ pub(in crate::web::routes) async fn agents_run_sub_agent_now(
         return Ok(sub_agents_warning_redirect(&agent_key, "No model set"));
     }
 
-    if job.sub_agent_kind == SUB_AGENT_KIND_CODING {
-        return match store::insert_analysis_coding_task_and_run(
-            &state.db_pool,
-            store::AnalysisCodingTaskRequest {
-                agent_key: &agent_key,
-                sub_agent_id,
-                trigger_mode: store::CodingTriggerMode::Manual,
-                request_origin: "manual",
-                source_sub_agent_run_id: None,
-                source_memory_id: None,
-                task_instructions: None,
-                requested_mode: None,
-            },
-        )
-        .await?
-        {
-            store::InsertAnalysisCodingTaskOutcome::Inserted { run_id, .. } => {
-                Ok(Redirect::to(&format!("/agents/{agent_key}/runs/{run_id}")).into_response())
-            }
-            store::InsertAnalysisCodingTaskOutcome::AlreadyQueued => Ok(
-                sub_agents_warning_redirect(&agent_key, "Coding is already queued."),
-            ),
-            store::InsertAnalysisCodingTaskOutcome::BlockedByMaintenance => Ok(
-                sub_agents_warning_redirect(&agent_key, ANALYSIS_CODING_ACTIVE_WARNING),
-            ),
-        };
-    }
-
     let queued_run = if job.timeframe.is_some() {
         crate::harness::store::insert_queued_manual_run(&state.db_pool, &agent_key, sub_agent_id)
             .await?
@@ -965,7 +937,7 @@ pub(in crate::web::routes) async fn agents_run_sub_agent_now(
                 None
             };
             let (strategy_prompt, strategy_prompt_revision) =
-                load_strategy_prompt(&state, &agent_key, sub_agent_id, &job.sub_agent_kind).await?;
+                load_strategy_prompt(&state, &agent_key, sub_agent_id).await?;
             let (accumulated_learnings, accumulated_learning_memory_id) =
                 load_accumulated_learnings(&state, &agent_key).await?;
             let mut request = dispatch_request_from_job(
@@ -999,7 +971,6 @@ pub(in crate::web::routes) async fn agents_run_sub_agent_now(
             let workspace_controller = state.workspace_controller.clone();
             let agent_api_base_url = state.hypervibes_agent_api_base_url.clone();
             let workspace_leases = state.workspace_leases.clone();
-            let trigger_coding_event = job.sub_agent_kind == SUB_AGENT_KIND_REVIEW;
             let dispatch_agent_key = agent_key.clone();
             let in_flight = state.in_flight.clone();
             tokio::spawn(async move {
@@ -1028,7 +999,7 @@ pub(in crate::web::routes) async fn agents_run_sub_agent_now(
                 let _workspace_lease = workspace_leases
                     .acquire_live_read(&dispatch_agent_key)
                     .await;
-                let result = dispatch_run_in_isolated_workspace_with_workspace_lease(
+                dispatch_run_in_isolated_workspace_with_workspace_lease(
                     pool.clone(),
                     backend.clone(),
                     workspace_controller.clone(),
@@ -1037,9 +1008,6 @@ pub(in crate::web::routes) async fn agents_run_sub_agent_now(
                     &workspace_leases,
                 )
                 .await;
-                if trigger_coding_event && result.succeeded {
-                    let _ = dispatch_review_coding_event(&pool, &dispatch_agent_key, run_id).await;
-                }
             });
             Ok(Redirect::to(&format!("/agents/{agent_key}/runs/{run_id}")).into_response())
         }
@@ -1049,10 +1017,6 @@ pub(in crate::web::routes) async fn agents_run_sub_agent_now(
         QueuedSubAgentRun::Skipped { run_id } => {
             Ok(Redirect::to(&format!("/agents/{agent_key}/runs/{run_id}")).into_response())
         }
-        QueuedSubAgentRun::BlockedByMaintenance => Ok(sub_agents_warning_redirect(
-            &agent_key,
-            ANALYSIS_CODING_ACTIVE_WARNING,
-        )),
     }
 }
 pub(in crate::web::routes) async fn agents_update_sub_agent_model(
@@ -1473,7 +1437,6 @@ fn role_page_url(agent_key: &str, kind: &str) -> String {
     let role_page = match kind {
         SUB_AGENT_KIND_TRADING => "trading",
         SUB_AGENT_KIND_REVIEW => "review",
-        SUB_AGENT_KIND_CODING => "coding",
         _ => "analysis",
     };
     format!("/agents/{agent_key}/{role_page}")
@@ -1500,18 +1463,13 @@ async fn load_strategy_prompt(
     state: &Arc<AppState>,
     agent_key: &str,
     sub_agent_id: i64,
-    sub_agent_kind: &str,
 ) -> anyhow::Result<(String, i64)> {
     let prompt = get_agent_strategy_prompt(&state.db_pool, agent_key, sub_agent_id).await?;
-    let mut stored_prompt = prompt
+    let stored_prompt = prompt
         .as_ref()
         .map(|row| row.prompt.clone())
         .unwrap_or_default();
     let revision = prompt.as_ref().map(|row| row.revision_id).unwrap_or(1);
-    if sub_agent_kind == SUB_AGENT_KIND_CODING && stored_prompt.trim().is_empty() {
-        stored_prompt =
-            crate::agents::strategy_prompts::default_prompt_for_role(sub_agent_kind).to_string();
-    }
     Ok((stored_prompt, revision))
 }
 
