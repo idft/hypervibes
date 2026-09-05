@@ -50,8 +50,8 @@ pub fn router(state: Arc<AppState>) -> Router {
             get(agents_show_notifications).post(agents_delete_notifications),
         )
         .route(
-            "/agents/{agent_key}/notifications/count/stream",
-            get(agent_notification_count_stream),
+            "/agents/{agent_key}/notifications/count",
+            get(agent_notification_count),
         )
         .route(
             "/agents/{agent_key}/transactions",

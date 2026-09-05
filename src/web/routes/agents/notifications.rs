@@ -1,4 +1,4 @@
-use std::{convert::Infallible, sync::Arc};
+use std::sync::Arc;
 
 use super::show::{AgentShowQueries, render_agent_show_page};
 use crate::{
@@ -16,14 +16,8 @@ use axum::{
     Form,
     extract::{Path, State},
     http::StatusCode,
-    response::{
-        IntoResponse, Redirect, Response,
-        sse::{Event, KeepAlive, Sse},
-    },
+    response::{Html, IntoResponse, Redirect, Response},
 };
-use futures::StreamExt;
-use tokio_stream::wrappers::BroadcastStream;
-use tracing::warn;
 
 pub(in crate::web::routes) async fn agents_show_notifications(
     State(state): State<Arc<AppState>>,
@@ -40,67 +34,16 @@ pub(in crate::web::routes) async fn agents_show_notifications(
     .await
 }
 
-pub(in crate::web::routes) async fn agent_notification_count_stream(
+pub(in crate::web::routes) async fn agent_notification_count(
     State(state): State<Arc<AppState>>,
     Path(agent_key): Path<String>,
 ) -> Result<Response, AppError> {
-    // Subscribe before loading the initial count so a change during setup is
-    // queued and rendered immediately after the initial snapshot.
-    let receiver = state.ui_events.subscribe();
     let Some(agent) = get_agent(&state.db_pool, &agent_key).await? else {
         return Ok((StatusCode::NOT_FOUND, "agent not found").into_response());
     };
-    let initial = render_notification_count_event(&state.db_pool, &agent.agent_key).await?;
-    let db_pool = state.db_pool.clone();
-    let agent_key = agent.agent_key;
-    let event_agent_key = agent_key.clone();
-
-    let updates = BroadcastStream::new(receiver)
-        .filter_map(move |item| {
-            let agent_key = event_agent_key.clone();
-            async move {
-                match item {
-                    Ok(UiEvent::NotificationQueued {
-                        agent_key: event_agent_key,
-                        ..
-                    })
-                    | Ok(UiEvent::NotificationsDeleted {
-                        agent_key: event_agent_key,
-                    }) if event_agent_key == agent_key => Some(()),
-                    Ok(_) => None,
-                    Err(tokio_stream::wrappers::errors::BroadcastStreamRecvError::Lagged(_)) => {
-                        Some(())
-                    }
-                }
-            }
-        })
-        .filter_map(move |_| {
-            let db_pool = db_pool.clone();
-            let agent_key = agent_key.clone();
-            async move {
-                match render_notification_count_event(&db_pool, &agent_key).await {
-                    Ok(event) => Some(Ok::<Event, Infallible>(event)),
-                    Err(error) => {
-                        warn!(agent_key = %agent_key, error = ?error, "failed to render notification-count SSE update");
-                        None
-                    }
-                }
-            }
-        });
-
-    let stream = tokio_stream::iter(vec![Ok::<Event, Infallible>(initial)]).chain(updates);
-    Ok(Sse::new(stream)
-        .keep_alive(KeepAlive::new().interval(std::time::Duration::from_secs(15)))
-        .into_response())
-}
-
-async fn render_notification_count_event(
-    pool: &crate::db::DbPool,
-    agent_key: &str,
-) -> Result<Event, AppError> {
-    let notification_count = count_notifications(pool, agent_key).await?;
+    let notification_count = count_notifications(&state.db_pool, &agent.agent_key).await?;
     let html = AgentNotificationCountPartialTemplate::render_view(notification_count)?;
-    Ok(Event::default().event("notification-count").data(html))
+    Ok(Html(html).into_response())
 }
 
 pub(in crate::web::routes) async fn agents_delete_notifications(

@@ -173,9 +173,9 @@ fn notifications_tab_renders_history_and_statuses() {
     assert!(rendered.contains("data-notification-select"));
     assert!(rendered.contains("data-notifications-select-all"));
     assert!(rendered.contains("data-notifications-delete-selected"));
-    assert!(rendered.contains("sse-connect=\"/agents/test-agent/notifications/count/stream\""));
+    assert!(rendered.contains("hx-get=\"/agents/test-agent/notifications/count\""));
+    assert!(rendered.contains("hx-trigger=\"every 15s\""));
     assert!(rendered.contains("id=\"agent-notification-count\""));
-    assert!(rendered.contains("sse-swap=\"notification-count\" hx-target=\"this\""));
     assert!(rendered.contains(">7</span>"));
 }
 
