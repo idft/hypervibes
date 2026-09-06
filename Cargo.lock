@@ -3276,7 +3276,7 @@ dependencies = [
 
 [[package]]
 name = "hypervibes"
-version = "0.3.2"
+version = "0.3.3"
 dependencies = [
  "aes-gcm",
  "alloy",
@@ -7055,7 +7055,7 @@ checksum = "1ebf944e87a7c253233ad6766e082e3cd714b5d03812acc24c318f549614536e"
 
 [[package]]
 name = "workspace-controller"
-version = "0.3.2"
+version = "0.3.3"
 dependencies = [
  "anyhow",
  "axum",
@@ -7070,7 +7070,7 @@ dependencies = [
 
 [[package]]
 name = "workspace-store"
-version = "0.3.2"
+version = "0.3.3"
 dependencies = [
  "anyhow",
  "chrono",
