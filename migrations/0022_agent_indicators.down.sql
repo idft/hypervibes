@@ -1,0 +1,5 @@
+DROP TABLE agent_indicator_runs;
+DROP TABLE agent_indicator_definition_instruments;
+ALTER TABLE agent_indicator_definitions DROP CONSTRAINT agent_indicator_definitions_active_version_fk;
+DROP TABLE agent_indicator_versions;
+DROP TABLE agent_indicator_definitions;

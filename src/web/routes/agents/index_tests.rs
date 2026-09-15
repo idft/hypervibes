@@ -256,7 +256,7 @@ async fn post_agents_creates_active_agent_without_sub_agents() {
         list_agent_instrument_ids(&state.db_pool, &agent_key)
             .await
             .expect("list default instruments"),
-        vec!["BTC".to_string()]
+        Vec::<String>::new()
     );
     let (runtime_config,): (serde_json::Value,) =
         sqlx::query_as("SELECT runtime_config FROM agents WHERE agent_key = $1")

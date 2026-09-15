@@ -13,7 +13,9 @@ use crate::{
         crypto::EncryptionKey,
         keys::derive_wallet_address,
         model::AgentRegistryRow,
-        store::{insert_agent, replace_agent_instruments},
+        store::{
+            insert_agent, replace_agent_analysis_instruments, replace_agent_trading_instruments,
+        },
         strategy_prompts::upsert_agent_strategy_prompt,
     },
     harness::backend::{DispatchRequest, DispatchResult, HarnessBackend},
@@ -211,9 +213,12 @@ pub async fn seed_instrument(state: &Arc<AppState>, instrument_id: &str, active:
 
 pub async fn select_instruments(state: &Arc<AppState>, agent_key: &str, instrument_ids: &[&str]) {
     let instrument_ids: Vec<String> = instrument_ids.iter().map(|id| (*id).to_string()).collect();
-    replace_agent_instruments(&state.db_pool, agent_key, &instrument_ids)
+    replace_agent_analysis_instruments(&state.db_pool, agent_key, &instrument_ids)
         .await
-        .expect("replace agent instruments");
+        .expect("replace agent analysis instruments");
+    replace_agent_trading_instruments(&state.db_pool, agent_key, &instrument_ids)
+        .await
+        .expect("replace agent trading instruments");
 }
 
 pub fn app(state: Arc<AppState>) -> Router {
@@ -242,7 +247,7 @@ pub async fn insert_memory_at(
     let id = Uuid::new_v4();
     seed_instrument(state, instrument_id, true).await;
     sqlx::query(
-        "INSERT INTO agent_instruments (agent_key, instrument_id) VALUES ($1, $2) ON CONFLICT DO NOTHING",
+        "INSERT INTO agent_analysis_instruments (agent_key, instrument_id) VALUES ($1, $2) ON CONFLICT DO NOTHING",
     )
     .bind(agent_key)
     .bind(instrument_id)

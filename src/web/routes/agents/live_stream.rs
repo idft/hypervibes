@@ -13,7 +13,7 @@ use tracing::warn;
 
 use crate::web::error::AppError;
 use crate::{
-    agents::store::{get_agent, list_agent_instrument_ids},
+    agents::store::{get_agent, list_agent_trading_instrument_ids},
     hyperliquid::live_state::{AccountKey, AccountLiveState, LiveConnectionStatus},
     memory::{get_latest_trading_decision, get_memory as get_memory_record, memory_expires_at},
     web::{
@@ -41,17 +41,18 @@ pub(in crate::web::routes) async fn agent_live_stream(
         Some(agent) => agent,
         None => return Ok((StatusCode::NOT_FOUND, "agent not found").into_response()),
     };
-    let configured_coins = match list_agent_instrument_ids(&state.db_pool, &agent.agent_key).await {
-        Ok(rows) => rows,
-        Err(error) => {
-            warn!(
-                agent_key = %agent.agent_key,
-                error = ?error,
-                "failed to list configured instruments for live positions stream"
-            );
-            Vec::new()
-        }
-    };
+    let configured_coins =
+        match list_agent_trading_instrument_ids(&state.db_pool, &agent.agent_key).await {
+            Ok(rows) => rows,
+            Err(error) => {
+                warn!(
+                    agent_key = %agent.agent_key,
+                    error = ?error,
+                    "failed to list configured instruments for live positions stream"
+                );
+                Vec::new()
+            }
+        };
 
     let Some(trading_account_address) = agent.trading_account_address.as_deref() else {
         return Ok(StatusCode::NOT_FOUND.into_response());

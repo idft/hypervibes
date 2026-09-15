@@ -10,7 +10,9 @@ use tokio::sync::{Mutex as AsyncMutex, OwnedMutexGuard, watch};
 use tracing::{debug, error, info, warn};
 
 use crate::{
-    agents::store::{get_agent, list_agent_instrument_ids},
+    agents::store::{
+        get_agent, list_agent_analysis_instrument_ids, list_agent_trading_instrument_ids,
+    },
     db::DbPool,
     harness::{
         backend::{DispatchOutcome, DispatchRequest, HarnessBackend, dispatch_with_timeout},
@@ -97,7 +99,8 @@ pub struct DispatchRequestInputs {
     pub run_id: i64,
     pub scheduled_for: chrono::DateTime<Utc>,
     pub agent: crate::agents::model::AgentDetailRow,
-    pub selected_instruments: Vec<String>,
+    pub analysis_instruments: Vec<String>,
+    pub trading_instruments: Vec<String>,
     pub strategy_prompt: String,
     pub strategy_prompt_revision: i64,
     pub accumulated_learnings: Option<String>,
@@ -969,7 +972,8 @@ pub fn dispatch_request_from_job(
         accumulated_learning_memory_id: inputs.accumulated_learning_memory_id,
         system_prompt: inputs.system_prompt,
         environment: inputs.agent.environment.clone(),
-        selected_instruments: inputs.selected_instruments,
+        analysis_instruments: inputs.analysis_instruments,
+        trading_instruments: inputs.trading_instruments,
         account_snapshot,
         model_provider_id: candle_job.model_provider_id.clone(),
         model_id: candle_job.model_id.clone(),
@@ -997,9 +1001,16 @@ pub async fn build_dispatch_request(
         return Ok(None);
     }
 
-    let selected_instruments = list_agent_instrument_ids(pool, &candle_job.agent_key).await?;
-
-    if selected_instruments.is_empty() && requires_selected_instruments(&candle_job.sub_agent_kind)
+    let analysis_instruments =
+        list_agent_analysis_instrument_ids(pool, &candle_job.agent_key).await?;
+    let trading_instruments =
+        list_agent_trading_instrument_ids(pool, &candle_job.agent_key).await?;
+    let required_instruments = match candle_job.sub_agent_kind.as_str() {
+        SUB_AGENT_KIND_ANALYSIS => &analysis_instruments,
+        SUB_AGENT_KIND_TRADING => &trading_instruments,
+        _ => &Vec::new(),
+    };
+    if required_instruments.is_empty() && requires_selected_instruments(&candle_job.sub_agent_kind)
     {
         return Ok(None);
     }
@@ -1026,7 +1037,8 @@ pub async fn build_dispatch_request(
             run_id,
             scheduled_for,
             agent,
-            selected_instruments,
+            analysis_instruments,
+            trading_instruments,
             strategy_prompt,
             strategy_prompt_revision,
             accumulated_learnings,
@@ -1258,7 +1270,8 @@ fn build_run_context_snapshot(
         "model_id": request.model_id.as_deref().unwrap_or("default"),
         "model_variant": request.model_variant,
         "timeout_seconds": request.timeout_seconds,
-        "selected_instruments": request.selected_instruments,
+        "analysis_instruments": request.analysis_instruments,
+        "trading_instruments": request.trading_instruments,
         "strategy_prompt_revision": {
             "target_sub_agent_id": request.sub_agent_id,
             "revision_id": request.strategy_prompt_revision,
@@ -1491,7 +1504,9 @@ mod tests {
         agents::{
             keys::derive_wallet_address,
             model::AgentRegistryRow,
-            store::{insert_agent, replace_agent_instruments},
+            store::{
+                insert_agent, replace_agent_analysis_instruments, replace_agent_trading_instruments,
+            },
         },
         harness::{
             backend::{DispatchResult, HarnessBackend},
@@ -1783,9 +1798,12 @@ mod tests {
         .execute(pool)
         .await
         .expect("seed BTC instrument");
-        replace_agent_instruments(pool, key, &["BTC".to_string()])
+        replace_agent_analysis_instruments(pool, key, &["BTC".to_string()])
             .await
-            .expect("seed agent instruments");
+            .expect("seed agent analysis instruments");
+        replace_agent_trading_instruments(pool, key, &["BTC".to_string()])
+            .await
+            .expect("seed agent trading instruments");
         sqlx::query(
             "UPDATE harness_sub_agents
                 SET model_provider_id = 'anthropic', model_id = 'claude-sonnet-test'

@@ -13,7 +13,7 @@ pub struct AgentReadiness {
     pub agent_key: String,
     pub active: bool,
     pub enabled: bool,
-    pub has_selected_instruments: bool,
+    pub has_trading_instruments: bool,
     pub has_enabled_analysis_job: bool,
     pub has_enabled_trading_job: bool,
     pub trading_sub_agent_id: Option<i64>,
@@ -23,7 +23,7 @@ impl AgentReadiness {
     pub fn is_ready_for_agent_trading(&self) -> bool {
         self.active
             && self.enabled
-            && self.has_selected_instruments
+            && self.has_trading_instruments
             && self.has_enabled_analysis_job
             && self.has_enabled_trading_job
     }
@@ -182,7 +182,7 @@ mod tests {
             agent_key: "test-agent".to_string(),
             active: true,
             enabled: true,
-            has_selected_instruments: true,
+            has_trading_instruments: true,
             has_enabled_analysis_job: true,
             has_enabled_trading_job: false,
             trading_sub_agent_id: Some(2),

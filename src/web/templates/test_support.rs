@@ -25,7 +25,7 @@ pub fn sample_agent_readiness() -> crate::agents::model::AgentReadiness {
         agent_key: "test-agent".to_string(),
         active: true,
         enabled: true,
-        has_selected_instruments: true,
+        has_trading_instruments: true,
         has_enabled_analysis_job: true,
         has_enabled_trading_job: true,
         trading_sub_agent_id: Some(3),

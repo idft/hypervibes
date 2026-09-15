@@ -435,7 +435,7 @@ pub(in crate::web::routes) async fn build_job_prompt_preview(
         SUB_AGENT_KIND_ANALYSIS | SUB_AGENT_KIND_TRADING
     );
     if requires_instruments
-        && crate::agents::store::list_agent_instrument_ids(&state.db_pool, &agent.agent_key)
+        && crate::agents::store::list_agent_trading_instrument_ids(&state.db_pool, &agent.agent_key)
             .await?
             .is_empty()
     {
@@ -925,7 +925,8 @@ pub(in crate::web::routes) async fn agents_run_sub_agent_now(
                 .await?
                 .ok_or_else(|| AppError(anyhow::anyhow!("agent not found")))?;
             let selected_instruments =
-                crate::agents::store::list_agent_instrument_ids(&state.db_pool, &agent_key).await?;
+                crate::agents::store::list_agent_trading_instrument_ids(&state.db_pool, &agent_key)
+                    .await?;
             let system_prompt = crate::agents::prompts::SYSTEM_PROMPT.to_string();
             let account_snapshot = if job.sub_agent_kind == SUB_AGENT_KIND_TRADING {
                 Some(live_agent_snapshot_for_dispatch(
@@ -946,7 +947,8 @@ pub(in crate::web::routes) async fn agents_run_sub_agent_now(
                     run_id,
                     scheduled_for,
                     agent,
-                    selected_instruments,
+                    analysis_instruments: selected_instruments.clone(),
+                    trading_instruments: selected_instruments,
                     strategy_prompt,
                     strategy_prompt_revision,
                     accumulated_learnings,

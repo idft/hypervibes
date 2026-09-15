@@ -21,8 +21,7 @@ use crate::{
         model::{AGENT_LIFECYCLE_ACTIVE, AgentRegistryRow, CreateAgentForm, slugify_agent_key},
         store::{
             delete_agent as delete_agent_in_store, get_agent, insert_agent,
-            list_agent_instrument_options, list_agent_readiness_for_user, list_agents_for_user,
-            replace_agent_instruments, set_agent_enabled,
+            list_agent_readiness_for_user, list_agents_for_user, set_agent_enabled,
         },
     },
     harness::store::{list_active_agent_runs, mark_run_aborted},
@@ -358,13 +357,7 @@ pub(in crate::web::routes) async fn create_agent(
 }
 
 async fn activate_new_agent(state: &Arc<AppState>, agent_key: &str) -> Result<(), anyhow::Error> {
-    let instrument_options = list_agent_instrument_options(&state.db_pool, agent_key).await?;
-    if instrument_options
-        .iter()
-        .any(|instrument| instrument.instrument_id == "BTC")
-    {
-        replace_agent_instruments(&state.db_pool, agent_key, &["BTC".to_string()]).await?;
-    }
+    let _ = (state, agent_key);
     Ok(())
 }
 pub(in crate::web::routes) fn render_new_form(

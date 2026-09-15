@@ -14,7 +14,7 @@ pub const RUN_STATUS_FAILED: &str = "failed";
 pub const RUN_STATUS_ABORTED: &str = "aborted";
 pub const RUN_STATUS_SKIPPED: &str = "skipped";
 
-pub const RUN_CONTEXT_SNAPSHOT_SCHEMA_VERSION: i32 = 3;
+pub const RUN_CONTEXT_SNAPSHOT_SCHEMA_VERSION: i32 = 4;
 pub const CAPABILITY_SCHEMA_VERSION: i32 = 2;
 pub const CAPABILITY_NOTIFICATION_SEND: &str = "hypervibes:notification_send";
 pub const CAPABILITY_PROMPT_REVISION_SUBMIT: &str = "hypervibes:prompt_revision_submit";
@@ -166,12 +166,13 @@ pub fn run_api_scopes_for_sub_agent(
     Ok(scopes)
 }
 
-// Schema version three intentionally has no catch-all object. Adding a new run
+// Schema version four intentionally has no catch-all object. Adding a new run
 // input is an explicit snapshot-schema change rather than an unreviewed place
 // to put runtime configuration or secrets. V2 changes the
 // `strategy_prompt_revisions` shape from prompt-kind keyed to
 // sub-agent-target keyed objects. V3 removes the retired package snapshot.
-const RUN_CONTEXT_SNAPSHOT_V3_FIELDS: &[&str] = &[
+// V4 records independent analysis and trading universes.
+const RUN_CONTEXT_SNAPSHOT_V4_FIELDS: &[&str] = &[
     "account_snapshot_metadata",
     "additional_instructions",
     "accumulated_learning_memory_id",
@@ -181,10 +182,11 @@ const RUN_CONTEXT_SNAPSHOT_V3_FIELDS: &[&str] = &[
     "notification_send_enabled",
     "provider_id",
     "scheduled_candle_boundary",
-    "selected_instruments",
+    "analysis_instruments",
     "strategy_prompt_revision",
     "system_prompt_version",
     "timeout_seconds",
+    "trading_instruments",
 ];
 
 pub const MAINTENANCE_TASK_KIND_PROVIDER_CONFIG_RELOAD: &str = "provider_config_reload";
@@ -311,12 +313,12 @@ fn validate_context_snapshot_v3(
     let fields = value
         .as_object()
         .ok_or_else(|| anyhow::anyhow!("run context snapshot must be a JSON object"))?;
-    if fields.len() != RUN_CONTEXT_SNAPSHOT_V3_FIELDS.len()
-        || RUN_CONTEXT_SNAPSHOT_V3_FIELDS
+    if fields.len() != RUN_CONTEXT_SNAPSHOT_V4_FIELDS.len()
+        || RUN_CONTEXT_SNAPSHOT_V4_FIELDS
             .iter()
             .any(|field| !fields.contains_key(*field))
     {
-        anyhow::bail!("run context snapshot does not match schema version three");
+        anyhow::bail!("run context snapshot does not match schema version four");
     }
 
     validate_identifier(
@@ -333,8 +335,12 @@ fn validate_context_snapshot_v3(
         "timeout_seconds",
     )?;
     validate_identifier_array(
-        required_context_field(fields, "selected_instruments")?,
-        "selected_instruments",
+        required_context_field(fields, "analysis_instruments")?,
+        "analysis_instruments",
+    )?;
+    validate_identifier_array(
+        required_context_field(fields, "trading_instruments")?,
+        "trading_instruments",
     )?;
     validate_strategy_prompt_revision(required_context_field(fields, "strategy_prompt_revision")?)?;
     validate_text(

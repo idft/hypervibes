@@ -8,7 +8,9 @@ use std::sync::Arc;
 use super::shared::urlencode;
 use super::show::{AgentSettingsQuery, AgentShowQueries, render_agent_show_page};
 use crate::{
-    agents::store::{get_agent, replace_agent_instruments},
+    agents::store::{
+        get_agent, replace_agent_analysis_instruments, replace_agent_trading_instruments,
+    },
     memory::delete_memories_for_agent,
     web::{AppState, auth::AuthenticatedUser, error::AppError, templates::AgentShowTab},
 };
@@ -58,11 +60,27 @@ pub(in crate::web::routes) async fn agents_update_instruments(
         .into_iter()
         .filter_map(|(key, value)| (key == "instrument_id").then_some(value))
         .collect();
-    let updated = replace_agent_instruments(&state.db_pool, &agent_key, &instrument_ids).await?;
+    let updated =
+        replace_agent_trading_instruments(&state.db_pool, &agent_key, &instrument_ids).await?;
 
     if !updated {
         return Ok((StatusCode::NOT_FOUND, "agent not found").into_response());
     }
 
+    Ok(Redirect::to(&format!("/agents/{agent_key}/settings")).into_response())
+}
+
+pub(in crate::web::routes) async fn agents_update_analysis_instruments(
+    State(state): State<Arc<AppState>>,
+    Path(agent_key): Path<String>,
+    axum::Form(form_pairs): axum::Form<Vec<(String, String)>>,
+) -> Result<Response, AppError> {
+    let instrument_ids = form_pairs
+        .into_iter()
+        .filter_map(|(key, value)| (key == "analysis_instrument_id").then_some(value))
+        .collect::<Vec<_>>();
+    if !replace_agent_analysis_instruments(&state.db_pool, &agent_key, &instrument_ids).await? {
+        return Ok((StatusCode::NOT_FOUND, "agent not found").into_response());
+    }
     Ok(Redirect::to(&format!("/agents/{agent_key}/settings")).into_response())
 }

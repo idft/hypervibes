@@ -28,6 +28,7 @@ futures = { version = "0.3", default-features = false, features = ["std"] }
 hex = "0.4"
 hypersdk = "0.2"
 pulldown-cmark = "0.13"
+pine-lang = "=0.2.6"
 rand = "0.10"
 reqwest = { version = "0.13", default-features = false, features = ["json", "rustls"] }
 rmp-serde = "1"

@@ -12,7 +12,7 @@ use crate::{
     agents::crypto as agent_crypto,
     agents::{
         AuthenticatedAgent,
-        store::{get_agent, list_agent_instrument_ids},
+        store::{get_agent, list_agent_trading_instrument_ids},
     },
     harness::model::RunApiScope,
     hyperliquid::orders::{
@@ -200,7 +200,7 @@ pub(super) async fn place_orders_handler(
         .await
         .map_err(ApiError::Internal)?
         .ok_or(ApiError::NotFound("agent not found"))?;
-    let selected_instruments = list_agent_instrument_ids(&state.db_pool, &agent.agent_key)
+    let selected_instruments = list_agent_trading_instrument_ids(&state.db_pool, &agent.agent_key)
         .await
         .map_err(ApiError::Internal)?;
     if selected_instruments.is_empty() {

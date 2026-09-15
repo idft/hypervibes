@@ -92,7 +92,7 @@ pub(crate) async fn insert_memory_in_tx(
             let selected: bool = sqlx::query_scalar(
                 "SELECT EXISTS (
                      SELECT 1
-                       FROM agent_instruments AS selection
+                        FROM agent_analysis_instruments AS selection
                        JOIN hyperliquid.instruments AS instruments
                          ON instruments.instrument_id = selection.instrument_id
                       WHERE selection.agent_key = $1

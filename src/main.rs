@@ -6,6 +6,7 @@ mod db;
 mod gateway;
 mod harness;
 mod hyperliquid;
+pub mod indicators;
 mod memory;
 mod model_catalog;
 mod notifications;

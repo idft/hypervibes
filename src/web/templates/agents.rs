@@ -196,7 +196,7 @@ impl AgentSetupChecklistView {
                     label: "Select currencies to trade",
                     description: "BTC is selected by default. Review or change the currencies this agent may trade.",
                     href: format!("/agents/{agent_key}/settings"),
-                    complete: readiness.has_selected_instruments,
+                    complete: readiness.has_trading_instruments,
                 },
                 AgentSetupChecklistStepView {
                     label: "Enable an Analysis sub-agent",

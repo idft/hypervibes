@@ -15,7 +15,8 @@ use super::memories::{AgentMemoriesQuery, parse_memory_date_filter, prepare_memo
 use super::transactions::apply_live_cash_balance_anchor;
 use crate::{
     agents::store::{
-        get_agent, get_agent_readiness, list_agent_instrument_ids, list_agent_instrument_options,
+        get_agent, get_agent_readiness, list_agent_analysis_instrument_options,
+        list_agent_trading_instrument_ids, list_agent_trading_instrument_options,
     },
     harness::model::SUB_AGENT_KIND_ANALYSIS,
     hyperliquid::{
@@ -132,7 +133,7 @@ pub(in crate::web::routes) async fn render_agent_show_page(
     }
 
     let instrument_options =
-        match list_agent_instrument_options(&state.db_pool, &agent.agent_key).await {
+        match list_agent_trading_instrument_options(&state.db_pool, &agent.agent_key).await {
             Ok(rows) => {
                 template.instrument_options_loaded = true;
                 template.has_selected_instruments = rows.iter().any(|row| row.selected);
@@ -147,6 +148,10 @@ pub(in crate::web::routes) async fn render_agent_show_page(
                 None
             }
         };
+    // Load the analysis selector independently so a future template change cannot
+    // accidentally derive its membership from the trading allowlist.
+    let _analysis_instrument_options =
+        list_agent_analysis_instrument_options(&state.db_pool, &agent.agent_key).await;
 
     match active_tab {
         AgentShowTab::Chat => unreachable!("Chat has its own page route"),
@@ -507,17 +512,18 @@ pub(in crate::web::routes) async fn populate_positions_tab(
     agent: &crate::agents::model::AgentDetailRow,
     template: &mut AgentsShowPageTemplate,
 ) -> Result<(), AppError> {
-    let configured_coins = match list_agent_instrument_ids(&state.db_pool, &agent.agent_key).await {
-        Ok(rows) => rows,
-        Err(error) => {
-            warn!(
-                agent_key = %agent.agent_key,
-                error = ?error,
-                "failed to list configured instruments for positions tab"
-            );
-            Vec::new()
-        }
-    };
+    let configured_coins =
+        match list_agent_trading_instrument_ids(&state.db_pool, &agent.agent_key).await {
+            Ok(rows) => rows,
+            Err(error) => {
+                warn!(
+                    agent_key = %agent.agent_key,
+                    error = ?error,
+                    "failed to list configured instruments for positions tab"
+                );
+                Vec::new()
+            }
+        };
     let market_data = state.market_data.snapshot();
 
     let Some(account_address) = agent.trading_account_address.as_deref() else {

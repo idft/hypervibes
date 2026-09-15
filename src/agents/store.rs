@@ -72,13 +72,13 @@ pub async fn list_agent_readiness_for_user(
                 agents.enabled,
                 EXISTS (
                     SELECT 1
-                      FROM agent_instruments
+                      FROM agent_trading_instruments
                       JOIN hyperliquid.instruments AS instruments
-                        ON instruments.instrument_id = agent_instruments.instrument_id
-                     WHERE agent_instruments.agent_key = agents.agent_key
+                         ON instruments.instrument_id = agent_trading_instruments.instrument_id
+                      WHERE agent_trading_instruments.agent_key = agents.agent_key
                        AND instruments.market_type = 'perp'
                        AND instruments.active = true
-                ) AS has_selected_instruments,
+                ) AS has_trading_instruments,
                 EXISTS (
                     SELECT 1
                       FROM harness_sub_agents
@@ -132,13 +132,13 @@ async fn list_agent_readiness_for_agent_key(
                 agents.enabled,
                 EXISTS (
                     SELECT 1
-                      FROM agent_instruments
+                      FROM agent_trading_instruments
                       JOIN hyperliquid.instruments AS instruments
-                        ON instruments.instrument_id = agent_instruments.instrument_id
-                     WHERE agent_instruments.agent_key = agents.agent_key
+                         ON instruments.instrument_id = agent_trading_instruments.instrument_id
+                      WHERE agent_trading_instruments.agent_key = agents.agent_key
                        AND instruments.market_type = 'perp'
                        AND instruments.active = true
-                ) AS has_selected_instruments,
+                ) AS has_trading_instruments,
                 EXISTS (
                     SELECT 1 FROM harness_sub_agents
                      WHERE harness_sub_agents.agent_key = agents.agent_key
@@ -265,13 +265,16 @@ pub async fn get_agent(pool: &DbPool, agent_key: &str) -> Result<Option<AgentDet
     Ok(row)
 }
 
-pub async fn list_agent_instrument_ids(pool: &DbPool, agent_key: &str) -> Result<Vec<String>> {
+pub async fn list_agent_trading_instrument_ids(
+    pool: &DbPool,
+    agent_key: &str,
+) -> Result<Vec<String>> {
     let rows: Vec<(String,)> = query_as(
         "SELECT instruments.instrument_id
-           FROM agent_instruments
+           FROM agent_trading_instruments
            JOIN hyperliquid.instruments AS instruments
-             ON instruments.instrument_id = agent_instruments.instrument_id
-          WHERE agent_instruments.agent_key = $1
+              ON instruments.instrument_id = agent_trading_instruments.instrument_id
+           WHERE agent_trading_instruments.agent_key = $1
             AND instruments.market_type = 'perp'
             AND instruments.active = true
           ORDER BY instruments.instrument_id",
@@ -279,7 +282,7 @@ pub async fn list_agent_instrument_ids(pool: &DbPool, agent_key: &str) -> Result
     .bind(agent_key)
     .fetch_all(pool)
     .await
-    .context("failed to list agent instrument ids")?;
+    .context("failed to list agent trading instrument ids")?;
 
     Ok(rows
         .into_iter()
@@ -287,17 +290,41 @@ pub async fn list_agent_instrument_ids(pool: &DbPool, agent_key: &str) -> Result
         .collect())
 }
 
-pub async fn list_agent_instrument_options(
+pub async fn list_agent_analysis_instrument_ids(
+    pool: &DbPool,
+    agent_key: &str,
+) -> Result<Vec<String>> {
+    let rows: Vec<(String,)> = query_as(
+        "SELECT instruments.instrument_id
+           FROM agent_analysis_instruments
+           JOIN hyperliquid.instruments AS instruments
+             ON instruments.instrument_id = agent_analysis_instruments.instrument_id
+          WHERE agent_analysis_instruments.agent_key = $1
+            AND instruments.market_type = 'perp'
+            AND instruments.active = true
+          ORDER BY instruments.instrument_id",
+    )
+    .bind(agent_key)
+    .fetch_all(pool)
+    .await
+    .context("failed to list agent analysis instrument ids")?;
+    Ok(rows
+        .into_iter()
+        .map(|(instrument_id,)| instrument_id)
+        .collect())
+}
+
+pub async fn list_agent_trading_instrument_options(
     pool: &DbPool,
     agent_key: &str,
 ) -> Result<Vec<AgentInstrumentOptionRow>> {
     let rows = query_as::<_, AgentInstrumentOptionRawRow>(
         "SELECT instruments.instrument_id,
-                (agent_instruments.instrument_id IS NOT NULL) AS selected
+                (agent_trading_instruments.instrument_id IS NOT NULL) AS selected
            FROM hyperliquid.instruments AS instruments
-           LEFT JOIN agent_instruments
-             ON agent_instruments.agent_key = $1
-            AND agent_instruments.instrument_id = instruments.instrument_id
+            LEFT JOIN agent_trading_instruments
+              ON agent_trading_instruments.agent_key = $1
+             AND agent_trading_instruments.instrument_id = instruments.instrument_id
           WHERE instruments.market_type = 'perp'
             AND instruments.active = true
           ORDER BY instruments.instrument_id",
@@ -305,7 +332,7 @@ pub async fn list_agent_instrument_options(
     .bind(agent_key)
     .fetch_all(pool)
     .await
-    .context("failed to list agent instrument options")?;
+    .context("failed to list agent trading instrument options")?;
 
     Ok(rows
         .into_iter()
@@ -317,7 +344,36 @@ pub async fn list_agent_instrument_options(
         .collect())
 }
 
-pub async fn replace_agent_instruments(
+pub async fn list_agent_analysis_instrument_options(
+    pool: &DbPool,
+    agent_key: &str,
+) -> Result<Vec<AgentInstrumentOptionRow>> {
+    let rows = query_as::<_, AgentInstrumentOptionRawRow>(
+        "SELECT instruments.instrument_id,
+                (agent_analysis_instruments.instrument_id IS NOT NULL) AS selected
+           FROM hyperliquid.instruments AS instruments
+           LEFT JOIN agent_analysis_instruments
+             ON agent_analysis_instruments.agent_key = $1
+            AND agent_analysis_instruments.instrument_id = instruments.instrument_id
+          WHERE instruments.market_type = 'perp'
+            AND instruments.active = true
+          ORDER BY instruments.instrument_id",
+    )
+    .bind(agent_key)
+    .fetch_all(pool)
+    .await
+    .context("failed to list agent analysis instrument options")?;
+    Ok(rows
+        .into_iter()
+        .map(|row| AgentInstrumentOptionRow {
+            logo_url: currency_logo_url(&row.instrument_id),
+            instrument_id: row.instrument_id,
+            selected: row.selected,
+        })
+        .collect())
+}
+
+pub async fn replace_agent_trading_instruments(
     pool: &DbPool,
     agent_key: &str,
     instrument_ids: &[String],
@@ -375,7 +431,7 @@ pub async fn replace_agent_instruments(
         }
     }
 
-    sqlx::query("DELETE FROM agent_instruments WHERE agent_key = $1")
+    sqlx::query("DELETE FROM agent_trading_instruments WHERE agent_key = $1")
         .bind(agent_key)
         .execute(&mut *tx)
         .await
@@ -383,7 +439,7 @@ pub async fn replace_agent_instruments(
 
     for instrument_id in &unique_ids {
         sqlx::query(
-            "INSERT INTO agent_instruments (agent_key, instrument_id)
+            "INSERT INTO agent_trading_instruments (agent_key, instrument_id)
              VALUES ($1, $2)",
         )
         .bind(agent_key)
@@ -404,6 +460,115 @@ pub async fn replace_agent_instruments(
         .context("failed to commit agent instrument replacement transaction")?;
 
     Ok(true)
+}
+
+pub async fn replace_agent_analysis_instruments(
+    pool: &DbPool,
+    agent_key: &str,
+    instrument_ids: &[String],
+) -> Result<bool> {
+    replace_agent_analysis_instruments_impl(
+        pool,
+        agent_key,
+        instrument_ids,
+        InstrumentUniverse::Analysis,
+    )
+    .await
+}
+
+#[derive(Clone, Copy)]
+enum InstrumentUniverse {
+    Analysis,
+}
+
+async fn replace_agent_analysis_instruments_impl(
+    pool: &DbPool,
+    agent_key: &str,
+    instrument_ids: &[String],
+    universe: InstrumentUniverse,
+) -> Result<bool> {
+    let unique_ids: Vec<String> = instrument_ids
+        .iter()
+        .map(|instrument_id| instrument_id.trim())
+        .filter(|instrument_id| !instrument_id.is_empty())
+        .map(ToOwned::to_owned)
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect();
+    let mut tx = pool
+        .begin()
+        .await
+        .context("failed to begin instrument replacement transaction")?;
+    let exists: Option<(i32,)> = query_as("SELECT 1 FROM agents WHERE agent_key = $1")
+        .bind(agent_key)
+        .fetch_optional(&mut *tx)
+        .await?;
+    if exists.is_none() {
+        return Ok(false);
+    }
+    if !unique_ids.is_empty() {
+        let valid: BTreeSet<String> = query_as::<_, (String,)>(
+            "SELECT instrument_id FROM hyperliquid.instruments WHERE instrument_id = ANY($1) AND market_type = 'perp' AND active = true",
+        ).bind(&unique_ids).fetch_all(&mut *tx).await?.into_iter().map(|(id,)| id).collect();
+        if valid.len() != unique_ids.len() {
+            let invalid: Vec<_> = unique_ids
+                .iter()
+                .filter(|id| !valid.contains(*id))
+                .cloned()
+                .collect();
+            return Err(anyhow!(
+                "invalid or inactive instrument ids: {}",
+                invalid.join(", ")
+            ));
+        }
+    }
+    let (delete_sql, insert_sql) = match universe {
+        InstrumentUniverse::Analysis => (
+            "DELETE FROM agent_analysis_instruments WHERE agent_key = $1",
+            "INSERT INTO agent_analysis_instruments (agent_key, instrument_id) VALUES ($1, $2)",
+        ),
+    };
+    sqlx::query(delete_sql)
+        .bind(agent_key)
+        .execute(&mut *tx)
+        .await?;
+    for instrument_id in &unique_ids {
+        sqlx::query(insert_sql)
+            .bind(agent_key)
+            .bind(instrument_id)
+            .execute(&mut *tx)
+            .await?;
+    }
+    sqlx::query("UPDATE agents SET updated_at = now() WHERE agent_key = $1")
+        .bind(agent_key)
+        .execute(&mut *tx)
+        .await?;
+    tx.commit()
+        .await
+        .context("failed to commit instrument replacement transaction")?;
+    Ok(true)
+}
+
+#[cfg(test)]
+pub async fn replace_agent_instruments(
+    pool: &DbPool,
+    agent_key: &str,
+    instrument_ids: &[String],
+) -> Result<bool> {
+    replace_agent_trading_instruments(pool, agent_key, instrument_ids).await
+}
+
+#[cfg(test)]
+pub async fn list_agent_instrument_ids(pool: &DbPool, agent_key: &str) -> Result<Vec<String>> {
+    list_agent_trading_instrument_ids(pool, agent_key).await
+}
+
+#[cfg(test)]
+pub async fn list_agent_instrument_options(
+    pool: &DbPool,
+    agent_key: &str,
+) -> Result<Vec<AgentInstrumentOptionRow>> {
+    list_agent_trading_instrument_options(pool, agent_key).await
 }
 
 /// Insert a full registry row.
@@ -602,7 +767,7 @@ mod tests {
             .expect("load initial readiness")
             .expect("agent readiness");
         assert!(initial.enabled);
-        assert!(!initial.has_selected_instruments);
+        assert!(!initial.has_trading_instruments);
         assert!(!initial.has_enabled_analysis_job);
         assert!(!initial.has_enabled_trading_job);
         assert!(!initial.is_ready_for_agent_trading());
@@ -628,7 +793,7 @@ mod tests {
             .await
             .expect("load configured readiness")
             .expect("agent readiness");
-        assert!(readiness.has_selected_instruments);
+        assert!(readiness.has_trading_instruments);
         assert!(readiness.has_enabled_analysis_job);
         assert!(readiness.has_enabled_trading_job);
         assert!(readiness.is_ready_for_agent_trading());
@@ -854,11 +1019,12 @@ mod tests {
             .expect("replace instruments");
         delete_agent(&pool, &key).await.expect("delete agent");
 
-        let count: (i64,) = query_as("SELECT COUNT(*) FROM agent_instruments WHERE agent_key = $1")
-            .bind(&key)
-            .fetch_one(&pool)
-            .await
-            .expect("count agent instruments");
+        let count: (i64,) =
+            query_as("SELECT COUNT(*) FROM agent_trading_instruments WHERE agent_key = $1")
+                .bind(&key)
+                .fetch_one(&pool)
+                .await
+                .expect("count agent instruments");
         assert_eq!(count.0, 0);
     }
 

@@ -34,7 +34,7 @@ fn build_analysis_prompt(request: &DispatchRequest) -> String {
     body.push_str("\n## Research strategy\n");
     body.push_str(&request.strategy_prompt);
     body.push_str("\n\n## Selected instruments\n");
-    body.push_str(&selected_instruments_section(&request.selected_instruments));
+    body.push_str(&selected_instruments_section(&request.analysis_instruments));
     if let Some(section) = closed_candle_cutoff_section(request) {
         body.push_str("\n\n");
         body.push_str(&section);
@@ -77,7 +77,7 @@ fn build_trading_prompt(request: &DispatchRequest) -> String {
     body.push_str("\n\n## Account state\n");
     body.push_str(&account_state_section(request.account_snapshot.as_ref()));
     body.push_str("\n\n## Selected instruments\n");
-    body.push_str(&selected_instruments_section(&request.selected_instruments));
+    body.push_str(&selected_instruments_section(&request.trading_instruments));
     body.push_str("\n\n## Instructions\n");
     body.push_str("- Call `hypervibes_get_trading_context(instrument_id)` for each selected instrument before making trading decisions. It returns the latest fresh research evidence per analysis producer, memory type, and scope, plus which evidence is stale or missing.\n");
     body.push_str("- Missing, stale, or failed research for an analyst is context for your decision, never a reason to skip evaluating the instrument. Record a no-trade decision when the evidence does not support exposure.\n");
@@ -121,7 +121,7 @@ fn build_review_prompt(request: &DispatchRequest) -> Result<String> {
     body.push_str("\n## Review strategy\n");
     body.push_str(&request.strategy_prompt);
     body.push_str("\n\n## Selected instruments\n");
-    body.push_str(&selected_instruments_section(&request.selected_instruments));
+    body.push_str(&selected_instruments_section(&request.analysis_instruments));
     body.push_str("\n\n## Instructions\n");
     body.push_str("- List research memories, `trading_decision` memories, and review memories using this review window's exact start and end. The Accumulated learnings section above is the canonical prior learning set; do not query historical `agent_learnings` outside this review window.\n");
     body.push_str("- List orders and account transactions using this review window's exact start and end. Include unfilled, rejected, canceled, open, and filled orders plus fills, fees, realized PnL, funding, and ledger events. Page `list_account_transactions` with a fixed limit and increasing offset until a page returns fewer rows than the limit.\n");
@@ -234,7 +234,8 @@ mod tests {
             accumulated_learning_memory_id: None,
             system_prompt: "You are a crypto trading assistant.".to_string(),
             environment: "live".to_string(),
-            selected_instruments: vec!["BTC".to_string(), "ETH".to_string()],
+            analysis_instruments: vec!["BTC".to_string(), "ETH".to_string()],
+            trading_instruments: vec!["BTC".to_string(), "ETH".to_string()],
             account_snapshot: None,
             model_provider_id: None,
             model_id: None,
