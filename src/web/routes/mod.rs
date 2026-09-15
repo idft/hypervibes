@@ -170,8 +170,8 @@ pub fn router(state: Arc<AppState>) -> Router {
             post(agents_reply_to_conversation_permission),
         )
         .route(
-            "/agents/{agent_key}/settings/instruments",
-            post(agents_update_instruments),
+            "/agents/{agent_key}/settings/trading-instruments",
+            post(agents_update_trading_instruments),
         )
         .route(
             "/agents/{agent_key}/settings/analysis-instruments",

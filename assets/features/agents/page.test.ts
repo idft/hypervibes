@@ -84,7 +84,7 @@ describe("agent currency icons", () => {
           <button data-select-no-currencies></button>
           <div data-instrument-scroll-container>
           <label data-instrument-row data-instrument-label="BTC" data-instrument-logo-url="/currency/btc.svg">
-            <input type="checkbox" name="instrument_id" value="BTC">
+            <input type="checkbox" name="instrument_id" value="BTC" data-instrument-input>
             <img data-instrument-logo alt="">
           </label>
         </div>
@@ -115,8 +115,8 @@ describe("agent currency icons", () => {
           <button data-select-no-currencies>Select none</button>
           <input data-instrument-search>
           <div data-instrument-scroll-container>
-            <label data-instrument-row data-instrument-label="BTC" data-instrument-logo-url="/currency/btc.svg"><input type="checkbox" name="instrument_id" value="BTC" checked></label>
-            <label data-instrument-row data-instrument-label="ETH" data-instrument-logo-url="/currency/eth.svg"><input type="checkbox" name="instrument_id" value="ETH"></label>
+            <label data-instrument-row data-instrument-label="BTC" data-instrument-logo-url="/currency/btc.svg"><input type="checkbox" name="instrument_id" value="BTC" data-instrument-input checked></label>
+            <label data-instrument-row data-instrument-label="ETH" data-instrument-logo-url="/currency/eth.svg"><input type="checkbox" name="instrument_id" value="ETH" data-instrument-input></label>
           </div>
         </div>
         <div data-instrument-search-empty></div>
@@ -140,6 +140,30 @@ describe("agent currency icons", () => {
 
     expect(document.querySelectorAll("[data-selected-instrument-list] img")).toHaveLength(1);
     expect(document.querySelector<HTMLElement>("[data-currency-modal]")?.classList.contains("hidden")).toBe(true);
+  });
+
+  it("keeps analysis and trading selectors independent", () => {
+    document.body.innerHTML = `
+      <section data-agent-instrument-selector="analysis">
+        <button data-select-currencies>Select analysis</button>
+        <div data-currency-modal class="hidden"><button data-currency-modal-close></button><button data-apply-currencies></button><button data-select-all-currencies></button><button data-select-no-currencies></button><div data-instrument-scroll-container><label data-instrument-row data-instrument-label="BTC"><input data-instrument-input type="checkbox" name="analysis_instrument_id" value="BTC"></label></div></div>
+        <div data-selected-instrument-list></div><div data-selected-instrument-empty></div><div data-no-currencies-warning></div>
+      </section>
+      <section data-agent-instrument-selector="trading">
+        <button data-select-currencies>Select trading</button>
+        <div data-currency-modal class="hidden"><button data-currency-modal-close></button><button data-apply-currencies></button><button data-select-all-currencies></button><button data-select-no-currencies></button><div data-instrument-scroll-container><label data-instrument-row data-instrument-label="ETH"><input data-instrument-input type="checkbox" name="trading_instrument_id" value="ETH"></label></div></div>
+        <div data-selected-instrument-list></div><div data-selected-instrument-empty></div><div data-no-currencies-warning></div>
+      </section>
+    `;
+
+    initAgentPage();
+    const analysis = document.querySelector<HTMLElement>('[data-agent-instrument-selector="analysis"]');
+    const trading = document.querySelector<HTMLElement>('[data-agent-instrument-selector="trading"]');
+    analysis?.querySelector<HTMLButtonElement>("[data-select-currencies]")?.click();
+    analysis?.querySelector<HTMLButtonElement>("[data-select-all-currencies]")?.click();
+
+    expect(analysis?.querySelector<HTMLInputElement>('input[name="analysis_instrument_id"]')?.checked).toBe(true);
+    expect(trading?.querySelector<HTMLInputElement>('input[name="trading_instrument_id"]')?.checked).toBe(false);
   });
 });
 

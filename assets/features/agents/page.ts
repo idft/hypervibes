@@ -75,7 +75,7 @@ function initInstrumentSelectors(root: ParentNode) {
     const rows = Array.from(container.querySelectorAll<HTMLElement>("[data-instrument-row]"));
     if (!list || !empty || !warning || !selectButton || !modal || !apply || !selectAll || !selectNone || rows.length === 0) return;
     container.dataset.bound = "true";
-    const inputFor = (row: HTMLElement) => row.querySelector<HTMLInputElement>('input[name="instrument_id"]');
+    const inputFor = (row: HTMLElement) => row.querySelector<HTMLInputElement>("[data-instrument-input]");
     const labelFor = (row: HTMLElement) => inputFor(row)?.value ?? "";
     const loadLogo = (row: HTMLElement) => {
       const image = row.querySelector<HTMLImageElement>("[data-instrument-logo]");

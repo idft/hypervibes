@@ -51,14 +51,14 @@ pub(in crate::web::routes) async fn agents_reset_memories(
     ))
     .into_response())
 }
-pub(in crate::web::routes) async fn agents_update_instruments(
+pub(in crate::web::routes) async fn agents_update_trading_instruments(
     State(state): State<Arc<AppState>>,
     Path(agent_key): Path<String>,
     axum::Form(form_pairs): axum::Form<Vec<(String, String)>>,
 ) -> Result<Response, AppError> {
     let instrument_ids: Vec<String> = form_pairs
         .into_iter()
-        .filter_map(|(key, value)| (key == "instrument_id").then_some(value))
+        .filter_map(|(key, value)| (key == "trading_instrument_id").then_some(value))
         .collect();
     let updated =
         replace_agent_trading_instruments(&state.db_pool, &agent_key, &instrument_ids).await?;

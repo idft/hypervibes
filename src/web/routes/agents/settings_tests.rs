@@ -7,7 +7,10 @@ use axum::http::{Request, StatusCode};
 use std::sync::Arc;
 use tower::util::ServiceExt;
 
-use crate::agents::store::{list_agent_instrument_ids, replace_agent_instruments};
+use crate::agents::store::{
+    list_agent_analysis_instrument_ids, list_agent_trading_instrument_ids,
+    replace_agent_analysis_instruments, replace_agent_trading_instruments,
+};
 
 #[tokio::test]
 async fn post_reset_memories_deletes_only_that_agents_memories() {
@@ -177,9 +180,12 @@ async fn agent_settings_route_renders_currency_controls() {
     let (agent_key, _) = insert_test_agent(&state).await.expect("insert agent");
     seed_instrument(&state, "BTC", true).await;
     seed_instrument(&state, "ETH", true).await;
-    replace_agent_instruments(&state.db_pool, &agent_key, &["BTC".to_string()])
+    replace_agent_analysis_instruments(&state.db_pool, &agent_key, &["BTC".to_string()])
         .await
-        .expect("seed selected instruments");
+        .expect("seed analysis instruments");
+    replace_agent_trading_instruments(&state.db_pool, &agent_key, &["ETH".to_string()])
+        .await
+        .expect("seed trading instruments");
 
     let response = router(state.clone())
         .oneshot(
@@ -193,12 +199,16 @@ async fn agent_settings_route_renders_currency_controls() {
 
     assert_eq!(response.status(), StatusCode::OK);
     let text = response_text(response).await;
-    assert!(text.contains("Currencies"));
-    assert!(!text.contains("Select the Hyperliquid perps this agent should analyze and trade."));
-    assert!(text.contains("name=\"instrument_id\""));
+    assert!(text.contains("Analysis instruments"));
+    assert!(text.contains("Trading instruments"));
+    assert!(text.contains("name=\"analysis_instrument_id\""));
+    assert!(text.contains("name=\"trading_instrument_id\""));
+    assert!(text.contains("/settings/analysis-instruments"));
+    assert!(text.contains("/settings/trading-instruments"));
     assert!(text.contains("value=\"BTC\""));
     assert!(text.contains("value=\"ETH\""));
     assert!(text.contains("value=\"BTC\" checked"));
+    assert!(text.contains("value=\"ETH\" checked"));
     assert!(!text.contains("Sync status"));
     assert!(!text.contains("abc123"));
     assert!(text.contains("data-select-currencies"));
@@ -211,7 +221,7 @@ async fn agent_settings_route_renders_currency_controls() {
 }
 
 #[tokio::test]
-async fn post_agent_instruments_updates_selection_and_redirects() {
+async fn post_agent_trading_instruments_updates_selection_and_redirects() {
     let state = test_state().await;
     let pool = state.db_pool.clone();
     let guard = state
@@ -227,9 +237,11 @@ async fn post_agent_instruments_updates_selection_and_redirects() {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri(format!("/agents/{agent_key}/settings/instruments"))
+                .uri(format!("/agents/{agent_key}/settings/trading-instruments"))
                 .header("content-type", "application/x-www-form-urlencoded")
-                .body(Body::from("instrument_id=BTC&instrument_id=ETH"))
+                .body(Body::from(
+                    "trading_instrument_id=BTC&trading_instrument_id=ETH",
+                ))
                 .unwrap(),
         )
         .await
@@ -245,7 +257,7 @@ async fn post_agent_instruments_updates_selection_and_redirects() {
         Some(expected_location.as_str())
     );
 
-    let selected = list_agent_instrument_ids(&pool, &agent_key)
+    let selected = list_agent_trading_instrument_ids(&pool, &agent_key)
         .await
         .expect("list selected instruments");
     assert_eq!(selected, vec!["BTC".to_string(), "ETH".to_string()]);
@@ -253,7 +265,7 @@ async fn post_agent_instruments_updates_selection_and_redirects() {
 }
 
 #[tokio::test]
-async fn post_agent_instruments_without_values_clears_selection_and_redirects() {
+async fn post_agent_trading_instruments_without_values_clears_selection_and_redirects() {
     let state = test_state().await;
     let pool = state.db_pool.clone();
     let guard = state
@@ -263,7 +275,7 @@ async fn post_agent_instruments_without_values_clears_selection_and_redirects() 
         .expect("test db guard");
     let (agent_key, _wallet_address) = insert_test_agent(&state).await.expect("insert agent");
     seed_instrument(&state, "BTC", true).await;
-    replace_agent_instruments(&pool, &agent_key, &["BTC".to_string()])
+    replace_agent_trading_instruments(&pool, &agent_key, &["BTC".to_string()])
         .await
         .expect("seed selected instruments");
 
@@ -271,7 +283,7 @@ async fn post_agent_instruments_without_values_clears_selection_and_redirects() 
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri(format!("/agents/{agent_key}/settings/instruments"))
+                .uri(format!("/agents/{agent_key}/settings/trading-instruments"))
                 .header("content-type", "application/x-www-form-urlencoded")
                 .body(Body::empty())
                 .unwrap(),
@@ -281,11 +293,48 @@ async fn post_agent_instruments_without_values_clears_selection_and_redirects() 
 
     assert_eq!(response.status(), StatusCode::SEE_OTHER);
 
-    let selected = list_agent_instrument_ids(&pool, &agent_key)
+    let selected = list_agent_trading_instrument_ids(&pool, &agent_key)
         .await
         .expect("list selected instruments");
     assert!(selected.is_empty());
     drop(guard);
+}
+
+#[tokio::test]
+async fn post_agent_analysis_instruments_does_not_change_trading_allowlist() {
+    let state = test_state().await;
+    let (agent_key, _) = insert_test_agent(&state).await.expect("insert agent");
+    seed_instrument(&state, "BTC", true).await;
+    seed_instrument(&state, "ETH", true).await;
+    replace_agent_trading_instruments(&state.db_pool, &agent_key, &["BTC".to_string()])
+        .await
+        .expect("seed trading instruments");
+
+    let response = router(state.clone())
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/agents/{agent_key}/settings/analysis-instruments"))
+                .header("content-type", "application/x-www-form-urlencoded")
+                .body(Body::from("analysis_instrument_id=ETH"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+    assert_eq!(
+        list_agent_analysis_instrument_ids(&state.db_pool, &agent_key)
+            .await
+            .expect("list analysis instruments"),
+        vec!["ETH".to_string()]
+    );
+    assert_eq!(
+        list_agent_trading_instrument_ids(&state.db_pool, &agent_key)
+            .await
+            .expect("list trading instruments"),
+        vec!["BTC".to_string()]
+    );
 }
 
 fn urldecode(raw: &[u8]) -> String {

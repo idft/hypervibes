@@ -132,26 +132,7 @@ pub(in crate::web::routes) async fn render_agent_show_page(
         }
     }
 
-    let instrument_options =
-        match list_agent_trading_instrument_options(&state.db_pool, &agent.agent_key).await {
-            Ok(rows) => {
-                template.instrument_options_loaded = true;
-                template.has_selected_instruments = rows.iter().any(|row| row.selected);
-                Some(rows)
-            }
-            Err(error) => {
-                warn!(
-                    agent_key = %agent.agent_key,
-                    error = ?error,
-                    "failed to list agent instrument options for agent page"
-                );
-                None
-            }
-        };
-    // Load the analysis selector independently so a future template change cannot
-    // accidentally derive its membership from the trading allowlist.
-    let _analysis_instrument_options =
-        list_agent_analysis_instrument_options(&state.db_pool, &agent.agent_key).await;
+    template.has_selected_instruments = readiness.has_trading_instruments;
 
     match active_tab {
         AgentShowTab::Chat => unreachable!("Chat has its own page route"),
@@ -225,8 +206,29 @@ pub(in crate::web::routes) async fn render_agent_show_page(
                 )
                 .await,
             );
-            if let Some(rows) = instrument_options {
-                template.instrument_options = rows;
+            match list_agent_trading_instrument_options(&state.db_pool, &agent.agent_key).await {
+                Ok(rows) => {
+                    template.instrument_options_loaded = true;
+                    template.instrument_options = rows;
+                }
+                Err(error) => warn!(
+                    agent_key = %agent.agent_key,
+                    error = ?error,
+                    "failed to list agent trading instrument options for settings page"
+                ),
+            }
+            match list_agent_analysis_instrument_options(&state.db_pool, &agent.agent_key).await {
+                Ok(rows) => {
+                    template.has_selected_analysis_instruments =
+                        rows.iter().any(|row| row.selected);
+                    template.analysis_instrument_options_loaded = true;
+                    template.analysis_instrument_options = rows;
+                }
+                Err(error) => warn!(
+                    agent_key = %agent.agent_key,
+                    error = ?error,
+                    "failed to list agent analysis instrument options for settings page"
+                ),
             }
         }
         AgentShowTab::Analysis | AgentShowTab::SubAgentsHeading => {
