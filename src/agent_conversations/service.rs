@@ -565,8 +565,9 @@ fn permission_rules_for(
         "hypervibes_get_account",
         "hypervibes_list_strategy_prompts",
         "hypervibes_get_strategy_prompt",
-        "hypervibes_get_latest_analysis",
-        "hypervibes_get_market_analysis",
+        "hypervibes_list_indicators",
+        "hypervibes_get_indicator",
+        "hypervibes_get_indicator_results",
         "hypervibes_get_memory_detail",
         "hypervibes_list_memories",
         "hypervibes_list_orders",
@@ -606,6 +607,13 @@ fn permission_rules_for(
         pattern: "*".to_string(),
         action: "ask".to_string(),
     });
+    for permission in ["hypervibes_create_indicator", "hypervibes_update_indicator"] {
+        rules.push(OpenCodePermissionRule {
+            permission: permission.to_string(),
+            pattern: "*".to_string(),
+            action: "ask".to_string(),
+        });
+    }
     Ok(rules)
 }
 

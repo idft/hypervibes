@@ -35,6 +35,8 @@ pub enum RunApiScope {
     PromptRead,
     PromptRevisionSubmit,
     NotificationSend,
+    IndicatorRead,
+    IndicatorWrite,
 }
 
 impl RunApiScope {
@@ -49,6 +51,8 @@ impl RunApiScope {
             Self::PromptRead => "hypervibes:prompt_read",
             Self::PromptRevisionSubmit => CAPABILITY_PROMPT_REVISION_SUBMIT,
             Self::NotificationSend => CAPABILITY_NOTIFICATION_SEND,
+            Self::IndicatorRead => "hypervibes:indicator_read",
+            Self::IndicatorWrite => "hypervibes:indicator_write",
         }
     }
 
@@ -63,6 +67,8 @@ impl RunApiScope {
             "hypervibes:prompt_read" => Some(Self::PromptRead),
             CAPABILITY_PROMPT_REVISION_SUBMIT => Some(Self::PromptRevisionSubmit),
             CAPABILITY_NOTIFICATION_SEND => Some(Self::NotificationSend),
+            "hypervibes:indicator_read" => Some(Self::IndicatorRead),
+            "hypervibes:indicator_write" => Some(Self::IndicatorWrite),
             _ => None,
         }
     }
@@ -135,6 +141,7 @@ pub fn run_api_scopes_for_sub_agent(
             RunApiScope::AccountRead,
             RunApiScope::MemoryRead,
             RunApiScope::MemoryWrite,
+            RunApiScope::IndicatorRead,
         ],
         SUB_AGENT_KIND_TRADING => vec![
             RunApiScope::AccountRead,
@@ -149,6 +156,8 @@ pub fn run_api_scopes_for_sub_agent(
             RunApiScope::OrderRead,
             RunApiScope::TransactionRead,
             RunApiScope::PromptRead,
+            RunApiScope::IndicatorRead,
+            RunApiScope::IndicatorWrite,
         ],
         _ => anyhow::bail!("unsupported sub-agent kind for run API scopes"),
     };

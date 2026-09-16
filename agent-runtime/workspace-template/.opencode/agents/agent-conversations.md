@@ -25,6 +25,11 @@ permission:
   hypervibes_list_orders: allow
   hypervibes_list_account_transactions: allow
   hypervibes_get_order: allow
+  hypervibes_list_indicators: allow
+  hypervibes_get_indicator: allow
+  hypervibes_get_indicator_results: allow
+  hypervibes_create_indicator: ask
+  hypervibes_update_indicator: ask
 ---
 
 Answer the operator directly and use the HyperVibes MCP tools for account,

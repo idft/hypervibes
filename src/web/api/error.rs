@@ -15,6 +15,7 @@ pub(super) enum ApiError {
     Forbidden(&'static str),
     NotFound(&'static str),
     Validation(String),
+    Conflict(&'static str),
     BadUuid,
     Internal(anyhow::Error),
 }
@@ -26,6 +27,7 @@ impl ApiError {
             ApiError::Forbidden(msg) => (*msg).to_string(),
             ApiError::NotFound(msg) => (*msg).to_string(),
             ApiError::Validation(msg) => msg.clone(),
+            ApiError::Conflict(msg) => (*msg).to_string(),
             ApiError::BadUuid => "invalid memory id".to_string(),
             ApiError::Internal(_) => "internal server error".to_string(),
         }
@@ -37,6 +39,7 @@ impl ApiError {
             ApiError::Forbidden(_) => StatusCode::FORBIDDEN,
             ApiError::NotFound(_) => StatusCode::NOT_FOUND,
             ApiError::Validation(_) => StatusCode::UNPROCESSABLE_ENTITY,
+            ApiError::Conflict(_) => StatusCode::CONFLICT,
             ApiError::BadUuid => StatusCode::NOT_FOUND,
             ApiError::Internal(_) => StatusCode::INTERNAL_SERVER_ERROR,
         }

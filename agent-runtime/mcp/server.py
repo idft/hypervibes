@@ -99,7 +99,11 @@ def _require_config() -> tuple[str, str, str]:
 
 def _headers() -> dict[str, str]:
     _, api_key, _ = _require_config()
-    return {"Authorization": f"Bearer {api_key}"}
+    headers = {"Authorization": f"Bearer {api_key}"}
+    conversation_id = os.getenv("HYPERVIBES_CONVERSATION_ID", "").strip()
+    if conversation_id:
+        headers["X-HyperVibes-Conversation-Id"] = conversation_id
+    return headers
 
 
 def _request(
@@ -220,6 +224,38 @@ def _require_offset(offset: int | None) -> int | None:
     return offset
 
 
+def _require_indicator_id(indicator_id: str) -> str:
+    return _require_nonblank("indicator_id", indicator_id)
+
+
+def _require_indicator_fields(
+    name: str,
+    timeframe: str,
+    instrument_ids: list[str],
+    source: str,
+    input_values: dict[str, Any] | None,
+) -> dict[str, Any]:
+    _require_nonblank("name", name)
+    _require_nonblank("timeframe", timeframe)
+    _require_nonblank("source", source)
+    if not isinstance(instrument_ids, list) or not instrument_ids or not all(
+        isinstance(instrument_id, str) and instrument_id.strip()
+        for instrument_id in instrument_ids
+    ):
+        raise ValueError("instrument_ids must be a non-empty list of nonblank IDs")
+    if len(set(instrument_ids)) != len(instrument_ids):
+        raise ValueError("instrument_ids must not contain duplicates")
+    if input_values is not None and not isinstance(input_values, dict):
+        raise ValueError("input_values must be a JSON object")
+    return {
+        "name": name,
+        "timeframe": timeframe,
+        "instrument_ids": instrument_ids,
+        "source": source,
+        "input_values": input_values if input_values is not None else {},
+    }
+
+
 @mcp.tool()
 def get_account() -> dict[str, Any]:
     """Return this agent's current Hyperliquid account snapshot."""
@@ -285,6 +321,106 @@ def submit_prompt_revision(
     )
     if not isinstance(result, dict) or set(result) != {"batch_id"} or not isinstance(result["batch_id"], int):
         raise RuntimeError("HyperVibes prompt revision returned unexpected shape")
+    return result
+
+
+@mcp.tool()
+def list_indicators() -> list[dict[str, Any]]:
+    """List this agent's indicator definitions and their latest run status."""
+    result = _request("GET", "/api/v1/indicators")
+    if not isinstance(result, list):
+        raise RuntimeError("HyperVibes indicators returned unexpected shape")
+    return result
+
+
+@mcp.tool()
+def get_indicator(indicator_id: str) -> dict[str, Any]:
+    """Return an indicator's active source, inputs, and selected targets."""
+    result = _request("GET", f"/api/v1/indicators/{_require_indicator_id(indicator_id)}")
+    if not isinstance(result, dict):
+        raise RuntimeError("HyperVibes indicator returned unexpected shape")
+    return result
+
+
+@mcp.tool()
+def get_indicator_results(
+    indicator_id: str,
+    instrument_id: str | None = None,
+    timeframe: str | None = None,
+    limit: int | None = None,
+) -> list[dict[str, Any]]:
+    """Return bounded indicator runs, values, and diagnostics."""
+    params: dict[str, Any] = {}
+    if instrument_id is not None:
+        params["instrument_id"] = _require_nonblank("instrument_id", instrument_id)
+    if timeframe is not None:
+        params["timeframe"] = _require_nonblank("timeframe", timeframe)
+    if limit is not None:
+        params["limit"] = _require_limit(limit)
+    result = _request(
+        "GET",
+        f"/api/v1/indicators/{_require_indicator_id(indicator_id)}/results",
+        params=params or None,
+    )
+    if not isinstance(result, list):
+        raise RuntimeError("HyperVibes indicator results returned unexpected shape")
+    return result
+
+
+@mcp.tool()
+def create_indicator(
+    name: str,
+    timeframe: str,
+    instrument_ids: list[str],
+    source: str,
+    description: str = "",
+    input_values: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Create a validated server-side PineScript indicator."""
+    if not isinstance(description, str):
+        raise ValueError("description must be a string")
+    body = _require_indicator_fields(name, timeframe, instrument_ids, source, input_values)
+    body["description"] = description
+    result = _request("POST", "/api/v1/indicators", json_body=body)
+    if not isinstance(result, dict):
+        raise RuntimeError("HyperVibes indicator creation returned unexpected shape")
+    return result
+
+
+@mcp.tool()
+def update_indicator(
+    indicator_id: str,
+    expected_version_id: str,
+    name: str,
+    timeframe: str,
+    instrument_ids: list[str],
+    source: str,
+    enabled: bool = True,
+    description: str = "",
+    input_values: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Create and activate a new immutable PineScript indicator version."""
+    if not isinstance(enabled, bool):
+        raise ValueError("enabled must be a boolean")
+    if not isinstance(description, str):
+        raise ValueError("description must be a string")
+    body = _require_indicator_fields(name, timeframe, instrument_ids, source, input_values)
+    body.update(
+        {
+            "expected_version_id": _require_nonblank(
+                "expected_version_id", expected_version_id
+            ),
+            "enabled": enabled,
+            "description": description,
+        }
+    )
+    result = _request(
+        "PUT",
+        f"/api/v1/indicators/{_require_indicator_id(indicator_id)}",
+        json_body=body,
+    )
+    if not isinstance(result, dict):
+        raise RuntimeError("HyperVibes indicator update returned unexpected shape")
     return result
 
 

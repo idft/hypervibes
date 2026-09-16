@@ -22,6 +22,7 @@ use crate::{
 pub struct AuthenticatedAgent {
     pub agent_key: String,
     credential: AuthenticatedAgentCredential,
+    conversation_id: Option<uuid::Uuid>,
 }
 
 #[derive(Debug, Clone)]
@@ -57,6 +58,10 @@ impl AuthenticatedAgent {
 
     pub fn is_run_credential(&self) -> bool {
         matches!(self.credential, AuthenticatedAgentCredential::Run { .. })
+    }
+
+    pub fn conversation_provenance(&self) -> Option<uuid::Uuid> {
+        self.conversation_id
     }
 }
 
@@ -96,6 +101,7 @@ where
                     capability_schema_version: credential.capability_schema_version,
                     api_scopes: credential.api_scopes,
                 },
+                conversation_id: None,
             });
         }
 
@@ -112,9 +118,36 @@ where
             warn!(error = ?error, "failed to touch api_key_last_used_at");
         }
 
+        let conversation_id = match parts.headers.get("x-hypervibes-conversation-id") {
+            Some(value) => {
+                let value = value.to_str().map_err(|_| AuthRejection::invalid())?;
+                Some(uuid::Uuid::parse_str(value).map_err(|_| AuthRejection::invalid())?)
+            }
+            None => None,
+        };
+        let conversation_id = match conversation_id {
+            Some(conversation_id) => {
+                match crate::agent_conversations::store::get_agent_conversation(
+                    &pool,
+                    &agent_key,
+                    conversation_id,
+                )
+                .await
+                {
+                    Ok(Some(_)) => Some(conversation_id),
+                    Ok(None) => return Err(AuthRejection::invalid()),
+                    Err(error) => {
+                        warn!(error = ?error, "failed to validate conversation provenance");
+                        return Err(AuthRejection::server_error());
+                    }
+                }
+            }
+            None => None,
+        };
         Ok(AuthenticatedAgent {
             agent_key,
             credential: AuthenticatedAgentCredential::Permanent,
+            conversation_id,
         })
     }
 }

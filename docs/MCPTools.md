@@ -5,7 +5,7 @@ slug: /mcp-tools
 # MCP Tools
 
 HyperVibes MCP tools let authorized roles inspect account data, use memory,
-manage orders, revise prompts, and send gateway notifications. Tools are always
+manage orders, indicators, revise prompts, and send gateway notifications. Tools are always
 scoped to the authenticated agent; the MCP server never receives a Hyperliquid
 private key.
 
@@ -29,6 +29,11 @@ private key.
 | `hypervibes_cancel_orders` | Trading and permitted Chat |
 | `hypervibes_cancel_all_orders` | Trading and permitted Chat |
 | `hypervibes_send_notification` | Trading by default |
+| `hypervibes_list_indicators` | Analysis, Review, and Chat |
+| `hypervibes_get_indicator` | Analysis, Review, and Chat |
+| `hypervibes_get_indicator_results` | Analysis, Review, and Chat |
+| `hypervibes_create_indicator` | Review; Chat with confirmation |
+| `hypervibes_update_indicator` | Review; Chat with confirmation |
 
 `hypervibes:notification_send` is the named capability for queueing a gateway
 notification. Trading enables it by default; other scheduled roles and Chat are
@@ -52,3 +57,6 @@ scope and targets, expiry, and producer status: `fresh`, `stale`, `missing`,
 
 Analysis uses approved data tools for research and publishes scoped memories
 with `hypervibes_write_memory`. Its MCP surface does not provide reusable code.
+It may read published indicator definitions and results, but it cannot change
+them. Review may create a definition or immutable new version from run-scoped
+evidence. Trading has no indicator tools.

@@ -255,10 +255,11 @@ fn write_conversation_runtime_environment(
     input: &ConversationWorkspaceMaterializationInput,
 ) -> Result<()> {
     let contents = format!(
-        "HYPERVIBES_AGENT_KEY={}\nHYPERVIBES_API_BASE_URL={}\nHYPERVIBES_API_KEY={}\nHYPERVIBES_WORKSPACE={}\n",
+        "HYPERVIBES_AGENT_KEY={}\nHYPERVIBES_API_BASE_URL={}\nHYPERVIBES_API_KEY={}\nHYPERVIBES_CONVERSATION_ID={}\nHYPERVIBES_WORKSPACE={}\n",
         path.agent_key(),
         input.api_base_url,
         input.api_key,
+        path.conversation_id(),
         workspace_container_path,
     );
     let temporary = workspace_root.join(".env.conversation.tmp");

@@ -1,5 +1,6 @@
 mod account;
 mod error;
+mod indicators;
 mod memories;
 mod notifications;
 pub(crate) mod orders;
@@ -11,6 +12,8 @@ mod test_support;
 
 #[cfg(test)]
 mod account_tests;
+#[cfg(test)]
+mod indicators_tests;
 #[cfg(test)]
 mod memories_tests;
 #[cfg(test)]
@@ -24,6 +27,7 @@ mod transactions_tests;
 
 // Re-export so handlers are reachable by bare name from `router()` below,
 // and so test code can reference them via `super::*` if needed.
+use self::indicators::*;
 use self::notifications::create as create_notification;
 use self::{account::*, memories::*, orders::*, strategy_prompts::*, transactions::*};
 
@@ -48,6 +52,15 @@ pub fn router(state: Arc<AppState>) -> Router {
         )
         .route("/memories/{id}", get(get_memory_by_id))
         .route("/notifications", post(create_notification))
+        .route("/indicators", post(create_indicator).get(list_indicators))
+        .route(
+            "/indicators/{indicator_id}",
+            get(get_indicator).put(update_indicator),
+        )
+        .route(
+            "/indicators/{indicator_id}/results",
+            get(get_indicator_results),
+        )
         .route("/account", get(get_account))
         .route("/account/transactions", get(list_account_transactions))
         .route("/strategy-prompts", get(list_strategy_prompts))

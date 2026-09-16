@@ -41,6 +41,7 @@ fn build_analysis_prompt(request: &DispatchRequest) -> String {
     }
     body.push_str("\n\n## Instructions\n");
     body.push_str("- This job's research method is defined by its strategy and its capabilities. Decide what market evidence to gather from your allowed tools, or reason from the evidence already available to you.\n");
+    body.push_str("- Inspect relevant published indicator measurements with `hypervibes_list_indicators`, `hypervibes_get_indicator`, and `hypervibes_get_indicator_results`; interpret the computed values as research evidence. Do not create or edit indicators.\n");
     body.push_str("- Public OHLCV may be fetched with `python .opencode/skills/hyperliquid-data/fetch_ohlcv.py <SYMBOL> <TIMEFRAME> --closed-before <BOUNDARY_MS> --output-dir scratch/ohlcv` using the exact boundary milliseconds above and the `hyperliquid-data` skill for details. The fetch manifest's `output_path` is the canonical input envelope; read that exact file rather than enumerating `scratch/`, and do not reshape the candles.\n");
     body.push_str(
         "- Publish your research findings as memory records with `hypervibes_write_memory` so the Trading job can consume them.\n",
@@ -128,6 +129,7 @@ fn build_review_prompt(request: &DispatchRequest) -> Result<String> {
     body.push_str("- Do not make unbounded or out-of-window memory, order, or transaction queries. Do not mention or assess records outside this review window; the injected Accumulated learnings are the sole exception and must be carried forward when updated.\n");
     body.push_str("- Trace orders through their `memory_record_ids` to the linked `trading_decision` memories, and follow `memory.links` from decisions back to the research evidence they were based on.\n");
     body.push_str("- Identify failures, good patterns, stale assumptions, and prompt improvement opportunities. When evidence justifies a material change, use `hypervibes_submit_prompt_revision` exactly once with the current base revision IDs, rationale, and same-agent evidence memory IDs. It may revise only the Trading prompt and those Analysis prompts whose configuration opted in to review updates; it activates all submitted changes atomically.\n");
+    body.push_str("- Inspect indicator definitions and results when relevant. When evidence justifies it, create an indicator or an immutable new version with the indicator MCP tools, and explain the revision rationale in the review memory. Never encode trading policy into Pine source.\n");
     body.push_str(
         "- Never edit `data/`, `scratch/`, or runtime files; review is diagnosis-only.\n",
     );
