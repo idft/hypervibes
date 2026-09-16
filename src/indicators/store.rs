@@ -55,6 +55,15 @@ pub enum IndicatorUpdateResult {
     VersionConflict,
 }
 
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub struct ScheduledIndicatorTarget {
+    pub agent_key: String,
+    pub definition_id: Uuid,
+    pub version_id: Uuid,
+    pub instrument_id: String,
+    pub timeframe: String,
+}
+
 fn source_sha256(source: &str) -> String {
     hex::encode(Sha256::digest(source.as_bytes()))
 }
@@ -201,6 +210,14 @@ pub async fn update_definition_with_new_version(
 pub async fn list_definitions(pool: &DbPool, agent_key: &str) -> Result<Vec<IndicatorDefinition>> {
     sqlx::query_as(AssertSqlSafe(format!("SELECT {DEFINITION_COLUMNS} FROM agent_indicator_definitions WHERE agent_key = $1 ORDER BY name"))).bind(agent_key).fetch_all(pool).await.context("failed to list indicator definitions")
 }
+
+/// Lists only targets still selected in the agent's active analysis universe.
+pub async fn list_enabled_targets(pool: &DbPool) -> Result<Vec<ScheduledIndicatorTarget>> {
+    sqlx::query_as("SELECT d.agent_key, d.id AS definition_id, d.active_version_id AS version_id, target.instrument_id, d.timeframe FROM agent_indicator_definitions d JOIN agent_indicator_definition_instruments target ON target.indicator_definition_id = d.id JOIN agent_analysis_instruments selected ON selected.agent_key = d.agent_key AND selected.instrument_id = target.instrument_id JOIN hyperliquid.instruments instruments ON instruments.instrument_id = target.instrument_id WHERE d.enabled AND instruments.active ORDER BY d.agent_key, d.id, target.instrument_id")
+        .fetch_all(pool)
+        .await
+        .context("failed to list enabled indicator targets")
+}
 pub async fn get_definition(
     pool: &DbPool,
     agent_key: &str,
@@ -214,6 +231,20 @@ pub async fn get_active_version(
     definition_id: Uuid,
 ) -> Result<Option<IndicatorVersion>> {
     sqlx::query_as(AssertSqlSafe(format!("SELECT {VERSION_COLUMNS_QUALIFIED} FROM agent_indicator_versions v JOIN agent_indicator_definitions d ON d.active_version_id = v.id WHERE d.agent_key = $1 AND d.id = $2"))).bind(agent_key).bind(definition_id).fetch_optional(pool).await.context("failed to get active indicator version")
+}
+pub async fn get_version(
+    pool: &DbPool,
+    agent_key: &str,
+    definition_id: Uuid,
+    version_id: Uuid,
+) -> Result<Option<IndicatorVersion>> {
+    sqlx::query_as(AssertSqlSafe(format!("SELECT {VERSION_COLUMNS_QUALIFIED} FROM agent_indicator_versions v JOIN agent_indicator_definitions d ON d.id = v.indicator_definition_id WHERE d.agent_key = $1 AND d.id = $2 AND v.id = $3")))
+        .bind(agent_key)
+        .bind(definition_id)
+        .bind(version_id)
+        .fetch_optional(pool)
+        .await
+        .context("failed to get indicator version")
 }
 pub async fn list_definition_versions(
     pool: &DbPool,

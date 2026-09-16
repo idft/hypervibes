@@ -156,6 +156,15 @@ async fn main() -> Result<()> {
         }
     });
 
+    info!("starting indicator scheduler");
+    let indicator_scheduler =
+        indicators::scheduler::IndicatorScheduler::new(pool.clone(), shutdown_rx.clone());
+    let mut indicator_scheduler_handle = tokio::spawn(async move {
+        if let Err(e) = indicator_scheduler.run().await {
+            error!(error = ?e, "indicator scheduler exited with error");
+        }
+    });
+
     info!(address = %config.bind_addr, "listening for web requests");
 
     let gateway_pending_links: Arc<DashMap<Uuid, PendingLink>> = Arc::new(DashMap::new());
@@ -220,6 +229,10 @@ async fn main() -> Result<()> {
             warn!("harness scheduler exited early");
             return Ok(());
         }
+        _ = &mut indicator_scheduler_handle => {
+            warn!("indicator scheduler exited early");
+            return Ok(());
+        }
         _ = &mut gateway_handle => {
             warn!("gateway service exited early");
             return Ok(());
@@ -229,6 +242,7 @@ async fn main() -> Result<()> {
     // Wait for the background tasks to finish their graceful shutdown.
     let _ = hyperliquid_monitor_handle.await;
     let _ = harness_scheduler_handle.await;
+    let _ = indicator_scheduler_handle.await;
     let _ = gateway_handle.await;
 
     // The scheduler drains the trackers it knows about inside its
