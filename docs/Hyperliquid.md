@@ -105,6 +105,15 @@ the account's historical record. Hyperliquid's [historical data
 documentation](https://hyperliquid.gitbook.io/hyperliquid-docs/historical-data.md)
 describes the exchange's own historical-data sources.
 
+## Indicator candle data
+
+Indicators use complete OHLCV candle snapshots fetched server-side from
+Hyperliquid's public market-data endpoint. HyperVibes sorts and validates the
+series, runs indicator source only on candles closed at the scheduled boundary,
+and persists the normalized candle input with each run. The browser chart reads
+that persisted run data, so it reflects the exact candles that produced the
+indicator values rather than a live or client-side price cache.
+
 ## Builder Fee
 
 A builder fee approval is required before HyperVibes can place eligible

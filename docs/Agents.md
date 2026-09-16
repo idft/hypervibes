@@ -26,8 +26,6 @@ audit memories when possible, and manages orders. Review records outcomes and
 learnings and can revise Trading and opted-in Analysis prompts. Missing or stale
 research does not block the scheduler or order gateway.
 
-conversations. Missing or stale live account data is marked unavailable; new
-agent-originated exposure fails closed until required live streams are current.
 The interface also shows positions, orders, transactions, memories,
 conversations, and Indicators. Missing or stale live account data is marked
 unavailable; new agent-originated exposure fails closed until required live
