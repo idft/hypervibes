@@ -50,6 +50,7 @@ pub enum AgentShowTab {
     Notifications,
     Transactions,
     Memories,
+    Indicators,
     SubAgentsHeading,
     Analysis,
     Trading,
@@ -65,6 +66,7 @@ impl AgentShowTab {
             Self::Notifications => format!("/agents/{agent_key}/notifications"),
             Self::Transactions => format!("/agents/{agent_key}/transactions"),
             Self::Memories => format!("/agents/{agent_key}/memories"),
+            Self::Indicators => format!("/agents/{agent_key}/indicators"),
             Self::Analysis => format!("/agents/{agent_key}/analysis"),
             Self::Trading => format!("/agents/{agent_key}/trading"),
             Self::Review => format!("/agents/{agent_key}/review"),
@@ -99,6 +101,7 @@ pub fn build_agent_show_tabs(
         ("Chat", AgentShowTab::Chat, false, false),
         ("Notifications", AgentShowTab::Notifications, false, false),
         ("Memories", AgentShowTab::Memories, false, false),
+        ("Indicators", AgentShowTab::Indicators, false, false),
         ("Sub-agents", AgentShowTab::SubAgentsHeading, true, false),
         ("Analysis", AgentShowTab::Analysis, false, true),
         ("Trading", AgentShowTab::Trading, false, true),
@@ -415,6 +418,7 @@ pub struct AgentsShowPageTemplate {
     pub show_notifications_tab: bool,
     pub show_transactions_tab: bool,
     pub show_memories_tab: bool,
+    pub show_indicators_tab: bool,
     pub show_settings_tab: bool,
     pub show_jobs_tab: bool,
     pub operation_notice: Option<String>,
@@ -441,6 +445,9 @@ pub struct AgentsShowPageTemplate {
     pub analysis_instrument_options: Vec<AgentInstrumentOptionRow>,
     pub analysis_instrument_options_loaded: bool,
     pub has_selected_analysis_instruments: bool,
+    pub indicators: Vec<IndicatorDefinitionView>,
+    pub indicator_form: IndicatorFormView,
+    pub indicator_errors: Vec<String>,
     pub setup_checklist: AgentSetupChecklistView,
     pub settings_notice: Option<String>,
     pub gateway_telegram: Option<GatewayTelegramView>,
@@ -478,6 +485,7 @@ impl AgentsShowPageTemplate {
             show_notifications_tab: active_tab == AgentShowTab::Notifications,
             show_transactions_tab: active_tab == AgentShowTab::Transactions,
             show_memories_tab: active_tab == AgentShowTab::Memories,
+            show_indicators_tab: active_tab == AgentShowTab::Indicators,
             show_settings_tab: active_tab == AgentShowTab::Settings,
             show_jobs_tab: active_tab == AgentShowTab::Analysis,
             operation_notice: None,
@@ -505,6 +513,9 @@ impl AgentsShowPageTemplate {
             analysis_instrument_options: Vec::new(),
             analysis_instrument_options_loaded: false,
             has_selected_analysis_instruments: false,
+            indicators: Vec::new(),
+            indicator_form: IndicatorFormView::default(),
+            indicator_errors: Vec::new(),
             setup_checklist: AgentSetupChecklistView {
                 is_ready: false,
                 steps: Vec::new(),
@@ -564,6 +575,34 @@ impl AgentsShowPageTemplate {
     pub fn set_notifications(&mut self, rows: Vec<NotificationHistoryRow>) {
         self.notifications = rows.into_iter().map(AgentNotificationView::from).collect();
     }
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct IndicatorFormView {
+    pub id: Option<uuid::Uuid>,
+    pub expected_version_id: Option<uuid::Uuid>,
+    pub name: String,
+    pub description: String,
+    pub timeframe: String,
+    pub source: String,
+    pub input_values: String,
+    pub enabled: bool,
+    pub selected_instrument_ids: Vec<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct IndicatorDefinitionView {
+    pub id: uuid::Uuid,
+    pub name: String,
+    pub description: String,
+    pub timeframe: String,
+    pub enabled: bool,
+    pub version_number: i32,
+    pub created_by_kind: String,
+    pub instrument_ids: Vec<String>,
+    pub latest_status: String,
+    pub latest_values: String,
+    pub latest_error: Option<String>,
 }
 
 fn mask_api_key(api_key: &str) -> String {

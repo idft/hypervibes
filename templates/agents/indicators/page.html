@@ -1,0 +1,33 @@
+<section class="mt-2 space-y-4" data-agent-indicators>
+    <section class="rounded-2xl border border-zinc-800 bg-[#0d0d10] p-6">
+        <div class="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+            <div><h2 class="text-lg font-medium text-white">Indicators</h2><p class="mt-1 text-sm text-zinc-400">Validated PineScript programs run against closed Hyperliquid candles.</p></div>
+            <a href="#indicator-editor" class="cursor-pointer rounded-full bg-violet-600 px-4 py-2 text-sm font-medium text-white hover:bg-violet-500">New indicator</a>
+        </div>
+        {% if indicators.is_empty() %}
+        <p class="mt-5 rounded-xl border border-zinc-800 bg-zinc-950/70 p-5 text-sm text-zinc-400">No indicators have been created for this agent.</p>
+        {% else %}
+        <div class="mt-5 space-y-3">
+        {% for indicator in indicators %}
+            <article class="rounded-xl border border-zinc-800 bg-zinc-950/60 p-4">
+                <div class="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between"><div><div class="flex items-center gap-2"><h3 class="font-medium text-white">{{ indicator.name }}</h3><span class="rounded border border-zinc-700 px-1.5 py-0.5 text-xs text-zinc-300">v{{ indicator.version_number }}</span><span class="rounded border px-1.5 py-0.5 text-xs {% if indicator.enabled %}border-emerald-900/60 text-emerald-300{% else %}border-zinc-700 text-zinc-500{% endif %}">{% if indicator.enabled %}Enabled{% else %}Disabled{% endif %}</span></div><p class="mt-1 text-sm text-zinc-400">{{ indicator.description }}</p><p class="mt-2 text-xs text-zinc-500">{{ indicator.timeframe }} · {{ indicator.instrument_ids|join(", ") }} · {{ indicator.created_by_kind }}</p></div><div class="flex gap-2"><a href="/agents/{{ agent.agent_key }}/indicators?edit={{ indicator.id }}#indicator-editor" class="cursor-pointer rounded-full border border-zinc-700 px-3 py-1.5 text-xs text-zinc-200 hover:border-zinc-600 hover:text-white">Edit</a><form action="/agents/{{ agent.agent_key }}/indicators/{{ indicator.id }}/delete" method="post"><button type="submit" class="cursor-pointer rounded-full border border-red-900/60 px-3 py-1.5 text-xs text-red-300 hover:border-red-800">Delete</button></form></div></div>
+                <div class="mt-3 border-t border-zinc-800 pt-3 text-xs text-zinc-400"><span>Status: {{ indicator.latest_status }}</span>{% if !indicator.latest_values.is_empty() %}<span class="ml-3">{{ indicator.latest_values }}</span>{% endif %}{% if let Some(error) = indicator.latest_error %}<span class="ml-3 text-red-300">{{ error }}</span>{% endif %}</div>
+            </article>
+        {% endfor %}
+        </div>
+        {% endif %}
+    </section>
+    <section id="indicator-editor" class="rounded-2xl border border-zinc-800 bg-[#0d0d10] p-6">
+        <h2 class="text-lg font-medium text-white">{% if indicator_form.id.is_some() %}Edit indicator{% else %}New indicator{% endif %}</h2>
+        {% for error in indicator_errors %}<p class="mt-3 rounded-xl border border-red-900/60 bg-red-950/30 px-4 py-3 text-sm text-red-200">{{ error }}</p>{% endfor %}
+        <form action="{% if let Some(id) = indicator_form.id %}/agents/{{ agent.agent_key }}/indicators/{{ id }}{% else %}/agents/{{ agent.agent_key }}/indicators{% endif %}" method="post" class="mt-5 space-y-4">
+            {% if let Some(version_id) = indicator_form.expected_version_id %}<input type="hidden" name="expected_version_id" value="{{ version_id }}">{% endif %}
+            <div class="grid gap-4 sm:grid-cols-2"><label class="text-sm text-zinc-300">Name<input required name="name" value="{{ indicator_form.name }}" class="mt-2 w-full rounded-xl border border-zinc-800 bg-zinc-950 px-3 py-2 text-zinc-100"></label><label class="text-sm text-zinc-300">Timeframe<input required name="timeframe" value="{{ indicator_form.timeframe }}" placeholder="1h" class="mt-2 w-full rounded-xl border border-zinc-800 bg-zinc-950 px-3 py-2 text-zinc-100"></label></div>
+            <label class="block text-sm text-zinc-300">Description<textarea name="description" rows="2" class="mt-2 w-full rounded-xl border border-zinc-800 bg-zinc-950 px-3 py-2 text-zinc-100">{{ indicator_form.description }}</textarea></label>
+            <div><label class="text-sm text-zinc-300">Pine source</label><div class="mt-2 flex gap-2"><button type="button" data-indicator-import-trigger class="cursor-pointer rounded-full border border-zinc-700 px-3 py-1.5 text-xs text-zinc-200 hover:border-zinc-600">Import PineScript</button><input data-indicator-import type="file" accept=".pine,.txt,text/plain,text/x-pine" class="hidden"></div><textarea required name="source" rows="14" data-indicator-source class="mt-2 w-full font-mono text-xs rounded-xl border border-zinc-800 bg-zinc-950 px-3 py-2 text-zinc-100">{{ indicator_form.source }}</textarea></div>
+            <label class="block text-sm text-zinc-300">Input values (JSON)<textarea name="input_values" rows="2" class="mt-2 w-full rounded-xl border border-zinc-800 bg-zinc-950 px-3 py-2 font-mono text-xs text-zinc-100">{{ indicator_form.input_values }}</textarea></label>
+            <fieldset><legend class="text-sm text-zinc-300">Analysis instrument targets</legend><div class="mt-2 flex flex-wrap gap-3">{% for option in analysis_instrument_options %}<label class="cursor-pointer text-sm text-zinc-300"><input type="checkbox" name="instrument_id" value="{{ option.instrument_id }}" {% if indicator_form.selected_instrument_ids.contains(option.instrument_id) %}checked{% endif %} class="mr-1 cursor-pointer">{{ option.instrument_id }}</label>{% endfor %}</div></fieldset>
+            <label class="flex cursor-pointer items-center gap-2 text-sm text-zinc-300"><input type="checkbox" name="enabled" {% if indicator_form.enabled %}checked{% endif %} class="cursor-pointer"> Enabled</label><button type="submit" class="cursor-pointer rounded-full bg-violet-600 px-4 py-2 text-sm font-medium text-white hover:bg-violet-500">{% if indicator_form.id.is_some() %}Save new version{% else %}Create indicator{% endif %}</button>
+        </form>
+    </section>
+</section>

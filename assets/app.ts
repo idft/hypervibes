@@ -7,6 +7,7 @@ import { initMemoryTimelines, installMemoryLifecycle } from "./features/agents/m
 import { initModelPickers, installModelPickerLifecycle } from "./features/agents/model-picker";
 import { initSingletonRoleForms } from "./features/agents/singleton-role-form";
 import { installAgentNavigation } from "./features/agents/navigation";
+import { initIndicators, installIndicatorsLifecycle } from "./features/agents/indicators";
 import { initProviders } from "./features/providers";
 import { installCopyButtons } from "./shared/clipboard";
 import { initClickableRows } from "./shared/clickable-rows";
@@ -20,6 +21,7 @@ function initialize(root: ParentNode = document) {
   initClickableRows(root);
   initAccount(root);
   initAgentPage(root);
+  initIndicators(root);
   initMemoryTimelines(root);
   initModelPickers(root);
   initSingletonRoleForms(root);
@@ -31,6 +33,7 @@ function start() {
   installCsrf();
   installCopyButtons();
   installAgentNavigation();
+  installIndicatorsLifecycle();
   installAgentPageLifecycle();
   installAgentLiveLifecycle();
   installMemoryLifecycle();

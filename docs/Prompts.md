@@ -38,8 +38,8 @@ revisions when dispatched, and cannot revise its own prompt.
 Analysis uses approved data tools, including the closed-candle market-data
 helper, and publishes research memories. Individual prompts and granted
 capabilities define the research method and output types; Analysis does not
-author reusable code. Custom indicators are a separate future follow-up and are
-not currently implemented.
+author reusable code. It can read the server-computed indicator definitions and
+results available to its agent, but cannot create or edit indicators.
 
 Trading reads current Analysis context and owns synthesis and execution. It
 should write a `trading_decision` for each evaluated instrument when possible,
@@ -48,3 +48,7 @@ considered.
 
 Scheduled sub-agents receive their prompt as input but cannot modify it. See
 [Sub-agents](SubAgents.md) and [Chat](Chat.md).
+
+Review can inspect indicators and create an evidence-backed definition or
+immutable version. Indicator source must not encode trading policy. Trading has
+no indicator access and continues to consume Analysis research memories.

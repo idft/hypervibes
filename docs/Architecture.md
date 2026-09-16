@@ -16,7 +16,8 @@ Startup performs the following work:
 2. Runs the shared SQL migration stream.
 3. Starts the Hyperliquid agent monitor.
 4. Starts the OpenCode sub-agent scheduler.
-5. Serves the web interface, static files, SSE streams, and the agent JSON API.
+5. Starts the deterministic indicator scheduler.
+6. Serves the web interface, static files, SSE streams, and the agent JSON API.
 
 The main process owns graceful shutdown. The first `SIGINT` or `SIGTERM` stops
 new scheduled work and lets in-flight agent dispatches drain. A second signal
@@ -46,6 +47,7 @@ the sub-agent and cascades its runs. Conversations remain separate from harness
 sub-agents and runs.
 | `opencode` | OpenCode HTTP client, session persistence access, and generated agent workspaces. |
 | `memory` | Append-only, agent-owned scoped records, source-run provenance, and links between records. |
+| `indicators` | Validated PineScript-subset definitions, immutable versions, server-fetched closed-candle execution, and durable result provenance. |
 | `hyperliquid` | Instrument reference data, account-history journal, live account state, signed order gateway, and order reconciliation. |
 | `web` | Askama-rendered web interface, HTMX/SSE updates, static assets, and `/api/v1` agent endpoints. |
 | `settings` | Global application settings, including the base OpenCode system prompt. |
@@ -85,6 +87,13 @@ reads fresh context for an instrument from each enabled Analysis producer,
 records a `trading_decision` memory when possible, and manages orders. Missing,
 stale, or failed analyst output is context rather than a scheduler or
 order-gateway block.
+
+Enabled indicators execute only for their explicitly selected analysis
+instruments. Each run records its immutable source version, closed-candle
+boundary, normalized candle input, plots, and diagnostics. Before an Analysis
+dispatch at a candle boundary, applicable indicator work is allowed to reach a
+terminal result; failed or unavailable indicator data remains visible through
+the read tools without blocking Analysis. Trading has no direct indicator scope.
 
 Run state is persisted. On startup and periodically thereafter, the scheduler
 resumes queued runs and recovers stale running runs so interrupted dispatches

@@ -4,6 +4,7 @@ mod gateway_tests;
 mod index;
 #[cfg(test)]
 mod index_tests;
+mod indicators;
 mod live_stream;
 #[cfg(test)]
 mod live_stream_tests;
@@ -36,8 +37,8 @@ mod transactions;
 mod transactions_tests;
 
 pub(in crate::web::routes) use self::{
-    chat::*, gateway::*, index::*, live_stream::*, memories::*, notifications::*, operations::*,
-    runs::*, settings::*, show::*, sub_agents::*, transactions::*,
+    chat::*, gateway::*, index::*, indicators::*, live_stream::*, memories::*, notifications::*,
+    operations::*, runs::*, settings::*, show::*, sub_agents::*, transactions::*,
 };
 mod chat;
 #[cfg(test)]

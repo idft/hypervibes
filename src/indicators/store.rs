@@ -326,6 +326,21 @@ pub async fn get_chart_run(
     sqlx::query_as(AssertSqlSafe(format!("SELECT {RUN_COLUMNS} FROM agent_indicator_runs WHERE agent_key = $1 AND indicator_definition_id = $2 AND instrument_id = $3 AND status = 'succeeded' ORDER BY scheduled_for DESC LIMIT 1"))).bind(agent_key).bind(definition_id).bind(instrument_id).fetch_optional(pool).await.context("failed to get indicator chart run")
 }
 
+pub async fn delete_definition(
+    pool: &DbPool,
+    agent_key: &str,
+    definition_id: Uuid,
+) -> Result<bool> {
+    let result =
+        sqlx::query("DELETE FROM agent_indicator_definitions WHERE agent_key = $1 AND id = $2")
+            .bind(agent_key)
+            .bind(definition_id)
+            .execute(pool)
+            .await
+            .context("failed to delete indicator definition")?;
+    Ok(result.rows_affected() == 1)
+}
+
 pub async fn enqueue_run(
     pool: &DbPool,
     agent_key: &str,

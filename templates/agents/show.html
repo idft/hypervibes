@@ -8,7 +8,7 @@
 
     {% include "agents/components/tabs.html" %}
 
-    <div id="agent-show-tab-content"{% if show_notifications_tab || show_transactions_tab || show_memories_tab || show_jobs_tab %} class="min-h-0 flex-1"{% endif %}>
+    <div id="agent-show-tab-content"{% if show_notifications_tab || show_transactions_tab || show_memories_tab || show_indicators_tab || show_jobs_tab %} class="min-h-0 flex-1"{% endif %}>
     {% if show_positions_tab && !setup_checklist.is_ready %}
     <section class="mb-2 rounded-2xl border border-violet-900/60 bg-violet-950/20 p-5">
         <div>
@@ -240,6 +240,8 @@
             </div>
         </section>
     </section>
+    {% else if show_indicators_tab %}
+    {% include "agents/indicators/page.html" %}
     {% else if show_settings_tab %}
     <section class="mt-2 space-y-2">
         <section class="rounded-2xl border border-zinc-800 bg-[#0d0d10] p-6">

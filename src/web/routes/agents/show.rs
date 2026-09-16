@@ -83,6 +83,13 @@ pub(in crate::web::routes) struct AgentSettingsQuery {
     pub gateway_link: Option<uuid::Uuid>,
 }
 #[derive(Debug, Clone, Default, Deserialize)]
+pub(in crate::web::routes) struct AgentIndicatorsQuery {
+    #[serde(default)]
+    pub edit: Option<uuid::Uuid>,
+    #[serde(default)]
+    pub error: Option<String>,
+}
+#[derive(Debug, Clone, Default, Deserialize)]
 pub(in crate::web::routes) struct AgentOperationQuery {
     #[serde(default)]
     pub notice: Option<String>,
@@ -94,6 +101,7 @@ pub(in crate::web::routes) struct AgentShowQueries {
     pub transactions: Option<AgentTransactionsQuery>,
     pub memories: Option<AgentMemoriesQuery>,
     pub settings: Option<AgentSettingsQuery>,
+    pub indicators: Option<AgentIndicatorsQuery>,
     pub sub_agents: Option<AgentSubAgentsQuery>,
 }
 
@@ -109,6 +117,7 @@ pub(in crate::web::routes) async fn render_agent_show_page(
         transactions: transactions_query,
         memories: memories_query,
         settings: settings_query,
+        indicators: indicators_query,
         sub_agents: sub_agents_query,
     } = queries;
     let Some(agent) = get_agent(&state.db_pool, agent_key).await? else {
@@ -230,6 +239,15 @@ pub(in crate::web::routes) async fn render_agent_show_page(
                     "failed to list agent analysis instrument options for settings page"
                 ),
             }
+        }
+        AgentShowTab::Indicators => {
+            super::indicators::populate_indicators_tab(
+                state,
+                &agent,
+                &mut template,
+                indicators_query.unwrap_or_default(),
+            )
+            .await?;
         }
         AgentShowTab::Analysis | AgentShowTab::SubAgentsHeading => {
             let requested_page = sub_agents_query

@@ -32,10 +32,18 @@ tools and never reads the workspace `.env`. Its default read tools are:
 - `hypervibes_list_orders`
 - `hypervibes_list_account_transactions`
 - `hypervibes_get_order`
+- `hypervibes_list_indicators`
+- `hypervibes_get_indicator`
+- `hypervibes_get_indicator_results`
 
 Order actions and memory writes use the conversation's Deny, Confirm, or Allow
 permission. Prompt updates always require one-time confirmation through
 `hypervibes_update_strategy_prompt`.
+
+Chat can also create or update an agent-owned indicator using validated
+PineScript-subset source. Each mutation requires the same one-time OpenCode
+confirmation and records the conversation as its provenance. Chat cannot grant
+an indicator access to instruments outside the agent's analysis set.
 
 Conversation notification policy defaults to Deny. Chat continues to deny
 notification sending while conversation workspace routing and per-session

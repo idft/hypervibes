@@ -112,6 +112,22 @@ pub fn router(state: Arc<AppState>) -> Router {
         )
         .route("/agents/{agent_key}/settings", get(agents_show_settings))
         .route(
+            "/agents/{agent_key}/indicators",
+            get(agents_show_indicators).post(agents_create_indicator),
+        )
+        .route(
+            "/agents/{agent_key}/indicators/chart-data",
+            get(agents_indicator_chart_data),
+        )
+        .route(
+            "/agents/{agent_key}/indicators/{indicator_id}",
+            post(agents_update_indicator),
+        )
+        .route(
+            "/agents/{agent_key}/indicators/{indicator_id}/delete",
+            post(agents_delete_indicator),
+        )
+        .route(
             "/agents/{agent_key}/settings/gateway/telegram/status",
             get(telegram_gateway_status),
         )
