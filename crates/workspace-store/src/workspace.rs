@@ -365,14 +365,13 @@ fn write_run_runtime_environment(
 ) -> Result<()> {
     let scratch = format!("{workspace_container_path}/scratch");
     let contents = format!(
-        "HYPERVIBES_AGENT_KEY={}\nHYPERVIBES_API_BASE_URL={}\nHYPERVIBES_API_KEY={}\nHYPERVIBES_WORKSPACE={}\nHYPERVIBES_RUN_ID={}\nHYPERVIBES_RUNTIME_CREDENTIAL_ID={}\nPYTHONDONTWRITEBYTECODE=1\nHOME={}\nTMPDIR={}/tmp\nMPLCONFIGDIR={}/matplotlib\n",
+        "HYPERVIBES_AGENT_KEY={}\nHYPERVIBES_API_BASE_URL={}\nHYPERVIBES_API_KEY={}\nHYPERVIBES_WORKSPACE={}\nHYPERVIBES_RUN_ID={}\nHYPERVIBES_RUNTIME_CREDENTIAL_ID={}\nPYTHONDONTWRITEBYTECODE=1\nHOME={}\nTMPDIR={}/tmp\n",
         path.agent_key(),
         input.api_base_url,
         input.runtime_api_key,
         workspace_container_path,
         path.run_id(),
         input.credential_id,
-        scratch,
         scratch,
         scratch,
     );
@@ -909,7 +908,7 @@ mod tests {
             "analysis",
             &analysis,
             "bash",
-            "python .opencode/skills/hyperliquid-data/fetch_ohlcv.py BTC 15m",
+            "/opt/hypervibes/mcp/.venv/bin/python .opencode/skills/hyperliquid-data/fetch_ohlcv.py BTC 15m",
             "allow",
         );
         assert_profile_action(
@@ -975,7 +974,7 @@ mod tests {
             "trading",
             &trading,
             "bash",
-            "python .opencode/skills/hyperliquid-data/fetch_ohlcv.py BTC 15m",
+            "/opt/hypervibes/mcp/.venv/bin/python .opencode/skills/hyperliquid-data/fetch_ohlcv.py BTC 15m",
             "deny",
         );
         assert_profile_action(

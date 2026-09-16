@@ -6,13 +6,6 @@ HyperVibes API base URL: `{{api_base_url}}`
 
 Workspace container path: `{{workspace_container_path}}`
 
-Role boundaries:
-
-- Analysis roles may inspect and directly execute read-only Python analysis
-  scripts under `scripts/user/` through their approved commands; other roles
-  may not read or execute those scripts. Every role may access only the
-  workspace paths its profile permits.
-
 Backend access:
 
 - Use the `hypervibes` MCP tools for account state, memories,

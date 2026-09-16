@@ -6,7 +6,7 @@ permission:
   "*": deny
   bash:
     "*": deny
-    "python .opencode/skills/hyperliquid-data/fetch_ohlcv.py *": allow
+    "/opt/hypervibes/mcp/.venv/bin/python .opencode/skills/hyperliquid-data/fetch_ohlcv.py *": allow
   read:
     "*": deny
     "{{workspace_permission_root}}/scratch/**": allow

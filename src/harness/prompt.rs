@@ -42,7 +42,7 @@ fn build_analysis_prompt(request: &DispatchRequest) -> String {
     body.push_str("\n\n## Instructions\n");
     body.push_str("- This job's research method is defined by its strategy and its capabilities. Decide what market evidence to gather from your allowed tools, or reason from the evidence already available to you.\n");
     body.push_str("- Inspect relevant published indicator measurements with `hypervibes_list_indicators`, `hypervibes_get_indicator`, and `hypervibes_get_indicator_results`; interpret the computed values as research evidence. Do not create or edit indicators.\n");
-    body.push_str("- Public OHLCV may be fetched with `python .opencode/skills/hyperliquid-data/fetch_ohlcv.py <SYMBOL> <TIMEFRAME> --closed-before <BOUNDARY_MS> --output-dir scratch/ohlcv` using the exact boundary milliseconds above and the `hyperliquid-data` skill for details. The fetch manifest's `output_path` is the canonical input envelope; read that exact file rather than enumerating `scratch/`, and do not reshape the candles.\n");
+    body.push_str("- Public OHLCV may be fetched with `/opt/hypervibes/mcp/.venv/bin/python .opencode/skills/hyperliquid-data/fetch_ohlcv.py <SYMBOL> <TIMEFRAME> --closed-before <BOUNDARY_MS> --output-dir scratch/ohlcv` using the exact boundary milliseconds above and the `hyperliquid-data` skill for details. The fetch manifest's `output_path` is the canonical input envelope; read that exact file rather than enumerating `scratch/`, and do not reshape the candles.\n");
     body.push_str(
         "- Publish your research findings as memory records with `hypervibes_write_memory` so the Trading job can consume them.\n",
     );
@@ -281,7 +281,9 @@ mod tests {
         assert!(prompt.contains("a candle closing exactly at the boundary is included"));
         assert!(prompt.contains("canonical input envelope"));
         assert!(prompt.contains("rather than enumerating `scratch/`"));
-        assert!(prompt.contains("python .opencode/skills/hyperliquid-data/fetch_ohlcv.py"));
+        assert!(prompt.contains(
+            "/opt/hypervibes/mcp/.venv/bin/python .opencode/skills/hyperliquid-data/fetch_ohlcv.py"
+        ));
         assert!(prompt.contains("`hyperliquid-data` skill"));
         assert!(prompt.contains("## Completion requirements"));
         assert!(prompt.contains(

@@ -12,7 +12,7 @@ Fetch OHLCV candle data directly from Hyperliquid's public REST API.
 Run the script from the agent workspace root:
 
 ```bash
-python .opencode/skills/hyperliquid-data/fetch_ohlcv.py <SYMBOL> <TIMEFRAME> [--limit N] [--start-time EPOCH_MS] [--end-time EPOCH_MS] [--closed-before EPOCH_MS] [--output-dir scratch/PATH]
+/opt/hypervibes/mcp/.venv/bin/python .opencode/skills/hyperliquid-data/fetch_ohlcv.py <SYMBOL> <TIMEFRAME> [--limit N] [--start-time EPOCH_MS] [--end-time EPOCH_MS] [--closed-before EPOCH_MS] [--output-dir scratch/PATH]
 ```
 
 `SYMBOL` and `TIMEFRAME` are positional arguments. Do not use unsupported flags
@@ -21,9 +21,9 @@ such as `--coin`, `--symbol`, `--timeframe`, or `--days`.
 Examples:
 
 ```bash
-python .opencode/skills/hyperliquid-data/fetch_ohlcv.py BTC 15m --limit 100 --closed-before 1783114200000 --output-dir scratch/ohlcv
-python .opencode/skills/hyperliquid-data/fetch_ohlcv.py ETH 1h --start-time 1710000000000 --end-time 1710100000000
-python .opencode/skills/hyperliquid-data/fetch_ohlcv.py BTC 15m --limit 500 --closed-before 1783114200000 --output-dir scratch/ohlcv
+/opt/hypervibes/mcp/.venv/bin/python .opencode/skills/hyperliquid-data/fetch_ohlcv.py BTC 15m --limit 100 --closed-before 1783114200000 --output-dir scratch/ohlcv
+/opt/hypervibes/mcp/.venv/bin/python .opencode/skills/hyperliquid-data/fetch_ohlcv.py ETH 1h --start-time 1710000000000 --end-time 1710100000000
+/opt/hypervibes/mcp/.venv/bin/python .opencode/skills/hyperliquid-data/fetch_ohlcv.py BTC 15m --limit 500 --closed-before 1783114200000 --output-dir scratch/ohlcv
 ```
 
 The script writes candles to `scratch/ohlcv/` by default and prints a small JSON
