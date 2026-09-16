@@ -73,6 +73,7 @@ pub struct IndicatorRun {
     pub latest_values: Option<Value>,
     pub diagnostics: Value,
     pub error_summary: Option<String>,
+    pub attempt_count: i32,
     pub started_at: Option<DateTime<Utc>>,
     pub finished_at: Option<DateTime<Utc>>,
     pub created_at: DateTime<Utc>,

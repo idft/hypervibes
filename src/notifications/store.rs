@@ -569,6 +569,7 @@ mod tests {
                     "model_variant": null,
                     "timeout_seconds": 60,
                     "analysis_instruments": [],
+                    "indicator_snapshot": null,
                     "trading_instruments": [],
                     "strategy_prompt_revision": {"target_sub_agent_id": 1, "revision_id": 1},
                     "additional_instructions": "",

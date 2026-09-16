@@ -974,6 +974,7 @@ pub fn dispatch_request_from_job(
         environment: inputs.agent.environment.clone(),
         analysis_instruments: inputs.analysis_instruments,
         trading_instruments: inputs.trading_instruments,
+        indicator_snapshot: None,
         account_snapshot,
         model_provider_id: candle_job.model_provider_id.clone(),
         model_id: candle_job.model_id.clone(),
@@ -1050,7 +1051,68 @@ pub async fn build_dispatch_request(
     if run_id != 0 {
         apply_run_model_snapshot(pool, &mut request).await?;
     }
+    if run_id != 0 && candle_job.sub_agent_kind == SUB_AGENT_KIND_ANALYSIS {
+        request.indicator_snapshot = Some(
+            wait_for_indicator_snapshot(
+                pool,
+                &candle_job.agent_key,
+                &request.analysis_instruments,
+                scheduled_for,
+            )
+            .await?,
+        );
+    }
     Ok(Some(request))
+}
+
+const INDICATOR_WAIT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+const INDICATOR_WAIT_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_millis(250);
+
+async fn wait_for_indicator_snapshot(
+    pool: &DbPool,
+    agent_key: &str,
+    analysis_instruments: &[String],
+    boundary: chrono::DateTime<Utc>,
+) -> Result<crate::harness::model::IndicatorSnapshot> {
+    crate::indicators::store::enqueue_applicable_runs(
+        pool,
+        agent_key,
+        analysis_instruments,
+        boundary,
+    )
+    .await?;
+    let deadline = tokio::time::Instant::now() + INDICATOR_WAIT_TIMEOUT;
+    loop {
+        let runs = crate::indicators::store::list_applicable_runs(
+            pool,
+            agent_key,
+            analysis_instruments,
+            boundary,
+        )
+        .await?;
+        if runs.iter().all(|run| {
+            matches!(
+                run.status.as_deref(),
+                Some("succeeded") | Some("failed") | Some("skipped") | None
+            )
+        }) || tokio::time::Instant::now() >= deadline
+        {
+            return Ok(crate::harness::model::IndicatorSnapshot {
+                as_of_boundary_ms: boundary.timestamp_millis(),
+                runs: runs
+                    .into_iter()
+                    .map(|run| crate::harness::model::IndicatorRunSnapshot {
+                        definition_id: run.definition_id,
+                        version_id: run.version_id,
+                        instrument_id: run.instrument_id,
+                        run_id: run.run_id,
+                        status: run.status.unwrap_or_else(|| "missing".to_string()),
+                    })
+                    .collect(),
+            });
+        }
+        tokio::time::sleep(INDICATOR_WAIT_POLL_INTERVAL).await;
+    }
 }
 
 async fn apply_run_model_snapshot(pool: &DbPool, request: &mut DispatchRequest) -> Result<()> {
@@ -1271,6 +1333,16 @@ fn build_run_context_snapshot(
         "model_variant": request.model_variant,
         "timeout_seconds": request.timeout_seconds,
         "analysis_instruments": request.analysis_instruments,
+        "indicator_snapshot": request.indicator_snapshot.as_ref().map(|snapshot| serde_json::json!({
+            "as_of_boundary_ms": snapshot.as_of_boundary_ms,
+            "runs": snapshot.runs.iter().map(|run| serde_json::json!({
+                "definition_id": run.definition_id,
+                "version_id": run.version_id,
+                "instrument_id": run.instrument_id,
+                "run_id": run.run_id,
+                "status": run.status,
+            })).collect::<Vec<_>>(),
+        })),
         "trading_instruments": request.trading_instruments,
         "strategy_prompt_revision": {
             "target_sub_agent_id": request.sub_agent_id,

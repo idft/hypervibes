@@ -53,6 +53,7 @@ CREATE TABLE agent_indicator_runs (
     latest_values JSONB NULL,
     diagnostics JSONB NOT NULL DEFAULT '[]'::jsonb,
     error_summary TEXT NULL,
+    attempt_count INTEGER NOT NULL DEFAULT 0 CHECK (attempt_count >= 0),
     started_at TIMESTAMPTZ NULL,
     finished_at TIMESTAMPTZ NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),

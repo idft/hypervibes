@@ -7,11 +7,14 @@ use uuid::Uuid;
 
 use crate::{
     db::DbPool,
+    harness::timeframe::{
+        DEFAULT_TRIGGER_DELAY_SECONDS, boundary_for_due_at, latest_due_at_or_before,
+    },
     indicators::model::{IndicatorDefinition, IndicatorRun, IndicatorVersion},
 };
 
-const RUN_COLUMNS: &str = "id, agent_key, indicator_definition_id, indicator_version_id, instrument_id, timeframe, scheduled_for, status, candle_data, plot_data, latest_values, diagnostics, error_summary, started_at, finished_at, created_at, updated_at";
-const RUN_COLUMNS_QUALIFIED: &str = "r.id, r.agent_key, r.indicator_definition_id, r.indicator_version_id, r.instrument_id, r.timeframe, r.scheduled_for, r.status, r.candle_data, r.plot_data, r.latest_values, r.diagnostics, r.error_summary, r.started_at, r.finished_at, r.created_at, r.updated_at";
+const RUN_COLUMNS: &str = "id, agent_key, indicator_definition_id, indicator_version_id, instrument_id, timeframe, scheduled_for, status, candle_data, plot_data, latest_values, diagnostics, error_summary, attempt_count, started_at, finished_at, created_at, updated_at";
+const RUN_COLUMNS_QUALIFIED: &str = "r.id, r.agent_key, r.indicator_definition_id, r.indicator_version_id, r.instrument_id, r.timeframe, r.scheduled_for, r.status, r.candle_data, r.plot_data, r.latest_values, r.diagnostics, r.error_summary, r.attempt_count, r.started_at, r.finished_at, r.created_at, r.updated_at";
 const DEFINITION_COLUMNS: &str = "id, agent_key, name, description, timeframe, enabled, active_version_id, created_at, updated_at";
 const VERSION_COLUMNS: &str = "id, indicator_definition_id, version_number, source, source_sha256, compiler_version, metadata, input_values, created_by_kind, created_by_run_id, created_by_conversation_id, created_at";
 const VERSION_COLUMNS_QUALIFIED: &str = "v.id, v.indicator_definition_id, v.version_number, v.source, v.source_sha256, v.compiler_version, v.metadata, v.input_values, v.created_by_kind, v.created_by_run_id, v.created_by_conversation_id, v.created_at";
@@ -62,6 +65,15 @@ pub struct ScheduledIndicatorTarget {
     pub version_id: Uuid,
     pub instrument_id: String,
     pub timeframe: String,
+}
+
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub struct ApplicableIndicatorRun {
+    pub definition_id: Uuid,
+    pub version_id: Uuid,
+    pub instrument_id: String,
+    pub run_id: Option<Uuid>,
+    pub status: Option<String>,
 }
 
 fn source_sha256(source: &str) -> String {
@@ -171,11 +183,12 @@ pub async fn create_definition_with_initial_version(
         .bind(definition_id).bind(input.name.trim()).bind(input.description.trim()).bind(input.timeframe.trim()).bind(input.enabled).bind(agent_key).execute(&mut *tx).await.context("failed to insert indicator definition")?;
     let version = insert_version(&mut tx, definition_id, 1, &input.version).await?;
     replace_targets(&mut tx, definition_id, &targets).await?;
-    let definition = sqlx::query_as(AssertSqlSafe(format!("UPDATE agent_indicator_definitions SET active_version_id = $1, updated_at = now() WHERE id = $2 AND agent_key = $3 RETURNING {DEFINITION_COLUMNS}")))
+    let definition: IndicatorDefinition = sqlx::query_as(AssertSqlSafe(format!("UPDATE agent_indicator_definitions SET active_version_id = $1, updated_at = now() WHERE id = $2 AND agent_key = $3 RETURNING {DEFINITION_COLUMNS}")))
         .bind(version.id).bind(definition_id).bind(agent_key).fetch_one(&mut *tx).await.context("failed to activate initial indicator version")?;
     tx.commit()
         .await
         .context("failed to commit indicator create transaction")?;
+    enqueue_immediate_runs(pool, agent_key, definition.id).await?;
     Ok(definition)
 }
 
@@ -204,7 +217,42 @@ pub async fn update_definition_with_new_version(
     tx.commit()
         .await
         .context("failed to commit indicator update transaction")?;
+    enqueue_immediate_runs(pool, agent_key, definition_id).await?;
     Ok(IndicatorUpdateResult::Updated)
+}
+
+async fn enqueue_immediate_runs(pool: &DbPool, agent_key: &str, definition_id: Uuid) -> Result<()> {
+    let definition = get_definition(pool, agent_key, definition_id)
+        .await?
+        .ok_or_else(|| anyhow!("indicator definition disappeared after activation"))?;
+    if !definition.enabled {
+        return Ok(());
+    }
+    let Some(due_at) = latest_due_at_or_before(
+        Utc::now(),
+        &definition.timeframe,
+        DEFAULT_TRIGGER_DELAY_SECONDS,
+    )?
+    else {
+        return Ok(());
+    };
+    let version_id = definition
+        .active_version_id
+        .ok_or_else(|| anyhow!("activated indicator has no active version"))?;
+    let boundary = boundary_for_due_at(due_at, DEFAULT_TRIGGER_DELAY_SECONDS);
+    for instrument_id in list_definition_instruments(pool, agent_key, definition_id).await? {
+        enqueue_run(
+            pool,
+            agent_key,
+            definition_id,
+            version_id,
+            &instrument_id,
+            &definition.timeframe,
+            boundary,
+        )
+        .await?;
+    }
+    Ok(())
 }
 
 pub async fn list_definitions(pool: &DbPool, agent_key: &str) -> Result<Vec<IndicatorDefinition>> {
@@ -291,8 +339,74 @@ pub async fn enqueue_run(
     let inserted: Option<(Uuid,)> = sqlx::query_as("INSERT INTO agent_indicator_runs (id, agent_key, indicator_definition_id, indicator_version_id, instrument_id, timeframe, scheduled_for, status) SELECT $1, d.agent_key, d.id, $3, $4, $5, $6, 'queued' FROM agent_indicator_definitions d JOIN agent_indicator_definition_instruments i ON i.indicator_definition_id = d.id WHERE d.id = $2 AND d.agent_key = $7 AND i.instrument_id = $4 ON CONFLICT (indicator_version_id, instrument_id, timeframe, scheduled_for) DO NOTHING RETURNING id").bind(id).bind(definition_id).bind(version_id).bind(instrument_id).bind(timeframe).bind(scheduled_for).bind(agent_key).fetch_optional(pool).await.context("failed to enqueue indicator run")?;
     Ok(inserted.map(|(id,)| id))
 }
-pub async fn claim_next_queued_run(pool: &DbPool) -> Result<Option<IndicatorRun>> {
-    sqlx::query_as(AssertSqlSafe(format!("WITH next AS (SELECT id FROM agent_indicator_runs WHERE status = 'queued' ORDER BY scheduled_for FOR UPDATE SKIP LOCKED LIMIT 1) UPDATE agent_indicator_runs r SET status = 'running', started_at = now(), updated_at = now() FROM next WHERE r.id = next.id RETURNING {RUN_COLUMNS_QUALIFIED}"))) .fetch_optional(pool).await.context("failed to claim indicator run")
+pub async fn enqueue_applicable_runs(
+    pool: &DbPool,
+    agent_key: &str,
+    analysis_instruments: &[String],
+    boundary: DateTime<Utc>,
+) -> Result<u64> {
+    let result = sqlx::query("INSERT INTO agent_indicator_runs (id, agent_key, indicator_definition_id, indicator_version_id, instrument_id, timeframe, scheduled_for, status) SELECT gen_random_uuid(), d.agent_key, d.id, d.active_version_id, target.instrument_id, d.timeframe, $3, 'queued' FROM agent_indicator_definitions d JOIN agent_indicator_definition_instruments target ON target.indicator_definition_id = d.id JOIN agent_analysis_instruments selected ON selected.agent_key = d.agent_key AND selected.instrument_id = target.instrument_id JOIN hyperliquid.instruments instruments ON instruments.instrument_id = target.instrument_id WHERE d.agent_key = $1 AND d.enabled AND target.instrument_id = ANY($2) AND instruments.active ON CONFLICT (indicator_version_id, instrument_id, timeframe, scheduled_for) DO NOTHING")
+        .bind(agent_key)
+        .bind(analysis_instruments)
+        .bind(boundary)
+        .execute(pool)
+        .await
+        .context("failed to enqueue applicable indicator runs")?;
+    Ok(result.rows_affected())
+}
+
+pub async fn list_applicable_runs(
+    pool: &DbPool,
+    agent_key: &str,
+    analysis_instruments: &[String],
+    boundary: DateTime<Utc>,
+) -> Result<Vec<ApplicableIndicatorRun>> {
+    sqlx::query_as("SELECT d.id AS definition_id, d.active_version_id AS version_id, target.instrument_id, r.id AS run_id, r.status FROM agent_indicator_definitions d JOIN agent_indicator_definition_instruments target ON target.indicator_definition_id = d.id JOIN agent_analysis_instruments selected ON selected.agent_key = d.agent_key AND selected.instrument_id = target.instrument_id JOIN hyperliquid.instruments instruments ON instruments.instrument_id = target.instrument_id LEFT JOIN agent_indicator_runs r ON r.indicator_version_id = d.active_version_id AND r.instrument_id = target.instrument_id AND r.timeframe = d.timeframe AND r.scheduled_for = $3 WHERE d.agent_key = $1 AND d.enabled AND target.instrument_id = ANY($2) AND instruments.active ORDER BY d.id, target.instrument_id")
+        .bind(agent_key)
+        .bind(analysis_instruments)
+        .bind(boundary)
+        .fetch_all(pool)
+        .await
+        .context("failed to list applicable indicator runs")
+}
+
+pub async fn claim_next_queued_run(
+    pool: &DbPool,
+    excluded_agent_keys: &[String],
+) -> Result<Option<IndicatorRun>> {
+    sqlx::query_as(AssertSqlSafe(format!("WITH next AS (SELECT id FROM agent_indicator_runs WHERE status = 'queued' AND NOT (agent_key = ANY($1)) ORDER BY scheduled_for, created_at FOR UPDATE SKIP LOCKED LIMIT 1) UPDATE agent_indicator_runs r SET status = 'running', attempt_count = attempt_count + 1, started_at = now(), updated_at = now() FROM next WHERE r.id = next.id RETURNING {RUN_COLUMNS_QUALIFIED}"))) .bind(excluded_agent_keys).fetch_optional(pool).await.context("failed to claim indicator run")
+}
+
+pub async fn requeue_retryable_run(
+    pool: &DbPool,
+    agent_key: &str,
+    run_id: Uuid,
+    error_summary: &str,
+    max_attempts: i32,
+) -> Result<bool> {
+    let result = sqlx::query("UPDATE agent_indicator_runs SET status = 'queued', diagnostics = '[]'::jsonb, error_summary = $1, started_at = NULL, updated_at = now() WHERE id = $2 AND agent_key = $3 AND status = 'running' AND attempt_count < $4")
+        .bind(error_summary)
+        .bind(run_id)
+        .bind(agent_key)
+        .bind(max_attempts)
+        .execute(pool)
+        .await
+        .context("failed to requeue retryable indicator run")?;
+    Ok(result.rows_affected() == 1)
+}
+
+pub async fn recover_stale_running_runs(
+    pool: &DbPool,
+    stale_before: DateTime<Utc>,
+    max_attempts: i32,
+) -> Result<u64> {
+    let result = sqlx::query("UPDATE agent_indicator_runs SET status = CASE WHEN attempt_count < $2 THEN 'queued' ELSE 'failed' END, error_summary = CASE WHEN attempt_count < $2 THEN 'indicator execution lease expired; retrying' ELSE 'indicator execution lease expired after maximum retries' END, started_at = NULL, finished_at = CASE WHEN attempt_count < $2 THEN NULL ELSE now() END, updated_at = now() WHERE status = 'running' AND started_at < $1")
+        .bind(stale_before)
+        .bind(max_attempts)
+        .execute(pool)
+        .await
+        .context("failed to recover stale indicator runs")?;
+    Ok(result.rows_affected())
 }
 pub async fn finish_run_succeeded(
     pool: &DbPool,
@@ -498,12 +612,12 @@ mod tests {
         )
         .await
         .expect("enqueue new");
-        let first = claim_next_queued_run(&pool)
+        let first = claim_next_queued_run(&pool, &[])
             .await
             .expect("claim")
             .expect("first run");
         assert!(
-            claim_next_queued_run(&pool)
+            claim_next_queued_run(&pool, &[])
                 .await
                 .expect("claim second")
                 .is_some()
@@ -555,7 +669,7 @@ mod tests {
                 .await
                 .expect("remaining")
                 .len(),
-            1
+            2
         );
     }
 }

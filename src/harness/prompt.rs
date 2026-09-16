@@ -236,6 +236,7 @@ mod tests {
             environment: "live".to_string(),
             analysis_instruments: vec!["BTC".to_string(), "ETH".to_string()],
             trading_instruments: vec!["BTC".to_string(), "ETH".to_string()],
+            indicator_snapshot: None,
             account_snapshot: None,
             model_provider_id: None,
             model_id: None,

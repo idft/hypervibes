@@ -2,7 +2,7 @@ use std::{sync::Arc, time::Duration};
 
 use anyhow::Result;
 use async_trait::async_trait;
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Duration as ChronoDuration, Utc};
 use serde_json::json;
 use tokio::sync::{Semaphore, watch};
 use tracing::{error, warn};
@@ -25,6 +25,8 @@ use crate::{
 
 const POLL_INTERVAL: Duration = Duration::from_secs(10);
 const RUN_CLAIM_LIMIT: usize = MAX_CONCURRENT_INDICATOR_EXECUTIONS;
+const MAX_RUN_ATTEMPTS: i32 = 3;
+const STALE_RUN_TIMEOUT: ChronoDuration = ChronoDuration::minutes(5);
 
 #[async_trait]
 pub trait IndicatorCandleClient: Send + Sync {
@@ -103,6 +105,8 @@ impl IndicatorScheduler {
     }
 
     pub async fn tick(&self, now: DateTime<Utc>) -> Result<()> {
+        store::recover_stale_running_runs(&self.pool, now - STALE_RUN_TIMEOUT, MAX_RUN_ATTEMPTS)
+            .await?;
         for target in store::list_enabled_targets(&self.pool).await? {
             let Some(due_at) =
                 latest_due_at_or_before(now, &target.timeframe, DEFAULT_TRIGGER_DELAY_SECONDS)?
@@ -121,10 +125,12 @@ impl IndicatorScheduler {
             )
             .await?;
         }
+        let mut claimed_agents = Vec::with_capacity(RUN_CLAIM_LIMIT);
         for _ in 0..RUN_CLAIM_LIMIT {
-            let Some(run) = store::claim_next_queued_run(&self.pool).await? else {
+            let Some(run) = store::claim_next_queued_run(&self.pool, &claimed_agents).await? else {
                 break;
             };
+            claimed_agents.push(run.agent_key.clone());
             self.execute_run(run).await;
         }
         Ok(())
@@ -145,7 +151,7 @@ impl IndicatorScheduler {
                 return;
             }
             Err(error) => {
-                self.fail(&run, &error.to_string()).await;
+                self.retry_or_fail(&run, &error.to_string()).await;
                 return;
             }
         };
@@ -218,4 +224,31 @@ impl IndicatorScheduler {
             warn!(run_id = %run.id, error = ?persist_error, "failed to persist indicator failure");
         }
     }
+
+    async fn retry_or_fail(&self, run: &IndicatorRun, error: &str) {
+        let summary = sanitize_error_summary(error);
+        match store::requeue_retryable_run(
+            &self.pool,
+            &run.agent_key,
+            run.id,
+            &summary,
+            MAX_RUN_ATTEMPTS,
+        )
+        .await
+        {
+            Ok(true) => {}
+            Ok(false) => self.fail(run, &summary).await,
+            Err(persist_error) => {
+                warn!(run_id = %run.id, error = ?persist_error, "failed to retry indicator fetch")
+            }
+        }
+    }
+}
+
+fn sanitize_error_summary(error: &str) -> String {
+    error
+        .chars()
+        .filter(|character| !character.is_control())
+        .take(500)
+        .collect()
 }

@@ -2,6 +2,7 @@ use std::collections::BTreeSet;
 
 use chrono::{DateTime, Utc};
 use serde_json::Value;
+use uuid::Uuid;
 
 pub const SUB_AGENT_KIND_ANALYSIS: &str = "analysis";
 pub const SUB_AGENT_KIND_TRADING: &str = "trading";
@@ -14,7 +15,7 @@ pub const RUN_STATUS_FAILED: &str = "failed";
 pub const RUN_STATUS_ABORTED: &str = "aborted";
 pub const RUN_STATUS_SKIPPED: &str = "skipped";
 
-pub const RUN_CONTEXT_SNAPSHOT_SCHEMA_VERSION: i32 = 4;
+pub const RUN_CONTEXT_SNAPSHOT_SCHEMA_VERSION: i32 = 5;
 pub const CAPABILITY_SCHEMA_VERSION: i32 = 2;
 pub const CAPABILITY_NOTIFICATION_SEND: &str = "hypervibes:notification_send";
 pub const CAPABILITY_PROMPT_REVISION_SUBMIT: &str = "hypervibes:prompt_revision_submit";
@@ -166,13 +167,14 @@ pub fn run_api_scopes_for_sub_agent(
     Ok(scopes)
 }
 
-// Schema version four intentionally has no catch-all object. Adding a new run
+// Schema version five intentionally has no catch-all object. Adding a new run
 // input is an explicit snapshot-schema change rather than an unreviewed place
 // to put runtime configuration or secrets. V2 changes the
 // `strategy_prompt_revisions` shape from prompt-kind keyed to
 // sub-agent-target keyed objects. V3 removes the retired package snapshot.
-// V4 records independent analysis and trading universes.
-const RUN_CONTEXT_SNAPSHOT_V4_FIELDS: &[&str] = &[
+// V4 records independent analysis and trading universes. V5 records bounded
+// indicator provenance for Analysis without including source or result data.
+const RUN_CONTEXT_SNAPSHOT_V5_FIELDS: &[&str] = &[
     "account_snapshot_metadata",
     "additional_instructions",
     "accumulated_learning_memory_id",
@@ -183,11 +185,27 @@ const RUN_CONTEXT_SNAPSHOT_V4_FIELDS: &[&str] = &[
     "provider_id",
     "scheduled_candle_boundary",
     "analysis_instruments",
+    "indicator_snapshot",
     "strategy_prompt_revision",
     "system_prompt_version",
     "timeout_seconds",
     "trading_instruments",
 ];
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IndicatorRunSnapshot {
+    pub definition_id: Uuid,
+    pub version_id: Uuid,
+    pub instrument_id: String,
+    pub run_id: Option<Uuid>,
+    pub status: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IndicatorSnapshot {
+    pub as_of_boundary_ms: i64,
+    pub runs: Vec<IndicatorRunSnapshot>,
+}
 
 pub const MAINTENANCE_TASK_KIND_PROVIDER_CONFIG_RELOAD: &str = "provider_config_reload";
 
@@ -275,7 +293,7 @@ impl RunContextSnapshot {
             anyhow::bail!("run context snapshot exceeds the size limit");
         }
         let capabilities = self.normalized_enabled_capabilities()?;
-        validate_context_snapshot_v3(
+        validate_context_snapshot_v5(
             &self.context,
             capabilities
                 .iter()
@@ -303,22 +321,22 @@ impl RunContextSnapshot {
     }
 }
 
-// V3 is deliberately an exact, closed JSON shape. The database retains JSONB
+// V5 is deliberately an exact, closed JSON shape. The database retains JSONB
 // for forwards-compatible storage, but no arbitrary nested configuration can
 // enter a durable artifact under the current schema version.
-fn validate_context_snapshot_v3(
+fn validate_context_snapshot_v5(
     value: &Value,
     notification_send_enabled: bool,
 ) -> anyhow::Result<()> {
     let fields = value
         .as_object()
         .ok_or_else(|| anyhow::anyhow!("run context snapshot must be a JSON object"))?;
-    if fields.len() != RUN_CONTEXT_SNAPSHOT_V4_FIELDS.len()
-        || RUN_CONTEXT_SNAPSHOT_V4_FIELDS
+    if fields.len() != RUN_CONTEXT_SNAPSHOT_V5_FIELDS.len()
+        || RUN_CONTEXT_SNAPSHOT_V5_FIELDS
             .iter()
             .any(|field| !fields.contains_key(*field))
     {
-        anyhow::bail!("run context snapshot does not match schema version four");
+        anyhow::bail!("run context snapshot does not match schema version five");
     }
 
     validate_identifier(
@@ -342,6 +360,7 @@ fn validate_context_snapshot_v3(
         required_context_field(fields, "trading_instruments")?,
         "trading_instruments",
     )?;
+    validate_indicator_snapshot(required_context_field(fields, "indicator_snapshot")?)?;
     validate_strategy_prompt_revision(required_context_field(fields, "strategy_prompt_revision")?)?;
     validate_text(
         required_context_field(fields, "additional_instructions")?,
@@ -370,6 +389,74 @@ fn validate_context_snapshot_v3(
         fields,
         "account_snapshot_metadata",
     )?)?;
+    Ok(())
+}
+
+fn validate_indicator_snapshot(value: &Value) -> anyhow::Result<()> {
+    if value.is_null() {
+        return Ok(());
+    }
+    let snapshot = value
+        .as_object()
+        .ok_or_else(|| anyhow::anyhow!("indicator_snapshot must be an object or null"))?;
+    if snapshot.len() != 2
+        || !snapshot.contains_key("as_of_boundary_ms")
+        || !snapshot.contains_key("runs")
+    {
+        anyhow::bail!("indicator_snapshot does not match its closed schema");
+    }
+    validate_positive_integer(
+        &snapshot["as_of_boundary_ms"],
+        "indicator_snapshot.as_of_boundary_ms",
+    )?;
+    let runs = snapshot["runs"]
+        .as_array()
+        .ok_or_else(|| anyhow::anyhow!("indicator_snapshot.runs must be an array"))?;
+    if runs.len() > 256 {
+        anyhow::bail!("indicator_snapshot contains too many runs");
+    }
+    let mut identities = BTreeSet::new();
+    for run in runs {
+        let run = run
+            .as_object()
+            .ok_or_else(|| anyhow::anyhow!("indicator_snapshot run must be an object"))?;
+        if run.len() != 5
+            || !run.contains_key("definition_id")
+            || !run.contains_key("version_id")
+            || !run.contains_key("instrument_id")
+            || !run.contains_key("run_id")
+            || !run.contains_key("status")
+        {
+            anyhow::bail!("indicator_snapshot run does not match its closed schema");
+        }
+        let definition_id = run["definition_id"]
+            .as_str()
+            .and_then(|value| Uuid::parse_str(value).ok())
+            .ok_or_else(|| anyhow::anyhow!("indicator_snapshot definition_id must be a UUID"))?;
+        let version_id = run["version_id"]
+            .as_str()
+            .and_then(|value| Uuid::parse_str(value).ok())
+            .ok_or_else(|| anyhow::anyhow!("indicator_snapshot version_id must be a UUID"))?;
+        let instrument_id = run["instrument_id"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("indicator_snapshot.instrument_id must be a string"))?;
+        validate_identifier(&run["instrument_id"], "indicator_snapshot.instrument_id")?;
+        if !run["run_id"].is_null()
+            && run["run_id"]
+                .as_str()
+                .and_then(|value| Uuid::parse_str(value).ok())
+                .is_none()
+        {
+            anyhow::bail!("indicator_snapshot run_id must be a UUID or null");
+        }
+        let status = run["status"]
+            .as_str()
+            .filter(|value| matches!(*value, "succeeded" | "failed" | "skipped" | "missing"))
+            .ok_or_else(|| anyhow::anyhow!("indicator_snapshot status is invalid"))?;
+        if !identities.insert((definition_id, version_id, instrument_id, status)) {
+            anyhow::bail!("indicator_snapshot contains duplicate runs");
+        }
+    }
     Ok(())
 }
 
