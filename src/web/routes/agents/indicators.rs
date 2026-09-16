@@ -5,6 +5,7 @@ use axum::{
     http::StatusCode,
     response::{IntoResponse, Redirect, Response},
 };
+use rust_decimal::prelude::ToPrimitive;
 use serde_json::{Value, json};
 use uuid::Uuid;
 
@@ -13,12 +14,13 @@ use crate::{
     agents::{model::AgentDetailRow, store::list_agent_analysis_instrument_options},
     harness::timeframe::parse_timeframe_seconds,
     indicators::{
-        runtime::validate_indicator_source,
+        runtime::{IndicatorInputMetadata, validate_indicator_source},
         store::{
             CreateIndicatorDefinition, IndicatorUpdateResult, NewIndicatorVersion,
             UpdateIndicatorDefinition, create_definition_with_initial_version, delete_definition,
-            get_active_version, get_chart_run, get_definition, list_definition_instruments,
-            list_definitions, list_latest_results, update_definition_with_new_version,
+            get_active_version, get_chart_run, get_definition, get_version,
+            list_definition_instruments, list_definitions, list_latest_results,
+            update_definition_with_new_version,
         },
     },
     web::{
@@ -27,6 +29,7 @@ use crate::{
         error::AppError,
         templates::{
             AgentShowTab, AgentsShowPageTemplate, IndicatorDefinitionView, IndicatorFormView,
+            IndicatorInputView,
         },
     },
 };
@@ -109,7 +112,7 @@ pub(in crate::web::routes) async fn populate_indicators_tab(
             description: definition.description,
             timeframe: definition.timeframe,
             source: version.source,
-            input_values: version.input_values.to_string(),
+            inputs: input_views(&version.metadata, &version.input_values)?,
             enabled: definition.enabled,
             selected_instrument_ids: list_definition_instruments(
                 &state.db_pool,
@@ -120,24 +123,84 @@ pub(in crate::web::routes) async fn populate_indicators_tab(
         };
     } else {
         template.indicator_form.enabled = true;
-        template.indicator_form.input_values = "{}".to_string();
     }
     Ok(())
+}
+
+fn input_views(metadata: &Value, values: &Value) -> Result<Vec<IndicatorInputView>, AppError> {
+    let inputs = serde_json::from_value::<Vec<IndicatorInputMetadata>>(
+        metadata.get("inputs").cloned().unwrap_or_else(|| json!([])),
+    )?;
+    let values = values
+        .as_object()
+        .ok_or_else(|| AppError(anyhow::anyhow!("indicator input values are not an object")))?;
+    Ok(inputs
+        .into_iter()
+        .map(|input| {
+            let value = values.get(&input.title).unwrap_or(&input.default);
+            IndicatorInputView {
+                title: input.title,
+                group: input.group,
+                kind: input.kind,
+                value: value_to_form_string(value),
+                checked: value.as_bool().unwrap_or(false),
+                min_value: input
+                    .min_value
+                    .map_or_else(String::new, |value| value.to_string()),
+                max_value: input
+                    .max_value
+                    .map_or_else(String::new, |value| value.to_string()),
+                step: input
+                    .step
+                    .map_or_else(String::new, |value| value.to_string()),
+            }
+        })
+        .collect())
+}
+
+fn value_to_form_string(value: &Value) -> String {
+    value
+        .as_str()
+        .map_or_else(|| value.to_string(), ToString::to_string)
 }
 
 fn form_values(form: Vec<(String, String)>) -> Result<(IndicatorFormView, Value), String> {
     let mut view = IndicatorFormView {
         enabled: false,
-        input_values: "{}".to_string(),
         ..Default::default()
     };
+    let mut inputs = serde_json::Map::new();
     for (key, value) in form {
+        if let Some((kind, title)) = key
+            .strip_prefix("indicator-input-")
+            .and_then(|key| key.split_once('-'))
+        {
+            let value = match kind {
+                "bool" => Value::Bool(value == "true"),
+                "int" => value
+                    .parse::<i64>()
+                    .map(Value::from)
+                    .map_err(|_| format!("input '{title}' must be an integer"))?,
+                "float" => {
+                    let value = value
+                        .parse::<f64>()
+                        .map_err(|_| format!("input '{title}' must be a number"))?;
+                    if !value.is_finite() {
+                        return Err(format!("input '{title}' must be a finite number"));
+                    }
+                    json!(value)
+                }
+                "string" | "source" => Value::String(value),
+                _ => return Err("indicator input has an unsupported type".to_string()),
+            };
+            inputs.insert(title.to_string(), value);
+            continue;
+        }
         match key.as_str() {
             "name" => view.name = value,
             "description" => view.description = value,
             "timeframe" => view.timeframe = value,
             "source" => view.source = value,
-            "input_values" => view.input_values = value,
             "instrument_id" => view.selected_instrument_ids.push(value),
             "enabled" => view.enabled = true,
             _ => {}
@@ -147,9 +210,7 @@ fn form_values(form: Vec<(String, String)>) -> Result<(IndicatorFormView, Value)
         return Err("indicator name must not be blank".to_string());
     }
     parse_timeframe_seconds(&view.timeframe).map_err(|error| error.to_string())?;
-    let inputs = serde_json::from_str(&view.input_values)
-        .map_err(|_| "input values must be valid JSON".to_string())?;
-    Ok((view, inputs))
+    Ok((view, Value::Object(inputs)))
 }
 
 fn version(source: String, input_values: Value) -> Result<NewIndicatorVersion, String> {
@@ -202,7 +263,11 @@ pub(in crate::web::routes) async fn agents_create_indicator(
     )
     .await;
     match result {
-        Ok(_) => Ok(Redirect::to(&format!("/agents/{agent_key}/indicators")).into_response()),
+        Ok(definition) => Ok(Redirect::to(&format!(
+            "/agents/{agent_key}/indicators?edit={}",
+            definition.id
+        ))
+        .into_response()),
         Err(error) => Ok(
             Redirect::to(&format!("/agents/{agent_key}/indicators?error={error}")).into_response(),
         ),
@@ -251,7 +316,7 @@ pub(in crate::web::routes) async fn agents_update_indicator(
             }
         },
     };
-    match update_definition_with_new_version(&state.db_pool, &agent_key, definition_id, &update).await? { IndicatorUpdateResult::Updated => Ok(Redirect::to(&format!("/agents/{agent_key}/indicators")).into_response()), IndicatorUpdateResult::NotFound => Ok((StatusCode::NOT_FOUND, "indicator not found").into_response()), IndicatorUpdateResult::VersionConflict => Ok(Redirect::to(&format!("/agents/{agent_key}/indicators?edit={definition_id}&error=Indicator+changed%3B+reload+before+saving")).into_response()) }
+    match update_definition_with_new_version(&state.db_pool, &agent_key, definition_id, &update).await? { IndicatorUpdateResult::Updated => Ok(Redirect::to(&format!("/agents/{agent_key}/indicators?edit={definition_id}")).into_response()), IndicatorUpdateResult::NotFound => Ok((StatusCode::NOT_FOUND, "indicator not found").into_response()), IndicatorUpdateResult::VersionConflict => Ok(Redirect::to(&format!("/agents/{agent_key}/indicators?edit={definition_id}&error=Indicator+changed%3B+reload+before+saving")).into_response()) }
 }
 
 pub(in crate::web::routes) async fn agents_delete_indicator(
@@ -292,16 +357,136 @@ pub(in crate::web::routes) async fn agents_indicator_chart_data(
     else {
         return Ok((StatusCode::NOT_FOUND, "no successful indicator run").into_response());
     };
+    let Some(definition) = get_definition(&state.db_pool, &agent_key, query.indicator_id).await?
+    else {
+        return Ok((StatusCode::NOT_FOUND, "indicator not found").into_response());
+    };
+    let version = get_version(
+        &state.db_pool,
+        &agent_key,
+        query.indicator_id,
+        run.indicator_version_id,
+    )
+    .await?
+    .ok_or_else(|| AppError(anyhow::anyhow!("indicator run version not found")))?;
+    let overlay = version
+        .metadata
+        .get("indicator")
+        .and_then(|metadata| metadata.get("overlay"))
+        .and_then(Value::as_bool)
+        .ok_or_else(|| AppError(anyhow::anyhow!("indicator version has invalid metadata")))?;
     let bars = query
         .bars
         .unwrap_or(MAX_CHART_BARS)
         .clamp(1, MAX_CHART_BARS);
-    let candles = run
-        .candle_data
-        .unwrap_or_else(|| json!([]))
-        .as_array()
-        .cloned()
-        .unwrap_or_default();
-    let candles = candles.into_iter().rev().take(bars).collect::<Vec<_>>().into_iter().rev().map(|candle| json!({"time": candle["opened_at"].as_str().and_then(|value| chrono::DateTime::parse_from_rfc3339(value).ok()).map(|value| value.timestamp()).unwrap_or_default(), "open": candle["open"], "high": candle["high"], "low": candle["low"], "close": candle["close"]})).collect::<Vec<_>>();
-    Ok(axum::Json(json!({"run": {"id": run.id, "version_id": run.indicator_version_id, "scheduled_for": run.scheduled_for}, "candles": candles, "plots": run.plot_data.unwrap_or_else(|| json!({}))})).into_response())
+    let candles = serde_json::from_value::<Vec<crate::indicators::model::Candle>>(
+        run.candle_data.unwrap_or_else(|| json!([])),
+    )?;
+    let candles = candles
+        .into_iter()
+        .rev()
+        .take(bars)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .collect::<Vec<_>>();
+    let plots = run
+        .plot_data
+        .unwrap_or_else(|| json!({}))
+        .as_object()
+        .ok_or_else(|| AppError(anyhow::anyhow!("indicator run has invalid plot data")))?
+        .iter()
+        .map(|(title, values)| {
+            let values = values
+                .as_array()
+                .ok_or_else(|| AppError(anyhow::anyhow!("indicator plot has invalid values")))?
+                .iter()
+                .rev()
+                .take(bars)
+                .collect::<Vec<_>>()
+                .into_iter()
+                .rev()
+                .zip(&candles)
+                .filter_map(|(value, candle)| {
+                    value
+                        .as_f64()
+                        .map(|value| json!({"time": candle.opened_at.timestamp(), "value": value}))
+                })
+                .collect::<Vec<_>>();
+            Ok(json!({"title": title, "values": values}))
+        })
+        .collect::<Result<Vec<_>, AppError>>()?;
+    let candles = candles
+        .into_iter()
+        .map(|candle| -> Result<Value, AppError> {
+            Ok(json!({
+                "time": candle.opened_at.timestamp(),
+                "open": candle.open.to_f64().ok_or_else(|| AppError(anyhow::anyhow!("candle open is outside chart range")))?,
+                "high": candle.high.to_f64().ok_or_else(|| AppError(anyhow::anyhow!("candle high is outside chart range")))?,
+                "low": candle.low.to_f64().ok_or_else(|| AppError(anyhow::anyhow!("candle low is outside chart range")))?,
+                "close": candle.close.to_f64().ok_or_else(|| AppError(anyhow::anyhow!("candle close is outside chart range")))?,
+            }))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(axum::Json(json!({
+        "indicator": {"id": definition.id, "name": definition.name, "overlay": overlay},
+        "run": {"id": run.id, "version": version.version_number, "scheduled_for": run.scheduled_for},
+        "candles": candles,
+        "plots": plots,
+    }))
+    .into_response())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn input_views_preserve_validated_metadata_and_saved_values() {
+        let views = input_views(
+            &json!({"inputs": [{
+                "kind": "int",
+                "title": "Length",
+                "group": "EMA",
+                "default": 20,
+                "min_value": 1.0,
+                "max_value": 100.0,
+                "step": 1.0
+            }]}),
+            &json!({"Length": 10}),
+        )
+        .expect("build views");
+
+        assert_eq!(views.len(), 1);
+        assert_eq!(views[0].title, "Length");
+        assert_eq!(views[0].value, "10");
+        assert_eq!(views[0].min_value, "1");
+        assert_eq!(views[0].max_value, "100");
+    }
+
+    #[test]
+    fn form_values_parses_typed_indicator_inputs() {
+        let (_, inputs) = form_values(vec![
+            ("name".to_string(), "EMA".to_string()),
+            ("timeframe".to_string(), "1h".to_string()),
+            ("source".to_string(), "indicator(\"EMA\")".to_string()),
+            ("indicator-input-int-Length".to_string(), "20".to_string()),
+            (
+                "indicator-input-float-Multiplier".to_string(),
+                "2.5".to_string(),
+            ),
+            ("indicator-input-bool-Show".to_string(), "false".to_string()),
+            ("indicator-input-bool-Show".to_string(), "true".to_string()),
+            (
+                "indicator-input-source-Price".to_string(),
+                "close".to_string(),
+            ),
+        ])
+        .expect("parse form");
+
+        assert_eq!(
+            inputs,
+            json!({"Length": 20, "Multiplier": 2.5, "Show": true, "Price": "close"})
+        );
+    }
 }

@@ -5,6 +5,8 @@ mod index;
 #[cfg(test)]
 mod index_tests;
 mod indicators;
+#[cfg(test)]
+mod indicators_tests;
 mod live_stream;
 #[cfg(test)]
 mod live_stream_tests;

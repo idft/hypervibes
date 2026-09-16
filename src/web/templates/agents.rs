@@ -585,9 +585,21 @@ pub struct IndicatorFormView {
     pub description: String,
     pub timeframe: String,
     pub source: String,
-    pub input_values: String,
+    pub inputs: Vec<IndicatorInputView>,
     pub enabled: bool,
     pub selected_instrument_ids: Vec<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct IndicatorInputView {
+    pub title: String,
+    pub group: String,
+    pub kind: String,
+    pub value: String,
+    pub checked: bool,
+    pub min_value: String,
+    pub max_value: String,
+    pub step: String,
 }
 
 #[derive(Debug, Clone)]
