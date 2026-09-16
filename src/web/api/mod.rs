@@ -52,6 +52,7 @@ pub fn router(state: Arc<AppState>) -> Router {
         )
         .route("/memories/{id}", get(get_memory_by_id))
         .route("/notifications", post(create_notification))
+        .route("/analysis-instruments", get(list_analysis_instruments))
         .route("/indicators", post(create_indicator).get(list_indicators))
         .route(
             "/indicators/{indicator_id}",

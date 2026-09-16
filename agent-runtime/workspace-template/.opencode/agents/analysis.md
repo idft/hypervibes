@@ -20,6 +20,7 @@ permission:
   hypervibes_get_account: allow
   hypervibes_list_memories: allow
   hypervibes_write_memory: allow
+  hypervibes_list_analysis_instruments: allow
   hypervibes_list_indicators: allow
   hypervibes_get_indicator: allow
   hypervibes_get_indicator_results: allow

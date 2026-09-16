@@ -565,6 +565,7 @@ fn permission_rules_for(
         "hypervibes_get_account",
         "hypervibes_list_strategy_prompts",
         "hypervibes_get_strategy_prompt",
+        "hypervibes_list_analysis_instruments",
         "hypervibes_list_indicators",
         "hypervibes_get_indicator",
         "hypervibes_get_indicator_results",
@@ -661,6 +662,10 @@ mod tests {
             Some("allow")
         );
         assert_eq!(action_for("hypervibes_get_strategy_prompt"), Some("allow"));
+        assert_eq!(
+            action_for("hypervibes_list_analysis_instruments"),
+            Some("allow")
+        );
         assert_eq!(action_for("hypervibes_send_notification"), Some("deny"));
         assert_eq!(action_for("hypervibes_update_strategy_prompt"), Some("ask"));
     }

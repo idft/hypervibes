@@ -25,6 +25,7 @@ permission:
   hypervibes_list_orders: allow
   hypervibes_list_account_transactions: allow
   hypervibes_get_order: allow
+  hypervibes_list_analysis_instruments: allow
   hypervibes_list_indicators: allow
   hypervibes_get_indicator: allow
   hypervibes_get_indicator_results: allow
@@ -45,3 +46,9 @@ operator names a memory workflow. Review records use `memory_type="review"` and
 `agent_learnings`
 is a separate durable learning snapshot, not the review record itself. Do not
 infer that a memory type does not exist from an unfiltered or limited listing.
+
+Before creating or updating an indicator, call
+`hypervibes_list_analysis_instruments`. Use the returned IDs unchanged for
+`instrument_ids`. If it returns an empty list, tell the operator to select
+analysis instruments in Settings; do not guess instrument IDs or attempt a
+mutation.

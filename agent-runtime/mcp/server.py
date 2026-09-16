@@ -325,6 +325,20 @@ def submit_prompt_revision(
 
 
 @mcp.tool()
+def list_analysis_instruments() -> list[str]:
+    """List the selected active analysis instrument IDs for this agent.
+
+    Call this before creating or updating an indicator and pass returned IDs
+    unchanged as instrument_ids. If the list is empty, ask the operator to
+    select analysis instruments in Settings; do not guess IDs or create.
+    """
+    result = _request("GET", "/api/v1/analysis-instruments")
+    if not isinstance(result, list) or not all(isinstance(value, str) for value in result):
+        raise RuntimeError("HyperVibes analysis instruments returned unexpected shape")
+    return result
+
+
+@mcp.tool()
 def list_indicators() -> list[dict[str, Any]]:
     """List this agent's indicator definitions and their latest run status."""
     result = _request("GET", "/api/v1/indicators")
@@ -376,7 +390,11 @@ def create_indicator(
     description: str = "",
     input_values: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Create a validated server-side PineScript indicator."""
+    """Create a validated server-side PineScript indicator.
+
+    First call list_analysis_instruments and use its returned IDs unchanged.
+    Input values are keyed by each Pine input's title, not its variable name.
+    """
     if not isinstance(description, str):
         raise ValueError("description must be a string")
     body = _require_indicator_fields(name, timeframe, instrument_ids, source, input_values)
@@ -399,7 +417,11 @@ def update_indicator(
     description: str = "",
     input_values: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Create and activate a new immutable PineScript indicator version."""
+    """Create and activate a new immutable PineScript indicator version.
+
+    First call list_analysis_instruments and use its returned IDs unchanged.
+    Input values are keyed by each Pine input's title, not its variable name.
+    """
     if not isinstance(enabled, bool):
         raise ValueError("enabled must be a boolean")
     if not isinstance(description, str):

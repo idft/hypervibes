@@ -115,6 +115,12 @@ class HyperVibesMcpServerTests(unittest.TestCase):
                 "list_strategy_prompts",
                 "get_strategy_prompt",
                 "update_strategy_prompt",
+                "list_analysis_instruments",
+                "list_indicators",
+                "get_indicator",
+                "get_indicator_results",
+                "create_indicator",
+                "update_indicator",
                 "get_trading_context",
                 "get_memory_detail",
                 "list_memories",
@@ -215,6 +221,13 @@ class HyperVibesMcpServerTests(unittest.TestCase):
                 },
             ],
         )
+
+    def test_list_analysis_instruments_uses_the_discovery_endpoint(self) -> None:
+        with mock.patch.object(self.server, "_request", return_value=["BTC", "ETH"]) as request:
+            result = self.server.list_analysis_instruments()
+
+        self.assertEqual(result, ["BTC", "ETH"])
+        request.assert_called_once_with("GET", "/api/v1/analysis-instruments")
 
     def test_strategy_prompt_tools_validate_inputs_and_response_shape(self) -> None:
         with self.assertRaises(ValueError):

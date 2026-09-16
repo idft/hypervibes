@@ -29,6 +29,7 @@ private key.
 | `hypervibes_cancel_orders` | Trading and permitted Chat |
 | `hypervibes_cancel_all_orders` | Trading and permitted Chat |
 | `hypervibes_send_notification` | Trading by default |
+| `hypervibes_list_analysis_instruments` | Analysis, Review, and Chat |
 | `hypervibes_list_indicators` | Analysis, Review, and Chat |
 | `hypervibes_get_indicator` | Analysis, Review, and Chat |
 | `hypervibes_get_indicator_results` | Analysis, Review, and Chat |
@@ -39,6 +40,11 @@ private key.
 notification. Trading enables it by default; other scheduled roles and Chat are
 denied by default. Notification provenance and capability schema derive from the
 authenticated run or conversation, never model-supplied data.
+
+Before creating or updating an indicator, callers must obtain target IDs from
+`hypervibes_list_analysis_instruments` and pass them unchanged. An empty result
+means the operator must select analysis instruments in Settings; callers must
+not guess IDs or issue a mutation.
 
 ## Memory tools
 

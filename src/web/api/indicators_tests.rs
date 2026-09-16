@@ -67,6 +67,18 @@ async fn indicators_create_and_reads_are_scoped_to_the_authenticated_agent() {
 }
 
 #[tokio::test]
+async fn analysis_instruments_lists_only_selected_active_targets() {
+    let state = test_state().await;
+    let (agent_key, api_key) = seed_agent(&state, "analysis-instruments").await;
+    seed_instrument(&state, "ETH", true).await;
+    select_instruments(&state, &agent_key, &["ETH"]).await;
+
+    let (status, instruments) = get_json_response(&state, &api_key, "/analysis-instruments").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(instruments, json!(["ETH"]));
+}
+
+#[tokio::test]
 async fn indicators_reject_invalid_source_before_persisting_a_definition() {
     let state = test_state().await;
     let (_agent_key, api_key) = seed_agent(&state, "indicators-invalid").await;

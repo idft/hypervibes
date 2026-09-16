@@ -14,6 +14,7 @@ permission:
   hypervibes_list_strategy_prompts: allow
   hypervibes_get_strategy_prompt: allow
   hypervibes_submit_prompt_revision: allow
+  hypervibes_list_analysis_instruments: allow
   hypervibes_list_indicators: allow
   hypervibes_get_indicator: allow
   hypervibes_get_indicator_results: allow
@@ -44,6 +45,11 @@ Never revise Review prompts.
 When evidence justifies it, inspect indicator results and create an indicator or
 new immutable version. Explain the evidence and revision rationale in the review
 memory; never encode trading policy into Pine source.
+
+Before creating or updating an indicator, call
+`hypervibes_list_analysis_instruments` and use the returned IDs unchanged for
+`instrument_ids`. Do not guess target IDs; an empty result requires the operator
+to select analysis instruments in Settings.
 
 Do not edit `data/`, `scratch/`, or runtime files. Express any improvement
 recommendation in the review content.

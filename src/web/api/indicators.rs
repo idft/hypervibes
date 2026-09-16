@@ -9,7 +9,7 @@ use serde_json::{Value, json};
 use uuid::Uuid;
 
 use crate::{
-    agents::AuthenticatedAgent,
+    agents::{AuthenticatedAgent, store::list_agent_analysis_instrument_ids},
     harness::{model::RunApiScope, timeframe::parse_timeframe_seconds},
     indicators::{
         model::{IndicatorDefinition, IndicatorRun, IndicatorVersion},
@@ -150,6 +150,18 @@ async fn detail_response(
         active_version,
         instrument_ids,
     })
+}
+
+/// `GET /api/v1/analysis-instruments`
+pub(super) async fn list_analysis_instruments(
+    State(state): State<Arc<AppState>>,
+    agent: AuthenticatedAgent,
+) -> Result<Json<Vec<String>>, ApiError> {
+    require_scope(&agent, RunApiScope::IndicatorRead)?;
+    let instrument_ids = list_agent_analysis_instrument_ids(&state.db_pool, &agent.agent_key)
+        .await
+        .map_err(ApiError::Internal)?;
+    Ok(Json(instrument_ids))
 }
 
 /// `GET /api/v1/indicators`
