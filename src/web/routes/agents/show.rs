@@ -88,6 +88,8 @@ pub(in crate::web::routes) struct AgentIndicatorsQuery {
     pub edit: Option<uuid::Uuid>,
     #[serde(default)]
     pub error: Option<String>,
+    #[serde(skip)]
+    pub page: crate::web::templates::IndicatorPage,
 }
 #[derive(Debug, Clone, Default, Deserialize)]
 pub(in crate::web::routes) struct AgentOperationQuery {

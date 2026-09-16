@@ -116,6 +116,18 @@ pub fn router(state: Arc<AppState>) -> Router {
             get(agents_show_indicators).post(agents_create_indicator),
         )
         .route(
+            "/agents/{agent_key}/indicators/new",
+            get(agents_new_indicator),
+        )
+        .route(
+            "/agents/{agent_key}/indicators/chart",
+            get(agents_show_indicator_chart),
+        )
+        .route(
+            "/agents/{agent_key}/indicators/{indicator_id}/edit",
+            get(agents_edit_indicator),
+        )
+        .route(
             "/agents/{agent_key}/indicators/chart-data",
             get(agents_indicator_chart_data),
         )

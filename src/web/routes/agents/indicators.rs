@@ -29,7 +29,7 @@ use crate::{
         error::AppError,
         templates::{
             AgentShowTab, AgentsShowPageTemplate, IndicatorDefinitionView, IndicatorFormView,
-            IndicatorInputView,
+            IndicatorInputView, IndicatorPage,
         },
     },
 };
@@ -56,6 +56,61 @@ pub(in crate::web::routes) async fn agents_show_indicators(
     .await
 }
 
+pub(in crate::web::routes) async fn agents_new_indicator(
+    State(state): State<Arc<AppState>>,
+    user: AuthenticatedUser,
+    Path(agent_key): Path<String>,
+    Query(query): Query<AgentIndicatorsQuery>,
+) -> Result<Response, AppError> {
+    render_indicator_page(&state, &user, &agent_key, IndicatorPage::Editor, query).await
+}
+
+pub(in crate::web::routes) async fn agents_edit_indicator(
+    State(state): State<Arc<AppState>>,
+    user: AuthenticatedUser,
+    Path((agent_key, indicator_id)): Path<(String, Uuid)>,
+    Query(mut query): Query<AgentIndicatorsQuery>,
+) -> Result<Response, AppError> {
+    query.edit = Some(indicator_id);
+    render_indicator_page(&state, &user, &agent_key, IndicatorPage::Editor, query).await
+}
+
+pub(in crate::web::routes) async fn agents_show_indicator_chart(
+    State(state): State<Arc<AppState>>,
+    user: AuthenticatedUser,
+    Path(agent_key): Path<String>,
+) -> Result<Response, AppError> {
+    render_indicator_page(
+        &state,
+        &user,
+        &agent_key,
+        IndicatorPage::Chart,
+        AgentIndicatorsQuery::default(),
+    )
+    .await
+}
+
+async fn render_indicator_page(
+    state: &Arc<AppState>,
+    user: &AuthenticatedUser,
+    agent_key: &str,
+    page: IndicatorPage,
+    mut query: AgentIndicatorsQuery,
+) -> Result<Response, AppError> {
+    query.page = page;
+    render_agent_show_page(
+        state,
+        user,
+        agent_key,
+        AgentShowTab::Indicators,
+        AgentShowQueries {
+            indicators: Some(query),
+            ..Default::default()
+        },
+    )
+    .await
+}
+
 pub(in crate::web::routes) async fn populate_indicators_tab(
     state: &Arc<AppState>,
     agent: &AgentDetailRow,
@@ -65,6 +120,7 @@ pub(in crate::web::routes) async fn populate_indicators_tab(
     template.analysis_instrument_options =
         list_agent_analysis_instrument_options(&state.db_pool, &agent.agent_key).await?;
     template.analysis_instrument_options_loaded = true;
+    template.indicator_page = query.page;
     template.indicator_errors = query.error.into_iter().collect();
     for definition in list_definitions(&state.db_pool, &agent.agent_key).await? {
         let version = get_active_version(&state.db_pool, &agent.agent_key, definition.id)
@@ -123,6 +179,12 @@ pub(in crate::web::routes) async fn populate_indicators_tab(
         };
     } else {
         template.indicator_form.enabled = true;
+        template.indicator_form.selected_instrument_ids = template
+            .analysis_instrument_options
+            .iter()
+            .filter(|option| option.selected)
+            .map(|option| option.instrument_id.clone())
+            .collect();
     }
     Ok(())
 }
@@ -236,7 +298,7 @@ pub(in crate::web::routes) async fn agents_create_indicator(
         Ok(value) => value,
         Err(error) => {
             return Ok(
-                Redirect::to(&format!("/agents/{agent_key}/indicators?error={error}"))
+                Redirect::to(&format!("/agents/{agent_key}/indicators/new?error={error}"))
                     .into_response(),
             );
         }
@@ -254,7 +316,7 @@ pub(in crate::web::routes) async fn agents_create_indicator(
                 Ok(value) => value,
                 Err(error) => {
                     return Ok(Redirect::to(&format!(
-                        "/agents/{agent_key}/indicators?error={error}"
+                        "/agents/{agent_key}/indicators/new?error={error}"
                     ))
                     .into_response());
                 }
@@ -264,13 +326,14 @@ pub(in crate::web::routes) async fn agents_create_indicator(
     .await;
     match result {
         Ok(definition) => Ok(Redirect::to(&format!(
-            "/agents/{agent_key}/indicators?edit={}",
+            "/agents/{agent_key}/indicators/{}/edit",
             definition.id
         ))
         .into_response()),
-        Err(error) => Ok(
-            Redirect::to(&format!("/agents/{agent_key}/indicators?error={error}")).into_response(),
-        ),
+        Err(error) => Ok(Redirect::to(&format!(
+            "/agents/{agent_key}/indicators/new?error={error}"
+        ))
+        .into_response()),
     }
 }
 
@@ -288,14 +351,14 @@ pub(in crate::web::routes) async fn agents_update_indicator(
         Ok(value) => value,
         Err(error) => {
             return Ok(Redirect::to(&format!(
-                "/agents/{agent_key}/indicators?edit={definition_id}&error={error}"
+                "/agents/{agent_key}/indicators/{definition_id}/edit?error={error}"
             ))
             .into_response());
         }
     };
     let Some(expected_active_version_id) = expected else {
         return Ok(Redirect::to(&format!(
-            "/agents/{agent_key}/indicators?edit={definition_id}&error=Missing+active+version"
+            "/agents/{agent_key}/indicators/{definition_id}/edit?error=Missing+active+version"
         ))
         .into_response());
     };
@@ -310,13 +373,13 @@ pub(in crate::web::routes) async fn agents_update_indicator(
             Ok(value) => value,
             Err(error) => {
                 return Ok(Redirect::to(&format!(
-                    "/agents/{agent_key}/indicators?edit={definition_id}&error={error}"
+                    "/agents/{agent_key}/indicators/{definition_id}/edit?error={error}"
                 ))
                 .into_response());
             }
         },
     };
-    match update_definition_with_new_version(&state.db_pool, &agent_key, definition_id, &update).await? { IndicatorUpdateResult::Updated => Ok(Redirect::to(&format!("/agents/{agent_key}/indicators?edit={definition_id}")).into_response()), IndicatorUpdateResult::NotFound => Ok((StatusCode::NOT_FOUND, "indicator not found").into_response()), IndicatorUpdateResult::VersionConflict => Ok(Redirect::to(&format!("/agents/{agent_key}/indicators?edit={definition_id}&error=Indicator+changed%3B+reload+before+saving")).into_response()) }
+    match update_definition_with_new_version(&state.db_pool, &agent_key, definition_id, &update).await? { IndicatorUpdateResult::Updated => Ok(Redirect::to(&format!("/agents/{agent_key}/indicators/{definition_id}/edit")).into_response()), IndicatorUpdateResult::NotFound => Ok((StatusCode::NOT_FOUND, "indicator not found").into_response()), IndicatorUpdateResult::VersionConflict => Ok(Redirect::to(&format!("/agents/{agent_key}/indicators/{definition_id}/edit?error=Indicator+changed%3B+reload+before+saving")).into_response()) }
 }
 
 pub(in crate::web::routes) async fn agents_delete_indicator(

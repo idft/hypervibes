@@ -58,6 +58,14 @@ pub enum AgentShowTab {
     Settings,
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum IndicatorPage {
+    #[default]
+    List,
+    Editor,
+    Chart,
+}
+
 impl AgentShowTab {
     fn path(self, agent_key: &str) -> String {
         match self {
@@ -446,6 +454,7 @@ pub struct AgentsShowPageTemplate {
     pub analysis_instrument_options_loaded: bool,
     pub has_selected_analysis_instruments: bool,
     pub indicators: Vec<IndicatorDefinitionView>,
+    pub indicator_page: IndicatorPage,
     pub indicator_form: IndicatorFormView,
     pub indicator_errors: Vec<String>,
     pub setup_checklist: AgentSetupChecklistView,
@@ -514,6 +523,7 @@ impl AgentsShowPageTemplate {
             analysis_instrument_options_loaded: false,
             has_selected_analysis_instruments: false,
             indicators: Vec::new(),
+            indicator_page: IndicatorPage::List,
             indicator_form: IndicatorFormView::default(),
             indicator_errors: Vec::new(),
             setup_checklist: AgentSetupChecklistView {

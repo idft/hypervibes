@@ -109,7 +109,7 @@ async fn seed_succeeded_run(
 }
 
 #[tokio::test]
-async fn indicators_tab_renders_the_editor_and_empty_chart_state() {
+async fn indicators_tab_renders_the_indicator_list() {
     let state = test_state().await;
     let (agent_key, _) = insert_test_agent(&state).await.expect("insert agent");
 
@@ -126,8 +126,54 @@ async fn indicators_tab_renders_the_editor_and_empty_chart_state() {
     assert_eq!(response.status(), StatusCode::OK);
     let body = response_text(response).await;
     assert!(body.contains("Indicators"));
+    assert!(body.contains("New indicator"));
+    assert!(body.contains(&format!("/agents/{agent_key}/indicators/new")));
+    assert!(body.contains(&format!("/agents/{agent_key}/indicators/chart")));
+    assert!(!body.contains("Pine source"));
+}
+
+#[tokio::test]
+async fn new_indicator_page_renders_the_editor_and_target_selector() {
+    let state = test_state().await;
+    let (agent_key, _) = insert_test_agent(&state).await.expect("insert agent");
+
+    let response = router(state)
+        .oneshot(
+            Request::builder()
+                .uri(format!("/agents/{agent_key}/indicators/new"))
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response_text(response).await;
     assert!(body.contains("Pine source"));
+    assert!(body.contains("Select indicator instruments"));
+    assert!(body.contains("data-agent-instrument-selector=\"indicator\""));
+}
+
+#[tokio::test]
+async fn indicator_chart_is_a_dedicated_page() {
+    let state = test_state().await;
+    let (agent_key, _) = insert_test_agent(&state).await.expect("insert agent");
+
+    let response = router(state)
+        .oneshot(
+            Request::builder()
+                .uri(format!("/agents/{agent_key}/indicators/chart"))
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response_text(response).await;
+    assert!(body.contains("Indicator chart"));
     assert!(body.contains("Create an indicator to view its completed runs on a chart."));
+    assert!(!body.contains("Pine source"));
 }
 
 #[tokio::test]
