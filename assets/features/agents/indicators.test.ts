@@ -47,13 +47,11 @@ describe("indicators", () => {
     expect(document.querySelector("[data-indicator-import-error]")?.textContent).toBe("");
   });
 
-  it("does not fetch chart data until both selections have values", () => {
+  it("does not fetch chart data without an indicator and instrument", () => {
     const fetch = vi.fn();
     vi.stubGlobal("fetch", fetch);
     document.body.innerHTML = `
       <section data-agent-indicators>
-        <select data-indicator-chart-definition><option value=""></option></select>
-        <select data-indicator-chart-instrument><option value="BTC">BTC</option></select>
         <div data-indicator-chart data-agent-key="agent"></div>
       </section>
     `;
@@ -61,23 +59,39 @@ describe("indicators", () => {
     initIndicators();
 
     expect(fetch).not.toHaveBeenCalled();
-    expect(document.querySelector("[data-indicator-chart]")?.textContent).toContain("Select an indicator");
+    expect(document.querySelector("[data-indicator-chart]")?.textContent).toContain("unavailable");
   });
 
   it("renders an empty state when no successful run is available", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: false }));
     document.body.innerHTML = `
       <section data-agent-indicators>
-        <select data-indicator-chart-definition><option value="indicator-id">EMA</option></select>
-        <select data-indicator-chart-instrument><option value="BTC">BTC</option></select>
-        <div data-indicator-chart data-agent-key="agent"></div>
+        <div data-indicator-chart data-agent-key="agent" data-indicator-id="indicator-id" data-instrument-id="BTC"></div>
       </section>
     `;
 
     initIndicators();
     await Promise.resolve();
 
-    expect(document.querySelector("[data-indicator-chart]")?.textContent).toContain("No successful run");
+    expect(document.querySelector("[data-indicator-chart]")?.textContent).toContain("No successful BTC run");
+  });
+
+  it("loads each instrument chart independently", async () => {
+    const fetch = vi.fn().mockResolvedValue({ ok: false });
+    vi.stubGlobal("fetch", fetch);
+    document.body.innerHTML = `
+      <section data-agent-indicators>
+        <div data-indicator-chart data-agent-key="agent" data-indicator-id="indicator-id" data-instrument-id="BTC"></div>
+        <div data-indicator-chart data-agent-key="agent" data-indicator-id="indicator-id" data-instrument-id="ETH"></div>
+      </section>
+    `;
+
+    initIndicators();
+    await Promise.resolve();
+
+    expect(fetch).toHaveBeenCalledTimes(2);
+    expect(fetch).toHaveBeenCalledWith(expect.stringContaining("instrument_id=BTC"));
+    expect(fetch).toHaveBeenCalledWith(expect.stringContaining("instrument_id=ETH"));
   });
 
   it("renders non-overlay plots in a dedicated pane and cleans up before an HTMX swap", async () => {
@@ -97,9 +111,7 @@ describe("indicators", () => {
     }));
     document.body.innerHTML = `
       <section data-agent-indicators>
-        <select data-indicator-chart-definition><option value="indicator-id">RSI</option></select>
-        <select data-indicator-chart-instrument><option value="BTC">BTC</option></select>
-        <div data-indicator-chart data-agent-key="agent"></div>
+        <div data-indicator-chart data-agent-key="agent" data-indicator-id="indicator-id" data-instrument-id="BTC"></div>
       </section>
     `;
 

@@ -26,12 +26,17 @@ use super::error::ApiError;
 /// inspecting the source run's sub-agent kind. Analysis may write any valid
 /// non-reserved type; Trading owns `trading_decision`; Review owns `review`
 /// and `agent_learnings`.
-async fn required_memory_type_for_credential(
+enum MemoryTypePolicy {
+    NonReserved,
+    Only(&'static [&'static str]),
+}
+
+async fn memory_type_policy_for_credential(
     state: &AppState,
     agent: &AuthenticatedAgent,
-) -> Result<Option<String>, ApiError> {
+) -> Result<MemoryTypePolicy, ApiError> {
     let Some((run_id, _)) = agent.run_provenance() else {
-        return Ok(None);
+        return Ok(MemoryTypePolicy::NonReserved);
     };
     let sub_agent_kind: Option<String> = sqlx::query_scalar(
         "SELECT sub_agent_kind FROM harness_sub_agent_runs WHERE id = $1 AND agent_key = $2",
@@ -41,30 +46,33 @@ async fn required_memory_type_for_credential(
     .fetch_optional(&state.db_pool)
     .await?;
     match sub_agent_kind.as_deref() {
-        Some(kind) if kind == SUB_AGENT_KIND_TRADING => Ok(Some("trading_decision".to_string())),
-        Some(kind) if kind == SUB_AGENT_KIND_ANALYSIS => Ok(None),
-        Some("review") => Ok(None),
+        Some(kind) if kind == SUB_AGENT_KIND_TRADING => {
+            Ok(MemoryTypePolicy::Only(&["trading_decision"]))
+        }
+        Some(kind) if kind == SUB_AGENT_KIND_ANALYSIS => Ok(MemoryTypePolicy::NonReserved),
+        Some("review") => Ok(MemoryTypePolicy::Only(&["review", "agent_learnings"])),
         _ => Err(ApiError::Forbidden("this run role cannot write memories")),
     }
 }
 
-fn check_reserved_memory_type(
-    input: &CreateMemory,
-    required_type: Option<&String>,
-) -> Result<(), ApiError> {
-    let requested = input.memory_type.trim();
-    if let Some(required) = required_type {
-        if requested != required {
+fn check_memory_type(requested: &str, policy: MemoryTypePolicy) -> Result<(), ApiError> {
+    match policy {
+        MemoryTypePolicy::Only(allowed) if !allowed.contains(&requested) => {
+            let allowed = allowed
+                .iter()
+                .map(|memory_type| format!("`{memory_type}`"))
+                .collect::<Vec<_>>()
+                .join(" or ");
             return Err(ApiError::Validation(format!(
-                "this run role may only write `{required}` memories"
+                "this run role may only write {allowed} memories"
             )));
         }
-        return Ok(());
-    }
-    if RESERVED_MEMORY_TYPES.contains(&requested) {
-        return Err(ApiError::Validation(format!(
-            "memory type `{requested}` is reserved for the framework"
-        )));
+        MemoryTypePolicy::NonReserved if RESERVED_MEMORY_TYPES.contains(&requested) => {
+            return Err(ApiError::Validation(format!(
+                "memory type `{requested}` is reserved for the framework"
+            )));
+        }
+        _ => {}
     }
     Ok(())
 }
@@ -79,8 +87,8 @@ pub(super) async fn create_memory(
     if let Err(errors) = input.validate() {
         return Err(ApiError::Validation(errors.join(" ")));
     }
-    let required_type = required_memory_type_for_credential(&state, &agent).await?;
-    check_reserved_memory_type(&input, required_type.as_ref())?;
+    let policy = memory_type_policy_for_credential(&state, &agent).await?;
+    check_memory_type(input.memory_type.trim(), policy)?;
 
     // Provenance is stamped from the authenticated run credential; request
     // metadata can never supply or override it.
@@ -466,5 +474,31 @@ impl LatestMemoryResponse {
             metadata: record.metadata,
             expires_at,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{MemoryTypePolicy, check_memory_type};
+
+    #[test]
+    fn review_policy_allows_only_framework_owned_review_records() {
+        for memory_type in ["review", "agent_learnings"] {
+            assert!(
+                check_memory_type(
+                    memory_type,
+                    MemoryTypePolicy::Only(&["review", "agent_learnings"])
+                )
+                .is_ok()
+            );
+        }
+
+        assert!(
+            check_memory_type(
+                "agent_learning",
+                MemoryTypePolicy::Only(&["review", "agent_learnings"])
+            )
+            .is_err()
+        );
     }
 }

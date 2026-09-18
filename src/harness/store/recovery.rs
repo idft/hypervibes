@@ -15,6 +15,44 @@ pub(crate) const ORPHANED_QUEUED_RUN_SUMMARY: &str =
 pub(crate) const ORPHANED_RUNNING_RUN_SUMMARY: &str =
     "running run orphaned by app restart after timeout";
 
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub struct RunningRunSessionRecoveryCandidate {
+    pub run_id: i64,
+    pub agent_key: String,
+    pub backend_run_ref: String,
+    pub command_dispatched: bool,
+}
+
+/// List running jobs old enough that an OpenCode status probe is expected to
+/// know their session. A missing session is terminal only after this short
+/// propagation grace; transport errors remain retryable by the scheduler.
+pub async fn list_running_run_session_recovery_candidates(
+    pool: &PgPool,
+    created_before: DateTime<Utc>,
+) -> Result<Vec<RunningRunSessionRecoveryCandidate>> {
+    query_as(
+        "SELECT runs.id AS run_id,
+                runs.agent_key,
+                runs.backend_run_ref,
+                EXISTS (
+                    SELECT 1
+                      FROM opencode.commands AS commands
+                     WHERE commands.session_id = runs.backend_run_ref
+                ) AS command_dispatched
+           FROM harness_sub_agent_runs AS runs
+          WHERE runs.status = $1
+            AND runs.backend_run_ref IS NOT NULL
+            AND COALESCE(runs.started_at, runs.created_at) <= $2
+          ORDER BY runs.created_at ASC, runs.id ASC
+          LIMIT 100",
+    )
+    .bind(RUN_STATUS_RUNNING)
+    .bind(created_before)
+    .fetch_all(pool)
+    .await
+    .context("failed to list running OpenCode sessions for recovery")
+}
+
 pub(crate) fn active_sub_agent_kinds_for_lane(sub_agent_kind: &str) -> &'static [&'static str] {
     match sub_agent_kind {
         SUB_AGENT_KIND_TRADING => &[SUB_AGENT_KIND_TRADING],

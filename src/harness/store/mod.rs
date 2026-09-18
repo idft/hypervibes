@@ -12,7 +12,7 @@ mod workspace;
 pub use common::set_all_agent_sub_agents_enabled;
 pub(crate) use common::{ACTIVE_STATUSES, lock_agent_coordination_tx};
 #[allow(unused_imports)]
-pub use recovery::recover_inactive_runs_all;
+pub use recovery::{list_running_run_session_recovery_candidates, recover_inactive_runs_all};
 #[allow(unused_imports)]
 pub use runs::{
     QueuedRunForDispatch, QueuedSubAgentRun, count_agent_runs_for_kind, get_run,

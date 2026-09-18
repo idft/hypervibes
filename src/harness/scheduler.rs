@@ -28,13 +28,16 @@ use crate::{
     hyperliquid::live_state::{LiveAccountStore, live_agent_snapshot_for_dispatch},
     memory::get_latest_agent_memory_by_type,
     opencode::{
-        client::OpenCodeClient, workspace::OpenCodeWorkspaceRuntimeConfig,
+        client::{OpenCodeClient, SessionStatusKind},
+        workspace::OpenCodeWorkspaceRuntimeConfig,
         workspace_control_client::WorkspaceController,
     },
 };
 
 const SCHEDULER_POLL_INTERVAL: Duration = Duration::from_secs(10);
 const ORPHAN_RECOVERY_INTERVAL: Duration = Duration::from_secs(60);
+const SESSION_RECOVERY_PROPAGATION_GRACE: chrono::Duration = chrono::Duration::seconds(30);
+const MISSING_SESSION_RECOVERY_SUMMARY: &str = "OpenCode session missing during recovery";
 const ARTIFACT_GARBAGE_COLLECTION_LIMIT: i64 = 50;
 const ARTIFACT_DELETION_CLAIM_TIMEOUT: chrono::Duration = chrono::Duration::minutes(5);
 const DUE_SCHEDULE_LIMIT: i64 = 20;
@@ -431,6 +434,13 @@ impl HarnessScheduler {
                 "recovered inactive harness runs during periodic sweep"
             );
         }
+        let live_recovered = self.recover_live_opencode_sessions(now).await?;
+        if live_recovered > 0 {
+            info!(
+                recovered = live_recovered,
+                "recovered runs whose OpenCode sessions were terminal"
+            );
+        }
         let stale_before = now - chrono::Duration::minutes(2);
         let requeued =
             store::requeue_stale_provider_config_reload_tasks(&self.pool, stale_before).await?;
@@ -441,6 +451,75 @@ impl HarnessScheduler {
         self.collect_expired_run_workspace_artifacts(now).await?;
         self.last_orphan_recovery_at = Some(now);
         Ok(())
+    }
+
+    async fn recover_live_opencode_sessions(&self, now: chrono::DateTime<Utc>) -> Result<u64> {
+        let candidates = store::list_running_run_session_recovery_candidates(
+            &self.pool,
+            now - SESSION_RECOVERY_PROPAGATION_GRACE,
+        )
+        .await?;
+        let mut recovered = 0;
+
+        for candidate in candidates {
+            let workspace_container_path = format!(
+                "{}/runs/{}/{}/workspace",
+                self.container_workspaces_root.trim_end_matches('/'),
+                candidate.agent_key,
+                candidate.run_id
+            );
+            match self
+                .backend
+                .get_session_status_in_directory(
+                    self.opencode_client.base_url(),
+                    &candidate.backend_run_ref,
+                    Some(&workspace_container_path),
+                )
+                .await
+            {
+                Ok(Some(SessionStatusKind::Idle)) if candidate.command_dispatched => {
+                    if store::mark_run_succeeded(
+                        &self.pool,
+                        candidate.run_id,
+                        Some(&candidate.backend_run_ref),
+                    )
+                    .await?
+                    {
+                        recovered += 1;
+                    }
+                }
+                Ok(Some(SessionStatusKind::Idle)) => {
+                    warn!(
+                        run_id = candidate.run_id,
+                        session_id = %candidate.backend_run_ref,
+                        "OpenCode session is idle before its command was persisted; leaving run for timeout recovery"
+                    );
+                }
+                Ok(Some(SessionStatusKind::Busy | SessionStatusKind::Retry { .. })) => {}
+                Ok(None) => {
+                    if store::mark_run_failed(
+                        &self.pool,
+                        candidate.run_id,
+                        MISSING_SESSION_RECOVERY_SUMMARY,
+                        Some(&candidate.backend_run_ref),
+                    )
+                    .await?
+                    {
+                        recovered += 1;
+                    }
+                }
+                Err(error) => {
+                    warn!(
+                        run_id = candidate.run_id,
+                        session_id = %candidate.backend_run_ref,
+                        error = ?error,
+                        "failed to probe OpenCode session during recovery; leaving run retryable"
+                    );
+                }
+            }
+        }
+
+        Ok(recovered)
     }
 
     async fn reconcile_terminal_run_workspaces(&self) -> Result<()> {
@@ -1566,7 +1645,10 @@ mod tests {
 
     use super::*;
 
-    use std::sync::{Arc, Mutex};
+    use std::{
+        collections::HashMap,
+        sync::{Arc, Mutex},
+    };
 
     use async_trait::async_trait;
     use chrono::Utc;
@@ -1584,7 +1666,8 @@ mod tests {
             backend::{DispatchResult, HarnessBackend},
             in_flight::InFlightTracker,
             model::{
-                HarnessSubAgentRunRow, RUN_STATUS_QUEUED, RUN_STATUS_SKIPPED, RUN_STATUS_SUCCEEDED,
+                HarnessSubAgentRunRow, RUN_STATUS_FAILED, RUN_STATUS_QUEUED, RUN_STATUS_RUNNING,
+                RUN_STATUS_SKIPPED, RUN_STATUS_SUCCEEDED,
             },
             store::{
                 self, ClaimedCandleSubAgentRun, insert_default_harness_sub_agents, insert_test_run,
@@ -1700,6 +1783,44 @@ mod tests {
 
         fn max_active_calls(&self) -> usize {
             self.max_active_calls.load(Ordering::SeqCst)
+        }
+    }
+
+    #[derive(Clone, Copy)]
+    enum RecoveryProbe {
+        Idle,
+        Missing,
+        Busy,
+        Retry,
+        Unavailable,
+    }
+
+    struct RecoveryBackend {
+        probes: HashMap<String, RecoveryProbe>,
+    }
+
+    #[async_trait]
+    impl HarnessBackend for RecoveryBackend {
+        async fn dispatch(&self, _request: DispatchRequest) -> Result<DispatchResult> {
+            Err(anyhow!("recovery backend does not dispatch"))
+        }
+
+        async fn get_session_status_in_directory(
+            &self,
+            _base_url: &str,
+            session_id: &str,
+            _workspace_container_path: Option<&str>,
+        ) -> Result<Option<SessionStatusKind>> {
+            match self.probes.get(session_id).copied() {
+                Some(RecoveryProbe::Idle) => Ok(Some(SessionStatusKind::Idle)),
+                Some(RecoveryProbe::Missing) => Ok(None),
+                Some(RecoveryProbe::Busy) => Ok(Some(SessionStatusKind::Busy)),
+                Some(RecoveryProbe::Retry) => Ok(Some(SessionStatusKind::Retry {
+                    message: "OpenCode is retrying".to_string(),
+                })),
+                Some(RecoveryProbe::Unavailable) => Err(anyhow!("OpenCode unavailable")),
+                None => Err(anyhow!("unexpected session probe")),
+            }
         }
     }
 
@@ -2050,6 +2171,221 @@ mod tests {
         }
         run_until(|| async {
             store::get_run(&pool, run_id)
+                .await
+                .ok()
+                .flatten()
+                .is_some_and(|run| run.status == RUN_STATUS_SUCCEEDED)
+        })
+        .await;
+    }
+
+    #[tokio::test]
+    async fn live_session_recovery_terminalizes_only_confirmed_terminal_sessions() {
+        let pool = test_db::pool().await;
+        let key = format!(
+            "sched-live-recovery-{}",
+            Utc::now().timestamp_nanos_opt().unwrap_or(0)
+        );
+        seed_test_agent(&pool, &key).await;
+        let sub_agent_id: i64 = sqlx::query_scalar(
+            "SELECT id FROM harness_sub_agents
+              WHERE agent_key = $1 AND sub_agent_key = 'technical-15m'",
+        )
+        .bind(&key)
+        .fetch_one(&pool)
+        .await
+        .expect("load analysis job");
+
+        let missing_run = insert_test_run(&pool, sub_agent_id, RUN_STATUS_RUNNING)
+            .await
+            .expect("insert missing-session run");
+        let busy_run = insert_test_run(&pool, sub_agent_id, RUN_STATUS_RUNNING)
+            .await
+            .expect("insert busy-session run");
+        let retry_run = insert_test_run(&pool, sub_agent_id, RUN_STATUS_RUNNING)
+            .await
+            .expect("insert retry-session run");
+        let unavailable_run = insert_test_run(&pool, sub_agent_id, RUN_STATUS_RUNNING)
+            .await
+            .expect("insert unavailable-session run");
+        let idle_run = insert_test_run(&pool, sub_agent_id, RUN_STATUS_RUNNING)
+            .await
+            .expect("insert idle-session run");
+        let idle_before_command_run = insert_test_run(&pool, sub_agent_id, RUN_STATUS_RUNNING)
+            .await
+            .expect("insert idle before command run");
+        let fresh_run = insert_test_run(&pool, sub_agent_id, RUN_STATUS_RUNNING)
+            .await
+            .expect("insert fresh missing-session run");
+
+        for (run_id, session_id, old_enough) in [
+            (missing_run, "ses_missing", true),
+            (busy_run, "ses_busy", true),
+            (retry_run, "ses_retry", true),
+            (unavailable_run, "ses_unavailable", true),
+            (idle_run, "ses_idle", true),
+            (idle_before_command_run, "ses_idle_before_command", true),
+            (fresh_run, "ses_fresh", false),
+        ] {
+            sqlx::query(
+                "UPDATE harness_sub_agent_runs
+                    SET started_at = CASE WHEN $3 THEN now() - interval '1 minute' ELSE now() END,
+                        backend_run_ref = $2
+                  WHERE id = $1",
+            )
+            .bind(run_id)
+            .bind(session_id)
+            .bind(old_enough)
+            .execute(&pool)
+            .await
+            .expect("seed run session");
+        }
+        sqlx::query("INSERT INTO opencode.sessions (id, status) VALUES ('ses_idle', 'idle')")
+            .execute(&pool)
+            .await
+            .expect("seed idle OpenCode session");
+        sqlx::query(
+            "INSERT INTO opencode.sessions (id, status) VALUES ('ses_idle_before_command', 'idle')",
+        )
+        .execute(&pool)
+        .await
+        .expect("seed idle OpenCode session without command");
+        sqlx::query(
+            "INSERT INTO opencode.commands (session_id, command_name) VALUES ('ses_idle', 'hypervibes-analysis')",
+        )
+        .execute(&pool)
+        .await
+        .expect("seed dispatched command");
+
+        let backend: Arc<dyn HarnessBackend> = Arc::new(RecoveryBackend {
+            probes: HashMap::from([
+                ("ses_missing".to_string(), RecoveryProbe::Missing),
+                ("ses_busy".to_string(), RecoveryProbe::Busy),
+                ("ses_retry".to_string(), RecoveryProbe::Retry),
+                ("ses_unavailable".to_string(), RecoveryProbe::Unavailable),
+                ("ses_idle".to_string(), RecoveryProbe::Idle),
+                ("ses_idle_before_command".to_string(), RecoveryProbe::Idle),
+                ("ses_fresh".to_string(), RecoveryProbe::Missing),
+            ]),
+        });
+        let (_shutdown_tx, shutdown_rx) = watch::channel(false);
+        let (_force_shutdown_tx, force_shutdown_rx) = watch::channel(false);
+        let mut scheduler = HarnessScheduler::new(
+            pool.clone(),
+            shutdown_rx,
+            force_shutdown_rx,
+            backend,
+            Arc::new(LiveAccountStore::new()),
+            scheduler_runtime(InFlightTracker::new()),
+        );
+
+        scheduler
+            .maybe_recover_orphans()
+            .await
+            .expect("run live session recovery");
+
+        let missing = store::get_run(&pool, missing_run)
+            .await
+            .expect("load missing run")
+            .expect("missing run exists");
+        assert_eq!(missing.status, RUN_STATUS_FAILED);
+        assert_eq!(
+            missing.error_summary.as_deref(),
+            Some(MISSING_SESSION_RECOVERY_SUMMARY)
+        );
+        let idle = store::get_run(&pool, idle_run)
+            .await
+            .expect("load idle run")
+            .expect("idle run exists");
+        assert_eq!(idle.status, RUN_STATUS_SUCCEEDED);
+        for run_id in [
+            busy_run,
+            retry_run,
+            unavailable_run,
+            idle_before_command_run,
+            fresh_run,
+        ] {
+            let run = store::get_run(&pool, run_id)
+                .await
+                .expect("load retained run")
+                .expect("retained run exists");
+            assert_eq!(run.status, RUN_STATUS_RUNNING);
+        }
+    }
+
+    #[tokio::test]
+    async fn live_session_recovery_releases_a_queued_run_in_its_lane() {
+        let pool = test_db::pool().await;
+        let key = format!(
+            "sched-live-recovery-lane-{}",
+            Utc::now().timestamp_nanos_opt().unwrap_or(0)
+        );
+        seed_test_agent(&pool, &key).await;
+        let sub_agent_id: i64 = sqlx::query_scalar(
+            "SELECT id FROM harness_sub_agents
+              WHERE agent_key = $1 AND sub_agent_key = 'technical-15m'",
+        )
+        .bind(&key)
+        .fetch_one(&pool)
+        .await
+        .expect("load analysis job");
+
+        let missing_run = insert_test_run(&pool, sub_agent_id, RUN_STATUS_RUNNING)
+            .await
+            .expect("insert missing-session run");
+        sqlx::query(
+            "UPDATE harness_sub_agent_runs
+                SET started_at = now() - interval '1 minute', backend_run_ref = 'ses_missing'
+              WHERE id = $1",
+        )
+        .bind(missing_run)
+        .execute(&pool)
+        .await
+        .expect("seed missing OpenCode session");
+
+        let queued_run = match store::insert_queued_manual_run(&pool, &key, sub_agent_id)
+            .await
+            .expect("queue successor run")
+        {
+            store::QueuedSubAgentRun::Dispatch {
+                run_id,
+                wait_for_lane,
+                ..
+            } => {
+                assert!(wait_for_lane);
+                run_id
+            }
+            other => panic!("expected queued successor, got {other:?}"),
+        };
+
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let backend: Arc<dyn HarnessBackend> = Arc::new(FakeBackend::success(calls.clone()));
+        let (_shutdown_tx, shutdown_rx) = watch::channel(false);
+        let (_force_shutdown_tx, force_shutdown_rx) = watch::channel(false);
+        let mut scheduler = HarnessScheduler::new(
+            pool.clone(),
+            shutdown_rx,
+            force_shutdown_rx,
+            backend,
+            Arc::new(LiveAccountStore::new()),
+            scheduler_runtime(InFlightTracker::new()),
+        );
+
+        scheduler.tick().await.expect("scheduler tick");
+        run_until(|| async {
+            calls
+                .lock()
+                .is_ok_and(|calls| calls.iter().any(|call| call.run_id == queued_run))
+        })
+        .await;
+
+        let missing = store::get_run(&pool, missing_run)
+            .await
+            .expect("load recovered run")
+            .expect("recovered run exists");
+        assert_eq!(missing.status, RUN_STATUS_FAILED);
+        run_until(|| async {
+            store::get_run(&pool, queued_run)
                 .await
                 .ok()
                 .flatten()

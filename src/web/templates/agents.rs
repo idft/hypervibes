@@ -62,8 +62,8 @@ pub enum AgentShowTab {
 pub enum IndicatorPage {
     #[default]
     List,
+    Detail,
     Editor,
-    Chart,
 }
 
 impl AgentShowTab {
@@ -454,6 +454,7 @@ pub struct AgentsShowPageTemplate {
     pub analysis_instrument_options_loaded: bool,
     pub has_selected_analysis_instruments: bool,
     pub indicators: Vec<IndicatorDefinitionView>,
+    pub indicator_detail: Option<IndicatorDefinitionView>,
     pub indicator_page: IndicatorPage,
     pub indicator_form: IndicatorFormView,
     pub indicator_errors: Vec<String>,
@@ -523,6 +524,7 @@ impl AgentsShowPageTemplate {
             analysis_instrument_options_loaded: false,
             has_selected_analysis_instruments: false,
             indicators: Vec::new(),
+            indicator_detail: None,
             indicator_page: IndicatorPage::List,
             indicator_form: IndicatorFormView::default(),
             indicator_errors: Vec::new(),
@@ -622,7 +624,13 @@ pub struct IndicatorDefinitionView {
     pub version_number: i32,
     pub created_by_kind: String,
     pub instrument_ids: Vec<String>,
-    pub latest_status: String,
+    pub instrument_runs: Vec<IndicatorInstrumentRunView>,
+}
+
+#[derive(Debug, Clone)]
+pub struct IndicatorInstrumentRunView {
+    pub instrument_id: String,
+    pub status: String,
     pub latest_values: String,
     pub latest_error: Option<String>,
 }

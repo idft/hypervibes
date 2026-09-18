@@ -29,7 +29,7 @@ use crate::{
         error::AppError,
         templates::{
             AgentShowTab, AgentsShowPageTemplate, IndicatorDefinitionView, IndicatorFormView,
-            IndicatorInputView, IndicatorPage,
+            IndicatorInputView, IndicatorInstrumentRunView, IndicatorPage,
         },
     },
 };
@@ -75,19 +75,16 @@ pub(in crate::web::routes) async fn agents_edit_indicator(
     render_indicator_page(&state, &user, &agent_key, IndicatorPage::Editor, query).await
 }
 
-pub(in crate::web::routes) async fn agents_show_indicator_chart(
+pub(in crate::web::routes) async fn agents_show_indicator(
     State(state): State<Arc<AppState>>,
     user: AuthenticatedUser,
-    Path(agent_key): Path<String>,
+    Path((agent_key, indicator_id)): Path<(String, Uuid)>,
 ) -> Result<Response, AppError> {
-    render_indicator_page(
-        &state,
-        &user,
-        &agent_key,
-        IndicatorPage::Chart,
-        AgentIndicatorsQuery::default(),
-    )
-    .await
+    let query = AgentIndicatorsQuery {
+        detail: Some(indicator_id),
+        ..Default::default()
+    };
+    render_indicator_page(&state, &user, &agent_key, IndicatorPage::Detail, query).await
 }
 
 async fn render_indicator_page(
@@ -126,10 +123,26 @@ pub(in crate::web::routes) async fn populate_indicators_tab(
         let version = get_active_version(&state.db_pool, &agent.agent_key, definition.id)
             .await?
             .ok_or_else(|| AppError(anyhow::anyhow!("indicator has no active version")))?;
-        let latest = list_latest_results(&state.db_pool, &agent.agent_key, definition.id, 1)
-            .await?
-            .into_iter()
-            .next();
+        let instrument_ids =
+            list_definition_instruments(&state.db_pool, &agent.agent_key, definition.id).await?;
+        let latest_runs =
+            list_latest_results(&state.db_pool, &agent.agent_key, definition.id, 100).await?;
+        let instrument_runs = instrument_ids
+            .iter()
+            .map(|instrument_id| {
+                let latest = latest_runs
+                    .iter()
+                    .find(|run| run.instrument_id == *instrument_id);
+                IndicatorInstrumentRunView {
+                    instrument_id: instrument_id.clone(),
+                    status: latest.map_or_else(|| "Not run".to_string(), |run| run.status.clone()),
+                    latest_values: latest
+                        .and_then(|run| run.latest_values.as_ref())
+                        .map_or_else(String::new, |values| values.to_string()),
+                    latest_error: latest.and_then(|run| run.error_summary.clone()),
+                }
+            })
+            .collect();
         template.indicators.push(IndicatorDefinitionView {
             id: definition.id,
             name: definition.name,
@@ -138,21 +151,19 @@ pub(in crate::web::routes) async fn populate_indicators_tab(
             enabled: definition.enabled,
             version_number: version.version_number,
             created_by_kind: version.created_by_kind,
-            instrument_ids: list_definition_instruments(
-                &state.db_pool,
-                &agent.agent_key,
-                definition.id,
-            )
-            .await?,
-            latest_status: latest
-                .as_ref()
-                .map_or_else(|| "Not run".to_string(), |run| run.status.clone()),
-            latest_values: latest
-                .as_ref()
-                .and_then(|run| run.latest_values.as_ref())
-                .map_or_else(String::new, |values| values.to_string()),
-            latest_error: latest.and_then(|run| run.error_summary),
+            instrument_ids,
+            instrument_runs,
         });
+    }
+    if let Some(id) = query.detail {
+        template.indicator_detail = template
+            .indicators
+            .iter()
+            .find(|indicator| indicator.id == id)
+            .cloned();
+        if template.indicator_detail.is_none() {
+            return Err(AppError(anyhow::anyhow!("indicator not found")));
+        }
     }
     if let Some(id) = query.edit {
         let definition = get_definition(&state.db_pool, &agent.agent_key, id)

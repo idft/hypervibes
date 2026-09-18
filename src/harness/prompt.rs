@@ -127,14 +127,14 @@ fn build_review_prompt(request: &DispatchRequest) -> Result<String> {
     body.push_str("- List orders and account transactions using this review window's exact start and end. Include unfilled, rejected, canceled, open, and filled orders plus fills, fees, realized PnL, funding, and ledger events. Page `list_account_transactions` with a fixed limit and increasing offset until a page returns fewer rows than the limit.\n");
     body.push_str("- Do not make unbounded or out-of-window memory, order, or transaction queries. Do not mention or assess records outside this review window; the injected Accumulated learnings are the sole exception and must be carried forward when updated.\n");
     body.push_str("- Trace orders through their `memory_record_ids` to the linked `trading_decision` memories, and follow `memory.links` from decisions back to the research evidence they were based on.\n");
-    body.push_str("- Identify failures, good patterns, stale assumptions, and prompt improvement opportunities. When evidence justifies a material change, use `hypervibes_submit_prompt_revision` exactly once with the current base revision IDs, rationale, and same-agent evidence memory IDs. It may revise only the Trading prompt and those Analysis prompts whose configuration opted in to review updates; it activates all submitted changes atomically.\n");
+    body.push_str("- Identify failures, good patterns, stale assumptions, and prompt improvement opportunities. When evidence justifies a material change, make at most one `hypervibes_submit_prompt_revision` call with the current base revision IDs, rationale, and same-agent evidence memory IDs. Each `changes` item must contain `target_sub_agent_id`, `base_revision_id`, and `prompt`; never use `new_prompt`. Do not retry the call if it fails; record the recommendation and error in the review memory instead. It may revise only the Trading prompt and those Analysis prompts whose configuration opted in to review updates; it activates all submitted changes atomically.\n");
     body.push_str("- Inspect indicator definitions and results when relevant. When evidence justifies it, create an indicator or an immutable new version with the indicator MCP tools, and explain the revision rationale in the review memory. Never encode trading policy into Pine source.\n");
     body.push_str(
         "- Never edit `data/`, `scratch/`, or runtime files; review is diagnosis-only.\n",
     );
     body.push_str("- Write exactly one `review` memory with `scope_kind = \"agent\"` and `links` of type `reviews` to the memories you reviewed.\n");
     body.push_str("- If learnings changed, write a new `agent_learnings` memory with `scope_kind = \"agent\"` and summary exactly `Accumulated agent learnings`. Its content must be a complete replacement snapshot: retain every still-valid learning from the Accumulated learnings section, add new learnings, and explicitly mark any superseded rules as removed or replaced. Then link the review memory to it with `link_type = \"updates_learnings\"`.\n");
-    body.push_str("- The review memory metadata must include `schema_version`, `source_run_id` (leave null; the server stamps provenance), `review_window_start`, `review_window_end`, and `evidence_memory_ids`.\n");
+    body.push_str("- The review memory metadata must include `schema_version`, `review_window_start`, `review_window_end`, and `evidence_memory_ids`. The server stamps run provenance; never include source run or sub-agent provenance in metadata.\n");
     body.push_str("- Do not place or cancel orders.\n");
     body.push_str("- Do not use generic strategy-prompt replacement. Submit no revision when evidence is insufficient.\n");
     Ok(body)
@@ -399,6 +399,10 @@ mod tests {
         assert!(prompt.contains("Never edit `data/`, `scratch/`, or runtime files"));
         assert!(prompt.contains("Do not place or cancel orders."));
         assert!(prompt.contains("`trading_decision` memories"));
+        assert!(prompt.contains("make at most one `hypervibes_submit_prompt_revision` call"));
+        assert!(prompt.contains("never use `new_prompt`"));
+        assert!(prompt.contains("Do not retry the call if it fails"));
+        assert!(!prompt.contains("source_run_id"));
     }
 
     #[test]

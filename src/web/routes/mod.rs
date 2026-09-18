@@ -120,10 +120,6 @@ pub fn router(state: Arc<AppState>) -> Router {
             get(agents_new_indicator),
         )
         .route(
-            "/agents/{agent_key}/indicators/chart",
-            get(agents_show_indicator_chart),
-        )
-        .route(
             "/agents/{agent_key}/indicators/{indicator_id}/edit",
             get(agents_edit_indicator),
         )
@@ -133,7 +129,7 @@ pub fn router(state: Arc<AppState>) -> Router {
         )
         .route(
             "/agents/{agent_key}/indicators/{indicator_id}",
-            post(agents_update_indicator),
+            get(agents_show_indicator).post(agents_update_indicator),
         )
         .route(
             "/agents/{agent_key}/indicators/{indicator_id}/delete",

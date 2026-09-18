@@ -128,7 +128,7 @@ async fn indicators_tab_renders_the_indicator_list() {
     assert!(body.contains("Indicators"));
     assert!(body.contains("New indicator"));
     assert!(body.contains(&format!("/agents/{agent_key}/indicators/new")));
-    assert!(body.contains(&format!("/agents/{agent_key}/indicators/chart")));
+    assert!(!body.contains(&format!("/agents/{agent_key}/indicators/chart")));
     assert!(!body.contains("Pine source"));
 }
 
@@ -155,14 +155,15 @@ async fn new_indicator_page_renders_the_editor_and_target_selector() {
 }
 
 #[tokio::test]
-async fn indicator_chart_is_a_dedicated_page() {
+async fn indicator_detail_renders_a_chart_for_each_target() {
     let state = test_state().await;
-    let (agent_key, _) = insert_test_agent(&state).await.expect("insert agent");
+    let (agent_key, definition_id, version_id) = seed_indicator(&state).await;
+    seed_succeeded_run(&state, &agent_key, definition_id, version_id).await;
 
     let response = router(state)
         .oneshot(
             Request::builder()
-                .uri(format!("/agents/{agent_key}/indicators/chart"))
+                .uri(format!("/agents/{agent_key}/indicators/{definition_id}"))
                 .body(Body::empty())
                 .expect("request"),
         )
@@ -171,8 +172,10 @@ async fn indicator_chart_is_a_dedicated_page() {
 
     assert_eq!(response.status(), StatusCode::OK);
     let body = response_text(response).await;
-    assert!(body.contains("Indicator chart"));
-    assert!(body.contains("Create an indicator to view its completed runs on a chart."));
+    assert!(body.contains("Test EMA"));
+    assert!(body.contains("Status:"));
+    assert!(body.contains(&format!("data-indicator-id=\"{definition_id}\"")));
+    assert!(body.contains("data-instrument-id=\"BTC\""));
     assert!(!body.contains("Pine source"));
 }
 

@@ -56,6 +56,15 @@ def _redirect_stderr_to_container_log() -> None:
         pass
 
 
+def _is_broken_stdio_shutdown(error: BaseException) -> bool:
+    """Recognize FastMCP's expected error when OpenCode closes stdio."""
+    if isinstance(error, BaseExceptionGroup):
+        return bool(error.exceptions) and all(
+            _is_broken_stdio_shutdown(exception) for exception in error.exceptions
+        )
+    return error.__class__.__name__ == "BrokenResourceError"
+
+
 def _load_config() -> tuple[str, str, str]:
     """Read required env vars, failing fast with a clear message.
 
@@ -302,7 +311,14 @@ def submit_prompt_revision(
     evidence_memory_ids: list[str],
     changes: list[dict[str, Any]],
 ) -> dict[str, Any]:
-    """Submit one evidence-backed review revision batch for eligible prompts."""
+    """Submit one evidence-backed review revision batch for eligible prompts.
+
+    Call this no more than once per Review run. Each ``changes`` item must be
+    an object with integer ``target_sub_agent_id`` and ``base_revision_id``,
+    plus string ``prompt`` fields. Do not use ``new_prompt``. If it fails,
+    record the recommendation and error in the review memory instead of
+    retrying.
+    """
     _require_nonblank("rationale", rationale)
     if not isinstance(evidence_memory_ids, list) or not all(
         isinstance(value, str) and value.strip() for value in evidence_memory_ids
@@ -622,7 +638,8 @@ def write_memory(
     argument entirely; do not pass an empty string. ``metadata`` must be a
     JSON object when provided; ``None`` is stored as an empty object. ``links``
     may be a list of objects with ``target_memory_id``, ``link_type``, and an
-    optional object ``metadata``.
+    optional object ``metadata``. Run and sub-agent provenance is stamped by
+    the server; do not include it in metadata.
     """
     if scope_kind not in {"agent", "instruments"}:
         raise ValueError("scope_kind must be agent or instruments")
@@ -780,7 +797,13 @@ def main() -> None:
     _redirect_stderr_to_container_log()
     _, _, agent_key = _require_config()
     LOGGER.info("hypervibes_mcp_started agent_key=%s", agent_key)
-    mcp.run()
+    try:
+        mcp.run()
+    except BaseException as exc:
+        if _is_broken_stdio_shutdown(exc):
+            LOGGER.info("hypervibes_mcp_stopped reason=stdio_client_disconnected")
+            return
+        raise
 
 
 if __name__ == "__main__":

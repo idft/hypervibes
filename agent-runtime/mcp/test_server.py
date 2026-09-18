@@ -238,6 +238,44 @@ class HyperVibesMcpServerTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "unexpected shape"):
                 self.server.get_strategy_prompt(7)
 
+    def test_submit_prompt_revision_uses_canonical_change_fields(self) -> None:
+        captured: dict[str, object] = {}
+
+        def fake_request(method, path, *, params=None, json_body=None):
+            captured.update(method=method, path=path, json_body=json_body)
+            return {"batch_id": 12}
+
+        with mock.patch.object(self.server, "_request", side_effect=fake_request):
+            result = self.server.submit_prompt_revision(
+                rationale="Clarify the fill-protection workflow.",
+                evidence_memory_ids=["00000000-0000-0000-0000-000000000001"],
+                changes=[
+                    {
+                        "target_sub_agent_id": 2,
+                        "base_revision_id": 3,
+                        "prompt": "Updated prompt.",
+                    }
+                ],
+            )
+
+        self.assertEqual(result, {"batch_id": 12})
+        self.assertEqual(captured["method"], "POST")
+        self.assertEqual(captured["path"], "/api/v1/strategy-prompts/revisions")
+        self.assertEqual(
+            captured["json_body"],
+            {
+                "rationale": "Clarify the fill-protection workflow.",
+                "evidence_memory_ids": ["00000000-0000-0000-0000-000000000001"],
+                "changes": [
+                    {
+                        "target_sub_agent_id": 2,
+                        "base_revision_id": 3,
+                        "prompt": "Updated prompt.",
+                    }
+                ],
+            },
+        )
+
     def test_logger_has_a_stderr_handler(self) -> None:
         self.assertTrue(
             any(
@@ -249,6 +287,15 @@ class HyperVibesMcpServerTests(unittest.TestCase):
     def test_container_log_redirection_is_best_effort(self) -> None:
         with mock.patch.object(self.server.os, "open", side_effect=OSError):
             self.server._redirect_stderr_to_container_log()
+
+    def test_main_treats_broken_stdio_as_a_clean_shutdown(self) -> None:
+        broken_resource = type("BrokenResourceError", (Exception,), {})()
+        error = ExceptionGroup("stdio closed", [broken_resource])
+        with (
+            mock.patch.object(self.server, "_redirect_stderr_to_container_log"),
+            mock.patch.object(self.server.mcp, "run", side_effect=error),
+        ):
+            self.server.main()
 
     def test_missing_env_raises_with_clear_message(self) -> None:
         with mock.patch.dict(os.environ, {}, clear=True):

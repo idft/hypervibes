@@ -48,22 +48,21 @@ export function initIndicators(root: ParentNode = document) {
       });
     });
 
-    const chartElement = page.querySelector<HTMLElement>("[data-indicator-chart]");
-    const definition = page.querySelector<HTMLSelectElement>("[data-indicator-chart-definition]");
-    const instrument = page.querySelector<HTMLSelectElement>("[data-indicator-chart-instrument]");
-    if (!chartElement || !definition || !instrument) return;
-    const load = async () => {
+    page.querySelectorAll<HTMLElement>("[data-indicator-chart]").forEach((chartElement) => {
+      const load = async () => {
       removeChart(chartElement);
       chartElement.replaceChildren();
       const agentKey = chartElement.dataset.agentKey;
-      if (!agentKey || !definition.value || !instrument.value) {
-        chartElement.textContent = "Select an indicator and instrument to load chart data.";
+      const indicatorId = chartElement.dataset.indicatorId;
+      const instrumentId = chartElement.dataset.instrumentId;
+      if (!agentKey || !indicatorId || !instrumentId) {
+        chartElement.textContent = "Chart data is unavailable.";
         return;
       }
       try {
-        const response = await fetch(`/agents/${encodeURIComponent(agentKey)}/indicators/chart-data?indicator_id=${encodeURIComponent(definition.value)}&instrument_id=${encodeURIComponent(instrument.value)}`);
+        const response = await fetch(`/agents/${encodeURIComponent(agentKey)}/indicators/chart-data?indicator_id=${encodeURIComponent(indicatorId)}&instrument_id=${encodeURIComponent(instrumentId)}`);
         if (!response.ok) {
-          chartElement.textContent = "No successful run is available for this selection.";
+          chartElement.textContent = `No successful ${instrumentId} run is available.`;
           return;
         }
         const data = await response.json() as ChartData;
@@ -81,10 +80,9 @@ export function initIndicators(root: ParentNode = document) {
       } catch {
         chartElement.textContent = "Chart data could not be loaded.";
       }
-    };
-    definition.addEventListener("change", () => { void load(); });
-    instrument.addEventListener("change", () => { void load(); });
-    void load();
+      };
+      void load();
+    });
   });
 }
 

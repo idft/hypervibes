@@ -7,6 +7,10 @@ use axum::{
 use serde_json::json;
 use tower::util::ServiceExt;
 
+use crate::agents::strategy_prompts::{
+    PromptRevisionChange, get_agent_strategy_prompt, submit_review_revisions,
+};
+
 use super::test_support::*;
 
 async fn response_json(response: axum::response::Response) -> serde_json::Value {
@@ -156,4 +160,46 @@ async fn strategy_prompt_rejects_invalid_sub_agent_id_and_unknown_input() {
         .await
         .expect("response");
     assert_eq!(response.status(), StatusCode::UNPROCESSABLE_ENTITY);
+}
+
+#[tokio::test]
+async fn review_revision_decodes_json_capabilities_for_trading_target() {
+    let state = test_state().await;
+    let (agent_key, _api_key) = seed_agent(&state, "review-revision-json").await;
+    let review_id = default_sub_agent_id(&state, &agent_key, "review").await;
+    let trading_id = default_sub_agent_id(&state, &agent_key, "trading").await;
+    let review_run_id = crate::harness::store::insert_test_run(
+        &state.db_pool,
+        review_id,
+        crate::harness::model::RUN_STATUS_SUCCEEDED,
+    )
+    .await
+    .expect("insert review run");
+    let current = get_agent_strategy_prompt(&state.db_pool, &agent_key, trading_id)
+        .await
+        .expect("load trading prompt")
+        .expect("trading prompt exists");
+
+    let batch_id = submit_review_revisions(
+        &state.db_pool,
+        &agent_key,
+        review_run_id,
+        "Clarify fill protection.",
+        &[],
+        &[PromptRevisionChange {
+            target_sub_agent_id: trading_id,
+            base_revision_id: current.revision_id,
+            prompt: "Updated trading prompt.".to_string(),
+        }],
+    )
+    .await
+    .expect("submit review revision");
+
+    assert!(batch_id > 0);
+    let updated = get_agent_strategy_prompt(&state.db_pool, &agent_key, trading_id)
+        .await
+        .expect("load updated trading prompt")
+        .expect("updated trading prompt exists");
+    assert_eq!(updated.prompt, "Updated trading prompt.");
+    assert_eq!(updated.revision_id, current.revision_id + 1);
 }

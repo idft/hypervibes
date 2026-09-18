@@ -50,7 +50,10 @@ targets, their base revisions, and Trading's base revision at dispatch.
 Before dispatch, HyperVibes snapshots the provider, model, thinking mode,
 selected instruments, sub-agent prompt revision, latest learnings, and global
 prompt. Trading also receives a live account snapshot. Run status remains
-independent of the OpenCode session, and recovery reconciles stale active runs.
+independent of the OpenCode session. Recovery reconciles stale active runs by
+probing OpenCode: a confirmed missing session fails its run promptly, while an
+unavailable OpenCode service leaves the run retryable until a later probe or
+the normal timeout.
 
 Scheduled work remains queued until its trigger and is independent of other
 agents' runs. Provider configuration reloads are handled separately from

@@ -29,6 +29,13 @@ pub struct PromptRevisionChange {
     pub prompt: String,
 }
 
+#[derive(sqlx::FromRow)]
+struct ReviewRevisionTarget {
+    sub_agent_kind: String,
+    #[sqlx(json)]
+    enabled_capabilities: Vec<String>,
+}
+
 pub async fn rollback_prompt_revision(
     pool: &DbPool,
     agent_key: &str,
@@ -116,7 +123,7 @@ pub async fn submit_review_revisions(
     // revision. The Review singleton may only revise Trading prompts and
     // opted-in Analysis prompts, never its own prompt or Coding's.
     for change in changes {
-        let target: Option<(String, Vec<String>)> = sqlx::query_as(
+        let target: Option<ReviewRevisionTarget> = sqlx::query_as(
             "SELECT jobs.sub_agent_kind, jobs.enabled_capabilities
                FROM harness_sub_agents AS jobs
               WHERE jobs.id = $1 AND jobs.agent_key = $2
@@ -126,15 +133,18 @@ pub async fn submit_review_revisions(
         .bind(agent_key)
         .fetch_optional(&mut *tx)
         .await?;
-        let Some((target_kind, enabled_capabilities)) = target else {
+        let Some(target) = target else {
             anyhow::bail!("prompt revision target does not belong to agent");
         };
-        match target_kind.as_str() {
+        match target.sub_agent_kind.as_str() {
             SUB_AGENT_KIND_TRADING => {}
             SUB_AGENT_KIND_ANALYSIS => {
                 anyhow::ensure!(
-                    enabled_capabilities.iter().any(|capability| capability
-                        == crate::harness::model::CAPABILITY_REVIEW_PROMPT_UPDATE),
+                    target
+                        .enabled_capabilities
+                        .iter()
+                        .any(|capability| capability
+                            == crate::harness::model::CAPABILITY_REVIEW_PROMPT_UPDATE),
                     "analysis job has not opted in to review prompt updates"
                 );
             }
@@ -145,9 +155,10 @@ pub async fn submit_review_revisions(
         let current: AgentStrategyPromptRow = query_as(
             "SELECT active.revision_id, active.target_sub_agent_id, revisions.target_sub_agent_key, jobs.sub_agent_kind AS target_sub_agent_kind, revisions.prompt, active.activated_at AS updated_at
                FROM agent_strategy_prompt_active_revisions active
-               JOIN agent_strategy_prompt_revisions revisions ON revisions.id = active.revision_id
-              WHERE active.agent_key = $1 AND active.target_sub_agent_id = $2
-              FOR UPDATE OF active",
+                JOIN agent_strategy_prompt_revisions revisions ON revisions.id = active.revision_id
+                JOIN harness_sub_agents jobs ON jobs.id = active.target_sub_agent_id AND jobs.agent_key = active.agent_key
+               WHERE active.agent_key = $1 AND active.target_sub_agent_id = $2
+               FOR UPDATE OF active",
         ).bind(agent_key).bind(change.target_sub_agent_id).fetch_one(&mut *tx).await?;
         anyhow::ensure!(
             current.revision_id == change.base_revision_id,
@@ -169,8 +180,9 @@ pub async fn submit_review_revisions(
         let current: AgentStrategyPromptRow = query_as(
             "SELECT active.revision_id, active.target_sub_agent_id, revisions.target_sub_agent_key, jobs.sub_agent_kind AS target_sub_agent_kind, revisions.prompt, active.activated_at AS updated_at
                FROM agent_strategy_prompt_active_revisions active
-               JOIN agent_strategy_prompt_revisions revisions ON revisions.id = active.revision_id
-              WHERE active.agent_key = $1 AND active.target_sub_agent_id = $2",
+                JOIN agent_strategy_prompt_revisions revisions ON revisions.id = active.revision_id
+                JOIN harness_sub_agents jobs ON jobs.id = active.target_sub_agent_id AND jobs.agent_key = active.agent_key
+               WHERE active.agent_key = $1 AND active.target_sub_agent_id = $2",
         ).bind(agent_key).bind(change.target_sub_agent_id).fetch_one(&mut *tx).await?;
         let revision_id: i64 = sqlx::query_scalar(
             "INSERT INTO agent_strategy_prompt_revisions (batch_id, agent_key, target_sub_agent_id, target_sub_agent_key, parent_revision_id, prompt) VALUES ($1, $2, $3, $4, $5, $6) RETURNING id",
