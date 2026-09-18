@@ -96,7 +96,7 @@ release version:
     fi
 
 dev:
-    podman-compose -f podman-compose.dev.yaml up
+    podman-compose -f podman-compose.dev.yaml up --force-recreate opencode test-postgres
 
 dev-build:
     podman-compose -f podman-compose.dev.yaml build

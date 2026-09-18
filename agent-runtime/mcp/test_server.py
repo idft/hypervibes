@@ -21,6 +21,8 @@ from pathlib import Path
 from typing import Any
 from unittest import mock
 
+from pydantic import ValidationError
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 MCP_DIR = REPO_ROOT / "agent-runtime" / "mcp"
 
@@ -527,6 +529,140 @@ class HyperVibesMcpServerTests(unittest.TestCase):
             self.server.submit_orders([])
         with self.assertRaises(ValueError):
             self.server.submit_orders("not-a-list")  # type: ignore[arg-type]
+
+    def test_order_schemas_reject_run_214_aliases_and_missing_limit_price(self) -> None:
+        with self.assertRaises(ValidationError):
+            self.server.CancelOrderInput.model_validate(
+                {"symbol": "ETH", "oid": "549220142898"}
+            )
+        with self.assertRaises(ValidationError):
+            self.server.CancelOrderInput.model_validate(
+                {"coin": "ETH", "oid": 549220142898}
+            )
+        with self.assertRaises(ValidationError):
+            self.server.SubmitOrderInput.model_validate(
+                {
+                    "symbol": "ETH",
+                    "side": "buy",
+                    "order_type": "limit",
+                    "sz": 0.004,
+                    "limit_px": 2606,
+                }
+            )
+        with self.assertRaisesRegex(ValidationError, "price is required"):
+            self.server.SubmitOrderInput.model_validate(
+                {
+                    "symbol": "ETH",
+                    "side": "buy",
+                    "order_type": "limit",
+                    "size": 0.004,
+                }
+            )
+        with self.assertRaises(ValidationError):
+            self.server.SubmitOrderInput.model_validate(
+                {
+                    "symbol": "ETH",
+                    "side": "buy",
+                    "order_type": "limit",
+                    "size": 0.004,
+                    "price": 2606,
+                    "limit_px": 2606,
+                }
+            )
+        with self.assertRaises(ValidationError):
+            self.server.SubmitOrderInput.model_validate(
+                {
+                    "symbol": "ETH",
+                    "side": "buy",
+                    "order_type": "limit",
+                    "size": 0.004,
+                    "price": 2606,
+                    "tif": "Gtc",
+                }
+            )
+
+    def test_order_schemas_expose_only_the_backend_contract(self) -> None:
+        submit_schema = self.server.SubmitOrderInput.model_json_schema()
+        self.assertFalse(submit_schema["additionalProperties"])
+        self.assertEqual(
+            set(submit_schema["required"]),
+            {"symbol", "side", "order_type", "size"},
+        )
+        self.assertTrue(
+            {
+                "symbol",
+                "side",
+                "order_type",
+                "size",
+                "price",
+                "time_in_force",
+                "reduce_only",
+                "take_profits",
+                "stop_losses",
+                "memory_record_ids",
+                "attribution_source",
+            }.issubset(submit_schema["properties"])
+        )
+
+        cancel_schema = self.server.CancelOrderInput.model_json_schema()
+        self.assertFalse(cancel_schema["additionalProperties"])
+        self.assertEqual(set(cancel_schema["required"]), {"symbol", "oid"})
+        self.assertEqual(cancel_schema["properties"]["oid"]["type"], "integer")
+
+    def test_order_tools_serialize_validated_payloads(self) -> None:
+        captured: dict[str, Any] = {}
+
+        def fake_request(method, path, *, params=None, json_body=None):
+            captured.update(method=method, path=path, json_body=json_body)
+            return {"results": []} if path == "/api/v1/orders" else []
+
+        order = self.server.SubmitOrderInput.model_validate(
+            {
+                "symbol": "ETH",
+                "side": "buy",
+                "order_type": "limit",
+                "size": 0.004,
+                "price": 2606,
+                "time_in_force": "gtc",
+                "memory_record_ids": ["decision-id"],
+            }
+        )
+        cancel = self.server.CancelOrderInput.model_validate(
+            {"symbol": "ETH", "oid": 549220142898}
+        )
+
+        with mock.patch.object(self.server, "_request", side_effect=fake_request):
+            self.server.submit_orders([order])
+        self.assertEqual(captured["method"], "POST")
+        self.assertEqual(captured["path"], "/api/v1/orders")
+        self.assertEqual(
+            captured["json_body"],
+            {
+                "orders": [
+                    {
+                        "symbol": "ETH",
+                        "side": "buy",
+                        "order_type": "limit",
+                        "size": "0.004",
+                        "price": "2606",
+                        "time_in_force": "gtc",
+                        "reduce_only": False,
+                        "take_profits": [],
+                        "stop_losses": [],
+                        "memory_record_ids": ["decision-id"],
+                        "attribution_source": "agent",
+                    }
+                ]
+            },
+        )
+
+        with mock.patch.object(self.server, "_request", side_effect=fake_request):
+            self.server.cancel_orders([cancel])
+        self.assertEqual(captured["path"], "/api/v1/orders/cancel")
+        self.assertEqual(
+            captured["json_body"],
+            {"orders": [{"symbol": "ETH", "oid": 549220142898}]},
+        )
 
     def test_memory_detail_requests_links(self) -> None:
         captured: dict[str, object] = {}

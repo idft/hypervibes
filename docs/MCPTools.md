@@ -59,6 +59,32 @@ and records targeting that instrument. It includes evidence provenance, type,
 scope and targets, expiry, and producer status: `fresh`, `stale`, `missing`,
 `failed`, or `disabled`.
 
+## Trading order inputs
+
+`hypervibes_submit_orders` accepts an `orders` array with strict item fields.
+A limit order requires `symbol`, `side` (`buy` or `sell`), `order_type` set to
+`limit`, positive `size`, and positive `price`. It accepts optional lowercase
+`time_in_force` (`gtc`, `ioc`, or `alo`), `reduce_only`, take-profit and
+stop-loss arrays, and `memory_record_ids`. For example:
+
+```json
+{
+  "orders": [{
+    "symbol": "ETH",
+    "side": "buy",
+    "order_type": "limit",
+    "size": 0.004,
+    "price": 2606,
+    "time_in_force": "gtc",
+    "memory_record_ids": ["trading-decision-id"]
+  }]
+}
+```
+
+`hypervibes_cancel_orders` requires a `symbol` and numeric exchange `oid` for
+each item. It does not accept the Hyperliquid aliases `coin`, `sz`, `limit_px`,
+or `tif`.
+
 ## Analysis research
 
 Analysis uses approved data tools for research and publishes scoped memories

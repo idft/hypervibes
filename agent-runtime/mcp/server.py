@@ -18,17 +18,98 @@ from __future__ import annotations
 import logging
 import os
 import sys
+from decimal import Decimal
 from pathlib import Path
-from typing import Any
+from typing import Annotated, Any, Literal
 
 import httpx
 from dotenv import load_dotenv
 from mcp.server.fastmcp import FastMCP
+from pydantic import BaseModel, ConfigDict, Field, StrictInt, field_validator, model_validator
 
 
 HTTP_TIMEOUT_SECONDS = 30.0
 
 mcp = FastMCP("hypervibes")
+
+
+PositiveDecimal = Annotated[Decimal, Field(gt=0)]
+NonBlankString = Annotated[str, Field(min_length=1)]
+
+
+class _StrictToolInput(BaseModel):
+    """Base model that keeps agent tool payloads aligned with the API contract."""
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class TriggerOrderInput(_StrictToolInput):
+    """One take-profit or stop-loss leg attached to an entry order."""
+
+    trigger_price: PositiveDecimal
+    limit_price: PositiveDecimal | None = None
+    size: PositiveDecimal | None = None
+
+
+class SubmitOrderInput(_StrictToolInput):
+    """A single opening, closing, or position-management order."""
+
+    symbol: NonBlankString = Field(description="Canonical instrument symbol, for example ETH.")
+    side: Literal["buy", "sell"]
+    order_type: Literal["limit", "market"]
+    size: PositiveDecimal = Field(description="Base-asset order quantity.")
+    price: PositiveDecimal | None = Field(
+        default=None,
+        description="Required positive limit price when order_type is limit.",
+    )
+    time_in_force: Literal["gtc", "ioc", "alo"] | None = Field(
+        default=None,
+        description="Optional limit-order time in force. Omit for gtc.",
+    )
+    reduce_only: bool = False
+    take_profits: list[TriggerOrderInput] = Field(default_factory=list)
+    stop_losses: list[TriggerOrderInput] = Field(default_factory=list)
+    memory_record_ids: list[NonBlankString] = Field(default_factory=list)
+    attribution_source: Literal["agent", "manual"] = "agent"
+
+    @field_validator("symbol")
+    @classmethod
+    def symbol_must_not_be_blank(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("symbol must not be blank")
+        return value
+
+    @model_validator(mode="after")
+    def limit_orders_require_price(self) -> SubmitOrderInput:
+        if self.order_type == "limit" and self.price is None:
+            raise ValueError("price is required for limit orders")
+        return self
+
+
+class CancelOrderInput(_StrictToolInput):
+    """An exchange order cancellation request."""
+
+    symbol: NonBlankString = Field(description="Canonical instrument symbol, for example ETH.")
+    oid: Annotated[
+        StrictInt,
+        Field(
+            ge=1,
+            le=2**64 - 1,
+            description="Numeric exchange-assigned order ID, not a quoted string.",
+        ),
+    ]
+
+    @field_validator("symbol")
+    @classmethod
+    def symbol_must_not_be_blank(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("symbol must not be blank")
+        return value
+
+
+# Resolve postponed aliases before FastMCP inspects these models for tool schemas.
+SubmitOrderInput.model_rebuild()
+CancelOrderInput.model_rebuild()
 
 
 # MCP uses stdout for its JSON-RPC transport. Keep operational diagnostics on
@@ -694,40 +775,60 @@ def write_memory(
 
 
 @mcp.tool()
-def submit_orders(orders: list[dict[str, Any]]) -> dict[str, Any]:
+def submit_orders(
+    orders: Annotated[
+        list[SubmitOrderInput],
+        Field(min_length=1, description="One or more validated order requests."),
+    ],
+) -> dict[str, Any]:
     """Submit one or more orders through the HyperVibes backend.
 
-    ``orders`` is the same list shape the backend expects on
-    ``POST /api/v1/orders``. Opening agent orders should include the relevant
-    trading-decision memory ID in ``memory_record_ids``. This is a real
-    backend action: the server selects instruments, signs the request, and
-    submits to Hyperliquid. The MCP server does not hold or use any private key.
+    For a limit order use ``symbol``, ``side``, ``order_type="limit"``,
+    ``size``, and ``price``. For example:
+    ``{"symbol":"ETH","side":"buy","order_type":"limit","size":0.004,"price":2606,"time_in_force":"gtc"}``.
+    Opening agent orders should include the relevant trading-decision memory ID
+    in ``memory_record_ids``. This is a real backend action: the server selects
+    instruments, signs the request, and submits to Hyperliquid. The MCP server
+    does not hold or use any private key.
     """
     if not isinstance(orders, list) or not orders:
         raise ValueError("orders must be a non-empty list")
     for index, order in enumerate(orders):
-        if not isinstance(order, dict):
-            raise ValueError(f"orders[{index}] must be a JSON object")
-    result = _request("POST", "/api/v1/orders", json_body={"orders": orders})
+        if not isinstance(order, SubmitOrderInput):
+            raise ValueError(f"orders[{index}] must be a validated order input")
+    result = _request(
+        "POST",
+        "/api/v1/orders",
+        json_body={"orders": [order.model_dump(mode="json") for order in orders]},
+    )
     if not isinstance(result, dict):
         raise RuntimeError("HyperVibes /orders POST returned unexpected shape")
     return result
 
 
 @mcp.tool()
-def cancel_orders(orders: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def cancel_orders(
+    orders: Annotated[
+        list[CancelOrderInput],
+        Field(min_length=1, description="One or more validated cancellation requests."),
+    ],
+) -> list[dict[str, Any]]:
     """Cancel one or more orders through the HyperVibes backend.
 
-    ``orders`` is the same list shape the backend expects on
-    ``POST /api/v1/orders/cancel``. Returns one outcome per requested
-    cancel.
+    Each item requires ``symbol`` and numeric ``oid``. For example:
+    ``{"symbol":"ETH","oid":549220142898}``. Returns one outcome per
+    requested cancel.
     """
     if not isinstance(orders, list) or not orders:
         raise ValueError("orders must be a non-empty list")
     for index, order in enumerate(orders):
-        if not isinstance(order, dict):
-            raise ValueError(f"orders[{index}] must be a JSON object")
-    result = _request("POST", "/api/v1/orders/cancel", json_body={"orders": orders})
+        if not isinstance(order, CancelOrderInput):
+            raise ValueError(f"orders[{index}] must be a validated cancellation input")
+    result = _request(
+        "POST",
+        "/api/v1/orders/cancel",
+        json_body={"orders": [order.model_dump(mode="json") for order in orders]},
+    )
     if not isinstance(result, list):
         raise RuntimeError(
             "HyperVibes /orders/cancel returned unexpected shape"
