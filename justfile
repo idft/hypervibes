@@ -98,6 +98,9 @@ release version:
 dev:
     podman-compose -f podman-compose.dev.yaml up
 
+dev-build:
+    podman-compose -f podman-compose.dev.yaml build
+
 website:
     pnpm --dir website start --host 0.0.0.0
 
