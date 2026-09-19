@@ -11,8 +11,11 @@ use serde::Deserialize;
 use tracing::warn;
 
 use super::super::account::agent_subaccount_name;
-use super::memories::{AgentMemoriesQuery, parse_memory_date_filter, prepare_memory_timeline_page};
 use super::transactions::apply_live_cash_balance_anchor;
+use super::{
+    memories::{AgentMemoriesQuery, parse_memory_date_filter, prepare_memory_timeline_page},
+    notifications::AgentNotificationsQuery,
+};
 use crate::{
     agents::store::{
         get_agent, get_agent_readiness, list_agent_analysis_instrument_options,
@@ -29,7 +32,7 @@ use crate::{
     memory::{
         get_latest_trading_decision, get_memory, list_agent_memory_timeline, memory_expires_at,
     },
-    notifications::store::{count_notifications, list_notification_history},
+    notifications::store::{count_notifications, list_notification_history_page},
     web::{
         AppState,
         auth::AuthenticatedUser,
@@ -102,6 +105,7 @@ pub(in crate::web::routes) struct AgentOperationQuery {
 #[derive(Debug, Default)]
 pub(in crate::web::routes) struct AgentShowQueries {
     pub operation_notice: Option<String>,
+    pub notifications: Option<AgentNotificationsQuery>,
     pub transactions: Option<AgentTransactionsQuery>,
     pub memories: Option<AgentMemoriesQuery>,
     pub settings: Option<AgentSettingsQuery>,
@@ -118,6 +122,7 @@ pub(in crate::web::routes) async fn render_agent_show_page(
 ) -> Result<Response, AppError> {
     let AgentShowQueries {
         operation_notice,
+        notifications: notifications_query,
         transactions: transactions_query,
         memories: memories_query,
         settings: settings_query,
@@ -156,9 +161,52 @@ pub(in crate::web::routes) async fn render_agent_show_page(
             populate_positions_tab(state, &agent, &mut template).await?;
         }
         AgentShowTab::Notifications => {
-            template.set_notifications(
-                list_notification_history(&state.db_pool, &agent.agent_key).await?,
-            );
+            const NOTIFICATIONS_PER_PAGE: usize = 50;
+            let requested_page = notifications_query
+                .as_ref()
+                .map(|query| parse_positive_page(&query.page))
+                .unwrap_or(1);
+            let total_count = count_notifications(&state.db_pool, &agent.agent_key).await? as usize;
+            let total_pages = if total_count == 0 {
+                0
+            } else {
+                total_count.div_ceil(NOTIFICATIONS_PER_PAGE)
+            };
+            let current_page = if total_pages == 0 {
+                1
+            } else {
+                requested_page.min(total_pages)
+            };
+            let offset = (current_page - 1) * NOTIFICATIONS_PER_PAGE;
+            let rows = list_notification_history_page(
+                &state.db_pool,
+                &agent.agent_key,
+                NOTIFICATIONS_PER_PAGE as i64,
+                offset as i64,
+            )
+            .await?;
+            let row_count = rows.len();
+            template.set_notifications(&agent.agent_key, rows);
+            template.notifications_page = current_page;
+            template.notifications_total_pages = total_pages;
+            template.notifications_total_count = total_count;
+            template.notifications_range_start = if total_count > 0 { offset + 1 } else { 0 };
+            template.notifications_range_end = offset + row_count;
+            template.notifications_previous_page_url = (current_page > 1).then(|| {
+                format!(
+                    "/agents/{}/notifications?page={}",
+                    agent.agent_key,
+                    current_page - 1
+                )
+            });
+            template.notifications_next_page_url = (total_pages > 0 && current_page < total_pages)
+                .then(|| {
+                    format!(
+                        "/agents/{}/notifications?page={}",
+                        agent.agent_key,
+                        current_page + 1
+                    )
+                });
         }
         AgentShowTab::Transactions => {
             let requested_page = transactions_query

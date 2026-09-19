@@ -1,37 +1,78 @@
 use std::sync::Arc;
 
-use super::show::{AgentShowQueries, render_agent_show_page};
+use super::show::{AgentShowQueries, load_selected_agent_navbar, render_agent_show_page};
 use crate::{
     agents::store::get_agent,
-    notifications::store::{count_notifications, delete_notification, delete_notifications},
+    notifications::store::{
+        count_notifications, delete_notification, delete_notifications, get_notification,
+    },
     web::{
         AppState,
         auth::AuthenticatedUser,
         error::AppError,
-        templates::{AgentNotificationCountPartialTemplate, AgentShowTab},
+        templates::{
+            AgentNotificationCountPartialTemplate, AgentNotificationDetailPageTemplate,
+            AgentNotificationDetailView, AgentShowTab,
+        },
         ui_events::UiEvent,
     },
 };
 use axum::{
     Form,
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::StatusCode,
     response::{Html, IntoResponse, Redirect, Response},
 };
+use serde::Deserialize;
+
+#[derive(Debug, Clone, Default, Deserialize)]
+pub(in crate::web::routes) struct AgentNotificationsQuery {
+    #[serde(default)]
+    pub page: String,
+}
 
 pub(in crate::web::routes) async fn agents_show_notifications(
     State(state): State<Arc<AppState>>,
     user: AuthenticatedUser,
     Path(agent_key): Path<String>,
+    Query(query): Query<AgentNotificationsQuery>,
 ) -> Result<Response, AppError> {
     render_agent_show_page(
         &state,
         &user,
         &agent_key,
         AgentShowTab::Notifications,
-        AgentShowQueries::default(),
+        AgentShowQueries {
+            notifications: Some(query),
+            ..Default::default()
+        },
     )
     .await
+}
+
+pub(in crate::web::routes) async fn agents_show_notification_detail(
+    State(state): State<Arc<AppState>>,
+    user: AuthenticatedUser,
+    Path((agent_key, notification_id)): Path<(String, uuid::Uuid)>,
+) -> Result<Response, AppError> {
+    let Some(agent) = get_agent(&state.db_pool, &agent_key).await? else {
+        return Ok((StatusCode::NOT_FOUND, "agent not found").into_response());
+    };
+    let Some(notification) =
+        get_notification(&state.db_pool, &agent.agent_key, notification_id).await?
+    else {
+        return Ok((StatusCode::NOT_FOUND, "notification not found").into_response());
+    };
+
+    let navbar = load_selected_agent_navbar(&state, user.id, &agent).await?;
+    let notification_count = count_notifications(&state.db_pool, &agent.agent_key).await?;
+    let html = AgentNotificationDetailPageTemplate::render_view(
+        agent.clone(),
+        AgentNotificationDetailView::from_row(&agent.agent_key, notification),
+        notification_count,
+        navbar,
+    )?;
+    Ok(Html(html).into_response())
 }
 
 pub(in crate::web::routes) async fn agent_notification_count(

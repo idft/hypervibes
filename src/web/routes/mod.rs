@@ -54,6 +54,10 @@ pub fn router(state: Arc<AppState>) -> Router {
             get(agent_notification_count),
         )
         .route(
+            "/agents/{agent_key}/notifications/{notification_id}",
+            get(agents_show_notification_detail),
+        )
+        .route(
             "/agents/{agent_key}/transactions",
             get(agents_show_transactions),
         )

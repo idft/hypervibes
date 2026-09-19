@@ -8,7 +8,7 @@ use crate::{
     },
     memory::MemoryRecord,
     model_catalog::options::ModelPickerOption,
-    notifications::model::NotificationHistoryRow,
+    notifications::model::{NotificationDetailRow, NotificationHistoryRow},
 };
 
 use super::memories::{
@@ -316,26 +316,13 @@ pub struct AgentNotificationView {
     pub created_at: LocalTimestampView,
     pub sent_at: Option<LocalTimestampView>,
     pub error: Option<String>,
+    pub detail_url: String,
 }
 
-impl From<NotificationHistoryRow> for AgentNotificationView {
-    fn from(row: NotificationHistoryRow) -> Self {
-        let (severity, severity_class) = match row.severity.as_str() {
-            "warning" => (
-                "Warning",
-                "border-amber-900/60 bg-amber-950/30 text-amber-200",
-            ),
-            "error" => ("Error", "border-red-900/60 bg-red-950/30 text-red-300"),
-            _ => ("Info", "border-sky-900/60 bg-sky-950/30 text-sky-200"),
-        };
-        let (status, status_class) = match row.status.as_str() {
-            "sent" => (
-                "Sent",
-                "border-emerald-900/60 bg-emerald-950/30 text-emerald-300",
-            ),
-            "failed" => ("Failed", "border-red-900/60 bg-red-950/30 text-red-300"),
-            _ => ("Queued", "border-zinc-700 bg-zinc-900/70 text-zinc-300"),
-        };
+impl AgentNotificationView {
+    fn from_row(agent_key: &str, row: NotificationHistoryRow) -> Self {
+        let (severity, severity_class) = notification_severity_badge(&row.severity);
+        let (status, status_class) = notification_status_badge(&row.status);
         Self {
             id: row.id,
             title: row.title,
@@ -347,7 +334,116 @@ impl From<NotificationHistoryRow> for AgentNotificationView {
             created_at: local_timestamp_view(row.created_at),
             sent_at: optional_local_timestamp_view(row.sent_at),
             error: row.error,
+            detail_url: format!("/agents/{agent_key}/notifications/{}", row.id),
         }
+    }
+}
+
+fn notification_severity_badge(severity: &str) -> (&'static str, &'static str) {
+    match severity {
+        "warning" => (
+            "Warning",
+            "border-amber-900/60 bg-amber-950/30 text-amber-200",
+        ),
+        "error" => ("Error", "border-red-900/60 bg-red-950/30 text-red-300"),
+        _ => ("Info", "border-sky-900/60 bg-sky-950/30 text-sky-200"),
+    }
+}
+
+fn notification_status_badge(status: &str) -> (&'static str, &'static str) {
+    match status {
+        "sent" => (
+            "Sent",
+            "border-emerald-900/60 bg-emerald-950/30 text-emerald-300",
+        ),
+        "failed" => ("Failed", "border-red-900/60 bg-red-950/30 text-red-300"),
+        _ => ("Queued", "border-zinc-700 bg-zinc-900/70 text-zinc-300"),
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct AgentNotificationDetailView {
+    pub title: String,
+    pub body: String,
+    pub severity: String,
+    pub severity_class: &'static str,
+    pub status: String,
+    pub status_class: &'static str,
+    pub created_at: LocalTimestampView,
+    pub sent_at: Option<LocalTimestampView>,
+    pub error: Option<String>,
+    pub source_label: Option<String>,
+    pub source_url: Option<String>,
+}
+
+impl AgentNotificationDetailView {
+    pub fn from_row(agent_key: &str, row: NotificationDetailRow) -> Self {
+        let (severity, severity_class) = notification_severity_badge(&row.severity);
+        let (status, status_class) = notification_status_badge(&row.status);
+        let (source_label, source_url) = match (
+            row.source_kind.as_deref(),
+            row.source_run_id,
+            row.source_conversation_id,
+        ) {
+            (Some("run"), Some(run_id), _) => (
+                Some(format!("Run #{run_id}")),
+                Some(format!("/agents/{agent_key}/runs/{run_id}")),
+            ),
+            (Some("conversation"), _, Some(conversation_id)) => (
+                Some("Conversation".to_string()),
+                Some(format!("/agents/{agent_key}/chat/{conversation_id}")),
+            ),
+            _ => (None, None),
+        };
+        Self {
+            title: row.title,
+            body: row.body,
+            severity: severity.to_string(),
+            severity_class,
+            status: status.to_string(),
+            status_class,
+            created_at: local_timestamp_view(row.created_at),
+            sent_at: optional_local_timestamp_view(row.sent_at),
+            error: row.error,
+            source_label,
+            source_url,
+        }
+    }
+}
+
+#[derive(Template)]
+#[template(path = "agents/notifications/detail-page.html")]
+pub struct AgentNotificationDetailPageTemplate {
+    pub agent: AgentDetailRow,
+    pub tabs: Vec<AgentShowTabLink>,
+    pub agent_tabs_use_htmx: bool,
+    pub notification: AgentNotificationDetailView,
+    pub current_path: String,
+    pub navbar: Navbar,
+}
+
+impl AgentNotificationDetailPageTemplate {
+    pub fn render_view(
+        agent: AgentDetailRow,
+        notification: AgentNotificationDetailView,
+        notification_count: i64,
+        navbar: Navbar,
+    ) -> Result<String, askama::Error> {
+        let current_path = format!("/agents/{}/notifications", agent.agent_key);
+        let navbar = navbar.with_selected_agent(
+            agent.agent_key.clone(),
+            agent.display_name.clone(),
+            agent.enabled,
+        );
+        Self {
+            tabs: build_agent_show_tabs(&agent, AgentShowTab::Notifications, notification_count),
+            agent_tabs_use_htmx: false,
+            agent,
+            notification,
+            current_path,
+            navbar,
+        }
+        .render()
     }
 }
 
@@ -431,6 +527,13 @@ pub struct AgentsShowPageTemplate {
     pub show_jobs_tab: bool,
     pub operation_notice: Option<String>,
     pub notifications: Vec<AgentNotificationView>,
+    pub notifications_page: usize,
+    pub notifications_total_pages: usize,
+    pub notifications_total_count: usize,
+    pub notifications_range_start: usize,
+    pub notifications_range_end: usize,
+    pub notifications_previous_page_url: Option<String>,
+    pub notifications_next_page_url: Option<String>,
     pub transactions: Vec<TransactionView>,
     pub transactions_page: usize,
     pub transactions_total_pages: usize,
@@ -500,6 +603,13 @@ impl AgentsShowPageTemplate {
             show_jobs_tab: active_tab == AgentShowTab::Analysis,
             operation_notice: None,
             notifications: Vec::new(),
+            notifications_page: 1,
+            notifications_total_pages: 0,
+            notifications_total_count: 0,
+            notifications_range_start: 0,
+            notifications_range_end: 0,
+            notifications_previous_page_url: None,
+            notifications_next_page_url: None,
             agent,
             transactions: Vec::new(),
             transactions_page: 1,
@@ -584,8 +694,11 @@ impl AgentsShowPageTemplate {
         .unwrap_or_default();
     }
 
-    pub fn set_notifications(&mut self, rows: Vec<NotificationHistoryRow>) {
-        self.notifications = rows.into_iter().map(AgentNotificationView::from).collect();
+    pub fn set_notifications(&mut self, agent_key: &str, rows: Vec<NotificationHistoryRow>) {
+        self.notifications = rows
+            .into_iter()
+            .map(|row| AgentNotificationView::from_row(agent_key, row))
+            .collect();
     }
 }
 

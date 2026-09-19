@@ -30,6 +30,21 @@ pub struct NotificationHistoryRow {
     pub error: Option<String>,
 }
 
+/// Full notification record displayed on the operator detail page.
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub struct NotificationDetailRow {
+    pub title: String,
+    pub body: String,
+    pub severity: String,
+    pub status: String,
+    pub created_at: DateTime<Utc>,
+    pub sent_at: Option<DateTime<Utc>>,
+    pub error: Option<String>,
+    pub source_kind: Option<String>,
+    pub source_run_id: Option<i64>,
+    pub source_conversation_id: Option<Uuid>,
+}
+
 /// Owned notification record produced after inserting a new row.
 #[derive(Debug, Clone)]
 pub struct NotificationRecord {

@@ -152,16 +152,19 @@ fn agents_show_page_renders_base_layout_and_delete_modal() {
 fn notifications_tab_renders_history_and_statuses() {
     let mut template =
         AgentsShowPageTemplate::new(sample_agent_detail_row(), AgentShowTab::Notifications, 7);
-    template.set_notifications(vec![crate::notifications::model::NotificationHistoryRow {
-        id: uuid::Uuid::new_v4(),
-        title: "Position changed".to_string(),
-        body: "BTC position increased from 0.1 to 0.2.".to_string(),
-        severity: "warning".to_string(),
-        status: "failed".to_string(),
-        created_at: Utc::now(),
-        sent_at: None,
-        error: Some("telegram send_message failed".to_string()),
-    }]);
+    template.set_notifications(
+        "test-agent",
+        vec![crate::notifications::model::NotificationHistoryRow {
+            id: uuid::Uuid::new_v4(),
+            title: "Position changed".to_string(),
+            body: "BTC position increased from 0.1 to 0.2.".to_string(),
+            severity: "warning".to_string(),
+            status: "failed".to_string(),
+            created_at: Utc::now(),
+            sent_at: None,
+            error: Some("telegram send_message failed".to_string()),
+        }],
+    );
 
     let rendered = template.render().expect("render notifications template");
 
@@ -173,10 +176,43 @@ fn notifications_tab_renders_history_and_statuses() {
     assert!(rendered.contains("data-notification-select"));
     assert!(rendered.contains("data-notifications-select-all"));
     assert!(rendered.contains("data-notifications-delete-selected"));
+    assert!(rendered.contains("href=\"/agents/test-agent/notifications/"));
     assert!(rendered.contains("hx-get=\"/agents/test-agent/notifications/count\""));
     assert!(rendered.contains("hx-trigger=\"every 15s\""));
     assert!(rendered.contains("id=\"agent-notification-count\""));
     assert!(rendered.contains(">7</span>"));
+}
+
+#[test]
+fn notification_detail_page_renders_source_provenance_link() {
+    let notification = AgentNotificationDetailView::from_row(
+        "test-agent",
+        crate::notifications::model::NotificationDetailRow {
+            title: "Position changed".to_string(),
+            body: "BTC position increased from 0.1 to 0.2.".to_string(),
+            severity: "warning".to_string(),
+            status: "sent".to_string(),
+            created_at: Utc::now(),
+            sent_at: Some(Utc::now()),
+            error: None,
+            source_kind: Some("run".to_string()),
+            source_run_id: Some(42),
+            source_conversation_id: None,
+        },
+    );
+
+    let rendered = AgentNotificationDetailPageTemplate::render_view(
+        sample_agent_detail_row(),
+        notification,
+        1,
+        Navbar::default(),
+    )
+    .expect("render notification detail page");
+
+    assert!(rendered.contains("Position changed"));
+    assert!(rendered.contains("BTC position increased from 0.1 to 0.2."));
+    assert!(rendered.contains("href=\"/agents/test-agent/runs/42\""));
+    assert!(rendered.contains("Run #42"));
 }
 
 #[test]

@@ -7,11 +7,10 @@ use crate::{
     db::DbPool,
     gateway::model::NotificationSeverity,
     notifications::model::{
-        NotificationHistoryRow, NotificationProvenance, NotificationRecord, NotificationRow,
+        NotificationDetailRow, NotificationHistoryRow, NotificationProvenance, NotificationRecord,
+        NotificationRow,
     },
 };
-
-pub const NOTIFICATION_HISTORY_LIMIT: i64 = 100;
 
 /// Count every notification for an agent, without applying the history-page limit.
 pub async fn count_notifications(pool: &DbPool, agent_key: &str) -> Result<i64> {
@@ -212,23 +211,45 @@ async fn authorize_notification_provenance(
     Ok(())
 }
 
-/// List the most recent notifications for an agent's operator history.
-pub async fn list_notification_history(
+/// List one ordered page of notifications for an agent's operator history.
+pub async fn list_notification_history_page(
     pool: &DbPool,
     agent_key: &str,
+    limit: i64,
+    offset: i64,
 ) -> Result<Vec<NotificationHistoryRow>> {
     query_as::<_, NotificationHistoryRow>(
         "SELECT id, title, body, severity, status, created_at, sent_at, error
            FROM notifications
           WHERE agent_key = $1
           ORDER BY created_at DESC, id DESC
-          LIMIT $2",
+          LIMIT $2 OFFSET $3",
     )
     .bind(agent_key)
-    .bind(NOTIFICATION_HISTORY_LIMIT)
+    .bind(limit)
+    .bind(offset)
     .fetch_all(pool)
     .await
-    .with_context(|| format!("failed to list notification history for agent {agent_key}"))
+    .with_context(|| format!("failed to list notification history page for agent {agent_key}"))
+}
+
+/// Get one notification, scoped to its owning agent.
+pub async fn get_notification(
+    pool: &DbPool,
+    agent_key: &str,
+    id: Uuid,
+) -> Result<Option<NotificationDetailRow>> {
+    query_as::<_, NotificationDetailRow>(
+        "SELECT title, body, severity, status, created_at, sent_at, error,
+                source_kind, source_run_id, source_conversation_id
+           FROM notifications
+          WHERE agent_key = $1 AND id = $2",
+    )
+    .bind(agent_key)
+    .bind(id)
+    .fetch_optional(pool)
+    .await
+    .with_context(|| format!("failed to get notification {id}"))
 }
 
 /// Delete one notification, scoped to its owning agent.
@@ -404,7 +425,7 @@ mod tests {
         .await
         .expect("create second notification");
 
-        let history = list_notification_history(&pool, &first_key)
+        let history = list_notification_history_page(&pool, &first_key, 50, 0)
             .await
             .expect("list notification history");
 
@@ -460,11 +481,11 @@ mod tests {
             1
         );
         assert_eq!(
-            list_notification_history(&pool, &first_key)
+            list_notification_history_page(&pool, &first_key, 50, 0)
                 .await
                 .expect("list first agent notification history")
                 .len(),
-            NOTIFICATION_HISTORY_LIMIT as usize
+            50
         );
     }
 
@@ -497,7 +518,7 @@ mod tests {
                 .expect("try to delete other agent notification")
         );
         assert_eq!(
-            list_notification_history(&pool, &owner_key)
+            list_notification_history_page(&pool, &owner_key, 50, 0)
                 .await
                 .expect("list owner notification history")
                 .len(),

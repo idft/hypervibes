@@ -102,16 +102,16 @@
                                 </td>
                                 <td class="px-3 py-3">
                                     <div class="flex min-w-0 items-center gap-2">
-                                        <span class="w-44 shrink-0 truncate font-medium text-zinc-100">{{ notification.title }}</span>
-                                        <span class="inline-flex shrink-0 rounded border px-1.5 py-0.5 text-xs {{ notification.severity_class }}">{{ notification.severity }}</span>
-                                        {% if let Some(sent_at) = notification.sent_at %}
-                                        <span title="Sent {{ sent_at.fallback_text }}" class="inline-flex shrink-0 rounded border px-1.5 py-0.5 text-xs {{ notification.status_class }}">{{ notification.status }}</span>
-                                        {% else if let Some(error) = notification.error %}
-                                        <span title="{{ error }}" class="inline-flex shrink-0 rounded border px-1.5 py-0.5 text-xs {{ notification.status_class }}">{{ notification.status }}</span>
-                                        {% else %}
-                                        <span class="inline-flex shrink-0 rounded border px-1.5 py-0.5 text-xs {{ notification.status_class }}">{{ notification.status }}</span>
-                                        {% endif %}
-                                        <span class="min-w-0 flex-1 truncate text-zinc-400">{{ notification.body }}</span>
+                                        <a href="{{ notification.detail_url }}" class="flex min-w-0 flex-1 items-center gap-2 rounded outline-none hover:text-white focus-visible:ring-2 focus-visible:ring-zinc-500">
+                                            <span class="w-44 shrink-0 truncate font-medium text-zinc-100">{{ notification.title }}</span>
+                                            <span class="inline-flex shrink-0 rounded border px-1.5 py-0.5 text-xs {{ notification.severity_class }}">{{ notification.severity }}</span>
+                                            {% if let Some(sent_at) = notification.sent_at %}
+                                            <span title="Sent {{ sent_at.fallback_text }}" class="inline-flex shrink-0 rounded border px-1.5 py-0.5 text-xs {{ notification.status_class }}">{{ notification.status }}</span>
+                                            {% else if let Some(error) = notification.error %}
+                                            <span title="{{ error }}" class="inline-flex shrink-0 rounded border px-1.5 py-0.5 text-xs {{ notification.status_class }}">{{ notification.status }}</span>
+                                            {% endif %}
+                                            <span class="min-w-0 flex-1 truncate text-zinc-400">{{ notification.body }}</span>
+                                        </a>
                                     </div>
                                 </td>
                                 <td class="w-40 px-3 py-3 text-right text-xs text-zinc-500">
@@ -126,6 +126,18 @@
                             {% endfor %}
                         </tbody>
                     </table>
+                </div>
+                <div class="mt-4 shrink-0 flex flex-col gap-3 border-t border-zinc-800 pt-4 text-sm text-zinc-400 sm:flex-row sm:items-center sm:justify-between">
+                    <p>Showing {{ notifications_range_start }}-{{ notifications_range_end }} of {{ notifications_total_count }} notifications</p>
+                    <div class="flex items-center gap-2">
+                        {% if let Some(previous_page_url) = notifications_previous_page_url %}
+                        <a href="{{ previous_page_url }}" hx-get="{{ previous_page_url }}" hx-select="#agent-notifications" hx-target="#agent-notifications" hx-swap="outerHTML" hx-push-url="true" class="inline-flex items-center rounded-full border border-zinc-800 px-3 py-1.5 text-xs font-medium text-zinc-300 hover:border-zinc-700 hover:text-white">Previous</a>
+                        {% endif %}
+                        <span class="px-2 text-xs uppercase tracking-[0.16em] text-zinc-500">Page {{ notifications_page }} of {{ notifications_total_pages }}</span>
+                        {% if let Some(next_page_url) = notifications_next_page_url %}
+                        <a href="{{ next_page_url }}" hx-get="{{ next_page_url }}" hx-select="#agent-notifications" hx-target="#agent-notifications" hx-swap="outerHTML" hx-push-url="true" class="inline-flex items-center rounded-full border border-zinc-800 px-3 py-1.5 text-xs font-medium text-zinc-300 hover:border-zinc-700 hover:text-white">Next</a>
+                        {% endif %}
+                    </div>
                 </div>
             </form>
             {% endif %}
