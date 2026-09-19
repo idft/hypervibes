@@ -2,7 +2,9 @@ use askama::Template;
 
 use crate::agents::model::AgentDetailRow;
 
-use super::agents::{AgentShowTab, AgentShowTabLink, ModelPickerView, build_agent_show_tabs};
+use super::agents::{
+    AgentShowTabLink, ModelPickerView, build_agent_show_tabs, tab_for_sub_agent_kind,
+};
 use super::navbar::Navbar;
 use super::runs::HarnessSubAgentRunView;
 use super::shared::{LocalTimestampView, TimeoutEditorView, format_duration, local_timestamp_view};
@@ -250,7 +252,7 @@ impl AgentJobDetailPageTemplate {
         Self {
             tabs: build_agent_show_tabs(
                 &agent,
-                detail_tab_for_kind(&job.sub_agent_kind),
+                tab_for_sub_agent_kind(&job.sub_agent_kind),
                 notification_count,
             ),
             agent_tabs_use_htmx: false,
@@ -282,15 +284,6 @@ pub struct ModelPickerPartialTemplate {
 impl ModelPickerPartialTemplate {
     pub fn render_view(model_picker: ModelPickerView) -> Result<String, askama::Error> {
         Self { model_picker }.render()
-    }
-}
-
-/// Map a sub-agent kind to the left-rail tab that owns its page.
-fn detail_tab_for_kind(sub_agent_kind: &str) -> AgentShowTab {
-    match sub_agent_kind {
-        "trading" => AgentShowTab::Trading,
-        "review" => AgentShowTab::Review,
-        _ => AgentShowTab::Analysis,
     }
 }
 

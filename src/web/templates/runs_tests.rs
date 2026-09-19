@@ -64,6 +64,31 @@ fn run_detail_page_renders_opencode_session_sections() {
 }
 
 #[test]
+fn run_detail_page_highlights_the_owning_agent_role() {
+    for (sub_agent_kind, tab_label, tab_path) in [
+        ("analysis", "Analysis", "analysis"),
+        ("trading", "Trading", "trading"),
+        ("review", "Review", "review"),
+    ] {
+        let mut row = sample_run_row(7, "succeeded", "role-run");
+        row.sub_agent_kind = sub_agent_kind.to_string();
+        let rendered = AgentRunDetailPageTemplate::render_view(
+            sample_opencode_detail_row(),
+            HarnessSubAgentRunDetailView::from_row(&row),
+            None,
+            false,
+            0,
+            Navbar::default(),
+        )
+        .expect("render run detail page");
+
+        assert!(rendered.contains(&format!(
+            "href=\"/agents/test-agent/{tab_path}\" data-agent-tab-link aria-current=\"page\" title=\"{tab_label}\""
+        )));
+    }
+}
+
+#[test]
 fn run_error_renders_in_fixed_summary_not_transcript() {
     let mut row = sample_run_row(9, "running", "analysis-15m");
     row.error_summary = Some("Usage limit reached".to_string());

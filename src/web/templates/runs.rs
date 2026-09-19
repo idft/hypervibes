@@ -4,7 +4,7 @@ use serde_json::Value;
 
 use crate::agents::model::AgentDetailRow;
 
-use super::agents::{AgentShowTab, AgentShowTabLink, build_agent_show_tabs};
+use super::agents::{AgentShowTabLink, build_agent_show_tabs, tab_for_sub_agent_kind};
 use super::navbar::Navbar;
 use super::shared::{
     LocalTimestampView, add_thousands_separators, format_decimal_with_commas, format_duration,
@@ -31,6 +31,7 @@ pub struct HarnessSubAgentRunView {
 pub struct HarnessSubAgentRunDetailView {
     pub id: i64,
     pub agent_key: String,
+    pub sub_agent_kind: String,
     pub status: String,
     pub status_label: String,
     pub status_class: String,
@@ -102,7 +103,7 @@ pub struct OpenCodeSessionErrorView {
 
 impl HarnessSubAgentRunView {
     pub fn from_row(row: &crate::harness::model::HarnessSubAgentRunRow) -> Self {
-        let _ = (&row.sub_agent_kind, row.created_at, row.updated_at);
+        let _ = (row.created_at, row.updated_at);
         let (status_label, status_class) = status_badge(row.status.as_str());
         let duration_text = run_duration_text(row.started_at, row.finished_at);
 
@@ -130,6 +131,7 @@ impl HarnessSubAgentRunDetailView {
         Self {
             id: row.id,
             agent_key: row.agent_key.clone(),
+            sub_agent_kind: row.sub_agent_kind.clone(),
             status: row.status.clone(),
             status_label,
             status_class,
@@ -350,7 +352,11 @@ impl AgentRunDetailPageTemplate {
             session_lookup_attempted,
         )?;
         Self {
-            tabs: build_agent_show_tabs(&agent, AgentShowTab::Analysis, notification_count),
+            tabs: build_agent_show_tabs(
+                &agent,
+                tab_for_sub_agent_kind(&run.sub_agent_kind),
+                notification_count,
+            ),
             agent_tabs_use_htmx: false,
             agent,
             run,

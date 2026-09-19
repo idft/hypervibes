@@ -6,6 +6,7 @@ use crate::{
         model::{AgentDetailRow, AgentListRow, AgentReadiness, CreateAgentForm},
         store::AgentInstrumentOptionRow,
     },
+    harness::model::{SUB_AGENT_KIND_REVIEW, SUB_AGENT_KIND_TRADING},
     memory::MemoryRecord,
     model_catalog::options::ModelPickerOption,
     notifications::model::{NotificationDetailRow, NotificationHistoryRow},
@@ -81,6 +82,15 @@ impl AgentShowTab {
             Self::Settings => format!("/agents/{agent_key}/settings"),
             Self::SubAgentsHeading => format!("/agents/{agent_key}"),
         }
+    }
+}
+
+/// Map a sub-agent kind to the left-rail tab that owns its page.
+pub(super) fn tab_for_sub_agent_kind(sub_agent_kind: &str) -> AgentShowTab {
+    match sub_agent_kind {
+        SUB_AGENT_KIND_TRADING => AgentShowTab::Trading,
+        SUB_AGENT_KIND_REVIEW => AgentShowTab::Review,
+        _ => AgentShowTab::Analysis,
     }
 }
 
