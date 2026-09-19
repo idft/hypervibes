@@ -16,7 +16,9 @@ Run the script from the agent workspace root:
 ```
 
 `SYMBOL` and `TIMEFRAME` are positional arguments. Do not use unsupported flags
-such as `--coin`, `--symbol`, `--timeframe`, or `--days`.
+such as `--coin`, `--symbol`, `--timeframe`, or `--days`. The documented command
+and this skill are authoritative: do not inspect the helper source or run shell
+probes to discover options.
 
 Examples:
 
@@ -60,7 +62,10 @@ Set `HYPERLIQUID_ENVIRONMENT` to `mainnet` or `testnet`. Defaults to `mainnet`.
    includes the 1-hour candle that opened at `B - interval_ms`, because it
    closes exactly at `B`, but excludes later candles.
 - Do not pair `--end-time` with `--closed-before`; the local close filter
-   is what guarantees no future-leakage.
+  is what guarantees no future-leakage.
+- For a boundary-anchored analysis job, never replace `--closed-before B_ms`
+  with `--end-time`, including when requesting a smaller candle window.
+  `--end-time` is for manual, non-boundary-anchored historical research only.
 - With `--closed-before`, `--limit` is the minimum number of eligible candles.
   The helper expands its fetch window when needed, then saves the most recent
   eligible candles. It fails rather than returning fewer than requested.
@@ -84,8 +89,9 @@ Small JSON manifest to stdout:
 `requested_boundary_ms` is `null` when `--closed-before` is not supplied;
 `actual_max_close_ms` is `null` when no candles pass the filter.
 
-The saved JSON file is the canonical scratch artifact for the current Analysis
-job. Its shape is:
+The saved JSON file is pretty-printed JSON so the workspace read tool can inspect
+complete candle records line by line. It is the canonical scratch artifact for
+the current Analysis job, with this shape:
 
 ```json
 {

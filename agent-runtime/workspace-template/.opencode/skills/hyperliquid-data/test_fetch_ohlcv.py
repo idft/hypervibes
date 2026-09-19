@@ -248,6 +248,24 @@ class OutputDirectoryTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "under scratch"):
             self.module.output_dir_from_argument("../outside")
 
+    def test_writes_line_oriented_json_for_workspace_reads(self) -> None:
+        import json
+        import tempfile
+
+        payload = {
+            "symbol": "BTC",
+            "timeframe": "15m",
+            "interval_ms": 900_000,
+            "candles": [{"timestamp_ms": 100, "close": 3.0}],
+        }
+        with tempfile.TemporaryDirectory() as temporary:
+            output_path = self.module.write_candles(Path(temporary), payload)
+            written = output_path.read_text()
+
+        self.assertIn('\n  "symbol": "BTC",\n', written)
+        self.assertIn('\n  "candles": [\n', written)
+        self.assertEqual(json.loads(written), payload)
+
 
 class ManifestIncludesBoundaryTests(unittest.TestCase):
     """Smoke-test that main() emits the requested boundary and max close

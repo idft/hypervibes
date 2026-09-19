@@ -184,7 +184,9 @@ def write_candles(output_dir: Path, payload: dict[str, Any]) -> Path:
     temp_path = output_path.with_name(f".{output_path.name}.tmp")
 
     with temp_path.open("w", encoding="utf-8") as f:
-        json.dump(payload, f, separators=(",", ":"))
+        # Keep one JSON value per line so the workspace read tool can inspect
+        # complete candles without truncating a single minified line.
+        json.dump(payload, f, indent=2)
         f.write("\n")
     os.replace(temp_path, output_path)
     return output_path
