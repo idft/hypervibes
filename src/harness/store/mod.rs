@@ -38,8 +38,7 @@ pub use sub_agents::{
     get_dispatch_sub_agent, get_singleton_sub_agent, insert_analysis_sub_agent_with_model_variant,
     insert_singleton_sub_agent, list_analysis_sub_agents, list_due_candle_sub_agents,
     list_sub_agent_runs_page, set_candle_sub_agent_timeframe, set_sub_agent_capabilities,
-    set_sub_agent_enabled, set_sub_agent_model_with_variant,
-    set_sub_agent_notification_send_enabled, set_sub_agent_timeout,
+    set_sub_agent_enabled, set_sub_agent_model_with_variant, set_sub_agent_timeout,
 };
 pub use workspace::{
     get_latest_provider_config_reload_task, get_next_queued_provider_config_reload_task,

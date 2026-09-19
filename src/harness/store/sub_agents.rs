@@ -6,10 +6,10 @@ use crate::{
     db::DbPool,
     harness::{
         model::{
-            CAPABILITY_NOTIFICATION_SEND, CAPABILITY_PROMPT_REVISION_SUBMIT,
-            HarnessDispatchSubAgentRow, HarnessSubAgentRow, HarnessSubAgentRunRow,
-            RUN_STATUS_QUEUED, RUN_STATUS_SKIPPED, SUB_AGENT_KIND_ANALYSIS, SUB_AGENT_KIND_REVIEW,
-            SUB_AGENT_KIND_TRADING,
+            CAPABILITY_INDICATOR_WRITE, CAPABILITY_NOTIFICATION_SEND,
+            CAPABILITY_PROMPT_REVISION_SUBMIT, HarnessDispatchSubAgentRow, HarnessSubAgentRow,
+            HarnessSubAgentRunRow, RUN_STATUS_QUEUED, RUN_STATUS_SKIPPED, SUB_AGENT_KIND_ANALYSIS,
+            SUB_AGENT_KIND_REVIEW, SUB_AGENT_KIND_TRADING,
         },
         sub_agent_key::{build_generated_event_sub_agent_key, build_generated_sub_agent_key},
         timeframe::{
@@ -523,25 +523,6 @@ pub async fn set_sub_agent_enabled(
     Ok(result.rows_affected() > 0)
 }
 
-/// Updates the notification capability assignment used by future runs. Existing
-/// run snapshots retain the capability state they were dispatched with.
-pub async fn set_sub_agent_notification_send_enabled(
-    pool: &DbPool,
-    agent_key: &str,
-    sub_agent_id: i64,
-    enabled: bool,
-) -> Result<bool> {
-    let Some(job) = get_agent_sub_agent(pool, agent_key, sub_agent_id).await? else {
-        return Ok(false);
-    };
-    let mut capabilities = job.enabled_capabilities;
-    capabilities.retain(|capability| capability != CAPABILITY_NOTIFICATION_SEND);
-    if enabled {
-        capabilities.push(CAPABILITY_NOTIFICATION_SEND.to_string());
-    }
-    set_sub_agent_capabilities(pool, agent_key, sub_agent_id, capabilities).await
-}
-
 /// Replaces the named capability assignment for future runs. Role ceilings are
 /// validated before persistence; current run snapshots remain unchanged.
 pub async fn set_sub_agent_capabilities(
@@ -579,7 +560,10 @@ pub async fn set_sub_agent_capabilities(
 fn default_capabilities_for_kind(sub_agent_kind: &str) -> Vec<&'static str> {
     match sub_agent_kind {
         SUB_AGENT_KIND_TRADING => vec![CAPABILITY_NOTIFICATION_SEND],
-        SUB_AGENT_KIND_REVIEW => vec![CAPABILITY_PROMPT_REVISION_SUBMIT],
+        SUB_AGENT_KIND_REVIEW => vec![
+            CAPABILITY_PROMPT_REVISION_SUBMIT,
+            CAPABILITY_INDICATOR_WRITE,
+        ],
         _ => Vec::new(),
     }
 }

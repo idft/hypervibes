@@ -208,6 +208,38 @@ function initJobDetailModals(root: ParentNode) {
   });
 }
 
+function initCapabilities(root: ParentNode) {
+  root.querySelectorAll<HTMLElement>("[data-capabilities]").forEach((card) => {
+    if (card.dataset.bound === "true") return;
+    const trigger = card.querySelector<HTMLButtonElement>("[data-capabilities-modal-trigger]");
+    const modal = document.getElementById("capabilities-modal");
+    const initialFocus = modal?.querySelector<HTMLElement>("[data-capabilities-modal-initial-focus]");
+    const inputs = Array.from(modal?.querySelectorAll<HTMLInputElement>('input[type="checkbox"]') ?? []);
+    if (!trigger || !modal || !initialFocus || inputs.length === 0) return;
+    card.dataset.bound = "true";
+    let savedChecks: boolean[] = [];
+    const close = (restore: boolean) => {
+      if (restore) inputs.forEach((input, index) => { input.checked = savedChecks[index] ?? false; });
+      modal.classList.add("hidden");
+      modal.classList.remove("flex");
+      modal.setAttribute("aria-hidden", "true");
+      document.body.classList.remove("overflow-hidden");
+      trigger.focus();
+    };
+    const open = () => {
+      savedChecks = inputs.map((input) => input.checked);
+      modal.classList.remove("hidden");
+      modal.classList.add("flex");
+      modal.setAttribute("aria-hidden", "false");
+      document.body.classList.add("overflow-hidden");
+      initialFocus.focus();
+    };
+    trigger.addEventListener("click", open);
+    modal.querySelectorAll<HTMLElement>("[data-capabilities-modal-close]").forEach((button) => button.addEventListener("click", () => close(true)));
+    modal.addEventListener("keydown", (event) => { if (event.key === "Escape") { event.preventDefault(); close(true); } });
+  });
+}
+
 
 function initNewJobForm(root: ParentNode) {
   const form = root.querySelector<HTMLElement>("[data-new-sub-agent-form]");
@@ -274,7 +306,7 @@ function initTelegramGateway(root: ParentNode) {
   modal.addEventListener("keydown", (event) => { if (event.key === "Escape") { event.preventDefault(); close(); } });
 }
 
-export function initAgentPage(root: ParentNode = document) { initAgentCreation(root); initPromptEditor(root); initInstrumentSelectors(root); initClickableRows(root); initInlineEditors(root); initJobDetailModals(root); initNewJobForm(root); initNotifications(root); initTelegramGateway(root); }
+export function initAgentPage(root: ParentNode = document) { initAgentCreation(root); initPromptEditor(root); initInstrumentSelectors(root); initClickableRows(root); initInlineEditors(root); initJobDetailModals(root); initCapabilities(root); initNewJobForm(root); initNotifications(root); initTelegramGateway(root); }
 export function installAgentPageLifecycle() {
   installAgentModals();
   document.addEventListener("click", (event) => {

@@ -13,13 +13,13 @@ permission:
   hypervibes_write_memory: allow
   hypervibes_list_strategy_prompts: allow
   hypervibes_get_strategy_prompt: allow
-  hypervibes_submit_prompt_revision: allow
+  hypervibes_submit_prompt_revision: deny
   hypervibes_list_analysis_instruments: allow
   hypervibes_list_indicators: allow
   hypervibes_get_indicator: allow
   hypervibes_get_indicator_results: allow
-  hypervibes_create_indicator: allow
-  hypervibes_update_indicator: allow
+  hypervibes_create_indicator: deny
+  hypervibes_update_indicator: deny
   hypervibes_send_notification: deny
 ---
 
@@ -38,13 +38,15 @@ forward each still-valid prior learning, add the new learning, and explicitly
 mark superseded rules as removed or replaced. Its summary must be exactly
 `Accumulated agent learnings`.
 
-When evidence justifies a material strategy change, submit one structured prompt
-revision batch for Trading and only Analysis jobs opted in to review updates.
-Never revise Review prompts.
+Use prompt-revision and indicator-writing tools only when the run grants them.
+When allowed and evidence justifies a material strategy change, submit one
+structured prompt revision batch for Trading or Analysis. Never revise Review
+prompts.
 
-When evidence justifies it, inspect indicator results and create an indicator or
-new immutable version. Explain the evidence and revision rationale in the review
-memory; never encode trading policy into Pine source.
+When indicator writing is allowed and evidence justifies it, inspect indicator
+results and create an indicator or new immutable version. Explain the evidence
+and revision rationale in the review memory; never encode trading policy into
+Pine source.
 
 Before creating or updating an indicator, call
 `hypervibes_list_analysis_instruments` and use the returned IDs unchanged for

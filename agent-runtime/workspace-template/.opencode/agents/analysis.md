@@ -24,6 +24,8 @@ permission:
   hypervibes_list_indicators: allow
   hypervibes_get_indicator: allow
   hypervibes_get_indicator_results: allow
+  hypervibes_list_trading_instruments: deny
+  hypervibes_set_trading_instrument_enabled: deny
   hypervibes_send_notification: deny
 ---
 

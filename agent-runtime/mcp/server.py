@@ -436,6 +436,35 @@ def list_analysis_instruments() -> list[str]:
 
 
 @mcp.tool()
+def list_trading_instruments() -> list[str]:
+    """List the active instruments currently allowed for new Trading exposure."""
+    result = _request("GET", "/api/v1/trading-instruments")
+    if not isinstance(result, list) or not all(isinstance(value, str) for value in result):
+        raise RuntimeError("HyperVibes trading instruments returned unexpected shape")
+    return result
+
+
+@mcp.tool()
+def set_trading_instrument_enabled(instrument_id: str, enabled: bool) -> list[str]:
+    """Enable or disable one Trading instrument and return the resulting allowlist.
+
+    Enabling is permitted only for an active instrument currently selected for
+    Analysis. Disabling the final Trading instrument pauses new exposure but
+    does not close positions.
+    """
+    if not isinstance(enabled, bool):
+        raise ValueError("enabled must be a boolean")
+    result = _request(
+        "PUT",
+        f"/api/v1/trading-instruments/{_require_nonblank('instrument_id', instrument_id)}",
+        json_body={"enabled": enabled},
+    )
+    if not isinstance(result, list) or not all(isinstance(value, str) for value in result):
+        raise RuntimeError("HyperVibes trading instruments returned unexpected shape")
+    return result
+
+
+@mcp.tool()
 def list_indicators() -> list[dict[str, Any]]:
     """List this agent's indicator definitions and their latest run status."""
     result = _request("GET", "/api/v1/indicators")

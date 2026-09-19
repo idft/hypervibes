@@ -29,13 +29,6 @@ pub struct PromptRevisionChange {
     pub prompt: String,
 }
 
-#[derive(sqlx::FromRow)]
-struct ReviewRevisionTarget {
-    sub_agent_kind: String,
-    #[sqlx(json)]
-    enabled_capabilities: Vec<String>,
-}
-
 pub async fn rollback_prompt_revision(
     pool: &DbPool,
     agent_key: &str,
@@ -118,13 +111,12 @@ pub async fn submit_review_revisions(
         .await?;
         anyhow::ensure!(exists, "evidence memory does not belong to agent");
     }
-    // Validate every target: same-agent ownership, analysis opt-in to Review
-    // prompt updates (or the trading singleton), and a matching base
-    // revision. The Review singleton may only revise Trading prompts and
-    // opted-in Analysis prompts, never its own prompt or Coding's.
+    // Validate every target: same-agent ownership, an eligible role, and a
+    // matching base revision. Review may revise Trading and Analysis prompts,
+    // but never its own prompt.
     for change in changes {
-        let target: Option<ReviewRevisionTarget> = sqlx::query_as(
-            "SELECT jobs.sub_agent_kind, jobs.enabled_capabilities
+        let target: Option<(String,)> = sqlx::query_as(
+            "SELECT jobs.sub_agent_kind
                FROM harness_sub_agents AS jobs
               WHERE jobs.id = $1 AND jobs.agent_key = $2
               FOR UPDATE OF jobs",
@@ -136,20 +128,10 @@ pub async fn submit_review_revisions(
         let Some(target) = target else {
             anyhow::bail!("prompt revision target does not belong to agent");
         };
-        match target.sub_agent_kind.as_str() {
-            SUB_AGENT_KIND_TRADING => {}
-            SUB_AGENT_KIND_ANALYSIS => {
-                anyhow::ensure!(
-                    target
-                        .enabled_capabilities
-                        .iter()
-                        .any(|capability| capability
-                            == crate::harness::model::CAPABILITY_REVIEW_PROMPT_UPDATE),
-                    "analysis job has not opted in to review prompt updates"
-                );
-            }
+        match target.0.as_str() {
+            SUB_AGENT_KIND_TRADING | SUB_AGENT_KIND_ANALYSIS => {}
             other => anyhow::bail!(
-                "review cannot revise the {other} prompt; only Trading and opted-in Analysis prompts are eligible"
+                "review cannot revise the {other} prompt; only Trading and Analysis prompts are eligible"
             ),
         }
         let current: AgentStrategyPromptRow = query_as(

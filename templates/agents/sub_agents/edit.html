@@ -43,33 +43,17 @@
                 </form>
             </section>
 
-            <section class="rounded-xl border border-zinc-800 bg-zinc-950/40 p-5">
-                <h2 class="text-lg font-medium text-white">Notifications</h2>
-                <p class="mt-1 text-sm text-zinc-400">Allow this sub-agent to send notifications through the agent's messaging gateway.</p>
-                <form action="{{ job.notification_capability_update_action }}" method="post" class="mt-4 flex flex-wrap items-center gap-3">
-                    {% if job.notification_send_enabled %}
-                    <input type="hidden" name="enabled" value="off">
-                    <button type="submit" class="cursor-pointer rounded-full border border-zinc-700 bg-zinc-900/70 px-4 py-2 text-sm font-medium text-zinc-200 hover:border-zinc-600 hover:bg-zinc-800 hover:text-white">Disable notifications</button>
-                    {% else %}
-                    <button type="submit" name="enabled" value="on" class="cursor-pointer rounded-full bg-emerald-600 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-500">Enable notifications</button>
+            <section class="grid gap-4 lg:grid-cols-2 lg:items-stretch">
+                <div class="border border-zinc-800 bg-zinc-950/40 p-5">
+                    <form action="{{ job.model_update_action }}" method="post" hx-post="{{ job.model_update_action }}" hx-swap="none">
+                        {% include "agents/components/model-picker.html" %}
+                    </form>
+                    {% if let Some(error) = job.model_error %}
+                    <p class="mt-2 text-xs text-amber-300" role="alert">{{ error }}</p>
                     {% endif %}
-                </form>
+                </div>
+                {% include "agents/components/capabilities.html" %}
             </section>
-
-            {% if active_role_label == "Trading" %}
-            <section class="rounded-xl border border-zinc-800 bg-zinc-950/40 p-5">
-                <h2 class="text-lg font-medium text-white">Review prompt updates</h2>
-                <p class="mt-1 text-sm text-zinc-400">When enabled, the Review sub-agent may revise the Trading prompt based on reviewed evidence.</p>
-                <form action="{{ job.review_prompt_update_action }}" method="post" class="mt-4 flex items-center gap-3">
-                    {% if job.review_prompt_update_enabled %}
-                    <input type="hidden" name="enabled" value="off">
-                    <button type="submit" class="cursor-pointer rounded-full border border-zinc-700 bg-zinc-900/70 px-4 py-2 text-sm font-medium text-zinc-200 hover:border-zinc-600 hover:bg-zinc-800 hover:text-white">Disable Review prompt updates</button>
-                    {% else %}
-                    <button type="submit" class="cursor-pointer rounded-full bg-emerald-600 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-500">Enable Review prompt updates</button>
-                    {% endif %}
-                </form>
-            </section>
-            {% endif %}
         </div>
 
         <div class="mt-5 flex justify-end border-t border-zinc-800 pt-5">

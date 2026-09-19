@@ -118,6 +118,8 @@ class HyperVibesMcpServerTests(unittest.TestCase):
                 "get_strategy_prompt",
                 "update_strategy_prompt",
                 "list_analysis_instruments",
+                "list_trading_instruments",
+                "set_trading_instrument_enabled",
                 "list_indicators",
                 "get_indicator",
                 "get_indicator_results",
@@ -168,7 +170,7 @@ class HyperVibesMcpServerTests(unittest.TestCase):
         review = (profiles / "review.md").read_text(encoding="utf-8")
         self.assertIn("hypervibes_list_strategy_prompts: allow", review)
         self.assertIn("hypervibes_get_strategy_prompt: allow", review)
-        self.assertIn("hypervibes_submit_prompt_revision: allow", review)
+        self.assertIn("hypervibes_submit_prompt_revision: deny", review)
         self.assertNotIn("hypervibes_update_strategy_prompt:", review)
 
     def test_strategy_prompt_tools_use_authenticated_api_paths(self) -> None:
@@ -230,6 +232,25 @@ class HyperVibesMcpServerTests(unittest.TestCase):
 
         self.assertEqual(result, ["BTC", "ETH"])
         request.assert_called_once_with("GET", "/api/v1/analysis-instruments")
+
+    def test_trading_instrument_tools_use_the_authenticated_api_paths(self) -> None:
+        with mock.patch.object(self.server, "_request", return_value=["BTC", "ETH"]) as request:
+            listed = self.server.list_trading_instruments()
+            updated = self.server.set_trading_instrument_enabled("ETH", True)
+
+        self.assertEqual(listed, ["BTC", "ETH"])
+        self.assertEqual(updated, ["BTC", "ETH"])
+        self.assertEqual(
+            request.call_args_list,
+            [
+                mock.call("GET", "/api/v1/trading-instruments"),
+                mock.call(
+                    "PUT",
+                    "/api/v1/trading-instruments/ETH",
+                    json_body={"enabled": True},
+                ),
+            ],
+        )
 
     def test_strategy_prompt_tools_validate_inputs_and_response_shape(self) -> None:
         with self.assertRaises(ValueError):

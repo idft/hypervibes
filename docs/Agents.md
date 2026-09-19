@@ -23,8 +23,9 @@ market-analysis role or standalone Prompts page.
 Analysis uses approved data tools and publishes scoped research memories.
 Trading synthesizes the current research context, records `trading_decision`
 audit memories when possible, and manages orders. Review records outcomes and
-learnings and can revise Trading and opted-in Analysis prompts. Missing or stale
-research does not block the scheduler or order gateway.
+learnings and can revise Trading and Analysis prompts when granted that
+capability. Missing or stale research does not block the scheduler or order
+gateway.
 
 The interface also shows positions, orders, transactions, memories,
 conversations, and Indicators. Missing or stale live account data is marked
@@ -41,7 +42,10 @@ sub-agent prompts or account settings.
 
 Analysis instruments limit the markets Analysis and indicators can inspect.
 Trading instruments are the strict allowlist for new order exposure. Adding an
-analysis instrument never adds it to the trading allowlist. At least one trading
+Analysis instrument never automatically adds it to the Trading allowlist. An
+Analysis run explicitly granted the Trading-instrument capability may promote an
+active Analysis instrument or remove a Trading instrument. Removing the final
+instrument pauses new exposure without closing positions. At least one Trading
 instrument must be selected before the agent can trade.
 
 ## Indicators

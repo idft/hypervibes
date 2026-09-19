@@ -17,7 +17,7 @@ private key.
 | `hypervibes_list_strategy_prompts` | Chat and Review |
 | `hypervibes_get_strategy_prompt` | Chat and Review |
 | `hypervibes_update_strategy_prompt` | Chat only; confirmation required |
-| `hypervibes_submit_prompt_revision` | Review only, for snapshotted permitted targets |
+| `hypervibes_submit_prompt_revision` | Review with the prompt-update capability; Trading and Analysis targets only |
 | `hypervibes_get_trading_context` | Trading and Chat |
 | `hypervibes_get_memory_detail` | Review and Chat |
 | `hypervibes_list_memories` | Analysis, Review, and Chat |
@@ -30,16 +30,23 @@ private key.
 | `hypervibes_cancel_all_orders` | Trading and permitted Chat |
 | `hypervibes_send_notification` | Trading by default |
 | `hypervibes_list_analysis_instruments` | Analysis, Review, and Chat |
+| `hypervibes_list_trading_instruments` | Analysis with the Trading-instrument capability |
+| `hypervibes_set_trading_instrument_enabled` | Analysis with the Trading-instrument capability |
 | `hypervibes_list_indicators` | Analysis, Review, and Chat |
 | `hypervibes_get_indicator` | Analysis, Review, and Chat |
 | `hypervibes_get_indicator_results` | Analysis, Review, and Chat |
-| `hypervibes_create_indicator` | Review; Chat with confirmation |
-| `hypervibes_update_indicator` | Review; Chat with confirmation |
+| `hypervibes_create_indicator` | Review with the indicator-write capability; Chat with confirmation |
+| `hypervibes_update_indicator` | Review with the indicator-write capability; Chat with confirmation |
 
 `hypervibes:notification_send` is the named capability for queueing a gateway
 notification. Trading enables it by default; other scheduled roles and Chat are
 denied by default. Notification provenance and capability schema derive from the
 authenticated run or conversation, never model-supplied data.
+
+`hypervibes:trading_instrument_write` lets an Analysis run list and atomically
+change the Trading allowlist. It can enable only an active instrument currently
+selected for Analysis, but may remove any current Trading instrument. Removing
+the final instrument pauses new exposure and does not close positions.
 
 Before creating or updating an indicator, callers must obtain target IDs from
 `hypervibes_list_analysis_instruments` and pass them unchanged. An empty result
@@ -90,5 +97,5 @@ or `tif`.
 Analysis uses approved data tools for research and publishes scoped memories
 with `hypervibes_write_memory`. Its MCP surface does not provide reusable code.
 It may read published indicator definitions and results, but it cannot change
-them. Review may create a definition or immutable new version from run-scoped
-evidence. Trading has no indicator tools.
+them. Review with its indicator-write capability may create a definition or
+immutable new version from run-scoped evidence. Trading has no indicator tools.

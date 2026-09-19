@@ -58,9 +58,10 @@ pub struct HarnessSubAgentDetailView {
     pub delete_action: String,
     pub hidden_enabled_value: &'static str,
     pub notification_send_enabled: bool,
-    pub notification_capability_update_action: String,
-    pub review_prompt_update_enabled: bool,
-    pub review_prompt_update_action: String,
+    pub prompt_revision_submit_enabled: bool,
+    pub indicator_write_enabled: bool,
+    pub trading_instrument_write_enabled: bool,
+    pub capabilities_update_action: String,
 }
 
 #[derive(Debug, Clone)]
@@ -168,16 +169,20 @@ impl HarnessSubAgentDetailView {
                 .enabled_capabilities
                 .iter()
                 .any(|capability| capability == "hypervibes:notification_send"),
-            notification_capability_update_action: format!(
-                "/agents/{}/sub-agents/{}/notification-capability",
-                row.agent_key, row.id
-            ),
-            review_prompt_update_enabled: row
+            prompt_revision_submit_enabled: row
                 .enabled_capabilities
                 .iter()
-                .any(|capability| capability == "hypervibes:review_prompt_update"),
-            review_prompt_update_action: format!(
-                "/agents/{}/sub-agents/{}/review-prompt-update",
+                .any(|capability| capability == "hypervibes:prompt_revision_submit"),
+            indicator_write_enabled: row
+                .enabled_capabilities
+                .iter()
+                .any(|capability| capability == "hypervibes:indicator_write"),
+            trading_instrument_write_enabled: row
+                .enabled_capabilities
+                .iter()
+                .any(|capability| capability == "hypervibes:trading_instrument_write"),
+            capabilities_update_action: format!(
+                "/agents/{}/sub-agents/{}/capabilities",
                 row.agent_key, row.id
             ),
         }
@@ -346,6 +351,7 @@ pub struct AgentRoleEditPageTemplate {
     pub role_page_path: String,
     pub job: HarnessSubAgentDetailView,
     pub prompt_view: RolePromptView,
+    pub model_picker: super::agents::ModelPickerView,
     pub current_path: String,
     pub navbar: Navbar,
 }

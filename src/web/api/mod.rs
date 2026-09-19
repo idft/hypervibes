@@ -5,6 +5,7 @@ mod memories;
 mod notifications;
 pub(crate) mod orders;
 mod strategy_prompts;
+mod trading_instruments;
 mod transactions;
 
 #[cfg(test)]
@@ -23,13 +24,18 @@ mod orders_tests;
 #[cfg(test)]
 mod strategy_prompts_tests;
 #[cfg(test)]
+mod trading_instruments_tests;
+#[cfg(test)]
 mod transactions_tests;
 
 // Re-export so handlers are reachable by bare name from `router()` below,
 // and so test code can reference them via `super::*` if needed.
 use self::indicators::*;
 use self::notifications::create as create_notification;
-use self::{account::*, memories::*, orders::*, strategy_prompts::*, transactions::*};
+use self::{
+    account::*, memories::*, orders::*, strategy_prompts::*, trading_instruments::*,
+    transactions::*,
+};
 
 use std::sync::Arc;
 
@@ -53,6 +59,11 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/memories/{id}", get(get_memory_by_id))
         .route("/notifications", post(create_notification))
         .route("/analysis-instruments", get(list_analysis_instruments))
+        .route("/trading-instruments", get(list_trading_instruments))
+        .route(
+            "/trading-instruments/{instrument_id}",
+            axum::routing::put(set_trading_instrument),
+        )
         .route("/indicators", post(create_indicator).get(list_indicators))
         .route(
             "/indicators/{indicator_id}",

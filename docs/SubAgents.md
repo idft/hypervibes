@@ -17,7 +17,7 @@ jobs and singleton Trading and Review jobs.
 | --- | --- | --- |
 | Analysis | Candle close at 15m, 1h, or 1d | Uses approved data tools for research and publishes discoverable memories. |
 | Trading | Candle close at 5m | Synthesizes Analysis context, records decisions, and manages orders. |
-| Review | Candle close at 1d | Reviews outcomes, records learnings, and can revise permitted prompts. |
+| Review | Candle close at 1d | Reviews outcomes, records learnings, and can revise Trading and Analysis prompts when granted the capability. |
 
 Candle-close jobs run at UTC candle boundaries after the configured settling
 delay. Analysis and Trading retain the selected-instrument gate; Review does not
@@ -26,9 +26,9 @@ use that gate.
 Analysis has many independently keyed jobs. Defaults use `technical-15m`,
 `technical-1h`, and `technical-1d`; user-created jobs provide a unique bounded
 ASCII-slug key and may share a schedule or timeframe with another job. Each
-Analysis sub-agent owns an independent full prompt revision. New Analysis
-sub-agents opt out of Review prompt revisions; the sub-agent detail can
-explicitly opt in.
+Analysis sub-agents own independent full prompt revisions but never modify
+prompts themselves. Review is the sole scheduled role that can submit prompt
+revisions.
 
 ## Configuration
 
@@ -40,10 +40,11 @@ strategy input saved for that sub-agent.
 Analysis uses its approved data tools and publishes research memories. It does
 not author reusable code.
 
-Capabilities are named assignments and are snapshotted with a run. The Review
-prompt-update capability is permitted only on Analysis jobs and is not an
-Analysis workspace tool permission. Review snapshots its opted-in Analysis
-targets, their base revisions, and Trading's base revision at dispatch.
+Capabilities are named assignments and are snapshotted with a run. Notifications
+are available to every role. Analysis may optionally manage the Trading
+instrument allowlist, while Review may optionally submit prompt revisions and
+create or update indicators. Review can revise Trading and Analysis prompts but
+never its own prompt. Capability changes apply only to future runs.
 
 ## Dispatch and runs
 

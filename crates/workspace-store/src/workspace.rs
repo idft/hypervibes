@@ -310,6 +310,8 @@ fn render_run_capability_permissions(
             capability.as_str(),
             "hypervibes:notification_send"
                 | "hypervibes:prompt_revision_submit"
+                | "hypervibes:indicator_write"
+                | "hypervibes:trading_instrument_write"
                 | "hypervibes:review_prompt_update"
         ) && !capability.starts_with("custom-mcp:")
     }) {
@@ -326,32 +328,80 @@ fn render_run_capability_permissions(
         .join(format!("{profile_name}.md"));
     let profile = fs::read_to_string(&profile_path)
         .with_context(|| format!("failed to read run profile {}", profile_path.display()))?;
-    let mut replaced = 0;
-    let action = if enabled_capabilities
-        .iter()
-        .any(|capability| capability == "hypervibes:notification_send")
-    {
-        "allow"
-    } else {
-        "deny"
+    let has_capability = |capability: &str| {
+        enabled_capabilities
+            .iter()
+            .any(|enabled| enabled == capability)
+    };
+    let mut permissions = match sub_agent_kind {
+        "analysis" => vec![
+            (
+                "hypervibes_send_notification",
+                has_capability("hypervibes:notification_send"),
+                0,
+            ),
+            (
+                "hypervibes_list_trading_instruments",
+                has_capability("hypervibes:trading_instrument_write"),
+                0,
+            ),
+            (
+                "hypervibes_set_trading_instrument_enabled",
+                has_capability("hypervibes:trading_instrument_write"),
+                0,
+            ),
+        ],
+        "trading" => vec![(
+            "hypervibes_send_notification",
+            has_capability("hypervibes:notification_send"),
+            0,
+        )],
+        "review" => vec![
+            (
+                "hypervibes_send_notification",
+                has_capability("hypervibes:notification_send"),
+                0,
+            ),
+            (
+                "hypervibes_submit_prompt_revision",
+                has_capability("hypervibes:prompt_revision_submit"),
+                0,
+            ),
+            (
+                "hypervibes_create_indicator",
+                has_capability("hypervibes:indicator_write"),
+                0,
+            ),
+            (
+                "hypervibes_update_indicator",
+                has_capability("hypervibes:indicator_write"),
+                0,
+            ),
+        ],
+        _ => unreachable!("validated run profile kind"),
     };
     let rendered = profile
         .lines()
         .map(|line| {
-            if line
-                .trim_start()
-                .starts_with("hypervibes_send_notification:")
+            let trimmed = line.trim_start();
+            if let Some((tool, enabled, replacements)) = permissions
+                .iter_mut()
+                .find(|(tool, _, _)| trimmed.starts_with(&format!("{tool}:")))
             {
-                replaced += 1;
-                format!("  hypervibes_send_notification: {action}")
+                *replacements += 1;
+                let action = if *enabled { "allow" } else { "deny" };
+                format!("  {tool}: {action}")
             } else {
                 line.to_string()
             }
         })
         .collect::<Vec<_>>()
         .join("\n");
-    if replaced != 1 {
-        bail!("run profile must contain exactly one notification permission");
+    if permissions
+        .iter()
+        .any(|(_, _, replacements)| *replacements != 1)
+    {
+        bail!("run profile must contain each capability permission exactly once");
     }
     fs::write(&profile_path, format!("{rendered}\n"))
         .with_context(|| format!("failed to write run profile {}", profile_path.display()))
@@ -884,6 +934,46 @@ mod tests {
     }
 
     #[test]
+    fn capability_permissions_are_rendered_per_run() {
+        let temp = TempDir::new("opencode-capability-permissions");
+        let config = sample_config(&temp.path);
+
+        let analysis_path = RunWorkspacePath::new("btc-2", 49).expect("run path");
+        let mut analysis_input = valid_materialization_input();
+        analysis_input.enabled_capabilities =
+            vec!["hypervibes:trading_instrument_write".to_string()];
+        materialize_run_workspace(&config, &analysis_path, &analysis_input)
+            .expect("materialize analysis workspace");
+        let analysis = fs::read_to_string(
+            analysis_path
+                .workspace_host_path(&config)
+                .join(".opencode/agents/analysis.md"),
+        )
+        .expect("read analysis profile");
+        assert!(analysis.contains("hypervibes_list_trading_instruments: allow"));
+        assert!(analysis.contains("hypervibes_set_trading_instrument_enabled: allow"));
+
+        let review_path = RunWorkspacePath::new("btc-2", 50).expect("run path");
+        let mut review_input = valid_materialization_input();
+        review_input.sub_agent_kind = "review".to_string();
+        review_input.enabled_capabilities = vec![
+            "hypervibes:prompt_revision_submit".to_string(),
+            "hypervibes:indicator_write".to_string(),
+        ];
+        materialize_run_workspace(&config, &review_path, &review_input)
+            .expect("materialize review workspace");
+        let review = fs::read_to_string(
+            review_path
+                .workspace_host_path(&config)
+                .join(".opencode/agents/review.md"),
+        )
+        .expect("read review profile");
+        assert!(review.contains("hypervibes_submit_prompt_revision: allow"));
+        assert!(review.contains("hypervibes_create_indicator: allow"));
+        assert!(review.contains("hypervibes_update_indicator: allow"));
+    }
+
+    #[test]
     fn generated_profiles_enforce_the_role_permission_matrix() {
         let temp = TempDir::new("opencode-profile-permissions");
         let config = sample_config(&temp.path);
@@ -938,6 +1028,13 @@ mod tests {
         assert_profile_action(
             "analysis",
             &analysis,
+            "hypervibes_list_trading_instruments",
+            "",
+            "deny",
+        );
+        assert_profile_action(
+            "analysis",
+            &analysis,
             "hypervibes_submit_orders",
             "",
             "deny",
@@ -951,6 +1048,14 @@ mod tests {
             "allow",
         );
         assert_profile_action("review", &review, "hypervibes_write_memory", "", "allow");
+        assert_profile_action(
+            "review",
+            &review,
+            "hypervibes_submit_prompt_revision",
+            "",
+            "deny",
+        );
+        assert_profile_action("review", &review, "hypervibes_create_indicator", "", "deny");
         assert_profile_action("review", &review, "bash", "python x.py", "deny");
         assert_profile_action("review", &review, "read", "scratch/data.json", "deny");
         assert_profile_action(

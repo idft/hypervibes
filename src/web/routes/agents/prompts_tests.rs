@@ -1,6 +1,6 @@
 //! Tests for the sub-agent strategy prompt endpoints owned by the agent
 //! routes: singleton edit pages render prompt editors and the sub-agent prompt update,
-//! rollback, and review-prompt-update handlers manage revisions.
+//! rollback, and capability handlers manage revisions and role permissions.
 use crate::web::routes::router;
 use crate::web::routes::test_support::*;
 use axum::body::Body;
@@ -76,6 +76,15 @@ async fn singleton_edit_pages_render_prompt_editors() {
             "missing save button for {role}"
         );
         assert!(text.contains("name=\"base_revision_id\""));
+        assert!(text.contains("Capabilities"));
+        assert!(text.contains("Select model"));
+        if role == "review" {
+            assert!(text.contains("Update prompts"));
+            assert!(text.contains("Create and update indicators"));
+        } else {
+            assert!(!text.contains("Update prompts"));
+            assert!(!text.contains("Create and update indicators"));
+        }
     }
 
     // The Analysis list page links to per-job detail pages instead of an
@@ -93,6 +102,47 @@ async fn singleton_edit_pages_render_prompt_editors() {
     assert_eq!(response.status(), StatusCode::OK);
     let text = response_text(response).await;
     assert!(text.contains(&format!("/agents/{agent_key}/sub-agents/{analysis_id}")));
+}
+
+#[tokio::test]
+async fn post_capabilities_grants_only_role_eligible_assignments() {
+    let state = test_state().await;
+    let (agent_key, _wallet_address) = insert_test_agent(&state).await.expect("insert agent");
+    let analysis_id = sub_agent_id_for(&state, &agent_key, "analysis").await;
+
+    let response = router(state.clone())
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!(
+                    "/agents/{agent_key}/sub-agents/{analysis_id}/capabilities"
+                ))
+                .header("content-type", "application/x-www-form-urlencoded")
+                .body(Body::from(
+                    "notification_send=on&trading_instrument_write=on&prompt_revision_submit=on",
+                ))
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+    let job = crate::harness::store::get_agent_sub_agent(&state.db_pool, &agent_key, analysis_id)
+        .await
+        .expect("load analysis job")
+        .expect("analysis job exists");
+    assert!(
+        job.enabled_capabilities
+            .contains(&"hypervibes:notification_send".to_string())
+    );
+    assert!(
+        job.enabled_capabilities
+            .contains(&"hypervibes:trading_instrument_write".to_string())
+    );
+    assert!(
+        !job.enabled_capabilities
+            .contains(&"hypervibes:prompt_revision_submit".to_string())
+    );
 }
 
 #[tokio::test]

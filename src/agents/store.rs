@@ -462,6 +462,85 @@ pub async fn replace_agent_trading_instruments(
     Ok(true)
 }
 
+/// Set one trading-instrument assignment without replacing concurrent changes
+/// to the rest of the allowlist. Enabling is restricted to an active Analysis
+/// selection so an Analysis run can only promote instruments it is configured
+/// to inspect. Disabling is idempotent and may leave the allowlist empty.
+pub async fn set_agent_trading_instrument_enabled(
+    pool: &DbPool,
+    agent_key: &str,
+    instrument_id: &str,
+    enabled: bool,
+) -> Result<()> {
+    let instrument_id = instrument_id.trim();
+    if instrument_id.is_empty() {
+        return Err(anyhow!("instrument id must not be empty"));
+    }
+
+    let mut tx = pool
+        .begin()
+        .await
+        .context("failed to begin trading instrument update transaction")?;
+    if enabled {
+        let inserted = sqlx::query(
+            "INSERT INTO agent_trading_instruments (agent_key, instrument_id)
+             SELECT $1, instruments.instrument_id
+               FROM hyperliquid.instruments AS instruments
+               JOIN agent_analysis_instruments AS analysis
+                 ON analysis.instrument_id = instruments.instrument_id
+                AND analysis.agent_key = $1
+              WHERE instruments.instrument_id = $2
+                AND instruments.market_type = 'perp'
+                AND instruments.active = true
+             ON CONFLICT DO NOTHING",
+        )
+        .bind(agent_key)
+        .bind(instrument_id)
+        .execute(&mut *tx)
+        .await
+        .context("failed to enable trading instrument")?;
+        if inserted.rows_affected() == 0 {
+            let already_enabled: bool = sqlx::query_scalar(
+                "SELECT EXISTS (
+                     SELECT 1 FROM agent_trading_instruments
+                      WHERE agent_key = $1 AND instrument_id = $2
+                 )",
+            )
+            .bind(agent_key)
+            .bind(instrument_id)
+            .fetch_one(&mut *tx)
+            .await
+            .context("failed to load trading instrument assignment")?;
+            if !already_enabled {
+                return Err(anyhow!(
+                    "trading instruments must be active instruments selected for analysis"
+                ));
+            }
+        }
+    } else {
+        sqlx::query(
+            "DELETE FROM agent_trading_instruments
+              WHERE agent_key = $1
+                AND instrument_id = $2",
+        )
+        .bind(agent_key)
+        .bind(instrument_id)
+        .execute(&mut *tx)
+        .await
+        .context("failed to disable trading instrument")?;
+    }
+
+    sqlx::query("UPDATE agents SET updated_at = now() WHERE agent_key = $1")
+        .bind(agent_key)
+        .execute(&mut *tx)
+        .await
+        .context("failed to update agent timestamp after trading instrument update")?;
+    tx.commit()
+        .await
+        .context("failed to commit trading instrument update transaction")?;
+    Ok(())
+}
+
 pub async fn replace_agent_analysis_instruments(
     pool: &DbPool,
     agent_key: &str,

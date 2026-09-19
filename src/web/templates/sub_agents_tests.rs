@@ -81,6 +81,10 @@ fn job_detail_page_renders_job_metadata_and_runs() {
     assert!(rendered.contains("data-model-picker-modal"));
     assert!(rendered.contains("Cancel"));
     assert!(rendered.contains("Save"));
+    assert!(rendered.contains("Capabilities"));
+    assert!(rendered.contains("No enabled capabilities"));
+    assert!(rendered.contains("Edit Capabilities"));
+    assert!(rendered.contains("data-capabilities-modal-trigger"));
     assert!(!rendered.contains("Trigger delay"));
 }
 

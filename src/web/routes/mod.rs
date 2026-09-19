@@ -258,8 +258,8 @@ pub fn router(state: Arc<AppState>) -> Router {
             post(agents_update_sub_agent_timeout),
         )
         .route(
-            "/agents/{agent_key}/sub-agents/{sub_agent_id}/notification-capability",
-            post(agents_update_sub_agent_notification_capability),
+            "/agents/{agent_key}/sub-agents/{sub_agent_id}/capabilities",
+            post(agents_update_sub_agent_capabilities),
         )
         .route(
             "/agents/{agent_key}/sub-agents/{sub_agent_id}/timeframe",
@@ -272,10 +272,6 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route(
             "/agents/{agent_key}/sub-agents/{sub_agent_id}/prompt/rollback",
             post(agents_rollback_sub_agent_prompt),
-        )
-        .route(
-            "/agents/{agent_key}/sub-agents/{sub_agent_id}/review-prompt-update",
-            post(agents_update_sub_agent_review_prompt_update),
         )
         .route(
             "/agents/{agent_key}/runs/{run_id}",

@@ -38,7 +38,9 @@ use crate::{
     },
     harness::{
         model::{
-            CAPABILITY_REVIEW_PROMPT_UPDATE, SUB_AGENT_KIND_ANALYSIS, SUB_AGENT_KIND_REVIEW,
+            CAPABILITY_INDICATOR_WRITE, CAPABILITY_NOTIFICATION_SEND,
+            CAPABILITY_PROMPT_REVISION_SUBMIT, CAPABILITY_TRADING_INSTRUMENT_WRITE,
+            LEGACY_CAPABILITY_REVIEW_PROMPT_UPDATE, SUB_AGENT_KIND_ANALYSIS, SUB_AGENT_KIND_REVIEW,
             SUB_AGENT_KIND_TRADING,
         },
         scheduler::{
@@ -1141,46 +1143,20 @@ pub(in crate::web::routes) async fn agents_update_sub_agent_timeout(
 }
 
 #[derive(Debug, Default, Deserialize)]
-pub(in crate::web::routes) struct NotificationCapabilityForm {
-    pub enabled: Option<String>,
+pub(in crate::web::routes) struct SubAgentCapabilitiesForm {
+    pub notification_send: Option<String>,
+    pub prompt_revision_submit: Option<String>,
+    pub indicator_write: Option<String>,
+    pub trading_instrument_write: Option<String>,
 }
 
-pub(in crate::web::routes) async fn agents_update_sub_agent_notification_capability(
+/// Replace the operator-visible capability assignments for future runs. The
+/// role-specific fields are assembled server-side so form input cannot grant a
+/// capability to an ineligible role.
+pub(in crate::web::routes) async fn agents_update_sub_agent_capabilities(
     State(state): State<Arc<AppState>>,
     Path((agent_key, sub_agent_id)): Path<(String, i64)>,
-    Form(form): Form<NotificationCapabilityForm>,
-) -> Result<Response, AppError> {
-    let updated = crate::harness::store::set_sub_agent_notification_send_enabled(
-        &state.db_pool,
-        &agent_key,
-        sub_agent_id,
-        form.enabled.is_some(),
-    )
-    .await?;
-    if !updated {
-        return Ok((StatusCode::NOT_FOUND, "sub-agent not found").into_response());
-    }
-    let redirect_url =
-        match crate::harness::store::get_agent_sub_agent(&state.db_pool, &agent_key, sub_agent_id)
-            .await?
-        {
-            Some(job) => prompt_page_url(&agent_key, sub_agent_id, &job.sub_agent_kind),
-            None => format!("/agents/{agent_key}/sub-agents/{sub_agent_id}"),
-        };
-    Ok(Redirect::to(&redirect_url).into_response())
-}
-
-#[derive(Debug, Default, Deserialize)]
-pub(in crate::web::routes) struct ReviewPromptUpdateForm {
-    pub enabled: Option<String>,
-}
-
-/// Toggle an Analysis job's opt-in to Review-driven prompt updates. The
-/// capability lives in `enabled_capabilities`; only Analysis jobs accept it.
-pub(in crate::web::routes) async fn agents_update_sub_agent_review_prompt_update(
-    State(state): State<Arc<AppState>>,
-    Path((agent_key, sub_agent_id)): Path<(String, i64)>,
-    Form(form): Form<ReviewPromptUpdateForm>,
+    Form(form): Form<SubAgentCapabilitiesForm>,
 ) -> Result<Response, AppError> {
     let Some(job) =
         crate::harness::store::get_agent_sub_agent(&state.db_pool, &agent_key, sub_agent_id)
@@ -1188,15 +1164,36 @@ pub(in crate::web::routes) async fn agents_update_sub_agent_review_prompt_update
     else {
         return Ok((StatusCode::NOT_FOUND, "sub-agent not found").into_response());
     };
-    if job.sub_agent_kind != SUB_AGENT_KIND_ANALYSIS {
-        return Err(AppError(anyhow::anyhow!(
-            "only analysis jobs can opt in to review prompt updates"
-        )));
+    let mut capabilities = job
+        .enabled_capabilities
+        .into_iter()
+        .filter(|capability| {
+            !matches!(
+                capability.as_str(),
+                CAPABILITY_NOTIFICATION_SEND
+                    | CAPABILITY_PROMPT_REVISION_SUBMIT
+                    | CAPABILITY_INDICATOR_WRITE
+                    | CAPABILITY_TRADING_INSTRUMENT_WRITE
+                    | LEGACY_CAPABILITY_REVIEW_PROMPT_UPDATE
+            )
+        })
+        .collect::<Vec<_>>();
+    if form.notification_send.is_some() {
+        capabilities.push(CAPABILITY_NOTIFICATION_SEND.to_string());
     }
-    let mut capabilities = job.enabled_capabilities;
-    capabilities.retain(|capability| capability != CAPABILITY_REVIEW_PROMPT_UPDATE);
-    if form.enabled.is_some() {
-        capabilities.push(CAPABILITY_REVIEW_PROMPT_UPDATE.to_string());
+    match job.sub_agent_kind.as_str() {
+        SUB_AGENT_KIND_ANALYSIS if form.trading_instrument_write.is_some() => {
+            capabilities.push(CAPABILITY_TRADING_INSTRUMENT_WRITE.to_string());
+        }
+        SUB_AGENT_KIND_REVIEW => {
+            if form.prompt_revision_submit.is_some() {
+                capabilities.push(CAPABILITY_PROMPT_REVISION_SUBMIT.to_string());
+            }
+            if form.indicator_write.is_some() {
+                capabilities.push(CAPABILITY_INDICATOR_WRITE.to_string());
+            }
+        }
+        _ => {}
     }
     let updated = crate::harness::store::set_sub_agent_capabilities(
         &state.db_pool,
@@ -1508,7 +1505,7 @@ const TRADING_ROLE: RolePageContext = RolePageContext {
 const REVIEW_ROLE: RolePageContext = RolePageContext {
     role_label: "Review",
     role_page_path: "/review",
-    role_description: "Reviews outcomes, records durable learnings, and may revise the prompts that opted in.",
+    role_description: "Reviews outcomes, records durable learnings, and may revise Trading and Analysis prompts when permitted.",
     default_timeframe: store::DEFAULT_REVIEW_TIMEFRAME,
     sub_agent_kind: SUB_AGENT_KIND_REVIEW,
     active_tab: AgentShowTab::Review,
@@ -1906,6 +1903,16 @@ async fn render_role_edit_page(
             }
         }
     };
+    let mut job_view = crate::web::templates::HarnessSubAgentDetailView::from_row(&job);
+    job_view.model_error = query.model_error;
+    let picker = load_model_picker_context(state, &agent).await;
+    let mut model_picker = build_model_picker_view(
+        "sub-agent-model-selection",
+        &job_view.model_selection,
+        job.model_variant.as_deref(),
+        picker,
+    );
+    model_picker.show_label = false;
     let notification_count = count_notifications(&state.db_pool, &agent.agent_key).await?;
     let navbar = load_selected_agent_navbar(state, user.id, &agent).await?;
     let role_page_path = format!("/agents/{agent_key}{}", context.role_page_path);
@@ -1917,8 +1924,9 @@ async fn render_role_edit_page(
         agent_tabs_use_htmx: false,
         active_role_label: context.role_label,
         role_page_path,
-        job: crate::web::templates::HarnessSubAgentDetailView::from_row(&job),
+        job: job_view,
         prompt_view,
+        model_picker,
         navbar,
     }
     .render()?;

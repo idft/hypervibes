@@ -243,6 +243,36 @@ describe("job detail modals", () => {
   });
 });
 
+describe("capabilities modal", () => {
+  it("restores unsaved selections when cancelled", () => {
+    document.body.innerHTML = `
+      <section data-capabilities>
+        <button type="button" data-capabilities-modal-trigger>EDIT</button>
+      </section>
+      <div id="capabilities-modal" data-capabilities-modal class="hidden" aria-hidden="true">
+        <button type="button" data-capabilities-modal-close>Close</button>
+        <input type="checkbox" data-capabilities-modal-initial-focus checked>
+        <input type="checkbox">
+        <button type="button" data-capabilities-modal-close>Cancel</button>
+      </div>
+    `;
+
+    initAgentPage();
+    const trigger = document.querySelector<HTMLButtonElement>("[data-capabilities-modal-trigger]");
+    const modal = document.querySelector<HTMLElement>("[data-capabilities-modal]");
+    const inputs = document.querySelectorAll<HTMLInputElement>('#capabilities-modal input[type="checkbox"]');
+    trigger?.click();
+    inputs[0].checked = false;
+    inputs[1].checked = true;
+    document.querySelectorAll<HTMLButtonElement>("[data-capabilities-modal-close]")[1]?.click();
+
+    expect(modal?.classList.contains("hidden")).toBe(true);
+    expect(inputs[0].checked).toBe(true);
+    expect(inputs[1].checked).toBe(false);
+    expect(document.activeElement).toBe(trigger);
+  });
+});
+
 describe("new job form", () => {
   it("only requires a timeframe for candle-close jobs", () => {
     document.body.innerHTML = `

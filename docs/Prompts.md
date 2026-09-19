@@ -29,9 +29,9 @@ Analysis prompt, which can be customized during creation. **Discuss prompt**
 opens Chat with the current draft as opening context. Saving creates an
 immutable revision. Chat changes require one-time OpenCode confirmation.
 
-Review may submit an evidence-backed atomic revision batch for Trading and only
-Analysis jobs that opted in. It snapshots permitted targets and their base
-revisions when dispatched, and cannot revise its own prompt.
+When granted its prompt-update capability, Review may submit an evidence-backed
+atomic revision batch for Trading and Analysis. It validates target ownership
+and base revisions when submitted, and cannot revise its own prompt.
 
 ## Role boundaries
 
@@ -49,6 +49,7 @@ considered.
 Scheduled sub-agents receive their prompt as input but cannot modify it. See
 [Sub-agents](SubAgents.md) and [Chat](Chat.md).
 
-Review can inspect indicators and create an evidence-backed definition or
-immutable version. Indicator source must not encode trading policy. Trading has
-no indicator access and continues to consume Analysis research memories.
+When granted its indicator-write capability, Review can inspect indicators and
+create an evidence-backed definition or immutable version. Indicator source must
+not encode trading policy. Trading has no indicator access and continues to
+consume Analysis research memories.

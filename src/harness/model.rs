@@ -19,7 +19,11 @@ pub const RUN_CONTEXT_SNAPSHOT_SCHEMA_VERSION: i32 = 5;
 pub const CAPABILITY_SCHEMA_VERSION: i32 = 2;
 pub const CAPABILITY_NOTIFICATION_SEND: &str = "hypervibes:notification_send";
 pub const CAPABILITY_PROMPT_REVISION_SUBMIT: &str = "hypervibes:prompt_revision_submit";
-pub const CAPABILITY_REVIEW_PROMPT_UPDATE: &str = "hypervibes:review_prompt_update";
+pub const CAPABILITY_INDICATOR_WRITE: &str = "hypervibes:indicator_write";
+pub const CAPABILITY_TRADING_INSTRUMENT_WRITE: &str = "hypervibes:trading_instrument_write";
+// Retained only so persisted Analysis assignments and historical run snapshots
+// from before Review-owned prompt authorization remain dispatchable. It grants no scope.
+pub const LEGACY_CAPABILITY_REVIEW_PROMPT_UPDATE: &str = "hypervibes:review_prompt_update";
 pub const MAX_RUN_CONTEXT_SNAPSHOT_BYTES: usize = 1024 * 1024;
 
 /// API actions attached to a short-lived run credential. These are separate
@@ -37,6 +41,8 @@ pub enum RunApiScope {
     NotificationSend,
     IndicatorRead,
     IndicatorWrite,
+    TradingInstrumentRead,
+    TradingInstrumentWrite,
 }
 
 impl RunApiScope {
@@ -52,7 +58,9 @@ impl RunApiScope {
             Self::PromptRevisionSubmit => CAPABILITY_PROMPT_REVISION_SUBMIT,
             Self::NotificationSend => CAPABILITY_NOTIFICATION_SEND,
             Self::IndicatorRead => "hypervibes:indicator_read",
-            Self::IndicatorWrite => "hypervibes:indicator_write",
+            Self::IndicatorWrite => CAPABILITY_INDICATOR_WRITE,
+            Self::TradingInstrumentRead => "hypervibes:trading_instrument_read",
+            Self::TradingInstrumentWrite => CAPABILITY_TRADING_INSTRUMENT_WRITE,
         }
     }
 
@@ -68,7 +76,9 @@ impl RunApiScope {
             CAPABILITY_PROMPT_REVISION_SUBMIT => Some(Self::PromptRevisionSubmit),
             CAPABILITY_NOTIFICATION_SEND => Some(Self::NotificationSend),
             "hypervibes:indicator_read" => Some(Self::IndicatorRead),
-            "hypervibes:indicator_write" => Some(Self::IndicatorWrite),
+            CAPABILITY_INDICATOR_WRITE => Some(Self::IndicatorWrite),
+            "hypervibes:trading_instrument_read" => Some(Self::TradingInstrumentRead),
+            CAPABILITY_TRADING_INSTRUMENT_WRITE => Some(Self::TradingInstrumentWrite),
             _ => None,
         }
     }
@@ -97,10 +107,18 @@ pub fn validate_sub_agent_capabilities(
         {
             anyhow::bail!("prompt revision submission is only eligible for review");
         }
-        if capability == CAPABILITY_REVIEW_PROMPT_UPDATE
+        if capability == CAPABILITY_INDICATOR_WRITE && sub_agent_kind != SUB_AGENT_KIND_REVIEW {
+            anyhow::bail!("indicator writing is only eligible for review");
+        }
+        if capability == CAPABILITY_TRADING_INSTRUMENT_WRITE
             && sub_agent_kind != SUB_AGENT_KIND_ANALYSIS
         {
-            anyhow::bail!("review prompt updates are only eligible for analysis jobs");
+            anyhow::bail!("trading instrument management is only eligible for analysis jobs");
+        }
+        if capability == LEGACY_CAPABILITY_REVIEW_PROMPT_UPDATE
+            && sub_agent_kind != SUB_AGENT_KIND_ANALYSIS
+        {
+            anyhow::bail!("legacy review prompt updates are only eligible for analysis jobs");
         }
         if !capabilities.insert(capability.to_string()) {
             anyhow::bail!("duplicate sub-agent capability");
@@ -112,7 +130,9 @@ pub fn validate_sub_agent_capabilities(
 fn is_valid_capability(capability: &str) -> bool {
     capability == CAPABILITY_NOTIFICATION_SEND
         || capability == CAPABILITY_PROMPT_REVISION_SUBMIT
-        || capability == CAPABILITY_REVIEW_PROMPT_UPDATE
+        || capability == CAPABILITY_INDICATOR_WRITE
+        || capability == CAPABILITY_TRADING_INSTRUMENT_WRITE
+        || capability == LEGACY_CAPABILITY_REVIEW_PROMPT_UPDATE
         || capability
             .strip_prefix("custom-mcp:")
             .is_some_and(valid_custom_mcp_capability)
@@ -157,7 +177,6 @@ pub fn run_api_scopes_for_sub_agent(
             RunApiScope::TransactionRead,
             RunApiScope::PromptRead,
             RunApiScope::IndicatorRead,
-            RunApiScope::IndicatorWrite,
         ],
         _ => anyhow::bail!("unsupported sub-agent kind for run API scopes"),
     };
@@ -172,6 +191,19 @@ pub fn run_api_scopes_for_sub_agent(
         .any(|capability| capability == CAPABILITY_PROMPT_REVISION_SUBMIT)
     {
         scopes.push(RunApiScope::PromptRevisionSubmit);
+    }
+    if enabled_capabilities
+        .iter()
+        .any(|capability| capability == CAPABILITY_INDICATOR_WRITE)
+    {
+        scopes.push(RunApiScope::IndicatorWrite);
+    }
+    if enabled_capabilities
+        .iter()
+        .any(|capability| capability == CAPABILITY_TRADING_INSTRUMENT_WRITE)
+    {
+        scopes.push(RunApiScope::TradingInstrumentRead);
+        scopes.push(RunApiScope::TradingInstrumentWrite);
     }
     Ok(scopes)
 }
@@ -759,20 +791,57 @@ mod tests {
     }
 
     #[test]
-    fn review_prompt_update_is_limited_to_analysis_jobs() {
+    fn indicator_writing_is_limited_to_review() {
+        assert!(
+            validate_sub_agent_capabilities(
+                SUB_AGENT_KIND_REVIEW,
+                &[CAPABILITY_INDICATOR_WRITE.to_string()],
+            )
+            .is_ok()
+        );
         assert!(
             validate_sub_agent_capabilities(
                 SUB_AGENT_KIND_ANALYSIS,
-                &[CAPABILITY_REVIEW_PROMPT_UPDATE.to_string()],
+                &[CAPABILITY_INDICATOR_WRITE.to_string()],
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn trading_instrument_management_is_limited_to_analysis_jobs() {
+        assert!(
+            validate_sub_agent_capabilities(
+                SUB_AGENT_KIND_ANALYSIS,
+                &[CAPABILITY_TRADING_INSTRUMENT_WRITE.to_string()],
             )
             .is_ok()
         );
         assert!(
             validate_sub_agent_capabilities(
                 SUB_AGENT_KIND_TRADING,
-                &[CAPABILITY_REVIEW_PROMPT_UPDATE.to_string()],
+                &[CAPABILITY_TRADING_INSTRUMENT_WRITE.to_string()],
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn review_writes_are_capability_gated() {
+        let scopes = run_api_scopes_for_sub_agent(SUB_AGENT_KIND_REVIEW, &[])
+            .expect("empty review capabilities are valid");
+        assert!(!scopes.contains(&RunApiScope::PromptRevisionSubmit));
+        assert!(!scopes.contains(&RunApiScope::IndicatorWrite));
+
+        let scopes = run_api_scopes_for_sub_agent(
+            SUB_AGENT_KIND_REVIEW,
+            &[
+                CAPABILITY_PROMPT_REVISION_SUBMIT.to_string(),
+                CAPABILITY_INDICATOR_WRITE.to_string(),
+            ],
+        )
+        .expect("review write capabilities are valid");
+        assert!(scopes.contains(&RunApiScope::PromptRevisionSubmit));
+        assert!(scopes.contains(&RunApiScope::IndicatorWrite));
     }
 }
