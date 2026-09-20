@@ -12,8 +12,11 @@ use super::shared::urlencode;
 use crate::{
     agents::store::{get_agent, lock_agent_execution_tx, set_agent_enabled},
     harness::store::{list_active_agent_runs, mark_run_aborted},
-    hyperliquid::orders::gateway::{
-        ExchangeClient, cancel_all_exchange_orders, close_exchange_position,
+    hyperliquid::orders::{
+        gateway::{
+            CancelAllSummary, ExchangeClient, cancel_all_exchange_orders, close_exchange_position,
+        },
+        model::OrderResult,
     },
     web::{AppState, api::orders::build_exchange_for_agent, error::AppError},
 };
@@ -118,22 +121,43 @@ pub(in crate::web::routes) async fn agents_emergency_stop(
     let mut cancelled_orders = 0;
     match agent.trading_account_address.as_deref() {
         Some(account_address) => match build_exchange_for_agent(&state, &agent_key).await {
-            Ok(exchange) => match cancel_all_exchange_orders(
-                &state.db_pool,
-                &exchange,
-                &agent_key,
-                account_address,
-                &agent.environment,
-                None,
-            )
-            .await
-            {
-                Ok(summary) => cancelled_orders = summary.outcomes.len(),
-                Err(error) => {
-                    failures.push("open-order cancellation failed".to_string());
-                    warn!(agent_key = %agent_key, error = %error, "emergency stop failed to cancel all exchange orders");
+            Ok(exchange) => {
+                match cancel_all_exchange_orders(
+                    &state.db_pool,
+                    &exchange,
+                    &agent_key,
+                    account_address,
+                    &agent.environment,
+                    None,
+                )
+                .await
+                {
+                    Ok(summary) => {
+                        let (successful, cancellation_failures) = inspect_cancel_summary(&summary);
+                        cancelled_orders = successful;
+                        for failure in cancellation_failures {
+                            warn!(agent_key = %agent_key, failure = %failure, "emergency stop exchange cancellation was not successful");
+                            failures.push(failure);
+                        }
+                    }
+                    Err(error) => {
+                        failures.push("open-order cancellation failed".to_string());
+                        warn!(agent_key = %agent_key, error = %error, "emergency stop failed to cancel all exchange orders");
+                    }
                 }
-            },
+
+                match exchange.open_orders(account_address).await {
+                    Ok(remaining) if !remaining.is_empty() => {
+                        failures.push(format!("{} exchange order(s) remain open", remaining.len()));
+                        warn!(agent_key = %agent_key, remaining_orders = remaining.len(), "emergency stop left exchange orders open");
+                    }
+                    Ok(_) => {}
+                    Err(error) => {
+                        failures.push("remaining open orders could not be verified".to_string());
+                        warn!(agent_key = %agent_key, error = %error, "emergency stop could not verify open orders");
+                    }
+                }
+            }
             Err(error) => {
                 failures.push("trading signer unavailable; order cancellation skipped".to_string());
                 warn!(agent_key = %agent_key, error = ?error, "emergency stop could not build exchange client");
@@ -147,7 +171,7 @@ pub(in crate::web::routes) async fn agents_emergency_stop(
 
     let notice = if failures.is_empty() {
         format!(
-            "Emergency stop complete: aborted {aborted_runs} run(s) and sent {cancelled_orders} cancellation(s)."
+            "Emergency stop complete: aborted {aborted_runs} run(s) and confirmed {cancelled_orders} cancellation(s)."
         )
     } else {
         format!("Emergency stop applied, but {}.", failures.join("; "))
@@ -163,23 +187,31 @@ pub(in crate::web::routes) async fn agents_close_position(
     State(state): State<Arc<AppState>>,
     Path((agent_key, symbol)): Path<(String, String)>,
 ) -> Result<Response, AppError> {
-    close_positions(&state, &agent_key, Some(symbol.as_str())).await?;
-    Ok(Redirect::to(&format!("/agents/{agent_key}")).into_response())
+    let notice = close_positions(&state, &agent_key, Some(symbol.as_str())).await?;
+    Ok(Redirect::to(&format!(
+        "/agents/{agent_key}?notice={}",
+        urlencode(&notice)
+    ))
+    .into_response())
 }
 
 pub(in crate::web::routes) async fn agents_close_all_positions(
     State(state): State<Arc<AppState>>,
     Path(agent_key): Path<String>,
 ) -> Result<Response, AppError> {
-    close_positions(&state, &agent_key, None).await?;
-    Ok(Redirect::to(&format!("/agents/{agent_key}")).into_response())
+    let notice = close_positions(&state, &agent_key, None).await?;
+    Ok(Redirect::to(&format!(
+        "/agents/{agent_key}?notice={}",
+        urlencode(&notice)
+    ))
+    .into_response())
 }
 
 async fn close_positions(
     state: &Arc<AppState>,
     agent_key: &str,
     symbol: Option<&str>,
-) -> Result<(), AppError> {
+) -> Result<String, AppError> {
     let agent = get_agent(&state.db_pool, agent_key)
         .await?
         .ok_or_else(|| anyhow::anyhow!("agent not found"))?;
@@ -193,7 +225,9 @@ async fn close_positions(
         .await?
         .ok_or_else(|| anyhow::anyhow!("agent not found"))?;
 
-    cancel_all_exchange_orders(
+    let mut failures = Vec::new();
+    let mut cancelled_orders = 0;
+    match cancel_all_exchange_orders(
         &state.db_pool,
         &exchange,
         agent_key,
@@ -202,7 +236,14 @@ async fn close_positions(
         symbol,
     )
     .await
-    .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+    {
+        Ok(summary) => {
+            let (successful, cancellation_failures) = inspect_cancel_summary(&summary);
+            cancelled_orders = successful;
+            failures.extend(cancellation_failures);
+        }
+        Err(error) => failures.push(format!("open-order cancellation failed: {error}")),
+    }
 
     let symbols: Vec<String> = match symbol {
         Some(symbol) => vec![symbol.to_string()],
@@ -215,8 +256,9 @@ async fn close_positions(
             .map(|position| position.symbol)
             .collect(),
     };
+    let mut closed_positions = 0;
     for symbol in symbols {
-        close_exchange_position(
+        match close_exchange_position(
             &state.db_pool,
             &exchange,
             &state.builder_fee_cache,
@@ -226,8 +268,117 @@ async fn close_positions(
             &symbol,
         )
         .await
-        .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+        {
+            Ok(Some(outcomes)) => {
+                let outcome_failures = inspect_close_outcomes(&symbol, &outcomes);
+                if outcome_failures.is_empty() {
+                    closed_positions += 1;
+                } else {
+                    failures.extend(outcome_failures);
+                }
+            }
+            Ok(None) => {}
+            Err(error) => failures.push(format!("{symbol} close failed: {error}")),
+        }
     }
+
+    match exchange.open_orders(account_address).await {
+        Ok(orders) => {
+            let remaining: Vec<_> = orders
+                .into_iter()
+                .filter(|order| symbol.is_none_or(|requested| requested == order.symbol))
+                .collect();
+            if !remaining.is_empty() {
+                failures.push(format!("{} exchange order(s) remain open", remaining.len()));
+            }
+        }
+        Err(error) => failures.push(format!(
+            "remaining open orders could not be verified: {error}"
+        )),
+    }
+
+    match exchange.positions(account_address).await {
+        Ok(positions) => {
+            let remaining: Vec<_> = positions
+                .into_iter()
+                .filter(|position| {
+                    !position.szi.is_zero()
+                        && symbol.is_none_or(|requested| requested == position.symbol)
+                })
+                .collect();
+            if !remaining.is_empty() {
+                let symbols = remaining
+                    .iter()
+                    .map(|position| position.symbol.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                failures.push(format!(
+                    "{} position(s) remain open: {symbols}",
+                    remaining.len()
+                ));
+            }
+        }
+        Err(error) => failures.push(format!(
+            "remaining positions could not be verified: {error}"
+        )),
+    }
+
     tx.rollback().await?;
-    Ok(())
+    if failures.is_empty() {
+        Ok(format!(
+            "Position close complete: closed {closed_positions} position(s) and canceled {cancelled_orders} order(s)."
+        ))
+    } else {
+        Ok(format!(
+            "Position close incomplete: {}.",
+            failures.join("; ")
+        ))
+    }
+}
+
+pub(super) fn inspect_cancel_summary(summary: &CancelAllSummary) -> (usize, Vec<String>) {
+    let mut successful = 0;
+    let mut failures = Vec::new();
+    for outcome in &summary.outcomes {
+        if outcome.status == "canceled" && outcome.error.is_none() {
+            successful += 1;
+        } else {
+            let detail = outcome
+                .error
+                .as_deref()
+                .map(|error| format!(": {error}"))
+                .unwrap_or_default();
+            failures.push(format!(
+                "{} order {} cancellation returned {}{detail}",
+                outcome.symbol, outcome.oid, outcome.status
+            ));
+        }
+    }
+    if summary.outcomes.len() != summary.considered {
+        failures.push(format!(
+            "exchange returned {} cancellation outcome(s) for {} open order(s)",
+            summary.outcomes.len(),
+            summary.considered
+        ));
+    }
+    (successful, failures)
+}
+
+pub(super) fn inspect_close_outcomes(symbol: &str, outcomes: &[OrderResult]) -> Vec<String> {
+    if outcomes.is_empty() {
+        return vec![format!("{symbol} close returned no exchange outcome")];
+    }
+
+    outcomes
+        .iter()
+        .filter(|outcome| outcome.status != "filled" || outcome.error.is_some())
+        .map(|outcome| {
+            let detail = outcome
+                .error
+                .as_deref()
+                .map(|error| format!(": {error}"))
+                .unwrap_or_default();
+            format!("{symbol} close returned {}{detail}", outcome.status)
+        })
+        .collect()
 }
