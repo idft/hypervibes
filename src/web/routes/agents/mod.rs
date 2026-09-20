@@ -18,6 +18,8 @@ mod notifications;
 mod notifications_tests;
 mod operations;
 #[cfg(test)]
+mod operations_tests;
+#[cfg(test)]
 mod prompts_tests;
 #[cfg(test)]
 mod router_tests;

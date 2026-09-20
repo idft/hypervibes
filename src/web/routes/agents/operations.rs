@@ -31,9 +31,9 @@ pub(in crate::web::routes) async fn agents_set_enabled(
     Ok(Redirect::to(&format!("/agents/{agent_key}/settings")).into_response())
 }
 
-/// Stop one agent without touching its position. The execution lock stays
-/// held until all already-started gateway submissions have completed, so the
-/// following exchange cancellation cannot miss a newly-resting order.
+/// Stop one agent without touching its position. Disabling under the execution
+/// lock waits for already-started gateway submissions and is committed before
+/// any best-effort cleanup begins.
 pub(in crate::web::routes) async fn agents_emergency_stop(
     State(state): State<Arc<AppState>>,
     Path(agent_key): Path<String>,
@@ -41,90 +41,110 @@ pub(in crate::web::routes) async fn agents_emergency_stop(
     let Some(agent) = get_agent(&state.db_pool, &agent_key).await? else {
         return Ok((StatusCode::NOT_FOUND, "agent not found").into_response());
     };
-    let Some(account_address) = agent.trading_account_address.as_deref() else {
-        return Ok((StatusCode::CONFLICT, "agent has no trading account").into_response());
-    };
-    let exchange = build_exchange_for_agent(&state, &agent_key).await?;
-    let active_runs = list_active_agent_runs(&state.db_pool, &agent_key).await?;
-
-    let mut tx = state.db_pool.begin().await?;
-    if lock_agent_execution_tx(&mut tx, &agent_key)
-        .await?
-        .is_none()
-    {
-        tx.rollback().await?;
+    if !set_agent_enabled(&state.db_pool, &agent_key, false).await? {
         return Ok((StatusCode::NOT_FOUND, "agent not found").into_response());
     }
-    sqlx::query("UPDATE agents SET enabled = false, updated_at = now() WHERE agent_key = $1")
-        .bind(&agent_key)
-        .execute(&mut *tx)
-        .await?;
 
     let mut aborted_runs = 0_usize;
     let mut failures = Vec::new();
-    for run in active_runs {
-        let run_workspace_container_path = Some(format!(
-            "{}/runs/{}/{}/workspace",
-            state
-                .opencode_container_workspaces_root
-                .trim_end_matches('/'),
-            agent_key,
-            run.id
-        ));
-        let abort_result = match run.backend_run_ref.as_deref() {
-            Some(session_id) => {
-                crate::harness::backend::abort_and_confirm_session_terminated(
-                    &state.harness_backend,
-                    &state.opencode_base_url,
-                    session_id,
-                    run_workspace_container_path.as_deref(),
-                )
-                .await
+    match list_active_agent_runs(&state.db_pool, &agent_key).await {
+        Ok(active_runs) => {
+            for run in active_runs {
+                let run_workspace_container_path = Some(format!(
+                    "{}/runs/{}/{}/workspace",
+                    state
+                        .opencode_container_workspaces_root
+                        .trim_end_matches('/'),
+                    agent_key,
+                    run.id
+                ));
+                let abort_result = match run.backend_run_ref.as_deref() {
+                    Some(session_id) => {
+                        crate::harness::backend::abort_and_confirm_session_terminated(
+                            &state.harness_backend,
+                            &state.opencode_base_url,
+                            session_id,
+                            run_workspace_container_path.as_deref(),
+                        )
+                        .await
+                    }
+                    None => Ok(true),
+                };
+                match abort_result {
+                    Ok(true) => {
+                        if let Err(error) = mark_run_aborted(
+                            &state.db_pool,
+                            run.id,
+                            "aborted by emergency stop",
+                            None,
+                        )
+                        .await
+                        {
+                            failures.push(format!("run {} could not be marked aborted", run.id));
+                            warn!(agent_key = %agent_key, run_id = run.id, error = ?error, "emergency stop could not persist aborted run state");
+                            continue;
+                        }
+                        aborted_runs += 1;
+                        if let Err(error) =
+                            crate::harness::scheduler::terminalize_run_workspace_artifact(
+                                &state.db_pool,
+                                &state.workspace_controller,
+                                &agent_key,
+                                run.id,
+                            )
+                            .await
+                        {
+                            failures.push(format!("run {} workspace cleanup failed", run.id));
+                            warn!(agent_key = %agent_key, run_id = run.id, error = ?error, "emergency stop failed to clean up run workspace");
+                        }
+                    }
+                    Ok(false) => {
+                        failures.push(format!("run {} could not be aborted", run.id));
+                        warn!(agent_key = %agent_key, run_id = run.id, "emergency stop could not abort active OpenCode session");
+                    }
+                    Err(error) => {
+                        failures.push(format!("run {} abort failed", run.id));
+                        warn!(agent_key = %agent_key, run_id = run.id, error = ?error, "emergency stop failed to abort active OpenCode session");
+                    }
+                }
             }
-            None => Ok(true),
-        };
-        match abort_result {
-            Ok(true) => {
-                mark_run_aborted(&state.db_pool, run.id, "aborted by emergency stop", None).await?;
-                crate::harness::scheduler::terminalize_run_workspace_artifact(
-                    &state.db_pool,
-                    &state.workspace_controller,
-                    &agent_key,
-                    run.id,
-                )
-                .await?;
-                aborted_runs += 1;
-            }
-            Ok(false) => {
-                failures.push(format!("run {} could not be aborted", run.id));
-                warn!(agent_key = %agent_key, run_id = run.id, "emergency stop could not abort active OpenCode session");
-            }
-            Err(error) => {
-                failures.push(format!("run {} abort failed", run.id));
-                warn!(agent_key = %agent_key, run_id = run.id, error = ?error, "emergency stop failed to abort active OpenCode session");
-            }
+        }
+        Err(error) => {
+            failures.push("active runs could not be loaded".to_string());
+            warn!(agent_key = %agent_key, error = ?error, "emergency stop failed to load active runs");
         }
     }
 
-    let cancelled_orders = match cancel_all_exchange_orders(
-        &state.db_pool,
-        &exchange,
-        &agent_key,
-        account_address,
-        &agent.environment,
-        None,
-    )
-    .await
-    {
-        Ok(summary) => summary.outcomes.len(),
-        Err(error) => {
-            failures.push("open-order cancellation failed".to_string());
-            warn!(agent_key = %agent_key, error = %error, "emergency stop failed to cancel all exchange orders");
-            0
+    let mut cancelled_orders = 0;
+    match agent.trading_account_address.as_deref() {
+        Some(account_address) => match build_exchange_for_agent(&state, &agent_key).await {
+            Ok(exchange) => match cancel_all_exchange_orders(
+                &state.db_pool,
+                &exchange,
+                &agent_key,
+                account_address,
+                &agent.environment,
+                None,
+            )
+            .await
+            {
+                Ok(summary) => cancelled_orders = summary.outcomes.len(),
+                Err(error) => {
+                    failures.push("open-order cancellation failed".to_string());
+                    warn!(agent_key = %agent_key, error = %error, "emergency stop failed to cancel all exchange orders");
+                }
+            },
+            Err(error) => {
+                failures.push("trading signer unavailable; order cancellation skipped".to_string());
+                warn!(agent_key = %agent_key, error = ?error, "emergency stop could not build exchange client");
+            }
+        },
+        None => {
+            failures.push("agent has no trading account; order cancellation skipped".to_string());
+            warn!(agent_key = %agent_key, "emergency stop skipped order cancellation because the agent has no trading account");
         }
-    };
+    }
 
-    tx.commit().await?;
     let notice = if failures.is_empty() {
         format!(
             "Emergency stop complete: aborted {aborted_runs} run(s) and sent {cancelled_orders} cancellation(s)."
