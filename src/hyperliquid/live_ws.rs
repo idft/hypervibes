@@ -201,26 +201,35 @@ fn parse_address(value: &str) -> Result<Address> {
 }
 
 fn subscribe_account(ws: &mut hws::Connection, address: Address) {
-    ws.subscribe(htypes::Subscription::UserFills { user: address });
-    // `UserEvents` carries `Funding`, `Liquidation`, and `NonUserCancel`
-    // events for the user. Hypersdk does not currently expose a dedicated
-    // `UserFundings` or `UserNonFundingLedgerUpdates` WebSocket channel,
-    // so funding events are harvested from `UserEvents` and the remaining
-    // non-funding ledger updates continue to be captured by the HTTP
-    // catch-up sync.
-    ws.subscribe(htypes::Subscription::UserEvents { user: address });
-    ws.subscribe(htypes::Subscription::ClearinghouseState {
-        user: address,
-        dex: None,
-    });
-    ws.subscribe(htypes::Subscription::SpotState {
-        user: address,
-        is_portfolio_margin: None,
-    });
-    ws.subscribe(htypes::Subscription::OpenOrders {
-        user: address,
-        dex: None,
-    });
+    for subscription in account_subscriptions(address) {
+        ws.subscribe(subscription);
+    }
+}
+
+fn account_subscriptions(address: Address) -> Vec<htypes::Subscription> {
+    vec![
+        htypes::Subscription::OrderUpdates { user: address },
+        htypes::Subscription::UserFills { user: address },
+        // `UserEvents` carries `Funding`, `Liquidation`, and `NonUserCancel`
+        // events for the user. Hypersdk does not currently expose a dedicated
+        // `UserFundings` or `UserNonFundingLedgerUpdates` WebSocket channel,
+        // so funding events are harvested from `UserEvents` and the remaining
+        // non-funding ledger updates continue to be captured by the HTTP
+        // catch-up sync.
+        htypes::Subscription::UserEvents { user: address },
+        htypes::Subscription::ClearinghouseState {
+            user: address,
+            dex: None,
+        },
+        htypes::Subscription::SpotState {
+            user: address,
+            is_portfolio_margin: None,
+        },
+        htypes::Subscription::OpenOrders {
+            user: address,
+            dex: None,
+        },
+    ]
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -523,6 +532,17 @@ mod tests {
     fn parse_address_rejects_garbage() {
         let err = parse_address("not-an-address").expect_err("must fail");
         assert!(format!("{err:#}").contains("invalid Hyperliquid account address"));
+    }
+
+    #[test]
+    fn account_subscriptions_include_order_updates() {
+        let address =
+            parse_address("0x8f0bb61c41988b44f623a0b5390fd2b52838d20e").expect("test address");
+
+        assert!(
+            account_subscriptions(address)
+                .contains(&htypes::Subscription::OrderUpdates { user: address })
+        );
     }
 
     #[tokio::test]
