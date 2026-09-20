@@ -3,9 +3,13 @@ use std::{collections::BTreeMap, panic::AssertUnwindSafe, sync::Arc};
 use anyhow::{Context, Result, anyhow, bail, ensure};
 use pine_lang::{
     RunResult, ScriptBuilder,
+    ast::{Stmt, Visitor, walk_stmt},
     core::{
-        Data, DefaultPineOutput, InputOutput, InputValue, MetadataOutput, Ohlcv, SymInfo, Timeframe,
+        Data, DefaultPineOutput, InputOutput, InputValue, MetadataOutput, Ohlcv, PineVersion,
+        SymInfo, Timeframe,
     },
+    lexer::Lexer,
+    parser::Parser,
 };
 use rust_decimal::prelude::ToPrimitive;
 use serde::{Deserialize, Serialize};
@@ -76,6 +80,43 @@ fn source_without_comments(source: &str) -> String {
         .map(|line| line.split_once("//").map_or(line, |(code, _)| code))
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+fn ensure_no_loops(source: &str) -> Result<()> {
+    #[derive(Default)]
+    struct LoopDetector {
+        found: bool,
+    }
+
+    impl Visitor for LoopDetector {
+        fn visit_stmt(&mut self, stmt: &Stmt) {
+            if matches!(
+                stmt,
+                Stmt::For { .. } | Stmt::ForIn { .. } | Stmt::While { .. }
+            ) {
+                self.found = true;
+            } else {
+                walk_stmt(self, stmt);
+            }
+        }
+    }
+
+    let version = PineVersion::detect(source)
+        .map_err(|error| anyhow!(error.to_string()))?
+        .unwrap_or(PineVersion::LATEST);
+    let tokens = Lexer::with_version(source, version)
+        .tokenize()
+        .map_err(|error| anyhow!(error.to_string()))?;
+    let program = Parser::new(tokens)
+        .parse_program()
+        .map_err(|error| anyhow!(error.to_string()))?;
+    let mut detector = LoopDetector::default();
+    detector.visit_program(&program);
+    ensure!(
+        !detector.found,
+        "Pine loops are not supported by HyperVibes indicators"
+    );
+    Ok(())
 }
 
 fn validate_input_values(inputs: &[IndicatorInputMetadata], values: &Value) -> Result<()> {
@@ -179,6 +220,8 @@ pub fn validate_indicator_source(
         stripped.contains("indicator("),
         "Pine source must declare indicator(...); strategies and libraries are not supported"
     );
+    // Metadata decoding executes the AST, and this Pine runtime has no instruction budget.
+    ensure_no_loops(source)?;
     let diagnostics = pine_lang::check(source, None).map_err(|error| anyhow!(error.to_string()))?;
     let diagnostics: Vec<_> = diagnostics.iter().map(diagnostic_from_pine).collect();
     ensure!(
@@ -447,6 +490,22 @@ mod tests {
             assert!(
                 validate_indicator_source(source, &serde_json::json!({})).is_err(),
                 "{source}"
+            );
+        }
+    }
+
+    #[test]
+    fn rejects_loops_before_metadata_execution() {
+        for source in [
+            "indicator(\"endless\")\nwhile true\n    continue",
+            "indicator(\"large\")\nfor i = 0 to 1000000000\n    plot(i)",
+            "indicator(\"collection\")\nfor item in array.from(1, 2)\n    plot(item)",
+        ] {
+            let error = validate_indicator_source(source, &serde_json::json!({}))
+                .expect_err("loops must be rejected");
+            assert_eq!(
+                error.to_string(),
+                "Pine loops are not supported by HyperVibes indicators"
             );
         }
     }

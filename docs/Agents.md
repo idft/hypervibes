@@ -55,4 +55,5 @@ Definitions target an explicit subset of the current analysis instruments and
 run only on server-fetched closed Hyperliquid candles. The tab shows recent
 status and values, supports PineScript text import, and charts the latest
 successful run. Editing creates a new immutable version rather than changing
-historical source or output.
+historical source or output. Loop statements are not part of the supported
+subset because the embedded Pine runtime cannot enforce an instruction budget.
