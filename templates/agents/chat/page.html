@@ -9,7 +9,7 @@
             <aside id="conversation-sidebar" sse-swap="conversation-sidebar" class="hidden w-64 shrink-0 border-r border-zinc-800 md:block">{{ sidebar_html|safe }}</aside>
             <main class="flex min-w-0 flex-1 flex-col">
                 <div id="conversation-summary" sse-swap="conversation-summary" class="shrink-0">{{ summary_html|safe }}</div>
-                <div data-conversation-transcript-scroll class="dark-scrollbar min-h-0 flex-1 overflow-y-auto px-4 py-5 sm:px-6"><div id="conversation-transcript" sse-swap="conversation-transcript">{{ transcript_html|safe }}</div></div>
+                <div data-conversation-transcript-scroll class="dark-scrollbar min-h-0 flex-1 overflow-y-auto px-4 py-5 sm:px-6"><div id="conversation-transcript" sse-swap="conversation-transcript" class="cursor-default">{{ transcript_html|safe }}</div></div>
                 <div id="conversation-permissions" sse-swap="conversation-permissions" class="shrink-0">{{ permissions_html|safe }}</div>
                 <div id="conversation-composer" sse-swap="conversation-composer" class="shrink-0">{{ composer_html|safe }}</div>
             </main>

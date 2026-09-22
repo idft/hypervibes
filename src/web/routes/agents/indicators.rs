@@ -14,6 +14,7 @@ use crate::{
     agents::{model::AgentDetailRow, store::list_agent_analysis_instrument_options},
     harness::timeframe::parse_timeframe_seconds,
     indicators::{
+        model::{Candle, INDICATOR_VISUAL_DATA_VERSION, IndicatorMarker, IndicatorVisualData},
         runtime::{IndicatorInputMetadata, validate_indicator_source},
         store::{
             CreateIndicatorDefinition, IndicatorUpdateResult, NewIndicatorVersion,
@@ -36,6 +37,130 @@ use crate::{
 
 const COMPILER_VERSION: &str = "pine-lang 0.2.6";
 const MAX_CHART_BARS: usize = 500;
+
+fn decode_visual_data(value: Option<&Value>) -> Result<IndicatorVisualData, AppError> {
+    let visual_data = match value {
+        None | Some(Value::Null) => IndicatorVisualData {
+            version: INDICATOR_VISUAL_DATA_VERSION,
+            markers: Vec::new(),
+        },
+        Some(value) => serde_json::from_value(value.clone()).map_err(|error| {
+            AppError(anyhow::anyhow!(
+                "indicator run has invalid visual data: {error}"
+            ))
+        })?,
+    };
+    if visual_data.version != INDICATOR_VISUAL_DATA_VERSION {
+        return Err(AppError(anyhow::anyhow!(
+            "indicator run has unsupported visual data version {}",
+            visual_data.version
+        )));
+    }
+    Ok(visual_data)
+}
+
+fn marker_target_index(bar_index: usize, offset: i64) -> Option<usize> {
+    if offset >= 0 {
+        usize::try_from(offset)
+            .ok()
+            .and_then(|offset| bar_index.checked_add(offset))
+    } else {
+        usize::try_from(offset.unsigned_abs())
+            .ok()
+            .and_then(|offset| bar_index.checked_sub(offset))
+    }
+}
+
+fn resolve_markers(
+    visual_data: IndicatorVisualData,
+    candles: &[Candle],
+    start_index: usize,
+) -> Result<Vec<Value>, AppError> {
+    let mut markers = Vec::new();
+    for marker in visual_data.markers {
+        let (bar_index, offset) = match &marker {
+            IndicatorMarker::Plotshape {
+                bar_index, offset, ..
+            }
+            | IndicatorMarker::Plotchar {
+                bar_index, offset, ..
+            }
+            | IndicatorMarker::Plotarrow {
+                bar_index, offset, ..
+            } => (*bar_index, *offset),
+        };
+        if bar_index >= candles.len() {
+            return Err(AppError(anyhow::anyhow!(
+                "indicator marker references an invalid source bar"
+            )));
+        }
+        let Some(target_index) = marker_target_index(bar_index, offset) else {
+            continue;
+        };
+        if target_index >= candles.len() || target_index < start_index {
+            continue;
+        }
+        let time = candles[target_index].opened_at.timestamp();
+        let resolved = match marker {
+            IndicatorMarker::Plotshape {
+                value,
+                title,
+                text,
+                style,
+                location,
+                color,
+                text_color,
+                size,
+                ..
+            } => {
+                let price = (location == "absolute").then_some(value);
+                json!({
+                    "kind": "plotshape", "time": time, "title": title, "text": text,
+                    "style": style, "location": location, "color": color,
+                    "text_color": text_color, "size": size, "price": price,
+                })
+            }
+            IndicatorMarker::Plotchar {
+                value,
+                title,
+                character,
+                text,
+                location,
+                color,
+                text_color,
+                size,
+                ..
+            } => {
+                let price = (location == "absolute").then_some(value);
+                json!({
+                    "kind": "plotchar", "time": time, "title": title,
+                    "character": character, "text": text, "location": location,
+                    "color": color, "text_color": text_color, "size": size, "price": price,
+                })
+            }
+            IndicatorMarker::Plotarrow {
+                value,
+                title,
+                color_up,
+                color_down,
+                ..
+            } => {
+                let (direction, color) = if value > 0.0 {
+                    ("up", color_up)
+                } else {
+                    ("down", color_down)
+                };
+                json!({
+                    "kind": "plotarrow", "time": time, "title": title,
+                    "direction": direction, "value": value, "color": color,
+                })
+            }
+        };
+        markers.push((time, resolved));
+    }
+    markers.sort_by_key(|(time, _)| *time);
+    Ok(markers.into_iter().map(|(_, marker)| marker).collect())
+}
 
 pub(in crate::web::routes) async fn agents_show_indicators(
     State(state): State<Arc<AppState>>,
@@ -453,17 +578,12 @@ pub(in crate::web::routes) async fn agents_indicator_chart_data(
         .bars
         .unwrap_or(MAX_CHART_BARS)
         .clamp(1, MAX_CHART_BARS);
-    let candles = serde_json::from_value::<Vec<crate::indicators::model::Candle>>(
-        run.candle_data.unwrap_or_else(|| json!([])),
-    )?;
-    let candles = candles
-        .into_iter()
-        .rev()
-        .take(bars)
-        .collect::<Vec<_>>()
-        .into_iter()
-        .rev()
-        .collect::<Vec<_>>();
+    let all_candles =
+        serde_json::from_value::<Vec<Candle>>(run.candle_data.unwrap_or_else(|| json!([])))?;
+    let start_index = all_candles.len().saturating_sub(bars);
+    let visual_data = decode_visual_data(run.visual_data.as_ref())?;
+    let markers = resolve_markers(visual_data, &all_candles, start_index)?;
+    let candles = &all_candles[start_index..];
     let plots = run
         .plot_data
         .unwrap_or_else(|| json!({}))
@@ -475,12 +595,8 @@ pub(in crate::web::routes) async fn agents_indicator_chart_data(
                 .as_array()
                 .ok_or_else(|| AppError(anyhow::anyhow!("indicator plot has invalid values")))?
                 .iter()
-                .rev()
-                .take(bars)
-                .collect::<Vec<_>>()
-                .into_iter()
-                .rev()
-                .zip(&candles)
+                .skip(start_index)
+                .zip(candles)
                 .filter_map(|(value, candle)| {
                     value
                         .as_f64()
@@ -491,7 +607,7 @@ pub(in crate::web::routes) async fn agents_indicator_chart_data(
         })
         .collect::<Result<Vec<_>, AppError>>()?;
     let candles = candles
-        .into_iter()
+        .iter()
         .map(|candle| -> Result<Value, AppError> {
             Ok(json!({
                 "time": candle.opened_at.timestamp(),
@@ -507,6 +623,7 @@ pub(in crate::web::routes) async fn agents_indicator_chart_data(
         "run": {"id": run.id, "version": version.version_number, "scheduled_for": run.scheduled_for},
         "candles": candles,
         "plots": plots,
+        "markers": markers,
     }))
     .into_response())
 }

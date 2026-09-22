@@ -346,6 +346,31 @@ def _require_indicator_fields(
     }
 
 
+def _indicator_run_for_agent(value: dict[str, Any]) -> dict[str, Any]:
+    run = dict(value)
+    visual_data = run.pop("visual_data", None)
+    if visual_data is None:
+        markers: list[Any] = []
+    elif isinstance(visual_data, dict) and isinstance(visual_data.get("markers"), list):
+        markers = visual_data["markers"]
+    else:
+        raise RuntimeError("HyperVibes indicator visual data returned unexpected shape")
+    run["markers"] = markers
+    return run
+
+
+def _indicator_list_item_for_agent(value: Any) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        raise RuntimeError("HyperVibes indicators returned unexpected shape")
+    item = dict(value)
+    latest_run = item.get("latest_run")
+    if latest_run is not None:
+        if not isinstance(latest_run, dict):
+            raise RuntimeError("HyperVibes latest indicator run returned unexpected shape")
+        item["latest_run"] = _indicator_run_for_agent(latest_run)
+    return item
+
+
 @mcp.tool()
 def get_account() -> dict[str, Any]:
     """Return this agent's current Hyperliquid account snapshot."""
@@ -466,11 +491,11 @@ def set_trading_instrument_enabled(instrument_id: str, enabled: bool) -> list[st
 
 @mcp.tool()
 def list_indicators() -> list[dict[str, Any]]:
-    """List this agent's indicator definitions and their latest run status."""
+    """List indicator definitions and agent-facing latest-run plots and markers."""
     result = _request("GET", "/api/v1/indicators")
     if not isinstance(result, list):
         raise RuntimeError("HyperVibes indicators returned unexpected shape")
-    return result
+    return [_indicator_list_item_for_agent(item) for item in result]
 
 
 @mcp.tool()
@@ -489,7 +514,7 @@ def get_indicator_results(
     timeframe: str | None = None,
     limit: int | None = None,
 ) -> list[dict[str, Any]]:
-    """Return bounded indicator runs, values, and diagnostics."""
+    """Return bounded closed-candle runs, numeric values, marker events, and diagnostics."""
     params: dict[str, Any] = {}
     if instrument_id is not None:
         params["instrument_id"] = _require_nonblank("instrument_id", instrument_id)
@@ -502,9 +527,9 @@ def get_indicator_results(
         f"/api/v1/indicators/{_require_indicator_id(indicator_id)}/results",
         params=params or None,
     )
-    if not isinstance(result, list):
+    if not isinstance(result, list) or not all(isinstance(run, dict) for run in result):
         raise RuntimeError("HyperVibes indicator results returned unexpected shape")
-    return result
+    return [_indicator_run_for_agent(run) for run in result]
 
 
 @mcp.tool()
@@ -516,10 +541,11 @@ def create_indicator(
     description: str = "",
     input_values: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Create a validated server-side PineScript indicator.
+    """Create a validated server-side PineScript indicator using pine-indicators guidance.
 
     First call list_analysis_instruments and use its returned IDs unchanged.
     Input values are keyed by each Pine input's title, not its variable name.
+    Numeric plot and plotshape, plotchar, and plotarrow marker outputs are supported.
     """
     if not isinstance(description, str):
         raise ValueError("description must be a string")
@@ -543,10 +569,11 @@ def update_indicator(
     description: str = "",
     input_values: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Create and activate a new immutable PineScript indicator version.
+    """Create and activate a new immutable PineScript version using pine-indicators guidance.
 
     First call list_analysis_instruments and use its returned IDs unchanged.
     Input values are keyed by each Pine input's title, not its variable name.
+    Inspect prior numeric plots and marker events before making evidence-based revisions.
     """
     if not isinstance(enabled, bool):
         raise ValueError("enabled must be a boolean")

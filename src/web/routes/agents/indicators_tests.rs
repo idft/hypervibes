@@ -2,7 +2,7 @@ use axum::{
     body::Body,
     http::{Request, StatusCode, header},
 };
-use chrono::Utc;
+use chrono::{TimeZone, Utc};
 use rust_decimal::Decimal;
 use serde_json::json;
 use tower::util::ServiceExt;
@@ -14,7 +14,7 @@ use crate::{
         runtime::validate_indicator_source,
         store::{
             CreateIndicatorDefinition, IndicatorUpdateResult, NewIndicatorVersion,
-            UpdateIndicatorDefinition, claim_next_queued_run,
+            PersistedIndicatorOutput, UpdateIndicatorDefinition, claim_next_queued_run,
             create_definition_with_initial_version, enqueue_run, finish_run_succeeded,
             get_active_version, update_definition_with_new_version,
         },
@@ -69,6 +69,23 @@ async fn seed_succeeded_run(
     definition_id: uuid::Uuid,
     version_id: uuid::Uuid,
 ) {
+    seed_succeeded_run_with_visual_data(
+        state,
+        agent_key,
+        definition_id,
+        version_id,
+        json!({"version": 1, "markers": []}),
+    )
+    .await;
+}
+
+async fn seed_succeeded_run_with_visual_data(
+    state: &std::sync::Arc<crate::web::AppState>,
+    agent_key: &str,
+    definition_id: uuid::Uuid,
+    version_id: uuid::Uuid,
+    visual_data: serde_json::Value,
+) -> (uuid::Uuid, Vec<Candle>) {
     enqueue_run(
         &state.db_pool,
         agent_key,
@@ -84,10 +101,13 @@ async fn seed_succeeded_run(
         .await
         .expect("claim run")
         .expect("queued run");
-    let candles = [1_i64, 2]
+    let candles = [0_i64, 1, 2, 3]
         .into_iter()
         .map(|hour| Candle {
-            opened_at: Utc::now() + chrono::Duration::hours(hour),
+            opened_at: Utc
+                .timestamp_opt(1_700_000_000 + hour * 3_600, 0)
+                .single()
+                .expect("deterministic candle timestamp"),
             open: Decimal::from(10),
             high: Decimal::from(12),
             low: Decimal::from(9),
@@ -99,13 +119,17 @@ async fn seed_succeeded_run(
         &state.db_pool,
         agent_key,
         run.id,
-        json!(candles),
-        json!({"EMA": [10.5, null]}),
-        json!({"EMA": 10.5}),
-        json!([]),
+        PersistedIndicatorOutput {
+            candle_data: json!(&candles),
+            plot_data: json!({"EMA": [10.5, null, 12.5, null]}),
+            visual_data,
+            latest_values: json!({"EMA": 10.5}),
+            diagnostics: json!([]),
+        },
     )
     .await
     .expect("finish run");
+    (run.id, candles)
 }
 
 #[tokio::test]
@@ -225,6 +249,145 @@ async fn chart_data_clamps_bars_and_omits_null_plot_points() {
             .expect("plot values")
             .is_empty()
     );
+    assert_eq!(body["markers"], json!([]));
+}
+
+#[tokio::test]
+async fn chart_data_resolves_marker_offsets_prices_directions_and_window() {
+    let state = test_state().await;
+    let (agent_key, definition_id, version_id) = seed_indicator(&state).await;
+    let (_, candles) = seed_succeeded_run_with_visual_data(
+        &state,
+        &agent_key,
+        definition_id,
+        version_id,
+        json!({
+            "version": 1,
+            "markers": [
+                {
+                    "kind": "plotshape", "bar_index": 0, "value": 1.0,
+                    "title": "Buy", "text": "BUY", "style": "triangleup",
+                    "location": "belowbar", "color": {"red": 0, "green": 128, "blue": 0, "transparency": 0},
+                    "text_color": null, "size": "large", "offset": 1
+                },
+                {
+                    "kind": "plotchar", "bar_index": 3, "value": 0.0,
+                    "title": "Stage", "character": "2", "text": "",
+                    "location": "absolute", "color": null, "text_color": null,
+                    "size": "small", "offset": -1
+                },
+                {
+                    "kind": "plotarrow", "bar_index": 1, "value": 2.5,
+                    "title": "Up", "color_up": {"red": 0, "green": 128, "blue": 0, "transparency": 0},
+                    "color_down": null, "min_height": 5.0, "max_height": 100.0, "offset": 0
+                },
+                {
+                    "kind": "plotarrow", "bar_index": 2, "value": -3.0,
+                    "title": "Down", "color_up": null,
+                    "color_down": {"red": 255, "green": 0, "blue": 0, "transparency": 10},
+                    "min_height": 5.0, "max_height": 100.0, "offset": 0
+                },
+                {
+                    "kind": "plotshape", "bar_index": 0, "value": 1.0,
+                    "title": "Outside history", "text": "", "style": "circle",
+                    "location": "abovebar", "color": null, "text_color": null,
+                    "size": "normal", "offset": -1
+                },
+                {
+                    "kind": "plotchar", "bar_index": 0, "value": 1.0,
+                    "title": "Outside window", "character": "1", "text": "",
+                    "location": "belowbar", "color": null, "text_color": null,
+                    "size": "normal", "offset": 0
+                }
+            ]
+        }),
+    )
+    .await;
+
+    let response = router(state)
+        .oneshot(
+            Request::builder()
+                .uri(format!("/agents/{agent_key}/indicators/chart-data?indicator_id={definition_id}&instrument_id=BTC&bars=3"))
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+    assert_eq!(response.status(), StatusCode::OK);
+    let body: serde_json::Value =
+        serde_json::from_str(&response_text(response).await).expect("JSON");
+    let markers = body["markers"].as_array().expect("markers");
+    assert_eq!(markers.len(), 4);
+    assert_eq!(markers[0]["kind"], "plotshape");
+    assert_eq!(markers[0]["time"], candles[1].opened_at.timestamp());
+    assert_eq!(markers[1]["kind"], "plotarrow");
+    assert_eq!(markers[1]["direction"], "up");
+    assert_eq!(markers[1]["color"]["green"], 128);
+    assert_eq!(markers[2]["kind"], "plotchar");
+    assert_eq!(markers[2]["time"], candles[2].opened_at.timestamp());
+    assert_eq!(markers[2]["price"], 0.0);
+    assert_eq!(markers[3]["kind"], "plotarrow");
+    assert_eq!(markers[3]["direction"], "down");
+    assert_eq!(markers[3]["color"]["red"], 255);
+    assert_eq!(body["candles"].as_array().expect("candles").len(), 3);
+}
+
+#[tokio::test]
+async fn chart_data_accepts_historical_null_visual_data() {
+    let state = test_state().await;
+    let (agent_key, definition_id, version_id) = seed_indicator(&state).await;
+    let (run_id, _) = seed_succeeded_run_with_visual_data(
+        &state,
+        &agent_key,
+        definition_id,
+        version_id,
+        json!({"version": 1, "markers": []}),
+    )
+    .await;
+    sqlx::query("UPDATE agent_indicator_runs SET visual_data = NULL WHERE id = $1")
+        .bind(run_id)
+        .execute(&state.db_pool)
+        .await
+        .expect("clear visual data");
+
+    let response = router(state)
+        .oneshot(
+            Request::builder()
+                .uri(format!("/agents/{agent_key}/indicators/chart-data?indicator_id={definition_id}&instrument_id=BTC"))
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+    assert_eq!(response.status(), StatusCode::OK);
+    let body: serde_json::Value =
+        serde_json::from_str(&response_text(response).await).expect("JSON");
+    assert_eq!(body["markers"], json!([]));
+}
+
+#[tokio::test]
+async fn chart_data_rejects_unsupported_visual_data_versions() {
+    let state = test_state().await;
+    let (agent_key, definition_id, version_id) = seed_indicator(&state).await;
+    seed_succeeded_run_with_visual_data(
+        &state,
+        &agent_key,
+        definition_id,
+        version_id,
+        json!({"version": 2, "markers": []}),
+    )
+    .await;
+
+    let response = router(state)
+        .oneshot(
+            Request::builder()
+                .uri(format!("/agents/{agent_key}/indicators/chart-data?indicator_id={definition_id}&instrument_id=BTC"))
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
 }
 
 #[tokio::test]

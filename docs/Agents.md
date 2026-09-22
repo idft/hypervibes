@@ -57,3 +57,20 @@ status and values, supports PineScript text import, and charts the latest
 successful run. Editing creates a new immutable version rather than changing
 historical source or output. Loop statements are not part of the supported
 subset because the embedded Pine runtime cannot enforce an instruction budget.
+
+The latest successful chart renders active `plotshape()`, `plotchar()`, and
+`plotarrow()` calls as markers derived from those same server-fetched closed
+candles. Shape and character markers support Pine text, colors, sizes,
+above/below/top/bottom/absolute locations, and positive or negative offsets
+that remain within the stored candle history. Lightweight Charts approximates
+Pine styles with circle, square, and up/down arrow markers; text color cannot be
+separate from marker color, and `plotarrow()` uses a fixed size rather than a
+value-dependent pixel height. All markers attach to the candlestick series,
+including indicators that are not overlays. Indicator markers are visual
+outputs only and never place orders.
+
+Chat loads the `pine-indicators` authoring skill before creating or modifying
+an indicator. Review can use the same skill when its run has indicator-write
+capability and evidence supports an immutable revision. Analysis does not edit
+indicators; it consumes their numeric plots and marker events as research
+evidence and publishes its conclusions as memories for Trading.

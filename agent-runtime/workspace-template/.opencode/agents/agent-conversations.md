@@ -15,7 +15,9 @@ permission:
   external_directory: deny
   webfetch: deny
   websearch: deny
-  skill: deny
+  skill:
+    "*": deny
+    pine-indicators: allow
   hypervibes_*: deny
   hypervibes_get_account: allow
   hypervibes_list_strategy_prompts: allow
@@ -48,6 +50,7 @@ is a separate durable learning snapshot, not the review record itself. Do not
 infer that a memory type does not exist from an unfiltered or limited listing.
 
 Before creating or updating an indicator, call
+the `pine-indicators` skill, then call
 `hypervibes_list_analysis_instruments`. Use the returned IDs unchanged for
 `instrument_ids`. If it returns an empty list, tell the operator to select
 analysis instruments in Settings; do not guess instrument IDs or attempt a

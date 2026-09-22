@@ -53,6 +53,12 @@ Before creating or updating an indicator, callers must obtain target IDs from
 means the operator must select analysis instruments in Settings; callers must
 not guess IDs or issue a mutation.
 
+Chat and indicator-write-enabled Review agents load the `pine-indicators` skill
+before authoring or revising Pine source. Indicator read tools expose numeric
+plots and an agent-facing `markers` collection. The versioned `visual_data`
+storage envelope remains an internal API and persistence contract and is not
+returned by MCP tools.
+
 ## Memory tools
 
 `hypervibes_write_memory` accepts `scope_kind` of `agent` or `instruments`.

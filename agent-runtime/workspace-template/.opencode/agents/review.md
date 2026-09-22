@@ -4,6 +4,9 @@ mode: all
 steps: 100
 permission:
   "*": deny
+  skill:
+    "*": deny
+    pine-indicators: allow
   hypervibes_*: deny
   hypervibes_list_memories: allow
   hypervibes_get_memory_detail: allow
@@ -44,9 +47,10 @@ structured prompt revision batch for Trading or Analysis. Never revise Review
 prompts.
 
 When indicator writing is allowed and evidence justifies it, inspect indicator
-results and create an indicator or new immutable version. Explain the evidence
-and revision rationale in the review memory; never encode trading policy into
-Pine source.
+results, load the `pine-indicators` skill, and create an indicator or new
+immutable version. Explain the evidence and revision rationale in the review
+memory; never encode order execution, position sizing, or risk policy into Pine
+source.
 
 Before creating or updating an indicator, call
 `hypervibes_list_analysis_instruments` and use the returned IDs unchanged for

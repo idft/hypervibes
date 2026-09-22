@@ -90,10 +90,14 @@ order-gateway block.
 
 Enabled indicators execute only for their explicitly selected analysis
 instruments. Each run records its immutable source version, closed-candle
-boundary, normalized candle input, plots, and diagnostics. Before an Analysis
-dispatch at a candle boundary, applicable indicator work is allowed to reach a
-terminal result; failed or unavailable indicator data remains visible through
-the read tools without blocking Analysis. Trading has no direct indicator scope.
+boundary, normalized candle input, numeric plots, versioned `visual_data`, and
+diagnostics. Visual-data version 1 stores compact marker events for
+`plotshape()`, `plotchar()`, and `plotarrow()` against source candle indices;
+the chart boundary resolves their offsets and timestamps without changing the
+immutable run output. Before an Analysis dispatch at a candle boundary,
+applicable indicator work is allowed to reach a terminal result; failed or
+unavailable indicator data remains visible through the read tools without
+blocking Analysis. Trading has no direct indicator scope.
 
 Run state is persisted. On startup and periodically thereafter, the scheduler
 resumes queued runs and recovers stale running runs so interrupted dispatches

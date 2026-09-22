@@ -3,10 +3,10 @@ use std::{collections::BTreeMap, panic::AssertUnwindSafe, sync::Arc};
 use anyhow::{Context, Result, anyhow, bail, ensure};
 use pine_lang::{
     RunResult, ScriptBuilder,
-    ast::{Stmt, Visitor, walk_stmt},
+    ast::{Expr, Stmt, Visitor, walk_expr, walk_stmt},
     core::{
-        Data, DefaultPineOutput, InputOutput, InputValue, MetadataOutput, Ohlcv, PineVersion,
-        SymInfo, Timeframe,
+        Color, Data, DefaultPineOutput, InputOutput, InputValue, MetadataOutput, Ohlcv,
+        PineVersion, PlotOutput, SymInfo, Timeframe,
     },
     lexer::Lexer,
     parser::Parser,
@@ -16,7 +16,10 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tokio::sync::Semaphore;
 
-use super::model::{Candle, IndicatorDiagnostic, IndicatorMetadata};
+use super::model::{
+    Candle, INDICATOR_VISUAL_DATA_VERSION, IndicatorColor, IndicatorDiagnostic, IndicatorMarker,
+    IndicatorMetadata, IndicatorVisualData,
+};
 
 pub const MAX_INDICATOR_SOURCE_BYTES: usize = 64 * 1024;
 pub const MAX_INDICATOR_TARGETS: usize = 64;
@@ -25,6 +28,10 @@ pub const DEFAULT_INDICATOR_HISTORY_BARS: usize = 500;
 pub const MAX_INDICATOR_PLOTS: usize = 32;
 pub const MAX_INDICATOR_INPUTS: usize = 32;
 pub const MAX_INDICATOR_INPUT_TITLE_BYTES: usize = 128;
+pub const MAX_INDICATOR_MARKER_CALLS: usize = 32;
+pub const MAX_INDICATOR_MARKER_TITLE_BYTES: usize = 128;
+pub const MAX_INDICATOR_MARKER_TEXT_BYTES: usize = 256;
+pub const MAX_INDICATOR_MARKER_CHARACTER_BYTES: usize = 32;
 pub const MAX_INDICATOR_RESULT_BYTES: usize = 2 * 1024 * 1024;
 pub const MAX_CONCURRENT_INDICATOR_EXECUTIONS: usize = 4;
 
@@ -50,6 +57,7 @@ pub struct ValidatedIndicatorSource {
 pub struct IndicatorExecutionOutput {
     pub metadata: IndicatorMetadata,
     pub plots: BTreeMap<String, Vec<Option<f64>>>,
+    pub visual_data: IndicatorVisualData,
     pub latest_values: BTreeMap<String, f64>,
     pub diagnostics: Vec<IndicatorDiagnostic>,
 }
@@ -82,22 +90,32 @@ fn source_without_comments(source: &str) -> String {
         .join("\n")
 }
 
-fn ensure_no_loops(source: &str) -> Result<()> {
+fn inspect_source(source: &str) -> Result<()> {
     #[derive(Default)]
-    struct LoopDetector {
-        found: bool,
+    struct SourceInspector {
+        found_loop: bool,
+        marker_calls: usize,
     }
 
-    impl Visitor for LoopDetector {
+    impl Visitor for SourceInspector {
         fn visit_stmt(&mut self, stmt: &Stmt) {
             if matches!(
                 stmt,
                 Stmt::For { .. } | Stmt::ForIn { .. } | Stmt::While { .. }
             ) {
-                self.found = true;
-            } else {
-                walk_stmt(self, stmt);
+                self.found_loop = true;
             }
+            walk_stmt(self, stmt);
+        }
+
+        fn visit_expr(&mut self, expr: &Expr) {
+            if let Expr::Call { callee, .. } = expr
+                && let Expr::Variable { name, .. } = callee.as_ref()
+                && matches!(name.as_str(), "plotshape" | "plotchar" | "plotarrow")
+            {
+                self.marker_calls = self.marker_calls.saturating_add(1);
+            }
+            walk_expr(self, expr);
         }
     }
 
@@ -110,11 +128,15 @@ fn ensure_no_loops(source: &str) -> Result<()> {
     let program = Parser::new(tokens)
         .parse_program()
         .map_err(|error| anyhow!(error.to_string()))?;
-    let mut detector = LoopDetector::default();
-    detector.visit_program(&program);
+    let mut inspector = SourceInspector::default();
+    inspector.visit_program(&program);
     ensure!(
-        !detector.found,
+        !inspector.found_loop,
         "Pine loops are not supported by HyperVibes indicators"
+    );
+    ensure!(
+        inspector.marker_calls <= MAX_INDICATOR_MARKER_CALLS,
+        "indicator declares more than {MAX_INDICATOR_MARKER_CALLS} marker output calls"
     );
     Ok(())
 }
@@ -221,7 +243,7 @@ pub fn validate_indicator_source(
         "Pine source must declare indicator(...); strategies and libraries are not supported"
     );
     // Metadata decoding executes the AST, and this Pine runtime has no instruction budget.
-    ensure_no_loops(source)?;
+    inspect_source(source)?;
     let diagnostics = pine_lang::check(source, None).map_err(|error| anyhow!(error.to_string()))?;
     let diagnostics: Vec<_> = diagnostics.iter().map(diagnostic_from_pine).collect();
     ensure!(
@@ -294,6 +316,227 @@ fn pine_timeframe(timeframe: &str) -> Result<Timeframe> {
         .ok_or_else(|| anyhow!("unsupported Pine timeframe {timeframe}"))
 }
 
+fn indicator_color(color: &Color) -> IndicatorColor {
+    IndicatorColor {
+        red: color.r,
+        green: color.g,
+        blue: color.b,
+        transparency: color.t,
+    }
+}
+
+fn validate_marker_string(value: &str, limit: usize, field: &str) -> Result<()> {
+    ensure!(
+        value.len() <= limit,
+        "indicator marker {field} exceeds {limit} bytes"
+    );
+    Ok(())
+}
+
+fn validate_marker_offset(offset: f64) -> Result<i64> {
+    ensure!(offset.is_finite(), "indicator marker offset must be finite");
+    ensure!(
+        offset.fract() == 0.0,
+        "indicator marker offset must be an integer"
+    );
+    ensure!(
+        offset >= -(MAX_INDICATOR_HISTORY_BARS as f64)
+            && offset <= MAX_INDICATOR_HISTORY_BARS as f64,
+        "indicator marker offset exceeds supported history"
+    );
+    Ok(offset as i64)
+}
+
+fn validate_show_last(show_last: Option<f64>) -> Result<Option<f64>> {
+    let Some(show_last) = show_last else {
+        return Ok(None);
+    };
+    ensure!(
+        show_last.is_finite() && show_last >= 0.0 && show_last.fract() == 0.0,
+        "indicator marker show_last must be a nonnegative integer"
+    );
+    Ok(Some(show_last))
+}
+
+fn is_inside_show_last(bar_index: usize, bar_count: usize, show_last: Option<f64>) -> bool {
+    match show_last {
+        None => true,
+        Some(0.0) => false,
+        Some(value) if value >= bar_count as f64 => true,
+        Some(value) => bar_index >= bar_count - value as usize,
+    }
+}
+
+fn validate_marker_location(location: &str) -> Result<()> {
+    ensure!(
+        matches!(
+            location,
+            "abovebar" | "belowbar" | "top" | "bottom" | "absolute"
+        ),
+        "unsupported indicator marker location '{location}'"
+    );
+    Ok(())
+}
+
+fn validate_marker_size(size: &str) -> Result<()> {
+    ensure!(
+        matches!(
+            size,
+            "auto" | "tiny" | "small" | "normal" | "large" | "huge"
+        ),
+        "unsupported indicator marker size '{size}'"
+    );
+    Ok(())
+}
+
+fn validate_plotshape_style(style: &str) -> Result<()> {
+    ensure!(
+        matches!(
+            style,
+            "xcross"
+                | "cross"
+                | "circle"
+                | "triangleup"
+                | "triangledown"
+                | "flag"
+                | "arrowup"
+                | "arrowdown"
+                | "square"
+                | "diamond"
+                | "labelup"
+                | "labeldown"
+        ),
+        "unsupported plotshape style '{style}'"
+    );
+    Ok(())
+}
+
+fn marker_is_active(value: f64, location: &str) -> Result<bool> {
+    if value.is_nan() {
+        return Ok(false);
+    }
+    ensure!(value.is_finite(), "indicator marker value must be finite");
+    Ok(location == "absolute" || value != 0.0)
+}
+
+fn collect_visual_data(outputs: &[DefaultPineOutput]) -> Result<IndicatorVisualData> {
+    let mut markers = Vec::new();
+    for (bar_index, output) in outputs.iter().enumerate() {
+        let marker_count = output
+            .plotshapes()
+            .len()
+            .checked_add(output.plotchars().len())
+            .and_then(|count| count.checked_add(output.plotarrows().len()))
+            .ok_or_else(|| anyhow!("indicator marker output count overflowed"))?;
+        ensure!(
+            marker_count <= MAX_INDICATOR_MARKER_CALLS,
+            "indicator emitted more than {MAX_INDICATOR_MARKER_CALLS} marker outputs on one candle"
+        );
+
+        for shape in output.plotshapes() {
+            validate_marker_string(&shape.title, MAX_INDICATOR_MARKER_TITLE_BYTES, "title")?;
+            validate_marker_string(&shape.text, MAX_INDICATOR_MARKER_TEXT_BYTES, "text")?;
+            validate_plotshape_style(&shape.style)?;
+            validate_marker_location(&shape.location)?;
+            validate_marker_size(&shape.size)?;
+            let offset = validate_marker_offset(shape.offset)?;
+            let show_last = validate_show_last(shape.show_last)?;
+            if shape.display == "none"
+                || !is_inside_show_last(bar_index, outputs.len(), show_last)
+                || !marker_is_active(shape.series, &shape.location)?
+            {
+                continue;
+            }
+            markers.push(IndicatorMarker::Plotshape {
+                bar_index,
+                value: shape.series,
+                title: shape.title.clone(),
+                text: shape.text.clone(),
+                style: shape.style.clone(),
+                location: shape.location.clone(),
+                color: shape.color.as_ref().map(indicator_color),
+                text_color: shape.textcolor.as_ref().map(indicator_color),
+                size: shape.size.clone(),
+                offset,
+            });
+        }
+
+        for character in output.plotchars() {
+            validate_marker_string(&character.title, MAX_INDICATOR_MARKER_TITLE_BYTES, "title")?;
+            validate_marker_string(
+                &character.char,
+                MAX_INDICATOR_MARKER_CHARACTER_BYTES,
+                "character",
+            )?;
+            validate_marker_string(&character.text, MAX_INDICATOR_MARKER_TEXT_BYTES, "text")?;
+            validate_marker_location(&character.location)?;
+            validate_marker_size(&character.size)?;
+            let offset = validate_marker_offset(character.offset)?;
+            let show_last = validate_show_last(character.show_last)?;
+            if character.display == "none"
+                || !is_inside_show_last(bar_index, outputs.len(), show_last)
+                || !marker_is_active(character.series, &character.location)?
+            {
+                continue;
+            }
+            markers.push(IndicatorMarker::Plotchar {
+                bar_index,
+                value: character.series,
+                title: character.title.clone(),
+                character: character.char.clone(),
+                text: character.text.clone(),
+                location: character.location.clone(),
+                color: character.color.as_ref().map(indicator_color),
+                text_color: character.textcolor.as_ref().map(indicator_color),
+                size: character.size.clone(),
+                offset,
+            });
+        }
+
+        for arrow in output.plotarrows() {
+            validate_marker_string(&arrow.title, MAX_INDICATOR_MARKER_TITLE_BYTES, "title")?;
+            let offset = validate_marker_offset(arrow.offset)?;
+            let show_last = validate_show_last(arrow.show_last)?;
+            ensure!(
+                arrow.minheight.is_finite() && arrow.minheight >= 0.0,
+                "plotarrow minheight must be finite and nonnegative"
+            );
+            ensure!(
+                arrow.maxheight.is_finite() && arrow.maxheight >= 0.0,
+                "plotarrow maxheight must be finite and nonnegative"
+            );
+            ensure!(
+                arrow.minheight <= arrow.maxheight,
+                "plotarrow minheight must not exceed maxheight"
+            );
+            if arrow.series.is_nan() {
+                continue;
+            }
+            ensure!(arrow.series.is_finite(), "plotarrow value must be finite");
+            if arrow.display == "none"
+                || arrow.series == 0.0
+                || !is_inside_show_last(bar_index, outputs.len(), show_last)
+            {
+                continue;
+            }
+            markers.push(IndicatorMarker::Plotarrow {
+                bar_index,
+                value: arrow.series,
+                title: arrow.title.clone(),
+                color_up: arrow.colorup.as_ref().map(indicator_color),
+                color_down: arrow.colordown.as_ref().map(indicator_color),
+                min_height: arrow.minheight,
+                max_height: arrow.maxheight,
+                offset,
+            });
+        }
+    }
+    Ok(IndicatorVisualData {
+        version: INDICATOR_VISUAL_DATA_VERSION,
+        markers,
+    })
+}
+
 fn execute_blocking(
     source: &str,
     input_values: &Value,
@@ -346,6 +589,7 @@ fn execute_blocking(
         .map_err(|error| anyhow!(error.to_string()))?
         .run()
         .map_err(|error| anyhow!(error.to_string()))?;
+    let visual_data = collect_visual_data(&run.outputs)?;
     let result = RunResult::collect(&run.outputs);
     ensure!(
         result.bars == candles.len(),
@@ -365,6 +609,7 @@ fn execute_blocking(
         metadata: validated.metadata,
         latest_values: latest_values(&result.plots)?,
         plots: result.plots,
+        visual_data,
         diagnostics: validated.diagnostics,
     })
 }
@@ -432,6 +677,11 @@ mod tests {
                 }
             })
             .collect()
+    }
+
+    fn execute(source: &str) -> IndicatorExecutionOutput {
+        execute_blocking(source, &serde_json::json!({}), &candles(), "BTC", "1m")
+            .expect("execute test indicator")
     }
 
     #[test]
@@ -508,5 +758,186 @@ mod tests {
                 "Pine loops are not supported by HyperVibes indicators"
             );
         }
+    }
+
+    #[test]
+    fn collects_all_marker_kinds_with_native_metadata_and_order() {
+        let output = execute(
+            r#"//@version=5
+indicator("Markers", overlay=true)
+plotarrow(2.5, title="Momentum", colorup=color.green, colordown=color.red, minheight=4, maxheight=20, show_last=1)
+plotarrow(-3, title="Negative", colorup=color.green, colordown=color.red, show_last=1)
+plotchar(true, title="Stage 1", char="1", location=location.belowbar, color=color.yellow, text="Stage", textcolor=color.blue, size=size.small, offset=-1, show_last=1)
+plotshape(close > 39, title="Buy", style=shape.triangleup, location=location.belowbar, color=color.green, text="BUY", textcolor=color.white, size=size.large, offset=2)
+plotshape(0, title="Zero", location=location.absolute, show_last=1)
+plotchar(0, title="Zero char", char="0", location=location.absolute, show_last=1)
+"#,
+        );
+
+        assert_eq!(output.visual_data.version, INDICATOR_VISUAL_DATA_VERSION);
+        assert_eq!(output.visual_data.markers.len(), 6);
+        assert!(matches!(
+            &output.visual_data.markers[0],
+            IndicatorMarker::Plotshape {
+                bar_index: 39,
+                value,
+                title,
+                text,
+                style,
+                location,
+                color: Some(IndicatorColor { green: 128, .. }),
+                text_color: Some(IndicatorColor { red: 255, green: 255, blue: 255, .. }),
+                size,
+                offset: 2,
+            } if *value == 1.0 && title == "Buy" && text == "BUY" && style == "triangleup"
+                && location == "belowbar" && size == "large"
+        ));
+        assert!(matches!(
+            &output.visual_data.markers[1],
+            IndicatorMarker::Plotshape { bar_index: 39, value, location, .. }
+                if *value == 0.0 && location == "absolute"
+        ));
+        assert!(matches!(
+            &output.visual_data.markers[2],
+            IndicatorMarker::Plotchar {
+                bar_index: 39,
+                character,
+                text,
+                text_color: Some(IndicatorColor { blue: 255, .. }),
+                offset: -1,
+                ..
+            } if character == "1" && text == "Stage"
+        ));
+        assert!(matches!(
+            &output.visual_data.markers[3],
+            IndicatorMarker::Plotchar { bar_index: 39, value, character, location, .. }
+                if *value == 0.0 && character == "0" && location == "absolute"
+        ));
+        assert!(matches!(
+            &output.visual_data.markers[4],
+            IndicatorMarker::Plotarrow {
+                bar_index: 39,
+                value,
+                color_up: Some(IndicatorColor { green: 128, .. }),
+                color_down: Some(IndicatorColor { red: 255, .. }),
+                min_height,
+                max_height,
+                ..
+            } if *value == 2.5 && *min_height == 4.0 && *max_height == 20.0
+        ));
+        assert!(matches!(
+            &output.visual_data.markers[5],
+            IndicatorMarker::Plotarrow { bar_index: 39, value, .. } if *value == -3.0
+        ));
+    }
+
+    #[test]
+    fn filters_inactive_hidden_and_show_last_markers() {
+        let output = execute(
+            r#"//@version=5
+indicator("Filters")
+plotshape(false, title="False")
+plotshape(na, title="NA")
+plotshape(true, title="Hidden shape", display=display.none)
+plotchar(false, title="Hidden", display=display.none)
+plotarrow(0, title="Zero")
+plotarrow(na, title="NA arrow")
+plotarrow(1, title="Hidden arrow", display=display.none)
+plotshape(true, title="Last", show_last=2)
+plotchar(true, title="Last char", char="3", show_last=2)
+plotarrow(1, title="Last arrow", show_last=2)
+"#,
+        );
+
+        assert_eq!(output.visual_data.markers.len(), 6);
+        for marker in &output.visual_data.markers {
+            let bar_index = match marker {
+                IndicatorMarker::Plotshape { bar_index, .. }
+                | IndicatorMarker::Plotchar { bar_index, .. }
+                | IndicatorMarker::Plotarrow { bar_index, .. } => *bar_index,
+            };
+            assert!(bar_index >= 38);
+        }
+        assert!(matches!(
+            output.visual_data.markers.as_slice(),
+            [
+                IndicatorMarker::Plotshape { .. },
+                IndicatorMarker::Plotchar { .. },
+                IndicatorMarker::Plotarrow { .. },
+                IndicatorMarker::Plotshape { .. },
+                IndicatorMarker::Plotchar { .. },
+                IndicatorMarker::Plotarrow { .. },
+            ]
+        ));
+    }
+
+    #[test]
+    fn validates_marker_limits_and_numeric_metadata() {
+        let mut source = String::from("//@version=5\nindicator(\"Too many\")\n");
+        for index in 0..11 {
+            source.push_str(&format!("plotshape (true, title=\"S{index}\")\n"));
+            source.push_str(&format!("plotchar (true, title=\"C{index}\")\n"));
+            source.push_str(&format!("plotarrow (1, title=\"A{index}\")\n"));
+        }
+        let error = validate_indicator_source(&source, &serde_json::json!({}))
+            .expect_err("combined marker call limit must be enforced");
+        assert_eq!(
+            error.to_string(),
+            "indicator declares more than 32 marker output calls"
+        );
+
+        for offset in [f64::NAN, f64::INFINITY, 0.5, 2_001.0, -2_001.0] {
+            assert!(validate_marker_offset(offset).is_err(), "offset {offset}");
+        }
+        for show_last in [Some(f64::NAN), Some(-1.0), Some(0.5)] {
+            assert!(validate_show_last(show_last).is_err());
+        }
+    }
+
+    #[test]
+    fn caps_actual_per_candle_marker_outputs_and_rejects_invalid_arrow_heights() {
+        fn arrow(minheight: f64, maxheight: f64) -> pine_lang::core::Plotarrow {
+            pine_lang::core::Plotarrow {
+                series: 1.0,
+                title: String::new(),
+                colorup: None,
+                colordown: None,
+                offset: 0.0,
+                minheight,
+                maxheight,
+                editable: true,
+                show_last: None,
+                display: "all".to_string(),
+                format: None,
+                precision: None,
+                force_overlay: false,
+            }
+        }
+
+        let mut output = DefaultPineOutput::default();
+        for _ in 0..=MAX_INDICATOR_MARKER_CALLS {
+            output.add_plotarrow(arrow(5.0, 100.0));
+        }
+        assert!(collect_visual_data(&[output]).is_err());
+
+        let mut output = DefaultPineOutput::default();
+        output.add_plotarrow(arrow(10.0, 5.0));
+        let error = collect_visual_data(&[output]).expect_err("invalid heights must fail");
+        assert_eq!(
+            error.to_string(),
+            "plotarrow minheight must not exceed maxheight"
+        );
+    }
+
+    #[test]
+    fn empty_marker_output_uses_the_versioned_envelope() {
+        let output = execute("//@version=5\nindicator(\"No markers\")\nplot(close)");
+        assert_eq!(
+            output.visual_data,
+            IndicatorVisualData {
+                version: INDICATOR_VISUAL_DATA_VERSION,
+                markers: Vec::new(),
+            }
+        );
     }
 }

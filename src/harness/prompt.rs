@@ -43,7 +43,7 @@ fn build_analysis_prompt(request: &DispatchRequest) -> String {
     }
     body.push_str("\n\n## Instructions\n");
     body.push_str("- This job's research method is defined by its strategy and its capabilities. Decide what market evidence to gather from your allowed tools, or reason from the evidence already available to you.\n");
-    body.push_str("- Inspect relevant published indicator measurements with `hypervibes_list_indicators`, `hypervibes_get_indicator`, and `hypervibes_get_indicator_results`; interpret the computed values as research evidence. Do not create or edit indicators.\n");
+    body.push_str("- Inspect relevant published numeric plots and marker events with `hypervibes_list_indicators`, `hypervibes_get_indicator`, and `hypervibes_get_indicator_results`; interpret them as research evidence, not order instructions. Do not create or edit indicators.\n");
     if request
         .enabled_capabilities
         .iter()
@@ -149,7 +149,7 @@ fn build_review_prompt(request: &DispatchRequest) -> Result<String> {
         .iter()
         .any(|capability| capability == CAPABILITY_INDICATOR_WRITE)
     {
-        body.push_str("- Inspect indicator definitions and results when relevant. When evidence justifies it, create an indicator or an immutable new version with the indicator MCP tools, and explain the revision rationale in the review memory. Never encode trading policy into Pine source.\n");
+        body.push_str("- Inspect indicator definitions and results when relevant. When evidence justifies it, load the `pine-indicators` skill, create an indicator or an immutable new version with the indicator MCP tools, and explain the revision rationale in the review memory. Pine may express analytical signals, but never encode order execution, position sizing, or risk policy.\n");
     }
     body.push_str(
         "- Never edit `data/`, `scratch/`, or runtime files; review is diagnosis-only.\n",
@@ -306,6 +306,8 @@ mod tests {
         ));
         assert!(prompt.contains("Choose your own memory type names"));
         assert!(prompt.contains("scope_kind = \"instruments\""));
+        assert!(prompt.contains("numeric plots and marker events"));
+        assert!(prompt.contains("not order instructions"));
     }
 
     #[test]
@@ -435,6 +437,18 @@ mod tests {
 
         assert!(!prompt.contains("hypervibes_submit_prompt_revision"));
         assert!(!prompt.contains("create an indicator or an immutable new version"));
+    }
+
+    #[test]
+    fn indicator_authorized_review_loads_the_pine_skill() {
+        let mut request = sample_request(SUB_AGENT_KIND_REVIEW);
+        request.enabled_capabilities = vec![CAPABILITY_INDICATOR_WRITE.to_string()];
+
+        let prompt = build_prompt(&request).expect("build review prompt");
+
+        assert!(prompt.contains("load the `pine-indicators` skill"));
+        assert!(prompt.contains("analytical signals"));
+        assert!(prompt.contains("never encode order execution"));
     }
 
     #[test]

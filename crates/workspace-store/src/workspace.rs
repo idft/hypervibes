@@ -1176,6 +1176,12 @@ mod tests {
         let profile = fs::read_to_string(workspace.join(".opencode/agents/agent-conversations.md"))
             .expect("read conversation profile");
         assert!(profile.contains("hypervibes_list_memories: allow"));
+        assert!(profile.contains("pine-indicators: allow"));
+        assert!(
+            workspace
+                .join(".opencode/skills/pine-indicators/SKILL.md")
+                .is_file()
+        );
     }
 
     #[test]

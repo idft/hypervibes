@@ -171,7 +171,62 @@ class HyperVibesMcpServerTests(unittest.TestCase):
         self.assertIn("hypervibes_list_strategy_prompts: allow", review)
         self.assertIn("hypervibes_get_strategy_prompt: allow", review)
         self.assertIn("hypervibes_submit_prompt_revision: deny", review)
+        self.assertIn("pine-indicators: allow", review)
+        self.assertIn("load the `pine-indicators` skill", review)
         self.assertNotIn("hypervibes_update_strategy_prompt:", review)
+        chat = (profiles / "agent-conversations.md").read_text(encoding="utf-8")
+        self.assertIn("pine-indicators: allow", chat)
+        self.assertIn("the `pine-indicators` skill", chat)
+        analysis = (profiles / "analysis.md").read_text(encoding="utf-8")
+        self.assertIn("numeric plots and marker events", analysis)
+        skill = profiles.parent / "skills" / "pine-indicators" / "SKILL.md"
+        self.assertTrue(skill.is_file())
+        self.assertIn("plotshape()", skill.read_text(encoding="utf-8"))
+        container_config = (
+            Path(__file__).parents[2]
+            / "agent-runtime"
+            / "container"
+            / "opencode.jsonc"
+        ).read_text(encoding="utf-8")
+        self.assertIn('"pine-indicators": "allow"', container_config)
+        self.assertIn("load the pine-indicators skill", container_config)
+
+    def test_indicator_reads_hide_internal_visual_data_versioning(self) -> None:
+        run = {
+            "id": "run-id",
+            "plot_data": {"EMA": [1.0]},
+            "visual_data": {
+                "version": 1,
+                "markers": [{"kind": "plotshape", "bar_index": 0}],
+            },
+        }
+
+        with mock.patch.object(self.server, "_request", return_value=[run]):
+            results = self.server.get_indicator_results("indicator-id")
+        self.assertNotIn("visual_data", results[0])
+        self.assertEqual(
+            results[0]["markers"],
+            [{"kind": "plotshape", "bar_index": 0}],
+        )
+
+        with mock.patch.object(
+            self.server,
+            "_request",
+            return_value=[{"id": "indicator-id", "latest_run": run}],
+        ):
+            indicators = self.server.list_indicators()
+        latest_run = indicators[0]["latest_run"]
+        self.assertNotIn("visual_data", latest_run)
+        self.assertEqual(latest_run["markers"][0]["kind"], "plotshape")
+
+    def test_indicator_reads_reject_malformed_visual_data(self) -> None:
+        with mock.patch.object(
+            self.server,
+            "_request",
+            return_value=[{"visual_data": {"version": 1, "markers": {}}}],
+        ):
+            with self.assertRaisesRegex(RuntimeError, "visual data"):
+                self.server.get_indicator_results("indicator-id")
 
     def test_strategy_prompt_tools_use_authenticated_api_paths(self) -> None:
         captured: list[dict[str, object]] = []

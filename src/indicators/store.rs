@@ -13,8 +13,8 @@ use crate::{
     indicators::model::{IndicatorDefinition, IndicatorRun, IndicatorVersion},
 };
 
-const RUN_COLUMNS: &str = "id, agent_key, indicator_definition_id, indicator_version_id, instrument_id, timeframe, scheduled_for, status, candle_data, plot_data, latest_values, diagnostics, error_summary, attempt_count, started_at, finished_at, created_at, updated_at";
-const RUN_COLUMNS_QUALIFIED: &str = "r.id, r.agent_key, r.indicator_definition_id, r.indicator_version_id, r.instrument_id, r.timeframe, r.scheduled_for, r.status, r.candle_data, r.plot_data, r.latest_values, r.diagnostics, r.error_summary, r.attempt_count, r.started_at, r.finished_at, r.created_at, r.updated_at";
+const RUN_COLUMNS: &str = "id, agent_key, indicator_definition_id, indicator_version_id, instrument_id, timeframe, scheduled_for, status, candle_data, plot_data, visual_data, latest_values, diagnostics, error_summary, attempt_count, started_at, finished_at, created_at, updated_at";
+const RUN_COLUMNS_QUALIFIED: &str = "r.id, r.agent_key, r.indicator_definition_id, r.indicator_version_id, r.instrument_id, r.timeframe, r.scheduled_for, r.status, r.candle_data, r.plot_data, r.visual_data, r.latest_values, r.diagnostics, r.error_summary, r.attempt_count, r.started_at, r.finished_at, r.created_at, r.updated_at";
 const DEFINITION_COLUMNS: &str = "id, agent_key, name, description, timeframe, enabled, active_version_id, created_at, updated_at";
 const VERSION_COLUMNS: &str = "id, indicator_definition_id, version_number, source, source_sha256, compiler_version, metadata, input_values, created_by_kind, created_by_run_id, created_by_conversation_id, created_at";
 const VERSION_COLUMNS_QUALIFIED: &str = "v.id, v.indicator_definition_id, v.version_number, v.source, v.source_sha256, v.compiler_version, v.metadata, v.input_values, v.created_by_kind, v.created_by_run_id, v.created_by_conversation_id, v.created_at";
@@ -74,6 +74,14 @@ pub struct ApplicableIndicatorRun {
     pub instrument_id: String,
     pub run_id: Option<Uuid>,
     pub status: Option<String>,
+}
+
+pub struct PersistedIndicatorOutput {
+    pub candle_data: Value,
+    pub plot_data: Value,
+    pub visual_data: Value,
+    pub latest_values: Value,
+    pub diagnostics: Value,
 }
 
 fn source_sha256(source: &str) -> String {
@@ -427,12 +435,9 @@ pub async fn finish_run_succeeded(
     pool: &DbPool,
     agent_key: &str,
     run_id: Uuid,
-    candle_data: Value,
-    plot_data: Value,
-    latest_values: Value,
-    diagnostics: Value,
+    output: PersistedIndicatorOutput,
 ) -> Result<bool> {
-    let result = sqlx::query("UPDATE agent_indicator_runs SET status = 'succeeded', candle_data = $1, plot_data = $2, latest_values = $3, diagnostics = $4, finished_at = now(), updated_at = now() WHERE id = $5 AND agent_key = $6 AND status = 'running'").bind(candle_data).bind(plot_data).bind(latest_values).bind(diagnostics).bind(run_id).bind(agent_key).execute(pool).await?;
+    let result = sqlx::query("UPDATE agent_indicator_runs SET status = 'succeeded', candle_data = $1, plot_data = $2, visual_data = $3, latest_values = $4, diagnostics = $5, finished_at = now(), updated_at = now() WHERE id = $6 AND agent_key = $7 AND status = 'running'").bind(output.candle_data).bind(output.plot_data).bind(output.visual_data).bind(output.latest_values).bind(output.diagnostics).bind(run_id).bind(agent_key).execute(pool).await?;
     Ok(result.rows_affected() == 1)
 }
 pub async fn finish_run_failed(
@@ -642,10 +647,13 @@ mod tests {
                 &pool,
                 "indicator-runs",
                 first.id,
-                json!([]),
-                json!([]),
-                json!({}),
-                json!([])
+                PersistedIndicatorOutput {
+                    candle_data: json!([]),
+                    plot_data: json!([]),
+                    visual_data: json!({"version": 1, "markers": []}),
+                    latest_values: json!({}),
+                    diagnostics: json!([]),
+                }
             )
             .await
             .expect("finish first")
@@ -661,13 +669,68 @@ mod tests {
                 &pool,
                 "indicator-runs",
                 second.id,
-                json!([]),
-                json!([]),
-                json!({}),
-                json!([])
+                PersistedIndicatorOutput {
+                    candle_data: json!([]),
+                    plot_data: json!([]),
+                    visual_data: json!({
+                        "version": 1,
+                        "markers": [
+                            {
+                                "kind": "plotshape", "bar_index": 0, "value": 1.0,
+                                "title": "Buy", "text": "BUY", "style": "triangleup",
+                                "location": "belowbar", "color": null, "text_color": null,
+                                "size": "normal", "offset": 0
+                            },
+                            {
+                                "kind": "plotchar", "bar_index": 0, "value": 1.0,
+                                "title": "Stage", "character": "1", "text": "",
+                                "location": "belowbar", "color": null, "text_color": null,
+                                "size": "normal", "offset": 0
+                            },
+                            {
+                                "kind": "plotarrow", "bar_index": 0, "value": -2.0,
+                                "title": "Momentum", "color_up": null, "color_down": null,
+                                "min_height": 5.0, "max_height": 100.0, "offset": 0
+                            }
+                        ]
+                    }),
+                    latest_values: json!({}),
+                    diagnostics: json!([]),
+                }
             )
             .await
             .expect("finish second")
+        );
+        let stored = list_latest_results(&pool, "indicator-runs", definition.id, 2)
+            .await
+            .expect("list persisted runs")
+            .into_iter()
+            .find(|run| run.id == second.id)
+            .expect("persisted second run");
+        assert_eq!(
+            stored.visual_data,
+            Some(json!({
+                "version": 1,
+                "markers": [
+                    {
+                        "kind": "plotshape", "bar_index": 0, "value": 1.0,
+                        "title": "Buy", "text": "BUY", "style": "triangleup",
+                        "location": "belowbar", "color": null, "text_color": null,
+                        "size": "normal", "offset": 0
+                    },
+                    {
+                        "kind": "plotchar", "bar_index": 0, "value": 1.0,
+                        "title": "Stage", "character": "1", "text": "",
+                        "location": "belowbar", "color": null, "text_color": null,
+                        "size": "normal", "offset": 0
+                    },
+                    {
+                        "kind": "plotarrow", "bar_index": 0, "value": -2.0,
+                        "title": "Momentum", "color_up": null, "color_down": null,
+                        "min_height": 5.0, "max_height": 100.0, "offset": 0
+                    }
+                ]
+            }))
         );
         sqlx::query("UPDATE agent_indicator_runs SET finished_at = scheduled_for")
             .execute(&pool)

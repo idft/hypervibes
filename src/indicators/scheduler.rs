@@ -189,9 +189,14 @@ impl IndicatorScheduler {
         };
         let candle_data = json!(candles);
         let plot_data = json!(output.plots);
+        let visual_data = json!(output.visual_data);
         let latest_values = json!(output.latest_values);
-        if serde_json::to_vec(&json!({"candles": candle_data, "plots": plot_data}))
-            .map_or(true, |data| data.len() > MAX_INDICATOR_RESULT_BYTES)
+        if serde_json::to_vec(&json!({
+            "candles": candle_data,
+            "plots": plot_data,
+            "visuals": visual_data,
+        }))
+        .map_or(true, |data| data.len() > MAX_INDICATOR_RESULT_BYTES)
         {
             self.fail(&run, "indicator result exceeds the maximum stored size")
                 .await;
@@ -201,10 +206,13 @@ impl IndicatorScheduler {
             &self.pool,
             &run.agent_key,
             run.id,
-            candle_data,
-            plot_data,
-            latest_values,
-            json!(output.diagnostics),
+            store::PersistedIndicatorOutput {
+                candle_data,
+                plot_data,
+                visual_data,
+                latest_values,
+                diagnostics: json!(output.diagnostics),
+            },
         )
         .await
         {
