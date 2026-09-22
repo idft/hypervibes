@@ -1056,6 +1056,63 @@
             });
         }
 
+        function initAgentIndicatorDeleteModal() {
+            const modal = document.getElementById('agent-indicator-delete-modal');
+            const form = document.getElementById('agent-indicator-delete-form');
+            const body = document.getElementById('agent-indicator-delete-modal-body');
+            const cancel = document.getElementById('cancel-agent-indicator-delete-btn');
+            if (!modal || !form || !body || !cancel) {
+                return;
+            }
+
+            function close() {
+                modal.classList.add('hidden');
+                modal.classList.remove('flex');
+            }
+
+            if (modal.dataset.agentIndicatorDeleteModalBound !== 'true') {
+                modal.dataset.agentIndicatorDeleteModalBound = 'true';
+                modal.addEventListener('click', function (event) {
+                    if (event.target === modal) {
+                        close();
+                    }
+                });
+                document.addEventListener('keydown', function (event) {
+                    if (event.key === 'Escape' && modal.classList.contains('flex')) {
+                        close();
+                    }
+                });
+                cancel.addEventListener('click', close);
+            }
+
+            document.querySelectorAll('[data-agent-indicator-delete-trigger]').forEach(function (button) {
+                if (button.dataset.agentIndicatorDeleteModalBound === 'true') {
+                    return;
+                }
+
+                button.dataset.agentIndicatorDeleteModalBound = 'true';
+                button.addEventListener('click', function () {
+                    const action = button.getAttribute('data-delete-action');
+                    const label = button.getAttribute('data-delete-label');
+                    if (!action || !label) {
+                        return;
+                    }
+
+                    form.setAttribute('action', action);
+                    const labelText = document.createElement('span');
+                    labelText.className = 'font-medium text-zinc-200';
+                    labelText.textContent = label;
+                    body.replaceChildren(
+                        document.createTextNode('Are you sure you want to delete '),
+                        labelText,
+                        document.createTextNode('? This action cannot be undone.')
+                    );
+                    modal.classList.remove('hidden');
+                    modal.classList.add('flex');
+                });
+            });
+        }
+
         function readLatestTradeExecutionSummaryValue(container) {
             return container.innerHTML.trim();
         }
@@ -1096,6 +1153,7 @@
             initClickableRows();
             initDeleteModal();
             initAgentJobDeleteModal();
+            initAgentIndicatorDeleteModal();
             seedLatestTradeExecutionSummary();
         }
 
