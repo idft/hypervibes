@@ -620,7 +620,7 @@ async fn new_analysis_job_page_renders_for_opencode_agent() {
     assert!(text.contains("data-model-picker-modal"));
     assert!(text.contains("data-model-picker-submit-on-save"));
     assert!(text.contains("Prompt"));
-    assert!(text.contains("Conservative swing trading research."));
+    assert!(text.contains("Produce conservative, trend-following research for the Trading agent."));
 }
 #[tokio::test]
 async fn post_analysis_job_creates_new_job_and_redirects() {

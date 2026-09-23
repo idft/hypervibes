@@ -138,6 +138,7 @@ fn build_review_prompt(request: &DispatchRequest) -> Result<String> {
     body.push_str("- Do not make unbounded or out-of-window memory, order, or transaction queries. Do not mention or assess records outside this review window; the injected Accumulated learnings are the sole exception and must be carried forward when updated.\n");
     body.push_str("- Trace orders through their `memory_record_ids` to the linked `trading_decision` memories, and follow `memory.links` from decisions back to the research evidence they were based on.\n");
     body.push_str("- Identify failures, good patterns, stale assumptions, and prompt improvement opportunities.\n");
+    body.push_str("- Inspect relevant indicator definitions and results with `hypervibes_list_indicators`, `hypervibes_get_indicator`, and `hypervibes_get_indicator_results`, whether or not indicator-writing capability is granted. Use exact historical `run_id` references when available within the permitted review scope; never substitute a later result or current version for the evidence available to a past decision. A frozen `timed_out` dependency was unavailable to its Analysis run even if it later completed. Record missing or out-of-scope attribution as a limitation.\n");
     if request
         .enabled_capabilities
         .iter()
@@ -150,10 +151,10 @@ fn build_review_prompt(request: &DispatchRequest) -> Result<String> {
         .iter()
         .any(|capability| capability == CAPABILITY_INDICATOR_WRITE)
     {
-        body.push_str("- Inspect indicator definitions and results when relevant. When evidence justifies it, load the `pine-indicators` skill, create an indicator or an immutable new version with the indicator MCP tools, and explain the revision rationale in the review memory. Pine may express analytical signals, but never encode order execution, position sizing, or risk policy.\n");
+        body.push_str("- When evidence justifies an indicator change, load the `pine-indicators` skill, create an indicator or an immutable new version with the indicator MCP tools, and explain the evidence, revision rationale, expected effect, and observed tool outcome in the review memory. Pine may express analytical signals, but never encode order execution, position sizing, or risk policy.\n");
     }
     body.push_str(
-        "- Never edit `data/`, `scratch/`, or runtime files; review is diagnosis-only.\n",
+        "- Never edit `data/`, `scratch/`, or runtime files. Apply any permitted prompt or indicator changes only through the approved tools; otherwise record recommendations in the review memory.\n",
     );
     body.push_str("- Write exactly one `review` memory with `scope_kind = \"agent\"` and `links` of type `reviews` to the memories you reviewed.\n");
     body.push_str("- If learnings changed, write a new `agent_learnings` memory with `scope_kind = \"agent\"` and summary exactly `Accumulated agent learnings`. Its content must be a complete replacement snapshot: retain every still-valid learning from the Accumulated learnings section, add new learnings, and explicitly mark any superseded rules as removed or replaced. Then link the review memory to it with `link_type = \"updates_learnings\"`.\n");
@@ -438,6 +439,10 @@ mod tests {
 
         assert!(!prompt.contains("hypervibes_submit_prompt_revision"));
         assert!(!prompt.contains("create an indicator or an immutable new version"));
+        assert!(prompt.contains("hypervibes_get_indicator_results"));
+        assert!(prompt.contains("exact historical `run_id`"));
+        assert!(prompt.contains("A frozen `timed_out` dependency was unavailable"));
+        assert!(!prompt.contains("load the `pine-indicators` skill"));
     }
 
     #[test]
