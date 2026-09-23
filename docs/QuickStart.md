@@ -14,7 +14,7 @@ your own access control and TLS termination.
 You need:
 
 - Podman and `podman-compose`
-- `curl`, `openssl`, and GNU `sed`
+- `curl` and `openssl`
 - A browser wallet for Hyperliquid login and account approvals
 - An OpenCode provider connection before an agent can run sub-agents
 
@@ -27,13 +27,14 @@ the `master` branch.
 umask 077 && curl -fsSLo podman-compose.yaml https://raw.githubusercontent.com/idft/hypervibes/master/podman-compose.yaml
 ```
 
-Generate unique secrets before the first start:
+Generate unique secrets in a private `.env` file before the first start. This
+command refuses to overwrite an existing `.env`:
 
 ```sh
-KEY=$(openssl rand -hex 32) && CTRL=$(openssl rand -hex 32) && OC=$(openssl rand -hex 32) && DB=$(openssl rand -hex 32) && sed -i -e "s/REPLACE_KEY/$KEY/" -e "s/REPLACE_CTRL/$CTRL/" -e "s/REPLACE_OC/$OC/" -e "s/REPLACE_DB/$DB/" podman-compose.yaml
+(umask 077; set -C; KEY=$(openssl rand -hex 32) && CTRL=$(openssl rand -hex 32) && OC=$(openssl rand -hex 32) && DB=$(openssl rand -hex 32) && printf 'AGENTS_ENCRYPTION_KEY=%s\nWORKSPACE_CONTROL_API_KEY=%s\nOPENCODE_SERVER_PASSWORD=%s\nPOSTGRES_PASSWORD=%s\n' "$KEY" "$CTRL" "$OC" "$DB" > .env)
 ```
 
-Start the stack:
+From that directory, start the stack:
 
 ```sh
 podman-compose up -d
@@ -56,8 +57,8 @@ enabling an agent that can place live orders.
 
 ## Keep the installation safe
 
-`podman-compose.yaml` contains generated secrets. Keep it private and back it
-up with the database. Do not run the secret-generation command against an
-existing installation. `podman-compose down` preserves data volumes; do not use
-`podman-compose down -v` unless you intend to delete the database, provider
-credentials, and generated workspaces.
+`.env` contains generated secrets. Keep it private and back it up with the
+database. Do not regenerate it after the first start. `podman-compose down`
+preserves data volumes; do not use `podman-compose down -v`
+unless you intend to delete the database, provider credentials, and generated
+workspaces.

@@ -219,8 +219,8 @@ agent `.env`.
 
 Back up the `agent_workspaces` volume with Podman volume tooling. Preserve the
 `opencode_data` volume independently because it contains global provider
-credentials and OAuth state. Back up the production `podman-compose.yaml` with
-the database because it contains the agent-encryption key.
+credentials and OAuth state. Back up the production `.env` with the database
+because it contains the agent-encryption key and database password.
 
 A rollout uses a fresh `agent_workspaces` volume. Back up the database, retain
 the legacy host `workspaces/` directory outside normal operation, deploy, and

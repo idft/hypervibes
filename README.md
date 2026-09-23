@@ -10,7 +10,7 @@ The production stack runs HyperVibes, its OpenCode runtime, and Postgres in
 containers. It publishes HyperVibes only on `127.0.0.1:3003`; it is not
 reachable from the network without a separately configured reverse proxy.
 
-Install Podman, `podman-compose`, `curl`, `openssl`, and GNU `sed`, then run
+Install Podman, `podman-compose`, `curl`, and `openssl`, then run
 these commands in a new installation directory.
 
 1. Download the Compose file from `master`.
@@ -19,10 +19,11 @@ these commands in a new installation directory.
    umask 077 && curl -fsSLo podman-compose.yaml https://raw.githubusercontent.com/idft/hypervibes/master/podman-compose.yaml
    ```
 
-2. Generate unique local secrets. Run this once, before the first start.
+2. Generate unique local secrets in a private `.env` file. Run this once,
+   before the first start; it will refuse to overwrite an existing `.env`.
 
    ```sh
-   KEY=$(openssl rand -hex 32) && CTRL=$(openssl rand -hex 32) && OC=$(openssl rand -hex 32) && DB=$(openssl rand -hex 32) && sed -i -e "s/REPLACE_KEY/$KEY/" -e "s/REPLACE_CTRL/$CTRL/" -e "s/REPLACE_OC/$OC/" -e "s/REPLACE_DB/$DB/" podman-compose.yaml
+   (umask 077; set -C; KEY=$(openssl rand -hex 32) && CTRL=$(openssl rand -hex 32) && OC=$(openssl rand -hex 32) && DB=$(openssl rand -hex 32) && printf 'AGENTS_ENCRYPTION_KEY=%s\nWORKSPACE_CONTROL_API_KEY=%s\nOPENCODE_SERVER_PASSWORD=%s\nPOSTGRES_PASSWORD=%s\n' "$KEY" "$CTRL" "$OC" "$DB" > .env)
    ```
 
 3. Start the stack.
@@ -32,6 +33,8 @@ these commands in a new installation directory.
    ```
 
 Open <http://127.0.0.1:3003> after the services become healthy.
+Keep `.env` private and back it up with the database; do not regenerate it after
+the first start.
 
 ## Development
 

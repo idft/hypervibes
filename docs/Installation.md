@@ -14,7 +14,7 @@ own separate Linux virtual machine.
 
 ## Podman Compose install (recommended)
 
-Install Podman, `podman-compose`, `curl`, `openssl`, and GNU `sed`. Create a
+Install Podman, `podman-compose`, `curl`, and `openssl`. Create a
 private installation directory, then download the current Compose file from the
 `master` branch.
 
@@ -22,13 +22,15 @@ private installation directory, then download the current Compose file from the
 umask 077 && curl -fsSLo podman-compose.yaml https://raw.githubusercontent.com/idft/hypervibes/master/podman-compose.yaml
 ```
 
-Generate unique secrets before the first start:
+Generate unique secrets in a private `.env` file before the first start. This
+command refuses to overwrite an existing `.env`:
 
 ```sh
-KEY=$(openssl rand -hex 32) && CTRL=$(openssl rand -hex 32) && OC=$(openssl rand -hex 32) && DB=$(openssl rand -hex 32) && sed -i -e "s/REPLACE_KEY/$KEY/" -e "s/REPLACE_CTRL/$CTRL/" -e "s/REPLACE_OC/$OC/" -e "s/REPLACE_DB/$DB/" podman-compose.yaml
+(umask 077; set -C; KEY=$(openssl rand -hex 32) && CTRL=$(openssl rand -hex 32) && OC=$(openssl rand -hex 32) && DB=$(openssl rand -hex 32) && printf 'AGENTS_ENCRYPTION_KEY=%s\nWORKSPACE_CONTROL_API_KEY=%s\nOPENCODE_SERVER_PASSWORD=%s\nPOSTGRES_PASSWORD=%s\n' "$KEY" "$CTRL" "$OC" "$DB" > .env)
 ```
 
-Start the stack:
+From that directory, start the stack (`podman-compose` reads `.env` for Compose
+variable substitution):
 
 ```sh
 podman-compose up -d
@@ -37,9 +39,9 @@ podman-compose up -d
 When the services are healthy, open [http://127.0.0.1:3003](http://127.0.0.1:3003).
 Continue with [Quick Start](/docs/quick-start).
 
-The Compose file contains generated secrets. Keep it private and back it up
-with the database. Do not run the secret-generation command against an
-existing installation. `podman-compose down` preserves data volumes; do not use
+Keep `.env` private and back it up with the database: it contains the
+agent-encryption key and database password. Do not regenerate it after the first
+start. `podman-compose down` preserves data volumes; do not use
 `podman-compose down -v` unless you intend to delete the database, provider
 credentials, and generated workspaces.
 
