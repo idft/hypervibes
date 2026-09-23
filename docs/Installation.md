@@ -60,6 +60,11 @@ the repository root:
 cargo run
 ```
 
+Indicator execution normally derives its worker count from available logical
+CPUs. Set `INDICATOR_MAX_CONCURRENT_EXECUTIONS` to `1..=32` to impose a
+per-process limit, and optionally set
+`INDICATOR_ANALYSIS_WAIT_TIMEOUT_SECONDS` to `1..=300` (default `30`).
+
 The development application uses the same local web address,
 [http://127.0.0.1:3003](http://127.0.0.1:3003), unless its configuration changes
 the bind address or port. See [Testing](Testing.md) for the test database and

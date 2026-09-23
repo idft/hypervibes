@@ -33,7 +33,6 @@ pub const MAX_INDICATOR_MARKER_TITLE_BYTES: usize = 128;
 pub const MAX_INDICATOR_MARKER_TEXT_BYTES: usize = 256;
 pub const MAX_INDICATOR_MARKER_CHARACTER_BYTES: usize = 32;
 pub const MAX_INDICATOR_RESULT_BYTES: usize = 2 * 1024 * 1024;
-pub const MAX_CONCURRENT_INDICATOR_EXECUTIONS: usize = 4;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct IndicatorInputMetadata {
@@ -620,7 +619,7 @@ pub async fn execute_indicator(
     execution_limit: Arc<Semaphore>,
     source: String,
     input_values: Value,
-    candles: Vec<Candle>,
+    candles: Arc<Vec<Candle>>,
     symbol: String,
     timeframe: String,
 ) -> Result<IndicatorExecutionOutput> {
@@ -631,7 +630,13 @@ pub async fn execute_indicator(
     tokio::task::spawn_blocking(move || {
         let _permit = permit;
         std::panic::catch_unwind(AssertUnwindSafe(|| {
-            execute_blocking(&source, &input_values, &candles, &symbol, &timeframe)
+            execute_blocking(
+                &source,
+                &input_values,
+                candles.as_slice(),
+                &symbol,
+                &timeframe,
+            )
         }))
         .map_err(|_| anyhow!("Pine runtime panicked"))?
     })
@@ -716,7 +721,7 @@ mod tests {
                 Arc::clone(&semaphore),
                 source.to_string(),
                 serde_json::json!({}),
-                candles(),
+                Arc::new(candles()),
                 "BTC".to_string(),
                 "1m".to_string(),
             )

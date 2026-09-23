@@ -46,6 +46,17 @@ async fn main() -> Result<()> {
         .init();
 
     let config = AppConfig::from_env()?;
+    info!(
+        indicator_max_concurrent_executions = config.indicators.max_concurrent_executions,
+        indicator_concurrency_source = if config.indicators.concurrency_overridden {
+            "environment"
+        } else {
+            "automatic"
+        },
+        indicator_analysis_wait_timeout_seconds = config.indicators.analysis_wait_timeout.as_secs(),
+        "resolved indicator settings"
+    );
+    indicators::coordination::set_analysis_wait_timeout(config.indicators.analysis_wait_timeout);
     info!("starting HyperVibes web server");
     info!("connecting to database");
     let pool = connect(&config.database_url).await?;
@@ -54,6 +65,8 @@ async fn main() -> Result<()> {
 
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
     let (force_shutdown_tx, force_shutdown_rx) = watch::channel(false);
+    let indicator_queue_notifier = indicators::coordination::IndicatorQueueNotifier::new();
+    indicators::coordination::install_queue_notifier(indicator_queue_notifier.clone());
     let live_accounts = Arc::new(LiveAccountStore::new());
     let encryption_key = agents::crypto::EncryptionKey::new(
         config.agents_encryption_key_id.clone(),
@@ -157,8 +170,13 @@ async fn main() -> Result<()> {
     });
 
     info!("starting indicator scheduler");
-    let indicator_scheduler =
-        indicators::scheduler::IndicatorScheduler::new(pool.clone(), shutdown_rx.clone());
+    let indicator_scheduler = indicators::scheduler::IndicatorScheduler::new(
+        pool.clone(),
+        shutdown_rx.clone(),
+        force_shutdown_rx.clone(),
+        indicator_queue_notifier,
+        config.indicators.max_concurrent_executions,
+    );
     let mut indicator_scheduler_handle = tokio::spawn(async move {
         if let Err(e) = indicator_scheduler.run().await {
             error!(error = ?e, "indicator scheduler exited with error");

@@ -459,9 +459,9 @@ pub async fn insert_queued_manual_run(
     };
 
     let now = Utc::now();
-    let scheduled_for = latest_due_at_or_before(now, &job.timeframe, job.trigger_delay_seconds)?
-        .map(|due| boundary_for_due_at(due, job.trigger_delay_seconds))
-        .unwrap_or(now);
+    let due_at = latest_due_at_or_before(now, &job.timeframe, job.trigger_delay_seconds)?
+        .context("no closed candle boundary is available for the manual run")?;
+    let scheduled_for = boundary_for_due_at(due_at, job.trigger_delay_seconds);
     let wait_for_lane =
         has_active_run_in_lane_tx(&mut tx, &job.agent_key, &job.sub_agent_kind, now).await?;
     let run_id = insert_run_with_model_variant_in_tx(

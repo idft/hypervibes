@@ -19,7 +19,10 @@ they do not place orders or manage positions.
    `hypervibes_get_indicator_results` when evidence from prior behavior matters.
 3. Write one deterministic `indicator(...)` program using only the supported
    subset below. Conditions must use current or historical closed-candle data;
-   never use future information or repainting assumptions.
+    never use future information or repainting assumptions.
+   Choose one to eight explicit `timeframes`. The same source and input-value
+   set runs independently on each timeframe. Use separate definitions when
+   timeframe-specific inputs are required; this is not Pine `request.security`.
 4. Create with `hypervibes_create_indicator`, or update with
    `hypervibes_update_indicator` and the active version ID as
    `expected_version_id`. An update creates a new immutable version.
@@ -116,10 +119,16 @@ chart uses a fixed arrow size.
 
 ## Interpreting Results
 
-`hypervibes_get_indicator_results` returns bounded immutable runs containing
+`hypervibes_get_indicator_results` requires one configured timeframe and returns
+bounded immutable runs for only that timeframe containing
 closed candles, numeric plots, marker events, latest numeric values, diagnostics,
 and run status. Marker events are not included in `latest_values`; inspect the
 returned `markers` collection when evaluating signal timing.
+
+Analysis receives exact frozen run evidence for each timeframe. A dependency
+reported as `timed_out` is fixed for that Analysis run and must not be replaced
+with a later completion. Chat and Review can pass `run_id` when an exact
+historical result is needed for provenance.
 
 Analysis should treat plots and markers as research evidence and publish its
 conclusions as scoped memories. A marker is not an order instruction.

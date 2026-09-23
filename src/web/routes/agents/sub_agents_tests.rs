@@ -454,9 +454,17 @@ async fn post_job_run_now_queues_and_dispatches_run() {
         .await
         .expect("list jobs");
     seed_instrument(&state, "BTC", true).await;
-    replace_agent_instruments(&pool, &agent_key, &["BTC".to_string()])
+    seed_instrument(&state, "ETH", true).await;
+    replace_agent_instruments(&pool, &agent_key, &["ETH".to_string()])
         .await
         .expect("seed instruments");
+    crate::agents::store::replace_agent_analysis_instruments(
+        &pool,
+        &agent_key,
+        &["BTC".to_string()],
+    )
+    .await
+    .expect("seed Analysis instruments");
     let sub_agent_id = jobs
         .iter()
         .find(|row| row.sub_agent_key == "technical-15m")
@@ -501,6 +509,8 @@ async fn post_job_run_now_queues_and_dispatches_run() {
         assert_eq!(recorded[0].sub_agent_id, sub_agent_id);
         assert_eq!(recorded[0].agent_key, agent_key);
         assert_eq!(recorded[0].sub_agent_key, "technical-15m");
+        assert_eq!(recorded[0].analysis_instruments, ["BTC"]);
+        assert_eq!(recorded[0].trading_instruments, ["ETH"]);
     }
 
     let runs = crate::harness::store::list_agent_runs(&pool, &agent_key, 10)

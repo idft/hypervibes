@@ -44,14 +44,11 @@ use crate::{
             SUB_AGENT_KIND_TRADING,
         },
         scheduler::{
-            DispatchRequestInputs, build_dispatch_request, dispatch_request_from_job,
-            dispatch_run_in_isolated_workspace_with_workspace_lease,
+            build_dispatch_request, dispatch_run_in_isolated_workspace_with_workspace_lease,
         },
         store::{self, QueuedSubAgentRun},
         timeframe::{parse_timeframe_seconds, parse_timeout_seconds},
     },
-    hyperliquid::live_state::live_agent_snapshot_for_dispatch,
-    memory::get_latest_agent_memory_by_type,
     model_catalog::options::parse_model_selection,
     notifications::store::count_notifications,
     web::{
@@ -432,19 +429,6 @@ pub(in crate::web::routes) async fn build_job_prompt_preview(
     else {
         anyhow::bail!("Job dispatch context is unavailable.");
     };
-    let requires_instruments = matches!(
-        job.sub_agent_kind.as_str(),
-        SUB_AGENT_KIND_ANALYSIS | SUB_AGENT_KIND_TRADING
-    );
-    if requires_instruments
-        && crate::agents::store::list_agent_trading_instrument_ids(&state.db_pool, &agent.agent_key)
-            .await?
-            .is_empty()
-    {
-        anyhow::bail!(
-            "Prompt preview requires at least one selected instrument for this sub-agent."
-        );
-    }
     let Some(request) = build_dispatch_request(
         &state.db_pool,
         &state.live_accounts,
@@ -460,29 +444,6 @@ pub(in crate::web::routes) async fn build_job_prompt_preview(
     crate::harness::prompt::build_prompt(&request)
 }
 
-async fn load_accumulated_learnings(
-    state: &Arc<AppState>,
-    agent_key: &str,
-) -> anyhow::Result<(Option<String>, Option<uuid::Uuid>)> {
-    Ok(
-        get_latest_agent_memory_by_type(&state.db_pool, agent_key, "agent_learnings")
-            .await?
-            .map(|memory| {
-                (
-                    format!(
-                        "Summary: {}\nCreated at: {}\nContent: {}",
-                        memory.summary,
-                        memory
-                            .created_at
-                            .to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
-                        memory.content
-                    ),
-                    memory.id,
-                )
-            })
-            .map_or((None, None), |(content, id)| (Some(content), Some(id))),
-    )
-}
 #[derive(Debug, Clone, Default, Deserialize)]
 pub(in crate::web::routes) struct CreateAnalysisJobForm {
     #[serde(default)]
@@ -923,54 +884,8 @@ pub(in crate::web::routes) async fn agents_run_sub_agent_now(
                     SERVER_SHUTTING_DOWN_WARNING,
                 ));
             }
-            let agent = get_agent(&state.db_pool, &agent_key)
-                .await?
-                .ok_or_else(|| AppError(anyhow::anyhow!("agent not found")))?;
-            let selected_instruments =
-                crate::agents::store::list_agent_trading_instrument_ids(&state.db_pool, &agent_key)
-                    .await?;
-            let system_prompt = crate::agents::prompts::SYSTEM_PROMPT.to_string();
-            let account_snapshot = if job.sub_agent_kind == SUB_AGENT_KIND_TRADING {
-                Some(live_agent_snapshot_for_dispatch(
-                    agent.trading_account_address.as_deref().unwrap_or_default(),
-                    &agent.environment,
-                    &state.live_accounts,
-                ))
-            } else {
-                None
-            };
-            let (strategy_prompt, strategy_prompt_revision) =
-                load_strategy_prompt(&state, &agent_key, sub_agent_id).await?;
-            let (accumulated_learnings, accumulated_learning_memory_id) =
-                load_accumulated_learnings(&state, &agent_key).await?;
-            let mut request = dispatch_request_from_job(
-                &job,
-                DispatchRequestInputs {
-                    run_id,
-                    scheduled_for,
-                    agent,
-                    analysis_instruments: selected_instruments.clone(),
-                    trading_instruments: selected_instruments,
-                    strategy_prompt,
-                    strategy_prompt_revision,
-                    accumulated_learnings,
-                    accumulated_learning_memory_id,
-                    system_prompt,
-                },
-                account_snapshot,
-            );
-            if job.sub_agent_kind == SUB_AGENT_KIND_REVIEW {
-                let review_window_end = Utc::now();
-                let review_window_start = Utc.from_utc_datetime(
-                    &review_window_end
-                        .date_naive()
-                        .and_hms_opt(0, 0, 0)
-                        .expect("UTC midnight is valid"),
-                );
-                request.review_window_start = Some(review_window_start);
-                request.review_window_end = Some(review_window_end);
-            }
             let pool = state.db_pool.clone();
+            let live_accounts = Arc::clone(&state.live_accounts);
             let backend = state.harness_backend.clone();
             let workspace_controller = state.workspace_controller.clone();
             let agent_api_base_url = state.hypervibes_agent_api_base_url.clone();
@@ -1003,6 +918,44 @@ pub(in crate::web::routes) async fn agents_run_sub_agent_now(
                 let _workspace_lease = workspace_leases
                     .acquire_live_read(&dispatch_agent_key)
                     .await;
+                let mut request = match build_dispatch_request(
+                    &pool,
+                    &live_accounts,
+                    &job,
+                    run_id,
+                    scheduled_for,
+                )
+                .await
+                {
+                    Ok(Some(request)) => request,
+                    Ok(None) => {
+                        let _ = store::mark_run_failed(
+                            &pool,
+                            run_id,
+                            "no currencies selected for agent; job skipped",
+                            None,
+                        )
+                        .await;
+                        return;
+                    }
+                    Err(error) => {
+                        let summary = format!("manual dispatch preparation failed: {error:#}");
+                        let _ = store::mark_run_failed(&pool, run_id, &summary, None).await;
+                        return;
+                    }
+                };
+                if job.sub_agent_kind == SUB_AGENT_KIND_REVIEW {
+                    let review_window_end = Utc::now();
+                    request.review_window_start = Some(
+                        Utc.from_utc_datetime(
+                            &review_window_end
+                                .date_naive()
+                                .and_hms_opt(0, 0, 0)
+                                .expect("UTC midnight is valid"),
+                        ),
+                    );
+                    request.review_window_end = Some(review_window_end);
+                }
                 dispatch_run_in_isolated_workspace_with_workspace_lease(
                     pool.clone(),
                     backend.clone(),
@@ -1456,20 +1409,6 @@ pub(in crate::web::routes) fn job_unique_violation_message(
     } else {
         Some("This sub-agent conflicts with an existing row.".to_string())
     }
-}
-
-async fn load_strategy_prompt(
-    state: &Arc<AppState>,
-    agent_key: &str,
-    sub_agent_id: i64,
-) -> anyhow::Result<(String, i64)> {
-    let prompt = get_agent_strategy_prompt(&state.db_pool, agent_key, sub_agent_id).await?;
-    let stored_prompt = prompt
-        .as_ref()
-        .map(|row| row.prompt.clone())
-        .unwrap_or_default();
-    let revision = prompt.as_ref().map(|row| row.revision_id).unwrap_or(1);
-    Ok((stored_prompt, revision))
 }
 
 #[derive(Debug, Default, Deserialize)]

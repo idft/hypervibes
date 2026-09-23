@@ -134,6 +134,40 @@ export function initIndicators(root: ParentNode = document) {
   root.querySelectorAll<HTMLElement>("[data-agent-indicators]").forEach((page) => {
     if (page.dataset.indicatorsBound === "true") return;
     page.dataset.indicatorsBound = "true";
+    const timeframeList = page.querySelector<HTMLElement>("[data-indicator-timeframe-list]");
+    const addTimeframe = page.querySelector<HTMLButtonElement>("[data-indicator-timeframe-add]");
+    const syncTimeframeRows = () => {
+      const rows = [...(timeframeList?.querySelectorAll<HTMLElement>("[data-indicator-timeframe-row]") ?? [])];
+      rows.forEach((row) => {
+        const remove = row.querySelector<HTMLButtonElement>("[data-indicator-timeframe-remove]");
+        if (remove) remove.disabled = rows.length === 1;
+      });
+      if (addTimeframe) addTimeframe.disabled = rows.length >= 8;
+    };
+    timeframeList?.addEventListener("click", (event) => {
+      const remove = (event.target as Element).closest<HTMLButtonElement>("[data-indicator-timeframe-remove]");
+      if (!remove || timeframeList.querySelectorAll("[data-indicator-timeframe-row]").length === 1) return;
+      remove.closest("[data-indicator-timeframe-row]")?.remove();
+      syncTimeframeRows();
+    });
+    addTimeframe?.addEventListener("click", () => {
+      if (!timeframeList || timeframeList.querySelectorAll("[data-indicator-timeframe-row]").length >= 8) return;
+      const row = document.createElement("div");
+      row.dataset.indicatorTimeframeRow = "";
+      row.className = "flex gap-2";
+      row.innerHTML = '<input required name="timeframe" placeholder="1h" class="min-w-0 flex-1 rounded-xl border border-zinc-800 bg-zinc-950 px-3 py-2 text-zinc-100"><button type="button" data-indicator-timeframe-remove class="cursor-pointer rounded-full border border-zinc-700 px-3 text-xs text-zinc-300 hover:text-white">Remove</button>';
+      timeframeList.append(row);
+      row.querySelector<HTMLInputElement>('input[name="timeframe"]')?.focus();
+      syncTimeframeRows();
+    });
+    syncTimeframeRows();
+
+    const timeframeSelector = page.querySelector<HTMLSelectElement>("[data-indicator-timeframe-selector]");
+    timeframeSelector?.addEventListener("change", () => {
+      page.querySelectorAll<HTMLElement>("[data-indicator-timeframe-panel]").forEach((panel) => {
+        panel.hidden = panel.dataset.indicatorTimeframePanel !== timeframeSelector.value;
+      });
+    });
     const source = page.querySelector<HTMLTextAreaElement>("[data-indicator-source]");
     const file = page.querySelector<HTMLInputElement>("[data-indicator-import]");
     const importError = page.querySelector<HTMLElement>("[data-indicator-import-error]");
@@ -161,12 +195,13 @@ export function initIndicators(root: ParentNode = document) {
       const agentKey = chartElement.dataset.agentKey;
       const indicatorId = chartElement.dataset.indicatorId;
       const instrumentId = chartElement.dataset.instrumentId;
-      if (!agentKey || !indicatorId || !instrumentId) {
+      const timeframe = chartElement.dataset.timeframe;
+      if (!agentKey || !indicatorId || !instrumentId || !timeframe) {
         chartElement.textContent = "Chart data is unavailable.";
         return;
       }
       try {
-        const response = await fetch(`/agents/${encodeURIComponent(agentKey)}/indicators/chart-data?indicator_id=${encodeURIComponent(indicatorId)}&instrument_id=${encodeURIComponent(instrumentId)}`);
+        const response = await fetch(`/agents/${encodeURIComponent(agentKey)}/indicators/chart-data?indicator_id=${encodeURIComponent(indicatorId)}&instrument_id=${encodeURIComponent(instrumentId)}&timeframe=${encodeURIComponent(timeframe)}`);
         if (!response.ok) {
           chartElement.textContent = `No successful ${instrumentId} run is available.`;
           return;

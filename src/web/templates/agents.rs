@@ -718,7 +718,7 @@ pub struct IndicatorFormView {
     pub expected_version_id: Option<uuid::Uuid>,
     pub name: String,
     pub description: String,
-    pub timeframe: String,
+    pub timeframes: Vec<String>,
     pub source: String,
     pub inputs: Vec<IndicatorInputView>,
     pub enabled: bool,
@@ -742,7 +742,7 @@ pub struct IndicatorDefinitionView {
     pub id: uuid::Uuid,
     pub name: String,
     pub description: String,
-    pub timeframe: String,
+    pub timeframes: Vec<String>,
     pub enabled: bool,
     pub version_number: i32,
     pub created_by_kind: String,
@@ -753,6 +753,8 @@ pub struct IndicatorDefinitionView {
 #[derive(Debug, Clone)]
 pub struct IndicatorInstrumentRunView {
     pub instrument_id: String,
+    pub timeframe: String,
+    pub selected: bool,
     pub status: String,
     pub latest_values: String,
     pub latest_error: Option<String>,

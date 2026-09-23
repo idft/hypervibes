@@ -206,6 +206,19 @@ pub fn boundary_for_due_at(due_at: DateTime<Utc>, trigger_delay_seconds: i32) ->
     Utc.timestamp_opt(boundary_ts, 0).single().unwrap_or(due_at)
 }
 
+/// Return the greatest canonical candle boundary not later than `at`.
+pub fn canonical_boundary_at_or_before(
+    at: DateTime<Utc>,
+    timeframe: &str,
+) -> Result<DateTime<Utc>> {
+    let duration = parse_timeframe_seconds(timeframe)
+        .with_context(|| format!("invalid timeframe {timeframe:?}"))?;
+    let boundary = floor_div(at.timestamp(), duration) * duration;
+    Utc.timestamp_opt(boundary, 0)
+        .single()
+        .ok_or_else(|| anyhow!("canonical boundary DateTime out of range"))
+}
+
 fn floor_div(numerator: i64, denominator: i64) -> i64 {
     let mut result = numerator / denominator;
     let remainder = numerator % denominator;
@@ -354,6 +367,18 @@ mod tests {
             at(12 * 3600)
         );
         assert_eq!(boundary_for_due_at(due, 0), due);
+    }
+
+    #[test]
+    fn canonical_boundary_reuses_slower_timeframes() {
+        assert_eq!(
+            canonical_boundary_at_or_before(at(10 * 3600 + 45 * 60), "1h").unwrap(),
+            at(10 * 3600)
+        );
+        assert_eq!(
+            canonical_boundary_at_or_before(at(11 * 3600), "1h").unwrap(),
+            at(11 * 3600)
+        );
     }
 
     #[test]

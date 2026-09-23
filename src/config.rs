@@ -1,4 +1,4 @@
-use std::{env, path::PathBuf};
+use std::{env, num::NonZeroUsize, path::PathBuf, time::Duration};
 
 use anyhow::{Context, Result, bail};
 use reqwest::Url;
@@ -16,7 +16,19 @@ pub struct AppConfig {
     pub opencode_base_url: String,
     pub opencode_server_username: String,
     pub opencode_server_password: Option<String>,
+    pub indicators: IndicatorConfig,
 }
+
+#[derive(Debug, Clone, Copy)]
+pub struct IndicatorConfig {
+    pub max_concurrent_executions: usize,
+    pub concurrency_overridden: bool,
+    pub analysis_wait_timeout: Duration,
+}
+
+const MAX_INDICATOR_CONCURRENCY: usize = 32;
+const DEFAULT_INDICATOR_ANALYSIS_WAIT_SECONDS: u64 = 30;
+const MAX_INDICATOR_ANALYSIS_WAIT_SECONDS: u64 = 300;
 
 impl AppConfig {
     pub fn from_env() -> Result<Self> {
@@ -33,8 +45,79 @@ impl AppConfig {
             opencode_base_url: opencode_base_url_from_env()?,
             opencode_server_username: opencode_server_username_from_env(),
             opencode_server_password: opencode_server_password_from_env(),
+            indicators: indicator_config_from_env()?,
         })
     }
+}
+
+fn default_indicator_concurrency(logical_cpus: usize) -> usize {
+    logical_cpus
+        .saturating_sub(1)
+        .clamp(1, MAX_INDICATOR_CONCURRENCY)
+}
+
+fn parse_bounded_usize(name: &str, raw: &str, maximum: usize) -> Result<usize> {
+    let value = raw
+        .trim()
+        .parse::<usize>()
+        .with_context(|| format!("{name} must be a positive integer"))?;
+    if !(1..=maximum).contains(&value) {
+        bail!("{name} must be between 1 and {maximum}");
+    }
+    Ok(value)
+}
+
+fn resolve_indicator_config(
+    concurrency_override: Option<&str>,
+    analysis_wait_override: Option<&str>,
+    available_parallelism: std::io::Result<NonZeroUsize>,
+) -> Result<(IndicatorConfig, bool)> {
+    let (max_concurrent_executions, concurrency_overridden, cpu_detection_failed) =
+        match concurrency_override {
+            Some(raw) => (
+                parse_bounded_usize(
+                    "INDICATOR_MAX_CONCURRENT_EXECUTIONS",
+                    raw,
+                    MAX_INDICATOR_CONCURRENCY,
+                )?,
+                true,
+                false,
+            ),
+            None => match available_parallelism {
+                Ok(cpus) => (default_indicator_concurrency(cpus.get()), false, false),
+                Err(_) => (1, false, true),
+            },
+        };
+    let wait_seconds = match analysis_wait_override {
+        Some(raw) => parse_bounded_usize(
+            "INDICATOR_ANALYSIS_WAIT_TIMEOUT_SECONDS",
+            raw,
+            MAX_INDICATOR_ANALYSIS_WAIT_SECONDS as usize,
+        )? as u64,
+        None => DEFAULT_INDICATOR_ANALYSIS_WAIT_SECONDS,
+    };
+    Ok((
+        IndicatorConfig {
+            max_concurrent_executions,
+            concurrency_overridden,
+            analysis_wait_timeout: Duration::from_secs(wait_seconds),
+        },
+        cpu_detection_failed,
+    ))
+}
+
+fn indicator_config_from_env() -> Result<IndicatorConfig> {
+    let concurrency = env::var("INDICATOR_MAX_CONCURRENT_EXECUTIONS").ok();
+    let wait = env::var("INDICATOR_ANALYSIS_WAIT_TIMEOUT_SECONDS").ok();
+    let (config, cpu_detection_failed) = resolve_indicator_config(
+        concurrency.as_deref(),
+        wait.as_deref(),
+        std::thread::available_parallelism(),
+    )?;
+    if cpu_detection_failed {
+        tracing::warn!("failed to detect available CPUs; using one indicator execution worker");
+    }
+    Ok(config)
 }
 
 fn app_cache_dir_from_env() -> Result<PathBuf> {
@@ -204,7 +287,61 @@ fn opencode_server_password_from_env() -> Option<String> {
 mod tests {
     use std::env;
 
-    use super::{app_cache_dir_from_env, bind_addr_from_env};
+    use super::{
+        app_cache_dir_from_env, bind_addr_from_env, default_indicator_concurrency,
+        resolve_indicator_config,
+    };
+
+    #[test]
+    fn indicator_concurrency_default_reserves_one_cpu_and_caps_at_32() {
+        for (cpus, expected) in [(1, 1), (2, 1), (8, 7), (32, 31), (64, 32)] {
+            assert_eq!(default_indicator_concurrency(cpus), expected);
+        }
+    }
+
+    #[test]
+    fn indicator_settings_parse_overrides_and_bounds() {
+        let (config, failed) = resolve_indicator_config(
+            Some("4"),
+            Some("45"),
+            Ok(std::num::NonZeroUsize::new(8).expect("nonzero")),
+        )
+        .expect("valid settings");
+        assert_eq!(config.max_concurrent_executions, 4);
+        assert!(config.concurrency_overridden);
+        assert_eq!(config.analysis_wait_timeout.as_secs(), 45);
+        assert!(!failed);
+
+        for value in ["0", "33", "not-a-number"] {
+            assert!(
+                resolve_indicator_config(
+                    Some(value),
+                    None,
+                    Ok(std::num::NonZeroUsize::new(8).expect("nonzero"))
+                )
+                .is_err()
+            );
+        }
+        for value in ["0", "301"] {
+            assert!(
+                resolve_indicator_config(
+                    None,
+                    Some(value),
+                    Ok(std::num::NonZeroUsize::new(8).expect("nonzero"))
+                )
+                .is_err()
+            );
+        }
+    }
+
+    #[test]
+    fn indicator_concurrency_falls_back_when_cpu_detection_fails() {
+        let (config, failed) =
+            resolve_indicator_config(None, None, Err(std::io::Error::other("unavailable")))
+                .expect("fallback settings");
+        assert_eq!(config.max_concurrent_executions, 1);
+        assert!(failed);
+    }
 
     #[test]
     fn bind_addr_defaults_to_loopback_port_3003() {

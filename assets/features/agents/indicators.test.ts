@@ -69,7 +69,7 @@ describe("indicators", () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: false }));
     document.body.innerHTML = `
       <section data-agent-indicators>
-        <div data-indicator-chart data-agent-key="agent" data-indicator-id="indicator-id" data-instrument-id="BTC"></div>
+        <div data-indicator-chart data-agent-key="agent" data-indicator-id="indicator-id" data-instrument-id="BTC" data-timeframe="1h"></div>
       </section>
     `;
 
@@ -84,8 +84,8 @@ describe("indicators", () => {
     vi.stubGlobal("fetch", fetch);
     document.body.innerHTML = `
       <section data-agent-indicators>
-        <div data-indicator-chart data-agent-key="agent" data-indicator-id="indicator-id" data-instrument-id="BTC"></div>
-        <div data-indicator-chart data-agent-key="agent" data-indicator-id="indicator-id" data-instrument-id="ETH"></div>
+        <div data-indicator-chart data-agent-key="agent" data-indicator-id="indicator-id" data-instrument-id="BTC" data-timeframe="1h"></div>
+        <div data-indicator-chart data-agent-key="agent" data-indicator-id="indicator-id" data-instrument-id="ETH" data-timeframe="4h"></div>
       </section>
     `;
 
@@ -95,6 +95,7 @@ describe("indicators", () => {
     expect(fetch).toHaveBeenCalledTimes(2);
     expect(fetch).toHaveBeenCalledWith(expect.stringContaining("instrument_id=BTC"));
     expect(fetch).toHaveBeenCalledWith(expect.stringContaining("instrument_id=ETH"));
+    expect(fetch).toHaveBeenCalledWith(expect.stringContaining("timeframe=4h"));
   });
 
   it("renders non-overlay plots in a dedicated pane and cleans up before an HTMX swap", async () => {
@@ -115,7 +116,7 @@ describe("indicators", () => {
     }));
     document.body.innerHTML = `
       <section data-agent-indicators>
-        <div data-indicator-chart data-agent-key="agent" data-indicator-id="indicator-id" data-instrument-id="BTC"></div>
+        <div data-indicator-chart data-agent-key="agent" data-indicator-id="indicator-id" data-instrument-id="BTC" data-timeframe="1h"></div>
       </section>
     `;
 
@@ -162,7 +163,7 @@ describe("indicators", () => {
     }));
     document.body.innerHTML = `
       <section data-agent-indicators>
-        <div data-indicator-chart data-agent-key="agent" data-indicator-id="indicator-id" data-instrument-id="BTC"></div>
+        <div data-indicator-chart data-agent-key="agent" data-indicator-id="indicator-id" data-instrument-id="BTC" data-timeframe="1h"></div>
       </section>
     `;
 
@@ -186,5 +187,27 @@ describe("indicators", () => {
       { time: 1, position: "belowBar", shape: "arrowUp", color: "#a1a1aa", size: 1 },
       { time: 1, position: "aboveBar", shape: "arrowDown", color: "rgba(255, 0, 0, 1)", size: 1 },
     ]);
+  });
+
+  it("bounds timeframe rows and switches result panels", () => {
+    document.body.innerHTML = `
+      <section data-agent-indicators>
+        <div data-indicator-timeframe-list><div data-indicator-timeframe-row><input name="timeframe"><button data-indicator-timeframe-remove></button></div></div>
+        <button data-indicator-timeframe-add></button>
+        <select data-indicator-timeframe-selector><option value="15m">15m</option><option value="1h">1h</option></select>
+        <div data-indicator-timeframe-panel="15m"></div>
+        <div data-indicator-timeframe-panel="1h" hidden></div>
+      </section>
+    `;
+    initIndicators();
+    const add = document.querySelector<HTMLButtonElement>("[data-indicator-timeframe-add]");
+    add?.click();
+    expect(document.querySelectorAll("[data-indicator-timeframe-row]")).toHaveLength(2);
+
+    const selector = document.querySelector<HTMLSelectElement>("[data-indicator-timeframe-selector]");
+    if (selector) selector.value = "1h";
+    selector?.dispatchEvent(new Event("change"));
+    expect(document.querySelector<HTMLElement>('[data-indicator-timeframe-panel="15m"]')?.hidden).toBe(true);
+    expect(document.querySelector<HTMLElement>('[data-indicator-timeframe-panel="1h"]')?.hidden).toBe(false);
   });
 });

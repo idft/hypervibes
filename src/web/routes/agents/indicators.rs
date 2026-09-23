@@ -12,7 +12,6 @@ use uuid::Uuid;
 use super::show::{AgentIndicatorsQuery, AgentShowQueries, render_agent_show_page};
 use crate::{
     agents::{model::AgentDetailRow, store::list_agent_analysis_instrument_options},
-    harness::timeframe::parse_timeframe_seconds,
     indicators::{
         model::{Candle, INDICATOR_VISUAL_DATA_VERSION, IndicatorMarker, IndicatorVisualData},
         runtime::{IndicatorInputMetadata, validate_indicator_source},
@@ -252,14 +251,22 @@ pub(in crate::web::routes) async fn populate_indicators_tab(
             list_definition_instruments(&state.db_pool, &agent.agent_key, definition.id).await?;
         let latest_runs =
             list_latest_results(&state.db_pool, &agent.agent_key, definition.id, 100).await?;
-        let instrument_runs = instrument_ids
+        let instrument_runs = definition
+            .timeframes
             .iter()
-            .map(|instrument_id| {
+            .flat_map(|timeframe| {
+                instrument_ids
+                    .iter()
+                    .map(move |instrument_id| (timeframe, instrument_id))
+            })
+            .map(|(timeframe, instrument_id)| {
                 let latest = latest_runs
                     .iter()
-                    .find(|run| run.instrument_id == *instrument_id);
+                    .find(|run| run.instrument_id == *instrument_id && run.timeframe == *timeframe);
                 IndicatorInstrumentRunView {
                     instrument_id: instrument_id.clone(),
+                    timeframe: timeframe.clone(),
+                    selected: definition.timeframes.first() == Some(timeframe),
                     status: latest.map_or_else(|| "Not run".to_string(), |run| run.status.clone()),
                     latest_values: latest
                         .and_then(|run| run.latest_values.as_ref())
@@ -272,7 +279,7 @@ pub(in crate::web::routes) async fn populate_indicators_tab(
             id: definition.id,
             name: definition.name,
             description: definition.description,
-            timeframe: definition.timeframe,
+            timeframes: definition.timeframes,
             enabled: definition.enabled,
             version_number: version.version_number,
             created_by_kind: version.created_by_kind,
@@ -302,7 +309,7 @@ pub(in crate::web::routes) async fn populate_indicators_tab(
             expected_version_id: definition.active_version_id,
             name: definition.name,
             description: definition.description,
-            timeframe: definition.timeframe,
+            timeframes: definition.timeframes,
             source: version.source,
             inputs: input_views(&version.metadata, &version.input_values)?,
             enabled: definition.enabled,
@@ -315,6 +322,7 @@ pub(in crate::web::routes) async fn populate_indicators_tab(
         };
     } else {
         template.indicator_form.enabled = true;
+        template.indicator_form.timeframes = vec!["1h".to_string()];
         template.indicator_form.selected_instrument_ids = template
             .analysis_instrument_options
             .iter()
@@ -397,7 +405,7 @@ fn form_values(form: Vec<(String, String)>) -> Result<(IndicatorFormView, Value)
         match key.as_str() {
             "name" => view.name = value,
             "description" => view.description = value,
-            "timeframe" => view.timeframe = value,
+            "timeframe" => view.timeframes.push(value),
             "source" => view.source = value,
             "instrument_id" => view.selected_instrument_ids.push(value),
             "enabled" => view.enabled = true,
@@ -407,7 +415,8 @@ fn form_values(form: Vec<(String, String)>) -> Result<(IndicatorFormView, Value)
     if view.name.trim().is_empty() {
         return Err("indicator name must not be blank".to_string());
     }
-    parse_timeframe_seconds(&view.timeframe).map_err(|error| error.to_string())?;
+    view.timeframes = crate::indicators::store::normalize_timeframes(&view.timeframes)
+        .map_err(|error| error.to_string())?;
     Ok((view, Value::Object(inputs)))
 }
 
@@ -445,7 +454,7 @@ pub(in crate::web::routes) async fn agents_create_indicator(
         &CreateIndicatorDefinition {
             name: form.name,
             description: form.description,
-            timeframe: form.timeframe,
+            timeframes: form.timeframes,
             enabled: form.enabled,
             instrument_ids: form.selected_instrument_ids,
             version: match version(form.source, inputs) {
@@ -502,7 +511,7 @@ pub(in crate::web::routes) async fn agents_update_indicator(
         expected_active_version_id,
         name: form.name,
         description: form.description,
-        timeframe: form.timeframe,
+        timeframes: form.timeframes,
         enabled: form.enabled,
         instrument_ids: form.selected_instrument_ids,
         version: match version(form.source, inputs) {
@@ -532,6 +541,7 @@ pub(in crate::web::routes) async fn agents_delete_indicator(
 pub(in crate::web::routes) struct ChartQuery {
     indicator_id: Uuid,
     instrument_id: String,
+    timeframe: String,
     bars: Option<usize>,
 }
 
@@ -546,19 +556,23 @@ pub(in crate::web::routes) async fn agents_indicator_chart_data(
     {
         return Ok((StatusCode::NOT_FOUND, "indicator target not found").into_response());
     }
+    let Some(definition) = get_definition(&state.db_pool, &agent_key, query.indicator_id).await?
+    else {
+        return Ok((StatusCode::NOT_FOUND, "indicator not found").into_response());
+    };
+    if !definition.timeframes.contains(&query.timeframe) {
+        return Ok((StatusCode::NOT_FOUND, "indicator timeframe not found").into_response());
+    }
     let Some(run) = get_chart_run(
         &state.db_pool,
         &agent_key,
         query.indicator_id,
         &query.instrument_id,
+        &query.timeframe,
     )
     .await?
     else {
         return Ok((StatusCode::NOT_FOUND, "no successful indicator run").into_response());
-    };
-    let Some(definition) = get_definition(&state.db_pool, &agent_key, query.indicator_id).await?
-    else {
-        return Ok((StatusCode::NOT_FOUND, "indicator not found").into_response());
     };
     let version = get_version(
         &state.db_pool,
@@ -620,7 +634,7 @@ pub(in crate::web::routes) async fn agents_indicator_chart_data(
         .collect::<Result<Vec<_>, _>>()?;
     Ok(axum::Json(json!({
         "indicator": {"id": definition.id, "name": definition.name, "overlay": overlay},
-        "run": {"id": run.id, "version": version.version_number, "scheduled_for": run.scheduled_for},
+        "run": {"id": run.id, "version": version.version_number, "timeframe": run.timeframe, "scheduled_for": run.scheduled_for},
         "candles": candles,
         "plots": plots,
         "markers": markers,
@@ -659,7 +673,8 @@ mod tests {
     fn form_values_parses_typed_indicator_inputs() {
         let (_, inputs) = form_values(vec![
             ("name".to_string(), "EMA".to_string()),
-            ("timeframe".to_string(), "1h".to_string()),
+            ("timeframe".to_string(), "4h".to_string()),
+            ("timeframe".to_string(), "15m".to_string()),
             ("source".to_string(), "indicator(\"EMA\")".to_string()),
             ("indicator-input-int-Length".to_string(), "20".to_string()),
             (
@@ -679,5 +694,12 @@ mod tests {
             inputs,
             json!({"Length": 20, "Multiplier": 2.5, "Show": true, "Price": "close"})
         );
+        let (form, _) = form_values(vec![
+            ("name".to_string(), "EMA".to_string()),
+            ("timeframe".to_string(), "4h".to_string()),
+            ("timeframe".to_string(), "15m".to_string()),
+        ])
+        .expect("normalize timeframes");
+        assert_eq!(form.timeframes, ["15m", "4h"]);
     }
 }

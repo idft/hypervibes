@@ -320,13 +320,19 @@ def _require_indicator_id(indicator_id: str) -> str:
 
 def _require_indicator_fields(
     name: str,
-    timeframe: str,
+    timeframes: list[str],
     instrument_ids: list[str],
     source: str,
     input_values: dict[str, Any] | None,
 ) -> dict[str, Any]:
     _require_nonblank("name", name)
-    _require_nonblank("timeframe", timeframe)
+    if not isinstance(timeframes, list) or not 1 <= len(timeframes) <= 8 or not all(
+        isinstance(timeframe, str) and timeframe.strip() for timeframe in timeframes
+    ):
+        raise ValueError("timeframes must contain between 1 and 8 nonblank values")
+    timeframes = [timeframe.strip() for timeframe in timeframes]
+    if len(set(timeframes)) != len(timeframes):
+        raise ValueError("timeframes must not contain duplicates")
     _require_nonblank("source", source)
     if not isinstance(instrument_ids, list) or not instrument_ids or not all(
         isinstance(instrument_id, str) and instrument_id.strip()
@@ -339,7 +345,7 @@ def _require_indicator_fields(
         raise ValueError("input_values must be a JSON object")
     return {
         "name": name,
-        "timeframe": timeframe,
+        "timeframes": timeframes,
         "instrument_ids": instrument_ids,
         "source": source,
         "input_values": input_values if input_values is not None else {},
@@ -348,6 +354,8 @@ def _require_indicator_fields(
 
 def _indicator_run_for_agent(value: dict[str, Any]) -> dict[str, Any]:
     run = dict(value)
+    for internal_field in ("claim_token", "lease_expires_at", "next_attempt_at"):
+        run.pop(internal_field, None)
     visual_data = run.pop("visual_data", None)
     if visual_data is None:
         markers: list[Any] = []
@@ -510,16 +518,18 @@ def get_indicator(indicator_id: str) -> dict[str, Any]:
 @mcp.tool()
 def get_indicator_results(
     indicator_id: str,
+    timeframe: str,
     instrument_id: str | None = None,
-    timeframe: str | None = None,
+    run_id: str | None = None,
     limit: int | None = None,
 ) -> list[dict[str, Any]]:
     """Return bounded closed-candle runs, numeric values, marker events, and diagnostics."""
     params: dict[str, Any] = {}
     if instrument_id is not None:
         params["instrument_id"] = _require_nonblank("instrument_id", instrument_id)
-    if timeframe is not None:
-        params["timeframe"] = _require_nonblank("timeframe", timeframe)
+    params["timeframe"] = _require_nonblank("timeframe", timeframe)
+    if run_id is not None:
+        params["run_id"] = _require_nonblank("run_id", run_id)
     if limit is not None:
         params["limit"] = _require_limit(limit)
     result = _request(
@@ -535,7 +545,7 @@ def get_indicator_results(
 @mcp.tool()
 def create_indicator(
     name: str,
-    timeframe: str,
+    timeframes: list[str],
     instrument_ids: list[str],
     source: str,
     description: str = "",
@@ -545,11 +555,12 @@ def create_indicator(
 
     First call list_analysis_instruments and use its returned IDs unchanged.
     Input values are keyed by each Pine input's title, not its variable name.
+    One input-value set is executed independently for every configured timeframe.
     Numeric plot and plotshape, plotchar, and plotarrow marker outputs are supported.
     """
     if not isinstance(description, str):
         raise ValueError("description must be a string")
-    body = _require_indicator_fields(name, timeframe, instrument_ids, source, input_values)
+    body = _require_indicator_fields(name, timeframes, instrument_ids, source, input_values)
     body["description"] = description
     result = _request("POST", "/api/v1/indicators", json_body=body)
     if not isinstance(result, dict):
@@ -562,7 +573,7 @@ def update_indicator(
     indicator_id: str,
     expected_version_id: str,
     name: str,
-    timeframe: str,
+    timeframes: list[str],
     instrument_ids: list[str],
     source: str,
     enabled: bool = True,
@@ -579,7 +590,7 @@ def update_indicator(
         raise ValueError("enabled must be a boolean")
     if not isinstance(description, str):
         raise ValueError("description must be a string")
-    body = _require_indicator_fields(name, timeframe, instrument_ids, source, input_values)
+    body = _require_indicator_fields(name, timeframes, instrument_ids, source, input_values)
     body.update(
         {
             "expected_version_id": _require_nonblank(

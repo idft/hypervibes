@@ -1134,6 +1134,7 @@ pub async fn build_dispatch_request(
         request.indicator_snapshot = Some(
             wait_for_indicator_snapshot(
                 pool,
+                run_id,
                 &candle_job.agent_key,
                 &request.analysis_instruments,
                 scheduled_for,
@@ -1144,53 +1145,38 @@ pub async fn build_dispatch_request(
     Ok(Some(request))
 }
 
-const INDICATOR_WAIT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 const INDICATOR_WAIT_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_millis(250);
 
 async fn wait_for_indicator_snapshot(
     pool: &DbPool,
+    analysis_run_id: i64,
     agent_key: &str,
     analysis_instruments: &[String],
     boundary: chrono::DateTime<Utc>,
 ) -> Result<crate::harness::model::IndicatorSnapshot> {
-    crate::indicators::store::enqueue_applicable_runs(
+    store::prepare_indicator_dependencies(
         pool,
+        analysis_run_id,
         agent_key,
         analysis_instruments,
         boundary,
+        crate::indicators::coordination::analysis_wait_timeout(),
     )
     .await?;
-    let deadline = tokio::time::Instant::now() + INDICATOR_WAIT_TIMEOUT;
     loop {
-        let runs = crate::indicators::store::list_applicable_runs(
-            pool,
-            agent_key,
-            analysis_instruments,
-            boundary,
-        )
-        .await?;
-        if runs.iter().all(|run| {
-            matches!(
-                run.status.as_deref(),
-                Some("succeeded") | Some("failed") | Some("skipped") | None
-            )
-        }) || tokio::time::Instant::now() >= deadline
-        {
-            return Ok(crate::harness::model::IndicatorSnapshot {
-                as_of_boundary_ms: boundary.timestamp_millis(),
-                runs: runs
-                    .into_iter()
-                    .map(|run| crate::harness::model::IndicatorRunSnapshot {
-                        definition_id: run.definition_id,
-                        version_id: run.version_id,
-                        instrument_id: run.instrument_id,
-                        run_id: run.run_id,
-                        status: run.status.unwrap_or_else(|| "missing".to_string()),
-                    })
-                    .collect(),
-            });
+        let completion = crate::indicators::coordination::completion_notified();
+        tokio::pin!(completion);
+        let state = store::get_indicator_set_state(pool, analysis_run_id).await?;
+        if state.frozen || state.all_terminal || Utc::now() >= state.wait_deadline_at {
+            return store::freeze_indicator_dependencies(pool, analysis_run_id).await;
         }
-        tokio::time::sleep(INDICATOR_WAIT_POLL_INTERVAL).await;
+        let until_deadline = (state.wait_deadline_at - Utc::now())
+            .to_std()
+            .unwrap_or_default();
+        tokio::select! {
+            () = &mut completion => {}
+            () = tokio::time::sleep(INDICATOR_WAIT_POLL_INTERVAL.min(until_deadline)) => {}
+        }
     }
 }
 
@@ -1418,6 +1404,8 @@ fn build_run_context_snapshot(
                 "definition_id": run.definition_id,
                 "version_id": run.version_id,
                 "instrument_id": run.instrument_id,
+                "timeframe": run.timeframe,
+                "indicator_boundary_ms": run.indicator_boundary_ms,
                 "run_id": run.run_id,
                 "status": run.status,
             })).collect::<Vec<_>>(),

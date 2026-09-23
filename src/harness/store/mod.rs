@@ -2,6 +2,7 @@
 /// scheduler until Phase 3 materializes isolated workspaces before dispatch.
 pub mod artifacts;
 mod common;
+mod indicator_dependencies;
 mod recovery;
 mod runs;
 mod runtime_credentials;
@@ -11,6 +12,9 @@ mod workspace;
 #[allow(unused_imports)]
 pub use common::set_all_agent_sub_agents_enabled;
 pub(crate) use common::{ACTIVE_STATUSES, lock_agent_coordination_tx};
+pub use indicator_dependencies::{
+    freeze_indicator_dependencies, get_indicator_set_state, prepare_indicator_dependencies,
+};
 #[allow(unused_imports)]
 pub use recovery::{list_running_run_session_recovery_candidates, recover_inactive_runs_all};
 #[allow(unused_imports)]

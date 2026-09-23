@@ -53,6 +53,16 @@ Before creating or updating an indicator, callers must obtain target IDs from
 means the operator must select analysis instruments in Settings; callers must
 not guess IDs or issue a mutation.
 
+Indicator mutations accept `timeframes`, a list of one to eight unique values
+such as `["15m", "1h", "4h"]`; there is no singular `timeframe` compatibility
+field. One Pine source and one input-value set execute independently for every
+configured timeframe. Use separate definitions for timeframe-specific inputs.
+Result reads require one timeframe so evidence from different candle series is
+never combined accidentally. They also accept an optional `run_id` for exact
+historical provenance. Analysis run credentials are restricted to exact runs in
+their frozen dependency snapshot; a dependency frozen as `timed_out` is not
+exposed if it completes later. Chat and Review retain bounded historical access.
+
 Chat and indicator-write-enabled Review agents load the `pine-indicators` skill
 before authoring or revising Pine source. Indicator read tools expose numeric
 plots and an agent-facing `markers` collection. The versioned `visual_data`

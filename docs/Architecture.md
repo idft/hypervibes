@@ -88,16 +88,31 @@ records a `trading_decision` memory when possible, and manages orders. Missing,
 stale, or failed analyst output is context rather than a scheduler or
 order-gateway block.
 
-Enabled indicators execute only for their explicitly selected analysis
-instruments. Each run records its immutable source version, closed-candle
+Enabled indicators execute the cross-product of their one to eight explicit
+timeframes and selected Analysis instruments. Definitions own configuration,
+immutable versions own Pine source and one shared input-value set, and each run
+records one version, instrument, timeframe, canonical closed-candle
 boundary, normalized candle input, numeric plots, versioned `visual_data`, and
 diagnostics. Visual-data version 1 stores compact marker events for
 `plotshape()`, `plotchar()`, and `plotarrow()` against source candle indices;
 the chart boundary resolves their offsets and timestamps without changing the
-immutable run output. Before an Analysis dispatch at a candle boundary,
-applicable indicator work is allowed to reach a terminal result; failed or
-unavailable indicator data remains visible through the read tools without
-blocking Analysis. Trading has no direct indicator scope.
+immutable run output. Before an Analysis dispatch, a durable dependency set
+freezes active versions and the target intersection. Each dependency uses the
+greatest canonical indicator boundary not later than the Analysis boundary, so
+finer Analysis cadences reuse slower indicator runs. The persisted deadline
+survives restarts; unfinished dependencies freeze as `timed_out`. V6 contexts
+record exact timeframe, indicator boundary, run ID, and frozen status, while V5
+contexts remain readable. Analysis credentials can read only their frozen exact
+results. Trading has no direct indicator scope.
+
+Indicator workers are bounded per process, claim work with expiring token-fenced
+leases, and retry temporary infrastructure failures at most three times with
+persisted backoff. Creating or updating an enabled definition queues the latest
+canonical boundary for every timeframe/instrument target. Reconciliation does
+not perform historical backfill. Queue and completion notifications reduce
+latency, with periodic database polling as the correctness fallback. Definitions
+are archived rather than deleted, and dependency-referenced runs are excluded
+from retention cleanup.
 
 Run state is persisted. On startup and periodically thereafter, the scheduler
 resumes queued runs and recovers stale running runs so interrupted dispatches
@@ -166,6 +181,11 @@ Operational configuration includes `APP_BIND_ADDR` or `APP_HOST` and
 `APP_PORT`, `APP_CACHE_DIR`, workspace root settings, the API base URL visible
 inside OpenCode workspaces, `OPENCODE_BASE_URL`, and OpenCode Basic Auth credentials. See
 `.env.example` for the complete local-development configuration.
+
+Indicator execution uses `INDICATOR_MAX_CONCURRENT_EXECUTIONS` (`1..=32`) or a
+CPU-derived default of logical CPUs minus one, clamped to `1..=32`. This is a
+per-process limit. `INDICATOR_ANALYSIS_WAIT_TIMEOUT_SECONDS` (`1..=300`, default
+30) bounds Analysis waiting for applicable indicator work.
 
 The application defaults to `127.0.0.1:3003`. The workspace-facing API URL is
 configured separately with `HYPERVIBES_AGENT_API_BASE_URL`; it must resolve

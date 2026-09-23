@@ -20,6 +20,8 @@ been tested.
 - [Configure Hyperliquid](Hyperliquid.md) to understand wallets, signers,
   accounts, fees, and referral settings.
 - [Agents](Agents.md) to understand agent setup and controls.
+- [Indicators](Indicators.md) to configure deterministic multi-timeframe Pine
+  research evidence.
 - [Configure AI providers](Providers.md) to connect models through OpenCode.
 
 ## Technical Overview
@@ -45,7 +47,7 @@ Agent sub-agents run automatically. The available sub-agent types are:
 - **Review** - Runs daily to review agent performance and publish accumulated
   learnings.
 
-Custom indicator support is a separate future follow-up and is not currently
-implemented.
+Custom indicators run independently on one to eight explicit closed-candle
+timeframes and publish versioned results for Analysis.
 
 Prompts for each sub-agent type can be edited to describe your trading strategy.

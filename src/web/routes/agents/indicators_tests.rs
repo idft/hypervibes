@@ -40,7 +40,7 @@ async fn seed_indicator(
         &CreateIndicatorDefinition {
             name: "Test EMA".to_string(),
             description: String::new(),
-            timeframe: "1h".to_string(),
+            timeframes: vec!["1h".to_string()],
             enabled: true,
             instrument_ids: vec!["BTC".to_string()],
             version: NewIndicatorVersion {
@@ -117,8 +117,8 @@ async fn seed_succeeded_run_with_visual_data(
         .collect::<Vec<_>>();
     finish_run_succeeded(
         &state.db_pool,
-        agent_key,
         run.id,
+        run.claim_token.expect("claimed run token"),
         PersistedIndicatorOutput {
             candle_data: json!(&candles),
             plot_data: json!({"EMA": [10.5, null, 12.5, null]}),
@@ -176,6 +176,8 @@ async fn new_indicator_page_renders_the_editor_and_target_selector() {
     assert!(body.contains("Pine source"));
     assert!(body.contains("Select indicator instruments"));
     assert!(body.contains("data-agent-instrument-selector=\"indicator\""));
+    assert!(body.contains("data-indicator-timeframe-add"));
+    assert!(body.contains("The same input values apply independently"));
 }
 
 #[tokio::test]
@@ -200,6 +202,8 @@ async fn indicator_detail_renders_a_chart_for_each_target() {
     assert!(body.contains("Status:"));
     assert!(body.contains(&format!("data-indicator-id=\"{definition_id}\"")));
     assert!(body.contains("data-instrument-id=\"BTC\""));
+    assert!(body.contains("data-indicator-timeframe-selector"));
+    assert!(body.contains("data-timeframe=\"1h\""));
     assert!(!body.contains("Pine source"));
 }
 
@@ -211,7 +215,7 @@ async fn chart_data_requires_a_current_indicator_target() {
     let response = router(state)
         .oneshot(
             Request::builder()
-                .uri(format!("/agents/{agent_key}/indicators/chart-data?indicator_id={definition_id}&instrument_id=ETH"))
+                .uri(format!("/agents/{agent_key}/indicators/chart-data?indicator_id={definition_id}&instrument_id=ETH&timeframe=1h"))
                 .body(Body::empty())
                 .expect("request"),
         )
@@ -230,7 +234,7 @@ async fn chart_data_clamps_bars_and_omits_null_plot_points() {
     let response = router(state)
         .oneshot(
             Request::builder()
-                .uri(format!("/agents/{agent_key}/indicators/chart-data?indicator_id={definition_id}&instrument_id=BTC&bars=0"))
+                .uri(format!("/agents/{agent_key}/indicators/chart-data?indicator_id={definition_id}&instrument_id=BTC&timeframe=1h&bars=0"))
                 .body(Body::empty())
                 .expect("request"),
         )
@@ -307,7 +311,7 @@ async fn chart_data_resolves_marker_offsets_prices_directions_and_window() {
     let response = router(state)
         .oneshot(
             Request::builder()
-                .uri(format!("/agents/{agent_key}/indicators/chart-data?indicator_id={definition_id}&instrument_id=BTC&bars=3"))
+                .uri(format!("/agents/{agent_key}/indicators/chart-data?indicator_id={definition_id}&instrument_id=BTC&timeframe=1h&bars=3"))
                 .body(Body::empty())
                 .expect("request"),
         )
@@ -353,7 +357,7 @@ async fn chart_data_accepts_historical_null_visual_data() {
     let response = router(state)
         .oneshot(
             Request::builder()
-                .uri(format!("/agents/{agent_key}/indicators/chart-data?indicator_id={definition_id}&instrument_id=BTC"))
+                .uri(format!("/agents/{agent_key}/indicators/chart-data?indicator_id={definition_id}&instrument_id=BTC&timeframe=1h"))
                 .body(Body::empty())
                 .expect("request"),
         )
@@ -381,7 +385,7 @@ async fn chart_data_rejects_unsupported_visual_data_versions() {
     let response = router(state)
         .oneshot(
             Request::builder()
-                .uri(format!("/agents/{agent_key}/indicators/chart-data?indicator_id={definition_id}&instrument_id=BTC"))
+                .uri(format!("/agents/{agent_key}/indicators/chart-data?indicator_id={definition_id}&instrument_id=BTC&timeframe=1h"))
                 .body(Body::empty())
                 .expect("request"),
         )
@@ -433,7 +437,7 @@ async fn update_indicator_redirects_when_the_active_version_is_stale() {
             expected_active_version_id: version_id,
             name: "Test EMA".to_string(),
             description: String::new(),
-            timeframe: "1h".to_string(),
+            timeframes: vec!["1h".to_string()],
             enabled: true,
             instrument_ids: vec!["BTC".to_string()],
             version: NewIndicatorVersion {

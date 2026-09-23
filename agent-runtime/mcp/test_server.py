@@ -195,6 +195,9 @@ class HyperVibesMcpServerTests(unittest.TestCase):
         run = {
             "id": "run-id",
             "plot_data": {"EMA": [1.0]},
+            "claim_token": "secret-claim",
+            "lease_expires_at": "2026-01-01T00:00:00Z",
+            "next_attempt_at": "2026-01-01T00:00:00Z",
             "visual_data": {
                 "version": 1,
                 "markers": [{"kind": "plotshape", "bar_index": 0}],
@@ -202,8 +205,11 @@ class HyperVibesMcpServerTests(unittest.TestCase):
         }
 
         with mock.patch.object(self.server, "_request", return_value=[run]):
-            results = self.server.get_indicator_results("indicator-id")
+            results = self.server.get_indicator_results("indicator-id", "1h")
         self.assertNotIn("visual_data", results[0])
+        self.assertNotIn("claim_token", results[0])
+        self.assertNotIn("lease_expires_at", results[0])
+        self.assertNotIn("next_attempt_at", results[0])
         self.assertEqual(
             results[0]["markers"],
             [{"kind": "plotshape", "bar_index": 0}],
@@ -226,7 +232,45 @@ class HyperVibesMcpServerTests(unittest.TestCase):
             return_value=[{"visual_data": {"version": 1, "markers": {}}}],
         ):
             with self.assertRaisesRegex(RuntimeError, "visual data"):
-                self.server.get_indicator_results("indicator-id")
+                self.server.get_indicator_results("indicator-id", "1h")
+
+    def test_indicator_mutations_use_plural_timeframes(self) -> None:
+        with mock.patch.object(self.server, "_request", return_value={"id": "indicator-id"}) as request:
+            self.server.create_indicator(
+                "EMA",
+                ["15m", "1h"],
+                ["BTC"],
+                'indicator("EMA")',
+            )
+        self.assertEqual(
+            request.call_args.kwargs["json_body"]["timeframes"],
+            ["15m", "1h"],
+        )
+        self.assertNotIn("timeframe", request.call_args.kwargs["json_body"])
+
+        with self.assertRaisesRegex(ValueError, "duplicates"):
+            self.server.create_indicator(
+                "EMA",
+                ["1h", " 1h "],
+                ["BTC"],
+                'indicator("EMA")',
+            )
+
+    def test_indicator_results_require_a_timeframe(self) -> None:
+        with mock.patch.object(self.server, "_request", return_value=[]) as request:
+            self.server.get_indicator_results("indicator-id", "4h", instrument_id="BTC")
+        self.assertEqual(
+            request.call_args.kwargs["params"],
+            {"timeframe": "4h", "instrument_id": "BTC"},
+        )
+
+    def test_indicator_results_accept_an_exact_run_id(self) -> None:
+        with mock.patch.object(self.server, "_request", return_value=[]) as request:
+            self.server.get_indicator_results("indicator-id", "1h", run_id="run-id")
+        self.assertEqual(
+            request.call_args.kwargs["params"],
+            {"timeframe": "1h", "run_id": "run-id"},
+        )
 
     def test_strategy_prompt_tools_use_authenticated_api_paths(self) -> None:
         captured: list[dict[str, object]] = []

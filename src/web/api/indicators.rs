@@ -4,20 +4,23 @@ use axum::{
     Json,
     extract::{Path, Query, State},
 };
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use uuid::Uuid;
 
 use crate::{
     agents::{AuthenticatedAgent, store::list_agent_analysis_instrument_ids},
-    harness::{model::RunApiScope, timeframe::parse_timeframe_seconds},
+    harness::model::RunApiScope,
     indicators::{
         model::{IndicatorDefinition, IndicatorRun, IndicatorVersion},
         runtime::validate_indicator_source,
         store::{
-            CreateIndicatorDefinition, IndicatorUpdateResult, NewIndicatorVersion,
-            UpdateIndicatorDefinition, create_definition_with_initial_version, get_active_version,
-            get_definition, list_definition_instruments, list_definitions, list_latest_results,
+            CreateIndicatorDefinition, FrozenDependencyResultFilter, IndicatorUpdateResult,
+            NewIndicatorVersion, UpdateIndicatorDefinition, create_definition_with_initial_version,
+            get_active_version, get_definition, get_result_by_id, list_definition_instruments,
+            list_definitions, list_frozen_dependency_results, list_latest_results,
+            list_latest_results_for_timeframe, normalize_timeframes,
             update_definition_with_new_version,
         },
     },
@@ -40,7 +43,56 @@ pub(super) struct IndicatorDetailResponse {
 pub(super) struct IndicatorListResponse {
     #[serde(flatten)]
     definition: IndicatorDefinition,
-    latest_run: Option<IndicatorRun>,
+    latest_run: Option<PublicIndicatorRun>,
+}
+
+#[derive(Debug, Serialize)]
+pub(super) struct PublicIndicatorRun {
+    id: Uuid,
+    agent_key: String,
+    indicator_definition_id: Uuid,
+    indicator_version_id: Uuid,
+    instrument_id: String,
+    timeframe: String,
+    scheduled_for: DateTime<Utc>,
+    status: String,
+    candle_data: Option<Value>,
+    plot_data: Option<Value>,
+    visual_data: Option<Value>,
+    latest_values: Option<Value>,
+    diagnostics: Value,
+    error_summary: Option<String>,
+    attempt_count: i32,
+    started_at: Option<DateTime<Utc>>,
+    finished_at: Option<DateTime<Utc>>,
+    created_at: DateTime<Utc>,
+    updated_at: DateTime<Utc>,
+}
+
+impl From<IndicatorRun> for PublicIndicatorRun {
+    fn from(run: IndicatorRun) -> Self {
+        Self {
+            id: run.id,
+            agent_key: run.agent_key,
+            indicator_definition_id: run.indicator_definition_id,
+            indicator_version_id: run.indicator_version_id,
+            instrument_id: run.instrument_id,
+            timeframe: run.timeframe,
+            scheduled_for: run.scheduled_for,
+            status: run.status,
+            candle_data: run.candle_data,
+            plot_data: run.plot_data,
+            visual_data: run.visual_data,
+            latest_values: run.latest_values,
+            diagnostics: run.diagnostics,
+            error_summary: run.error_summary,
+            attempt_count: run.attempt_count,
+            started_at: run.started_at,
+            finished_at: run.finished_at,
+            created_at: run.created_at,
+            updated_at: run.updated_at,
+        }
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -49,7 +101,7 @@ pub(super) struct CreateIndicatorRequest {
     name: String,
     #[serde(default)]
     description: String,
-    timeframe: String,
+    timeframes: Vec<String>,
     instrument_ids: Vec<String>,
     source: String,
     #[serde(default = "empty_object")]
@@ -63,7 +115,7 @@ pub(super) struct UpdateIndicatorRequest {
     name: String,
     #[serde(default)]
     description: String,
-    timeframe: String,
+    timeframes: Vec<String>,
     enabled: bool,
     instrument_ids: Vec<String>,
     source: String,
@@ -74,7 +126,8 @@ pub(super) struct UpdateIndicatorRequest {
 #[derive(Debug, Deserialize)]
 pub(super) struct ResultsQuery {
     instrument_id: Option<String>,
-    timeframe: Option<String>,
+    timeframe: String,
+    run_id: Option<Uuid>,
     limit: Option<i64>,
 }
 
@@ -119,14 +172,13 @@ fn version_for(
     })
 }
 
-fn validate_definition(name: &str, timeframe: &str) -> Result<(), ApiError> {
+fn validate_definition(name: &str, timeframes: &[String]) -> Result<Vec<String>, ApiError> {
     if name.trim().is_empty() {
         return Err(ApiError::Validation(
             "indicator name must not be blank".to_string(),
         ));
     }
-    parse_timeframe_seconds(timeframe).map_err(|error| ApiError::Validation(error.to_string()))?;
-    Ok(())
+    normalize_timeframes(timeframes).map_err(|error| ApiError::Validation(error.to_string()))
 }
 
 async fn detail_response(
@@ -174,15 +226,42 @@ pub(super) async fn list_indicators(
         .await
         .map_err(ApiError::Internal)?;
     let mut response = Vec::with_capacity(definitions.len());
+    let analysis_run_id = match agent.run_provenance() {
+        Some((run_id, _)) => crate::harness::store::get_run(&state.db_pool, run_id)
+            .await
+            .map_err(ApiError::Internal)?
+            .filter(|run| run.sub_agent_kind == crate::harness::model::SUB_AGENT_KIND_ANALYSIS)
+            .map(|run| run.id),
+        None => None,
+    };
     for definition in definitions {
-        let latest_run = list_latest_results(&state.db_pool, &agent.agent_key, definition.id, 1)
+        let latest_run = if let Some(run_id) = analysis_run_id {
+            list_frozen_dependency_results(
+                &state.db_pool,
+                run_id,
+                &agent.agent_key,
+                definition.id,
+                FrozenDependencyResultFilter {
+                    timeframe: None,
+                    instrument_id: None,
+                    run_id: None,
+                    limit: 1,
+                },
+            )
             .await
             .map_err(ApiError::Internal)?
             .into_iter()
-            .next();
+            .next()
+        } else {
+            list_latest_results(&state.db_pool, &agent.agent_key, definition.id, 1)
+                .await
+                .map_err(ApiError::Internal)?
+                .into_iter()
+                .next()
+        };
         response.push(IndicatorListResponse {
             definition,
-            latest_run,
+            latest_run: latest_run.map(Into::into),
         });
     }
     Ok(Json(response))
@@ -195,14 +274,14 @@ pub(super) async fn create_indicator(
     Json(input): Json<CreateIndicatorRequest>,
 ) -> Result<Json<IndicatorDetailResponse>, ApiError> {
     require_scope(&agent, RunApiScope::IndicatorWrite)?;
-    validate_definition(&input.name, &input.timeframe)?;
+    let timeframes = validate_definition(&input.name, &input.timeframes)?;
     let definition = create_definition_with_initial_version(
         &state.db_pool,
         &agent.agent_key,
         &CreateIndicatorDefinition {
             name: input.name,
             description: input.description,
-            timeframe: input.timeframe,
+            timeframes,
             enabled: true,
             instrument_ids: input.instrument_ids,
             version: version_for(&agent, input.source, input.input_values)?,
@@ -235,12 +314,12 @@ pub(super) async fn update_indicator(
     Json(input): Json<UpdateIndicatorRequest>,
 ) -> Result<Json<IndicatorDetailResponse>, ApiError> {
     require_scope(&agent, RunApiScope::IndicatorWrite)?;
-    validate_definition(&input.name, &input.timeframe)?;
+    let timeframes = validate_definition(&input.name, &input.timeframes)?;
     let update = UpdateIndicatorDefinition {
         expected_active_version_id: input.expected_version_id,
         name: input.name,
         description: input.description,
-        timeframe: input.timeframe,
+        timeframes,
         enabled: input.enabled,
         instrument_ids: input.instrument_ids,
         version: version_for(&agent, input.source, input.input_values)?,
@@ -270,15 +349,8 @@ pub(super) async fn get_indicator_results(
     agent: AuthenticatedAgent,
     Path(definition_id): Path<Uuid>,
     Query(query): Query<ResultsQuery>,
-) -> Result<Json<Vec<IndicatorRun>>, ApiError> {
+) -> Result<Json<Vec<PublicIndicatorRun>>, ApiError> {
     require_scope(&agent, RunApiScope::IndicatorRead)?;
-    if get_definition(&state.db_pool, &agent.agent_key, definition_id)
-        .await
-        .map_err(ApiError::Internal)?
-        .is_none()
-    {
-        return Err(ApiError::NotFound("indicator not found"));
-    }
     let limit = query.limit.unwrap_or(20);
     if !(1..=100).contains(&limit) {
         return Err(ApiError::Validation(
@@ -290,18 +362,69 @@ pub(super) async fn get_indicator_results(
         .as_deref()
         .map(str::trim)
         .filter(|value| !value.is_empty());
-    let timeframe = query
-        .timeframe
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty());
-    let runs = list_latest_results(&state.db_pool, &agent.agent_key, definition_id, 100)
+    let timeframe = query.timeframe.trim();
+    crate::harness::timeframe::parse_timeframe_seconds(timeframe)
+        .map_err(|error| ApiError::Validation(error.to_string()))?;
+    let run_context = match agent.run_provenance() {
+        Some((run_id, _)) => crate::harness::store::get_run(&state.db_pool, run_id)
+            .await
+            .map_err(ApiError::Internal)?,
+        None => None,
+    };
+    let runs = if let Some(run) = run_context
+        .filter(|run| run.sub_agent_kind == crate::harness::model::SUB_AGENT_KIND_ANALYSIS)
+    {
+        list_frozen_dependency_results(
+            &state.db_pool,
+            run.id,
+            &agent.agent_key,
+            definition_id,
+            FrozenDependencyResultFilter {
+                timeframe: Some(timeframe),
+                instrument_id,
+                run_id: query.run_id,
+                limit,
+            },
+        )
+        .await
+        .map_err(ApiError::Internal)?
+    } else if let Some(run_id) = query.run_id {
+        get_result_by_id(
+            &state.db_pool,
+            &agent.agent_key,
+            definition_id,
+            timeframe,
+            instrument_id,
+            run_id,
+        )
         .await
         .map_err(ApiError::Internal)?
         .into_iter()
-        .filter(|run| instrument_id.is_none_or(|value| run.instrument_id == value))
-        .filter(|run| timeframe.is_none_or(|value| run.timeframe == value))
-        .take(limit as usize)
-        .collect();
-    Ok(Json(runs))
+        .collect()
+    } else {
+        let Some(definition) = get_definition(&state.db_pool, &agent.agent_key, definition_id)
+            .await
+            .map_err(ApiError::Internal)?
+        else {
+            return Err(ApiError::NotFound("indicator not found"));
+        };
+        if !definition.timeframes.iter().any(|value| value == timeframe) {
+            return Err(ApiError::Validation(
+                "timeframe must be configured on the indicator".to_string(),
+            ));
+        }
+        list_latest_results_for_timeframe(
+            &state.db_pool,
+            &agent.agent_key,
+            definition_id,
+            timeframe,
+            instrument_id,
+            limit,
+        )
+        .await
+        .map_err(ApiError::Internal)?
+        .into_iter()
+        .collect()
+    };
+    Ok(Json(runs.into_iter().map(Into::into).collect()))
 }

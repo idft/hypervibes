@@ -15,7 +15,8 @@ pub const RUN_STATUS_FAILED: &str = "failed";
 pub const RUN_STATUS_ABORTED: &str = "aborted";
 pub const RUN_STATUS_SKIPPED: &str = "skipped";
 
-pub const RUN_CONTEXT_SNAPSHOT_SCHEMA_VERSION: i32 = 5;
+pub const RUN_CONTEXT_SNAPSHOT_SCHEMA_VERSION: i32 = 6;
+pub const HISTORICAL_RUN_CONTEXT_SNAPSHOT_SCHEMA_VERSION: i32 = 5;
 pub const CAPABILITY_SCHEMA_VERSION: i32 = 2;
 pub const CAPABILITY_NOTIFICATION_SEND: &str = "hypervibes:notification_send";
 pub const CAPABILITY_PROMPT_REVISION_SUBMIT: &str = "hypervibes:prompt_revision_submit";
@@ -25,6 +26,7 @@ pub const CAPABILITY_TRADING_INSTRUMENT_WRITE: &str = "hypervibes:trading_instru
 // from before Review-owned prompt authorization remain dispatchable. It grants no scope.
 pub const LEGACY_CAPABILITY_REVIEW_PROMPT_UPDATE: &str = "hypervibes:review_prompt_update";
 pub const MAX_RUN_CONTEXT_SNAPSHOT_BYTES: usize = 1024 * 1024;
+pub const MAX_ANALYSIS_INDICATOR_DEPENDENCIES: usize = 1024;
 
 /// API actions attached to a short-lived run credential. These are separate
 /// from OpenCode permissions so direct HTTP calls cannot bypass role policy.
@@ -238,7 +240,9 @@ pub struct IndicatorRunSnapshot {
     pub definition_id: Uuid,
     pub version_id: Uuid,
     pub instrument_id: String,
-    pub run_id: Option<Uuid>,
+    pub timeframe: String,
+    pub indicator_boundary_ms: i64,
+    pub run_id: Uuid,
     pub status: String,
 }
 
@@ -321,7 +325,10 @@ pub struct RunContextSnapshot {
 
 impl RunContextSnapshot {
     pub fn validate(&self) -> anyhow::Result<()> {
-        if self.schema_version != RUN_CONTEXT_SNAPSHOT_SCHEMA_VERSION {
+        if !matches!(
+            self.schema_version,
+            HISTORICAL_RUN_CONTEXT_SNAPSHOT_SCHEMA_VERSION | RUN_CONTEXT_SNAPSHOT_SCHEMA_VERSION
+        ) {
             anyhow::bail!("unsupported run context schema version");
         }
         if self.capability_schema_version != CAPABILITY_SCHEMA_VERSION {
@@ -334,12 +341,18 @@ impl RunContextSnapshot {
             anyhow::bail!("run context snapshot exceeds the size limit");
         }
         let capabilities = self.normalized_enabled_capabilities()?;
-        validate_context_snapshot_v5(
-            &self.context,
-            capabilities
-                .iter()
-                .any(|capability| capability == CAPABILITY_NOTIFICATION_SEND),
-        )?;
+        let notification_send_enabled = capabilities
+            .iter()
+            .any(|capability| capability == CAPABILITY_NOTIFICATION_SEND);
+        match self.schema_version {
+            HISTORICAL_RUN_CONTEXT_SNAPSHOT_SCHEMA_VERSION => {
+                validate_context_snapshot_v5(&self.context, notification_send_enabled)?
+            }
+            RUN_CONTEXT_SNAPSHOT_SCHEMA_VERSION => {
+                validate_context_snapshot_v6(&self.context, notification_send_enabled)?
+            }
+            _ => unreachable!("supported run context versions are matched above"),
+        }
         Ok(())
     }
 
@@ -401,7 +414,7 @@ fn validate_context_snapshot_v5(
         required_context_field(fields, "trading_instruments")?,
         "trading_instruments",
     )?;
-    validate_indicator_snapshot(required_context_field(fields, "indicator_snapshot")?)?;
+    validate_indicator_snapshot_v5(required_context_field(fields, "indicator_snapshot")?)?;
     validate_strategy_prompt_revision(required_context_field(fields, "strategy_prompt_revision")?)?;
     validate_text(
         required_context_field(fields, "additional_instructions")?,
@@ -433,7 +446,80 @@ fn validate_context_snapshot_v5(
     Ok(())
 }
 
-fn validate_indicator_snapshot(value: &Value) -> anyhow::Result<()> {
+fn validate_context_snapshot_v6(
+    value: &Value,
+    notification_send_enabled: bool,
+) -> anyhow::Result<()> {
+    validate_context_snapshot_v5_fields(value, notification_send_enabled, true)
+}
+
+fn validate_context_snapshot_v5_fields(
+    value: &Value,
+    notification_send_enabled: bool,
+    v6: bool,
+) -> anyhow::Result<()> {
+    let fields = value
+        .as_object()
+        .ok_or_else(|| anyhow::anyhow!("run context snapshot must be a JSON object"))?;
+    if fields.len() != RUN_CONTEXT_SNAPSHOT_V5_FIELDS.len()
+        || RUN_CONTEXT_SNAPSHOT_V5_FIELDS
+            .iter()
+            .any(|field| !fields.contains_key(*field))
+    {
+        anyhow::bail!("run context snapshot does not match schema version six");
+    }
+    validate_identifier(
+        required_context_field(fields, "provider_id")?,
+        "provider_id",
+    )?;
+    validate_identifier(required_context_field(fields, "model_id")?, "model_id")?;
+    validate_optional_identifier(
+        required_context_field(fields, "model_variant")?,
+        "model_variant",
+    )?;
+    validate_positive_integer(
+        required_context_field(fields, "timeout_seconds")?,
+        "timeout_seconds",
+    )?;
+    validate_identifier_array(
+        required_context_field(fields, "analysis_instruments")?,
+        "analysis_instruments",
+    )?;
+    validate_identifier_array(
+        required_context_field(fields, "trading_instruments")?,
+        "trading_instruments",
+    )?;
+    if v6 {
+        validate_indicator_snapshot_v6(required_context_field(fields, "indicator_snapshot")?)?;
+    }
+    validate_strategy_prompt_revision(required_context_field(fields, "strategy_prompt_revision")?)?;
+    validate_text(
+        required_context_field(fields, "additional_instructions")?,
+        "additional_instructions",
+    )?;
+    validate_optional_uuid(
+        required_context_field(fields, "accumulated_learning_memory_id")?,
+        "accumulated_learning_memory_id",
+    )?;
+    validate_identifier(
+        required_context_field(fields, "system_prompt_version")?,
+        "system_prompt_version",
+    )?;
+    validate_mcp_installations(required_context_field(fields, "mcp_installations")?)?;
+    let declared = required_context_field(fields, "notification_send_enabled")?
+        .as_bool()
+        .ok_or_else(|| anyhow::anyhow!("notification_send_enabled must be a boolean"))?;
+    if declared != notification_send_enabled {
+        anyhow::bail!("run context notification authority does not match capabilities");
+    }
+    validate_optional_timestamp(
+        required_context_field(fields, "scheduled_candle_boundary")?,
+        "scheduled_candle_boundary",
+    )?;
+    validate_account_snapshot_metadata(required_context_field(fields, "account_snapshot_metadata")?)
+}
+
+fn validate_indicator_snapshot_v5(value: &Value) -> anyhow::Result<()> {
     if value.is_null() {
         return Ok(());
     }
@@ -499,6 +585,96 @@ fn validate_indicator_snapshot(value: &Value) -> anyhow::Result<()> {
         }
     }
     Ok(())
+}
+
+fn validate_indicator_snapshot_v6(value: &Value) -> anyhow::Result<()> {
+    if value.is_null() {
+        return Ok(());
+    }
+    let snapshot = value
+        .as_object()
+        .ok_or_else(|| anyhow::anyhow!("indicator_snapshot must be an object or null"))?;
+    if snapshot.len() != 2
+        || !snapshot.contains_key("as_of_boundary_ms")
+        || !snapshot.contains_key("runs")
+    {
+        anyhow::bail!("indicator_snapshot does not match its closed schema");
+    }
+    validate_positive_integer(
+        &snapshot["as_of_boundary_ms"],
+        "indicator_snapshot.as_of_boundary_ms",
+    )?;
+    let runs = snapshot["runs"]
+        .as_array()
+        .ok_or_else(|| anyhow::anyhow!("indicator_snapshot.runs must be an array"))?;
+    if runs.len() > MAX_ANALYSIS_INDICATOR_DEPENDENCIES {
+        anyhow::bail!("indicator_snapshot contains too many runs");
+    }
+    let mut identities = BTreeSet::new();
+    for run in runs {
+        let run = run
+            .as_object()
+            .ok_or_else(|| anyhow::anyhow!("indicator_snapshot run must be an object"))?;
+        let required = [
+            "definition_id",
+            "version_id",
+            "instrument_id",
+            "timeframe",
+            "indicator_boundary_ms",
+            "run_id",
+            "status",
+        ];
+        if run.len() != required.len() || required.iter().any(|field| !run.contains_key(*field)) {
+            anyhow::bail!("indicator_snapshot run does not match schema version six");
+        }
+        let definition_id = parse_snapshot_uuid(&run["definition_id"], "definition_id")?;
+        let version_id = parse_snapshot_uuid(&run["version_id"], "version_id")?;
+        parse_snapshot_uuid(&run["run_id"], "run_id")?;
+        validate_identifier(&run["instrument_id"], "indicator_snapshot.instrument_id")?;
+        validate_identifier(&run["timeframe"], "indicator_snapshot.timeframe")?;
+        crate::harness::timeframe::parse_timeframe_seconds(
+            run["timeframe"]
+                .as_str()
+                .expect("validated timeframe is a string"),
+        )?;
+        validate_positive_integer(
+            &run["indicator_boundary_ms"],
+            "indicator_snapshot.indicator_boundary_ms",
+        )?;
+        run["status"]
+            .as_str()
+            .filter(|value| {
+                matches!(
+                    *value,
+                    "succeeded" | "failed" | "skipped" | "timed_out" | "missing"
+                )
+            })
+            .ok_or_else(|| anyhow::anyhow!("indicator_snapshot status is invalid"))?;
+        let identity = (
+            definition_id,
+            version_id,
+            run["instrument_id"]
+                .as_str()
+                .expect("validated instrument is a string"),
+            run["timeframe"]
+                .as_str()
+                .expect("validated timeframe is a string"),
+            run["indicator_boundary_ms"]
+                .as_u64()
+                .expect("validated boundary is an integer"),
+        );
+        if !identities.insert(identity) {
+            anyhow::bail!("indicator_snapshot contains duplicate runs");
+        }
+    }
+    Ok(())
+}
+
+fn parse_snapshot_uuid(value: &Value, field: &str) -> anyhow::Result<Uuid> {
+    value
+        .as_str()
+        .and_then(|value| Uuid::parse_str(value).ok())
+        .ok_or_else(|| anyhow::anyhow!("indicator_snapshot {field} must be a UUID"))
 }
 
 fn required_context_field<'a>(
@@ -741,6 +917,35 @@ pub struct HarnessDispatchSubAgentRow {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
+
+    fn context_with_indicator(
+        indicator_snapshot: Value,
+        schema_version: i32,
+    ) -> RunContextSnapshot {
+        RunContextSnapshot {
+            schema_version,
+            context: json!({
+                "provider_id": "provider",
+                "model_id": "model",
+                "model_variant": null,
+                "timeout_seconds": 60,
+                "analysis_instruments": ["BTC"],
+                "indicator_snapshot": indicator_snapshot,
+                "trading_instruments": ["ETH"],
+                "strategy_prompt_revision": {"target_sub_agent_id": 1, "revision_id": 1},
+                "additional_instructions": "",
+                "accumulated_learning_memory_id": null,
+                "system_prompt_version": "v1",
+                "mcp_installations": [],
+                "notification_send_enabled": false,
+                "scheduled_candle_boundary": 1,
+                "account_snapshot_metadata": null
+            }),
+            capability_schema_version: CAPABILITY_SCHEMA_VERSION,
+            enabled_capabilities: Vec::new(),
+        }
+    }
 
     #[test]
     fn capabilities_accept_notification_and_future_custom_mcp_tools() {
@@ -843,5 +1048,77 @@ mod tests {
         .expect("review write capabilities are valid");
         assert!(scopes.contains(&RunApiScope::PromptRevisionSubmit));
         assert!(scopes.contains(&RunApiScope::IndicatorWrite));
+    }
+
+    #[test]
+    fn historical_v5_and_exact_v6_contexts_validate() {
+        let definition_id = Uuid::new_v4();
+        let version_id = Uuid::new_v4();
+        let run_id = Uuid::new_v4();
+        let v5 = context_with_indicator(
+            json!({
+                "as_of_boundary_ms": 1,
+                "runs": [{
+                    "definition_id": definition_id,
+                    "version_id": version_id,
+                    "instrument_id": "BTC",
+                    "run_id": run_id,
+                    "status": "succeeded"
+                }]
+            }),
+            HISTORICAL_RUN_CONTEXT_SNAPSHOT_SCHEMA_VERSION,
+        );
+        assert!(v5.validate().is_ok());
+
+        let v6 = context_with_indicator(
+            json!({
+                "as_of_boundary_ms": 1,
+                "runs": [{
+                    "definition_id": definition_id,
+                    "version_id": version_id,
+                    "instrument_id": "BTC",
+                    "timeframe": "1h",
+                    "indicator_boundary_ms": 1,
+                    "run_id": run_id,
+                    "status": "timed_out"
+                }]
+            }),
+            RUN_CONTEXT_SNAPSHOT_SCHEMA_VERSION,
+        );
+        assert!(v6.validate().is_ok());
+    }
+
+    #[test]
+    fn v6_duplicate_identity_includes_timeframe_and_boundary() {
+        let definition_id = Uuid::new_v4();
+        let version_id = Uuid::new_v4();
+        let base = |timeframe: &str, boundary: i64, run_id: Uuid| {
+            json!({
+                "definition_id": definition_id,
+                "version_id": version_id,
+                "instrument_id": "BTC",
+                "timeframe": timeframe,
+                "indicator_boundary_ms": boundary,
+                "run_id": run_id,
+                "status": "succeeded"
+            })
+        };
+        let distinct = context_with_indicator(
+            json!({"as_of_boundary_ms": 1, "runs": [
+                base("15m", 1, Uuid::new_v4()),
+                base("1h", 1, Uuid::new_v4()),
+                base("1h", 2, Uuid::new_v4())
+            ]}),
+            RUN_CONTEXT_SNAPSHOT_SCHEMA_VERSION,
+        );
+        assert!(distinct.validate().is_ok());
+        let duplicate = context_with_indicator(
+            json!({"as_of_boundary_ms": 1, "runs": [
+                base("1h", 1, Uuid::new_v4()),
+                base("1h", 1, Uuid::new_v4())
+            ]}),
+            RUN_CONTEXT_SNAPSHOT_SCHEMA_VERSION,
+        );
+        assert!(duplicate.validate().is_err());
     }
 }
