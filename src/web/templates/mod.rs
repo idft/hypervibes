@@ -13,6 +13,10 @@ mod settings;
 pub(crate) mod shared;
 mod sub_agents;
 
+pub fn frontend_asset_version() -> &'static str {
+    env!("CARGO_PKG_VERSION")
+}
+
 #[cfg(test)]
 use self::shared::*;
 

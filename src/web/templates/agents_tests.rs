@@ -29,6 +29,10 @@ fn agents_page_renders_base_layout_and_status_box() {
     };
     let rendered = template.render().unwrap();
     assert!(rendered.contains("<!DOCTYPE html>"));
+    assert!(rendered.contains(&format!(
+        "/static/dist/app.js?v={}",
+        frontend_asset_version()
+    )));
     assert!(rendered.contains("HyperVibes Agents"));
     assert!(!rendered.contains("Registered agents"));
     assert!(!rendered.contains("Agents persisted in the registry database."));

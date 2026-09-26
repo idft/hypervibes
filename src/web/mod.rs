@@ -14,10 +14,8 @@ use std::{path::PathBuf, sync::Arc};
 
 use anyhow::{Context, Result};
 use axum::Router;
-#[cfg(debug_assertions)]
 use axum::http::{HeaderValue, header::CACHE_CONTROL};
 use tokio::sync::watch;
-#[cfg(debug_assertions)]
 use tower_http::set_header::SetResponseHeaderLayer;
 use tower_http::{services::ServeDir, trace::TraceLayer};
 use tracing::Level;
@@ -204,7 +202,6 @@ fn router(state: Arc<AppState>) -> Router {
 fn static_router(static_root: impl Into<PathBuf>) -> Router {
     let static_root = static_root.into();
     let dist = Router::new().fallback_service(ServeDir::new(static_root.join("dist")));
-    #[cfg(debug_assertions)]
     let dist = dist.layer(SetResponseHeaderLayer::overriding(
         CACHE_CONTROL,
         HeaderValue::from_static("no-store"),
@@ -218,19 +215,16 @@ fn static_router(static_root: impl Into<PathBuf>) -> Router {
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[cfg(debug_assertions)]
     use axum::{body::Body, http::Request};
     use std::time::Duration;
-    #[cfg(debug_assertions)]
     use tower::util::ServiceExt;
 
     /// Short grace used by these tests so the timeout path runs
     /// quickly. The real `SHUTDOWN_IN_FLIGHT_GRACE` is 30 minutes.
     const TEST_GRACE: Duration = Duration::from_millis(200);
 
-    #[cfg(debug_assertions)]
     #[tokio::test]
-    async fn built_assets_are_not_cached_in_debug_builds() {
+    async fn built_assets_are_not_cached() {
         let app = static_router("static");
         for path in ["/dist/app.js", "/dist/app.css"] {
             let response = app

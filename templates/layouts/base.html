@@ -10,8 +10,8 @@
     <link rel="apple-touch-icon" href="/static/apple-touch-icon.png">
     <link rel="manifest" href="/static/site.webmanifest">
     <script>try { if (localStorage.getItem("agent-rail-expanded") === "false") document.documentElement.classList.add("agent-rail-initially-collapsed"); } catch (_) {}</script>
-    <link rel="stylesheet" href="/static/dist/app.css">
-    <script src="/static/dist/app.js" type="module"></script>
+    <link rel="stylesheet" href="/static/dist/app.css?v={{ crate::web::templates::frontend_asset_version() }}">
+    <script src="/static/dist/app.js?v={{ crate::web::templates::frontend_asset_version() }}" type="module"></script>
 </head>
 <body class="bg-[#0a0a0b] text-zinc-100 antialiased">
     <header class="fixed inset-x-0 top-0 z-40 h-14 border-b border-zinc-800 bg-[#17191c]">

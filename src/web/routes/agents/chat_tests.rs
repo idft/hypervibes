@@ -1,9 +1,6 @@
 use uuid::Uuid;
 
-use super::chat::{
-    NewConversationForm, chat_message_redirect, opencode_message_id_at,
-    strategy_prompt_chat_message,
-};
+use super::chat::{NewConversationForm, opencode_message_id_at, strategy_prompt_chat_message};
 
 #[test]
 fn opencode_message_ids_sort_by_timestamp() {
@@ -18,21 +15,6 @@ fn opencode_message_ids_sort_by_timestamp() {
 
     assert!(first.starts_with("msg_f9cd16fe7000"));
     assert!(first < second);
-}
-
-#[test]
-fn htmx_message_submission_returns_an_hx_redirect() {
-    let response =
-        chat_message_redirect("test-agent", Uuid::nil(), true).expect("create HTMX chat redirect");
-
-    assert_eq!(response.status(), axum::http::StatusCode::OK);
-    assert_eq!(
-        response
-            .headers()
-            .get("HX-Redirect")
-            .and_then(|value| value.to_str().ok()),
-        Some("/agents/test-agent/chat/00000000-0000-0000-0000-000000000000")
-    );
 }
 
 #[test]

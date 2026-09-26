@@ -164,7 +164,7 @@ impl AgentConversationPageTemplate {
         );
         Self {
             tabs: build_agent_show_tabs(&agent, AgentShowTab::Chat, notification_count),
-            agent_tabs_use_htmx: false,
+            agent_tabs_use_htmx: true,
             current_path,
             agent,
             conversation_id,
@@ -208,7 +208,7 @@ impl AgentConversationEmptyPageTemplate {
         );
         Self {
             tabs: build_agent_show_tabs(&agent, AgentShowTab::Chat, notification_count),
-            agent_tabs_use_htmx: false,
+            agent_tabs_use_htmx: true,
             current_path,
             agent,
             model_picker,

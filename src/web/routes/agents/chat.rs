@@ -9,7 +9,7 @@ use askama::Template;
 use axum::{
     Form,
     extract::{Path, State},
-    http::{HeaderMap, HeaderValue, StatusCode},
+    http::{HeaderMap, StatusCode},
     response::{
         Html, IntoResponse, Redirect, Response,
         sse::{Event, KeepAlive, Sse},
@@ -612,37 +612,23 @@ pub(in crate::web::routes) async fn agents_send_conversation_message(
         .submit_conversation_turn(&agent_key, conversation_id, &form.message_id, &form.message)
         .await
     {
-        Ok(()) => chat_message_redirect(&agent_key, conversation_id, is_htmx_request(&headers)),
+        Ok(()) if is_htmx_request(&headers) => {
+            render_message_composer(&state, &agent_key, conversation_id, String::new(), None).await
+        }
+        Ok(()) => Ok(
+            Redirect::to(&format!("/agents/{agent_key}/chat/{conversation_id}")).into_response(),
+        ),
         Err(error) => {
-            render_message_error(
+            render_message_composer(
                 &state,
                 &agent_key,
                 conversation_id,
                 form.message,
-                &error.to_string(),
+                Some(&error.to_string()),
             )
             .await
         }
     }
-}
-
-pub(super) fn chat_message_redirect(
-    agent_key: &str,
-    conversation_id: Uuid,
-    htmx: bool,
-) -> Result<Response, AppError> {
-    let location = format!("/agents/{agent_key}/chat/{conversation_id}");
-    if !htmx {
-        return Ok(Redirect::to(&location).into_response());
-    }
-    let mut response = StatusCode::OK.into_response();
-    response.headers_mut().insert(
-        "HX-Redirect",
-        HeaderValue::try_from(location).map_err(|error| {
-            AppError(anyhow::anyhow!("invalid chat redirect location: {error}"))
-        })?,
-    );
-    Ok(response)
 }
 
 async fn render_message_error(
@@ -652,10 +638,20 @@ async fn render_message_error(
     message: String,
     error: &str,
 ) -> Result<Response, AppError> {
+    render_message_composer(state, agent_key, conversation_id, message, Some(error)).await
+}
+
+async fn render_message_composer(
+    state: &Arc<AppState>,
+    agent_key: &str,
+    conversation_id: Uuid,
+    message: String,
+    error: Option<&str>,
+) -> Result<Response, AppError> {
     let Some(snapshot) = load_snapshot(state, agent_key, conversation_id).await? else {
         return Ok((StatusCode::NOT_FOUND, "conversation not found").into_response());
     };
-    let rendered = render_snapshot(&snapshot, message, Some(error.to_string()))?;
+    let rendered = render_snapshot(&snapshot, message, error.map(str::to_owned))?;
     Ok(Html(rendered.composer).into_response())
 }
 
