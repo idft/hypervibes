@@ -91,7 +91,12 @@ pub(in crate::web::routes) async fn agents_emergency_stop(
                         if let Err(error) =
                             crate::harness::scheduler::terminalize_run_workspace_artifact(
                                 &state.db_pool,
+                                &state.harness_backend,
                                 &state.workspace_controller,
+                                &state.opencode_base_url,
+                                run_workspace_container_path
+                                    .as_deref()
+                                    .expect("run workspace path was constructed"),
                                 &agent_key,
                                 run.id,
                             )

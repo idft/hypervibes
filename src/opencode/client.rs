@@ -31,7 +31,7 @@ impl OpenCodeClientConfig {
             base_url,
             username,
             password,
-            create_session_timeout: Duration::from_secs(15),
+            create_session_timeout: Duration::from_secs(30),
             status_timeout: Duration::from_secs(15),
             oauth_callback_timeout: Duration::from_secs(15 * 60),
         }
@@ -140,7 +140,7 @@ impl OpenCodeClient {
             .json(&body)
             .send()
             .await
-            .map_err(|error| anyhow!("OpenCode create_session request failed: {error}"))?;
+            .map_err(|error| session_request_error(error, "create_session"))?;
         let response = parse_opencode_response(response).await?;
         let session: OpenCodeSession = response
             .json()
@@ -179,7 +179,7 @@ impl OpenCodeClient {
             .json(&request)
             .send()
             .await
-            .map_err(|error| anyhow!("OpenCode conversation session request failed: {error}"))?;
+            .map_err(|error| session_request_error(error, "conversation session"))?;
         let response = parse_opencode_response(response).await?;
         response
             .json()
@@ -1088,6 +1088,17 @@ fn percent_encode(value: &str) -> String {
     out
 }
 
+fn session_request_error(error: reqwest::Error, operation: &str) -> anyhow::Error {
+    let reason = if error.is_timeout() {
+        "timed out"
+    } else if error.is_connect() {
+        "connection failed"
+    } else {
+        "request failed"
+    };
+    anyhow::Error::new(error).context(format!("OpenCode {operation} {reason}"))
+}
+
 async fn parse_opencode_response(response: reqwest::Response) -> Result<reqwest::Response> {
     let status = response.status();
     if status.is_success() {
@@ -1319,10 +1330,56 @@ mod tests {
     }
 
     #[test]
-    fn client_uses_short_timeouts_for_metadata_calls() {
+    fn client_allows_slow_session_creation_but_keeps_short_metadata_timeouts() {
         let config = OpenCodeClientConfig::new("opencode".to_string(), None);
-        assert_eq!(config.create_session_timeout, Duration::from_secs(15));
+        assert_eq!(config.create_session_timeout, Duration::from_secs(30));
         assert_eq!(config.status_timeout, Duration::from_secs(15));
+    }
+
+    #[tokio::test]
+    async fn session_creation_timeout_is_independent_of_metadata_timeout() {
+        use axum::{Json, Router, routing::post};
+
+        let app = Router::new().route(
+            "/session",
+            post(|| async {
+                tokio::time::sleep(Duration::from_millis(80)).await;
+                Json(serde_json::json!({"id": "ses_slow"}))
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind session test server");
+        let base_url = format!("http://{}", listener.local_addr().expect("local address"));
+        let server = tokio::spawn(async move {
+            axum::serve(listener, app)
+                .await
+                .expect("serve session test server");
+        });
+
+        let mut config = OpenCodeClientConfig::new("opencode".to_string(), None);
+        config.create_session_timeout = Duration::from_millis(200);
+        config.status_timeout = Duration::from_millis(20);
+        let client = OpenCodeClient::new(config.clone()).expect("client");
+        let session = client
+            .create_session(&base_url, "/workspaces/runs/agent-1/1/workspace", None)
+            .await
+            .expect("session finishes within its own timeout");
+        assert_eq!(session.id, "ses_slow");
+
+        config.create_session_timeout = Duration::from_millis(20);
+        let client = OpenCodeClient::new(config).expect("client with short session timeout");
+        let error = client
+            .create_session(&base_url, "/workspaces/runs/agent-1/2/workspace", None)
+            .await
+            .expect_err("slow session creation should time out");
+        assert!(format!("{error:#}").contains("create_session timed out"));
+        assert!(error.chain().any(|cause| {
+            cause
+                .downcast_ref::<reqwest::Error>()
+                .is_some_and(reqwest::Error::is_timeout)
+        }));
+        server.abort();
     }
 
     #[tokio::test]

@@ -39,8 +39,6 @@ struct RunWorkspaceArtifactDbRow {
 pub struct RunWorkspaceTerminalizationCandidate {
     pub run_id: i64,
     pub agent_key: String,
-    pub status: String,
-    pub backend_run_ref: Option<String>,
 }
 
 #[derive(Debug, Clone, sqlx::FromRow)]
@@ -391,9 +389,7 @@ pub async fn list_pending_run_workspace_terminalization(
 ) -> Result<Vec<RunWorkspaceTerminalizationCandidate>> {
     query_as(
         "SELECT runs.id AS run_id,
-                runs.agent_key,
-                runs.status,
-                runs.backend_run_ref
+                runs.agent_key
            FROM harness_run_workspace_artifacts AS artifacts
            JOIN harness_sub_agent_runs AS runs ON runs.id = artifacts.run_id
           WHERE runs.status = ANY($1)

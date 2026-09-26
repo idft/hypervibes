@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use std::time::Instant;
 
 use anyhow::{Context, Result, anyhow};
 use async_trait::async_trait;
@@ -126,6 +127,13 @@ pub trait HarnessBackend: Send + Sync {
     ) -> Result<Option<SessionStatusKind>> {
         self.get_session_status(base_url, session_id).await
     }
+
+    /// Release a finished run's workspace-scoped OpenCode caches. Call only
+    /// after checking that its session is no longer active. Fake backends do
+    /// not hold OpenCode instances, so they need no cleanup.
+    async fn dispose_workspace_instance(&self, _base_url: &str, _directory: &str) -> Result<()> {
+        Ok(())
+    }
 }
 
 #[derive(Clone)]
@@ -156,6 +164,7 @@ impl HarnessBackend for OpenCodeBackend {
             request.scheduled_for.format("%Y-%m-%dT%H:%M:%SZ")
         );
 
+        let session_start = Instant::now();
         let session = self
             .client
             .create_session(
@@ -164,6 +173,14 @@ impl HarnessBackend for OpenCodeBackend {
                 Some(&title),
             )
             .await
+            .inspect_err(|error| {
+                warn!(
+                    run_id = request.run_id,
+                    elapsed_ms = session_start.elapsed().as_millis(),
+                    error = ?error,
+                    "opencode session creation failed"
+                );
+            })
             .with_context(|| {
                 format!(
                     "failed to create OpenCode session for agent {} (workspace {})",
@@ -178,6 +195,7 @@ impl HarnessBackend for OpenCodeBackend {
             display_name = %request.display_name,
             sub_agent_key = %request.sub_agent_key,
             session_id = %session.id,
+            elapsed_ms = session_start.elapsed().as_millis(),
             "opencode session created"
         );
 
@@ -279,6 +297,12 @@ impl HarnessBackend for OpenCodeBackend {
     ) -> Result<Option<SessionStatusKind>> {
         self.client
             .get_session_status_in_directory(base_url, session_id, workspace_container_path)
+            .await
+    }
+
+    async fn dispose_workspace_instance(&self, base_url: &str, directory: &str) -> Result<()> {
+        self.client
+            .dispose_workspace_instance(base_url, directory)
             .await
     }
 }

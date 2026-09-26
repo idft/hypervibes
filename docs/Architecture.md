@@ -117,6 +117,14 @@ from retention cleanup.
 Run state is persisted. On startup and periodically thereafter, the scheduler
 resumes queued runs and recovers stale running runs so interrupted dispatches
 do not block subsequent work.
+After a run becomes terminal, workspace cleanup checks that its OpenCode session
+is inactive before scrubbing runtime secrets and disposing that run directory's
+cached OpenCode instance. The run's session record and workspace artifact remain
+available under their normal retention policies; disposal releases in-memory
+plugin and workspace state. A failed probe or disposal leaves the artifact
+pending for the scheduler's periodic recovery sweep rather than releasing an
+active session's resources. Session creation has a 30-second HTTP deadline;
+the outer run deadline is configured independently per sub-agent.
 
 ### Isolated Workspace Foundation
 

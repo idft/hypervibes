@@ -526,47 +526,17 @@ impl HarnessScheduler {
         for candidate in
             store::artifacts::list_pending_run_workspace_terminalization(&self.pool, 50).await?
         {
-            if let Some(session_id) = candidate.backend_run_ref.as_deref() {
-                let workspace_container_path = format!(
+            if let Err(error) = terminalize_run_workspace_artifact(
+                &self.pool,
+                &self.backend,
+                &self.workspace_controller,
+                self.opencode_client.base_url(),
+                &format!(
                     "{}/runs/{}/{}/workspace",
                     self.container_workspaces_root.trim_end_matches('/'),
                     candidate.agent_key,
                     candidate.run_id
-                );
-                match self
-                    .backend
-                    .get_session_status_in_directory(
-                        self.opencode_client.base_url(),
-                        session_id,
-                        Some(&workspace_container_path),
-                    )
-                    .await
-                {
-                    Ok(Some(status)) if status.is_active() => {
-                        warn!(
-                            run_id = candidate.run_id,
-                            agent_key = %candidate.agent_key,
-                            run_status = %candidate.status,
-                            status = ?status,
-                            "terminal run still has an active OpenCode session; retaining runtime secret until recovery"
-                        );
-                        continue;
-                    }
-                    Ok(_) => {}
-                    Err(error) => {
-                        warn!(
-                            run_id = candidate.run_id,
-                            agent_key = %candidate.agent_key,
-                            error = ?error,
-                            "failed to confirm terminal OpenCode session state"
-                        );
-                        continue;
-                    }
-                }
-            }
-            if let Err(error) = terminalize_run_workspace_artifact(
-                &self.pool,
-                &self.workspace_controller,
+                ),
                 &candidate.agent_key,
                 candidate.run_id,
             )
@@ -575,7 +545,6 @@ impl HarnessScheduler {
                 warn!(
                     run_id = candidate.run_id,
                     agent_key = %candidate.agent_key,
-                    run_status = %candidate.status,
                     error = ?error,
                     "failed to reconcile terminal run workspace"
                 );
@@ -1252,6 +1221,7 @@ pub async fn dispatch_run_in_isolated_workspace(
     let run_id = request.run_id;
     let agent_key = request.agent_key.clone();
     let sub_agent_key = request.sub_agent_key.clone();
+    let base_url = request.opencode_base_url.clone();
     let request = match materialize_dispatch_run_workspace(
         &pool,
         &workspace_controller,
@@ -1276,9 +1246,16 @@ pub async fn dispatch_run_in_isolated_workspace(
                 None,
             )
             .await;
-            if let Err(terminalize_error) =
-                terminalize_run_workspace_artifact(&pool, &workspace_controller, &agent_key, run_id)
-                    .await
+            if let Err(terminalize_error) = terminalize_run_workspace_artifact(
+                &pool,
+                &backend,
+                &workspace_controller,
+                &base_url,
+                "", // No workspace session can exist before materialization succeeds.
+                &agent_key,
+                run_id,
+            )
+            .await
             {
                 warn!(
                     run_id,
@@ -1291,9 +1268,21 @@ pub async fn dispatch_run_in_isolated_workspace(
         }
     };
 
-    let result = dispatch_running_run(pool.clone(), backend, request).await;
-    if let Err(error) =
-        terminalize_run_workspace_artifact(&pool, &workspace_controller, &agent_key, run_id).await
+    let workspace_container_path =
+        OpenCodeWorkspaceRuntimeConfig::from_value(&request.runtime_config)
+            .expect("materialized run has a workspace path")
+            .workspace_container_path;
+    let result = dispatch_running_run(pool.clone(), backend.clone(), request).await;
+    if let Err(error) = terminalize_run_workspace_artifact(
+        &pool,
+        &backend,
+        &workspace_controller,
+        &base_url,
+        &workspace_container_path,
+        &agent_key,
+        run_id,
+    )
+    .await
     {
         warn!(
             run_id,
@@ -1435,7 +1424,10 @@ fn build_run_context_snapshot(
 /// is terminal. Callers must have already confirmed any OpenCode session ended.
 pub async fn terminalize_run_workspace_artifact(
     pool: &DbPool,
+    backend: &Arc<dyn HarnessBackend>,
     workspace_controller: &Arc<dyn WorkspaceController>,
+    opencode_base_url: &str,
+    directory: &str,
     agent_key: &str,
     run_id: i64,
 ) -> Result<bool> {
@@ -1460,6 +1452,19 @@ pub async fn terminalize_run_workspace_artifact(
         return Ok(false);
     }
 
+    if let Some(session_id) = run.backend_run_ref.as_deref() {
+        if directory.is_empty() {
+            anyhow::bail!("cannot dispose a session without its workspace directory");
+        }
+        let status = backend
+            .get_session_status_in_directory(opencode_base_url, session_id, Some(directory))
+            .await?;
+        if status.as_ref().is_some_and(SessionStatusKind::is_active) {
+            warn!(run_id, agent_key, status = ?status, "terminal run still has an active OpenCode session; retaining runtime secret until recovery");
+            return Ok(false);
+        }
+    }
+
     store::revoke_run_runtime_credential(pool, agent_key, run_id).await?;
     workspace_controller
         .scrub_run_workspace_runtime_secrets(agent_key, run_id, &format!("run:{run_id}:scrub"))
@@ -1480,6 +1485,17 @@ pub async fn terminalize_run_workspace_artifact(
             inspection.file_count,
         )
         .await?;
+    }
+    if run.backend_run_ref.is_some() {
+        // Keep the artifact pending on a transport failure so recovery retries
+        // disposal. The workspace itself is retained for the normal seven days.
+        backend
+            .dispose_workspace_instance(opencode_base_url, directory)
+            .await?;
+        info!(
+            run_id,
+            agent_key, directory, "disposed OpenCode run instance"
+        );
     }
     store::artifacts::mark_run_workspace_terminalized(pool, agent_key, run_id).await
 }
@@ -1629,7 +1645,7 @@ fn sort_trading_jobs_for_dispatch(
 
 #[cfg(test)]
 mod tests {
-    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
     use super::*;
 
@@ -1666,6 +1682,7 @@ mod tests {
 
     struct FakeBackend {
         calls: Arc<Mutex<Vec<DispatchRequest>>>,
+        disposed: Arc<Mutex<Vec<String>>>,
         delay: Duration,
         active_calls: Arc<AtomicUsize>,
         max_active_calls: Arc<AtomicUsize>,
@@ -1698,6 +1715,14 @@ mod tests {
             Ok(DispatchResult {
                 backend_run_ref: "ses_fake".to_string(),
             })
+        }
+
+        async fn dispose_workspace_instance(&self, _base_url: &str, directory: &str) -> Result<()> {
+            self.disposed
+                .lock()
+                .expect("lock disposed workspaces")
+                .push(directory.to_string());
+            Ok(())
         }
     }
 
@@ -1737,6 +1762,7 @@ mod tests {
         fn success(calls: Arc<Mutex<Vec<DispatchRequest>>>) -> Self {
             Self {
                 calls,
+                disposed: Arc::new(Mutex::new(Vec::new())),
                 delay: Duration::ZERO,
                 active_calls: Arc::new(AtomicUsize::new(0)),
                 max_active_calls: Arc::new(AtomicUsize::new(0)),
@@ -1747,6 +1773,7 @@ mod tests {
         fn with_delay(calls: Arc<Mutex<Vec<DispatchRequest>>>, delay: Duration) -> Self {
             Self {
                 calls,
+                disposed: Arc::new(Mutex::new(Vec::new())),
                 delay,
                 active_calls: Arc::new(AtomicUsize::new(0)),
                 max_active_calls: Arc::new(AtomicUsize::new(0)),
@@ -1762,6 +1789,7 @@ mod tests {
         fn with_barrier(calls: Arc<Mutex<Vec<DispatchRequest>>>, parties: usize) -> Self {
             Self {
                 calls,
+                disposed: Arc::new(Mutex::new(Vec::new())),
                 delay: Duration::ZERO,
                 active_calls: Arc::new(AtomicUsize::new(0)),
                 max_active_calls: Arc::new(AtomicUsize::new(0)),
@@ -1810,6 +1838,178 @@ mod tests {
                 None => Err(anyhow!("unexpected session probe")),
             }
         }
+    }
+
+    struct CleanupBackend {
+        status: Mutex<SessionStatusKind>,
+        fail_dispose_once: AtomicBool,
+        disposed: Mutex<Vec<String>>,
+    }
+
+    #[async_trait]
+    impl HarnessBackend for CleanupBackend {
+        async fn dispatch(&self, _request: DispatchRequest) -> Result<DispatchResult> {
+            Ok(DispatchResult {
+                backend_run_ref: "ses_cleanup".to_string(),
+            })
+        }
+
+        async fn get_session_status_in_directory(
+            &self,
+            _base_url: &str,
+            session_id: &str,
+            directory: Option<&str>,
+        ) -> Result<Option<SessionStatusKind>> {
+            assert_eq!(session_id, "ses_cleanup");
+            assert!(directory.is_some_and(|path| path.contains("/runs/")));
+            Ok(Some(self.status.lock().expect("lock status").clone()))
+        }
+
+        async fn dispose_workspace_instance(&self, _base_url: &str, directory: &str) -> Result<()> {
+            assert_eq!(
+                *self.status.lock().expect("lock status"),
+                SessionStatusKind::Idle
+            );
+            self.disposed
+                .lock()
+                .expect("lock disposal calls")
+                .push(directory.to_string());
+            if self.fail_dispose_once.swap(false, Ordering::SeqCst) {
+                anyhow::bail!("temporary disposal failure");
+            }
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn terminal_run_disposal_waits_for_idle_and_retries_failure_during_recovery() {
+        let pool = crate::test_db::pool().await;
+        let key = format!(
+            "dispose-run-{}",
+            Utc::now().timestamp_nanos_opt().unwrap_or(0)
+        );
+        seed_test_agent(&pool, &key).await;
+        let (run_id,): (i64,) = sqlx::query_as(
+            "INSERT INTO harness_sub_agent_runs (
+                 sub_agent_id, agent_key, sub_agent_key, sub_agent_kind,
+                 status, scheduled_for, timeout_seconds
+             ) SELECT id, agent_key, sub_agent_key, sub_agent_kind,
+                      'running', now(), 900
+                 FROM harness_sub_agents
+                WHERE agent_key = $1 AND sub_agent_kind = 'trading'
+             RETURNING id",
+        )
+        .bind(&key)
+        .fetch_one(&pool)
+        .await
+        .expect("seed running run");
+        let artifact = store::artifacts::prepare_run_workspace_artifact(
+            &pool,
+            &key,
+            run_id,
+            &crate::harness::model::RunContextSnapshot {
+                schema_version: crate::harness::model::RUN_CONTEXT_SNAPSHOT_SCHEMA_VERSION,
+                context: json!({
+                    "provider_id": "default",
+                    "model_id": "default",
+                    "model_variant": null,
+                    "timeout_seconds": 900,
+                    "analysis_instruments": [],
+                    "indicator_snapshot": null,
+                    "trading_instruments": [],
+                    "strategy_prompt_revision": {"target_sub_agent_id": 1, "revision_id": 1},
+                    "additional_instructions": "",
+                    "accumulated_learning_memory_id": null,
+                    "system_prompt_version": "v1",
+                    "mcp_installations": [],
+                    "notification_send_enabled": false,
+                    "scheduled_candle_boundary": null,
+                    "account_snapshot_metadata": null
+                }),
+                capability_schema_version: crate::harness::model::CAPABILITY_SCHEMA_VERSION,
+                enabled_capabilities: Vec::new(),
+            },
+        )
+        .await
+        .expect("prepare artifact");
+        assert_eq!(artifact.workspace_status, "preparing");
+        let runtime = scheduler_runtime(InFlightTracker::new());
+        runtime
+            .workspace_controller
+            .materialize_run_workspace(
+                &key,
+                run_id,
+                workspace_store::workspace::RunWorkspaceMaterializationInput {
+                    display_name: key.clone(),
+                    api_base_url: runtime.agent_api_base_url.clone(),
+                    runtime_api_key: "vta_cleanup_test".to_string(),
+                    credential_id: uuid::Uuid::new_v4().to_string(),
+                    sub_agent_kind: SUB_AGENT_KIND_TRADING.to_string(),
+                    enabled_capabilities: Vec::new(),
+                },
+                "cleanup-test",
+            )
+            .await
+            .expect("materialize workspace");
+        store::mark_run_succeeded(&pool, run_id, Some("ses_cleanup"))
+            .await
+            .expect("mark run succeeded");
+
+        let backend = Arc::new(CleanupBackend {
+            status: Mutex::new(SessionStatusKind::Busy),
+            fail_dispose_once: AtomicBool::new(true),
+            disposed: Mutex::new(Vec::new()),
+        });
+        let scheduler = HarnessScheduler::new(
+            pool.clone(),
+            tokio::sync::watch::channel(false).1,
+            tokio::sync::watch::channel(false).1,
+            backend.clone(),
+            Arc::new(LiveAccountStore::default()),
+            runtime,
+        );
+        scheduler
+            .reconcile_terminal_run_workspaces()
+            .await
+            .expect("active session remains pending");
+        assert!(backend.disposed.lock().expect("disposals").is_empty());
+        let artifact = store::artifacts::get_run_workspace_artifact(&pool, &key, run_id)
+            .await
+            .expect("load artifact")
+            .expect("artifact exists");
+        assert!(artifact.runtime_secrets_scrubbed_at.is_none());
+
+        *backend.status.lock().expect("lock status") = SessionStatusKind::Idle;
+        scheduler
+            .reconcile_terminal_run_workspaces()
+            .await
+            .expect("failed disposal stays pending");
+        let artifact = store::artifacts::get_run_workspace_artifact(&pool, &key, run_id)
+            .await
+            .expect("load artifact")
+            .expect("artifact exists");
+        assert_ne!(artifact.workspace_status, "retained");
+        assert!(artifact.runtime_secrets_scrubbed_at.is_some());
+
+        scheduler
+            .reconcile_terminal_run_workspaces()
+            .await
+            .expect("retry cleanup");
+        let artifact = store::artifacts::get_run_workspace_artifact(&pool, &key, run_id)
+            .await
+            .expect("load artifact")
+            .expect("artifact exists");
+        assert_eq!(artifact.workspace_status, "retained");
+        let directory = format!("/workspaces/runs/{key}/{run_id}/workspace");
+        assert_eq!(
+            backend.disposed.lock().expect("disposals").as_slice(),
+            [directory.clone(), directory]
+        );
+        scheduler
+            .reconcile_terminal_run_workspaces()
+            .await
+            .expect("terminalized artifact is not retried");
+        assert_eq!(backend.disposed.lock().expect("disposals").len(), 2);
     }
 
     #[tokio::test]
@@ -1870,7 +2070,7 @@ mod tests {
         let runtime = scheduler_runtime(InFlightTracker::new());
         dispatch_run_in_isolated_workspace(
             pool.clone(),
-            backend,
+            backend.clone(),
             runtime.workspace_controller.clone(),
             runtime.agent_api_base_url,
             request,
@@ -1887,6 +2087,14 @@ mod tests {
         assert_eq!(
             dispatched_path,
             format!("/workspaces/runs/{key}/{run_id}/workspace")
+        );
+        assert_eq!(
+            backend
+                .disposed
+                .lock()
+                .expect("lock disposed workspaces")
+                .as_slice(),
+            [dispatched_path]
         );
         let artifact = store::artifacts::get_run_workspace_artifact(&pool, &key, run_id)
             .await

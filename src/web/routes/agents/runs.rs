@@ -174,7 +174,10 @@ pub(in crate::web::routes) async fn agents_cancel_run(
             .await?;
             crate::harness::scheduler::terminalize_run_workspace_artifact(
                 &state.db_pool,
+                &state.harness_backend,
                 &state.workspace_controller,
+                &state.opencode_base_url,
+                &workspace_container_path,
                 &agent_key,
                 run_id,
             )

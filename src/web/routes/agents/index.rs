@@ -189,7 +189,12 @@ pub(in crate::web::routes) async fn delete_agent(
         mark_run_aborted(&state.db_pool, run.id, "aborted by agent deletion", None).await?;
         crate::harness::scheduler::terminalize_run_workspace_artifact(
             &state.db_pool,
+            &state.harness_backend,
             &state.workspace_controller,
+            &state.opencode_base_url,
+            run_workspace_container_path
+                .as_deref()
+                .expect("run workspace path was constructed"),
             &agent_key,
             run.id,
         )
