@@ -78,12 +78,6 @@ pub(in crate::web::routes) struct ReferralClaimRequest {
 struct ReferralResponse {
     #[serde(default)]
     referred_by: Option<Value>,
-    token_to_state: (Value, ReferralTokenState),
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct ReferralTokenState {
     cum_vlm: String,
 }
 
@@ -238,7 +232,7 @@ fn referral_eligibility_from_response(response: ReferralResponse) -> ReferralEli
     if response.referred_by.is_some() {
         return ReferralEligibility::AlreadyReferred;
     }
-    let Ok(volume) = Decimal::from_str(&response.token_to_state.1.cum_vlm) else {
+    let Ok(volume) = Decimal::from_str(&response.cum_vlm) else {
         return ReferralEligibility::Unavailable;
     };
     if volume.is_sign_negative() {
@@ -1543,7 +1537,8 @@ mod tests {
     fn referral_state(referred_by: Option<Value>, volume: &str) -> Value {
         json!({
             "referredBy": referred_by,
-            "tokenToState": [{}, {"cumVlm": volume}]
+            "cumVlm": volume,
+            "tokenToState": []
         })
     }
 
@@ -1577,6 +1572,23 @@ mod tests {
         assert_eq!(
             referral_eligibility_from_response(response),
             ReferralEligibility::AlreadyReferred
+        );
+        let response: ReferralResponse = serde_json::from_value(json!({
+            "referredBy": null,
+            "cumVlm": "0.0",
+            "tokenToState": [[0, {"cumVlm": "20000.0"}]]
+        }))
+        .expect("referral response with per-token state");
+        assert_eq!(
+            referral_eligibility_from_response(response),
+            ReferralEligibility::Eligible
+        );
+        assert!(
+            serde_json::from_value::<ReferralResponse>(json!({
+                "referredBy": null,
+                "tokenToState": []
+            }))
+            .is_err()
         );
     }
 
