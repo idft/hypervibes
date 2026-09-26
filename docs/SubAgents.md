@@ -37,6 +37,12 @@ provider, model, optional thinking mode, timeout, prompt, and capabilities.
 Enabled scheduled jobs require an explicit model. The prompt is the complete
 strategy input saved for that sub-agent.
 
+The Trading edit page also lets operators change its candle-close timeframe
+(for example, `2m` or `5m`). The next run is scheduled on the next boundary
+of the new timeframe. Newly created Trading jobs use the stable key `trading`,
+which stays the same when the timeframe changes. Existing Trading jobs with
+timeframe-based keys retain the legacy naming convention.
+
 Analysis uses its approved data tools and publishes research memories. It does
 not author reusable code.
 

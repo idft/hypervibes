@@ -50,7 +50,7 @@ pub struct SingletonSubAgentConfig<'a> {
 /// This is idempotent: existing rows keyed by `(agent_key, sub_agent_key)`
 /// are left untouched. The fixture gets disabled
 /// `technical-15m`, `technical-1h`, `technical-1d` Analysis jobs, a
-/// `trading-5m` job, and a `review-1d` job.
+/// `trading` job, and a `review-1d` job.
 pub async fn insert_default_harness_sub_agents(pool: &DbPool, agent_key: &str) -> Result<()> {
     for timeframe in DEFAULT_ANALYSIS_TIMEFRAMES {
         insert_default_analysis_job(pool, agent_key, timeframe).await?;
@@ -279,9 +279,8 @@ pub async fn insert_singleton_sub_agent(
         "unsupported singleton sub-agent kind"
     );
     let sub_agent_key = match sub_agent_kind {
-        SUB_AGENT_KIND_TRADING | SUB_AGENT_KIND_REVIEW => {
-            build_generated_sub_agent_key(sub_agent_kind, config.timeframe)
-        }
+        SUB_AGENT_KIND_TRADING => SUB_AGENT_KIND_TRADING.to_string(),
+        SUB_AGENT_KIND_REVIEW => build_generated_sub_agent_key(sub_agent_kind, config.timeframe),
         _ => build_generated_event_sub_agent_key(sub_agent_kind),
     };
     let timeframe = match sub_agent_kind {
@@ -335,7 +334,11 @@ async fn insert_default_candle_job(
     enabled: bool,
     timeout_seconds: i32,
 ) -> Result<()> {
-    let sub_agent_key = build_generated_sub_agent_key(sub_agent_kind, timeframe);
+    let sub_agent_key = if sub_agent_kind == SUB_AGENT_KIND_TRADING {
+        SUB_AGENT_KIND_TRADING.to_string()
+    } else {
+        build_generated_sub_agent_key(sub_agent_kind, timeframe)
+    };
     let now = Utc::now();
     let next_run_at = next_due_after(now, timeframe, DEFAULT_TRIGGER_DELAY_SECONDS)
         .with_context(|| format!("invalid default timeframe {timeframe:?}"))?;
@@ -632,8 +635,8 @@ pub async fn set_sub_agent_timeout(
 /// Change a job's timeframe and re-anchor its next run to the next
 /// boundary for that timeframe. Keeping these fields together prevents an
 /// edited job from firing at a boundary from its previous cadence.
-/// Analysis jobs keep their user-provided sub-agent key; other candle jobs
-/// derive their key from kind and timeframe.
+/// Analysis jobs and newly created Trading jobs keep their stable key;
+/// legacy Trading keys and Review keys continue to track the timeframe.
 pub async fn set_candle_sub_agent_timeframe(
     pool: &DbPool,
     agent_key: &str,
@@ -649,8 +652,8 @@ pub async fn set_candle_sub_agent_timeframe(
         .await
         .context("failed to begin job timeframe update transaction")?;
     lock_agent_coordination_tx(&mut tx, agent_key).await?;
-    let job: Option<(String, i32)> = query_as(
-        "SELECT sub_agent_kind, trigger_delay_seconds
+    let job: Option<(String, String, i32)> = query_as(
+        "SELECT sub_agent_kind, sub_agent_key, trigger_delay_seconds
            FROM harness_sub_agents
            WHERE agent_key = $1
              AND id = $2
@@ -663,7 +666,7 @@ pub async fn set_candle_sub_agent_timeframe(
     .await
     .with_context(|| format!("failed to lock job {sub_agent_id} for agent {agent_key}"))?;
 
-    let Some((sub_agent_kind, trigger_delay_seconds)) = job else {
+    let Some((sub_agent_kind, current_key, trigger_delay_seconds)) = job else {
         tx.rollback()
             .await
             .context("failed to roll back missing job timeframe update")?;
@@ -671,7 +674,9 @@ pub async fn set_candle_sub_agent_timeframe(
     };
 
     let next_run_at = next_due_after(Utc::now(), timeframe, trigger_delay_seconds)?;
-    let sub_agent_key = if sub_agent_kind == SUB_AGENT_KIND_ANALYSIS {
+    let sub_agent_key = if sub_agent_kind == SUB_AGENT_KIND_ANALYSIS
+        || (sub_agent_kind == SUB_AGENT_KIND_TRADING && current_key == SUB_AGENT_KIND_TRADING)
+    {
         None
     } else {
         Some(build_generated_sub_agent_key(&sub_agent_kind, timeframe))

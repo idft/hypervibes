@@ -982,15 +982,19 @@ pub(in crate::web::routes) async fn agents_update_sub_agent_model(
     headers: HeaderMap,
     Form(form): Form<ModelSelectionForm>,
 ) -> Result<Response, AppError> {
-    let detail_url = format!("/agents/{agent_key}/sub-agents/{sub_agent_id}");
-    let Some(_agent) = get_agent(&state.db_pool, &agent_key).await? else {
-        return Ok((StatusCode::NOT_FOUND, "agent not found").into_response());
-    };
-    let Some(_job) =
+    let Some(job) =
         crate::harness::store::get_agent_sub_agent(&state.db_pool, &agent_key, sub_agent_id)
             .await?
     else {
         return Ok((StatusCode::NOT_FOUND, "sub-agent not found").into_response());
+    };
+    let detail_url = if job.sub_agent_kind == SUB_AGENT_KIND_TRADING {
+        format!("/agents/{agent_key}/trading/edit")
+    } else {
+        format!("/agents/{agent_key}/sub-agents/{sub_agent_id}")
+    };
+    let Some(_agent) = get_agent(&state.db_pool, &agent_key).await? else {
+        return Ok((StatusCode::NOT_FOUND, "agent not found").into_response());
     };
 
     let parsed = match parse_model_selection(&form.model_selection) {
@@ -1051,14 +1055,17 @@ pub(in crate::web::routes) async fn agents_update_sub_agent_timeout(
     Path((agent_key, sub_agent_id)): Path<(String, i64)>,
     Form(form): Form<TimeoutForm>,
 ) -> Result<Response, AppError> {
-    let detail_url = format!("/agents/{agent_key}/sub-agents/{sub_agent_id}");
-
-    if crate::harness::store::get_agent_sub_agent(&state.db_pool, &agent_key, sub_agent_id)
-        .await?
-        .is_none()
-    {
+    let Some(job) =
+        crate::harness::store::get_agent_sub_agent(&state.db_pool, &agent_key, sub_agent_id)
+            .await?
+    else {
         return Ok((StatusCode::NOT_FOUND, "sub-agent not found").into_response());
-    }
+    };
+    let detail_url = if job.sub_agent_kind == SUB_AGENT_KIND_TRADING {
+        format!("/agents/{agent_key}/trading/edit")
+    } else {
+        format!("/agents/{agent_key}/sub-agents/{sub_agent_id}")
+    };
 
     let timeout_seconds = match parse_timeout_seconds(&form.timeout) {
         Ok(value) => value,
@@ -1158,12 +1165,12 @@ pub(in crate::web::routes) async fn agents_update_sub_agent_capabilities(
     if !updated {
         return Ok((StatusCode::NOT_FOUND, "sub-agent not found").into_response());
     }
-    Ok(Redirect::to(&prompt_page_url(
-        &agent_key,
-        sub_agent_id,
-        &job.sub_agent_kind,
-    ))
-    .into_response())
+    let redirect_url = if job.sub_agent_kind == SUB_AGENT_KIND_TRADING {
+        format!("/agents/{agent_key}/trading/edit")
+    } else {
+        prompt_page_url(&agent_key, sub_agent_id, &job.sub_agent_kind)
+    };
+    Ok(Redirect::to(&redirect_url).into_response())
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -1193,7 +1200,17 @@ pub(in crate::web::routes) async fn agents_update_sub_agent_timeframe(
     Path((agent_key, sub_agent_id)): Path<(String, i64)>,
     Form(form): Form<TimeframeForm>,
 ) -> Result<Response, AppError> {
-    let detail_url = format!("/agents/{agent_key}/sub-agents/{sub_agent_id}");
+    let Some(job) =
+        crate::harness::store::get_agent_sub_agent(&state.db_pool, &agent_key, sub_agent_id)
+            .await?
+    else {
+        return Ok((StatusCode::NOT_FOUND, "sub-agent not found").into_response());
+    };
+    let detail_url = if job.sub_agent_kind == SUB_AGENT_KIND_TRADING {
+        format!("/agents/{agent_key}/trading/edit")
+    } else {
+        format!("/agents/{agent_key}/sub-agents/{sub_agent_id}")
+    };
     let timeframe = form.timeframe.trim();
     if let Err(error) = parse_timeframe_seconds(timeframe) {
         return Ok(timeframe_error_redirect(
@@ -1419,6 +1436,8 @@ pub(in crate::web::routes) struct RolePageQuery {
     pub prompt_error: Option<String>,
     #[serde(default)]
     pub timeout_error: Option<String>,
+    #[serde(default)]
+    pub timeframe_error: Option<String>,
     #[serde(default)]
     pub model_error: Option<String>,
 }
@@ -1844,6 +1863,8 @@ async fn render_role_edit_page(
     };
     let mut job_view = crate::web::templates::HarnessSubAgentDetailView::from_row(&job);
     job_view.model_error = query.model_error;
+    job_view.candle_trigger_editor.error = query.timeframe_error;
+    job_view.timeout_editor.error = query.timeout_error;
     let picker = load_model_picker_context(state, &agent).await;
     let mut model_picker = build_model_picker_view(
         "sub-agent-model-selection",

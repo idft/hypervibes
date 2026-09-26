@@ -762,7 +762,7 @@ async fn trading_singleton_is_created_from_its_new_page() {
         .iter()
         .find(|row| row.sub_agent_kind == SUB_AGENT_KIND_TRADING)
         .expect("trading singleton recreated");
-    assert_eq!(job.sub_agent_key, "trading-15m");
+    assert_eq!(job.sub_agent_key, "trading");
     assert_eq!(job.timeframe.as_deref(), Some("15m"));
     assert_eq!(job.timeout_seconds, 600);
     assert!(!job.enabled);
@@ -790,7 +790,7 @@ async fn trading_singleton_is_created_from_its_new_page() {
         "data-row-href=\"/agents/{agent_key}/trading/edit\""
     )));
     assert!(trading_page_text.contains(">Trigger<"));
-    assert!(trading_page_text.contains(">trading-15m<"));
+    assert!(trading_page_text.contains(">trading<"));
     assert!(!trading_page_text.contains("data-detail-delete-trigger"));
     assert!(!trading_page_text.contains("data-model-picker-lazy"));
 
@@ -807,6 +807,29 @@ async fn trading_singleton_is_created_from_its_new_page() {
     let edit_page_text = response_text(edit_page).await;
     assert!(edit_page_text.contains("data-detail-delete-trigger"));
     assert!(edit_page_text.contains(&format!("/agents/{agent_key}/sub-agents/{}/delete", job.id)));
+    let trigger = edit_page_text.find(">Trigger<").expect("trigger row");
+    let timeout = edit_page_text.find(">Timeout<").expect("timeout row");
+    let next_run = edit_page_text.find(">Next run<").expect("next run row");
+    let model = edit_page_text
+        .find(&format!("/agents/{agent_key}/sub-agents/{}/model", job.id))
+        .expect("model form");
+    let capabilities = edit_page_text
+        .find(&format!(
+            "/agents/{agent_key}/sub-agents/{}/capabilities",
+            job.id
+        ))
+        .expect("capabilities form");
+    let prompt = edit_page_text.find(">Prompt<").expect("prompt editor");
+    assert!(trigger < timeout && timeout < next_run && next_run < model);
+    assert!(model < capabilities && capabilities < prompt);
+    assert!(edit_page_text.contains("data-inline-editor-trigger"));
+    assert!(edit_page_text.contains("aria-label=\"Edit candle trigger\""));
+    assert!(edit_page_text.contains("name=\"timeframe\" value=\"15m\""));
+    assert!(edit_page_text.contains("name=\"timeout\""));
+    assert!(edit_page_text.contains(&format!(
+        "/agents/{agent_key}/sub-agents/{}/timeframe",
+        job.id
+    )));
 
     let response = router(state.clone())
         .oneshot(
@@ -1141,8 +1164,9 @@ async fn post_job_model_htmx_updates_without_redirect() {
     let sub_agent_id = crate::harness::store::list_agent_sub_agents(&pool, &agent_key)
         .await
         .expect("list jobs")
-        .first()
-        .expect("default job present")
+        .into_iter()
+        .find(|job| job.sub_agent_key == "technical-15m")
+        .expect("default analysis job present")
         .id;
     crate::harness::store::set_sub_agent_model_with_variant(
         &pool,
@@ -1202,8 +1226,9 @@ async fn post_invalid_job_model_htmx_redirects_with_an_error() {
     let sub_agent_id = crate::harness::store::list_agent_sub_agents(&state.db_pool, &agent_key)
         .await
         .expect("list jobs")
-        .first()
-        .expect("default job present")
+        .into_iter()
+        .find(|job| job.sub_agent_key == "technical-15m")
+        .expect("default analysis job present")
         .id;
 
     let response = router(state)
@@ -1240,8 +1265,9 @@ async fn post_job_model_without_htmx_redirects_to_detail() {
     let sub_agent_id = crate::harness::store::list_agent_sub_agents(&state.db_pool, &agent_key)
         .await
         .expect("list jobs")
-        .first()
-        .expect("default job present")
+        .into_iter()
+        .find(|job| job.sub_agent_key == "technical-15m")
+        .expect("default analysis job present")
         .id;
 
     let response = router(state)
@@ -1277,8 +1303,9 @@ async fn post_job_timeout_updates_and_redirects() {
     let sub_agent_id = crate::harness::store::list_agent_sub_agents(&pool, &agent_key)
         .await
         .expect("list jobs")
-        .first()
-        .expect("default job present")
+        .into_iter()
+        .find(|job| job.sub_agent_key == "technical-15m")
+        .expect("default analysis job present")
         .id;
 
     let response = router(state.clone())
@@ -1365,6 +1392,200 @@ async fn post_job_timeframe_keeps_durable_analysis_key() {
         0
     );
 }
+
+#[tokio::test]
+async fn trading_edit_updates_timeframe_without_changing_stable_key() {
+    let state = test_state().await;
+    let pool = state.db_pool.clone();
+    let (agent_key, _) = insert_test_opencode_agent(&state)
+        .await
+        .expect("insert opencode agent");
+    let job =
+        crate::harness::store::get_singleton_sub_agent(&pool, &agent_key, SUB_AGENT_KIND_TRADING)
+            .await
+            .expect("load trading job")
+            .expect("default trading job");
+    assert_eq!(job.sub_agent_key, "trading");
+
+    for timeframe in ["2m", "5m"] {
+        let response = router(state.clone())
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!(
+                        "/agents/{agent_key}/sub-agents/{}/timeframe",
+                        job.id
+                    ))
+                    .header("content-type", "application/x-www-form-urlencoded")
+                    .body(Body::from(format!("timeframe={timeframe}")))
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+        assert_eq!(response.status(), StatusCode::SEE_OTHER);
+        assert_eq!(
+            response
+                .headers()
+                .get("location")
+                .and_then(|value| value.to_str().ok()),
+            Some(format!("/agents/{agent_key}/trading/edit").as_str())
+        );
+
+        let updated = crate::harness::store::get_agent_sub_agent(&pool, &agent_key, job.id)
+            .await
+            .expect("load updated job")
+            .expect("trading job");
+        assert_eq!(updated.sub_agent_key, "trading");
+        assert_eq!(updated.timeframe.as_deref(), Some(timeframe));
+        let next_run_at = updated.next_run_at.expect("scheduled next run");
+        assert!(next_run_at > chrono::Utc::now());
+        let duration =
+            crate::harness::timeframe::parse_timeframe_seconds(timeframe).expect("valid timeframe");
+        assert_eq!(
+            (next_run_at.timestamp()
+                - i64::from(crate::harness::timeframe::DEFAULT_TRIGGER_DELAY_SECONDS))
+                % duration,
+            0
+        );
+    }
+
+    let invalid = router(state.clone())
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!(
+                    "/agents/{agent_key}/sub-agents/{}/timeframe",
+                    job.id
+                ))
+                .header("content-type", "application/x-www-form-urlencoded")
+                .body(Body::from("timeframe=15s"))
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+    let location = invalid
+        .headers()
+        .get("location")
+        .expect("redirect location")
+        .to_str()
+        .expect("valid location");
+    assert!(location.starts_with(&format!(
+        "/agents/{agent_key}/trading/edit?timeframe_error="
+    )));
+    let edit = router(state)
+        .oneshot(
+            Request::builder()
+                .uri(location)
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+    assert_eq!(edit.status(), StatusCode::OK);
+    assert!(response_text(edit).await.contains("Invalid timeframe"));
+}
+
+#[tokio::test]
+async fn trading_edit_timeout_returns_to_edit_page_and_displays_validation_errors() {
+    let state = test_state().await;
+    let pool = state.db_pool.clone();
+    let (agent_key, _) = insert_test_opencode_agent(&state)
+        .await
+        .expect("insert opencode agent");
+    let job =
+        crate::harness::store::get_singleton_sub_agent(&pool, &agent_key, SUB_AGENT_KIND_TRADING)
+            .await
+            .expect("load trading job")
+            .expect("default trading job");
+
+    for (timeout, expected_location) in [
+        ("20m", format!("/agents/{agent_key}/trading/edit")),
+        (
+            "0m",
+            format!("/agents/{agent_key}/trading/edit?timeout_error="),
+        ),
+    ] {
+        let response = router(state.clone())
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/agents/{agent_key}/sub-agents/{}/timeout", job.id))
+                    .header("content-type", "application/x-www-form-urlencoded")
+                    .body(Body::from(format!("timeout={timeout}")))
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+        assert_eq!(response.status(), StatusCode::SEE_OTHER);
+        let location = response
+            .headers()
+            .get("location")
+            .expect("redirect location")
+            .to_str()
+            .expect("valid location");
+        assert!(location.starts_with(&expected_location));
+        if timeout == "0m" {
+            let edit = router(state.clone())
+                .oneshot(
+                    Request::builder()
+                        .uri(location)
+                        .body(Body::empty())
+                        .expect("request"),
+                )
+                .await
+                .expect("response");
+            assert!(response_text(edit).await.contains("Invalid timeout"));
+        }
+    }
+
+    let updated = crate::harness::store::get_agent_sub_agent(&pool, &agent_key, job.id)
+        .await
+        .expect("load updated job")
+        .expect("trading job");
+    assert_eq!(updated.timeout_seconds, 20 * 60);
+}
+
+#[tokio::test]
+async fn legacy_trading_key_keeps_its_timeframe_naming_when_edited() {
+    let state = test_state().await;
+    let pool = state.db_pool.clone();
+    let (agent_key, _) = insert_test_opencode_agent(&state)
+        .await
+        .expect("insert opencode agent");
+    let job =
+        crate::harness::store::get_singleton_sub_agent(&pool, &agent_key, SUB_AGENT_KIND_TRADING)
+            .await
+            .expect("load trading job")
+            .expect("default trading job");
+    sqlx::query("UPDATE harness_sub_agents SET sub_agent_key = 'trading-1m', timeframe = '1m' WHERE id = $1")
+        .bind(job.id)
+        .execute(&pool)
+        .await
+        .expect("simulate legacy job");
+
+    let response = router(state.clone())
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!(
+                    "/agents/{agent_key}/sub-agents/{}/timeframe",
+                    job.id
+                ))
+                .header("content-type", "application/x-www-form-urlencoded")
+                .body(Body::from("timeframe=5m"))
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+    let updated = crate::harness::store::get_agent_sub_agent(&pool, &agent_key, job.id)
+        .await
+        .expect("load updated job")
+        .expect("trading job");
+    assert_eq!(updated.sub_agent_key, "trading-5m");
+    assert_eq!(updated.timeframe.as_deref(), Some("5m"));
+}
+
 #[tokio::test]
 async fn post_job_timeframe_invalid_value_redirects_with_error() {
     let state = test_state().await;
@@ -1375,8 +1596,9 @@ async fn post_job_timeframe_invalid_value_redirects_with_error() {
     let sub_agent_id = crate::harness::store::list_agent_sub_agents(&pool, &agent_key)
         .await
         .expect("list jobs")
-        .first()
-        .expect("default job present")
+        .into_iter()
+        .find(|job| job.sub_agent_key == "technical-15m")
+        .expect("default analysis job present")
         .id;
 
     let response = router(state)
@@ -1451,8 +1673,9 @@ async fn post_job_timeout_invalid_value_redirects_with_error() {
     let sub_agent_id = crate::harness::store::list_agent_sub_agents(&pool, &agent_key)
         .await
         .expect("list jobs")
-        .first()
-        .expect("default job present")
+        .into_iter()
+        .find(|job| job.sub_agent_key == "technical-15m")
+        .expect("default analysis job present")
         .id;
 
     let response = router(state.clone())

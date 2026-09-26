@@ -2697,7 +2697,7 @@ mod tests {
         .expect("fetch analysis id");
         let (trading_id,): (i64,) = sqlx::query_as(
             "SELECT id FROM harness_sub_agents
-              WHERE agent_key = $1 AND sub_agent_key = 'trading-5m'",
+              WHERE agent_key = $1 AND sub_agent_key = 'trading'",
         )
         .bind(&key)
         .fetch_one(&pool)
@@ -2729,7 +2729,7 @@ mod tests {
         let mut jobs: Vec<&str> = guard.iter().map(|r| r.sub_agent_key.as_str()).collect();
         jobs.sort();
         assert!(
-            jobs == vec!["technical-15m", "trading-5m"],
+            jobs == vec!["technical-15m", "trading"],
             "expected both lanes to dispatch, got {jobs:?}"
         );
         assert!(

@@ -91,7 +91,7 @@ async fn strategy_prompt_get_and_update_are_scoped_to_authenticated_agent() {
     assert_eq!(response.status(), StatusCode::OK);
     let body = response_json(response).await;
     assert_eq!(body["target_sub_agent_id"], first_trading_id);
-    assert_eq!(body["target_sub_agent_key"], "trading-5m");
+    assert_eq!(body["target_sub_agent_key"], "trading");
     assert_eq!(body["prompt"], "Trade only liquid breakouts.");
     assert!(body["updated_at"].is_string());
     assert!(body["revision_id"].is_i64());
