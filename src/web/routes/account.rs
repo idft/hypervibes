@@ -20,10 +20,7 @@ use tracing::warn;
 use crate::{
     agents::store::list_agents_for_user,
     hyperliquid::builder_fee::{BUILDER_RECIPIENT, MAX_BUILDER_FEE_TENTHS_OF_BP},
-    hyperliquid::{
-        referral::{MAX_REFERRAL_APPLICATION_VOLUME, REFERRAL_CODE, set_referrer_action},
-        signing::{set_referrer_action_hash, set_referrer_signing_payload},
-    },
+    hyperliquid::referral::{MAX_REFERRAL_APPLICATION_VOLUME, REFERRAL_CODE},
     web::{
         AppState,
         auth::{
@@ -54,22 +51,12 @@ const REVOKED_BUILDER_FEE_RATE: &str = "0.00%";
 const PERPETUAL_USDC_TOKEN: &str = "USDC:0x6d1e7cde53ba9467b783cb7c530ce054";
 const UNIFIED_ACCOUNT_DEX: &str = "spot";
 const MAX_TRANSFER_DECIMAL_PLACES: u32 = 8;
-/// Wallet signatures are accepted for five minutes to allow a normal signing flow.
-const REFERRAL_NONCE_MAX_AGE_MILLIS: u64 = 5 * 60 * 1000;
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 #[serde(rename_all = "camelCase")]
 pub(in crate::web::routes) struct SignedAction {
     action: Value,
-    signature: String,
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-pub(in crate::web::routes) struct ReferralClaimRequest {
-    action: Value,
-    nonce: u64,
     signature: String,
 }
 
@@ -257,25 +244,6 @@ async fn referral_eligibility(state: &AppState, owner: &str) -> ReferralEligibil
     serde_json::from_value(response)
         .map(referral_eligibility_from_response)
         .unwrap_or(ReferralEligibility::Unavailable)
-}
-
-fn referral_eligibility_response(eligibility: ReferralEligibility) -> Response {
-    let (status, message) = match eligibility {
-        ReferralEligibility::Eligible => unreachable!("eligible referral state is not an error"),
-        ReferralEligibility::AlreadyReferred => (
-            StatusCode::CONFLICT,
-            "This account already has a referral code.",
-        ),
-        ReferralEligibility::VolumeExceeded => (
-            StatusCode::UNPROCESSABLE_ENTITY,
-            "This account is no longer eligible for a referral discount.",
-        ),
-        ReferralEligibility::Unavailable => (
-            StatusCode::BAD_GATEWAY,
-            "Hyperliquid referral eligibility is temporarily unavailable.",
-        ),
-    };
-    (status, Json(json!({"error": message}))).into_response()
 }
 
 async fn load_owned_trading_accounts(
@@ -744,8 +712,11 @@ pub(in crate::web::routes) async fn account_index(
                 .as_ref()
                 .and_then(|wallet| wallet.api_wallet_address.clone()),
             referral_offer_available,
-            referral_auto_prompt: referral_offer_available && api_wallet_state == "Approved",
+            referral_auto_prompt: referral_offer_available
+                && owned_accounts.account_mode != AccountMode::Unregistered,
             referral_wallet_address: user.wallet_address.to_ascii_lowercase(),
+            referral_code: REFERRAL_CODE,
+            referral_url: format!("https://app.hyperliquid.xyz/join/{REFERRAL_CODE}"),
             api_wallet_state,
             api_wallet_expires_at: api_wallet
                 .as_ref()
@@ -882,64 +853,6 @@ pub(in crate::web::routes) async fn cancel_builder_fee(
         .record_revocation(&user.wallet_address, BUILDER_RECIPIENT)
         .await;
     Ok(Json(json!({"status":"ok", "redirect":"/account"})).into_response())
-}
-
-pub(in crate::web::routes) async fn referral_signing_payload(
-    State(state): State<Arc<AppState>>,
-    user: AuthenticatedUser,
-) -> Result<Response, AppError> {
-    let eligibility = referral_eligibility(&state, &user.wallet_address).await;
-    if eligibility != ReferralEligibility::Eligible {
-        return Ok(referral_eligibility_response(eligibility));
-    }
-    let nonce = u64::try_from(chrono::Utc::now().timestamp_millis()).map_err(|_| {
-        AppError(anyhow::anyhow!(
-            "system clock returned a negative timestamp"
-        ))
-    })?;
-    Ok(Json(set_referrer_signing_payload(nonce)?).into_response())
-}
-
-pub(in crate::web::routes) async fn claim_referral_discount(
-    State(state): State<Arc<AppState>>,
-    user: AuthenticatedUser,
-    Json(request): Json<ReferralClaimRequest>,
-) -> Result<Response, AppError> {
-    if !valid_referral_action(&request.action)
-        || !valid_referral_nonce(request.nonce, chrono::Utc::now().timestamp_millis())
-        || !referral_signature_matches(&request.signature, &user.wallet_address, request.nonce)
-    {
-        return Ok(StatusCode::BAD_REQUEST.into_response());
-    }
-    let eligibility = referral_eligibility(&state, &user.wallet_address).await;
-    if eligibility != ReferralEligibility::Eligible {
-        return Ok(referral_eligibility_response(eligibility));
-    }
-    let Some(signature) = signature_parts(&request.signature) else {
-        return Ok(StatusCode::BAD_REQUEST.into_response());
-    };
-    let exchange = match state
-        .referral_exchange
-        .relay_set_referrer(&set_referrer_action(), request.nonce, signature)
-        .await
-    {
-        Ok(response) => response,
-        Err(_) => {
-            return Ok((
-                StatusCode::BAD_GATEWAY,
-                Json(json!({"error": "Hyperliquid exchange is temporarily unavailable."})),
-            )
-                .into_response());
-        }
-    };
-    if !exchange_success(&exchange) {
-        return Ok((
-            StatusCode::UNPROCESSABLE_ENTITY,
-            Json(json!({"error": referral_error_message(&exchange)})),
-        )
-            .into_response());
-    }
-    Ok(Json(json!({"status": "ok", "redirect": "/account"})).into_response())
 }
 
 pub(in crate::web::routes) async fn setup_user_api_wallet(
@@ -1323,15 +1236,6 @@ fn transfer_error_message(response: &Value) -> String {
         .unwrap_or("Hyperliquid rejected the transfer.")
         .to_string()
 }
-fn referral_error_message(response: &Value) -> String {
-    response
-        .get("response")
-        .and_then(Value::as_str)
-        .or_else(|| response.get("message").and_then(Value::as_str))
-        .filter(|message| !message.is_empty() && message.len() <= 500)
-        .unwrap_or("Hyperliquid rejected the discount claim.")
-        .to_string()
-}
 fn signature_parts(signature: &str) -> Option<Value> {
     let raw = hex::decode(signature.strip_prefix("0x")?).ok()?;
     if raw.len() != 65 {
@@ -1352,32 +1256,6 @@ fn valid_common(action: &Value) -> bool {
 }
 fn valid_lowercase_address(value: &str) -> bool {
     Address::from_str(value).is_ok() && value == value.to_ascii_lowercase()
-}
-fn valid_referral_action(action: &Value) -> bool {
-    let Some(action) = action.as_object() else {
-        return false;
-    };
-    action.len() == 2
-        && action.get("type").and_then(Value::as_str) == Some("setReferrer")
-        && action.get("code").and_then(Value::as_str) == Some(REFERRAL_CODE)
-}
-fn valid_referral_nonce(nonce: u64, now_millis: i64) -> bool {
-    let Ok(nonce) = i64::try_from(nonce) else {
-        return false;
-    };
-    nonce > 0 && now_millis.abs_diff(nonce) <= REFERRAL_NONCE_MAX_AGE_MILLIS
-}
-fn referral_signature_matches(signature: &str, expected: &str, nonce: u64) -> bool {
-    let Ok(hash) = set_referrer_action_hash(nonce) else {
-        return false;
-    };
-    let digest =
-        hypersdk::hypercore::signing::agent_signing_hash(hypersdk::hypercore::Chain::Mainnet, hash);
-    Signature::from_str(signature)
-        .ok()
-        .and_then(|signature| signature.recover_address_from_prehash(&digest).ok())
-        .map(|address| address.to_string().eq_ignore_ascii_case(expected))
-        .unwrap_or(false)
 }
 fn valid_user_api_wallet_action(action: &Value, expected_address: &str) -> bool {
     valid_common(action)
@@ -1484,55 +1362,8 @@ fn uint_word(value: u64) -> [u8; 32] {
 
 #[cfg(test)]
 mod tests {
-    use std::{collections::VecDeque, sync::Mutex};
-
     use super::*;
-    use crate::{
-        hyperliquid::referral::{ReferralExchange, ReferralFuture},
-        web::routes::test_support::test_state_with_referral_exchange,
-    };
     use alloy::signers::{Signer, local::PrivateKeySigner};
-
-    struct RecordingReferralExchange {
-        states: Mutex<VecDeque<Result<Value, String>>>,
-        relays: Mutex<Vec<Value>>,
-    }
-
-    impl RecordingReferralExchange {
-        fn new(states: Vec<Result<Value, String>>) -> Self {
-            Self {
-                states: Mutex::new(states.into()),
-                relays: Mutex::new(Vec::new()),
-            }
-        }
-    }
-
-    impl ReferralExchange for RecordingReferralExchange {
-        fn referral_state<'a>(&'a self, _user: &'a str) -> ReferralFuture<'a> {
-            Box::pin(async move {
-                self.states
-                    .lock()
-                    .expect("lock referral states")
-                    .pop_front()
-                    .unwrap_or_else(|| Err("missing referral state".to_string()))
-            })
-        }
-
-        fn relay_set_referrer<'a>(
-            &'a self,
-            action: &'a Value,
-            nonce: u64,
-            signature: Value,
-        ) -> ReferralFuture<'a> {
-            Box::pin(async move {
-                self.relays
-                    .lock()
-                    .expect("lock referral relays")
-                    .push(json!({"action": action, "nonce": nonce, "signature": signature}));
-                Ok(json!({"status": "ok"}))
-            })
-        }
-    }
 
     fn referral_state(referred_by: Option<Value>, volume: &str) -> Value {
         json!({
@@ -1540,10 +1371,6 @@ mod tests {
             "cumVlm": volume,
             "tokenToState": []
         })
-    }
-
-    fn eligible_referral_state() -> Result<Value, String> {
-        Ok(referral_state(None, "10000"))
     }
 
     #[test]
@@ -1630,149 +1457,6 @@ mod tests {
         );
     }
 
-    #[tokio::test]
-    async fn referral_claim_rejects_invalid_requests_without_relaying() {
-        let fake = Arc::new(RecordingReferralExchange::new(vec![
-            eligible_referral_state(),
-        ]));
-        let state = test_state_with_referral_exchange(fake.clone()).await;
-        let user = AuthenticatedUser {
-            id: uuid::Uuid::new_v4(),
-            wallet_address: "0x1111111111111111111111111111111111111111".to_string(),
-        };
-        let now = u64::try_from(chrono::Utc::now().timestamp_millis()).expect("positive timestamp");
-        for action in [
-            json!({"type": "setReferrer", "code": "ANOTHER_CODE"}),
-            json!({"type": "setReferrer", "code": REFERRAL_CODE, "nonce": now}),
-            json!({"type": "setReferrer", "code": REFERRAL_CODE, "extra": true}),
-        ] {
-            let response = claim_referral_discount(
-                State(state.clone()),
-                user.clone(),
-                Json(ReferralClaimRequest {
-                    action,
-                    nonce: now,
-                    signature: "0x".to_string(),
-                }),
-            )
-            .await
-            .expect("response");
-            assert_eq!(response.status(), StatusCode::BAD_REQUEST);
-        }
-        let response = claim_referral_discount(
-            State(state),
-            user,
-            Json(ReferralClaimRequest {
-                action: set_referrer_action(),
-                nonce: now.saturating_sub(REFERRAL_NONCE_MAX_AGE_MILLIS + 1),
-                signature: "0x".to_string(),
-            }),
-        )
-        .await
-        .expect("response");
-        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
-        assert!(fake.relays.lock().expect("lock relays").is_empty());
-    }
-
-    #[tokio::test]
-    async fn referral_signing_payload_fails_closed_when_state_is_unavailable() {
-        let fake = Arc::new(RecordingReferralExchange::new(vec![Err(
-            "unavailable".to_string()
-        )]));
-        let state = test_state_with_referral_exchange(fake.clone()).await;
-        let response = referral_signing_payload(
-            State(state),
-            AuthenticatedUser {
-                id: uuid::Uuid::new_v4(),
-                wallet_address: "0x1111111111111111111111111111111111111111".to_string(),
-            },
-        )
-        .await
-        .expect("response");
-        assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
-        assert!(fake.relays.lock().expect("lock relays").is_empty());
-    }
-
-    #[tokio::test]
-    async fn referral_claim_rechecks_eligibility_before_relaying() {
-        let fake = Arc::new(RecordingReferralExchange::new(vec![Ok(referral_state(
-            Some(json!("0x1111111111111111111111111111111111111111")),
-            "0",
-        ))]));
-        let state = test_state_with_referral_exchange(fake.clone()).await;
-        let signer = PrivateKeySigner::from_str(
-            "4c0883a69102937d6231471b5dbb6204fe5129617082795f9d3d2c7e2f9f3f5b",
-        )
-        .expect("signer");
-        let nonce =
-            u64::try_from(chrono::Utc::now().timestamp_millis()).expect("positive timestamp");
-        let signature = hypersdk::hypercore::signing::sign_l1_action(
-            &signer,
-            hypersdk::hypercore::Chain::Mainnet,
-            set_referrer_action_hash(nonce).expect("hash"),
-        )
-        .await
-        .expect("sign")
-        .to_string();
-        let response = claim_referral_discount(
-            State(state),
-            AuthenticatedUser {
-                id: uuid::Uuid::new_v4(),
-                wallet_address: signer.address().to_string().to_ascii_lowercase(),
-            },
-            Json(ReferralClaimRequest {
-                action: set_referrer_action(),
-                nonce,
-                signature,
-            }),
-        )
-        .await
-        .expect("response");
-        assert_eq!(response.status(), StatusCode::CONFLICT);
-        assert!(fake.relays.lock().expect("lock relays").is_empty());
-    }
-
-    #[tokio::test]
-    async fn referral_claim_relays_only_the_fixed_l1_payload() {
-        let fake = Arc::new(RecordingReferralExchange::new(vec![
-            eligible_referral_state(),
-        ]));
-        let state = test_state_with_referral_exchange(fake.clone()).await;
-        let signer = PrivateKeySigner::from_str(
-            "4c0883a69102937d6231471b5dbb6204fe5129617082795f9d3d2c7e2f9f3f5b",
-        )
-        .expect("signer");
-        let nonce =
-            u64::try_from(chrono::Utc::now().timestamp_millis()).expect("positive timestamp");
-        let signature = hypersdk::hypercore::signing::sign_l1_action(
-            &signer,
-            hypersdk::hypercore::Chain::Mainnet,
-            set_referrer_action_hash(nonce).expect("hash"),
-        )
-        .await
-        .expect("sign")
-        .to_string();
-        let response = claim_referral_discount(
-            State(state),
-            AuthenticatedUser {
-                id: uuid::Uuid::new_v4(),
-                wallet_address: signer.address().to_string().to_ascii_lowercase(),
-            },
-            Json(ReferralClaimRequest {
-                action: set_referrer_action(),
-                nonce,
-                signature,
-            }),
-        )
-        .await
-        .expect("response");
-        assert_eq!(response.status(), StatusCode::OK);
-        let relays = fake.relays.lock().expect("lock relays");
-        assert_eq!(relays.len(), 1);
-        assert_eq!(relays[0]["action"], set_referrer_action());
-        assert!(relays[0].get("vaultAddress").is_none());
-        assert!(relays[0].get("expiresAfter").is_none());
-    }
     #[tokio::test]
     async fn validates_official_approve_agent_typed_signature() {
         let signer = PrivateKeySigner::from_str(

@@ -46,18 +46,10 @@ impl ReferralExchange for TestReferralExchange {
         Box::pin(async {
             Ok(serde_json::json!({
                 "referredBy": null,
-                "tokenToState": [{}, {"cumVlm": "0"}]
+                "cumVlm": "0",
+                "tokenToState": []
             }))
         })
-    }
-
-    fn relay_set_referrer<'a>(
-        &'a self,
-        _action: &'a serde_json::Value,
-        _nonce: u64,
-        _signature: serde_json::Value,
-    ) -> ReferralFuture<'a> {
-        Box::pin(async { Ok(serde_json::json!({"status": "ok"})) })
     }
 }
 
@@ -101,44 +93,6 @@ pub(in crate::web::routes) async fn test_state_with_backend(
 pub(in crate::web::routes) async fn test_state_with_backend_and_shutdown(
     harness_backend: Arc<dyn HarnessBackend>,
     shutdown_signaled: bool,
-) -> Arc<AppState> {
-    test_state_with_backend_shutdown_and_referral(
-        harness_backend,
-        shutdown_signaled,
-        Arc::new(TestReferralExchange),
-    )
-    .await
-}
-
-pub(in crate::web::routes) async fn test_state_with_referral_exchange(
-    referral_exchange: Arc<dyn ReferralExchange>,
-) -> Arc<AppState> {
-    test_state_with_backend_shutdown_and_referral(
-        Arc::new(NoopHarnessBackend),
-        false,
-        referral_exchange,
-    )
-    .await
-}
-
-/// Build a test state whose `gateway_pending_links` map is wired to the
-/// returned `Arc<DashMap<...>>` so gateway route tests can drive the Telegram
-/// link flow (start and reject) through the HTTP router.
-pub(in crate::web::routes) async fn test_state_with_gateway_pending_links() -> (
-    Arc<AppState>,
-    Arc<dashmap::DashMap<uuid::Uuid, crate::gateway::model::PendingLink>>,
-) {
-    let pending_links = Arc::new(dashmap::DashMap::new());
-    let state = test_state_with_backend(Arc::new(NoopHarnessBackend)).await;
-    let mut state_inner = (*state).clone();
-    state_inner.gateway_pending_links = Some(Arc::clone(&pending_links));
-    (Arc::new(state_inner), pending_links)
-}
-
-async fn test_state_with_backend_shutdown_and_referral(
-    harness_backend: Arc<dyn HarnessBackend>,
-    shutdown_signaled: bool,
-    referral_exchange: Arc<dyn ReferralExchange>,
 ) -> Arc<AppState> {
     let pool = Arc::new(test_db::pool().await);
     let cache_dir = std::path::PathBuf::from("/tmp/opencode/hypervibes-routes-cache");
@@ -196,7 +150,7 @@ async fn test_state_with_backend_shutdown_and_referral(
         .unwrap(),
         asset_cache: Arc::new(crate::cache::asset::AssetCache::new(cache_dir).unwrap()),
         builder_fee_cache: Arc::new(BuilderFeeCache::new(Arc::new(TestBuilderFeeLookup))),
-        referral_exchange,
+        referral_exchange: Arc::new(TestReferralExchange),
         in_flight: crate::harness::in_flight::InFlightTracker::new(),
         workspace_leases: crate::harness::workspace_lease::WorkspaceLeaseManager::new(),
         conversation_turns: crate::agent_conversations::service::ConversationTurnTracker::default(),
@@ -205,6 +159,21 @@ async fn test_state_with_backend_shutdown_and_referral(
         gateway_pending_links: None,
     })
 }
+
+/// Build a test state whose `gateway_pending_links` map is wired to the
+/// returned `Arc<DashMap<...>>` so gateway route tests can drive the Telegram
+/// link flow (start and reject) through the HTTP router.
+pub(in crate::web::routes) async fn test_state_with_gateway_pending_links() -> (
+    Arc<AppState>,
+    Arc<dashmap::DashMap<uuid::Uuid, crate::gateway::model::PendingLink>>,
+) {
+    let pending_links = Arc::new(dashmap::DashMap::new());
+    let state = test_state_with_backend(Arc::new(NoopHarnessBackend)).await;
+    let mut state_inner = (*state).clone();
+    state_inner.gateway_pending_links = Some(Arc::clone(&pending_links));
+    (Arc::new(state_inner), pending_links)
+}
+
 pub(in crate::web::routes) async fn read_sse_chunk(body: Body, timeout_ms: u64) -> String {
     let mut body = body;
     let mut buf = Vec::<u8>::new();

@@ -134,12 +134,16 @@ account.
 
 ## Referral Discount
 
-The referral discount is optional. Eligible users can apply the HyperVibes
-referral code from the Account page for an additional **4% discount on
-Hyperliquid fees**.
+The referral discount is optional. Eligible users can follow the HyperVibes
+link from the Account page to Hyperliquid, connect the same main wallet, and
+apply the code there for an additional **4% discount on Hyperliquid fees**.
+Confirm that Hyperliquid shows **HYPERVIBES** before approving it; a wallet may
+offer a different code.
 
 The main account must have less than $10,000 in cumulative trading volume and
 must not already have a referral code. The discount is offered only while the
-account remains eligible. Referral discounts do not apply to sub-accounts. See
+account remains eligible. Refresh the Account page after applying the code to
+confirm Hyperliquid reports it; the offer will disappear. Referral discounts
+do not apply to sub-accounts. See
 Hyperliquid's [referral documentation](https://hyperliquid.gitbook.io/hyperliquid-docs/referrals.md)
 for its current referral terms.

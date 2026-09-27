@@ -22,6 +22,8 @@ pub struct AccountPageTemplate {
     pub referral_offer_available: bool,
     pub referral_auto_prompt: bool,
     pub referral_wallet_address: String,
+    pub referral_code: &'static str,
+    pub referral_url: String,
     pub api_wallet_expires_at: Option<chrono::DateTime<chrono::Utc>>,
     pub api_wallet_expiry_class: &'static str,
     pub api_wallet_show_expired: bool,
