@@ -352,10 +352,42 @@ def _require_indicator_fields(
     }
 
 
-def _indicator_run_for_agent(value: dict[str, Any]) -> dict[str, Any]:
+def _indicator_run_for_agent(
+    value: dict[str, Any], bar_start: int | None = None, bar_limit: int = 100
+) -> dict[str, Any]:
     run = dict(value)
     for internal_field in ("claim_token", "lease_expires_at", "next_attempt_at"):
         run.pop(internal_field, None)
+    candles = run.pop("candle_data", None)
+    plots = run.pop("plot_data", None)
+    # The API retains the complete input and plot series for charts, but sending
+    # hundreds of candles to OpenCode hides the signal fields behind tool-output
+    # truncation. Page the aligned numeric history without losing older bars.
+    if candles is not None and not isinstance(candles, list):
+        raise RuntimeError("HyperVibes indicator candle data returned unexpected shape")
+    if plots is not None and not isinstance(plots, dict):
+        raise RuntimeError("HyperVibes indicator plot data returned unexpected shape")
+    candle_count = len(candles) if candles is not None else 0
+    start = bar_start if bar_start is not None else max(0, candle_count - bar_limit)
+    end = min(candle_count, start + bar_limit)
+    run["bar_count"] = candle_count
+    run["bar_start"] = start
+    run["previous_bar_start"] = max(0, start - bar_limit) if start > 0 else None
+    run["next_bar_start"] = end if end < candle_count else None
+    run["bars"] = [
+        {
+            "bar_index": index,
+            "opened_at": candle.get("opened_at"),
+            "close": candle.get("close"),
+            "plots": {
+                name: series[index]
+                for name, series in (plots or {}).items()
+                if isinstance(series, list) and index < len(series)
+            },
+        }
+        for index in range(start, end)
+        if isinstance(candle := candles[index], dict)
+    ]
     visual_data = run.pop("visual_data", None)
     if visual_data is None:
         markers: list[Any] = []
@@ -363,7 +395,19 @@ def _indicator_run_for_agent(value: dict[str, Any]) -> dict[str, Any]:
         markers = visual_data["markers"]
     else:
         raise RuntimeError("HyperVibes indicator visual data returned unexpected shape")
-    run["markers"] = markers
+    run["markers"] = [
+        {
+            **marker,
+            "opened_at": candles[marker["bar_index"]].get("opened_at"),
+        }
+        if isinstance(marker, dict)
+        and isinstance(marker.get("bar_index"), int)
+        and not isinstance(marker["bar_index"], bool)
+        and 0 <= marker["bar_index"] < candle_count
+        and isinstance(candles[marker["bar_index"]], dict)
+        else marker
+        for marker in markers
+    ]
     return run
 
 
@@ -499,7 +543,7 @@ def set_trading_instrument_enabled(instrument_id: str, enabled: bool) -> list[st
 
 @mcp.tool()
 def list_indicators() -> list[dict[str, Any]]:
-    """List indicator definitions and agent-facing latest-run plots and markers."""
+    """List indicator definitions with compact latest-run plots and dated markers."""
     result = _request("GET", "/api/v1/indicators")
     if not isinstance(result, list):
         raise RuntimeError("HyperVibes indicators returned unexpected shape")
@@ -522,16 +566,29 @@ def get_indicator_results(
     instrument_id: str | None = None,
     run_id: str | None = None,
     limit: int | None = None,
+    bar_start: int | None = None,
+    bar_limit: int = 100,
 ) -> list[dict[str, Any]]:
-    """Return bounded closed-candle runs, numeric values, marker events, and diagnostics."""
+    """Return runs with up to 100 aligned bars per call and all dated markers.
+
+    The default window is the last 100 bars. Pass bar_start (zero-based, oldest
+    first) to read any older window of the same run; use previous_bar_start and
+    next_bar_start to page. bar_limit may be 1..100. Run limit defaults to 1;
+    use run_id to inspect an exact historical run.
+    """
+    if bar_start is not None and (
+        not isinstance(bar_start, int) or isinstance(bar_start, bool) or bar_start < 0
+    ):
+        raise ValueError("bar_start must be a non-negative integer")
+    if not isinstance(bar_limit, int) or isinstance(bar_limit, bool) or not 1 <= bar_limit <= 100:
+        raise ValueError("bar_limit must be between 1 and 100")
     params: dict[str, Any] = {}
     if instrument_id is not None:
         params["instrument_id"] = _require_nonblank("instrument_id", instrument_id)
     params["timeframe"] = _require_nonblank("timeframe", timeframe)
     if run_id is not None:
         params["run_id"] = _require_nonblank("run_id", run_id)
-    if limit is not None:
-        params["limit"] = _require_limit(limit)
+    params["limit"] = _require_limit(limit if limit is not None else 1)
     result = _request(
         "GET",
         f"/api/v1/indicators/{_require_indicator_id(indicator_id)}/results",
@@ -539,7 +596,7 @@ def get_indicator_results(
     )
     if not isinstance(result, list) or not all(isinstance(run, dict) for run in result):
         raise RuntimeError("HyperVibes indicator results returned unexpected shape")
-    return [_indicator_run_for_agent(run) for run in result]
+    return [_indicator_run_for_agent(run, bar_start, bar_limit) for run in result]
 
 
 @mcp.tool()

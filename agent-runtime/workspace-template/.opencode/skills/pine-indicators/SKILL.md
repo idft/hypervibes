@@ -120,10 +120,16 @@ chart uses a fixed arrow size.
 ## Interpreting Results
 
 `hypervibes_get_indicator_results` requires one configured timeframe and returns
-bounded immutable runs for only that timeframe containing
-closed candles, numeric plots, marker events, latest numeric values, diagnostics,
-and run status. Marker events are not included in `latest_values`; inspect the
-returned `markers` collection when evaluating signal timing.
+bounded immutable runs for only that timeframe (one run by default). Each run
+includes up to 100 closed candles as `bars` (bar index, open time, close,
+numeric plots), `bar_count`, all marker events with their candle open times,
+latest numeric values, diagnostics, and run status. The default window is the
+most recent 100 bars. Pass `bar_start` to read older bars of the same run, and
+use `previous_bar_start` and `next_bar_start` to page through the full history;
+`bar_limit` can be set to 1–100. Marker events are not included in
+`latest_values`; inspect the returned `markers` collection when evaluating
+signal timing. The full input and plot history is also retained by the server
+for charts.
 
 Analysis receives exact frozen run evidence for each timeframe. A dependency
 reported as `timed_out` is fixed for that Analysis run and must not be replaced

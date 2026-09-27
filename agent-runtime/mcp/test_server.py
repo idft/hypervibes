@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import importlib
 import importlib.util
+import json
 import os
 import sys
 import tempfile
@@ -234,6 +235,64 @@ class HyperVibesMcpServerTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "visual data"):
                 self.server.get_indicator_results("indicator-id", "1h")
 
+    def test_indicator_reads_page_long_history_without_hiding_signals(self) -> None:
+        candles = [
+            {"opened_at": f"bar-{index}", "close": str(index), "volume": "1"}
+            for index in range(500)
+        ]
+        run = {
+            "id": "frozen-run-id",
+            "candle_data": candles,
+            "plot_data": {"Fast EMA": list(range(500)), "Slow EMA": list(range(500))},
+            "latest_values": {"Fast EMA": 499, "Slow EMA": 499},
+            "visual_data": {
+                "version": 1,
+                "markers": [{"kind": "plotshape", "bar_index": 10}, {"kind": "plotchar", "bar_index": 499}],
+            },
+        }
+
+        with mock.patch.object(self.server, "_request", return_value=[run]):
+            result = self.server.get_indicator_results("indicator-id", "1h", run_id="frozen-run-id")[0]
+        self.assertNotIn("candle_data", result)
+        self.assertNotIn("plot_data", result)
+        self.assertEqual(result["bar_count"], 500)
+        self.assertEqual(result["bar_start"], 400)
+        self.assertEqual(result["previous_bar_start"], 300)
+        self.assertIsNone(result["next_bar_start"])
+        self.assertEqual(len(result["bars"]), 100)
+        self.assertEqual(result["bars"][0]["bar_index"], 400)
+        self.assertEqual(result["bars"][-1]["plots"], {"Fast EMA": 499, "Slow EMA": 499})
+        self.assertEqual(result["markers"][0]["opened_at"], "bar-10")
+        self.assertEqual(result["markers"][1]["opened_at"], "bar-499")
+        rendered = json.dumps(result, indent=2)
+        self.assertLess(len(rendered), 35_000)
+        self.assertLess(max(map(len, rendered.splitlines())), 2_000)
+
+        with mock.patch.object(self.server, "_request", return_value=[{"id": "indicator-id", "latest_run": run}]):
+            latest = self.server.list_indicators()[0]["latest_run"]
+        self.assertEqual(latest["bars"], result["bars"])
+        self.assertEqual(latest["markers"], result["markers"])
+
+        with mock.patch.object(self.server, "_request", return_value=[run]) as request:
+            older = self.server.get_indicator_results("indicator-id", "1h", run_id="frozen-run-id", bar_start=0)[0]
+        self.assertEqual(older["bar_start"], 0)
+        self.assertIsNone(older["previous_bar_start"])
+        self.assertEqual(older["next_bar_start"], 100)
+        self.assertEqual(older["bars"][0]["plots"], {"Fast EMA": 0, "Slow EMA": 0})
+        self.assertEqual(older["bars"][-1]["bar_index"], 99)
+        self.assertEqual(request.call_args.kwargs["params"]["limit"], 1)
+
+        with mock.patch.object(self.server, "_request", return_value=[run]):
+            middle = self.server.get_indicator_results("indicator-id", "1h", bar_start=200, bar_limit=50)[0]
+        self.assertEqual((middle["bar_start"], middle["previous_bar_start"], middle["next_bar_start"]), (200, 150, 250))
+        self.assertEqual([bar["bar_index"] for bar in middle["bars"]], list(range(200, 250)))
+
+    def test_indicator_result_bar_window_rejects_invalid_bounds(self) -> None:
+        for start, size in [(-1, 100), (0, 0), (0, 101), (True, 10), (0, True)]:
+            with self.subTest(start=start, size=size):
+                with self.assertRaises(ValueError):
+                    self.server.get_indicator_results("indicator-id", "1h", bar_start=start, bar_limit=size)
+
     def test_indicator_mutations_use_plural_timeframes(self) -> None:
         with mock.patch.object(self.server, "_request", return_value={"id": "indicator-id"}) as request:
             self.server.create_indicator(
@@ -261,7 +320,7 @@ class HyperVibesMcpServerTests(unittest.TestCase):
             self.server.get_indicator_results("indicator-id", "4h", instrument_id="BTC")
         self.assertEqual(
             request.call_args.kwargs["params"],
-            {"timeframe": "4h", "instrument_id": "BTC"},
+            {"timeframe": "4h", "instrument_id": "BTC", "limit": 1},
         )
 
     def test_indicator_results_accept_an_exact_run_id(self) -> None:
@@ -269,7 +328,7 @@ class HyperVibesMcpServerTests(unittest.TestCase):
             self.server.get_indicator_results("indicator-id", "1h", run_id="run-id")
         self.assertEqual(
             request.call_args.kwargs["params"],
-            {"timeframe": "1h", "run_id": "run-id"},
+            {"timeframe": "1h", "run_id": "run-id", "limit": 1},
         )
 
     def test_strategy_prompt_tools_use_authenticated_api_paths(self) -> None:

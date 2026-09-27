@@ -45,6 +45,7 @@ fn build_analysis_prompt(request: &DispatchRequest) -> String {
     body.push_str("- This job's research method is defined by its strategy and its capabilities. Decide what market evidence to gather from your allowed tools, or reason from the evidence already available to you.\n");
     body.push_str("- Inspect relevant published numeric plots and marker events with `hypervibes_list_indicators`, `hypervibes_get_indicator`, and `hypervibes_get_indicator_results`; interpret them as research evidence, not order instructions. Do not create or edit indicators.\n");
     body.push_str("- Indicator timeframes are separate evidence. Your run can read only its frozen exact indicator runs; a `timed_out` dependency remains unavailable for this run even if it completes later.\n");
+    body.push_str("- When citing indicator evidence in research memories, record the exact run ID, instrument, timeframe, boundary, relevant numeric plots and marker times. If a frozen dependency or its signals are unavailable, state that explicitly instead of treating run success as signal confirmation.\n");
     if request
         .enabled_capabilities
         .iter()
@@ -309,6 +310,7 @@ mod tests {
         assert!(prompt.contains("Choose your own memory type names"));
         assert!(prompt.contains("scope_kind = \"instruments\""));
         assert!(prompt.contains("numeric plots and marker events"));
+        assert!(prompt.contains("record the exact run ID"));
         assert!(prompt.contains("not order instructions"));
     }
 

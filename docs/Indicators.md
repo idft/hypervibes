@@ -55,6 +55,18 @@ failures, non-finite output, and result-size violations are terminal.
 Successful runs retain the exact bounded candle input, numeric plots, visual
 marker data, latest values, and diagnostics used for the result.
 
+The agent-facing MCP result tools return the latest 100 aligned closed bars
+by default (close and numeric plots), the total bar count, latest values,
+diagnostics, and all marker events labeled with their candle time. Request
+older bars from the same run using `bar_start` (zero-based from the oldest
+bar), following `previous_bar_start` and `next_bar_start` to page through the
+entire history. `bar_limit` accepts 1–100; the result count defaults to one
+run so signal evidence stays within OpenCode's tool-output limit. The HTTP API
+and operator charts continue to expose the complete stored series at once.
+Analysis is instructed to cite exact frozen run IDs and the relevant numeric
+values and marker times in its research memories so later reviews can retrieve
+the same evidence instead of substituting a newer indicator run.
+
 At reconciliation cadence, structured debug logging reports ready depth, oldest
 ready age, running and retry counts, and frozen timed-out dependency count.
 
