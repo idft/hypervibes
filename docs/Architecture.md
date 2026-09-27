@@ -125,6 +125,14 @@ plugin and workspace state. A failed probe or disposal leaves the artifact
 pending for the scheduler's periodic recovery sweep rather than releasing an
 active session's resources. Session creation has a 30-second HTTP deadline;
 the outer run deadline is configured independently per sub-agent.
+Terminal run workspaces are retained for two hours after successful secret
+scrubbing and OpenCode instance disposal. A periodic sweep deletes expired
+workspaces only after checking that their sessions are inactive; failed checks
+are retried. Run records and mirrored transcripts remain in Postgres after
+workspace deletion, but run-local scratch files do not. Conversation workspaces
+remain available across turns and are removed when the conversation is deleted.
+Previously assigned workspace expiration timestamps are not changed by a new
+retention setting.
 
 ### Isolated Workspace Foundation
 

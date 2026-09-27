@@ -11,7 +11,7 @@ use crate::{
     },
 };
 
-pub const RUN_WORKSPACE_ARTIFACT_RETENTION: chrono::Duration = chrono::Duration::days(7);
+pub const RUN_WORKSPACE_ARTIFACT_RETENTION: chrono::Duration = chrono::Duration::hours(2);
 
 #[derive(Debug, sqlx::FromRow)]
 struct RunWorkspaceArtifactDbRow {
@@ -236,7 +236,7 @@ pub async fn record_run_workspace_stats(
     Ok(result.rows_affected() > 0)
 }
 
-/// Make a scrubbed terminal run artifact retainable for seven days.
+/// Retain a scrubbed terminal run workspace for two hours.
 pub async fn mark_run_workspace_terminalized(
     pool: &DbPool,
     agent_key: &str,
@@ -670,7 +670,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn terminalized_artifacts_expire_after_seven_days() {
+    async fn terminalized_artifacts_expire_after_two_hours() {
         let pool = test_db::pool().await;
         let agent_key = format!(
             "artifact-expiry-{}",
@@ -708,8 +708,27 @@ mod tests {
         let terminalized_at = artifact.terminalized_at.expect("terminalized timestamp");
         assert_eq!(
             artifact.expires_at,
-            Some(terminalized_at + RUN_WORKSPACE_ARTIFACT_RETENTION)
+            Some(terminalized_at + chrono::Duration::hours(2))
         );
+        assert!(
+            claim_expired_run_workspace_artifacts(
+                &pool,
+                terminalized_at + chrono::Duration::minutes(119),
+                10,
+            )
+            .await
+            .expect("claim before expiry")
+            .is_empty()
+        );
+        let claimed = claim_expired_run_workspace_artifacts(
+            &pool,
+            terminalized_at + chrono::Duration::hours(2),
+            10,
+        )
+        .await
+        .expect("claim at expiry");
+        assert_eq!(claimed.len(), 1);
+        assert_eq!(claimed[0].run_id, run_id);
     }
 
     #[tokio::test]

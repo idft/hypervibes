@@ -1488,7 +1488,7 @@ pub async fn terminalize_run_workspace_artifact(
     }
     if run.backend_run_ref.is_some() {
         // Keep the artifact pending on a transport failure so recovery retries
-        // disposal. The workspace itself is retained for the normal seven days.
+        // disposal. The workspace itself is retained for two hours.
         backend
             .dispose_workspace_instance(opencode_base_url, directory)
             .await?;
