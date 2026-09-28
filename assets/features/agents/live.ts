@@ -110,11 +110,35 @@ function installConversationComposerShortcut() {
   });
 }
 
+function preserveConversationDraftOnSse(event: Event) {
+  const composer = event.target;
+  if (!(composer instanceof HTMLElement) || composer.id !== "conversation-composer") return;
+  const textarea = composer.querySelector<HTMLTextAreaElement>('textarea[name="message"]');
+  if (!textarea || (!textarea.value && document.activeElement !== textarea)) return;
+
+  // SSE snapshots contain an empty composer. Keep the live textarea (and its
+  // focus/caret) while still applying the server's busy state to its controls.
+  const data = (event as CustomEvent<{ data?: string }>).detail?.data;
+  if (typeof data !== "string") return;
+  const fragment = document.createElement("template");
+  fragment.innerHTML = data;
+  const nextTextarea = fragment.content.querySelector<HTMLTextAreaElement>('textarea[name="message"]');
+  const button = composer.querySelector<HTMLButtonElement>('button[type="submit"]');
+  const nextButton = fragment.content.querySelector<HTMLButtonElement>('button[type="submit"]');
+  if (!nextTextarea || !button || !nextButton) return;
+
+  event.preventDefault();
+  textarea.disabled = nextTextarea.disabled;
+  button.disabled = nextButton.disabled;
+  button.className = nextButton.className;
+}
+
 export function installAgentLiveLifecycle() {
   installDetailDeleteModal();
   installPositionCloseModal();
   installRunCancelModal();
   installConversationComposerShortcut();
+  document.addEventListener("htmx:sseBeforeMessage", preserveConversationDraftOnSse);
   document.addEventListener("change", (event) => {
     const input = event.target;
     if (!(input instanceof HTMLInputElement) || input.name !== "model_selection") return;

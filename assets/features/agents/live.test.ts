@@ -25,6 +25,68 @@ describe("conversation composer shortcut", () => {
   });
 });
 
+describe("conversation composer SSE updates", () => {
+  const incomingComposer = '<form><textarea name="message" disabled></textarea><button type="submit" disabled class="cursor-not-allowed">Send</button></form>';
+
+  it("keeps an unsent draft and updates the busy state", () => {
+    document.body.innerHTML = '<div id="conversation-composer"><form><textarea name="message"></textarea><button type="submit" class="cursor-pointer">Send</button></form></div>';
+    installAgentLiveLifecycle();
+
+    const composer = document.getElementById("conversation-composer");
+    const textarea = composer?.querySelector<HTMLTextAreaElement>('textarea[name="message"]');
+    const button = composer?.querySelector<HTMLButtonElement>('button[type="submit"]');
+    if (!composer || !textarea || !button) throw new Error("Conversation composer was not rendered");
+    textarea.value = "Draft in progress";
+
+    const busyEvent = new CustomEvent("htmx:sseBeforeMessage", { bubbles: true, cancelable: true, detail: { data: incomingComposer } });
+    composer.dispatchEvent(busyEvent);
+
+    expect(busyEvent.defaultPrevented).toBe(true);
+    expect(composer.querySelector('textarea[name="message"]')).toBe(textarea);
+    expect(textarea.value).toBe("Draft in progress");
+    expect(textarea.disabled).toBe(true);
+    expect(button.disabled).toBe(true);
+    expect(button.className).toBe("cursor-not-allowed");
+
+    const idleEvent = new CustomEvent("htmx:sseBeforeMessage", { bubbles: true, cancelable: true, detail: { data: '<form><textarea name="message"></textarea><button type="submit" class="cursor-pointer">Send</button></form>' } });
+    composer.dispatchEvent(idleEvent);
+    expect(idleEvent.defaultPrevented).toBe(true);
+    expect(textarea.value).toBe("Draft in progress");
+    expect(textarea.disabled).toBe(false);
+    expect(button.disabled).toBe(false);
+    expect(button.className).toBe("cursor-pointer");
+  });
+
+  it("keeps focus when an empty composer receives an SSE update", () => {
+    document.body.innerHTML = '<div id="conversation-composer"><form><textarea name="message"></textarea><button type="submit">Send</button></form></div>';
+    installAgentLiveLifecycle();
+
+    const composer = document.getElementById("conversation-composer");
+    const textarea = composer?.querySelector<HTMLTextAreaElement>('textarea[name="message"]');
+    if (!composer || !textarea) throw new Error("Conversation composer was not rendered");
+    textarea.focus();
+
+    const event = new CustomEvent("htmx:sseBeforeMessage", { bubbles: true, cancelable: true, detail: { data: incomingComposer } });
+    composer.dispatchEvent(event);
+
+    expect(event.defaultPrevented).toBe(true);
+    expect(composer.querySelector('textarea[name="message"]')).toBe(textarea);
+    expect(textarea.disabled).toBe(true);
+  });
+
+  it("allows an unfocused empty composer to refresh normally", () => {
+    document.body.innerHTML = '<div id="conversation-composer"><form><textarea name="message"></textarea><button type="submit">Send</button></form></div>';
+    installAgentLiveLifecycle();
+
+    const composer = document.getElementById("conversation-composer");
+    if (!composer) throw new Error("Conversation composer was not rendered");
+    const event = new CustomEvent("htmx:sseBeforeMessage", { bubbles: true, cancelable: true, detail: { data: incomingComposer } });
+    composer.dispatchEvent(event);
+
+    expect(event.defaultPrevented).toBe(false);
+  });
+});
+
 describe("model-dependent buttons", () => {
   it("enables a disabled sub-agent after its model selection changes", () => {
     document.body.innerHTML = `
