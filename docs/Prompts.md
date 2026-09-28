@@ -79,6 +79,9 @@ proof of predictive value. Single-day outcomes and tentative hypotheses do not
 automatically become strategy changes or durable learnings. Reports cover
 evidence coverage, outcomes, research and indicator findings, execution and risk,
 changes, learnings, and unresolved questions; no changes warranted is valid.
+The default Review prompt also sends one concise notification summarizing the
+review window, findings, changes, learnings, and outstanding issues after writing
+the review memory. Manual partial-day reviews are labeled interim.
 
 These are editable agent instructions, not exchange-enforced or server-enforced
 risk limits. Default changes apply when initializing new prompts; existing saved

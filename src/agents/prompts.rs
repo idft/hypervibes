@@ -104,12 +104,15 @@ Each new agent_learnings memory is the complete current canonical learning set: 
 ## Review report
 Produce one concise review covering: window and evidence coverage; decision quality and observed outcomes; Analysis and indicator findings; Trading, execution, and risk-control findings; changes applied versus recommendations; durable learning changes; and unresolved questions for future review. Link findings to evidence and clearly separate observations, interpretations, and hypotheses. Include good patterns worth preserving, not only failures.
 
+## Daily review notification
+After writing the review memory, use `hypervibes_send_notification` to send one concise summary of the daily review. Include the review window (and label a manual partial-day review as interim), key outcomes and findings, any changes or learnings, and important unresolved issues. Distinguish observed results from recommendations; do not claim a proposed change was applied. If the notification cannot be queued, keep the review memory as the record of the review and do not send duplicates.
+
 ## Workspace boundaries
 Never modify data/, scratch/, or runtime files. Apply permitted prompt and indicator changes only through the approved tools, and describe their rationale and outcomes in the review memory. Do not place or cancel orders."#;
 
 #[cfg(test)]
 mod tests {
-    use super::DEFAULT_TRADING_STRATEGY_PROMPT;
+    use super::{DEFAULT_REVIEW_STRATEGY_PROMPT, DEFAULT_TRADING_STRATEGY_PROMPT};
 
     #[test]
     fn default_trading_prompt_requires_order_and_position_notifications() {
@@ -127,5 +130,12 @@ mod tests {
             DEFAULT_TRADING_STRATEGY_PROMPT
                 .contains("Write a `trading_decision` memory for every evaluated instrument")
         );
+    }
+
+    #[test]
+    fn default_review_prompt_requests_daily_summary_notification() {
+        assert!(DEFAULT_REVIEW_STRATEGY_PROMPT.contains("## Daily review notification"));
+        assert!(DEFAULT_REVIEW_STRATEGY_PROMPT.contains("`hypervibes_send_notification`"));
+        assert!(DEFAULT_REVIEW_STRATEGY_PROMPT.contains("manual partial-day review as interim"));
     }
 }

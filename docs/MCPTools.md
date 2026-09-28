@@ -28,7 +28,7 @@ private key.
 | `hypervibes_submit_orders` | Trading and permitted Chat |
 | `hypervibes_cancel_orders` | Trading and permitted Chat |
 | `hypervibes_cancel_all_orders` | Trading and permitted Chat |
-| `hypervibes_send_notification` | Trading by default |
+| `hypervibes_send_notification` | Trading and Review by default; other scheduled roles when granted the capability |
 | `hypervibes_list_analysis_instruments` | Analysis, Review, and Chat |
 | `hypervibes_list_trading_instruments` | Analysis with the Trading-instrument capability |
 | `hypervibes_set_trading_instrument_enabled` | Analysis with the Trading-instrument capability |
@@ -39,7 +39,7 @@ private key.
 | `hypervibes_update_indicator` | Review with the indicator-write capability; Chat with confirmation |
 
 `hypervibes:notification_send` is the named capability for queueing a gateway
-notification. Trading enables it by default; other scheduled roles and Chat are
+notification. Trading and Review enable it by default; Analysis and Chat are
 denied by default. Notification provenance and capability schema derive from the
 authenticated run or conversation, never model-supplied data.
 

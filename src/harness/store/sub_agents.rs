@@ -566,8 +566,27 @@ fn default_capabilities_for_kind(sub_agent_kind: &str) -> Vec<&'static str> {
         SUB_AGENT_KIND_REVIEW => vec![
             CAPABILITY_PROMPT_REVISION_SUBMIT,
             CAPABILITY_INDICATOR_WRITE,
+            CAPABILITY_NOTIFICATION_SEND,
         ],
         _ => Vec::new(),
+    }
+}
+
+#[cfg(test)]
+mod default_capability_tests {
+    use super::*;
+    use crate::harness::model::{RunApiScope, run_api_scopes_for_sub_agent};
+
+    #[test]
+    fn review_defaults_allow_notifications() {
+        let capabilities = default_capabilities_for_kind(SUB_AGENT_KIND_REVIEW)
+            .into_iter()
+            .map(str::to_string)
+            .collect::<Vec<_>>();
+        assert!(capabilities.contains(&CAPABILITY_NOTIFICATION_SEND.to_string()));
+        let scopes = run_api_scopes_for_sub_agent(SUB_AGENT_KIND_REVIEW, &capabilities)
+            .expect("valid default review capabilities");
+        assert!(scopes.contains(&RunApiScope::NotificationSend));
     }
 }
 
