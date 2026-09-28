@@ -22,10 +22,13 @@ discoverable rather than mapped to an analyst and can be agent-scoped or target
 one or more instruments. A custom Analysis type expires on the producing job's
 schedule unless the record specifies explicit validity.
 
-Trading reads the latest fresh record per `(Analysis producer, memory type,
-scope)` for the requested instrument, including agent-wide records. Missing,
-failed, disabled, and stale producers are returned as context, not treated as a
-scheduler or order-gateway block.
+Trading reads the latest record per `(Analysis producer, memory type, scope)`
+for the requested instrument, including agent-wide records. Fresh records are
+returned first with their complete research; expired or disabled records carry
+only their identity, provenance, expiry, and status so historical research
+cannot bury fresh evidence in a large tool response. Missing or failed runs do
+not appear as evidence records. Missing, failed, disabled, and stale research
+does not block the scheduler or order gateway.
 
 ## Trading decisions
 

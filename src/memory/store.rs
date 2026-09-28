@@ -416,9 +416,10 @@ pub async fn list_latest_memory_candidates(
     Ok(rows)
 }
 
-/// One fresh research output selected per `(analysis producer, memory_type,
-/// scope)` for the Trading context query. Includes agent-scoped records and
-/// records targeting the requested instrument.
+/// Latest research per `(analysis producer, memory_type, scope)` for the
+/// Trading context query. Fresh records come first with their full payload;
+/// expired or disabled records retain provenance and status without their
+/// potentially large, non-actionable research bodies.
 pub async fn get_trading_context_evidence(
     pool: &DbPool,
     agent_key: &str,
@@ -481,6 +482,11 @@ pub async fn get_trading_context_evidence(
             _ if producer_enabled == Some(false) => EvidenceStatus::Disabled,
             _ => EvidenceStatus::Fresh,
         };
+        let (summary, content, metadata) = if status == EvidenceStatus::Fresh {
+            (Some(row.summary), Some(row.content), Some(row.metadata))
+        } else {
+            (None, None, None)
+        };
         evidence.push(TradingContextEvidence {
             memory_id: row.id,
             created_at: row.created_at,
@@ -489,13 +495,24 @@ pub async fn get_trading_context_evidence(
             scope_kind: row.scope_kind,
             instrument_targets: targets,
             timeframe: row.timeframe,
-            summary: row.summary,
-            content: row.content,
-            metadata: row.metadata,
+            summary,
+            content,
+            metadata,
             expires_at,
             status,
         });
     }
+    evidence.sort_by(|a, b| {
+        let priority = |status| match status {
+            EvidenceStatus::Fresh => 0,
+            EvidenceStatus::Stale => 1,
+            EvidenceStatus::Disabled => 2,
+        };
+        priority(a.status)
+            .cmp(&priority(b.status))
+            .then_with(|| b.created_at.cmp(&a.created_at))
+            .then_with(|| b.memory_id.cmp(&a.memory_id))
+    });
     Ok(evidence)
 }
 
@@ -530,9 +547,12 @@ pub struct TradingContextEvidence {
     pub scope_kind: String,
     pub instrument_targets: Vec<String>,
     pub timeframe: Option<String>,
-    pub summary: String,
-    pub content: String,
-    pub metadata: serde_json::Value,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub summary: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub content: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub metadata: Option<serde_json::Value>,
     pub expires_at: Option<DateTime<Utc>>,
     pub status: EvidenceStatus,
 }

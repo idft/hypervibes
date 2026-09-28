@@ -76,11 +76,14 @@ Agent scope requires no instrument IDs; instrument scope requires one or more
 unique selected canonical instrument IDs. The server stamps source-run
 provenance and never accepts source run or sub-agent identity from metadata.
 
-`hypervibes_get_trading_context(instrument_id)` returns the latest fresh output
-per `(Analysis producer, memory type, scope)`, including agent-scoped records
-and records targeting that instrument. It includes evidence provenance, type,
-scope and targets, expiry, and producer status: `fresh`, `stale`, `missing`,
-`failed`, or `disabled`.
+`hypervibes_get_trading_context(instrument_id)` returns the latest record per
+`(Analysis producer, memory type, scope)`, including agent-scoped records and
+records targeting that instrument. Fresh records come first with full content,
+summary, and metadata. Stale or disabled records include only ID, provenance,
+type, scope and targets, timeframe, expiry, and status; their research bodies
+are omitted to keep the response small. The evidence status is `Fresh`,
+`Stale`, or `Disabled`. A producer without records does not appear in the
+evidence array.
 
 ## Trading order inputs
 

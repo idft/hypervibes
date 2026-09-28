@@ -677,6 +677,83 @@ async fn list_memories_include_expired_keeps_explicit_valid_for_seconds() {
 }
 
 #[tokio::test]
+async fn trading_context_keeps_fresh_research_ahead_of_large_stale_history() {
+    let state = test_state().await;
+    let (agent_key, api_key) = seed_agent(&state, "context-fresh-first").await;
+    let now = Utc::now();
+    sqlx::query(
+        "UPDATE harness_sub_agents
+         SET enabled = true, model_provider_id = 'openai', model_id = 'test-model'
+         WHERE agent_key = $1 AND sub_agent_key = 'technical-15m'",
+    )
+    .bind(&agent_key)
+    .execute(&state.db_pool)
+    .await
+    .expect("enable analysis producer");
+
+    for index in 0..16 {
+        let id = insert_memory_at(
+            &state,
+            &agent_key,
+            now - Duration::hours(2),
+            "BTC",
+            Some("15m"),
+            &format!("historical_{index:02}"),
+            "expired background",
+            json!({ "valid_for_seconds": 60 }),
+        )
+        .await;
+        sqlx::query("UPDATE memory.records SET content = $1 WHERE id = $2")
+            .bind("old context ".repeat(600))
+            .bind(id)
+            .execute(&state.db_pool)
+            .await
+            .expect("expand expired research body");
+    }
+    let fresh_id = insert_memory_at(
+        &state,
+        &agent_key,
+        now - Duration::minutes(1),
+        "BTC",
+        Some("15m"),
+        "trend_analysis",
+        "fresh trend",
+        json!({ "valid_for_seconds": 1800 }),
+    )
+    .await;
+
+    let (status, body) = get_json_response(
+        &state,
+        &api_key,
+        "/memories/trading-context?instrument_id=BTC",
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let evidence = body["evidence"].as_array().expect("evidence array");
+    assert_eq!(evidence.len(), 17);
+    assert_eq!(evidence[0]["memory_id"], fresh_id.to_string());
+    assert_eq!(evidence[0]["status"], "Fresh");
+    assert_eq!(evidence[0]["summary"], "fresh trend");
+    assert_eq!(evidence[0]["content"], "body for fresh trend");
+    assert_eq!(evidence[0]["metadata"]["valid_for_seconds"], 1800);
+    assert!(evidence.iter().skip(1).all(|row| {
+        row["status"] == "Stale"
+            && row.get("summary").is_none()
+            && row.get("content").is_none()
+            && row.get("metadata").is_none()
+            && row["expires_at"].is_string()
+            && row["memory_id"].is_string()
+    }));
+    assert!(
+        serde_json::to_string_pretty(&body)
+            .expect("serialize tool response")
+            .len()
+            < 48 * 1024,
+        "the MCP-rendered response must stay below OpenCode's 50 KB truncation threshold"
+    );
+}
+
+#[tokio::test]
 async fn latest_memories_returns_latest_valid_per_timeframe() {
     let state = test_state().await;
     let (agent_key, api_key) = seed_agent(&state, "latest-per-tf").await;

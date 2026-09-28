@@ -90,7 +90,7 @@ fn build_trading_prompt(request: &DispatchRequest) -> String {
     body.push_str("\n\n## Selected instruments\n");
     body.push_str(&selected_instruments_section(&request.trading_instruments));
     body.push_str("\n\n## Instructions\n");
-    body.push_str("- Call `hypervibes_get_trading_context(instrument_id)` for each selected instrument before making trading decisions. It returns the latest fresh research evidence per analysis producer, memory type, and scope, plus which evidence is stale or missing.\n");
+    body.push_str("- Call `hypervibes_get_trading_context(instrument_id)` for each selected instrument before making trading decisions. It returns the latest research per analysis producer, memory type, and scope: fresh evidence first with full content, followed by compact stale or disabled status records. Missing research has no record.\n");
     body.push_str("- Missing, stale, or failed research for an analyst is context for your decision, never a reason to skip evaluating the instrument. Record a no-trade decision when the evidence does not support exposure.\n");
     body.push_str("- Write a `trading_decision` memory with `hypervibes_write_memory` for every evaluated instrument, including no-trade and position-management outcomes. Use `scope_kind = \"instruments\"` with that instrument's ID, or `scope_kind = \"agent\"` for agent-wide decisions. Link the decision to every evidence memory you considered with `link_type = \"based_on\"`.\n");
     body.push_str("- When you open new exposure, include the `trading_decision` memory ID in each opening order's `memory_record_ids` for execution traceability. Reduce-only orders never require it. If recording the decision failed, continue with the order workflow without it.\n");
