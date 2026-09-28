@@ -15,6 +15,7 @@ use crate::agents::{
 };
 
 static STALE_DB_CLEANUP: OnceCell<()> = OnceCell::const_new();
+const DEFAULT_TEST_DATABASE_URL: &str = "postgres://hypervibes:hypervibes@127.0.0.1:15433/postgres";
 const TEST_USER_ID: Uuid = Uuid::from_u128(1);
 const TEST_API_WALLET_PRIVATE_KEY: &str =
     "4c0883a69102937d6231471b5dbb6204fe5129617082795f9d3d2c7e2f9f3f5b";
@@ -111,8 +112,10 @@ impl Drop for TestDb {
 }
 
 pub async fn pool() -> TestDb {
-    let url = env::var("TEST_DATABASE_URL")
-        .expect("TEST_DATABASE_URL must be set for tests; use the dedicated test-postgres service");
+    let url = env::var("TEST_DATABASE_URL").unwrap_or_else(|error| match error {
+        env::VarError::NotPresent => DEFAULT_TEST_DATABASE_URL.to_owned(),
+        env::VarError::NotUnicode(_) => panic!("TEST_DATABASE_URL must be valid UTF-8"),
+    });
     let base_options = PgConnectOptions::from_str(&url).expect("parse test database url");
 
     STALE_DB_CLEANUP

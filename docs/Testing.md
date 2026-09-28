@@ -14,9 +14,9 @@ just test
 
 ## Test Database
 
-By default `cargo test` uses the dedicated `test-postgres` service from `podman-compose.dev.yaml` via `TEST_DATABASE_URL=postgres://hypervibes:hypervibes@127.0.0.1:15433/postgres` from `.cargo/config.toml`.
+By default `cargo test` uses the dedicated `test-postgres` service from `podman-compose.dev.yaml` at `postgres://hypervibes:hypervibes@127.0.0.1:15433/postgres`. This default is defined in `src/test_db.rs`; set `TEST_DATABASE_URL` to override it.
 
-`src/test_db.rs` creates a fresh database for each `pool()` call when `TEST_DATABASE_URL` is set, runs migrations inside that database, and lets those isolated test databases be created concurrently on the dedicated test Postgres service.
+`src/test_db.rs` creates a fresh database for each `pool()` call, runs migrations inside that database, and lets those isolated test databases be created concurrently on the dedicated test Postgres service.
 
 The helper also does two cleanup passes:
 
