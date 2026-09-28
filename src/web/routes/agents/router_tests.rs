@@ -34,6 +34,96 @@ async fn agent_chat_route_renders_empty_state() {
 }
 
 #[tokio::test]
+async fn chat_form_includes_session_csrf_token_and_post_reaches_handler_without_javascript() {
+    let state = test_state().await;
+    let (agent_key, _) = insert_test_agent(&state).await.expect("insert agent");
+    let session_token = "chat-test-session";
+    let csrf_token = "chat-test-csrf";
+    query("INSERT INTO user_sessions (token_hash, csrf_hash, user_id, issued_at, expires_at) VALUES ($1, $2, $3, now(), now() + INTERVAL '1 day')")
+        .bind(Sha256::digest(session_token.as_bytes()).to_vec())
+        .bind(Sha256::digest(csrf_token.as_bytes()).to_vec())
+        .bind(crate::test_db::test_user_id())
+        .execute(&state.db_pool)
+        .await
+        .expect("insert session");
+
+    let cookie = format!("vt_session={session_token}; vt_csrf={csrf_token}");
+    let response = router(state.clone())
+        .oneshot(
+            Request::builder()
+                .uri(format!("/agents/{agent_key}/chat"))
+                .header("cookie", &cookie)
+                .body(Body::empty())
+                .expect("GET chat"),
+        )
+        .await
+        .expect("chat response");
+    assert_eq!(response.status(), StatusCode::OK);
+    let html = response_text(response).await;
+    assert!(html.contains(&format!("name=\"csrf_token\" value=\"{csrf_token}\"")));
+
+    let response = router(state)
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/agents/{agent_key}/chat/conversations"))
+                .header("cookie", cookie)
+                .header("content-type", "application/x-www-form-urlencoded")
+                .body(Body::from(format!("csrf_token={csrf_token}")))
+                .expect("POST chat form"),
+        )
+        .await
+        .expect("create conversation response");
+    assert_eq!(response.status(), StatusCode::OK);
+    assert!(response_text(response).await.contains("Select a model."));
+}
+
+#[tokio::test]
+async fn chat_stream_sidebar_keeps_the_session_csrf_token() {
+    let state = test_state().await;
+    let (agent_key, _) = insert_test_agent(&state).await.expect("insert agent");
+    let conversation_id = Uuid::new_v4();
+    query(
+        "INSERT INTO agent_conversations (
+             id, agent_key, opencode_session_id, channel, title, model_provider_id, model_id
+         ) VALUES ($1, $2, $3, 'web', 'New conversation', 'ollama-cloud', 'glm-5.2')",
+    )
+    .bind(conversation_id)
+    .bind(&agent_key)
+    .bind(format!("ses_{conversation_id}"))
+    .execute(&state.db_pool)
+    .await
+    .expect("insert conversation");
+    let session_token = "chat-stream-session";
+    let csrf_token = "chat-stream-csrf";
+    query("INSERT INTO user_sessions (token_hash, csrf_hash, user_id, issued_at, expires_at) VALUES ($1, $2, $3, now(), now() + INTERVAL '1 day')")
+        .bind(Sha256::digest(session_token.as_bytes()).to_vec())
+        .bind(Sha256::digest(csrf_token.as_bytes()).to_vec())
+        .bind(crate::test_db::test_user_id())
+        .execute(&state.db_pool)
+        .await
+        .expect("insert session");
+
+    let response = router(state)
+        .oneshot(
+            Request::builder()
+                .uri(format!("/agents/{agent_key}/chat/{conversation_id}/stream"))
+                .header(
+                    "cookie",
+                    format!("vt_session={session_token}; vt_csrf={csrf_token}"),
+                )
+                .body(Body::empty())
+                .expect("GET chat stream"),
+        )
+        .await
+        .expect("chat stream response");
+    assert_eq!(response.status(), StatusCode::OK);
+    let events = read_sse_chunk(response.into_body(), 100).await;
+    assert!(events.contains("event: conversation-sidebar"));
+    assert!(events.contains(&format!("name=\"csrf_token\" value=\"{csrf_token}\"")));
+}
+
+#[tokio::test]
 async fn role_tabs_swap_content_with_htmx() {
     let state = test_state().await;
     let (agent_key, _wallet_address) = insert_test_agent(&state).await.expect("insert agent");

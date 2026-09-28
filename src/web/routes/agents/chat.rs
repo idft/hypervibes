@@ -36,7 +36,7 @@ use crate::{
     opencode::{client::OpenCodePermissionReply, store::get_session_detail},
     web::{
         AppState,
-        auth::AuthenticatedUser,
+        auth::{AuthenticatedUser, csrf_cookie_value},
         error::AppError,
         run_detail_events::RunDetailDbEvent,
         templates::{
@@ -263,11 +263,13 @@ impl RenderedSnapshot {
 }
 fn render_snapshot(
     snapshot: &ConversationSnapshot,
+    csrf_token: &str,
     message: String,
     error: Option<String>,
 ) -> Result<RenderedSnapshot, AppError> {
     let sidebar = AgentConversationSidebarPartialTemplate {
         agent_key: snapshot.agent.agent_key.clone(),
+        csrf_token: csrf_token.to_string(),
         new_conversation_model_selection: format!(
             "{}/{}",
             snapshot.conversation.model_provider_id, snapshot.conversation.model_id
@@ -351,6 +353,7 @@ pub(super) fn opencode_message_id_at(timestamp_millis: u64, random: Uuid) -> Str
 pub(in crate::web::routes) async fn agents_show_chat(
     State(state): State<Arc<AppState>>,
     Path(agent_key): Path<String>,
+    headers: HeaderMap,
     user: AuthenticatedUser,
 ) -> Result<Response, AppError> {
     let Some(agent) = get_agent(&state.db_pool, &agent_key).await? else {
@@ -375,9 +378,9 @@ pub(in crate::web::routes) async fn agents_show_chat(
     Ok(Html(AgentConversationEmptyPageTemplate::render_view(
         agent,
         picker,
+        csrf_cookie_value(&headers).unwrap_or_default().to_string(),
         Vec::new(),
-        String::new(),
-        String::new(),
+        (String::new(), String::new()),
         notification_count,
         navbar,
     )?)
@@ -387,6 +390,7 @@ pub(in crate::web::routes) async fn agents_show_chat(
 pub(in crate::web::routes) async fn agents_new_chat(
     State(state): State<Arc<AppState>>,
     Path(agent_key): Path<String>,
+    headers: HeaderMap,
     user: AuthenticatedUser,
 ) -> Result<Response, AppError> {
     let Some(agent) = get_agent(&state.db_pool, &agent_key).await? else {
@@ -411,9 +415,9 @@ pub(in crate::web::routes) async fn agents_new_chat(
     Ok(Html(AgentConversationEmptyPageTemplate::render_view(
         agent,
         picker,
+        csrf_cookie_value(&headers).unwrap_or_default().to_string(),
         Vec::new(),
-        String::new(),
-        String::new(),
+        (String::new(), String::new()),
         notification_count,
         navbar,
     )?)
@@ -423,12 +427,18 @@ pub(in crate::web::routes) async fn agents_new_chat(
 pub(in crate::web::routes) async fn agents_show_chat_detail(
     State(state): State<Arc<AppState>>,
     Path((agent_key, conversation_id)): Path<(String, Uuid)>,
+    headers: HeaderMap,
     user: AuthenticatedUser,
 ) -> Result<Response, AppError> {
     let Some(snapshot) = load_snapshot(&state, &agent_key, conversation_id).await? else {
         return Ok((StatusCode::NOT_FOUND, "conversation not found").into_response());
     };
-    let rendered = render_snapshot(&snapshot, String::new(), None)?;
+    let rendered = render_snapshot(
+        &snapshot,
+        csrf_cookie_value(&headers).unwrap_or_default(),
+        String::new(),
+        None,
+    )?;
     let navbar = load_selected_agent_navbar(&state, user.id, &snapshot.agent).await?;
     let notification_count = count_notifications(&state.db_pool, &snapshot.agent.agent_key).await?;
     let html = AgentConversationPageTemplate::render_view(
@@ -450,6 +460,7 @@ pub(in crate::web::routes) async fn agents_show_chat_detail(
 pub(in crate::web::routes) async fn agents_create_conversation(
     State(state): State<Arc<AppState>>,
     Path(agent_key): Path<String>,
+    headers: HeaderMap,
     user: AuthenticatedUser,
     Form(form): Form<NewConversationForm>,
 ) -> Result<Response, AppError> {
@@ -503,8 +514,8 @@ pub(in crate::web::routes) async fn agents_create_conversation(
                 agent,
                 model_selection,
                 error,
-                strategy_prompt_kind,
-                strategy_prompt,
+                (strategy_prompt_kind, strategy_prompt),
+                csrf_cookie_value(&headers).unwrap_or_default(),
                 user.id,
             )
             .await;
@@ -519,8 +530,8 @@ pub(in crate::web::routes) async fn agents_create_conversation(
                     agent,
                     model_selection,
                     "Select a valid model.".to_string(),
-                    strategy_prompt_kind,
-                    strategy_prompt,
+                    (strategy_prompt_kind, strategy_prompt),
+                    csrf_cookie_value(&headers).unwrap_or_default(),
                     user.id,
                 )
                 .await;
@@ -567,8 +578,8 @@ async fn render_empty_error(
     agent: crate::agents::model::AgentDetailRow,
     selection: String,
     error: String,
-    strategy_prompt_kind: String,
-    strategy_prompt: String,
+    strategy_prompt_context: (String, String),
+    csrf_token: &str,
     user_id: Uuid,
 ) -> Result<Response, AppError> {
     let picker = build_model_picker_view(
@@ -582,9 +593,9 @@ async fn render_empty_error(
     Ok(Html(AgentConversationEmptyPageTemplate::render_view(
         agent,
         picker,
+        csrf_token.to_string(),
         vec![error],
-        strategy_prompt_kind,
-        strategy_prompt,
+        strategy_prompt_context,
         notification_count,
         navbar,
     )?)
@@ -651,7 +662,7 @@ async fn render_message_composer(
     let Some(snapshot) = load_snapshot(state, agent_key, conversation_id).await? else {
         return Ok((StatusCode::NOT_FOUND, "conversation not found").into_response());
     };
-    let rendered = render_snapshot(&snapshot, message, error.map(str::to_owned))?;
+    let rendered = render_snapshot(&snapshot, "", message, error.map(str::to_owned))?;
     Ok(Html(rendered.composer).into_response())
 }
 
@@ -755,12 +766,14 @@ pub(in crate::web::routes) async fn agents_reply_to_conversation_permission(
 pub(in crate::web::routes) async fn agent_conversation_stream(
     State(state): State<Arc<AppState>>,
     Path((agent_key, conversation_id)): Path<(String, Uuid)>,
+    headers: HeaderMap,
 ) -> Result<Response, AppError> {
     let receiver = state.run_detail_events.subscribe();
     let Some(snapshot) = load_snapshot(&state, &agent_key, conversation_id).await? else {
         return Ok((StatusCode::NOT_FOUND, "conversation not found").into_response());
     };
-    let initial = render_snapshot(&snapshot, String::new(), None)?.events();
+    let csrf_token = csrf_cookie_value(&headers).unwrap_or_default().to_string();
+    let initial = render_snapshot(&snapshot, &csrf_token, String::new(), None)?.events();
     let shutdown_rx = state.shutdown_rx.clone();
     let stream =
         tokio_stream::iter(initial.into_iter().map(Ok::<Event, Infallible>)).chain(unfold(
@@ -768,6 +781,7 @@ pub(in crate::web::routes) async fn agent_conversation_stream(
                 state,
                 agent_key,
                 conversation_id,
+                csrf_token,
                 session_id: snapshot.conversation.opencode_session_id,
                 receiver,
                 shutdown_rx,
@@ -787,6 +801,7 @@ struct ConversationStreamState {
     state: Arc<AppState>,
     agent_key: String,
     conversation_id: Uuid,
+    csrf_token: String,
     session_id: String,
     receiver: broadcast::Receiver<RunDetailDbEvent>,
     shutdown_rx: tokio::sync::watch::Receiver<bool>,
@@ -814,11 +829,11 @@ async fn next_conversation_event(
                     stream.busy = snapshot.busy;
                     stream.last_permissions = next;
                     if busy_changed {
-                        if let Ok(rendered) = render_snapshot(&snapshot, String::new(), None) {
+                        if let Ok(rendered) = render_snapshot(&snapshot, &stream.csrf_token, String::new(), None) {
                             stream.pending.extend(rendered.events());
                         }
                     } else if permissions_changed
-                        && let Ok(rendered) = render_snapshot(&snapshot, String::new(), None)
+                        && let Ok(rendered) = render_snapshot(&snapshot, &stream.csrf_token, String::new(), None)
                     {
                         stream.pending.push_back(Event::default().event("conversation-permissions").data(rendered.permissions));
                     }
@@ -842,7 +857,7 @@ async fn next_conversation_event(
                         stream.session_id = snapshot.conversation.opencode_session_id.clone();
                         stream.busy = snapshot.busy;
                         stream.last_permissions = signature(&snapshot.permissions);
-                        match render_snapshot(&snapshot, String::new(), None) {
+                        match render_snapshot(&snapshot, &stream.csrf_token, String::new(), None) {
                             Ok(rendered) => stream.pending.extend(rendered.events()),
                             Err(error) => warn!(conversation_id = %stream.conversation_id, error = ?error, "failed to render conversation SSE snapshot"),
                         }

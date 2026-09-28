@@ -72,6 +72,7 @@ fn conversation_composer_autofocuses_the_message_input() {
 fn conversation_sidebar_posts_the_selected_conversation_model() {
     let rendered = askama::Template::render(&AgentConversationSidebarPartialTemplate {
         agent_key: "test-agent".to_string(),
+        csrf_token: "sidebar-csrf-token".to_string(),
         new_conversation_model_selection: "ollama-cloud/glm-5.2".to_string(),
         new_conversation_model_variant: "high".to_string(),
         conversations: Vec::new(),
@@ -79,6 +80,7 @@ fn conversation_sidebar_posts_the_selected_conversation_model() {
     .expect("render conversation sidebar");
 
     assert!(rendered.contains("action=\"/agents/test-agent/chat/conversations\" method=\"post\""));
+    assert!(rendered.contains("name=\"csrf_token\" value=\"sidebar-csrf-token\""));
     assert!(rendered.contains("name=\"model_selection\" value=\"ollama-cloud/glm-5.2\""));
 }
 
@@ -86,6 +88,7 @@ fn conversation_sidebar_posts_the_selected_conversation_model() {
 fn conversation_sidebar_marks_telegram_conversations() {
     let rendered = askama::Template::render(&AgentConversationSidebarPartialTemplate {
         agent_key: "test-agent".to_string(),
+        csrf_token: String::new(),
         new_conversation_model_selection: "ollama-cloud/glm-5.2".to_string(),
         new_conversation_model_variant: String::new(),
         conversations: vec![AgentConversationListItemView {

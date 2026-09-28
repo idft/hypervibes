@@ -451,6 +451,9 @@ fn cookie_value<'a>(headers: &'a HeaderMap, name: &str) -> Option<&'a str> {
         .map(str::trim)
         .find_map(|part| part.strip_prefix(&format!("{name}=")))
 }
+pub(crate) fn csrf_cookie_value(headers: &HeaderMap) -> Option<&str> {
+    cookie_value(headers, CSRF_COOKIE)
+}
 fn cookie(name: &str, value: &str, http_only: bool, secure: bool) -> HeaderValue {
     let secure = if secure { "; Secure" } else { "" };
     HeaderValue::from_str(&format!(

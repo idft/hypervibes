@@ -95,6 +95,7 @@ pub struct AgentConversationEmptyPageTemplate {
     pub agent_tabs_use_htmx: bool,
     pub current_path: String,
     pub model_picker: ModelPickerView,
+    pub csrf_token: String,
     pub errors: Vec<String>,
     pub strategy_prompt_kind: String,
     pub strategy_prompt: String,
@@ -104,6 +105,7 @@ pub struct AgentConversationEmptyPageTemplate {
 #[template(path = "agents/chat/sidebar.html")]
 pub struct AgentConversationSidebarPartialTemplate {
     pub agent_key: String,
+    pub csrf_token: String,
     pub new_conversation_model_selection: String,
     pub new_conversation_model_variant: String,
     pub conversations: Vec<AgentConversationListItemView>,
@@ -194,12 +196,13 @@ impl AgentConversationEmptyPageTemplate {
     pub fn render_view(
         agent: AgentDetailRow,
         model_picker: ModelPickerView,
+        csrf_token: String,
         errors: Vec<String>,
-        strategy_prompt_kind: String,
-        strategy_prompt: String,
+        strategy_prompt_context: (String, String),
         notification_count: i64,
         navbar: Navbar,
     ) -> Result<String, askama::Error> {
+        let (strategy_prompt_kind, strategy_prompt) = strategy_prompt_context;
         let current_path = format!("/agents/{}/chat", agent.agent_key);
         let navbar = navbar.with_selected_agent(
             agent.agent_key.clone(),
@@ -212,6 +215,7 @@ impl AgentConversationEmptyPageTemplate {
             current_path,
             agent,
             model_picker,
+            csrf_token,
             errors,
             strategy_prompt_kind,
             strategy_prompt,
