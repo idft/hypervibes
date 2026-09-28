@@ -1,0 +1,73 @@
+# Install HyperVibes with an AI agent
+
+HyperVibes is a self-hosted application for supervising AI trading agents on Hyperliquid. This file is for an AI assistant asked to "Install HyperVibes from hypervibes.ai". Follow the steps below with the user; do not assume you have access to their computer or VM.
+
+## Ask the user first
+
+- Ask whether they already have a Linux VM and, if so, its SSH address, username, port (if not 22), and how you should authenticate. If they do not have a VM, help them choose or create one before proceeding. Linux is the currently supported platform; a dedicated VM is recommended.
+- Ask where to install HyperVibes on the VM. Use `$HOME/hyperliquid` if they have no preference. Check for an existing installation before creating files or restarting services; preserve existing `.env` files and data.
+- Confirm you can run commands on the VM as the intended, non-root Podman user. Ask for any access or privilege needed to install packages or enable a user service at boot; do not request that they paste secrets into chat.
+
+## Install on the VM
+
+1. Install `podman`, `podman-compose`, `curl`, and `openssl` using the VM's package manager. Check that `systemctl --user` is available for the user service below.
+2. Create the chosen installation directory (private to the VM user) and run the following commands **from that directory**. The Compose file is the production stack: HyperVibes, OpenCode, and PostgreSQL.
+
+   ```sh
+   umask 077 && curl -fsSLo podman-compose.yaml https://raw.githubusercontent.com/idft/hypervibes/master/podman-compose.yaml
+   ```
+
+3. Before the first start, generate unique secrets in `.env` once. This command refuses to overwrite an existing `.env`; do not regenerate it for an existing installation.
+
+   ```sh
+   (umask 077; set -C; KEY=$(openssl rand -hex 32) && CTRL=$(openssl rand -hex 32) && OC=$(openssl rand -hex 32) && DB=$(openssl rand -hex 32) && printf 'AGENTS_ENCRYPTION_KEY=%s\nWORKSPACE_CONTROL_API_KEY=%s\nOPENCODE_SERVER_PASSWORD=%s\nPOSTGRES_PASSWORD=%s\n' "$KEY" "$CTRL" "$OC" "$DB" > .env)
+   ```
+
+4. Start the stack:
+
+   ```sh
+   podman-compose up -d
+   podman-compose ps
+   curl -fsS http://127.0.0.1:3003/healthz
+   ```
+
+   Wait for the containers to become healthy if the health check does not pass immediately. Troubleshoot failures before telling the user the installation is ready.
+
+## Start at boot with systemd
+
+Create a **user** unit at `~/.config/systemd/user/hypervibes.service` for the same account that owns the installation. This example assumes `$HOME/hyperliquid`; change `WorkingDirectory` if the user chose another directory. Replace `/usr/bin/podman-compose` with the absolute path reported by `command -v podman-compose` on the VM.
+
+```ini
+[Unit]
+Description=HyperVibes Podman Compose stack
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+WorkingDirectory=%h/hyperliquid
+ExecStart=/usr/bin/podman-compose up -d
+ExecStop=/usr/bin/podman-compose down
+
+[Install]
+WantedBy=default.target
+```
+
+Run `systemctl --user daemon-reload` and `systemctl --user enable --now hypervibes.service`. Check `systemctl --user status hypervibes.service` and `podman-compose ps`. To start the user service after reboot without an interactive login, enable lingering for that account (`loginctl enable-linger USERNAME`); this may require administrator privileges. Do not run the Compose stack as root just to make it start at boot. The containers' `restart: unless-stopped` settings handle restarts while Podman is running.
+
+Keep `.env` private and back it up together with the database. Do not use `podman-compose down -v` unless the user intends to delete the persistent volumes.
+
+## Open the web UI safely
+
+The production Compose file publishes the web UI on **the VM's loopback address only**, at `127.0.0.1:3003`. This is deliberate: a VM may have a public IP address, and the web UI must not be publicly accessible. The application's `0.0.0.0:3003` setting *inside its container* is needed for the container network; it does not make the host port public. Do not change the Compose `ports` binding to `0.0.0.0`, open port 3003 to the internet, or recommend browsing to `http://VM_PUBLIC_IP:3003`.
+
+If the browser is on the VM itself, open `http://127.0.0.1:3003`. Otherwise, have the user run this command **on their own computer**, using their VM login details (add `-p SSH_PORT` if necessary), and leave the SSH session open:
+
+```sh
+ssh -o ExitOnForwardFailure=yes -N -L 127.0.0.1:3003:127.0.0.1:3003 USERNAME@VM_ADDRESS
+```
+
+Then have the user open `http://127.0.0.1:3003` in the browser **on their own computer**. Both ends of this tunnel use loopback addresses; the only remote connection is SSH. If local port 3003 is occupied, choose another local port in the first `127.0.0.1:3003` of the `-L` argument and open that port in the browser.
+
+Ask whether the user already has a Tailscale tailnet and would like help setting up tailnet-only access as an additional convenience. Only configure it if they want it, and keep the web UI private; SSH forwarding is sufficient for the initial installation.
+
+After the user can open the UI, point them to https://hypervibes.ai/docs/quick-start for browser-wallet login, trading signer approval, provider connection, and agent setup. These steps require the user's participation.
