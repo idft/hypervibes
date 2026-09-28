@@ -1,0 +1,28 @@
+<nav class="min-h-0 rounded-2xl border border-zinc-800 bg-zinc-950/50 p-3 md:col-span-2 xl:col-span-1 xl:overflow-y-auto" aria-label="Memory types">
+    <h3 class="px-2 py-2 text-xs font-medium uppercase tracking-[0.16em] text-zinc-400">Types</h3>
+    <div class="flex max-h-36 flex-col gap-1 overflow-y-auto xl:max-h-none xl:overflow-visible">
+        <a href="{{ all_url }}" hx-get="{{ all_url }}" hx-select="#agent-memories" hx-target="#agent-memories" hx-swap="outerHTML" hx-push-url="true" {% if all_selected %}aria-current="true"{% endif %} class="memory-type-option flex min-w-0 cursor-pointer items-center justify-between gap-2 rounded-lg px-3 py-2 text-left text-sm text-zinc-300 hover:bg-zinc-800 hover:text-white">
+            <span>All memories</span><span class="text-xs text-zinc-500">{{ all_count }}</span>
+        </a>
+        {% for item in memory_types %}
+        <a href="{{ item.url }}" hx-get="{{ item.url }}" hx-select="#agent-memories" hx-target="#agent-memories" hx-swap="outerHTML" hx-push-url="true" {% if item.selected %}aria-current="true"{% endif %} class="memory-type-option flex min-w-0 cursor-pointer items-center justify-between gap-2 rounded-lg px-3 py-2 text-left text-sm text-zinc-300 hover:bg-zinc-800 hover:text-white">
+            <span class="min-w-0 break-words">{{ item.name }}</span><span class="shrink-0 text-xs text-zinc-500">{{ item.count }}</span>
+        </a>
+        {% endfor %}
+    </div>
+</nav>
+<section class="flex min-h-0 flex-col rounded-2xl border border-zinc-800 bg-zinc-950/50 p-3" aria-label="Memories list">
+    <div class="shrink-0 px-2 py-2">
+        <h3 class="text-sm font-medium text-white">{% if all_selected %}All memories{% else %}{{ selected_type }}{% endif %}</h3>
+        <p class="mt-1 text-xs text-zinc-500">{% if let Some(date_text) = selected_memory_date_text %}{{ date_text }} · {% endif %}Newest first</p>
+    </div>
+    {% if memory_count == 0 %}
+    <div class="mt-2 rounded-xl border border-zinc-800 bg-[#0d0d10] p-4 text-sm text-zinc-400">
+        {% if !has_any_memories %}No memories have been written yet.{% else %}No memories in this timeframe.{% endif %}
+    </div>
+    {% else %}
+    <div class="memory-list-scroll mt-2 min-h-0 flex-1 space-y-2 overflow-y-auto pr-1">
+        {% include "agents/memories/timeline-items.html" %}
+    </div>
+    {% endif %}
+</section>

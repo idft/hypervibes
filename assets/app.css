@@ -188,14 +188,6 @@ html.agent-rail-initially-collapsed .agent-rail.agent-rail-expanded .agent-rail-
   overflow-anchor: none;
 }
 
-.memory-timeline-scroll {
-  cursor: grab;
-}
-
-.memory-timeline-scroll[data-dragging="true"] {
-  cursor: grabbing;
-}
-
 *::-webkit-scrollbar {
   width: 12px;
   height: 12px;
@@ -220,24 +212,27 @@ html.agent-rail-initially-collapsed .agent-rail.agent-rail-expanded .agent-rail-
   line-height: 1.7;
 }
 
-.memory-timeline-card p {
+.memory-list-item p {
   display: -webkit-box;
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 3;
   overflow: hidden;
 }
 
-.memory-timeline-card[aria-pressed="true"] {
+.memory-list-item[aria-pressed="true"],
+.memory-type-option[aria-current="true"],
+.memory-range-option[aria-current="true"],
+.memory-range-option.memory-custom-active {
   border-color: rgba(161, 161, 170, 1);
   background: rgba(24, 24, 27, 0.98);
   box-shadow: inset 0 0 0 1px rgba(212, 212, 216, 0.12);
 }
 
-.memory-timeline-scroll[data-dragging="true"] .memory-timeline-card {
-  user-select: none;
+.memory-date-input {
+  color-scheme: dark;
 }
 
-.memory-timeline-card[aria-pressed="true"] p {
+.memory-list-item[aria-pressed="true"] p {
   color: rgba(250, 250, 250, 1);
 }
 

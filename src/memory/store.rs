@@ -7,7 +7,7 @@ use crate::{
     db::DbPool,
     memory::model::{
         CreateMemory, MEMORY_SCOPE_INSTRUMENTS, MemoryLinkRecord, MemoryListFilter, MemoryRecord,
-        MemoryTimelineRecord,
+        MemoryTimelineRecord, MemoryTypeCount,
     },
 };
 
@@ -271,6 +271,7 @@ pub async fn list_memories(
 pub async fn list_agent_memory_timeline(
     pool: &DbPool,
     agent_key: &str,
+    memory_type: Option<&str>,
     since: Option<DateTime<Utc>>,
     until: Option<DateTime<Utc>>,
     before: Option<(DateTime<Utc>, Uuid)>,
@@ -280,6 +281,11 @@ pub async fn list_agent_memory_timeline(
          FROM memory.records WHERE agent_key = ",
     );
     qb.push_bind(agent_key.to_string());
+
+    if let Some(memory_type) = memory_type {
+        qb.push(" AND memory_type = ")
+            .push_bind(memory_type.to_string());
+    }
 
     if let Some(since) = since {
         qb.push(" AND created_at >= ").push_bind(since);
@@ -305,6 +311,31 @@ pub async fn list_agent_memory_timeline(
         .context("failed to list agent memory timeline")?;
 
     Ok(rows)
+}
+
+/// Discover every type owned by the agent, even when it has no records on the
+/// selected day. Counts reflect the currently selected date window.
+pub async fn list_agent_memory_type_counts(
+    pool: &DbPool,
+    agent_key: &str,
+    since: Option<DateTime<Utc>>,
+    until: Option<DateTime<Utc>>,
+) -> Result<Vec<MemoryTypeCount>> {
+    sqlx::query_as::<_, MemoryTypeCount>(
+        "SELECT memory_type,
+                COUNT(*) FILTER (WHERE ($2::timestamptz IS NULL OR created_at >= $2)
+                                   AND ($3::timestamptz IS NULL OR created_at < $3)) AS count
+           FROM memory.records
+          WHERE agent_key = $1
+          GROUP BY memory_type
+          ORDER BY memory_type",
+    )
+    .bind(agent_key)
+    .bind(since)
+    .bind(until)
+    .fetch_all(pool)
+    .await
+    .context("failed to discover agent memory types")
 }
 
 /// Fetch the latest memory for an agent and memory type.

@@ -430,7 +430,7 @@ fn jobs_page_links_to_new_job_page() {
 }
 
 #[test]
-fn memories_tab_renders_timeline_date_filter_and_markdown_content() {
+fn memories_tab_renders_time_filter_and_markdown_content() {
     let mut template =
         AgentsShowPageTemplate::new(sample_agent_detail_row(), AgentShowTab::Memories, 0);
     let records = [
@@ -449,27 +449,40 @@ fn memories_tab_renders_timeline_date_filter_and_markdown_content() {
             "Trail the stop closer if funding flips and spot momentum weakens.",
         ),
     ];
-    template.set_memories(
-        records.iter().map(crate::memory::MemoryTimelineRecord::from).collect(),
-        records.first().cloned(),
-        "2026-06-20".to_string(),
-        Some("Saturday, June 20, 2026".to_string()),
-        None,
-        Some("/agents/test-agent/memories/timeline?before_us=1&before_id=00000000-0000-0000-0000-000000000000&date=2026-06-20".to_string()),
-    );
+    template.set_memories(AgentMemoriesView {
+        rows: records.iter().map(crate::memory::MemoryTimelineRecord::from).collect(),
+        selected_memory: records.first().cloned(),
+        filter_range_value: "custom".to_string(),
+        filter_start_value: "2026-06-20".to_string(),
+        filter_end_value: "2026-06-21".to_string(),
+        filter_timezone_value: "America/New_York".to_string(),
+        selected_date_text: Some("Jun 20, 2026 – Jun 21, 2026".to_string()),
+        filter_error_text: None,
+        next_page_url: Some("/agents/test-agent/memories/timeline?before_us=1&before_id=00000000-0000-0000-0000-000000000000&range=custom&start=2026-06-20&end=2026-06-21&tz=America%2FNew_York".to_string()),
+        memory_types: vec![MemoryTypeOption { name: "analysis".to_string(), count: 1, url: "/agents/test-agent/memories?range=custom&start=2026-06-20&end=2026-06-21&tz=America%2FNew_York&memory_type=analysis".to_string(), selected: true }],
+        all_types_url: "/agents/test-agent/memories?range=custom&start=2026-06-20&end=2026-06-21&tz=America%2FNew_York".to_string(),
+        all_time_url: "/agents/test-agent/memories?memory_type=analysis".to_string(),
+        hour_url: "/agents/test-agent/memories?range=1h&memory_type=analysis".to_string(),
+        six_hours_url: "/agents/test-agent/memories?range=6h&memory_type=analysis".to_string(),
+        day_url: "/agents/test-agent/memories?range=24h&memory_type=analysis".to_string(),
+        stream_url: "/agents/test-agent/memories/stream?range=custom&start=2026-06-20&end=2026-06-21&tz=America%2FNew_York&memory_type=analysis".to_string(),
+        selected_type: "analysis".to_string(),
+        has_any_memories: true,
+    });
 
     let rendered = template.render().unwrap();
-    assert!(rendered.contains("Timeline"));
-    assert!(rendered.contains("Showing Saturday, June 20, 2026"));
-    assert!(rendered.contains("name=\"date\""));
+    assert!(rendered.contains("Types"));
+    assert!(rendered.contains("Jun 20, 2026 – Jun 21, 2026"));
+    assert!(rendered.contains("name=\"start\""));
+    assert!(rendered.contains("name=\"end\""));
+    assert!(rendered.contains("aria-controls=\"memory-custom-range\" aria-expanded=\"true\""));
     assert!(rendered.contains("Momentum remains constructive"));
     assert!(rendered.contains("<h3>Readout</h3>"));
     assert!(rendered.contains("<li>Wait for a pullback before adding risk.</li>"));
     assert!(rendered.contains("metadata keys"));
     assert!(rendered.contains("data-memory-detail-loading"));
     assert!(
-        rendered
-            .contains("hx-trigger=\"intersect once root:.memory-timeline-scroll threshold:0.5\"")
+        rendered.contains("hx-trigger=\"intersect once root:.memory-list-scroll threshold:0.5\"")
     );
 }
 

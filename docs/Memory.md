@@ -41,3 +41,13 @@ Review records outcomes and learnings. `agent_learnings` preserve durable
 lessons for future Analysis, Trading, and Review runs. Framework-owned types are
 reserved: Trading writes `trading_decision`, and Review writes review and
 learning records.
+
+## Operator browser
+
+The agent's Memories tab discovers its type list from stored records, including
+custom Analysis types. Selecting a type filters records before pagination. The
+time filter offers rolling 1h, 6h, and 24h windows or an inclusive custom
+range of local calendar dates (including daylight-saving transitions). The page
+sends the browser's time zone with a custom range and keeps the selected type
+and time filter while loading older records or receiving live updates. When a
+time filter is active, the type list shows only types with records in that window.

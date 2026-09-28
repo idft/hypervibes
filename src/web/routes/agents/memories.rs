@@ -6,37 +6,49 @@ use axum::{
         sse::{Event, KeepAlive, Sse},
     },
 };
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Duration, LocalResult, NaiveDate, TimeZone, Utc};
+use chrono_tz::Tz;
 use futures::StreamExt;
 use serde::Deserialize;
 use std::{convert::Infallible, sync::Arc};
 use tokio_stream::wrappers::BroadcastStream;
 use tracing::warn;
 
-use super::shared::is_htmx_request;
+use super::shared::{is_htmx_request, urlencode};
 use super::show::{AgentShowQueries, load_selected_agent_navbar, render_agent_show_page};
 use crate::web::error::AppError;
 use crate::{
     agents::store::get_agent,
     memory::{
-        AGENT_MEMORY_TIMELINE_PAGE_SIZE, MemoryTimelineRecord, get_memory as get_memory_record,
-        list_agent_memory_timeline,
+        AGENT_MEMORY_TIMELINE_PAGE_SIZE, MemoryTimelineRecord, MemoryTypeCount,
+        get_memory as get_memory_record, list_agent_memory_timeline, list_agent_memory_type_counts,
     },
     notifications::store::count_notifications,
     web::{
         AppState,
         auth::AuthenticatedUser,
         templates::{
-            AgentMemoryDetailPageTemplate, AgentMemoryDetailPartialTemplate,
-            AgentMemoryTimelinePartialTemplate, AgentShowTab, MemoryView,
+            AgentMemoryBrowserPartialTemplate, AgentMemoryDetailPageTemplate,
+            AgentMemoryDetailPartialTemplate, AgentMemoryTimelineItemsPartialTemplate,
+            AgentShowTab, MemoryBrowserOptions, MemoryTypeOption, MemoryView,
         },
         ui_events::UiEvent,
     },
 };
-#[derive(Debug, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize)]
 pub(in crate::web::routes) struct AgentMemoriesQuery {
     #[serde(default)]
     pub date: String,
+    #[serde(default)]
+    pub range: String,
+    #[serde(default)]
+    pub start: String,
+    #[serde(default)]
+    pub end: String,
+    #[serde(default)]
+    pub tz: String,
+    #[serde(default)]
+    pub memory_type: String,
     #[serde(default)]
     pub before_us: String,
     #[serde(default)]
@@ -123,21 +135,24 @@ pub(in crate::web::routes) async fn agent_memory_timeline_page(
     Path(agent_key): Path<String>,
     Query(query): Query<AgentMemoriesQuery>,
 ) -> Result<Response, AppError> {
-    let (_, selected_date_text, _, since, until) = parse_memory_date_filter(&query.date);
+    let date_filter = parse_memory_time_filter(&query, Utc::now());
     let Ok(before) = parse_memory_cursor(&query.before_us, &query.before_id) else {
         return Ok((StatusCode::BAD_REQUEST, "invalid memory timeline cursor").into_response());
     };
-    let rows = list_agent_memory_timeline(&state.db_pool, &agent_key, since, until, before).await?;
-    let (rows, next_page_url) = prepare_memory_timeline_page(
+    let memory_type = (!query.memory_type.is_empty()).then_some(query.memory_type.as_str());
+    let rows = list_agent_memory_timeline(
+        &state.db_pool,
         &agent_key,
-        rows,
-        selected_date_text.as_ref().map(|_| query.date.as_str()),
-    );
+        memory_type,
+        date_filter.since,
+        date_filter.until,
+        before,
+    )
+    .await?;
+    let (rows, next_page_url) =
+        prepare_memory_timeline_page(&agent_key, rows, &date_filter, memory_type);
     let timeline = crate::web::templates::build_memory_timeline_for_sse(&agent_key, &rows);
-    let html = crate::web::templates::AgentMemoryTimelineItemsPartialTemplate::render_view(
-        timeline,
-        next_page_url,
-    )?;
+    let html = AgentMemoryTimelineItemsPartialTemplate::render_view(timeline, next_page_url)?;
     Ok(Html(html).into_response())
 }
 pub(in crate::web::routes) async fn agent_memories_stream(
@@ -149,12 +164,11 @@ pub(in crate::web::routes) async fn agent_memories_stream(
         return Ok((StatusCode::NOT_FOUND, "agent not found").into_response());
     };
 
-    let (_, selected_date_text, _, since, until) = parse_memory_date_filter(&query.date);
+    let stream_query = query.clone();
     let db_pool = state.db_pool.clone();
     let agent_key = agent.agent_key.clone();
     let agent_key_for_render = agent_key.clone();
-    let selected_date_text_filter = selected_date_text.clone();
-    let date_filter_value = query.date.clone();
+    let memory_type = query.memory_type;
 
     let notifications = BroadcastStream::new(state.ui_events.subscribe())
         .filter_map(move |item| {
@@ -177,16 +191,14 @@ pub(in crate::web::routes) async fn agent_memories_stream(
         .filter_map(move |_| {
             let db_pool = db_pool.clone();
             let agent_key = agent_key_for_render.clone();
-            let selected_date_text = selected_date_text_filter.clone();
-            let date_filter_value = date_filter_value.clone();
+            let date_filter = parse_memory_time_filter(&stream_query, Utc::now());
+            let memory_type = memory_type.clone();
             async move {
                 match render_memory_timeline_event(
                     &db_pool,
                     &agent_key,
-                    since,
-                    until,
-                    selected_date_text,
-                    date_filter_value,
+                    &date_filter,
+                    &memory_type,
                 )
                     .await
                 {
@@ -206,48 +218,55 @@ pub(in crate::web::routes) async fn agent_memories_stream(
 pub(in crate::web::routes) async fn render_memory_timeline_event(
     pool: &crate::db::DbPool,
     agent_key: &str,
-    since: Option<chrono::DateTime<Utc>>,
-    until: Option<chrono::DateTime<Utc>>,
-    selected_date_text: Option<String>,
-    date_filter_value: String,
+    date_filter: &MemoryDateFilter,
+    selected_type: &str,
 ) -> Result<Event, AppError> {
-    let rows = list_agent_memory_timeline(pool, agent_key, since, until, None).await?;
-    let (rows, next_page_url) = prepare_memory_timeline_page(
+    let memory_type = (!selected_type.is_empty()).then_some(selected_type);
+    let rows = list_agent_memory_timeline(
+        pool,
         agent_key,
-        rows,
-        selected_date_text
-            .as_ref()
-            .map(|_| date_filter_value.as_str()),
-    );
+        memory_type,
+        date_filter.since,
+        date_filter.until,
+        None,
+    )
+    .await?;
+    let types =
+        list_agent_memory_type_counts(pool, agent_key, date_filter.since, date_filter.until)
+            .await?;
+    let (rows, next_page_url) =
+        prepare_memory_timeline_page(agent_key, rows, date_filter, memory_type);
     let timeline = crate::web::templates::build_memory_timeline_for_sse(agent_key, &rows);
-    let html = AgentMemoryTimelinePartialTemplate::render_view(
+    let html = AgentMemoryBrowserPartialTemplate::render_view(
         timeline,
-        rows.len(),
-        selected_date_text,
         next_page_url,
+        MemoryBrowserOptions {
+            date_text: date_filter.date_text.clone(),
+            memory_types: build_memory_type_options(agent_key, &types, selected_type, date_filter),
+            all_url: memory_page_url(agent_key, "", date_filter),
+            selected_type: selected_type.to_string(),
+            has_any_memories: !types.is_empty(),
+        },
     )?;
-    Ok(Event::default().event("memories-timeline").data(html))
+    Ok(Event::default().event("memories-browser").data(html))
 }
 
 pub(in crate::web::routes) fn prepare_memory_timeline_page(
     agent_key: &str,
     mut rows: Vec<MemoryTimelineRecord>,
-    date: Option<&str>,
+    date_filter: &MemoryDateFilter,
+    memory_type: Option<&str>,
 ) -> (Vec<MemoryTimelineRecord>, Option<String>) {
     let has_more = rows.len() > AGENT_MEMORY_TIMELINE_PAGE_SIZE as usize;
     rows.truncate(AGENT_MEMORY_TIMELINE_PAGE_SIZE as usize);
     let next_page_url = has_more.then(|| {
         let last = rows.last().expect("a full timeline page has a last row");
-        let mut url = format!(
-            "/agents/{agent_key}/memories/timeline?before_us={}&before_id={}",
+        format!(
+            "/agents/{agent_key}/memories/timeline?before_us={}&before_id={}{}",
             last.created_at.timestamp_micros(),
-            last.id
-        );
-        if let Some(date) = date {
-            url.push_str("&date=");
-            url.push_str(date);
-        }
-        url
+            last.id,
+            date_filter.query_tail(memory_type.unwrap_or_default()),
+        )
     });
     (rows, next_page_url)
 }
@@ -269,68 +288,250 @@ fn parse_memory_cursor(
         _ => Err(()),
     }
 }
-type MemoryDateFilter = (
-    String,
-    Option<String>,
-    Option<String>,
-    Option<chrono::DateTime<Utc>>,
-    Option<chrono::DateTime<Utc>>,
-);
+#[derive(Debug, Clone, Default)]
+pub(in crate::web::routes) struct MemoryDateFilter {
+    pub range_value: String,
+    pub start_value: String,
+    pub end_value: String,
+    pub date_value: String,
+    pub tz_value: String,
+    pub date_text: Option<String>,
+    pub error_text: Option<String>,
+    pub since: Option<DateTime<Utc>>,
+    pub until: Option<DateTime<Utc>>,
+}
 
-pub(in crate::web::routes) fn parse_memory_date_filter(raw: &str) -> MemoryDateFilter {
+impl MemoryDateFilter {
+    fn query_tail(&self, memory_type: &str) -> String {
+        let mut tail = String::new();
+        if self.date_text.is_some() {
+            if !self.date_value.is_empty() {
+                tail.push_str(&format!(
+                    "&date={}&tz={}",
+                    urlencode(&self.date_value),
+                    urlencode(&self.tz_value)
+                ));
+            } else if self.range_value == "custom" {
+                tail.push_str(&format!(
+                    "&range=custom&start={}&end={}&tz={}",
+                    urlencode(&self.start_value),
+                    urlencode(&self.end_value),
+                    urlencode(&self.tz_value)
+                ));
+            }
+        }
+        if matches!(self.range_value.as_str(), "1h" | "6h" | "24h") {
+            tail.push_str(&format!("&range={}", self.range_value));
+        }
+        if !memory_type.is_empty() {
+            tail.push_str(&format!("&memory_type={}", urlencode(memory_type)));
+        }
+        tail
+    }
+}
+
+pub(in crate::web::routes) fn memory_preset_url(
+    agent_key: &str,
+    memory_type: &str,
+    range: &str,
+) -> String {
+    memory_page_url(
+        agent_key,
+        memory_type,
+        &MemoryDateFilter {
+            range_value: range.to_string(),
+            ..Default::default()
+        },
+    )
+}
+
+pub(in crate::web::routes) fn parse_memory_time_filter(
+    query: &AgentMemoriesQuery,
+    now: DateTime<Utc>,
+) -> MemoryDateFilter {
+    if query.range.is_empty() && !query.date.is_empty() {
+        return parse_memory_date_filter(&query.date, &query.tz);
+    }
+    let range = query.range.as_str();
+    if let Some(hours) = match range {
+        "1h" => Some(1),
+        "6h" => Some(6),
+        "24h" => Some(24),
+        _ => None,
+    } {
+        return MemoryDateFilter {
+            range_value: range.to_string(),
+            date_text: Some(format!("Last {hours}h")),
+            since: Some(now - Duration::hours(hours)),
+            ..Default::default()
+        };
+    }
+    if range == "custom" {
+        return parse_memory_custom_filter(&query.start, &query.end, &query.tz);
+    }
+    if range.is_empty() || range == "all" {
+        return MemoryDateFilter::default();
+    }
+    MemoryDateFilter {
+        error_text: Some("Choose a valid time filter.".to_string()),
+        ..Default::default()
+    }
+}
+
+fn parse_memory_custom_filter(raw_start: &str, raw_end: &str, raw_tz: &str) -> MemoryDateFilter {
+    let mut filter = MemoryDateFilter {
+        range_value: "custom".to_string(),
+        start_value: raw_start.trim().to_string(),
+        end_value: raw_end.trim().to_string(),
+        tz_value: raw_tz.trim().to_string(),
+        ..Default::default()
+    };
+    let (Ok(start), Ok(end)) = (
+        NaiveDate::parse_from_str(&filter.start_value, "%Y-%m-%d"),
+        NaiveDate::parse_from_str(&filter.end_value, "%Y-%m-%d"),
+    ) else {
+        filter.error_text = Some("Choose a start and end date in YYYY-MM-DD format.".to_string());
+        return filter;
+    };
+    if start > end {
+        filter.error_text = Some("The start date must be on or before the end date.".to_string());
+        return filter;
+    }
+    if filter.tz_value.is_empty() {
+        filter.tz_value = "UTC".to_string();
+    }
+    let Ok(tz) = filter.tz_value.parse::<Tz>() else {
+        filter.error_text = Some("That time zone is not recognized.".to_string());
+        return filter;
+    };
+    let Some(next_day) = end.succ_opt() else {
+        filter.error_text = Some("That end date is out of range.".to_string());
+        return filter;
+    };
+    let (Some(since), Some(until)) = (local_day_start(start, tz), local_day_start(next_day, tz))
+    else {
+        filter.error_text =
+            Some("That date range could not be resolved in this time zone.".to_string());
+        return filter;
+    };
+    filter.date_text = Some(if start == end {
+        start.format("%b %-d, %Y").to_string()
+    } else {
+        format!(
+            "{} – {}",
+            start.format("%b %-d, %Y"),
+            end.format("%b %-d, %Y")
+        )
+    });
+    filter.since = Some(since);
+    filter.until = Some(until);
+    filter
+}
+
+pub(in crate::web::routes) fn memory_page_url(
+    agent_key: &str,
+    memory_type: &str,
+    date_filter: &MemoryDateFilter,
+) -> String {
+    memory_filter_url(
+        &format!("/agents/{agent_key}/memories"),
+        memory_type,
+        date_filter,
+    )
+}
+
+pub(in crate::web::routes) fn memory_stream_url(
+    agent_key: &str,
+    memory_type: &str,
+    date_filter: &MemoryDateFilter,
+) -> String {
+    memory_filter_url(
+        &format!("/agents/{agent_key}/memories/stream"),
+        memory_type,
+        date_filter,
+    )
+}
+
+fn memory_filter_url(base: &str, memory_type: &str, date_filter: &MemoryDateFilter) -> String {
+    let tail = date_filter.query_tail(memory_type);
+    if tail.is_empty() {
+        base.to_string()
+    } else {
+        format!("{base}?{}", &tail[1..])
+    }
+}
+
+pub(in crate::web::routes) fn build_memory_type_options(
+    agent_key: &str,
+    types: &[MemoryTypeCount],
+    selected_type: &str,
+    date_filter: &MemoryDateFilter,
+) -> Vec<MemoryTypeOption> {
+    let has_time_filter = date_filter.since.is_some() || date_filter.until.is_some();
+    types
+        .iter()
+        .filter(|row| !has_time_filter || row.count > 0)
+        .map(|row| MemoryTypeOption {
+            name: row.memory_type.clone(),
+            count: row.count,
+            url: memory_page_url(agent_key, &row.memory_type, date_filter),
+            selected: selected_type == row.memory_type,
+        })
+        .collect()
+}
+
+pub(in crate::web::routes) fn parse_memory_date_filter(
+    raw: &str,
+    raw_tz: &str,
+) -> MemoryDateFilter {
     let trimmed = raw.trim();
     if trimmed.is_empty() {
-        return (String::new(), None, None, None, None);
+        return MemoryDateFilter::default();
     }
 
-    let Ok(date) = chrono::NaiveDate::parse_from_str(trimmed, "%Y-%m-%d") else {
-        return (
-            trimmed.to_string(),
-            None,
-            Some("Use YYYY-MM-DD to filter memories by UTC date.".to_string()),
-            None,
-            None,
-        );
+    let mut filter = MemoryDateFilter {
+        range_value: "custom".to_string(),
+        start_value: trimmed.to_string(),
+        end_value: trimmed.to_string(),
+        date_value: trimmed.to_string(),
+        tz_value: raw_tz.trim().to_string(),
+        ..Default::default()
     };
-
-    let Some(start_of_day) = date.and_hms_opt(0, 0, 0) else {
-        return (
-            trimmed.to_string(),
-            None,
-            Some("That date could not be parsed.".to_string()),
-            None,
-            None,
-        );
+    let Ok(date) = NaiveDate::parse_from_str(trimmed, "%Y-%m-%d") else {
+        filter.error_text = Some("Use YYYY-MM-DD to filter memories by local date.".to_string());
+        return filter;
+    };
+    // Bare legacy date URLs retain UTC semantics; the form supplies the browser's IANA zone.
+    if filter.tz_value.is_empty() {
+        filter.tz_value = "UTC".to_string();
+    }
+    let Ok(tz) = filter.tz_value.parse::<Tz>() else {
+        filter.error_text = Some("That time zone is not recognized.".to_string());
+        return filter;
     };
     let Some(next_day) = date.succ_opt() else {
-        return (
-            trimmed.to_string(),
-            None,
-            Some("That date is out of range.".to_string()),
-            None,
-            None,
-        );
+        filter.error_text = Some("That date is out of range.".to_string());
+        return filter;
     };
-    let Some(end_of_day) = next_day.and_hms_opt(0, 0, 0) else {
-        return (
-            trimmed.to_string(),
-            None,
-            Some("That date is out of range.".to_string()),
-            None,
-            None,
-        );
+    let (Some(since), Some(until)) = (local_day_start(date, tz), local_day_start(next_day, tz))
+    else {
+        filter.error_text = Some("That date could not be resolved in this time zone.".to_string());
+        return filter;
     };
+    filter.date_text = Some(date.format("%A, %B %-d, %Y").to_string());
+    filter.since = Some(since);
+    filter.until = Some(until);
+    filter
+}
 
-    (
-        trimmed.to_string(),
-        Some(date.format("%A, %B %-d, %Y").to_string()),
-        None,
-        Some(chrono::DateTime::<Utc>::from_naive_utc_and_offset(
-            start_of_day,
-            Utc,
-        )),
-        Some(chrono::DateTime::<Utc>::from_naive_utc_and_offset(
-            end_of_day, Utc,
-        )),
-    )
+fn local_day_start(date: NaiveDate, tz: Tz) -> Option<DateTime<Utc>> {
+    // Some zones transition at midnight: use the earliest valid minute of that day.
+    (0..24 * 60).find_map(|minute| {
+        let local = date.and_hms_opt(minute / 60, minute % 60, 0)?;
+        match tz.from_local_datetime(&local) {
+            LocalResult::Single(value) => Some(value.with_timezone(&Utc)),
+            LocalResult::Ambiguous(first, second) => Some(first.min(second).with_timezone(&Utc)),
+            LocalResult::None => None,
+        }
+    })
 }

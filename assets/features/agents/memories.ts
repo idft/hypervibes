@@ -1,3 +1,17 @@
+import { renderLocalDateTimes } from "../../shared/presentation";
+
+function localTodayDate() {
+  const today = new Date();
+  const month = String(today.getMonth() + 1).padStart(2, "0");
+  const day = String(today.getDate()).padStart(2, "0");
+  return `${today.getFullYear()}-${month}-${day}`;
+}
+
+function updateDateLimits(form: HTMLFormElement) {
+  const today = localTodayDate();
+  form.querySelectorAll<HTMLInputElement>('input[type="date"]').forEach((input) => { input.max = today; });
+}
+
 function selectedMemoryRoots(root: ParentNode) {
   return root instanceof HTMLElement && root.matches("[data-agent-memories]") ? [root] : Array.from(root.querySelectorAll<HTMLElement>("[data-agent-memories]"));
 }
@@ -20,19 +34,48 @@ export function restoreSelectedMemoryItems(root: ParentNode = document) {
 
 export function initMemoryTimelines(root: ParentNode = document) {
   selectedMemoryRoots(root).forEach((memoryRoot) => {
+    const timezone = memoryRoot.querySelector<HTMLInputElement>("[data-memory-timezone]");
+    const browserTimezone = () => Intl.DateTimeFormat().resolvedOptions().timeZone ?? "UTC";
+    if (timezone && !timezone.value) timezone.value = browserTimezone();
+    const form = memoryRoot.querySelector<HTMLFormElement>("[data-memory-date-form]");
+    if (form && form.dataset.bound !== "true") {
+      form.dataset.bound = "true";
+      form.addEventListener("submit", () => { updateDateLimits(form); if (timezone) timezone.value = browserTimezone(); });
+    }
+    if (form) updateDateLimits(form);
+    const customToggle = memoryRoot.querySelector<HTMLButtonElement>("[data-memory-custom-toggle]");
+    if (customToggle && form && customToggle.dataset.bound !== "true") {
+      customToggle.dataset.bound = "true";
+      customToggle.addEventListener("click", () => {
+        updateDateLimits(form);
+        form.classList.remove("hidden");
+        customToggle.setAttribute("aria-expanded", "true");
+        form.querySelector<HTMLInputElement>('input[name="start"]')?.focus();
+      });
+    }
+    const cancel = form?.querySelector<HTMLButtonElement>("[data-memory-custom-cancel]");
+    if (cancel && customToggle && form && cancel.dataset.bound !== "true") {
+      cancel.dataset.bound = "true";
+      cancel.addEventListener("click", () => {
+        form.reset();
+        form.classList.add("hidden");
+        customToggle.setAttribute("aria-expanded", "false");
+        customToggle.focus();
+      });
+    }
+    form?.querySelectorAll<HTMLInputElement>('input[type="date"]').forEach((input) => {
+      if (input.dataset.pickerBound === "true") return;
+      input.dataset.pickerBound = "true";
+      input.addEventListener("focus", () => { if (form) updateDateLimits(form); });
+      input.addEventListener("click", () => {
+        if (form) updateDateLimits(form);
+        try { input.showPicker?.(); } catch { input.focus(); }
+      });
+    });
     if (!memoryRoot.dataset.selectedMemoryId) {
       const selected = memoryRoot.querySelector<HTMLElement>('[data-memory-timeline-item][aria-pressed="true"]');
       if (selected?.dataset.memoryId) memoryRoot.dataset.selectedMemoryId = selected.dataset.memoryId;
     }
-  });
-  root.querySelectorAll<HTMLElement>(".memory-timeline-scroll").forEach((container) => {
-    if (container.dataset.dragScrollBound === "true") return;
-    container.dataset.dragScrollBound = "true";
-    let startX: number | null = null; let startScrollLeft = 0; let dragging = false;
-    container.addEventListener("pointerdown", (event) => { if (event.button !== 0) return; startX = event.clientX; startScrollLeft = container.scrollLeft; dragging = false; });
-    container.addEventListener("pointermove", (event) => { if (startX === null) return; const delta = event.clientX - startX; if (Math.abs(delta) > 6) { if (!dragging) { dragging = true; container.dataset.dragging = "true"; container.setPointerCapture(event.pointerId); } container.scrollLeft = startScrollLeft - delta; } });
-    container.addEventListener("pointerup", (event) => { if (container.hasPointerCapture(event.pointerId)) container.releasePointerCapture(event.pointerId); startX = null; window.setTimeout(() => { dragging = false; container.dataset.dragging = "false"; }, 0); });
-    container.addEventListener("click", (event) => { if (dragging) { event.preventDefault(); event.stopPropagation(); } }, true);
   });
   restoreSelectedMemoryItems(root);
 }
@@ -43,5 +86,5 @@ export function installMemoryLifecycle() {
     if ((event as CustomEvent<{ successful?: boolean }>).detail.successful && element instanceof HTMLElement && element.matches("[data-memory-timeline-item]")) setActive(element);
   });
   document.addEventListener("htmx:afterSwap", (event) => { const target = (event as CustomEvent<{ target?: unknown }>).detail.target; if (!(target instanceof Element)) return; initMemoryTimelines(target); restoreSelectedMemoryItems(target); });
-  document.addEventListener("htmx:sseMessage", (event) => { const target = (event as CustomEvent<{ elt?: Element }>).detail.elt; if (target instanceof Element && target.matches('[sse-swap="memories-timeline"]')) restoreSelectedMemoryItems(target.closest("[data-agent-memories]") ?? document); });
+  document.addEventListener("htmx:sseMessage", (event) => { const target = (event as CustomEvent<{ elt?: Element }>).detail.elt; if (target instanceof Element && target.matches('[sse-swap="memories-browser"]')) { const root = target.closest("[data-agent-memories]") ?? document; restoreSelectedMemoryItems(root); renderLocalDateTimes(root); } });
 }

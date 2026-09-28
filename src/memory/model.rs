@@ -34,6 +34,12 @@ pub struct MemoryTimelineRecord {
     pub summary: String,
 }
 
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub struct MemoryTypeCount {
+    pub memory_type: String,
+    pub count: i64,
+}
+
 impl From<&MemoryRecord> for MemoryTimelineRecord {
     fn from(row: &MemoryRecord) -> Self {
         Self {

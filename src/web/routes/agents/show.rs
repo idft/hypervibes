@@ -13,7 +13,10 @@ use tracing::warn;
 use super::super::account::agent_subaccount_name;
 use super::transactions::apply_live_cash_balance_anchor;
 use super::{
-    memories::{AgentMemoriesQuery, parse_memory_date_filter, prepare_memory_timeline_page},
+    memories::{
+        AgentMemoriesQuery, build_memory_type_options, memory_page_url, memory_preset_url,
+        memory_stream_url, parse_memory_time_filter, prepare_memory_timeline_page,
+    },
     notifications::AgentNotificationsQuery,
 };
 use crate::{
@@ -30,7 +33,8 @@ use crate::{
         },
     },
     memory::{
-        get_latest_trading_decision, get_memory, list_agent_memory_timeline, memory_expires_at,
+        get_latest_trading_decision, get_memory, list_agent_memory_timeline,
+        list_agent_memory_type_counts, memory_expires_at,
     },
     notifications::store::{count_notifications, list_notification_history_page},
     web::{
@@ -38,11 +42,11 @@ use crate::{
         auth::AuthenticatedUser,
         error::AppError,
         templates::{
-            AccountBalancePartialTemplate, AccountBalanceView, AgentRecentRunsView, AgentShowTab,
-            AgentsShowPageTemplate, BalanceSparklinesPartialTemplate,
-            LatestTradeDecisionSummaryPartialTemplate, OpenOrdersPartialTemplate, OpenOrdersView,
-            OpenPositionsPartialTemplate, OpenPositionsView, SparklineView, TransactionView,
-            load_navbar,
+            AccountBalancePartialTemplate, AccountBalanceView, AgentMemoriesView,
+            AgentRecentRunsView, AgentShowTab, AgentsShowPageTemplate,
+            BalanceSparklinesPartialTemplate, LatestTradeDecisionSummaryPartialTemplate,
+            OpenOrdersPartialTemplate, OpenOrdersView, OpenPositionsPartialTemplate,
+            OpenPositionsView, SparklineView, TransactionView, load_navbar,
         },
     },
 };
@@ -217,32 +221,67 @@ pub(in crate::web::routes) async fn render_agent_show_page(
         }
         AgentShowTab::Memories => {
             let memory_query = memories_query.unwrap_or_default();
-            let (filter_date_value, selected_date_text, filter_error_text, since, until) =
-                parse_memory_date_filter(&memory_query.date);
+            let date_filter = parse_memory_time_filter(&memory_query, Utc::now());
+            let selected_type = memory_query.memory_type.as_str();
+            let memory_type = (!selected_type.is_empty()).then_some(selected_type);
 
-            match list_agent_memory_timeline(&state.db_pool, &agent.agent_key, since, until, None)
-                .await
+            match list_agent_memory_timeline(
+                &state.db_pool,
+                &agent.agent_key,
+                memory_type,
+                date_filter.since,
+                date_filter.until,
+                None,
+            )
+            .await
             {
                 Ok(rows) => {
+                    let types = list_agent_memory_type_counts(
+                        &state.db_pool,
+                        &agent.agent_key,
+                        date_filter.since,
+                        date_filter.until,
+                    )
+                    .await?;
                     let (rows, next_page_url) = prepare_memory_timeline_page(
                         &agent.agent_key,
                         rows,
-                        selected_date_text
-                            .as_ref()
-                            .map(|_| filter_date_value.as_str()),
+                        &date_filter,
+                        memory_type,
                     );
                     let selected_memory = match rows.first() {
                         Some(row) => get_memory(&state.db_pool, &agent.agent_key, row.id).await?,
                         None => None,
                     };
-                    template.set_memories(
+                    template.set_memories(AgentMemoriesView {
                         rows,
                         selected_memory,
-                        filter_date_value,
-                        selected_date_text,
-                        filter_error_text,
+                        filter_range_value: date_filter.range_value.clone(),
+                        filter_start_value: date_filter.start_value.clone(),
+                        filter_end_value: date_filter.end_value.clone(),
+                        filter_timezone_value: date_filter.tz_value.clone(),
+                        selected_date_text: date_filter.date_text.clone(),
+                        filter_error_text: date_filter.error_text.clone(),
                         next_page_url,
-                    );
+                        memory_types: build_memory_type_options(
+                            &agent.agent_key,
+                            &types,
+                            selected_type,
+                            &date_filter,
+                        ),
+                        all_types_url: memory_page_url(&agent.agent_key, "", &date_filter),
+                        all_time_url: memory_preset_url(&agent.agent_key, selected_type, "all"),
+                        hour_url: memory_preset_url(&agent.agent_key, selected_type, "1h"),
+                        six_hours_url: memory_preset_url(&agent.agent_key, selected_type, "6h"),
+                        day_url: memory_preset_url(&agent.agent_key, selected_type, "24h"),
+                        stream_url: memory_stream_url(
+                            &agent.agent_key,
+                            selected_type,
+                            &date_filter,
+                        ),
+                        selected_type: selected_type.to_string(),
+                        has_any_memories: !types.is_empty(),
+                    });
                 }
                 Err(error) => {
                     warn!(

@@ -96,6 +96,14 @@ pub struct MemoryTimelineItem {
     pub selected: bool,
 }
 
+#[derive(Debug, Clone)]
+pub struct MemoryTypeOption {
+    pub name: String,
+    pub count: i64,
+    pub url: String,
+    pub selected: bool,
+}
+
 pub(super) fn render_memory_markdown_html(content: &str) -> String {
     let mut options = MarkdownOptions::empty();
     options.insert(MarkdownOptions::ENABLE_TABLES);
@@ -144,26 +152,47 @@ pub fn build_memory_timeline_for_sse(
 }
 
 #[derive(Template)]
-#[template(path = "agents/memories/timeline.html")]
-pub struct AgentMemoryTimelinePartialTemplate {
+#[template(path = "agents/memories/browser.html")]
+pub struct AgentMemoryBrowserPartialTemplate {
     pub memory_timeline: Vec<MemoryTimelineItem>,
     pub memory_count: usize,
     pub selected_memory_date_text: Option<String>,
     pub next_page_url: Option<String>,
+    pub memory_types: Vec<MemoryTypeOption>,
+    pub all_count: i64,
+    pub all_url: String,
+    pub all_selected: bool,
+    pub selected_type: String,
+    pub has_any_memories: bool,
 }
 
-impl AgentMemoryTimelinePartialTemplate {
+pub struct MemoryBrowserOptions {
+    pub date_text: Option<String>,
+    pub memory_types: Vec<MemoryTypeOption>,
+    pub all_url: String,
+    pub selected_type: String,
+    pub has_any_memories: bool,
+}
+
+impl AgentMemoryBrowserPartialTemplate {
     pub fn render_view(
         memory_timeline: Vec<MemoryTimelineItem>,
-        memory_count: usize,
-        selected_memory_date_text: Option<String>,
         next_page_url: Option<String>,
+        options: MemoryBrowserOptions,
     ) -> Result<String, askama::Error> {
+        let all_count = options.memory_types.iter().map(|item| item.count).sum();
+        let memory_count = memory_timeline.len();
         Self {
             memory_timeline,
             memory_count,
-            selected_memory_date_text,
+            selected_memory_date_text: options.date_text,
             next_page_url,
+            memory_types: options.memory_types,
+            all_count,
+            all_url: options.all_url,
+            all_selected: options.selected_type.is_empty(),
+            selected_type: options.selected_type,
+            has_any_memories: options.has_any_memories,
         }
         .render()
     }

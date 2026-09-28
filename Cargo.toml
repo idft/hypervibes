@@ -24,6 +24,7 @@ alloy = { version = "2.0.5", default-features = false, features = ["signer-local
 aes-gcm = "0.11"
 base64 = "0.22"
 chrono = { version = "0.4", features = ["serde"] }
+chrono-tz = "0.10"
 futures = { version = "0.3", default-features = false, features = ["std"] }
 hex = "0.4"
 hypersdk = "0.2"

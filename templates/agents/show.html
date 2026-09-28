@@ -221,34 +221,56 @@
         </section>
     </section>
     {% else if show_memories_tab %}
-    <section class="flex h-full min-h-0" data-agent-memories data-selected-memory-id="{% if let Some(item) = memory_timeline.first() %}{{ item.memory_id }}{% endif %}">
+    <section id="agent-memories" class="flex h-full min-h-0" data-agent-memories data-selected-memory-id="{% if let Some(item) = memory_timeline.first() %}{{ item.memory_id }}{% endif %}">
         <section class="flex min-h-0 flex-1 flex-col overflow-hidden rounded-2xl border border-zinc-800 bg-[#0d0d10] p-6">
-            <div class="shrink-0 flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
+            <div class="shrink-0 flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
                 <h2 class="text-lg font-medium text-white">Memories</h2>
-                <form action="{{ current_path }}" method="get" class="flex flex-col gap-3 sm:flex-row sm:items-end">
-                    <div>
-                        <label for="memory_date" class="text-xs uppercase tracking-[0.16em] text-zinc-500">Date</label>
-                        <input id="memory_date" name="date" type="date" value="{{ memory_filter_date_value }}" class="mt-2 w-full rounded-xl border border-zinc-800 bg-zinc-950/70 px-4 py-2.5 text-sm text-zinc-200 outline-none focus:border-zinc-700 sm:w-auto">
-                    </div>
-                    <div class="flex items-center gap-2">
-                        <button type="submit" class="rounded-full bg-white px-4 py-2 text-sm font-medium text-black hover:bg-zinc-200">Apply</button>
-                        {% if has_memory_date_filter %}
-                        <a href="{{ current_path }}" class="rounded-full border border-zinc-800 px-4 py-2 text-sm font-medium text-zinc-300 hover:border-zinc-700 hover:text-white">Clear</a>
-                        {% endif %}
-                    </div>
-                </form>
+                <div class="flex min-w-0 flex-col gap-3" data-memory-time-filter>
+                    <nav class="flex flex-wrap items-center gap-2" aria-label="Memory time filter">
+                        <span class="mr-1 text-xs font-medium uppercase tracking-[0.16em] text-zinc-500">Time</span>
+                        <a href="{{ memory_all_time_url }}" hx-get="{{ memory_all_time_url }}" hx-select="#agent-memories" hx-target="#agent-memories" hx-swap="outerHTML" hx-push-url="true" {% if memory_filter_range_value.is_empty() %}aria-current="true"{% endif %} class="memory-range-option cursor-pointer rounded-full border border-zinc-800 px-3 py-1.5 text-xs font-medium text-zinc-300 hover:border-zinc-600 hover:text-white">All</a>
+                        <a href="{{ memory_hour_url }}" hx-get="{{ memory_hour_url }}" hx-select="#agent-memories" hx-target="#agent-memories" hx-swap="outerHTML" hx-push-url="true" {% if memory_filter_range_value == "1h" %}aria-current="true"{% endif %} class="memory-range-option cursor-pointer rounded-full border border-zinc-800 px-3 py-1.5 text-xs font-medium text-zinc-300 hover:border-zinc-600 hover:text-white">1h</a>
+                        <a href="{{ memory_six_hours_url }}" hx-get="{{ memory_six_hours_url }}" hx-select="#agent-memories" hx-target="#agent-memories" hx-swap="outerHTML" hx-push-url="true" {% if memory_filter_range_value == "6h" %}aria-current="true"{% endif %} class="memory-range-option cursor-pointer rounded-full border border-zinc-800 px-3 py-1.5 text-xs font-medium text-zinc-300 hover:border-zinc-600 hover:text-white">6h</a>
+                        <a href="{{ memory_day_url }}" hx-get="{{ memory_day_url }}" hx-select="#agent-memories" hx-target="#agent-memories" hx-swap="outerHTML" hx-push-url="true" {% if memory_filter_range_value == "24h" %}aria-current="true"{% endif %} class="memory-range-option cursor-pointer rounded-full border border-zinc-800 px-3 py-1.5 text-xs font-medium text-zinc-300 hover:border-zinc-600 hover:text-white">24h</a>
+                        <button type="button" data-memory-custom-toggle aria-controls="memory-custom-range" aria-expanded="{% if memory_filter_range_value == "custom" %}true{% else %}false{% endif %}" class="memory-range-option cursor-pointer rounded-full border border-zinc-800 px-3 py-1.5 text-xs font-medium text-zinc-300 hover:border-zinc-600 hover:text-white {% if memory_filter_range_value == "custom" %}memory-custom-active{% endif %}">Custom</button>
+                    </nav>
+                    <form id="memory-custom-range" action="{{ current_path }}" method="get" data-memory-date-form data-memory-custom-form class="{% if memory_filter_range_value != "custom" %}hidden {% endif %}flex flex-wrap items-end gap-3 rounded-xl border border-zinc-800 bg-zinc-950/60 p-3">
+                        <input type="hidden" name="range" value="custom">
+                        <input type="hidden" name="memory_type" value="{{ memory_selected_type }}">
+                        <input type="hidden" name="tz" value="{{ memory_filter_timezone_value }}" data-memory-timezone>
+                        <div>
+                            <label for="memory_start" class="block text-xs text-zinc-400">Start date</label>
+                            <div class="mt-1 flex items-center rounded-lg border border-zinc-700 bg-zinc-950 focus-within:border-zinc-500">
+                                <input id="memory_start" name="start" type="date" required value="{{ memory_filter_start_value }}" class="memory-date-input w-44 cursor-pointer bg-transparent px-3 py-2 text-sm text-zinc-100 outline-none">
+                            </div>
+                        </div>
+                        <div>
+                            <label for="memory_end" class="block text-xs text-zinc-400">End date</label>
+                            <div class="mt-1 flex items-center rounded-lg border border-zinc-700 bg-zinc-950 focus-within:border-zinc-500">
+                                <input id="memory_end" name="end" type="date" required value="{{ memory_filter_end_value }}" class="memory-date-input w-44 cursor-pointer bg-transparent px-3 py-2 text-sm text-zinc-100 outline-none">
+                            </div>
+                        </div>
+                        <button type="submit" class="cursor-pointer rounded-full bg-white px-4 py-2 text-sm font-medium text-black hover:bg-zinc-200">Apply</button>
+                        <button type="button" data-memory-custom-cancel class="cursor-pointer rounded-full border border-zinc-800 px-4 py-2 text-sm font-medium text-zinc-300 hover:border-zinc-700 hover:text-white">Cancel</button>
+                    </form>
+                </div>
             </div>
             {% if let Some(error_text) = memory_filter_error_text %}
             <div class="mt-4 rounded-xl border border-amber-900/60 bg-amber-950/30 px-4 py-3 text-sm text-amber-200">{{ error_text }}</div>
             {% endif %}
-            <div class="shrink-0" hx-ext="sse" sse-connect="/agents/{{ agent.agent_key }}/memories/stream?date={{ memory_filter_date_value }}" sse-swap="memories-timeline">{{ memory_timeline_html|safe }}</div>
-
-            <div class="dark-scrollbar relative mt-6 min-h-0 flex-1 overflow-y-auto">
-                <div data-memory-detail-loading class="pointer-events-none absolute inset-0 z-10 hidden items-center justify-center rounded-2xl bg-zinc-950/70 backdrop-blur-sm" role="status" aria-live="polite">
-                    <span class="size-7 animate-spin rounded-full border-2 border-zinc-700 border-t-white" aria-hidden="true"></span>
-                    <span class="sr-only">Loading memory</span>
+            <div class="mt-5 grid min-h-0 flex-1 grid-cols-1 gap-4 overflow-y-auto md:grid-cols-[minmax(15rem,19rem)_minmax(0,1fr)] xl:grid-cols-[minmax(11rem,14rem)_minmax(15rem,19rem)_minmax(0,1fr)] xl:overflow-hidden">
+                <div class="contents" hx-ext="sse" sse-connect="{{ memory_stream_url }}" sse-swap="memories-browser">{{ memory_timeline_html|safe }}</div>
+                <div class="relative min-h-0 md:overflow-y-auto">
+                    <div data-memory-detail-loading class="pointer-events-none absolute inset-0 z-10 hidden items-center justify-center rounded-2xl bg-zinc-950/70 backdrop-blur-sm" role="status" aria-live="polite">
+                        <span class="size-7 animate-spin rounded-full border-2 border-zinc-700 border-t-white" aria-hidden="true"></span>
+                        <span class="sr-only">Loading memory</span>
+                    </div>
+                    {% if selected_memory_html.is_empty() %}
+                    <div id="memory-detail" class="rounded-2xl border border-zinc-800 bg-zinc-950/70 p-6 text-sm text-zinc-400">Select a memory to view it here.</div>
+                    {% else %}
+                    {{ selected_memory_html|safe }}
+                    {% endif %}
                 </div>
-                {{ selected_memory_html|safe }}
             </div>
         </section>
     </section>

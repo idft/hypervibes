@@ -13,8 +13,8 @@ use crate::{
 };
 
 use super::memories::{
-    AgentMemoryDetailPartialTemplate, AgentMemoryTimelinePartialTemplate, MemoryTimelineItem,
-    MemoryView, TransactionView, build_memory_timeline,
+    AgentMemoryBrowserPartialTemplate, AgentMemoryDetailPartialTemplate, MemoryBrowserOptions,
+    MemoryTimelineItem, MemoryTypeOption, MemoryView, TransactionView, build_memory_timeline,
 };
 use super::navbar::Navbar;
 use super::runs::HarnessSubAgentRunView;
@@ -553,13 +553,20 @@ pub struct AgentsShowPageTemplate {
     pub transactions_previous_page_url: Option<String>,
     pub transactions_next_page_url: Option<String>,
     pub memory_timeline: Vec<MemoryTimelineItem>,
-    pub memory_filter_date_value: String,
+    pub memory_filter_range_value: String,
+    pub memory_filter_start_value: String,
+    pub memory_filter_end_value: String,
+    pub memory_filter_timezone_value: String,
     pub memory_filter_error_text: Option<String>,
     pub selected_memory_date_text: Option<String>,
     pub selected_memory_html: String,
     pub memory_timeline_html: String,
-    pub has_memory_date_filter: bool,
-    pub memory_count: usize,
+    pub memory_all_time_url: String,
+    pub memory_hour_url: String,
+    pub memory_six_hours_url: String,
+    pub memory_day_url: String,
+    pub memory_stream_url: String,
+    pub memory_selected_type: String,
     pub instrument_options: Vec<AgentInstrumentOptionRow>,
     pub instrument_options_loaded: bool,
     pub has_selected_instruments: bool,
@@ -630,13 +637,20 @@ impl AgentsShowPageTemplate {
             transactions_previous_page_url: None,
             transactions_next_page_url: None,
             memory_timeline: Vec::new(),
-            memory_filter_date_value: String::new(),
+            memory_filter_range_value: String::new(),
+            memory_filter_start_value: String::new(),
+            memory_filter_end_value: String::new(),
+            memory_filter_timezone_value: String::new(),
             memory_filter_error_text: None,
             selected_memory_date_text: None,
             selected_memory_html: String::new(),
             memory_timeline_html: String::new(),
-            has_memory_date_filter: false,
-            memory_count: 0,
+            memory_all_time_url: String::new(),
+            memory_hour_url: String::new(),
+            memory_six_hours_url: String::new(),
+            memory_day_url: String::new(),
+            memory_stream_url: String::new(),
+            memory_selected_type: String::new(),
             instrument_options: Vec::new(),
             instrument_options_loaded: false,
             has_selected_instruments: false,
@@ -670,23 +684,37 @@ impl AgentsShowPageTemplate {
         }
     }
 
-    pub fn set_memories(
-        &mut self,
-        rows: Vec<crate::memory::MemoryTimelineRecord>,
-        selected_memory: Option<MemoryRecord>,
-        filter_date_value: String,
-        selected_date_text: Option<String>,
-        filter_error_text: Option<String>,
-        next_page_url: Option<String>,
-    ) {
+    pub fn set_memories(&mut self, view: AgentMemoriesView) {
+        let AgentMemoriesView {
+            rows,
+            selected_memory,
+            filter_range_value,
+            filter_start_value,
+            filter_end_value,
+            filter_timezone_value,
+            selected_date_text,
+            filter_error_text,
+            next_page_url,
+            memory_types,
+            all_types_url,
+            all_time_url,
+            hour_url,
+            six_hours_url,
+            day_url,
+            stream_url,
+            selected_type,
+            has_any_memories,
+        } = view;
         let selected_memory = selected_memory.map(MemoryView::from_record);
         let selected_memory_id = selected_memory
             .as_ref()
             .map(|memory| memory.memory_id.as_str());
-        self.memory_count = rows.len();
         self.memory_timeline =
             build_memory_timeline(&self.agent.agent_key, &rows, selected_memory_id);
-        self.memory_filter_date_value = filter_date_value;
+        self.memory_filter_range_value = filter_range_value;
+        self.memory_filter_start_value = filter_start_value;
+        self.memory_filter_end_value = filter_end_value;
+        self.memory_filter_timezone_value = filter_timezone_value;
         self.selected_memory_date_text = selected_date_text;
         self.memory_filter_error_text = filter_error_text;
         self.selected_memory_html = selected_memory
@@ -694,12 +722,22 @@ impl AgentsShowPageTemplate {
             .transpose()
             .unwrap_or_default()
             .unwrap_or_default();
-        self.has_memory_date_filter = !self.memory_filter_date_value.is_empty();
-        self.memory_timeline_html = AgentMemoryTimelinePartialTemplate::render_view(
+        self.memory_all_time_url = all_time_url;
+        self.memory_hour_url = hour_url;
+        self.memory_six_hours_url = six_hours_url;
+        self.memory_day_url = day_url;
+        self.memory_stream_url = stream_url;
+        self.memory_selected_type = selected_type.clone();
+        self.memory_timeline_html = AgentMemoryBrowserPartialTemplate::render_view(
             self.memory_timeline.clone(),
-            self.memory_count,
-            self.selected_memory_date_text.clone(),
             next_page_url,
+            MemoryBrowserOptions {
+                date_text: self.selected_memory_date_text.clone(),
+                memory_types,
+                all_url: all_types_url,
+                selected_type,
+                has_any_memories,
+            },
         )
         .unwrap_or_default();
     }
@@ -710,6 +748,27 @@ impl AgentsShowPageTemplate {
             .map(|row| AgentNotificationView::from_row(agent_key, row))
             .collect();
     }
+}
+
+pub struct AgentMemoriesView {
+    pub rows: Vec<crate::memory::MemoryTimelineRecord>,
+    pub selected_memory: Option<MemoryRecord>,
+    pub filter_range_value: String,
+    pub filter_start_value: String,
+    pub filter_end_value: String,
+    pub filter_timezone_value: String,
+    pub selected_date_text: Option<String>,
+    pub filter_error_text: Option<String>,
+    pub next_page_url: Option<String>,
+    pub memory_types: Vec<MemoryTypeOption>,
+    pub all_types_url: String,
+    pub all_time_url: String,
+    pub hour_url: String,
+    pub six_hours_url: String,
+    pub day_url: String,
+    pub stream_url: String,
+    pub selected_type: String,
+    pub has_any_memories: bool,
 }
 
 #[derive(Debug, Clone, Default)]
