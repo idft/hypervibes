@@ -88,6 +88,10 @@ async fn cancel_running_run_aborts_session_and_marks_run_aborted() {
     let detail_html = response_text(detail_response).await;
     assert!(detail_html.contains("Cancel run"));
     assert!(detail_html.contains(&format!("/agents/{agent_key}/runs/{run_id}/cancel")));
+    assert!(
+        detail_html.find("id=\"run-cancel-modal\"") > detail_html.find("id=\"run-transcript\""),
+        "the confirmation must live outside the SSE-swapped run summary"
+    );
 
     let response = router(Arc::clone(&state))
         .oneshot(

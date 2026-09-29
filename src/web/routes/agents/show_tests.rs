@@ -41,6 +41,10 @@ async fn agent_positions_route_renders_latest_trade_execution_summary_under_open
     assert!(text.contains("Open orders"));
     assert!(text.contains("Scaled out into strength"));
     assert!(!text.contains("Older plan"));
+    assert!(
+        text.find("id=\"position-close-modal\"") > text.find("sse-swap=\"orders\""),
+        "the confirmation must live outside the SSE-swapped positions fragment"
+    );
 }
 #[tokio::test]
 async fn agent_positions_route_renders_latest_analysis_summary_under_open_orders() {
