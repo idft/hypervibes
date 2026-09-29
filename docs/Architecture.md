@@ -65,8 +65,8 @@ sub-account, creates an agent API key, creates default prompts and schedules,
 and is ready to create isolated run or conversation workspaces when needed.
 
 The scheduler polls every 10 seconds. It claims due work transactionally and
-uses independent analysis and trading lanes per agent, while allowing work for
-different agents to run concurrently. Built-in work includes:
+uses independent analysis, review, and trading lanes per agent, while allowing
+work for different agents to run concurrently. Built-in work includes:
 
 - scheduled Analysis jobs, Trading, and Review
 
@@ -116,7 +116,10 @@ from retention cleanup.
 
 Run state is persisted. On startup and periodically thereafter, the scheduler
 resumes queued runs and recovers stale running runs so interrupted dispatches
-do not block subsequent work.
+do not block subsequent work. A due daily Review whose review lane is occupied
+keeps its scheduled boundary and retries on subsequent ticks instead of losing
+the daily review window.
+
 After a run becomes terminal, workspace cleanup checks that its OpenCode session
 is inactive before scrubbing runtime secrets and disposing that run directory's
 cached OpenCode instance. The run's session record and workspace artifact remain

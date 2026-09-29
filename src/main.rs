@@ -141,7 +141,7 @@ async fn main() -> Result<()> {
         Arc::clone(&live_accounts),
         encryption_key.clone(),
     );
-    let mut hyperliquid_monitor_handle = tokio::spawn(async move {
+    let hyperliquid_monitor_handle = tokio::spawn(async move {
         if let Err(e) = hyperliquid_monitor.run().await {
             error!(error = ?e, "hyperliquid agent monitor exited with error");
         }
@@ -163,7 +163,7 @@ async fn main() -> Result<()> {
         },
         workspace_leases.clone(),
     );
-    let mut harness_scheduler_handle = tokio::spawn(async move {
+    let harness_scheduler_handle = tokio::spawn(async move {
         if let Err(e) = harness_scheduler.run().await {
             error!(error = ?e, "harness scheduler exited with error");
         }
@@ -177,7 +177,7 @@ async fn main() -> Result<()> {
         indicator_queue_notifier,
         config.indicators.max_concurrent_executions,
     );
-    let mut indicator_scheduler_handle = tokio::spawn(async move {
+    let indicator_scheduler_handle = tokio::spawn(async move {
         if let Err(e) = indicator_scheduler.run().await {
             error!(error = ?e, "indicator scheduler exited with error");
         }
@@ -198,7 +198,7 @@ async fn main() -> Result<()> {
         crate::agent_conversations::service::ConversationTurnTracker::default(),
         Arc::clone(&gateway_pending_links),
     );
-    let mut gateway_handle = tokio::spawn(async move {
+    let gateway_handle = tokio::spawn(async move {
         if let Err(e) = gateway_service.run().await {
             error!(error = ?e, "gateway service exited with error");
         }
@@ -223,8 +223,6 @@ async fn main() -> Result<()> {
         workspace_leases,
         gateway_pending_links,
     );
-    tokio::pin!(server_future);
-
     // Single source of truth for shutdown: when SIGINT or SIGTERM
     // arrives, set the shared flag. Every long-running task
     // (web server's graceful shutdown, harness scheduler's loop,
@@ -235,33 +233,16 @@ async fn main() -> Result<()> {
     // fail fast on their next MCP call.
     spawn_shutdown_listener(shutdown_tx, force_shutdown_tx);
 
-    tokio::select! {
-        result = &mut server_future => {
-            result?;
-        }
-        _ = &mut hyperliquid_monitor_handle => {
-            warn!("hyperliquid agent monitor exited early");
-            return Ok(());
-        }
-        _ = &mut harness_scheduler_handle => {
-            warn!("harness scheduler exited early");
-            return Ok(());
-        }
-        _ = &mut indicator_scheduler_handle => {
-            warn!("indicator scheduler exited early");
-            return Ok(());
-        }
-        _ = &mut gateway_handle => {
-            warn!("gateway service exited early");
-            return Ok(());
-        }
-    }
-
-    // Wait for the background tasks to finish their graceful shutdown.
-    let _ = hyperliquid_monitor_handle.await;
-    let _ = harness_scheduler_handle.await;
-    let _ = indicator_scheduler_handle.await;
-    let _ = gateway_handle.await;
+    wait_for_services(
+        server_future,
+        shutdown_rx,
+        force_shutdown_rx.clone(),
+        hyperliquid_monitor_handle,
+        harness_scheduler_handle,
+        indicator_scheduler_handle,
+        gateway_handle,
+    )
+    .await?;
 
     // The scheduler drains the trackers it knows about inside its
     // own `run`, but manual event dispatches that started after the
@@ -296,6 +277,109 @@ async fn main() -> Result<()> {
     }
 
     info!("shutdown complete");
+    Ok(())
+}
+
+async fn wait_for_services<F>(
+    server_future: F,
+    shutdown_rx: watch::Receiver<bool>,
+    mut force_shutdown_rx: watch::Receiver<bool>,
+    hyperliquid_monitor_handle: tokio::task::JoinHandle<()>,
+    harness_scheduler_handle: tokio::task::JoinHandle<()>,
+    indicator_scheduler_handle: tokio::task::JoinHandle<()>,
+    gateway_handle: tokio::task::JoinHandle<()>,
+) -> Result<()>
+where
+    F: std::future::Future<Output = Result<()>>,
+{
+    tokio::select! {
+        result = wait_for_services_gracefully(
+            server_future,
+            shutdown_rx,
+            hyperliquid_monitor_handle,
+            harness_scheduler_handle,
+            indicator_scheduler_handle,
+            gateway_handle,
+        ) => result,
+        _ = async {
+            loop {
+                if *force_shutdown_rx.borrow() { break; }
+                if force_shutdown_rx.changed().await.is_err() {
+                    std::future::pending::<()>().await;
+                }
+            }
+        } => {
+            warn!("force shutdown: abandoning pending web and background task drains");
+            Ok(())
+        }
+    }
+}
+
+async fn wait_for_services_gracefully<F>(
+    server_future: F,
+    shutdown_rx: watch::Receiver<bool>,
+    mut hyperliquid_monitor_handle: tokio::task::JoinHandle<()>,
+    mut harness_scheduler_handle: tokio::task::JoinHandle<()>,
+    mut indicator_scheduler_handle: tokio::task::JoinHandle<()>,
+    mut gateway_handle: tokio::task::JoinHandle<()>,
+) -> Result<()>
+where
+    F: std::future::Future<Output = Result<()>>,
+{
+    tokio::pin!(server_future);
+    let server_finished = tokio::select! {
+        result = &mut server_future => {
+            result?;
+            true
+        }
+        _ = &mut hyperliquid_monitor_handle => {
+            if !*shutdown_rx.borrow() {
+                warn!("hyperliquid agent monitor exited early");
+                return Ok(());
+            }
+            false
+        }
+        _ = &mut harness_scheduler_handle => {
+            if !*shutdown_rx.borrow() {
+                warn!("harness scheduler exited early");
+                return Ok(());
+            }
+            false
+        }
+        _ = &mut indicator_scheduler_handle => {
+            if !*shutdown_rx.borrow() {
+                warn!("indicator scheduler exited early");
+                return Ok(());
+            }
+            false
+        }
+        _ = &mut gateway_handle => {
+            if !*shutdown_rx.borrow() {
+                warn!("gateway service exited early");
+                return Ok(());
+            }
+            false
+        }
+    };
+
+    // A background task may finish first during normal shutdown. Keep the
+    // web API available until dispatches drain, regardless of which task won
+    // the select. Do not poll a JoinHandle already consumed by that select.
+    if !server_finished {
+        server_future.await?;
+    }
+    if !hyperliquid_monitor_handle.is_finished() {
+        let _ = hyperliquid_monitor_handle.await;
+    }
+    if !harness_scheduler_handle.is_finished() {
+        let _ = harness_scheduler_handle.await;
+    }
+    if !indicator_scheduler_handle.is_finished() {
+        let _ = indicator_scheduler_handle.await;
+    }
+    if !gateway_handle.is_finished() {
+        let _ = gateway_handle.await;
+    }
     Ok(())
 }
 
@@ -357,4 +441,73 @@ fn spawn_shutdown_listener(
         warn!("second shutdown signal received; force-shutting down");
         let _ = force_shutdown_tx.send(true);
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn normal_worker_exit_during_shutdown_does_not_interrupt_web_or_harness_drain() {
+        let (_shutdown_tx, shutdown_rx) = watch::channel(true);
+        let (_force_tx, force_rx) = watch::channel(false);
+        let (web_tx, web_rx) = tokio::sync::oneshot::channel::<()>();
+        let (harness_tx, harness_rx) = tokio::sync::oneshot::channel::<()>();
+        let waiter = tokio::spawn(wait_for_services(
+            async move {
+                web_rx.await.expect("release web drain");
+                Ok(())
+            },
+            shutdown_rx,
+            force_rx,
+            tokio::spawn(async {}),
+            tokio::spawn(async move {
+                harness_rx.await.expect("release harness drain");
+            }),
+            tokio::spawn(async {}),
+            tokio::spawn(async {}),
+        ));
+
+        tokio::task::yield_now().await;
+        assert!(!waiter.is_finished(), "web drain should still be pending");
+        web_tx.send(()).expect("release web drain");
+        tokio::task::yield_now().await;
+        assert!(
+            !waiter.is_finished(),
+            "harness drain should still be pending"
+        );
+        harness_tx.send(()).expect("release harness drain");
+        tokio::time::timeout(std::time::Duration::from_secs(1), waiter)
+            .await
+            .expect("shutdown finishes")
+            .expect("join waiter")
+            .expect("wait for services");
+    }
+
+    #[tokio::test]
+    async fn force_shutdown_interrupts_stuck_services() {
+        let (_shutdown_tx, shutdown_rx) = watch::channel(true);
+        let (force_tx, force_rx) = watch::channel(false);
+        let mut waiter = tokio::spawn(wait_for_services(
+            std::future::pending::<Result<()>>(),
+            shutdown_rx,
+            force_rx,
+            tokio::spawn(async {}),
+            tokio::spawn(std::future::pending()),
+            tokio::spawn(async {}),
+            tokio::spawn(async {}),
+        ));
+
+        tokio::task::yield_now().await;
+        assert!(!waiter.is_finished(), "services should still be draining");
+        force_tx.send(true).expect("force shutdown");
+        let result = tokio::time::timeout(std::time::Duration::from_millis(200), &mut waiter).await;
+        if result.is_err() {
+            waiter.abort();
+        }
+        result
+            .expect("force should interrupt the service drain")
+            .expect("join waiter")
+            .expect("wait for services");
+    }
 }

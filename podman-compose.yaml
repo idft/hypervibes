@@ -18,6 +18,7 @@ services:
   hypervibes:
     image: ghcr.io/idft/hypervibes:0.3.7
     restart: unless-stopped
+    stop_grace_period: 31m
     command: ["hypervibes"]
     environment:
       DATABASE_URL: postgres://hypervibes:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}@postgres:5432/hypervibes

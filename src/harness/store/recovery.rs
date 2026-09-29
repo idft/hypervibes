@@ -56,9 +56,8 @@ pub async fn list_running_run_session_recovery_candidates(
 pub(crate) fn active_sub_agent_kinds_for_lane(sub_agent_kind: &str) -> &'static [&'static str] {
     match sub_agent_kind {
         SUB_AGENT_KIND_TRADING => &[SUB_AGENT_KIND_TRADING],
-        SUB_AGENT_KIND_ANALYSIS | SUB_AGENT_KIND_REVIEW => {
-            &[SUB_AGENT_KIND_ANALYSIS, SUB_AGENT_KIND_REVIEW]
-        }
+        SUB_AGENT_KIND_ANALYSIS => &[SUB_AGENT_KIND_ANALYSIS],
+        SUB_AGENT_KIND_REVIEW => &[SUB_AGENT_KIND_REVIEW],
         _ => &[],
     }
 }

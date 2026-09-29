@@ -90,6 +90,7 @@ type LaneLockMap = Arc<Mutex<HashMap<(String, CandleSubAgentrLane), Weak<AsyncMu
 #[derive(Clone, Copy, Hash, PartialEq, Eq)]
 enum CandleSubAgentrLane {
     Analysis,
+    Review,
     Trading,
 }
 
@@ -299,7 +300,7 @@ impl HarnessScheduler {
                 }
             }
 
-            if (!analysis_jobs.is_empty() || !review_jobs.is_empty())
+            if !analysis_jobs.is_empty()
                 && let Some(lane_guard) = self
                     .lane_locks
                     .try_acquire(&agent_key, CandleSubAgentrLane::Analysis)
@@ -315,7 +316,7 @@ impl HarnessScheduler {
                 tokio::spawn(async move {
                     let _guard = in_flight.track();
                     let _lane_guard = lane_guard;
-                    process_analysis_lane_for_agent(
+                    process_jobs_in_lane_for_agent(
                         &pool,
                         &backend,
                         &workspace_controller,
@@ -323,6 +324,35 @@ impl HarnessScheduler {
                         &live_accounts,
                         &agent_key,
                         sort_analysis_jobs_for_dispatch(analysis_jobs),
+                        &workspace_leases,
+                    )
+                    .await;
+                });
+            }
+
+            if !review_jobs.is_empty()
+                && let Some(lane_guard) = self
+                    .lane_locks
+                    .try_acquire(&agent_key, CandleSubAgentrLane::Review)
+            {
+                let pool = self.pool.clone();
+                let backend = self.backend.clone();
+                let workspace_controller = self.workspace_controller.clone();
+                let agent_api_base_url = self.agent_api_base_url.clone();
+                let live_accounts = self.live_accounts.clone();
+                let agent_key = agent_key.clone();
+                let in_flight = self.in_flight.clone();
+                let workspace_leases = self.workspace_leases.clone();
+                tokio::spawn(async move {
+                    let _guard = in_flight.track();
+                    let _lane_guard = lane_guard;
+                    process_jobs_in_lane_for_agent(
+                        &pool,
+                        &backend,
+                        &workspace_controller,
+                        &agent_api_base_url,
+                        &live_accounts,
+                        &agent_key,
                         sort_analysis_jobs_for_dispatch(review_jobs),
                         &workspace_leases,
                     )
@@ -374,7 +404,8 @@ impl HarnessScheduler {
         {
             let lane = match run.sub_agent_kind.as_str() {
                 SUB_AGENT_KIND_TRADING => CandleSubAgentrLane::Trading,
-                SUB_AGENT_KIND_ANALYSIS | SUB_AGENT_KIND_REVIEW => CandleSubAgentrLane::Analysis,
+                SUB_AGENT_KIND_ANALYSIS => CandleSubAgentrLane::Analysis,
+                SUB_AGENT_KIND_REVIEW => CandleSubAgentrLane::Review,
                 _ => continue,
             };
             let Some(lane_guard) = self.lane_locks.try_acquire(&run.agent_key, lane) else {
@@ -825,9 +856,9 @@ fn maintenance_error_summary(error: &anyhow::Error) -> String {
 
 #[expect(
     clippy::too_many_arguments,
-    reason = "the analysis lane keeps scheduler dependencies explicit across spawned tasks"
+    reason = "each lane keeps scheduler dependencies explicit across spawned tasks"
 )]
-async fn process_analysis_lane_for_agent(
+async fn process_jobs_in_lane_for_agent(
     pool: &DbPool,
     backend: &Arc<dyn HarnessBackend>,
     workspace_controller: &Arc<dyn WorkspaceController>,
@@ -835,26 +866,11 @@ async fn process_analysis_lane_for_agent(
     live_accounts: &Arc<LiveAccountStore>,
     agent_key: &str,
     jobs: Vec<HarnessDispatchSubAgentRow>,
-    review_jobs: Vec<HarnessDispatchSubAgentRow>,
     workspace_leases: &WorkspaceLeaseManager,
 ) {
     let _lease = workspace_leases.acquire_live_read(agent_key).await;
     for candle_job in jobs {
         let _ = process_candle_job_for_agent(
-            pool,
-            backend,
-            workspace_controller,
-            agent_api_base_url,
-            live_accounts,
-            agent_key,
-            candle_job,
-            workspace_leases,
-        )
-        .await;
-    }
-
-    for candle_job in review_jobs {
-        process_candle_job_for_agent(
             pool,
             backend,
             workspace_controller,
@@ -942,6 +958,12 @@ async fn process_candle_job_for_agent(
             debug!(
                 sub_agent_id,
                 agent_key, "candle_job no longer due at claim time"
+            );
+        }
+        store::ClaimedCandleSubAgentRun::Deferred => {
+            debug!(
+                sub_agent_id,
+                agent_key, "review lane occupied; retrying on next tick"
             );
         }
         store::ClaimedCandleSubAgentRun::Skipped { run_id } => {
@@ -2740,6 +2762,57 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn tick_runs_review_and_analysis_concurrently_for_same_agent() {
+        let pool = test_db::pool().await;
+        let key = format!(
+            "sched-review-lane-{}",
+            Utc::now().timestamp_nanos_opt().unwrap_or(0)
+        );
+        seed_test_agent(&pool, &key).await;
+        let (analysis_id, review_id): (i64, i64) = sqlx::query_as(
+            "SELECT (SELECT id FROM harness_sub_agents WHERE agent_key = $1 AND sub_agent_key = 'technical-15m'),
+                    (SELECT id FROM harness_sub_agents WHERE agent_key = $1 AND sub_agent_kind = 'review')",
+        )
+        .bind(&key)
+        .fetch_one(&pool)
+        .await
+        .expect("load analysis and review jobs");
+        pin_job_due(&pool, analysis_id, "15m").await;
+        pin_job_due(&pool, review_id, "1d").await;
+
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let backend_impl = Arc::new(FakeBackend::with_barrier(calls.clone(), 2));
+        let backend: Arc<dyn HarnessBackend> = backend_impl.clone();
+        let mut scheduler = HarnessScheduler::new(
+            pool.clone(),
+            watch::channel(false).1,
+            watch::channel(false).1,
+            backend,
+            Arc::new(LiveAccountStore::new()),
+            scheduler_runtime(InFlightTracker::new()),
+        );
+        scheduler.tick().await.expect("tick");
+        run_until(|| async { calls.lock().expect("lock calls").len() == 2 }).await;
+
+        let mut kinds: Vec<String> = calls
+            .lock()
+            .expect("lock calls")
+            .iter()
+            .map(|r| r.sub_agent_kind.clone())
+            .collect();
+        kinds.sort();
+        assert_eq!(kinds, ["analysis", "review"]);
+        assert!(backend_impl.max_active_calls() >= 2);
+        assert!(
+            store::list_agent_runs(&pool, &key, 10)
+                .await
+                .expect("list runs")
+                .iter()
+                .all(|run| run.status != RUN_STATUS_SKIPPED)
+        );
+    }
+
+    #[tokio::test]
     async fn tick_dispatches_different_agents_concurrently() {
         let pool = test_db::pool().await;
         let key_a = format!("agent-a-{}", Utc::now().timestamp_nanos_opt().unwrap_or(0));
@@ -2854,6 +2927,88 @@ mod tests {
             skipped.error_summary.as_deref(),
             Some("previous run still active")
         );
+    }
+
+    #[tokio::test]
+    async fn review_claim_ignores_running_analysis_and_retries_busy_review() {
+        let pool = test_db::pool().await;
+        let key = format!(
+            "review-lane-{}",
+            Utc::now().timestamp_nanos_opt().unwrap_or(0)
+        );
+        seed_test_agent(&pool, &key).await;
+        let (analysis_id, review_id): (i64, i64) = sqlx::query_as(
+            "SELECT (SELECT id FROM harness_sub_agents WHERE agent_key = $1 AND sub_agent_key = 'technical-15m'),
+                    (SELECT id FROM harness_sub_agents WHERE agent_key = $1 AND sub_agent_kind = 'review')",
+        )
+        .bind(&key)
+        .fetch_one(&pool)
+        .await
+        .expect("load jobs");
+        let due = pin_job_due(&pool, review_id, "1d").await;
+        let analysis_run_id = insert_test_run(&pool, analysis_id, RUN_STATUS_RUNNING)
+            .await
+            .expect("seed running analysis");
+        let first = claim_due_candle_sub_agent(&pool, review_id, Utc::now())
+            .await
+            .expect("review claim despite analysis");
+        let ClaimedCandleSubAgentRun::Dispatch { run_id } = first else {
+            panic!("analysis must not block the review lane");
+        };
+        assert_eq!(
+            store::get_run(&pool, run_id)
+                .await
+                .expect("fetch review")
+                .expect("run")
+                .scheduled_for,
+            crate::harness::timeframe::boundary_for_due_at(
+                due,
+                crate::harness::timeframe::DEFAULT_TRIGGER_DELAY_SECONDS
+            )
+        );
+        store::mark_run_succeeded(&pool, run_id, None)
+            .await
+            .expect("finish first review");
+        store::mark_run_succeeded(&pool, analysis_run_id, None)
+            .await
+            .expect("finish analysis");
+
+        let second_due = pin_job_due(&pool, review_id, "1d").await;
+        let active_review_id = insert_test_run(&pool, review_id, RUN_STATUS_RUNNING)
+            .await
+            .expect("seed running review");
+        let before = store::count_sub_agent_runs(&pool, &key, review_id)
+            .await
+            .expect("count before");
+        assert!(matches!(
+            claim_due_candle_sub_agent(&pool, review_id, Utc::now())
+                .await
+                .expect("defer claim"),
+            ClaimedCandleSubAgentRun::Deferred
+        ));
+        assert_eq!(
+            store::count_sub_agent_runs(&pool, &key, review_id)
+                .await
+                .expect("count after"),
+            before
+        );
+        let (next_run_at,): (chrono::DateTime<Utc>,) =
+            sqlx::query_as("SELECT next_run_at FROM harness_sub_agents WHERE id = $1")
+                .bind(review_id)
+                .fetch_one(&pool)
+                .await
+                .expect("load schedule");
+        assert_eq!(next_run_at, second_due);
+
+        store::mark_run_succeeded(&pool, active_review_id, None)
+            .await
+            .expect("finish active review");
+        assert!(matches!(
+            claim_due_candle_sub_agent(&pool, review_id, Utc::now())
+                .await
+                .expect("retry review"),
+            ClaimedCandleSubAgentRun::Dispatch { .. }
+        ));
     }
 
     #[tokio::test]

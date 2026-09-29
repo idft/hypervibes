@@ -836,6 +836,9 @@ pub enum ClaimedCandleSubAgentRun {
     /// still active. A `skipped` run row was inserted and returned; no
     /// backend dispatch should happen.
     Skipped { run_id: i64 },
+    /// A review is due, but its own lane is occupied. Leave the schedule
+    /// unchanged so the next tick retries the same review window.
+    Deferred,
     /// The job was no longer due (concurrent claim, disabled,
     /// missing, etc.). No row was written.
     NotDue,
@@ -940,6 +943,12 @@ pub async fn claim_due_candle_sub_agent(
 
     let outcome =
         if has_active_run_in_lane_tx(&mut tx, &job.agent_key, &job.sub_agent_kind, now).await? {
+            if job.sub_agent_kind == SUB_AGENT_KIND_REVIEW {
+                tx.commit()
+                    .await
+                    .context("failed to commit deferred review claim")?;
+                return Ok(ClaimedCandleSubAgentRun::Deferred);
+            }
             let run_id = insert_run_with_model_variant_in_tx(
                 &mut tx,
                 job.id,
