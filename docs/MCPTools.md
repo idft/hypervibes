@@ -16,7 +16,7 @@ private key.
 | `hypervibes_get_account` | Analysis, Trading, and Chat |
 | `hypervibes_list_strategy_prompts` | Chat and Review |
 | `hypervibes_get_strategy_prompt` | Chat and Review |
-| `hypervibes_update_strategy_prompt` | Chat only; confirmation required |
+| `hypervibes_update_strategy_prompt` | Chat only; Strategy prompts permission (Confirm by default) |
 | `hypervibes_submit_prompt_revision` | Review with the prompt-update capability; Trading and Analysis targets only |
 | `hypervibes_get_trading_context` | Trading and Chat |
 | `hypervibes_get_memory_detail` | Review and Chat |
@@ -39,8 +39,8 @@ private key.
 | `hypervibes_list_indicators` | Analysis, Review, and Chat |
 | `hypervibes_get_indicator` | Analysis, Review, and Chat |
 | `hypervibes_get_indicator_results` | Analysis, Review, and Chat |
-| `hypervibes_create_indicator` | Review with the indicator-write capability; Chat with confirmation |
-| `hypervibes_update_indicator` | Review with the indicator-write capability; Chat with confirmation |
+| `hypervibes_create_indicator` | Review with the indicator-write capability; Chat Indicators permission (Confirm by default) |
+| `hypervibes_update_indicator` | Review with the indicator-write capability; Chat Indicators permission (Confirm by default) |
 
 `hypervibes:notification_send` is the named capability for queueing a gateway
 notification. Trading and Review enable it by default; Analysis and Chat are

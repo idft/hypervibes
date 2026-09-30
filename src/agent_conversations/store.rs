@@ -7,9 +7,8 @@ use uuid::Uuid;
 use crate::{
     agent_conversations::model::{
         AgentConversationListRow, AgentConversationRow, AgentConversationToolPolicyRow,
-        CreateAgentConversation, TOOL_GROUP_MEMORY_WRITES, TOOL_GROUP_NOTIFICATIONS,
-        TOOL_GROUP_ORDERS, TOOL_POLICY_ALLOW, TOOL_POLICY_CONFIRM, TOOL_POLICY_DENY,
-        UpdateAgentConversationModel,
+        CreateAgentConversation, DEFAULT_TOOL_POLICIES, TOOL_POLICY_ALLOW, TOOL_POLICY_CONFIRM,
+        TOOL_POLICY_DENY, UpdateAgentConversationModel,
     },
     db::DbPool,
 };
@@ -89,15 +88,7 @@ pub async fn create_conversation_with_default_policies(
     .context("failed to insert agent conversation")?
     .ok_or_else(|| anyhow!("agent does not exist"))?;
 
-    for (tool_group, policy) in [
-        (TOOL_GROUP_ORDERS, TOOL_POLICY_CONFIRM),
-        (TOOL_GROUP_MEMORY_WRITES, TOOL_POLICY_CONFIRM),
-        (TOOL_GROUP_NOTIFICATIONS, TOOL_POLICY_DENY),
-        (
-            crate::agent_conversations::model::TOOL_GROUP_JOURNAL_WRITES,
-            TOOL_POLICY_DENY,
-        ),
-    ] {
+    for (tool_group, policy) in DEFAULT_TOOL_POLICIES {
         sqlx::query(
             "INSERT INTO agent_conversation_tool_policies (conversation_id, tool_group, policy) \
              VALUES ($1, $2, $3)",
@@ -670,28 +661,24 @@ fn validate_input(validation: Result<(), Vec<String>>) -> Result<()> {
 }
 
 fn validate_tool_policies(policies: &[AgentConversationToolPolicyRow]) -> Result<()> {
-    if policies.len() != 4 {
+    if policies.len() != DEFAULT_TOOL_POLICIES.len() {
         bail!("conversation tool policies must contain all known tool groups exactly once");
     }
-    let mut orders = 0;
-    let mut memory_writes = 0;
-    let mut notifications = 0;
-    let mut journal_writes = 0;
-    for policy in policies {
-        match policy.tool_group.trim() {
-            TOOL_GROUP_ORDERS => orders += 1,
-            TOOL_GROUP_MEMORY_WRITES => memory_writes += 1,
-            TOOL_GROUP_NOTIFICATIONS => notifications += 1,
-            crate::agent_conversations::model::TOOL_GROUP_JOURNAL_WRITES => journal_writes += 1,
-            other => bail!("unknown conversation tool group: {other}"),
+    for (tool_group, _) in DEFAULT_TOOL_POLICIES {
+        if policies
+            .iter()
+            .filter(|policy| policy.tool_group == tool_group)
+            .count()
+            != 1
+        {
+            bail!("conversation tool policies must contain all known tool groups exactly once");
         }
+    }
+    for policy in policies {
         match policy.policy.trim() {
             TOOL_POLICY_DENY | TOOL_POLICY_CONFIRM | TOOL_POLICY_ALLOW => {}
             other => bail!("unknown conversation tool policy: {other}"),
         }
-    }
-    if orders != 1 || memory_writes != 1 || notifications != 1 || journal_writes != 1 {
-        bail!("conversation tool policies must contain all known tool groups exactly once");
     }
     Ok(())
 }
@@ -834,7 +821,7 @@ mod tests {
         .await
         .expect("create conversation");
 
-        assert_eq!(created.tool_policies.len(), 4);
+        assert_eq!(created.tool_policies.len(), 6);
         assert!(
             created
                 .tool_policies
@@ -864,6 +851,48 @@ mod tests {
             .expect("conversation exists");
         assert_eq!(loaded.id, created.id);
         assert_eq!(loaded.model_variant.as_deref(), Some("high"));
+    }
+
+    #[tokio::test]
+    async fn permissions_migration_backfills_confirmation_without_changing_existing_policies() {
+        let pool = test_db::pool().await;
+        let key = format!("permissions-migration-{}", Uuid::new_v4());
+        seed_agent(&pool, &key).await;
+        let created = create_conversation_with_default_policies(
+            &pool,
+            &create_input(&key, "ses_permissions_migration"),
+        )
+        .await
+        .expect("create conversation");
+        sqlx::query("UPDATE agent_conversation_tool_policies SET policy = 'allow' WHERE conversation_id = $1 AND tool_group = 'orders'")
+            .bind(created.id).execute(&pool).await.expect("customize existing policy");
+        sqlx::raw_sql(include_str!(
+            "../../migrations/0027_chat_permissions.down.sql"
+        ))
+        .execute(&pool)
+        .await
+        .expect("restore previous schema");
+        sqlx::raw_sql(include_str!("../../migrations/0027_chat_permissions.sql"))
+            .execute(&pool)
+            .await
+            .expect("migrate existing conversation");
+        let migrated = get_agent_conversation(&pool, &key, created.id)
+            .await
+            .expect("load migrated conversation")
+            .expect("conversation exists");
+        assert_eq!(migrated.tool_policies.len(), 6);
+        for (group, expected) in [
+            ("orders", "allow"),
+            ("indicator_writes", "confirm"),
+            ("strategy_prompt_writes", "confirm"),
+        ] {
+            assert!(
+                migrated
+                    .tool_policies
+                    .iter()
+                    .any(|policy| policy.tool_group == group && policy.policy == expected)
+            );
+        }
     }
 
     #[tokio::test]

@@ -24,8 +24,9 @@ use uuid::Uuid;
 use crate::{
     agent_conversations::{
         model::{
-            AgentConversationRow, ConversationInitializing, TOOL_GROUP_JOURNAL_WRITES,
-            TOOL_GROUP_MEMORY_WRITES, TOOL_GROUP_NOTIFICATIONS, TOOL_GROUP_ORDERS,
+            AgentConversationRow, ConversationInitializing, TOOL_GROUP_INDICATOR_WRITES,
+            TOOL_GROUP_JOURNAL_WRITES, TOOL_GROUP_MEMORY_WRITES, TOOL_GROUP_NOTIFICATIONS,
+            TOOL_GROUP_ORDERS, TOOL_GROUP_STRATEGY_PROMPT_WRITES,
         },
         service::{CONVERSATION_MESSAGE_MAX_CHARS, ConversationService},
     },
@@ -85,17 +86,21 @@ pub(in crate::web::routes) struct ConversationMessageForm {
 #[derive(Default, Deserialize)]
 pub(in crate::web::routes) struct ConversationSettingsForm {
     #[serde(default)]
-    model_selection: String,
+    model_selection: Option<String>,
     #[serde(default)]
     model_variant: String,
     #[serde(default)]
-    orders_policy: String,
+    orders_policy: Option<String>,
     #[serde(default)]
-    memory_writes_policy: String,
+    memory_writes_policy: Option<String>,
     #[serde(default)]
-    notifications_policy: String,
+    notifications_policy: Option<String>,
     #[serde(default)]
-    journal_writes_policy: String,
+    journal_writes_policy: Option<String>,
+    #[serde(default)]
+    indicator_writes_policy: Option<String>,
+    #[serde(default)]
+    strategy_prompt_writes_policy: Option<String>,
 }
 #[derive(Default, Deserialize)]
 pub(in crate::web::routes) struct PermissionReplyForm {
@@ -180,30 +185,9 @@ async fn load_snapshot(
         conversation.model_variant.as_deref(),
         load_model_picker_context(state, &agent).await,
     );
-    let orders_policy = conversation
-        .tool_policies
-        .iter()
-        .find(|item| item.tool_group == TOOL_GROUP_ORDERS)
-        .map(|item| item.policy.clone())
-        .unwrap_or_else(|| "confirm".to_string());
-    let memory_writes_policy = conversation
-        .tool_policies
-        .iter()
-        .find(|item| item.tool_group == TOOL_GROUP_MEMORY_WRITES)
-        .map(|item| item.policy.clone())
-        .unwrap_or_else(|| "confirm".to_string());
-    let notifications_policy = conversation
-        .tool_policies
-        .iter()
-        .find(|item| item.tool_group == TOOL_GROUP_NOTIFICATIONS)
-        .map(|item| item.policy.clone())
-        .unwrap_or_else(|| "deny".to_string());
-    let journal_writes_policy = conversation
-        .tool_policies
-        .iter()
-        .find(|item| item.tool_group == TOOL_GROUP_JOURNAL_WRITES)
-        .map(|item| item.policy.clone())
-        .unwrap_or_else(|| "deny".to_string());
+    let policies = crate::web::templates::AgentConversationPolicyView::from_policies(
+        &conversation.tool_policies,
+    );
     let initializing = conversation.is_initializing();
     let permissions = if initializing {
         Vec::new()
@@ -231,10 +215,7 @@ async fn load_snapshot(
         initializing,
         settings: AgentConversationSettingsView {
             model_picker: picker,
-            orders_policy,
-            memory_writes_policy,
-            notifications_policy,
-            journal_writes_policy,
+            policies,
             disabled: busy || initializing,
         },
         permissions,
@@ -747,24 +728,34 @@ pub(in crate::web::routes) async fn agents_update_conversation_settings(
     if let Err(error) = current.require_initialized() {
         return conversation_action_error(error.into());
     }
-    let selection = parse_model_selection(&form.model_selection)
-        .map_err(anyhow::Error::msg)?
-        .ok_or_else(|| AppError(anyhow::anyhow!("Select a model.")))?;
-    let selection =
+    let selection = if let Some(model_selection) = &form.model_selection {
+        let selection = parse_model_selection(model_selection)
+            .map_err(anyhow::Error::msg)?
+            .ok_or_else(|| AppError(anyhow::anyhow!("Select a model.")))?;
         validate_model_selection_for_agent(&state, Some(selection), &form.model_variant)
             .await
             .map_err(|error| AppError(anyhow::anyhow!(error)))?
-            .ok_or_else(|| AppError(anyhow::anyhow!("Select a model.")))?;
+            .ok_or_else(|| AppError(anyhow::anyhow!("Select a model.")))?
+    } else {
+        (
+            current.model_provider_id.clone(),
+            current.model_id.clone(),
+            current.model_variant.clone(),
+        )
+    };
     let mut policies = current.tool_policies;
     for policy in &mut policies {
-        if policy.tool_group == TOOL_GROUP_ORDERS {
-            policy.policy = form.orders_policy.clone();
-        } else if policy.tool_group == TOOL_GROUP_MEMORY_WRITES {
-            policy.policy = form.memory_writes_policy.clone();
-        } else if policy.tool_group == TOOL_GROUP_NOTIFICATIONS {
-            policy.policy = form.notifications_policy.clone();
-        } else if policy.tool_group == TOOL_GROUP_JOURNAL_WRITES {
-            policy.policy = form.journal_writes_policy.clone();
+        let submitted = match policy.tool_group.as_str() {
+            TOOL_GROUP_ORDERS => &form.orders_policy,
+            TOOL_GROUP_MEMORY_WRITES => &form.memory_writes_policy,
+            TOOL_GROUP_NOTIFICATIONS => &form.notifications_policy,
+            TOOL_GROUP_JOURNAL_WRITES => &form.journal_writes_policy,
+            TOOL_GROUP_INDICATOR_WRITES => &form.indicator_writes_policy,
+            TOOL_GROUP_STRATEGY_PROMPT_WRITES => &form.strategy_prompt_writes_policy,
+            _ => return Ok((StatusCode::BAD_REQUEST, "unknown permission group").into_response()),
+        };
+        if let Some(value) = submitted {
+            policy.policy = value.clone();
         }
     }
     if let Err(error) = service(&state)

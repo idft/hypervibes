@@ -1,5 +1,6 @@
 import { animateNumberRolls, tickRunningDurations } from "../../shared/presentation";
 import { installConversationCreationGuard } from "./conversation-creation";
+import { installChatPermissions } from "./chat-permissions";
 
 const SUB_AGENTS_REFRESH_KEY = "agent-sub-agents-refresh-required";
 
@@ -135,6 +136,7 @@ function preserveConversationDraftOnSse(event: Event) {
 }
 
 export function installAgentLiveLifecycle() {
+  installChatPermissions();
   installConversationCreationGuard();
   installDetailDeleteModal();
   installPositionCloseModal();

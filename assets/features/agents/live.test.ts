@@ -1,5 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+vi.mock("htmx.org", () => ({ default: { swap: vi.fn() } }));
+
 import { installAgentLiveLifecycle } from "./live";
 import { initModelPickers } from "./model-picker";
 

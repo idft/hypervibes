@@ -27,7 +27,8 @@ Each role page edits its prompt; an Analysis sub-agent detail edits that
 specific sub-agent's prompt. New Analysis sub-agents start with the default
 Analysis prompt, which can be customized during creation. **Discuss prompt**
 opens Chat with the current draft as opening context. Saving creates an
-immutable revision. Chat changes require one-time OpenCode confirmation.
+immutable revision. Chat changes follow the conversation's Strategy prompts
+permission, which defaults to one-time OpenCode confirmation.
 
 When granted its prompt-update capability, Review may submit an evidence-backed
 atomic revision batch for Trading and Analysis. It validates target ownership

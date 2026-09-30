@@ -404,7 +404,7 @@ async fn conversation_creation_survives_caller_cancellation_at_each_remote_stage
             assert!(row.opencode_session_id.starts_with("ses_"));
             assert_eq!(row.model_variant.as_deref(), Some("high"));
             assert_eq!(row.channel, "web");
-            assert_eq!(row.tool_policies.len(), 4);
+            assert_eq!(row.tool_policies.len(), 6);
         }
     }
 }
@@ -484,7 +484,7 @@ async fn independently_admitted_conversations_keep_their_models_channels_and_pol
         assert_eq!(stored.model_provider_id, "test");
         assert_eq!(stored.model_id, "model");
         assert_eq!(stored.model_variant, row.model_variant);
-        assert_eq!(stored.tool_policies.len(), 4);
+        assert_eq!(stored.tool_policies.len(), 6);
     }
     let requests = backend.control.requests.lock().await;
     assert_eq!(requests.len(), 2);
@@ -503,6 +503,9 @@ async fn independently_admitted_conversations_keep_their_models_channels_and_pol
             ("hypervibes_add_journal_note", "deny"),
             ("hypervibes_list_account_trades", "allow"),
             ("hypervibes_get_account_trade", "allow"),
+            ("hypervibes_create_indicator", "ask"),
+            ("hypervibes_update_indicator", "ask"),
+            ("hypervibes_update_strategy_prompt", "ask"),
         ] {
             assert!(
                 rules
@@ -608,6 +611,79 @@ async fn pending_conversation_actions_and_agent_deletion_preserve_local_state() 
         backend.control.requests.lock().await.is_empty(),
         "no session-specific requests or workspace deletion while pending"
     );
+}
+
+#[tokio::test]
+async fn permission_and_model_settings_save_independently_and_update_runtime_rules() {
+    let backend = FakeBackend::start().await;
+    let state = backend.state().await;
+    let (agent, _) = insert_test_opencode_agent(&state)
+        .await
+        .expect("insert agent");
+    let conversation = conversation_service(&state)
+        .create_web_conversation(&agent, "test", "model", Some("high"))
+        .await
+        .expect("create conversation");
+    drain(&state).await;
+    let app = router(Arc::clone(&state));
+    for form in [
+        "orders_policy=confirm&memory_writes_policy=allow&notifications_policy=deny&journal_writes_policy=deny&indicator_writes_policy=allow&strategy_prompt_writes_policy=deny",
+        "model_selection=test/model&model_variant=high",
+    ] {
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/agents/{agent}/chat/{}/settings", conversation.id))
+                    .header("content-type", "application/x-www-form-urlencoded")
+                    .body(Body::from(form))
+                    .expect("settings request"),
+            )
+            .await
+            .expect("settings response");
+        assert_eq!(response.status(), StatusCode::SEE_OTHER);
+        let saved = store::get_agent_conversation(&state.db_pool, &agent, conversation.id)
+            .await
+            .expect("load conversation")
+            .expect("conversation exists");
+        assert_eq!(saved.model_provider_id, "test");
+        assert_eq!(saved.model_id, "model");
+        assert_eq!(saved.model_variant.as_deref(), Some("high"));
+        for (group, policy) in [
+            ("indicator_writes", "allow"),
+            ("strategy_prompt_writes", "deny"),
+            ("memory_writes", "allow"),
+        ] {
+            assert!(
+                saved
+                    .tool_policies
+                    .iter()
+                    .any(|item| item.tool_group == group && item.policy == policy)
+            );
+        }
+    }
+    let requests = backend.control.requests.lock().await;
+    let updates = requests
+        .iter()
+        .filter(|(id, body)| id != "session" && body["permission"].is_array())
+        .collect::<Vec<_>>();
+    assert_eq!(updates.len(), 2);
+    for (_, body) in updates {
+        let rules = body["permission"].as_array().expect("runtime rules");
+        for (permission, action) in [
+            ("hypervibes_create_indicator", "allow"),
+            ("hypervibes_update_indicator", "allow"),
+            ("hypervibes_update_strategy_prompt", "deny"),
+            ("hypervibes_write_memory", "allow"),
+        ] {
+            assert!(
+                rules
+                    .iter()
+                    .any(|rule| rule["permission"] == permission && rule["action"] == action)
+            );
+        }
+    }
 }
 
 #[tokio::test]

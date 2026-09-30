@@ -1,0 +1,24 @@
+<dialog id="chat-permissions-modal" aria-labelledby="chat-permissions-title" aria-describedby="chat-permissions-description" class="m-auto max-h-[calc(100dvh-2rem)] w-[min(32rem,calc(100vw-2rem))] overflow-y-auto rounded-3xl border border-zinc-800 bg-[#0d0d10] p-0 text-zinc-200 shadow-2xl shadow-black/50 backdrop:bg-black/70 backdrop:backdrop-blur-sm">
+  <form action="/agents/{{ agent_key }}/chat/{{ conversation_id }}/settings" method="post" data-chat-permissions-form>
+    <div class="border-b border-zinc-800 px-6 py-4">
+      <h3 id="chat-permissions-title" class="text-lg font-medium text-white">Manage permissions</h3>
+      <p id="chat-permissions-description" class="mt-1 text-sm text-zinc-400">Choose which actions this conversation can perform. Confirm asks for approval each time.</p>
+    </div>
+    <fieldset {% if settings.disabled %}disabled{% endif %} class="divide-y divide-zinc-800 px-6 [&:disabled_select]:cursor-not-allowed [&:disabled_select]:opacity-50">
+      {% for permission in settings.policies %}
+      <label class="flex items-center justify-between gap-4 py-3 text-sm">
+        <span>{{ permission.label }}</span>
+        <select name="{{ permission.input_name }}" class="cursor-pointer rounded-lg border border-zinc-800 bg-zinc-950 px-3 py-2 text-sm text-zinc-200 focus:border-violet-500 focus:outline-none">
+          <option value="deny" {% if permission.policy == "deny" %}selected{% endif %}>Deny</option>
+          <option value="confirm" {% if permission.policy == "confirm" %}selected{% endif %}>Confirm</option>
+          <option value="allow" {% if permission.policy == "allow" %}selected{% endif %}>Allow</option>
+        </select>
+      </label>
+      {% endfor %}
+    </fieldset>
+    <div class="flex justify-end gap-3 border-t border-zinc-800 px-6 py-4">
+      <button type="button" data-chat-permissions-cancel class="cursor-pointer rounded-full border border-zinc-800 px-4 py-2 text-sm font-medium text-zinc-300 hover:border-zinc-700 hover:text-white">Cancel</button>
+      <button type="submit" {% if settings.disabled %}disabled{% endif %} class="cursor-pointer rounded-full bg-violet-600 px-4 py-2 text-sm font-medium text-white hover:bg-violet-500 disabled:cursor-not-allowed disabled:opacity-50">Save</button>
+    </div>
+  </form>
+</dialog>

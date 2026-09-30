@@ -8,9 +8,20 @@ pub const TOOL_GROUP_ORDERS: &str = "orders";
 pub const TOOL_GROUP_MEMORY_WRITES: &str = "memory_writes";
 pub const TOOL_GROUP_NOTIFICATIONS: &str = "notifications";
 pub const TOOL_GROUP_JOURNAL_WRITES: &str = "journal_writes";
+pub const TOOL_GROUP_INDICATOR_WRITES: &str = "indicator_writes";
+pub const TOOL_GROUP_STRATEGY_PROMPT_WRITES: &str = "strategy_prompt_writes";
 pub const TOOL_POLICY_DENY: &str = "deny";
 pub const TOOL_POLICY_CONFIRM: &str = "confirm";
 pub const TOOL_POLICY_ALLOW: &str = "allow";
+
+pub const DEFAULT_TOOL_POLICIES: [(&str, &str); 6] = [
+    (TOOL_GROUP_ORDERS, TOOL_POLICY_CONFIRM),
+    (TOOL_GROUP_MEMORY_WRITES, TOOL_POLICY_CONFIRM),
+    (TOOL_GROUP_NOTIFICATIONS, TOOL_POLICY_DENY),
+    (TOOL_GROUP_JOURNAL_WRITES, TOOL_POLICY_DENY),
+    (TOOL_GROUP_INDICATOR_WRITES, TOOL_POLICY_CONFIRM),
+    (TOOL_GROUP_STRATEGY_PROMPT_WRITES, TOOL_POLICY_CONFIRM),
+];
 
 pub fn session_is_pending(session_id: &str) -> bool {
     session_id.starts_with("pending_")

@@ -37,13 +37,19 @@ tools and never reads the workspace `.env`. Its default read tools are:
 - `hypervibes_get_indicator`
 - `hypervibes_get_indicator_results`
 
-Order actions and memory writes use the conversation's Deny, Confirm, or Allow
-permission. Prompt updates always require one-time confirmation through
-`hypervibes_update_strategy_prompt`.
+The header shows each conversation permission's current status. Use **Manage
+permissions** to change Orders, Memory, Notifications, Journal notes, Indicators,
+or Strategy prompts, then **Save** to apply them. **Cancel** discards your edits.
+Permissions can be changed while the conversation is idle.
+
+Each permission supports **Deny**, **Confirm** (one-time approval for each action),
+or **Allow**. Orders, Memory, Indicators, and Strategy prompts default to Confirm;
+Notifications and Journal notes default to Deny. Read-only tools remain allowed.
+The Strategy prompts permission controls `hypervibes_update_strategy_prompt`.
 
 Chat can also create or update an agent-owned indicator using validated
-PineScript-subset source. Each mutation requires the same one-time OpenCode
-confirmation and records the conversation as its provenance. Chat cannot grant
+PineScript-subset source. Each mutation follows the Indicators permission and
+records the conversation as its provenance. Chat cannot grant
 an indicator access to instruments outside the agent's analysis set.
 It first lists selected analysis instruments and uses those IDs unchanged. If
 none are selected, Chat directs the operator to Settings rather than guessing
@@ -61,7 +67,7 @@ The **Discuss prompt** action on a role page opens Chat with the draft:
 2. HyperVibes creates a conversation using the latest Chat model.
 3. The draft is included in the opening message when it fits the context limit.
 4. Chat can load the saved target prompt when the draft is too long.
-5. Any requested MCP update waits for one-time confirmation.
+5. Any requested MCP update follows the conversation's Strategy prompts permission.
 
 Chat prompt tools only access the current agent's targets. Scheduled sub-agents
 receive their prompt revision as input but cannot modify it.

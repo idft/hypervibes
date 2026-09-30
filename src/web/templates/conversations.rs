@@ -56,11 +56,43 @@ impl AgentConversationListItemView {
 #[derive(Debug, Clone)]
 pub struct AgentConversationSettingsView {
     pub model_picker: ModelPickerView,
-    pub orders_policy: String,
-    pub memory_writes_policy: String,
-    pub notifications_policy: String,
-    pub journal_writes_policy: String,
+    pub policies: Vec<AgentConversationPolicyView>,
     pub disabled: bool,
+}
+#[derive(Debug, Clone)]
+pub struct AgentConversationPolicyView {
+    pub label: &'static str,
+    pub input_name: String,
+    pub policy: String,
+}
+
+impl AgentConversationPolicyView {
+    pub fn from_policies(
+        policies: &[crate::agent_conversations::model::AgentConversationToolPolicyRow],
+    ) -> Vec<Self> {
+        use crate::agent_conversations::model::*;
+
+        DEFAULT_TOOL_POLICIES
+            .into_iter()
+            .map(|(tool_group, default_policy)| Self {
+                label: match tool_group {
+                    TOOL_GROUP_ORDERS => "Orders",
+                    TOOL_GROUP_MEMORY_WRITES => "Memory",
+                    TOOL_GROUP_NOTIFICATIONS => "Notifications",
+                    TOOL_GROUP_JOURNAL_WRITES => "Journal notes",
+                    TOOL_GROUP_INDICATOR_WRITES => "Indicators",
+                    TOOL_GROUP_STRATEGY_PROMPT_WRITES => "Strategy prompts",
+                    _ => unreachable!("default tool groups have display labels"),
+                },
+                input_name: format!("{tool_group}_policy"),
+                policy: policies
+                    .iter()
+                    .find(|policy| policy.tool_group == tool_group)
+                    .map(|policy| policy.policy.clone())
+                    .unwrap_or_else(|| default_policy.to_string()),
+            })
+            .collect()
+    }
 }
 #[derive(Debug, Clone)]
 pub struct AgentConversationPermissionRequestView {
