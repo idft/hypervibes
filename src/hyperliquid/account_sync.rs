@@ -74,6 +74,17 @@ pub async fn sync_account_once(
         streams.push(result);
     }
 
+    if streams
+        .iter()
+        .any(|result| result.stream == SyncStream::Fills && result.error.is_none())
+    {
+        super::trade_store::rebuild_dirty(
+            pool,
+            &config.account_address,
+            config.environment.as_journal_str(),
+        )
+        .await?;
+    }
     Ok(SyncSummary { streams })
 }
 

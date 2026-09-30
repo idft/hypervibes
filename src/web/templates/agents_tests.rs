@@ -382,18 +382,23 @@ fn jobs_page_renders_recent_runs_pagination_controls() {
 #[test]
 fn transactions_page_renders_pagination_controls() {
     let row = AccountTransactionRow {
+        event_id: "test-event".to_string(),
         event_time: Utc::now(),
         event_category: "ledger".to_string(),
+        activity_type: "deposit".to_string(),
+        token: None,
         symbol: None,
         asset: None,
         fee_usdc: None,
         realized_pnl_usdc: None,
         usdc_delta: Some(rust_decimal::Decimal::new(1, 0)),
         running_balance: Some(rust_decimal::Decimal::new(5, 0)),
+        has_notes: false,
     };
     let mut template =
         AgentsShowPageTemplate::new(sample_agent_detail_row(), AgentShowTab::Transactions, 0);
     template.transactions = vec![TransactionView::from_row(row)];
+    template.transactions_view = "activity".into();
     template.transactions_page = 2;
     template.transactions_total_pages = 3;
     template.transactions_total_count = 125;

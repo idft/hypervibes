@@ -38,6 +38,7 @@ pub enum RunApiScope {
     OrderRead,
     OrderWrite,
     TransactionRead,
+    TradeJournalWrite,
     PromptRead,
     PromptRevisionSubmit,
     NotificationSend,
@@ -56,6 +57,7 @@ impl RunApiScope {
             Self::OrderRead => "hypervibes:order_read",
             Self::OrderWrite => "hypervibes:order_write",
             Self::TransactionRead => "hypervibes:transaction_read",
+            Self::TradeJournalWrite => "hypervibes:trade_journal_write",
             Self::PromptRead => "hypervibes:prompt_read",
             Self::PromptRevisionSubmit => CAPABILITY_PROMPT_REVISION_SUBMIT,
             Self::NotificationSend => CAPABILITY_NOTIFICATION_SEND,
@@ -74,6 +76,7 @@ impl RunApiScope {
             "hypervibes:order_read" => Some(Self::OrderRead),
             "hypervibes:order_write" => Some(Self::OrderWrite),
             "hypervibes:transaction_read" => Some(Self::TransactionRead),
+            "hypervibes:trade_journal_write" => Some(Self::TradeJournalWrite),
             "hypervibes:prompt_read" => Some(Self::PromptRead),
             CAPABILITY_PROMPT_REVISION_SUBMIT => Some(Self::PromptRevisionSubmit),
             CAPABILITY_NOTIFICATION_SEND => Some(Self::NotificationSend),
@@ -177,6 +180,7 @@ pub fn run_api_scopes_for_sub_agent(
             RunApiScope::MemoryWrite,
             RunApiScope::OrderRead,
             RunApiScope::TransactionRead,
+            RunApiScope::TradeJournalWrite,
             RunApiScope::PromptRead,
             RunApiScope::IndicatorRead,
         ],
@@ -1048,6 +1052,19 @@ mod tests {
         .expect("review write capabilities are valid");
         assert!(scopes.contains(&RunApiScope::PromptRevisionSubmit));
         assert!(scopes.contains(&RunApiScope::IndicatorWrite));
+    }
+
+    #[test]
+    fn journal_note_scopes_are_review_only() {
+        for role in [SUB_AGENT_KIND_ANALYSIS, SUB_AGENT_KIND_TRADING] {
+            let scopes = run_api_scopes_for_sub_agent(role, &[]).expect("role scopes");
+            assert!(!scopes.contains(&RunApiScope::TransactionRead));
+            assert!(!scopes.contains(&RunApiScope::TradeJournalWrite));
+        }
+        let review =
+            run_api_scopes_for_sub_agent(SUB_AGENT_KIND_REVIEW, &[]).expect("review scopes");
+        assert!(review.contains(&RunApiScope::TransactionRead));
+        assert!(review.contains(&RunApiScope::TradeJournalWrite));
     }
 
     #[test]

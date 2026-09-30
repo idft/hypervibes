@@ -160,7 +160,7 @@
         <section id="agent-transactions" class="flex min-h-0 flex-1 flex-col rounded-2xl border border-zinc-800 bg-[#0d0d10] p-6">
             <div class="shrink-0 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                 <h2 class="text-lg font-medium text-white">Transactions</h2>
-                {% if !transactions.is_empty() %}
+                {% if !transactions.is_empty() || !trades.is_empty() %}
                 <div class="flex items-center gap-2">
                     {% if let Some(previous_page_url) = transactions_previous_page_url %}
                     <a href="{{ previous_page_url }}" hx-get="{{ previous_page_url }}" hx-select="#agent-transactions" hx-target="#agent-transactions" hx-swap="outerHTML" hx-push-url="true" class="inline-flex items-center rounded-full border border-zinc-800 px-3 py-1.5 text-xs font-medium text-zinc-300 hover:border-zinc-700 hover:text-white">Previous</a>
@@ -172,6 +172,38 @@
                 </div>
                 {% endif %}
             </div>
+            <nav class="mt-4 flex gap-2 text-sm" aria-label="Transaction view">
+                <a href="/agents/{{ agent.agent_key }}/trades" hx-get="/agents/{{ agent.agent_key }}/trades" hx-select="#agent-transactions" hx-target="#agent-transactions" hx-swap="outerHTML" hx-push-url="true" class="rounded-full border px-4 py-1.5 {% if transactions_view == "trades" %}border-violet-500 text-white{% else %}border-zinc-800 text-zinc-400{% endif %}">Trades</a>
+                <a href="/agents/{{ agent.agent_key }}/transactions" hx-get="/agents/{{ agent.agent_key }}/transactions" hx-select="#agent-transactions" hx-target="#agent-transactions" hx-swap="outerHTML" hx-push-url="true" class="rounded-full border px-4 py-1.5 {% if transactions_view == "activity" %}border-violet-500 text-white{% else %}border-zinc-800 text-zinc-400{% endif %}">Activity</a>
+            </nav>
+            {% if transactions_view == "trades" %}
+            {% if trades.is_empty() %}
+            <p class="mt-4 text-sm text-zinc-400">No perpetual trade cycles have synced yet.</p>
+            {% else %}
+            <div class="dark-scrollbar mt-4 min-h-0 flex-1 overflow-auto">
+                <table class="min-w-full divide-y divide-zinc-800 text-sm">
+                    <thead class="text-left text-xs uppercase text-zinc-500"><tr><th class="px-3 py-3">Trade</th><th class="px-3 py-3">Status</th><th class="px-3 py-3">Last activity</th><th class="px-3 py-3 text-right">Entry / Exit price</th><th class="px-3 py-3 text-right" title="Total asset quantity entered">Amount</th><th class="px-3 py-3 text-right">Realized P&amp;L</th><th class="px-3 py-3 text-right">USDC fees</th><th class="px-3 py-3 text-right" title="Imported USDC funding received or paid while the position was open">Funding</th><th class="px-3 py-3 text-right" title="Realized P&amp;L minus trading fees plus signed funding">Net realized</th><th class="px-3 py-3"><span class="sr-only">Trade notes</span></th></tr></thead>
+                    <tbody class="divide-y divide-zinc-800">
+                    {% for trade in trades %}
+                    <tr class="cursor-default hover:bg-zinc-900/50">
+                        <td class="px-3 py-3"><a class="inline-flex items-center gap-2 text-violet-300 hover:text-violet-200" title="{{ trade.row.symbol }} · {{ trade.row.direction }}" href="/agents/{{ agent.agent_key }}/trades?page={{ transactions_page }}&target={{ trade.row.id }}"><img src="{{ trade.logo_url }}" alt="{{ trade.row.symbol }}" class="h-5 w-5 rounded-sm"><span>{{ trade.row.direction }}</span></a></td>
+                        <td class="px-3 py-3 text-zinc-300">{{ trade.row.status }}{% if let Some(reason) = trade.row.coverage_reason %}<span title="{{ reason }}" class="block text-xs text-amber-300">Incomplete coverage</span>{% endif %}</td>
+                        <td class="whitespace-nowrap px-3 py-3 text-xs text-zinc-400"><time class="timeago" datetime="{{ trade.last_activity.iso }}" title="{{ trade.last_activity.fallback_text }}">{{ trade.last_activity.fallback_text }}</time></td>
+                        <td class="px-3 py-3 text-right font-mono text-xs tabular-nums">{{ trade.entry_price }} / {{ trade.exit_price }}</td>
+                        <td class="px-3 py-3 text-right font-mono text-xs tabular-nums" title="Total quantity entered in {{ trade.row.symbol }}">{{ trade.amount }}</td>
+                        <td class="px-3 py-3 text-right font-mono text-xs tabular-nums {{ trade.gross_pnl.color_class }}">{{ trade.gross_pnl.value }}</td>
+                        <td class="px-3 py-3 text-right font-mono text-xs tabular-nums">{% if trade.row.fee_coverage %}{{ trade.usdc_fees }}{% else %}Incomplete{% endif %}</td>
+                        <td class="px-3 py-3 text-right font-mono text-xs tabular-nums {{ trade.funding.color_class }}">{{ trade.funding.value }}</td>
+                        <td class="px-3 py-3 text-right font-mono text-xs tabular-nums {{ trade.net_realized.color_class }}">{{ trade.net_realized.value }}</td>
+                        <td class="px-3 py-3"><a class="inline-flex text-zinc-400 hover:text-violet-300" aria-label="{% if trade.row.note_count > 0 %}View trade notes{% else %}Add trade note{% endif %}" title="{% if trade.row.note_count > 0 %}View trade notes{% else %}Add trade note{% endif %}" href="/agents/{{ agent.agent_key }}/trades?page={{ transactions_page }}&target={{ trade.row.id }}" hx-get="/agents/{{ agent.agent_key }}/trades?page={{ transactions_page }}&target={{ trade.row.id }}" hx-select="#journal-notes-modal" hx-target="#journal-notes-container" hx-swap="innerHTML" hx-push-url="false" data-journal-notes-trigger data-journal-target="{{ trade.row.id }}">{% let has_notes = trade.row.note_count > 0 %}{% include "agents/components/notes-icon.html" %}</a></td>
+                    </tr>
+                    {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            {% include "agents/components/transaction-pagination.html" %}
+            {% endif %}
+            {% else %}
             {% if transactions.is_empty() %}
             <div class="mt-4 rounded-xl border border-zinc-800 bg-zinc-950/70 p-6 text-center">
                 <p class="text-sm text-zinc-400">No transactions have synced yet.</p>
@@ -189,16 +221,17 @@
                             <th class="px-4 py-3 text-right font-medium">Realized PnL USDC</th>
                             <th class="px-4 py-3 text-right font-medium">USDC delta</th>
                             <th class="px-4 py-3 text-right font-medium">Balance</th>
+                            <th class="px-4 py-3"><span class="sr-only">Transaction notes</span></th>
                         </tr>
                     </thead>
                     <tbody class="divide-y divide-zinc-800">
                         {% for tx in transactions %}
-                        <tr class="hover:bg-zinc-900/50">
+                        <tr class="cursor-default hover:bg-zinc-900/50">
                             <td class="px-4 py-3 align-top font-mono text-xs tabular-nums text-zinc-300">
                                 <time class="local-datetime" data-local-format="datetime" datetime="{{ tx.event_time.iso }}" title="{{ tx.event_time.fallback_text }}">{{ tx.event_time.fallback_text }}</time>
                             </td>
                             <td class="px-4 py-3 align-top">
-                                <span class="inline-flex rounded border border-zinc-700 px-1.5 py-0.5 text-xs text-zinc-300">{{ tx.row.event_category }}</span>
+                                <span class="inline-flex rounded border border-zinc-700 px-1.5 py-0.5 text-xs text-zinc-300">{{ tx.row.activity_type }}</span>
                             </td>
                             <td class="px-4 py-3 align-top text-zinc-300">
                                 {% if let Some(symbol) = tx.row.symbol %}
@@ -207,29 +240,26 @@
                                 {% if let Some(asset) = tx.row.asset %}
                                 <div class="text-xs text-zinc-500">{{ asset }}</div>
                                 {% endif %}
+                                {% if let Some(token) = tx.row.token %}<div class="text-xs text-zinc-500">{{ token }}</div>{% endif %}
                             </td>
                             <td class="px-4 py-3 text-right align-top font-mono text-xs tabular-nums text-zinc-300">{{ tx.fee_usdc }}</td>
                             <td class="px-4 py-3 text-right align-top font-mono text-xs tabular-nums {{ tx.realized_pnl_usdc.color_class }}">{{ tx.realized_pnl_usdc.value }}</td>
                             <td class="px-4 py-3 text-right align-top font-mono text-xs tabular-nums {{ tx.usdc_delta.color_class }}">{{ tx.usdc_delta.value }}</td>
-                            <td class="px-4 py-3 text-right align-top font-mono text-xs tabular-nums text-zinc-300">{{ tx.running_balance.value }}</td>
+                            <td class="px-4 py-3 text-right align-top font-mono text-xs tabular-nums text-zinc-300">{% if tx.row.running_balance.is_some() %}{{ tx.running_balance.value }}{% else %}<span class="text-amber-300">Incomplete</span>{% endif %}</td>
+                            <td class="px-4 py-3 align-top"><a class="inline-flex text-zinc-400 hover:text-violet-300" aria-label="{% if tx.row.has_notes %}View transaction notes{% else %}Add transaction note{% endif %}" title="{% if tx.row.has_notes %}View transaction notes{% else %}Add transaction note{% endif %}" href="/agents/{{ agent.agent_key }}/transactions?page={{ transactions_page }}&kind={{ tx.row.event_category }}&target={{ tx.row.event_id }}" hx-get="/agents/{{ agent.agent_key }}/transactions?page={{ transactions_page }}&kind={{ tx.row.event_category }}&target={{ tx.row.event_id }}" hx-select="#journal-notes-modal" hx-target="#journal-notes-container" hx-swap="innerHTML" hx-push-url="false" data-journal-notes-trigger data-journal-target="{{ tx.row.event_id }}">{% let has_notes = tx.row.has_notes %}{% include "agents/components/notes-icon.html" %}</a></td>
                         </tr>
                         {% endfor %}
                     </tbody>
                 </table>
             </div>
-            <div class="mt-4 shrink-0 flex flex-col gap-3 border-t border-zinc-800 pt-4 text-sm text-zinc-400 sm:flex-row sm:items-center sm:justify-between">
-                <p>Showing {{ transactions_range_start }}-{{ transactions_range_end }} of {{ transactions_total_count }} transactions</p>
-                <div class="flex items-center gap-2">
-                    {% if let Some(previous_page_url) = transactions_previous_page_url %}
-                    <a href="{{ previous_page_url }}" hx-get="{{ previous_page_url }}" hx-select="#agent-transactions" hx-target="#agent-transactions" hx-swap="outerHTML" hx-push-url="true" class="inline-flex items-center rounded-full border border-zinc-800 px-3 py-1.5 text-xs font-medium text-zinc-300 hover:border-zinc-700 hover:text-white">Previous</a>
-                    {% endif %}
-                    <span class="px-2 text-xs uppercase tracking-[0.16em] text-zinc-500">Page {{ transactions_page }} of {{ transactions_total_pages }}</span>
-                    {% if let Some(next_page_url) = transactions_next_page_url %}
-                    <a href="{{ next_page_url }}" hx-get="{{ next_page_url }}" hx-select="#agent-transactions" hx-target="#agent-transactions" hx-swap="outerHTML" hx-push-url="true" class="inline-flex items-center rounded-full border border-zinc-800 px-3 py-1.5 text-xs font-medium text-zinc-300 hover:border-zinc-700 hover:text-white">Next</a>
-                    {% endif %}
-                </div>
-            </div>
+            {% include "agents/components/transaction-pagination.html" %}
             {% endif %}
+            {% endif %}
+            <div id="journal-notes-container">
+                {% if let Some(target) = journal_selected_id %}
+                {% include "agents/components/journal-notes-modal.html" %}
+                {% endif %}
+            </div>
         </section>
     </section>
     {% else if show_memories_tab %}

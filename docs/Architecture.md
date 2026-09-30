@@ -57,6 +57,10 @@ schema for registry and orchestration tables, and `memory`, `hyperliquid`, and
 `opencode` schemas for their respective data. All migrations live in
 `migrations/` and run at application startup.
 
+Hyperliquid account history powers the Trades and Activity views. Users and
+authorized agents can add notes to trades and individual transactions, with
+each note showing its author and time.
+
 ## Agent Execution
 
 A user first configures and approves one user-owned Hyperliquid trading

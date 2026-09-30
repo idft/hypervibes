@@ -12,6 +12,7 @@ mod runs;
 mod settings;
 pub(crate) mod shared;
 mod sub_agents;
+mod trades;
 
 pub fn frontend_asset_version() -> &'static str {
     env!("CARGO_PKG_VERSION")
@@ -33,6 +34,7 @@ pub use providers::*;
 pub use runs::*;
 pub use settings::*;
 pub use sub_agents::*;
+pub use trades::*;
 
 #[cfg(test)]
 mod test_support;

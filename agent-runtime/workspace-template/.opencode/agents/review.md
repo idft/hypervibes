@@ -12,6 +12,10 @@ permission:
   hypervibes_get_memory_detail: allow
   hypervibes_list_orders: allow
   hypervibes_list_account_transactions: allow
+  hypervibes_list_account_trades: allow
+  hypervibes_get_account_trade: allow
+  hypervibes_list_journal_notes: allow
+  hypervibes_add_journal_note: allow
   hypervibes_get_order: allow
   hypervibes_write_memory: allow
   hypervibes_list_strategy_prompts: allow

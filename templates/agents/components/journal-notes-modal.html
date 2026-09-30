@@ -1,0 +1,32 @@
+<dialog id="journal-notes-modal" data-journal-notes-modal data-journal-target="{{ target }}" aria-labelledby="journal-notes-title" class="m-auto max-h-[85vh] w-[calc(100vw-2rem)] max-w-3xl overflow-hidden rounded-2xl border border-zinc-800 bg-[#0d0d10] p-0 text-zinc-200 shadow-2xl backdrop:bg-black/70 backdrop:backdrop-blur-sm">
+    <div class="flex max-h-[85vh] flex-col">
+        <header class="flex shrink-0 items-center justify-between gap-4 border-b border-zinc-800 px-6 py-4">
+            <h3 id="journal-notes-title" class="text-lg font-medium text-white">{% if journal_selected_kind == "trade" %}Trade{% else %}Transaction{% endif %} notes</h3>
+            <a href="{{ current_path }}?page={{ transactions_page }}" data-journal-notes-close class="inline-flex cursor-pointer rounded-full p-2 text-zinc-400 hover:bg-zinc-900 hover:text-white" aria-label="Close notes" title="Close notes">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" class="size-5" aria-hidden="true"><path stroke-linecap="round" d="m6 6 12 12M6 18 18 6"/></svg>
+            </a>
+        </header>
+        <div class="dark-scrollbar min-h-0 flex-1 overflow-y-auto px-6 py-4">
+            {% if journal_selected_kind == "trade" %}
+            <details class="mb-5 rounded-xl border border-zinc-800 bg-zinc-950/60 p-4">
+                <summary class="cursor-pointer text-sm font-medium text-zinc-300">Trade fills</summary>
+                <div class="mt-3 space-y-2 text-xs text-zinc-400">{% for fill in trade_fills %}<p>{{ fill.row.fill_time }} · {{ fill.row.side }} · {{ fill.row.segment }} {{ fill.quantity }} @ {{ fill.price }} · fee {% if let Some(fee) = fill.fee_usdc %}{{ fee }}{% else %}unknown{% endif %} · realized <span class="{{ fill.realized_pnl.color_class }}">{{ fill.realized_pnl.value }}</span></p>{% endfor %}</div>
+            </details>
+            {% endif %}
+            {% if journal_notes.is_empty() %}
+            <p class="py-4 text-sm text-zinc-500">No notes yet. Add the first note below.</p>
+            {% else %}
+            <div class="space-y-4">{% for note in journal_notes %}<article class="rounded-xl border border-zinc-800 bg-zinc-950/60 p-4"><p class="whitespace-pre-wrap break-words text-sm text-zinc-200">{{ note.body }}</p><p class="mt-2 text-xs text-zinc-500">{{ note.author_kind }} · {{ note.author_id }} · {{ note.created_at }}</p></article>{% endfor %}</div>
+            {% endif %}
+        </div>
+        <form method="post" action="/agents/{{ agent.agent_key }}/transactions/{{ journal_selected_kind }}/{{ target }}/notes" hx-post="/agents/{{ agent.agent_key }}/transactions/{{ journal_selected_kind }}/{{ target }}/notes" hx-select="#agent-transactions" hx-target="#agent-transactions" hx-swap="outerHTML" hx-push-url="false" class="shrink-0 border-t border-zinc-800 px-6 py-4">
+            <input type="hidden" name="csrf_token" value="{{ journal_csrf_token }}"><input type="hidden" name="page" value="{{ transactions_page }}">
+            <label for="journal-note" class="mb-2 block text-sm font-medium text-zinc-300">Add a note</label>
+            <textarea id="journal-note" name="body" rows="3" maxlength="4000" required autofocus placeholder="Write a note…" class="block max-h-40 min-h-20 w-full resize-y rounded-lg border border-zinc-700 bg-zinc-950 px-3 py-2 text-sm text-white placeholder:text-zinc-600 focus:border-violet-500 focus:outline-none"></textarea>
+            <div class="mt-3 flex justify-end gap-2">
+                <a href="{{ current_path }}?page={{ transactions_page }}" data-journal-notes-close class="cursor-pointer rounded-full border border-zinc-800 px-4 py-2 text-sm text-zinc-300 hover:border-zinc-700 hover:text-white">Close</a>
+                <button type="submit" class="cursor-pointer rounded-full bg-violet-600 px-4 py-2 text-sm text-white hover:bg-violet-500">Save note</button>
+            </div>
+        </form>
+    </div>
+</dialog>

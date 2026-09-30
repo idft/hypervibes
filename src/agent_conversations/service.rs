@@ -9,8 +9,8 @@ use crate::{
     agent_conversations::{
         model::{
             AgentConversationRow, AgentConversationToolPolicyRow, CreateAgentConversation,
-            TOOL_GROUP_MEMORY_WRITES, TOOL_GROUP_NOTIFICATIONS, TOOL_GROUP_ORDERS,
-            TOOL_POLICY_ALLOW, TOOL_POLICY_CONFIRM, TOOL_POLICY_DENY,
+            TOOL_GROUP_JOURNAL_WRITES, TOOL_GROUP_MEMORY_WRITES, TOOL_GROUP_NOTIFICATIONS,
+            TOOL_GROUP_ORDERS, TOOL_POLICY_ALLOW, TOOL_POLICY_CONFIRM, TOOL_POLICY_DENY,
         },
         store,
     },
@@ -523,8 +523,13 @@ fn first_turn_title(conversation: &AgentConversationRow, text: &str) -> Option<S
 }
 
 pub fn default_permission_rules() -> Vec<OpenCodePermissionRule> {
-    permission_rules_for(TOOL_POLICY_CONFIRM, TOOL_POLICY_CONFIRM, TOOL_POLICY_DENY)
-        .expect("confirm is a valid conversation tool policy")
+    permission_rules_for(
+        TOOL_POLICY_CONFIRM,
+        TOOL_POLICY_CONFIRM,
+        TOOL_POLICY_DENY,
+        TOOL_POLICY_DENY,
+    )
+    .expect("confirm is a valid conversation tool policy")
 }
 
 pub fn permission_rules(
@@ -545,22 +550,27 @@ pub fn permission_rules(
         .find(|policy| policy.tool_group == TOOL_GROUP_NOTIFICATIONS)
         .map(|policy| policy.policy.as_str())
         .ok_or_else(|| anyhow!("Missing Notifications policy."))?;
-    if policies.len() != 3 {
-        bail!(
-            "Conversation policies must contain Orders, Memory writes, and Notifications exactly once."
-        );
+    let journal_writes = policies
+        .iter()
+        .find(|policy| policy.tool_group == TOOL_GROUP_JOURNAL_WRITES)
+        .map(|policy| policy.policy.as_str())
+        .ok_or_else(|| anyhow!("Missing Journal writes policy."))?;
+    if policies.len() != 4 {
+        bail!("Conversation policies must contain each tool group exactly once.");
     }
-    permission_rules_for(orders, memory_writes, notifications)
+    permission_rules_for(orders, memory_writes, notifications, journal_writes)
 }
 
 fn permission_rules_for(
     orders: &str,
     memory_writes: &str,
     notifications: &str,
+    journal_writes: &str,
 ) -> Result<Vec<OpenCodePermissionRule>> {
     let orders = action_for_policy(orders)?;
     let memory_writes = action_for_policy(memory_writes)?;
     let notifications = action_for_policy(notifications)?;
+    let journal_writes = action_for_policy(journal_writes)?;
     let mut rules = [
         "hypervibes_get_account",
         "hypervibes_list_strategy_prompts",
@@ -573,6 +583,9 @@ fn permission_rules_for(
         "hypervibes_list_memories",
         "hypervibes_list_orders",
         "hypervibes_list_account_transactions",
+        "hypervibes_list_account_trades",
+        "hypervibes_get_account_trade",
+        "hypervibes_list_journal_notes",
         "hypervibes_get_order",
     ]
     .into_iter()
@@ -602,6 +615,11 @@ fn permission_rules_for(
         permission: "hypervibes_write_memory".to_string(),
         pattern: "*".to_string(),
         action: memory_writes.to_string(),
+    });
+    rules.push(OpenCodePermissionRule {
+        permission: "hypervibes_add_journal_note".to_string(),
+        pattern: "*".to_string(),
+        action: journal_writes.to_string(),
     });
     rules.push(OpenCodePermissionRule {
         permission: "hypervibes_update_strategy_prompt".to_string(),
@@ -678,6 +696,7 @@ mod tests {
             (TOOL_GROUP_ORDERS, TOOL_POLICY_CONFIRM),
             (TOOL_GROUP_MEMORY_WRITES, TOOL_POLICY_CONFIRM),
             (TOOL_GROUP_NOTIFICATIONS, TOOL_POLICY_ALLOW),
+            (TOOL_GROUP_JOURNAL_WRITES, TOOL_POLICY_ALLOW),
         ]
         .into_iter()
         .map(|(tool_group, policy)| AgentConversationToolPolicyRow {

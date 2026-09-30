@@ -61,6 +61,11 @@ pub fn router(state: Arc<AppState>) -> Router {
             "/agents/{agent_key}/transactions",
             get(agents_show_transactions),
         )
+        .route("/agents/{agent_key}/trades", get(agents_show_trades))
+        .route(
+            "/agents/{agent_key}/transactions/{kind}/{target}/notes",
+            post(agents_add_journal_note),
+        )
         .route("/agents/{agent_key}/memories", get(agents_show_memories))
         .route(
             "/agents/{agent_key}/memories/stream",

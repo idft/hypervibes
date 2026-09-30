@@ -4,21 +4,23 @@ use rust_decimal::Decimal;
 
 use crate::db::DbPool;
 
-/// A single USDC balance-impacting event from the account timeline.
+/// One source account event, including events with unclassified cash impact.
 #[derive(Debug, Clone, serde::Serialize, sqlx::FromRow)]
 pub struct AccountTransactionRow {
+    pub event_id: String,
     pub event_time: DateTime<Utc>,
     pub event_category: String,
+    pub activity_type: String,
+    pub token: Option<String>,
     pub symbol: Option<String>,
     pub asset: Option<String>,
     pub fee_usdc: Option<Decimal>,
     pub realized_pnl_usdc: Option<Decimal>,
     pub usdc_delta: Option<Decimal>,
-    /// Cumulative net USDC flow as of this event, computed across the
-    /// account's full history and anchored at 0 at the first journaled
-    /// event. This is realized cash flow only — unrealized PnL is not
-    /// included.
+    /// Cumulative classified USDC cash flow across the full available history.
+    /// None when this or any earlier event has unclassified cash impact.
     pub running_balance: Option<Decimal>,
+    pub has_notes: bool,
 }
 
 pub struct AccountTransactionWindow<'a> {
@@ -30,7 +32,7 @@ pub struct AccountTransactionWindow<'a> {
     pub offset: i64,
 }
 
-/// List durable account-journal events in a bounded UTC window for an agent's
+/// List durable account-journal events in a UTC window for an agent's
 /// account. The running balance intentionally covers the full account history.
 pub async fn list_account_transactions_in_window(
     pool: &DbPool,
@@ -42,28 +44,32 @@ pub async fn list_account_transactions_in_window(
         "WITH ordered AS (
              SELECT event_id,
                     event_time,
-                    event_category,
+                     event_category, activity_type, token,
                     symbol,
                     asset,
                     fee_usdc,
                     realized_pnl_usdc,
                     usdc_delta,
-                    SUM(COALESCE(usdc_delta, 0))
-                      OVER (ORDER BY event_time, event_id
-                            ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)
-                      AS running_balance
+                     CASE WHEN COUNT(*) FILTER (WHERE usdc_delta IS NULL)
+                          OVER (ORDER BY event_time, event_id) = 0
+                          THEN SUM(usdc_delta) OVER (ORDER BY event_time, event_id)
+                     END AS running_balance
                FROM hyperliquid.account_timeline
               WHERE account_address = $1
                 AND environment = $2
         )
-        SELECT event_time,
-               event_category,
+         SELECT event_id, event_time,
+                event_category, activity_type, token,
                symbol,
                asset,
                fee_usdc,
                realized_pnl_usdc,
                usdc_delta,
-               running_balance
+               running_balance,
+               EXISTS(SELECT 1 FROM hyperliquid.journal_notes n
+                      WHERE n.account_address=$1 AND n.environment=$2
+                      AND n.target_kind=ordered.event_category AND n.event_id=ordered.event_id)
+                   AS has_notes
           FROM ordered
          WHERE event_time >= $3
            AND event_time < $4
@@ -104,31 +110,35 @@ pub async fn list_account_transactions(
         "WITH ordered AS (
              SELECT event_id,
                     event_time,
-                    event_category,
+                     event_category, activity_type, token,
                     symbol,
                     asset,
                     fee_usdc,
                     realized_pnl_usdc,
                     usdc_delta,
-                    SUM(COALESCE(usdc_delta, 0))
-                      OVER (ORDER BY event_time, event_id
-                            ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)
-                      AS running_balance
+                     CASE WHEN COUNT(*) FILTER (WHERE usdc_delta IS NULL)
+                          OVER (ORDER BY event_time, event_id) = 0
+                          THEN SUM(usdc_delta) OVER (ORDER BY event_time, event_id)
+                     END AS running_balance
                FROM hyperliquid.account_timeline
               WHERE account_address = $1
                 AND environment = $2
           )
-          SELECT event_time,
-                 event_category,
+           SELECT event_id, event_time,
+                  event_category, activity_type, token,
                 symbol,
                 asset,
                 fee_usdc,
                 realized_pnl_usdc,
                 usdc_delta,
-                running_balance
-           FROM ordered
-          ORDER BY event_time DESC, event_id DESC
-          LIMIT $3",
+                 running_balance,
+                 EXISTS(SELECT 1 FROM hyperliquid.journal_notes n
+                        WHERE n.account_address=$1 AND n.environment=$2
+                        AND n.target_kind=ordered.event_category AND n.event_id=ordered.event_id)
+                     AS has_notes
+            FROM ordered
+           ORDER BY event_time DESC, event_id DESC
+           LIMIT $3",
     )
     .bind(account_address)
     .bind(environment)
@@ -157,33 +167,6 @@ pub async fn count_account_transactions(
     Ok(count)
 }
 
-/// Return the cumulative net USDC flow across the full account history —
-/// i.e. the running balance immediately after the most recent event. This
-/// is the same value the window-function CTE in
-/// [`list_account_transactions_page`] computes on its first ordered row,
-/// exposed separately so that a paginated caller can re-anchor displayed
-/// balances against a live wallet snapshot even when only a slice of rows
-/// is loaded. Returns `None` when the account has no journaled events
-/// (the SQL `SUM` of zero rows is `NULL`).
-pub async fn latest_account_running_balance(
-    pool: &DbPool,
-    account_address: &str,
-    environment: &str,
-) -> Result<Option<Decimal>> {
-    let (balance,): (Option<Decimal>,) = sqlx::query_as(
-        "SELECT SUM(COALESCE(usdc_delta, 0))
-           FROM hyperliquid.account_timeline
-          WHERE account_address = $1
-            AND environment = $2",
-    )
-    .bind(account_address)
-    .bind(environment)
-    .fetch_one(pool)
-    .await
-    .context("failed to fetch latest account running balance")?;
-    Ok(balance)
-}
-
 /// Return a single page of USDC balance-impacting events for an account,
 /// newest first. The `running_balance` value on each row is computed across
 /// the account's **full** history (via a window-function CTE) before the
@@ -200,32 +183,36 @@ pub async fn list_account_transactions_page(
         "WITH ordered AS (
              SELECT event_id,
                     event_time,
-                    event_category,
+                     event_category, activity_type, token,
                     symbol,
                     asset,
                     fee_usdc,
                     realized_pnl_usdc,
                     usdc_delta,
-                    SUM(COALESCE(usdc_delta, 0))
-                      OVER (ORDER BY event_time, event_id
-                            ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)
-                      AS running_balance
+                     CASE WHEN COUNT(*) FILTER (WHERE usdc_delta IS NULL)
+                          OVER (ORDER BY event_time, event_id) = 0
+                          THEN SUM(usdc_delta) OVER (ORDER BY event_time, event_id)
+                     END AS running_balance
                FROM hyperliquid.account_timeline
               WHERE account_address = $1
                 AND environment = $2
           )
-          SELECT event_time,
-                 event_category,
+           SELECT event_id, event_time,
+                  event_category, activity_type, token,
                 symbol,
                 asset,
                 fee_usdc,
                 realized_pnl_usdc,
                 usdc_delta,
-                running_balance
-           FROM ordered
-          ORDER BY event_time DESC, event_id DESC
-          LIMIT $3
-         OFFSET $4",
+                 running_balance,
+                 EXISTS(SELECT 1 FROM hyperliquid.journal_notes n
+                        WHERE n.account_address=$1 AND n.environment=$2
+                        AND n.target_kind=ordered.event_category AND n.event_id=ordered.event_id)
+                     AS has_notes
+            FROM ordered
+           ORDER BY event_time DESC, event_id DESC
+           LIMIT $3
+          OFFSET $4",
     )
     .bind(account_address)
     .bind(environment)
@@ -291,10 +278,10 @@ pub async fn fetch_balance_series(
         "WITH ordered AS (
              SELECT event_time,
                     event_id,
-                    SUM(COALESCE(usdc_delta, 0))
-                      OVER (ORDER BY event_time, event_id
-                            ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)
-                      AS running_balance
+                     CASE WHEN COUNT(*) FILTER (WHERE usdc_delta IS NULL)
+                          OVER (ORDER BY event_time, event_id) = 0
+                          THEN SUM(usdc_delta) OVER (ORDER BY event_time, event_id)
+                     END AS running_balance
                FROM hyperliquid.account_timeline
               WHERE account_address = $1
                 AND environment = $2
@@ -317,9 +304,9 @@ pub async fn fetch_balance_series(
              WHERE event_time >= $3
              ORDER BY date_trunc($4, event_time), event_time DESC, event_id DESC
          )
-         SELECT bucket, balance, sort_time FROM anchor
-         UNION ALL
-         SELECT bucket, balance, sort_time FROM windowed
+          SELECT bucket, balance, sort_time FROM anchor WHERE balance IS NOT NULL
+          UNION ALL
+          SELECT bucket, balance, sort_time FROM windowed WHERE balance IS NOT NULL
          ORDER BY sort_time, bucket",
     )
     .bind(account_address)
@@ -777,5 +764,155 @@ mod tests {
     fn truncate_to_micros(at: DateTime<Utc>) -> DateTime<Utc> {
         DateTime::<Utc>::from_timestamp_micros(at.timestamp_micros())
             .expect("timestamp_micros in range")
+    }
+
+    #[tokio::test]
+    async fn sends_have_signed_deltas_and_unclassified_events_invalidate_balance() {
+        let pool = test_db::pool().await;
+        let account = "0xclassification-test";
+        seed_agent_account(&pool, account, "classification").await;
+        let t = Utc::now() - Duration::hours(1);
+        for (i, sender, recipient, amount, fee, fee_token) in [
+            (0, "0xother", account, "199.89", "0", None),
+            (1, account, "0xother", "50", "1", Some("USDC")),
+            (2, account, account, "50", "0", None),
+        ] {
+            sqlx::query("INSERT INTO hyperliquid.ledger_events(hash,account_address,environment,event_time,
+                event_type,source_stream,ledger_type,token,amount,fee,details,ingest_source,inserted_at)
+                VALUES ($1,$2,'live',$3,'send','test','send','USDC',$4,$5,$6,'test',now())")
+                .bind(format!("send-{i}" )).bind(account).bind(t + Duration::seconds(i))
+                .bind(amount.parse::<Decimal>().expect("amount"))
+                .bind(fee.parse::<Decimal>().expect("fee"))
+                .bind(serde_json::json!({"user":sender.to_uppercase(),"destination":recipient.to_uppercase(),"feeToken":fee_token}))
+                .execute(&*pool).await.expect("send");
+        }
+        let rows = list_account_transactions(&pool, account, "live", 10)
+            .await
+            .expect("timeline");
+        assert_eq!(rows[2].usdc_delta, Some(Decimal::new(19989, 2)));
+        assert_eq!(rows[2].running_balance, rows[2].usdc_delta);
+        assert_eq!(rows[1].usdc_delta, Some(Decimal::new(-51, 0)));
+        assert_eq!(rows[0].usdc_delta, Some(Decimal::ZERO));
+        sqlx::query(
+            "INSERT INTO hyperliquid.ledger_events(hash,account_address,environment,event_time,
+            event_type,source_stream,ledger_type,token,amount,details,ingest_source,inserted_at)
+            VALUES ('unknown-token',$1,'live',$2,'send','test','send','HYPE',1,
+                    '{\"user\":\"0xother\",\"destination\":\"0xclassification-test\"}',
+                    'test',now())",
+        )
+        .bind(account)
+        .bind(t + Duration::seconds(3))
+        .execute(&*pool)
+        .await
+        .expect("unknown");
+        let latest = list_account_transactions(&pool, account, "live", 1)
+            .await
+            .expect("timeline");
+        assert_eq!(latest[0].usdc_delta, None);
+        assert_eq!(latest[0].running_balance, None);
+    }
+
+    #[tokio::test]
+    async fn ledger_classifier_rejects_ambiguous_fees_and_unknown_cash_shapes() {
+        let pool = test_db::pool().await;
+        let classify = |kind: &'static str,
+                        usdc: Option<Decimal>,
+                        token: Option<&'static str>,
+                        amount: Option<Decimal>,
+                        fee: Option<Decimal>,
+                        details: serde_json::Value| {
+            let pool = &pool;
+            async move {
+                let (delta,): (Option<Decimal>,) = sqlx::query_as(
+                    "SELECT hyperliquid.ledger_usdc_delta('0xaccount',$1,$2,$3,$4,$5,$6)",
+                )
+                .bind(kind)
+                .bind(usdc)
+                .bind(token)
+                .bind(amount)
+                .bind(fee)
+                .bind(details)
+                .fetch_one(&**pool)
+                .await
+                .expect("classify");
+                delta
+            }
+        };
+        assert_eq!(
+            classify(
+                "deposit",
+                Some(Decimal::new(100, 0)),
+                None,
+                None,
+                None,
+                serde_json::json!({})
+            )
+            .await,
+            Some(Decimal::new(100, 0))
+        );
+        assert_eq!(
+            classify(
+                "withdraw",
+                Some(Decimal::new(-25, 0)),
+                None,
+                None,
+                None,
+                serde_json::json!({})
+            )
+            .await,
+            Some(Decimal::new(-25, 0))
+        );
+        assert_eq!(
+            classify("withdraw", None, None, None, None, serde_json::json!({})).await,
+            None
+        );
+        assert_eq!(
+            classify(
+                "other",
+                Some(Decimal::new(50, 0)),
+                Some("USDC"),
+                None,
+                None,
+                serde_json::json!({})
+            )
+            .await,
+            None
+        );
+        assert_eq!(
+            classify(
+                "send",
+                None,
+                Some("HYPE"),
+                Some(Decimal::new(50, 0)),
+                None,
+                serde_json::json!({"user":"0xother","destination":"0xaccount","usdcValue":"50"})
+            )
+            .await,
+            None
+        );
+        assert_eq!(
+            classify(
+                "send",
+                None,
+                Some("USDC"),
+                Some(Decimal::new(50, 0)),
+                Some(Decimal::ONE),
+                serde_json::json!({"user":"0xaccount","destination":"0xother","feeToken":"HYPE"})
+            )
+            .await,
+            None
+        );
+        assert_eq!(
+            classify(
+                "send",
+                None,
+                Some("USDC"),
+                None,
+                None,
+                serde_json::json!({"user":"0xaccount","destination":"0xother"})
+            )
+            .await,
+            None
+        );
     }
 }

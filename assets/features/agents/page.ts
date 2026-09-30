@@ -306,7 +306,37 @@ function initTelegramGateway(root: ParentNode) {
   modal.addEventListener("keydown", (event) => { if (event.key === "Escape") { event.preventDefault(); close(); } });
 }
 
-export function initAgentPage(root: ParentNode = document) { initAgentCreation(root); initPromptEditor(root); initInstrumentSelectors(root); initClickableRows(root); initInlineEditors(root); initJobDetailModals(root); initCapabilities(root); initNewJobForm(root); initNotifications(root); initTelegramGateway(root); }
+const boundJournalNotesModals = new WeakSet<HTMLDialogElement>();
+
+function initJournalNotesModals(root: ParentNode) {
+  root.querySelectorAll<HTMLDialogElement>("[data-journal-notes-modal]").forEach((modal) => {
+    if (boundJournalNotesModals.has(modal)) return;
+    boundJournalNotesModals.add(modal);
+    const close = () => {
+      modal.close();
+      const url = new URL(window.location.href);
+      if (url.searchParams.get("target") === modal.dataset.journalTarget) {
+        url.searchParams.delete("target");
+        url.searchParams.delete("kind");
+        window.history.replaceState(window.history.state, "", url);
+      }
+      const trigger = Array.from(document.querySelectorAll<HTMLAnchorElement>("[data-journal-notes-trigger]"))
+        .find((link) => link.dataset.journalTarget === modal.dataset.journalTarget);
+      trigger?.focus();
+    };
+    modal.querySelectorAll<HTMLElement>("[data-journal-notes-close]").forEach((button) => {
+      button.addEventListener("click", (event) => { event.preventDefault(); close(); });
+    });
+    modal.addEventListener("cancel", (event) => { event.preventDefault(); close(); });
+    modal.addEventListener("click", (event) => { if (event.target === modal) close(); });
+    // A restored HTMX snapshot may contain an open attribute without the
+    // browser's modal state. Reopen it in the top layer to restore focus trapping.
+    if (modal.open) modal.close();
+    modal.showModal();
+  });
+}
+
+export function initAgentPage(root: ParentNode = document) { initAgentCreation(root); initPromptEditor(root); initInstrumentSelectors(root); initClickableRows(root); initInlineEditors(root); initJobDetailModals(root); initCapabilities(root); initNewJobForm(root); initNotifications(root); initTelegramGateway(root); initJournalNotesModals(root); }
 export function installAgentPageLifecycle() {
   installAgentModals();
   document.addEventListener("click", (event) => {

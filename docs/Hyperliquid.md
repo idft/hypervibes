@@ -84,14 +84,30 @@ setup page.
 Sub-accounts use the main account's fee tier, but Hyperliquid referral
 discounts do not apply to sub-accounts.
 
-## Transactions
+## Transactions and trade journal
 
 HyperVibes imports Hyperliquid account activity for each agent's assigned
-account and displays it as a chronological ledger on the agent's Transactions
-page. The application combines exchange history with newly received account
-events and avoids adding the same event more than once.
+account. Open the agent's **Transactions** tab to switch between **Trades**
+(the default view) and **Activity**.
 
-The ledger can include:
+### Trades
+
+The Trades view groups perpetual fills into long or short trades, from opening
+a position to closing it. Adding to a position or partially closing it stays
+within the same trade. Reversing direction closes one trade and starts another.
+
+Each trade shows its status, entry and exit prices, realized profit or loss,
+trading fees, and funding. **Net realized** is realized profit or loss minus
+trading fees, plus funding received or minus funding paid. For open trades,
+these amounts are realized results so far; they do not include unrealized
+profit or loss.
+
+Values marked **Incomplete** mean the available history or fee information is
+insufficient to calculate a complete result.
+
+### Activity
+
+Activity shows individual account events in a chronological ledger, including:
 
 - trades and fills
 - trading fees and realized profit or loss
@@ -99,11 +115,25 @@ The ledger can include:
 - deposits, withdrawals, and account transfers
 - other Hyperliquid ledger changes
 
+The running balance reflects USDC movements in the available history. It may
+differ from the current account balance if older history is missing. A balance
+marked **Incomplete** means an event's effect on the balance could not be
+determined.
+
 Transactions are historical account activity. Current positions and open orders
 are shown separately on the agent page, while the transaction ledger remains
 the account's historical record. Hyperliquid's [historical data
 documentation](https://hyperliquid.gitbook.io/hyperliquid-docs/historical-data.md)
 describes the exchange's own historical-data sources.
+
+### Journal notes
+
+Select the notes icon beside a trade or transaction to read or add notes. Trade
+notes also let you inspect the individual fills. Each note shows its author and
+time, and saved notes cannot be edited or deleted.
+
+Review agents can add notes as part of their review. To let a Chat conversation
+add notes, set its **Journal notes** permission to **Allow**.
 
 ## Indicator candle data
 

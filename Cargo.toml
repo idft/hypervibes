@@ -41,7 +41,7 @@ sha2 = "0.10"
 sqlx = { version = "0.9", features = ["runtime-tokio", "tls-rustls", "postgres", "chrono", "json", "rust_decimal", "migrate", "uuid"] }
 teloxide = { version = "0.17", default-features = false, features = ["rustls", "macros"] }
 thiserror = "2"
-uuid = { version = "1", features = ["v4", "serde"] }
+uuid = { version = "1", features = ["v4", "v5", "serde"] }
 tokio = { version = "1", features = ["full"] }
 tokio-stream = { version = "0.1", default-features = false, features = ["sync"] }
 tower = { version = "0.5", features = ["util"] }

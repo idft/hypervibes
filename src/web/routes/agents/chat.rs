@@ -24,8 +24,8 @@ use uuid::Uuid;
 use crate::{
     agent_conversations::{
         model::{
-            AgentConversationRow, TOOL_GROUP_MEMORY_WRITES, TOOL_GROUP_NOTIFICATIONS,
-            TOOL_GROUP_ORDERS,
+            AgentConversationRow, TOOL_GROUP_JOURNAL_WRITES, TOOL_GROUP_MEMORY_WRITES,
+            TOOL_GROUP_NOTIFICATIONS, TOOL_GROUP_ORDERS,
         },
         service::{CONVERSATION_MESSAGE_MAX_CHARS, ConversationService},
     },
@@ -94,6 +94,8 @@ pub(in crate::web::routes) struct ConversationSettingsForm {
     memory_writes_policy: String,
     #[serde(default)]
     notifications_policy: String,
+    #[serde(default)]
+    journal_writes_policy: String,
 }
 #[derive(Default, Deserialize)]
 pub(in crate::web::routes) struct PermissionReplyForm {
@@ -195,6 +197,12 @@ async fn load_snapshot(
         .find(|item| item.tool_group == TOOL_GROUP_NOTIFICATIONS)
         .map(|item| item.policy.clone())
         .unwrap_or_else(|| "deny".to_string());
+    let journal_writes_policy = conversation
+        .tool_policies
+        .iter()
+        .find(|item| item.tool_group == TOOL_GROUP_JOURNAL_WRITES)
+        .map(|item| item.policy.clone())
+        .unwrap_or_else(|| "deny".to_string());
     let permissions = state
         .opencode_client
         .list_pending_permissions(
@@ -219,6 +227,7 @@ async fn load_snapshot(
             orders_policy,
             memory_writes_policy,
             notifications_policy,
+            journal_writes_policy,
             disabled: busy,
         },
         permissions,
@@ -725,6 +734,8 @@ pub(in crate::web::routes) async fn agents_update_conversation_settings(
             policy.policy = form.memory_writes_policy.clone();
         } else if policy.tool_group == TOOL_GROUP_NOTIFICATIONS {
             policy.policy = form.notifications_policy.clone();
+        } else if policy.tool_group == TOOL_GROUP_JOURNAL_WRITES {
+            policy.policy = form.journal_writes_policy.clone();
         }
     }
     service(&state)

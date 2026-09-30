@@ -1,24 +1,27 @@
 use axum::{
+    Form,
     extract::{Path, Query, State},
-    response::Response,
+    http::{HeaderMap, StatusCode},
+    response::{IntoResponse, Redirect, Response},
 };
-use rust_decimal::Decimal;
+use serde::Deserialize;
 use std::sync::Arc;
 
 use super::show::{AgentShowQueries, AgentTransactionsQuery, render_agent_show_page};
-use crate::{
-    hyperliquid::{
-        live_state::{AccountKey, AccountLiveState},
-        queries::AccountTransactionRow,
-    },
-    web::{AppState, auth::AuthenticatedUser, error::AppError, templates::AgentShowTab},
+use crate::web::{
+    AppState,
+    auth::{AuthenticatedUser, csrf_cookie_value},
+    error::AppError,
+    templates::AgentShowTab,
 };
 pub(in crate::web::routes) async fn agents_show_transactions(
     State(state): State<Arc<AppState>>,
     user: AuthenticatedUser,
     Path(agent_key): Path<String>,
-    Query(query): Query<AgentTransactionsQuery>,
+    Query(mut query): Query<AgentTransactionsQuery>,
+    headers: HeaderMap,
 ) -> Result<Response, AppError> {
+    query.csrf_token = csrf_cookie_value(&headers).unwrap_or_default().to_string();
     render_agent_show_page(
         &state,
         &user,
@@ -31,70 +34,79 @@ pub(in crate::web::routes) async fn agents_show_transactions(
     )
     .await
 }
-/// Re-anchor every displayed `running_balance` to the live wallet cash
-/// balance, so the transactions table shows the same cash figure as the
-/// Positions tab regardless of which historical page is being viewed.
-///
-/// `latest_running_balance` is the cumulative net USDC flow across the
-/// account's **full** history — i.e. the running balance immediately after
-/// the most recent journaled event — supplied by the caller so this helper can
-/// re-anchor correctly even when only a paginated slice of rows is loaded
-/// (where `rows.first()` is *not* the global newest row).
-pub(in crate::web::routes) fn apply_live_cash_balance_anchor(
-    state: &Arc<AppState>,
-    agent: &crate::agents::model::AgentDetailRow,
-    latest_running_balance: Option<Decimal>,
-    rows: &mut [AccountTransactionRow],
-) {
-    let Some(latest_running_balance) = latest_running_balance else {
-        return;
-    };
-    let Some(trading_account_address) = agent.trading_account_address.as_deref() else {
-        return;
-    };
-    let account_key = AccountKey::new(trading_account_address, &agent.environment);
-    let Some(snapshot) = state.live_accounts.get(&account_key) else {
-        return;
-    };
-    let Some(live_cash_balance) = live_cash_balance(&snapshot) else {
-        return;
-    };
 
-    let adjustment = live_cash_balance - latest_running_balance;
-    for row in rows {
-        if let Some(running_balance) = row.running_balance {
-            row.running_balance = Some(running_balance + adjustment);
-        }
-    }
+pub(in crate::web::routes) async fn agents_show_trades(
+    state: State<Arc<AppState>>,
+    user: AuthenticatedUser,
+    agent_key: Path<String>,
+    Query(mut query): Query<AgentTransactionsQuery>,
+    headers: HeaderMap,
+) -> Result<Response, AppError> {
+    query.is_trades = true;
+    agents_show_transactions(state, user, agent_key, Query(query), headers).await
 }
-pub(in crate::web::routes) fn live_cash_balance(state: &AccountLiveState) -> Option<Decimal> {
-    let perps_account_value = state
-        .margin
-        .as_ref()
-        .and_then(|margin| margin.account_value)
-        .filter(|value| !value.is_sign_negative());
-    let unrealized_pnl = state
-        .open_positions
-        .iter()
-        .filter_map(|position| position.unrealized_pnl)
-        .fold(Decimal::ZERO, |acc, value| acc + value);
-    let perps_cash = perps_account_value.map(|value| value - unrealized_pnl);
 
-    let spot_usdc = state
-        .spot_balances
-        .iter()
-        .find(|balance| balance.coin.eq_ignore_ascii_case("USDC"));
-    let spot_usdc_available = spot_usdc
-        .and_then(|balance| balance.available)
-        .filter(|value| !value.is_sign_negative());
-    let spot_usdc_total = spot_usdc
-        .and_then(|balance| balance.total)
-        .filter(|value| !value.is_sign_negative());
+#[derive(Deserialize)]
+pub(in crate::web::routes) struct JournalNoteForm {
+    body: String,
+    #[serde(default)]
+    page: String,
+}
 
-    match (perps_cash, spot_usdc_available) {
-        (Some(perps), Some(spot_available)) => Some(perps + spot_available),
-        (Some(perps), None) => Some(perps),
-        (None, Some(spot_available)) => Some(spot_available),
-        (None, None) => spot_usdc_total,
+pub(in crate::web::routes) async fn agents_add_journal_note(
+    State(state): State<Arc<AppState>>,
+    user: AuthenticatedUser,
+    Path((agent_key, kind, target)): Path<(String, String, String)>,
+    Form(form): Form<JournalNoteForm>,
+) -> Result<Response, AppError> {
+    let Some(agent) = crate::agents::store::get_agent(&state.db_pool, &agent_key).await? else {
+        return Ok((StatusCode::NOT_FOUND, "agent not found").into_response());
+    };
+    let (owns,): (bool,) =
+        sqlx::query_as("SELECT EXISTS(SELECT 1 FROM agents WHERE agent_key=$1 AND user_id=$2)")
+            .bind(&agent_key)
+            .bind(user.id)
+            .fetch_one(&state.db_pool)
+            .await?;
+    if !owns {
+        return Ok((StatusCode::NOT_FOUND, "agent not found").into_response());
     }
+    let Some(account) = agent.trading_account_address.as_deref() else {
+        return Ok((StatusCode::NOT_FOUND, "account not assigned").into_response());
+    };
+    let saved = crate::hyperliquid::trade_store::add_note(
+        &state.db_pool,
+        crate::hyperliquid::trade_store::JournalNoteInput {
+            account,
+            environment: &agent.environment,
+            kind: &kind,
+            target: &target,
+            author_kind: "human",
+            author_id: &user.id.to_string(),
+            body: &form.body,
+            source_run_id: None,
+            source_conversation_id: None,
+        },
+    )
+    .await?;
+    if saved.is_none() {
+        return Ok((
+            StatusCode::NOT_FOUND,
+            "journal target not found or invalid note",
+        )
+            .into_response());
+    }
+    let page = form
+        .page
+        .parse::<usize>()
+        .ok()
+        .filter(|n| *n > 0)
+        .unwrap_or(1);
+    let path = if kind == "trade" {
+        "trades"
+    } else {
+        "transactions"
+    };
+    let location = format!("/agents/{agent_key}/{path}?page={page}&kind={kind}&target={target}");
+    Ok(Redirect::to(&location).into_response())
 }

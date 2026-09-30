@@ -5,6 +5,7 @@ mod memories;
 mod notifications;
 pub(crate) mod orders;
 mod strategy_prompts;
+mod trades;
 mod trading_instruments;
 mod transactions;
 
@@ -24,6 +25,8 @@ mod orders_tests;
 #[cfg(test)]
 mod strategy_prompts_tests;
 #[cfg(test)]
+mod trades_tests;
+#[cfg(test)]
 mod trading_instruments_tests;
 #[cfg(test)]
 mod transactions_tests;
@@ -32,6 +35,7 @@ mod transactions_tests;
 // and so test code can reference them via `super::*` if needed.
 use self::indicators::*;
 use self::notifications::create as create_notification;
+use self::trades::*;
 use self::{
     account::*, memories::*, orders::*, strategy_prompts::*, trading_instruments::*,
     transactions::*,
@@ -75,6 +79,12 @@ pub fn router(state: Arc<AppState>) -> Router {
         )
         .route("/account", get(get_account))
         .route("/account/transactions", get(list_account_transactions))
+        .route("/account/trades", get(list_account_trades))
+        .route("/account/trades/{trade_id}", get(get_account_trade))
+        .route(
+            "/account/journal/{kind}/{target}/notes",
+            get(get_account_notes).post(post_account_note),
+        )
         .route("/strategy-prompts", get(list_strategy_prompts))
         .route("/strategy-prompts/revisions", post(submit_prompt_revision))
         .route(

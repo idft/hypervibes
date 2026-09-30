@@ -7,6 +7,7 @@ pub const CONVERSATION_CHANNEL_TELEGRAM: &str = "telegram";
 pub const TOOL_GROUP_ORDERS: &str = "orders";
 pub const TOOL_GROUP_MEMORY_WRITES: &str = "memory_writes";
 pub const TOOL_GROUP_NOTIFICATIONS: &str = "notifications";
+pub const TOOL_GROUP_JOURNAL_WRITES: &str = "journal_writes";
 pub const TOOL_POLICY_DENY: &str = "deny";
 pub const TOOL_POLICY_CONFIRM: &str = "confirm";
 pub const TOOL_POLICY_ALLOW: &str = "allow";

@@ -618,6 +618,35 @@ class HyperVibesMcpServerTests(unittest.TestCase):
                 offset=-1,
             )
 
+    def test_trade_and_note_tools_construct_scoped_requests(self) -> None:
+        calls: list[tuple[object, ...]] = []
+
+        def fake_request(method, path, *, params=None, json_body=None):
+            calls.append((method, path, params, json_body))
+            return {} if json_body is not None or "/trades/" in path else []
+
+        trade_id = "00000000-0000-0000-0000-000000000001"
+        with mock.patch.object(self.server, "_request", side_effect=fake_request):
+            self.server.list_account_trades(limit=10, offset=20)
+            self.server.get_account_trade(trade_id)
+            self.server.list_journal_notes("fill", "hash:12")
+            self.server.add_journal_note("trade", trade_id, "  journal entry  ")
+        self.assertEqual(calls[0], ("GET", "/api/v1/account/trades", {"limit": 10, "offset": 20}, None))
+        self.assertEqual(calls[1][1], f"/api/v1/account/trades/{trade_id}")
+        self.assertEqual(calls[2][1], "/api/v1/account/journal/fill/hash%3A12/notes")
+        self.assertEqual(calls[3], ("POST", f"/api/v1/account/journal/trade/{trade_id}/notes", None,
+                                    {"body": "journal entry"}))
+
+    def test_journal_note_tools_reject_invalid_inputs(self) -> None:
+        with self.assertRaises(ValueError):
+            self.server.list_account_trades(offset=-1)
+        with self.assertRaises(ValueError):
+            self.server.get_account_trade("not-a-uuid")
+        with self.assertRaises(ValueError):
+            self.server.add_journal_note("ledger", "a/b", "note")
+        with self.assertRaises(ValueError):
+            self.server.add_journal_note("ledger", "id", " " * 4)
+
     def test_write_memory_defaults_metadata_to_empty_object(self) -> None:
         captured: dict[str, object] = {}
 

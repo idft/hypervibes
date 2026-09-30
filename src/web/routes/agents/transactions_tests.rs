@@ -1,11 +1,11 @@
 //! Tests for agents/transactions_tests.rs
-use super::*;
 use crate::web::routes::router;
 use crate::web::routes::test_support::*;
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use chrono::{DateTime, Duration, TimeZone, Utc};
 use rust_decimal::Decimal;
+use sha2::{Digest, Sha256};
 use std::sync::Arc;
 use tower::util::ServiceExt;
 
@@ -27,6 +27,20 @@ async fn agent_transactions_route_renders_full_timeline() {
     )
     .await;
 
+    let default_response = router(state.clone())
+        .oneshot(
+            Request::builder()
+                .uri(format!("/agents/{agent_key}/trades"))
+                .body(Body::empty())
+                .expect("default view request"),
+        )
+        .await
+        .expect("default view response");
+    assert_eq!(default_response.status(), StatusCode::OK);
+    let default_text = response_text(default_response).await;
+    assert!(default_text.contains("No perpetual trade cycles have synced yet."));
+    assert!(!default_text.contains("Showing 1-1 of 1 transactions"));
+
     let response = router(state.clone())
         .oneshot(
             Request::builder()
@@ -45,7 +59,7 @@ async fn agent_transactions_route_renders_full_timeline() {
     assert!(text.contains("Page 1 of 1"));
 }
 #[tokio::test]
-async fn agent_transactions_route_anchors_running_balance_to_live_cash_balance() {
+async fn agent_transactions_route_does_not_anchor_running_balance_to_live_cash_balance() {
     let state = test_state().await;
     let (agent_key, wallet_address) = insert_test_agent(&state).await.expect("insert agent");
     seed_ledger_event(
@@ -89,28 +103,7 @@ async fn agent_transactions_route_anchors_running_balance_to_live_cash_balance()
     assert_eq!(response.status(), StatusCode::OK);
     let text = response_text(response).await;
     assert!(text.contains("42.0000"));
-    assert!(text.contains("42.0017"));
-}
-#[tokio::test]
-async fn live_cash_balance_excludes_unrealized_pnl() {
-    let state = AccountLiveState {
-        margin: Some(crate::hyperliquid::live_state::LiveMarginState {
-            account_value: Some(Decimal::new(110, 0)),
-            ..Default::default()
-        }),
-        spot_balances: vec![crate::hyperliquid::live_state::LiveSpotBalance {
-            coin: "USDC".to_string(),
-            available: Some(Decimal::new(5, 0)),
-            ..Default::default()
-        }],
-        open_positions: vec![crate::hyperliquid::live_state::LivePosition {
-            unrealized_pnl: Some(Decimal::new(10, 0)),
-            ..Default::default()
-        }],
-        ..Default::default()
-    };
-
-    assert_eq!(live_cash_balance(&state), Some(Decimal::new(105, 0)));
+    assert!(!text.contains("42.0017"));
 }
 
 fn pagination_base_time() -> DateTime<Utc> {
@@ -221,7 +214,7 @@ async fn agent_transactions_route_clamps_out_of_range_page_to_last_page() {
 }
 
 #[tokio::test]
-async fn agent_transactions_route_anchors_running_balance_to_live_cash_balance_on_page_two() {
+async fn agent_transactions_route_uses_journal_balance_on_page_two() {
     let state = test_state().await;
     let (agent_key, wallet_address) = insert_test_agent(&state).await.expect("insert agent");
     let total = TRANSACTIONS_PER_PAGE + 5;
@@ -256,19 +249,114 @@ async fn agent_transactions_route_anchors_running_balance_to_live_cash_balance_o
     let text = response_text(response).await;
     assert!(text.contains(&expected_time_text(5)));
 
-    let total_count = total as i64;
-    let live_cash = Decimal::new(100000, 4);
-    let adjustment = live_cash - Decimal::new(total_count, 0);
-    let anchored_for_event_5 = Decimal::new(5, 0) + adjustment;
-    let anchored_for_event_1 = Decimal::new(1, 0) + adjustment;
-    let formatted_5 = format_money_like_template(anchored_for_event_5);
-    let formatted_1 = format_money_like_template(anchored_for_event_1);
+    let formatted_5 = format_money_like_template(Decimal::new(5, 0));
+    let formatted_1 = format_money_like_template(Decimal::new(1, 0));
     assert!(
         text.contains(&formatted_5),
-        "expected anchored balance {formatted_5} for event 5 in {text}"
+        "expected journal balance {formatted_5} for event 5 in {text}"
     );
     assert!(
         text.contains(&formatted_1),
-        "expected anchored balance {formatted_1} for event 1 in {text}"
+        "expected journal balance {formatted_1} for event 1 in {text}"
+    );
+}
+
+#[tokio::test]
+async fn activity_note_form_requires_csrf_and_preserves_page() {
+    let state = test_state().await;
+    let (agent_key, wallet) = insert_test_agent(&state).await.expect("insert agent");
+    seed_ledger_event(
+        &state,
+        &wallet,
+        "journal-activity",
+        Utc::now(),
+        Decimal::new(10, 0),
+    )
+    .await;
+    let session = "journal-session";
+    let csrf = "journal-csrf";
+    sqlx::query(
+        "INSERT INTO user_sessions(token_hash,csrf_hash,user_id,issued_at,expires_at)
+        VALUES ($1,$2,$3,now(),now()+interval '1 day')",
+    )
+    .bind(Sha256::digest(session.as_bytes()).to_vec())
+    .bind(Sha256::digest(csrf.as_bytes()).to_vec())
+    .bind(crate::test_db::test_user_id())
+    .execute(&state.db_pool)
+    .await
+    .expect("session");
+    let cookie = format!("vt_session={session}; vt_csrf={csrf}");
+    let url = format!("/agents/{agent_key}/transactions?kind=ledger&target=journal-activity");
+    let response = router(state.clone())
+        .oneshot(
+            Request::builder()
+                .uri(&url)
+                .header("cookie", &cookie)
+                .body(Body::empty())
+                .expect("GET"),
+        )
+        .await
+        .expect("response");
+    assert_eq!(response.status(), StatusCode::OK);
+    let text = response_text(response).await;
+    assert!(text.contains(&format!("name=\"csrf_token\" value=\"{csrf}\"")));
+    assert!(text.contains("data-notes-icon=\"outline\""));
+    let path = format!("/agents/{agent_key}/transactions/ledger/journal-activity/notes");
+    let bad = router(state.clone())
+        .oneshot(
+            Request::builder()
+                .uri(&path)
+                .method("POST")
+                .header("cookie", &cookie)
+                .header("content-type", "application/x-www-form-urlencoded")
+                .body(Body::from("body=Not+authorized"))
+                .expect("POST"),
+        )
+        .await
+        .expect("response");
+    assert_ne!(bad.status(), StatusCode::SEE_OTHER);
+    let good = router(state.clone())
+        .oneshot(
+            Request::builder()
+                .uri(&path)
+                .method("POST")
+                .header("cookie", &cookie)
+                .header("content-type", "application/x-www-form-urlencoded")
+                .body(Body::from(format!(
+                    "csrf_token={csrf}&body=This+worked&page=2"
+                )))
+                .expect("POST"),
+        )
+        .await
+        .expect("response");
+    assert_eq!(good.status(), StatusCode::SEE_OTHER);
+    assert!(
+        good.headers()["location"]
+            .to_str()
+            .expect("location")
+            .contains("page=2")
+    );
+    let (count,): (i64,) = sqlx::query_as(
+        "SELECT count(*) FROM hyperliquid.journal_notes WHERE event_id='journal-activity'",
+    )
+    .fetch_one(&state.db_pool)
+    .await
+    .expect("notes");
+    assert_eq!(count, 1);
+    let response = router(state.clone())
+        .oneshot(
+            Request::builder()
+                .uri(&url)
+                .header("cookie", &cookie)
+                .body(Body::empty())
+                .expect("GET saved note"),
+        )
+        .await
+        .expect("saved note response");
+    assert_eq!(response.status(), StatusCode::OK);
+    assert!(
+        response_text(response)
+            .await
+            .contains("data-notes-icon=\"filled\"")
     );
 }

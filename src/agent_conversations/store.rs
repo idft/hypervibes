@@ -93,6 +93,10 @@ pub async fn create_conversation_with_default_policies(
         (TOOL_GROUP_ORDERS, TOOL_POLICY_CONFIRM),
         (TOOL_GROUP_MEMORY_WRITES, TOOL_POLICY_CONFIRM),
         (TOOL_GROUP_NOTIFICATIONS, TOOL_POLICY_DENY),
+        (
+            crate::agent_conversations::model::TOOL_GROUP_JOURNAL_WRITES,
+            TOOL_POLICY_DENY,
+        ),
     ] {
         sqlx::query(
             "INSERT INTO agent_conversation_tool_policies (conversation_id, tool_group, policy) \
@@ -666,17 +670,19 @@ fn validate_input(validation: Result<(), Vec<String>>) -> Result<()> {
 }
 
 fn validate_tool_policies(policies: &[AgentConversationToolPolicyRow]) -> Result<()> {
-    if policies.len() != 3 {
+    if policies.len() != 4 {
         bail!("conversation tool policies must contain all known tool groups exactly once");
     }
     let mut orders = 0;
     let mut memory_writes = 0;
     let mut notifications = 0;
+    let mut journal_writes = 0;
     for policy in policies {
         match policy.tool_group.trim() {
             TOOL_GROUP_ORDERS => orders += 1,
             TOOL_GROUP_MEMORY_WRITES => memory_writes += 1,
             TOOL_GROUP_NOTIFICATIONS => notifications += 1,
+            crate::agent_conversations::model::TOOL_GROUP_JOURNAL_WRITES => journal_writes += 1,
             other => bail!("unknown conversation tool group: {other}"),
         }
         match policy.policy.trim() {
@@ -684,7 +690,7 @@ fn validate_tool_policies(policies: &[AgentConversationToolPolicyRow]) -> Result
             other => bail!("unknown conversation tool policy: {other}"),
         }
     }
-    if orders != 1 || memory_writes != 1 || notifications != 1 {
+    if orders != 1 || memory_writes != 1 || notifications != 1 || journal_writes != 1 {
         bail!("conversation tool policies must contain all known tool groups exactly once");
     }
     Ok(())
@@ -828,16 +834,22 @@ mod tests {
         .await
         .expect("create conversation");
 
-        assert_eq!(created.tool_policies.len(), 3);
+        assert_eq!(created.tool_policies.len(), 4);
         assert!(
             created
                 .tool_policies
                 .iter()
-                .filter(|policy| policy.tool_group != TOOL_GROUP_NOTIFICATIONS)
+                .filter(|policy| policy.tool_group != TOOL_GROUP_NOTIFICATIONS
+                    && policy.tool_group
+                        != crate::agent_conversations::model::TOOL_GROUP_JOURNAL_WRITES)
                 .all(|policy| policy.policy == TOOL_POLICY_CONFIRM)
         );
         assert!(created.tool_policies.iter().any(|policy| {
             policy.tool_group == TOOL_GROUP_NOTIFICATIONS && policy.policy == TOOL_POLICY_DENY
+        }));
+        assert!(created.tool_policies.iter().any(|policy| {
+            policy.tool_group == crate::agent_conversations::model::TOOL_GROUP_JOURNAL_WRITES
+                && policy.policy == TOOL_POLICY_DENY
         }));
         let listed = list_agent_conversations(&pool, &key)
             .await

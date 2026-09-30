@@ -18,6 +18,7 @@ from __future__ import annotations
 import logging
 import os
 import sys
+from urllib.parse import quote
 from decimal import Decimal
 from pathlib import Path
 from typing import Annotated, Any, Literal
@@ -804,6 +805,63 @@ def list_account_transactions(
         raise RuntimeError(
             "HyperVibes /account/transactions returned unexpected shape"
         )
+    return result
+
+
+@mcp.tool()
+def list_account_trades(limit: int | None = None, offset: int | None = None) -> list[dict[str, Any]]:
+    """List flat-to-flat perpetual trade cycles, including open/incomplete cycles."""
+    params: dict[str, Any] = {}
+    if limit is not None:
+        params["limit"] = _require_limit(limit)
+        if limit > 100:
+            raise ValueError("trade limit must be <= 100")
+    if offset is not None:
+        params["offset"] = _require_offset(offset)
+    result = _request("GET", "/api/v1/account/trades", params=params or None)
+    if not isinstance(result, list):
+        raise RuntimeError("HyperVibes /account/trades returned unexpected shape")
+    return result
+
+
+@mcp.tool()
+def get_account_trade(trade_id: str) -> dict[str, Any]:
+    """Get a trade cycle with its allocated entry and exit fills."""
+    from uuid import UUID
+    trade_id = str(UUID(_require_nonblank("trade_id", trade_id)))
+    result = _request("GET", f"/api/v1/account/trades/{trade_id}")
+    if not isinstance(result, dict):
+        raise RuntimeError("HyperVibes /account/trades/{id} returned unexpected shape")
+    return result
+
+
+def _journal_path(kind: str, target: str) -> str:
+    if kind not in ("trade", "fill", "funding", "ledger"):
+        raise ValueError("kind must be trade, fill, funding, or ledger")
+    target = _require_nonblank("target", target)
+    if "/" in target or len(target) > 300:
+        raise ValueError("invalid journal target")
+    return f"/api/v1/account/journal/{kind}/{quote(target, safe='')}/notes"
+
+
+@mcp.tool()
+def list_journal_notes(kind: str, target: str) -> list[dict[str, Any]]:
+    """List chronological attributed notes on a trade or account activity event."""
+    result = _request("GET", _journal_path(kind, target))
+    if not isinstance(result, list):
+        raise RuntimeError("HyperVibes journal notes returned unexpected shape")
+    return result
+
+
+@mcp.tool()
+def add_journal_note(kind: str, target: str, body: str) -> dict[str, Any]:
+    """Append an attributed note to a trade or activity event (Review or permitted Chat)."""
+    body = _require_nonblank("body", body).strip()
+    if not body or len(body.encode("utf-8")) > 4000:
+        raise ValueError("note must be 1..4000 bytes")
+    result = _request("POST", _journal_path(kind, target), json_body={"body": body})
+    if not isinstance(result, dict):
+        raise RuntimeError("HyperVibes journal note returned unexpected shape")
     return result
 
 

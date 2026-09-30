@@ -11,7 +11,6 @@ use serde::Deserialize;
 use tracing::warn;
 
 use super::super::account::agent_subaccount_name;
-use super::transactions::apply_live_cash_balance_anchor;
 use super::{
     memories::{
         AgentMemoriesQuery, build_memory_type_options, memory_page_url, memory_preset_url,
@@ -29,7 +28,7 @@ use crate::{
         live_state::{AccountKey, AccountLiveState, LiveConnectionStatus},
         queries::{
             BalanceSeriesBucket, count_account_transactions, fetch_balance_series,
-            latest_account_running_balance, list_account_transactions_page,
+            list_account_transactions_page,
         },
     },
     memory::{
@@ -81,6 +80,14 @@ pub(in crate::web::routes) struct AgentSubAgentsQuery {
 pub(in crate::web::routes) struct AgentTransactionsQuery {
     #[serde(default)]
     pub page: String,
+    #[serde(skip)]
+    pub is_trades: bool,
+    #[serde(default)]
+    pub target: Option<String>,
+    #[serde(default)]
+    pub kind: Option<String>,
+    #[serde(skip)]
+    pub csrf_token: String,
 }
 #[derive(Debug, Clone, Default, Deserialize)]
 pub(in crate::web::routes) struct AgentSettingsQuery {
@@ -213,11 +220,77 @@ pub(in crate::web::routes) async fn render_agent_show_page(
                 });
         }
         AgentShowTab::Transactions => {
-            let requested_page = transactions_query
-                .as_ref()
-                .map(|query| parse_positive_page(&query.page))
-                .unwrap_or(1);
-            populate_transactions_tab(state, &agent, &mut template, requested_page).await;
+            let query = transactions_query.unwrap_or_default();
+            template.journal_csrf_token = query.csrf_token.clone();
+            let requested_page = parse_positive_page(&query.page);
+            template.transactions_view = if query.is_trades {
+                "trades"
+            } else {
+                "activity"
+            }
+            .into();
+            template.current_path = if query.is_trades {
+                format!("/agents/{agent_key}/trades")
+            } else {
+                format!("/agents/{agent_key}/transactions")
+            };
+            if template.transactions_view == "trades" {
+                populate_trades_tab(state, &agent, &mut template, requested_page).await;
+            } else {
+                populate_transactions_tab(state, &agent, &mut template, requested_page).await;
+            }
+            if let Some(id) = query.target.as_deref() {
+                let kind = if template.transactions_view == "trades" {
+                    "trade"
+                } else {
+                    query.kind.as_deref().unwrap_or("")
+                };
+                if matches!(kind, "trade" | "fill" | "ledger" | "funding")
+                    && let Some(account) = agent.trading_account_address.as_deref()
+                {
+                    match crate::hyperliquid::trade_store::target_exists(
+                        &state.db_pool,
+                        account,
+                        &agent.environment,
+                        kind,
+                        id,
+                    )
+                    .await
+                    {
+                        Ok(true) => {
+                            template.journal_selected_id = Some(id.to_string());
+                            template.journal_selected_kind = kind.to_string();
+                            template.journal_notes = crate::hyperliquid::trade_store::list_notes(
+                                &state.db_pool,
+                                account,
+                                &agent.environment,
+                                kind,
+                                id,
+                            )
+                            .await?;
+                            if kind == "trade"
+                                && let Ok(trade_id) = uuid::Uuid::parse_str(id)
+                            {
+                                template.trade_fills =
+                                    crate::hyperliquid::trade_store::trade_fills(
+                                        &state.db_pool,
+                                        account,
+                                        &agent.environment,
+                                        trade_id,
+                                    )
+                                    .await?
+                                    .into_iter()
+                                    .map(crate::web::templates::TradeFillView::from_row)
+                                    .collect();
+                            }
+                        }
+                        Ok(false) => {}
+                        Err(error) => {
+                            warn!(?error, "failed to load transaction journal target")
+                        }
+                    }
+                }
+            }
         }
         AgentShowTab::Memories => {
             let memory_query = memories_query.unwrap_or_default();
@@ -353,6 +426,58 @@ pub(in crate::web::routes) async fn render_agent_show_page(
     }
 
     Ok(Html(template.render()?).into_response())
+}
+pub(in crate::web::routes) async fn populate_trades_tab(
+    state: &Arc<AppState>,
+    agent: &crate::agents::model::AgentDetailRow,
+    template: &mut AgentsShowPageTemplate,
+    requested_page: usize,
+) {
+    let Some(account) = agent.trading_account_address.as_deref() else {
+        return;
+    };
+    let total = match crate::hyperliquid::trade_store::count_trades(
+        &state.db_pool,
+        account,
+        &agent.environment,
+    )
+    .await
+    {
+        Ok(total) => total as usize,
+        Err(error) => {
+            warn!(?error, "failed to count trades");
+            return;
+        }
+    };
+    let pages = total.div_ceil(25);
+    let page = requested_page.min(pages.max(1));
+    let offset = (page - 1) * 25;
+    template.transactions_page = page;
+    template.transactions_total_pages = pages;
+    template.transactions_total_count = total;
+    template.transactions_previous_page_url =
+        (page > 1).then(|| format!("/agents/{}/trades?page={}", agent.agent_key, page - 1));
+    template.transactions_next_page_url =
+        (page < pages).then(|| format!("/agents/{}/trades?page={}", agent.agent_key, page + 1));
+    match crate::hyperliquid::trade_store::list_trades(
+        &state.db_pool,
+        account,
+        &agent.environment,
+        25,
+        offset as i64,
+    )
+    .await
+    {
+        Ok(rows) => {
+            template.transactions_range_start = if total == 0 { 0 } else { offset + 1 };
+            template.transactions_range_end = offset + rows.len();
+            template.trades = rows
+                .into_iter()
+                .map(crate::web::templates::TradeView::from_row)
+                .collect();
+        }
+        Err(error) => warn!(?error, "failed to list trades"),
+    }
 }
 
 pub(in crate::web::routes) async fn load_selected_agent_navbar(
@@ -559,26 +684,6 @@ pub(in crate::web::routes) async fn populate_transactions_tab(
             }
 
             let offset = ((current_page - 1) * TRANSACTIONS_PER_PAGE) as i64;
-            let latest_running_balance = match latest_account_running_balance(
-                &state.db_pool,
-                account_address,
-                &agent.environment,
-            )
-            .await
-            {
-                Ok(value) => value,
-                Err(error) => {
-                    warn!(
-                        agent_key = %agent.agent_key,
-                        trading_account_address = %account_address,
-                        environment = %agent.environment,
-                        error = ?error,
-                        "failed to fetch latest account running balance for transactions page"
-                    );
-                    None
-                }
-            };
-
             match list_account_transactions_page(
                 &state.db_pool,
                 account_address,
@@ -588,8 +693,7 @@ pub(in crate::web::routes) async fn populate_transactions_tab(
             )
             .await
             {
-                Ok(mut rows) => {
-                    apply_live_cash_balance_anchor(state, agent, latest_running_balance, &mut rows);
+                Ok(rows) => {
                     let row_count = rows.len();
                     template.transactions =
                         rows.into_iter().map(TransactionView::from_row).collect();
