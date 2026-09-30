@@ -1,4 +1,4 @@
-ARG OPENCODE_TAG=1.18.32
+ARG OPENCODE_TAG=1.18.33
 
 FROM docker.io/library/rust:1.96-alpine AS builder
 
