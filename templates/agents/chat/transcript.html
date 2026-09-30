@@ -1,4 +1,6 @@
-{% if let Some(session) = session %}
+{% if initializing %}
+<p role="status" class="rounded-2xl border border-amber-900/60 bg-amber-950/20 p-5 text-center text-sm text-amber-100/80">Creating conversation…</p>
+{% else if let Some(session) = session %}
 {% if !session.session_errors.is_empty() %}
 {% for error in session.session_errors %}
 <article class="mb-3 rounded-xl border border-red-900/60 bg-red-950/30 p-3 text-sm text-red-100">{{ error.error_type }} {{ error.error_message }}</article>

@@ -37,17 +37,38 @@ fn conversation_transcript_shows_thinking_bubble_while_busy() {
     let busy = askama::Template::render(&AgentConversationTranscriptPartialTemplate {
         session: None,
         busy: true,
+        initializing: false,
     })
     .expect("render busy conversation transcript");
     let idle = askama::Template::render(&AgentConversationTranscriptPartialTemplate {
         session: None,
         busy: false,
+        initializing: false,
     })
     .expect("render idle conversation transcript");
 
     assert!(busy.contains("Assistant is thinking"));
     assert!(busy.contains("animate-spin"));
     assert!(!idle.contains("Assistant is thinking"));
+}
+
+#[test]
+fn conversation_transcript_distinguishes_creation_from_mirror_lag() {
+    let initializing = askama::Template::render(&AgentConversationTranscriptPartialTemplate {
+        session: None,
+        busy: false,
+        initializing: true,
+    })
+    .expect("render pending conversation");
+    let mirror_lag = askama::Template::render(&AgentConversationTranscriptPartialTemplate {
+        session: None,
+        busy: false,
+        initializing: false,
+    })
+    .expect("render missing mirror");
+    assert!(initializing.contains("Creating conversation…"));
+    assert!(!initializing.contains("Waiting for the OpenCode session mirror"));
+    assert!(mirror_lag.contains("Waiting for the OpenCode session mirror"));
 }
 
 #[test]

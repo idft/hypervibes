@@ -4,7 +4,97 @@ import { installAgentLiveLifecycle } from "./live";
 import { initModelPickers } from "./model-picker";
 
 afterEach(() => {
+  window.dispatchEvent(new Event("pageshow"));
   document.body.replaceChildren();
+});
+
+describe("conversation creation submissions", () => {
+  const markup = '<form data-conversation-create action="/agents/test-agent/chat/conversations" method="post"><input name="model_selection" value="openai/test"><input name="model_variant" value="high"><input name="csrf_token" value="token"><textarea name="strategy_prompt">Draft</textarea><button type="submit" class="cursor-pointer">New conversation</button></form>';
+  const submit = (form: HTMLFormElement) => {
+    const event = new Event("submit", { bubbles: true, cancelable: true });
+    form.dispatchEvent(event);
+    return event;
+  };
+  const form = () => {
+    const value = document.querySelector<HTMLFormElement>("form");
+    if (!value) throw new Error("Missing creation form");
+    return value;
+  };
+
+  it("allows the first POST and blocks repeated submissions without losing fields", () => {
+    document.body.innerHTML = markup;
+    installAgentLiveLifecycle();
+    expect(submit(form()).defaultPrevented).toBe(false);
+    expect(submit(form()).defaultPrevented).toBe(true);
+    const button = form().querySelector("button");
+    expect(button?.disabled).toBe(true);
+    expect(button?.textContent).toBe("Creating…");
+    expect(button?.classList.contains("cursor-wait")).toBe(true);
+    expect(Object.fromEntries(new FormData(form()))).toEqual({ model_selection: "openai/test", model_variant: "high", csrf_token: "token", strategy_prompt: "Draft" });
+  });
+
+  it("keeps the guard and disabled button after SSE replaces the form", () => {
+    document.body.innerHTML = markup;
+    installAgentLiveLifecycle();
+    submit(form());
+    document.body.innerHTML = markup;
+    document.dispatchEvent(new CustomEvent("htmx:sseMessage", { detail: {} }));
+    expect(form().querySelector("button")?.disabled).toBe(true);
+    expect(submit(form()).defaultPrevented).toBe(true);
+  });
+
+  it("admits one request when requestSubmit is repeated, and respects native validation", () => {
+    document.body.innerHTML = markup;
+    installAgentLiveLifecycle();
+    let requests = 0;
+    form().addEventListener("submit", (event) => {
+      if (!event.defaultPrevented) requests += 1;
+      event.preventDefault(); // Emulate navigation without jsdom's unimplemented POST.
+    });
+    const required = document.createElement("input");
+    required.required = true;
+    form().append(required);
+    form().requestSubmit();
+    expect(requests).toBe(0);
+    required.value = "valid";
+    form().requestSubmit();
+    form().requestSubmit();
+    expect(requests).toBe(1);
+  });
+
+  it.each(["htmx:afterRequest", "htmx:sendError", "htmx:timeout", "htmx:validation:halted"])("allows another creation after %s, including a replaced form", (name) => {
+    document.body.innerHTML = markup;
+    installAgentLiveLifecycle();
+    const original = form();
+    submit(original);
+    const request = new CustomEvent("htmx:beforeRequest", { bubbles: true, cancelable: true, detail: { elt: original } });
+    original.dispatchEvent(request);
+    expect(request.defaultPrevented).toBe(false);
+    const repeated = new CustomEvent("htmx:beforeRequest", { bubbles: true, cancelable: true, detail: { elt: original } });
+    original.dispatchEvent(repeated);
+    expect(repeated.defaultPrevented).toBe(true);
+    document.body.innerHTML = markup;
+    document.dispatchEvent(new CustomEvent("htmx:afterSwap", { detail: { target: document.body } }));
+    document.dispatchEvent(new CustomEvent(name, { detail: { elt: original, successful: name === "htmx:afterRequest" } }));
+    expect(form().querySelector("button")?.disabled).toBe(false);
+    expect(form().querySelector("button")?.textContent).toBe("New conversation");
+    expect(submit(form()).defaultPrevented).toBe(false);
+  });
+
+  it("does not lock an invalid form and resets on history restoration", () => {
+    document.body.innerHTML = markup;
+    installAgentLiveLifecycle();
+    const input = document.createElement("input");
+    input.required = true;
+    form().append(input);
+    submit(form());
+    expect(form().querySelector("button")?.disabled).toBe(false);
+    input.value = "valid";
+    expect(submit(form()).defaultPrevented).toBe(false);
+    window.dispatchEvent(new PageTransitionEvent("pageshow", { persisted: true }));
+    expect(form().querySelector("button")?.disabled).toBe(false);
+    expect(submit(form()).defaultPrevented).toBe(false);
+  });
 });
 
 describe("conversation composer shortcut", () => {

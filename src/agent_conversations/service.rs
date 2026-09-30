@@ -1,8 +1,13 @@
-use std::{collections::HashSet, sync::Arc, time::Duration};
+use std::{
+    collections::HashSet,
+    sync::Arc,
+    time::{Duration, Instant},
+};
 
 use anyhow::{Context, Result, anyhow, bail};
+use futures::FutureExt;
 use tokio::sync::Mutex;
-use tracing::warn;
+use tracing::{info, warn};
 use uuid::Uuid;
 
 use crate::{
@@ -73,7 +78,7 @@ pub struct ConversationService<'a> {
     pub client: &'a OpenCodeClient,
     pub base_url: &'a str,
     pub agent_api_base_url: &'a str,
-    pub workspace_controller: &'a dyn WorkspaceController,
+    pub workspace_controller: Arc<dyn WorkspaceController>,
     pub in_flight: &'a InFlightTracker,
     pub turn_tracker: &'a ConversationTurnTracker,
     pub shutdown_rx: tokio::sync::watch::Receiver<bool>,
@@ -114,25 +119,93 @@ impl<'a> ConversationService<'a> {
         model_id: &str,
         model_variant: Option<&str>,
     ) -> Result<AgentConversationRow> {
-        let agent = self.load_agent(agent_key).await?;
-        let external_key = if external_conversation_key.trim().is_empty() {
-            None
-        } else {
-            Some(external_conversation_key.trim().to_string())
-        };
+        // Admission and spawning contain no await: cancellation cannot leave a
+        // reservation behind before the tracked task owns the entire workflow.
+        let in_flight = self.in_flight.track();
+        if *self.shutdown_rx.borrow() {
+            bail!("Conversation creation is unavailable while the server is shutting down.");
+        }
+        let pool = self.pool.clone();
+        let client = self.client.clone();
+        let base_url = self.base_url.to_string();
+        let agent_api_base_url = self.agent_api_base_url.to_string();
+        let workspace_controller = Arc::clone(&self.workspace_controller);
+        let tracker = self.in_flight.clone();
+        let turn_tracker = self.turn_tracker.clone();
+        let shutdown_rx = self.shutdown_rx.clone();
         let input = CreateAgentConversation {
             agent_key: agent_key.to_string(),
             opencode_session_id: format!("pending_{}", Uuid::new_v4()),
             channel: channel.to_string(),
-            external_conversation_key: external_key,
+            external_conversation_key: (!external_conversation_key.trim().is_empty())
+                .then(|| external_conversation_key.trim().to_string()),
             title: "New conversation".to_string(),
             model_provider_id: provider_id.to_string(),
             model_id: model_id.to_string(),
             model_variant: model_variant.map(ToOwned::to_owned),
         };
+        let task = tokio::spawn(async move {
+            let _in_flight = in_flight;
+            let started = Instant::now();
+            let service = ConversationService {
+                pool: &pool,
+                client: &client,
+                base_url: &base_url,
+                agent_api_base_url: &agent_api_base_url,
+                workspace_controller,
+                in_flight: &tracker,
+                turn_tracker: &turn_tracker,
+                shutdown_rx,
+            };
+            let mut stage = "validation";
+            let mut conversation_id = None;
+            let result = std::panic::AssertUnwindSafe(service.initialize_conversation(
+                &input,
+                &mut stage,
+                &mut conversation_id,
+            ))
+            .catch_unwind()
+            .await;
+            match result {
+                Ok(result) => {
+                    match &result {
+                        Ok(row) => info!(agent_key = %input.agent_key, conversation_id = %row.id,
+                            stage, elapsed_ms = started.elapsed().as_millis(), "conversation creation completed"),
+                        Err(error) => warn!(agent_key = %input.agent_key, ?conversation_id,
+                            stage, elapsed_ms = started.elapsed().as_millis(), error = ?error,
+                            "conversation creation failed"),
+                    }
+                    result
+                }
+                Err(panic) => {
+                    warn!(agent_key = %input.agent_key, ?conversation_id, stage,
+                        elapsed_ms = started.elapsed().as_millis(), "conversation creation task panicked");
+                    std::panic::resume_unwind(panic)
+                }
+            }
+        });
+        // A dropped caller drops only this handle; Tokio detaches the task.
+        task.await
+            .context("conversation creation task failed to join")?
+    }
+
+    async fn initialize_conversation(
+        &self,
+        input: &CreateAgentConversation,
+        stage: &mut &'static str,
+        conversation_id: &mut Option<Uuid>,
+    ) -> Result<AgentConversationRow> {
+        let agent_key = input.agent_key.as_str();
+        let agent = self.load_agent(agent_key).await?;
+        input
+            .validate()
+            .map_err(|errors| anyhow!(errors.join(" ")))?;
+        *stage = "reservation";
         let conversation =
-            store::create_conversation_with_default_policies(self.pool, &input).await?;
+            store::create_conversation_with_default_policies(self.pool, input).await?;
+        *conversation_id = Some(conversation.id);
         let workspace = async {
+            *stage = "workspace preparation";
             crate::agent_conversations::workspace::prepare_conversation_workspace(
                 self.pool,
                 agent_key,
@@ -140,6 +213,7 @@ impl<'a> ConversationService<'a> {
                 CAPABILITY_SCHEMA_VERSION,
             )
             .await?;
+            *stage = "workspace materialization";
             let workspace = self
                 .workspace_controller
                 .materialize_conversation_workspace(
@@ -153,29 +227,37 @@ impl<'a> ConversationService<'a> {
                     &format!("conversation-materialize-{}", conversation.id),
                 )
                 .await?;
-            crate::agent_conversations::workspace::mark_conversation_workspace_ready(
+            *stage = "workspace ready";
+            if !crate::agent_conversations::workspace::mark_conversation_workspace_ready(
                 self.pool,
                 agent_key,
                 conversation.id,
             )
-            .await?;
+            .await?
+            {
+                bail!("Conversation workspace no longer exists.");
+            }
             Result::<_, anyhow::Error>::Ok(workspace)
         }
         .await;
+        if workspace.is_ok() {
+            *stage = "session creation";
+        }
         match workspace {
             Ok(workspace) => match self
                 .client
                 .create_conversation_session(
                     self.base_url,
                     &workspace.workspace_container_path,
-                    provider_id,
-                    model_id,
-                    model_variant,
+                    &input.model_provider_id,
+                    &input.model_id,
+                    input.model_variant.as_deref(),
                     default_permission_rules(),
                 )
                 .await
             {
                 Ok(session) => {
+                    *stage = "session persistence";
                     if !store::set_conversation_session_id(
                         self.pool,
                         agent_key,
@@ -466,6 +548,10 @@ impl<'a> ConversationService<'a> {
         store::get_agent_conversation(self.pool, agent_key, conversation_id)
             .await?
             .ok_or_else(|| anyhow!("Conversation not found."))
+            .and_then(|conversation| {
+                conversation.require_initialized()?;
+                Ok(conversation)
+            })
     }
 
     async fn workspace_path(&self, agent_key: &str, conversation_id: Uuid) -> Result<String> {

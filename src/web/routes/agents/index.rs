@@ -207,6 +207,12 @@ pub(in crate::web::routes) async fn delete_agent(
             &agent_key,
         )
         .await?;
+    if conversation_sessions
+        .iter()
+        .any(|(_, session_id)| crate::agent_conversations::model::session_is_pending(session_id))
+    {
+        return Ok((StatusCode::CONFLICT, "Conversation is still initializing. Please wait for it to finish. The agent remains disabled.").into_response());
+    }
     let conversation_workspace_container_path = |conversation_id: uuid::Uuid| {
         format!(
             "{}/conversations/{agent_key}/{conversation_id}/workspace",
@@ -242,6 +248,12 @@ pub(in crate::web::routes) async fn delete_agent(
             &agent_key,
         )
         .await?;
+    if conversation_sessions
+        .iter()
+        .any(|(_, session_id)| crate::agent_conversations::model::session_is_pending(session_id))
+    {
+        return Ok((StatusCode::CONFLICT, "Conversation is still initializing. Please wait for it to finish. The agent remains disabled.").into_response());
+    }
     for (conversation_id, session_id) in &conversation_sessions {
         let status = state
             .opencode_client

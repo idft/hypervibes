@@ -1319,7 +1319,7 @@ impl GatewayServiceState {
             client: &self.opencode_client,
             base_url: &self.opencode_base_url,
             agent_api_base_url: &self.agent_api_base_url,
-            workspace_controller: self.workspace_controller.as_ref(),
+            workspace_controller: Arc::clone(&self.workspace_controller),
             in_flight: &self.in_flight,
             turn_tracker: &self.conversation_turns,
             shutdown_rx: self.shutdown_rx.clone(),

@@ -12,6 +12,14 @@ pub const TOOL_POLICY_DENY: &str = "deny";
 pub const TOOL_POLICY_CONFIRM: &str = "confirm";
 pub const TOOL_POLICY_ALLOW: &str = "allow";
 
+pub fn session_is_pending(session_id: &str) -> bool {
+    session_id.starts_with("pending_")
+}
+
+#[derive(Debug, thiserror::Error)]
+#[error("Conversation is still initializing. Please wait for it to finish.")]
+pub struct ConversationInitializing;
+
 #[derive(Debug, Clone)]
 pub struct AgentConversationRow {
     pub id: Uuid,
@@ -29,6 +37,18 @@ pub struct AgentConversationRow {
 }
 
 impl AgentConversationRow {
+    pub fn is_initializing(&self) -> bool {
+        session_is_pending(&self.opencode_session_id)
+    }
+
+    pub fn require_initialized(&self) -> Result<(), ConversationInitializing> {
+        if self.is_initializing() {
+            Err(ConversationInitializing)
+        } else {
+            Ok(())
+        }
+    }
+
     /// Builder-style helper that returns a clone with the supplied external
     /// conversation key. Used by [`crate::agent_conversations::service::ConversationService::create_web_conversation`]
     /// to erase the empty external key passed through the generic

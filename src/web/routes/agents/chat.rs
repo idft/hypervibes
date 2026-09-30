@@ -24,8 +24,8 @@ use uuid::Uuid;
 use crate::{
     agent_conversations::{
         model::{
-            AgentConversationRow, TOOL_GROUP_JOURNAL_WRITES, TOOL_GROUP_MEMORY_WRITES,
-            TOOL_GROUP_NOTIFICATIONS, TOOL_GROUP_ORDERS,
+            AgentConversationRow, ConversationInitializing, TOOL_GROUP_JOURNAL_WRITES,
+            TOOL_GROUP_MEMORY_WRITES, TOOL_GROUP_NOTIFICATIONS, TOOL_GROUP_ORDERS,
         },
         service::{CONVERSATION_MESSAGE_MAX_CHARS, ConversationService},
     },
@@ -110,6 +110,7 @@ struct ConversationSnapshot {
     telegram_chat_id: Option<String>,
     session: Option<OpenCodeSessionView>,
     busy: bool,
+    initializing: bool,
     settings: AgentConversationSettingsView,
     permissions: Vec<AgentConversationPermissionRequestView>,
 }
@@ -120,7 +121,7 @@ fn service(state: &AppState) -> ConversationService<'_> {
         client: &state.opencode_client,
         base_url: &state.opencode_base_url,
         agent_api_base_url: &state.hypervibes_agent_api_base_url,
-        workspace_controller: state.workspace_controller.as_ref(),
+        workspace_controller: Arc::clone(&state.workspace_controller),
         in_flight: &state.in_flight,
         turn_tracker: &state.conversation_turns,
         shutdown_rx: state.shutdown_rx.clone(),
@@ -203,18 +204,23 @@ async fn load_snapshot(
         .find(|item| item.tool_group == TOOL_GROUP_JOURNAL_WRITES)
         .map(|item| item.policy.clone())
         .unwrap_or_else(|| "deny".to_string());
-    let permissions = state
-        .opencode_client
-        .list_pending_permissions(
-            &state.opencode_base_url,
-            &format!("/workspaces/conversations/{agent_key}/{conversation_id}/workspace"),
-        )
-        .await
-        .unwrap_or_default()
-        .iter()
-        .filter(|request| request.session_id == conversation.opencode_session_id)
-        .map(AgentConversationPermissionRequestView::from)
-        .collect();
+    let initializing = conversation.is_initializing();
+    let permissions = if initializing {
+        Vec::new()
+    } else {
+        state
+            .opencode_client
+            .list_pending_permissions(
+                &state.opencode_base_url,
+                &format!("/workspaces/conversations/{agent_key}/{conversation_id}/workspace"),
+            )
+            .await
+            .unwrap_or_default()
+            .iter()
+            .filter(|request| request.session_id == conversation.opencode_session_id)
+            .map(AgentConversationPermissionRequestView::from)
+            .collect()
+    };
     Ok(Some(ConversationSnapshot {
         agent,
         conversation,
@@ -222,13 +228,14 @@ async fn load_snapshot(
         telegram_chat_id,
         session,
         busy,
+        initializing,
         settings: AgentConversationSettingsView {
             model_picker: picker,
             orders_policy,
             memory_writes_policy,
             notifications_policy,
             journal_writes_policy,
-            disabled: busy,
+            disabled: busy || initializing,
         },
         permissions,
     }))
@@ -310,6 +317,7 @@ fn render_snapshot(
             ),
         },
         busy: snapshot.busy,
+        initializing: snapshot.initializing,
         session: snapshot.session.clone(),
         settings: snapshot.settings.clone(),
     }
@@ -317,13 +325,14 @@ fn render_snapshot(
     let transcript = AgentConversationTranscriptPartialTemplate {
         session: snapshot.session.clone(),
         busy: snapshot.busy,
+        initializing: snapshot.initializing,
     }
     .render()?;
     let composer = AgentConversationComposerPartialTemplate {
         agent_key: snapshot.agent.agent_key.clone(),
         conversation_id: snapshot.conversation.id,
         message_id: opencode_message_id(),
-        busy: snapshot.busy,
+        busy: snapshot.busy || snapshot.initializing,
         message,
         error,
     }
@@ -679,28 +688,45 @@ pub(in crate::web::routes) async fn agents_stop_conversation(
     State(state): State<Arc<AppState>>,
     Path((agent_key, conversation_id)): Path<(String, Uuid)>,
 ) -> Result<Response, AppError> {
-    service(&state)
+    if let Err(error) = service(&state)
         .stop_conversation(&agent_key, conversation_id)
-        .await?;
+        .await
+    {
+        return conversation_action_error(error);
+    }
     Ok(Redirect::to(&format!("/agents/{agent_key}/chat/{conversation_id}")).into_response())
 }
 pub(in crate::web::routes) async fn agents_compact_conversation(
     State(state): State<Arc<AppState>>,
     Path((agent_key, conversation_id)): Path<(String, Uuid)>,
 ) -> Result<Response, AppError> {
-    service(&state)
+    if let Err(error) = service(&state)
         .compact_conversation(&agent_key, conversation_id)
-        .await?;
+        .await
+    {
+        return conversation_action_error(error);
+    }
     Ok(Redirect::to(&format!("/agents/{agent_key}/chat/{conversation_id}")).into_response())
 }
 pub(in crate::web::routes) async fn agents_delete_conversation(
     State(state): State<Arc<AppState>>,
     Path((agent_key, conversation_id)): Path<(String, Uuid)>,
 ) -> Result<Response, AppError> {
-    service(&state)
+    if let Err(error) = service(&state)
         .delete_conversation(&agent_key, conversation_id)
-        .await?;
+        .await
+    {
+        return conversation_action_error(error);
+    }
     Ok(Redirect::to(&format!("/agents/{agent_key}/chat")).into_response())
+}
+
+fn conversation_action_error(error: anyhow::Error) -> Result<Response, AppError> {
+    if error.is::<ConversationInitializing>() {
+        Ok((StatusCode::CONFLICT, error.to_string()).into_response())
+    } else {
+        Err(AppError(error))
+    }
 }
 
 pub(in crate::web::routes) async fn agents_update_conversation_settings(
@@ -711,6 +737,16 @@ pub(in crate::web::routes) async fn agents_update_conversation_settings(
     let Some(_agent) = get_agent(&state.db_pool, &agent_key).await? else {
         return Ok((StatusCode::NOT_FOUND, "agent not found").into_response());
     };
+    let current = crate::agent_conversations::store::get_agent_conversation(
+        &state.db_pool,
+        &agent_key,
+        conversation_id,
+    )
+    .await?
+    .ok_or_else(|| AppError(anyhow::anyhow!("conversation not found")))?;
+    if let Err(error) = current.require_initialized() {
+        return conversation_action_error(error.into());
+    }
     let selection = parse_model_selection(&form.model_selection)
         .map_err(anyhow::Error::msg)?
         .ok_or_else(|| AppError(anyhow::anyhow!("Select a model.")))?;
@@ -719,13 +755,6 @@ pub(in crate::web::routes) async fn agents_update_conversation_settings(
             .await
             .map_err(|error| AppError(anyhow::anyhow!(error)))?
             .ok_or_else(|| AppError(anyhow::anyhow!("Select a model.")))?;
-    let current = crate::agent_conversations::store::get_agent_conversation(
-        &state.db_pool,
-        &agent_key,
-        conversation_id,
-    )
-    .await?
-    .ok_or_else(|| AppError(anyhow::anyhow!("conversation not found")))?;
     let mut policies = current.tool_policies;
     for policy in &mut policies {
         if policy.tool_group == TOOL_GROUP_ORDERS {
@@ -738,7 +767,7 @@ pub(in crate::web::routes) async fn agents_update_conversation_settings(
             policy.policy = form.journal_writes_policy.clone();
         }
     }
-    service(&state)
+    if let Err(error) = service(&state)
         .update_conversation_model_and_policies(
             &agent_key,
             conversation_id,
@@ -747,7 +776,10 @@ pub(in crate::web::routes) async fn agents_update_conversation_settings(
             selection.2.as_deref(),
             &policies,
         )
-        .await?;
+        .await
+    {
+        return conversation_action_error(error);
+    }
     Ok(Redirect::to(&format!("/agents/{agent_key}/chat/{conversation_id}")).into_response())
 }
 
@@ -761,10 +793,14 @@ pub(in crate::web::routes) async fn agents_reply_to_conversation_permission(
         "reject" => OpenCodePermissionReply::Reject,
         _ => return Ok((StatusCode::BAD_REQUEST, "invalid permission reply").into_response()),
     };
-    if !service(&state)
+    let replied = match service(&state)
         .reply_to_permission(&agent_key, conversation_id, &request_id, reply)
-        .await?
+        .await
     {
+        Ok(replied) => replied,
+        Err(error) => return conversation_action_error(error),
+    };
+    if !replied {
         return Ok((
             StatusCode::NOT_FOUND,
             "permission request not found for conversation",
@@ -799,6 +835,7 @@ pub(in crate::web::routes) async fn agent_conversation_stream(
                 pending: VecDeque::new(),
                 interval: tokio::time::interval(Duration::from_secs(3)),
                 busy: snapshot.busy,
+                initializing: snapshot.initializing,
                 last_permissions: signature(&snapshot.permissions),
             },
             next_conversation_event,
@@ -819,6 +856,7 @@ struct ConversationStreamState {
     pending: VecDeque<Event>,
     interval: tokio::time::Interval,
     busy: bool,
+    initializing: bool,
     last_permissions: String,
 }
 async fn next_conversation_event(
@@ -832,12 +870,16 @@ async fn next_conversation_event(
             changed = stream.shutdown_rx.changed() => {
                 if changed.is_err() || *stream.shutdown_rx.borrow() { return None; }
             },
-            _ = stream.interval.tick(), if stream.busy => {
+            _ = stream.interval.tick(), if stream.busy || stream.initializing => {
                 if let Ok(Some(snapshot)) = load_snapshot(&stream.state, &stream.agent_key, stream.conversation_id).await {
                     let next = signature(&snapshot.permissions);
-                    let busy_changed = snapshot.busy != stream.busy;
+                    let busy_changed = snapshot.busy != stream.busy
+                        || snapshot.initializing != stream.initializing
+                        || snapshot.conversation.opencode_session_id != stream.session_id;
                     let permissions_changed = next != stream.last_permissions;
                     stream.busy = snapshot.busy;
+                    stream.initializing = snapshot.initializing;
+                    stream.session_id = snapshot.conversation.opencode_session_id.clone();
                     stream.last_permissions = next;
                     if busy_changed {
                         if let Ok(rendered) = render_snapshot(&snapshot, &stream.csrf_token, String::new(), None) {
@@ -867,6 +909,7 @@ async fn next_conversation_event(
                     Ok(Some(snapshot)) => {
                         stream.session_id = snapshot.conversation.opencode_session_id.clone();
                         stream.busy = snapshot.busy;
+                        stream.initializing = snapshot.initializing;
                         stream.last_permissions = signature(&snapshot.permissions);
                         match render_snapshot(&snapshot, &stream.csrf_token, String::new(), None) {
                             Ok(rendered) => stream.pending.extend(rendered.events()),

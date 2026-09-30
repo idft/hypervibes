@@ -38,10 +38,15 @@ impl AgentConversationListItemView {
                 Some(variant) => format!("{}/{} - {variant}", row.model_provider_id, row.model_id),
                 None => format!("{}/{}", row.model_provider_id, row.model_id),
             },
-            status_text: row
-                .opencode_status
-                .clone()
-                .unwrap_or_else(|| "syncing".to_string()),
+            status_text: if crate::agent_conversations::model::session_is_pending(
+                &row.opencode_session_id,
+            ) {
+                "creating".to_string()
+            } else {
+                row.opencode_status
+                    .clone()
+                    .unwrap_or_else(|| "syncing".to_string())
+            },
             selected: selected == Some(row.id),
             href: format!("/agents/{}/chat/{}", row.agent_key, row.id),
         }
@@ -119,6 +124,7 @@ pub struct AgentConversationSummaryPartialTemplate {
     pub title: String,
     pub model_text: String,
     pub busy: bool,
+    pub initializing: bool,
     pub session: Option<OpenCodeSessionView>,
     pub settings: AgentConversationSettingsView,
 }
@@ -127,6 +133,7 @@ pub struct AgentConversationSummaryPartialTemplate {
 pub struct AgentConversationTranscriptPartialTemplate {
     pub session: Option<OpenCodeSessionView>,
     pub busy: bool,
+    pub initializing: bool,
 }
 #[derive(Template)]
 #[template(path = "agents/chat/composer.html")]
