@@ -23,7 +23,6 @@
   <form action="/agents/{{ agent_key }}/chat/{{ conversation_id }}/settings" method="post" class="mt-4 grid gap-3 border-t border-zinc-800 pt-4">
     <fieldset {% if settings.disabled %}disabled{% endif %} class="contents [&:disabled_button]:cursor-not-allowed">
       {% let model_picker = settings.model_picker %}{% include "agents/components/model-picker.html" %}
-      <button type="submit" class="w-fit cursor-pointer rounded-full border border-zinc-800 px-3 py-1.5 text-xs font-medium text-zinc-300 hover:border-zinc-700 hover:text-white disabled:opacity-50">Save model</button>
     </fieldset>
   </form>
   <div class="mt-4 flex min-w-0 items-center gap-4">
