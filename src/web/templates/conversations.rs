@@ -154,7 +154,6 @@ pub struct AgentConversationSummaryPartialTemplate {
     pub agent_key: String,
     pub conversation_id: Uuid,
     pub title: String,
-    pub model_text: String,
     pub busy: bool,
     pub initializing: bool,
     pub session: Option<OpenCodeSessionView>,

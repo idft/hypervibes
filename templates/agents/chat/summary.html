@@ -37,8 +37,7 @@
     <button type="button" data-chat-permissions-open aria-haspopup="dialog" aria-controls="chat-permissions-modal" {% if settings.disabled %}disabled{% endif %} class="shrink-0 cursor-pointer rounded-full border border-zinc-800 px-3 py-1.5 text-xs font-medium text-zinc-300 hover:border-zinc-700 hover:text-white disabled:cursor-not-allowed disabled:opacity-50">Manage permissions</button>
   </div>
   {% include "agents/chat/permissions-modal.html" %}
-  <dl class="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-4 xl:grid-cols-8">
-    <div><dt class="text-xs text-zinc-500">Model</dt><dd class="break-all font-mono text-xs text-zinc-200">{{ model_text }}</dd></div>
+  <dl class="mt-4 grid grid-cols-2 gap-3 sm:grid-cols-4 xl:grid-cols-7">
     {% if let Some(session) = session %}
     <div><dt class="text-xs text-zinc-500">Cost</dt><dd class="font-mono text-xs text-zinc-200">{{ session.estimated_cost_text }}</dd></div>
     <div><dt class="text-xs text-zinc-500">Input / output</dt><dd class="font-mono text-xs text-zinc-200">{{ session.input_tokens_text }} / {{ session.output_tokens_text }}</dd></div>

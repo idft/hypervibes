@@ -176,7 +176,7 @@ async fn load_snapshot(
         .unwrap_or_else(|| "syncing".to_string());
     let busy = state.conversation_turns.is_active(conversation_id).await
         || matches!(status_text.as_str(), "busy" | "retry");
-    let picker = build_model_picker_view(
+    let mut picker = build_model_picker_view(
         "conversation-model-selection",
         &format!(
             "{}/{}",
@@ -185,6 +185,7 @@ async fn load_snapshot(
         conversation.model_variant.as_deref(),
         load_model_picker_context(state, &agent).await,
     );
+    picker.show_label = false;
     let policies = crate::web::templates::AgentConversationPolicyView::from_policies(
         &conversation.tool_policies,
     );
@@ -287,16 +288,6 @@ fn render_snapshot(
         agent_key: snapshot.agent.agent_key.clone(),
         conversation_id: snapshot.conversation.id,
         title: snapshot.conversation.title.clone(),
-        model_text: match snapshot.conversation.model_variant.as_deref() {
-            Some(variant) => format!(
-                "{}/{} - {variant}",
-                snapshot.conversation.model_provider_id, snapshot.conversation.model_id
-            ),
-            None => format!(
-                "{}/{}",
-                snapshot.conversation.model_provider_id, snapshot.conversation.model_id
-            ),
-        },
         busy: snapshot.busy,
         initializing: snapshot.initializing,
         session: snapshot.session.clone(),
@@ -367,12 +358,13 @@ pub(in crate::web::routes) async fn agents_show_chat(
         );
     }
     let notification_count = count_notifications(&state.db_pool, &agent.agent_key).await?;
-    let picker = build_model_picker_view(
+    let mut picker = build_model_picker_view(
         "conversation-model-selection",
         "",
         None,
         load_model_picker_context(&state, &agent).await,
     );
+    picker.show_label = false;
     let navbar = load_selected_agent_navbar(&state, user.id, &agent).await?;
     Ok(Html(AgentConversationEmptyPageTemplate::render_view(
         agent,
@@ -404,12 +396,13 @@ pub(in crate::web::routes) async fn agents_new_chat(
         );
     }
     let notification_count = count_notifications(&state.db_pool, &agent.agent_key).await?;
-    let picker = build_model_picker_view(
+    let mut picker = build_model_picker_view(
         "conversation-model-selection",
         "",
         None,
         load_model_picker_context(&state, &agent).await,
     );
+    picker.show_label = false;
     let navbar = load_selected_agent_navbar(&state, user.id, &agent).await?;
     Ok(Html(AgentConversationEmptyPageTemplate::render_view(
         agent,
@@ -581,12 +574,13 @@ async fn render_empty_error(
     csrf_token: &str,
     user_id: Uuid,
 ) -> Result<Response, AppError> {
-    let picker = build_model_picker_view(
+    let mut picker = build_model_picker_view(
         "conversation-model-selection",
         &selection,
         None,
         load_model_picker_context(state, &agent).await,
     );
+    picker.show_label = false;
     let navbar = load_selected_agent_navbar(state, user_id, &agent).await?;
     let notification_count = count_notifications(&state.db_pool, &agent.agent_key).await?;
     Ok(Html(AgentConversationEmptyPageTemplate::render_view(
