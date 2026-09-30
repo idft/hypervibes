@@ -6,9 +6,9 @@ use uuid::Uuid;
 
 use crate::{
     agent_conversations::model::{
-        AgentConversationListRow, AgentConversationRow, AgentConversationToolPolicyRow,
-        CreateAgentConversation, DEFAULT_TOOL_POLICIES, TOOL_POLICY_ALLOW, TOOL_POLICY_CONFIRM,
-        TOOL_POLICY_DENY, UpdateAgentConversationModel,
+        AgentChatPolicyDefaultRow, AgentConversationListRow, AgentConversationRow,
+        AgentConversationToolPolicyRow, CreateAgentConversation, DEFAULT_TOOL_POLICIES,
+        TOOL_POLICY_ALLOW, TOOL_POLICY_CONFIRM, TOOL_POLICY_DENY, UpdateAgentConversationModel,
     },
     db::DbPool,
 };
@@ -54,8 +54,97 @@ struct AgentConversationListDbRow {
     compaction_count: Option<i32>,
 }
 
-/// Create an app-owned mapping after OpenCode has created its session. The
-/// default state-changing tool policies are persisted atomically with it.
+/// Load effective defaults, including standard defaults for newly created agents
+/// and tool groups that do not yet have a saved default.
+pub async fn get_agent_chat_policy_defaults(
+    pool: &DbPool,
+    agent_key: &str,
+) -> Result<Vec<AgentChatPolicyDefaultRow>> {
+    load_agent_chat_policy_defaults(pool, agent_key).await
+}
+
+async fn load_agent_chat_policy_defaults<'e, E>(
+    executor: E,
+    agent_key: &str,
+) -> Result<Vec<AgentChatPolicyDefaultRow>>
+where
+    E: sqlx::Executor<'e, Database = sqlx::Postgres>,
+{
+    let groups: Vec<&str> = DEFAULT_TOOL_POLICIES
+        .iter()
+        .map(|(group, _)| *group)
+        .collect();
+    let policies: Vec<&str> = DEFAULT_TOOL_POLICIES
+        .iter()
+        .map(|(_, policy)| *policy)
+        .collect();
+    query_as(
+        "SELECT defaults.tool_group, COALESCE(saved.policy, defaults.policy) AS policy
+           FROM unnest($2::text[], $3::text[]) AS defaults(tool_group, policy)
+           LEFT JOIN agent_chat_policy_defaults AS saved
+             ON saved.agent_key = $1 AND saved.tool_group = defaults.tool_group",
+    )
+    .bind(agent_key)
+    .bind(groups)
+    .bind(policies)
+    .fetch_all(executor)
+    .await
+    .context("failed to load agent chat permission defaults")
+}
+
+pub fn validate_agent_chat_policy_defaults(policies: &[AgentChatPolicyDefaultRow]) -> Result<()> {
+    validate_policy_values(
+        &policies
+            .iter()
+            .map(|policy| (policy.tool_group.as_str(), policy.policy.as_str()))
+            .collect::<Vec<_>>(),
+    )
+}
+
+pub async fn replace_agent_chat_policy_defaults(
+    pool: &DbPool,
+    agent_key: &str,
+    policies: &[AgentChatPolicyDefaultRow],
+) -> Result<bool> {
+    validate_agent_chat_policy_defaults(policies)?;
+    let mut tx = pool
+        .begin()
+        .await
+        .context("failed to begin chat defaults transaction")?;
+    // Serialize concurrent saves so the six policies are always replaced as a set.
+    let exists: Option<String> =
+        sqlx::query_scalar("SELECT agent_key FROM agents WHERE agent_key = $1 FOR UPDATE")
+            .bind(agent_key)
+            .fetch_optional(&mut *tx)
+            .await
+            .context("failed to load agent before saving chat defaults")?;
+    if exists.is_none() {
+        return Ok(false);
+    }
+    sqlx::query("DELETE FROM agent_chat_policy_defaults WHERE agent_key = $1")
+        .bind(agent_key)
+        .execute(&mut *tx)
+        .await
+        .context("failed to clear agent chat defaults")?;
+    for policy in policies {
+        sqlx::query(
+            "INSERT INTO agent_chat_policy_defaults (agent_key, tool_group, policy) VALUES ($1, $2, $3)",
+        )
+        .bind(agent_key)
+        .bind(&policy.tool_group)
+        .bind(&policy.policy)
+        .execute(&mut *tx)
+        .await
+        .context("failed to save agent chat default")?;
+    }
+    tx.commit()
+        .await
+        .context("failed to commit agent chat defaults")?;
+    Ok(true)
+}
+
+/// Reserve an app-owned conversation and snapshot the agent's effective tool
+/// defaults atomically. Later changes to defaults do not affect this conversation.
 pub async fn create_conversation_with_default_policies(
     pool: &DbPool,
     input: &CreateAgentConversation,
@@ -88,14 +177,15 @@ pub async fn create_conversation_with_default_policies(
     .context("failed to insert agent conversation")?
     .ok_or_else(|| anyhow!("agent does not exist"))?;
 
-    for (tool_group, policy) in DEFAULT_TOOL_POLICIES {
+    let defaults = load_agent_chat_policy_defaults(&mut *tx, &row.agent_key).await?;
+    for policy in defaults {
         sqlx::query(
             "INSERT INTO agent_conversation_tool_policies (conversation_id, tool_group, policy) \
              VALUES ($1, $2, $3)",
         )
         .bind(row.id)
-        .bind(tool_group)
-        .bind(policy)
+        .bind(policy.tool_group)
+        .bind(policy.policy)
         .execute(&mut *tx)
         .await
         .context("failed to insert default agent conversation tool policy")?;
@@ -661,23 +751,32 @@ fn validate_input(validation: Result<(), Vec<String>>) -> Result<()> {
 }
 
 fn validate_tool_policies(policies: &[AgentConversationToolPolicyRow]) -> Result<()> {
+    validate_policy_values(
+        &policies
+            .iter()
+            .map(|policy| (policy.tool_group.as_str(), policy.policy.as_str()))
+            .collect::<Vec<_>>(),
+    )
+}
+
+fn validate_policy_values(policies: &[(&str, &str)]) -> Result<()> {
     if policies.len() != DEFAULT_TOOL_POLICIES.len() {
-        bail!("conversation tool policies must contain all known tool groups exactly once");
+        bail!("chat tool policies must contain all known tool groups exactly once");
     }
     for (tool_group, _) in DEFAULT_TOOL_POLICIES {
         if policies
             .iter()
-            .filter(|policy| policy.tool_group == tool_group)
+            .filter(|(group, _)| *group == tool_group)
             .count()
             != 1
         {
-            bail!("conversation tool policies must contain all known tool groups exactly once");
+            bail!("chat tool policies must contain all known tool groups exactly once");
         }
     }
-    for policy in policies {
-        match policy.policy.trim() {
+    for (_, policy) in policies {
+        match *policy {
             TOOL_POLICY_DENY | TOOL_POLICY_CONFIRM | TOOL_POLICY_ALLOW => {}
-            other => bail!("unknown conversation tool policy: {other}"),
+            other => bail!("unknown chat tool policy: {other}"),
         }
     }
     Ok(())
@@ -803,6 +902,176 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn chat_defaults_are_agent_scoped_and_snapshotted_for_new_conversations() {
+        let pool = test_db::pool().await;
+        seed_agent(&pool, "defaults-agent").await;
+        seed_agent(&pool, "other-agent").await;
+        let original = create_conversation_with_default_policies(
+            &pool,
+            &create_input("defaults-agent", "ses_original"),
+        )
+        .await
+        .expect("create original conversation");
+        let mut defaults = get_agent_chat_policy_defaults(&pool, "defaults-agent")
+            .await
+            .expect("load standard defaults");
+        assert_eq!(defaults.len(), 6);
+        for policy in &mut defaults {
+            policy.policy = TOOL_POLICY_ALLOW.to_string();
+        }
+        assert!(
+            replace_agent_chat_policy_defaults(&pool, "defaults-agent", &defaults)
+                .await
+                .expect("save defaults")
+        );
+        let saved = get_agent_chat_policy_defaults(&pool, "defaults-agent")
+            .await
+            .expect("load saved defaults");
+        assert!(
+            saved
+                .iter()
+                .all(|policy| policy.policy == TOOL_POLICY_ALLOW)
+        );
+        let other = get_agent_chat_policy_defaults(&pool, "other-agent")
+            .await
+            .expect("load other agent defaults");
+        for (group, policy) in DEFAULT_TOOL_POLICIES {
+            assert!(
+                other
+                    .iter()
+                    .any(|row| row.tool_group == group && row.policy == policy)
+            );
+        }
+        for (channel, session) in [("web", "ses_new_web"), ("telegram", "ses_new_telegram")] {
+            let created = create_conversation_with_default_policies(
+                &pool,
+                &CreateAgentConversation {
+                    channel: channel.to_string(),
+                    ..create_input("defaults-agent", session)
+                },
+            )
+            .await
+            .expect("create with saved defaults");
+            assert!(
+                created
+                    .tool_policies
+                    .iter()
+                    .all(|policy| policy.policy == TOOL_POLICY_ALLOW)
+            );
+        }
+        let unchanged = get_agent_conversation(&pool, "defaults-agent", original.id)
+            .await
+            .expect("load original")
+            .expect("original exists");
+        for policy in &original.tool_policies {
+            assert!(
+                unchanged
+                    .tool_policies
+                    .iter()
+                    .any(|row| row.tool_group == policy.tool_group && row.policy == policy.policy)
+            );
+        }
+        let mut invalid = defaults.clone();
+        invalid[0].policy = "invalid".to_string();
+        assert!(
+            replace_agent_chat_policy_defaults(&pool, "defaults-agent", &invalid)
+                .await
+                .is_err()
+        );
+        let mut duplicate = defaults.clone();
+        duplicate[0].tool_group = duplicate[1].tool_group.clone();
+        assert!(
+            replace_agent_chat_policy_defaults(&pool, "defaults-agent", &duplicate)
+                .await
+                .is_err()
+        );
+        assert!(
+            replace_agent_chat_policy_defaults(&pool, "defaults-agent", &defaults[..5])
+                .await
+                .is_err()
+        );
+        assert!(
+            get_agent_chat_policy_defaults(&pool, "defaults-agent")
+                .await
+                .expect("invalid saves preserve defaults")
+                .iter()
+                .all(|policy| policy.policy == TOOL_POLICY_ALLOW)
+        );
+        assert!(
+            !replace_agent_chat_policy_defaults(&pool, "missing-agent", &defaults)
+                .await
+                .expect("unknown agent")
+        );
+    }
+
+    #[tokio::test]
+    async fn chat_defaults_migration_backfills_agents_and_cascades_on_deletion() {
+        let pool = test_db::pool().await;
+        sqlx::raw_sql(include_str!(
+            "../../migrations/0028_agent_chat_policy_defaults.down.sql"
+        ))
+        .execute(&pool)
+        .await
+        .expect("roll back defaults migration");
+        seed_agent(&pool, "backfill-agent").await;
+        sqlx::raw_sql(include_str!(
+            "../../migrations/0028_agent_chat_policy_defaults.sql"
+        ))
+        .execute(&pool)
+        .await
+        .expect("migrate existing agents");
+        let rows: Vec<AgentChatPolicyDefaultRow> = query_as(
+            "SELECT tool_group, policy FROM agent_chat_policy_defaults WHERE agent_key = $1",
+        )
+        .bind("backfill-agent")
+        .fetch_all(&pool)
+        .await
+        .expect("backfilled defaults");
+        assert_eq!(rows.len(), 6);
+        for (group, policy) in DEFAULT_TOOL_POLICIES {
+            // Migration 0028 preserves the initial Deny default for existing
+            // agents; the newer Confirm starting default applies to new agents.
+            let policy = if group == crate::agent_conversations::model::TOOL_GROUP_JOURNAL_WRITES {
+                TOOL_POLICY_DENY
+            } else {
+                policy
+            };
+            assert!(
+                rows.iter()
+                    .any(|row| row.tool_group == group && row.policy == policy)
+            );
+        }
+        let existing = get_agent_chat_policy_defaults(&pool, "backfill-agent")
+            .await
+            .expect("existing defaults");
+        assert!(existing.iter().any(|row| {
+            row.tool_group == crate::agent_conversations::model::TOOL_GROUP_JOURNAL_WRITES
+                && row.policy == TOOL_POLICY_DENY
+        }));
+        seed_agent(&pool, "new-agent").await;
+        let new = get_agent_chat_policy_defaults(&pool, "new-agent")
+            .await
+            .expect("new defaults");
+        assert!(new.iter().any(|row| {
+            row.tool_group == crate::agent_conversations::model::TOOL_GROUP_JOURNAL_WRITES
+                && row.policy == TOOL_POLICY_CONFIRM
+        }));
+        sqlx::query("DELETE FROM agents WHERE agent_key = $1")
+            .bind("backfill-agent")
+            .execute(&pool)
+            .await
+            .expect("delete agent");
+        let count: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM agent_chat_policy_defaults WHERE agent_key = $1",
+        )
+        .bind("backfill-agent")
+        .fetch_one(&pool)
+        .await
+        .expect("count defaults");
+        assert_eq!(count, 0);
+    }
+
+    #[tokio::test]
     async fn create_lists_default_policies_without_an_opencode_mirror() {
         let pool = test_db::pool().await;
         let key = format!(
@@ -826,9 +1095,7 @@ mod tests {
             created
                 .tool_policies
                 .iter()
-                .filter(|policy| policy.tool_group != TOOL_GROUP_NOTIFICATIONS
-                    && policy.tool_group
-                        != crate::agent_conversations::model::TOOL_GROUP_JOURNAL_WRITES)
+                .filter(|policy| policy.tool_group != TOOL_GROUP_NOTIFICATIONS)
                 .all(|policy| policy.policy == TOOL_POLICY_CONFIRM)
         );
         assert!(created.tool_policies.iter().any(|policy| {
@@ -836,7 +1103,7 @@ mod tests {
         }));
         assert!(created.tool_policies.iter().any(|policy| {
             policy.tool_group == crate::agent_conversations::model::TOOL_GROUP_JOURNAL_WRITES
-                && policy.policy == TOOL_POLICY_DENY
+                && policy.policy == TOOL_POLICY_CONFIRM
         }));
         let listed = list_agent_conversations(&pool, &key)
             .await

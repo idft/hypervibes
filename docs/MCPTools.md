@@ -27,7 +27,7 @@ private key.
 | `hypervibes_list_account_trades` | Review and Chat |
 | `hypervibes_get_account_trade` | Review and Chat |
 | `hypervibes_list_journal_notes` | Review and Chat |
-| `hypervibes_add_journal_note` | Review; Chat when Journal notes is set to Allow |
+| `hypervibes_add_journal_note` | Review; Chat when Trade notes is set to Allow |
 | `hypervibes_get_order` | Trading, Review, and Chat |
 | `hypervibes_submit_orders` | Trading and permitted Chat |
 | `hypervibes_cancel_orders` | Trading and permitted Chat |
@@ -51,7 +51,7 @@ The trade journal tools let Review and Chat agents inspect trades, their fills,
 and existing notes. `hypervibes_add_journal_note` adds a note to a trade or an
 individual fill, funding payment, or ledger event. Notes show who wrote them and
 cannot be edited or deleted. Review agents can add notes; Chat requires the
-conversation's **Journal notes** permission to be set to **Allow**.
+conversation's **Trade notes** permission to be set to **Allow**.
 
 `hypervibes:trading_instrument_write` lets an Analysis run list and atomically
 change the Trading allowlist. It can enable only an active instrument currently

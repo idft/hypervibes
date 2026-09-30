@@ -18,7 +18,7 @@ pub const DEFAULT_TOOL_POLICIES: [(&str, &str); 6] = [
     (TOOL_GROUP_ORDERS, TOOL_POLICY_CONFIRM),
     (TOOL_GROUP_MEMORY_WRITES, TOOL_POLICY_CONFIRM),
     (TOOL_GROUP_NOTIFICATIONS, TOOL_POLICY_DENY),
-    (TOOL_GROUP_JOURNAL_WRITES, TOOL_POLICY_DENY),
+    (TOOL_GROUP_JOURNAL_WRITES, TOOL_POLICY_CONFIRM),
     (TOOL_GROUP_INDICATOR_WRITES, TOOL_POLICY_CONFIRM),
     (TOOL_GROUP_STRATEGY_PROMPT_WRITES, TOOL_POLICY_CONFIRM),
 ];
@@ -95,6 +95,12 @@ pub struct AgentConversationListRow {
     pub peak_context_tokens: Option<i32>,
     pub estimated_cost: Option<Decimal>,
     pub compaction_count: Option<i32>,
+}
+
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub struct AgentChatPolicyDefaultRow {
+    pub tool_group: String,
+    pub policy: String,
 }
 
 #[derive(Debug, Clone, sqlx::FromRow)]

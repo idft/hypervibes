@@ -366,6 +366,13 @@ pub(in crate::web::routes) async fn render_agent_show_page(
             }
         }
         AgentShowTab::Settings => {
+            let defaults = crate::agent_conversations::store::get_agent_chat_policy_defaults(
+                &state.db_pool,
+                &agent.agent_key,
+            )
+            .await?;
+            template.chat_permission_defaults =
+                crate::web::templates::AgentConversationPolicyView::from_defaults(&defaults);
             template.settings_notice = settings_query
                 .as_ref()
                 .and_then(|query| query.notice.clone());

@@ -38,13 +38,21 @@ tools and never reads the workspace `.env`. Its default read tools are:
 - `hypervibes_get_indicator_results`
 
 The header shows each conversation permission's current status. Use **Manage
-permissions** to change Orders, Memory, Notifications, Journal notes, Indicators,
+permissions** to change Orders, Memory, Notifications, Trade notes, Indicators,
 or Strategy prompts, then **Save** to apply them. **Cancel** discards your edits.
 Permissions can be changed while the conversation is idle.
 
 Each permission supports **Deny**, **Confirm** (one-time approval for each action),
-or **Allow**. Orders, Memory, Indicators, and Strategy prompts default to Confirm;
-Notifications and Journal notes default to Deny. Read-only tools remain allowed.
+or **Allow**. Configure an agent's starting permissions in **Settings → Chat
+permission defaults**, select **Manage permissions**, adjust the permissions in
+the modal, then select **Save**. **Cancel** discards your edits. New Web and Telegram
+conversations copy these defaults when they are created. Changing the defaults
+does not change existing conversations; use **Manage permissions** in a
+conversation to change its own permissions.
+
+New agents initially default to Confirm for Orders, Memory, Trade notes,
+Indicators, and Strategy prompts, and Deny for Notifications. Existing agents
+keep their saved defaults. Read-only tools remain allowed.
 The Strategy prompts permission controls `hypervibes_update_strategy_prompt`.
 
 Chat can also create or update an agent-owned indicator using validated
@@ -55,9 +63,9 @@ It first lists selected analysis instruments and uses those IDs unchanged. If
 none are selected, Chat directs the operator to Settings rather than guessing
 instrument IDs or attempting the mutation.
 
-Conversation notification policy defaults to Deny. Chat continues to deny
-notification sending while conversation workspace routing and per-session
-approval scoping are implemented.
+Notifications initially default to Deny. To let Chat send notifications, set
+**Notifications** to **Allow** for the conversation, or in the agent's defaults
+before creating a new conversation.
 
 ## Discuss a prompt
 

@@ -70,6 +70,26 @@ impl AgentConversationPolicyView {
     pub fn from_policies(
         policies: &[crate::agent_conversations::model::AgentConversationToolPolicyRow],
     ) -> Vec<Self> {
+        Self::from_values(
+            &policies
+                .iter()
+                .map(|policy| (policy.tool_group.as_str(), policy.policy.as_str()))
+                .collect::<Vec<_>>(),
+        )
+    }
+
+    pub fn from_defaults(
+        policies: &[crate::agent_conversations::model::AgentChatPolicyDefaultRow],
+    ) -> Vec<Self> {
+        Self::from_values(
+            &policies
+                .iter()
+                .map(|policy| (policy.tool_group.as_str(), policy.policy.as_str()))
+                .collect::<Vec<_>>(),
+        )
+    }
+
+    fn from_values(policies: &[(&str, &str)]) -> Vec<Self> {
         use crate::agent_conversations::model::*;
 
         DEFAULT_TOOL_POLICIES
@@ -79,7 +99,7 @@ impl AgentConversationPolicyView {
                     TOOL_GROUP_ORDERS => "Orders",
                     TOOL_GROUP_MEMORY_WRITES => "Memory",
                     TOOL_GROUP_NOTIFICATIONS => "Notifications",
-                    TOOL_GROUP_JOURNAL_WRITES => "Journal notes",
+                    TOOL_GROUP_JOURNAL_WRITES => "Trade notes",
                     TOOL_GROUP_INDICATOR_WRITES => "Indicators",
                     TOOL_GROUP_STRATEGY_PROMPT_WRITES => "Strategy prompts",
                     _ => unreachable!("default tool groups have display labels"),
@@ -87,8 +107,8 @@ impl AgentConversationPolicyView {
                 input_name: format!("{tool_group}_policy"),
                 policy: policies
                     .iter()
-                    .find(|policy| policy.tool_group == tool_group)
-                    .map(|policy| policy.policy.clone())
+                    .find(|(group, _)| *group == tool_group)
+                    .map(|(_, policy)| policy.to_string())
                     .unwrap_or_else(|| default_policy.to_string()),
             })
             .collect()

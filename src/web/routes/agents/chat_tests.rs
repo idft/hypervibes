@@ -462,6 +462,21 @@ async fn independently_admitted_conversations_keep_their_models_channels_and_pol
     let (agent, _) = insert_test_opencode_agent(&state)
         .await
         .expect("insert agent");
+    let mut defaults = store::get_agent_chat_policy_defaults(&state.db_pool, &agent)
+        .await
+        .expect("load defaults");
+    for policy in &mut defaults {
+        policy.policy = match policy.tool_group.as_str() {
+            "orders" | "journal_writes" | "indicator_writes" => "allow",
+            "memory_writes" | "strategy_prompt_writes" => "deny",
+            "notifications" => "confirm",
+            _ => panic!("unexpected permission group"),
+        }
+        .to_string();
+    }
+    store::replace_agent_chat_policy_defaults(&state.db_pool, &agent, &defaults)
+        .await
+        .expect("save custom defaults");
     let service = conversation_service(&state);
     let (web, telegram) = tokio::join!(
         service.create_web_conversation(&agent, "test", "model", Some("high")),
@@ -485,6 +500,15 @@ async fn independently_admitted_conversations_keep_their_models_channels_and_pol
         assert_eq!(stored.model_id, "model");
         assert_eq!(stored.model_variant, row.model_variant);
         assert_eq!(stored.tool_policies.len(), 6);
+        for default in &defaults {
+            assert!(
+                stored
+                    .tool_policies
+                    .iter()
+                    .any(|policy| policy.tool_group == default.tool_group
+                        && policy.policy == default.policy)
+            );
+        }
     }
     let requests = backend.control.requests.lock().await;
     assert_eq!(requests.len(), 2);
@@ -497,15 +521,15 @@ async fn independently_admitted_conversations_keep_their_models_channels_and_pol
         assert_eq!(input["agent"], "agent-conversations");
         let rules = input["permission"].as_array().expect("permission rules");
         for (permission, action) in [
-            ("hypervibes_submit_orders", "ask"),
-            ("hypervibes_write_memory", "ask"),
-            ("hypervibes_send_notification", "deny"),
-            ("hypervibes_add_journal_note", "deny"),
+            ("hypervibes_submit_orders", "allow"),
+            ("hypervibes_write_memory", "deny"),
+            ("hypervibes_send_notification", "ask"),
+            ("hypervibes_add_journal_note", "allow"),
             ("hypervibes_list_account_trades", "allow"),
             ("hypervibes_get_account_trade", "allow"),
-            ("hypervibes_create_indicator", "ask"),
-            ("hypervibes_update_indicator", "ask"),
-            ("hypervibes_update_strategy_prompt", "ask"),
+            ("hypervibes_create_indicator", "allow"),
+            ("hypervibes_update_indicator", "allow"),
+            ("hypervibes_update_strategy_prompt", "deny"),
         ] {
             assert!(
                 rules

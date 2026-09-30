@@ -207,6 +207,10 @@ pub fn router(state: Arc<AppState>) -> Router {
             post(agents_update_trading_instruments),
         )
         .route(
+            "/agents/{agent_key}/settings/chat-permissions",
+            post(agents_update_chat_permission_defaults),
+        )
+        .route(
             "/agents/{agent_key}/settings/analysis-instruments",
             post(agents_update_analysis_instruments),
         )

@@ -253,7 +253,7 @@ impl<'a> ConversationService<'a> {
                     &input.model_provider_id,
                     &input.model_id,
                     input.model_variant.as_deref(),
-                    default_permission_rules(),
+                    permission_rules(&conversation.tool_policies)?,
                 )
                 .await
             {
@@ -609,18 +609,6 @@ fn first_turn_title(conversation: &AgentConversationRow, text: &str) -> Option<S
     })
 }
 
-pub fn default_permission_rules() -> Vec<OpenCodePermissionRule> {
-    permission_rules_for(
-        TOOL_POLICY_CONFIRM,
-        TOOL_POLICY_CONFIRM,
-        TOOL_POLICY_DENY,
-        TOOL_POLICY_DENY,
-        TOOL_POLICY_CONFIRM,
-        TOOL_POLICY_CONFIRM,
-    )
-    .expect("confirm is a valid conversation tool policy")
-}
-
 pub fn permission_rules(
     policies: &[AgentConversationToolPolicyRow],
 ) -> Result<Vec<OpenCodePermissionRule>> {
@@ -777,7 +765,15 @@ mod tests {
 
     #[test]
     fn chat_allows_strategy_prompt_reads_without_notification_access() {
-        let rules = default_permission_rules();
+        let rules = permission_rules_for(
+            TOOL_POLICY_CONFIRM,
+            TOOL_POLICY_CONFIRM,
+            TOOL_POLICY_DENY,
+            TOOL_POLICY_CONFIRM,
+            TOOL_POLICY_CONFIRM,
+            TOOL_POLICY_CONFIRM,
+        )
+        .expect("standard defaults are valid");
         let action_for = |permission: &str| {
             rules
                 .iter()
@@ -795,6 +791,7 @@ mod tests {
             Some("allow")
         );
         assert_eq!(action_for("hypervibes_send_notification"), Some("deny"));
+        assert_eq!(action_for("hypervibes_add_journal_note"), Some("ask"));
         assert_eq!(action_for("hypervibes_update_strategy_prompt"), Some("ask"));
     }
 

@@ -13,6 +13,122 @@ use crate::agents::store::{
 };
 
 #[tokio::test]
+async fn chat_permission_defaults_save_and_render_selected_values() {
+    let state = test_state().await;
+    let (agent_key, _) = insert_test_agent(&state).await.expect("insert agent");
+    let app = router(Arc::clone(&state));
+    let response = app.clone().oneshot(
+        Request::builder().method("POST")
+            .uri(format!("/agents/{agent_key}/settings/chat-permissions"))
+            .header("content-type", "application/x-www-form-urlencoded")
+            .body(Body::from("orders_policy=allow&memory_writes_policy=deny&notifications_policy=confirm&journal_writes_policy=allow&indicator_writes_policy=deny&strategy_prompt_writes_policy=allow&csrf_token=test-token"))
+            .expect("request"),
+    ).await.expect("save defaults");
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+    let location = response
+        .headers()
+        .get("location")
+        .expect("redirect")
+        .to_str()
+        .expect("redirect text");
+    assert!(location.starts_with(&format!("/agents/{agent_key}/settings?notice=")));
+    let defaults = crate::agent_conversations::store::get_agent_chat_policy_defaults(
+        &state.db_pool,
+        &agent_key,
+    )
+    .await
+    .expect("saved defaults");
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri(format!("/agents/{agent_key}/settings"))
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("render settings");
+    assert_eq!(response.status(), StatusCode::OK);
+    let text = response_text(response).await;
+    assert!(text.contains("Chat permission defaults"));
+    assert!(text.contains("Existing conversations keep their current permissions."));
+    for (group, policy) in [
+        ("orders", "allow"),
+        ("memory_writes", "deny"),
+        ("notifications", "confirm"),
+        ("journal_writes", "allow"),
+        ("indicator_writes", "deny"),
+        ("strategy_prompt_writes", "allow"),
+    ] {
+        assert!(
+            defaults
+                .iter()
+                .any(|row| row.tool_group == group && row.policy == policy)
+        );
+        let select = text
+            .split(&format!("name=\"{group}_policy\""))
+            .nth(1)
+            .expect("permission select")
+            .split("</select>")
+            .next()
+            .expect("select contents");
+        assert!(select.contains(&format!("value=\"{policy}\" selected")));
+    }
+}
+
+#[tokio::test]
+async fn chat_permission_defaults_reject_invalid_incomplete_and_duplicate_forms() {
+    let state = test_state().await;
+    let (agent_key, _) = insert_test_agent(&state).await.expect("insert agent");
+    let app = router(Arc::clone(&state));
+    let valid = "orders_policy=allow&memory_writes_policy=allow&notifications_policy=allow&journal_writes_policy=allow&indicator_writes_policy=allow&strategy_prompt_writes_policy=allow";
+    for body in [
+        valid.replace("orders_policy=allow", "orders_policy=invalid"),
+        "orders_policy=allow".to_string(),
+        valid.replace("orders_policy", "unknown_policy"),
+        valid.replace("orders_policy", "memory_writes_policy"),
+    ] {
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/agents/{agent_key}/settings/chat-permissions"))
+                    .header("content-type", "application/x-www-form-urlencoded")
+                    .body(Body::from(body))
+                    .expect("request"),
+            )
+            .await
+            .expect("invalid form response");
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+    let defaults = crate::agent_conversations::store::get_agent_chat_policy_defaults(
+        &state.db_pool,
+        &agent_key,
+    )
+    .await
+    .expect("unchanged defaults");
+    for (group, policy) in crate::agent_conversations::model::DEFAULT_TOOL_POLICIES {
+        assert!(
+            defaults
+                .iter()
+                .any(|row| row.tool_group == group && row.policy == policy)
+        );
+    }
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/agents/missing/settings/chat-permissions")
+                .header("content-type", "application/x-www-form-urlencoded")
+                .body(Body::from(valid))
+                .expect("request"),
+        )
+        .await
+        .expect("missing agent response");
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
 async fn post_reset_memories_deletes_only_that_agents_memories() {
     let state = test_state().await;
     let app = router(Arc::clone(&state));

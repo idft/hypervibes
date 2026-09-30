@@ -8,6 +8,10 @@ use std::sync::Arc;
 use super::shared::urlencode;
 use super::show::{AgentSettingsQuery, AgentShowQueries, render_agent_show_page};
 use crate::{
+    agent_conversations::{
+        model::AgentChatPolicyDefaultRow,
+        store::{replace_agent_chat_policy_defaults, validate_agent_chat_policy_defaults},
+    },
     agents::store::{
         get_agent, replace_agent_analysis_instruments, replace_agent_trading_instruments,
     },
@@ -83,4 +87,38 @@ pub(in crate::web::routes) async fn agents_update_analysis_instruments(
         return Ok((StatusCode::NOT_FOUND, "agent not found").into_response());
     }
     Ok(Redirect::to(&format!("/agents/{agent_key}/settings")).into_response())
+}
+
+pub(in crate::web::routes) async fn agents_update_chat_permission_defaults(
+    State(state): State<Arc<AppState>>,
+    Path(agent_key): Path<String>,
+    axum::Form(form_pairs): axum::Form<Vec<(String, String)>>,
+) -> Result<Response, AppError> {
+    if get_agent(&state.db_pool, &agent_key).await?.is_none() {
+        return Ok((StatusCode::NOT_FOUND, "agent not found").into_response());
+    }
+    let mut policies = Vec::with_capacity(form_pairs.len());
+    for (name, policy) in form_pairs {
+        if name == "csrf_token" {
+            continue;
+        }
+        let Some(tool_group) = name.strip_suffix("_policy") else {
+            return Ok((StatusCode::BAD_REQUEST, "unknown permission field").into_response());
+        };
+        policies.push(AgentChatPolicyDefaultRow {
+            tool_group: tool_group.to_string(),
+            policy,
+        });
+    }
+    if let Err(error) = validate_agent_chat_policy_defaults(&policies) {
+        return Ok((StatusCode::BAD_REQUEST, error.to_string()).into_response());
+    }
+    if !replace_agent_chat_policy_defaults(&state.db_pool, &agent_key, &policies).await? {
+        return Ok((StatusCode::NOT_FOUND, "agent not found").into_response());
+    }
+    Ok(Redirect::to(&format!(
+        "/agents/{agent_key}/settings?notice={}#chat-permission-defaults",
+        urlencode("Chat permission defaults saved. New conversations will use these permissions.")
+    ))
+    .into_response())
 }

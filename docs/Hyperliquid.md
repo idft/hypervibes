@@ -133,7 +133,7 @@ notes also let you inspect the individual fills. Each note shows its author and
 time, and saved notes cannot be edited or deleted.
 
 Review agents can add notes as part of their review. To let a Chat conversation
-add notes, set its **Journal notes** permission to **Allow**.
+add notes, set its **Trade notes** permission to **Allow**.
 
 ## Indicator candle data
 
