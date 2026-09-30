@@ -2,7 +2,7 @@
 
 This is a framework for allowing OpenCode-backed AI agents to trade crypto on Hyperliquid exchange.
 
-See `docs/` for project documentation.
+See `docs/` for project documentation.  Documentation is for public, user-facing documentation, not technical implementation details.
 Keep documentation up to date when making signifigant code changes or archetecutre decisions.
 You do not need to update the docs for UI changes.
 
