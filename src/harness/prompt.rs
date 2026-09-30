@@ -47,6 +47,7 @@ fn build_analysis_prompt(request: &DispatchRequest) -> String {
     body.push_str("- Indicator timeframes are separate evidence. Your run can read only its frozen exact indicator runs; a `timed_out` dependency remains unavailable for this run even if it completes later.\n");
     body.push_str(INDICATOR_PAGING_INSTRUCTIONS);
     body.push_str("- When citing indicator evidence in research memories, record the exact run ID, instrument, timeframe, boundary, relevant numeric plots and marker times. If a frozen dependency or its signals are unavailable, state that explicitly instead of treating run success as signal confirmation.\n");
+    body.push_str(ANALYSIS_HANDOFF_INSTRUCTIONS);
     if request
         .enabled_capabilities
         .iter()
@@ -91,10 +92,11 @@ fn build_trading_prompt(request: &DispatchRequest) -> String {
     body.push_str("\n\n## Selected instruments\n");
     body.push_str(&selected_instruments_section(&request.trading_instruments));
     body.push_str("\n\n## Instructions\n");
-    body.push_str("- Call `hypervibes_get_trading_context(instrument_id)` for each selected instrument before making trading decisions. It returns the latest research per analysis producer, memory type, and scope: fresh evidence first with full content, followed by compact stale or disabled status records. Missing research has no record.\n");
+    body.push_str("- Call `hypervibes_get_trading_context(instrument_id)` for each selected instrument before making trading decisions. It returns the latest research per analysis producer, memory type, and scope: fresh evidence first with full content, followed by compact stale, disabled, or superseded status records. `correction_target_ids` associates corrections with their originals; apply them only to those records. A correction does not establish a new entry thesis. Legacy prose-only corrections require careful synthesis. Preserve genuine disagreements between producers. Missing research has no record.\n");
     body.push_str("- Missing, stale, or failed research for an analyst is context for your decision, never a reason to skip evaluating the instrument. Record a no-trade decision when the evidence does not support exposure.\n");
     body.push_str("- Write a `trading_decision` memory with `hypervibes_write_memory` for every evaluated instrument, including no-trade and position-management outcomes. Use `scope_kind = \"instruments\"` with that instrument's ID, or `scope_kind = \"agent\"` for agent-wide decisions. Link the decision to every evidence memory you considered with `link_type = \"based_on\"`.\n");
-    body.push_str("- When you open new exposure, include the `trading_decision` memory ID in each opening order's `memory_record_ids` for execution traceability. Reduce-only orders never require it. If recording the decision failed, continue with the order workflow without it.\n");
+    body.push_str(TRADING_MEMORY_RECOVERY_INSTRUCTIONS);
+    body.push_str("- When you open new exposure, include the `trading_decision` memory ID returned by a successful write in each opening order's `memory_record_ids` for execution traceability. Reduce-only orders never require it. If recording the decision failed, do not open new exposure; continue reduce-only protection and risk management. Report failed publications and instruments without decision IDs in your final response.\n");
     body.push_str(
         "- Agent-submitted orders should use the default `attribution_source = \"agent\"`.\n",
     );
@@ -142,6 +144,7 @@ fn build_review_prompt(request: &DispatchRequest) -> Result<String> {
     body.push_str("- Identify failures, good patterns, stale assumptions, and prompt improvement opportunities.\n");
     body.push_str("- Inspect relevant indicator definitions and results with `hypervibes_list_indicators`, `hypervibes_get_indicator`, and `hypervibes_get_indicator_results`, whether or not indicator-writing capability is granted. Use exact historical `run_id` references when available within the permitted review scope; never substitute a later result or current version for the evidence available to a past decision. A frozen `timed_out` dependency was unavailable to its Analysis run even if it later completed. Record missing or out-of-scope attribution as a limitation.\n");
     body.push_str(INDICATOR_PAGING_INSTRUCTIONS);
+    body.push_str("- Independently sample a bounded representative set of research memories, including publications without self-corrections. Compare quoted numeric observations, source candle open/derived close times, and marker chronology against exact frozen runs within this window. Check internal contradictions such as EMA ordering. Record sampled memory/run IDs, evidence coverage, factual findings, and limitations. Count self-corrections separately from independently sampled errors; neither successful execution nor a correction count is a correctness score. Assess explicit expiry, correction relationships, repaired links, and per-instrument decision coverage separately from trade outcomes.\n");
     if request
         .enabled_capabilities
         .iter()
@@ -166,6 +169,13 @@ fn build_review_prompt(request: &DispatchRequest) -> Result<String> {
     body.push_str("- Do not use generic strategy-prompt replacement. Submit no revision when evidence is insufficient.\n");
     Ok(body)
 }
+
+const ANALYSIS_HANDOFF_INSTRUCTIONS: &str = "- Prefer a compact handoff with optional `metadata.handoff_version = 1`: separate source observations from interpretation. Include instrument/timeframe/evidence boundary, exact evidence memory and indicator run IDs, source bars (`bar_index`, `opened_at`, derived `closed_at`), quoted numeric observations, bias, setup status, entry/stop/targets when applicable, confidence with rationale, invalidation, and explicit `metadata.stale_after` for fragile entries. Qualitative confidence is not a calibrated probability. Legacy prose-only memories remain readable.\n\
+- Before publishing, perform an agent-side consistency check: copy IDs and times unchanged from returned evidence; verify quoted values against the cited row; distinguish candle open, derived close, and marker visual offset; check that the stated EMA ordering agrees with the quoted fast/slow values. The backend does not fact-check research. Label partial or unavailable evidence; never fill gaps with an inferred timestamp or a later run.\n\
+- Use a stable memory type for successive handoffs. Corrections must link to the exact original memory with `link_type = \"corrects\"`, explain the changed observations/conclusions, and include explicit `metadata.stale_after` no later than the original's expiry. Publish durable data-quality guidance separately rather than extending old entry details. A deadline stated only in prose does not affect freshness.\n";
+
+const TRADING_MEMORY_RECOVERY_INSTRUCTIONS: &str = "- Copy evidence `memory_id` values from returned context objects unchanged into `links[*].target_memory_id`; never retype, infer, or guess a corrected UUID. On a definitive HTTP 422 `code = invalid_memory_link`, use its zero-based `link_index`: refetch authorized trading context for the instrument, identify the intended evidence from returned objects, repair only that bad reference, and retry the memory write at most once. Do not silently drop required links. If the intended evidence cannot be identified, report unresolved audit coverage.\n\
+- Never blindly retry a timeout, transport error, HTTP 500, or malformed success response: the write may have committed. Memory writes have no idempotency key and Trading has no historical memory lookup. Report the uncertain write and continue reduce-only work; do not replay orders to repair logging.\n";
 
 const INDICATOR_PAGING_INSTRUCTIONS: &str = "- Indicator discovery returns an `items` envelope with `next_offset`, not evidence histories. Its `latest_run` is only one instrument/timeframe; inspect every applicable frozen target explicitly. Result reads default to the latest 20 bars and newest 20 marker events, and may return fewer to fit the whole-call text budget.\n\
 - Continue only with the returned exact `run_id`, preserving version, instrument, timeframe, and boundary. Numeric pagination is independent of marker pagination: use `bar_start=next_bar_start` for forward history, `bar_end=previous_bar_end` for backward history, and `marker_start=next_marker_start` for older events. Use actual counts and cursors, not requested limits.\n\
@@ -487,6 +497,38 @@ mod tests {
         let trading =
             build_prompt(&sample_request(SUB_AGENT_KIND_TRADING)).expect("build trading prompt");
         assert!(!trading.contains(INDICATOR_PAGING_INSTRUCTIONS));
+    }
+
+    #[test]
+    fn research_and_decision_contracts_keep_accuracy_agent_owned_and_recovery_bounded() {
+        let analysis =
+            build_prompt(&sample_request(SUB_AGENT_KIND_ANALYSIS)).expect("analysis prompt");
+        for instruction in [
+            "metadata.handoff_version = 1",
+            "agent-side consistency check",
+            "backend does not fact-check",
+            "link_type = \"corrects\"",
+            "no later than the original's expiry",
+        ] {
+            assert!(analysis.contains(instruction), "{instruction}");
+        }
+        let trading =
+            build_prompt(&sample_request(SUB_AGENT_KIND_TRADING)).expect("trading prompt");
+        for instruction in [
+            "invalid_memory_link",
+            "zero-based `link_index`",
+            "at most once",
+            "no idempotency key",
+            "do not open new exposure",
+            "continue reduce-only",
+            "correction_target_ids",
+        ] {
+            assert!(trading.contains(instruction), "{instruction}");
+        }
+        assert!(!trading.contains("continue with the order workflow without it"));
+        let review = build_prompt(&sample_request(SUB_AGENT_KIND_REVIEW)).expect("review prompt");
+        assert!(review.contains("publications without self-corrections"));
+        assert!(review.contains("Count self-corrections separately"));
     }
 
     #[test]

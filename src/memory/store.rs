@@ -21,6 +21,20 @@ pub struct MemorySourceRun {
     pub run_id: i64,
 }
 
+#[derive(Debug, thiserror::Error)]
+pub enum MemoryStoreError {
+    #[error("{0}")]
+    Validation(String),
+    #[error(
+        "links[{index}].target_memory_id is unavailable; copy the exact ID from authorized same-agent context and retry once"
+    )]
+    InvalidLinkTarget { index: usize },
+    #[error("instrument_ids[{index}] is not an active instrument selected by the owner agent")]
+    InvalidInstrumentTarget { index: usize },
+    #[error(transparent)]
+    Database(#[from] anyhow::Error),
+}
+
 fn clamp_limit(limit: Option<i64>) -> i64 {
     let raw = limit.unwrap_or(DEFAULT_LIMIT);
     if raw < 1 {
@@ -41,10 +55,10 @@ pub async fn insert_memory(
     agent_key: &str,
     input: &CreateMemory,
     source_run: Option<MemorySourceRun>,
-) -> Result<MemoryRecord> {
+) -> Result<MemoryRecord, MemoryStoreError> {
     input
         .validate()
-        .map_err(|errors| anyhow::anyhow!(errors.join(" ")))?;
+        .map_err(|errors| MemoryStoreError::Validation(errors.join(" ")))?;
     let mut tx = pool
         .begin()
         .await
@@ -61,11 +75,40 @@ pub(crate) async fn insert_memory_in_tx(
     agent_key: &str,
     input: &CreateMemory,
     source_run: Option<MemorySourceRun>,
-) -> Result<MemoryRecord> {
+) -> Result<MemoryRecord, MemoryStoreError> {
     let id = Uuid::new_v4();
-    let metadata = input.metadata_or_default();
+    let mut metadata = input.metadata_or_default();
     let timeframe = input.timeframe.as_deref();
     let source_run_id = source_run.map(|source| source.run_id);
+
+    // Materialize the new policy at publication time, rather than changing the
+    // computed TTL of historical rows. Use the immutable run schedule, never
+    // the caller's evidence timeframe or the job's mutable current schedule.
+    if let Some(run_id) = source_run_id
+        && metadata.get("stale_after").is_none()
+        && metadata.get("valid_for_seconds").is_none()
+    {
+        let source: Option<(String, Option<String>, DateTime<Utc>)> = sqlx::query_as(
+            "SELECT sub_agent_kind, timeframe, scheduled_for
+             FROM harness_sub_agent_runs WHERE id = $1 AND agent_key = $2",
+        )
+        .bind(run_id)
+        .bind(agent_key)
+        .fetch_optional(&mut **tx)
+        .await
+        .context("failed to load memory source schedule")?;
+        if let Some((kind, schedule, boundary)) = source
+            && kind == "analysis"
+        {
+            let expires_at = crate::memory::expiry::analysis_schedule_expires_at(
+                schedule.as_deref(),
+                boundary,
+                Utc::now(),
+            )?;
+            metadata["stale_after"] = serde_json::json!(expires_at);
+            metadata["expiry_policy"] = serde_json::json!("analysis_schedule_v1");
+        }
+    }
 
     let row = sqlx::query_as::<_, MemoryRecord>(
         "INSERT INTO memory.records (
@@ -87,8 +130,8 @@ pub(crate) async fn insert_memory_in_tx(
     .await
     .context("failed to insert memory record")?;
 
-    if input.scope_kind == MEMORY_SCOPE_INSTRUMENTS {
-        for instrument_id in &input.instrument_ids {
+    if input.scope_kind.trim() == MEMORY_SCOPE_INSTRUMENTS {
+        for (index, instrument_id) in input.instrument_ids.iter().enumerate() {
             let selected: bool = sqlx::query_scalar(
                 "SELECT EXISTS (
                      SELECT 1
@@ -105,10 +148,9 @@ pub(crate) async fn insert_memory_in_tx(
             .fetch_one(&mut **tx)
             .await
             .context("failed to validate memory instrument target")?;
-            anyhow::ensure!(
-                selected,
-                "instrument target {instrument_id} is not an active instrument selected by the owner agent"
-            );
+            if !selected {
+                return Err(MemoryStoreError::InvalidInstrumentTarget { index });
+            }
             sqlx::query(
                 "INSERT INTO memory.instrument_targets (memory_id, agent_key, instrument_id)
                  VALUES ($1, $2, $3)
@@ -125,8 +167,8 @@ pub(crate) async fn insert_memory_in_tx(
         }
     }
 
-    for link in input.links_or_empty() {
-        insert_memory_link_in_tx(tx, agent_key, id, &link).await?;
+    for (index, link) in input.links_or_empty().iter().enumerate() {
+        insert_memory_link_in_tx(tx, agent_key, id, link, index).await?;
     }
 
     Ok(row)
@@ -162,7 +204,8 @@ async fn insert_memory_link_in_tx(
     agent_key: &str,
     source_memory_id: Uuid,
     link: &crate::memory::model::CreateMemoryLink,
-) -> Result<()> {
+    index: usize,
+) -> Result<(), MemoryStoreError> {
     let owned: (bool,) = sqlx::query_as(
         "SELECT EXISTS (
              SELECT 1 FROM memory.records WHERE id = $1 AND agent_key = $2
@@ -174,7 +217,7 @@ async fn insert_memory_link_in_tx(
     .await
     .context("failed to validate memory link ownership")?;
     if !owned.0 {
-        anyhow::bail!("memory link target is not owned by agent");
+        return Err(MemoryStoreError::InvalidLinkTarget { index });
     }
     let metadata = link
         .metadata
@@ -427,12 +470,19 @@ pub async fn get_trading_context_evidence(
     now: DateTime<Utc>,
 ) -> Result<Vec<TradingContextEvidence>> {
     let rows: Vec<TradingContextEvidenceRow> = sqlx::query_as(
-        "SELECT DISTINCT ON (runs.sub_agent_id, records.memory_type, records.scope_kind)
-                records.id, records.created_at, records.memory_type, records.summary,
-                records.content, records.metadata, records.scope_kind, records.timeframe,
-                records.source_run_id,
-                runs.sub_agent_key AS producer_sub_agent_key,
-                jobs.enabled AS producer_enabled
+        "WITH candidates AS (
+         SELECT
+                 records.id, records.created_at, records.memory_type, records.summary,
+                 records.content, records.metadata, records.scope_kind, records.timeframe,
+                 records.source_run_id,
+                 runs.sub_agent_id AS producer_id,
+                 runs.sub_agent_key AS producer_sub_agent_key,
+                 jobs.enabled AS producer_enabled,
+                 ARRAY(SELECT links.target_memory_id FROM memory.links AS links
+                        WHERE links.source_memory_id = records.id
+                          AND links.agent_key = records.agent_key
+                          AND links.link_type = 'corrects'
+                        ORDER BY links.target_memory_id) AS correction_target_ids
            FROM memory.records AS records
            LEFT JOIN harness_sub_agent_runs AS runs
              ON runs.id = records.source_run_id AND runs.agent_key = records.agent_key
@@ -448,8 +498,18 @@ pub async fn get_trading_context_evidence(
                      WHERE targets.memory_id = records.id AND targets.instrument_id = $2
                 )
             )
-           ORDER BY runs.sub_agent_id, records.memory_type, records.scope_kind,
-                    records.created_at DESC, records.id DESC",
+         )
+         SELECT DISTINCT ON (producer_id, scope_kind,
+                             CASE WHEN cardinality(correction_target_ids) = 0 THEN memory_type END,
+                             correction_target_ids)
+                id, created_at, memory_type, summary, content, metadata, scope_kind,
+                timeframe, source_run_id, producer_sub_agent_key, producer_enabled,
+                correction_target_ids
+           FROM candidates
+          ORDER BY producer_id, scope_kind,
+                   CASE WHEN cardinality(correction_target_ids) = 0 THEN memory_type END,
+                   correction_target_ids,
+                   created_at DESC, id DESC",
     )
     .bind(agent_key)
     .bind(instrument_id)
@@ -457,20 +517,41 @@ pub async fn get_trading_context_evidence(
     .await
     .context("failed to load trading context evidence")?;
 
+    let expiry_by_id: std::collections::HashMap<_, _> = rows
+        .iter()
+        .map(|row| {
+            let expires_at = crate::memory::memory_expires_at(&MemoryRecord {
+                id: row.id,
+                created_at: row.created_at,
+                agent_key: agent_key.to_string(),
+                scope_kind: row.scope_kind.clone(),
+                timeframe: row.timeframe.clone(),
+                memory_type: row.memory_type.clone(),
+                summary: row.summary.clone(),
+                content: row.content.clone(),
+                metadata: row.metadata.clone(),
+                source_run_id: row.source_run_id,
+            });
+            (row.id, expires_at)
+        })
+        .collect();
     let mut evidence = Vec::new();
     for row in rows {
-        let expires_at = crate::memory::memory_expires_at(&MemoryRecord {
-            id: row.id,
-            created_at: row.created_at,
-            agent_key: agent_key.to_string(),
-            scope_kind: row.scope_kind.clone(),
-            timeframe: row.timeframe.clone(),
-            memory_type: row.memory_type.clone(),
-            summary: row.summary.clone(),
-            content: row.content.clone(),
-            metadata: row.metadata.clone(),
-            source_run_id: row.source_run_id,
-        });
+        let mut expires_at = expiry_by_id[&row.id];
+        // A correction applies to its original, not to a newer independent
+        // handoff. It cannot extend the original's entry validity. Prose-only
+        // legacy corrections have no resolvable relationship and stay unchanged.
+        let superseded = !row.correction_target_ids.is_empty()
+            && row
+                .correction_target_ids
+                .iter()
+                .all(|id| !expiry_by_id.contains_key(id));
+        for target in &row.correction_target_ids {
+            if let Some(Some(target_expiry)) = expiry_by_id.get(target) {
+                expires_at =
+                    Some(expires_at.map_or(*target_expiry, |expiry| expiry.min(*target_expiry)));
+            }
+        }
         let targets = if row.scope_kind == MEMORY_SCOPE_INSTRUMENTS {
             list_memory_instrument_targets(pool, agent_key, row.id).await?
         } else {
@@ -478,6 +559,7 @@ pub async fn get_trading_context_evidence(
         };
         let producer_enabled = row.producer_enabled;
         let status = match expires_at {
+            _ if superseded => EvidenceStatus::Superseded,
             Some(expires_at) if expires_at <= now => EvidenceStatus::Stale,
             _ if producer_enabled == Some(false) => EvidenceStatus::Disabled,
             _ => EvidenceStatus::Fresh,
@@ -500,6 +582,8 @@ pub async fn get_trading_context_evidence(
             metadata,
             expires_at,
             status,
+            correction_target_ids: row.correction_target_ids,
+            source_run_id: row.source_run_id,
         });
     }
     evidence.sort_by(|a, b| {
@@ -507,6 +591,7 @@ pub async fn get_trading_context_evidence(
             EvidenceStatus::Fresh => 0,
             EvidenceStatus::Stale => 1,
             EvidenceStatus::Disabled => 2,
+            EvidenceStatus::Superseded => 3,
         };
         priority(a.status)
             .cmp(&priority(b.status))
@@ -521,6 +606,7 @@ pub enum EvidenceStatus {
     Fresh,
     Stale,
     Disabled,
+    Superseded,
 }
 
 #[derive(Debug, Clone, sqlx::FromRow)]
@@ -536,11 +622,13 @@ struct TradingContextEvidenceRow {
     source_run_id: Option<i64>,
     producer_sub_agent_key: Option<String>,
     producer_enabled: Option<bool>,
+    correction_target_ids: Vec<Uuid>,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct TradingContextEvidence {
     pub memory_id: Uuid,
+    pub source_run_id: Option<i64>,
     pub created_at: DateTime<Utc>,
     pub memory_type: String,
     pub producer_sub_agent_key: Option<String>,
@@ -555,6 +643,7 @@ pub struct TradingContextEvidence {
     pub metadata: Option<serde_json::Value>,
     pub expires_at: Option<DateTime<Utc>>,
     pub status: EvidenceStatus,
+    pub correction_target_ids: Vec<Uuid>,
 }
 
 /// Fetch a single memory by id, scoped to the caller's `agent_key`.

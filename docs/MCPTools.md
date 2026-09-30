@@ -101,6 +101,11 @@ pages are independent of marker pages: use `bar_start=next_bar_start` forward,
 `marker_start=next_marker_start` for older events. Markers are newest source
 candle first, then original `event_position`. `opened_at` is source candle open
 time, not close/confirmation time, and visual `offset` does not change it.
+Bars and markers also carry `closed_at`, derived from that exact run's timeframe;
+it is a candle boundary, not proof of signal confirmation or execution time.
+Bars include stored OHLCV fields when available alongside plots and bar indices.
+The exact run's `scheduled_for` is the evidence boundary. Added fields share the
+existing whole-call budget; consumers must continue to use actual counts/cursors.
 Check `evidence_available`, total/returned counts, `bars_complete` and
 `markers_complete`. Unavailable evidence is not absence of signals, and partial
 pages cannot establish complete-history claims. Unexpected OpenCode truncation
@@ -114,14 +119,37 @@ recorded, never through the global output-cache filesystem path. See
 Agent scope requires no instrument IDs; instrument scope requires one or more
 unique selected canonical instrument IDs. The server stamps source-run
 provenance and never accepts source run or sub-agent identity from metadata.
+Use optional `metadata.handoff_version=1` for compact research handoffs and
+`links[*].link_type="corrects"` for corrections to exact originals. Provide
+explicit `metadata.stale_after` for fragile entry evidence and corrections.
+New Analysis publications otherwise materialize two immutable source-run schedule
+cycles from the evidence boundary, including 5m jobs and omitted memory timeframes.
+
+Invalid/missing/foreign memory links return HTTP 422 with a bounded message,
+`code="invalid_memory_link"`, and zero-based `link_index`. Missing and foreign IDs
+are indistinguishable; the transaction rolls back completely. Invalid selected
+instrument targets return 422 with `code="invalid_memory_target"` and
+`instrument_index`. Malformed UUIDs are JSON validation errors; database failures
+remain HTTP 500. The MCP error preserves the indexed API response.
+
+Trading copies IDs from context unchanged. For a definitive invalid-link 422,
+refetch authorized context, repair only the bad reference, and retry at most once.
+Never guess IDs, omit required links, or retry ambiguous transport/500 failures.
+Memory writes have no idempotency key and may have committed before an ambiguous
+failure. No broader Trading memory-read permission is added.
 
 `hypervibes_get_trading_context(instrument_id)` returns the latest record per
 `(Analysis producer, memory type, scope)`, including agent-scoped records and
-records targeting that instrument. Fresh records come first with full content,
+records targeting that instrument. Corrections are selected per producer/scope/
+structured target set instead of correction type, and carry
+`correction_target_ids`. Fresh records come first with full content,
 summary, and metadata. Stale or disabled records include only ID, provenance,
 type, scope and targets, timeframe, expiry, and status; their research bodies
 are omitted to keep the response small. The evidence status is `Fresh`,
-`Stale`, or `Disabled`. A producer without records does not appear in the
+`Stale`, `Disabled`, or `Superseded`. Corrections become Superseded when none of
+their originals remain in current context, and cannot extend an original's
+expiry. Legacy prose-only corrections retain existing behavior. Evidence also
+includes its server-owned `source_run_id`. A producer without records does not appear in the
 evidence array.
 
 ## Trading order inputs

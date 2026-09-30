@@ -98,9 +98,12 @@ the current Analysis job, with this shape:
   "symbol": "BTC",
   "timeframe": "15m",
   "interval_ms": 900000,
+  "requested_boundary_ms": 1783114200000,
   "candles": [
     {
       "timestamp_ms": 1783112400000,
+      "opened_at": "2026-07-03T21:00:00Z",
+      "closed_at": "2026-07-03T21:15:00Z",
       "open": 108000.0,
       "high": 108100.0,
       "low": 107900.0,
@@ -113,5 +116,11 @@ the current Analysis job, with this shape:
 
 `interval_ms` is authoritative. Analyzer code must reject a missing or
 non-positive interval rather than infer cadence from candle spacing.
+Each row's `opened_at` is UTC candle start; `closed_at` is its derived exclusive
+end (`timestamp_ms + interval_ms`), not a marker confirmation or trade time.
+The envelope retains `requested_boundary_ms` next to the source rows. Copy these
+times and the exact row's OHLCV values into research citations rather than
+manually inferring timestamps. Existing numeric `timestamp_ms`/OHLCV fields are
+retained for compatibility.
 
 Errors are printed to stderr and the script exits non-zero.

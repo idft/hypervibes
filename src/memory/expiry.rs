@@ -9,10 +9,10 @@ use crate::memory::MemoryRecord;
 ///    producer when it knows the data goes stale at a wall-clock instant.
 /// 2. `metadata.valid_for_seconds` — a relative duration added to
 ///    `created_at`.
-/// 3. For analysis-produced research rows with neither of the above, fall
-///    back to the producing analyst's schedule. The source run's timeframe
-///    drives the default validity window, and rows produced by an
-///    unscheduled producer use the conservative 30-minute fallback.
+/// 3. Legacy provenance-bearing research rows fall back to their memory
+///    timeframe (15m => 30m, 1h => 2h, 1d => 48h, others => 30m).
+///    New Analysis publications materialize schedule-derived `stale_after`
+///    at insertion; historical rows retain their original computation.
 ///
 /// Returns `None` when the row has no implicit or explicit expiration
 /// (e.g. an `observation` memory with no `valid_for_seconds`).
@@ -20,10 +20,11 @@ pub fn memory_expires_at(row: &MemoryRecord) -> Option<DateTime<Utc>> {
     stale_after(&row.metadata)
         .or_else(|| {
             valid_for_seconds(&row.metadata)
-                .map(|seconds| row.created_at + Duration::seconds(seconds))
+                .and_then(Duration::try_seconds)
+                .and_then(|duration| row.created_at.checked_add_signed(duration))
         })
         .or_else(|| {
-            // Only analysis-originated research rows get a schedule-based
+            // Only provenance-bearing research rows get a legacy timeframe
             // default; framework log types (trading decisions, reviews,
             // learnings) are durable audit records and never implicitly expire.
             if is_analysis_originated(row) {
@@ -83,18 +84,55 @@ fn stale_after(metadata: &serde_json::Value) -> Option<DateTime<Utc>> {
 /// Default validity for an analysis-produced research memory that has no
 /// explicit `valid_for_seconds` or `stale_after` in its metadata.
 ///
-/// The values are intentionally **2x the schedule interval**: an analysis
-/// job is expected to run on every schedule tick, but the next run may be
-/// delayed (model latency, provider 429s, a missed cron tick, etc). Keeping
-/// the memory valid for a full second cycle gives the trading loop a
-/// one-cycle fallback instead of going `[SILENT]` on the first delay. New
-/// research still supersedes older output, so the longer window adds
-/// tolerance, not stale signal.
+/// Preserve this legacy mapping for historical audit reproducibility.
 fn analysis_default_valid_for(timeframe: &str) -> Duration {
     match timeframe {
         "15m" => Duration::minutes(30),
         "1h" => Duration::minutes(120),
         "1d" => Duration::hours(48),
         _ => Duration::minutes(30),
+    }
+}
+
+pub(crate) fn analysis_schedule_expires_at(
+    schedule: Option<&str>,
+    boundary: DateTime<Utc>,
+    published_at: DateTime<Utc>,
+) -> anyhow::Result<DateTime<Utc>> {
+    let (anchor, seconds) = match schedule {
+        Some(schedule) => (
+            boundary,
+            crate::harness::timeframe::parse_timeframe_seconds(schedule)?
+                .checked_mul(2)
+                .ok_or_else(|| anyhow::anyhow!("analysis validity overflow"))?,
+        ),
+        None => (published_at, 30 * 60),
+    };
+    Duration::try_seconds(seconds)
+        .and_then(|duration| anchor.checked_add_signed(duration))
+        .ok_or_else(|| anyhow::anyhow!("analysis expiration timestamp overflow"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn schedule_validity_uses_boundary_and_canonical_parser() {
+        let boundary = Utc::now();
+        let published_at = boundary + Duration::minutes(12);
+        for (schedule, minutes) in [("5m", 10), ("15m", 30), ("4h", 480)] {
+            assert_eq!(
+                analysis_schedule_expires_at(Some(schedule), boundary, published_at)
+                    .expect("valid schedule"),
+                boundary + Duration::minutes(minutes),
+            );
+        }
+        assert_eq!(
+            analysis_schedule_expires_at(None, boundary, published_at).expect("fallback"),
+            published_at + Duration::minutes(30),
+        );
+        assert_eq!(analysis_default_valid_for("5m"), Duration::minutes(30));
+        assert_eq!(analysis_default_valid_for(""), Duration::minutes(30));
     }
 }

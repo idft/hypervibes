@@ -10,6 +10,343 @@ use uuid::Uuid;
 use crate::web::ui_events::UiEvent;
 
 use super::test_support::*;
+
+async fn post_memory_json(
+    state: &Arc<crate::web::AppState>,
+    api_key: &str,
+    body: &serde_json::Value,
+) -> (StatusCode, serde_json::Value) {
+    let request = Request::builder()
+        .method("POST")
+        .uri("/memories")
+        .header("authorization", format!("Bearer {api_key}"))
+        .header("content-type", "application/json")
+        .body(Body::from(
+            serde_json::to_vec(body).expect("serialize request"),
+        ))
+        .expect("request");
+    let response = app(Arc::clone(state))
+        .oneshot(request)
+        .await
+        .expect("response");
+    let status = response.status();
+    let bytes = axum::body::to_bytes(response.into_body(), 64 * 1024)
+        .await
+        .expect("body");
+    (
+        status,
+        serde_json::from_slice(&bytes).expect("JSON response"),
+    )
+}
+
+#[tokio::test]
+async fn invalid_memory_links_are_private_atomic_and_repairable() {
+    let state = test_state().await;
+    let (agent_key, api_key) = seed_agent(&state, "link-recovery").await;
+    let (other_key, _) = seed_agent(&state, "link-foreign").await;
+    let now = Utc::now();
+    let owned_id = insert_memory_at(
+        &state,
+        &agent_key,
+        now,
+        "BTC",
+        Some("15m"),
+        "handoff",
+        "owned",
+        json!({}),
+    )
+    .await;
+    let foreign_id = insert_memory_at(
+        &state,
+        &other_key,
+        now,
+        "BTC",
+        Some("15m"),
+        "handoff",
+        "foreign",
+        json!({}),
+    )
+    .await;
+    let mut input = json!({
+        "scope_kind": "instruments", "instrument_ids": ["BTC"],
+        "memory_type": "observation", "summary": "link recovery", "content": "body",
+        "links": [
+            {"target_memory_id": owned_id, "link_type": "based_on"},
+            {"target_memory_id": Uuid::new_v4(), "link_type": "based_on"}
+        ]
+    });
+    let (status, missing) = post_memory_json(&state, &api_key, &input).await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(missing["code"], "invalid_memory_link");
+    assert_eq!(missing["link_index"], 1);
+    assert!(
+        missing["error"]
+            .as_str()
+            .expect("error")
+            .contains("same-agent context")
+    );
+    input["links"][1]["target_memory_id"] = json!(foreign_id);
+    let (status, foreign) = post_memory_json(&state, &api_key, &input).await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(missing, foreign, "foreign existence must not leak");
+    input["links"][1]["target_memory_id"] = json!("not-a-uuid");
+    let (status, malformed) = post_memory_json(&state, &api_key, &input).await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert!(malformed["error"].is_string());
+    let count: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM memory.records WHERE agent_key = $1 AND summary = 'link recovery'",
+    )
+    .bind(&agent_key)
+    .fetch_one(&state.db_pool)
+    .await
+    .expect("count memories");
+    assert_eq!(count, 0, "failed writes must roll back records and links");
+    let links: i64 = sqlx::query_scalar("SELECT count(*) FROM memory.links WHERE agent_key = $1")
+        .bind(&agent_key)
+        .fetch_one(&state.db_pool)
+        .await
+        .expect("count links");
+    assert_eq!(links, 0);
+
+    // Recovery uses authorized context IDs, preserving the good first link.
+    let (_, context) = get_json_response(
+        &state,
+        &api_key,
+        "/memories/trading-context?instrument_id=BTC",
+    )
+    .await;
+    input["links"][1]["target_memory_id"] = context["evidence"][0]["memory_id"].clone();
+    let (status, repaired) = post_memory_json(&state, &api_key, &input).await;
+    assert_eq!(status, StatusCode::CREATED);
+    assert!(repaired["id"].is_string());
+    let links: i64 = sqlx::query_scalar("SELECT count(*) FROM memory.links WHERE agent_key = $1")
+        .bind(&agent_key)
+        .fetch_one(&state.db_pool)
+        .await
+        .expect("count repaired links");
+    assert_eq!(
+        links, 1,
+        "duplicate links are idempotent inside a single write"
+    );
+}
+
+#[tokio::test]
+async fn memory_target_validation_and_database_errors_are_distinct() {
+    let state = test_state().await;
+    let (_, api_key) = seed_agent(&state, "target-errors").await;
+    let mut input = json!({"scope_kind": "instruments", "instrument_ids": ["UNKNOWN"],
+        "memory_type": "observation", "summary": "db-failure", "content": "body"});
+    let (status, body) = post_memory_json(&state, &api_key, &input).await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(body["code"], "invalid_memory_target");
+    assert_eq!(body["instrument_index"], 0);
+    // The helper provides an isolated test database; inject a genuine DB failure.
+    sqlx::query("ALTER TABLE memory.records ADD CONSTRAINT test_reject_summary CHECK (summary <> 'db-failure')")
+        .execute(&state.db_pool).await.expect("install test constraint");
+    input["instrument_ids"] = json!(["BTC"]);
+    let (status, body) = post_memory_json(&state, &api_key, &input).await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+    assert_eq!(body, json!({"error": "internal server error"}));
+}
+
+#[tokio::test]
+async fn new_analysis_expiry_uses_immutable_schedule_without_rewriting_legacy_rows() {
+    use crate::memory::{CreateMemory, MemorySourceRun, memory_expires_at, store::insert_memory};
+    let state = test_state().await;
+    let (agent_key, _) = seed_agent(&state, "schedule-expiry").await;
+    let boundary = DateTime::from_timestamp_micros(Utc::now().timestamp_micros())
+        .expect("representable timestamp")
+        - Duration::minutes(12);
+    let legacy_id = insert_memory_at(
+        &state,
+        &agent_key,
+        boundary,
+        "BTC",
+        Some("5m"),
+        "legacy",
+        "legacy expiry",
+        json!({}),
+    )
+    .await;
+    let run_id: i64 = sqlx::query_scalar("SELECT source_run_id FROM memory.records WHERE id = $1")
+        .bind(legacy_id)
+        .fetch_one(&state.db_pool)
+        .await
+        .expect("source run");
+    sqlx::query(
+        "UPDATE harness_sub_agent_runs SET timeframe = '5m', scheduled_for = $1 WHERE id = $2",
+    )
+    .bind(boundary)
+    .bind(run_id)
+    .execute(&state.db_pool)
+    .await
+    .expect("run schedule");
+    let mut input: CreateMemory = serde_json::from_value(json!({
+        "scope_kind": "instruments", "instrument_ids": ["BTC"],
+        "memory_type": "handoff", "summary": "new handoff", "content": "body",
+        "timeframe": "4h"
+    }))
+    .expect("input");
+    for timeframe in [Some("4h".to_string()), None] {
+        input.timeframe = timeframe;
+        let row = insert_memory(
+            &state.db_pool,
+            &agent_key,
+            &input,
+            Some(MemorySourceRun { run_id }),
+        )
+        .await
+        .expect("publish");
+        assert_eq!(
+            memory_expires_at(&row),
+            Some(boundary + Duration::minutes(10))
+        );
+        assert_eq!(row.metadata["expiry_policy"], "analysis_schedule_v1");
+    }
+    input.metadata = Some(json!({"valid_for_seconds": 120}));
+    let row = insert_memory(
+        &state.db_pool,
+        &agent_key,
+        &input,
+        Some(MemorySourceRun { run_id }),
+    )
+    .await
+    .expect("explicit validity");
+    assert_eq!(
+        memory_expires_at(&row),
+        Some(row.created_at + Duration::seconds(120))
+    );
+    let legacy = crate::memory::get_memory(&state.db_pool, &agent_key, legacy_id)
+        .await
+        .expect("legacy query")
+        .expect("legacy row");
+    assert_eq!(
+        memory_expires_at(&legacy),
+        Some(boundary + Duration::minutes(30))
+    );
+    assert_eq!(legacy.metadata, json!({}));
+}
+
+#[tokio::test]
+async fn context_associates_corrections_and_supersedes_only_resolvable_entry_details() {
+    let state = test_state().await;
+    let (agent_key, api_key) = seed_agent(&state, "correction-context").await;
+    sqlx::query("UPDATE harness_sub_agents SET enabled = true, model_provider_id = 'openai', model_id = 'test' WHERE agent_key = $1 AND sub_agent_kind = 'analysis'")
+        .bind(&agent_key).execute(&state.db_pool).await.expect("enable producer");
+    let now = Utc::now();
+    let original = insert_memory_at(
+        &state,
+        &agent_key,
+        now - Duration::minutes(2),
+        "BTC",
+        Some("5m"),
+        "handoff",
+        "original",
+        json!({"stale_after": now + Duration::minutes(1)}),
+    )
+    .await;
+    let correction = insert_memory_at(
+        &state,
+        &agent_key,
+        now - Duration::minutes(1),
+        "BTC",
+        Some("5m"),
+        "timestamp_correction",
+        "correction",
+        json!({"valid_for_seconds": 1800}),
+    )
+    .await;
+    sqlx::query("INSERT INTO memory.links (agent_key, source_memory_id, target_memory_id, link_type) VALUES ($1, $2, $3, 'corrects')")
+        .bind(&agent_key).bind(correction).bind(original).execute(&state.db_pool).await.expect("correction link");
+    let guidance = insert_memory_at(
+        &state,
+        &agent_key,
+        now,
+        "BTC",
+        None,
+        "data_quality_guidance",
+        "guidance",
+        json!({"valid_for_seconds": 3600}),
+    )
+    .await;
+    let legacy_correction = insert_memory_at(
+        &state,
+        &agent_key,
+        now,
+        "BTC",
+        None,
+        "legacy_correction",
+        "legacy prose",
+        json!({"valid_for_seconds": 3600}),
+    )
+    .await;
+    let (_, context) = get_json_response(
+        &state,
+        &api_key,
+        "/memories/trading-context?instrument_id=BTC",
+    )
+    .await;
+    let rows = context["evidence"].as_array().expect("evidence");
+    let row = rows
+        .iter()
+        .find(|row| row["memory_id"] == correction.to_string())
+        .expect("correction");
+    assert_eq!(row["correction_target_ids"], json!([original]));
+    assert_eq!(row["status"], "Fresh");
+    let original_row = rows
+        .iter()
+        .find(|row| row["memory_id"] == original.to_string())
+        .expect("original");
+    assert_eq!(row["expires_at"], original_row["expires_at"]);
+    let evidence = crate::memory::store::get_trading_context_evidence(
+        &state.db_pool,
+        &agent_key,
+        "BTC",
+        now + Duration::minutes(2),
+    )
+    .await
+    .expect("future context");
+    assert_eq!(
+        evidence
+            .iter()
+            .find(|row| row.memory_id == correction)
+            .expect("expired correction")
+            .status,
+        crate::memory::store::EvidenceStatus::Stale
+    );
+    insert_memory_at(
+        &state,
+        &agent_key,
+        now,
+        "BTC",
+        Some("5m"),
+        "handoff",
+        "new handoff",
+        json!({"valid_for_seconds": 600}),
+    )
+    .await;
+    let (_, context) = get_json_response(
+        &state,
+        &api_key,
+        "/memories/trading-context?instrument_id=BTC",
+    )
+    .await;
+    let rows = context["evidence"].as_array().expect("evidence");
+    let row = rows
+        .iter()
+        .find(|row| row["memory_id"] == correction.to_string())
+        .expect("correction");
+    assert_eq!(row["status"], "Superseded");
+    assert!(row.get("content").is_none());
+    for id in [guidance, legacy_correction] {
+        assert_eq!(
+            rows.iter()
+                .find(|row| row["memory_id"] == id.to_string())
+                .expect("retained evidence")["status"],
+            "Fresh"
+        );
+    }
+}
 #[tokio::test]
 async fn post_memories_creates_record() {
     let state = test_state().await;

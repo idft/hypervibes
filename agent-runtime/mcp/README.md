@@ -49,6 +49,14 @@ canonical `instrument_ids`. The backend stamps run provenance; callers cannot
 supply it. Trading uses `get_trading_context(instrument_id)` to retrieve fresh
 analysis evidence and analyst status, then writes `trading_decision` records.
 
+Memory link failures are typed HTTP 422s carrying `code=invalid_memory_link`
+and zero-based `link_index`; missing and foreign IDs are indistinguishable and
+failed writes roll back atomically. Trading copies context IDs unchanged and
+may refetch context, repair only that reference, and retry once on this definitive
+error. It must not retry ambiguous transport/500 failures: memory writes have no
+idempotency key. Corrections use `corrects` links and explicit validity; context
+exposes `correction_target_ids` and compact `Superseded` corrections.
+
 ## Indicator evidence
 
 Indicator discovery/results use compact MCP `schema_version=2` projections;
@@ -65,7 +73,11 @@ may reduce complete units. Every continuation supplies the exact returned
 `marker_start=next_marker_start` independently retrieves older events. Markers
 are newest source candle first, with original `event_position` breaking ties.
 Source `opened_at` is candle open time; visual offsets never imply an event or
-confirmation time. Inspect availability, counts and `bars_complete` /
+confirmation time. Bars and markers include derived `closed_at` from the exact
+run timeframe; bars also expose stored OHLCV fields when present. These fields
+share the existing budget and can reduce actual page counts.
+
+Inspect availability, counts and `bars_complete` /
 `markers_complete`; unavailable and partial evidence cannot establish absence
 of signals. Unexpected truncation requires a smaller authorized MCP read,
 never a global output-cache filesystem read. See `docs/Indicators.md`.

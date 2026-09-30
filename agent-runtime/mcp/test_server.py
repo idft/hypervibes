@@ -17,6 +17,7 @@ import sys
 import tempfile
 import types
 import unittest
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 from unittest import mock
@@ -40,8 +41,14 @@ def indicator_text(value: Any) -> str:
     return "\n\n".join(to_json(item, indent=2).decode() for item in items)
 
 
+def source_open(index: int) -> str:
+    return (datetime(2026, 9, 20, tzinfo=timezone.utc) + timedelta(minutes=15 * index)).isoformat().replace("+00:00", "Z")
+
+
 def dense_indicator_run(bars: int = 500, plots: int = 3, events: int = 4) -> dict[str, Any]:
-    candles = [{"opened_at": f"bar-{index}", "close": str(index)} for index in range(bars)]
+    candles = [{"opened_at": source_open(index), "close": str(index),
+                "open": str(index), "high": str(index + 1), "low": str(index), "volume": "12"}
+               for index in range(bars)]
     markers = []
     for index in range(bars):
         for position in range(events):
@@ -252,7 +259,8 @@ class HyperVibesMcpServerTests(unittest.TestCase):
         self.assertNotIn("lease_expires_at", results[0])
         self.assertNotIn("next_attempt_at", results[0])
         self.assertNotIn("future_http_field", results[0])
-        self.assertEqual(results[0]["markers"][0]["opened_at"], "bar-0")
+        self.assertEqual(results[0]["markers"][0]["opened_at"], source_open(0))
+        self.assertEqual(results[0]["markers"][0]["closed_at"], source_open(1))
         self.assertNotIn("color", results[0]["markers"][0])
 
         with mock.patch.object(
@@ -300,7 +308,8 @@ class HyperVibesMcpServerTests(unittest.TestCase):
         self.assertEqual(len(result["bars"]), 20)
         self.assertEqual(result["bars"][0]["bar_index"], 480)
         self.assertEqual(result["bars"][-1]["plots"], run["latest_values"])
-        self.assertEqual(result["markers"][0]["opened_at"], "bar-499")
+        self.assertEqual(result["markers"][0]["opened_at"], source_open(499))
+        self.assertEqual(result["markers"][0]["closed_at"], source_open(500))
         self.assertFalse(result["markers_complete"])
         self.assertEqual(result["marker_count"], 2000)
         self.assertEqual(result["marker_returned_count"], 20)
@@ -322,8 +331,14 @@ class HyperVibesMcpServerTests(unittest.TestCase):
 
         with mock.patch.object(self.server, "_request", return_value=[run]):
             middle = self.server.get_indicator_results("indicator-id", "1h", run_id="frozen-run-id", bar_start=200, bar_limit=50)[0]
-        self.assertEqual((middle["bar_start"], middle["previous_bar_start"], middle["next_bar_start"]), (200, 150, 250))
-        self.assertEqual([bar["bar_index"] for bar in middle["bars"]], list(range(200, 250)))
+        count = middle["bar_returned_count"]
+        self.assertGreater(count, 0)
+        self.assertLessEqual(count, 50)
+        self.assertEqual((middle["bar_start"], middle["previous_bar_start"], middle["next_bar_start"]), (200, 200 - count, 200 + count))
+        self.assertEqual([bar["bar_index"] for bar in middle["bars"]], list(range(200, 200 + count)))
+        self.assertEqual(middle["bars"][0]["closed_at"], source_open(201))
+        self.assertEqual(middle["bars"][0]["high"], "201")
+        self.assert_indicator_budget([middle])
 
     def assert_indicator_budget(self, result: Any) -> None:
         text = indicator_text(result)
@@ -387,7 +402,8 @@ class HyperVibesMcpServerTests(unittest.TestCase):
             self.assertGreater(page["marker_returned_count"], 0)
             for event in page["markers"]:
                 original = run["visual_data"]["markers"][event["event_position"]]
-                self.assertEqual(event["opened_at"], f"bar-{original['bar_index']}")
+                self.assertEqual(event["opened_at"], source_open(original['bar_index']))
+                self.assertEqual(event["closed_at"], source_open(original['bar_index'] + 1))
                 for field in ("kind", "title", "text", "character", "value", "offset"):
                     self.assertEqual(event.get(field), original.get(field))
                 collected.append(event["event_position"])
@@ -1158,6 +1174,21 @@ class HyperVibesMcpServerTests(unittest.TestCase):
         self.assertNotIn("vta_super_secret", str(ctx.exception))
         self.assertIn("[redacted]", str(ctx.exception))
 
+    def test_memory_write_errors_preserve_recovery_code_without_automatic_retry(self) -> None:
+        for status, body in [(422, {"error": "links[1].target_memory_id is unavailable; use same-agent context",
+                                    "code": "invalid_memory_link", "link_index": 1}),
+                             (500, {"error": "internal server error"})]:
+            response = self.server.httpx.Response(status, json=body)
+            with mock.patch.object(self.server, "_require_config", return_value=("http://example.test", "test-key", "agent")):
+                with mock.patch.object(self.server.httpx, "request", return_value=response) as request:
+                    with self.assertRaises(RuntimeError) as error:
+                        self.server.write_memory("agent", "observation", "summary", "body")
+            self.assertEqual(request.call_count, 1)
+            self.assertIn(f"returned {status}:", str(error.exception))
+            if status == 422:
+                self.assertIn('"code":"invalid_memory_link"', str(error.exception))
+                self.assertIn('"link_index":1', str(error.exception))
+
     def test_send_notification_posts_to_notifications_endpoint(self) -> None:
         captured: dict[str, Any] = {}
 
@@ -1203,6 +1234,29 @@ class HyperVibesMcpServerTests(unittest.TestCase):
     def test_send_notification_rejects_unknown_severity(self) -> None:
         with self.assertRaises(ValueError):
             self.server.send_notification(title="t", body="b", severity="critical")
+
+
+class OhlcvProvenanceTests(unittest.TestCase):
+    def test_saved_rows_keep_exact_values_and_open_close_boundary_provenance(self) -> None:
+        path = REPO_ROOT / "agent-runtime/workspace-template/.opencode/skills/hyperliquid-data/fetch_ohlcv.py"
+        spec = importlib.util.spec_from_file_location("ohlcv_helper", path)
+        assert spec is not None and spec.loader is not None
+        helper = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(helper)
+        candles = [
+            {"t": 1783112400000, "o": "2690.9", "h": "2691.6", "l": "2687.1", "c": "2688.8", "v": "12.5"},
+            {"t": 1783113300000, "o": "2700", "h": "2701", "l": "2699", "c": "2700", "v": "10"},
+        ]
+        boundary = 1783113300000
+        closed = helper.filter_closed_before(candles, 900000, boundary)
+        payload = helper.canonical_payload("ETH", "15m", 900000, closed, boundary)
+        self.assertEqual(payload["requested_boundary_ms"], boundary)
+        self.assertEqual(len(payload["candles"]), 1)
+        row = payload["candles"][0]
+        self.assertEqual(row["timestamp_ms"], 1783112400000)
+        self.assertEqual(row["opened_at"], "2026-07-03T21:00:00Z")
+        self.assertEqual(row["closed_at"], "2026-07-03T21:15:00Z")
+        self.assertEqual([row[key] for key in ("open", "high", "low", "close")], [2690.9, 2691.6, 2687.1, 2688.8])
 
 
 if __name__ == "__main__":

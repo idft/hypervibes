@@ -41,10 +41,19 @@ selected instrument, explicit entry confirmation and invalidation, confidence
 rationale, and at least 1.5:1 estimated reward:risk after costs for actionable
 setups. Missing evidence and no-trade conclusions are valid outcomes.
 
-Research uses the system's timeframe-based expiry unless the analyst shortens it
+New research uses the immutable producing run's schedule/boundary expiry unless the analyst overrides it
 with `metadata.stale_after` or `metadata.valid_for_seconds`. A deadline in prose
 does not set memory expiry. Thesis and entry-opportunity lifetimes are distinct;
 a memory containing both uses the earlier deadline.
+
+Runtime instructions prefer compact version-1 handoffs separating quoted source
+observations from interpretation, with exact run/bar references and validity.
+Analysis performs a pre-publication consistency check of IDs, source rows,
+candle open/derived close times, visual offsets, and EMA ordering. Partial or
+unavailable evidence must be labeled rather than reconstructed from later runs.
+The backend does not verify these research claims. Legacy prose handoffs remain
+compatible. Corrections link to exact originals using `corrects`; durable
+data-quality guidance is published separately from expiring entry details.
 
 The editable Trading default uses these conservative starting limits:
 
@@ -62,6 +71,13 @@ before retrying uncertain submissions. Exits are reduce-only, and protection is
 reconciled after partial fills or exits. Planned stop risk is an estimate, not a
 guarantee of maximum realized loss.
 
+Runtime Trading instructions require successful decision IDs for opening orders
+and preserve reduce-only protection if logging fails. IDs are copied unchanged
+from returned context. A definitive indexed invalid-link 422 allows one context
+refetch, reference repair, and write retry; ambiguous failures are reported without
+blind retries or order replay. Corrections apply only to their structured targets,
+and superseded entry corrections do not become fresh theses.
+
 The editable Review default evaluates decision quality separately from outcomes
 for the supplied review window, including partial-day reviews. It assesses
 Analysis, Trading, execution, and indicator evidence against the strategy and
@@ -70,6 +86,13 @@ historical attribution. Relevant indicator inspection is part of every Review
 run, even without indicator-writing permission. Historical results are read by
 exact run ID where available within the permitted scope; later results cannot
 retroactively make a timed-out dependency available to Analysis.
+
+Review independently samples a bounded representative set of publications,
+including runs that did not self-correct, comparing claims to exact frozen
+numeric outputs/source rows. It records sample IDs, coverage and limitations,
+counts self-corrections separately from sampled factual findings, and assesses
+decision/expiry/link coverage independently of trade outcomes. This is an
+assessment workflow, not an automatic research-acceptance validator.
 
 Review applies indicator or Analysis/Trading prompt changes only with the
 corresponding capability and material supporting evidence. It favors small

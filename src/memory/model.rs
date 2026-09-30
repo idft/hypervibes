@@ -134,6 +134,30 @@ impl CreateMemory {
         {
             errors.push("metadata must be a JSON object.".to_string());
         }
+        if let Some(metadata) = &self.metadata {
+            if let Some(value) = metadata.get("stale_after")
+                && !value
+                    .as_str()
+                    .is_some_and(|value| DateTime::parse_from_rfc3339(value).is_ok())
+            {
+                errors.push("metadata.stale_after must be an RFC 3339 timestamp.".to_string());
+            }
+            if let Some(value) = metadata.get("valid_for_seconds")
+                && !value.as_f64().is_some_and(|seconds| {
+                    seconds.is_finite()
+                        && seconds >= 1.0
+                        && seconds < i64::MAX as f64
+                        && chrono::Duration::try_seconds(seconds.floor() as i64)
+                            .and_then(|duration| Utc::now().checked_add_signed(duration))
+                            .is_some()
+                })
+            {
+                errors.push(
+                    "metadata.valid_for_seconds must be a positive, representable duration."
+                        .to_string(),
+                );
+            }
+        }
         if let Some(links) = &self.links {
             for (index, link) in links.iter().enumerate() {
                 if link.link_type.trim().is_empty() {

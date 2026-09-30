@@ -81,9 +81,17 @@ fn check_memory_type(requested: &str, policy: MemoryTypePolicy) -> Result<(), Ap
 pub(super) async fn create_memory(
     State(state): State<Arc<AppState>>,
     agent: AuthenticatedAgent,
-    Json(input): Json<CreateMemory>,
+    input: Result<Json<CreateMemory>, axum::extract::rejection::JsonRejection>,
 ) -> Result<Response, ApiError> {
     super::require_run_api_scope(&agent, RunApiScope::MemoryWrite)?;
+    let Json(input) = input.map_err(|error| {
+        let message: String = error.body_text().chars().take(500).collect();
+        if error.status() == StatusCode::UNPROCESSABLE_ENTITY {
+            ApiError::Validation(message)
+        } else {
+            ApiError::BadRequest(message)
+        }
+    })?;
     if let Err(errors) = input.validate() {
         return Err(ApiError::Validation(errors.join(" ")));
     }
@@ -98,7 +106,16 @@ pub(super) async fn create_memory(
 
     let record = memory_store::insert_memory(&state.db_pool, &agent.agent_key, &input, source_run)
         .await
-        .map_err(ApiError::Internal)?;
+        .map_err(|error| match error {
+            memory_store::MemoryStoreError::Validation(message) => ApiError::Validation(message),
+            memory_store::MemoryStoreError::InvalidLinkTarget { index } => {
+                ApiError::InvalidMemoryLink { index }
+            }
+            memory_store::MemoryStoreError::InvalidInstrumentTarget { index } => {
+                ApiError::InvalidMemoryTarget { index }
+            }
+            memory_store::MemoryStoreError::Database(error) => ApiError::Internal(error),
+        })?;
     let instrument_targets =
         memory_store::list_memory_instrument_targets(&state.db_pool, &agent.agent_key, record.id)
             .await
@@ -411,10 +428,8 @@ pub struct MemoryRecordResponse {
     /// if the row has no explicit or implicit expiration (e.g. an
     /// `observation` memory with no `valid_for_seconds` / `stale_after`).
     ///
-    /// Analysis-produced research rows use the schedule-derived defaults
-    /// (`15m` => 30m, `1h` => 120m, `1d` => 48h, unknown => 30m — all 2x the
-    /// schedule interval so the trading loop has a one-cycle fallback if the
-    /// next analysis is delayed).
+    /// New Analysis publications materialize two source-run schedule cycles
+    /// from the boundary. Legacy rows retain memory-timeframe defaults.
     pub expires_at: Option<DateTime<Utc>>,
 }
 

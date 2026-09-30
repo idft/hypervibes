@@ -18,7 +18,9 @@ from __future__ import annotations
 import logging
 import math
 import os
+import re
 import sys
+from datetime import datetime, timedelta, timezone
 from urllib.parse import quote
 from decimal import Decimal
 from pathlib import Path
@@ -552,8 +554,22 @@ def _indicator_run_for_agent(
     start = bar_start if bar_start is not None else max(0, end - bar_limit)
     end = min(end, start + bar_limit)
     run["bar_count"], run["bar_start"] = candle_count, start
+    def source_times(index: int) -> dict[str, str]:
+        opened_at = candles[index]["opened_at"]
+        try:
+            opened = datetime.fromisoformat(opened_at.replace("Z", "+00:00"))
+            interval = re.fullmatch(r"([1-9][0-9]*)([mhd])", run["timeframe"])
+            if opened.tzinfo is None or interval is None:
+                raise ValueError("invalid candle provenance")
+            seconds = int(interval[1]) * {"m": 60, "h": 3600, "d": 86400}[interval[2]]
+            closed = opened + timedelta(seconds=seconds)
+        except (ValueError, OverflowError) as exc:
+            raise RuntimeError("Malformed indicator candle time or timeframe; inspect the stored run in the operator UI") from exc
+        return {"opened_at": opened_at, "closed_at": closed.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")}
+
     run["bars"] = [
-        {"bar_index": index, "opened_at": candles[index]["opened_at"], "close": candles[index]["close"],
+        {"bar_index": index, **source_times(index), "close": candles[index]["close"],
+         **{field: candles[index][field] for field in ("open", "high", "low", "volume") if field in candles[index]},
          "plots": {name: series[index] for name, series in plots.items()}}
         for index in range(start, end)
     ]
@@ -562,7 +578,7 @@ def _indicator_run_for_agent(
     ordered = sorted(enumerate(markers), key=lambda event: -event[1]["bar_index"])
     run["marker_count"], run["marker_start"] = len(markers), marker_start
     run["markers"] = [
-        {"event_position": position, "opened_at": candles[marker["bar_index"]]["opened_at"],
+        {"event_position": position, **source_times(marker["bar_index"]),
          **{field: marker[field] for field in (
              ["bar_index", "kind", "title", "value", "offset"]
              + (["text"] if marker["kind"] != "plotarrow" else [])
@@ -1157,6 +1173,11 @@ def write_memory(
     may be a list of objects with ``target_memory_id``, ``link_type``, and an
     optional object ``metadata``. Run and sub-agent provenance is stamped by
     the server; do not include it in metadata.
+    Copy target IDs unchanged. A definitive 422 ``invalid_memory_link`` includes
+    a zero-based ``link_index``; refetch authorized context, repair only that
+    reference and retry at most once. Do not guess IDs, drop required links, or
+    retry ambiguous failures (writes have no idempotency key). Corrections use
+    ``link_type="corrects"`` with explicit ``metadata.stale_after``.
     """
     if scope_kind not in {"agent", "instruments"}:
         raise ValueError("scope_kind must be agent or instruments")

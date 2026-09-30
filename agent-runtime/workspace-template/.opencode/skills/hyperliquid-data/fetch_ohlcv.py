@@ -7,6 +7,7 @@ import os
 import sys
 import time
 import uuid
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -87,13 +88,20 @@ def canonical_payload(
     timeframe: str,
     interval_ms: int,
     candles: list[dict[str, Any]],
+    requested_boundary_ms: int | None = None,
 ) -> dict[str, Any]:
     """Build the stable input envelope consumed by Python analysis scripts."""
     return {
         "symbol": symbol,
         "timeframe": timeframe,
         "interval_ms": interval_ms,
-        "candles": [normalize_candle(candle) for candle in candles],
+        "requested_boundary_ms": requested_boundary_ms,
+        "candles": [
+            {**normalize_candle(candle),
+             "opened_at": datetime.fromtimestamp(candle_start_ms(candle) / 1000, timezone.utc).isoformat().replace("+00:00", "Z"),
+             "closed_at": datetime.fromtimestamp(candle_close_ms(candle, interval_ms) / 1000, timezone.utc).isoformat().replace("+00:00", "Z")}
+            for candle in candles
+        ],
     }
 
 
@@ -308,7 +316,7 @@ def main() -> None:
     requested_boundary_ms = closed_before_ms
     actual_max_close_ms = maximum_close_ms(candles, interval_ms)
     try:
-        payload = canonical_payload(args.symbol, args.timeframe, interval_ms, candles)
+        payload = canonical_payload(args.symbol, args.timeframe, interval_ms, candles, requested_boundary_ms)
     except RuntimeError as exc:
         print(str(exc), file=sys.stderr)
         sys.exit(1)

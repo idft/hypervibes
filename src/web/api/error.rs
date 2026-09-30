@@ -15,6 +15,8 @@ pub(super) enum ApiError {
     Forbidden(&'static str),
     NotFound(&'static str),
     Validation(String),
+    InvalidMemoryLink { index: usize },
+    InvalidMemoryTarget { index: usize },
     Conflict(&'static str),
     BadUuid,
     Internal(anyhow::Error),
@@ -27,6 +29,14 @@ impl ApiError {
             ApiError::Forbidden(msg) => (*msg).to_string(),
             ApiError::NotFound(msg) => (*msg).to_string(),
             ApiError::Validation(msg) => msg.clone(),
+            ApiError::InvalidMemoryLink { index } => {
+                crate::memory::store::MemoryStoreError::InvalidLinkTarget { index: *index }
+                    .to_string()
+            }
+            ApiError::InvalidMemoryTarget { index } => {
+                crate::memory::store::MemoryStoreError::InvalidInstrumentTarget { index: *index }
+                    .to_string()
+            }
             ApiError::Conflict(msg) => (*msg).to_string(),
             ApiError::BadUuid => "invalid memory id".to_string(),
             ApiError::Internal(_) => "internal server error".to_string(),
@@ -39,6 +49,9 @@ impl ApiError {
             ApiError::Forbidden(_) => StatusCode::FORBIDDEN,
             ApiError::NotFound(_) => StatusCode::NOT_FOUND,
             ApiError::Validation(_) => StatusCode::UNPROCESSABLE_ENTITY,
+            ApiError::InvalidMemoryLink { .. } | ApiError::InvalidMemoryTarget { .. } => {
+                StatusCode::UNPROCESSABLE_ENTITY
+            }
             ApiError::Conflict(_) => StatusCode::CONFLICT,
             ApiError::BadUuid => StatusCode::NOT_FOUND,
             ApiError::Internal(_) => StatusCode::INTERNAL_SERVER_ERROR,
@@ -60,7 +73,19 @@ impl IntoResponse for ApiError {
         if let ApiError::Internal(ref e) = self {
             error!(error = ?e, "agent API request failed");
         }
-        let body = Json(json!({ "error": self.message() }));
+        let mut body = json!({ "error": self.message() });
+        match &self {
+            ApiError::InvalidMemoryLink { index } => {
+                body["code"] = json!("invalid_memory_link");
+                body["link_index"] = json!(index);
+            }
+            ApiError::InvalidMemoryTarget { index } => {
+                body["code"] = json!("invalid_memory_target");
+                body["instrument_index"] = json!(index);
+            }
+            _ => {}
+        }
+        let body = Json(body);
         (self.status(), body).into_response()
     }
 }
