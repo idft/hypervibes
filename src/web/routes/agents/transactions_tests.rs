@@ -38,7 +38,7 @@ async fn agent_transactions_route_renders_full_timeline() {
         .expect("default view response");
     assert_eq!(default_response.status(), StatusCode::OK);
     let default_text = response_text(default_response).await;
-    assert!(default_text.contains("No perpetual trade cycles have synced yet."));
+    assert!(default_text.contains("No trades yet"));
     assert!(!default_text.contains("Showing 1-1 of 1 transactions"));
 
     let response = router(state.clone())

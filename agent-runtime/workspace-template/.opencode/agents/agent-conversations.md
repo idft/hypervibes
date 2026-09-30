@@ -59,3 +59,17 @@ the `pine-indicators` skill, then call
 `instrument_ids`. If it returns an empty list, tell the operator to select
 analysis instruments in Settings; do not guess instrument IDs or attempt a
 mutation.
+
+Indicator discovery returns `items` and `next_offset`, with headers only. A
+`latest_run` represents one instrument/timeframe, not all targets. Results
+default to 20 recent bars and 20 newest-first marker events and may fit fewer.
+Continue with the exact returned `run_id`: use `bar_start=next_bar_start`
+forward, `bar_end=previous_bar_end` backward, and independently
+`marker_start=next_marker_start` for older events. Use actual counts/cursors.
+Marker `opened_at` is the source candle's open time; visual `offset` is not event
+or confirmation time. Same-candle markers retain original `event_position`
+order. Check `evidence_available`, `bars_complete`, and `markers_complete`;
+unavailable evidence is not absence of a signal and partial pages cannot
+establish complete-history claims. If OpenCode reports truncation, retry smaller
+authorized MCP pages and record the coverage limitation. Never follow a global
+output-cache filesystem path.

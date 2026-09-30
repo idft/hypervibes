@@ -45,6 +45,7 @@ fn build_analysis_prompt(request: &DispatchRequest) -> String {
     body.push_str("- This job's research method is defined by its strategy and its capabilities. Decide what market evidence to gather from your allowed tools, or reason from the evidence already available to you.\n");
     body.push_str("- Inspect relevant published numeric plots and marker events with `hypervibes_list_indicators`, `hypervibes_get_indicator`, and `hypervibes_get_indicator_results`; interpret them as research evidence, not order instructions. Do not create or edit indicators.\n");
     body.push_str("- Indicator timeframes are separate evidence. Your run can read only its frozen exact indicator runs; a `timed_out` dependency remains unavailable for this run even if it completes later.\n");
+    body.push_str(INDICATOR_PAGING_INSTRUCTIONS);
     body.push_str("- When citing indicator evidence in research memories, record the exact run ID, instrument, timeframe, boundary, relevant numeric plots and marker times. If a frozen dependency or its signals are unavailable, state that explicitly instead of treating run success as signal confirmation.\n");
     if request
         .enabled_capabilities
@@ -140,6 +141,7 @@ fn build_review_prompt(request: &DispatchRequest) -> Result<String> {
     body.push_str("- Trace orders through their `memory_record_ids` to the linked `trading_decision` memories, and follow `memory.links` from decisions back to the research evidence they were based on.\n");
     body.push_str("- Identify failures, good patterns, stale assumptions, and prompt improvement opportunities.\n");
     body.push_str("- Inspect relevant indicator definitions and results with `hypervibes_list_indicators`, `hypervibes_get_indicator`, and `hypervibes_get_indicator_results`, whether or not indicator-writing capability is granted. Use exact historical `run_id` references when available within the permitted review scope; never substitute a later result or current version for the evidence available to a past decision. A frozen `timed_out` dependency was unavailable to its Analysis run even if it later completed. Record missing or out-of-scope attribution as a limitation.\n");
+    body.push_str(INDICATOR_PAGING_INSTRUCTIONS);
     if request
         .enabled_capabilities
         .iter()
@@ -164,6 +166,11 @@ fn build_review_prompt(request: &DispatchRequest) -> Result<String> {
     body.push_str("- Do not use generic strategy-prompt replacement. Submit no revision when evidence is insufficient.\n");
     Ok(body)
 }
+
+const INDICATOR_PAGING_INSTRUCTIONS: &str = "- Indicator discovery returns an `items` envelope with `next_offset`, not evidence histories. Its `latest_run` is only one instrument/timeframe; inspect every applicable frozen target explicitly. Result reads default to the latest 20 bars and newest 20 marker events, and may return fewer to fit the whole-call text budget.\n\
+- Continue only with the returned exact `run_id`, preserving version, instrument, timeframe, and boundary. Numeric pagination is independent of marker pagination: use `bar_start=next_bar_start` for forward history, `bar_end=previous_bar_end` for backward history, and `marker_start=next_marker_start` for older events. Use actual counts and cursors, not requested limits.\n\
+- Markers are newest source candle first, then original `event_position`. `opened_at` is the source candle's open time, not its close/confirmation time; `offset` changes display only. Check `evidence_available`, `bars_complete`, `markers_complete`, and coverage counts. An empty unavailable result is not absence of a signal, and a partial page cannot support claims about the complete history.\n\
+- If OpenCode unexpectedly reports truncation, retry a smaller authorized MCP page (including a smaller discovery limit or both `bar_limit` and `marker_limit`) and record the coverage limitation. Never follow the global output-cache filesystem path.\n";
 
 fn closed_candle_cutoff_section(request: &DispatchRequest) -> Option<String> {
     let timeframe = request.timeframe.as_deref()?;
@@ -457,6 +464,29 @@ mod tests {
         assert!(prompt.contains("load the `pine-indicators` skill"));
         assert!(prompt.contains("analytical signals"));
         assert!(prompt.contains("never encode order execution"));
+    }
+
+    #[test]
+    fn research_consumers_receive_exact_run_paging_and_coverage_instructions() {
+        for kind in [SUB_AGENT_KIND_ANALYSIS, SUB_AGENT_KIND_REVIEW] {
+            let prompt = build_prompt(&sample_request(kind)).expect("build research prompt");
+            for instruction in [
+                "`items` envelope",
+                "every applicable frozen target",
+                "returned exact `run_id`",
+                "`bar_end=previous_bar_end`",
+                "`marker_start=next_marker_start`",
+                "`markers_complete`",
+                "`offset` changes display only",
+                "partial page cannot support claims about the complete history",
+                "Never follow the global output-cache filesystem path",
+            ] {
+                assert!(prompt.contains(instruction), "{kind}: {instruction}");
+            }
+        }
+        let trading =
+            build_prompt(&sample_request(SUB_AGENT_KIND_TRADING)).expect("build trading prompt");
+        assert!(!trading.contains(INDICATOR_PAGING_INSTRUCTIONS));
     }
 
     #[test]

@@ -454,4 +454,62 @@ async fn analysis_run_credential_reads_only_its_frozen_exact_dependencies() {
     .await;
     assert_eq!(status, StatusCode::OK);
     assert!(cross_run.as_array().expect("cross-run results").is_empty());
+
+    // MCP continuations reuse this endpoint. Changing enabled state, active
+    // version and configured timeframe between pages must not move exact reads.
+    let (headers, body) = json_body(&json!({
+        "expected_version_id": visible["active_version"]["id"],
+        "name": "Revised dependency",
+        "timeframes": ["4h"],
+        "instrument_ids": ["BTC"],
+        "source": SOURCE,
+        "enabled": false,
+    }));
+    let mut request = Request::builder()
+        .method("PUT")
+        .uri(format!("/indicators/{visible_definition}"))
+        .header("authorization", format!("Bearer {api_key}"));
+    if let Some((name, value)) = headers {
+        request = request.header(name, value);
+    }
+    let response = app(Arc::clone(&state))
+        .oneshot(request.body(body).expect("update request"))
+        .await
+        .expect("update response");
+    assert_eq!(response.status(), StatusCode::OK);
+    let changed = response_json(response).await;
+    assert_ne!(
+        changed["active_version"]["id"],
+        exact[0]["indicator_version_id"]
+    );
+    assert_eq!(changed["enabled"], false);
+
+    let exact_path = format!(
+        "/indicators/{visible_definition}/results?timeframe=1h&instrument_id=BTC&run_id={visible_run_id}"
+    );
+    for token in [&credential.token, &api_key] {
+        let (status, continuation) = get_json_response(&state, token, &exact_path).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(continuation, exact);
+    }
+    let (status, still_hidden) = get_json_response(
+        &state,
+        &credential.token,
+        &format!(
+            "/indicators/{timed_out_definition}/results?timeframe=1h&run_id={timed_out_run_id}"
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        still_hidden
+            .as_array()
+            .expect("timed-out exact read")
+            .is_empty()
+    );
+
+    let (_, foreign_key) = seed_agent(&state, "indicator-foreign-continuation").await;
+    let (status, foreign) = get_json_response(&state, &foreign_key, &exact_path).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(foreign.as_array().expect("foreign exact read").is_empty());
 }

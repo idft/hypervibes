@@ -1,11 +1,9 @@
 """Lightweight tests for the HyperVibes MCP server helpers.
 
-These tests intentionally avoid importing :mod:`mcp.server.fastmcp` so they
-can run in environments where the MCP package is not installed (such as
-the bare dev container). The MCP server itself is verified at runtime by
-booting it inside the custom OpenCode image; these tests cover the parts
-that can be exercised cheaply: env loading, validation, and the HTTP
-helper's URL/header construction.
+Unit tests use a fake FastMCP so they also run without the MCP package. When
+the pinned package is available, a separate process checks the real low-level
+transport serialization. Tests cover env loading, validation, authenticated
+requests, indicator budgets and complete immutable history recovery.
 """
 
 from __future__ import annotations
@@ -14,6 +12,7 @@ import importlib
 import importlib.util
 import json
 import os
+import subprocess
 import sys
 import tempfile
 import types
@@ -23,9 +22,56 @@ from typing import Any
 from unittest import mock
 
 from pydantic import ValidationError
+from pydantic_core import to_json
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 MCP_DIR = REPO_ROOT / "agent-runtime" / "mcp"
+REAL_MCP_AVAILABLE = importlib.util.find_spec("mcp") is not None
+
+
+def indicator_text(value: Any) -> str:
+    """FastMCP 1.28.1 emits one pretty JSON text block per list item.
+
+    OpenCode 1.18.32 joins blocks with two newlines, then applies independent
+    50 KiB UTF-8 / 2,000 line limits (tool/truncate.ts, session/tools.ts).
+    The real-package integration test checks this mirror against call_tool.
+    """
+    items = value if isinstance(value, list) else [value]
+    return "\n\n".join(to_json(item, indent=2).decode() for item in items)
+
+
+def dense_indicator_run(bars: int = 500, plots: int = 3, events: int = 4) -> dict[str, Any]:
+    candles = [{"opened_at": f"bar-{index}", "close": str(index)} for index in range(bars)]
+    markers = []
+    for index in range(bars):
+        for position in range(events):
+            kind = ("plotshape", "plotchar", "plotarrow")[position % 3]
+            marker = {
+                "kind": kind, "bar_index": index, "value": -2.5 if kind == "plotarrow" else 1.0,
+                "title": ("LR", "SR", "LB", "SB")[position % 4],
+                "offset": -1, "color": {"red": 255, "green": 128, "blue": 0, "transparency": 0},
+                "location": "belowbar", "style": "labelup", "size": "small",
+            }
+            if kind != "plotarrow":
+                marker["text"] = "候補" * 42 + "!" * 4  # Full permitted 256 UTF-8 bytes.
+            if kind == "plotchar":
+                marker["character"] = "↑"
+            markers.append(marker)
+    return {
+        "id": "frozen-run-id", "agent_key": "default",
+        "indicator_definition_id": "indicator-id", "indicator_version_id": "version-id",
+        "instrument_id": "ETH", "timeframe": "15m", "scheduled_for": "2026-09-30T07:15:00Z",
+        "status": "succeeded", "candle_data": candles,
+        "plot_data": {f"Plot {n}": list(range(bars)) for n in range(plots)},
+        "latest_values": {f"Plot {n}": bars - 1 for n in range(plots)},
+        "visual_data": {"version": 1, "markers": markers}, "diagnostics": [],
+        "error_summary": None,
+    }
+
+
+def indicator_definition(run: dict[str, Any], **fields: Any) -> dict[str, Any]:
+    return {"id": "indicator-id", "name": "Entry", "enabled": True,
+            "timeframes": ["15m"], "active_version_id": "version-id", "latest_run": run, **fields}
 
 
 def _install_fake_mcp() -> None:
@@ -73,6 +119,7 @@ def _load_server(defaults: dict[str, str] | None = None):
         )
         assert spec and spec.loader
         module: Any = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = module
         spec.loader.exec_module(module)
         return module
     finally:
@@ -93,6 +140,7 @@ class HyperVibesMcpServerTests(unittest.TestCase):
                 "HYPERVIBES_AGENT_KEY": "default",
             }
         )
+        cls.server.LOGGER.setLevel("WARNING")
 
     def test_loads_required_env_from_workspace(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -193,17 +241,9 @@ class HyperVibesMcpServerTests(unittest.TestCase):
         self.assertIn("load the pine-indicators skill", container_config)
 
     def test_indicator_reads_hide_internal_visual_data_versioning(self) -> None:
-        run = {
-            "id": "run-id",
-            "plot_data": {"EMA": [1.0]},
-            "claim_token": "secret-claim",
-            "lease_expires_at": "2026-01-01T00:00:00Z",
-            "next_attempt_at": "2026-01-01T00:00:00Z",
-            "visual_data": {
-                "version": 1,
-                "markers": [{"kind": "plotshape", "bar_index": 0}],
-            },
-        }
+        run = dense_indicator_run(1, 1, 1)
+        run.update(claim_token="secret-claim", lease_expires_at="date", next_attempt_at="date",
+                   future_http_field="x" * 100_000)
 
         with mock.patch.object(self.server, "_request", return_value=[run]):
             results = self.server.get_indicator_results("indicator-id", "1h")
@@ -211,81 +251,288 @@ class HyperVibesMcpServerTests(unittest.TestCase):
         self.assertNotIn("claim_token", results[0])
         self.assertNotIn("lease_expires_at", results[0])
         self.assertNotIn("next_attempt_at", results[0])
-        self.assertEqual(
-            results[0]["markers"],
-            [{"kind": "plotshape", "bar_index": 0}],
-        )
+        self.assertNotIn("future_http_field", results[0])
+        self.assertEqual(results[0]["markers"][0]["opened_at"], "bar-0")
+        self.assertNotIn("color", results[0]["markers"][0])
 
         with mock.patch.object(
             self.server,
             "_request",
-            return_value=[{"id": "indicator-id", "latest_run": run}],
+            return_value=[indicator_definition(run)],
         ):
             indicators = self.server.list_indicators()
-        latest_run = indicators[0]["latest_run"]
+        latest_run = indicators["items"][0]["latest_run"]
         self.assertNotIn("visual_data", latest_run)
-        self.assertEqual(latest_run["markers"][0]["kind"], "plotshape")
+        self.assertNotIn("bars", latest_run)
+        self.assertNotIn("markers", latest_run)
+
+    def test_dense_indicator_response_fits_transport_and_exposes_current_markers(self) -> None:
+        run = dense_indicator_run()
+        with mock.patch.object(self.server, "_request", return_value=[run]):
+            result = self.server.get_indicator_results("indicator-id", "15m")
+        text = indicator_text(result)
+        self.assertLessEqual(len(text.encode("utf-8")), 24 * 1024)
+        self.assertLessEqual(len(text.split("\n")), 1000)
+        self.assertEqual(result[0]["markers"][0]["bar_index"], 499)
 
     def test_indicator_reads_reject_malformed_visual_data(self) -> None:
+        run = dense_indicator_run(1, 1, 1)
+        run["visual_data"]["markers"] = {}
         with mock.patch.object(
             self.server,
             "_request",
-            return_value=[{"visual_data": {"version": 1, "markers": {}}}],
+            return_value=[run],
         ):
             with self.assertRaisesRegex(RuntimeError, "visual data"):
                 self.server.get_indicator_results("indicator-id", "1h")
 
     def test_indicator_reads_page_long_history_without_hiding_signals(self) -> None:
-        candles = [
-            {"opened_at": f"bar-{index}", "close": str(index), "volume": "1"}
-            for index in range(500)
-        ]
-        run = {
-            "id": "frozen-run-id",
-            "candle_data": candles,
-            "plot_data": {"Fast EMA": list(range(500)), "Slow EMA": list(range(500))},
-            "latest_values": {"Fast EMA": 499, "Slow EMA": 499},
-            "visual_data": {
-                "version": 1,
-                "markers": [{"kind": "plotshape", "bar_index": 10}, {"kind": "plotchar", "bar_index": 499}],
-            },
-        }
+        run = dense_indicator_run()
 
         with mock.patch.object(self.server, "_request", return_value=[run]):
             result = self.server.get_indicator_results("indicator-id", "1h", run_id="frozen-run-id")[0]
         self.assertNotIn("candle_data", result)
         self.assertNotIn("plot_data", result)
         self.assertEqual(result["bar_count"], 500)
-        self.assertEqual(result["bar_start"], 400)
-        self.assertEqual(result["previous_bar_start"], 300)
+        self.assertEqual(result["bar_start"], 480)
+        self.assertEqual(result["previous_bar_start"], 460)
         self.assertIsNone(result["next_bar_start"])
-        self.assertEqual(len(result["bars"]), 100)
-        self.assertEqual(result["bars"][0]["bar_index"], 400)
-        self.assertEqual(result["bars"][-1]["plots"], {"Fast EMA": 499, "Slow EMA": 499})
-        self.assertEqual(result["markers"][0]["opened_at"], "bar-10")
-        self.assertEqual(result["markers"][1]["opened_at"], "bar-499")
-        rendered = json.dumps(result, indent=2)
-        self.assertLess(len(rendered), 35_000)
-        self.assertLess(max(map(len, rendered.splitlines())), 2_000)
+        self.assertEqual(len(result["bars"]), 20)
+        self.assertEqual(result["bars"][0]["bar_index"], 480)
+        self.assertEqual(result["bars"][-1]["plots"], run["latest_values"])
+        self.assertEqual(result["markers"][0]["opened_at"], "bar-499")
+        self.assertFalse(result["markers_complete"])
+        self.assertEqual(result["marker_count"], 2000)
+        self.assertEqual(result["marker_returned_count"], 20)
 
-        with mock.patch.object(self.server, "_request", return_value=[{"id": "indicator-id", "latest_run": run}]):
-            latest = self.server.list_indicators()[0]["latest_run"]
-        self.assertEqual(latest["bars"], result["bars"])
-        self.assertEqual(latest["markers"], result["markers"])
+        with mock.patch.object(self.server, "_request", return_value=[indicator_definition(run)]):
+            latest = self.server.list_indicators()["items"][0]["latest_run"]
+        self.assertEqual(latest["id"], result["id"])
+        self.assertNotIn("bars", latest)
+        self.assertNotIn("markers", latest)
 
         with mock.patch.object(self.server, "_request", return_value=[run]) as request:
             older = self.server.get_indicator_results("indicator-id", "1h", run_id="frozen-run-id", bar_start=0)[0]
         self.assertEqual(older["bar_start"], 0)
         self.assertIsNone(older["previous_bar_start"])
-        self.assertEqual(older["next_bar_start"], 100)
-        self.assertEqual(older["bars"][0]["plots"], {"Fast EMA": 0, "Slow EMA": 0})
-        self.assertEqual(older["bars"][-1]["bar_index"], 99)
+        self.assertEqual(older["next_bar_start"], 20)
+        self.assertEqual(older["bars"][0]["plots"], {f"Plot {n}": 0 for n in range(3)})
+        self.assertEqual(older["bars"][-1]["bar_index"], 19)
         self.assertEqual(request.call_args.kwargs["params"]["limit"], 1)
 
         with mock.patch.object(self.server, "_request", return_value=[run]):
-            middle = self.server.get_indicator_results("indicator-id", "1h", bar_start=200, bar_limit=50)[0]
+            middle = self.server.get_indicator_results("indicator-id", "1h", run_id="frozen-run-id", bar_start=200, bar_limit=50)[0]
         self.assertEqual((middle["bar_start"], middle["previous_bar_start"], middle["next_bar_start"]), (200, 150, 250))
         self.assertEqual([bar["bar_index"] for bar in middle["bars"]], list(range(200, 250)))
+
+    def assert_indicator_budget(self, result: Any) -> None:
+        text = indicator_text(result)
+        self.assertLessEqual(len(text.encode("utf-8")), self.server.INDICATOR_TEXT_BYTES)
+        self.assertLessEqual(len(text.split("\n")), self.server.INDICATOR_TEXT_LINES)
+
+    def read_indicator_page(self, run: dict[str, Any], **kwargs: Any) -> dict[str, Any]:
+        with mock.patch.object(self.server, "_request", return_value=[run]):
+            result = self.server.get_indicator_results("indicator-id", "15m", run_id=run["id"], **kwargs)
+        self.assert_indicator_budget(result)
+        return result[0]
+
+    def test_maximum_density_and_aggregate_pages_fit_both_budgets(self) -> None:
+        run = dense_indicator_run(2000, 32, 32)
+        for marker in run["visual_data"]["markers"]:
+            marker["title"] = "候" * 42 + "!!"  # 128 bytes.
+        for args in ({}, {"bar_limit": 100, "marker_limit": 100}, {"bar_start": 0, "bar_limit": 100}):
+            page = self.read_indicator_page(run, **args)
+            self.assertGreater(page["bar_returned_count"], 0)
+            self.assertGreater(page["marker_returned_count"], 0)
+            self.assertFalse(page["bars_complete"])
+            self.assertFalse(page["markers_complete"])
+            self.assertIsNotNone(page["next_marker_start"])
+            if "bar_start" in args:
+                self.assertEqual(page["bars"][0]["bar_index"], 0)
+                self.assertEqual(page["next_bar_start"], page["bar_returned_count"])
+            else:
+                self.assertEqual(page["bars"][-1]["bar_index"], 1999)
+        with mock.patch.object(self.server, "_request", return_value=[run, run]):
+            pages = self.server.get_indicator_results("indicator-id", "15m", limit=2, bar_limit=100, marker_limit=100)
+        self.assertEqual(len(pages), 2)
+        self.assert_indicator_budget(pages)
+        self.assertTrue(any(page["budget_reduced"] for page in pages))
+
+    def test_all_numeric_history_recovers_forward_and_backward_without_gaps(self) -> None:
+        run = dense_indicator_run(500, 32, 4)
+        for direction in ("forward", "backward"):
+            collected = []
+            args = {"bar_start": 0} if direction == "forward" else {}
+            for iteration in range(501):
+                # Vary marker/number requests to force changing fitted page sizes.
+                page = self.read_indicator_page(run, bar_limit=100, marker_limit=100 if iteration % 2 else 1, **args)
+                self.assertGreater(page["bar_returned_count"], 0)
+                indices = [bar["bar_index"] for bar in page["bars"]]
+                collected.extend(indices if direction == "forward" else reversed(indices))
+                cursor = page["next_bar_start"] if direction == "forward" else page["previous_bar_end"]
+                if cursor is None:
+                    break
+                args = {"bar_start" if direction == "forward" else "bar_end": cursor}
+            else:
+                self.fail("numeric pagination never finished")
+            self.assertEqual(collected, list(range(500)) if direction == "forward" else list(reversed(range(500))))
+
+    def test_all_marker_history_recovers_independently_with_stable_duplicate_order(self) -> None:
+        run = dense_indicator_run()
+        cursor = 0
+        collected = []
+        for _ in range(2001):
+            page = self.read_indicator_page(run, marker_start=cursor, marker_limit=100, bar_limit=1)
+            self.assertEqual(page["bars"][0]["bar_index"], 499)
+            self.assertGreater(page["marker_returned_count"], 0)
+            for event in page["markers"]:
+                original = run["visual_data"]["markers"][event["event_position"]]
+                self.assertEqual(event["opened_at"], f"bar-{original['bar_index']}")
+                for field in ("kind", "title", "text", "character", "value", "offset"):
+                    self.assertEqual(event.get(field), original.get(field))
+                collected.append(event["event_position"])
+            next_cursor = page["next_marker_start"]
+            if next_cursor is None:
+                break
+            self.assertEqual(next_cursor, cursor + page["marker_returned_count"])
+            cursor = next_cursor
+        else:
+            self.fail("marker pagination never finished")
+        expected = sorted(range(2000), key=lambda n: -run["visual_data"]["markers"][n]["bar_index"])
+        self.assertEqual(collected, expected)
+        empty = self.read_indicator_page(run, marker_start=2000)
+        self.assertEqual(empty["markers"], [])
+        self.assertFalse(empty["markers_complete"])
+        self.assertLess(empty["previous_marker_start"], empty["marker_start"])
+        previous = self.read_indicator_page(run, marker_start=empty["previous_marker_start"])
+        self.assertGreater(previous["marker_returned_count"], 0)
+
+    def test_discovery_recovers_catalog_without_embedding_histories(self) -> None:
+        run = dense_indicator_run()
+        catalog = [{"id": str(index), "name": "候" * 150, "enabled": True, "timeframes": ["5m", "15m"],
+                    "active_version_id": "version-id", "latest_run": run, "source": "x" * 100_000,
+                    "description": "x" * 100_000} for index in range(65)]
+        for total in (2, 65):
+            cursor, found = 0, []
+            with mock.patch.object(self.server, "_request", return_value=catalog[:total]):
+                for _ in range(total + 1):
+                    page = self.server.list_indicators(limit=100, offset=cursor)
+                    self.assert_indicator_budget(page)
+                    self.assertEqual(page["total"], total)
+                    self.assertEqual(page["returned_count"], len(page["items"]))
+                    for item in page["items"]:
+                        self.assertNotIn("source", item)
+                        self.assertNotIn("description", item)
+                        self.assertNotIn("bars", item["latest_run"])
+                        self.assertNotIn("markers", item["latest_run"])
+                        found.append(item["id"])
+                    if page["next_offset"] is None:
+                        break
+                    self.assertGreater(page["next_offset"], cursor)
+                    cursor = page["next_offset"]
+            self.assertEqual(found, [str(index) for index in range(total)])
+
+    def test_empty_missing_failed_and_skipped_evidence_are_distinct(self) -> None:
+        empty = self.read_indicator_page(dense_indicator_run(0, 0, 0))
+        self.assertTrue(empty["evidence_available"])
+        self.assertTrue(empty["markers_complete"])
+        self.assertTrue(empty["bars_complete"])
+        self.assertEqual(empty["marker_count"], 0)
+        for status in ("failed", "skipped", "queued", "succeeded"):
+            run = dense_indicator_run()
+            run.update(status=status, candle_data=None, plot_data=None, visual_data=None,
+                       error_summary="錯" * 10000, diagnostics=[{"severity": "error", "message": "bad" * 1000}] * 100)
+            page = self.read_indicator_page(run)
+            self.assertEqual(page["status"], status)
+            self.assertFalse(page["evidence_available"])
+            self.assertFalse(page["markers_complete"])
+            self.assertIsNone(page["marker_count"])
+            self.assertTrue(page["diagnostics_abbreviated"])
+            self.assertTrue(page["error_summary_abbreviated"])
+        with mock.patch.object(self.server, "_request", return_value=[]):
+            self.assertEqual(self.server.get_indicator_results("indicator-id", "15m"), [])
+
+    def test_malformed_markers_candles_and_plots_return_bounded_errors(self) -> None:
+        for change in ({"bar_index": -1}, {"bar_index": True}, {"bar_index": 2}, {"kind": "unknown"},
+                       {"value": float("nan")}, {"offset": 1.5}, {"text": {}}, {"title": None}):
+            run = dense_indicator_run(2, 1, 1)
+            run["visual_data"]["markers"][0].update(change)
+            with self.subTest(change=change), self.assertRaisesRegex(RuntimeError, "marker"):
+                self.read_indicator_page(run)
+        run = dense_indicator_run(2, 1, 1)
+        run["candle_data"][0] = None
+        with self.assertRaisesRegex(RuntimeError, "candle"):
+            self.read_indicator_page(run)
+        run = dense_indicator_run(2, 1, 1)
+        run["plot_data"]["Plot 0"] = [1]
+        with self.assertRaisesRegex(RuntimeError, "unaligned"):
+            self.read_indicator_page(run)
+
+    def test_oversized_single_units_and_multi_run_minimum_fail_explicitly(self) -> None:
+        for target in ("title", "plot", "header"):
+            run = dense_indicator_run(1, 1, 1)
+            if target == "title":
+                run["visual_data"]["markers"][0]["title"] = "x" * 30000
+            elif target == "plot":
+                run["plot_data"] = {"x" * 30000: [1]}
+            else:
+                run["latest_values"] = {"x" * 30000: 1}
+            with self.assertRaisesRegex(ValueError, "oversized"):
+                self.read_indicator_page(run)
+        run = dense_indicator_run(1, 32, 1)
+        with mock.patch.object(self.server, "_request", return_value=[run] * 100):
+            with self.assertRaisesRegex(ValueError, "smaller run limit or exact run_id"):
+                self.server.get_indicator_results("indicator-id", "15m", limit=100)
+        run = dense_indicator_run(500, 32, 4)
+        with mock.patch.object(self.server, "_request", return_value=[run] * 100):
+            with self.assertRaisesRegex(ValueError, "smaller run limit"):
+                self.server.get_indicator_results("indicator-id", "15m", limit=100, bar_limit=100, marker_limit=100)
+        with mock.patch.object(self.server, "_request", return_value=[indicator_definition(run, name="x" * 30000)]):
+            with self.assertRaisesRegex(ValueError, "discovery item"):
+                self.server.list_indicators()
+
+    def test_offsets_require_exact_runs_and_validate_ranges(self) -> None:
+        for args in ({"bar_start": 0}, {"marker_start": 0}, {"bar_end": 20}):
+            with self.assertRaisesRegex(ValueError, "exact run_id"):
+                self.server.get_indicator_results("indicator-id", "15m", **args)
+        for args in ({"marker_start": -1}, {"marker_start": True}, {"marker_limit": 0},
+                     {"marker_limit": 101}, {"marker_limit": True}, {"bar_end": -1},
+                     {"bar_start": 0, "bar_end": 1}, {"limit": 101}, {"limit": True}):
+            with self.assertRaises(ValueError):
+                self.read_indicator_page(dense_indicator_run(), **args)
+        for args in ({"bar_start": 501}, {"bar_end": 501}, {"marker_start": 2001}):
+            with self.assertRaisesRegex(ValueError, "exceeds"):
+                self.read_indicator_page(dense_indicator_run(), **args)
+        for args in ({"offset": -1}, {"offset": True}, {"limit": 0}, {"limit": 101}):
+            with self.assertRaises(ValueError):
+                self.server.list_indicators(**args)
+
+    def test_continuations_forward_only_the_exact_authorized_run(self) -> None:
+        run = dense_indicator_run()
+        first = self.read_indicator_page(run)
+        with mock.patch.object(self.server, "_request", return_value=[run]) as request:
+            page = self.server.get_indicator_results("indicator-id", "15m", instrument_id="ETH",
+                                                     run_id=first["id"], marker_start=first["next_marker_start"])[0]
+        request.assert_called_once_with("GET", "/api/v1/indicators/indicator-id/results",
+                                       params={"timeframe": "15m", "instrument_id": "ETH", "run_id": first["id"], "limit": 1})
+        for field in ("id", "indicator_version_id", "instrument_id", "timeframe", "scheduled_for"):
+            self.assertEqual(page[field], first[field])
+
+    def test_output_diagnostics_log_counts_without_evidence_content(self) -> None:
+        run = dense_indicator_run(500, 32, 4)
+        with self.assertLogs(self.server.LOGGER, level="INFO") as logs:
+            page = self.read_indicator_page(run, bar_limit=100, marker_limit=100)
+        self.assertIn("tool=get_indicator_results schema_version=2", logs.output[0])
+        self.assertIn(f"bars={page['bar_returned_count']} markers={page['marker_returned_count']}", logs.output[0])
+        self.assertIn("budget_reduced=True", logs.output[0])
+        self.assertNotIn("候補", logs.output[0])
+        self.assertNotIn("frozen-run-id", logs.output[0])
+
+    @unittest.skipUnless(REAL_MCP_AVAILABLE, "install mcp==1.28.1 for real transport checks")
+    def test_real_fastmcp_serialization(self) -> None:
+        completed = subprocess.run([sys.executable, str(MCP_DIR / "test_indicator_transport.py")],
+                                   capture_output=True, text=True, timeout=120)
+        self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
 
     def test_indicator_result_bar_window_rejects_invalid_bounds(self) -> None:
         for start, size in [(-1, 100), (0, 0), (0, 101), (True, 10), (0, True)]:

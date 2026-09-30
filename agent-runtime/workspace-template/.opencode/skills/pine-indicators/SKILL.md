@@ -120,16 +120,42 @@ chart uses a fixed arrow size.
 ## Interpreting Results
 
 `hypervibes_get_indicator_results` requires one configured timeframe and returns
-bounded immutable runs for only that timeframe (one run by default). Each run
-includes up to 100 closed candles as `bars` (bar index, open time, close,
-numeric plots), `bar_count`, all marker events with their candle open times,
-latest numeric values, diagnostics, and run status. The default window is the
-most recent 100 bars. Pass `bar_start` to read older bars of the same run, and
-use `previous_bar_start` and `next_bar_start` to page through the full history;
-`bar_limit` can be set to 1–100. Marker events are not included in
-`latest_values`; inspect the returned `markers` collection when evaluating
-signal timing. The full input and plot history is also retained by the server
-for charts.
+bounded immutable runs for only that timeframe (one run by default), with
+`schema_version=2` and exact run/version/instrument/timeframe/boundary provenance.
+Discovery uses `hypervibes_list_indicators(limit=20, offset=0)` and returns an
+`items` envelope with `total`, `returned_count`, and `next_offset`; follow the
+cursor to discover the catalog. It embeds headers only. A `latest_run` header
+represents just one target; inspect all relevant frozen targets explicitly.
+
+Result defaults are the most recent **20 bars** and **20 marker events**.
+`bar_limit` and `marker_limit` each accept 1–100 as maximum requested counts.
+The complete call fits a 24 KiB UTF-8 / 1,000-line text budget, so it may return
+fewer complete units. Use actual `bar_returned_count`, `marker_returned_count`,
+and cursors, not requested sizes. Latest numeric values and compact, explicitly
+labeled abbreviated diagnostics accompany the run status.
+
+Every continuation must supply the exact returned `run_id`:
+
+- `bar_start=next_bar_start` pages forward from an absolute oldest-first index.
+- `bar_end=previous_bar_end` pages backward from an exclusive end, retaining that
+  end when the fitted size shrinks. Do not combine `bar_start` and `bar_end`.
+- `marker_start=next_marker_start` independently pages older events, in newest
+  source candle first order; original `event_position` breaks same-candle ties.
+
+Markers retain kind, title, text/character where applicable, value, source
+`bar_index`, source candle `opened_at`, and visual `offset`. Source open time is
+not candle-close confirmation time; offset does not change event time.
+Markers are not included in `latest_values`. Inspect `markers` for signal timing.
+`marker_count` is the total event count; `markers_complete` is true only when
+this page contains the entire available marker history. `bars_complete` has
+the analogous meaning. `evidence_available=false` and null counts mean
+unavailable evidence, not zero events. An available empty marker history has
+`marker_count=0` and `markers_complete=true`. A partial page cannot establish
+absence across the entire history. The HTTP API and charts retain full records.
+
+If OpenCode unexpectedly reports truncation, retry smaller authorized MCP
+pages and record the coverage limitation; never follow the global output-cache
+filesystem path.
 
 Analysis receives exact frozen run evidence for each timeframe. A dependency
 reported as `timed_out` is fixed for that Analysis run and must not be replaced

@@ -16,6 +16,7 @@ The server:
 from __future__ import annotations
 
 import logging
+import math
 import os
 import sys
 from urllib.parse import quote
@@ -27,6 +28,7 @@ import httpx
 from dotenv import load_dotenv
 from mcp.server.fastmcp import FastMCP
 from pydantic import BaseModel, ConfigDict, Field, StrictInt, field_validator, model_validator
+from pydantic_core import to_json
 
 
 HTTP_TIMEOUT_SECONDS = 30.0
@@ -316,7 +318,13 @@ def _require_offset(offset: int | None) -> int | None:
 
 
 def _require_indicator_id(indicator_id: str) -> str:
-    return _require_nonblank("indicator_id", indicator_id)
+    return _indicator_filter("indicator_id", indicator_id)
+
+
+def _indicator_filter(name: str, value: str) -> str:
+    if not isinstance(value, str) or not value.strip() or len(value.encode("utf-8")) > 255:
+        raise ValueError(f"{name} must be a nonblank string of at most 255 bytes")
+    return value
 
 
 def _require_indicator_fields(
@@ -353,74 +361,280 @@ def _require_indicator_fields(
     }
 
 
+INDICATOR_SCHEMA_VERSION = 2
+INDICATOR_TEXT_BYTES = 24 * 1024
+INDICATOR_TEXT_LINES = 1000
+
+
+def _indicator_text(value: Any) -> str:
+    """Mirror FastMCP 1.28.1 + OpenCode 1.18.32 text serialization.
+
+    FastMCP uses pydantic_core.to_json(indent=2), one block per list item;
+    OpenCode joins text blocks with two newlines. Structured content is not
+    consumed as tool text. Keep this paired with test_indicator_transport.py.
+    """
+    items = value if isinstance(value, list) else [value]
+    return "\n\n".join(to_json(item, indent=2).decode() for item in items)
+
+
+def _indicator_text_size(value: Any) -> tuple[int, int]:
+    text = _indicator_text(value)
+    return len(text.encode("utf-8")), len(text.split("\n"))
+
+
+def _indicator_fits(value: Any) -> bool:
+    size, lines = _indicator_text_size(value)
+    return size <= INDICATOR_TEXT_BYTES and lines <= INDICATOR_TEXT_LINES
+
+
+def _log_indicator_output(tool: str, value: Any, reduced: bool) -> None:
+    size, lines = _indicator_text_size(value)
+    runs = value if isinstance(value, list) else []
+    LOGGER.info(
+        "hypervibes_mcp_output tool=%s schema_version=%s bytes=%s lines=%s "
+        "bars=%s markers=%s definitions=%s budget_reduced=%s",
+        tool, INDICATOR_SCHEMA_VERSION, size, lines,
+        sum(len(run["bars"]) for run in runs),
+        sum(len(run["markers"]) for run in runs),
+        len(value["items"]) if isinstance(value, dict) else 0, reduced,
+    )
+
+
+def _indicator_integer(name: str, value: Any, minimum: int, maximum: int | None = None) -> int:
+    if type(value) is not int or value < minimum or (maximum is not None and value > maximum):
+        bounds = f"{minimum}..{maximum}" if maximum is not None else f">= {minimum}"
+        raise ValueError(f"{name} must be an integer {bounds}")
+    return value
+
+
+def _indicator_number(value: Any, *, nullable: bool = False) -> bool:
+    return (nullable and value is None) or (
+        type(value) in (int, float) and math.isfinite(value)
+    )
+
+
+def _indicator_close(value: Any) -> bool:
+    if type(value) in (int, float):
+        return _indicator_number(value)
+    if isinstance(value, str):
+        try:
+            return Decimal(value).is_finite()
+        except ArithmeticError:
+            return False
+    return False
+
+
+def _indicator_values(value: Any) -> dict[str, Any] | None:
+    if value is None:
+        return None
+    if not isinstance(value, dict) or not all(
+        isinstance(name, str) and _indicator_number(number, nullable=True)
+        for name, number in value.items()
+    ):
+        raise RuntimeError("Malformed indicator latest values; inspect the stored run in the operator UI")
+    return {name: number for name, number in value.items()}
+
+
+def _indicator_run_header(value: dict[str, Any]) -> dict[str, Any]:
+    fields = (
+        "id", "indicator_definition_id", "indicator_version_id", "instrument_id",
+        "timeframe", "scheduled_for", "status",
+    )
+    if not all(isinstance(value.get(field), str) and value[field].strip() for field in fields):
+        raise RuntimeError("Malformed indicator run provenance; inspect the stored run in the operator UI")
+    return {"schema_version": INDICATOR_SCHEMA_VERSION, **{field: value[field] for field in fields}}
+
+
+def _indicator_diagnostics(value: dict[str, Any]) -> dict[str, Any]:
+    diagnostics = value.get("diagnostics", [])
+    if not isinstance(diagnostics, list):
+        raise RuntimeError("Malformed indicator diagnostics; inspect the stored run in the operator UI")
+    projected = []
+    abbreviated = len(diagnostics) > 3
+    for diagnostic in diagnostics[:3]:
+        if not isinstance(diagnostic, dict):
+            raise RuntimeError("Malformed indicator diagnostic; inspect the stored run in the operator UI")
+        item = {}
+        for field in ("severity", "message"):
+            text = diagnostic.get(field, "")
+            if not isinstance(text, str):
+                raise RuntimeError("Malformed indicator diagnostic text; inspect the stored run in the operator UI")
+            shortened = text.encode("utf-8")[:512].decode("utf-8", errors="ignore")
+            abbreviated |= shortened != text
+            item[field] = shortened
+        for field in ("line", "column"):
+            number = diagnostic.get(field)
+            if number is not None and (type(number) is not int or number < 0):
+                raise RuntimeError("Malformed indicator diagnostic location; inspect the stored run in the operator UI")
+            item[field] = number
+        projected.append(item)
+    error = value.get("error_summary")
+    if error is not None and not isinstance(error, str):
+        raise RuntimeError("Malformed indicator error summary; inspect the stored run in the operator UI")
+    shortened_error = error.encode("utf-8")[:512].decode("utf-8", errors="ignore") if error else error
+    return {
+        "diagnostics": projected, "diagnostic_count": len(diagnostics),
+        "diagnostics_abbreviated": abbreviated, "error_summary": shortened_error,
+        "error_summary_abbreviated": shortened_error != error,
+    }
+
+
+def _indicator_page_metadata(run: dict[str, Any]) -> None:
+    """Recompute cursors after removing complete units, using actual counts."""
+    start, count = run["bar_start"], len(run["bars"])
+    run["bar_returned_count"] = count
+    run["bar_end"] = start + count
+    run["previous_bar_start"] = max(0, start - max(1, count)) if start > 0 else None
+    # Exclusive end supports gap-free backward paging even if the next page
+    # fits fewer bars. bar_start is always a forward, oldest-first range.
+    run["previous_bar_end"] = start if start > 0 else None
+    run["next_bar_start"] = start + count if start + count < (run["bar_count"] or 0) else None
+    run["bars_complete"] = run["evidence_available"] and start == 0 and count == run["bar_count"]
+    start, count = run["marker_start"], len(run["markers"])
+    run["marker_returned_count"] = count
+    run["previous_marker_start"] = max(0, start - max(1, count)) if start > 0 else None
+    run["next_marker_start"] = start + count if start + count < (run["marker_count"] or 0) else None
+    run["markers_complete"] = run["evidence_available"] and start == 0 and count == run["marker_count"]
+
+
 def _indicator_run_for_agent(
-    value: dict[str, Any], bar_start: int | None = None, bar_limit: int = 100
+    value: dict[str, Any], bar_start: int | None = None, bar_limit: int = 20,
+    marker_start: int = 0, marker_limit: int = 20, bar_end: int | None = None,
 ) -> dict[str, Any]:
-    run = dict(value)
-    for internal_field in ("claim_token", "lease_expires_at", "next_attempt_at"):
-        run.pop(internal_field, None)
-    candles = run.pop("candle_data", None)
-    plots = run.pop("plot_data", None)
-    # The API retains the complete input and plot series for charts, but sending
-    # hundreds of candles to OpenCode hides the signal fields behind tool-output
-    # truncation. Page the aligned numeric history without losing older bars.
-    if candles is not None and not isinstance(candles, list):
-        raise RuntimeError("HyperVibes indicator candle data returned unexpected shape")
-    if plots is not None and not isinstance(plots, dict):
-        raise RuntimeError("HyperVibes indicator plot data returned unexpected shape")
-    candle_count = len(candles) if candles is not None else 0
-    start = bar_start if bar_start is not None else max(0, candle_count - bar_limit)
-    end = min(candle_count, start + bar_limit)
-    run["bar_count"] = candle_count
-    run["bar_start"] = start
-    run["previous_bar_start"] = max(0, start - bar_limit) if start > 0 else None
-    run["next_bar_start"] = end if end < candle_count else None
+    run = _indicator_run_header(value)
+    run["latest_values"] = _indicator_values(value.get("latest_values"))
+    run.update(_indicator_diagnostics(value))
+    candles, plots, visual = (value.get(field) for field in ("candle_data", "plot_data", "visual_data"))
+    available = run["status"] == "succeeded" and all(data is not None for data in (candles, plots, visual))
+    run.update({
+        "evidence_available": available, "bar_count": None, "bar_start": 0, "bars": [],
+        "marker_count": None, "marker_start": 0, "markers": [],
+        "marker_order": "source_bar_desc_event_position_asc", "budget_reduced": False,
+    })
+    if not available:
+        _indicator_page_metadata(run)
+        return run
+    if not isinstance(candles, list) or not all(
+        isinstance(candle, dict) and isinstance(candle.get("opened_at"), str)
+        and candle["opened_at"].strip() and _indicator_close(candle.get("close"))
+        for candle in candles
+    ):
+        raise RuntimeError("Malformed indicator candle data; inspect the stored run in the operator UI")
+    candle_count = len(candles)
+    if not isinstance(plots, dict) or not all(
+        isinstance(name, str) and isinstance(series, list) and len(series) == candle_count
+        and all(_indicator_number(number, nullable=True) for number in series)
+        for name, series in plots.items()
+    ):
+        raise RuntimeError("Malformed or unaligned indicator plot data; inspect the stored run in the operator UI")
+    if not isinstance(visual, dict) or not isinstance(visual.get("markers"), list):
+        raise RuntimeError("Malformed indicator visual data; inspect the stored run in the operator UI")
+    markers = visual["markers"]
+    for marker in markers:
+        if not isinstance(marker, dict):
+            raise RuntimeError("Malformed indicator marker; inspect the stored run in the operator UI")
+        kind, index, offset = (marker.get(field) for field in ("kind", "bar_index", "offset"))
+        strings = ["title"] + (["text"] if kind != "plotarrow" else []) + (["character"] if kind == "plotchar" else [])
+        if (
+            kind not in ("plotshape", "plotchar", "plotarrow") or type(index) is not int
+            or not 0 <= index < candle_count or type(offset) is not int
+            or not -2000 <= offset <= 2000 or not _indicator_number(marker.get("value"))
+            or not all(isinstance(marker.get(field), str) for field in strings)
+        ):
+            raise RuntimeError("Malformed or unaligned indicator marker; inspect the stored run in the operator UI")
+    if bar_start is not None and bar_start > candle_count:
+        raise ValueError("bar_start exceeds this exact run's bar_count")
+    if bar_end is not None and bar_end > candle_count:
+        raise ValueError("bar_end exceeds this exact run's bar_count")
+    if marker_start > len(markers):
+        raise ValueError("marker_start exceeds this exact run's marker_count")
+    end = bar_end if bar_end is not None else candle_count
+    start = bar_start if bar_start is not None else max(0, end - bar_limit)
+    end = min(end, start + bar_limit)
+    run["bar_count"], run["bar_start"] = candle_count, start
     run["bars"] = [
-        {
-            "bar_index": index,
-            "opened_at": candle.get("opened_at"),
-            "close": candle.get("close"),
-            "plots": {
-                name: series[index]
-                for name, series in (plots or {}).items()
-                if isinstance(series, list) and index < len(series)
-            },
-        }
+        {"bar_index": index, "opened_at": candles[index]["opened_at"], "close": candles[index]["close"],
+         "plots": {name: series[index] for name, series in plots.items()}}
         for index in range(start, end)
-        if isinstance(candle := candles[index], dict)
     ]
-    visual_data = run.pop("visual_data", None)
-    if visual_data is None:
-        markers: list[Any] = []
-    elif isinstance(visual_data, dict) and isinstance(visual_data.get("markers"), list):
-        markers = visual_data["markers"]
-    else:
-        raise RuntimeError("HyperVibes indicator visual data returned unexpected shape")
+    # Python's stable sort preserves original order for duplicate same-bar
+    # events; event_position exposes their immutable identity to consumers.
+    ordered = sorted(enumerate(markers), key=lambda event: -event[1]["bar_index"])
+    run["marker_count"], run["marker_start"] = len(markers), marker_start
     run["markers"] = [
-        {
-            **marker,
-            "opened_at": candles[marker["bar_index"]].get("opened_at"),
-        }
-        if isinstance(marker, dict)
-        and isinstance(marker.get("bar_index"), int)
-        and not isinstance(marker["bar_index"], bool)
-        and 0 <= marker["bar_index"] < candle_count
-        and isinstance(candles[marker["bar_index"]], dict)
-        else marker
-        for marker in markers
+        {"event_position": position, "opened_at": candles[marker["bar_index"]]["opened_at"],
+         **{field: marker[field] for field in (
+             ["bar_index", "kind", "title", "value", "offset"]
+             + (["text"] if marker["kind"] != "plotarrow" else [])
+             + (["character"] if marker["kind"] == "plotchar" else [])
+         )}}
+        for position, marker in ordered[marker_start:marker_start + marker_limit]
     ]
+    _indicator_page_metadata(run)
     return run
 
 
+def _fit_indicator_runs(runs: list[dict[str, Any]], tail_bars: bool) -> list[dict[str, Any]]:
+    # Fail aggregate/header overflow before repeatedly fitting large requested
+    # pages. Every nonempty requested stream must retain at least one unit.
+    minimum = []
+    for run in runs:
+        smallest = {**run, "bars": run["bars"][-1:] if tail_bars else run["bars"][:1],
+                    "markers": run["markers"][:1]}
+        if tail_bars and run["bars"]:
+            smallest["bar_start"] = run["bars"][-1]["bar_index"]
+        smallest["budget_reduced"] = len(run["bars"]) > 1 or len(run["markers"]) > 1
+        _indicator_page_metadata(smallest)
+        minimum.append(smallest)
+    if not _indicator_fits(minimum):
+        raise ValueError(
+            "Indicator response cannot fit the text budget. Use a smaller run limit or exact run_id; "
+            "if one run still fails, an oversized header/bar/event needs operator inspection."
+        )
+    reduced = False
+    while not _indicator_fits(runs):
+        candidates = [
+            (len(to_json(run[field], indent=2)), index, field)
+            for index, run in enumerate(runs) for field in ("bars", "markers")
+            if len(run[field]) > 1
+        ]
+        if not candidates:
+            raise RuntimeError("Indicator fitting could not make progress; request a smaller exact-run page")
+        _, index, field = max(candidates)
+        run = runs[index]
+        if field == "bars" and tail_bars:
+            run[field].pop(0)
+            run["bar_start"] += 1
+        else:
+            run[field].pop()
+        run["budget_reduced"] = reduced = True
+        _indicator_page_metadata(run)
+    _log_indicator_output("get_indicator_results", runs, reduced)
+    return runs
+
+
 def _indicator_list_item_for_agent(value: Any) -> dict[str, Any]:
-    if not isinstance(value, dict):
+    if (
+        not isinstance(value, dict)
+        or not all(isinstance(value.get(field), str) and value[field].strip() for field in ("id", "name"))
+        or not isinstance(value.get("enabled"), bool)
+        or not isinstance(value.get("timeframes"), list)
+        or not all(isinstance(timeframe, str) for timeframe in value["timeframes"])
+        or (value.get("active_version_id") is not None and not isinstance(value["active_version_id"], str))
+    ):
         raise RuntimeError("HyperVibes indicators returned unexpected shape")
-    item = dict(value)
-    latest_run = item.get("latest_run")
+    item = {field: value[field] for field in (
+        "id", "name", "enabled", "timeframes", "active_version_id"
+    ) if field in value}
+    # The authenticated discovery endpoint excludes archived definitions.
+    item["archived"] = False
+    latest_run = value.get("latest_run")
     if latest_run is not None:
         if not isinstance(latest_run, dict):
             raise RuntimeError("HyperVibes latest indicator run returned unexpected shape")
-        item["latest_run"] = _indicator_run_for_agent(latest_run)
+        item["latest_run"] = _indicator_run_header(latest_run)
+    else:
+        item["latest_run"] = None
     return item
 
 
@@ -543,12 +757,38 @@ def set_trading_instrument_enabled(instrument_id: str, enabled: bool) -> list[st
 
 
 @mcp.tool()
-def list_indicators() -> list[dict[str, Any]]:
-    """List indicator definitions with compact latest-run plots and dated markers."""
+def list_indicators(limit: StrictInt = 20, offset: StrictInt = 0) -> dict[str, Any]:
+    """Discover definitions and compact latest-run headers, without histories.
+
+    Returns items, total, offset, returned_count, next_offset. Follow next_offset
+    for additional definitions. latest_run is only one instrument/timeframe;
+    inspect every relevant frozen target with get_indicator_results explicitly.
+    """
+    _indicator_integer("limit", limit, 1, 100)
+    _indicator_integer("offset", offset, 0)
     result = _request("GET", "/api/v1/indicators")
     if not isinstance(result, list):
         raise RuntimeError("HyperVibes indicators returned unexpected shape")
-    return [_indicator_list_item_for_agent(item) for item in result]
+    if offset > len(result):
+        raise ValueError("offset exceeds indicator total; restart discovery")
+    envelope: dict[str, Any] = {
+        "schema_version": INDICATOR_SCHEMA_VERSION, "items": [], "total": len(result),
+        "offset": offset, "returned_count": 0, "next_offset": None, "budget_reduced": False,
+    }
+    for value in result[offset:offset + limit]:
+        envelope["items"].append(_indicator_list_item_for_agent(value))
+        count = len(envelope["items"])
+        envelope["returned_count"] = count
+        envelope["next_offset"] = offset + count if offset + count < len(result) else None
+        if not _indicator_fits(envelope):
+            envelope["items"].pop()
+            if not envelope["items"]:
+                raise ValueError("Indicator discovery item exceeds the text budget; use get_indicator for operator detail inspection")
+            count -= 1
+            envelope.update(returned_count=count, next_offset=offset + count, budget_reduced=True)
+            break
+    _log_indicator_output("list_indicators", envelope, envelope["budget_reduced"])
+    return envelope
 
 
 @mcp.tool()
@@ -566,30 +806,41 @@ def get_indicator_results(
     timeframe: str,
     instrument_id: str | None = None,
     run_id: str | None = None,
-    limit: int | None = None,
-    bar_start: int | None = None,
-    bar_limit: int = 100,
+    limit: StrictInt | None = None,
+    bar_start: StrictInt | None = None,
+    bar_limit: StrictInt = 20,
+    marker_start: StrictInt | None = None,
+    marker_limit: StrictInt = 20,
+    bar_end: StrictInt | None = None,
 ) -> list[dict[str, Any]]:
-    """Return runs with up to 100 aligned bars per call and all dated markers.
+    """Read compact exact-run evidence: latest 20 bars and newest 20 markers.
 
-    The default window is the last 100 bars. Pass bar_start (zero-based, oldest
-    first) to read any older window of the same run; use previous_bar_start and
-    next_bar_start to page. bar_limit may be 1..100. Run limit defaults to 1;
-    use run_id to inspect an exact historical run.
+    bar_limit and marker_limit (1..100) are maximum requested counts; the whole
+    call may fit fewer complete units. Markers page independently, newest source
+    candle first, then original event_position. opened_at is source candle time;
+    offset is visual only. Empty unavailable evidence is not absence of signals.
+    Check evidence_available, bars_complete, markers_complete and actual counts.
+    Run limit defaults to 1. Every offset requires run_id from the first page:
+    pass bar_start=next_bar_start for forward history, or the exclusive
+    bar_end=previous_bar_end for gap-free backward history; do not combine them.
+    Pass marker_start=next_marker_start independently to read older events.
     """
-    if bar_start is not None and (
-        not isinstance(bar_start, int) or isinstance(bar_start, bool) or bar_start < 0
-    ):
-        raise ValueError("bar_start must be a non-negative integer")
-    if not isinstance(bar_limit, int) or isinstance(bar_limit, bool) or not 1 <= bar_limit <= 100:
-        raise ValueError("bar_limit must be between 1 and 100")
+    for name, value in (("bar_start", bar_start), ("marker_start", marker_start), ("bar_end", bar_end)):
+        if value is not None:
+            _indicator_integer(name, value, 0)
+            if run_id is None:
+                raise ValueError("Indicator page offsets require an exact run_id from the first result page")
+    if bar_start is not None and bar_end is not None:
+        raise ValueError("Use either bar_start (forward) or bar_end (backward), not both")
+    _indicator_integer("bar_limit", bar_limit, 1, 100)
+    _indicator_integer("marker_limit", marker_limit, 1, 100)
     params: dict[str, Any] = {}
     if instrument_id is not None:
-        params["instrument_id"] = _require_nonblank("instrument_id", instrument_id)
-    params["timeframe"] = _require_nonblank("timeframe", timeframe)
+        params["instrument_id"] = _indicator_filter("instrument_id", instrument_id)
+    params["timeframe"] = _indicator_filter("timeframe", timeframe)
     if run_id is not None:
-        params["run_id"] = _require_nonblank("run_id", run_id)
-    params["limit"] = _require_limit(limit if limit is not None else 1)
+        params["run_id"] = _indicator_filter("run_id", run_id)
+    params["limit"] = _indicator_integer("limit", limit if limit is not None else 1, 1, 100)
     result = _request(
         "GET",
         f"/api/v1/indicators/{_require_indicator_id(indicator_id)}/results",
@@ -597,7 +848,10 @@ def get_indicator_results(
     )
     if not isinstance(result, list) or not all(isinstance(run, dict) for run in result):
         raise RuntimeError("HyperVibes indicator results returned unexpected shape")
-    return [_indicator_run_for_agent(run, bar_start, bar_limit) for run in result]
+    return _fit_indicator_runs([
+        _indicator_run_for_agent(run, bar_start, bar_limit, marker_start or 0, marker_limit, bar_end)
+        for run in result
+    ], tail_bars=bar_start is None)
 
 
 @mcp.tool()

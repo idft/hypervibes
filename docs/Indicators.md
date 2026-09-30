@@ -55,14 +55,56 @@ failures, non-finite output, and result-size violations are terminal.
 Successful runs retain the exact bounded candle input, numeric plots, visual
 marker data, latest values, and diagnostics used for the result.
 
-The agent-facing MCP result tools return the latest 100 aligned closed bars
-by default (close and numeric plots), the total bar count, latest values,
-diagnostics, and all marker events labeled with their candle time. Request
-older bars from the same run using `bar_start` (zero-based from the oldest
-bar), following `previous_bar_start` and `next_bar_start` to page through the
-entire history. `bar_limit` accepts 1–100; the result count defaults to one
-run so signal evidence stays within OpenCode's tool-output limit. The HTTP API
-and operator charts continue to expose the complete stored series at once.
+The agent-facing MCP contracts use `schema_version=2`. Discovery returns a
+lightweight `items` envelope with `total`, `offset`, `returned_count`, and
+`next_offset` (default `limit=20`). Items contain definition identity, name,
+enabled/archived state, timeframes, active version ID, and a compact `latest_run`
+header. Discovery excludes archived definitions. Each header represents only
+one instrument/timeframe, not all targets; Analysis must inspect its applicable
+frozen target set explicitly.
+
+Result reads return one run by default, its exact provenance/status, latest
+numeric values, compact diagnostics, the latest **20 aligned bars**, and the
+newest **20 marker events**. `bar_limit` and `marker_limit` accept 1–100 as
+maximum requested counts. Complete calls (including multiple runs) are fitted
+to **24 KiB UTF-8 text and 1,000 lines** by reducing complete bars/events.
+`budget_reduced` reports fitting; actual returned counts and cursors describe
+coverage. An oversized minimum representation produces an actionable bounded
+error rather than an empty, non-advancing page or silently fewer runs.
+
+Numeric and marker pagination are independent. Every continuation supplies the
+first page's exact `run_id`, instrument and timeframe:
+
+- For forward numeric history, start with `bar_start=0`, then follow
+  `next_bar_start`. `bar_index` is absolute, oldest-first.
+- For backward history, begin with the default latest page, then pass
+  `bar_end=previous_bar_end`. This exclusive-end cursor preserves gap-free
+  coverage even when subsequent page sizes shrink. Do not combine `bar_start`
+  and `bar_end`. `previous_bar_start` remains a start-range hint; use
+  `previous_bar_end` for backward traversal.
+- For marker history, follow `next_marker_start`. Events are ordered by source
+  candle descending, then original `event_position` ascending for same-candle
+  events. The marker page does not follow the numeric page's range.
+
+Compact markers retain source `bar_index`, `opened_at`, kind, title,
+text/character where applicable, value and visual offset, without chart styling.
+`opened_at` is the source candle's open time, not its close/confirmation time;
+visual `offset` never changes the observed event time. `bar_count` and
+`marker_count` describe entire histories; `bar_returned_count` and
+`marker_returned_count` describe the page. `bars_complete` and `markers_complete`
+are true only if the page contains the entire available respective history.
+Available empty marker history has count zero and is complete. Unavailable
+evidence has `evidence_available=false`, null total counts, and false
+completeness flags. A missing run returns an empty list. Failed/skipped runs
+retain status and error information. Diagnostic/error abbreviation is explicit
+in `diagnostics_abbreviated`/`error_summary_abbreviated`; full diagnostics remain
+in the HTTP representation.
+
+A partial page cannot establish absence of signals across the entire history.
+If OpenCode unexpectedly reports truncation, retry smaller authorized MCP
+pages and record the coverage limitation; never follow the global output-cache
+filesystem path. The HTTP API and operator charts expose complete immutable
+stored series.
 Analysis is instructed to cite exact frozen run IDs and the relevant numeric
 values and marker times in its research memories so later reviews can retrieve
 the same evidence instead of substituting a newer indicator run.

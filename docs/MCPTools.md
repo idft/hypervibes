@@ -79,6 +79,35 @@ plots and an agent-facing `markers` collection. The versioned `visual_data`
 storage envelope remains an internal API and persistence contract and is not
 returned by MCP tools.
 
+`hypervibes_list_indicators(limit=20, offset=0)` returns a schema-version-2
+discovery envelope: `items`, `total`, `offset`, `returned_count`, `next_offset`,
+and `budget_reduced`. Follow `next_offset`; do not infer catalog completion from
+the requested limit. Items include compact run headers only, with no histories,
+source or diagnostics. A `latest_run` is one instrument/timeframe, so inspect
+all relevant frozen targets explicitly.
+
+`hypervibes_get_indicator_results` returns a list of schema-version-2 runs,
+defaulting to one run, its latest 20 numeric bars and newest 20 marker events.
+`bar_limit` and `marker_limit` accept 1–100 as maximum counts. The entire
+serialized call is limited to 24 KiB UTF-8 text and 1,000 lines; complete units
+may be reduced with honest actual counts/cursors and `budget_reduced` flags.
+If even the minimum useful representation cannot fit, the tool asks for a
+smaller run `limit`, an exact `run_id`, or operator inspection of an oversized
+unit; it does not silently omit runs.
+
+Supply the exact returned `run_id` with every continuation offset. Numeric
+pages are independent of marker pages: use `bar_start=next_bar_start` forward,
+`bar_end=previous_bar_end` backward (exclusive end; do not combine them), and
+`marker_start=next_marker_start` for older events. Markers are newest source
+candle first, then original `event_position`. `opened_at` is source candle open
+time, not close/confirmation time, and visual `offset` does not change it.
+Check `evidence_available`, total/returned counts, `bars_complete` and
+`markers_complete`. Unavailable evidence is not absence of signals, and partial
+pages cannot establish complete-history claims. Unexpected OpenCode truncation
+must be recovered through smaller authorized MCP pages, with coverage limits
+recorded, never through the global output-cache filesystem path. See
+[Indicators](Indicators.md) for the full coverage and immutable-history contract.
+
 ## Memory tools
 
 `hypervibes_write_memory` accepts `scope_kind` of `agent` or `instruments`.
