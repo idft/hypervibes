@@ -170,9 +170,9 @@ fn build_review_prompt(request: &DispatchRequest) -> Result<String> {
     Ok(body)
 }
 
-const ANALYSIS_HANDOFF_INSTRUCTIONS: &str = "- Prefer a compact handoff with optional `metadata.handoff_version = 1`: separate source observations from interpretation. Include instrument/timeframe/evidence boundary, exact evidence memory and indicator run IDs, source bars (`bar_index`, `opened_at`, derived `closed_at`), quoted numeric observations, bias, setup status, entry/stop/targets when applicable, confidence with rationale, invalidation, and explicit `metadata.stale_after` for fragile entries. Qualitative confidence is not a calibrated probability. Legacy prose-only memories remain readable.\n\
+const ANALYSIS_HANDOFF_INSTRUCTIONS: &str = "- Prefer a compact handoff with optional `metadata.handoff_version = 1`: separate source observations from interpretation. Include instrument/timeframe/evidence boundary, exact evidence memory and indicator run IDs, source bars (`bar_index`, `opened_at`, derived `closed_at`), quoted numeric observations, bias, setup status, entry/stop/targets when applicable, confidence with rationale, and price/event invalidation and cancellation conditions. Qualitative confidence is not a calibrated probability. Legacy prose-only memories remain readable.\n\
 - Before publishing, perform an agent-side consistency check: copy IDs and times unchanged from returned evidence; verify quoted values against the cited row; distinguish candle open, derived close, and marker visual offset; check that the stated EMA ordering agrees with the quoted fast/slow values. The backend does not fact-check research. Label partial or unavailable evidence; never fill gaps with an inferred timestamp or a later run.\n\
-- Use a stable memory type for successive handoffs. Corrections must link to the exact original memory with `link_type = \"corrects\"`, explain the changed observations/conclusions, and include explicit `metadata.stale_after` no later than the original's expiry. Publish durable data-quality guidance separately rather than extending old entry details. A deadline stated only in prose does not affect freshness.\n";
+- Use a stable memory type for successive handoffs. Corrections must link to the exact original memory with `link_type = \"corrects\"` and explain the changed observations/conclusions. Publish durable data-quality guidance separately rather than renewing old entry details.\n";
 
 const TRADING_MEMORY_RECOVERY_INSTRUCTIONS: &str = "- Copy evidence `memory_id` values from returned context objects unchanged into `links[*].target_memory_id`; never retype, infer, or guess a corrected UUID. On a definitive HTTP 422 `code = invalid_memory_link`, use its zero-based `link_index`: refetch authorized trading context for the instrument, identify the intended evidence from returned objects, repair only that bad reference, and retry the memory write at most once. Do not silently drop required links. If the intended evidence cannot be identified, report unresolved audit coverage.\n\
 - Never blindly retry a timeout, transport error, HTTP 500, or malformed success response: the write may have committed. Memory writes have no idempotency key and Trading has no historical memory lookup. Report the uncertain write and continue reduce-only work; do not replay orders to repair logging.\n";
@@ -508,7 +508,6 @@ mod tests {
             "agent-side consistency check",
             "backend does not fact-check",
             "link_type = \"corrects\"",
-            "no later than the original's expiry",
         ] {
             assert!(analysis.contains(instruction), "{instruction}");
         }

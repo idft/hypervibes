@@ -54,7 +54,7 @@ and zero-based `link_index`; missing and foreign IDs are indistinguishable and
 failed writes roll back atomically. Trading copies context IDs unchanged and
 may refetch context, repair only that reference, and retry once on this definitive
 error. It must not retry ambiguous transport/500 failures: memory writes have no
-idempotency key. Corrections use `corrects` links and explicit validity; context
+idempotency key. Corrections use `corrects` links to exact originals; context
 exposes `correction_target_ids` and compact `Superseded` corrections.
 
 ## Indicator evidence

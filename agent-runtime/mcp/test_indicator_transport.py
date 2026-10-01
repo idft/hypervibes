@@ -89,6 +89,21 @@ class IndicatorTransportTests(unittest.TestCase):
         self.assertIn("oversized", text)
         self.assertLess(len(text.encode("utf-8")), 1000)
 
+    def test_memory_transport_leaves_expiry_to_backend(self):
+        args = {"scope_kind": "agent", "memory_type": "handoff", "summary": "s", "content": "c"}
+        metadata = {
+            "handoff_version": 1,
+            "stale_after": "2026-10-01T18:05:00Z",
+            "valid_for_seconds": 60,
+            "expiry_policy": "caller_policy",
+        }
+        backend = {"id": "memory-id", "expires_at": "2026-10-01T18:30:00Z"}
+        with mock.patch.object(self.server, "_request", return_value=backend) as request:
+            result = self.wire_call("write_memory", {**args, "metadata": metadata})
+        self.assertFalse(result.isError)
+        self.assertEqual(request.call_args.kwargs["json_body"]["metadata"], metadata)
+        self.assertEqual(result.structuredContent["expires_at"], backend["expires_at"])
+
 
 if __name__ == "__main__":
     unittest.main()

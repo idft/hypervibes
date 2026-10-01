@@ -23,8 +23,8 @@ one or more instruments. Analysis owns the accuracy of its quoted values,
 timestamps, and interpretations; the backend validates storage shape, ownership,
 and references, not factual correctness.
 
-New Analysis publications without explicit validity receive a materialized
-`metadata.stale_after` and `expiry_policy="analysis_schedule_v1"`. Expiry is two
+Every new Analysis publication receives a backend-owned
+`metadata.stale_after` and `expiry_policy="analysis_schedule_v2"`. Expiry is two
 cycles of the **immutable producing run's schedule**, anchored to its scheduled
 evidence boundary (5m => boundary + 10m, 15m => +30m, 4h => +8h). The memory's
 optional evidence timeframe does not override that schedule; omitted timeframes
@@ -32,15 +32,22 @@ work the same way. Unscheduled producers use publication time +30m. Runtime/mode
 latency does not extend scheduled entry validity, so a late publication can
 already be stale.
 
-Explicit `metadata.stale_after` takes precedence over `valid_for_seconds`; the
-latter remains relative to publication time. Fragile entries should provide an
-explicit boundary-based deadline. Invalid timestamp/duration shapes are rejected
-on new writes. Prose deadlines have no storage effect.
+Analysis cannot shorten or extend memory expiry. Supplied `metadata.stale_after`
+and `expiry_policy` are overwritten and `valid_for_seconds` is removed, even when
+their values are malformed. The MCP tool forwards metadata without rejecting
+expiry controls; the backend stamps the actual deadline before validation, and
+the memory write response includes it as `expires_at`. Prose deadlines have no
+storage effect. Price/event invalidation and cancellation conditions remain part
+of research: a fresh memory does not guarantee an actionable entry.
 
-Historical records are not rewritten: without explicit validity, legacy
-provenance-bearing research uses its **memory timeframe** (15m => 30m, 1h => 2h,
+Historical records are not rewritten, including prior caller-set validity and
+`analysis_schedule_v1` deadlines. Explicit `stale_after` takes precedence over
+`valid_for_seconds`, which is relative to creation. Without explicit validity,
+legacy provenance-bearing research uses its **memory timeframe** (15m => 30m, 1h => 2h,
 1d => 48h, other/5m/omitted => 30m), relative to creation. Records without run
-provenance have no implicit expiry. This preserves historical freshness claims.
+provenance have no implicit expiry. Non-Analysis writes retain their existing
+explicit-validity behavior and validation. This preserves historical freshness
+claims.
 
 Trading reads the latest record per `(Analysis producer, memory type, scope)`
 for the requested instrument, including agent-wide records. Fresh records are
@@ -56,8 +63,9 @@ Prefer optional `metadata.handoff_version=1` and a compact handoff separating
 source observations from interpretation: exact evidence/run IDs, instrument,
 timeframe and boundary, source bars (`bar_index`, `opened_at`, derived `closed_at`),
 quoted numeric observations, bias, setup status, applicable entry/stop/targets,
-confidence rationale, invalidation, and explicit validity. This is an agent-side
-formatting convention; legacy prose-only memories remain accepted and readable.
+confidence rationale, and price/event invalidation and cancellation conditions.
+This is an agent-side formatting convention; legacy prose-only memories remain
+accepted and readable.
 Qualitative confidence is not a calibrated probability.
 
 For example, a versioned handoff can keep short prose in `content` and use this
@@ -81,8 +89,7 @@ optional metadata layout (keys are conventions, not factual-validation rules):
     "setup_status": "no_setup",
     "confidence": {"label": "moderate", "rationale": "EMA alignment without entry confirmation"},
     "invalidation": "A new closed-bar bullish crossover"
-  },
-  "stale_after": "2026-09-30T12:05:00Z"
+  }
 }
 ```
 
@@ -91,7 +98,7 @@ as applicable; unavailable sources are labeled explicitly. IDs in a real
 publication must be copied from authorized evidence, never from this example.
 
 Reuse stable handoff types. Corrections use an outgoing `link_type="corrects"`
-to the exact original memory and explicit expiry no later than its original.
+to the exact original memory; Analysis does not choose their expiry either.
 Trading context returns `correction_target_ids` and the latest correction per
 producer/scope/target set, even if the correction type name changes. A correction
 can be Fresh only while its original remains current, and its context expiry is

@@ -201,21 +201,42 @@ async fn new_analysis_expiry_uses_immutable_schedule_without_rewriting_legacy_ro
             memory_expires_at(&row),
             Some(boundary + Duration::minutes(10))
         );
-        assert_eq!(row.metadata["expiry_policy"], "analysis_schedule_v1");
+        assert_eq!(row.metadata["expiry_policy"], "analysis_schedule_v2");
     }
-    input.metadata = Some(json!({"valid_for_seconds": 120}));
-    let row = insert_memory(
-        &state.db_pool,
-        &agent_key,
-        &input,
-        Some(MemorySourceRun { run_id }),
-    )
-    .await
-    .expect("explicit validity");
-    assert_eq!(
-        memory_expires_at(&row),
-        Some(row.created_at + Duration::seconds(120))
-    );
+    for metadata in [
+        json!({"valid_for_seconds": 120}),
+        json!({"valid_for_seconds": 86400}),
+        json!({"stale_after": boundary + Duration::minutes(5)}),
+        json!({"stale_after": boundary + Duration::days(1),
+            "valid_for_seconds": 86400, "expiry_policy": "caller_policy",
+            "handoff_version": 1}),
+        json!({"stale_after": "not-a-timestamp", "valid_for_seconds": -1}),
+        json!({"stale_after": null, "valid_for_seconds": null, "expiry_policy": null}),
+    ] {
+        input.metadata = Some(metadata.clone());
+        let row = insert_memory(
+            &state.db_pool,
+            &agent_key,
+            &input,
+            Some(MemorySourceRun { run_id }),
+        )
+        .await
+        .expect("publish with caller validity");
+        assert_eq!(
+            memory_expires_at(&row),
+            Some(boundary + Duration::minutes(10))
+        );
+        assert_eq!(row.metadata["expiry_policy"], "analysis_schedule_v2");
+        assert!(row.metadata.get("valid_for_seconds").is_none());
+        assert_eq!(
+            row.metadata.get("handoff_version"),
+            metadata.get("handoff_version")
+        );
+        assert!(
+            memory_expires_at(&row).is_some_and(|expiry| expiry < row.created_at),
+            "caller validity must not renew evidence published after its deadline"
+        );
+    }
     let legacy = crate::memory::get_memory(&state.db_pool, &agent_key, legacy_id)
         .await
         .expect("legacy query")
@@ -225,6 +246,97 @@ async fn new_analysis_expiry_uses_immutable_schedule_without_rewriting_legacy_ro
         Some(boundary + Duration::minutes(30))
     );
     assert_eq!(legacy.metadata, json!({}));
+}
+
+#[tokio::test]
+async fn analysis_memory_api_overrides_caller_expiry_using_the_authenticated_run() {
+    let state = test_state().await;
+    let (agent_key, _) = seed_agent(&state, "backend-owned-expiry").await;
+    let sub_agent_id: i64 = sqlx::query_scalar(
+        "SELECT id FROM harness_sub_agents WHERE agent_key = $1 AND sub_agent_kind = 'analysis'",
+    )
+    .bind(&agent_key)
+    .fetch_one(&state.db_pool)
+    .await
+    .expect("Analysis sub-agent");
+    let run_id = crate::harness::store::insert_test_run(
+        &state.db_pool,
+        sub_agent_id,
+        crate::harness::model::RUN_STATUS_RUNNING,
+    )
+    .await
+    .expect("Analysis run");
+    let boundary = DateTime::from_timestamp_micros(Utc::now().timestamp_micros())
+        .expect("representable boundary")
+        - Duration::minutes(3);
+    sqlx::query(
+        "UPDATE harness_sub_agent_runs SET timeframe = '15m', scheduled_for = $1 WHERE id = $2",
+    )
+    .bind(boundary)
+    .bind(run_id)
+    .execute(&state.db_pool)
+    .await
+    .expect("immutable producing schedule");
+    sqlx::query("UPDATE harness_sub_agents SET enabled = true, model_provider_id = 'openai', model_id = 'test', timeframe = '5m' WHERE id = $1")
+        .bind(sub_agent_id)
+        .execute(&state.db_pool)
+        .await
+        .expect("change current job schedule");
+    sqlx::query("INSERT INTO harness_run_workspace_artifacts (run_id, context_schema_version, context_snapshot, capability_schema_version, capability_snapshot, workspace_status, workspace_created_at) VALUES ($1, $2, '{}'::jsonb, $3, '[]'::jsonb, 'ready', now())")
+        .bind(run_id)
+        .bind(crate::harness::model::RUN_CONTEXT_SNAPSHOT_SCHEMA_VERSION)
+        .bind(crate::harness::model::CAPABILITY_SCHEMA_VERSION)
+        .execute(&state.db_pool)
+        .await
+        .expect("ready run artifact");
+    let credential =
+        crate::harness::store::issue_run_runtime_credential(&state.db_pool, &agent_key, run_id)
+            .await
+            .expect("Analysis credential");
+    let expected_expiry = boundary + Duration::minutes(30);
+    for metadata in [
+        json!({"stale_after": boundary + Duration::minutes(5)}),
+        json!({"valid_for_seconds": 60}),
+        json!({"stale_after": boundary + Duration::days(1),
+            "valid_for_seconds": 86400, "expiry_policy": "analysis_schedule_v1"}),
+        json!({"stale_after": "not-a-timestamp", "valid_for_seconds": "not-a-duration"}),
+        json!({"stale_after": null, "valid_for_seconds": null}),
+    ] {
+        let input = json!({
+            "scope_kind": "instruments", "instrument_ids": ["BTC"],
+            "timeframe": "5m", "memory_type": "handoff",
+            "summary": "confirmed setup", "content": "entry and cancellation conditions",
+            "metadata": metadata
+        });
+        let (status, response) = post_memory_json(&state, &credential.token, &input).await;
+        assert_eq!(status, StatusCode::CREATED, "{response}");
+        assert_eq!(response["source_run_id"], run_id);
+        let expires_at =
+            DateTime::parse_from_rfc3339(response["expires_at"].as_str().expect("backend expiry"))
+                .expect("valid expiry")
+                .with_timezone(&Utc);
+        assert_eq!(expires_at, expected_expiry);
+        assert_eq!(
+            response["metadata"]["expiry_policy"],
+            "analysis_schedule_v2"
+        );
+        assert!(response["metadata"].get("valid_for_seconds").is_none());
+        let evidence = crate::memory::store::get_trading_context_evidence(
+            &state.db_pool,
+            &agent_key,
+            "BTC",
+            boundary + Duration::minutes(6),
+        )
+        .await
+        .expect("Trading context after caller deadline");
+        let handoff = evidence
+            .iter()
+            .find(|row| row.memory_id.to_string() == response["id"].as_str().expect("memory ID"))
+            .expect("new handoff");
+        assert_eq!(handoff.status, crate::memory::store::EvidenceStatus::Fresh);
+        assert_eq!(handoff.expires_at, Some(expected_expiry));
+        assert!(handoff.content.is_some());
+    }
 }
 
 #[tokio::test]

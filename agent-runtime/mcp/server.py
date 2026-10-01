@@ -1177,7 +1177,7 @@ def write_memory(
     a zero-based ``link_index``; refetch authorized context, repair only that
     reference and retry at most once. Do not guess IDs, drop required links, or
     retry ambiguous failures (writes have no idempotency key). Corrections use
-    ``link_type="corrects"`` with explicit ``metadata.stale_after``.
+    ``link_type="corrects"`` to reference the exact original memory.
     """
     if scope_kind not in {"agent", "instruments"}:
         raise ValueError("scope_kind must be agent or instruments")

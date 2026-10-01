@@ -120,10 +120,14 @@ Agent scope requires no instrument IDs; instrument scope requires one or more
 unique selected canonical instrument IDs. The server stamps source-run
 provenance and never accepts source run or sub-agent identity from metadata.
 Use optional `metadata.handoff_version=1` for compact research handoffs and
-`links[*].link_type="corrects"` for corrections to exact originals. Provide
-explicit `metadata.stale_after` for fragile entry evidence and corrections.
-New Analysis publications otherwise materialize two immutable source-run schedule
-cycles from the evidence boundary, including 5m jobs and omitted memory timeframes.
+`links[*].link_type="corrects"` for corrections to exact originals. Every new
+Analysis publication receives backend-owned expiry: two immutable source-run
+schedule cycles from the evidence boundary, including 5m jobs and omitted memory
+timeframes, or publication +30m for unscheduled runs. Caller-supplied expiry
+metadata is silently ignored for Analysis publications; the MCP tool forwards
+metadata and the backend stamps the actual deadline. Price/event invalidation
+and cancellation conditions remain part of research. See
+[Memory](Memory.md) for historical and correction-expiry behavior.
 
 Invalid/missing/foreign memory links return HTTP 422 with a bounded message,
 `code="invalid_memory_link"`, and zero-based `link_index`. Missing and foreign IDs

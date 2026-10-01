@@ -92,9 +92,6 @@ pub(super) async fn create_memory(
             ApiError::BadRequest(message)
         }
     })?;
-    if let Err(errors) = input.validate() {
-        return Err(ApiError::Validation(errors.join(" ")));
-    }
     let policy = memory_type_policy_for_credential(&state, &agent).await?;
     check_memory_type(input.memory_type.trim(), policy)?;
 
@@ -104,6 +101,7 @@ pub(super) async fn create_memory(
         .run_provenance()
         .map(|(run_id, _)| MemorySourceRun { run_id });
 
+    // The store applies backend-owned Analysis expiry before validating inputs.
     let record = memory_store::insert_memory(&state.db_pool, &agent.agent_key, &input, source_run)
         .await
         .map_err(|error| match error {

@@ -42,13 +42,19 @@ selected instrument, explicit entry confirmation and invalidation, confidence
 rationale, and at least 1.5:1 estimated reward:risk after costs for actionable
 setups. Missing evidence and no-trade conclusions are valid outcomes.
 
-New research uses the immutable producing run's schedule/boundary expiry unless the analyst overrides it
-with `metadata.stale_after` or `metadata.valid_for_seconds`. A deadline in prose
-does not set memory expiry. Thesis and entry-opportunity lifetimes are distinct;
-a memory containing both uses the earlier deadline.
+New Analysis research expiry is exclusively backend-controlled: two cycles of
+the immutable producing run's schedule from its evidence boundary, or 30 minutes
+after publication for unscheduled runs. Analysis cannot override it with
+`metadata.stale_after` or `metadata.valid_for_seconds`; caller values are silently
+ignored. MCP tool descriptions and Analysis runtime/default instructions no longer
+ask the analyst to choose a deadline. Older customized prompts can still supply
+expiry metadata, but cannot change the backend deadline. A deadline in prose does
+not set memory expiry. Distinguish directional context from entry readiness and specify
+price/event invalidation; fresh research does not make an invalidated or chased
+entry actionable.
 
 Runtime instructions prefer compact version-1 handoffs separating quoted source
-observations from interpretation, with exact run/bar references and validity.
+observations from interpretation, with exact run/bar references and invalidation.
 Analysis performs a pre-publication consistency check of IDs, source rows,
 candle open/derived close times, visual offsets, and EMA ordering. Partial or
 unavailable evidence must be labeled rather than reconstructed from later runs.

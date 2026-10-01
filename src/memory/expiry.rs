@@ -5,14 +5,15 @@ use crate::memory::MemoryRecord;
 /// Compute the absolute expiration timestamp for a memory row, if it has
 /// one. The rules (in priority order) are:
 ///
-/// 1. `metadata.stale_after` — an explicit RFC 3339 timestamp set by the
-///    producer when it knows the data goes stale at a wall-clock instant.
+/// 1. `metadata.stale_after` — an absolute RFC 3339 timestamp. The backend
+///    stamps it for new Analysis publications; older rows may be producer-set.
 /// 2. `metadata.valid_for_seconds` — a relative duration added to
 ///    `created_at`.
 /// 3. Legacy provenance-bearing research rows fall back to their memory
 ///    timeframe (15m => 30m, 1h => 2h, 1d => 48h, others => 30m).
-///    New Analysis publications materialize schedule-derived `stale_after`
-///    at insertion; historical rows retain their original computation.
+///    New Analysis publications always materialize schedule-derived `stale_after`
+///    at insertion, overriding caller validity; historical rows retain their
+///    original computation.
 ///
 /// Returns `None` when the row has no implicit or explicit expiration
 /// (e.g. an `observation` memory with no `valid_for_seconds`).

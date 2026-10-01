@@ -56,9 +56,6 @@ pub async fn insert_memory(
     input: &CreateMemory,
     source_run: Option<MemorySourceRun>,
 ) -> Result<MemoryRecord, MemoryStoreError> {
-    input
-        .validate()
-        .map_err(|errors| MemoryStoreError::Validation(errors.join(" ")))?;
     let mut tx = pool
         .begin()
         .await
@@ -81,13 +78,10 @@ pub(crate) async fn insert_memory_in_tx(
     let timeframe = input.timeframe.as_deref();
     let source_run_id = source_run.map(|source| source.run_id);
 
-    // Materialize the new policy at publication time, rather than changing the
-    // computed TTL of historical rows. Use the immutable run schedule, never
-    // the caller's evidence timeframe or the job's mutable current schedule.
-    if let Some(run_id) = source_run_id
-        && metadata.get("stale_after").is_none()
-        && metadata.get("valid_for_seconds").is_none()
-    {
+    // Expiry of new Analysis publications is backend-owned. Materialize it from
+    // the immutable run schedule, never caller metadata, the evidence timeframe,
+    // or the job's mutable current schedule. Historical rows keep their policy.
+    if let Some(run_id) = source_run_id {
         let source: Option<(String, Option<String>, DateTime<Utc>)> = sqlx::query_as(
             "SELECT sub_agent_kind, timeframe, scheduled_for
              FROM harness_sub_agent_runs WHERE id = $1 AND agent_key = $2",
@@ -105,10 +99,25 @@ pub(crate) async fn insert_memory_in_tx(
                 boundary,
                 Utc::now(),
             )?;
+            let metadata_object = metadata.as_object_mut().ok_or_else(|| {
+                MemoryStoreError::Validation("metadata must be a JSON object.".to_string())
+            })?;
+            metadata_object.remove("valid_for_seconds");
             metadata["stale_after"] = serde_json::json!(expires_at);
-            metadata["expiry_policy"] = serde_json::json!("analysis_schedule_v1");
+            metadata["expiry_policy"] = serde_json::json!("analysis_schedule_v2");
         }
     }
+
+    // Validate the effective metadata, not ignored caller expiry controls. This
+    // also lets older prompts submit malformed expiry values without losing the
+    // research publication. Non-Analysis validity retains its existing checks.
+    let normalized_input = CreateMemory {
+        metadata: Some(metadata.clone()),
+        ..input.clone()
+    };
+    normalized_input
+        .validate()
+        .map_err(|errors| MemoryStoreError::Validation(errors.join(" ")))?;
 
     let row = sqlx::query_as::<_, MemoryRecord>(
         "INSERT INTO memory.records (

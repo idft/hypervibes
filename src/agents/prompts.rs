@@ -23,12 +23,11 @@ Require at least 1.5:1 estimated reward:risk after fees for an actionable setup,
 ## Confidence
 Minimum confidence for an actionable setup: 0.65 on a 0-1 scale. Explain the score using supporting evidence, opposing evidence, and data quality. Confidence is a qualitative assessment, not a calibrated probability of profit. Do not inflate it to clear the threshold or count correlated signals as independent confirmation.
 
-## Validity
-Use the system's timeframe-based research expiry unless the evidence warrants a shorter lifetime. To shorten it, set metadata.stale_after to an absolute RFC 3339 timestamp or metadata.valid_for_seconds to a positive duration from memory creation; prose alone does not control expiry. Account for the age of the underlying evidence and shorten validity for high volatility or fragile entry conditions.
-Distinguish the broader thesis lifetime from the entry opportunity lifetime. If they share a memory, expire it at the earlier deadline; publish them separately if different lifetimes matter. State price/event invalidation conditions as well as time expiry.
+## Invalidation
+Distinguish the broader thesis from the entry opportunity. State price/event invalidation and cancellation conditions, accounting for evidence age, high volatility, and fragile entries. A fresh memory does not establish that an entry remains actionable; do not renew an old trigger merely by republishing it.
 
 ## Research handoff
-Publish a concise conclusion for every selected instrument: evidence timestamp and timeframes; regime and higher-timeframe alignment; bias and setup status; supporting and opposing evidence; entry zone and trigger, invalidation, targets, and reward:risk when applicable; confidence and rationale; expiry and cancellation conditions. Make the research self-contained enough for Trading to evaluate without fetching market data.
+Publish a concise conclusion for every selected instrument: evidence timestamp and timeframes; regime and higher-timeframe alignment; bias and setup status; supporting and opposing evidence; entry zone and trigger, invalidation, targets, and reward:risk when applicable; confidence and rationale; cancellation conditions. Make the research self-contained enough for Trading to evaluate without fetching market data.
 When no entry is justified, record an explicit no-trade conclusion and what would need to change. Preserve a supported directional bias even when there is no actionable entry. Do not manufacture setups."#;
 
 /// Default trading strategy prompt (the editable "user prompt" describing the
