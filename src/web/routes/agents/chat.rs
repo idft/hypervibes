@@ -771,6 +771,7 @@ pub(in crate::web::routes) async fn agents_update_conversation_settings(
 pub(in crate::web::routes) async fn agents_reply_to_conversation_permission(
     State(state): State<Arc<AppState>>,
     Path((agent_key, conversation_id, request_id)): Path<(String, Uuid, String)>,
+    headers: HeaderMap,
     Form(form): Form<PermissionReplyForm>,
 ) -> Result<Response, AppError> {
     let reply = match form.reply.as_str() {
@@ -791,6 +792,18 @@ pub(in crate::web::routes) async fn agents_reply_to_conversation_permission(
             "permission request not found for conversation",
         )
             .into_response());
+    }
+    if is_htmx_request(&headers) {
+        let Some(snapshot) = load_snapshot(&state, &agent_key, conversation_id).await? else {
+            return Ok((StatusCode::NOT_FOUND, "conversation not found").into_response());
+        };
+        let html = AgentConversationPermissionsPartialTemplate {
+            agent_key,
+            conversation_id,
+            requests: snapshot.permissions,
+        }
+        .render()?;
+        return Ok(Html(html).into_response());
     }
     Ok(Redirect::to(&format!("/agents/{agent_key}/chat/{conversation_id}")).into_response())
 }
