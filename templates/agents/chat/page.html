@@ -15,5 +15,17 @@
             </main>
         </section>
     </div>
+    <div id="detail-delete-modal" class="fixed inset-0 z-50 hidden items-center justify-center bg-black/70 px-4 backdrop-blur-sm" aria-modal="true" aria-labelledby="detail-delete-modal-title" aria-describedby="detail-delete-modal-body" role="dialog">
+        <div class="w-full max-w-md rounded-2xl border border-zinc-800 bg-[#0d0d10] p-6 shadow-2xl">
+            <h3 id="detail-delete-modal-title" class="text-lg font-semibold text-white">Delete conversation</h3>
+            <p id="detail-delete-modal-body" class="mt-2 text-sm leading-6 text-zinc-400"></p>
+            <div class="mt-6 flex flex-col-reverse gap-3 sm:flex-row sm:justify-end">
+                <button type="button" id="cancel-detail-delete-btn" class="w-full cursor-pointer rounded-full border border-zinc-800 px-4 py-2 text-sm font-medium text-zinc-300 hover:border-zinc-700 hover:text-white sm:w-auto">Cancel</button>
+                <form id="detail-delete-form" action="/agents/{{ agent.agent_key }}/chat/{{ conversation_id }}/delete" method="post" class="w-full sm:w-auto">
+                    <button type="submit" id="confirm-detail-delete-btn" class="w-full cursor-pointer rounded-full bg-red-600 px-4 py-2 text-sm font-medium text-white hover:bg-red-500 sm:w-auto">Delete conversation</button>
+                </form>
+            </div>
+        </div>
+    </div>
 </div>
 {% endblock %}

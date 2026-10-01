@@ -12,11 +12,9 @@
           <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="size-6" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="M9 9V4.5M9 9H4.5M9 9 3.75 3.75M9 15v4.5M9 15H4.5M9 15l-5.25 5.25M15 9h4.5M15 9V4.5M15 9l5.25-5.25M15 15h4.5M15 15v4.5m0-4.5 5.25 5.25"></path></svg>
         </button>
       </form>
-      <form action="/agents/{{ agent_key }}/chat/{{ conversation_id }}/delete" method="post">
-        <button aria-label="Delete conversation" title="Delete conversation" class="inline-flex h-10 w-10 cursor-pointer items-center justify-center rounded-lg border border-red-900/60 text-red-300 hover:border-red-500 hover:bg-red-600 hover:text-white">
-          <svg class="h-4 w-4" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true"><path d="M7.5 2.75A1.75 1.75 0 0 0 5.75 4.5V5H3.5a.75.75 0 0 0 0 1.5h.5v8A2.5 2.5 0 0 0 6.5 17h7a2.5 2.5 0 0 0 2.5-2.5v-8h.5a.75.75 0 0 0 0-1.5h-2.25v-.5A1.75 1.75 0 0 0 12.5 2.75h-5Zm5.25 2.25v-.5a.25.25 0 0 0-.25-.25h-5a.25.25 0 0 0-.25.25V5h5.5ZM7.75 8a.75.75 0 0 1 .75.75v4.5a.75.75 0 0 1-1.5 0v-4.5A.75.75 0 0 1 7.75 8Zm4.5 0a.75.75 0 0 1 .75.75v4.5a.75.75 0 0 1-1.5 0v-4.5a.75.75 0 0 1 .75-.75Z"></path></svg>
-        </button>
-      </form>
+      <button type="button" data-detail-delete-trigger data-delete-action="/agents/{{ agent_key }}/chat/{{ conversation_id }}/delete" data-delete-label="{{ title }}" data-delete-kind="conversation" aria-label="Delete conversation" title="Delete conversation" aria-haspopup="dialog" aria-controls="detail-delete-modal" class="inline-flex h-10 w-10 cursor-pointer items-center justify-center rounded-lg border border-red-900/60 text-red-300 hover:border-red-500 hover:bg-red-600 hover:text-white">
+        <svg class="h-4 w-4" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true"><path d="M7.5 2.75A1.75 1.75 0 0 0 5.75 4.5V5H3.5a.75.75 0 0 0 0 1.5h.5v8A2.5 2.5 0 0 0 6.5 17h7a2.5 2.5 0 0 0 2.5-2.5v-8h.5a.75.75 0 0 0 0-1.5h-2.25v-.5A1.75 1.75 0 0 0 12.5 2.75h-5Zm5.25 2.25v-.5a.25.25 0 0 0-.25-.25h-5a.25.25 0 0 0-.25.25V5h5.5ZM7.75 8a.75.75 0 0 1 .75.75v4.5a.75.75 0 0 1-1.5 0v-4.5A.75.75 0 0 1 7.75 8Zm4.5 0a.75.75 0 0 1 .75.75v4.5a.75.75 0 0 1-1.5 0v-4.5a.75.75 0 0 1 .75-.75Z"></path></svg>
+      </button>
       {% endif %}
     </div>
   </fieldset>
