@@ -9,6 +9,7 @@
 //! - updates the in-memory [`LiveAccountStore`] on every relevant event;
 //! - upserts fills, funding, and ledger events into the existing durable
 //!   journal tables via [`crate::hyperliquid::account_sync`];
+//! - rebuilds dirty trade projections after each persisted fill batch;
 //! - performs one HTTP catch-up sync after a reconnect (configurable via
 //!   [`LiveWsOptions`]);
 //! - exits cleanly on shutdown.
@@ -294,6 +295,18 @@ async fn handle_message(
                     drop(row);
                 }
             }
+            if persist_journal {
+                // Fill writes durably mark affected instruments dirty. Rebuild
+                // once per batch so open trades and later exits are visible
+                // without waiting for startup or reconnect HTTP synchronization.
+                super::trade_store::rebuild_dirty(
+                    pool,
+                    &config.account_address,
+                    config.environment.as_journal_str(),
+                )
+                .await
+                .context("failed to rebuild trade journal after WebSocket fills")?;
+            }
         }
         htypes::Incoming::UserEvents(event) => {
             if let Some(row) =
@@ -518,6 +531,174 @@ mod tests {
     use super::*;
     use crate::hyperliquid::config::HyperliquidEnvironment;
     use crate::hyperliquid::live_state::{LiveAccountStore, LiveConnectionStatus};
+
+    #[tokio::test]
+    async fn user_fills_refresh_trade_journal_without_http_sync() {
+        use crate::{hyperliquid::trade_store, test_db};
+        use rust_decimal_macros::dec;
+
+        let pool = test_db::pool().await;
+        let account = "0x8f0bb61c41988b44f623a0b5390fd2b52838d20e";
+        let config = AccountSyncConfig {
+            account_address: account.into(),
+            environment: HyperliquidEnvironment::Mainnet,
+            history_start_ms: 0,
+            overlap_ms: 0,
+        };
+        let key = AccountKey::new(account, "live");
+        let store = Arc::new(LiveAccountStore::new());
+        let lookup = InstrumentLookupMap::from([(
+            "ETH".into(),
+            ("hyperliquid:ETH".into(), "ETH".into(), "ETH".into()),
+        )]);
+        sqlx::query(
+            "INSERT INTO agents(agent_key,user_id,created_at,updated_at,display_name,
+             trading_account_address,environment,api_key,lifecycle)
+             VALUES ('ws-trades',$1,now(),now(),'WS trades',$2,'live','ws-trades-api','active')",
+        )
+        .bind(test_db::test_user_id())
+        .bind(account)
+        .execute(&*pool)
+        .await
+        .expect("seed agent");
+        sqlx::query(
+            "INSERT INTO hyperliquid.instruments(instrument_id,name,market_type,base_asset,
+             quote_asset,settlement_asset,price_decimals,size_decimals,lot_size,is_hip3,
+             active,created_at,updated_at)
+             VALUES ('hyperliquid:ETH','ETH','perp','ETH','USDC','USDC',2,2,0.01,
+             false,true,now(),now())",
+        )
+        .execute(&*pool)
+        .await
+        .expect("seed instrument");
+
+        let opening = htypes::Fill {
+            coin: "ETH".into(),
+            px: dec!(2000),
+            sz: dec!(0.5),
+            side: htypes::Side::Bid,
+            time: 1_700_000_000_000,
+            start_position: dec!(0),
+            dir: htypes::FillDirection::OpenLong,
+            closed_pnl: dec!(0),
+            hash: "0xopening".into(),
+            oid: 42,
+            crossed: true,
+            fee: dec!(0.5),
+            tid: 1,
+            cloid: None,
+            fee_token: "USDC".into(),
+            liquidation: None,
+            builder_fee: None,
+        };
+        let addition = htypes::Fill {
+            sz: dec!(0.25),
+            start_position: dec!(0.5),
+            hash: "0xaddition".into(),
+            fee: dec!(0.25),
+            tid: 2,
+            time: opening.time + 1,
+            ..opening.clone()
+        };
+        let message = |is_snapshot, fills| htypes::Incoming::UserFills {
+            is_snapshot,
+            user: parse_address(account).expect("test account address"),
+            fills,
+        };
+
+        handle_message(
+            &pool,
+            &config,
+            &lookup,
+            &store,
+            &key,
+            message(false, vec![opening.clone()]),
+            false,
+        )
+        .await
+        .expect("handle fill without journal persistence");
+        let (fill_count,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM hyperliquid.trade_fills")
+            .fetch_one(&*pool)
+            .await
+            .expect("count persisted fills");
+        assert_eq!(fill_count, 0);
+
+        let mut trade_id = None;
+        for is_snapshot in [false, true] {
+            handle_message(
+                &pool,
+                &config,
+                &lookup,
+                &store,
+                &key,
+                message(is_snapshot, vec![addition.clone(), opening.clone()]),
+                true,
+            )
+            .await
+            .expect("handle opening fills and snapshot replay");
+            let trades = trade_store::list_trades(&pool, account, "live", 10, 0)
+                .await
+                .expect("list trades after WebSocket fills");
+            assert_eq!(
+                trades.len(),
+                1,
+                "opening fills must immediately form a trade"
+            );
+            let trade = &trades[0];
+            assert_eq!(trade.symbol, "ETH");
+            assert_eq!(trade.status, "open");
+            assert_eq!(trade.direction, "long");
+            assert_eq!(trade.remaining_size, dec!(0.75));
+            assert_eq!(trade.entry_size, dec!(0.75));
+            assert_eq!(trade.entry_price(), Some(dec!(2000)));
+            assert_eq!(trade.usdc_fees, dec!(0.75));
+            assert_eq!(trade.net_pnl, dec!(-0.75));
+            assert!(trade.closed_at.is_none());
+            if let Some(id) = trade_id {
+                assert_eq!(trade.id, id, "snapshot replay must preserve the trade ID");
+            }
+            trade_id = Some(trade.id);
+        }
+
+        for (tid, size, start, pnl, status, remaining) in [
+            (3, dec!(0.25), dec!(0.75), dec!(25), "open", dec!(0.5)),
+            (4, dec!(0.5), dec!(0.5), dec!(50), "closed", dec!(0)),
+        ] {
+            let closing = htypes::Fill {
+                px: dec!(2100),
+                sz: size,
+                side: htypes::Side::Ask,
+                time: opening.time + tid,
+                start_position: start,
+                dir: htypes::FillDirection::CloseLong,
+                closed_pnl: pnl,
+                hash: format!("0xclosing-{tid}"),
+                fee: size,
+                tid,
+                ..opening.clone()
+            };
+            handle_message(
+                &pool,
+                &config,
+                &lookup,
+                &store,
+                &key,
+                message(false, vec![closing]),
+                true,
+            )
+            .await
+            .expect("handle closing fill");
+            let trades = trade_store::list_trades(&pool, account, "live", 10, 0)
+                .await
+                .expect("list updated trades");
+            assert_eq!(trades.len(), 1);
+            assert_eq!(Some(trades[0].id), trade_id);
+            assert_eq!(trades[0].status, status);
+            assert_eq!(trades[0].remaining_size, remaining);
+            assert_eq!(trades[0].gross_pnl, (dec!(0.75) - remaining) * dec!(100));
+            assert_eq!(trades[0].closed_at.is_some(), status == "closed");
+        }
+    }
 
     #[test]
     fn parse_address_accepts_lowercase_hex() {

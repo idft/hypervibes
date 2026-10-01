@@ -95,6 +95,8 @@ account. Open the agent's **Transactions** tab to switch between **Trades**
 The Trades view groups perpetual fills into long or short trades, from opening
 a position to closing it. Adding to a position or partially closing it stays
 within the same trade. Reversing direction closes one trade and starts another.
+Open trades appear as soon as their opening fills are imported; they do not need
+to close first. Live fills update the trade's status and realized results.
 
 Each trade shows its status, entry and exit prices, realized profit or loss,
 trading fees, and funding. **Net realized** is realized profit or loss minus
