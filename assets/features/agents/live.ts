@@ -4,8 +4,25 @@ import { installChatPermissions } from "./chat-permissions";
 
 const SUB_AGENTS_REFRESH_KEY = "agent-sub-agents-refresh-required";
 
-export function scrollRunTranscriptToBottom() {
-  document.querySelectorAll<HTMLElement>("[data-run-transcript-scroll], [data-conversation-transcript-scroll]").forEach((scroll) => { scroll.scrollTop = scroll.scrollHeight; });
+const BOTTOM_PIN_THRESHOLD_PX = 40;
+const pinnedToBottom = new WeakSet<HTMLElement>();
+
+function nearTranscriptBottom(scroll: HTMLElement) {
+  return scroll.scrollHeight - scroll.scrollTop - scroll.clientHeight < BOTTOM_PIN_THRESHOLD_PX;
+}
+
+function scrollTranscriptIfPinned(scroll: HTMLElement) {
+  if (!pinnedToBottom.has(scroll)) return;
+  scroll.scrollTop = scroll.scrollHeight;
+}
+
+function scrollRunTranscriptToBottom() {
+  document.querySelectorAll<HTMLElement>("[data-run-transcript-scroll], [data-conversation-transcript-scroll]").forEach(scrollTranscriptIfPinned);
+}
+
+function pinTranscriptToBottom(scroll: HTMLElement) {
+  pinnedToBottom.add(scroll);
+  scroll.scrollTop = scroll.scrollHeight;
 }
 
 export function initRunTranscripts(root: ParentNode = document) {
@@ -14,8 +31,13 @@ export function initRunTranscripts(root: ParentNode = document) {
     const transcript = scroll.querySelector<HTMLElement>('[sse-swap="run-transcript"], [sse-swap="conversation-transcript"]');
     if (!transcript || scroll.dataset.bound === "true") return;
     scroll.dataset.bound = "true";
-    const observer = new ResizeObserver(scrollRunTranscriptToBottom);
+    scroll.addEventListener("scroll", () => {
+      if (nearTranscriptBottom(scroll)) pinnedToBottom.add(scroll);
+      else pinnedToBottom.delete(scroll);
+    });
+    const observer = new ResizeObserver(() => scrollTranscriptIfPinned(scroll));
     observer.observe(scroll); observer.observe(transcript);
+    pinTranscriptToBottom(scroll);
   });
   scrollRunTranscriptToBottom();
 }
@@ -112,6 +134,14 @@ function installConversationComposerShortcut() {
   });
 }
 
+function followConversationTranscriptOnSend(event: Event) {
+  const form = event.target;
+  if (!(form instanceof HTMLFormElement) || !form.matches('form[action*="/chat/"][action$="/messages"]')) return;
+  const textarea = form.querySelector<HTMLTextAreaElement>('textarea[name="message"]');
+  if (textarea && !textarea.value.trim()) return;
+  document.querySelectorAll<HTMLElement>("[data-conversation-transcript-scroll]").forEach(pinTranscriptToBottom);
+}
+
 function preserveConversationDraftOnSse(event: Event) {
   const composer = event.target;
   if (!(composer instanceof HTMLElement) || composer.id !== "conversation-composer") return;
@@ -142,6 +172,7 @@ export function installAgentLiveLifecycle() {
   installPositionCloseModal();
   installRunCancelModal();
   installConversationComposerShortcut();
+  document.addEventListener("submit", followConversationTranscriptOnSend);
   document.addEventListener("htmx:sseBeforeMessage", preserveConversationDraftOnSse);
   document.addEventListener("change", (event) => {
     const input = event.target;

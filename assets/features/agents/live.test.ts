@@ -1,11 +1,12 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("htmx.org", () => ({ default: { swap: vi.fn() } }));
 
-import { installAgentLiveLifecycle } from "./live";
+import { initRunTranscripts, installAgentLiveLifecycle } from "./live";
 import { initModelPickers } from "./model-picker";
 
 afterEach(() => {
+  vi.unstubAllGlobals();
   window.dispatchEvent(new Event("pageshow"));
   document.body.replaceChildren();
 });
@@ -234,6 +235,112 @@ describe("model-dependent buttons", () => {
     save.click();
 
     expect(button.disabled).toBe(false);
+  });
+});
+
+describe("conversation transcript scroll pinning", () => {
+  class TestResizeObserver {
+    static callbacks: Array<() => void> = [];
+    constructor(callback: () => void) { TestResizeObserver.callbacks.push(callback); }
+    observe() {}
+    disconnect() {}
+  }
+  const scrollHeight = 1000;
+  const clientHeight = 200;
+  const bottom = scrollHeight - clientHeight;
+  const markup = `
+    <div data-conversation-transcript-scroll>
+      <div id="conversation-transcript" sse-swap="conversation-transcript"></div>
+    </div>
+  `;
+
+  const installConversation = () => {
+    document.body.innerHTML = markup;
+    const scroll = document.querySelector<HTMLElement>("[data-conversation-transcript-scroll]");
+    if (!scroll) throw new Error("Conversation transcript scroll container was not rendered");
+    Object.defineProperty(scroll, "scrollHeight", { configurable: true, value: scrollHeight });
+    Object.defineProperty(scroll, "clientHeight", { configurable: true, value: clientHeight });
+    installAgentLiveLifecycle();
+    initRunTranscripts();
+    return scroll;
+  };
+  const readerMovesTo = (scroll: HTMLElement, top: number) => {
+    scroll.scrollTop = top;
+    scroll.dispatchEvent(new Event("scroll"));
+  };
+  const swapTranscript = () => {
+    const transcript = document.getElementById("conversation-transcript");
+    if (!transcript) throw new Error("Conversation transcript was not rendered");
+    document.dispatchEvent(new CustomEvent("htmx:afterSwap", { detail: { target: transcript } }));
+    document.dispatchEvent(new CustomEvent("htmx:afterSettle", { detail: { target: transcript } }));
+  };
+  const resizeTranscript = () => {
+    for (const callback of TestResizeObserver.callbacks) callback();
+  };
+
+  beforeEach(() => {
+    TestResizeObserver.callbacks.length = 0;
+    vi.stubGlobal("ResizeObserver", TestResizeObserver);
+  });
+
+  it("opens the conversation at the latest message", () => {
+    const scroll = installConversation();
+    expect(scroll.scrollTop).toBe(scrollHeight);
+  });
+
+  it("keeps following the transcript while the reader stays at the bottom", () => {
+    const scroll = installConversation();
+    readerMovesTo(scroll, bottom - 10);
+    swapTranscript();
+    expect(scroll.scrollTop).toBe(scrollHeight);
+    resizeTranscript();
+    expect(scroll.scrollTop).toBe(scrollHeight);
+  });
+
+  it("stops forcing the transcript down while the reader is scrolled up", () => {
+    const scroll = installConversation();
+    readerMovesTo(scroll, 300);
+    swapTranscript();
+    expect(scroll.scrollTop).toBe(300);
+    resizeTranscript();
+    expect(scroll.scrollTop).toBe(300);
+  });
+
+  it("re-pins the transcript when the reader returns to the bottom", () => {
+    const scroll = installConversation();
+    readerMovesTo(scroll, 300);
+    swapTranscript();
+    readerMovesTo(scroll, bottom);
+    swapTranscript();
+    expect(scroll.scrollTop).toBe(scrollHeight);
+  });
+
+  it("follows the conversation again after the reader sends a message", () => {
+    const scroll = installConversation();
+    readerMovesTo(scroll, 300);
+    swapTranscript();
+    const form = document.createElement("form");
+    form.action = "/agents/test-agent/chat/00000000-0000-0000-0000-000000000000/messages";
+    const textarea = document.createElement("textarea");
+    textarea.name = "message";
+    textarea.value = "Summarize the last run";
+    form.append(textarea);
+    document.body.append(form);
+    form.dispatchEvent(new Event("submit", { bubbles: true }));
+    expect(scroll.scrollTop).toBe(scrollHeight);
+  });
+
+  it("ignores empty message submissions while the reader is scrolled up", () => {
+    const scroll = installConversation();
+    readerMovesTo(scroll, 300);
+    const form = document.createElement("form");
+    form.action = "/agents/test-agent/chat/00000000-0000-0000-0000-000000000000/messages";
+    const textarea = document.createElement("textarea");
+    textarea.name = "message";
+    form.append(textarea);
+    document.body.append(form);
+    form.dispatchEvent(new Event("submit", { bubbles: true }));
+    expect(scroll.scrollTop).toBe(300);
   });
 });
 
