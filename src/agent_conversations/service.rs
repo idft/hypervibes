@@ -1,5 +1,5 @@
 use std::{
-    collections::HashSet,
+    collections::{HashMap, VecDeque},
     sync::Arc,
     time::{Duration, Instant},
 };
@@ -25,8 +25,8 @@ use crate::{
     harness::{in_flight::InFlightTracker, model::CAPABILITY_SCHEMA_VERSION},
     opencode::{
         client::{
-            DeleteSessionResult, OpenCodeClient, OpenCodePermissionReply, OpenCodePermissionRule,
-            SessionStatusKind,
+            DeleteSessionResult, OpenCodeClient, OpenCodeConversationPrompt,
+            OpenCodePermissionReply, OpenCodePermissionRule, SessionStatusKind,
         },
         workspace_control_client::WorkspaceController,
     },
@@ -37,39 +37,155 @@ pub const CONVERSATION_MESSAGE_MAX_CHARS: usize = 12_000;
 pub const CONVERSATION_TITLE_MAX_CHARS: usize = 100;
 const ACTIVE_TURN_POLL_INTERVAL: Duration = Duration::from_secs(2);
 const ACTIVE_TURN_TIMEOUT: Duration = Duration::from_secs(30 * 60);
+pub const CONVERSATION_MESSAGE_QUEUE_LIMIT: usize = 20;
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct QueuedConversationMessage {
+    pub message_id: String,
+    pub text: String,
+}
+
+/// Whether a submitted turn was sent to OpenCode immediately or queued behind
+/// the turn that is still running.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConversationTurnOutcome {
+    Sent,
+    Queued,
+}
 
 #[derive(Clone, Default)]
 pub struct ConversationTurnTracker {
-    active: Arc<Mutex<HashSet<Uuid>>>,
+    state: Arc<Mutex<ConversationTurnState>>,
+}
+
+#[derive(Default)]
+struct ConversationTurnState {
+    active: HashMap<Uuid, Arc<Mutex<()>>>,
+    queue: HashMap<Uuid, VecDeque<QueuedConversationMessage>>,
 }
 
 impl ConversationTurnTracker {
-    pub async fn try_acquire(&self, conversation_id: Uuid) -> Option<ConversationTurnGuard> {
-        let mut active = self.active.lock().await;
-        active
-            .insert(conversation_id)
-            .then_some(ConversationTurnGuard {
-                active: Arc::clone(&self.active),
-                conversation_id,
-            })
+    async fn admit(
+        &self,
+        conversation_id: Uuid,
+        message: QueuedConversationMessage,
+    ) -> Result<Option<ConversationTurnGuard>> {
+        let mut state = self.state.lock().await;
+        let entries = state.queue.entry(conversation_id).or_default();
+        if entries.len() >= CONVERSATION_MESSAGE_QUEUE_LIMIT {
+            bail!(
+                "Too many messages are already queued for this conversation. Wait for the current turn to finish."
+            );
+        }
+        let had_pending = !entries.is_empty();
+        entries.push_back(message);
+        if state.active.contains_key(&conversation_id) {
+            return Ok(None);
+        }
+        let dispatch = Arc::new(Mutex::new(()));
+        state.active.insert(conversation_id, Arc::clone(&dispatch));
+        Ok(Some(ConversationTurnGuard {
+            state: Arc::clone(&self.state),
+            conversation_id,
+            released: false,
+            dispatch,
+            had_pending,
+        }))
     }
 
     pub async fn is_active(&self, conversation_id: Uuid) -> bool {
-        self.active.lock().await.contains(&conversation_id)
+        self.state
+            .lock()
+            .await
+            .active
+            .contains_key(&conversation_id)
+    }
+
+    async fn dispatch_lock(&self, conversation_id: Uuid) -> Option<Arc<Mutex<()>>> {
+        self.state
+            .lock()
+            .await
+            .active
+            .get(&conversation_id)
+            .cloned()
+    }
+
+    /// Return the next queued message to submit, removing it from the queue.
+    pub async fn dequeue(&self, conversation_id: Uuid) -> Option<QueuedConversationMessage> {
+        self.state
+            .lock()
+            .await
+            .queue
+            .get_mut(&conversation_id)
+            .and_then(VecDeque::pop_front)
+    }
+
+    /// Return a failed submission to the front of the queue so a later turn
+    /// watcher retries it before newer messages.
+    pub async fn requeue_front(&self, conversation_id: Uuid, message: QueuedConversationMessage) {
+        self.state
+            .lock()
+            .await
+            .queue
+            .entry(conversation_id)
+            .or_default()
+            .push_front(message);
+    }
+
+    pub async fn queued_messages(&self, conversation_id: Uuid) -> Vec<QueuedConversationMessage> {
+        self.state
+            .lock()
+            .await
+            .queue
+            .get(&conversation_id)
+            .map(|entries| entries.iter().cloned().collect())
+            .unwrap_or_default()
+    }
+
+    pub async fn clear_queued(&self, conversation_id: Uuid) {
+        self.state.lock().await.queue.remove(&conversation_id);
+    }
+
+    async fn discard_queued(&self, conversation_id: Uuid, message_id: &str) {
+        if let Some(entries) = self.state.lock().await.queue.get_mut(&conversation_id) {
+            entries.retain(|message| message.message_id != message_id);
+        }
     }
 }
 
 pub struct ConversationTurnGuard {
-    active: Arc<Mutex<HashSet<Uuid>>>,
+    state: Arc<Mutex<ConversationTurnState>>,
     conversation_id: Uuid,
+    released: bool,
+    dispatch: Arc<Mutex<()>>,
+    had_pending: bool,
+}
+
+impl ConversationTurnGuard {
+    async fn next_queued_or_release(&mut self) -> Option<QueuedConversationMessage> {
+        let mut state = self.state.lock().await;
+        let next = state
+            .queue
+            .get_mut(&self.conversation_id)
+            .and_then(VecDeque::pop_front);
+        if next.is_none() {
+            state.queue.remove(&self.conversation_id);
+            state.active.remove(&self.conversation_id);
+            self.released = true;
+        }
+        next
+    }
 }
 
 impl Drop for ConversationTurnGuard {
     fn drop(&mut self) {
-        let active = Arc::clone(&self.active);
+        if self.released {
+            return;
+        }
+        let state = Arc::clone(&self.state);
         let conversation_id = self.conversation_id;
         tokio::spawn(async move {
-            active.lock().await.remove(&conversation_id);
+            state.lock().await.active.remove(&conversation_id);
         });
     }
 }
@@ -319,7 +435,7 @@ impl<'a> ConversationService<'a> {
         conversation_id: Uuid,
         message_id: &str,
         message: &str,
-    ) -> Result<()> {
+    ) -> Result<ConversationTurnOutcome> {
         let text = message.trim();
         if text.is_empty() {
             bail!("Message cannot be blank.");
@@ -330,12 +446,26 @@ impl<'a> ConversationService<'a> {
         if !message_id.starts_with("msg_") {
             bail!("Invalid message id.");
         }
+        if *self.shutdown_rx.borrow() {
+            bail!("Server is shutting down. Please try again after it restarts.");
+        }
         self.load_agent(agent_key).await?;
         let conversation = self.load_conversation(agent_key, conversation_id).await?;
-        let Some(turn_guard) = self.turn_tracker.try_acquire(conversation_id).await else {
-            bail!("This conversation already has a turn in progress.");
-        };
         let workspace = self.workspace_path(agent_key, conversation_id).await?;
+        let Some(turn_guard) = self
+            .turn_tracker
+            .admit(
+                conversation_id,
+                QueuedConversationMessage {
+                    message_id: message_id.to_string(),
+                    text: text.to_string(),
+                },
+            )
+            .await?
+        else {
+            return Ok(ConversationTurnOutcome::Queued);
+        };
+        let dispatch_guard = Arc::clone(&turn_guard.dispatch).lock_owned().await;
         let status = self
             .client
             .get_session_status_in_directory(
@@ -343,37 +473,71 @@ impl<'a> ConversationService<'a> {
                 &conversation.opencode_session_id,
                 Some(&workspace),
             )
-            .await?;
-        if status.as_ref().is_some_and(SessionStatusKind::is_active) {
-            bail!("The current turn is still running. Wait for it to finish or stop it first.");
+            .await;
+        let status = match status {
+            Ok(status) => status,
+            Err(error) => {
+                self.turn_tracker
+                    .discard_queued(conversation_id, message_id)
+                    .await;
+                drop(dispatch_guard);
+                self.spawn_turn_watcher(turn_guard, conversation, workspace, None);
+                return Err(error);
+            }
+        };
+        if status.as_ref().is_some_and(SessionStatusKind::is_active) || turn_guard.had_pending {
+            // A turn is running outside our tracker (for example after a
+            // server restart). Keep the acquired guard and queue the message;
+            // the watcher below submits it once the session returns to idle.
+            drop(dispatch_guard);
+            self.spawn_turn_watcher(turn_guard, conversation, workspace, None);
+            return Ok(ConversationTurnOutcome::Queued);
         }
-        self.client
-            .send_conversation_prompt_async(
-                self.base_url,
-                &workspace,
-                &conversation.opencode_session_id,
-                &crate::opencode::client::OpenCodeConversationPrompt {
-                    message_id: message_id.to_string(),
-                    provider_id: conversation.model_provider_id.clone(),
-                    model_id: conversation.model_id.clone(),
-                    variant: conversation.model_variant.clone(),
-                    text: text.to_string(),
-                },
-            )
-            .await?;
+        let Some(first) = self.turn_tracker.dequeue(conversation_id).await else {
+            bail!("Message was cancelled when the conversation was stopped.");
+        };
+        let sent = send_conversation_turn_prompt(
+            self.client,
+            self.base_url,
+            &workspace,
+            &conversation,
+            &first.message_id,
+            &first.text,
+        )
+        .await;
+        drop(dispatch_guard);
+        let initial_title = sent
+            .as_ref()
+            .ok()
+            .and_then(|()| first_turn_title(&conversation, &first.text));
+        self.spawn_turn_watcher(turn_guard, conversation, workspace, initial_title);
+        sent?;
+        Ok(ConversationTurnOutcome::Sent)
+    }
+
+    /// Watch the submitted turn until it completes, then submit queued
+    /// messages one at a time. The guard is held for the whole queue so a
+    /// queued message never races a direct submission.
+    fn spawn_turn_watcher(
+        &self,
+        turn_guard: ConversationTurnGuard,
+        conversation: AgentConversationRow,
+        workspace: String,
+        initial_title: Option<String>,
+    ) {
         let client = self.client.clone();
         let base_url = self.base_url.to_string();
-        let conversation_title = first_turn_title(&conversation, text);
-        let conversation_agent_key = conversation.agent_key;
+        let conversation_agent_key = conversation.agent_key.clone();
         let conversation_id = conversation.id;
-        let session_id = conversation.opencode_session_id;
+        let session_id = conversation.opencode_session_id.clone();
         let pool = self.pool.clone();
+        let turn_tracker = self.turn_tracker.clone();
         let mut shutdown_rx = self.shutdown_rx.clone();
         let in_flight = self.in_flight.track();
         tokio::spawn(async move {
-            let _turn_guard = turn_guard;
+            let mut turn_guard = turn_guard;
             let _in_flight = in_flight;
-            if let Some(title) = conversation_title {
+            if let Some(title) = initial_title {
                 if let Err(error) = client
                     .update_session_title(&base_url, &workspace, &session_id, &title)
                     .await
@@ -390,49 +554,114 @@ impl<'a> ConversationService<'a> {
                     warn!(conversation_id = %conversation_id, error = ?error, "failed to persist conversation title");
                 }
             }
-            let waited = tokio::time::timeout(ACTIVE_TURN_TIMEOUT, async {
-                loop {
-                    tokio::select! {
-                        _ = tokio::time::sleep(ACTIVE_TURN_POLL_INTERVAL) => {},
-                        changed = shutdown_rx.changed() => {
-                            if changed.is_err() || *shutdown_rx.borrow() {
-                                return;
+            let mut session_id = session_id;
+            loop {
+                if *shutdown_rx.borrow() {
+                    return;
+                }
+                let completed = tokio::time::timeout(ACTIVE_TURN_TIMEOUT, async {
+                    loop {
+                        tokio::select! {
+                            _ = tokio::time::sleep(ACTIVE_TURN_POLL_INTERVAL) => {},
+                            changed = shutdown_rx.changed() => {
+                                if changed.is_err() || *shutdown_rx.borrow() { return false; }
+                            }
+                        }
+                        match client.get_session_status_in_directory(&base_url, &session_id, Some(&workspace)).await {
+                            Ok(Some(status)) if status.is_active() => continue,
+                            Ok(_) => return true,
+                            Err(error) => {
+                                warn!(session_id, error = ?error, "failed to observe active conversation turn");
+                                continue;
                             }
                         }
                     }
-                    match client.get_session_status_in_directory(&base_url, &session_id, Some(&workspace)).await {
-                        Ok(Some(status)) if status.is_active() => continue,
-                        Ok(_) => return,
-                        Err(error) => {
-                            warn!(session_id, error = ?error, "failed to observe active conversation turn");
-                            return;
-                        }
+                })
+                .await;
+                match completed {
+                    Ok(true) => {}
+                    Ok(false) => return,
+                    Err(_) => {
+                        warn!(
+                            session_id,
+                            timeout_seconds = ACTIVE_TURN_TIMEOUT.as_secs(),
+                            "conversation turn observation timed out"
+                        );
+                        return;
                     }
                 }
-            })
-            .await;
-            if waited.is_err() {
-                warn!(
-                    session_id,
-                    timeout_seconds = ACTIVE_TURN_TIMEOUT.as_secs(),
-                    "conversation turn observation timed out"
-                );
+                // Serialize queued dispatch with Stop. Stop either cancels a
+                // turn already dispatched, or clears its queue before another
+                // prompt can be sent.
+                let _dispatch_guard = Arc::clone(&turn_guard.dispatch).lock_owned().await;
+                if *shutdown_rx.borrow() {
+                    return;
+                }
+                let Some(queued) = turn_guard.next_queued_or_release().await else {
+                    return;
+                };
+                match store::get_agent_conversation(&pool, &conversation_agent_key, conversation_id)
+                    .await
+                {
+                    Ok(Some(next)) if !next.is_initializing() => {
+                        if let Err(error) = send_conversation_turn_prompt(
+                            &client,
+                            &base_url,
+                            &workspace,
+                            &next,
+                            &queued.message_id,
+                            &queued.text,
+                        )
+                        .await
+                        {
+                            warn!(
+                                conversation_id = %conversation_id,
+                                error = ?error,
+                                text = %queued.text,
+                                "failed to submit queued conversation message; it will retry on the next turn"
+                            );
+                            turn_tracker.requeue_front(conversation_id, queued).await;
+                            return;
+                        }
+                        session_id = next.opencode_session_id;
+                    }
+                    Ok(_) => {
+                        // The conversation was deleted or reset; drop the
+                        // remaining queued messages with it.
+                        turn_tracker.clear_queued(conversation_id).await;
+                        return;
+                    }
+                    Err(error) => {
+                        warn!(conversation_id = %conversation_id, error = ?error, "failed to reload conversation for queued message");
+                        turn_tracker.requeue_front(conversation_id, queued).await;
+                        return;
+                    }
+                }
             }
         });
-        Ok(())
     }
 
     pub async fn stop_conversation(&self, agent_key: &str, conversation_id: Uuid) -> Result<bool> {
         self.load_agent(agent_key).await?;
         let conversation = self.load_conversation(agent_key, conversation_id).await?;
         let workspace = self.workspace_path(agent_key, conversation_id).await?;
-        self.client
+        let dispatch = self.turn_tracker.dispatch_lock(conversation_id).await;
+        let _dispatch_guard = match dispatch {
+            Some(lock) => Some(lock.lock_owned().await),
+            None => None,
+        };
+        // Clear before aborting, so observing the abort's idle state cannot
+        // cause the watcher to start another queued turn.
+        self.turn_tracker.clear_queued(conversation_id).await;
+        let aborted = self
+            .client
             .abort_session_in_directory(
                 self.base_url,
                 &conversation.opencode_session_id,
                 Some(&workspace),
             )
-            .await
+            .await?;
+        Ok(aborted)
     }
 
     pub async fn compact_conversation(&self, agent_key: &str, conversation_id: Uuid) -> Result<()> {
@@ -473,6 +702,7 @@ impl<'a> ConversationService<'a> {
         if !store::delete_conversation_mapping(self.pool, agent_key, conversation_id).await? {
             bail!("Conversation no longer exists.");
         }
+        self.turn_tracker.clear_queued(conversation_id).await;
         Ok(())
     }
 
@@ -583,6 +813,9 @@ impl<'a> ConversationService<'a> {
         conversation: &AgentConversationRow,
         workspace_container_path: &str,
     ) -> Result<()> {
+        if self.turn_tracker.is_active(conversation.id).await {
+            bail!("Stop the active conversation before changing it.");
+        }
         let status = self
             .client
             .get_session_status_in_directory(
@@ -596,6 +829,30 @@ impl<'a> ConversationService<'a> {
         }
         Ok(())
     }
+}
+
+async fn send_conversation_turn_prompt(
+    client: &OpenCodeClient,
+    base_url: &str,
+    workspace: &str,
+    conversation: &AgentConversationRow,
+    message_id: &str,
+    text: &str,
+) -> Result<()> {
+    client
+        .send_conversation_prompt_async(
+            base_url,
+            workspace,
+            &conversation.opencode_session_id,
+            &OpenCodeConversationPrompt {
+                message_id: message_id.to_string(),
+                provider_id: conversation.model_provider_id.clone(),
+                model_id: conversation.model_id.clone(),
+                variant: conversation.model_variant.clone(),
+                text: text.to_string(),
+            },
+        )
+        .await
 }
 
 fn first_turn_title(conversation: &AgentConversationRow, text: &str) -> Option<String> {
@@ -754,13 +1011,151 @@ mod tests {
 
         assert!(!tracker.is_active(conversation_id).await);
         let guard = tracker
-            .try_acquire(conversation_id)
+            .admit(
+                conversation_id,
+                QueuedConversationMessage {
+                    message_id: "msg_test".into(),
+                    text: "test".into(),
+                },
+            )
             .await
+            .expect("admit conversation turn")
             .expect("acquire conversation turn");
         assert!(tracker.is_active(conversation_id).await);
         drop(guard);
         tokio::task::yield_now().await;
         assert!(!tracker.is_active(conversation_id).await);
+    }
+
+    #[tokio::test]
+    async fn turn_tracker_keeps_queued_messages_in_submission_order() {
+        let tracker = ConversationTurnTracker::default();
+        let conversation_id = Uuid::new_v4();
+        let queued = |i: usize| QueuedConversationMessage {
+            message_id: format!("msg_{i}"),
+            text: format!("text {i}"),
+        };
+
+        let _guard = tracker
+            .admit(conversation_id, queued(0))
+            .await
+            .expect("admit first")
+            .expect("own watcher");
+        for i in 1..CONVERSATION_MESSAGE_QUEUE_LIMIT {
+            assert!(
+                tracker
+                    .admit(conversation_id, queued(i))
+                    .await
+                    .expect("admit queued")
+                    .is_none()
+            );
+        }
+        assert!(
+            tracker
+                .admit(
+                    conversation_id,
+                    QueuedConversationMessage {
+                        message_id: "msg_overflow".to_string(),
+                        text: "overflow".to_string(),
+                    }
+                )
+                .await
+                .is_err(),
+            "queue refuses messages beyond the limit"
+        );
+        assert_eq!(
+            tracker
+                .queued_messages(conversation_id)
+                .await
+                .iter()
+                .map(|message| message.text.as_str())
+                .collect::<Vec<_>>(),
+            (0..CONVERSATION_MESSAGE_QUEUE_LIMIT)
+                .map(|i| format!("text {i}"))
+                .collect::<Vec<_>>()
+        );
+
+        assert_eq!(
+            tracker
+                .dequeue(conversation_id)
+                .await
+                .map(|message| message.text),
+            Some("text 0".to_string())
+        );
+        tracker
+            .requeue_front(
+                conversation_id,
+                QueuedConversationMessage {
+                    message_id: "msg_retry".to_string(),
+                    text: "retry first".to_string(),
+                },
+            )
+            .await;
+        assert_eq!(
+            tracker
+                .dequeue(conversation_id)
+                .await
+                .map(|message| message.text),
+            Some("retry first".to_string()),
+            "requeued messages drain before newer ones"
+        );
+
+        tracker.clear_queued(conversation_id).await;
+        assert!(tracker.queued_messages(conversation_id).await.is_empty());
+        assert!(tracker.dequeue(conversation_id).await.is_none());
+    }
+
+    #[tokio::test]
+    async fn queue_completion_and_new_admission_are_atomic() {
+        let tracker = ConversationTurnTracker::default();
+        let id = Uuid::new_v4();
+        let message = |text: &str| QueuedConversationMessage {
+            message_id: format!("msg_{text}"),
+            text: text.to_string(),
+        };
+        let mut first = tracker
+            .admit(id, message("first"))
+            .await
+            .expect("admit first")
+            .expect("first owns watcher");
+        assert_eq!(
+            tracker.dequeue(id).await.map(|queued| queued.text),
+            Some("first".into())
+        );
+        assert!(
+            tracker
+                .admit(id, message("second"))
+                .await
+                .expect("admit second")
+                .is_none()
+        );
+        assert_eq!(
+            first
+                .next_queued_or_release()
+                .await
+                .map(|queued| queued.text),
+            Some("second".into())
+        );
+        assert!(first.next_queued_or_release().await.is_none());
+        let mut next = tracker
+            .admit(id, message("third"))
+            .await
+            .expect("admit third")
+            .expect("new message owns a watcher after queue completion");
+        drop(first);
+        tokio::task::yield_now().await;
+        assert!(
+            tracker.is_active(id).await,
+            "old guard cannot release a newer watcher"
+        );
+        assert_eq!(
+            next.next_queued_or_release()
+                .await
+                .map(|queued| queued.text),
+            Some("third".into())
+        );
+        assert!(next.next_queued_or_release().await.is_none());
+        assert!(!tracker.is_active(id).await);
     }
 
     #[test]

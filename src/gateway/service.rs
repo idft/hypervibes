@@ -22,7 +22,7 @@ use crate::{
     agent_conversations::{
         self,
         model::{CONVERSATION_CHANNEL_TELEGRAM, CONVERSATION_CHANNEL_WEB},
-        service::{ConversationService, ConversationTurnTracker},
+        service::{ConversationService, ConversationTurnOutcome, ConversationTurnTracker},
         store as conversation_store,
     },
     agents::crypto::{EncryptionKey, decrypt},
@@ -373,6 +373,7 @@ struct GatewayServiceState {
 struct TelegramTurnBaseline {
     assistant_message_ids: HashSet<String>,
     session_error_count: usize,
+    user_message_id: Option<String>,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -779,17 +780,28 @@ impl GatewayServiceState {
                         .await?
                 }
             };
-            let reply_baseline = get_session_detail(&self.pool, &conversation.opencode_session_id)
-                .await?
-                .map(|detail| telegram_turn_baseline(&detail.messages, &detail.session_errors))
-                .unwrap_or_default();
+            let mut reply_baseline =
+                get_session_detail(&self.pool, &conversation.opencode_session_id)
+                    .await?
+                    .map(|detail| telegram_turn_baseline(&detail.messages, &detail.session_errors))
+                    .unwrap_or_default();
             let message_id = format!(
                 "msg_{}",
                 chrono::Utc::now().timestamp_nanos_opt().unwrap_or(0)
             );
-            self.conversation_service()
+            reply_baseline.user_message_id = Some(message_id.clone());
+            let outcome = self
+                .conversation_service()
                 .submit_conversation_turn(agent_key, conversation.id, &message_id, text)
                 .await?;
+            if matches!(outcome, ConversationTurnOutcome::Queued) {
+                bot.send_message(
+                    chat_id,
+                    "Message queued. It will send when the current turn finishes.",
+                )
+                .await
+                .ok();
+            }
             self.spawn_telegram_reply_forwarder(
                 agent_key.to_string(),
                 bot.clone(),
@@ -924,7 +936,10 @@ impl GatewayServiceState {
                     .await
                 {
                     Ok(Some(status)) if status.is_active() => {}
-                    Ok(_) => return Ok(true),
+                    Ok(_) if !self.conversation_turns.is_active(conversation_id).await => {
+                        return Ok(true);
+                    }
+                    Ok(_) => {}
                     Err(error) => return Err(error),
                 }
             }
@@ -1353,6 +1368,7 @@ fn telegram_turn_baseline(
             .map(|message| message.id.clone())
             .collect(),
         session_error_count: session_errors.len(),
+        user_message_id: None,
     }
 }
 
@@ -1361,7 +1377,19 @@ fn telegram_turn_reply(
     session_errors: &[OpenCodeSessionErrorRow],
     baseline: &TelegramTurnBaseline,
 ) -> Option<TelegramTurnReply> {
-    let replies: Vec<String> = messages
+    // Bound each forwarder to its submitted user message. In particular, a
+    // queued turn must not forward the preceding turn's response again.
+    let turn_messages = if let Some(id) = &baseline.user_message_id {
+        let start = messages.iter().position(|message| &message.id == id)? + 1;
+        let end = messages[start..]
+            .iter()
+            .position(|message| message.role == "user")
+            .map_or(messages.len(), |offset| start + offset);
+        &messages[start..end]
+    } else {
+        messages
+    };
+    let replies: Vec<String> = turn_messages
         .iter()
         .filter(|message| {
             message.role == "assistant" && !baseline.assistant_message_ids.contains(&message.id)
@@ -1376,6 +1404,18 @@ fn telegram_turn_reply(
         .collect();
     if !replies.is_empty() {
         return Some(TelegramTurnReply::Assistant(replies));
+    }
+    // Session errors aren't attributed to a user message in the mirror. Only
+    // forward them for the latest turn, rather than assigning later errors to
+    // every message that was queued before them.
+    if let Some(id) = &baseline.user_message_id
+        && messages
+            .iter()
+            .rev()
+            .find(|message| message.role == "user")
+            .is_some_and(|message| &message.id != id)
+    {
+        return None;
     }
     session_errors
         .iter()
@@ -1656,6 +1696,29 @@ mod tests {
         assert_eq!(
             telegram_turn_reply(&[], &errors, &baseline),
             Some(TelegramTurnReply::Error("new error".to_string()))
+        );
+    }
+
+    #[test]
+    fn queued_telegram_turns_only_forward_their_own_replies() {
+        let messages = vec![
+            message("first", "user", Some("first prompt")),
+            message("reply-first", "assistant", Some("first reply")),
+            message("second", "user", Some("queued prompt")),
+            message("reply-second", "assistant", Some("queued reply")),
+            message("third", "user", Some("another prompt")),
+            message("reply-third", "assistant", Some("another reply")),
+        ];
+        let mut baseline = telegram_turn_baseline(&[], &[]);
+        baseline.user_message_id = Some("second".into());
+        assert_eq!(
+            telegram_turn_reply(&messages, &[], &baseline),
+            Some(TelegramTurnReply::Assistant(vec!["queued reply".into()]))
+        );
+        assert_eq!(
+            telegram_turn_reply(&messages[..2], &[], &baseline),
+            None,
+            "a queued message that hasn't been sent cannot forward the current reply"
         );
     }
 

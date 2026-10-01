@@ -38,12 +38,14 @@ fn conversation_transcript_shows_thinking_bubble_while_busy() {
         session: None,
         busy: true,
         initializing: false,
+        queued: Vec::new(),
     })
     .expect("render busy conversation transcript");
     let idle = askama::Template::render(&AgentConversationTranscriptPartialTemplate {
         session: None,
         busy: false,
         initializing: false,
+        queued: Vec::new(),
     })
     .expect("render idle conversation transcript");
 
@@ -53,17 +55,49 @@ fn conversation_transcript_shows_thinking_bubble_while_busy() {
 }
 
 #[test]
+fn conversation_transcript_lists_queued_messages_while_a_turn_runs() {
+    let rendered = askama::Template::render(&AgentConversationTranscriptPartialTemplate {
+        session: None,
+        busy: true,
+        initializing: false,
+        queued: vec![
+            "Keep an eye on BTC.".to_string(),
+            "Then check SOL.".to_string(),
+        ],
+    })
+    .expect("render transcript with queued messages");
+
+    let first = rendered
+        .find("Keep an eye on BTC.")
+        .expect("first queued text");
+    let second = rendered
+        .find("Then check SOL.")
+        .expect("second queued text");
+    assert!(first < second, "queued messages keep submission order");
+    assert!(rendered.contains("queued"));
+    let thinking = rendered
+        .find("Assistant is thinking")
+        .expect("thinking bubble");
+    assert!(
+        thinking < first,
+        "queued messages render after the thinking bubble"
+    );
+}
+
+#[test]
 fn conversation_transcript_distinguishes_creation_from_mirror_lag() {
     let initializing = askama::Template::render(&AgentConversationTranscriptPartialTemplate {
         session: None,
         busy: false,
         initializing: true,
+        queued: Vec::new(),
     })
     .expect("render pending conversation");
     let mirror_lag = askama::Template::render(&AgentConversationTranscriptPartialTemplate {
         session: None,
         busy: false,
         initializing: false,
+        queued: Vec::new(),
     })
     .expect("render missing mirror");
     assert!(initializing.contains("Creating conversation…"));
@@ -78,6 +112,7 @@ fn conversation_composer_autofocuses_the_message_input() {
         conversation_id: uuid::Uuid::nil(),
         message_id: "msg_test".to_string(),
         busy: false,
+        initializing: false,
         message: String::new(),
         error: None,
     })
@@ -87,6 +122,39 @@ fn conversation_composer_autofocuses_the_message_input() {
     assert!(rendered.contains("hx-post"));
     assert!(rendered.contains("hx-target=\"#conversation-composer\""));
     assert!(rendered.contains("hx-swap=\"innerHTML\""));
+}
+
+#[test]
+fn conversation_composer_stays_enabled_while_busy_but_disables_while_initializing() {
+    let busy = askama::Template::render(&AgentConversationComposerPartialTemplate {
+        agent_key: "test-agent".to_string(),
+        conversation_id: uuid::Uuid::nil(),
+        message_id: "msg_test".to_string(),
+        busy: true,
+        initializing: false,
+        message: String::new(),
+        error: None,
+    })
+    .expect("render busy conversation composer");
+    let initializing = askama::Template::render(&AgentConversationComposerPartialTemplate {
+        agent_key: "test-agent".to_string(),
+        conversation_id: uuid::Uuid::nil(),
+        message_id: "msg_test".to_string(),
+        busy: false,
+        initializing: true,
+        message: String::new(),
+        error: None,
+    })
+    .expect("render initializing conversation composer");
+
+    assert!(busy.contains("autofocus"));
+    assert!(!busy.contains("autofocus disabled"));
+    assert!(busy.contains("Queue</button>"));
+    assert!(busy.contains("cursor-pointer"));
+    assert!(busy.contains("Enter to queue"));
+    assert!(!busy.contains(">Send</button>"));
+    assert!(initializing.contains("autofocus disabled"));
+    assert!(initializing.contains("cursor-not-allowed"));
 }
 
 #[test]

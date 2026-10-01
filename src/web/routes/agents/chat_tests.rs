@@ -23,7 +23,7 @@ use uuid::Uuid;
 use crate::{
     agent_conversations::{
         model::{AgentConversationRow, CreateAgentConversation},
-        service::ConversationService,
+        service::{CONVERSATION_MESSAGE_QUEUE_LIMIT, ConversationService, ConversationTurnOutcome},
         store,
     },
     opencode::workspace_control_client::HttpWorkspaceController,
@@ -86,6 +86,12 @@ struct CreationBackend {
     release_workspace: Notify,
     release_session: Notify,
     requests: Mutex<Vec<(String, Value)>>,
+    session_status: Mutex<String>,
+    created_sessions: Mutex<Vec<String>>,
+    pause_status: AtomicBool,
+    status_entered: Notify,
+    release_status: Notify,
+    busy_on_prompt: AtomicBool,
 }
 
 struct FakeBackend {
@@ -111,6 +117,7 @@ impl FakeBackend {
             .route("/session/status", get(fake_session_status))
             .route("/session/{id}/prompt_async", post(fake_session_action))
             .route("/session/{id}", patch(fake_session_action))
+            .route("/session/{id}/abort", post(fake_abort_session))
             .route("/provider", get(|| async { Json(json!({"all": [{"id": "test", "models": {"model": {"id": "model", "variants": {"high": {}}}}}], "connected": ["test"]})) }))
             .route("/permission", get(fake_permissions))
             .fallback(fake_unexpected_request)
@@ -175,7 +182,13 @@ async fn fake_create_session(
     if control.fail_session.load(Ordering::SeqCst) {
         return (StatusCode::INTERNAL_SERVER_ERROR, "creation failed").into_response();
     }
-    Json(json!({"id": format!("ses_{}", Uuid::new_v4())})).into_response()
+    let session_id = format!("ses_{}", Uuid::new_v4());
+    control
+        .created_sessions
+        .lock()
+        .await
+        .push(session_id.clone());
+    Json(json!({"id": session_id})).into_response()
 }
 
 async fn fake_delete_workspace(State(control): State<Arc<CreationBackend>>) -> Json<Value> {
@@ -197,12 +210,24 @@ async fn fake_permissions(State(control): State<Arc<CreationBackend>>) -> Json<V
 }
 
 async fn fake_session_status(State(control): State<Arc<CreationBackend>>) -> Json<Value> {
+    if control.pause_status.swap(false, Ordering::SeqCst) {
+        control.status_entered.notify_one();
+        control.release_status.notified().await;
+    }
     control
         .requests
         .lock()
         .await
         .push(("session-status".to_string(), Value::Null));
-    Json(json!({}))
+    let status = control.session_status.lock().await.clone();
+    let mut statuses = serde_json::Map::new();
+    for session_id in control.created_sessions.lock().await.iter() {
+        statuses.insert(
+            session_id.clone(),
+            json!({"type": if status.is_empty() { "idle" } else { &status }}),
+        );
+    }
+    Json(Value::Object(statuses))
 }
 
 async fn fake_inspect_workspace(State(control): State<Arc<CreationBackend>>) -> Json<Value> {
@@ -221,8 +246,19 @@ async fn fake_session_action(
     Path(id): Path<String>,
     Json(input): Json<Value>,
 ) -> StatusCode {
+    if input["parts"].is_array() && control.busy_on_prompt.load(Ordering::SeqCst) {
+        *control.session_status.lock().await = "busy".to_string();
+    }
     control.requests.lock().await.push((id, input));
     StatusCode::NO_CONTENT
+}
+
+async fn fake_abort_session(
+    State(control): State<Arc<CreationBackend>>,
+    Path(id): Path<String>,
+) -> Json<Value> {
+    control.requests.lock().await.push((id, Value::Null));
+    Json(json!(true))
 }
 
 async fn fake_unexpected_request(
@@ -789,6 +825,335 @@ async fn read_snapshot(body: &mut Body) -> String {
         ));
     }
     snapshot
+}
+
+async fn prompt_texts(backend: &FakeBackend) -> Vec<String> {
+    backend
+        .control
+        .requests
+        .lock()
+        .await
+        .iter()
+        .filter(|(_, input)| input["parts"].is_array())
+        .map(|(_, input)| {
+            input["parts"][0]["text"]
+                .as_str()
+                .unwrap_or_default()
+                .to_string()
+        })
+        .collect()
+}
+
+async fn wait_for_prompt_texts(backend: &FakeBackend, count: usize) -> Vec<String> {
+    let deadline = std::time::Instant::now() + Duration::from_secs(30);
+    loop {
+        let texts = prompt_texts(backend).await;
+        if texts.len() >= count {
+            return texts;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "queued messages were not drained in time"
+        );
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
+}
+
+async fn set_session_status(backend: &FakeBackend, status: &str) {
+    *backend.control.session_status.lock().await = status.to_string();
+}
+
+async fn created_conversation(
+    backend: &FakeBackend,
+    state: &Arc<AppState>,
+    agent: &str,
+) -> AgentConversationRow {
+    let conversation = conversation_service(state)
+        .create_web_conversation(agent, "test", "model", None)
+        .await
+        .expect("create conversation");
+    let created = backend
+        .control
+        .created_sessions
+        .lock()
+        .await
+        .last()
+        .cloned();
+    assert!(
+        created.is_some_and(|session_id| session_id.starts_with("ses_")),
+        "conversation creation must be observed by the fake backend"
+    );
+    drain(state).await;
+    conversation
+}
+
+#[tokio::test]
+async fn messages_sent_while_a_turn_runs_queue_and_drain_in_order() {
+    let backend = FakeBackend::start().await;
+    let state = backend.state().await;
+    let (agent, _) = insert_test_opencode_agent(&state)
+        .await
+        .expect("insert agent");
+    let conversation = created_conversation(&backend, &state, &agent).await;
+
+    backend.control.busy_on_prompt.store(true, Ordering::SeqCst);
+
+    set_session_status(&backend, "busy").await;
+    let first = conversation_service(&state)
+        .submit_conversation_turn(
+            &agent,
+            conversation.id,
+            "msg_first",
+            "Check the account balance.",
+        )
+        .await
+        .expect("queue first message while the turn runs");
+    let second = conversation_service(&state)
+        .submit_conversation_turn(
+            &agent,
+            conversation.id,
+            "msg_second",
+            "Then summarize open positions.",
+        )
+        .await
+        .expect("queue second message while the turn runs");
+    assert!(matches!(first, ConversationTurnOutcome::Queued));
+    assert!(matches!(second, ConversationTurnOutcome::Queued));
+    assert_eq!(
+        state
+            .conversation_turns
+            .queued_messages(conversation.id)
+            .await
+            .iter()
+            .map(|message| message.text.as_str())
+            .collect::<Vec<_>>(),
+        [
+            "Check the account balance.",
+            "Then summarize open positions."
+        ],
+        "queued messages stay visible in submission order"
+    );
+    assert!(
+        prompt_texts(&backend).await.is_empty(),
+        "queued messages are not submitted while the turn runs"
+    );
+
+    set_session_status(&backend, "idle").await;
+    assert_eq!(
+        wait_for_prompt_texts(&backend, 1).await,
+        ["Check the account balance."]
+    );
+    tokio::time::sleep(Duration::from_millis(2200)).await;
+    assert_eq!(
+        prompt_texts(&backend).await,
+        ["Check the account balance."],
+        "the second queued message must wait until the first queued turn finishes"
+    );
+    set_session_status(&backend, "idle").await;
+    let drained = wait_for_prompt_texts(&backend, 2).await;
+    assert_eq!(
+        drained,
+        [
+            "Check the account balance.",
+            "Then summarize open positions."
+        ],
+        "queued messages drain one at a time in order once idle"
+    );
+    assert!(
+        state
+            .conversation_turns
+            .queued_messages(conversation.id)
+            .await
+            .is_empty()
+    );
+    set_session_status(&backend, "idle").await;
+    drain(&state).await;
+}
+
+#[tokio::test]
+async fn submissions_arriving_during_the_status_request_keep_fifo_order() {
+    let backend = FakeBackend::start().await;
+    let state = backend.state().await;
+    let (agent, _) = insert_test_opencode_agent(&state)
+        .await
+        .expect("insert agent");
+    let conversation = created_conversation(&backend, &state, &agent).await;
+    set_session_status(&backend, "busy").await;
+    backend.control.pause_status.store(true, Ordering::SeqCst);
+    let caller_state = Arc::clone(&state);
+    let caller_agent = agent.clone();
+    let id = conversation.id;
+    let first = tokio::spawn(async move {
+        conversation_service(&caller_state)
+            .submit_conversation_turn(&caller_agent, id, "msg_first", "first")
+            .await
+    });
+    wait_for(&backend.control.status_entered).await;
+    assert_eq!(
+        conversation_service(&state)
+            .submit_conversation_turn(&agent, id, "msg_second", "second")
+            .await
+            .expect("queue second"),
+        ConversationTurnOutcome::Queued
+    );
+    backend.control.release_status.notify_one();
+    assert_eq!(
+        first
+            .await
+            .expect("first caller joins")
+            .expect("queue first"),
+        ConversationTurnOutcome::Queued
+    );
+    set_session_status(&backend, "idle").await;
+    assert_eq!(
+        wait_for_prompt_texts(&backend, 2).await,
+        ["first", "second"]
+    );
+    drain(&state).await;
+}
+
+#[tokio::test]
+async fn conversation_queue_rejects_messages_beyond_the_limit() {
+    let backend = FakeBackend::start().await;
+    let state = backend.state().await;
+    let (agent, _) = insert_test_opencode_agent(&state)
+        .await
+        .expect("insert agent");
+    let conversation = created_conversation(&backend, &state, &agent).await;
+
+    set_session_status(&backend, "busy").await;
+    for i in 0..CONVERSATION_MESSAGE_QUEUE_LIMIT {
+        let outcome = conversation_service(&state)
+            .submit_conversation_turn(
+                &agent,
+                conversation.id,
+                &format!("msg_{i}"),
+                &format!("queued message {i}"),
+            )
+            .await
+            .expect("queue message within the limit");
+        assert!(matches!(outcome, ConversationTurnOutcome::Queued));
+    }
+    let overflow = conversation_service(&state)
+        .submit_conversation_turn(
+            &agent,
+            conversation.id,
+            "msg_overflow",
+            "one message too many",
+        )
+        .await
+        .expect_err("queue rejects messages beyond the limit");
+    assert!(
+        overflow
+            .to_string()
+            .contains("Too many messages are already queued")
+    );
+    assert_eq!(
+        state
+            .conversation_turns
+            .queued_messages(conversation.id)
+            .await
+            .len(),
+        CONVERSATION_MESSAGE_QUEUE_LIMIT
+    );
+    state.conversation_turns.clear_queued(conversation.id).await;
+    set_session_status(&backend, "idle").await;
+    drain(&state).await;
+}
+
+#[tokio::test]
+async fn stopping_a_conversation_abandons_queued_messages() {
+    let backend = FakeBackend::start().await;
+    let state = backend.state().await;
+    let (agent, _) = insert_test_opencode_agent(&state)
+        .await
+        .expect("insert agent");
+    let conversation = created_conversation(&backend, &state, &agent).await;
+
+    set_session_status(&backend, "busy").await;
+    let outcome = conversation_service(&state)
+        .submit_conversation_turn(&agent, conversation.id, "msg_queued", "Wait for this.")
+        .await
+        .expect("queue message while the turn runs");
+    assert!(matches!(outcome, ConversationTurnOutcome::Queued));
+    assert_eq!(
+        state
+            .conversation_turns
+            .queued_messages(conversation.id)
+            .await
+            .len(),
+        1
+    );
+
+    conversation_service(&state)
+        .stop_conversation(&agent, conversation.id)
+        .await
+        .expect("stop the running conversation");
+    assert!(
+        state
+            .conversation_turns
+            .queued_messages(conversation.id)
+            .await
+            .is_empty(),
+        "stopping the turn abandons messages queued behind it"
+    );
+    set_session_status(&backend, "idle").await;
+    drain(&state).await;
+}
+
+#[tokio::test]
+async fn queued_message_sse_updates_and_composer_hint_render_live() {
+    let backend = FakeBackend::start().await;
+    let state = backend.state().await;
+    let (agent, _) = insert_test_opencode_agent(&state)
+        .await
+        .expect("insert agent");
+    let conversation = created_conversation(&backend, &state, &agent).await;
+    let app = router(Arc::clone(&state));
+
+    let stream = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!("/agents/{agent}/chat/{}/stream", conversation.id))
+                .body(Body::empty())
+                .expect("stream request"),
+        )
+        .await
+        .expect("stream response");
+    assert_eq!(stream.status(), StatusCode::OK);
+    let mut body = stream.into_body();
+    let initial = read_snapshot(&mut body).await;
+    assert!(!initial.contains("Then summarize open positions."));
+
+    set_session_status(&backend, "busy").await;
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!("/agents/{agent}/chat/{}/messages", conversation.id))
+                .header("content-type", "application/x-www-form-urlencoded")
+                .header("HX-Request", "true")
+                .body(Body::from(
+                    "message=Then+summarize+open+positions.&message_id=msg_queued",
+                ))
+                .expect("message request"),
+        )
+        .await
+        .expect("message response");
+    assert_eq!(response.status(), StatusCode::OK);
+    let composer = response_text(response).await;
+    assert!(composer.contains(">Queue</button>"));
+    assert!(!composer.contains("autofocus disabled"));
+    assert!(composer.contains("Enter to queue"));
+
+    let updated = read_snapshot(&mut body).await;
+    assert!(updated.contains("Then summarize open positions."));
+    assert!(updated.contains(">queued</span>"));
+    assert!(!updated.contains("autofocus disabled"));
+    state.conversation_turns.clear_queued(conversation.id).await;
+    set_session_status(&backend, "idle").await;
+    drain(&state).await;
 }
 
 #[tokio::test]

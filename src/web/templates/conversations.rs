@@ -185,6 +185,7 @@ pub struct AgentConversationTranscriptPartialTemplate {
     pub session: Option<OpenCodeSessionView>,
     pub busy: bool,
     pub initializing: bool,
+    pub queued: Vec<String>,
 }
 #[derive(Template)]
 #[template(path = "agents/chat/composer.html")]
@@ -193,6 +194,7 @@ pub struct AgentConversationComposerPartialTemplate {
     pub conversation_id: Uuid,
     pub message_id: String,
     pub busy: bool,
+    pub initializing: bool,
     pub message: String,
     pub error: Option<String>,
 }

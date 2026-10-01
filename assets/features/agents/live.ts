@@ -149,7 +149,8 @@ function preserveConversationDraftOnSse(event: Event) {
   if (!textarea || (!textarea.value && document.activeElement !== textarea)) return;
 
   // SSE snapshots contain an empty composer. Keep the live textarea (and its
-  // focus/caret) while still applying the server's busy state to its controls.
+  // focus/caret) while still applying the server's control state (busy Send/
+  // Queue labeling or initializing-disabled controls) to the rest of the form.
   const data = (event as CustomEvent<{ data?: string }>).detail?.data;
   if (typeof data !== "string") return;
   const fragment = document.createElement("template");
@@ -163,6 +164,10 @@ function preserveConversationDraftOnSse(event: Event) {
   textarea.disabled = nextTextarea.disabled;
   button.disabled = nextButton.disabled;
   button.className = nextButton.className;
+  button.innerHTML = nextButton.innerHTML;
+  const hint = composer.querySelector<HTMLElement>("[data-conversation-composer-hint]");
+  const nextHint = fragment.content.querySelector<HTMLElement>("[data-conversation-composer-hint]");
+  if (hint && nextHint) hint.textContent = nextHint.textContent;
 }
 
 export function installAgentLiveLifecycle() {

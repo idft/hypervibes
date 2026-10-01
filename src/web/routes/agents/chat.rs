@@ -28,7 +28,7 @@ use crate::{
             TOOL_GROUP_JOURNAL_WRITES, TOOL_GROUP_MEMORY_WRITES, TOOL_GROUP_NOTIFICATIONS,
             TOOL_GROUP_ORDERS, TOOL_GROUP_STRATEGY_PROMPT_WRITES,
         },
-        service::{CONVERSATION_MESSAGE_MAX_CHARS, ConversationService},
+        service::{CONVERSATION_MESSAGE_MAX_CHARS, ConversationService, ConversationTurnOutcome},
     },
     agents::store::get_agent,
     gateway::{model::TelegramGatewayConfig, store as gateway_store},
@@ -116,6 +116,7 @@ struct ConversationSnapshot {
     session: Option<OpenCodeSessionView>,
     busy: bool,
     initializing: bool,
+    queued: Vec<String>,
     settings: AgentConversationSettingsView,
     permissions: Vec<AgentConversationPermissionRequestView>,
 }
@@ -214,6 +215,13 @@ async fn load_snapshot(
         session,
         busy,
         initializing,
+        queued: state
+            .conversation_turns
+            .queued_messages(conversation_id)
+            .await
+            .into_iter()
+            .map(|message| message.text)
+            .collect(),
         settings: AgentConversationSettingsView {
             model_picker: picker,
             policies,
@@ -298,13 +306,15 @@ fn render_snapshot(
         session: snapshot.session.clone(),
         busy: snapshot.busy,
         initializing: snapshot.initializing,
+        queued: snapshot.queued.clone(),
     }
     .render()?;
     let composer = AgentConversationComposerPartialTemplate {
         agent_key: snapshot.agent.agent_key.clone(),
         conversation_id: snapshot.conversation.id,
         message_id: opencode_message_id(),
-        busy: snapshot.busy || snapshot.initializing,
+        busy: snapshot.busy,
+        initializing: snapshot.initializing,
         message,
         error,
     }
@@ -616,12 +626,24 @@ pub(in crate::web::routes) async fn agents_send_conversation_message(
         .submit_conversation_turn(&agent_key, conversation_id, &form.message_id, &form.message)
         .await
     {
-        Ok(()) if is_htmx_request(&headers) => {
-            render_message_composer(&state, &agent_key, conversation_id, String::new(), None).await
+        Ok(outcome) => {
+            if matches!(outcome, ConversationTurnOutcome::Queued) {
+                // Wake the live stream so queued messages appear immediately
+                // instead of waiting for the next busy-state interval tick.
+                state
+                    .run_detail_events
+                    .publish(RunDetailDbEvent::ConversationChanged { conversation_id });
+            }
+            if is_htmx_request(&headers) {
+                render_message_composer(&state, &agent_key, conversation_id, String::new(), None)
+                    .await
+            } else {
+                Ok(
+                    Redirect::to(&format!("/agents/{agent_key}/chat/{conversation_id}"))
+                        .into_response(),
+                )
+            }
         }
-        Ok(()) => Ok(
-            Redirect::to(&format!("/agents/{agent_key}/chat/{conversation_id}")).into_response(),
-        ),
         Err(error) => {
             render_message_composer(
                 &state,
@@ -834,6 +856,7 @@ pub(in crate::web::routes) async fn agent_conversation_stream(
                 interval: tokio::time::interval(Duration::from_secs(3)),
                 busy: snapshot.busy,
                 initializing: snapshot.initializing,
+                queued: snapshot.queued.len(),
                 last_permissions: signature(&snapshot.permissions),
             },
             next_conversation_event,
@@ -855,6 +878,7 @@ struct ConversationStreamState {
     interval: tokio::time::Interval,
     busy: bool,
     initializing: bool,
+    queued: usize,
     last_permissions: String,
 }
 async fn next_conversation_event(
@@ -873,11 +897,13 @@ async fn next_conversation_event(
                     let next = signature(&snapshot.permissions);
                     let busy_changed = snapshot.busy != stream.busy
                         || snapshot.initializing != stream.initializing
-                        || snapshot.conversation.opencode_session_id != stream.session_id;
+                        || snapshot.conversation.opencode_session_id != stream.session_id
+                        || snapshot.queued.len() != stream.queued;
                     let permissions_changed = next != stream.last_permissions;
                     stream.busy = snapshot.busy;
                     stream.initializing = snapshot.initializing;
                     stream.session_id = snapshot.conversation.opencode_session_id.clone();
+                    stream.queued = snapshot.queued.len();
                     stream.last_permissions = next;
                     if busy_changed {
                         if let Ok(rendered) = render_snapshot(&snapshot, &stream.csrf_token, String::new(), None) {
@@ -908,6 +934,7 @@ async fn next_conversation_event(
                         stream.session_id = snapshot.conversation.opencode_session_id.clone();
                         stream.busy = snapshot.busy;
                         stream.initializing = snapshot.initializing;
+                        stream.queued = snapshot.queued.len();
                         stream.last_permissions = signature(&snapshot.permissions);
                         match render_snapshot(&snapshot, &stream.csrf_token, String::new(), None) {
                             Ok(rendered) => stream.pending.extend(rendered.events()),

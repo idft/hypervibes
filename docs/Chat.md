@@ -20,6 +20,14 @@ Compaction and deletion are OpenCode session operations available only while the
 session is idle. Deleting an agent removes its idle mapped sessions and
 agent-owned conversation records.
 
+You can keep typing while the agent responds. Messages sent during a running
+turn are queued, shown as queued in the transcript, and submitted in order once
+the running turn finishes. **Stop** abandons messages still queued behind the
+running turn. Telegram messages also queue, with an acknowledgement in the chat.
+Up to 20 messages can wait in a conversation's queue. The queue lives on the
+server, so it survives closing or reloading your browser, but queued messages
+are lost if the server restarts.
+
 The `agent-conversations` profile has no native shell, filesystem, web, or task
 tools and never reads the workspace `.env`. Its default read tools are:
 
