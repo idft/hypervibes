@@ -16,7 +16,7 @@ services:
       retries: 5
 
   hypervibes:
-    image: ghcr.io/idft/hypervibes:0.3.7
+    image: ghcr.io/idft/hypervibes:0.3.8
     restart: unless-stopped
     stop_grace_period: 31m
     command: ["hypervibes"]
@@ -46,7 +46,7 @@ services:
       start_period: 20s
 
   opencode:
-    image: ghcr.io/idft/hypervibes:0.3.7
+    image: ghcr.io/idft/hypervibes:0.3.8
     restart: unless-stopped
     command: ["opencode", "serve", "--hostname", "0.0.0.0", "--port", "14096"]
     environment:
