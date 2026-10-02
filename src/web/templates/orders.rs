@@ -6,6 +6,7 @@ use crate::hyperliquid::live_state::{
     AccountLiveState, LiveDataStatus, LiveOpenOrder, account_live_health,
 };
 
+use super::live_health::LiveAccountDisplayState;
 use super::shared::{
     MoneyCell, currency_logo_url, format_money_cell, format_neutral_money_cell_with_decimals,
 };
@@ -39,8 +40,13 @@ pub struct OpenOrdersView {
 impl OpenOrdersView {
     pub fn from_live_state(state: AccountLiveState) -> Self {
         let health = account_live_health(&state);
-        let (is_loading, unavailable_message) = section_message(health.open_orders);
-        if !health.open_orders.is_current() {
+        let display = LiveAccountDisplayState::from_live_state(&state);
+        let (is_loading, unavailable_message) = if display.orders_available {
+            (false, None)
+        } else {
+            section_message(health.open_orders)
+        };
+        if !display.orders_available {
             return Self {
                 orders: Vec::new(),
                 is_loading,

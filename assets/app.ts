@@ -11,13 +11,15 @@ import { initIndicators, installIndicatorsLifecycle } from "./features/agents/in
 import { initProviders } from "./features/providers";
 import { installCopyButtons } from "./shared/clipboard";
 import { initClickableRows } from "./shared/clickable-rows";
-import { renderLocalDateTimes, renderTimeago, seedNumberRolls, startRunningDurationTicker } from "./shared/presentation";
+import { animateNumberRolls, renderLocalDateTimes, renderTimeago, seedNumberRolls, startRunningDurationTicker } from "./shared/presentation";
 
-function initialize(root: ParentNode = document) {
+function initialize(root: ParentNode = document, animateNumbers = false) {
   seedCsrfTokens(root);
   renderTimeago(root);
   renderLocalDateTimes(root);
-  seedNumberRolls(root);
+  // Live values must be compared before seeding overwrites the previous value.
+  if (animateNumbers) animateNumberRolls(root);
+  else seedNumberRolls(root);
   initClickableRows(root);
   initAccount(root);
   initAgentPage(root);
@@ -41,7 +43,7 @@ function start() {
   document.addEventListener("htmx:afterSwap", (event) => {
     const swappedElement = (event as CustomEvent<{ elt?: unknown }>).detail.elt;
     if (swappedElement instanceof Element) {
-      initialize(swappedElement);
+      initialize(swappedElement, swappedElement.matches('[sse-swap="balance"]'));
     }
   });
   initialize();

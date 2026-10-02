@@ -10,7 +10,7 @@ fn account_balance_partial_renders_loading_state_when_value_missing() {
     let view = AccountBalanceView {
         total_balance: None,
         total_u_pnl: AnimatedNumber::for_pnl(rust_decimal::Decimal::ZERO),
-        data_available: false,
+        positions_available: false,
     };
     let html = AccountBalancePartialTemplate::render_view(view).unwrap();
     assert!(html.contains("Balance"));
@@ -132,6 +132,55 @@ fn balance_view_sums_total_upnl_from_open_positions() {
     let view = AccountBalanceView::from_live_state(state);
     assert_eq!(view.total_u_pnl.value, "100.0000");
     assert_eq!(view.total_u_pnl.color_class, "text-emerald-400");
+}
+
+#[test]
+fn balance_view_keeps_current_position_pnl_visible_across_spot_refreshes() {
+    use crate::hyperliquid::live_state::{
+        ACCOUNT_DATA_MAX_AGE, AccountLiveState, LiveMarginState, LivePosition,
+    };
+    let now = Utc::now();
+    let mut state = AccountLiveState {
+        status: LiveConnectionStatus::Connected,
+        clearinghouse_updated_at: Some(now),
+        margin: Some(LiveMarginState {
+            account_value: Some(Decimal::new(1000, 0)),
+            ..Default::default()
+        }),
+        open_positions: vec![LivePosition {
+            coin: "BTC".to_string(),
+            szi: Some(Decimal::ONE),
+            unrealized_pnl: Some(Decimal::new(125, 0)),
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+
+    for spot_updated_at in [
+        None,
+        Some(now),
+        Some(now - ACCOUNT_DATA_MAX_AGE - chrono::Duration::seconds(1)),
+        Some(now),
+    ] {
+        state.spot_updated_at = spot_updated_at;
+        let view = AccountBalanceView::from_live_state(state.clone());
+        assert_eq!(view.total_balance.is_some(), spot_updated_at == Some(now));
+        assert_eq!(
+            view.unrealized_pnl().expect("current position PnL").value,
+            "125.0000"
+        );
+        let html = AccountBalancePartialTemplate::render_view(view).expect("balance renders");
+        assert!(html.contains("data-animate-key=\"total-upnl\""));
+        assert!(html.contains("data-raw-value=\"125\""));
+    }
+
+    // A stale position snapshot must still be unavailable, even with fresh spot data.
+    state.clearinghouse_updated_at =
+        Some(now - ACCOUNT_DATA_MAX_AGE - chrono::Duration::seconds(1));
+    let view = AccountBalanceView::from_live_state(state);
+    assert!(view.unrealized_pnl().is_none());
+    let html = AccountBalancePartialTemplate::render_view(view).expect("balance renders");
+    assert!(!html.contains("data-animate-key=\"total-upnl\""));
 }
 
 #[test]

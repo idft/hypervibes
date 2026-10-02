@@ -34,6 +34,7 @@ pub fn live_state_from_clearinghouse(
         environment: account_key.environment.clone(),
         status: crate::hyperliquid::live_state::LiveConnectionStatus::Connected,
         connected_at: None,
+        connection_interrupted_at: None,
         clearinghouse_updated_at: Some(Utc::now()),
         open_orders_updated_at: None,
         spot_updated_at: None,

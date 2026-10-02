@@ -17,7 +17,7 @@ fn agents_page_renders_base_layout_and_status_box() {
         account_balance: AccountBalanceView {
             total_balance: Some(rust_decimal::Decimal::new(232_6800, 4)),
             total_u_pnl: AnimatedNumber::for_pnl(rust_decimal::Decimal::ZERO),
-            data_available: true,
+            positions_available: true,
         },
         api_key_last_used_iso: None,
     };
@@ -54,7 +54,7 @@ fn agents_page_renders_loading_placeholder_when_no_balance() {
         account_balance: AccountBalanceView {
             total_balance: None,
             total_u_pnl: AnimatedNumber::for_pnl(rust_decimal::Decimal::ZERO),
-            data_available: false,
+            positions_available: false,
         },
         api_key_last_used_iso: None,
     };

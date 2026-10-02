@@ -55,6 +55,90 @@ async fn account_live_stream_closes_when_shutdown_is_signaled() {
 }
 
 #[tokio::test]
+async fn reconnect_grace_expires_on_the_stream_without_new_exchange_data() {
+    use crate::hyperliquid::live_state::{LiveMarginState, LiveOpenOrder, LivePosition};
+    use rust_decimal::Decimal;
+
+    let state = test_state().await;
+    let (agent_key, wallet_address) = insert_test_agent(&state).await.expect("insert agent");
+    let key = AccountKey::new(&wallet_address, "live");
+    let now = Utc::now();
+    state.live_accounts.replace(
+        key.clone(),
+        AccountLiveState {
+            status: LiveConnectionStatus::Connected,
+            clearinghouse_updated_at: Some(now),
+            open_orders_updated_at: Some(now),
+            spot_updated_at: Some(now),
+            margin: Some(LiveMarginState {
+                account_value: Some(Decimal::new(1000, 0)),
+                ..Default::default()
+            }),
+            open_positions: vec![LivePosition {
+                coin: "BTC".to_string(),
+                szi: Some(Decimal::ONE),
+                ..Default::default()
+            }],
+            open_orders: vec![LiveOpenOrder {
+                coin: "ETH".to_string(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        },
+    );
+    state
+        .live_accounts
+        .set_status(&key, LiveConnectionStatus::Reconnecting);
+    state.live_accounts.upsert(key, |state| {
+        state.connection_interrupted_at = Some(now - chrono::Duration::seconds(28));
+    });
+    let response = router(state)
+        .oneshot(
+            Request::builder()
+                .uri(format!("/agents/{agent_key}/live/stream"))
+                .body(Body::empty())
+                .expect("build live stream request"),
+        )
+        .await
+        .expect("serve live stream");
+    let mut body = response.into_body();
+    tokio::time::timeout(std::time::Duration::from_secs(8), async {
+        let mut saw_cached_positions = false;
+        let mut saw_cached_orders = false;
+        let mut saw_reconnect_warning = false;
+        let mut saw_expired_positions = false;
+        loop {
+            let frame = body
+                .frame()
+                .await
+                .expect("stream remains open")
+                .expect("valid SSE frame");
+            let Ok(data) = frame.into_data() else {
+                continue;
+            };
+            let text = String::from_utf8(data.to_vec()).expect("UTF-8 SSE event");
+            saw_reconnect_warning |= text.contains("Showing last known data");
+            if text.contains("event: positions") {
+                saw_cached_positions |= text.contains("BTC");
+                saw_expired_positions |= text.contains("unavailable");
+            }
+            if text.contains("event: orders") {
+                saw_cached_orders |= text.contains("ETH");
+                if text.contains("unavailable") {
+                    assert!(saw_cached_positions);
+                    assert!(saw_cached_orders);
+                    assert!(saw_reconnect_warning);
+                    assert!(saw_expired_positions);
+                    break;
+                }
+            }
+        }
+    })
+    .await
+    .expect("the five-second freshness tick expires the reconnect display grace");
+}
+
+#[tokio::test]
 async fn account_balance_stream_emits_initial_loading_placeholder() {
     let state = test_state().await;
 

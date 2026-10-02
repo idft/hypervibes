@@ -54,8 +54,8 @@ export function seedNumberRolls(root: ParentNode = document) {
   });
 }
 
-export function animateNumberRolls() {
-  document.querySelectorAll<HTMLElement>(".number-roll").forEach((container) => {
+export function animateNumberRolls(root: ParentNode = document) {
+  root.querySelectorAll<HTMLElement>(".number-roll").forEach((container) => {
     const key = container.dataset.animateKey;
     if (!key) {
       return;
@@ -65,9 +65,11 @@ export function animateNumberRolls() {
     const digits = container.querySelectorAll<HTMLElement>(".number-digit");
     if (previous && previous.formatted !== formatted) {
       const up = Number(container.dataset.rawValue) > Number(previous.raw);
+      // Live swaps can arrive before the previous roll finishes. Keep the
+      // incoming digits visible so frequent PnL updates never blank the stat.
       const keyframes: Keyframe[] = up
-        ? [{ transform: "translateY(-0.4em)", opacity: "0", color: "#4ade80" }, { transform: "translateY(0)", opacity: "1", color: "inherit" }]
-        : [{ transform: "translateY(0.4em)", opacity: "0", color: "#f87171" }, { transform: "translateY(0)", opacity: "1", color: "inherit" }];
+        ? [{ transform: "translateY(-0.4em)", color: "#4ade80" }, { transform: "translateY(0)", color: "inherit" }]
+        : [{ transform: "translateY(0.4em)", color: "#f87171" }, { transform: "translateY(0)", color: "inherit" }];
       let delay = 0;
       digits.forEach((digit) => {
         digit.animate(keyframes, { ...rollTiming, delay });

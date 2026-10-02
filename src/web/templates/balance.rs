@@ -1,9 +1,9 @@
 use askama::Template;
 use rust_decimal::Decimal;
 
-use crate::hyperliquid::live_state::account_live_health;
 use crate::hyperliquid::queries::BalancePoint;
 
+use super::live_health::LiveAccountDisplayState;
 use super::shared::{AnimatedNumber, MoneyCell, dash_cell, format_signed_money_cell};
 
 /// View-model for the live account balance card shown on the agent detail
@@ -22,13 +22,12 @@ use super::shared::{AnimatedNumber, MoneyCell, dash_cell, format_signed_money_ce
 pub struct AccountBalanceView {
     pub total_balance: Option<Decimal>,
     pub total_u_pnl: AnimatedNumber,
-    pub data_available: bool,
+    pub positions_available: bool,
 }
 
 impl AccountBalanceView {
     pub fn from_live_state(state: crate::hyperliquid::live_state::AccountLiveState) -> Self {
-        let health = account_live_health(&state);
-        let data_available = health.balance.is_current();
+        let display = LiveAccountDisplayState::from_live_state(&state);
         let perps_account_value = state
             .margin
             .as_ref()
@@ -59,9 +58,9 @@ impl AccountBalanceView {
             .fold(Decimal::ZERO, |acc, value| acc + value);
 
         Self {
-            total_balance: data_available.then_some(total_balance).flatten(),
+            total_balance: display.balance_available.then_some(total_balance).flatten(),
             total_u_pnl: AnimatedNumber::for_pnl(total_u_pnl),
-            data_available,
+            positions_available: display.positions_available,
         }
     }
 
@@ -75,7 +74,9 @@ impl AccountBalanceView {
     }
 
     pub fn unrealized_pnl(&self) -> Option<&AnimatedNumber> {
-        self.data_available.then_some(&self.total_u_pnl)
+        // PnL comes entirely from clearinghouse positions; spot balance
+        // freshness must not hide an otherwise current position value.
+        self.positions_available.then_some(&self.total_u_pnl)
     }
 }
 

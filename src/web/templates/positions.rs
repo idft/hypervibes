@@ -7,6 +7,7 @@ use crate::hyperliquid::market_data::MarketDataSnapshot;
 use askama::Template;
 use rust_decimal::Decimal;
 
+use super::live_health::LiveAccountDisplayState;
 use super::shared::{
     MoneyCell, currency_logo_url, dash_cell, format_decimal_with_commas,
     format_money_text_with_decimals, format_neutral_money_cell_with_decimals,
@@ -69,9 +70,14 @@ impl OpenPositionsView {
         market_data: &MarketDataSnapshot,
     ) -> Self {
         let health = account_live_health(&state);
-        let (is_loading, unavailable_message) = section_message(health.positions, "positions");
+        let display = LiveAccountDisplayState::from_live_state(&state);
+        let (is_loading, unavailable_message) = if display.positions_available {
+            (false, None)
+        } else {
+            section_message(health.positions, "positions")
+        };
 
-        if !health.positions.is_current() {
+        if !display.positions_available {
             return Self {
                 positions: Vec::new(),
                 is_loading,

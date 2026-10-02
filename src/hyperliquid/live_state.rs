@@ -378,6 +378,10 @@ pub struct AccountLiveState {
     pub environment: String,
     pub status: LiveConnectionStatus,
     pub connected_at: Option<DateTime<Utc>>,
+    /// Start of the current connection interruption, preserved through retries
+    /// and catch-up synchronization until the connection is restored.
+    #[serde(default)]
+    pub connection_interrupted_at: Option<DateTime<Utc>>,
     /// Last successful clearinghouse snapshot. This authorizes positions.
     pub clearinghouse_updated_at: Option<DateTime<Utc>>,
     /// Last successful open-orders snapshot.
@@ -606,6 +610,11 @@ impl LiveAccountStore {
                     status,
                     ..Default::default()
                 });
+            if status == LiveConnectionStatus::Connected {
+                state.connection_interrupted_at = None;
+            } else if state.status == LiveConnectionStatus::Connected {
+                state.connection_interrupted_at = Some(Utc::now());
+            }
             state.status = status;
             if matches!(status, LiveConnectionStatus::Connected) && state.connected_at.is_none() {
                 state.connected_at = Some(Utc::now());
@@ -681,6 +690,34 @@ mod tests {
         assert_eq!(state.status, LiveConnectionStatus::Connected);
         assert!(state.connected_at.is_some());
         assert!(state.connected_at.is_some());
+    }
+
+    #[test]
+    fn connection_interruption_tracks_the_original_gap_through_retries() {
+        let store = LiveAccountStore::new();
+        let k = key("0xgap");
+        let initial = store.set_status(&k, LiveConnectionStatus::Connecting);
+        assert!(initial.connection_interrupted_at.is_none());
+        store.set_status(&k, LiveConnectionStatus::Connected);
+        let disconnected = store.set_status(&k, LiveConnectionStatus::Reconnecting);
+        assert!(disconnected.connection_interrupted_at.is_some());
+
+        // Backdate the gap so this also catches accidentally resetting the
+        // grace period at each retry or catch-up transition.
+        let interrupted_at = Utc::now() - chrono::Duration::seconds(20);
+        store.upsert(k.clone(), |state| {
+            state.connection_interrupted_at = Some(interrupted_at);
+        });
+        for status in [
+            LiveConnectionStatus::Reconnecting,
+            LiveConnectionStatus::Connecting,
+            LiveConnectionStatus::StartupSyncing,
+        ] {
+            let state = store.set_status(&k, status);
+            assert_eq!(state.connection_interrupted_at, Some(interrupted_at));
+        }
+        let restored = store.set_status(&k, LiveConnectionStatus::Connected);
+        assert!(restored.connection_interrupted_at.is_none());
     }
 
     #[test]

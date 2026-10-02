@@ -23,6 +23,37 @@ afterEach(() => {
 });
 
 describe("HTMX initialization", () => {
+  it("animates live balance changes before reseeding, keeping digits visible across rapid swaps", () => {
+    const animate = vi.fn();
+    const originalAnimate = HTMLElement.prototype.animate;
+    HTMLElement.prototype.animate = animate;
+    try {
+      const balance = document.createElement("div");
+      balance.setAttribute("sse-swap", "balance");
+      document.body.append(balance);
+      const swap = (value: string) => {
+        balance.innerHTML = `<div class="number-roll" data-animate-key="test-live-pnl" data-raw-value="${value}">${Array.from(value, (digit) => `<span class="number-digit" data-digit="${digit}">${digit}</span>`).join("")}</div>`;
+        balance.dispatchEvent(new CustomEvent("htmx:afterSwap", { bubbles: true, detail: { elt: balance, target: balance } }));
+      };
+
+      swap("10");
+      expect(animate).not.toHaveBeenCalled();
+      swap("11");
+      expect(animate).toHaveBeenCalledTimes(2);
+      expect(animate.mock.calls[0][0][0].color).toBe("#4ade80");
+      swap("9");
+      expect(animate).toHaveBeenCalledTimes(3);
+      expect(animate.mock.calls[2][0][0].color).toBe("#f87171");
+      for (const [keyframes] of animate.mock.calls) {
+        expect(keyframes.every((frame: Keyframe) => frame.opacity === undefined || frame.opacity === "1")).toBe(true);
+      }
+      swap("9");
+      expect(animate).toHaveBeenCalledTimes(3);
+    } finally {
+      HTMLElement.prototype.animate = originalAnimate;
+    }
+  });
+
   it("formats timestamps in an outerHTML replacement", () => {
     const timestamp = "2026-06-27T00:01:00Z";
     const replacement = document.createElement("section");

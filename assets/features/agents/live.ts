@@ -1,4 +1,4 @@
-import { animateNumberRolls, tickRunningDurations } from "../../shared/presentation";
+import { tickRunningDurations } from "../../shared/presentation";
 import { installConversationCreationGuard } from "./conversation-creation";
 import { installChatPermissions } from "./chat-permissions";
 
@@ -184,10 +184,6 @@ export function installAgentLiveLifecycle() {
     if (!(input instanceof HTMLInputElement) || input.name !== "model_selection") return;
     const form = input.closest<HTMLFormElement>("form");
     if (form) updateModelDependentButtons(form);
-  });
-  document.addEventListener("htmx:sseMessage", (event) => {
-    const detail = (event as CustomEvent<{ type?: string; event?: Event }>).detail;
-    if (detail.type === "balance" || detail.type === "positions") window.setTimeout(animateNumberRolls, 50);
   });
   document.addEventListener("htmx:afterSwap", (event) => { const target = (event as CustomEvent<{ target?: unknown }>).detail.target; if (!(target instanceof Element)) return; initRunTranscripts(target); if (target.matches('[sse-swap="run-summary"]')) tickRunningDurations(); if (target.matches('[sse-swap="run-transcript"], [sse-swap="conversation-transcript"]') || target.querySelector('[sse-swap="run-transcript"], [sse-swap="conversation-transcript"]')) scrollRunTranscriptToBottom(); });
   document.addEventListener("htmx:afterSettle", (event) => { const target = (event as CustomEvent<{ target?: unknown }>).detail.target; if (!(target instanceof Element)) return; if (target.matches('[sse-swap="run-transcript"], [sse-swap="conversation-transcript"]') || target.querySelector('[sse-swap="run-transcript"], [sse-swap="conversation-transcript"]')) scrollRunTranscriptToBottom(); });
