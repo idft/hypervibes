@@ -24,13 +24,13 @@ timestamps, and interpretations; the backend validates storage shape, ownership,
 and references, not factual correctness.
 
 Every new Analysis publication receives a backend-owned
-`metadata.stale_after` and `expiry_policy="analysis_schedule_v2"`. Expiry is two
-cycles of the **immutable producing run's schedule**, anchored to its scheduled
-evidence boundary (5m => boundary + 10m, 15m => +30m, 4h => +8h). The memory's
+`metadata.stale_after` and `expiry_policy="analysis_schedule_v3"`. Expiry is two
+cycles of the **immutable producing run's schedule**, anchored to the memory's
+actual creation time (5m => creation + 10m, 15m => +30m, 4h => +8h). The memory's
 optional evidence timeframe does not override that schedule; omitted timeframes
-work the same way. Unscheduled producers use publication time +30m. Runtime/model
-latency does not extend scheduled entry validity, so a late publication can
-already be stale.
+work the same way. Unscheduled producers use creation time +30m. Queue delays and
+runtime/model latency do not consume the memory's validity period before it is
+created. Stored expiry is shared by the API, Trading context, and operator UI.
 
 Analysis cannot shorten or extend memory expiry. Supplied `metadata.stale_after`
 and `expiry_policy` are overwritten and `valid_for_seconds` is removed, even when
@@ -41,7 +41,8 @@ storage effect. Price/event invalidation and cancellation conditions remain part
 of research: a fresh memory does not guarantee an actionable entry.
 
 Historical records are not rewritten, including prior caller-set validity and
-`analysis_schedule_v1` deadlines. Explicit `stale_after` takes precedence over
+`analysis_schedule_v1` and scheduled-boundary `analysis_schedule_v2` deadlines.
+Explicit `stale_after` takes precedence over
 `valid_for_seconds`, which is relative to creation. Without explicit validity,
 legacy provenance-bearing research uses its **memory timeframe** (15m => 30m, 1h => 2h,
 1d => 48h, other/5m/omitted => 30m), relative to creation. Records without run

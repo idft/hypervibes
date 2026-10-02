@@ -11,9 +11,9 @@ use crate::memory::MemoryRecord;
 ///    `created_at`.
 /// 3. Legacy provenance-bearing research rows fall back to their memory
 ///    timeframe (15m => 30m, 1h => 2h, 1d => 48h, others => 30m).
-///    New Analysis publications always materialize schedule-derived `stale_after`
-///    at insertion, overriding caller validity; historical rows retain their
-///    original computation.
+///    New Analysis publications always materialize `stale_after` at insertion:
+///    creation time plus two cycles of the producing run's schedule, overriding
+///    caller validity; historical rows retain their original computation.
 ///
 /// Returns `None` when the row has no implicit or explicit expiration
 /// (e.g. an `observation` memory with no `valid_for_seconds`).
@@ -97,20 +97,16 @@ fn analysis_default_valid_for(timeframe: &str) -> Duration {
 
 pub(crate) fn analysis_schedule_expires_at(
     schedule: Option<&str>,
-    boundary: DateTime<Utc>,
-    published_at: DateTime<Utc>,
+    created_at: DateTime<Utc>,
 ) -> anyhow::Result<DateTime<Utc>> {
-    let (anchor, seconds) = match schedule {
-        Some(schedule) => (
-            boundary,
-            crate::harness::timeframe::parse_timeframe_seconds(schedule)?
-                .checked_mul(2)
-                .ok_or_else(|| anyhow::anyhow!("analysis validity overflow"))?,
-        ),
-        None => (published_at, 30 * 60),
+    let seconds = match schedule {
+        Some(schedule) => crate::harness::timeframe::parse_timeframe_seconds(schedule)?
+            .checked_mul(2)
+            .ok_or_else(|| anyhow::anyhow!("analysis validity overflow"))?,
+        None => 30 * 60,
     };
     Duration::try_seconds(seconds)
-        .and_then(|duration| anchor.checked_add_signed(duration))
+        .and_then(|duration| created_at.checked_add_signed(duration))
         .ok_or_else(|| anyhow::anyhow!("analysis expiration timestamp overflow"))
 }
 
@@ -119,19 +115,17 @@ mod tests {
     use super::*;
 
     #[test]
-    fn schedule_validity_uses_boundary_and_canonical_parser() {
-        let boundary = Utc::now();
-        let published_at = boundary + Duration::minutes(12);
+    fn schedule_validity_uses_creation_time_and_canonical_parser() {
+        let created_at = Utc::now();
         for (schedule, minutes) in [("5m", 10), ("15m", 30), ("4h", 480)] {
             assert_eq!(
-                analysis_schedule_expires_at(Some(schedule), boundary, published_at)
-                    .expect("valid schedule"),
-                boundary + Duration::minutes(minutes),
+                analysis_schedule_expires_at(Some(schedule), created_at).expect("valid schedule"),
+                created_at + Duration::minutes(minutes),
             );
         }
         assert_eq!(
-            analysis_schedule_expires_at(None, boundary, published_at).expect("fallback"),
-            published_at + Duration::minutes(30),
+            analysis_schedule_expires_at(None, created_at).expect("fallback"),
+            created_at + Duration::minutes(30),
         );
         assert_eq!(analysis_default_valid_for("5m"), Duration::minutes(30));
         assert_eq!(analysis_default_valid_for(""), Duration::minutes(30));

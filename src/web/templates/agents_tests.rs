@@ -113,14 +113,7 @@ fn agents_show_page_renders_base_layout_and_delete_modal() {
     template.account_balance_html = account_balance_html;
     template.open_positions_html = open_positions_html;
     template.open_orders_html = open_orders_html;
-    template.latest_trade_decision_summary_html =
-        LatestTradeDecisionSummaryPartialTemplate::render_view(
-            Some("Scaled out into strength".to_string()),
-            None,
-            Some(Utc::now()),
-            None,
-        )
-        .unwrap();
+    template.activity_html = "Scaled out into strength".to_string();
     template.sparklines_html = sparklines_html;
     template.setup_checklist = AgentSetupChecklistView::from_readiness(&sample_agent_readiness());
     let rendered = template.render().unwrap();
@@ -145,6 +138,7 @@ fn agents_show_page_renders_base_layout_and_delete_modal() {
     assert!(rendered.contains("Balance"));
     assert!(rendered.contains("Unrealized"));
     assert!(rendered.contains("Scaled out into strength"));
+    assert!(rendered.contains("sse-swap=\"activity\" hx-swap=\"innerHTML\""));
     assert!(rendered.contains("sse-swap=\"health\" hx-swap=\"innerHTML\""));
     assert!(rendered.contains("sse-swap=\"balance\" hx-swap=\"innerHTML\""));
     assert!(rendered.contains("sse-swap=\"positions\" hx-swap=\"innerHTML\""));

@@ -122,8 +122,8 @@ provenance and never accepts source run or sub-agent identity from metadata.
 Use optional `metadata.handoff_version=1` for compact research handoffs and
 `links[*].link_type="corrects"` for corrections to exact originals. Every new
 Analysis publication receives backend-owned expiry: two immutable source-run
-schedule cycles from the evidence boundary, including 5m jobs and omitted memory
-timeframes, or publication +30m for unscheduled runs. Caller-supplied expiry
+schedule cycles from the memory's actual creation time, including 5m jobs and
+omitted memory timeframes, or creation +30m for unscheduled runs. Caller-supplied expiry
 metadata is silently ignored for Analysis publications; the MCP tool forwards
 metadata and the backend stamps the actual deadline. Price/event invalidation
 and cancellation conditions remain part of research. See

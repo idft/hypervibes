@@ -1,7 +1,6 @@
 use std::time::Duration;
 
 use askama::Template;
-use chrono::{DateTime, Utc};
 
 use crate::hyperliquid::live_state::{
     AccountLiveState, LiveDataStatus, LiveOpenOrder, account_live_health,
@@ -9,7 +8,6 @@ use crate::hyperliquid::live_state::{
 
 use super::shared::{
     MoneyCell, currency_logo_url, format_money_cell, format_neutral_money_cell_with_decimals,
-    format_timestamp_iso, format_timestamp_utc,
 };
 
 /// Per-row view of an open resting order for the agent detail page.
@@ -165,51 +163,5 @@ pub struct OpenOrdersPartialTemplate {
 impl OpenOrdersPartialTemplate {
     pub fn render_view(view: OpenOrdersView) -> Result<String, askama::Error> {
         Self { view }.render()
-    }
-}
-
-#[derive(Template)]
-#[template(path = "agents/fragments/latest-trade-decision-summary.html")]
-pub struct LatestTradeDecisionSummaryPartialTemplate {
-    pub summary: Option<String>,
-    pub detail_url: Option<String>,
-    /// `created_at` of the latest `trading_decision` memory formatted as an
-    /// ISO 8601 / RFC 3339 string with a `Z` suffix, suitable for the
-    /// `datetime` attribute of a `<time>` element consumed by
-    /// `timeago.js`. Empty when no memory exists yet.
-    pub created_at_iso: String,
-    /// `created_at` of the latest `trading_decision` memory formatted as
-    /// `YYYY-MM-DD HH:MM UTC`. Used as the timeago fallback so the
-    /// timestamp is meaningful even before client-side JS hydrates.
-    /// Empty when no memory exists yet.
-    pub created_at_fallback_text: String,
-    /// `expires_at` of the latest `trading_decision` memory (resolved from
-    /// `stale_after` / `valid_for_seconds` metadata) formatted as an ISO
-    /// 8601 / RFC 3339 string, suitable for the `title` attribute of a
-    /// `<time>` element. Empty when the row has no explicit expiration.
-    pub expires_at_iso: String,
-    /// `true` when `expires_at` is at or before the server's `now`. The
-    /// agent page uses this to highlight the timestamp and surface a
-    /// warning icon so the operator can investigate the decision gap.
-    pub is_expired: bool,
-}
-
-impl LatestTradeDecisionSummaryPartialTemplate {
-    pub fn render_view(
-        summary: Option<String>,
-        detail_url: Option<String>,
-        created_at: Option<DateTime<Utc>>,
-        expires_at: Option<DateTime<Utc>>,
-    ) -> Result<String, askama::Error> {
-        let is_expired = expires_at.is_some_and(|value| value <= Utc::now());
-        Self {
-            summary,
-            detail_url,
-            created_at_iso: created_at.map(format_timestamp_iso).unwrap_or_default(),
-            created_at_fallback_text: created_at.map(format_timestamp_utc).unwrap_or_default(),
-            expires_at_iso: expires_at.map(format_timestamp_iso).unwrap_or_default(),
-            is_expired,
-        }
-        .render()
     }
 }

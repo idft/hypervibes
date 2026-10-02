@@ -79,11 +79,13 @@ pub(crate) async fn insert_memory_in_tx(
     let source_run_id = source_run.map(|source| source.run_id);
 
     // Expiry of new Analysis publications is backend-owned. Materialize it from
-    // the immutable run schedule, never caller metadata, the evidence timeframe,
-    // or the job's mutable current schedule. Historical rows keep their policy.
+    // creation time and the immutable run schedule, never caller metadata, the
+    // evidence timeframe, or the job's mutable current schedule.
     if let Some(run_id) = source_run_id {
         let source: Option<(String, Option<String>, DateTime<Utc>)> = sqlx::query_as(
-            "SELECT sub_agent_kind, timeframe, scheduled_for
+            // CURRENT_TIMESTAMP matches the memory row's created_at default:
+            // both use the database transaction timestamp, avoiding clock skew.
+            "SELECT sub_agent_kind, timeframe, CURRENT_TIMESTAMP
              FROM harness_sub_agent_runs WHERE id = $1 AND agent_key = $2",
         )
         .bind(run_id)
@@ -91,20 +93,19 @@ pub(crate) async fn insert_memory_in_tx(
         .fetch_optional(&mut **tx)
         .await
         .context("failed to load memory source schedule")?;
-        if let Some((kind, schedule, boundary)) = source
+        if let Some((kind, schedule, created_at)) = source
             && kind == "analysis"
         {
             let expires_at = crate::memory::expiry::analysis_schedule_expires_at(
                 schedule.as_deref(),
-                boundary,
-                Utc::now(),
+                created_at,
             )?;
             let metadata_object = metadata.as_object_mut().ok_or_else(|| {
                 MemoryStoreError::Validation("metadata must be a JSON object.".to_string())
             })?;
             metadata_object.remove("valid_for_seconds");
             metadata["stale_after"] = serde_json::json!(expires_at);
-            metadata["expiry_policy"] = serde_json::json!("analysis_schedule_v2");
+            metadata["expiry_policy"] = serde_json::json!("analysis_schedule_v3");
         }
     }
 
@@ -411,14 +412,6 @@ pub async fn get_latest_agent_memory_by_type(
     .context("failed to fetch latest agent memory by type")?;
 
     Ok(row)
-}
-
-/// Latest `trading_decision` memory overall, newest first.
-pub async fn get_latest_trading_decision(
-    pool: &DbPool,
-    agent_key: &str,
-) -> Result<Option<MemoryRecord>> {
-    get_latest_agent_memory_by_type(pool, agent_key, "trading_decision").await
 }
 
 pub async fn list_memory_instrument_targets(

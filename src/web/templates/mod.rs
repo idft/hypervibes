@@ -1,4 +1,5 @@
 mod account;
+mod activity;
 mod agents;
 mod balance;
 mod conversations;
@@ -22,6 +23,7 @@ pub fn frontend_asset_version() -> &'static str {
 use self::shared::*;
 
 pub use account::*;
+pub use activity::*;
 pub use agents::*;
 pub use balance::*;
 pub use conversations::*;

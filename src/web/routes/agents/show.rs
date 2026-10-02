@@ -12,6 +12,7 @@ use tracing::warn;
 
 use super::super::account::agent_subaccount_name;
 use super::{
+    live_stream::render_agent_activity_html,
     memories::{
         AgentMemoriesQuery, build_memory_type_options, memory_page_url, memory_preset_url,
         memory_stream_url, parse_memory_time_filter, prepare_memory_timeline_page,
@@ -31,10 +32,7 @@ use crate::{
             list_account_transactions_page,
         },
     },
-    memory::{
-        get_latest_trading_decision, get_memory, list_agent_memory_timeline,
-        list_agent_memory_type_counts, memory_expires_at,
-    },
+    memory::{get_memory, list_agent_memory_timeline, list_agent_memory_type_counts},
     notifications::store::{count_notifications, list_notification_history_page},
     web::{
         AppState,
@@ -43,9 +41,9 @@ use crate::{
         templates::{
             AccountBalancePartialTemplate, AccountBalanceView, AgentMemoriesView,
             AgentRecentRunsView, AgentShowTab, AgentsShowPageTemplate,
-            BalanceSparklinesPartialTemplate, LatestTradeDecisionSummaryPartialTemplate,
-            OpenOrdersPartialTemplate, OpenOrdersView, OpenPositionsPartialTemplate,
-            OpenPositionsView, SparklineView, TransactionView, load_navbar,
+            BalanceSparklinesPartialTemplate, OpenOrdersPartialTemplate, OpenOrdersView,
+            OpenPositionsPartialTemplate, OpenPositionsView, SparklineView, TransactionView,
+            load_navbar,
         },
     },
 };
@@ -164,6 +162,7 @@ pub(in crate::web::routes) async fn render_agent_show_page(
     template.has_selected_instruments = readiness.has_trading_instruments;
 
     match active_tab {
+        AgentShowTab::ToolsHeading => unreachable!("Tools is a non-clickable navigation heading"),
         AgentShowTab::Chat => unreachable!("Chat has its own page route"),
         AgentShowTab::Trading | AgentShowTab::Review => {
             unreachable!("Trading and Review have their own page routes")
@@ -734,6 +733,7 @@ pub(in crate::web::routes) async fn populate_positions_tab(
     agent: &crate::agents::model::AgentDetailRow,
     template: &mut AgentsShowPageTemplate,
 ) -> Result<(), AppError> {
+    template.activity_html = render_agent_activity_html(&state.db_pool, &agent.agent_key).await?;
     let configured_coins =
         match list_agent_trading_instrument_ids(&state.db_pool, &agent.agent_key).await {
             Ok(rows) => rows,
@@ -785,21 +785,6 @@ pub(in crate::web::routes) async fn populate_positions_tab(
     let open_orders_view = OpenOrdersView::from_live_state(live_snapshot.clone());
     template.open_orders_html =
         OpenOrdersPartialTemplate::render_view(open_orders_view).map_err(anyhow::Error::from)?;
-
-    let latest_decision = get_latest_trading_decision(&state.db_pool, &agent.agent_key).await?;
-    let decision_detail_url = latest_decision
-        .as_ref()
-        .map(|memory| format!("/agents/{}/memories/{}", agent.agent_key, memory.id));
-    template.latest_trade_decision_summary_html =
-        LatestTradeDecisionSummaryPartialTemplate::render_view(
-            latest_decision
-                .as_ref()
-                .map(|memory| memory.summary.clone()),
-            decision_detail_url,
-            latest_decision.as_ref().map(|memory| memory.created_at),
-            latest_decision.as_ref().and_then(memory_expires_at),
-        )
-        .map_err(anyhow::Error::from)?;
 
     let now = Utc::now();
     let since_24h = now - chrono::Duration::hours(24);

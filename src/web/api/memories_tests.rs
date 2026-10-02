@@ -150,7 +150,7 @@ async fn memory_target_validation_and_database_errors_are_distinct() {
 }
 
 #[tokio::test]
-async fn new_analysis_expiry_uses_immutable_schedule_without_rewriting_legacy_rows() {
+async fn delayed_analysis_expiry_uses_creation_time_and_immutable_schedule() {
     use crate::memory::{CreateMemory, MemorySourceRun, memory_expires_at, store::insert_memory};
     let state = test_state().await;
     let (agent_key, _) = seed_agent(&state, "schedule-expiry").await;
@@ -166,6 +166,22 @@ async fn new_analysis_expiry_uses_immutable_schedule_without_rewriting_legacy_ro
         "legacy",
         "legacy expiry",
         json!({}),
+    )
+    .await;
+    let historical_deadline = boundary + Duration::minutes(10);
+    let historical_metadata = json!({
+        "stale_after": historical_deadline,
+        "expiry_policy": "analysis_schedule_v2"
+    });
+    let historical_id = insert_memory_at(
+        &state,
+        &agent_key,
+        boundary,
+        "BTC",
+        Some("5m"),
+        "historical",
+        "previously stored deadline",
+        historical_metadata.clone(),
     )
     .await;
     let run_id: i64 = sqlx::query_scalar("SELECT source_run_id FROM memory.records WHERE id = $1")
@@ -199,9 +215,9 @@ async fn new_analysis_expiry_uses_immutable_schedule_without_rewriting_legacy_ro
         .expect("publish");
         assert_eq!(
             memory_expires_at(&row),
-            Some(boundary + Duration::minutes(10))
+            Some(row.created_at + Duration::minutes(10))
         );
-        assert_eq!(row.metadata["expiry_policy"], "analysis_schedule_v2");
+        assert_eq!(row.metadata["expiry_policy"], "analysis_schedule_v3");
     }
     for metadata in [
         json!({"valid_for_seconds": 120}),
@@ -224,19 +240,36 @@ async fn new_analysis_expiry_uses_immutable_schedule_without_rewriting_legacy_ro
         .expect("publish with caller validity");
         assert_eq!(
             memory_expires_at(&row),
-            Some(boundary + Duration::minutes(10))
+            Some(row.created_at + Duration::minutes(10))
         );
-        assert_eq!(row.metadata["expiry_policy"], "analysis_schedule_v2");
+        assert_eq!(row.metadata["expiry_policy"], "analysis_schedule_v3");
         assert!(row.metadata.get("valid_for_seconds").is_none());
         assert_eq!(
             row.metadata.get("handoff_version"),
             metadata.get("handoff_version")
         );
         assert!(
-            memory_expires_at(&row).is_some_and(|expiry| expiry < row.created_at),
-            "caller validity must not renew evidence published after its deadline"
+            memory_expires_at(&row).is_some_and(|expiry| expiry > Utc::now()),
+            "a delayed publication must receive its full validity period"
         );
     }
+    sqlx::query("UPDATE harness_sub_agent_runs SET timeframe = NULL WHERE id = $1")
+        .bind(run_id)
+        .execute(&state.db_pool)
+        .await
+        .expect("make producing run unscheduled");
+    let unscheduled = insert_memory(
+        &state.db_pool,
+        &agent_key,
+        &input,
+        Some(MemorySourceRun { run_id }),
+    )
+    .await
+    .expect("publish unscheduled analysis memory");
+    assert_eq!(
+        memory_expires_at(&unscheduled),
+        Some(unscheduled.created_at + Duration::minutes(30))
+    );
     let legacy = crate::memory::get_memory(&state.db_pool, &agent_key, legacy_id)
         .await
         .expect("legacy query")
@@ -246,6 +279,12 @@ async fn new_analysis_expiry_uses_immutable_schedule_without_rewriting_legacy_ro
         Some(boundary + Duration::minutes(30))
     );
     assert_eq!(legacy.metadata, json!({}));
+    let historical = crate::memory::get_memory(&state.db_pool, &agent_key, historical_id)
+        .await
+        .expect("historical query")
+        .expect("historical row");
+    assert_eq!(memory_expires_at(&historical), Some(historical_deadline));
+    assert_eq!(historical.metadata, historical_metadata);
 }
 
 #[tokio::test]
@@ -293,7 +332,6 @@ async fn analysis_memory_api_overrides_caller_expiry_using_the_authenticated_run
         crate::harness::store::issue_run_runtime_credential(&state.db_pool, &agent_key, run_id)
             .await
             .expect("Analysis credential");
-    let expected_expiry = boundary + Duration::minutes(30);
     for metadata in [
         json!({"stale_after": boundary + Duration::minutes(5)}),
         json!({"valid_for_seconds": 60}),
@@ -311,6 +349,11 @@ async fn analysis_memory_api_overrides_caller_expiry_using_the_authenticated_run
         let (status, response) = post_memory_json(&state, &credential.token, &input).await;
         assert_eq!(status, StatusCode::CREATED, "{response}");
         assert_eq!(response["source_run_id"], run_id);
+        let created_at =
+            DateTime::parse_from_rfc3339(response["created_at"].as_str().expect("creation time"))
+                .expect("valid creation time")
+                .with_timezone(&Utc);
+        let expected_expiry = created_at + Duration::minutes(30);
         let expires_at =
             DateTime::parse_from_rfc3339(response["expires_at"].as_str().expect("backend expiry"))
                 .expect("valid expiry")
@@ -318,14 +361,14 @@ async fn analysis_memory_api_overrides_caller_expiry_using_the_authenticated_run
         assert_eq!(expires_at, expected_expiry);
         assert_eq!(
             response["metadata"]["expiry_policy"],
-            "analysis_schedule_v2"
+            "analysis_schedule_v3"
         );
         assert!(response["metadata"].get("valid_for_seconds").is_none());
         let evidence = crate::memory::store::get_trading_context_evidence(
             &state.db_pool,
             &agent_key,
             "BTC",
-            boundary + Duration::minutes(6),
+            created_at + Duration::minutes(6),
         )
         .await
         .expect("Trading context after caller deadline");

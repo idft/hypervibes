@@ -15,24 +15,17 @@ use crate::web::error::AppError;
 use crate::{
     agents::store::{get_agent, list_agent_trading_instrument_ids},
     hyperliquid::live_state::{AccountKey, AccountLiveState, LiveConnectionStatus},
-    memory::{get_latest_trading_decision, get_memory as get_memory_record, memory_expires_at},
+    memory::{MemoryListFilter, store::list_memories},
     web::{
         AppState,
         templates::{
-            AccountBalancePartialTemplate, AccountBalanceView,
-            LatestTradeDecisionSummaryPartialTemplate, LiveAccountHealthPartialTemplate,
-            LiveAccountHealthView, OpenOrdersPartialTemplate, OpenOrdersView,
-            OpenPositionsPartialTemplate, OpenPositionsView,
+            AccountBalancePartialTemplate, AccountBalanceView, AgentActivityPartialTemplate,
+            LiveAccountHealthPartialTemplate, LiveAccountHealthView, OpenOrdersPartialTemplate,
+            OpenOrdersView, OpenPositionsPartialTemplate, OpenPositionsView,
         },
         ui_events::UiEvent,
     },
 };
-#[derive(Debug)]
-pub(in crate::web::routes) enum MemoryNotification {
-    Some(uuid::Uuid),
-    Lagged,
-}
-
 pub(in crate::web::routes) async fn agent_live_stream(
     State(state): State<Arc<AppState>>,
     Path(agent_key): Path<String>,
@@ -59,6 +52,7 @@ pub(in crate::web::routes) async fn agent_live_stream(
     };
     let account_key = AccountKey::new(trading_account_address, &agent.environment);
     let live_accounts = Arc::clone(&state.live_accounts);
+    let activity_receiver = state.ui_events.subscribe();
 
     // Emit a snapshot up-front so the UI never sits on the initial-render
     // placeholder if the orchestrator already produced a value before the
@@ -79,8 +73,7 @@ pub(in crate::web::routes) async fn agent_live_stream(
         &state.market_data.snapshot(),
         &agent.agent_key,
     )?;
-    initial_events
-        .push(render_latest_trade_decision_summary_event(&state.db_pool, &agent.agent_key).await?);
+    initial_events.push(render_agent_activity_event(&state.db_pool, &agent.agent_key).await?);
 
     let account_key_filter = account_key.clone();
     let account_key_for_notifications = account_key.clone();
@@ -130,60 +123,39 @@ pub(in crate::web::routes) async fn agent_live_stream(
             tokio_stream::iter(events.into_iter().map(Ok::<Event, Infallible>))
         });
 
-    let summary_db_pool = state.db_pool.clone();
-    let summary_agent_key_filter = agent.agent_key.clone();
-    let summary_agent_key_render = agent.agent_key.clone();
-    let summary_notifications = BroadcastStream::new(state.ui_events.subscribe())
+    let activity_db_pool = state.db_pool.clone();
+    let activity_agent_key_filter = agent.agent_key.clone();
+    let activity_agent_key_render = agent.agent_key.clone();
+    let activity_notifications = BroadcastStream::new(activity_receiver)
         .filter_map(move |item| {
-            let agent_key = summary_agent_key_filter.clone();
+            let agent_key = activity_agent_key_filter.clone();
             async move {
                 match item {
                     Ok(UiEvent::MemoryCreated {
                         agent_key: event_agent_key,
-                        memory_id,
-                    }) if event_agent_key == agent_key => Some(MemoryNotification::Some(memory_id)),
+                        ..
+                    }) if event_agent_key == agent_key => Some(()),
                     Ok(_) => None,
                     Err(tokio_stream::wrappers::errors::BroadcastStreamRecvError::Lagged(_)) => {
-                        Some(MemoryNotification::Lagged)
+                        Some(())
                     }
                 }
             }
         })
-        .then(move |notification| {
-            let db_pool = summary_db_pool.clone();
-            let agent_key = summary_agent_key_render.clone();
+        .then(move |()| {
+            let db_pool = activity_db_pool.clone();
+            let agent_key = activity_agent_key_render.clone();
             async move {
-                let needs_decision_update = match notification {
-                    MemoryNotification::Some(memory_id) => {
-                        match get_memory_record(&db_pool, &agent_key, memory_id).await {
-                            Ok(Some(memory)) => memory.memory_type == "trading_decision",
-                            Ok(None) => false,
-                            Err(error) => {
-                                warn!(agent_key = %agent_key, error = ?error, "failed to inspect memory event for live summary update");
-                                false
-                            }
-                        }
-                    }
-                    MemoryNotification::Lagged => {
-                        // Lagged notification: we may have missed a decision
-                        // memory, so re-render the summary to catch up.
-                        true
-                    }
-                };
-
-                let mut events = Vec::new();
-                if needs_decision_update {
-                    match render_latest_trade_decision_summary_event(&db_pool, &agent_key).await {
-                        Ok(event) => events.push(Ok::<Event, Infallible>(event)),
-                        Err(error) => {
-                            warn!(agent_key = %agent_key, error = ?error, "failed to render latest trade decision summary SSE event");
-                        }
+                match render_agent_activity_event(&db_pool, &agent_key).await {
+                    Ok(event) => Some(Ok::<Event, Infallible>(event)),
+                    Err(error) => {
+                        warn!(agent_key = %agent_key, error = ?error, "failed to render activity SSE event");
+                        None
                     }
                 }
-                events
             }
         })
-        .flat_map(tokio_stream::iter);
+        .filter_map(|event| async move { event });
 
     // Store notifications cover incoming exchange data. This timer covers the
     // opposite case: a silent connection must still visibly become stale.
@@ -248,7 +220,7 @@ pub(in crate::web::routes) async fn agent_live_stream(
     )
     .chain(futures::stream::select(
         futures::stream::select(notifications, freshness_refresh),
-        summary_notifications,
+        activity_notifications,
     ))
     // Ending the SSE stream drops an in-progress market-data request before
     // the runtime starts tearing down its HTTP dispatcher.
@@ -306,21 +278,28 @@ pub(in crate::web::routes) fn render_open_orders_event(
     let html = OpenOrdersPartialTemplate::render_view(view)?;
     Ok(Event::default().event("orders").data(html))
 }
-pub(in crate::web::routes) async fn render_latest_trade_decision_summary_event(
+pub(in crate::web::routes) async fn render_agent_activity_html(
+    pool: &crate::db::DbPool,
+    agent_key: &str,
+) -> Result<String, AppError> {
+    let memories = list_memories(
+        pool,
+        agent_key,
+        &MemoryListFilter {
+            limit: Some(5),
+            ..Default::default()
+        },
+    )
+    .await?;
+    Ok(AgentActivityPartialTemplate::render_view(
+        agent_key, memories,
+    )?)
+}
+
+pub(in crate::web::routes) async fn render_agent_activity_event(
     pool: &crate::db::DbPool,
     agent_key: &str,
 ) -> Result<Event, AppError> {
-    let latest = get_latest_trading_decision(pool, agent_key).await?;
-    let detail_url = latest
-        .as_ref()
-        .map(|memory| format!("/agents/{agent_key}/memories/{}", memory.id));
-    let summary = latest.as_ref().map(|memory| memory.summary.clone());
-    let created_at = latest.as_ref().map(|memory| memory.created_at);
-    let expires_at = latest.as_ref().and_then(memory_expires_at);
-    let html = LatestTradeDecisionSummaryPartialTemplate::render_view(
-        summary, detail_url, created_at, expires_at,
-    )?;
-    Ok(Event::default()
-        .event("latest-trade-decision-summary")
-        .data(html))
+    let html = render_agent_activity_html(pool, agent_key).await?;
+    Ok(Event::default().event("activity").data(html))
 }

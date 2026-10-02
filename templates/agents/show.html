@@ -8,9 +8,9 @@
 
     {% include "agents/components/tabs.html" %}
 
-    <div id="agent-show-tab-content"{% if show_notifications_tab || show_transactions_tab || show_memories_tab || show_indicators_tab || show_jobs_tab %} class="min-h-0 flex-1"{% endif %}>
+    <div id="agent-show-tab-content"{% if show_positions_tab %} class="flex min-h-0 flex-1 flex-col"{% else if show_notifications_tab || show_transactions_tab || show_memories_tab || show_indicators_tab || show_jobs_tab %} class="min-h-0 flex-1"{% endif %}>
     {% if show_positions_tab && !setup_checklist.is_ready %}
-    <section class="mb-2 rounded-2xl border border-violet-900/60 bg-violet-950/20 p-5">
+    <section class="mb-2 shrink-0 rounded-2xl border border-violet-900/60 bg-violet-950/20 p-5">
         <div>
             <h2 class="text-lg font-medium text-white">Agent setup</h2>
             <p class="mt-1 text-sm text-zinc-400">Complete these steps before this agent can trade on its scheduled workflow. Daily review is optional.</p>
@@ -41,7 +41,7 @@
     {% endif %}
 
     {% if !has_selected_instruments %}
-    <a href="/agents/{{ agent.agent_key }}/settings" class="mb-2 flex items-center justify-center gap-2 rounded-2xl border border-amber-900/60 bg-amber-950/30 px-4 py-2 text-sm text-amber-200 hover:border-amber-800 hover:bg-amber-950/40">
+    <a href="/agents/{{ agent.agent_key }}/settings" class="mb-2 flex shrink-0 items-center justify-center gap-2 rounded-2xl border border-amber-900/60 bg-amber-950/30 px-4 py-2 text-sm text-amber-200 hover:border-amber-800 hover:bg-amber-950/40">
         <svg class="h-4 w-4 shrink-0 text-amber-300" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true">
             <path fill-rule="evenodd" d="M8.485 2.495c.673-1.167 2.357-1.167 3.03 0l6.28 10.875c.673 1.167-.17 2.625-1.516 2.625H3.72c-1.347 0-2.189-1.458-1.515-2.625L8.485 2.495ZM10 5a.75.75 0 0 1 .75.75v3.5a.75.75 0 0 1-1.5 0v-3.5A.75.75 0 0 1 10 5Zm0 9a1 1 0 1 0 0-2 1 1 0 0 0 0 2Z" clip-rule="evenodd"></path>
         </svg>
@@ -50,11 +50,11 @@
     {% endif %}
 
     {% if show_positions_tab %}
-    <section class="mt-2 space-y-2" hx-ext="sse" sse-connect="/agents/{{ agent.agent_key }}/live/stream">
+    <section class="mt-2 flex min-h-0 flex-1 flex-col gap-2" hx-ext="sse" sse-connect="/agents/{{ agent.agent_key }}/live/stream">
         {% if let Some(notice) = operation_notice %}
-        <div class="rounded-xl border border-amber-900/60 bg-amber-950/30 px-4 py-3 text-sm text-amber-200">{{ notice }}</div>
+        <div class="shrink-0 rounded-xl border border-amber-900/60 bg-amber-950/30 px-4 py-3 text-sm text-amber-200">{{ notice }}</div>
         {% endif %}
-        <section class="rounded-2xl border border-zinc-800 bg-[#0d0d10] p-6">
+        <section class="shrink-0 rounded-2xl border border-zinc-800 bg-[#0d0d10] p-6">
             <div class="mb-4" sse-swap="health" hx-swap="innerHTML">{{ live_account_health_html|safe }}</div>
             <div class="grid grid-cols-1 gap-6 sm:grid-cols-4">
                 <div class="contents" sse-swap="balance" hx-swap="innerHTML">{{account_balance_html|safe}}</div>
@@ -62,16 +62,29 @@
             </div>
         </section>
 
-        <section class="rounded-2xl border border-zinc-800 bg-[#0d0d10] p-6">
-            <h2 class="text-lg font-medium text-white">Positions</h2>
+        <details open class="group shrink-0 rounded-2xl border border-zinc-800 bg-[#0d0d10] p-6">
+            <summary class="flex cursor-pointer list-none items-center justify-between gap-3 [&::-webkit-details-marker]:hidden">
+                <h2 class="text-lg font-medium text-white">Positions</h2>
+                <svg class="h-5 w-5 shrink-0 text-zinc-500 transition-transform group-open:rotate-90" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="m8 4 6 6-6 6"></path></svg>
+            </summary>
             <div class="mt-4" sse-swap="positions" hx-swap="innerHTML">{{ open_positions_html|safe }}</div>
-        </section>
+        </details>
 
-        <section class="rounded-2xl border border-zinc-800 bg-[#0d0d10] p-6">
-            <h2 class="text-lg font-medium text-white">Open orders</h2>
-            <div data-latest-trade-decision-summary sse-swap="latest-trade-decision-summary" hx-swap="innerHTML">{{ latest_trade_decision_summary_html|safe }}</div>
-            <div class="mt-4" sse-swap="orders" hx-swap="innerHTML">{{ open_orders_html|safe }}</div>
-        </section>
+        <details open class="group shrink-0 rounded-2xl border border-zinc-800 bg-[#0d0d10] p-6">
+            <summary class="flex cursor-pointer list-none items-center justify-between gap-3 [&::-webkit-details-marker]:hidden">
+                <h2 class="text-lg font-medium text-white">Activity</h2>
+                <svg class="h-5 w-5 shrink-0 text-zinc-500 transition-transform group-open:rotate-90" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="m8 4 6 6-6 6"></path></svg>
+            </summary>
+            <div class="mt-4" sse-swap="activity" hx-swap="innerHTML">{{ activity_html|safe }}</div>
+        </details>
+
+        <details open class="agent-open-orders group shrink-0 overflow-hidden rounded-2xl border border-zinc-800 bg-[#0d0d10] p-6">
+            <summary class="flex cursor-pointer list-none items-center justify-between gap-3 [&::-webkit-details-marker]:hidden">
+                <h2 class="text-lg font-medium text-white">Open orders</h2>
+                <svg class="h-5 w-5 shrink-0 text-zinc-500 transition-transform group-open:rotate-90" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="m8 4 6 6-6 6"></path></svg>
+            </summary>
+            <div class="mt-4 min-h-0 flex-1 overflow-auto [scrollbar-gutter:stable]" sse-swap="orders" hx-swap="innerHTML">{{ open_orders_html|safe }}</div>
+        </details>
     </section>
     <div id="position-close-modal" class="fixed inset-0 z-50 hidden items-center justify-center bg-black/70 px-4 backdrop-blur-sm" aria-modal="true" aria-labelledby="position-close-modal-title" role="dialog">
         <div class="w-full max-w-md rounded-2xl border border-zinc-800 bg-[#0d0d10] p-6 shadow-2xl">

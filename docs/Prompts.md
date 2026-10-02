@@ -43,8 +43,8 @@ rationale, and at least 1.5:1 estimated reward:risk after costs for actionable
 setups. Missing evidence and no-trade conclusions are valid outcomes.
 
 New Analysis research expiry is exclusively backend-controlled: two cycles of
-the immutable producing run's schedule from its evidence boundary, or 30 minutes
-after publication for unscheduled runs. Analysis cannot override it with
+the immutable producing run's schedule from the memory's actual creation time,
+or 30 minutes after creation for unscheduled runs. Analysis cannot override it with
 `metadata.stale_after` or `metadata.valid_for_seconds`; caller values are silently
 ignored. MCP tool descriptions and Analysis runtime/default instructions no longer
 ask the analyst to choose a deadline. Older customized prompts can still supply

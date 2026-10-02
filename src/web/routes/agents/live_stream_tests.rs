@@ -457,14 +457,114 @@ async fn open_orders_stream_emits_initial_rows_when_state_present() {
     assert!(text.contains("limit"));
 }
 #[tokio::test]
-async fn latest_trade_decision_summary_event_renders_empty_without_a_decision() {
+async fn activity_event_renders_empty_without_memories() {
     let state = test_state().await;
     let (agent_key, _wallet_address) = insert_test_agent(&state).await.expect("insert agent");
 
-    let event = render_latest_trade_decision_summary_event(&state.db_pool, &agent_key)
+    let event = render_agent_activity_event(&state.db_pool, &agent_key)
         .await
-        .expect("render latest trade decision summary event");
+        .expect("render activity event");
     let text = format!("{event:?}");
 
-    assert!(text.contains("latest-trade-decision-summary"));
+    assert!(text.contains("activity"));
+    assert!(text.contains("No activity yet."));
+}
+
+#[tokio::test]
+async fn activity_shows_five_latest_agent_memories_and_updates_live() {
+    use crate::memory::{CreateMemory, store::insert_memory};
+    use crate::web::ui_events::UiEvent;
+
+    let state = test_state().await;
+    let (agent_key, _) = insert_test_agent(&state).await.expect("insert agent");
+    let (other_agent_key, _) = insert_test_agent(&state).await.expect("insert other agent");
+    let input = CreateMemory {
+        scope_kind: "agent".to_string(),
+        instrument_ids: Vec::new(),
+        timeframe: None,
+        memory_type: "review".to_string(),
+        summary: "other-agent-activity".to_string(),
+        content: "Activity details".to_string(),
+        metadata: None,
+        links: None,
+    };
+    insert_memory(&state.db_pool, &other_agent_key, &input, None)
+        .await
+        .expect("insert other agent memory");
+    for index in 0..6 {
+        let input = CreateMemory {
+            memory_type: if index % 2 == 0 {
+                "trading_decision"
+            } else {
+                "review"
+            }
+            .to_string(),
+            summary: format!("activity-entry-{index}"),
+            ..input.clone()
+        };
+        insert_memory(&state.db_pool, &agent_key, &input, None)
+            .await
+            .expect("insert activity memory");
+    }
+
+    let html = render_agent_activity_html(&state.db_pool, &agent_key)
+        .await
+        .expect("render activity");
+    assert!(!html.contains("activity-entry-0"));
+    assert!(!html.contains("other-agent-activity"));
+    for index in 1..6 {
+        assert!(html.contains(&format!("activity-entry-{index}")));
+    }
+    assert!(html.find("activity-entry-5") < html.find("activity-entry-4"));
+    assert!(html.contains("trading decision"));
+    assert!(html.contains("review"));
+
+    let response = router(Arc::clone(&state))
+        .oneshot(
+            Request::builder()
+                .uri(format!("/agents/{agent_key}/live/stream"))
+                .body(Body::empty())
+                .expect("build live stream request"),
+        )
+        .await
+        .expect("serve live stream");
+    assert_eq!(response.status(), StatusCode::OK);
+    let mut body = response.into_body();
+    tokio::time::timeout(std::time::Duration::from_secs(2), async {
+        loop {
+            let frame = body
+                .frame()
+                .await
+                .expect("initial SSE frame")
+                .expect("read frame");
+            if let Ok(data) = frame.into_data()
+                && String::from_utf8_lossy(&data).contains("event: activity")
+            {
+                break;
+            }
+        }
+    })
+    .await
+    .expect("receive initial activity snapshot");
+
+    let memory = insert_memory(
+        &state.db_pool,
+        &agent_key,
+        &CreateMemory {
+            summary: "activity-entry-new".to_string(),
+            ..input
+        },
+        None,
+    )
+    .await
+    .expect("insert new review memory");
+    state.ui_events.publish(UiEvent::MemoryCreated {
+        agent_key: agent_key.clone(),
+        memory_id: memory.id,
+    });
+    let text = read_sse_chunk(body, 1000).await;
+    assert!(text.contains("event: activity"));
+    assert!(text.contains("activity-entry-new"));
+    assert!(text.contains(&format!("/agents/{agent_key}/memories/{}", memory.id)));
+    assert!(!text.contains("activity-entry-1"));
 }

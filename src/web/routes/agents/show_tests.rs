@@ -6,7 +6,7 @@ use axum::http::{Request, StatusCode};
 use tower::util::ServiceExt;
 
 #[tokio::test]
-async fn agent_positions_route_renders_latest_trade_execution_summary_under_open_orders() {
+async fn agent_positions_route_renders_memories_in_activity_above_open_orders() {
     let state = test_state().await;
     let (agent_key, _wallet_address) = insert_test_agent(&state).await.expect("insert agent");
     seed_memory_with_type(
@@ -40,14 +40,21 @@ async fn agent_positions_route_renders_latest_trade_execution_summary_under_open
     let text = response_text(response).await;
     assert!(text.contains("Open orders"));
     assert!(text.contains("Scaled out into strength"));
-    assert!(!text.contains("Older plan"));
+    assert!(text.contains("Older plan"));
+    let positions = text.find(">Positions</h2>").expect("positions heading");
+    let activity = text.find(">Activity</h2>").expect("activity heading");
+    let summary = text
+        .find("Scaled out into strength")
+        .expect("memory summary");
+    let orders = text.find(">Open orders</h2>").expect("orders heading");
+    assert!(positions < activity && activity < summary && summary < orders);
     assert!(
         text.find("id=\"position-close-modal\"") > text.find("sse-swap=\"orders\""),
         "the confirmation must live outside the SSE-swapped positions fragment"
     );
 }
 #[tokio::test]
-async fn agent_positions_route_renders_latest_analysis_summary_under_open_orders() {
+async fn agent_positions_route_includes_analysis_memories_in_activity() {
     let state = test_state().await;
     let (agent_key, _wallet_address) = insert_test_agent(&state).await.expect("insert agent");
     let analysis = seed_memory_with_type(
@@ -79,11 +86,11 @@ async fn agent_positions_route_renders_latest_analysis_summary_under_open_orders
 
     assert_eq!(response.status(), StatusCode::OK);
     let text = response_text(response).await;
-    assert!(!text.contains("BTC bullish continuation above 67k"));
-    assert!(!text.contains("Older plan"));
+    assert!(text.contains("BTC bullish continuation above 67k"));
+    assert!(text.contains("Older plan"));
     assert!(
-        !text.contains(&format!("/agents/{agent_key}/memories/{}", analysis.id)),
-        "analysis evidence belongs in the Analysis role, not the positions summary"
+        text.contains(&format!("/agents/{agent_key}/memories/{}", analysis.id)),
+        "activity links to the full memory details"
     );
 }
 
@@ -112,7 +119,7 @@ async fn selected_agent_page_omits_workspace_template_drift_warning() {
     );
 }
 #[tokio::test]
-async fn agent_positions_route_renders_empty_analysis_section_when_no_market_analysis_memory() {
+async fn agent_positions_route_renders_empty_activity_when_no_memories_exist() {
     let state = test_state().await;
     let (agent_key, _wallet_address) = insert_test_agent(&state).await.expect("insert agent");
 
@@ -128,7 +135,8 @@ async fn agent_positions_route_renders_empty_analysis_section_when_no_market_ana
 
     assert_eq!(response.status(), StatusCode::OK);
     let text = response_text(response).await;
-    assert!(text.contains(">Analysis<"));
+    assert!(text.contains(">Activity</h2>"));
+    assert!(text.contains("No activity yet."));
     // Empty placeholder — no link to any memory.
     assert!(!text.contains(&format!("/agents/{agent_key}/memories/")));
 }

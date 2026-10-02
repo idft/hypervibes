@@ -52,6 +52,7 @@ pub enum AgentShowTab {
     Transactions,
     Memories,
     Indicators,
+    ToolsHeading,
     SubAgentsHeading,
     Analysis,
     Trading,
@@ -80,7 +81,7 @@ impl AgentShowTab {
             Self::Trading => format!("/agents/{agent_key}/trading"),
             Self::Review => format!("/agents/{agent_key}/review"),
             Self::Settings => format!("/agents/{agent_key}/settings"),
-            Self::SubAgentsHeading => format!("/agents/{agent_key}"),
+            Self::ToolsHeading | Self::SubAgentsHeading => format!("/agents/{agent_key}"),
         }
     }
 }
@@ -100,7 +101,7 @@ pub struct AgentShowTabLink {
     pub href: String,
     pub active: bool,
     pub notification_count: Option<i64>,
-    /// Non-clickable section heading (the `Sub-agents` label). Headings are
+    /// Non-clickable section heading. Headings are
     /// never marked active and never render as links.
     pub is_heading: bool,
     /// Indented beneath its section heading.
@@ -116,11 +117,12 @@ pub fn build_agent_show_tabs(
     [
         ("Positions", AgentShowTab::Positions, false, false),
         ("Transactions", AgentShowTab::Transactions, false, false),
-        ("Chat", AgentShowTab::Chat, false, false),
-        ("Notifications", AgentShowTab::Notifications, false, false),
-        ("Memories", AgentShowTab::Memories, false, false),
-        ("Indicators", AgentShowTab::Indicators, false, false),
+        ("Tools", AgentShowTab::ToolsHeading, true, false),
+        ("Indicators", AgentShowTab::Indicators, false, true),
+        ("Memories", AgentShowTab::Memories, false, true),
+        ("Notifications", AgentShowTab::Notifications, false, true),
         ("Sub-agents", AgentShowTab::SubAgentsHeading, true, false),
+        ("Chat", AgentShowTab::Chat, false, true),
         ("Analysis", AgentShowTab::Analysis, false, true),
         ("Trading", AgentShowTab::Trading, false, true),
         ("Review", AgentShowTab::Review, false, true),
@@ -593,7 +595,7 @@ pub struct AgentsShowPageTemplate {
     pub account_balance_html: String,
     pub open_positions_html: String,
     pub open_orders_html: String,
-    pub latest_trade_decision_summary_html: String,
+    pub activity_html: String,
     pub sparklines_html: String,
     pub api_key_masked: String,
     pub current_path: String,
@@ -688,7 +690,7 @@ impl AgentsShowPageTemplate {
             account_balance_html: String::new(),
             open_positions_html: String::new(),
             open_orders_html: String::new(),
-            latest_trade_decision_summary_html: String::new(),
+            activity_html: String::new(),
             sparklines_html: String::new(),
             jobs: Vec::new(),
             jobs_loaded: false,
