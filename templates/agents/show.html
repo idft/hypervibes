@@ -58,7 +58,7 @@
             <div class="mb-4" sse-swap="health" hx-swap="innerHTML">{{ live_account_health_html|safe }}</div>
             <div class="grid grid-cols-1 gap-6 sm:grid-cols-4">
                 <div class="contents" sse-swap="balance" hx-swap="innerHTML">{{account_balance_html|safe}}</div>
-                {{ sparklines_html|safe }}
+                <div class="contents" sse-swap="sparklines" hx-swap="innerHTML">{{ sparklines_html|safe }}</div>
             </div>
         </section>
 

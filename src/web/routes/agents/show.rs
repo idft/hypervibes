@@ -12,7 +12,7 @@ use tracing::warn;
 
 use super::super::account::agent_subaccount_name;
 use super::{
-    live_stream::render_agent_activity_html,
+    live_stream::{render_agent_activity_html, render_balance_sparklines_html},
     memories::{
         AgentMemoriesQuery, build_memory_type_options, memory_page_url, memory_preset_url,
         memory_stream_url, parse_memory_time_filter, prepare_memory_timeline_page,
@@ -27,10 +27,7 @@ use crate::{
     harness::model::SUB_AGENT_KIND_ANALYSIS,
     hyperliquid::{
         live_state::{AccountKey, AccountLiveState, LiveConnectionStatus},
-        queries::{
-            BalanceSeriesBucket, count_account_transactions, fetch_balance_series,
-            list_account_transactions_page,
-        },
+        queries::{count_account_transactions, list_account_transactions_page},
     },
     memory::{get_memory, list_agent_memory_timeline, list_agent_memory_type_counts},
     notifications::store::{count_notifications, list_notification_history_page},
@@ -40,9 +37,8 @@ use crate::{
         error::AppError,
         templates::{
             AccountBalancePartialTemplate, AccountBalanceView, AgentMemoriesView,
-            AgentRecentRunsView, AgentShowTab, AgentsShowPageTemplate,
-            BalanceSparklinesPartialTemplate, OpenOrdersPartialTemplate, OpenOrdersView,
-            OpenPositionsPartialTemplate, OpenPositionsView, SparklineView, TransactionView,
+            AgentRecentRunsView, AgentShowTab, AgentsShowPageTemplate, OpenOrdersPartialTemplate,
+            OpenOrdersView, OpenPositionsPartialTemplate, OpenPositionsView, TransactionView,
             load_navbar,
         },
     },
@@ -786,57 +782,7 @@ pub(in crate::web::routes) async fn populate_positions_tab(
     template.open_orders_html =
         OpenOrdersPartialTemplate::render_view(open_orders_view).map_err(anyhow::Error::from)?;
 
-    let now = Utc::now();
-    let since_24h = now - chrono::Duration::hours(24);
-    let since_30d = now - chrono::Duration::days(30);
-    let series_24h = match fetch_balance_series(
-        &state.db_pool,
-        account_address,
-        &agent.environment,
-        since_24h,
-        BalanceSeriesBucket::Hour,
-    )
-    .await
-    {
-        Ok(points) => points,
-        Err(error) => {
-            warn!(
-                agent_key = %agent.agent_key,
-                trading_account_address = %account_address,
-                environment = %agent.environment,
-                error = ?error,
-                "failed to fetch 24h balance series for agent page"
-            );
-            Vec::new()
-        }
-    };
-    let series_30d = match fetch_balance_series(
-        &state.db_pool,
-        account_address,
-        &agent.environment,
-        since_30d,
-        BalanceSeriesBucket::Day,
-    )
-    .await
-    {
-        Ok(points) => points,
-        Err(error) => {
-            warn!(
-                agent_key = %agent.agent_key,
-                trading_account_address = %account_address,
-                environment = %agent.environment,
-                error = ?error,
-                "failed to fetch 30d balance series for agent page"
-            );
-            Vec::new()
-        }
-    };
-    let sparklines = vec![
-        SparklineView::from_series("24 hours", &series_24h, 240, 48),
-        SparklineView::from_series("30 days", &series_30d, 240, 48),
-    ];
-    template.sparklines_html =
-        BalanceSparklinesPartialTemplate::render_view(sparklines).map_err(anyhow::Error::from)?;
+    template.sparklines_html = render_balance_sparklines_html(&state.db_pool, &account_key).await?;
 
     Ok(())
 }

@@ -14,14 +14,18 @@ use tracing::warn;
 use crate::web::error::AppError;
 use crate::{
     agents::store::{get_agent, list_agent_trading_instrument_ids},
-    hyperliquid::live_state::{AccountKey, AccountLiveState, LiveConnectionStatus},
+    hyperliquid::{
+        live_state::{AccountKey, AccountLiveState, LiveConnectionStatus},
+        queries::{BalanceSeriesBucket, fetch_balance_series},
+    },
     memory::{MemoryListFilter, store::list_memories},
     web::{
         AppState,
         templates::{
             AccountBalancePartialTemplate, AccountBalanceView, AgentActivityPartialTemplate,
-            LiveAccountHealthPartialTemplate, LiveAccountHealthView, OpenOrdersPartialTemplate,
-            OpenOrdersView, OpenPositionsPartialTemplate, OpenPositionsView,
+            BalanceSparklinesPartialTemplate, LiveAccountHealthPartialTemplate,
+            LiveAccountHealthView, OpenOrdersPartialTemplate, OpenOrdersView,
+            OpenPositionsPartialTemplate, OpenPositionsView, SparklineView,
         },
         ui_events::UiEvent,
     },
@@ -74,6 +78,46 @@ pub(in crate::web::routes) async fn agent_live_stream(
         &agent.agent_key,
     )?;
     initial_events.push(render_agent_activity_event(&state.db_pool, &agent.agent_key).await?);
+    let mut last_sparklines_html =
+        render_balance_sparklines_html(&state.db_pool, &account_key).await?;
+    initial_events.push(
+        Event::default()
+            .event("sparklines")
+            .data(&last_sparklines_html),
+    );
+
+    // Charts use the durable journal, not the in-memory account snapshot.
+    // Poll independently so a fill committed after an account notification,
+    // funding, or an HTTP catch-up is reflected without another exchange event.
+    let sparklines_db_pool = state.db_pool.clone();
+    let sparklines_account_key = account_key.clone();
+    let sparklines_refresh = tokio_stream::wrappers::IntervalStream::new(tokio::time::interval(
+        std::time::Duration::from_secs(5),
+    ))
+    .skip(1)
+    .then(move |_| {
+        let pool = sparklines_db_pool.clone();
+        let account_key = sparklines_account_key.clone();
+        async move {
+            match render_balance_sparklines_html(&pool, &account_key).await {
+                Ok(html) => Some(html),
+                Err(error) => {
+                    warn!(error = ?error, "failed to render balance sparklines SSE event");
+                    None
+                }
+            }
+        }
+    })
+    .filter_map(move |html| {
+        let event = html
+            .filter(|html| *html != last_sparklines_html)
+            .map(|html| {
+                let event = Event::default().event("sparklines").data(&html);
+                last_sparklines_html = html;
+                Ok::<Event, Infallible>(event)
+            });
+        futures::future::ready(event)
+    });
 
     let account_key_filter = account_key.clone();
     let account_key_for_notifications = account_key.clone();
@@ -230,7 +274,7 @@ pub(in crate::web::routes) async fn agent_live_stream(
     )
     .chain(futures::stream::select(
         futures::stream::select(notifications, freshness_refresh),
-        activity_notifications,
+        futures::stream::select(activity_notifications, sparklines_refresh),
     ))
     // Ending the SSE stream drops an in-progress market-data request before
     // the runtime starts tearing down its HTTP dispatcher.
@@ -304,6 +348,50 @@ pub(in crate::web::routes) async fn render_agent_activity_html(
     Ok(AgentActivityPartialTemplate::render_view(
         agent_key, memories,
     )?)
+}
+
+pub(in crate::web::routes) async fn render_balance_sparklines_html(
+    pool: &crate::db::DbPool,
+    account_key: &AccountKey,
+) -> Result<String, AppError> {
+    let now = chrono::Utc::now();
+    let mut sparklines = Vec::with_capacity(2);
+    for (label, window, bucket) in [
+        (
+            "24 hours",
+            chrono::Duration::hours(24),
+            BalanceSeriesBucket::Hour,
+        ),
+        (
+            "30 days",
+            chrono::Duration::days(30),
+            BalanceSeriesBucket::Day,
+        ),
+    ] {
+        let series = match fetch_balance_series(
+            pool,
+            &account_key.account_address,
+            &account_key.environment,
+            now - window,
+            bucket,
+        )
+        .await
+        {
+            Ok(points) => points,
+            Err(error) => {
+                warn!(
+                    trading_account_address = %account_key.account_address,
+                    environment = %account_key.environment,
+                    window = label,
+                    error = ?error,
+                    "failed to fetch balance series for agent charts"
+                );
+                Vec::new()
+            }
+        };
+        sparklines.push(SparklineView::from_series(label, &series, 240, 48));
+    }
+    Ok(BalanceSparklinesPartialTemplate::render_view(sparklines)?)
 }
 
 pub(in crate::web::routes) async fn render_agent_activity_event(

@@ -16,6 +16,92 @@ use crate::{
 use std::{collections::HashMap, sync::Arc};
 
 #[tokio::test]
+async fn balance_sparklines_refresh_after_persisted_entry_and_exit_without_live_notifications() {
+    async fn next_sparklines(body: &mut Body) -> String {
+        tokio::time::timeout(std::time::Duration::from_secs(8), async {
+            loop {
+                let frame = body
+                    .frame()
+                    .await
+                    .expect("SSE stream remains open")
+                    .expect("read SSE frame");
+                if let Ok(data) = frame.into_data() {
+                    let text = String::from_utf8(data.to_vec()).expect("UTF-8 SSE event");
+                    if text.contains("event: sparklines") {
+                        return text;
+                    }
+                }
+            }
+        })
+        .await
+        .expect("receive updated sparklines on the five-second refresh")
+    }
+
+    let state = test_state().await;
+    let (agent_key, account_address) = insert_test_agent(&state).await.expect("insert agent");
+    sqlx::query(
+        "INSERT INTO hyperliquid.ledger_events
+            (hash, account_address, environment, event_time, event_type,
+             source_stream, ledger_type, usdc, ingest_source, inserted_at)
+         VALUES ('sparkline-deposit', $1, 'live', $2, 'ledger', 'test',
+                 'deposit', 1000, 'test', NOW())",
+    )
+    .bind(&account_address)
+    .bind(Utc::now() - chrono::Duration::days(31))
+    .execute(&state.db_pool)
+    .await
+    .expect("seed balance anchor before both chart windows");
+
+    let response = router(Arc::clone(&state))
+        .oneshot(
+            Request::builder()
+                .uri(format!("/agents/{agent_key}/live/stream"))
+                .body(Body::empty())
+                .expect("build live stream request"),
+        )
+        .await
+        .expect("serve live stream");
+    assert_eq!(response.status(), StatusCode::OK);
+    let mut body = response.into_body();
+    let initial = next_sparklines(&mut body).await;
+    assert!(initial.contains("24 hours"));
+    assert!(initial.contains("30 days"));
+    assert!(!initial.contains("<polyline"));
+
+    for (trade_id, direction, side, realized_pnl, expected_change) in [
+        ("entry", "Open Long", "buy", 0, "(1.0000)"),
+        ("exit", "Close Long", "sell", 10, "+8.0000"),
+    ] {
+        // Persist fills without changing the in-memory account. The charts
+        // must pick up committed journal data even if exchange state arrived
+        // earlier or no further account notification is received.
+        sqlx::query(
+            "INSERT INTO hyperliquid.trade_fills
+                (hash, account_address, environment, event_time, source_stream,
+                 fee_usdc, fee, fee_token, realized_pnl_usdc, fill_time, direction, side,
+                 price, size, trade_id, ingest_source, inserted_at)
+             VALUES ($1, $2, 'live', $3, 'test', 1, 1, 'USDC', $4, $3, $5, $6,
+                     100, 1, $1, 'test', NOW())",
+        )
+        .bind(trade_id)
+        .bind(&account_address)
+        .bind(Utc::now())
+        .bind(rust_decimal::Decimal::from(realized_pnl))
+        .bind(direction)
+        .bind(side)
+        .execute(&state.db_pool)
+        .await
+        .expect("persist order fill");
+
+        let updated = next_sparklines(&mut body).await;
+        assert!(updated.contains("24 hours"));
+        assert!(updated.contains("30 days"));
+        assert_eq!(updated.matches(expected_change).count(), 2, "{updated}");
+        assert_eq!(updated.matches("<polyline").count(), 2, "{updated}");
+    }
+}
+
+#[tokio::test]
 async fn account_balance_stream_returns_404_for_unknown_agent() {
     let state = test_state().await;
 

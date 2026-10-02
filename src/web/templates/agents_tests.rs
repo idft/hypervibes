@@ -141,6 +141,7 @@ fn agents_show_page_renders_base_layout_and_delete_modal() {
     assert!(rendered.contains("sse-swap=\"activity\" hx-swap=\"innerHTML\""));
     assert!(rendered.contains("sse-swap=\"health\" hx-swap=\"innerHTML\""));
     assert!(rendered.contains("sse-swap=\"balance\" hx-swap=\"innerHTML\""));
+    assert!(rendered.contains("sse-swap=\"sparklines\" hx-swap=\"innerHTML\""));
     assert!(rendered.contains("sse-swap=\"positions\" hx-swap=\"innerHTML\""));
     assert!(rendered.contains("sse-swap=\"orders\" hx-swap=\"innerHTML\""));
     assert!(!rendered.contains("Agent setup"));
