@@ -611,15 +611,17 @@ pub(in crate::web::routes) async fn agents_send_conversation_message(
     headers: HeaderMap,
     Form(form): Form<ConversationMessageForm>,
 ) -> Result<Response, AppError> {
-    if form.message.trim().is_empty()
-        || form.message.chars().count() > CONVERSATION_MESSAGE_MAX_CHARS
-    {
-        let error = if form.message.trim().is_empty() {
-            "Message cannot be blank."
+    let text = form.message.trim();
+    let character_count = text.chars().count();
+    if text.is_empty() || character_count > CONVERSATION_MESSAGE_MAX_CHARS {
+        let error = if text.is_empty() {
+            "Message cannot be blank.".to_string()
         } else {
-            "Message is too long."
+            format!(
+                "Message is too long ({character_count} characters). The limit is {CONVERSATION_MESSAGE_MAX_CHARS} characters per message."
+            )
         };
-        return render_message_error(&state, &agent_key, conversation_id, form.message, error)
+        return render_message_error(&state, &agent_key, conversation_id, form.message, &error)
             .await;
     }
     match service(&state)

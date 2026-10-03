@@ -16,6 +16,13 @@ retain that selection while OpenCode records per-message attribution. The
 transcript includes messages, tool activity, errors, token/context usage, cost,
 and compaction telemetry through live updates.
 
+Messages can contain up to **100,000 characters**, including pasted handoff
+documents. The composer shows this limit; if you exceed it, the error reports
+your message's character count and keeps the draft so you can edit it. Leading
+and trailing whitespace is trimmed before counting and sending. This is a
+message-size limit; the selected model's context window still applies to the
+conversation, including previous messages and tool results.
+
 Compaction and deletion are OpenCode session operations available only while the
 session is idle. Deleting an agent removes its idle mapped sessions and
 agent-owned conversation records.
@@ -81,7 +88,7 @@ The **Discuss prompt** action on a role page opens Chat with the draft:
 
 1. The user selects a sub-agent prompt target and edits its draft.
 2. HyperVibes creates a conversation using the latest Chat model.
-3. The draft is included in the opening message when it fits the context limit.
+3. The draft is included in the opening message when it fits the message-size limit.
 4. Chat can load the saved target prompt when the draft is too long.
 5. Any requested MCP update follows the conversation's Strategy prompts permission.
 

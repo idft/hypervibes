@@ -33,7 +33,7 @@ use crate::{
 };
 
 pub const CONVERSATION_PROFILE: &str = "agent-conversations";
-pub const CONVERSATION_MESSAGE_MAX_CHARS: usize = 12_000;
+pub const CONVERSATION_MESSAGE_MAX_CHARS: usize = 100_000;
 pub const CONVERSATION_TITLE_MAX_CHARS: usize = 100;
 const ACTIVE_TURN_POLL_INTERVAL: Duration = Duration::from_secs(2);
 const ACTIVE_TURN_TIMEOUT: Duration = Duration::from_secs(30 * 60);

@@ -23,7 +23,10 @@ use uuid::Uuid;
 use crate::{
     agent_conversations::{
         model::{AgentConversationRow, CreateAgentConversation},
-        service::{CONVERSATION_MESSAGE_QUEUE_LIMIT, ConversationService, ConversationTurnOutcome},
+        service::{
+            CONVERSATION_MESSAGE_MAX_CHARS, CONVERSATION_MESSAGE_QUEUE_LIMIT, ConversationService,
+            ConversationTurnOutcome,
+        },
         store,
     },
     opencode::workspace_control_client::HttpWorkspaceController,
@@ -885,6 +888,61 @@ async fn created_conversation(
     );
     drain(state).await;
     conversation
+}
+
+#[tokio::test]
+async fn chat_accepts_large_unicode_handoffs_and_preserves_oversized_drafts() {
+    let backend = FakeBackend::start().await;
+    let state = backend.state().await;
+    let (agent, _) = insert_test_opencode_agent(&state)
+        .await
+        .expect("insert agent");
+    let conversation = created_conversation(&backend, &state, &agent).await;
+    let message = "📝".repeat(CONVERSATION_MESSAGE_MAX_CHARS);
+
+    for (message_id, draft, oversized) in [
+        ("msg_handoff", format!("  {message}\n"), false),
+        ("msg_oversized", format!("{message}📝"), true),
+    ] {
+        let response = router(Arc::clone(&state))
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri(format!("/agents/{agent}/chat/{}/messages", conversation.id))
+                    .header("content-type", "application/x-www-form-urlencoded")
+                    .header("hx-request", "true")
+                    .body(Body::from(format!(
+                        "message_id={message_id}&message={}",
+                        super::shared::urlencode(&draft)
+                    )))
+                    .expect("handoff request"),
+            )
+            .await
+            .expect("handoff response");
+        assert_eq!(response.status(), StatusCode::OK);
+        let composer = response_text(response).await;
+        assert!(composer.contains("Up to 100,000 characters per message"));
+        if oversized {
+            assert!(composer.contains("Message is too long (100001 characters)"));
+            assert!(composer.contains("The limit is 100000 characters per message"));
+            assert!(composer.contains(&draft), "keep the oversized draft intact");
+        } else {
+            assert!(!composer.contains("Message is too long"));
+        }
+    }
+
+    assert_eq!(prompt_texts(&backend).await, std::slice::from_ref(&message));
+    let error = conversation_service(&state)
+        .submit_conversation_turn(
+            &agent,
+            conversation.id,
+            "msg_service_oversized",
+            &format!("{message}📝"),
+        )
+        .await
+        .expect_err("service also enforces the message limit");
+    assert!(error.to_string().contains("at most 100000 characters"));
+    drain(&state).await;
 }
 
 #[tokio::test]

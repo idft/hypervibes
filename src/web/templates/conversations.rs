@@ -198,6 +198,15 @@ pub struct AgentConversationComposerPartialTemplate {
     pub message: String,
     pub error: Option<String>,
 }
+
+impl AgentConversationComposerPartialTemplate {
+    pub fn message_limit_text(&self) -> String {
+        super::shared::add_thousands_separators(
+            &crate::agent_conversations::service::CONVERSATION_MESSAGE_MAX_CHARS.to_string(),
+        )
+    }
+}
+
 #[derive(Template)]
 #[template(path = "agents/chat/permissions.html")]
 pub struct AgentConversationPermissionsPartialTemplate {
