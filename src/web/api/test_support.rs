@@ -99,6 +99,7 @@ pub async fn test_state() -> Arc<AppState> {
         asset_cache: Arc::new(crate::cache::asset::AssetCache::new(cache_dir).unwrap()),
         builder_fee_cache: Arc::new(BuilderFeeCache::new(Arc::new(TestBuilderFeeLookup))),
         referral_exchange: Arc::new(HyperliquidReferralExchange::mainnet()),
+        subaccount_creator: Arc::new(crate::hyperliquid::subaccounts::SubaccountCreator::mainnet()),
         in_flight: crate::harness::in_flight::InFlightTracker::new(),
         workspace_leases: crate::harness::workspace_lease::WorkspaceLeaseManager::new(),
         conversation_turns: crate::agent_conversations::service::ConversationTurnTracker::default(),

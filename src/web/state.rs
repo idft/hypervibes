@@ -45,6 +45,7 @@ pub struct AppState {
     pub asset_cache: Arc<AssetCache>,
     pub builder_fee_cache: Arc<BuilderFeeCache>,
     pub referral_exchange: Arc<dyn ReferralExchange>,
+    pub subaccount_creator: Arc<crate::hyperliquid::subaccounts::SubaccountCreator>,
     pub in_flight: InFlightTracker,
     pub workspace_leases: WorkspaceLeaseManager,
     pub conversation_turns: ConversationTurnTracker,

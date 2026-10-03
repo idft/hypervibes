@@ -1061,15 +1061,32 @@ pub(in crate::web::routes) async fn create_user_subaccount(
         Ok(signer) => signer,
         Err(response) => return Ok(response),
     };
-    let (address, created) =
-        if let Some(address) = discover_subaccount(&user.wallet_address, &expected_name).await {
-            (address, false)
-        } else {
-            match relay_create_subaccount(&signer, &user.wallet_address, &expected_name).await {
-                Ok(address) => (address, true),
-                Err(response) => return Ok(response),
-            }
-        };
+    let owner = user.wallet_address.parse::<Address>().map_err(|error| {
+        AppError(anyhow::anyhow!(
+            "invalid authenticated wallet address: {error}"
+        ))
+    })?;
+    let result = match state
+        .subaccount_creator
+        .create(&signer, owner, &expected_name)
+        .await
+    {
+        Ok(result) => result,
+        Err(error) => {
+            let status = match &error {
+                crate::hyperliquid::subaccounts::CreateSubaccountError::Rejected(_) => {
+                    StatusCode::UNPROCESSABLE_ENTITY
+                }
+                crate::hyperliquid::subaccounts::CreateSubaccountError::LookupUnavailable
+                | crate::hyperliquid::subaccounts::CreateSubaccountError::Unconfirmed => {
+                    StatusCode::BAD_GATEWAY
+                }
+            };
+            return Ok((status, Json(json!({"error": error.to_string()}))).into_response());
+        }
+    };
+    let address = result.address.to_string().to_ascii_lowercase();
+    let created = result.created;
     Ok(
         Json(json!({"status":"ok", "name": expected_name, "address": address, "created": created}))
             .into_response(),
@@ -1120,43 +1137,6 @@ async fn ready_user_signer(
     Ok(signer)
 }
 
-/// Sign and relay a `createSubAccount` action, then reconcile the created
-/// sub-account by its exact name. Returns the sub-account address. The error
-/// variant is the response to return to the caller.
-async fn relay_create_subaccount(
-    signer: &hypersdk::hypercore::PrivateKeySigner,
-    owner: &str,
-    expected_name: &str,
-) -> Result<String, Response> {
-    let nonce = chrono::Utc::now().timestamp_millis() as u64;
-    let (_hash, signature) =
-        crate::hyperliquid::signing::sign_create_subaccount(signer, expected_name, nonce)
-            .await
-            .map_err(|error| AppError(error).into_response())?;
-    let action = json!({"type": "createSubAccount", "name": expected_name});
-    let signature =
-        serde_json::to_value(signature).map_err(|error| AppError(error.into()).into_response())?;
-    let exchange = relay_with_signature(&action, nonce, signature).await;
-    if !exchange_success(&exchange) {
-        let message = exchange_error_message(&exchange);
-        warn!(response = ?exchange, "Hyperliquid rejected new Sub-Account creation");
-        return Err((
-            StatusCode::UNPROCESSABLE_ENTITY,
-            Json(json!({"error": message})),
-        )
-            .into_response());
-    }
-    let Some(address) = discover_subaccount(owner, expected_name).await else {
-        warn!(owner = %owner, subaccount_name = %expected_name, "Hyperliquid accepted new Sub-Account creation but it could not be reconciled");
-        return Err((
-            StatusCode::BAD_GATEWAY,
-            Json(json!({"error": "Sub-Account creation was accepted but could not be confirmed. Refresh the account list before retrying."})),
-        )
-            .into_response());
-    };
-    Ok(address)
-}
-
 /// The Hyperliquid sub-account name HyperVibes creates for an agent.
 /// Hyperliquid limits sub-account names to 16 characters, so the display
 /// name is truncated to fit the `vt-` prefix that marks HyperVibes-managed
@@ -1170,29 +1150,6 @@ pub(in crate::web::routes) fn agent_subaccount_name(display_name: &str) -> Strin
         .trim_end()
         .to_string();
     format!("vt-{suffix}")
-}
-
-async fn discover_subaccount(owner: &str, expected_name: &str) -> Option<String> {
-    let response = reqwest::Client::new()
-        .post("https://api.hyperliquid.xyz/info")
-        .json(&json!({"type":"subAccounts", "user": owner}))
-        .send()
-        .await
-        .ok()?
-        .error_for_status()
-        .ok()?
-        .json::<Value>()
-        .await
-        .ok()?;
-    response.as_array()?.iter().find_map(|entry| {
-        (entry.get("name").and_then(Value::as_str) == Some(expected_name)).then(|| {
-            entry
-                .get("subAccountUser")
-                .or_else(|| entry.get("address"))
-                .and_then(Value::as_str)
-                .map(str::to_ascii_lowercase)
-        })?
-    })
 }
 
 async fn relay(action: &Value, signature: &str) -> Value {
@@ -1217,15 +1174,6 @@ async fn relay_with_signature(action: &Value, nonce: u64, signature: Value) -> V
 
 fn exchange_success(response: &Value) -> bool {
     response.get("status").and_then(Value::as_str) == Some("ok")
-}
-
-fn exchange_error_message(response: &Value) -> String {
-    response
-        .get("response")
-        .and_then(Value::as_str)
-        .or_else(|| response.get("message").and_then(Value::as_str))
-        .unwrap_or("Hyperliquid rejected Sub-Account creation.")
-        .to_string()
 }
 
 fn transfer_error_message(response: &Value) -> String {
@@ -1363,7 +1311,122 @@ fn uint_word(value: u64) -> [u8; 32] {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::hyperliquid::subaccounts::tests::{ADDRESS, MockExchange, Reply, accounts, empty};
+    use crate::web::routes::test_support::{response_text, test_state};
     use alloy::signers::{Signer, local::PrivateKeySigner};
+
+    async fn create_with_mock(
+        state: &Arc<AppState>,
+        display_name: &str,
+    ) -> Result<Response, AppError> {
+        create_user_subaccount(
+            State(Arc::clone(state)),
+            AuthenticatedUser {
+                id: crate::test_db::test_user_id(),
+                wallet_address: "0x0000000000000000000000000000000000000001".to_string(),
+            },
+            Json(NewAgentSubaccountRequest {
+                display_name: display_name.to_string(),
+            }),
+        )
+        .await
+    }
+
+    #[tokio::test]
+    async fn creation_uses_sdk_address_and_preserves_naming_and_stored_signer() {
+        let mock = MockExchange::new(vec![empty()], vec![Reply::success()]).await;
+        let mut state = (*test_state().await).clone();
+        state.subaccount_creator = Arc::clone(&mock.creator);
+        let state = Arc::new(state);
+        let before = get_user_api_wallet(&state.db_pool, crate::test_db::test_user_id())
+            .await
+            .expect("read signer")
+            .expect("stored signer");
+        let response = create_with_mock(&state, "  A Very Long Agent Display Name  ")
+            .await
+            .expect("create response");
+        assert_eq!(response.status(), StatusCode::OK);
+        let body: Value =
+            serde_json::from_str(&response_text(response).await).expect("JSON response");
+        assert_eq!(
+            body,
+            json!({"status": "ok", "name": "vt-A Very Long A", "address": ADDRESS, "created": true})
+        );
+        assert_eq!(
+            mock.requests("exchange")[0]["action"]["name"],
+            "vt-A Very Long A"
+        );
+        assert_eq!(mock.requests("info")[0]["user"], before.main_wallet_address);
+        assert_eq!(mock.requests("info").len(), 1);
+        let after = get_user_api_wallet(&state.db_pool, crate::test_db::test_user_id())
+            .await
+            .expect("read signer after creation")
+            .expect("stored signer");
+        assert_eq!(
+            before.hyperliquid_private_key_ciphertext,
+            after.hyperliquid_private_key_ciphertext
+        );
+        assert_eq!(before.api_wallet_address, after.api_wallet_address);
+        assert_eq!(before.api_wallet_approved_at, after.api_wallet_approved_at);
+    }
+
+    #[tokio::test]
+    async fn creation_maps_rejection_and_uncertainty_to_user_facing_errors() {
+        for (reply, recovery, status, message) in [
+            (
+                Reply::Json(json!({"status": "err", "response": "Need to deposit"})),
+                vec![],
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "Need to deposit",
+            ),
+            (
+                Reply::Malformed,
+                vec![empty()],
+                StatusCode::BAD_GATEWAY,
+                "Sub-Account creation could not be confirmed. Refresh the account list before retrying.",
+            ),
+        ] {
+            let mut info = vec![empty()];
+            info.extend(recovery);
+            let mock = MockExchange::new(info, vec![reply]).await;
+            let mut state = (*test_state().await).clone();
+            state.subaccount_creator = Arc::clone(&mock.creator);
+            let response = create_with_mock(&Arc::new(state), "BTC")
+                .await
+                .expect("error response");
+            assert_eq!(response.status(), status);
+            let body: Value =
+                serde_json::from_str(&response_text(response).await).expect("JSON error");
+            assert_eq!(body, json!({"error": message}));
+            assert_eq!(mock.requests("exchange").len(), 1);
+        }
+    }
+
+    #[tokio::test]
+    async fn existing_subaccount_still_requires_a_verified_server_signer() {
+        let mock = MockExchange::new(
+            vec![accounts(
+                "0x0000000000000000000000000000000000000001",
+                "vt-BTC",
+            )],
+            vec![],
+        )
+        .await;
+        let mut state = (*test_state().await).clone();
+        state.subaccount_creator = Arc::clone(&mock.creator);
+        sqlx::query("UPDATE users SET api_wallet_address = $2 WHERE id = $1")
+            .bind(crate::test_db::test_user_id())
+            .bind(ADDRESS)
+            .execute(&state.db_pool)
+            .await
+            .expect("mismatch stored signer address");
+        let response = create_with_mock(&Arc::new(state), "BTC")
+            .await
+            .expect("invalid stored signer response");
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        assert!(mock.requests("info").is_empty());
+        assert!(mock.requests("exchange").is_empty());
+    }
 
     fn referral_state(referred_by: Option<Value>, volume: &str) -> Value {
         json!({
@@ -1728,18 +1791,6 @@ mod tests {
         assert_eq!(
             subaccount_limit(&json!({"cumVlm":"100000000000"})),
             Some(50)
-        );
-    }
-
-    #[test]
-    fn extracts_exchange_rejection_message() {
-        assert_eq!(
-            exchange_error_message(&json!({"status":"err","response":"Need to deposit"})),
-            "Need to deposit"
-        );
-        assert_eq!(
-            exchange_error_message(&json!({"status":"error"})),
-            "Hyperliquid rejected Sub-Account creation."
         );
     }
 }

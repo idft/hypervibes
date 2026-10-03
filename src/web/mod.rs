@@ -97,6 +97,7 @@ pub async fn serve(
         referral_exchange: Arc::new(
             crate::hyperliquid::referral::HyperliquidReferralExchange::mainnet(),
         ),
+        subaccount_creator: Arc::new(crate::hyperliquid::subaccounts::SubaccountCreator::mainnet()),
         in_flight: in_flight_for_state,
         workspace_leases,
         conversation_turns: crate::agent_conversations::service::ConversationTurnTracker::default(),

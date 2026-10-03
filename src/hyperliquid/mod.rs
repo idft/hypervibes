@@ -12,7 +12,7 @@ pub mod orders;
 pub mod queries;
 pub mod raw_http;
 pub mod referral;
-pub mod signing;
+pub mod subaccounts;
 pub mod sync_state;
 pub mod trade_cycles;
 pub mod trade_store;
