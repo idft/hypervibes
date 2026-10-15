@@ -12,3 +12,10 @@ declare module "@tanstack/react-router" {
     server: { requestContext: { runtime: AppRuntime } };
   }
 }
+
+// Start's Vite-generated registration must retain the host-injected context too.
+declare module "@tanstack/react-start" {
+  interface Register {
+    server: { requestContext: { runtime: AppRuntime } };
+  }
+}

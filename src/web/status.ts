@@ -1,6 +1,9 @@
+import { redirect } from "@tanstack/react-router";
 import { createServerFn } from "@tanstack/react-start";
+import { getRequestHeaders } from "@tanstack/react-start/server";
+import { currentUser } from "../auth-user.js";
 
-// Public preview status only. Future private operations must enforce auth here.
-export const getRuntimeStatus = createServerFn({ method: "GET" }).handler(
-  ({ context }) => context.runtime.status(),
-);
+export const getRuntimeStatus = createServerFn({ method: "GET" }).handler(async ({ context }) => {
+  if (!await currentUser(context.runtime, getRequestHeaders())) throw redirect({ to: "/login" });
+  return context.runtime.status();
+});

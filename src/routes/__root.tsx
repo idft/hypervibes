@@ -1,6 +1,5 @@
 import { createRootRoute, HeadContent, Outlet, Scripts } from "@tanstack/react-router";
 import type { ReactNode } from "react";
-import { Navbar } from "../components/navbar.js";
 import stylesheet from "../web/app.css?url";
 
 export const Route = createRootRoute({
@@ -23,16 +22,7 @@ export const Route = createRootRoute({
 });
 
 function Layout() {
-  return (
-    <>
-      <header className="fixed inset-x-0 top-0 z-40 h-14 border-b border-zinc-800 bg-[#17191c]">
-        <Navbar />
-      </header>
-      <div className="app-shell fixed inset-x-0 bottom-0 top-14 overflow-y-auto">
-        <main className="app-content min-w-0 px-4 py-6 sm:px-6 lg:px-8"><Outlet /></main>
-      </div>
-    </>
-  );
+  return <Outlet />;
 }
 
 function Document({ children }: { children: ReactNode }) {

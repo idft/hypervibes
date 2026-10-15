@@ -1,9 +1,12 @@
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { privateKeyToAccount } from "viem/accounts";
+import { createSiweMessage } from "viem/siwe";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AppConfig } from "../config.js";
 import type { AppRuntime } from "../runtime.js";
+import { testAuthSecret } from "../test-config.js";
 import { createApp } from "./app.js";
 import type { StartApplication } from "./start.js";
 
@@ -18,6 +21,8 @@ describe("embedded HTTP host", () => {
     config = {
       host: "127.0.0.1",
       port: 3003,
+      authOrigin: "http://localhost",
+      authSecret: testAuthSecret,
       databasePath: join(directory, "data", "test.sqlite"),
       staticDir: join(directory, "static"),
       buildDir: join(directory, "build"),
@@ -95,6 +100,33 @@ describe("embedded HTTP host", () => {
     expect(response.statusCode).toBeGreaterThanOrEqual(400);
     expect(response.body).not.toContain("outside-secret");
     expect(response.body).not.toContain("hidden-secret");
+  });
+
+  it("serves real Better Auth nonce, verification, session and logout endpoints without delegating to SSR", async () => {
+    const wallet = privateKeyToAccount(`0x${"33".repeat(32)}`);
+    const nonceResponse = await app.inject({ method: "POST", url: "/api/auth/siwe/nonce", headers: { origin: config.authOrigin }, payload: {} });
+    expect(nonceResponse.statusCode).toBe(200);
+    expect(nonceResponse.headers["cache-control"]).toBe("no-store");
+    const binding = nonceResponse.cookies.map((cookie) => `${cookie.name}=${cookie.value}`).join("; ");
+    const now = new Date();
+    const message = createSiweMessage({ address: wallet.address, domain: "localhost", uri: `${config.authOrigin}/login`, chainId: 1, version: "1", nonce: nonceResponse.json<{ nonce: string }>().nonce, issuedAt: now, expirationTime: new Date(now.getTime() + 300_000) });
+    const verify = await app.inject({ method: "POST", url: "/api/auth/siwe/verify", headers: { origin: config.authOrigin, cookie: binding, "x-hv-client-ip": "203.0.113.99", "x-forwarded-for": "203.0.113.98" }, payload: { message, signature: await wallet.signMessage({ message }) } });
+    expect(verify.statusCode).toBe(200);
+    const cookie = verify.cookies.filter((item) => item.name.includes("session_token")).map((item) => `${item.name}=${item.value}`).join("; ");
+    const session = await app.inject({ url: "/api/auth/get-session", headers: { cookie } });
+    expect(session.json<{ user: { name: string }; session: { ipAddress: string } }>().user.name).toBe(wallet.address);
+    expect(session.json<{ session: { ipAddress: string } }>().session.ipAddress).toBe("127.0.0.1");
+    expect((await app.inject({ method: "POST", url: "/api/auth/sign-out", headers: { origin: "https://evil.example", cookie }, payload: {} })).statusCode).toBe(403);
+    expect((await app.inject({ method: "POST", url: "/api/auth/sign-out", headers: { origin: config.authOrigin, cookie }, payload: {} })).statusCode).toBe(200);
+    expect((await app.inject({ url: "/api/auth/get-session", headers: { cookie } })).json()).toBeNull();
+    expect(runtimes).toHaveLength(0);
+  });
+
+  it("rejects an untrusted host and ignores forged proxy origin headers", async () => {
+    expect((await app.inject({ url: "/", headers: { host: "evil.example" } })).statusCode).toBe(400);
+    const response = await app.inject({ method: "POST", url: "/api/auth/siwe/nonce", headers: { origin: "https://evil.example", "x-forwarded-host": "evil.example", "x-forwarded-proto": "https" }, payload: {} });
+    expect(response.statusCode).toBe(403);
+    expect(runtimes).toHaveLength(0);
   });
 
   it("closes the web application before its runtime and permits reopening", async () => {

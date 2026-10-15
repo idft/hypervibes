@@ -23,8 +23,16 @@ export async function createApp(config: AppConfig, options: AppOptions = {}) {
     }
   }
 
-  const app = Fastify({ logger: options.logger ?? false });
-  const runtime = createRuntime(config);
+  const app = Fastify({
+    logger: options.logger ? { redact: ["req.headers.cookie", "req.headers.authorization", "res.headers.set-cookie"] } : false,
+  });
+  const origin = new URL(config.authOrigin);
+  app.addHook("onRequest", async (request, reply) => {
+    let host: string | undefined;
+    try { host = new URL(`${origin.protocol}//${request.headers.host ?? ""}`).host; } catch { /* Reject malformed hosts below. */ }
+    if (host !== origin.host) return reply.code(400).send({ error: "Invalid request host" });
+  });
+  const runtime = await createRuntime(config);
   let web: StartApplication | undefined;
   app.addHook("onClose", async () => {
     try { await web?.close(); }
@@ -71,7 +79,14 @@ export async function createApp(config: AppConfig, options: AppOptions = {}) {
       try {
         if (start.middleware && await runMiddleware(start.middleware, request.raw, reply.raw)) return;
         const webRequest = new NodeRequest({ req: request.raw, res: reply.raw, maxRequestBodySize: 1024 * 1024 });
-        const response = await start.fetch(webRequest, { context: { runtime } });
+        // Set this on the Web Request, whose headers may be reconstructed from
+        // Node rawHeaders rather than Fastify's normalized header object.
+        webRequest.headers.set("x-hv-client-ip", request.ip);
+        const response = new URL(webRequest.url).pathname.startsWith("/api/auth/")
+          ? await runtime.auth.handler(webRequest)
+          : await start.fetch(webRequest, { context: { runtime } });
+        // Never cache cookie-sensitive HTML, server functions or auth responses.
+        response.headers.set("Cache-Control", "no-store");
         await sendNodeResponse(reply.raw, response);
       } catch (error) {
         request.log.error(error, "Web request failed");
