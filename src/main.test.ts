@@ -1,0 +1,91 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+const mocks = vi.hoisted(() => ({
+  createApp: vi.fn(),
+  app: {
+    listen: vi.fn(),
+    close: vi.fn(),
+    log: { error: vi.fn() },
+  },
+}));
+
+vi.mock("./web/app.js", () => ({ createApp: mocks.createApp }));
+vi.mock("./config.js", () => ({
+  loadConfig: () => ({ host: "127.0.0.1", port: 3003 }),
+}));
+
+import { main } from "./main.js";
+
+// All server methods are mocked: these tests never open a socket or database.
+describe("server entry point", () => {
+  const signals = ["SIGINT", "SIGTERM"] as const;
+  let originalListeners: Map<string, NodeJS.SignalsListener[]>;
+  let originalExitCode: typeof process.exitCode;
+
+  beforeEach(() => {
+    vi.resetAllMocks();
+    mocks.app.listen.mockResolvedValue(undefined);
+    mocks.app.close.mockResolvedValue(undefined);
+    mocks.createApp.mockResolvedValue(mocks.app);
+    originalExitCode = process.exitCode;
+    originalListeners = new Map(signals.map((signal) => [signal, process.listeners(signal)]));
+  });
+  afterEach(() => {
+    for (const signal of signals) {
+      for (const listener of process.listeners(signal)) {
+        if (!originalListeners.get(signal)?.includes(listener)) process.off(signal, listener);
+      }
+    }
+    process.exitCode = originalExitCode;
+  });
+
+  it("listens using config, then closes only once on repeated shutdown signals", async () => {
+    await main(["--dev"]);
+    expect(mocks.createApp).toHaveBeenCalledWith({ host: "127.0.0.1", port: 3003 }, { logger: true, development: true });
+    expect(mocks.app.listen).toHaveBeenCalledWith({ host: "127.0.0.1", port: 3003 });
+    const stop = process.listeners("SIGTERM").find((listener) =>
+      !originalListeners.get("SIGTERM")?.includes(listener));
+    expect(stop).toBeDefined();
+    stop?.("SIGTERM");
+    stop?.("SIGTERM");
+    await vi.waitFor(() => {
+      expect(mocks.app.close).toHaveBeenCalledTimes(1);
+      expect(process.listeners("SIGTERM")).toEqual(originalListeners.get("SIGTERM"));
+      expect(process.listeners("SIGINT")).toEqual(originalListeners.get("SIGINT"));
+    });
+  });
+
+  it("closes resources and removes signal handlers when listening fails", async () => {
+    const failure = new Error("address already in use");
+    mocks.app.listen.mockRejectedValue(failure);
+    await expect(main()).rejects.toBe(failure);
+    expect(mocks.app.close).toHaveBeenCalledTimes(1);
+    for (const signal of signals) {
+      expect(process.listeners(signal)).toEqual(originalListeners.get(signal));
+    }
+  });
+
+  it("propagates initialization failure without installing signal handlers", async () => {
+    const failure = new Error("cannot open database");
+    mocks.createApp.mockRejectedValue(failure);
+    await expect(main()).rejects.toBe(failure);
+    expect(mocks.app.listen).not.toHaveBeenCalled();
+    for (const signal of signals) {
+      expect(process.listeners(signal)).toEqual(originalListeners.get(signal));
+    }
+  });
+
+  it("logs shutdown errors and sets a failing exit code", async () => {
+    const failure = new Error("close failed");
+    mocks.app.close.mockRejectedValue(failure);
+    await main();
+    const stop = process.listeners("SIGINT").find((listener) =>
+      !originalListeners.get("SIGINT")?.includes(listener));
+    stop?.("SIGINT");
+    await vi.waitFor(() => {
+      expect(mocks.app.log.error).toHaveBeenCalledWith(failure, "Shutdown failed");
+      expect(process.exitCode).toBe(1);
+      expect(process.listeners("SIGINT")).toEqual(originalListeners.get("SIGINT"));
+    });
+  });
+});

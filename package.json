@@ -3,32 +3,58 @@
   "version": "0.3.8",
   "private": true,
   "type": "module",
+  "engines": {
+    "node": ">=22.23.3"
+  },
   "scripts": {
+    "dev:server": "tsx src/main.ts --dev",
+    "build:app": "vite build --config vite.app.config.ts",
+    "generate:routes": "tsr generate",
+    "start:server": "tsx src/main.ts",
+    "typecheck:server": "tsr generate && tsc --project tsconfig.server.json",
+    "lint:server": "eslint src vite.app.config.ts vitest.server.config.ts",
+    "test:server": "vitest run --config vitest.server.config.ts",
     "build:js": "./node_modules/esbuild/bin/esbuild assets/app.ts assets/login.ts --bundle --outdir=static/dist --minify",
     "build:css": "tailwindcss -i assets/app.css -o static/dist/app.css --minify",
     "build": "pnpm build:js && pnpm build:css",
     "lint": "eslint assets",
     "lint:fix": "eslint assets --fix",
     "typecheck": "tsc --noEmit",
-    "test:js": "vitest run --environment jsdom"
+    "test:js": "vitest run assets --environment jsdom"
   },
   "dependencies": {
+    "@fastify/static": "10.1.6",
+    "@tanstack/react-router": "1.170.44",
+    "@tanstack/react-start": "1.169.2",
+    "drizzle-orm": "1.0.0-rc.4",
+    "fastify": "5.12.7",
     "htmx-ext-sse": "2.2.4",
     "htmx.org": "2.0.10",
     "lightweight-charts": "5.2.1",
+    "react": "19.3.1",
+    "react-dom": "19.3.1",
+    "srvx": "1.0.5",
     "timeago.js": "4.0.2",
     "viem": "^2.55.2"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
     "@tailwindcss/cli": "^4.1.0",
+    "@tailwindcss/vite": "4.3.1",
+    "@tanstack/router-cli": "1.167.44",
+    "@types/node": "22.20.5",
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
+    "@vitejs/plugin-react": "5.2.0",
     "esbuild": "^0.25.0",
     "eslint": "^10.5.0",
     "globals": "^17.6.0",
     "jsdom": "^29.1.1",
     "tailwindcss": "^4.1.0",
+    "tsx": "4.23.15",
     "typescript": "^5.7.0",
     "typescript-eslint": "^8.61.1",
+    "vite": "8.1.5",
     "vitest": "^4.1.10"
   }
 }

@@ -8,5 +8,5 @@
     "allowImportingTsExtensions": false,
     "skipLibCheck": true
   },
-  "include": ["assets/**/*.ts"]
+  "include": ["assets/**/*.ts", "vite.app.config.ts", "vitest.server.config.ts"]
 }

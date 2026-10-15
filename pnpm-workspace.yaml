@@ -1,3 +1,8 @@
+# Keep Browserslist data outside pnpm's minimum-release-age quarantine.
+overrides:
+  browserslist>baseline-browser-mapping: 2.11.28
+  browserslist>node-releases: 2.0.58
+
 allowBuilds:
   esbuild: true
   "@parcel/watcher": true

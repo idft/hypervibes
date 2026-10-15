@@ -1,17 +1,38 @@
 # HyperVibes
 
-This is a framework for allowing OpenCode-backed AI agents to trade crypto on Hyperliquid exchange.
+HyperVibes is a framework for AI agents to trade crypto on Hyperliquid exchange.
 
-See `docs/` for project documentation.  Documentation is for public, user-facing documentation, not technical implementation details.
-Keep documentation up to date when making signifigant code changes or archetecutre decisions.
-You do not need to update the docs for UI changes.
+## Current Work: Incremental TypeScript Rewrite
+
+We are building a new TypeScript application from scratch, implementing features
+incrementally rather than converting the entire Rust app. See `pi.md` for existing
+design research; use the root `package.json` for current commands.
+
+* Write new backend TypeScript files directly alongside the existing `.rs` files in `src/`. Use descriptive TypeScript filenames (e.g. `database.ts`, `app.ts`), not Rust module names like `mod.ts`; filenames do not need to match the Rust files.
+* Use the existing root `package.json` and pnpm; do not create a separate backend package.
+* The scaffold uses Fastify and SQLite via Node's built-in `node:sqlite`.
+* Pi Durable integration is deferred. Later, one harness can manage conversations linked to application agent records; starting the scaffold must not start agents or make model calls.
+* Keep the existing UI, templates, and frontend build; modify them incrementally as features are implemented.
+* Keep the Rust/OpenCode/PostgreSQL application intact as a reference. Do not port its entire schema or import its existing data.
+* Domain tables, schema migrations, APIs, workers, and trading functionality are future work, not implied by the scaffold.
+
+## Documentation During the Rewrite
+
+* **Do not create or update documentation for TypeScript rewrite work unless the user explicitly requests it.** This includes `docs/`, README files, and `pi.md`.
+* Keep the existing public documentation for the legacy application unchanged while the rewrite is in progress.
+* Maintain `AGENTS.md` when the user requests changes to coding-agent instructions.
 
 ## Stack
 
-* Rust
-* axum
-* sqlx
-* postgres
+New application:
+* TypeScript/ESM on Node.js 22.23.3 or a newer supported, patched Node release
+* Fastify
+* SQLite (`node:sqlite`)
+* pnpm
+* Pi Durable planned for agent execution
+
+Existing application (reference, not the current implementation target):
+* Rust, axum, sqlx, PostgreSQL
 * HTMX, SSE for live updates
 
 ## Frontend build
@@ -30,8 +51,13 @@ Frontend assets are managed with `pnpm` and built via `esbuild` and Tailwind CSS
 
 ## Testing
 
-* Run `cargo test` from the repo root. Tests default to the dedicated `test-postgres` service from `podman-compose.dev.yaml` at `postgres://hypervibes:hypervibes@127.0.0.1:15433/postgres` (defined in `src/test_db.rs`; override with `TEST_DATABASE_URL`). `src/test_db.rs` creates isolated databases for test helper calls against that service and runs migrations in each one so database setup can happen concurrently. The dev stack's Postgres at `localhost:15432` (u: hypervibes, p: hypervibes, db: hypervibes) is never touched by tests.
-* use a 240 second timeout for tests
+* **Do not run Rust tests (`cargo test`, including workspace variants) while working on the TypeScript rewrite.** They are unrelated to the new app and can hang waiting for PostgreSQL. Only run them if the user explicitly requests it.
+* Do not run `just test`: it includes the legacy Rust suite. Do not run Cargo build, Clippy, or formatting checks by default for TypeScript-only work.
+* Run backend checks from the repo root: `pnpm typecheck:server`, `pnpm lint:server`, and `pnpm test:server`.
+* Backend tests use disposable SQLite files and injected HTTP requests, without opening a listening port or depending on PostgreSQL, containers, or model calls.
+* For frontend changes, use `pnpm typecheck`, `pnpm lint`, and `pnpm test:js` as appropriate.
+* Never point tests at the running application's database or use real exchange credentials.
+* Use a 240 second timeout for tests.
 
 ## UI Rules
 
@@ -45,30 +71,24 @@ Frontend assets are managed with `pnpm` and built via `esbuild` and Tailwind CSS
 
 ## Code Quality & Linting Standards
 
-Strict Clippy Enforcement: All Rust code must pass cargo clippy --workspace --all-targets -- -D warnings before commit. This treats dead code warnings as compilation errors, forcing immediate resolution rather than suppression. 
+* Use strict TypeScript types and keep backend Node configuration separate from browser configuration.
+* Keep application construction separate from listening; importing modules must not start servers, open databases, or launch agent work.
+* Close owned resources on shutdown and on initialization failure.
+* Remove unreachable, unused, or unreferenced code. Do not add speculative feature scaffolding or suppress diagnostics without a documented reason.
+* Preserve explicit error handling and domain/security boundaries. Do not use floating-point numbers as financial authority.
+* Keep application schema ownership separate from Pi Durable's internal storage; do not write its private tables directly.
 
-Dead Code Policy:
+### Run before commits affecting the TypeScript backend
 
-Remove unreachable, unused, or unreferenced code immediately
-Never use #[allow(dead_code)] unless documenting a specific exception (e.g., public API stability, future feature scaffolding)
-Document any allowed dead code with a comment explaining why it exists and when it will be addressed 
-Error Handling Requirements:
-
-Use ? operator for error propagation in library code
-Replace .unwrap() with .expect("descriptive message") only for invariant violations
-Use thiserror for library errors and anyhow for application entry points 
-Type System Leverage:
-
-Maximize compile-time safety through Rust's type system
-Avoid unwrap() in library code; prefer explicit error handling
-Make match statements exhaustive; avoid wildcard arms when possible 
-Pre-Commit Automation:
-
-### Run before every commit
-```
-cargo clippy --workspace --all-targets -- -D warnings
-cargo fmt --check
-cargo test --workspace
+```sh
+pnpm typecheck:server
+pnpm lint:server
+pnpm test:server
 ```
 
-Definition of Done: No new Clippy warnings, no dead code, all tests passing.
+Run the relevant frontend checks when changing frontend code. Do not add Rust
+checks to the rewrite workflow; legacy Rust testing requires an explicit user request.
+
+Definition of Done: Relevant TypeScript checks pass, with no new diagnostics or
+dead code. Documentation updates are not part of the rewrite workflow unless
+explicitly requested.

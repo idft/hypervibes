@@ -13,6 +13,12 @@ export default tseslint.config(
     },
   },
   {
-    ignores: ["static/dist/", "node_modules/", "target/"],
+    files: ["src/**/*.{ts,tsx}", "vite.app.config.ts", "vitest.server.config.ts"],
+    languageOptions: {
+      globals: { ...globals.node },
+    },
+  },
+  {
+    ignores: ["static/dist/", "node_modules/", "target/", ".build/", "src/routeTree.gen.ts"],
   }
 );
