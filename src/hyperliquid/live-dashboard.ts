@@ -2,7 +2,7 @@ import { HttpTransport, SubscriptionClient, WebSocketTransport } from "@nktkas/h
 import { dashboardOrders, dashboardPerps, dashboardSpot, loadAgentDashboard, type AgentDashboard } from "./agent-dashboard.js";
 
 type Section = "perps" | "spot" | "orders";
-type Patch = Partial<Pick<AgentDashboard, "perpEquity" | "positions" | "spotUsdc" | "orders">>;
+type Patch = Partial<Pick<AgentDashboard, "perpEquity" | "positions" | "spotUsdc" | "spotUsdcHold" | "orders">>;
 export interface AccountFeedEvents {
   connected(): void;
   disconnected(): void;
@@ -162,7 +162,7 @@ export class LiveDashboards {
             for (const section of sections) {
               if (account.revision[section] !== revision[section]) continue;
               if (section === "perps" && snapshot.perpEquity !== null && snapshot.positions !== null) update(section, { perpEquity: snapshot.perpEquity, positions: snapshot.positions });
-              if (section === "spot" && snapshot.spotUsdc !== null) update(section, { spotUsdc: snapshot.spotUsdc });
+              if (section === "spot" && snapshot.spotUsdc !== null) update(section, { spotUsdc: snapshot.spotUsdc, spotUsdcHold: snapshot.spotUsdcHold ?? null });
               if (section === "orders" && snapshot.orders !== null) update(section, { orders: snapshot.orders });
             }
             this.publish(account);

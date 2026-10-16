@@ -147,7 +147,7 @@ export async function loadOwnedTradingAccounts(
 }
 
 /** Looks up the current builder-fee maximum for a user, in tenths of a bp. */
-export async function maxBuilderFee(transport: HttpTransport, user: string, builder: string): Promise<number> {
+export async function maxBuilderFee(transport: HttpTransport, user: string, builder: string, signal?: AbortSignal): Promise<number> {
   const info = new InfoClient({ transport });
-  return info.maxBuilderFee({ user: user as `0x${string}`, builder: builder as `0x${string}` });
+  return info.maxBuilderFee({ user: user as `0x${string}`, builder: builder as `0x${string}` }, signal);
 }

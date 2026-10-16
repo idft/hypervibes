@@ -1,3 +1,6 @@
+import type { OrderService } from "../hyperliquid/orders/order-service.js";
+import { createHyperliquidExtension } from "../hyperliquid/durable-extension.js";
+import type { HyperliquidService } from "../hyperliquid/service.js";
 import { BACKGROUND_CONTEXT as context } from "@earendil-works/chord/context";
 import { getSupportedThinkingLevels, type Models } from "@earendil-works/pi-ai/models";
 import { createRegistry, Harness, InboxDoc, LiveDoc } from "@earendil-works/pi-durable";
@@ -44,7 +47,7 @@ export class AgentService {
   private scheduling = false;
   private closing?: Promise<void>;
   private resuming: Promise<void> = Promise.resolve();
-  constructor(private readonly db: ApplicationDatabase, private readonly database: SharedDatabase, private readonly providers: ProviderService, private readonly options: AgentServiceOptions = {}) {}
+  constructor(private readonly db: ApplicationDatabase, private readonly database: SharedDatabase, private readonly providers: ProviderService, private readonly hyperliquid: HyperliquidService, private readonly orders: OrderService, private readonly options: AgentServiceOptions = {}) {}
   private notify(id: string) { for (const listener of this.lifecycle.get(id) ?? []) listener(); }
   private models(userId: string) { return this.options.models ? Promise.resolve(this.options.models) : this.providers.models(userId); }
   private async configured(agent: AgentRow, current: RunningAgent) {
@@ -124,20 +127,28 @@ export class AgentService {
     try {
       await this.db.update(hvAgents).set({ state: "provisioning", error: null, updatedAt: Date.now() }).where(eq(hvAgents.id, agent.id)).run();
       this.notify(agent.id);
+      const registry = createRegistry();
+      const hyperliquid = createHyperliquidExtension(this.hyperliquid, agent.userId, agent.id, this.orders);
+      registry.install(hyperliquid);
       const storage = await SqliteStorage.open(this.database.borrow(), { prefix: harnessPrefix(agent.id) });
       try {
         harness = await Harness.open(storage, {
-          models: await this.models(agent.userId), registry: createRegistry(),
+          models: await this.models(agent.userId), registry,
           settings: { retry: { maxRetries: 2 }, stream: { timeoutMs: 120_000 } },
         }, context);
       } catch (error) { await storage.close(context); throw error; }
       // root() is idempotent inside this Agent's store, including a crash before
       // the application records its ID. No cross-store transaction is required.
       const main = await harness.root(context, { agent: {
-        model: agent.initialProvider && agent.initialModelId ? { provider: agent.initialProvider, modelId: agent.initialModelId } : this.options.model ?? legacyModel, extensions: [], tools: [],
-        instructions: "You are the user's HyperVibes assistant. Help discuss trading strategies and answer questions. Trading and live exchange data are not configured. Do not claim to place orders or access live account information.",
+        model: agent.initialProvider && agent.initialModelId ? { provider: agent.initialProvider, modelId: agent.initialModelId } : this.options.model ?? legacyModel,
       } });
       if (agent.conversationId !== null && agent.conversationId !== main.id) throw new Error("Agent root identity changed");
+      // root options apply only on creation. Configure before scheduling so old
+      // scaffold roots also gain the extension without changing model/history.
+      await main.configure({
+        extensions: [hyperliquid], tools: null,
+        instructions: "You are the user's HyperVibes assistant. Help discuss trading strategies and answer questions. Use the available tools for account information and order execution, following the Hyperliquid extension's instructions. Describe confirmed outcomes accurately; never claim an unknown action failed or succeeded.",
+      }, context);
       this.admit();
       await this.db.update(hvAgents).set({ state: "ready", conversationId: main.id, error: null, updatedAt: Date.now() }).where(eq(hvAgents.id, agent.id)).run();
       const current = { harness, main };

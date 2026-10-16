@@ -1,4 +1,7 @@
-import { HttpTransport } from "@nktkas/hyperliquid";
+import type { TradingAuthority } from "./orders/order-service.js";
+import { hvWalletAddresses } from "../db/auth-schema.js";
+import { HttpTransport, InfoClient } from "@nktkas/hyperliquid";
+import { loadAccountStatus } from "./account-status.js";
 import type { JournalService } from "./journal-service.js";
 import { loadAgentDashboard, type AgentDashboard } from "./agent-dashboard.js";
 import { LiveDashboards, type AccountFeedFactory } from "./live-dashboard.js";
@@ -112,8 +115,9 @@ export class HyperliquidService {
     private readonly transport: HttpTransport = new HttpTransport(),
     feedFactory?: AccountFeedFactory,
     private readonly journal?: JournalService,
+    nonceManager?: (signer: string) => Promise<number>,
   ) {
-    this.creator = new SubaccountCreator(transport);
+    this.creator = new SubaccountCreator(transport, nonceManager);
     this.live = new LiveDashboards(transport, feedFactory);
   }
 
@@ -149,6 +153,42 @@ export class HyperliquidService {
     const agent = await this.db.select().from(hvAgents).where(and(eq(hvAgents.id, agentId(id)), eq(hvAgents.userId, userId))).get();
     if (!agent) throw new HyperliquidError("Agent not found", 404);
     return agent.tradingAccountAddress;
+  }
+
+  async agentTradingAccount(userId: string, id: string) {
+    if (this.stopped) throw new HyperliquidError("Hyperliquid service is closed", 503);
+    return this.dashboardAccount(userId, id);
+  }
+
+  /** Signing authority is resolved by the host, never from tool arguments. */
+  async orderAuthority(userId: string, id: string, signal: AbortSignal, needsBuilder: boolean): Promise<TradingAuthority> {
+    const account = (await this.agentTradingAccount(userId, id))?.toLowerCase();
+    if (!account) throw new HyperliquidError("Assign a trading account first.", 409);
+    const wallets = await this.db.select().from(hvWalletAddresses).where(eq(hvWalletAddresses.userId, userId)).all();
+    const primary = wallets.filter((wallet) => wallet.isPrimary);
+    const wallet = primary.length === 1 ? primary[0] : wallets.length === 1 ? wallets[0] : undefined;
+    if (!wallet || !/^0x[0-9a-fA-F]{40}$/.test(wallet.address)) throw new HyperliquidError("A unique owner wallet is required for order signing.", 409);
+    const owner = wallet.address.toLowerCase() as `0x${string}`;
+    const info = new InfoClient({ transport: this.transport });
+    const role = await info.userRole({ user: account as `0x${string}` }, signal);
+    if (!(account === owner && role.role === "user") && !(role.role === "subAccount" && role.data.master.toLowerCase() === owner)) throw new HyperliquidError("Assigned trading account ownership could not be verified.", 409);
+    const row = await this.settings(userId);
+    const privateKey = await this.decryptSigner(userId);
+    const signer = privateKeyToAccount(privateKey as `0x${string}`);
+    if (signer.address.toLowerCase() !== row?.apiWalletAddress?.toLowerCase()) throw new HyperliquidError("Stored signer identity does not match its configuration.", 409);
+    const signerRole = await info.userRole({ user: signer.address }, signal);
+    if (signerRole.role !== "agent" || signerRole.data.user.toLowerCase() !== owner) throw new HyperliquidError("Trading signer approval could not be verified on the exchange.", 409);
+    const fee = row?.builderFeeTenthsOfBp ?? 0;
+    const remoteFee = needsBuilder ? await maxBuilderFee(this.transport, owner, BUILDER_RECIPIENT, signal) : 0;
+    if (needsBuilder && (!row?.builderFeeApprovedAt || !Number.isInteger(fee) || fee < 1 || fee > MAX_BUILDER_FEE_TENTHS_OF_BP || !Number.isSafeInteger(remoteFee) || remoteFee < fee)) throw new HyperliquidError("Builder fee approval is missing or insufficient.", 409);
+    return { account, privateKey, ...(account === owner ? {} : { vaultAddress: account as `0x${string}` }), builder: { b: BUILDER_RECIPIENT, f: needsBuilder ? fee : 0 } };
+  }
+
+  async agentAccountStatus(userId: string, id: string, signal?: AbortSignal) {
+    if (this.stopped) throw new HyperliquidError("Hyperliquid service is closed", 503);
+    const address = await this.dashboardAccount(userId, id);
+    const cached = this.started && address ? this.live.snapshot(address) : undefined;
+    return loadAccountStatus(this.transport, address, cached, signal);
   }
 
   async agentDashboard(userId: string, id: string) {

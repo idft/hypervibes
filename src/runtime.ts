@@ -6,6 +6,7 @@ import { openDatabase } from "./db/database.js";
 import { lockProfile } from "./db/profile-lock.js";
 import { applicationDatabase, SharedDatabase } from "./db/shared-database.js";
 import type { AccountFeedFactory } from "./hyperliquid/live-dashboard.js";
+import { OrderService } from "./hyperliquid/orders/order-service.js";
 import { HyperliquidService } from "./hyperliquid/service.js";
 import { HttpTransport } from "@nktkas/hyperliquid";
 import { exchangeHistory, JournalService, type HistoryFetcher } from "./hyperliquid/journal-service.js";
@@ -24,13 +25,16 @@ export async function createRuntime(config: AppConfig, options: AgentServiceOpti
   let agents: AgentService | undefined;
   let hyperliquid: HyperliquidService | undefined;
   let providers: ProviderService | undefined;
+  let orders: OrderService | undefined;
   let closing: Promise<void> | undefined;
   let failure: Error | undefined;
   const close = () => closing ??= (async () => {
     try { await agents?.close(); }
     finally {
-      try { await hyperliquid?.close(); }
-      finally {
+      try {
+        try { await orders?.close(); }
+        finally { await hyperliquid?.close(); }
+      } finally {
         try { await providers?.close(); }
         finally {
           try { await database.close(); }
@@ -53,12 +57,18 @@ export async function createRuntime(config: AppConfig, options: AgentServiceOpti
     const providerService = new ProviderService(db, config.encryptionKey, options);
     providers = providerService;
     await providerService.initialize();
-    const agentService = new AgentService(db, database, providerService, options);
-    providerService.onChanged = (userId) => agentService.providersChanged(userId);
-    agents = agentService;
     const transport = new HttpTransport();
     const journal = new JournalService(database, options.journalHistoryFetcher ?? exchangeHistory(transport));
-    hyperliquid = new HyperliquidService(db, config.encryptionKey, transport, options.accountFeedFactory, journal);
+    const orderService = new OrderService(database, transport, {
+      account: (userId, agentId) => hyperliquid!.agentTradingAccount(userId, agentId),
+      authority: (userId, agentId, signal, needsBuilder) => hyperliquid!.orderAuthority(userId, agentId, signal, needsBuilder),
+    });
+    orders = orderService;
+    hyperliquid = new HyperliquidService(db, config.encryptionKey, transport, options.accountFeedFactory, journal, (signer) => orderService.store.nonce(signer));
+    await orderService.recover();
+    const agentService = new AgentService(db, database, providerService, hyperliquid, orderService, options);
+    providerService.onChanged = (userId) => agentService.providersChanged(userId);
+    agents = agentService;
     await agentService.recover();
     return {
       db,
@@ -67,11 +77,13 @@ export async function createRuntime(config: AppConfig, options: AgentServiceOpti
       origin: config.authOrigin,
       agents: agentService,
       hyperliquid,
+      orders: orderService,
       providers: providerService,
       start() {
         if (closing || failure) throw new Error("Runtime is unavailable");
-        agentService.start();
         hyperliquid?.start();
+        orderService.start();
+        agentService.start();
       },
       status(): RuntimeStatus {
         if (closing || failure || !database.available || !connection.isOpen) throw new Error("Runtime is unavailable");

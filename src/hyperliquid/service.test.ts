@@ -6,11 +6,14 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { hvUsers } from "../db/auth-schema.js";
+import { hvUsers, hvWalletAddresses } from "../db/auth-schema.js";
+import { hvHyperliquidSettings } from "../db/exchange-schema.js";
+import { eq } from "drizzle-orm";
 import { createRuntime, type AppRuntime } from "../runtime.js";
 import { testConfig } from "../test-config.js";
 import { BUILDER_RECIPIENT } from "./constants.js";
 import { HyperliquidError } from "./errors.js";
+import type { AccountFeedEvents } from "./live-dashboard.js";
 
 const encryptionKey = "3f".repeat(32);
 const mainWallet = privateKeyToAccount(`0x${"5a".repeat(32)}` as `0x${string}`);
@@ -104,15 +107,21 @@ describe("Hyperliquid account service", () => {
   let directory: string;
   let runtime: AppRuntime;
   const user = { id: "owner", walletAddress: mainWallet.address.toLowerCase() };
+  let feedEvents: Map<string, AccountFeedEvents>;
 
   beforeEach(async () => {
     directory = mkdtempSync(join(tmpdir(), "hv-hyperliquid-"));
+    feedEvents = new Map();
     const models = createModels();
     models.setProvider(fauxProvider().provider);
     runtime = await createRuntime(testConfig({
       APP_SQLITE_PATH: join(directory, "app.sqlite"),
       AGENTS_ENCRYPTION_KEY: encryptionKey,
-    }), { models, model: { provider: "faux", modelId: "faux-1" } });
+    }), {
+      models, model: { provider: "faux", modelId: "faux-1" },
+      accountFeedFactory: (address, events) => { feedEvents.set(address, events); return { close: async () => {} }; },
+      journalHistoryFetcher: async () => [],
+    });
     await runtime.db.insert(hvUsers).values({ id: user.id, name: "Owner", email: "owner@example.test" }).run();
   });
   afterEach(async () => {
@@ -128,7 +137,71 @@ describe("Hyperliquid account service", () => {
     await expect(runtime.hyperliquid.agentDashboard("someone-else", agent.id)).rejects.toMatchObject({ status: 404 });
     await expect(runtime.hyperliquid.agentDashboard(user.id, randomUUID())).rejects.toMatchObject({ status: 404 });
     expect(await runtime.hyperliquid.agentDashboard(user.id, agent.id)).toMatchObject({ address: null, positions: null, orders: null });
+    await expect(runtime.hyperliquid.agentAccountStatus("someone-else", agent.id)).rejects.toMatchObject({ status: 404 });
+    await expect(runtime.hyperliquid.agentAccountStatus(user.id, randomUUID())).rejects.toMatchObject({ status: 404 });
+    expect(await runtime.hyperliquid.agentAccountStatus(user.id, agent.id)).toMatchObject({ address: null, positions: null, orders: null });
     expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it("shares the dashboard feed with the Agent account tool and isolates assigned accounts", async () => {
+    const address = `0x${"ab".repeat(20)}`;
+    const other = `0x${"cd".repeat(20)}`;
+    const one = await runtime.agents.create(user.id, "First", randomUUID(), address);
+    const two = await runtime.agents.create(user.id, "Second", randomUUID(), other);
+    const fetcher = vi.fn(async (_input: unknown, init: RequestInit) => {
+      const { type, user: account } = JSON.parse(String(init.body)) as { type: string; user: string };
+      if (type === "clearinghouseState") return Response.json({ marginSummary: { accountValue: account === address ? "10.123" : "20" }, assetPositions: [] });
+      if (type === "spotClearinghouseState") return Response.json({ balances: [{ coin: "USDC", total: account === address ? "150" : "250", hold: "5" }] });
+      if (type === "userAbstraction") return Response.json("unifiedAccount");
+      return Response.json([]);
+    });
+    vi.stubGlobal("fetch", fetcher);
+    runtime.hyperliquid.start();
+    await vi.waitFor(() => expect(feedEvents.size).toBe(2));
+    for (const events of feedEvents.values()) events.connected();
+    await vi.waitFor(async () => expect((await runtime.hyperliquid.agentDashboard(user.id, one.id)).live?.sections.orders.fresh).toBe(true));
+    await vi.waitFor(async () => expect((await runtime.hyperliquid.agentDashboard(user.id, two.id)).live?.sections.orders.fresh).toBe(true));
+    fetcher.mockClear();
+    expect(await runtime.hyperliquid.agentAccountStatus(user.id, one.id)).toMatchObject({ address, perpEquity: "10.123", spotUsdc: "150", spotUsdcHold: "5", accountAbstraction: "unifiedAccount", sections: { perps: { source: "live", fresh: true }, spot: { source: "live", fresh: true } } });
+    expect(await runtime.hyperliquid.agentAccountStatus(user.id, two.id)).toMatchObject({ address: other, perpEquity: "20", spotUsdc: "250" });
+    expect(feedEvents.size).toBe(2);
+    expect(fetcher).toHaveBeenCalledTimes(2);
+    for (const [, init] of fetcher.mock.calls) expect(JSON.parse(String(init.body)).type).toBe("userAbstraction");
+  });
+
+  async function signingFixture() {
+    await runtime.db.insert(hvWalletAddresses).values({ id: randomUUID(), userId: user.id, address: user.walletAddress, chainId: 42161, isPrimary: true, createdAt: new Date() }).run();
+    await runtime.hyperliquid.storeApiWallet(user.id, "import", signerPrivateKey);
+    await runtime.db.update(hvHyperliquidSettings).set({ apiWalletApprovedAt: Date.now(), builderFeeApprovedAt: Date.now(), builderFeeTenthsOfBp: 10 }).where(eq(hvHyperliquidSettings.userId, user.id)).run();
+  }
+
+  it("verifies live owner/signer authority and uses vaultAddress only for owned subaccounts", async () => {
+    await signingFixture();
+    const subaccount = `0x${"ab".repeat(20)}`;
+    const sub = await runtime.agents.create(user.id, "Sub", randomUUID(), subaccount);
+    const main = await runtime.agents.create(user.id, "Main", randomUUID(), user.walletAddress);
+    vi.stubGlobal("fetch", infoRoutes({ userRole: (body) => body.user === signerAddress
+      ? { role: "agent", data: { user: user.walletAddress } }
+      : body.user === subaccount ? { role: "subAccount", data: { master: user.walletAddress } } : { role: "user" } }));
+    expect(await runtime.hyperliquid.orderAuthority(user.id, sub.id, new AbortController().signal, true)).toMatchObject({ account: subaccount, vaultAddress: subaccount, privateKey: signerPrivateKey, builder: { b: BUILDER_RECIPIENT, f: 10 } });
+    const mainAuthority = await runtime.hyperliquid.orderAuthority(user.id, main.id, new AbortController().signal, true);
+    expect(mainAuthority.account).toBe(user.walletAddress);
+    expect(mainAuthority).not.toHaveProperty("vaultAddress");
+    await expect(runtime.hyperliquid.orderAuthority("another-user", main.id, new AbortController().signal, true)).rejects.toMatchObject({ status: 404 });
+  });
+
+  it("fails closed on foreign accounts/signers and revoked fees, without blocking fee-free cancellation", async () => {
+    await signingFixture();
+    const agent = await runtime.agents.create(user.id, "Main", randomUUID(), user.walletAddress);
+    vi.stubGlobal("fetch", infoRoutes({ userRole: (body) => body.user === signerAddress ? { role: "agent", data: { user: `0x${"ff".repeat(20)}` } } : { role: "user" } }));
+    await expect(runtime.hyperliquid.orderAuthority(user.id, agent.id, new AbortController().signal, true)).rejects.toThrow("signer approval");
+    vi.stubGlobal("fetch", infoRoutes({ userRole: (body) => body.user === signerAddress ? { role: "agent", data: { user: user.walletAddress } } : { role: "user" }, maxBuilderFee: () => 0 }));
+    await expect(runtime.hyperliquid.orderAuthority(user.id, agent.id, new AbortController().signal, true)).rejects.toThrow("Builder fee");
+    expect((await runtime.hyperliquid.orderAuthority(user.id, agent.id, new AbortController().signal, false)).builder.f).toBe(0);
+    const foreign = await runtime.agents.create(user.id, "Foreign", randomUUID(), `0x${"ff".repeat(20)}`);
+    await expect(runtime.hyperliquid.orderAuthority(user.id, foreign.id, new AbortController().signal, false)).rejects.toThrow("ownership");
+    await runtime.db.update(hvHyperliquidSettings).set({ apiWalletExpiresAt: Date.now() - 1 }).where(eq(hvHyperliquidSettings.userId, user.id)).run();
+    await expect(runtime.hyperliquid.orderAuthority(user.id, agent.id, new AbortController().signal, false)).rejects.toThrow("approve a trading signer");
   });
 
   it("generates, stores and approves a trading signer with main-wallet signatures", async () => {

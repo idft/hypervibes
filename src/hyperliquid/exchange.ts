@@ -76,7 +76,7 @@ interface OwnerState {
 export class SubaccountCreator {
   private readonly owners = new Map<string, OwnerState>();
 
-  constructor(private readonly transport: HttpTransport) {}
+  constructor(private readonly transport: HttpTransport, private readonly nonceManager?: (signer: string) => Promise<number>) {}
 
   private async discover(owner: string, name: string): Promise<string | null> {
     const info = new InfoClient({ transport: this.transport });
@@ -113,7 +113,7 @@ export class SubaccountCreator {
     state.pending.add(name);
     try {
       const wallet = privateKeyToAccount(privateKey as `0x${string}`);
-      const exchange = new ExchangeClient({ transport: this.transport, wallet });
+      const exchange = new ExchangeClient({ transport: this.transport, wallet, nonceManager: this.nonceManager });
       const response = await exchange.createSubAccount({ name });
       state.pending.delete(name);
       const address = typeof response.response?.data === "string" ? response.response.data.toLowerCase() : null;

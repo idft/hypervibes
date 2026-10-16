@@ -1,0 +1,2128 @@
+{
+  "version": "7",
+  "dialect": "sqlite",
+  "id": "11b3605b-e3b4-4dd3-a373-9fdb64cc7c53",
+  "prevIds": [
+    "3e33aace-43b2-4d51-a6f8-432bcf8764fc"
+  ],
+  "ddl": [
+    {
+      "name": "hv_auth_accounts",
+      "entityType": "tables"
+    },
+    {
+      "name": "hv_auth_verifications",
+      "entityType": "tables"
+    },
+    {
+      "name": "hv_sessions",
+      "entityType": "tables"
+    },
+    {
+      "name": "hv_users",
+      "entityType": "tables"
+    },
+    {
+      "name": "hv_wallet_addresses",
+      "entityType": "tables"
+    },
+    {
+      "name": "hv_agents",
+      "entityType": "tables"
+    },
+    {
+      "name": "hv_hyperliquid_settings",
+      "entityType": "tables"
+    },
+    {
+      "name": "hv_installation",
+      "entityType": "tables"
+    },
+    {
+      "name": "hv_provider_connections",
+      "entityType": "tables"
+    },
+    {
+      "name": "hv_journal_accounts",
+      "entityType": "tables"
+    },
+    {
+      "name": "hv_journal_entries",
+      "entityType": "tables"
+    },
+    {
+      "name": "hv_journal_notes",
+      "entityType": "tables"
+    },
+    {
+      "name": "hv_journal_sync",
+      "entityType": "tables"
+    },
+    {
+      "name": "hv_exchange_nonces",
+      "entityType": "tables"
+    },
+    {
+      "name": "hv_order_actions",
+      "entityType": "tables"
+    },
+    {
+      "name": "hv_order_events",
+      "entityType": "tables"
+    },
+    {
+      "name": "hv_order_items",
+      "entityType": "tables"
+    },
+    {
+      "name": "hv_order_requests",
+      "entityType": "tables"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "id",
+      "entityType": "columns",
+      "table": "hv_auth_accounts"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "account_id",
+      "entityType": "columns",
+      "table": "hv_auth_accounts"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "provider_id",
+      "entityType": "columns",
+      "table": "hv_auth_accounts"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "user_id",
+      "entityType": "columns",
+      "table": "hv_auth_accounts"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "access_token",
+      "entityType": "columns",
+      "table": "hv_auth_accounts"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "refresh_token",
+      "entityType": "columns",
+      "table": "hv_auth_accounts"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "id_token",
+      "entityType": "columns",
+      "table": "hv_auth_accounts"
+    },
+    {
+      "type": "integer",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "access_token_expires_at",
+      "entityType": "columns",
+      "table": "hv_auth_accounts"
+    },
+    {
+      "type": "integer",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "refresh_token_expires_at",
+      "entityType": "columns",
+      "table": "hv_auth_accounts"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "scope",
+      "entityType": "columns",
+      "table": "hv_auth_accounts"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "password",
+      "entityType": "columns",
+      "table": "hv_auth_accounts"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "(cast(unixepoch('subsecond') * 1000 as integer))",
+      "generated": null,
+      "name": "created_at",
+      "entityType": "columns",
+      "table": "hv_auth_accounts"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "updated_at",
+      "entityType": "columns",
+      "table": "hv_auth_accounts"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "id",
+      "entityType": "columns",
+      "table": "hv_auth_verifications"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "identifier",
+      "entityType": "columns",
+      "table": "hv_auth_verifications"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "value",
+      "entityType": "columns",
+      "table": "hv_auth_verifications"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "expires_at",
+      "entityType": "columns",
+      "table": "hv_auth_verifications"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "(cast(unixepoch('subsecond') * 1000 as integer))",
+      "generated": null,
+      "name": "created_at",
+      "entityType": "columns",
+      "table": "hv_auth_verifications"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "(cast(unixepoch('subsecond') * 1000 as integer))",
+      "generated": null,
+      "name": "updated_at",
+      "entityType": "columns",
+      "table": "hv_auth_verifications"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "id",
+      "entityType": "columns",
+      "table": "hv_sessions"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "expires_at",
+      "entityType": "columns",
+      "table": "hv_sessions"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "token",
+      "entityType": "columns",
+      "table": "hv_sessions"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "(cast(unixepoch('subsecond') * 1000 as integer))",
+      "generated": null,
+      "name": "created_at",
+      "entityType": "columns",
+      "table": "hv_sessions"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "updated_at",
+      "entityType": "columns",
+      "table": "hv_sessions"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "ip_address",
+      "entityType": "columns",
+      "table": "hv_sessions"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "user_agent",
+      "entityType": "columns",
+      "table": "hv_sessions"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "user_id",
+      "entityType": "columns",
+      "table": "hv_sessions"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "id",
+      "entityType": "columns",
+      "table": "hv_users"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "name",
+      "entityType": "columns",
+      "table": "hv_users"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "email",
+      "entityType": "columns",
+      "table": "hv_users"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "false",
+      "generated": null,
+      "name": "email_verified",
+      "entityType": "columns",
+      "table": "hv_users"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "image",
+      "entityType": "columns",
+      "table": "hv_users"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "(cast(unixepoch('subsecond') * 1000 as integer))",
+      "generated": null,
+      "name": "created_at",
+      "entityType": "columns",
+      "table": "hv_users"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "(cast(unixepoch('subsecond') * 1000 as integer))",
+      "generated": null,
+      "name": "updated_at",
+      "entityType": "columns",
+      "table": "hv_users"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "id",
+      "entityType": "columns",
+      "table": "hv_wallet_addresses"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "user_id",
+      "entityType": "columns",
+      "table": "hv_wallet_addresses"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "address",
+      "entityType": "columns",
+      "table": "hv_wallet_addresses"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "chain_id",
+      "entityType": "columns",
+      "table": "hv_wallet_addresses"
+    },
+    {
+      "type": "integer",
+      "notNull": false,
+      "autoincrement": false,
+      "default": "false",
+      "generated": null,
+      "name": "is_primary",
+      "entityType": "columns",
+      "table": "hv_wallet_addresses"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "created_at",
+      "entityType": "columns",
+      "table": "hv_wallet_addresses"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "id",
+      "entityType": "columns",
+      "table": "hv_agents"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "user_id",
+      "entityType": "columns",
+      "table": "hv_agents"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "name",
+      "entityType": "columns",
+      "table": "hv_agents"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "creation_request_id",
+      "entityType": "columns",
+      "table": "hv_agents"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "'provisioning'",
+      "generated": null,
+      "name": "state",
+      "entityType": "columns",
+      "table": "hv_agents"
+    },
+    {
+      "type": "integer",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "conversation_id",
+      "entityType": "columns",
+      "table": "hv_agents"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "initial_provider",
+      "entityType": "columns",
+      "table": "hv_agents"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "initial_model_id",
+      "entityType": "columns",
+      "table": "hv_agents"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "error",
+      "entityType": "columns",
+      "table": "hv_agents"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "trading_account_address",
+      "entityType": "columns",
+      "table": "hv_agents"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "created_at",
+      "entityType": "columns",
+      "table": "hv_agents"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "updated_at",
+      "entityType": "columns",
+      "table": "hv_agents"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "user_id",
+      "entityType": "columns",
+      "table": "hv_hyperliquid_settings"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "api_wallet_address",
+      "entityType": "columns",
+      "table": "hv_hyperliquid_settings"
+    },
+    {
+      "type": "blob",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "private_key_ciphertext",
+      "entityType": "columns",
+      "table": "hv_hyperliquid_settings"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "private_key_key_id",
+      "entityType": "columns",
+      "table": "hv_hyperliquid_settings"
+    },
+    {
+      "type": "integer",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "api_wallet_approved_at",
+      "entityType": "columns",
+      "table": "hv_hyperliquid_settings"
+    },
+    {
+      "type": "integer",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "api_wallet_expires_at",
+      "entityType": "columns",
+      "table": "hv_hyperliquid_settings"
+    },
+    {
+      "type": "integer",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "api_wallet_expiry_checked_at",
+      "entityType": "columns",
+      "table": "hv_hyperliquid_settings"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "0",
+      "generated": null,
+      "name": "builder_fee_tenths_of_bp",
+      "entityType": "columns",
+      "table": "hv_hyperliquid_settings"
+    },
+    {
+      "type": "integer",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "builder_fee_approved_at",
+      "entityType": "columns",
+      "table": "hv_hyperliquid_settings"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "created_at",
+      "entityType": "columns",
+      "table": "hv_hyperliquid_settings"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "updated_at",
+      "entityType": "columns",
+      "table": "hv_hyperliquid_settings"
+    },
+    {
+      "type": "integer",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "id",
+      "entityType": "columns",
+      "table": "hv_installation"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "device_id",
+      "entityType": "columns",
+      "table": "hv_installation"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "user_id",
+      "entityType": "columns",
+      "table": "hv_provider_connections"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "provider_id",
+      "entityType": "columns",
+      "table": "hv_provider_connections"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "auth_type",
+      "entityType": "columns",
+      "table": "hv_provider_connections"
+    },
+    {
+      "type": "blob",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "ciphertext",
+      "entityType": "columns",
+      "table": "hv_provider_connections"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "key_id",
+      "entityType": "columns",
+      "table": "hv_provider_connections"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "catalog",
+      "entityType": "columns",
+      "table": "hv_provider_connections"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "updated_at",
+      "entityType": "columns",
+      "table": "hv_provider_connections"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "account",
+      "entityType": "columns",
+      "table": "hv_journal_accounts"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "0",
+      "generated": null,
+      "name": "revision",
+      "entityType": "columns",
+      "table": "hv_journal_accounts"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "-1",
+      "generated": null,
+      "name": "projected_revision",
+      "entityType": "columns",
+      "table": "hv_journal_accounts"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "0",
+      "generated": null,
+      "name": "history_limited",
+      "entityType": "columns",
+      "table": "hv_journal_accounts"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "account",
+      "entityType": "columns",
+      "table": "hv_journal_entries"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "id",
+      "entityType": "columns",
+      "table": "hv_journal_entries"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "kind",
+      "entityType": "columns",
+      "table": "hv_journal_entries"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "time",
+      "entityType": "columns",
+      "table": "hv_journal_entries"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "data",
+      "entityType": "columns",
+      "table": "hv_journal_entries"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "balance",
+      "entityType": "columns",
+      "table": "hv_journal_entries"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "1",
+      "generated": null,
+      "name": "active",
+      "entityType": "columns",
+      "table": "hv_journal_entries"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "id",
+      "entityType": "columns",
+      "table": "hv_journal_notes"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "account",
+      "entityType": "columns",
+      "table": "hv_journal_notes"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "target",
+      "entityType": "columns",
+      "table": "hv_journal_notes"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "author_id",
+      "entityType": "columns",
+      "table": "hv_journal_notes"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "body",
+      "entityType": "columns",
+      "table": "hv_journal_notes"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "created_at",
+      "entityType": "columns",
+      "table": "hv_journal_notes"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "account",
+      "entityType": "columns",
+      "table": "hv_journal_sync"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "stream",
+      "entityType": "columns",
+      "table": "hv_journal_sync"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "0",
+      "generated": null,
+      "name": "cursor",
+      "entityType": "columns",
+      "table": "hv_journal_sync"
+    },
+    {
+      "type": "integer",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "updated_at",
+      "entityType": "columns",
+      "table": "hv_journal_sync"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "error",
+      "entityType": "columns",
+      "table": "hv_journal_sync"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "signer",
+      "entityType": "columns",
+      "table": "hv_exchange_nonces"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "nonce",
+      "entityType": "columns",
+      "table": "hv_exchange_nonces"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "id",
+      "entityType": "columns",
+      "table": "hv_order_actions"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "request_id",
+      "entityType": "columns",
+      "table": "hv_order_actions"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "ordinal",
+      "entityType": "columns",
+      "table": "hv_order_actions"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "payload",
+      "entityType": "columns",
+      "table": "hv_order_actions"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "state",
+      "entityType": "columns",
+      "table": "hv_order_actions"
+    },
+    {
+      "type": "integer",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "nonce",
+      "entityType": "columns",
+      "table": "hv_order_actions"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "expires_at",
+      "entityType": "columns",
+      "table": "hv_order_actions"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "updated_at",
+      "entityType": "columns",
+      "table": "hv_order_actions"
+    },
+    {
+      "type": "integer",
+      "notNull": false,
+      "autoincrement": true,
+      "default": null,
+      "generated": null,
+      "name": "id",
+      "entityType": "columns",
+      "table": "hv_order_events"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "item_id",
+      "entityType": "columns",
+      "table": "hv_order_events"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "source",
+      "entityType": "columns",
+      "table": "hv_order_events"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "time",
+      "entityType": "columns",
+      "table": "hv_order_events"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "data",
+      "entityType": "columns",
+      "table": "hv_order_events"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "id",
+      "entityType": "columns",
+      "table": "hv_order_items"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "action_id",
+      "entityType": "columns",
+      "table": "hv_order_items"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "ordinal",
+      "entityType": "columns",
+      "table": "hv_order_items"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "symbol",
+      "entityType": "columns",
+      "table": "hv_order_items"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "cloid",
+      "entityType": "columns",
+      "table": "hv_order_items"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "oid",
+      "entityType": "columns",
+      "table": "hv_order_items"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "active",
+      "entityType": "columns",
+      "table": "hv_order_items"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "view",
+      "entityType": "columns",
+      "table": "hv_order_items"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "updated_at",
+      "entityType": "columns",
+      "table": "hv_order_items"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "id",
+      "entityType": "columns",
+      "table": "hv_order_requests"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "agent_id",
+      "entityType": "columns",
+      "table": "hv_order_requests"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "account",
+      "entityType": "columns",
+      "table": "hv_order_requests"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "request_key",
+      "entityType": "columns",
+      "table": "hv_order_requests"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "kind",
+      "entityType": "columns",
+      "table": "hv_order_requests"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "input",
+      "entityType": "columns",
+      "table": "hv_order_requests"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "created_at",
+      "entityType": "columns",
+      "table": "hv_order_requests"
+    },
+    {
+      "columns": [
+        "user_id"
+      ],
+      "tableTo": "hv_users",
+      "columnsTo": [
+        "id"
+      ],
+      "onUpdate": "NO ACTION",
+      "onDelete": "CASCADE",
+      "nameExplicit": false,
+      "name": "fk_hv_auth_accounts_user_id_hv_users_id_fk",
+      "entityType": "fks",
+      "table": "hv_auth_accounts"
+    },
+    {
+      "columns": [
+        "user_id"
+      ],
+      "tableTo": "hv_users",
+      "columnsTo": [
+        "id"
+      ],
+      "onUpdate": "NO ACTION",
+      "onDelete": "CASCADE",
+      "nameExplicit": false,
+      "name": "fk_hv_sessions_user_id_hv_users_id_fk",
+      "entityType": "fks",
+      "table": "hv_sessions"
+    },
+    {
+      "columns": [
+        "user_id"
+      ],
+      "tableTo": "hv_users",
+      "columnsTo": [
+        "id"
+      ],
+      "onUpdate": "NO ACTION",
+      "onDelete": "CASCADE",
+      "nameExplicit": false,
+      "name": "fk_hv_wallet_addresses_user_id_hv_users_id_fk",
+      "entityType": "fks",
+      "table": "hv_wallet_addresses"
+    },
+    {
+      "columns": [
+        "user_id"
+      ],
+      "tableTo": "hv_users",
+      "columnsTo": [
+        "id"
+      ],
+      "onUpdate": "NO ACTION",
+      "onDelete": "RESTRICT",
+      "nameExplicit": false,
+      "name": "fk_hv_agents_user_id_hv_users_id_fk",
+      "entityType": "fks",
+      "table": "hv_agents"
+    },
+    {
+      "columns": [
+        "user_id"
+      ],
+      "tableTo": "hv_users",
+      "columnsTo": [
+        "id"
+      ],
+      "onUpdate": "NO ACTION",
+      "onDelete": "RESTRICT",
+      "nameExplicit": false,
+      "name": "fk_hv_hyperliquid_settings_user_id_hv_users_id_fk",
+      "entityType": "fks",
+      "table": "hv_hyperliquid_settings"
+    },
+    {
+      "columns": [
+        "user_id"
+      ],
+      "tableTo": "hv_users",
+      "columnsTo": [
+        "id"
+      ],
+      "onUpdate": "NO ACTION",
+      "onDelete": "CASCADE",
+      "nameExplicit": false,
+      "name": "fk_hv_provider_connections_user_id_hv_users_id_fk",
+      "entityType": "fks",
+      "table": "hv_provider_connections"
+    },
+    {
+      "columns": [
+        "account"
+      ],
+      "tableTo": "hv_journal_accounts",
+      "columnsTo": [
+        "account"
+      ],
+      "onUpdate": "NO ACTION",
+      "onDelete": "NO ACTION",
+      "nameExplicit": false,
+      "name": "fk_hv_journal_entries_account_hv_journal_accounts_account_fk",
+      "entityType": "fks",
+      "table": "hv_journal_entries"
+    },
+    {
+      "columns": [
+        "author_id"
+      ],
+      "tableTo": "hv_users",
+      "columnsTo": [
+        "id"
+      ],
+      "onUpdate": "NO ACTION",
+      "onDelete": "NO ACTION",
+      "nameExplicit": false,
+      "name": "fk_hv_journal_notes_author_id_hv_users_id_fk",
+      "entityType": "fks",
+      "table": "hv_journal_notes"
+    },
+    {
+      "columns": [
+        "account",
+        "target"
+      ],
+      "tableTo": "hv_journal_entries",
+      "columnsTo": [
+        "account",
+        "id"
+      ],
+      "onUpdate": "NO ACTION",
+      "onDelete": "NO ACTION",
+      "nameExplicit": false,
+      "name": "fk_hv_journal_notes_account_target_hv_journal_entries_account_id_fk",
+      "entityType": "fks",
+      "table": "hv_journal_notes"
+    },
+    {
+      "columns": [
+        "account"
+      ],
+      "tableTo": "hv_journal_accounts",
+      "columnsTo": [
+        "account"
+      ],
+      "onUpdate": "NO ACTION",
+      "onDelete": "NO ACTION",
+      "nameExplicit": false,
+      "name": "fk_hv_journal_sync_account_hv_journal_accounts_account_fk",
+      "entityType": "fks",
+      "table": "hv_journal_sync"
+    },
+    {
+      "columns": [
+        "request_id"
+      ],
+      "tableTo": "hv_order_requests",
+      "columnsTo": [
+        "id"
+      ],
+      "onUpdate": "NO ACTION",
+      "onDelete": "NO ACTION",
+      "nameExplicit": false,
+      "name": "fk_hv_order_actions_request_id_hv_order_requests_id_fk",
+      "entityType": "fks",
+      "table": "hv_order_actions"
+    },
+    {
+      "columns": [
+        "item_id"
+      ],
+      "tableTo": "hv_order_items",
+      "columnsTo": [
+        "id"
+      ],
+      "onUpdate": "NO ACTION",
+      "onDelete": "NO ACTION",
+      "nameExplicit": false,
+      "name": "fk_hv_order_events_item_id_hv_order_items_id_fk",
+      "entityType": "fks",
+      "table": "hv_order_events"
+    },
+    {
+      "columns": [
+        "action_id"
+      ],
+      "tableTo": "hv_order_actions",
+      "columnsTo": [
+        "id"
+      ],
+      "onUpdate": "NO ACTION",
+      "onDelete": "NO ACTION",
+      "nameExplicit": false,
+      "name": "fk_hv_order_items_action_id_hv_order_actions_id_fk",
+      "entityType": "fks",
+      "table": "hv_order_items"
+    },
+    {
+      "columns": [
+        "agent_id"
+      ],
+      "tableTo": "hv_agents",
+      "columnsTo": [
+        "id"
+      ],
+      "onUpdate": "NO ACTION",
+      "onDelete": "NO ACTION",
+      "nameExplicit": false,
+      "name": "fk_hv_order_requests_agent_id_hv_agents_id_fk",
+      "entityType": "fks",
+      "table": "hv_order_requests"
+    },
+    {
+      "columns": [
+        "user_id",
+        "provider_id"
+      ],
+      "nameExplicit": false,
+      "name": "hv_provider_connections_pk",
+      "entityType": "pks",
+      "table": "hv_provider_connections"
+    },
+    {
+      "columns": [
+        "account",
+        "id"
+      ],
+      "nameExplicit": false,
+      "name": "hv_journal_entries_pk",
+      "entityType": "pks",
+      "table": "hv_journal_entries"
+    },
+    {
+      "columns": [
+        "account",
+        "stream"
+      ],
+      "nameExplicit": false,
+      "name": "hv_journal_sync_pk",
+      "entityType": "pks",
+      "table": "hv_journal_sync"
+    },
+    {
+      "columns": [
+        "id"
+      ],
+      "nameExplicit": false,
+      "name": "hv_auth_accounts_pk",
+      "table": "hv_auth_accounts",
+      "entityType": "pks"
+    },
+    {
+      "columns": [
+        "id"
+      ],
+      "nameExplicit": false,
+      "name": "hv_auth_verifications_pk",
+      "table": "hv_auth_verifications",
+      "entityType": "pks"
+    },
+    {
+      "columns": [
+        "id"
+      ],
+      "nameExplicit": false,
+      "name": "hv_sessions_pk",
+      "table": "hv_sessions",
+      "entityType": "pks"
+    },
+    {
+      "columns": [
+        "id"
+      ],
+      "nameExplicit": false,
+      "name": "hv_users_pk",
+      "table": "hv_users",
+      "entityType": "pks"
+    },
+    {
+      "columns": [
+        "id"
+      ],
+      "nameExplicit": false,
+      "name": "hv_wallet_addresses_pk",
+      "table": "hv_wallet_addresses",
+      "entityType": "pks"
+    },
+    {
+      "columns": [
+        "id"
+      ],
+      "nameExplicit": false,
+      "name": "hv_agents_pk",
+      "table": "hv_agents",
+      "entityType": "pks"
+    },
+    {
+      "columns": [
+        "user_id"
+      ],
+      "nameExplicit": false,
+      "name": "hv_hyperliquid_settings_pk",
+      "table": "hv_hyperliquid_settings",
+      "entityType": "pks"
+    },
+    {
+      "columns": [
+        "id"
+      ],
+      "nameExplicit": false,
+      "name": "hv_installation_pk",
+      "table": "hv_installation",
+      "entityType": "pks"
+    },
+    {
+      "columns": [
+        "account"
+      ],
+      "nameExplicit": false,
+      "name": "hv_journal_accounts_pk",
+      "table": "hv_journal_accounts",
+      "entityType": "pks"
+    },
+    {
+      "columns": [
+        "id"
+      ],
+      "nameExplicit": false,
+      "name": "hv_journal_notes_pk",
+      "table": "hv_journal_notes",
+      "entityType": "pks"
+    },
+    {
+      "columns": [
+        "signer"
+      ],
+      "nameExplicit": false,
+      "name": "hv_exchange_nonces_pk",
+      "table": "hv_exchange_nonces",
+      "entityType": "pks"
+    },
+    {
+      "columns": [
+        "id"
+      ],
+      "nameExplicit": false,
+      "name": "hv_order_actions_pk",
+      "table": "hv_order_actions",
+      "entityType": "pks"
+    },
+    {
+      "columns": [
+        "id"
+      ],
+      "nameExplicit": false,
+      "name": "hv_order_events_pk",
+      "table": "hv_order_events",
+      "entityType": "pks"
+    },
+    {
+      "columns": [
+        "id"
+      ],
+      "nameExplicit": false,
+      "name": "hv_order_items_pk",
+      "table": "hv_order_items",
+      "entityType": "pks"
+    },
+    {
+      "columns": [
+        "id"
+      ],
+      "nameExplicit": false,
+      "name": "hv_order_requests_pk",
+      "table": "hv_order_requests",
+      "entityType": "pks"
+    },
+    {
+      "columns": [
+        {
+          "value": "user_id",
+          "isExpression": false
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "origin": "manual",
+      "name": "hvAuthAccounts_userId_idx",
+      "entityType": "indexes",
+      "table": "hv_auth_accounts"
+    },
+    {
+      "columns": [
+        {
+          "value": "identifier",
+          "isExpression": false
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "origin": "manual",
+      "name": "hvAuthVerifications_identifier_idx",
+      "entityType": "indexes",
+      "table": "hv_auth_verifications"
+    },
+    {
+      "columns": [
+        {
+          "value": "user_id",
+          "isExpression": false
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "origin": "manual",
+      "name": "hvSessions_userId_idx",
+      "entityType": "indexes",
+      "table": "hv_sessions"
+    },
+    {
+      "columns": [
+        {
+          "value": "user_id",
+          "isExpression": false
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "origin": "manual",
+      "name": "hvWalletAddresses_userId_idx",
+      "entityType": "indexes",
+      "table": "hv_wallet_addresses"
+    },
+    {
+      "columns": [
+        {
+          "value": "user_id",
+          "isExpression": false
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "origin": "manual",
+      "name": "hv_agents_owner_idx",
+      "entityType": "indexes",
+      "table": "hv_agents"
+    },
+    {
+      "columns": [
+        {
+          "value": "user_id",
+          "isExpression": false
+        },
+        {
+          "value": "creation_request_id",
+          "isExpression": false
+        }
+      ],
+      "isUnique": true,
+      "where": null,
+      "origin": "manual",
+      "name": "hv_agents_creation_request_idx",
+      "entityType": "indexes",
+      "table": "hv_agents"
+    },
+    {
+      "columns": [
+        {
+          "value": "trading_account_address",
+          "isExpression": false
+        }
+      ],
+      "isUnique": true,
+      "where": null,
+      "origin": "manual",
+      "name": "hv_agents_trading_account_idx",
+      "entityType": "indexes",
+      "table": "hv_agents"
+    },
+    {
+      "columns": [
+        {
+          "value": "account",
+          "isExpression": false
+        },
+        {
+          "value": "kind",
+          "isExpression": false
+        },
+        {
+          "value": "active",
+          "isExpression": false
+        },
+        {
+          "value": "time",
+          "isExpression": false
+        },
+        {
+          "value": "id",
+          "isExpression": false
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "origin": "manual",
+      "name": "hv_journal_entries_page",
+      "entityType": "indexes",
+      "table": "hv_journal_entries"
+    },
+    {
+      "columns": [
+        {
+          "value": "account",
+          "isExpression": false
+        },
+        {
+          "value": "time",
+          "isExpression": false
+        },
+        {
+          "value": "id",
+          "isExpression": false
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "origin": "manual",
+      "name": "hv_journal_entries_timeline",
+      "entityType": "indexes",
+      "table": "hv_journal_entries"
+    },
+    {
+      "columns": [
+        {
+          "value": "account",
+          "isExpression": false
+        },
+        {
+          "value": "target",
+          "isExpression": false
+        },
+        {
+          "value": "created_at",
+          "isExpression": false
+        },
+        {
+          "value": "id",
+          "isExpression": false
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "origin": "manual",
+      "name": "hv_journal_notes_target",
+      "entityType": "indexes",
+      "table": "hv_journal_notes"
+    },
+    {
+      "columns": [
+        {
+          "value": "request_id",
+          "isExpression": false
+        },
+        {
+          "value": "ordinal",
+          "isExpression": false
+        }
+      ],
+      "isUnique": true,
+      "where": null,
+      "origin": "manual",
+      "name": "hv_order_action_ordinal",
+      "entityType": "indexes",
+      "table": "hv_order_actions"
+    },
+    {
+      "columns": [
+        {
+          "value": "state",
+          "isExpression": false
+        },
+        {
+          "value": "updated_at",
+          "isExpression": false
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "origin": "manual",
+      "name": "hv_order_actions_state",
+      "entityType": "indexes",
+      "table": "hv_order_actions"
+    },
+    {
+      "columns": [
+        {
+          "value": "item_id",
+          "isExpression": false
+        },
+        {
+          "value": "id",
+          "isExpression": false
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "origin": "manual",
+      "name": "hv_order_events_item",
+      "entityType": "indexes",
+      "table": "hv_order_events"
+    },
+    {
+      "columns": [
+        {
+          "value": "action_id",
+          "isExpression": false
+        },
+        {
+          "value": "ordinal",
+          "isExpression": false
+        }
+      ],
+      "isUnique": true,
+      "where": null,
+      "origin": "manual",
+      "name": "hv_order_item_ordinal",
+      "entityType": "indexes",
+      "table": "hv_order_items"
+    },
+    {
+      "columns": [
+        {
+          "value": "cloid",
+          "isExpression": false
+        }
+      ],
+      "isUnique": true,
+      "where": null,
+      "origin": "manual",
+      "name": "hv_order_item_cloid",
+      "entityType": "indexes",
+      "table": "hv_order_items"
+    },
+    {
+      "columns": [
+        {
+          "value": "active",
+          "isExpression": false
+        },
+        {
+          "value": "updated_at",
+          "isExpression": false
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "origin": "manual",
+      "name": "hv_order_items_active",
+      "entityType": "indexes",
+      "table": "hv_order_items"
+    },
+    {
+      "columns": [
+        {
+          "value": "oid",
+          "isExpression": false
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "origin": "manual",
+      "name": "hv_order_items_oid",
+      "entityType": "indexes",
+      "table": "hv_order_items"
+    },
+    {
+      "columns": [
+        {
+          "value": "agent_id",
+          "isExpression": false
+        },
+        {
+          "value": "request_key",
+          "isExpression": false
+        }
+      ],
+      "isUnique": true,
+      "where": null,
+      "origin": "manual",
+      "name": "hv_order_request_key",
+      "entityType": "indexes",
+      "table": "hv_order_requests"
+    },
+    {
+      "columns": [
+        {
+          "value": "agent_id",
+          "isExpression": false
+        },
+        {
+          "value": "created_at",
+          "isExpression": false
+        }
+      ],
+      "isUnique": false,
+      "where": null,
+      "origin": "manual",
+      "name": "hv_order_requests_agent",
+      "entityType": "indexes",
+      "table": "hv_order_requests"
+    },
+    {
+      "columns": [
+        "token"
+      ],
+      "nameExplicit": false,
+      "name": "hv_sessions_token_unique",
+      "entityType": "uniques",
+      "table": "hv_sessions"
+    },
+    {
+      "columns": [
+        "email"
+      ],
+      "nameExplicit": false,
+      "name": "hv_users_email_unique",
+      "entityType": "uniques",
+      "table": "hv_users"
+    },
+    {
+      "value": "length(trim(\"name\")) BETWEEN 1 AND 80",
+      "name": "hv_agents_name_check",
+      "entityType": "checks",
+      "table": "hv_agents"
+    },
+    {
+      "value": "\"state\" IN ('provisioning', 'ready', 'failed')",
+      "name": "hv_agents_state_check",
+      "entityType": "checks",
+      "table": "hv_agents"
+    },
+    {
+      "value": "\"builder_fee_tenths_of_bp\" BETWEEN 0 AND 100",
+      "name": "hv_hyperliquid_settings_builder_fee_check",
+      "entityType": "checks",
+      "table": "hv_hyperliquid_settings"
+    },
+    {
+      "value": "\"history_limited\" IN (0, 1)",
+      "name": "hv_journal_history_limited",
+      "entityType": "checks",
+      "table": "hv_journal_accounts"
+    },
+    {
+      "value": "\"kind\" IN ('fill', 'funding', 'ledger', 'trade')",
+      "name": "hv_journal_entry_kind",
+      "entityType": "checks",
+      "table": "hv_journal_entries"
+    },
+    {
+      "value": "\"active\" IN (0, 1)",
+      "name": "hv_journal_entry_active",
+      "entityType": "checks",
+      "table": "hv_journal_entries"
+    },
+    {
+      "value": "length(trim(\"body\")) > 0 AND length(\"body\") <= 4000",
+      "name": "hv_journal_note_body",
+      "entityType": "checks",
+      "table": "hv_journal_notes"
+    },
+    {
+      "value": "\"stream\" IN ('fill', 'funding', 'ledger')",
+      "name": "hv_journal_sync_stream",
+      "entityType": "checks",
+      "table": "hv_journal_sync"
+    },
+    {
+      "value": "\"state\" IN ('prepared', 'submitting', 'unknown', 'done', 'not_sent')",
+      "name": "hv_order_action_state",
+      "entityType": "checks",
+      "table": "hv_order_actions"
+    },
+    {
+      "value": "\"active\" IN (0, 1)",
+      "name": "hv_order_item_active",
+      "entityType": "checks",
+      "table": "hv_order_items"
+    },
+    {
+      "value": "\"kind\" IN ('submit', 'cancel', 'cancel_all')",
+      "name": "hv_order_request_kind",
+      "entityType": "checks",
+      "table": "hv_order_requests"
+    }
+  ],
+  "renames": []
+}

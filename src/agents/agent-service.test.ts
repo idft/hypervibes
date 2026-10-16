@@ -1,5 +1,7 @@
 import { createModels } from "@earendil-works/pi-ai/models";
-import { fauxAssistantMessage, fauxProvider } from "@earendil-works/pi-ai/providers/faux";
+import { fauxAssistantMessage, fauxProvider, fauxToolCall } from "@earendil-works/pi-ai/providers/faux";
+import { BACKGROUND_CONTEXT as context } from "@earendil-works/chord/context";
+import { Harness } from "@earendil-works/pi-durable";
 import { SqliteStorage } from "@earendil-works/pi-durable/storage/sqlite";
 import { eq } from "drizzle-orm";
 import { randomUUID } from "node:crypto";
@@ -53,6 +55,54 @@ describe("per-Agent durable execution", () => {
     await runtime.agents.send("owner", one.id, "Hello", randomUUID());
     await vi.waitFor(async () => expect((await runtime.agents.chat("owner", one.id)).messages.some((entry) => entry.text === "Only Agent one sees this")).toBe(true));
     expect((await runtime.agents.chat("owner", two.id)).messages).toEqual([]);
+  });
+
+  it("enables the native account tool for old roots on reopen without changing model or history", async () => {
+    const opened = vi.spyOn(Harness, "open");
+    const agent = await create();
+    const harness = await opened.mock.results[0]!.value as Harness;
+    const root = await harness.root(context);
+    const toolNames = ["get_account", "submit_orders", "cancel_orders", "cancel_all_orders", "list_orders", "get_order", "get_order_request"];
+    expect((await root.agent(context)).tools.map((tool) => tool.name)).toEqual(toolNames);
+    await root.configure({ extensions: [], tools: [], instructions: "Trading and live exchange data are not configured." }, context);
+    await runtime.close();
+    runtime = await createRuntime(config(), options());
+    const restored = await (await opened.mock.results[1]!.value as Harness).root(context);
+    const resolved = await restored.agent(context);
+    expect(restored.id).toBe(agent.conversationId);
+    expect(resolved.extensions.map((extension) => extension.name)).toEqual(["hyperliquid"]);
+    expect(resolved.tools.map((tool) => tool.name)).toEqual(toolNames);
+    expect(resolved.instructions).not.toContain("not configured");
+    expect(resolved.model).toEqual(options().model);
+    expect(faux.state.callCount).toBe(0);
+  });
+
+  it("executes get_account through Durable with a trusted per-Agent binding", async () => {
+    const one = await create();
+    const two = await create("Second", randomUUID(), "other");
+    const status = vi.spyOn(runtime.hyperliquid, "agentAccountStatus");
+    for (const [agent, owner] of [[one, "owner"], [two, "other"]] as const) {
+      faux.setResponses([
+        fauxAssistantMessage(fauxToolCall("get_account", {}), { stopReason: "toolUse" }),
+        (transcript) => {
+          const result = transcript.messages.find((message) => message.role === "toolResult");
+          expect(result).toMatchObject({ role: "toolResult", toolName: "get_account", isError: false });
+          expect(JSON.stringify(result)).toContain("No trading account is assigned");
+          return fauxAssistantMessage("Account checked");
+        },
+      ]);
+      await runtime.agents.send(owner, agent.id, "Check my account", randomUUID());
+      await vi.waitFor(async () => expect((await runtime.agents.chat(owner, agent.id)).messages.some((entry) => entry.text === "Account checked")).toBe(true));
+      expect(status).toHaveBeenLastCalledWith(owner, agent.id, expect.any(AbortSignal));
+    }
+    expect(status).toHaveBeenCalledTimes(2);
+    faux.setResponses([
+      fauxAssistantMessage(fauxToolCall("get_account", { address: "another-account" }), { stopReason: "toolUse" }),
+      fauxAssistantMessage("Invalid arguments rejected"),
+    ]);
+    await runtime.agents.send("owner", one.id, "Try another account", randomUUID());
+    await vi.waitFor(async () => expect((await runtime.agents.chat("owner", one.id)).messages.some((entry) => entry.text === "Invalid arguments rejected")).toBe(true));
+    expect(status).toHaveBeenCalledTimes(2);
   });
 
   it("deduplicates concurrent creation and rejects reuse with a different name", async () => {

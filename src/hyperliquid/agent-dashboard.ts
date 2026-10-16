@@ -13,6 +13,7 @@ export interface AgentDashboard {
   fetchedAt: number;
   perpEquity: string | null;
   spotUsdc: string | null;
+  spotUsdcHold?: string | null;
   positions: DashboardPosition[] | null;
   orders: DashboardOrder[] | null;
   errors: string[];
@@ -32,7 +33,8 @@ export function dashboardPerps(state: ClearinghouseStateResponse) {
   };
 }
 export function dashboardSpot(state: SpotClearinghouseStateResponse) {
-  return { spotUsdc: state.balances.find((balance) => balance.coin === "USDC")?.total ?? "0" };
+  const usdc = state.balances.find((balance) => balance.coin === "USDC");
+  return { spotUsdc: usdc?.total ?? "0", spotUsdcHold: usdc ? usdc.hold ?? null : "0" };
 }
 export function dashboardOrders(orders: FrontendOpenOrdersResponse) {
   return { orders: orders.map((order) => ({ id: order.oid, coin: order.coin, side: order.side === "B" ? "Buy" : "Sell", size: order.sz, price: order.limitPx, type: order.orderType })) };
