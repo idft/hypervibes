@@ -1,3 +1,5 @@
+import { createModels } from "@earendil-works/pi-ai/models";
+import { fauxProvider } from "@earendil-works/pi-ai/providers/faux";
 import { privateKeyToAccount } from "viem/accounts";
 import { randomUUID } from "node:crypto";
 import { mkdtempSync, rmSync } from "node:fs";
@@ -105,10 +107,12 @@ describe("Hyperliquid account service", () => {
 
   beforeEach(async () => {
     directory = mkdtempSync(join(tmpdir(), "hv-hyperliquid-"));
+    const models = createModels();
+    models.setProvider(fauxProvider().provider);
     runtime = await createRuntime(testConfig({
       APP_SQLITE_PATH: join(directory, "app.sqlite"),
       AGENTS_ENCRYPTION_KEY: encryptionKey,
-    }));
+    }), { models, model: { provider: "faux", modelId: "faux-1" } });
     await runtime.db.insert(hvUsers).values({ id: user.id, name: "Owner", email: "owner@example.test" }).run();
   });
   afterEach(async () => {

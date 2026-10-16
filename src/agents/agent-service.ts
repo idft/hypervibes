@@ -1,6 +1,5 @@
 import { BACKGROUND_CONTEXT as context } from "@earendil-works/chord/context";
-import { createModels, type Models } from "@earendil-works/pi-ai/models";
-import { opencodeGoProvider } from "@earendil-works/pi-ai/providers/opencode-go";
+import { getSupportedThinkingLevels, type Models } from "@earendil-works/pi-ai/models";
 import { createRegistry, Harness, InboxDoc, LiveDoc } from "@earendil-works/pi-durable";
 import type { Conversation, ConversationView, EntryRecord, InboxState, LiveState, ModelRef } from "@earendil-works/pi-durable";
 import { SqliteStorage } from "@earendil-works/pi-durable/storage/sqlite";
@@ -10,11 +9,13 @@ import { hvAgents, type AgentRow } from "../db/agent-schema.js";
 import type { ApplicationDatabase, SharedDatabase } from "../db/shared-database.js";
 
 import { AgentError, agentId, agentName, chatMessage, harnessPrefix, requestId } from "./agent-input.js";
+import type { ProviderService } from "../providers/provider-service.js";
 
-const defaultModel: ModelRef = { provider: "opencode-go", modelId: "deepseek-v4.1-flash" };
+// Existing scaffold roots retain their original model, never silently switch.
+const legacyModel: ModelRef = { provider: "opencode-go", modelId: "deepseek-v4.1-flash" };
 
 export interface AgentServiceOptions {
-  /** Injected model catalog for isolated tests; production installs only OpenCode Go. */
+  /** Injected model catalog for isolated tests; never used by the production host. */
   models?: Models;
   model?: ModelRef;
 }
@@ -24,6 +25,7 @@ export interface AgentChat {
   agent: AgentRow;
   model: ModelRef;
   configured: boolean;
+  thinkingLevel?: string;
   busy: boolean;
   queued: number;
   messages: ChatEntry[];
@@ -32,8 +34,6 @@ export interface AgentChat {
 
 /** Owns every Agent harness; no request owns a harness or waits for model work. */
 export class AgentService {
-  private readonly models: Models;
-  private readonly model: ModelRef;
   private readonly running = new Map<string, RunningAgent>();
   private readonly opening = new Map<string, Promise<RunningAgent>>();
   private readonly submitting = new Map<string, Promise<void>>();
@@ -43,14 +43,22 @@ export class AgentService {
   private stopping = false;
   private scheduling = false;
   private closing?: Promise<void>;
-  constructor(private readonly db: ApplicationDatabase, private readonly database: SharedDatabase, private readonly options: AgentServiceOptions = {}) {
-    const models = createModels();
-    models.setProvider(opencodeGoProvider());
-    this.models = options.models ?? models;
-    this.model = options.model ?? defaultModel;
-  }
+  private resuming: Promise<void> = Promise.resolve();
+  constructor(private readonly db: ApplicationDatabase, private readonly database: SharedDatabase, private readonly providers: ProviderService, private readonly options: AgentServiceOptions = {}) {}
   private notify(id: string) { for (const listener of this.lifecycle.get(id) ?? []) listener(); }
-  private configured() { return Boolean(this.options.models || process.env.OPENCODE_API_KEY?.trim()); }
+  private models(userId: string) { return this.options.models ? Promise.resolve(this.options.models) : this.providers.models(userId); }
+  private async configured(agent: AgentRow, current: RunningAgent) {
+    const model = (await current.main.agent(context)).model;
+    return Boolean(model && (this.options.models || await this.providers.configured(agent.userId, model)));
+  }
+  async providersChanged(userId: string) {
+    if (this.stopping) return;
+    for (const agent of await this.list(userId)) {
+      const current = this.running.get(agent.id);
+      if (current && this.scheduling && await this.configured(agent, current) && !this.stopping) current.harness.resume();
+      this.notify(agent.id);
+    }
+  }
   private admit() { if (this.stopping) throw new AgentError("Agent execution is shutting down", 503); }
   async list(userId: string) {
     this.admit();
@@ -72,16 +80,18 @@ export class AgentService {
     return false;
   }
 
-  async create(userId: string, name: string, creationRequestId: string, tradingAccountAddress?: string) {
+  async create(userId: string, name: string, creationRequestId: string, tradingAccountAddress?: string, selection?: ModelRef) {
     this.admit();
     name = agentName(name);
     creationRequestId = requestId(creationRequestId);
     const account = typeof tradingAccountAddress === "string" && tradingAccountAddress ? tradingAccountAddress : null;
+    const model = this.options.models ? selection ?? this.options.model ?? legacyModel : await this.providers.validate(userId, selection);
     const now = Date.now();
     let agent: AgentRow | undefined;
     try {
       const [row] = await this.db.insert(hvAgents).values({
-        id: randomUUID(), userId, name, creationRequestId, tradingAccountAddress: account, createdAt: now, updatedAt: now,
+        id: randomUUID(), userId, name, creationRequestId, tradingAccountAddress: account,
+        initialProvider: model.provider, initialModelId: model.modelId, createdAt: now, updatedAt: now,
       }).onConflictDoNothing({ target: [hvAgents.userId, hvAgents.creationRequestId] }).returning().all();
       agent = row ?? await this.db.select().from(hvAgents).where(and(eq(hvAgents.userId, userId), eq(hvAgents.creationRequestId, creationRequestId))).get();
     } catch (error) {
@@ -93,7 +103,9 @@ export class AgentService {
       throw error;
     }
     if (!agent) throw new AgentError("Unable to create Agent", 503);
-    if (agent.name !== name) throw new AgentError("This creation request was already used with a different name", 409);
+    if (agent.name !== name || agent.tradingAccountAddress !== account || agent.initialProvider !== model.provider || agent.initialModelId !== model.modelId) {
+      throw new AgentError("This creation request was already used with different settings", 409);
+    }
     try { await this.open(agent); } catch { /* Persisted failure is returned for visible retry. */ }
     return this.owned(userId, agent.id);
   }
@@ -115,14 +127,14 @@ export class AgentService {
       const storage = await SqliteStorage.open(this.database.borrow(), { prefix: harnessPrefix(agent.id) });
       try {
         harness = await Harness.open(storage, {
-          models: this.models, registry: createRegistry(),
+          models: await this.models(agent.userId), registry: createRegistry(),
           settings: { retry: { maxRetries: 2 }, stream: { timeoutMs: 120_000 } },
         }, context);
       } catch (error) { await storage.close(context); throw error; }
       // root() is idempotent inside this Agent's store, including a crash before
       // the application records its ID. No cross-store transaction is required.
       const main = await harness.root(context, { agent: {
-        model: this.model, extensions: [], tools: [],
+        model: agent.initialProvider && agent.initialModelId ? { provider: agent.initialProvider, modelId: agent.initialModelId } : this.options.model ?? legacyModel, extensions: [], tools: [],
         instructions: "You are the user's HyperVibes assistant. Help discuss trading strategies and answer questions. Trading and live exchange data are not configured. Do not claim to place orders or access live account information.",
       } });
       if (agent.conversationId !== null && agent.conversationId !== main.id) throw new Error("Agent root identity changed");
@@ -139,7 +151,7 @@ export class AgentService {
           this.notify(agent.id);
         }
       }).catch(() => { /* A shared-storage failure is also reported by runtime health. */ });
-      if (this.scheduling && this.configured()) harness.resume();
+      if (this.scheduling && await this.configured(agent, current)) harness.resume();
       return current;
     } catch (error) {
       await harness?.close(context);
@@ -153,7 +165,16 @@ export class AgentService {
   start() {
     this.admit();
     this.scheduling = true;
-    if (this.configured()) for (const { harness } of this.running.values()) harness.resume();
+    if (this.options.models) for (const { harness } of this.running.values()) harness.resume();
+    else this.resuming = this.resumeConfigured().catch(() => { /* Storage health reports failures; admission also checks configuration. */ });
+  }
+  private async resumeConfigured() {
+    const agents = await this.db.select().from(hvAgents).all();
+    for (const agent of agents) {
+      if (this.stopping) return;
+      const current = this.running.get(agent.id);
+      if (current && await this.configured(agent, current) && !this.stopping) current.harness.resume();
+    }
   }
   async recover() {
     const agents = await this.db.select().from(hvAgents).all();
@@ -177,8 +198,12 @@ export class AgentService {
     ]);
     return this.projectChat(agent, [...entries.items].reverse(), live, inbox);
   }
-  private projectChat(agent: AgentRow, entries: readonly EntryRecord[], live?: Readonly<LiveState>, inbox?: Readonly<InboxState>): AgentChat {
-    const result: AgentChat = { agent, model: this.model, configured: this.configured(), busy: false, queued: 0, messages: [], partial: "" };
+  private async projectChat(agent: AgentRow, entries: readonly EntryRecord[], live?: Readonly<LiveState>, inbox?: Readonly<InboxState>): Promise<AgentChat> {
+    const current = this.running.get(agent.id);
+    const resolved = await current?.main.agent(context);
+    const model = resolved?.model ?? (agent.initialProvider && agent.initialModelId ? { provider: agent.initialProvider, modelId: agent.initialModelId } : this.options.model ?? legacyModel);
+    const configured = Boolean(this.options.models || await this.providers.configured(agent.userId, model));
+    const result: AgentChat = { agent, model, configured, thinkingLevel: resolved?.thinkingLevel, busy: false, queued: 0, messages: [], partial: "" };
     result.busy = Boolean(live?.run);
     result.queued = inbox?.items.length ?? 0;
     for (const entry of entries.slice(-100)) {
@@ -238,7 +263,7 @@ export class AgentService {
         if (lifetime.aborted) break;
         if (changed) {
           changed = false;
-          publish(this.projectChat(agent, view?.entries ?? [],
+          publish(await this.projectChat(agent, view?.entries ?? [],
             view?.docs["pi.live"] as unknown as LiveState | undefined,
             view?.docs["pi.inbox"] as unknown as InboxState | undefined));
         }
@@ -258,22 +283,46 @@ export class AgentService {
     if (!this.scheduling) throw new AgentError("Agent execution is not ready", 503);
     message = chatMessage(message);
     submissionRequestId = requestId(submissionRequestId);
-    if (!this.configured()) throw new AgentError("Chat requires OPENCODE_API_KEY on the server", 503);
     // Serialize admission (not model execution) so concurrent browser requests
     // cannot race past the persisted inbox limit.
-    const operation = (this.submitting.get(agent.id) ?? Promise.resolve()).then(async () => {
+    return this.serialize(agent.id, async () => {
       this.admit();
       const current = this.running.get(agent.id);
       if (!current) throw new AgentError("Agent is unavailable. Retry initialization.", 503);
+      if (!await this.configured(agent, current)) throw new AgentError("Reconnect this Agent's provider or select an available model on the Providers page.", 409);
       const inbox = await current.harness.snapshot(InboxDoc, current.main.id, context);
       if ((inbox?.items.length ?? 0) >= 20) throw new AgentError("Agent message queue is full. Wait for a response.", 429);
       const submission = await current.main.submit({ type: "input", content: message, requestId: submissionRequestId }, context);
       return { submissionId: submission.id };
     });
+  }
+  private serialize<T>(id: string, action: () => Promise<T>) {
+    const operation = (this.submitting.get(id) ?? Promise.resolve()).then(action);
     const settled = operation.then(() => {}, () => {});
-    this.submitting.set(agent.id, settled);
-    void settled.then(() => { if (this.submitting.get(agent.id) === settled) this.submitting.delete(agent.id); });
+    this.submitting.set(id, settled);
+    void settled.then(() => { if (this.submitting.get(id) === settled) this.submitting.delete(id); });
     return operation;
+  }
+  async selectModel(userId: string, id: string, selection: ModelRef, thinkingLevel?: string) {
+    const agent = await this.owned(userId, id);
+    return this.serialize(agent.id, async () => {
+      this.admit();
+      const model = this.options.models ? selection : await this.providers.validate(userId, selection);
+      const current = this.running.get(agent.id);
+      if (!current) throw new AgentError("Agent is unavailable. Retry initialization.", 503);
+      // Change only at idle: a prepared request may retain its previous model,
+      // and changing providers must not reroute already queued spending.
+      const live = await current.harness.snapshot(LiveDoc, current.main.id, context);
+      const inbox = await current.harness.snapshot(InboxDoc, current.main.id, context);
+      if (live?.run || inbox?.items.length) throw new AgentError("Stop or finish queued work before changing models.", 409);
+      const catalogModel = (await this.models(userId)).getModel(model.provider, model.modelId);
+      if (!catalogModel) throw new AgentError("Model is unavailable.", 409);
+      const level = thinkingLevel ? getSupportedThinkingLevels(catalogModel).find((value) => value === thinkingLevel) : undefined;
+      if (thinkingLevel && !level) throw new AgentError("Select a supported thinking level.");
+      await current.main.configure({ model, thinkingLevel: level ?? null }, context);
+      this.notify(agent.id);
+      if (this.scheduling && !this.stopping) current.harness.resume();
+    });
   }
   async stop(userId: string, id: string) {
     const agent = await this.owned(userId, id);
@@ -283,6 +332,7 @@ export class AgentService {
     this.stopping = true;
     this.feedShutdown.abort();
     return this.closing ??= (async () => {
+      await this.resuming;
       await Promise.all(this.feeds);
       await Promise.all(this.submitting.values());
       await Promise.allSettled(this.opening.values());

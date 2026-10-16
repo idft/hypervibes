@@ -16,11 +16,11 @@ describe("Agent management", () => {
     const html = renderToStaticMarkup(<AgentsPage agents={[
       {
         id: "fixture-id", userId: "owner", name: "<script>bad()</script>", state: "failed", conversationId: null,
-        error: "fixture", tradingAccountAddress: null, creationRequestId: "request", createdAt: 0, updatedAt: 0,
+        error: "fixture", initialProvider: null, initialModelId: null, tradingAccountAddress: null, creationRequestId: "request", createdAt: 0, updatedAt: 0,
       },
       {
         id: "trading-id", userId: "owner", name: "Trading agent", state: "ready", conversationId: 2,
-        error: null, tradingAccountAddress: "0x1234000000000000000000000000000000000000", creationRequestId: "request2", createdAt: 0, updatedAt: 0,
+        error: null, initialProvider: null, initialModelId: null, tradingAccountAddress: "0x1234000000000000000000000000000000000000", creationRequestId: "request2", createdAt: 0, updatedAt: 0,
       },
     ]} />);
     expect(html).toContain('/agents/fixture-id');

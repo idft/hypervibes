@@ -9,6 +9,9 @@ export const hvAgents = sqliteTable("hv_agents", {
   creationRequestId: text("creation_request_id").notNull(),
   state: text("state", { enum: ["provisioning", "ready", "failed"] }).notNull().default("provisioning"),
   conversationId: integer("conversation_id"),
+  /** Creation intent only; current selection is owned by Durable's pi.agent. */
+  initialProvider: text("initial_provider"),
+  initialModelId: text("initial_model_id"),
   error: text("error"),
   /** Linked Hyperliquid main account or sub-account; null for chat-only agents. */
   tradingAccountAddress: text("trading_account_address"),

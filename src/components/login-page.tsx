@@ -2,6 +2,7 @@ import { useRef, useState } from "react";
 import type { EIP1193Provider } from "viem";
 import { authClient } from "../web/auth-client.js";
 import { loginError, walletLogin } from "../web/wallet-login.js";
+import { getLoginDestination } from "../web/providers.js";
 
 export function LoginPage() {
   const [status, setStatus] = useState("");
@@ -29,7 +30,7 @@ export function LoginPage() {
           if (result.error) throw new Error("Sign-in could not be verified. Please try again.");
         },
       });
-      window.location.assign("/agents");
+      window.location.assign(await getLoginDestination());
     } catch (reason) {
       setError(loginError(reason));
       setStatus("");

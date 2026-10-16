@@ -1,0 +1,24 @@
+import { isRedirect } from "@tanstack/react-router";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+const mocks = vi.hoisted(() => ({ models: vi.fn(), accounts: vi.fn() }));
+vi.mock("./providers.js", () => ({ getModelChoices: mocks.models }));
+vi.mock("./agents.js", () => ({ getTradingAccountChoices: mocks.accounts, createAgent: vi.fn(), createAgentSubaccount: vi.fn() }));
+import { Route } from "../routes/_authenticated.agents.new.js";
+
+const loader = Route.options.loader as () => Promise<unknown>;
+describe("provider setup creation guard", () => {
+  beforeEach(() => vi.resetAllMocks());
+  it("redirects new-agent navigation before any exchange request when no models are available", async () => {
+    mocks.models.mockResolvedValue([]);
+    const result = await loader().catch((error: unknown) => error);
+    expect(isRedirect(result)).toBe(true);
+    if (isRedirect(result)) expect(result.options.to).toBe("/providers");
+    expect(mocks.accounts).not.toHaveBeenCalled();
+  });
+  it("loads choices when a connected provider has a model", async () => {
+    const models = [{ provider: "test", modelId: "model", name: "Model", thinkingLevels: [] }];
+    mocks.models.mockResolvedValue(models); mocks.accounts.mockResolvedValue({ mainAddress: "fixture" });
+    expect(await loader()).toEqual({ models, choices: { mainAddress: "fixture" } });
+  });
+});

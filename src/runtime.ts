@@ -8,6 +8,7 @@ import { openDatabase } from "./db/database.js";
 import { lockProfile } from "./db/profile-lock.js";
 import { applicationDatabase, SharedDatabase } from "./db/shared-database.js";
 import { HyperliquidService } from "./hyperliquid/service.js";
+import { ProviderService, type ProviderServiceOptions } from "./providers/provider-service.js";
 
 export interface RuntimeStatus {
   database: "connected";
@@ -15,19 +16,23 @@ export interface RuntimeStatus {
 }
 
 /** Application-owned resources, constructed once by the host, never by a request. */
-export async function createRuntime(config: AppConfig, options: AgentServiceOptions = {}) {
+export async function createRuntime(config: AppConfig, options: AgentServiceOptions & ProviderServiceOptions = {}) {
   const connection = openDatabase(config.databasePath);
   const database = new SharedDatabase(connection);
   let release: (() => Promise<void>) | undefined;
   let agents: AgentService | undefined;
   let hyperliquid: HyperliquidService | undefined;
+  let providers: ProviderService | undefined;
   let closing: Promise<void> | undefined;
   let failure: Error | undefined;
   const close = () => closing ??= (async () => {
     try { await agents?.close(); }
     finally {
-      try { await database.close(); }
-      finally { await release?.(); }
+      try { await providers?.close(); }
+      finally {
+        try { await database.close(); }
+        finally { await release?.(); }
+      }
     }
   })();
   try {
@@ -44,7 +49,11 @@ export async function createRuntime(config: AppConfig, options: AgentServiceOpti
     const db = applicationDatabase(database);
     const auth = createAuth(db, config);
     await auth.$context;
-    const agentService = new AgentService(db, database, options);
+    const providerService = new ProviderService(db, config.encryptionKey, options);
+    providers = providerService;
+    await providerService.initialize();
+    const agentService = new AgentService(db, database, providerService, options);
+    providerService.onChanged = (userId) => agentService.providersChanged(userId);
     agents = agentService;
     hyperliquid = new HyperliquidService(db, config.encryptionKey);
     await agentService.recover();
@@ -55,6 +64,7 @@ export async function createRuntime(config: AppConfig, options: AgentServiceOpti
       origin: config.authOrigin,
       agents: agentService,
       hyperliquid,
+      providers: providerService,
       start() {
         if (closing || failure) throw new Error("Runtime is unavailable");
         agentService.start();

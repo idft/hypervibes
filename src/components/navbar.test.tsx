@@ -1,0 +1,26 @@
+// @vitest-environment jsdom
+import type { ComponentProps } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
+import { describe, expect, it, vi } from "vitest";
+
+vi.mock("@tanstack/react-router", () => ({
+  Link: ({ to, ...props }: ComponentProps<"a"> & { to: string }) => <a href={to} {...props} />,
+}));
+vi.mock("../web/auth-client.js", () => ({ authClient: { signOut: vi.fn() } }));
+import { Navbar } from "./navbar.js";
+
+describe("Navbar", () => {
+  it("places an accessible, icon-only Providers link in the right-side controls", () => {
+    const container = document.createElement("div");
+    container.innerHTML = renderToStaticMarkup(<Navbar walletAddress={`0x${"11".repeat(20)}`} />);
+    const links = container.querySelectorAll('a[href="/providers"]');
+    expect(links).toHaveLength(1);
+    const link = links[0]!;
+    expect(link.parentElement?.classList.contains("ml-auto")).toBe(true);
+    expect(link.getAttribute("title")).toBe("Provider connections");
+    expect(link.getAttribute("aria-label")).toBe("Provider connections");
+    expect(link.textContent).toBe("");
+    expect(link.querySelector('svg[aria-hidden="true"]')).not.toBeNull();
+    expect(link.classList.contains("cursor-pointer")).toBe(true);
+  });
+});

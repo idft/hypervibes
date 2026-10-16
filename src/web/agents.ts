@@ -15,7 +15,7 @@ export async function agentUser(runtime: AppRuntime, headers: Headers, mutation 
   return user;
 }
 
-function field(data: unknown, key: string): string {
+export function field(data: unknown, key: string): string {
   if (typeof data !== "object" || data === null || !(key in data)) throw new Error("Invalid request");
   const value = Reflect.get(data, key);
   if (typeof value !== "string") throw new Error("Invalid request");
@@ -56,12 +56,15 @@ export const createAgent = createServerFn({ method: "POST" })
     name: field(data, "name"),
     requestId: field(data, "requestId"),
     accountSelection: "accountSelection" in (data as object) ? field(data, "accountSelection") : "none",
+    provider: field(data, "provider"),
+    modelId: field(data, "modelId"),
   }))
   .handler(async ({ context, data }) => {
     const user = await agentUser(context.runtime, getRequestHeaders(), true);
     return agentAction(async () => {
+      const model = await context.runtime.providers.validate(user.id, { provider: data.provider, modelId: data.modelId });
       const tradingAccount = await selectedTradingAccount(context.runtime, user, data.accountSelection);
-      return context.runtime.agents.create(user.id, data.name, data.requestId, tradingAccount ?? undefined);
+      return context.runtime.agents.create(user.id, data.name, data.requestId, tradingAccount ?? undefined, model);
     });
   });
 
@@ -96,6 +99,13 @@ export const retryAgent = createServerFn({ method: "POST" })
   .handler(async ({ context, data }) => {
     const user = await agentUser(context.runtime, getRequestHeaders(), true);
     return agentAction(() => context.runtime.agents.retry(user.id, data.id));
+  });
+
+export const selectAgentModel = createServerFn({ method: "POST" })
+  .validator((data: unknown) => ({ id: field(data, "id"), provider: field(data, "provider"), modelId: field(data, "modelId"), thinkingLevel: field(data, "thinkingLevel") }))
+  .handler(async ({ context, data }) => {
+    const user = await agentUser(context.runtime, getRequestHeaders(), true);
+    return agentAction(() => context.runtime.agents.selectModel(user.id, data.id, { provider: data.provider, modelId: data.modelId }, data.thinkingLevel));
   });
 
 export const stopAgentChat = createServerFn({ method: "POST" })

@@ -1,8 +1,9 @@
 import { isRedirect } from "@tanstack/react-router";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const mocks = vi.hoisted(() => ({ user: vi.fn() }));
+const mocks = vi.hoisted(() => ({ user: vi.fn(), destination: vi.fn() }));
 vi.mock("./auth.js", () => ({ getCurrentUser: mocks.user }));
+vi.mock("./providers.js", () => ({ getLoginDestination: mocks.destination }));
 import { Route as ProtectedRoute } from "../routes/_authenticated.js";
 import { Route as LoginRoute } from "../routes/login.js";
 
@@ -26,11 +27,12 @@ describe("auth route guards", () => {
     expect(await protectedGuard()).toEqual({ user });
   });
 
-  it("redirects an authenticated login-page visit to the preview", async () => {
+  it.each(["/providers", "/agents"])("redirects an authenticated login-page visit to %s", async (destination) => {
     mocks.user.mockResolvedValue({ id: "fixture", walletAddress: `0x${"11".repeat(20)}` });
+    mocks.destination.mockResolvedValue(destination);
     const result = await loginGuard().catch((error: unknown) => error);
     expect(isRedirect(result)).toBe(true);
-    if (isRedirect(result)) expect(result.options.to).toBe("/agents");
+    if (isRedirect(result)) expect(result.options.to).toBe(destination);
   });
 
   it("keeps login public and propagates auth failures instead of granting access", async () => {

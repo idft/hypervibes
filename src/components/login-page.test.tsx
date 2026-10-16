@@ -4,7 +4,8 @@ import { createRoot } from "react-dom/client";
 import type { Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const mocks = vi.hoisted(() => ({ login: vi.fn() }));
+const mocks = vi.hoisted(() => ({ login: vi.fn(), destination: vi.fn() }));
+vi.mock("../web/providers.js", () => ({ getLoginDestination: mocks.destination }));
 vi.mock("../web/wallet-login.js", async (original) => ({
   ...await original<typeof import("../web/wallet-login.js")>(), walletLogin: mocks.login,
 }));
@@ -25,6 +26,7 @@ describe("login page", () => {
   afterEach(async () => {
     await act(async () => root.unmount());
     container.remove();
+    vi.restoreAllMocks();
   });
 
   it("renders the existing centered login card without authenticated navigation", () => {
@@ -33,6 +35,16 @@ describe("login page", () => {
     expect(container.querySelector("button")?.className).toContain("cursor-pointer");
     expect(container.querySelector("nav")).toBeNull();
     expect(container.querySelector("[role=alert]")?.textContent).toBe("");
+  });
+
+  it.each(["/providers", "/agents"])("navigates to %s after wallet login according to provider readiness", async (destination) => {
+    mocks.login.mockResolvedValue(undefined);
+    mocks.destination.mockResolvedValue(destination);
+    const assign = vi.fn();
+    const location = window.location;
+    vi.spyOn(window, "location", "get").mockReturnValue({ ...location, assign } as unknown as Location);
+    await act(async () => container.querySelector("button")!.click());
+    expect(assign).toHaveBeenCalledWith(destination);
   });
 
   it("prevents duplicate submissions, announces progress and permits retry after cancellation", async () => {

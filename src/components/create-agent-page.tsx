@@ -3,35 +3,41 @@ import { useRef, useState } from "react";
 import type { AgentRow } from "../db/agent-schema.js";
 import type { TradingAccountChoices } from "../hyperliquid/service.js";
 import { formatMoneyText } from "../hyperliquid/decimal.js";
+import type { ModelChoice } from "../providers/provider-service.js";
+import { ModelPicker, modelKey } from "./model-picker.js";
 
 export interface CreateAgentResult { ok: boolean; error?: string; data?: AgentRow }
 export interface CreateSubaccountResult { ok: boolean; error?: string; data?: { address: string; created: boolean } }
 
-export function CreateAgentPage({ choices, create, createSubaccount }: {
+export function CreateAgentPage({ choices, models, create, createSubaccount }: {
   choices: TradingAccountChoices;
-  create: (name: string, requestId: string, accountSelection: string) => Promise<CreateAgentResult>;
+  models: ModelChoice[];
+  create: (name: string, requestId: string, accountSelection: string, model: ModelChoice) => Promise<CreateAgentResult>;
   createSubaccount: (name: string) => Promise<CreateSubaccountResult>;
 }) {
   const router = useRouter();
   const [name, setName] = useState("");
   const [selection, setSelection] = useState<string>("main");
+  const [selectedModel, setSelectedModel] = useState("");
+  const model = models.find((choice) => modelKey(choice) === selectedModel);
   const [pending, setPending] = useState(false);
   const [subaccountPending, setSubaccountPending] = useState(false);
   const [error, setError] = useState("");
   const [subaccountStatus, setSubaccountStatus] = useState("");
-  const request = useRef<{ name: string; id: string } | null>(null);
+  const request = useRef<{ settings: string; id: string } | null>(null);
   const inFlight = useRef(false);
   const subaccountInFlight = useRef(false);
   const trimmed = name.trim();
 
   async function submit() {
-    if (inFlight.current || !trimmed) return;
+    if (inFlight.current || !trimmed || !model) return;
     inFlight.current = true;
     setPending(true);
     setError("");
     try {
-      if (request.current?.name !== trimmed) request.current = { name: trimmed, id: crypto.randomUUID() };
-      const result = await create(trimmed, request.current.id, selection);
+      const settings = JSON.stringify([trimmed, selection, selectedModel]);
+      if (request.current?.settings !== settings) request.current = { settings, id: crypto.randomUUID() };
+      const result = await create(trimmed, request.current.id, selection, model);
       if (!result.ok || !result.data) { setError(result.error ?? "Unable to create Agent"); return; }
       window.location.assign(`/agents/${result.data.id}`);
     } catch {
@@ -83,6 +89,9 @@ export function CreateAgentPage({ choices, create, createSubaccount }: {
             className="mt-2 block w-full rounded-xl border border-zinc-800 bg-zinc-950 px-3 py-2 text-sm text-white placeholder-zinc-600 focus:border-zinc-600 focus:outline-none" />
         </div>
 
+        <ModelPicker choices={models} value={selectedModel} onChange={setSelectedModel} disabled={pending} />
+        <a href="/providers" className="block cursor-pointer text-xs text-violet-300 hover:underline">Manage provider connections</a>
+
         <fieldset>
           <legend className="text-sm font-medium text-zinc-300">Trading account</legend>
           {choices.subaccountCapacity && <p className="mt-1 text-xs text-zinc-500">Sub-account capacity: {choices.subaccountCapacity}.</p>}
@@ -119,7 +128,7 @@ export function CreateAgentPage({ choices, create, createSubaccount }: {
         {error && <p role="alert" className="rounded-2xl border border-red-900/60 bg-red-950/20 p-4 text-sm text-red-300">{error}</p>}
 
         <div className="flex items-center gap-3 border-t border-zinc-800 pt-6">
-          <button type="submit" disabled={pending || !trimmed} className="cursor-pointer rounded-full bg-violet-600 px-5 py-2 text-sm font-medium text-white hover:bg-violet-500 disabled:cursor-wait disabled:opacity-50">{pending ? "Creating…" : "Create agent"}</button>
+          <button type="submit" disabled={pending || !trimmed || !model} className="cursor-pointer rounded-full bg-violet-600 px-5 py-2 text-sm font-medium text-white hover:bg-violet-500 disabled:cursor-wait disabled:opacity-50">{pending ? "Creating…" : "Create agent"}</button>
           <a href="/agents" className="cursor-pointer rounded-full border border-zinc-700 px-5 py-2 text-sm font-medium text-zinc-500 hover:border-zinc-600 hover:text-zinc-300">Cancel</a>
         </div>
       </form>

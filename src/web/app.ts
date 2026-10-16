@@ -36,12 +36,11 @@ export async function createApp(config: AppConfig, options: AppOptions = {}) {
   const runtime = await createRuntime(config);
   const streams = new AgentEventStreams(runtime);
   let web: StartApplication | undefined;
+  // SSE responses must finish before Fastify waits for active HTTP connections.
+  app.addHook("preClose", async () => { await streams.close(); });
   app.addHook("onClose", async () => {
-    try { await streams.close(); }
-    finally {
-      try { await web?.close(); }
-      finally { await runtime.close(); }
-    }
+    try { await web?.close(); }
+    finally { await runtime.close(); }
   });
 
   try {

@@ -1,17 +1,24 @@
-import { createFileRoute } from "@tanstack/react-router";
+import { createFileRoute, redirect } from "@tanstack/react-router";
 import { CreateAgentPage } from "../components/create-agent-page.js";
 import { createAgent, createAgentSubaccount, getTradingAccountChoices } from "../web/agents.js";
 
+import { getModelChoices } from "../web/providers.js";
+
 export const Route = createFileRoute("/_authenticated/agents/new")({
-  loader: () => getTradingAccountChoices(),
+  loader: async () => {
+    const models = await getModelChoices();
+    if (!models.length) throw redirect({ to: "/providers" });
+    return { choices: await getTradingAccountChoices(), models };
+  },
   component: CreateAgentRoute,
 });
 
 function CreateAgentRoute() {
   return (
     <CreateAgentPage
-      choices={Route.useLoaderData()}
-      create={(name, requestId, accountSelection) => createAgent({ data: { name, requestId, accountSelection } })}
+      choices={Route.useLoaderData().choices}
+      models={Route.useLoaderData().models}
+      create={(name, requestId, accountSelection, model) => createAgent({ data: { name, requestId, accountSelection, provider: model.provider, modelId: model.modelId } })}
       createSubaccount={(name) => createAgentSubaccount({ data: { name } })}
     />
   );

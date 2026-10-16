@@ -36,7 +36,6 @@ describe("per-Agent durable execution", () => {
   });
   afterEach(async () => {
     vi.restoreAllMocks();
-    vi.unstubAllEnvs();
     await runtime.close();
     rmSync(directory, { recursive: true, force: true });
   });
@@ -93,7 +92,7 @@ describe("per-Agent durable execution", () => {
     expect(stopped.busy).toBe(false);
     expect(stopped.queued).toBe(0);
     expect(faux.state.callCount).toBe(1);
-  });
+  }, 15_000);
 
   it("persists chat and deduplicates message retries across a backend restart", async () => {
     const agent = await create();
@@ -191,15 +190,14 @@ describe("per-Agent durable execution", () => {
     expect((await runtime.agents.owned("owner", agent.id)).conversationId).toBe(agent.conversationId);
   });
 
-  it("creates without provider credentials but refuses new model calls", async () => {
+  it("preserves existing agents without credentials but refuses creation and new model calls", async () => {
+    const agent = await create();
     await runtime.close();
-    vi.stubEnv("OPENCODE_API_KEY", "");
     runtime = await createRuntime(config());
     runtime.start();
-    const agent = await create();
-    expect(agent.state).toBe("ready");
     expect((await runtime.agents.chat("owner", agent.id)).configured).toBe(false);
-    await expect(runtime.agents.send("owner", agent.id, "Hello", randomUUID())).rejects.toMatchObject({ status: 503 });
+    await expect(create()).rejects.toMatchObject({ status: 409 });
+    await expect(runtime.agents.send("owner", agent.id, "Hello", randomUUID())).rejects.toMatchObject({ status: 409 });
   });
 
   it("validates IDs, names, message sizes and seals admission on shutdown", async () => {

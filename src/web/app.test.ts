@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AppConfig } from "../config.js";
 import type { AppRuntime } from "../runtime.js";
 import { testAuthSecret } from "../test-config.js";
+import { AgentEventStreams } from "./agent-events.js";
 import { createApp } from "./app.js";
 import type { StartApplication } from "./start.js";
 
@@ -140,6 +141,30 @@ describe("embedded HTTP host", () => {
     const response = await app.inject({ method: "POST", url: "/api/auth/siwe/nonce", headers: { origin: "https://evil.example", "x-forwarded-host": "evil.example", "x-forwarded-proto": "https" }, payload: {} });
     expect(response.statusCode).toBe(403);
     expect(runtimes).toHaveLength(0);
+  });
+
+  it("closes chat streams before HTTP draining and releases the profile lock", async () => {
+    await app.inject("/");
+    const runtime = runtimes[0]!;
+    const closeStreams = vi.spyOn(AgentEventStreams.prototype, "close");
+    const closeServer = app.server.close.bind(app.server);
+    const drain = vi.spyOn(app.server, "close").mockImplementation((callback) => {
+      expect(closeStreams).toHaveBeenCalledOnce();
+      expect(runtime.status().database).toBe("connected");
+      expect(start.close).not.toHaveBeenCalled();
+      return closeServer(callback);
+    });
+    try {
+      await app.close();
+      expect(drain).toHaveBeenCalledOnce();
+      expect(start.close).toHaveBeenCalledOnce();
+      await expect(runtime.database.get("SELECT 1")).rejects.toThrow("closed");
+      app = await createApp(config, { loadWeb: async () => start });
+      expect((await app.inject("/healthz")).statusCode).toBe(200);
+    } finally {
+      drain.mockRestore();
+      closeStreams.mockRestore();
+    }
   });
 
   it("closes the web application before its runtime and permits reopening", async () => {

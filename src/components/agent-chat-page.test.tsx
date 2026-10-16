@@ -5,7 +5,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AgentChat } from "../agents/agent-service.js";
 
-const mocks = vi.hoisted(() => ({ retryAgent: vi.fn(), sendAgentMessage: vi.fn(), stopAgentChat: vi.fn() }));
+const mocks = vi.hoisted(() => ({ retryAgent: vi.fn(), selectAgentModel: vi.fn(), sendAgentMessage: vi.fn(), stopAgentChat: vi.fn() }));
 vi.mock("../web/agents.js", () => mocks);
 import { AgentChatPage } from "./agent-chat-page.js";
 
@@ -33,7 +33,7 @@ class FakeEventSource {
 vi.stubGlobal("EventSource", FakeEventSource);
 
 const initial: AgentChat = {
-  agent: { id: "agent-fixture", name: "Research", userId: "owner", state: "ready", conversationId: 1, error: null, tradingAccountAddress: null, creationRequestId: "fixture", createdAt: 0, updatedAt: 0 },
+  agent: { id: "agent-fixture", name: "Research", userId: "owner", state: "ready", conversationId: 1, initialProvider: null, initialModelId: null, error: null, tradingAccountAddress: null, creationRequestId: "fixture", createdAt: 0, updatedAt: 0 },
   model: { provider: "opencode-go", modelId: "deepseek-v4.1-flash" }, configured: true, busy: false, queued: 0, messages: [], partial: "",
 };
 describe("Agent chat", () => {
@@ -117,10 +117,31 @@ describe("Agent chat", () => {
     expect(mocks.sendAgentMessage.mock.calls[1]![0]).toEqual(first);
     expect(container.querySelector("textarea")!.value).toBe("");
   });
+  it("applies a selected model and thinking level while idle and disables changes during work", async () => {
+    mocks.selectAgentModel.mockResolvedValue({ ok: true });
+    await act(async () => root.render(<AgentChatPage initial={initial} choices={[
+      { ...initial.model, name: "Current", thinkingLevels: [] },
+      { provider: "other", modelId: "new", name: "New model", thinkingLevels: ["high"] },
+    ]} />));
+    const selects = () => container.querySelectorAll("select");
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, "value")!.set!.call(selects()[0], JSON.stringify(["other", "new"]));
+      selects()[0]!.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, "value")!.set!.call(selects()[1], "high");
+      selects()[1]!.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    const apply = [...container.querySelectorAll("button")].find((button) => button.textContent === "Apply model")!;
+    await act(async () => apply.click());
+    expect(mocks.selectAgentModel).toHaveBeenCalledWith({ data: { id: initial.agent.id, provider: "other", modelId: "new", thinkingLevel: "high" } });
+    await act(async () => current().emit("chat", { ...initial, busy: true }));
+    expect(apply.disabled).toBe(true);
+  });
   it("disables chat when credentials are missing", async () => {
     await act(async () => root.render(<AgentChatPage initial={{ ...initial, configured: false }} key="unconfigured" />));
     await type("Hello");
-    expect(container.textContent).toContain("OPENCODE_API_KEY");
+    expect(container.textContent).toContain("Reconnect this Agent’s provider");
     expect(container.querySelector("form button")!.hasAttribute("disabled")).toBe(true);
   });
 });

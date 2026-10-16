@@ -15,7 +15,7 @@ export interface AppConfig {
   buildDir: string;
   authOrigin: string;
   authSecret: string;
-  /** Optional server secret for encrypting stored exchange private keys. */
+  /** Optional server secret for encrypting exchange and provider credentials. */
   encryptionKey: EncryptionKeySetting | undefined;
 }
 
@@ -61,7 +61,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
   };
 }
 
-/** Parses the optional AGENTS_ENCRYPTION_KEY secret for exchange private keys. */
+/** Parses the optional AGENTS_ENCRYPTION_KEY secret for stored credentials. */
 function encryptionKeySetting(env: NodeJS.ProcessEnv): EncryptionKeySetting | undefined {
   const keyHex = (env.AGENTS_ENCRYPTION_KEY ?? "").trim();
   if (!keyHex) return undefined;
