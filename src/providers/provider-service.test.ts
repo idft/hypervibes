@@ -47,6 +47,10 @@ describe("per-user providers", () => {
     },
   });
   const options = () => ({ providers: () => [provider()], accountFeedFactory: () => ({ close: async () => {} }), journalHistoryFetcher: async () => [] });
+  async function selectModel(userId: string, agentId: string, model: typeof ref, thinkingLevel = "") {
+    const { definition } = await runtime.agents.subagents.detail(userId, agentId, `main:${agentId}`);
+    return runtime.agents.subagents.update(userId, agentId, definition.id, { ...definition, ...model, thinkingLevel });
+  }
   async function prompt(id: string, user = "owner") {
     let result!: LoginView;
     await vi.waitFor(() => {
@@ -227,9 +231,9 @@ describe("per-user providers", () => {
     faux.setResponses([fauxAssistantMessage("First answer"), fauxAssistantMessage("Second answer")]);
     await runtime.agents.send("owner", agent.id, "Hello", randomUUID());
     await vi.waitFor(async () => expect((await runtime.agents.chat("owner", agent.id)).messages.map((entry) => entry.text)).toEqual(["Hello", "First answer"]));
-    await expect(runtime.agents.selectModel("other", agent.id, ref)).rejects.toMatchObject({ status: 404 });
-    await expect(runtime.agents.selectModel("owner", agent.id, { ...ref, modelId: "large" }, "nonsense")).rejects.toThrow("thinking");
-    await runtime.agents.selectModel("owner", agent.id, { ...ref, modelId: "large" });
+    await expect(selectModel("other", agent.id, ref)).rejects.toMatchObject({ status: 404 });
+    await expect(selectModel("owner", agent.id, { ...ref, modelId: "large" }, "nonsense")).rejects.toThrow("thinking");
+    await selectModel("owner", agent.id, { ...ref, modelId: "large" });
     expect((await runtime.agents.chat("owner", agent.id)).model.modelId).toBe("large");
     expect((await runtime.agents.chat("owner", agent.id)).agent.conversationId).toBe(agent.conversationId);
     await runtime.agents.send("owner", agent.id, "Again", randomUUID());
@@ -280,7 +284,7 @@ describe("per-user providers", () => {
       await vi.waitFor(() => expect(updates.at(-1)?.configured).toBe(false));
       await connect();
       await vi.waitFor(() => expect(updates.at(-1)?.configured).toBe(true));
-      await runtime.agents.selectModel("owner", agent.id, { ...ref, modelId: "large" });
+      await selectModel("owner", agent.id, { ...ref, modelId: "large" });
       await vi.waitFor(() => expect(updates.at(-1)?.modelId).toBe("large"));
     } finally { controller.abort(); await watching; }
   });
@@ -295,7 +299,7 @@ describe("per-user providers", () => {
     await runtime.agents.send("owner", agent.id, "Start", randomUUID());
     await vi.waitFor(() => expect(faux.state.callCount).toBe(1));
     try {
-      await expect(runtime.agents.selectModel("owner", agent.id, { ...ref, modelId: "large" })).rejects.toMatchObject({ status: 409 });
+      await expect(selectModel("owner", agent.id, { ...ref, modelId: "large" })).rejects.toMatchObject({ status: 409 });
       await runtime.providers.disconnect("other", ref.provider);
       expect((await runtime.agents.chat("owner", agent.id)).configured).toBe(true);
     } finally { release(); }

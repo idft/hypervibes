@@ -31,7 +31,6 @@ export function AgentChatPage({ initial }: { initial: AgentChat }) {
   return (
     <div className="flex w-full flex-1 flex-col gap-4 rounded-2xl border border-zinc-800 bg-[#0d0d10] p-6">
       <header><h2 className="text-lg font-medium text-white">Chat</h2><p className="mt-2 text-sm text-zinc-400">Main conversation · {chat.model.provider}/{chat.model.modelId}</p></header>
-      <p className="rounded-xl border border-amber-800/70 bg-amber-950/30 px-4 py-3 text-sm text-amber-200">Trading is not configured. This Agent has no exchange, filesystem, or shell tools.</p>
       {!chat.configured && <p role="status" className="text-sm text-amber-200">Reconnect this Agent’s provider or select an available model. <a href="/providers" className="cursor-pointer underline">Manage providers</a></p>}
       {chat.agent.state !== "ready" && <div role="status" className="rounded-xl border border-zinc-700 p-4"><p>{chat.agent.error ?? "Initializing Agent…"}</p><button disabled={pending} onClick={() => { void action("retry"); }} className="mt-3 cursor-pointer rounded-lg bg-violet-600 px-4 py-2 text-sm disabled:cursor-wait">Retry initialization</button></div>}
       <section aria-label="Conversation" aria-live="polite" className="max-h-[55vh] min-h-64 space-y-4 overflow-y-auto rounded-xl border border-zinc-800 bg-[#0d0d10] p-5">

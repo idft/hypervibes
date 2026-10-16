@@ -115,13 +115,6 @@ export const retryAgent = createServerFn({ method: "POST" })
     return agentAction(() => context.runtime.agents.retry(user.id, data.id));
   });
 
-export const selectAgentModel = createServerFn({ method: "POST" })
-  .validator((data: unknown) => ({ id: field(data, "id"), provider: field(data, "provider"), modelId: field(data, "modelId"), thinkingLevel: field(data, "thinkingLevel") }))
-  .handler(async ({ context, data }) => {
-    const user = await agentUser(context.runtime, getRequestHeaders(), true);
-    return agentAction(() => context.runtime.agents.selectModel(user.id, data.id, { provider: data.provider, modelId: data.modelId }, data.thinkingLevel));
-  });
-
 export const stopAgentChat = createServerFn({ method: "POST" })
   .validator((data: unknown) => ({ id: field(data, "id") }))
   .handler(async ({ context, data }) => {

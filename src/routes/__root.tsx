@@ -1,5 +1,6 @@
 import { createRootRoute, HeadContent, Outlet, Scripts } from "@tanstack/react-router";
 import type { ReactNode } from "react";
+import { AppToaster } from "../components/app-toaster.js";
 import stylesheet from "../web/app.css?url";
 
 export const Route = createRootRoute({
@@ -22,7 +23,7 @@ export const Route = createRootRoute({
 });
 
 function Layout() {
-  return <Outlet />;
+  return <><Outlet /><AppToaster /></>;
 }
 
 function Document({ children }: { children: ReactNode }) {

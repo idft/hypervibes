@@ -72,7 +72,7 @@ describe("per-Agent durable execution", () => {
     const agent = await create();
     const harness = await opened.mock.results[0]!.value as Harness;
     const root = await harness.root(context);
-    const toolNames = ["get_account", "submit_orders", "cancel_orders", "cancel_all_orders", "list_orders", "get_order", "get_order_request"];
+    const toolNames = ["get_account", "submit_orders", "cancel_orders", "cancel_all_orders", "list_orders", "get_order", "get_order_request", "list_subagents", "delegate_subagent", "get_subagent_run"];
     expect((await root.agent(context)).tools.map((tool) => tool.name)).toEqual(toolNames);
     await root.configure({ extensions: [], tools: [], instructions: "Trading and live exchange data are not configured." }, context);
     await runtime.close();
@@ -80,7 +80,7 @@ describe("per-Agent durable execution", () => {
     const restored = await (await opened.mock.results[1]!.value as Harness).root(context);
     const resolved = await restored.agent(context);
     expect(restored.id).toBe(agent.conversationId);
-    expect(resolved.extensions.map((extension) => extension.name)).toEqual(["hyperliquid"]);
+    expect(resolved.extensions.map((extension) => extension.name)).toEqual(["hyperliquid", "subagents"]);
     expect(resolved.tools.map((tool) => tool.name)).toEqual(toolNames);
     expect(resolved.instructions).not.toContain("not configured");
     expect(resolved.model).toEqual(options().model);

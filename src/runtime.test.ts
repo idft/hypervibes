@@ -25,7 +25,7 @@ describe("embedded application runtime", () => {
     expect(runtime.status()).toEqual({ database: "connected", agentExecution: "available" });
     const tables = await runtime.database.all<{ name: string }>("SELECT name FROM sqlite_schema WHERE type = 'table' ORDER BY name");
     expect(tables.map((table) => table.name)).toEqual([
-      "hv_agents", "hv_auth_accounts", "hv_auth_verifications", "hv_exchange_nonces", "hv_hyperliquid_settings", "hv_installation", "hv_journal_accounts", "hv_journal_entries", "hv_journal_notes", "hv_journal_sync", "hv_order_actions", "hv_order_events", "hv_order_items", "hv_order_requests", "hv_provider_connections", "hv_schema_migrations", "hv_sessions", "hv_users", "hv_wallet_addresses", "sqlite_sequence",
+      "hv_agents", "hv_auth_accounts", "hv_auth_verifications", "hv_exchange_nonces", "hv_hyperliquid_settings", "hv_installation", "hv_journal_accounts", "hv_journal_entries", "hv_journal_notes", "hv_journal_sync", "hv_order_actions", "hv_order_events", "hv_order_items", "hv_order_requests", "hv_provider_connections", "hv_schema_migrations", "hv_sessions", "hv_subagent_runs", "hv_subagents", "hv_users", "hv_wallet_addresses", "sqlite_sequence",
     ]);
     expect((await runtime.database.get<{ synchronous: number }>("PRAGMA synchronous"))?.synchronous).toBe(2);
   });

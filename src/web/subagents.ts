@@ -1,0 +1,28 @@
+import { createServerFn } from "@tanstack/react-start";
+import { getRequestHeaders } from "@tanstack/react-start/server";
+import { agentAction, agentUser, field } from "./agents.js";
+
+export const listSubagents = createServerFn({ method: "GET" }).validator((data: unknown) => ({ agentId: field(data, "agentId") })).handler(async ({ context, data }) => {
+  const user = await agentUser(context.runtime, getRequestHeaders());
+  return agentAction(() => context.runtime.agents.subagents.list(user.id, data.agentId));
+});
+export const getSubagent = createServerFn({ method: "GET" }).validator((data: unknown) => ({ agentId: field(data, "agentId"), id: field(data, "id") })).handler(async ({ context, data }) => {
+  const user = await agentUser(context.runtime, getRequestHeaders());
+  return agentAction(() => context.runtime.agents.subagents.detail(user.id, data.agentId, data.id));
+});
+export const saveSubagent = createServerFn({ method: "POST" }).validator((data: unknown) => ({ agentId: field(data, "agentId"), id: field(data, "id"), requestId: field(data, "requestId"), settings: data && typeof data === "object" ? Reflect.get(data, "settings") as unknown : undefined })).handler(async ({ context, data }) => {
+  const user = await agentUser(context.runtime, getRequestHeaders(), true);
+  return agentAction(() => data.id ? context.runtime.agents.subagents.update(user.id, data.agentId, data.id, data.settings) : context.runtime.agents.subagents.create(user.id, data.agentId, data.settings, data.requestId));
+});
+export const archiveSubagent = createServerFn({ method: "POST" }).validator((data: unknown) => ({ agentId: field(data, "agentId"), id: field(data, "id") })).handler(async ({ context, data }) => {
+  const user = await agentUser(context.runtime, getRequestHeaders(), true);
+  return agentAction(() => context.runtime.agents.subagents.archive(user.id, data.agentId, data.id));
+});
+export const runSubagent = createServerFn({ method: "POST" }).validator((data: unknown) => ({ agentId: field(data, "agentId"), id: field(data, "id"), task: field(data, "task"), requestId: field(data, "requestId") })).handler(async ({ context, data }) => {
+  const user = await agentUser(context.runtime, getRequestHeaders(), true);
+  return agentAction(() => context.runtime.agents.subagents.run(user.id, data.agentId, data.id, data.task, data.requestId));
+});
+export const stopSubagentRun = createServerFn({ method: "POST" }).validator((data: unknown) => ({ agentId: field(data, "agentId"), runId: field(data, "runId") })).handler(async ({ context, data }) => {
+  const user = await agentUser(context.runtime, getRequestHeaders(), true);
+  return agentAction(() => context.runtime.agents.subagents.stop(user.id, data.agentId, data.runId));
+});

@@ -73,7 +73,7 @@ describe("Agent chat", () => {
   it("renders escaped messages, model and an honest no-trading boundary", () => {
     const html = renderToStaticMarkup(<AgentChatPage initial={{ ...initial, messages: [{ id: "one", role: "assistant", text: "<script>bad()</script>", failed: false }] }} />);
     expect(html).toContain("deepseek-v4.1-flash");
-    expect(html).toContain("Trading is not configured");
+    expect(html).not.toContain("Enabled order tools");
     expect(html).toContain("&lt;script&gt;");
     expect(html).not.toContain("<script>");
   });

@@ -2,7 +2,7 @@ import type { OrderService } from "../hyperliquid/orders/order-service.js";
 import { createHyperliquidExtension } from "../hyperliquid/durable-extension.js";
 import type { HyperliquidService } from "../hyperliquid/service.js";
 import { BACKGROUND_CONTEXT as context } from "@earendil-works/chord/context";
-import { getSupportedThinkingLevels, type Models } from "@earendil-works/pi-ai/models";
+import type { Models } from "@earendil-works/pi-ai/models";
 import { createRegistry, Harness, InboxDoc, LiveDoc } from "@earendil-works/pi-durable";
 import type { Conversation, ConversationView, EntryRecord, InboxState, LiveState, ModelRef } from "@earendil-works/pi-durable";
 import { SqliteStorage } from "@earendil-works/pi-durable/storage/sqlite";
@@ -12,6 +12,7 @@ import { hvAgents, type AgentRow } from "../db/agent-schema.js";
 import type { ApplicationDatabase, SharedDatabase } from "../db/shared-database.js";
 
 import { AgentError, agentId, agentName, chatMessage, harnessPrefix, requestId } from "./agent-input.js";
+import { SubagentService } from "./subagent-service.js";
 import type { ProviderService } from "../providers/provider-service.js";
 
 // Existing scaffold roots retain their original model, never silently switch.
@@ -39,7 +40,6 @@ export interface AgentChat {
 export class AgentService {
   private readonly running = new Map<string, RunningAgent>();
   private readonly opening = new Map<string, Promise<RunningAgent>>();
-  private readonly submitting = new Map<string, Promise<void>>();
   private readonly lifecycle = new Map<string, Set<() => void>>();
   private readonly feedShutdown = new AbortController();
   private readonly feeds = new Set<Promise<void>>();
@@ -47,7 +47,12 @@ export class AgentService {
   private scheduling = false;
   private closing?: Promise<void>;
   private resuming: Promise<void> = Promise.resolve();
-  constructor(private readonly db: ApplicationDatabase, private readonly database: SharedDatabase, private readonly providers: ProviderService, private readonly hyperliquid: HyperliquidService, private readonly orders: OrderService, private readonly options: AgentServiceOptions = {}) {}
+  readonly subagents: SubagentService;
+  constructor(private readonly db: ApplicationDatabase, private readonly database: SharedDatabase, private readonly providers: ProviderService, private readonly hyperliquid: HyperliquidService, private readonly orders: OrderService, private readonly options: AgentServiceOptions = {}) {
+    this.subagents = new SubagentService(db, database, providers, {
+      owned: (userId, id) => this.owned(userId, id), models: (userId) => this.models(userId), changed: (id) => this.notify(id),
+    }, Boolean(options.models));
+  }
   private notify(id: string) { for (const listener of this.lifecycle.get(id) ?? []) listener(); }
   private models(userId: string) { return this.options.models ? Promise.resolve(this.options.models) : this.providers.models(userId); }
   private async configured(agent: AgentRow, current: RunningAgent) {
@@ -131,6 +136,8 @@ export class AgentService {
       const registry = createRegistry();
       const hyperliquid = createHyperliquidExtension(this.hyperliquid, agent.userId, agent.id, this.orders);
       registry.install(hyperliquid);
+      const execution = this.subagents.extension(agent.id, hyperliquid);
+      registry.install(execution.extension);
       const storage = await SqliteStorage.open(this.database.borrow(), { prefix: harnessPrefix(agent.id) });
       try {
         harness = await Harness.open(storage, {
@@ -144,12 +151,8 @@ export class AgentService {
         model: agent.initialProvider && agent.initialModelId ? { provider: agent.initialProvider, modelId: agent.initialModelId } : this.options.model ?? legacyModel,
       } });
       if (agent.conversationId !== null && agent.conversationId !== main.id) throw new Error("Agent root identity changed");
-      // root options apply only on creation. Configure before scheduling so old
-      // scaffold roots also gain the extension without changing model/history.
-      await main.configure({
-        extensions: [hyperliquid], tools: null,
-        instructions: "You are the user's HyperVibes assistant. Help discuss trading strategies and answer questions. Use the available tools for account information and order execution, following the Hyperliquid extension's instructions. Describe confirmed outcomes accurately; never claim an unknown action failed or succeeded.",
-      }, context);
+      // Seed once from the existing root; later startups preserve editable settings.
+      await this.subagents.bind(agent, harness, main, hyperliquid, execution);
       this.admit();
       await this.db.update(hvAgents).set({ state: "ready", conversationId: main.id, error: null, updatedAt: Date.now() }).where(eq(hvAgents.id, agent.id)).run();
       const current = { harness, main };
@@ -158,6 +161,7 @@ export class AgentService {
       void harness.closed.then(async (end) => {
         if (this.running.get(agent.id) !== current) return;
         this.running.delete(agent.id);
+        this.subagents.unbind(agent.id);
         if (end.reason === "failed" && !this.stopping) {
           await this.db.update(hvAgents).set({ state: "failed", error: "Agent execution stopped. Retry initialization.", updatedAt: Date.now() }).where(eq(hvAgents.id, agent.id)).run();
           this.notify(agent.id);
@@ -166,6 +170,7 @@ export class AgentService {
       if (this.scheduling && await this.configured(agent, current)) harness.resume();
       return current;
     } catch (error) {
+      this.subagents.unbind(agent.id);
       await harness?.close(context);
       if (!this.stopping) {
         await this.db.update(hvAgents).set({ state: "failed", error: "Unable to initialize Agent. Retry initialization.", updatedAt: Date.now() }).where(eq(hvAgents.id, agent.id)).run();
@@ -177,8 +182,9 @@ export class AgentService {
   start() {
     this.admit();
     this.scheduling = true;
+    this.resuming = this.subagents.start().catch(() => { this.subagents.schedulerError = "Unable to initialize subagent scheduling. Restart the backend to retry."; });
     if (this.options.models) for (const { harness } of this.running.values()) harness.resume();
-    else this.resuming = this.resumeConfigured().catch(() => { /* Storage health reports failures; admission also checks configuration. */ });
+    else this.resuming = Promise.all([this.resuming, this.resumeConfigured()]).then(() => {}).catch(() => { /* Storage health reports failures; admission also checks configuration. */ });
   }
   private async resumeConfigured() {
     const agents = await this.db.select().from(hvAgents).all();
@@ -219,6 +225,9 @@ export class AgentService {
     result.busy = Boolean(live?.run);
     result.queued = inbox?.items.length ?? 0;
     for (const entry of entries.slice(-100)) {
+      if (entry.kind === "hv.subagent-notification" && entry.data && typeof entry.data === "object" && "text" in entry.data && typeof entry.data.text === "string") {
+        result.messages.push({ id: `notification:${entry.id}`, role: "assistant", text: entry.data.text, failed: false });
+      }
       for (const [index, message] of (entry.model ?? []).entries()) {
         if (message.role !== "user" && message.role !== "assistant") continue;
         const failed = message.role === "assistant" && (message.stopReason === "error" || message.stopReason === "aborted");
@@ -297,7 +306,7 @@ export class AgentService {
     submissionRequestId = requestId(submissionRequestId);
     // Serialize admission (not model execution) so concurrent browser requests
     // cannot race past the persisted inbox limit.
-    return this.serialize(agent.id, async () => {
+    return this.subagents.serial(agent.id, async () => {
       this.admit();
       const current = this.running.get(agent.id);
       if (!current) throw new AgentError("Agent is unavailable. Retry initialization.", 503);
@@ -308,45 +317,17 @@ export class AgentService {
       return { submissionId: submission.id };
     });
   }
-  private serialize<T>(id: string, action: () => Promise<T>) {
-    const operation = (this.submitting.get(id) ?? Promise.resolve()).then(action);
-    const settled = operation.then(() => {}, () => {});
-    this.submitting.set(id, settled);
-    void settled.then(() => { if (this.submitting.get(id) === settled) this.submitting.delete(id); });
-    return operation;
-  }
-  async selectModel(userId: string, id: string, selection: ModelRef, thinkingLevel?: string) {
-    const agent = await this.owned(userId, id);
-    return this.serialize(agent.id, async () => {
-      this.admit();
-      const model = this.options.models ? selection : await this.providers.validate(userId, selection);
-      const current = this.running.get(agent.id);
-      if (!current) throw new AgentError("Agent is unavailable. Retry initialization.", 503);
-      // Change only at idle: a prepared request may retain its previous model,
-      // and changing providers must not reroute already queued spending.
-      const live = await current.harness.snapshot(LiveDoc, current.main.id, context);
-      const inbox = await current.harness.snapshot(InboxDoc, current.main.id, context);
-      if (live?.run || inbox?.items.length) throw new AgentError("Stop or finish queued work before changing models.", 409);
-      const catalogModel = (await this.models(userId)).getModel(model.provider, model.modelId);
-      if (!catalogModel) throw new AgentError("Model is unavailable.", 409);
-      const level = thinkingLevel ? getSupportedThinkingLevels(catalogModel).find((value) => value === thinkingLevel) : undefined;
-      if (thinkingLevel && !level) throw new AgentError("Select a supported thinking level.");
-      await current.main.configure({ model, thinkingLevel: level ?? null }, context);
-      this.notify(agent.id);
-      if (this.scheduling && !this.stopping) current.harness.resume();
-    });
-  }
   async stop(userId: string, id: string) {
     const agent = await this.owned(userId, id);
-    await this.running.get(agent.id)?.main.abort(context, { background: true });
+    await this.running.get(agent.id)?.main.abort(context);
   }
   close() {
     this.stopping = true;
     this.feedShutdown.abort();
     return this.closing ??= (async () => {
       await this.resuming;
+      await this.subagents.close();
       await Promise.all(this.feeds);
-      await Promise.all(this.submitting.values());
       await Promise.allSettled(this.opening.values());
       const results = await Promise.allSettled([...this.running.values()].map(({ harness }) => harness.close(context)));
       this.running.clear();
