@@ -56,8 +56,8 @@ describe("Better Auth SIWE on Node SQLite", () => {
     ip = `127.0.0.${++ipSuffix}`;
     runtime = await createRuntime(config());
   });
-  afterEach(() => {
-    runtime.close();
+  afterEach(async () => {
+    await runtime.close();
     rmSync(directory, { recursive: true, force: true });
   });
 
@@ -70,34 +70,34 @@ describe("Better Auth SIWE on Node SQLite", () => {
     expect(setCookie).toContain("Max-Age=604800");
     const identity = await currentUser(runtime, headers(cookie));
     expect(identity).toEqual({ id: expect.any(String), walletAddress: wallet.address });
-    expect(runtime.db.all(sql`SELECT provider_id FROM hv_auth_accounts`)).toEqual([{ provider_id: "siwe" }]);
-    runtime.close();
+    expect(await runtime.db.values((sql`SELECT provider_id FROM hv_auth_accounts`))).toEqual([["siwe"]]);
+    await runtime.close();
     runtime = await createRuntime(config());
     expect(await currentUser(runtime, headers(cookie))).toEqual(identity);
-    expect(runtime.db.all(sql`SELECT * FROM hv_schema_migrations`)).toHaveLength(1);
+    expect(await runtime.db.values((sql`SELECT * FROM hv_schema_migrations`))).toHaveLength(2);
   });
 
   it("reuses the same user on subsequent logins", async () => {
     const first = await login();
     const second = await login();
     expect(await currentUser(runtime, headers(first.cookie))).toEqual(await currentUser(runtime, headers(second.cookie)));
-    expect(runtime.db.all(sql`SELECT id FROM hv_users`)).toHaveLength(1);
-    expect(runtime.db.all(sql`SELECT id FROM hv_wallet_addresses`)).toHaveLength(1);
-    expect(runtime.db.all(sql`SELECT id FROM hv_auth_accounts`)).toHaveLength(1);
+    expect(await runtime.db.values((sql`SELECT id FROM hv_users`))).toHaveLength(1);
+    expect(await runtime.db.values((sql`SELECT id FROM hv_wallet_addresses`))).toHaveLength(1);
+    expect(await runtime.db.values((sql`SELECT id FROM hv_auth_accounts`))).toHaveLength(1);
   });
 
   it("rejects missing, tampered, expired and revoked sessions", async () => {
     expect(await currentUser(runtime, headers())).toBeNull();
     const first = await login();
     expect(await currentUser(runtime, headers(first.cookie.replace("session_token=", "session_token=tampered-")))).toBeNull();
-    runtime.db.update(hvSessions).set({ expiresAt: new Date(Date.now() - 1_000) }).run();
+    await runtime.db.update(hvSessions).set({ expiresAt: new Date(Date.now() - 1_000) }).run();
     expect(await currentUser(runtime, headers(first.cookie))).toBeNull();
     const second = await login();
     const response = await request("/sign-out", {}, second.cookie);
     expect(response.status).toBe(200);
     expect(response.headers.getSetCookie().join(";")).toContain("Max-Age=0");
     expect(await currentUser(runtime, headers(second.cookie))).toBeNull();
-    expect(runtime.db.all(sql`SELECT id FROM hv_sessions`)).toEqual([]);
+    expect(await runtime.db.values((sql`SELECT id FROM hv_sessions`))).toEqual([]);
   });
 
   it("requires a same-origin POST for login and logout", async () => {
@@ -125,15 +125,15 @@ describe("Better Auth SIWE on Node SQLite", () => {
     const responses = await Promise.all([request("/siwe/verify", body, proof.cookie), request("/siwe/verify", body, proof.cookie)]);
     expect(responses.map((response) => response.status).sort()).toEqual([200, 401]);
     expect((await request("/siwe/verify", body, proof.cookie)).status).toBe(401);
-    expect(runtime.db.all(sql`SELECT id FROM hv_sessions`)).toHaveLength(1);
+    expect(await runtime.db.values((sql`SELECT id FROM hv_sessions`))).toHaveLength(1);
   });
 
   it("rejects expired server nonces even with a freshly signed message", async () => {
     const proof = await challenge();
-    const row = runtime.db.select().from(hvAuthVerifications).get()!;
+    const row = (await runtime.db.select().from(hvAuthVerifications).get())!;
     expect(row.expiresAt.getTime()).toBeLessThanOrEqual(Date.now() + 300_000);
     expect(row.expiresAt.getTime()).toBeGreaterThan(Date.now() + 299_000);
-    runtime.db.update(hvAuthVerifications).set({ expiresAt: new Date(Date.now() - 1_000) })
+    await runtime.db.update(hvAuthVerifications).set({ expiresAt: new Date(Date.now() - 1_000) })
       .where(eq(hvAuthVerifications.identifier, `siwe:${proof.nonce}`)).run();
     expect((await request("/siwe/verify", { message: proof.message, signature: proof.signature }, proof.cookie)).status).toBe(401);
   });
@@ -150,8 +150,8 @@ describe("Better Auth SIWE on Node SQLite", () => {
     const proof = await challenge(overrides);
     const response = await request("/siwe/verify", { message: proof.message, signature: proof.signature }, proof.cookie);
     expect(response.status).toBe(401);
-    expect(runtime.db.all(sql`SELECT id FROM hv_users`)).toEqual([]);
-    expect(runtime.db.all(sql`SELECT id FROM hv_sessions`)).toEqual([]);
+    expect(await runtime.db.values((sql`SELECT id FROM hv_users`))).toEqual([]);
+    expect(await runtime.db.values((sql`SELECT id FROM hv_sessions`))).toEqual([]);
   });
 
   it("rejects incorrect signatures, tampered messages and malformed payloads", async () => {
@@ -161,33 +161,33 @@ describe("Better Auth SIWE on Node SQLite", () => {
     const second = await challenge();
     expect((await request("/siwe/verify", { message: second.message.replace(wallet.address, otherWallet.address), signature: second.signature }, second.cookie)).status).toBe(401);
     expect((await request("/siwe/verify", { message: 123, signature: "invalid" })).status).toBe(401);
-    expect(runtime.db.all(sql`SELECT id FROM hv_users`)).toEqual([]);
+    expect(await runtime.db.values((sql`SELECT id FROM hv_users`))).toEqual([]);
   });
 
   it("bounds nonce issuance with Better Auth's rate limiter", async () => {
     for (let count = 0; count < 20; count++) expect((await request("/siwe/nonce", {})).status).toBe(200);
     expect((await request("/siwe/nonce", {})).status).toBe(429);
-    expect(runtime.db.all(sql`SELECT id FROM hv_auth_verifications`)).toHaveLength(20);
+    expect(await runtime.db.values((sql`SELECT id FROM hv_auth_verifications`))).toHaveLength(20);
   });
 
   it("cleans expired sessions and verification records without deleting live state", async () => {
     const { cookie } = await login();
     const now = new Date();
-    runtime.db.insert(hvAuthVerifications).values(Array.from({ length: 120 }, (_, index) => ({
+    await runtime.db.insert(hvAuthVerifications).values(Array.from({ length: 120 }, (_, index) => ({
       id: `expired-${index}`, identifier: `expired-${index}`, value: "expired", createdAt: now, updatedAt: now, expiresAt: new Date(0),
     }))).run();
     await request("/siwe/nonce", {});
-    expect(runtime.db.all(sql`SELECT id FROM hv_auth_verifications WHERE expires_at = 0`)).toHaveLength(20);
+    expect(await runtime.db.values((sql`SELECT id FROM hv_auth_verifications WHERE expires_at = 0`))).toHaveLength(20);
     expect(await currentUser(runtime, headers(cookie))).not.toBeNull();
   });
 
   it("keeps password registration disabled", async () => {
     expect((await request("/sign-up/email", { email: "test@example.com", password: "unused-password", name: "test" })).status).not.toBe(200);
-    expect(runtime.db.all(sql`SELECT id FROM hv_users`)).toEqual([]);
+    expect(await runtime.db.values((sql`SELECT id FROM hv_users`))).toEqual([]);
   });
 
   it("uses Secure cookies on HTTPS without changing the trusted public origin", async () => {
-    runtime.close();
+    await runtime.close();
     runtime = await createRuntime({ ...config(), authOrigin: "https://app.example.com" });
     const response = await runtime.auth.handler(new Request("https://app.example.com/api/auth/siwe/nonce", {
       method: "POST", headers: { origin: "https://app.example.com", "content-type": "application/json", "x-hv-client-ip": ip }, body: "{}",

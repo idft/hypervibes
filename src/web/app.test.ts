@@ -74,6 +74,18 @@ describe("embedded HTTP host", () => {
     expect((await app.inject("/api/v1/agents")).statusCode).toBe(404);
   });
 
+  it("serves the Agent chat event stream through the embedded host", async () => {
+    // The stream route is registered before the Start catch-all; anonymous
+    // browsers receive a finite JSON error, never an open stream.
+    const denied = await app.inject("/api/agents/4527ece2-5a90-4d5e-b73a-351368ad71f3/events");
+    expect(denied.statusCode).toBe(401);
+    expect(denied.headers["content-type"]).toContain("application/json");
+    expect(denied.headers["cache-control"]).toBe("no-store");
+    expect(denied.json<{ error: string }>().error).toContain("Sign in");
+    const crossSite = await app.inject({ url: "/api/agents/4527ece2-5a90-4d5e-b73a-351368ad71f3/events", headers: { origin: "https://evil.example" } });
+    expect(crossSite.statusCode).toBe(403);
+  });
+
   it.each(["application/json", "application/x-www-form-urlencoded", "multipart/form-data; boundary=fixture"])("preserves the request body for Start: %s", async (contentType) => {
     const response = await app.inject({ method: "POST", url: "/echo", headers: { "Content-Type": contentType }, payload: "body fixture" });
     expect(response.statusCode).toBe(200);
@@ -135,7 +147,7 @@ describe("embedded HTTP host", () => {
     start.close = vi.fn(async () => { expect(runtime.status().database).toBe("connected"); });
     await app.close();
     expect(start.close).toHaveBeenCalledOnce();
-    expect(runtime.db.$client.isOpen).toBe(false);
+    await expect(runtime.database.get("SELECT 1")).rejects.toThrow("closed");
     app = await createApp(config, { loadWeb: async () => ({ ...start, close: async () => {} }) });
     expect((await app.inject("/healthz")).statusCode).toBe(200);
   });
@@ -146,7 +158,9 @@ describe("embedded HTTP host", () => {
   });
 
   it("reports a missing production build without leaving an initialized app", async () => {
+    await app.close();
     await expect(createApp(config)).rejects.toThrow("pnpm build:app");
+    app = await createApp(config, { loadWeb: async () => start });
   });
 
   it("can import the entry point without starting a server", async () => {

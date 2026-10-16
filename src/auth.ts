@@ -1,16 +1,17 @@
 import { drizzleAdapter } from "@better-auth/drizzle-adapter/relations-v2";
 import { betterAuth } from "better-auth";
 import { inArray, lt } from "drizzle-orm";
-import type { NodeSQLiteDatabase } from "drizzle-orm/node-sqlite";
+import type { ApplicationDatabase } from "./db/shared-database.js";
 import { createAuthOptions } from "./auth-options.js";
 import type { AppConfig } from "./config.js";
 import * as schema from "./db/auth-schema.js";
 
-export function createAuth(db: NodeSQLiteDatabase, config: AppConfig) {
+export function createAuth(db: ApplicationDatabase, config: AppConfig) {
   const auth = betterAuth({
     ...createAuthOptions(config),
-    // DatabaseSync transactions require synchronous callbacks. Better Auth's
-    // SQLite consumeOne still uses atomic DELETE RETURNING for nonce replay safety.
+    // Individual statements use the shared queue. Better Auth's SQLite
+    // consumeOne uses atomic DELETE RETURNING for nonce replay safety.
+    // Proxy transactions must not emit an unreserved BEGIN/COMMIT sequence.
     database: drizzleAdapter(db, { provider: "sqlite", schema, transaction: false }),
   });
   return {
@@ -21,7 +22,7 @@ export function createAuth(db: NodeSQLiteDatabase, config: AppConfig) {
       if (response.ok && request.method === "POST" && /\/siwe\/(nonce|get-nonce)$/.test(new URL(request.url).pathname)) {
         const now = new Date();
         for (const table of [schema.hvSessions, schema.hvAuthVerifications]) {
-          db.delete(table).where(inArray(table.id,
+          await db.delete(table).where(inArray(table.id,
             db.select({ id: table.id }).from(table).where(lt(table.expiresAt, now)).limit(100),
           )).run();
         }

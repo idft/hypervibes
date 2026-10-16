@@ -23,7 +23,7 @@ export function Navbar({ walletAddress }: { walletAddress: string }) {
   }
   return (
     <div className="relative flex h-full items-center px-4">
-      <span className="text-sm text-zinc-400">Select an agent</span>
+      <Link to="/agents" className="cursor-pointer text-sm text-zinc-400 hover:text-white">Agents</Link>
       <Link to="/agents" className="absolute left-1/2 flex h-full -translate-x-1/2 cursor-pointer items-center gap-2 px-4 text-sm font-semibold tracking-wide text-zinc-100 hover:bg-zinc-800">
         <img src="/static/android-chrome-512x512.png" alt="" className="h-9 w-9 rounded-md object-cover" />
         <span>HyperVibes</span>

@@ -4,6 +4,7 @@ import { isAbsolute, join, relative, sep } from "node:path";
 import { NodeRequest, sendNodeResponse } from "srvx/node";
 import type { AppConfig } from "../config.js";
 import { createRuntime } from "../runtime.js";
+import { AgentEventStreams } from "./agent-events.js";
 import { runMiddleware } from "./middleware.js";
 import { loadStart } from "./start.js";
 import type { StartApplication } from "./start.js";
@@ -33,10 +34,14 @@ export async function createApp(config: AppConfig, options: AppOptions = {}) {
     if (host !== origin.host) return reply.code(400).send({ error: "Invalid request host" });
   });
   const runtime = await createRuntime(config);
+  const streams = new AgentEventStreams(runtime);
   let web: StartApplication | undefined;
   app.addHook("onClose", async () => {
-    try { await web?.close(); }
-    finally { runtime.close(); }
+    try { await streams.close(); }
+    finally {
+      try { await web?.close(); }
+      finally { await runtime.close(); }
+    }
   });
 
   try {
@@ -67,7 +72,19 @@ export async function createApp(config: AppConfig, options: AppOptions = {}) {
     }
     app.get("/healthz", async () => {
       runtime.status();
+      await runtime.database.get("SELECT 1");
       return { status: "ok" };
+    });
+
+    // One Server-Sent Events subscription per open chat view: committed Durable
+    // snapshots are pushed, with no conversation polling.
+    app.get("/api/agents/:id/events", async (request, reply) => {
+      reply.hijack();
+      const webRequest = new NodeRequest({ req: request.raw, res: reply.raw, maxRequestBodySize: 1024 * 1024 });
+      webRequest.headers.set("x-hv-client-ip", request.ip);
+      const response = await streams.open(webRequest, (request.params as { id: string }).id);
+      response.headers.set("Cache-Control", "no-store");
+      await sendNodeResponse(reply.raw, response);
     });
 
     // Leave request streams unread for Start (JSON, FormData, etc.). The Node
@@ -98,6 +115,7 @@ export async function createApp(config: AppConfig, options: AppOptions = {}) {
       }
     });
     await app.ready();
+    runtime.start();
     return app;
   } catch (error) {
     await app.close();

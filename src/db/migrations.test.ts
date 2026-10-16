@@ -29,7 +29,7 @@ describe("generated SQLite auth migrations", () => {
     migrate(db, config);
     connection.exec("INSERT INTO hv_users (id, name, email) VALUES ('fixture', 'Wallet', 'fixture@example.test')");
     migrate(db, config);
-    expect(connection.prepare("SELECT count(*) AS count FROM hv_schema_migrations").get()?.count).toBe(1);
+    expect(connection.prepare("SELECT count(*) AS count FROM hv_schema_migrations").get()?.count).toBe(2);
     expect(connection.prepare("SELECT name FROM hv_users").get()?.name).toBe("Wallet");
     expect(connection.prepare("SELECT value FROM pi_test").get()?.value).toBe("untouched");
     expect(() => connection.exec("INSERT INTO hv_wallet_addresses (id, user_id, address, chain_id, created_at) VALUES ('wallet', 'missing', '0x0', 1, 0)")).toThrow();
@@ -41,11 +41,11 @@ describe("generated SQLite auth migrations", () => {
     const db = drizzle({ client: connection });
     const config = { migrationsFolder: folder, migrationsTable: "hv_schema_migrations" };
     migrate(db, config);
-    const failing = join(folder, "20261016000000_test_failure");
+    const failing = join(folder, "20990101000000_test_failure");
     mkdirSync(failing);
     writeFileSync(join(failing, "migration.sql"), "CREATE TABLE temporary_upgrade (id TEXT);\n--> statement-breakpoint\nINSERT INTO nonexistent_table VALUES (1)");
     expect(() => migrate(db, config)).toThrow();
-    expect(connection.prepare("SELECT count(*) AS count FROM hv_schema_migrations").get()?.count).toBe(1);
+    expect(connection.prepare("SELECT count(*) AS count FROM hv_schema_migrations").get()?.count).toBe(2);
     expect(connection.prepare("SELECT name FROM sqlite_schema WHERE name = 'temporary_upgrade'").get()).toBeUndefined();
     expect(connection.prepare("SELECT name FROM sqlite_schema WHERE name = 'hv_users'").get()?.name).toBe("hv_users");
   });
