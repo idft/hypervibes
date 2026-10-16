@@ -12,8 +12,10 @@ import { AgentEventStreams } from "./agent-events.js";
 const mocks = vi.hoisted(() => ({ session: vi.fn() }));
 vi.mock("../auth-user.js", () => ({ currentUserSession: mocks.session }));
 import type { ChatEvent } from "./agent-events.js";
+import type { AgentDashboard } from "../hyperliquid/agent-dashboard.js";
+import type { AccountFeedEvents } from "../hyperliquid/live-dashboard.js";
 const expiry = () => new Date(Date.now() + 3_600_000);
-async function readEvent(reader: ReadableStreamDefaultReader<Uint8Array>, buffer: { text: string }): Promise<ChatEvent> {
+async function readEvent<T = ChatEvent["data"]>(reader: ReadableStreamDefaultReader<Uint8Array>, buffer: { text: string }): Promise<{ event?: string; data: T }> {
   for (;;) {
     const block = buffer.text.split("\n\n");
     buffer.text = block.pop() ?? "";
@@ -35,17 +37,24 @@ describe("Agent chat event stream", () => {
   let runtime: AppRuntime;
   let streams: AgentEventStreams;
   let faux: ReturnType<typeof fauxProvider>;
+  let feedEvents: AccountFeedEvents | undefined;
+  const closeFeed = vi.fn(async () => {});
   const config = () => testConfig({ APP_SQLITE_PATH: join(directory, "app.sqlite") });
   const options = () => {
     const models = createModels();
     faux = fauxProvider();
     models.setProvider(faux.provider);
-    return { models, model: { provider: "faux", modelId: "faux-1" } };
+    return { models, model: { provider: "faux", modelId: "faux-1" }, accountFeedFactory: (_address: string, events: AccountFeedEvents) => {
+      feedEvents = events;
+      return { close: closeFeed };
+    } };
   };
   const request = (id: string, signal?: AbortSignal) => new Request(`http://localhost:3003/api/agents/${id}/events`, {
     headers: { origin: "http://localhost:3003", cookie: "fixture" }, signal,
   });
   beforeEach(async () => {
+    feedEvents = undefined;
+    closeFeed.mockClear();
     directory = mkdtempSync(join(tmpdir(), "hv-agent-events-"));
     runtime = await createRuntime(config(), options());
     await runtime.db.insert(hvUsers).values([
@@ -99,6 +108,54 @@ describe("Agent chat event stream", () => {
     const reopened = await streams.open(request(agent.id), agent.id);
     expect(reopened.status).toBe(200);
     await reopened.body!.cancel();
+  });
+
+  it("restores linked-account monitoring on runtime startup without any dashboard connections", async () => {
+    const agent = await runtime.agents.create("owner", "Trading", randomUUID(), `0x${"34".repeat(20)}`);
+    await streams.close();
+    await runtime.close();
+    runtime = await createRuntime(config(), options());
+    streams = new AgentEventStreams(runtime, "dashboard");
+    expect(feedEvents).toBeUndefined();
+    runtime.start();
+    await vi.waitFor(() => expect(feedEvents).toBeDefined());
+    feedEvents!.update("spot", { spotUsdc: "17" });
+    expect(await runtime.hyperliquid.agentDashboard("owner", agent.id)).toMatchObject({ spotUsdc: "17" });
+  });
+
+  it("authorizes dashboard subscriptions and pushes cached/live state without tying the feed to browser lifetime", async () => {
+    await streams.close();
+    streams = new AgentEventStreams(runtime, "dashboard");
+    const agent = await runtime.agents.create("owner", "Trading", randomUUID(), `0x${"12".repeat(20)}`);
+    const crossSite = new Request(`http://localhost:3003/api/agents/${agent.id}/dashboard/events`, { headers: { origin: "https://evil.example" } });
+    expect((await streams.open(crossSite, agent.id)).status).toBe(403);
+    mocks.session.mockResolvedValue({ user: { id: "other" }, expiresAt: expiry() });
+    expect((await streams.open(request(agent.id), agent.id)).status).toBe(404);
+    expect(feedEvents).toBeUndefined();
+    mocks.session.mockResolvedValue(null);
+    expect((await streams.open(request(agent.id), agent.id)).status).toBe(401);
+    mocks.session.mockResolvedValue({ user: { id: "owner" }, expiresAt: expiry() });
+    const source = new AbortController();
+    const response = await streams.open(request(agent.id, source.signal), agent.id);
+    const reader = response.body!.getReader();
+    const buffer = { text: "" };
+    const initial = await readEvent<AgentDashboard>(reader, buffer);
+    expect(initial.event).toBe("dashboard");
+    expect(initial.data.perpEquity).toBeNull();
+    feedEvents!.update("perps", { perpEquity: "9007199254740993.12", positions: [] });
+    const updated = await readEvent<AgentDashboard>(reader, buffer);
+    expect(updated.data.perpEquity).toBe("9007199254740993.12");
+    source.abort();
+    expect((await reader.read()).done).toBe(true);
+    expect(closeFeed).not.toHaveBeenCalled();
+    feedEvents!.update("spot", { spotUsdc: "23" });
+    const reopened = await streams.open(request(agent.id), agent.id);
+    const cached = await readEvent<AgentDashboard>(reopened.body!.getReader(), { text: "" });
+    expect(cached.data.spotUsdc).toBe("23");
+    expect(cached.data.perpEquity).toBe("9007199254740993.12");
+    await streams.close();
+    await runtime.close();
+    expect(closeFeed).toHaveBeenCalledOnce();
   });
 
   it("notifies subscribers of shutdown and stops admitting streams", { timeout: 30_000 }, async () => {

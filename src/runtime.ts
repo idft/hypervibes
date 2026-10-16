@@ -7,6 +7,7 @@ import type { AppConfig } from "./config.js";
 import { openDatabase } from "./db/database.js";
 import { lockProfile } from "./db/profile-lock.js";
 import { applicationDatabase, SharedDatabase } from "./db/shared-database.js";
+import type { AccountFeedFactory } from "./hyperliquid/live-dashboard.js";
 import { HyperliquidService } from "./hyperliquid/service.js";
 import { ProviderService, type ProviderServiceOptions } from "./providers/provider-service.js";
 
@@ -16,7 +17,7 @@ export interface RuntimeStatus {
 }
 
 /** Application-owned resources, constructed once by the host, never by a request. */
-export async function createRuntime(config: AppConfig, options: AgentServiceOptions & ProviderServiceOptions = {}) {
+export async function createRuntime(config: AppConfig, options: AgentServiceOptions & ProviderServiceOptions & { accountFeedFactory?: AccountFeedFactory } = {}) {
   const connection = openDatabase(config.databasePath);
   const database = new SharedDatabase(connection);
   let release: (() => Promise<void>) | undefined;
@@ -28,10 +29,13 @@ export async function createRuntime(config: AppConfig, options: AgentServiceOpti
   const close = () => closing ??= (async () => {
     try { await agents?.close(); }
     finally {
-      try { await providers?.close(); }
+      try { await hyperliquid?.close(); }
       finally {
-        try { await database.close(); }
-        finally { await release?.(); }
+        try { await providers?.close(); }
+        finally {
+          try { await database.close(); }
+          finally { await release?.(); }
+        }
       }
     }
   })();
@@ -55,7 +59,7 @@ export async function createRuntime(config: AppConfig, options: AgentServiceOpti
     const agentService = new AgentService(db, database, providerService, options);
     providerService.onChanged = (userId) => agentService.providersChanged(userId);
     agents = agentService;
-    hyperliquid = new HyperliquidService(db, config.encryptionKey);
+    hyperliquid = new HyperliquidService(db, config.encryptionKey, undefined, options.accountFeedFactory);
     await agentService.recover();
     return {
       db,
@@ -68,6 +72,7 @@ export async function createRuntime(config: AppConfig, options: AgentServiceOpti
       start() {
         if (closing || failure) throw new Error("Runtime is unavailable");
         agentService.start();
+        hyperliquid?.start();
       },
       status(): RuntimeStatus {
         if (closing || failure || !database.available || !connection.isOpen) throw new Error("Runtime is unavailable");

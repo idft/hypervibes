@@ -35,9 +35,10 @@ export async function createApp(config: AppConfig, options: AppOptions = {}) {
   });
   const runtime = await createRuntime(config);
   const streams = new AgentEventStreams(runtime);
+  const dashboards = new AgentEventStreams(runtime, "dashboard");
   let web: StartApplication | undefined;
   // SSE responses must finish before Fastify waits for active HTTP connections.
-  app.addHook("preClose", async () => { await streams.close(); });
+  app.addHook("preClose", async () => { await Promise.all([streams.close(), dashboards.close()]); });
   app.addHook("onClose", async () => {
     try { await web?.close(); }
     finally { await runtime.close(); }
@@ -83,6 +84,14 @@ export async function createApp(config: AppConfig, options: AppOptions = {}) {
       webRequest.headers.set("x-hv-client-ip", request.ip);
       const response = await streams.open(webRequest, (request.params as { id: string }).id);
       response.headers.set("Cache-Control", "no-store");
+      await sendNodeResponse(reply.raw, response);
+    });
+
+    app.get("/api/agents/:id/dashboard/events", async (request, reply) => {
+      reply.hijack();
+      const webRequest = new NodeRequest({ req: request.raw, res: reply.raw, maxRequestBodySize: 1024 * 1024 });
+      webRequest.headers.set("x-hv-client-ip", request.ip);
+      const response = await dashboards.open(webRequest, (request.params as { id: string }).id);
       await sendNodeResponse(reply.raw, response);
     });
 
