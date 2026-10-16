@@ -23,7 +23,7 @@ describe("Agent dashboard snapshots", () => {
     }));
     return calls;
   }
-  it("does not make exchange calls for chat-only agents", async () => {
+  it("does not make exchange calls when a development row has no address", async () => {
     const calls = mockFetch();
     expect(await loadAgentDashboard(new HttpTransport(), null)).toMatchObject({ address: null, positions: null, orders: null });
     expect(calls).toHaveLength(0);

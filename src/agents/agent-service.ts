@@ -83,11 +83,12 @@ export class AgentService {
     return false;
   }
 
-  async create(userId: string, name: string, creationRequestId: string, tradingAccountAddress?: string, selection?: ModelRef) {
+  async create(userId: string, name: string, creationRequestId: string, tradingAccountAddress: string, selection?: ModelRef) {
     this.admit();
     name = agentName(name);
     creationRequestId = requestId(creationRequestId);
-    const account = typeof tradingAccountAddress === "string" && tradingAccountAddress ? tradingAccountAddress : null;
+    if (typeof tradingAccountAddress !== "string" || !/^0x[0-9a-fA-F]{40}$/.test(tradingAccountAddress)) throw new AgentError("A linked Hyperliquid trading account is required.");
+    const account = tradingAccountAddress.toLowerCase();
     const model = this.options.models ? selection ?? this.options.model ?? legacyModel : await this.providers.validate(userId, selection);
     const now = Date.now();
     let agent: AgentRow | undefined;

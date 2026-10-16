@@ -12,8 +12,8 @@ export interface AccountFeedEvents {
 export type AccountFeedFactory = (address: string, events: AccountFeedEvents) => { close(): Promise<void> };
 
 /** One read-only connection per linked account, never per browser tab. */
-export const openAccountFeed: AccountFeedFactory = (address, events) => {
-  const transport = new WebSocketTransport();
+export const openAccountFeed = (address: string, events: AccountFeedEvents, sharedTransport?: WebSocketTransport): ReturnType<AccountFeedFactory> => {
+  const transport = sharedTransport ?? new WebSocketTransport();
   const client = new SubscriptionClient({ transport });
   const abort = new AbortController();
   const connected = () => events.connected();
@@ -22,7 +22,8 @@ export const openAccountFeed: AccountFeedFactory = (address, events) => {
   transport.socket.addEventListener("close", disconnected);
   const user = address as `0x${string}`;
   const options = { signal: abort.signal, onError: () => events.failed() };
-  const task = Promise.all([
+  if (transport.socket.readyState === 1) queueMicrotask(() => { if (!abort.signal.aborted) connected(); });
+  const tasks = [
     client.clearinghouseState({ user, dex: "" }, (event) => {
       if (event.user.toLowerCase() === address && event.dex === "") events.update("perps", dashboardPerps(event.clearinghouseState));
     }, options),
@@ -32,13 +33,15 @@ export const openAccountFeed: AccountFeedFactory = (address, events) => {
     client.openOrders({ user, dex: "" }, (event) => {
       if (event.user.toLowerCase() === address && event.dex === "") events.update("orders", dashboardOrders(event.orders));
     }, options),
-  ]).catch(() => { if (!abort.signal.aborted) events.failed(); });
+  ];
+  for (const task of tasks) void task.catch(() => { if (!abort.signal.aborted) events.failed(); });
   return { async close() {
     transport.socket.removeEventListener("open", connected);
     transport.socket.removeEventListener("close", disconnected);
     abort.abort();
-    transport.close();
-    await task;
+    if (!sharedTransport) transport.close();
+    const subscriptions = await Promise.allSettled(tasks);
+    await Promise.allSettled(subscriptions.flatMap((result) => result.status === "fulfilled" ? [result.value.unsubscribe()] : []));
   } };
 };
 

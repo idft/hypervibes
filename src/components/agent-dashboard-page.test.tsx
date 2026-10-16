@@ -89,10 +89,10 @@ describe("Agent dashboard", () => {
     const overview = container.querySelector('[aria-label="Account overview"]')!;
     expect(overview.querySelector(".text-red-400")!.textContent).toBe("(0.2000)");
   });
-  it("does not subscribe for a chat-only agent and closes the previous stream on navigation", async () => {
+  it("handles an invalid development agent without opening an account feed", async () => {
     await act(async () => root.render(<AgentDashboardPage id="unlinked" initial={{ ...initial, address: null }} />));
     expect(FakeEventSource.instances).toHaveLength(1);
     expect(source().close).toHaveBeenCalledOnce();
-    expect(container.textContent).toContain("No trading account");
+    expect(container.textContent).toContain("missing its required Hyperliquid account");
   });
 });

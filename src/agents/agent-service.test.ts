@@ -4,7 +4,9 @@ import { BACKGROUND_CONTEXT as context } from "@earendil-works/chord/context";
 import { Harness } from "@earendil-works/pi-durable";
 import { SqliteStorage } from "@earendil-works/pi-durable/storage/sqlite";
 import { eq } from "drizzle-orm";
-import { randomUUID } from "node:crypto";
+import { HttpTransport } from "@nktkas/hyperliquid";
+import { loadAccountStatus } from "../hyperliquid/account-status.js";
+import { createHash, randomUUID } from "node:crypto";
 import { mkdtempSync, rmSync, utimesSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
@@ -22,8 +24,8 @@ describe("per-Agent durable execution", () => {
   let faux: ReturnType<typeof fauxProvider>;
   let models: ReturnType<typeof createModels>;
   const config = () => testConfig({ APP_SQLITE_PATH: join(directory, "app.sqlite") });
-  const options = () => ({ models, model: { provider: faux.getModel().provider, modelId: faux.getModel().id } });
-  const create = (name = "BTC Momentum", id = randomUUID(), user = "owner") => runtime.agents.create(user, name, id);
+  const options = () => ({ models, model: { provider: faux.getModel().provider, modelId: faux.getModel().id }, accountFeedFactory: () => ({ close: async () => {} }), journalHistoryFetcher: async () => [] });
+  const create = (name = "BTC Momentum", id = randomUUID(), user = "owner") => runtime.agents.create(user, name, id, `0x${createHash("sha256").update(`${user}/${id}`).digest("hex").slice(0, 40)}`);
   beforeEach(async () => {
     directory = mkdtempSync(join(tmpdir(), "hv-agents-"));
     faux = fauxProvider();
@@ -40,6 +42,14 @@ describe("per-Agent durable execution", () => {
     vi.restoreAllMocks();
     await runtime.close();
     rmSync(directory, { recursive: true, force: true });
+  });
+
+  it("requires a valid linked account before persisting or initializing an agent", async () => {
+    for (const account of ["", "none", "invalid", undefined]) {
+      await expect(runtime.agents.create("owner", "Invalid", randomUUID(), account as string)).rejects.toThrow("linked Hyperliquid trading account is required");
+    }
+    expect(await runtime.agents.list("owner")).toEqual([]);
+    expect(faux.state.callCount).toBe(0);
   });
 
   it("creates one idle root without calling a model; isolates harnesses in the same SQLite file", async () => {
@@ -80,14 +90,15 @@ describe("per-Agent durable execution", () => {
   it("executes get_account through Durable with a trusted per-Agent binding", async () => {
     const one = await create();
     const two = await create("Second", randomUUID(), "other");
-    const status = vi.spyOn(runtime.hyperliquid, "agentAccountStatus");
+    const empty = await loadAccountStatus(new HttpTransport(), null);
+    const status = vi.spyOn(runtime.hyperliquid, "agentAccountStatus").mockImplementation(async (owner, id) => ({ ...empty, address: (await runtime.agents.owned(owner, id)).tradingAccountAddress, errors: [] }));
     for (const [agent, owner] of [[one, "owner"], [two, "other"]] as const) {
       faux.setResponses([
         fauxAssistantMessage(fauxToolCall("get_account", {}), { stopReason: "toolUse" }),
         (transcript) => {
           const result = transcript.messages.find((message) => message.role === "toolResult");
           expect(result).toMatchObject({ role: "toolResult", toolName: "get_account", isError: false });
-          expect(JSON.stringify(result)).toContain("No trading account is assigned");
+          expect(JSON.stringify(result)).toContain(agent.tradingAccountAddress);
           return fauxAssistantMessage("Account checked");
         },
       ]);

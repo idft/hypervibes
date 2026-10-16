@@ -5,7 +5,7 @@ import type { AppRuntime } from "../runtime.js";
 
 const mocks = vi.hoisted(() => ({ currentUser: vi.fn() }));
 vi.mock("../auth-user.js", () => ({ currentUser: mocks.currentUser }));
-import { agentAction, agentUser } from "./agents.js";
+import { agentAction, agentUser, selectedTradingAccount } from "./agents.js";
 
 const runtime = { origin: "http://localhost:3003", status: vi.fn() } as unknown as AppRuntime;
 describe("Agent server-function boundary", () => {
@@ -27,6 +27,14 @@ describe("Agent server-function boundary", () => {
     expect(await agentUser(runtime, new Headers({ origin: runtime.origin }), true)).toMatchObject({ id: "owner" });
     mocks.currentUser.mockRejectedValue(new Error("storage unavailable"));
     await expect(agentUser(runtime, new Headers())).rejects.toThrow("storage unavailable");
+  });
+  it("rejects account-less creation and fails closed on unavailable account choices", async () => {
+    const choices = vi.fn().mockResolvedValue({ lookupError: "Exchange unavailable", accountModeSupported: true, apiWalletReady: true, mainAddress: "0xfixture", mainAssignedTo: null });
+    const app = { hyperliquid: { tradingAccountChoices: choices } } as unknown as AppRuntime;
+    const user = { id: "owner", walletAddress: "0xfixture" };
+    await expect(selectedTradingAccount(app, user, "none")).rejects.toThrow("Select an available");
+    expect(choices).not.toHaveBeenCalled();
+    await expect(selectedTradingAccount(app, user, "main")).rejects.toThrow("Exchange unavailable");
   });
   it("returns public errors without disclosing unexpected provider/storage errors", async () => {
     expect(await agentAction(async () => { throw new AgentError("Agent not found", 404); })).toEqual({ ok: false, error: "Agent not found" });

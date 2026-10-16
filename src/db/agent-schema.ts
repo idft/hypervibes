@@ -13,7 +13,7 @@ export const hvAgents = sqliteTable("hv_agents", {
   initialProvider: text("initial_provider"),
   initialModelId: text("initial_model_id"),
   error: text("error"),
-  /** Linked Hyperliquid main account or sub-account; null for chat-only agents. */
+  /** Required for new agents by AgentService; nullable only for legacy development rows. */
   tradingAccountAddress: text("trading_account_address"),
   createdAt: integer("created_at").notNull(),
   updatedAt: integer("updated_at").notNull(),

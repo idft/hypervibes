@@ -23,8 +23,8 @@ describe("Agent navigation", () => {
   afterEach(async () => { await act(async () => root.unmount()); container.remove(); localStorage.clear(); });
   it("links the requested sections, defaults to dashboard and pins Settings below the main links", () => {
     const links = [...container.querySelectorAll("nav a")];
-    expect(links.map((link) => link.getAttribute("aria-label"))).toEqual(["Dashboard", "Chat", "Transactions", "Chart", "Memories", "Sub-agents", "Settings"]);
-    expect(links.map((link) => link.getAttribute("href"))).toEqual(["/agents/fixture", "/agents/fixture/chat", "/agents/fixture/transactions", "/agents/fixture/chart", "/agents/fixture/memories", "/agents/fixture/sub-agents", "/agents/fixture/settings"]);
+    expect(links.map((link) => link.getAttribute("aria-label"))).toEqual(["Dashboard", "Chart", "Chat", "Transactions", "Memories", "Sub-agents", "Settings"]);
+    expect(links.map((link) => link.getAttribute("href"))).toEqual(["/agents/fixture", "/agents/fixture/chart", "/agents/fixture/chat", "/agents/fixture/transactions", "/agents/fixture/memories", "/agents/fixture/sub-agents", "/agents/fixture/settings"]);
     expect(links[6]?.closest(".mt-auto")).not.toBeNull();
     expect(container.textContent).not.toContain("Research");
     expect(container.textContent).not.toContain("← Agents");

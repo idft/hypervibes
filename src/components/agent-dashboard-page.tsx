@@ -42,7 +42,7 @@ export function AgentDashboardPage({ id, initial }: { id: string; initial: Agent
   const unrealizedPnl = snapshot.positions?.reduce<string | null>((total, position) => total === null ? null : addDecimals(total, position.unrealizedPnl), "0") ?? null;
   return <div className="w-full space-y-2">
     <h2 className="sr-only">Dashboard</h2>
-    {!snapshot.address ? <Panel title="Trading account"><p className="text-sm text-zinc-400">No trading account is linked to this Agent. Chat is available without one.</p></Panel> : <>
+    {!snapshot.address ? <Panel title="Trading account"><p className="text-sm text-zinc-400">This agent is missing its required Hyperliquid account. Create a new agent with a linked account.</p></Panel> : <>
       <section aria-label="Account overview" className="rounded-2xl border border-zinc-800 bg-[#0d0d10] p-6">
         <p role="status" className="mb-5 flex items-center gap-2 text-xs text-zinc-400"><span aria-hidden="true" className={`h-2 w-2 rounded-full ${connectionColor}`} />{connectionLabel}</p>
         {error && <p role="alert" className="mb-4 rounded-xl border border-amber-900 p-3 text-sm text-amber-200">{error}</p>}

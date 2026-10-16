@@ -46,7 +46,7 @@ describe("per-user providers", () => {
       return faux.provider.streamSimple(model, context, options);
     },
   });
-  const options = () => ({ providers: () => [provider()] });
+  const options = () => ({ providers: () => [provider()], accountFeedFactory: () => ({ close: async () => {} }), journalHistoryFetcher: async () => [] });
   async function prompt(id: string, user = "owner") {
     let result!: LoginView;
     await vi.waitFor(() => {
@@ -99,7 +99,7 @@ describe("per-user providers", () => {
     vi.stubEnv("HV_TEST_PROVIDER_API_KEY", "server-key-secret");
     expect(await runtime.providers.choices("owner")).toEqual([]);
     expect(await (await runtime.providers.models("owner")).getAuth(ref.provider)).toBeUndefined();
-    await expect(runtime.agents.create("owner", "Blocked", randomUUID(), undefined, ref)).rejects.toMatchObject({ status: 409 });
+    await expect(runtime.agents.create("owner", "Blocked", randomUUID(), `0x${"12".repeat(20)}`, ref)).rejects.toMatchObject({ status: 409 });
     expect(await runtime.agents.list("owner")).toEqual([]);
     expect(faux.state.callCount).toBe(0);
   });
@@ -219,10 +219,10 @@ describe("per-user providers", () => {
 
   it("creates and changes a model in the same conversation, persists selection, and blocks disconnected inference", async () => {
     await connect();
-    await expect(runtime.agents.create("owner", "Invalid", randomUUID(), undefined, { ...ref, modelId: "missing" })).rejects.toMatchObject({ status: 409 });
+    await expect(runtime.agents.create("owner", "Invalid", randomUUID(), `0x${"12".repeat(20)}`, { ...ref, modelId: "missing" })).rejects.toMatchObject({ status: 409 });
     const requestId = randomUUID();
-    const agent = await runtime.agents.create("owner", "Research", requestId, undefined, ref);
-    await expect(runtime.agents.create("owner", "Research", requestId, undefined, { ...ref, modelId: "large" })).rejects.toMatchObject({ status: 409 });
+    const agent = await runtime.agents.create("owner", "Research", requestId, `0x${"12".repeat(20)}`, ref);
+    await expect(runtime.agents.create("owner", "Research", requestId, `0x${"12".repeat(20)}`, { ...ref, modelId: "large" })).rejects.toMatchObject({ status: 409 });
     expect(faux.state.callCount).toBe(0);
     faux.setResponses([fauxAssistantMessage("First answer"), fauxAssistantMessage("Second answer")]);
     await runtime.agents.send("owner", agent.id, "Hello", randomUUID());
@@ -250,7 +250,7 @@ describe("per-user providers", () => {
     expect(disconnected.configured).toBe(false);
     expect(disconnected.messages).toHaveLength(6);
     await expect(runtime.agents.send("owner", agent.id, "Blocked", randomUUID())).rejects.toMatchObject({ status: 409 });
-    await expect(runtime.agents.create("owner", "Blocked", randomUUID(), undefined, ref)).rejects.toMatchObject({ status: 409 });
+    await expect(runtime.agents.create("owner", "Blocked", randomUUID(), `0x${"12".repeat(20)}`, ref)).rejects.toMatchObject({ status: 409 });
     await connect("owner", "replacement-key");
     expect((await runtime.agents.chat("owner", agent.id)).configured).toBe(true);
   });
@@ -258,7 +258,7 @@ describe("per-user providers", () => {
   it("uses the selected model and the user's OAuth credential for inference", async () => {
     await connect("owner", "valid-callback", "oauth");
     const selected = { ...ref, modelId: "large" };
-    const agent = await runtime.agents.create("owner", "OAuth agent", randomUUID(), undefined, selected);
+    const agent = await runtime.agents.create("owner", "OAuth agent", randomUUID(), `0x${"12".repeat(20)}`, selected);
     faux.setResponses([fauxAssistantMessage("OAuth answer")]);
     await runtime.agents.send("owner", agent.id, "Hello", randomUUID());
     await vi.waitFor(async () => expect((await runtime.agents.chat("owner", agent.id)).messages).toHaveLength(2));
@@ -268,7 +268,7 @@ describe("per-user providers", () => {
 
   it("pushes provider availability and model changes to existing chat subscriptions", async () => {
     await connect();
-    const agent = await runtime.agents.create("owner", "Research", randomUUID(), undefined, ref);
+    const agent = await runtime.agents.create("owner", "Research", randomUUID(), `0x${"12".repeat(20)}`, ref);
     const controller = new AbortController();
     const updates: { configured: boolean; modelId: string }[] = [];
     const watching = runtime.agents.watchChat("owner", agent.id, controller.signal, (chat) => {
@@ -288,7 +288,7 @@ describe("per-user providers", () => {
   it("refuses model changes while work is active and does not change another user's credentials on disconnect", async () => {
     await connect();
     await connect("other", "other-key");
-    const agent = await runtime.agents.create("owner", "Research", randomUUID(), undefined, ref);
+    const agent = await runtime.agents.create("owner", "Research", randomUUID(), `0x${"12".repeat(20)}`, ref);
     let release!: () => void;
     const gate = new Promise<void>((resolve) => { release = resolve; });
     faux.setResponses([async () => { await gate; return fauxAssistantMessage("Done"); }]);
@@ -303,7 +303,7 @@ describe("per-user providers", () => {
 
   it("fails closed with a missing/wrong encryption key and still permits existing history", async () => {
     await connect();
-    const agent = await runtime.agents.create("owner", "Research", randomUUID(), undefined, ref);
+    const agent = await runtime.agents.create("owner", "Research", randomUUID(), `0x${"12".repeat(20)}`, ref);
     await runtime.close();
     runtime = await createRuntime(config(""), options());
     expect((await runtime.agents.chat("owner", agent.id)).configured).toBe(false);
@@ -338,7 +338,7 @@ describe("per-user providers", () => {
     await connect();
     expect(networkRefreshes).toBe(1);
     expect(await runtime.providers.choices("owner")).toHaveLength(2);
-    const agent = await runtime.agents.create("owner", "Dynamic", randomUUID(), undefined, ref);
+    const agent = await runtime.agents.create("owner", "Dynamic", randomUUID(), `0x${"12".repeat(20)}`, ref);
     await runtime.close();
     runtime = await createRuntime(config(), { providers: dynamic });
     expect(networkRefreshes).toBe(1);

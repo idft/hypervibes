@@ -36,9 +36,10 @@ export const listAgents = createServerFn({ method: "GET" }).handler(async ({ con
 });
 
 /** Validates the selected trading account against fresh Hyperliquid data. */
-async function selectedTradingAccount(runtime: AppRuntime, user: AuthenticatedWallet, selection: string): Promise<string | null> {
-  if (selection === "none") return null;
+export async function selectedTradingAccount(runtime: AppRuntime, user: AuthenticatedWallet, selection: string): Promise<string> {
+  if (!selection || selection === "none") throw new AgentError("Select an available trading account.");
   const choices = await runtime.hyperliquid.tradingAccountChoices(user);
+  if (choices.lookupError) throw new AgentError(choices.lookupError);
   if (!choices.accountModeSupported) throw new AgentError("HyperVibes currently supports Unified Accounts only.");
   if (!choices.apiWalletReady) throw new AgentError("Set up and approve a trading signer first.", 409);
   if (selection === "main") {
@@ -46,7 +47,6 @@ async function selectedTradingAccount(runtime: AppRuntime, user: AuthenticatedWa
     return choices.mainAddress;
   }
   const subaccount = choices.subaccounts.find((account) => account.address === selection);
-  if (choices.lookupError) throw new AgentError(choices.lookupError);
   if (subaccount && !subaccount.assignedTo) return subaccount.address;
   throw new AgentError("Select an available trading account.");
 }
@@ -55,7 +55,7 @@ export const createAgent = createServerFn({ method: "POST" })
   .validator((data: unknown) => ({
     name: field(data, "name"),
     requestId: field(data, "requestId"),
-    accountSelection: "accountSelection" in (data as object) ? field(data, "accountSelection") : "none",
+    accountSelection: field(data, "accountSelection"),
     provider: field(data, "provider"),
     modelId: field(data, "modelId"),
   }))
@@ -64,7 +64,7 @@ export const createAgent = createServerFn({ method: "POST" })
     return agentAction(async () => {
       const model = await context.runtime.providers.validate(user.id, { provider: data.provider, modelId: data.modelId });
       const tradingAccount = await selectedTradingAccount(context.runtime, user, data.accountSelection);
-      return context.runtime.agents.create(user.id, data.name, data.requestId, tradingAccount ?? undefined, model);
+      return context.runtime.agents.create(user.id, data.name, data.requestId, tradingAccount, model);
     });
   });
 

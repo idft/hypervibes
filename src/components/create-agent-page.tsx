@@ -28,9 +28,11 @@ export function CreateAgentPage({ choices, models, create, createSubaccount }: {
   const inFlight = useRef(false);
   const subaccountInFlight = useRef(false);
   const trimmed = name.trim();
+  const availableSelection = selection === "main" ? !choices.mainAssignedTo : choices.subaccounts.some((account) => account.address === selection && !account.assignedTo);
+  const accountReady = choices.apiWalletReady && choices.accountModeSupported && !choices.lookupError && availableSelection;
 
   async function submit() {
-    if (inFlight.current || !trimmed || !model) return;
+    if (inFlight.current || !trimmed || !model || !accountReady) return;
     inFlight.current = true;
     setPending(true);
     setError("");
@@ -75,7 +77,7 @@ export function CreateAgentPage({ choices, models, create, createSubaccount }: {
 
       {!choices.apiWalletReady && (
         <p role="status" className="mt-6 rounded-2xl border border-amber-800/70 bg-amber-950/30 px-4 py-3 text-sm text-amber-200">
-          Trading requires an approved Hyperliquid API key. <a href="/account" className="cursor-pointer underline">Set it up on the Account page</a>, or create a chat-only agent below.
+          Every agent requires a linked Hyperliquid account and an approved API key. <a href="/account" className="cursor-pointer underline">Set it up on the Account page</a> before creating an agent.
         </p>
       )}
       {choices.lookupError && (
@@ -110,13 +112,8 @@ export function CreateAgentPage({ choices, models, create, createSubaccount }: {
                 note={subaccount.assignedTo ? `In use by ${subaccount.assignedTo.agentName}` : null}
                 onSelect={() => setSelection(subaccount.address)} />
             ))}
-            <ChoiceRow
-              label="No trading account" address={null} balance={null}
-              checked={selection === "none"} disabled={false}
-              note="Chat-only agent; link an account later."
-              onSelect={() => setSelection("none")} />
             <div className="p-4">
-              <button type="button" disabled={subaccountPending || !trimmed} onClick={() => { void newSubaccount(); }}
+              <button type="button" disabled={subaccountPending || !trimmed || !choices.apiWalletReady || !choices.accountModeSupported} onClick={() => { void newSubaccount(); }}
                 className="cursor-pointer rounded-full border border-violet-500 px-5 py-2 text-sm font-medium text-violet-200 hover:border-violet-400 hover:bg-violet-950/40 hover:text-white disabled:cursor-wait disabled:opacity-50">
                 {subaccountPending ? "Creating…" : "Create Sub-Account"}
               </button>
@@ -128,7 +125,7 @@ export function CreateAgentPage({ choices, models, create, createSubaccount }: {
         {error && <p role="alert" className="rounded-2xl border border-red-900/60 bg-red-950/20 p-4 text-sm text-red-300">{error}</p>}
 
         <div className="flex items-center gap-3 border-t border-zinc-800 pt-6">
-          <button type="submit" disabled={pending || !trimmed || !model} className="cursor-pointer rounded-full bg-violet-600 px-5 py-2 text-sm font-medium text-white hover:bg-violet-500 disabled:cursor-wait disabled:opacity-50">{pending ? "Creating…" : "Create agent"}</button>
+          <button type="submit" disabled={pending || !trimmed || !model || !accountReady} className="cursor-pointer rounded-full bg-violet-600 px-5 py-2 text-sm font-medium text-white hover:bg-violet-500 disabled:cursor-wait disabled:opacity-50">{pending ? "Creating…" : "Create agent"}</button>
           <a href="/agents" className="cursor-pointer rounded-full border border-zinc-700 px-5 py-2 text-sm font-medium text-zinc-500 hover:border-zinc-600 hover:text-zinc-300">Cancel</a>
         </div>
       </form>

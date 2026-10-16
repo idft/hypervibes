@@ -4,9 +4,9 @@ import type { AgentRow } from "../db/agent-schema.js";
 
 const sections = [
   { label: "Dashboard", to: "/agents/$agentId", icon: "M3 3h6v6H3zM13 3h6v6h-6zM3 13h6v6H3zM13 13h6v6h-6z" },
+  { label: "Chart", to: "/agents/$agentId/chart", icon: "M3 3v18h18M6 15l5-6 4 3 5-7" },
   { label: "Chat", to: "/agents/$agentId/chat", icon: "M4 4h16v12H9l-5 4z" },
   { label: "Transactions", to: "/agents/$agentId/transactions", icon: "M3 7h17m-4-4 4 4-4 4M21 17H4m4-4-4 4 4 4" },
-  { label: "Chart", to: "/agents/$agentId/chart", icon: "M3 3v18h18M6 15l5-6 4 3 5-7" },
   { label: "Memories", to: "/agents/$agentId/memories", icon: "M4 4h16v16H4zM8 8h8M8 12h8M8 16h5" },
   { label: "Sub-agents", to: "/agents/$agentId/sub-agents", icon: "M9 3h6v6H9zM3 16h6v6H3zM15 16h6v6h-6zM12 9v4M6 16v-3h12v3" },
   { label: "Settings", to: "/agents/$agentId/settings", icon: "M4 6h16M4 12h16M4 18h16M8 3v6M16 9v6M10 15v6" },

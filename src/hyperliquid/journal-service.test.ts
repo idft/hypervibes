@@ -145,7 +145,7 @@ describe("durable account journal", () => {
     await expect(service.addJournalNote("other", otherId, "deposit-1", "cross-account")).rejects.toThrow("not found");
     await service.addJournalNote("owner", id, "deposit-1", " scoped ");
     expect((await service.journalNotes("owner", id, "deposit-1"))[0]).toMatchObject({ body: "scoped", authorId: "owner" });
-    expect(await service.agentJournal("owner", unlinked, "activity", 1)).toMatchObject({ linked: false, total: 0 });
+    await expect(service.agentJournal("owner", unlinked, "activity", 1)).rejects.toMatchObject({ status: 409 });
     await expect(service.addJournalNote("owner", id, "deposit-1", "   ")).rejects.toThrow("1–4000");
     await expect(service.addJournalNote("owner", id, "deposit-1", "x".repeat(4001))).rejects.toThrow("1–4000");
   });

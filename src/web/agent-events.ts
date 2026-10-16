@@ -1,3 +1,5 @@
+import { HyperliquidError } from "../hyperliquid/errors.js";
+import type { ChartSelection, ChartSnapshot } from "../hyperliquid/chart-contracts.js";
 import { AgentError, agentId } from "../agents/agent-input.js";
 import type { AgentDashboard } from "../hyperliquid/agent-dashboard.js";
 import type { AgentChat } from "../agents/agent-service.js";
@@ -16,7 +18,7 @@ export class AgentEventStreams {
   private readonly connections = new Set<() => void>();
   private readonly tasks = new Set<Promise<void>>();
   private readonly users = new Map<string, number>();
-  constructor(private readonly runtime: AppRuntime, private readonly kind: "chat" | "dashboard" = "chat") {}
+  constructor(private readonly runtime: AppRuntime, private readonly kind: "chat" | "dashboard" | "chart" = "chat") {}
 
   async open(request: Request, id: string): Promise<Response> {
     try {
@@ -29,19 +31,22 @@ export class AgentEventStreams {
       const session = await currentUserSession(this.runtime, request.headers);
       if (!session) throw new AgentError("Sign in to view this agent", 401);
       await this.runtime.agents.owned(session.user.id, id);
+      const params = new URL(request.url).searchParams;
+      const selection = this.kind === "chart" ? await this.runtime.hyperliquid.charts.selection(params.get("coin") ?? "", params.get("interval") ?? "") : undefined;
       if (this.stopping || request.signal.aborted) throw new AgentError("Connection closed", 503);
       const count = this.users.get(session.user.id) ?? 0;
       if (count >= 10) throw new AgentError("Too many open event connections", 429);
       this.users.set(session.user.id, count + 1);
-      return this.connect(request, id, session.user.id, session.expiresAt);
+      return this.connect(request, id, session.user.id, session.expiresAt, selection);
     } catch (error) {
-      const status = error instanceof AgentError ? error.status : 503;
-      const message = error instanceof AgentError ? error.message : "Agent event stream is unavailable";
+      const expected = error instanceof AgentError || error instanceof HyperliquidError;
+      const status = expected ? error.status : 503;
+      const message = expected ? error.message : "Agent event stream is unavailable";
       return Response.json({ error: message }, { status, headers: { "Cache-Control": "no-store" } });
     }
   }
 
-  private connect(request: Request, id: string, userId: string, expiresAt: Date): Response {
+  private connect(request: Request, id: string, userId: string, expiresAt: Date, selection?: ChartSelection): Response {
     const abort = new AbortController();
     let controller: ReadableStreamDefaultController<Uint8Array>;
     let pending: Uint8Array | undefined;
@@ -99,7 +104,7 @@ export class AgentEventStreams {
       } catch { finish("unavailable", "Unable to verify this session. Reconnecting…"); }
       finally { checking = false; }
     };
-    const publish = (snapshot: AgentChat | AgentDashboard) => {
+    const publish = (snapshot: AgentChat | AgentDashboard | ChartSnapshot) => {
       if (closed) return;
       if (Date.now() >= expiry) { finish("unauthorized", "Session expired. Please sign in again."); return; }
       const value = frame(this.kind, snapshot);
@@ -126,9 +131,10 @@ export class AgentEventStreams {
         if (++ticks % 4 === 0) void revalidate();
       }, heartbeatMs);
       heartbeat.unref();
-      const watching = this.kind === "chat"
+      const watching = Promise.resolve().then(() => this.kind === "chat"
         ? this.runtime.agents.watchChat(userId, id, abort.signal, publish)
-        : this.runtime.hyperliquid.watchDashboard(userId, id, abort.signal, publish);
+        : selection ? this.runtime.hyperliquid.charts.watch(selection, abort.signal, publish)
+          : this.runtime.hyperliquid.watchDashboard(userId, id, abort.signal, publish));
       const task = watching
         .then(() => { if (!closed) shutdown(); })
         .catch(() => finish("unavailable", "Agent event stream interrupted. Reconnecting…"))

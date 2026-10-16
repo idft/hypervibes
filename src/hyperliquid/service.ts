@@ -1,3 +1,5 @@
+import { SharedHyperliquidFeeds } from "./shared-feeds.js";
+import { MarketCharts } from "./market-charts.js";
 import type { TradingAuthority } from "./orders/order-service.js";
 import { hvWalletAddresses } from "../db/auth-schema.js";
 import { HttpTransport, InfoClient } from "@nktkas/hyperliquid";
@@ -104,6 +106,8 @@ export interface TradingAccountChoices {
 export class HyperliquidService {
   private readonly creator: SubaccountCreator;
   private readonly live: LiveDashboards;
+  private readonly feeds = new SharedHyperliquidFeeds();
+  readonly charts: MarketCharts;
   private started = false;
   private stopped = false;
   private registryTimer?: ReturnType<typeof setTimeout>;
@@ -118,7 +122,8 @@ export class HyperliquidService {
     nonceManager?: (signer: string) => Promise<number>,
   ) {
     this.creator = new SubaccountCreator(transport, nonceManager);
-    this.live = new LiveDashboards(transport, feedFactory);
+    this.live = new LiveDashboards(transport, feedFactory ?? this.feeds.account);
+    this.charts = new MarketCharts(transport, this.feeds.candle);
   }
 
   start() {
@@ -145,13 +150,14 @@ export class HyperliquidService {
     this.stopped = true;
     clearTimeout(this.registryTimer);
     await this.registryTask;
-    try { await this.live.close(); }
-    finally { await this.journal?.close(); }
+    try { await Promise.all([this.live.close(), this.charts.close()]); }
+    finally { this.feeds.close(); await this.journal?.close(); }
   }
 
   private async dashboardAccount(userId: string, id: string) {
     const agent = await this.db.select().from(hvAgents).where(and(eq(hvAgents.id, agentId(id)), eq(hvAgents.userId, userId))).get();
     if (!agent) throw new HyperliquidError("Agent not found", 404);
+    if (!agent.tradingAccountAddress) throw new HyperliquidError("Agent is missing its required Hyperliquid account", 409);
     return agent.tradingAccountAddress;
   }
 
