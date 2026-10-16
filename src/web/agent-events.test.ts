@@ -7,6 +7,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { randomUUID } from "node:crypto";import { hvUsers } from "../db/auth-schema.js";
 import { createRuntime, type AppRuntime } from "../runtime.js";
 import { testConfig } from "../test-config.js";
+import { hvSubagentRuns } from "../db/subagent-schema.js";
+import type { RunHistory } from "../agents/subagent-history.js";
 import { AgentEventStreams } from "./agent-events.js";
 
 const mocks = vi.hoisted(() => ({ session: vi.fn() }));
@@ -156,6 +158,48 @@ describe("Agent chat event stream", () => {
     await streams.close();
     await runtime.close();
     expect(closeFeed).toHaveBeenCalledOnce();
+  });
+
+  it("pushes paginated run history on creation/completion, authorizes its scope and closes its watcher", async () => {
+    await streams.close(); streams = new AgentEventStreams(runtime, "runs");
+    const agent = await runtime.agents.create("owner", "Research", randomUUID(), `0x${"12".repeat(20)}`);
+    await runtime.agents.subagents.tick();
+    const worker = await runtime.agents.subagents.create("owner", agent.id, { name: "Research", description: "", instructions: "Find evidence", provider: "faux", modelId: "faux-1", thinkingLevel: "", tools: [], enabled: true, delegatable: true, persistent: false, schedule: "", delaySeconds: 30, completion: "save", timeoutSeconds: 900 }, randomUUID());
+    const runRequest = (page = "1", signal?: AbortSignal) => new Request(`http://localhost:3003/api/agents/${agent.id}/sub-agents/${worker.id}/runs/events?page=${page}`, { headers: { origin: runtime.origin }, signal });
+    expect((await streams.open(runRequest("0"), agent.id, worker.id)).status).toBe(400);
+    expect((await streams.open(runRequest(), agent.id, "missing")).status).toBe(404);
+    mocks.session.mockResolvedValue({ user: { id: "other" }, expiresAt: expiry() });
+    expect((await streams.open(runRequest(), agent.id, worker.id)).status).toBe(404);
+    mocks.session.mockResolvedValue({ user: { id: "owner" }, expiresAt: expiry() });
+    await runtime.db.insert(hvSubagentRuns).values(Array.from({ length: 51 }, (_, index) => ({ id: `old-${index}`, agentId: agent.id, subagentId: worker.id, requestId: `old:${index}`, source: "schedule" as const, task: "Old task", config: worker, status: "skipped" as const, createdAt: index, reportedAt: 1 }))).run();
+    const source = new AbortController();
+    const response = await streams.open(runRequest("2", source.signal), agent.id, worker.id);
+    const reader = response.body!.getReader(), buffer = { text: "" };
+    const initial = await readEvent<RunHistory>(reader, buffer);
+    expect(initial.event).toBe("runs");
+    expect(initial.data.pagination).toMatchObject({ page: 2, pages: 2, total: 51 });
+    expect(initial.data.runs).toHaveLength(1);
+    const history = vi.spyOn(runtime.agents.subagents, "history");
+    await runtime.agents.subagents.tick();
+    expect(history).not.toHaveBeenCalled(); // Idle scheduler ticks do not poll history.
+    faux.setResponses([fauxAssistantMessage("Pushed worker answer")]);
+    const run = await runtime.agents.subagents.run("owner", agent.id, worker.id, "New task", randomUUID());
+    const updated = await readEvent<RunHistory>(reader, buffer);
+    expect(updated.data.pagination).toMatchObject({ page: 2, total: 52 });
+    expect(updated.data.runs).toHaveLength(2);
+    source.abort();
+    await streams.close();
+    // Reconnecting to page one obtains current state, not missed-event replay.
+    streams = new AgentEventStreams(runtime, "runs");
+    const live = await streams.open(runRequest(), agent.id, worker.id);
+    const liveReader = live.body!.getReader(), liveBuffer = { text: "" };
+    let snapshot = (await readEvent<RunHistory>(liveReader, liveBuffer)).data;
+    for (let i = 0; i < 10 && snapshot.runs.find((item) => item.id === run.id)?.status !== "completed"; i++) snapshot = (await readEvent<RunHistory>(liveReader, liveBuffer)).data;
+    expect(snapshot.runs.find((item) => item.id === run.id)?.status).toBe("completed");
+    expect(snapshot.runs[0]).not.toHaveProperty("result");
+    await streams.close();
+    expect((await readEvent(liveReader, liveBuffer)).event).toBe("shutdown");
+    vi.restoreAllMocks();
   });
 
   it("authenticates chart subscriptions before market requests and closes their backend watcher", async () => {

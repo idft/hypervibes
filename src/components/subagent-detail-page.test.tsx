@@ -13,6 +13,12 @@ import { SubagentDetailPage } from "./subagent-detail-page.js";
 import { SubagentsPage } from "./subagents-page.js";
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 const definition: SubagentRow = { id: "worker:fixture", agentId: "agent-fixture", kind: "worker", name: "Research", description: "Find evidence", instructions: "Research carefully", provider: "faux", modelId: "faux-1", thinkingLevel: "", tools: [], enabled: true, archived: false, delegatable: true, persistent: false, conversationId: null, schedule: "", delaySeconds: 30, nextRunAt: null, completion: "wake", timeoutSeconds: 900, createdAt: 1, updatedAt: 1 };
+class HistorySource extends EventTarget {
+  static instances: HistorySource[] = [];
+  onerror: (() => void) | null = null;
+  close = vi.fn();
+  constructor(readonly url: string) { super(); HistorySource.instances.push(this); }
+}
 const choices = [{ provider: "faux", modelId: "faux-1", name: "Faux", thinkingLevels: ["high"] }];
 describe("subagent pages", () => {
   let root: Root, container: HTMLDivElement;
@@ -38,8 +44,47 @@ describe("subagent pages", () => {
       else Reflect.deleteProperty(HTMLDialogElement.prototype, key);
     }
   });
-  beforeEach(() => { vi.resetAllMocks(); container = document.createElement("div"); document.body.append(container); root = createRoot(container); mocks.getSubagent.mockResolvedValue({ ok: true, data: initial() }); mocks.saveSubagentSection.mockImplementation(({ data }: { data: { settings: Partial<SubagentRow> } }) => Promise.resolve({ ok: true, data: { ...definition, ...data.settings } })); mocks.saveSubagentAssignments.mockImplementation(({ data }: { data: { settings: Partial<SubagentRow> } }) => Promise.resolve({ ok: true, data: { ...definition, ...data.settings } })); mocks.saveSubagentIdentity.mockImplementation(({ data }: { data: { name: string; description: string } }) => Promise.resolve({ ok: true, data: { ...definition, name: data.name, description: data.description } })); mocks.saveSubagentTools.mockImplementation(({ data }: { data: { tools: string[] } }) => Promise.resolve({ ok: true, data: { ...definition, tools: data.tools } })); });
-  afterEach(async () => { await act(async () => root.unmount()); container.remove(); vi.restoreAllMocks(); });
+  beforeEach(() => { vi.resetAllMocks(); HistorySource.instances = []; vi.stubGlobal("EventSource", HistorySource); container = document.createElement("div"); document.body.append(container); root = createRoot(container); mocks.getSubagent.mockResolvedValue({ ok: true, data: initial() }); mocks.saveSubagentSection.mockImplementation(({ data }: { data: { settings: Partial<SubagentRow> } }) => Promise.resolve({ ok: true, data: { ...definition, ...data.settings } })); mocks.saveSubagentAssignments.mockImplementation(({ data }: { data: { settings: Partial<SubagentRow> } }) => Promise.resolve({ ok: true, data: { ...definition, ...data.settings } })); mocks.saveSubagentIdentity.mockImplementation(({ data }: { data: { name: string; description: string } }) => Promise.resolve({ ok: true, data: { ...definition, name: data.name, description: data.description } })); mocks.saveSubagentTools.mockImplementation(({ data }: { data: { tools: string[] } }) => Promise.resolve({ ok: true, data: { ...definition, tools: data.tools } })); });
+  afterEach(async () => { await act(async () => root.unmount()); container.remove(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
+  it("paginates live history without refresh controls, ignores old streams and cleans up on navigation", async () => {
+    await render();
+    expect(container.textContent).not.toContain("latest 50");
+    expect([...container.querySelectorAll("button")].some((button) => button.textContent === "Refresh")).toBe(false);
+    expect(container.querySelector('[aria-label="Run history pagination"]')).toBeNull();
+    const first = HistorySource.instances.at(-1)!;
+    expect(first.url).toBe("/api/agents/agent-fixture/sub-agents/worker%3Afixture/runs/events?page=1");
+    const summary = { id: "run-1", subagentId: definition.id, status: "running", source: "manual", task: "Live assignment", createdAt: Date.now() };
+    const snapshot = (page: number, total = 51) => ({ runs: [{ ...summary, task: `Page ${page} assignment` }], pagination: { page, pages: Math.ceil(total / 50), total, pageSize: 50 }, schedulerError: null });
+    const push = (source: HistorySource, page: number, total = 51) => act(async () => { source.dispatchEvent(new MessageEvent("runs", { data: JSON.stringify(snapshot(page, total)) })); });
+    await push(first, 1);
+    expect(container.textContent).toContain("Page 1 of 2");
+    expect(container.textContent).toContain("Page 1 assignment");
+    const previous = [...container.querySelectorAll("button")].find((button) => button.textContent === "Previous")!;
+    expect(previous.disabled).toBe(true);
+    await click("Next");
+    const second = HistorySource.instances.at(-1)!;
+    expect(second.url).toContain("page=2"); expect(first.close).toHaveBeenCalledOnce();
+    await push(first, 1, 999); // Late updates from the closed page cannot overwrite it.
+    expect(container.textContent).not.toContain("999 runs");
+    await push(second, 2);
+    expect(container.textContent).toContain("Page 2 of 2");
+    expect(container.textContent).toContain("Page 2 assignment");
+    expect([...container.querySelectorAll("button")].find((button) => button.textContent === "Next")!.disabled).toBe(true);
+    await push(second, 2, 52);
+    expect(container.textContent).toContain("52 runs");
+    expect(HistorySource.instances).toHaveLength(2); // New runs do not jump to page one.
+    await act(async () => second.onerror?.());
+    expect(container.textContent).toContain("Live updates interrupted");
+    await push(second, 2, 53);
+    expect(container.textContent).not.toContain("Live updates interrupted");
+    mocks.stopSubagentRun.mockResolvedValue({ ok: true });
+    await click("Stop assignment");
+    expect(mocks.stopSubagentRun).toHaveBeenCalledWith({ data: { agentId: definition.agentId, runId: summary.id } });
+    expect(mocks.getSubagent).not.toHaveBeenCalled();
+    await render({ ...definition, kind: "orchestrator" });
+    expect(second.close).toHaveBeenCalledOnce();
+  });
+
   it("lists the protected orchestrator and links workers to detail pages", () => {
     const html = renderToStaticMarkup(<SubagentsPage agentId={definition.agentId} definitions={[{ ...definition, id: "main:fixture", kind: "orchestrator", name: "Orchestrator" }, definition]} />);
     expect(html).toContain("Main conversation · Protected"); expect(html).toContain("Create subagent");
@@ -419,7 +464,7 @@ describe("subagent pages", () => {
     expect(document.querySelector("dialog")).toBeNull();
     expect(mocks.runSubagent).not.toHaveBeenCalled();
   });
-  it("starts an assignment from the modal and refreshes history without saving settings", async () => {
+  it("starts an assignment from the modal and relies on live history without saving settings", async () => {
     await render(); await editInstructions("Unsaved instructions");
     await click("Run now");
     const task = document.querySelector("dialog textarea")!;
@@ -431,13 +476,13 @@ describe("subagent pages", () => {
     await click("Run assignment");
     expect(document.querySelector("dialog")).toBeNull();
     expect(mocks.runSubagent).toHaveBeenCalledWith({ data: { agentId: definition.agentId, id: definition.id, task: "Research current conditions", requestId: expect.any(String) } });
-    expect(mocks.getSubagent).toHaveBeenCalledOnce();
+    expect(mocks.getSubagent).not.toHaveBeenCalled();
     expect(mocks.saveSubagent).not.toHaveBeenCalled();
     expect(container.querySelector("textarea")!.value).toBe("Unsaved instructions");
     await click("Run now");
     expect((document.querySelector("dialog textarea") as HTMLTextAreaElement).value).toBe("");
   });
-  it("does not resubmit an accepted assignment when refreshing history fails", async () => {
+  it("does not resubmit an accepted assignment when the live history connection fails", async () => {
     await render(); await click("Run now");
     const task = document.querySelector("dialog textarea")!;
     await act(async () => {
@@ -451,10 +496,9 @@ describe("subagent pages", () => {
     await click("Starting…"); await click("Cancel");
     expect(document.querySelector("dialog")).not.toBeNull();
     expect(mocks.runSubagent).toHaveBeenCalledOnce();
-    mocks.getSubagent.mockRejectedValueOnce(new Error("Disconnected"));
-    await act(async () => resolve({ ok: true }));
+    await act(async () => { HistorySource.instances.at(-1)!.onerror?.(); resolve({ ok: true }); });
     expect(document.querySelector("dialog")).toBeNull();
-    expect(container.querySelector("[role=alert]")?.textContent).toContain("Assignment started, but run history");
+    expect(container.querySelector("[role=status]")?.textContent).toContain("Live updates interrupted");
     expect(mocks.runSubagent).toHaveBeenCalledOnce();
   });
   it("hides worker actions on the orchestrator and disables unavailable workers", async () => {

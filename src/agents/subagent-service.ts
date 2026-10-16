@@ -1,12 +1,13 @@
 import { BACKGROUND_CONTEXT as context } from "@earendil-works/chord/context";
 import { getSupportedThinkingLevels, type Models } from "@earendil-works/pi-ai/models";
-import { InboxDoc, LiveDoc, type AgentChange, type Conversation, type Extension, type Harness, type ModelRef } from "@earendil-works/pi-durable";
-import { and, asc, desc, eq, inArray, isNull, lte, or } from "drizzle-orm";
+import { InboxDoc, LiveDoc, type AgentChange, type Conversation, type ConversationId, type Cursor, type EntryRecord, type Extension, type Harness, type ModelRef } from "@earendil-works/pi-durable";
+import { and, asc, count, desc, eq, inArray, isNull, lte, or, sql } from "drizzle-orm";
 import { randomUUID } from "node:crypto";
 import type { AgentRow } from "../db/agent-schema.js";
 import { hvSubagents, hvSubagentRuns, type SubagentRow, type SubagentRun } from "../db/subagent-schema.js";
 import type { ApplicationDatabase, SharedDatabase } from "../db/shared-database.js";
 import type { ProviderService } from "../providers/provider-service.js";
+import { runHistoryPageSize, runPagination, type RunHistory } from "./subagent-history.js";
 import { AgentError, requestId } from "./agent-input.js";
 import { createSubagentExtension, RunReceipt, type RunnerId, type SubagentExtension } from "./subagent-extension.js";
 import { assignment, defaultMainInstructions, mainToolNames, nextCandleRun, subagentInput, type AssignmentSettings } from "./subagent-input.js";
@@ -24,7 +25,17 @@ export class SubagentService {
   private tickActive = false;
   private ready = false;
   private stopping = false;
-  schedulerError: string | null = null;
+  private readonly historyListeners = new Map<string, Set<() => void>>();
+  private readonly historyShutdown = new AbortController();
+  private readonly historyFeeds = new Set<Promise<void>>();
+  private schedulerFailure: string | null = null;
+  get schedulerError() { return this.schedulerFailure; }
+  set schedulerError(value: string | null) {
+    if (this.schedulerFailure === value) return;
+    this.schedulerFailure = value;
+    for (const listeners of this.historyListeners.values()) for (const listener of listeners) listener();
+  }
+  private historyChanged(id: string) { for (const listener of this.historyListeners.get(id) ?? []) listener(); }
   constructor(private readonly db: ApplicationDatabase, private readonly database: SharedDatabase, private readonly providers: ProviderService, private readonly host: SubagentHost, private readonly injectedModels = false) {}
   extension(agentId: string, hyperliquid: Extension) { return createSubagentExtension(this, agentId, hyperliquid); }
   async bind(agent: AgentRow, harness: Harness, main: Conversation, hyperliquid: Extension, execution: SubagentExtension) {
@@ -80,8 +91,88 @@ export class SubagentService {
   async detail(userId: string, agentId: string, id: string) {
     await this.host.owned(userId, agentId);
     const definition = await this.definition(agentId, id);
-    const runs = await this.db.select().from(hvSubagentRuns).where(and(eq(hvSubagentRuns.agentId, agentId), eq(hvSubagentRuns.subagentId, id))).orderBy(desc(hvSubagentRuns.createdAt)).limit(50).all();
-    return { definition, runs, schedulerError: this.schedulerError };
+    const filter = and(eq(hvSubagentRuns.agentId, agentId), eq(hvSubagentRuns.subagentId, id));
+    const { runs, pagination } = await this.database.appTransaction(async (db) => {
+      const total = (await db.select({ total: count() }).from(hvSubagentRuns).where(filter).get())!.total;
+      const runs = await db.select().from(hvSubagentRuns).where(filter).orderBy(desc(hvSubagentRuns.createdAt), desc(hvSubagentRuns.id)).limit(runHistoryPageSize).all();
+      return { runs, pagination: runPagination(total) };
+    });
+    return { definition, runs, pagination, schedulerError: this.schedulerError };
+  }
+  async history(userId: string, agentId: string, id: string, page = 1): Promise<RunHistory> {
+    if (!Number.isSafeInteger(page) || page < 1) throw new AgentError("Invalid history page");
+    await this.host.owned(userId, agentId);
+    await this.definition(agentId, id);
+    const filter = and(eq(hvSubagentRuns.agentId, agentId), eq(hvSubagentRuns.subagentId, id));
+    return this.database.appTransaction(async (db) => {
+      const total = (await db.select({ total: count() }).from(hvSubagentRuns).where(filter).get())!.total;
+      const pagination = runPagination(total, page);
+      // Only prompt previews are streamed; full prompts/results/configuration
+      // belong on run details. Keep 50 valid, large assignments below the SSE cap.
+      const { id: runId, subagentId, source, task, status, createdAt } = hvSubagentRuns;
+      const runs = await db.select({ id: runId, subagentId, source, task: sql<string>`substr(${task}, 1, 512)`, status, createdAt }).from(hvSubagentRuns).where(filter).orderBy(desc(createdAt), desc(runId)).limit(runHistoryPageSize).offset((pagination.page - 1) * runHistoryPageSize).all();
+      return { runs, pagination, schedulerError: this.schedulerError };
+    });
+  }
+  async watchHistory(userId: string, agentId: string, id: string, page: number, signal: AbortSignal, publish: (history: RunHistory) => void): Promise<void> {
+    this.admit();
+    const lifetime = AbortSignal.any([signal, this.historyShutdown.signal]);
+    let finish!: () => void;
+    const finished = new Promise<void>((resolve) => { finish = resolve; });
+    this.historyFeeds.add(finished);
+    let dirty = true;
+    let wake: (() => void) | undefined;
+    const changed = () => { dirty = true; wake?.(); };
+    const listeners = this.historyListeners.get(id) ?? new Set<() => void>();
+    this.historyListeners.set(id, listeners); listeners.add(changed);
+    lifetime.addEventListener("abort", changed);
+    try {
+      while (!lifetime.aborted) {
+        if (dirty) {
+          dirty = false;
+          const snapshot = await this.history(userId, agentId, id, page);
+          if (!lifetime.aborted) publish(snapshot);
+        }
+        if (!dirty && !lifetime.aborted) await new Promise<void>((resolve) => { wake = resolve; });
+        wake = undefined;
+      }
+    } finally {
+      lifetime.removeEventListener("abort", changed);
+      listeners.delete(changed);
+      if (!listeners.size) this.historyListeners.delete(id);
+      this.historyFeeds.delete(finished); finish();
+    }
+  }
+  async runDetail(userId: string, agentId: string, id: string, runId: string) {
+    await this.host.owned(userId, agentId);
+    const definition = await this.definition(agentId, id);
+    const run = await this.db.select().from(hvSubagentRuns).where(and(eq(hvSubagentRuns.id, runId), eq(hvSubagentRuns.agentId, agentId), eq(hvSubagentRuns.subagentId, id))).get();
+    if (!run) throw new AgentError("Assignment not found", 404);
+    const entries: EntryRecord[] = [], prior: EntryRecord[] = [];
+    if (run.conversationId !== null) {
+      const child = await this.binding(agentId).harness.conversation(run.conversationId as ConversationId, context);
+      if (!child) throw new AgentError("Assignment conversation is unavailable", 503);
+      // Read a consistent snapshot through Durable's public transaction API.
+      // Submission boundaries keep later persistent assignments out of this run.
+      await child.commit(async (tx) => {
+        const submission = await tx.submissionByRequest(child.id, `assignment:${run.id}`);
+        if (submission?.entry === undefined) return;
+        let cursor: Cursor | undefined;
+        let ended = false;
+        do {
+          const page = await tx.scanEntries({ conversationId: child.id, order: "ascending" }, 200, cursor);
+          for (const entry of page.items) {
+            // Workers receive assignments only through plain input submissions.
+            // A subsequent user entry therefore starts the next assignment,
+            // including when this submission ended without an answer.
+            if (entry.id > submission.entry && entry.kind === "pi.user") { ended = true; break; }
+            (entry.id < submission.entry ? prior : entries).push(entry);
+          }
+          cursor = page.next;
+        } while (cursor && !ended);
+      }, context);
+    }
+    return { definition, run, entries, prior };
   }
   private async definition(agentId: string, id: string) {
     const row = await this.db.select().from(hvSubagents).where(and(eq(hvSubagents.id, id), eq(hvSubagents.agentId, agentId))).get();
@@ -208,6 +299,7 @@ export class SubagentService {
       if (runs.some((run) => run.subagentId === id)) throw new AgentError("This worker already has an active assignment.", 409);
       if (runs.length >= 4) throw new AgentError("This Agent already has four active workers.", 429);
       const run = (await this.db.insert(hvSubagentRuns).values({ id: randomUUID(), agentId, subagentId: id, requestId: submissionId, source, task, config: definition, createdAt: Date.now() }).returning().all())[0]!;
+      this.historyChanged(id);
       await this.dispatch(binding, run); return run;
     });
   }
@@ -225,9 +317,11 @@ export class SubagentService {
       await db.update(hvSubagentRuns).set({ conversationId, status: "running" }).where(and(eq(hvSubagentRuns.id, run.id), inArray(hvSubagentRuns.status, active))).run();
       if (run.config.persistent) await db.update(hvSubagents).set({ conversationId }).where(eq(hvSubagents.id, run.subagentId)).run();
     });
+    this.historyChanged(run.subagentId);
   }
   async finish(id: string, status: "completed" | "failed" | "cancelled" | "skipped", result: string) {
-    await this.db.update(hvSubagentRuns).set({ status, result, finishedAt: Date.now() }).where(and(eq(hvSubagentRuns.id, id), inArray(hvSubagentRuns.status, active))).run();
+    const run = await this.db.update(hvSubagentRuns).set({ status, result, finishedAt: Date.now() }).where(and(eq(hvSubagentRuns.id, id), inArray(hvSubagentRuns.status, active))).returning({ subagentId: hvSubagentRuns.subagentId }).get();
+    if (run) this.historyChanged(run.subagentId);
   }
   async reported(id: string) { await this.db.update(hvSubagentRuns).set({ reportedAt: Date.now() }).where(eq(hvSubagentRuns.id, id)).run(); }
   async stop(userId: string, agentId: string, runId: string) {
@@ -311,8 +405,9 @@ export class SubagentService {
         await db.update(hvSubagents).set({ nextRunAt: nextCandleRun(now, row.schedule, row.delaySeconds) }).where(eq(hvSubagents.id, row.id)).run();
         return (await db.insert(hvSubagentRuns).values({ id: randomUUID(), agentId: row.agentId, subagentId: row.id, requestId: `schedule:${row.id}:${row.nextRunAt}`, source: "schedule", task: `Scheduled ${row.schedule} assignment. UTC candle close: ${new Date(row.nextRunAt! - row.delaySeconds * 1000).toISOString()}.\n\nCarry out your responsibilities according to your instructions.`, config: row, status: reason ? "skipped" : "queued", result: reason, createdAt: now, finishedAt: reason ? now : null, reportedAt: reason ? now : null }).returning().all())[0]!;
       });
+      this.historyChanged(row.id);
       if (run.status === "queued" && binding) await this.dispatch(binding, run);
     });
   }
-  async close() { this.stopping = true; this.ready = false; if (this.timer) clearInterval(this.timer); await this.ticking; await Promise.all(this.pending.values()); }
+  async close() { this.stopping = true; this.ready = false; this.historyShutdown.abort(); if (this.timer) clearInterval(this.timer); await this.ticking; await Promise.all(this.pending.values()); await Promise.all(this.historyFeeds); }
 }

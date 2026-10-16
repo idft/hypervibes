@@ -2,6 +2,7 @@ import { HyperliquidError } from "../hyperliquid/errors.js";
 import type { ChartSelection, ChartSnapshot } from "../hyperliquid/chart-contracts.js";
 import { AgentError, agentId } from "../agents/agent-input.js";
 import type { AgentDashboard } from "../hyperliquid/agent-dashboard.js";
+import type { RunHistory } from "../agents/subagent-history.js";
 import type { AgentChat } from "../agents/agent-service.js";
 import { currentUserSession } from "../auth-user.js";
 import type { AppRuntime } from "../runtime.js";
@@ -18,9 +19,9 @@ export class AgentEventStreams {
   private readonly connections = new Set<() => void>();
   private readonly tasks = new Set<Promise<void>>();
   private readonly users = new Map<string, number>();
-  constructor(private readonly runtime: AppRuntime, private readonly kind: "chat" | "dashboard" | "chart" = "chat") {}
+  constructor(private readonly runtime: AppRuntime, private readonly kind: "chat" | "dashboard" | "chart" | "runs" = "chat") {}
 
-  async open(request: Request, id: string): Promise<Response> {
+  async open(request: Request, id: string, subagentId?: string): Promise<Response> {
     try {
       this.runtime.status();
       if (this.stopping) throw new AgentError("Server is shutting down", 503);
@@ -33,11 +34,13 @@ export class AgentEventStreams {
       await this.runtime.agents.owned(session.user.id, id);
       const params = new URL(request.url).searchParams;
       const selection = this.kind === "chart" ? await this.runtime.hyperliquid.charts.selection(params.get("coin") ?? "", params.get("interval") ?? "") : undefined;
+      const history = this.kind === "runs" ? { subagentId: subagentId ?? "", page: Number(params.get("page") ?? "1") } : undefined;
+      if (history) await this.runtime.agents.subagents.history(session.user.id, id, history.subagentId, history.page);
       if (this.stopping || request.signal.aborted) throw new AgentError("Connection closed", 503);
       const count = this.users.get(session.user.id) ?? 0;
       if (count >= 10) throw new AgentError("Too many open event connections", 429);
       this.users.set(session.user.id, count + 1);
-      return this.connect(request, id, session.user.id, session.expiresAt, selection);
+      return this.connect(request, id, session.user.id, session.expiresAt, selection, history);
     } catch (error) {
       const expected = error instanceof AgentError || error instanceof HyperliquidError;
       const status = expected ? error.status : 503;
@@ -46,7 +49,7 @@ export class AgentEventStreams {
     }
   }
 
-  private connect(request: Request, id: string, userId: string, expiresAt: Date, selection?: ChartSelection): Response {
+  private connect(request: Request, id: string, userId: string, expiresAt: Date, selection?: ChartSelection, history?: { subagentId: string; page: number }): Response {
     const abort = new AbortController();
     let controller: ReadableStreamDefaultController<Uint8Array>;
     let pending: Uint8Array | undefined;
@@ -104,7 +107,7 @@ export class AgentEventStreams {
       } catch { finish("unavailable", "Unable to verify this session. Reconnecting…"); }
       finally { checking = false; }
     };
-    const publish = (snapshot: AgentChat | AgentDashboard | ChartSnapshot) => {
+    const publish = (snapshot: AgentChat | AgentDashboard | ChartSnapshot | RunHistory) => {
       if (closed) return;
       if (Date.now() >= expiry) { finish("unauthorized", "Session expired. Please sign in again."); return; }
       const value = frame(this.kind, snapshot);
@@ -133,7 +136,8 @@ export class AgentEventStreams {
       heartbeat.unref();
       const watching = Promise.resolve().then(() => this.kind === "chat"
         ? this.runtime.agents.watchChat(userId, id, abort.signal, publish)
-        : selection ? this.runtime.hyperliquid.charts.watch(selection, abort.signal, publish)
+        : history ? this.runtime.agents.subagents.watchHistory(userId, id, history.subagentId, history.page, abort.signal, publish)
+          : selection ? this.runtime.hyperliquid.charts.watch(selection, abort.signal, publish)
           : this.runtime.hyperliquid.watchDashboard(userId, id, abort.signal, publish));
       const task = watching
         .then(() => { if (!closed) shutdown(); })

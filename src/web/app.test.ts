@@ -90,15 +90,15 @@ describe("embedded HTTP host", () => {
     expect((await app.inject("/api/v1/agents")).statusCode).toBe(404);
   });
 
-  it("serves the Agent chat event stream through the embedded host", async () => {
+  it.each(["events", "sub-agents/worker%3Afixture/runs/events?page=2"])("serves Agent event streams through the embedded host: %s", async (path) => {
     // The stream route is registered before the Start catch-all; anonymous
     // browsers receive a finite JSON error, never an open stream.
-    const denied = await app.inject("/api/agents/4527ece2-5a90-4d5e-b73a-351368ad71f3/events");
+    const denied = await app.inject(`/api/agents/4527ece2-5a90-4d5e-b73a-351368ad71f3/${path}`);
     expect(denied.statusCode).toBe(401);
     expect(denied.headers["content-type"]).toContain("application/json");
     expect(denied.headers["cache-control"]).toBe("no-store");
     expect(denied.json<{ error: string }>().error).toContain("Sign in");
-    const crossSite = await app.inject({ url: "/api/agents/4527ece2-5a90-4d5e-b73a-351368ad71f3/events", headers: { origin: "https://evil.example" } });
+    const crossSite = await app.inject({ url: `/api/agents/4527ece2-5a90-4d5e-b73a-351368ad71f3/${path}`, headers: { origin: "https://evil.example" } });
     expect(crossSite.statusCode).toBe(403);
   });
 
@@ -157,13 +157,13 @@ describe("embedded HTTP host", () => {
     expect(runtimes).toHaveLength(0);
   });
 
-  it("closes chat, dashboard and chart streams before HTTP draining and releases the profile lock", async () => {
+  it("closes chat, dashboard, chart and run history streams before HTTP draining and releases the profile lock", async () => {
     await app.inject("/");
     const runtime = runtimes[0]!;
     const closeStreams = vi.spyOn(AgentEventStreams.prototype, "close");
     const closeServer = app.server.close.bind(app.server);
     const drain = vi.spyOn(app.server, "close").mockImplementation((callback) => {
-      expect(closeStreams).toHaveBeenCalledTimes(3);
+      expect(closeStreams).toHaveBeenCalledTimes(4);
       expect(runtime.status().database).toBe("connected");
       expect(start.close).not.toHaveBeenCalled();
       return closeServer(callback);

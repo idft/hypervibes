@@ -160,6 +160,49 @@ describe("subagent definitions, execution and scheduling", () => {
     await expect(runtime.agents.subagents.updateSection("owner", agent.id, worker.id, "instructions", { instructions: "Denied" })).rejects.toMatchObject({ status: 409 });
   });
 
+  it("pushes scheduled skips and scheduler errors, and releases history subscriptions on abort", async () => {
+    const agent = await createAgent(), worker = await createWorker(agent.id, { schedule: "1h" });
+    const source = new AbortController(), publish = vi.fn();
+    const watching = runtime.agents.subagents.watchHistory("owner", agent.id, worker.id, 1, source.signal, publish);
+    try {
+      await vi.waitFor(() => expect(publish).toHaveBeenCalledOnce());
+      runtime.agents.subagents.schedulerError = "Scheduler unavailable";
+      await vi.waitFor(() => expect(publish.mock.lastCall?.[0].schedulerError).toBe("Scheduler unavailable"));
+      const now = Date.now();
+      await runtime.db.update(hvSubagents).set({ nextRunAt: now - 120000 }).where(eq(hvSubagents.id, worker.id)).run();
+      await runtime.agents.subagents.tick(now);
+      await vi.waitFor(() => {
+        expect(publish.mock.lastCall?.[0].runs[0]).toMatchObject({ source: "schedule", status: "skipped" });
+        expect(publish.mock.lastCall?.[0].schedulerError).toBeNull();
+      });
+      expect(faux.state.callCount).toBe(0);
+    } finally { source.abort(); await watching; }
+    const calls = publish.mock.calls.length;
+    runtime.agents.subagents.schedulerError = "After disconnect";
+    expect(publish).toHaveBeenCalledTimes(calls);
+  });
+
+  it("paginates history in stable newest-first pages without large result payloads", async () => {
+    const agent = await createAgent(), worker = await createWorker(agent.id);
+    expect((await runtime.agents.subagents.history("owner", agent.id, worker.id)).pagination).toEqual({ page: 1, pages: 1, pageSize: 50, total: 0 });
+    await runtime.db.insert(hvSubagentRuns).values(Array.from({ length: 105 }, (_, index) => ({ id: `history-${String(index).padStart(3, "0")}`, agentId: agent.id, subagentId: worker.id, requestId: `history:${index}`, source: "schedule" as const, task: "x".repeat(16000), config: worker, status: "skipped" as const, result: "Large result must not be included", createdAt: 1, reportedAt: 1 }))).run();
+    const pages = await Promise.all([1, 2, 3].map((page) => runtime.agents.subagents.history("owner", agent.id, worker.id, page)));
+    expect(pages.map((page) => page.runs.length)).toEqual([50, 50, 5]);
+    expect(pages.map((page) => page.pagination.page)).toEqual([1, 2, 3]);
+    expect(pages[0]!.pagination).toEqual({ page: 1, pages: 3, total: 105, pageSize: 50 });
+    const ids = pages.flatMap((page) => page.runs.map((run) => run.id));
+    expect(new Set(ids).size).toBe(105);
+    expect(pages[0]!.runs[0]!.task).toHaveLength(512);
+    expect(ids).toEqual([...ids].sort().reverse());
+    expect(Object.keys(pages[0]!.runs[0]!).sort()).toEqual(["id", "subagentId", "source", "task", "status", "createdAt"].sort());
+    expect((await runtime.agents.subagents.history("owner", agent.id, worker.id, 999)).pagination.page).toBe(3);
+    for (const page of [0, -1, 1.5, NaN, Infinity]) await expect(runtime.agents.subagents.history("owner", agent.id, worker.id, page)).rejects.toMatchObject({ status: 400 });
+    await expect(runtime.agents.subagents.history("other", agent.id, worker.id)).rejects.toMatchObject({ status: 404 });
+    const other = await createAgent();
+    await expect(runtime.agents.subagents.history("owner", other.id, worker.id)).rejects.toMatchObject({ status: 404 });
+    expect((await detail(agent.id, worker.id)).pagination.total).toBe(105);
+  });
+
   it("runs fresh scoped conversations, saves full results and deduplicates assignment retries", async () => {
     const opened = vi.spyOn(Harness, "open"); const agent = await createAgent(), worker = await createWorker(agent.id, { tools: ["get_account"] });
     const harness = await opened.mock.results[0]!.value as Harness;
@@ -181,6 +224,39 @@ describe("subagent definitions, execution and scheduling", () => {
     await runtime.agents.subagents.run("owner", agent.id, worker.id, "First", randomUUID()); const first = await completed(agent.id, worker.id);
     await runtime.agents.subagents.run("owner", agent.id, worker.id, "Second", randomUUID()); const second = await completed(agent.id, worker.id);
     expect(second.conversationId).toBe(first.conversationId); expect(second.result).toBe("I remember");
+    const firstDetail = await runtime.agents.subagents.runDetail("owner", agent.id, worker.id, first.id);
+    expect(firstDetail.prior).toEqual([]);
+    expect(JSON.stringify(firstDetail.entries)).toContain("Remember this");
+    expect(JSON.stringify(firstDetail.entries)).not.toContain("I remember");
+    const secondDetail = await runtime.agents.subagents.runDetail("owner", agent.id, worker.id, second.id);
+    expect(JSON.stringify(secondDetail.prior)).toContain("Remember this");
+    expect(JSON.stringify(secondDetail.entries)).toContain("I remember");
+    expect(JSON.stringify(secondDetail.entries)).not.toContain("Remember this");
+    await runtime.close(); runtime = await createRuntime(config(), options());
+    expect((await runtime.agents.subagents.runDetail("owner", agent.id, worker.id, first.id)).entries).toEqual(firstDetail.entries);
+  });
+
+  it("returns complete transcripts across pages, preserves tool calls/results and enforces ownership", async () => {
+    const opened = vi.spyOn(Harness, "open");
+    const agent = await createAgent(), worker = await createWorker(agent.id);
+    faux.setResponses([fauxAssistantMessage(fauxToolCall("unavailable_tool", { evidence: "test" }), { stopReason: "toolUse" }), fauxAssistantMessage("x".repeat(65000))]);
+    await runtime.agents.subagents.run("owner", agent.id, worker.id, "Find evidence", randomUUID());
+    const run = await completed(agent.id, worker.id);
+    expect(run.result).toHaveLength(65000);
+    const harness = await opened.mock.results[0]!.value as Harness;
+    const child = (await harness.conversation(run.conversationId! as never, context))!;
+    await child.commit(async (tx) => {
+      for (let i = 0; i < 205; i++) await tx.appendEntry(child.id, { kind: "test.evidence", data: { index: i } });
+    }, context);
+    const result = await runtime.agents.subagents.runDetail("owner", agent.id, worker.id, run.id);
+    expect(result.entries.filter((entry) => entry.kind === "test.evidence")).toHaveLength(205);
+    expect(result.entries.flatMap((entry) => entry.model ?? []).some((message) => message.role === "toolResult")).toBe(true);
+    expect(JSON.stringify(result.entries)).toContain("unavailable_tool");
+    expect(result.run.config.instructions).toBe(worker.instructions);
+    const otherWorker = await createWorker(agent.id), otherAgent = await createAgent();
+    for (const [user, agentId, id, runId] of [["other", agent.id, worker.id, run.id], ["owner", otherAgent.id, worker.id, run.id], ["owner", agent.id, otherWorker.id, run.id], ["owner", agent.id, worker.id, "missing"]]) {
+      await expect(runtime.agents.subagents.runDetail(user!, agentId!, id!, runId!)).rejects.toMatchObject({ status: 404 });
+    }
   });
 
   it("delivers notification-only results visibly without waking the orchestrator, once across restart", async () => {

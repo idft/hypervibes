@@ -42,9 +42,10 @@ export async function createApp(config: AppConfig, options: AppOptions = {}) {
   const streams = new AgentEventStreams(runtime);
   const dashboards = new AgentEventStreams(runtime, "dashboard");
   const charts = new AgentEventStreams(runtime, "chart");
+  const runs = new AgentEventStreams(runtime, "runs");
   let web: StartApplication | undefined;
   // SSE responses must finish before Fastify waits for active HTTP connections.
-  app.addHook("preClose", async () => { await Promise.all([streams.close(), dashboards.close(), charts.close(), logos.close()]); });
+  app.addHook("preClose", async () => { await Promise.all([streams.close(), dashboards.close(), charts.close(), runs.close(), logos.close()]); });
   app.addHook("onClose", async () => {
     try { await web?.close(); }
     finally { await runtime.close(); }
@@ -117,6 +118,14 @@ export async function createApp(config: AppConfig, options: AppOptions = {}) {
       const webRequest = new NodeRequest({ req: request.raw, res: reply.raw, maxRequestBodySize: 1024 * 1024 });
       webRequest.headers.set("x-hv-client-ip", request.ip);
       const response = await charts.open(webRequest, (request.params as { id: string }).id);
+      await sendNodeResponse(reply.raw, response);
+    });
+
+    app.get<{ Params: { id: string; subagentId: string } }>("/api/agents/:id/sub-agents/:subagentId/runs/events", async (request, reply) => {
+      reply.hijack();
+      const webRequest = new NodeRequest({ req: request.raw, res: reply.raw, maxRequestBodySize: 1024 * 1024 });
+      webRequest.headers.set("x-hv-client-ip", request.ip);
+      const response = await runs.open(webRequest, request.params.id, request.params.subagentId);
       await sendNodeResponse(reply.raw, response);
     });
 

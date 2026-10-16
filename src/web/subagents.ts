@@ -10,6 +10,10 @@ export const getSubagent = createServerFn({ method: "GET" }).validator((data: un
   const user = await agentUser(context.runtime, getRequestHeaders());
   return agentAction(() => context.runtime.agents.subagents.detail(user.id, data.agentId, data.id));
 });
+export const getSubagentRun = createServerFn({ method: "GET" }).validator((data: unknown) => ({ agentId: field(data, "agentId"), id: field(data, "id"), runId: field(data, "runId") })).handler(async ({ context, data }) => {
+  const user = await agentUser(context.runtime, getRequestHeaders());
+  return agentAction(() => context.runtime.agents.subagents.runDetail(user.id, data.agentId, data.id, data.runId));
+});
 export const saveSubagent = createServerFn({ method: "POST" }).validator((data: unknown) => ({ agentId: field(data, "agentId"), id: field(data, "id"), requestId: field(data, "requestId"), settings: data && typeof data === "object" ? Reflect.get(data, "settings") as unknown : undefined })).handler(async ({ context, data }) => {
   const user = await agentUser(context.runtime, getRequestHeaders(), true);
   return agentAction(() => data.id ? context.runtime.agents.subagents.update(user.id, data.agentId, data.id, data.settings) : context.runtime.agents.subagents.create(user.id, data.agentId, data.settings, data.requestId));
