@@ -6,6 +6,7 @@ import { randomUUID } from "node:crypto";
 import type { AgentRow } from "../db/agent-schema.js";
 import { hvSubagents, hvSubagentRuns, type SubagentRow, type SubagentRun } from "../db/subagent-schema.js";
 import type { ApplicationDatabase, SharedDatabase } from "../db/shared-database.js";
+import type { FastifyBaseLogger } from "fastify";
 import type { ProviderService } from "../providers/provider-service.js";
 import { runHistoryPageSize, runPagination, type RunHistory } from "./subagent-history.js";
 import { AgentError, requestId } from "./agent-input.js";
@@ -38,7 +39,7 @@ export class SubagentService {
     for (const listeners of this.historyListeners.values()) for (const listener of listeners) listener();
   }
   private historyChanged(id: string) { for (const listener of this.historyListeners.get(id) ?? []) listener(); }
-  constructor(private readonly db: ApplicationDatabase, private readonly database: SharedDatabase, private readonly providers: ProviderService, private readonly host: SubagentHost, private readonly injectedModels = false) {}
+  constructor(private readonly db: ApplicationDatabase, private readonly database: SharedDatabase, private readonly providers: ProviderService, private readonly host: SubagentHost, private readonly injectedModels = false, private readonly log?: FastifyBaseLogger) {}
   extension(agentId: string, hyperliquid: Extension) { return createSubagentExtension(this, agentId, hyperliquid); }
   async bind(agent: AgentRow, harness: Harness, main: Conversation, hyperliquid: Extension, execution: SubagentExtension) {
     const resolved = await main.agent(context);
@@ -401,6 +402,7 @@ export class SubagentService {
     for (const row of definitions) await this.db.update(hvSubagents).set({ nextRunAt: row.enabled && !row.archived ? nextCandleRun(Date.now(), row.schedule, row.delaySeconds) : null }).where(eq(hvSubagents.id, row.id)).run();
     if (this.stopping) return;
     this.ready = true;
+    this.log?.info("Starting sub-agent scheduler");
     this.timer = setInterval(() => { void this.tick(); }, 1000); this.timer.unref();
     await this.tick();
   }
@@ -440,7 +442,10 @@ export class SubagentService {
         await this.schedule(row, now);
       }
       this.schedulerError = null;
-    }).catch(() => { this.schedulerError = "Subagent scheduler encountered an error. It will retry; persisted assignments are retained."; }).finally(() => { this.tickActive = false; });
+    }).catch((error: unknown) => {
+      this.schedulerError = "Subagent scheduler encountered an error. It will retry; persisted assignments are retained.";
+      this.log?.error(error, "Subagent scheduler encountered an error");
+    }).finally(() => { this.tickActive = false; });
     return this.ticking;
   }
   private schedule(candidate: SubagentRow, now: number) {
@@ -464,6 +469,7 @@ export class SubagentService {
         return (await db.insert(hvSubagentRuns).values({ id: randomUUID(), agentId: row.agentId, subagentId: row.id, requestId: `schedule:${row.id}:${row.nextRunAt}`, source: "schedule", task: `Scheduled ${row.schedule} assignment. UTC candle close: ${new Date(row.nextRunAt! - row.delaySeconds * 1000).toISOString()}.\n\nCarry out your responsibilities according to your instructions.`, config: row, status: reason ? "skipped" : "queued", result: reason, createdAt: now, finishedAt: reason ? now : null, reportedAt: reason ? now : null }).returning().all())[0]!;
       });
       this.historyChanged(row.id);
+      this.log?.info({ agentId: run.agentId, runId: run.id, subagentId: run.subagentId, status: run.status, reason: reason || undefined }, reason ? "Scheduled sub-agent run skipped" : "Scheduled sub-agent run");
       if (run.status === "queued" && binding) await this.dispatch(binding, run);
     });
   }

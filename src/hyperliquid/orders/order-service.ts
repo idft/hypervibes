@@ -2,6 +2,7 @@ import { ApiRequestError, ExchangeClient, InfoClient, type HttpTransport } from 
 import { compare } from "./order-math.js";
 import { privateKeyToAccount } from "viem/accounts";
 import type { SharedDatabase } from "../../db/shared-database.js";
+import type { FastifyBaseLogger } from "fastify";
 import { HyperliquidError } from "../errors.js";
 import { assertStringAmounts, exchangeOid, instruments, instrument, isPerpetual, liveView, newView, prepareSubmit } from "./order-prepare.js";
 import { OrderStore, active, type PreparedAction, type PreparedPayload, type RequestRow } from "./order-store.js";
@@ -24,20 +25,21 @@ export class OrderService {
   private timer?: ReturnType<typeof setTimeout>;
   private started = false;
   private stopping = false;
-  constructor(database: SharedDatabase, private readonly transport: HttpTransport, private readonly bindings: OrderBindings) {
+  constructor(database: SharedDatabase, private readonly transport: HttpTransport, private readonly bindings: OrderBindings, private readonly log?: FastifyBaseLogger) {
     this.store = new OrderStore(database); this.info = new InfoClient({ transport });
   }
   recover() { return this.store.recover(); }
   start() {
     if (this.started || this.stopping) return;
     this.started = true;
+    this.log?.info("Starting order reconciliation loop");
     const tick = async () => {
       try {
         for (const request of await this.store.pendingRequests()) {
           if (this.stopping) break;
           await this.lock(request.id, () => this.reconcile(request, this.signal()));
         }
-      } catch { /* Keep persisted uncertainty; the next bounded pass retries reads only. */ }
+      } catch (error) { this.log?.warn(error, "Order reconciliation pass failed; retrying on the next pass"); }
       finally { if (!this.stopping) { this.timer = setTimeout(() => { void this.track(tick()); }, 15_000); this.timer.unref(); } }
     };
     void this.track(tick());

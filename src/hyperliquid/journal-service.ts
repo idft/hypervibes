@@ -1,6 +1,7 @@
 import { InfoClient, type HttpTransport } from "@nktkas/hyperliquid";
 import { randomUUID } from "node:crypto";
 import type { SharedDatabase } from "../db/shared-database.js";
+import type { FastifyBaseLogger } from "fastify";
 import { HyperliquidError } from "./errors.js";
 import { amount } from "./journal-decimal.js";
 import { buildTrades, fillEvent, fundingEvent, ledgerEvent, type JournalEvent, type JournalStream, type JournalTrade } from "./journal-model.js";
@@ -32,11 +33,12 @@ export function exchangeHistory(transport: HttpTransport): HistoryFetcher {
 export class JournalService {
   private readonly workers = new Map<string, { controller: AbortController; task?: Promise<void>; timer?: ReturnType<typeof setTimeout> }>();
   private stopped = false;
-  constructor(private readonly db: SharedDatabase, private readonly fetchHistory: HistoryFetcher) {}
+  constructor(private readonly db: SharedDatabase, private readonly fetchHistory: HistoryFetcher, private readonly log?: FastifyBaseLogger) {}
 
   reconcile(addresses: string[]) {
     if (this.stopped) return;
     const desired = new Set(addresses.map((a) => a.toLowerCase()));
+    if (desired.size > 0 && this.workers.size === 0 && !this.stopped) this.log?.info({ accounts: desired.size }, "Synchronizing trade journals");
     for (const [account, worker] of this.workers) if (!desired.has(account)) {
       worker.controller.abort(); clearTimeout(worker.timer);
       void worker.task?.finally(() => { if (this.workers.get(account) === worker) this.workers.delete(account); });
@@ -51,7 +53,7 @@ export class JournalService {
         const fullScan = now - lastFullScan >= 86_400_000;
         if (fullScan) lastFullScan = now;
         worker.task = this.syncAccount(account, worker.controller.signal, now, fullScan)
-          .catch(() => { if (!worker.controller.signal.aborted) console.error("Unable to synchronize trade journal; retrying"); })
+          .catch((error: unknown) => { if (!worker.controller.signal.aborted) this.log?.error({ err: error, account }, "Unable to synchronize trade journal; retrying"); })
           .finally(() => {
             if (worker.controller.signal.aborted) { this.workers.delete(account); return; }
             worker.timer = setTimeout(refresh, 15_000); worker.timer.unref();
@@ -93,7 +95,10 @@ export class JournalService {
         await this.db.run("UPDATE hv_journal_sync SET error=? WHERE account=? AND stream=?", message, account, stream);
       }
     }
-    if (!signal.aborted) await this.project(account);
+    if (!signal.aborted) {
+      this.log?.debug({ account }, "Synchronized trade journal");
+      await this.project(account);
+    }
   }
 
   private async window(account: string, stream: JournalStream, start: number, end: number, signal: AbortSignal): Promise<void> {

@@ -11,6 +11,7 @@ import { HyperliquidService } from "./hyperliquid/service.js";
 import { HttpTransport } from "@nktkas/hyperliquid";
 import { exchangeHistory, JournalService, type HistoryFetcher } from "./hyperliquid/journal-service.js";
 import { ProviderService, type ProviderServiceOptions } from "./providers/provider-service.js";
+import type { FastifyBaseLogger } from "fastify";
 
 export interface RuntimeStatus {
   database: "connected";
@@ -18,7 +19,8 @@ export interface RuntimeStatus {
 }
 
 /** Application-owned resources, constructed once by the host, never by a request. */
-export async function createRuntime(config: AppConfig, options: AgentServiceOptions & ProviderServiceOptions & { accountFeedFactory?: AccountFeedFactory; journalHistoryFetcher?: HistoryFetcher } = {}) {
+export async function createRuntime(config: AppConfig, options: AgentServiceOptions & ProviderServiceOptions & { accountFeedFactory?: AccountFeedFactory; journalHistoryFetcher?: HistoryFetcher; logger?: FastifyBaseLogger } = {}) {
+  const logger = options.logger;
   const connection = openDatabase(config.databasePath);
   const database = new SharedDatabase(connection);
   let release: (() => Promise<void>) | undefined;
@@ -47,7 +49,10 @@ export async function createRuntime(config: AppConfig, options: AgentServiceOpti
     release = await lockProfile(config.databasePath, (error) => {
       failure = error;
       // Stop admission synchronously, then drain execution before releasing SQL.
-      void close().catch(() => { console.error("Failed to close compromised application storage"); });
+      void close().catch((error: unknown) => {
+        if (logger) logger.error(error, "Failed to close compromised application storage");
+        else console.error("Failed to close compromised application storage", error);
+      });
     });
     // Native migration access is allowed only before the shared queue is used.
     migrateApplication(connection);
@@ -58,15 +63,15 @@ export async function createRuntime(config: AppConfig, options: AgentServiceOpti
     providers = providerService;
     await providerService.initialize();
     const transport = new HttpTransport();
-    const journal = new JournalService(database, options.journalHistoryFetcher ?? exchangeHistory(transport));
+    const journal = new JournalService(database, options.journalHistoryFetcher ?? exchangeHistory(transport), logger?.child({ component: "journal" }));
     const orderService = new OrderService(database, transport, {
       account: (userId, agentId) => hyperliquid!.agentTradingAccount(userId, agentId),
       authority: (userId, agentId, signal, needsBuilder) => hyperliquid!.orderAuthority(userId, agentId, signal, needsBuilder),
-    });
+    }, logger?.child({ component: "orders" }));
     orders = orderService;
-    hyperliquid = new HyperliquidService(db, config.encryptionKey, transport, options.accountFeedFactory, journal, (signer) => orderService.store.nonce(signer));
+    hyperliquid = new HyperliquidService(db, config.encryptionKey, transport, options.accountFeedFactory, journal, (signer) => orderService.store.nonce(signer), logger?.child({ component: "hyperliquid" }));
     await orderService.recover();
-    const agentService = new AgentService(db, database, providerService, hyperliquid, orderService, options);
+    const agentService = new AgentService(db, database, providerService, hyperliquid, orderService, { ...options, logger: logger?.child({ component: "agents" }) });
     providerService.onChanged = (userId) => agentService.providersChanged(userId);
     agents = agentService;
     await agentService.recover();

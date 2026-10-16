@@ -12,6 +12,7 @@ import { and, eq, isNotNull, isNull } from "drizzle-orm";
 import { privateKeyToAccount } from "viem/accounts";
 import type { EncryptionKeySetting } from "../config.js";
 import type { ApplicationDatabase } from "../db/shared-database.js";
+import type { FastifyBaseLogger } from "fastify";
 import { hvAgents } from "../db/agent-schema.js";
 import { hvHyperliquidSettings, type HyperliquidSettingsRow } from "../db/exchange-schema.js";
 import {
@@ -120,6 +121,7 @@ export class HyperliquidService {
     feedFactory?: AccountFeedFactory,
     private readonly journal?: JournalService,
     nonceManager?: (signer: string) => Promise<number>,
+    private readonly log?: FastifyBaseLogger,
   ) {
     this.creator = new SubaccountCreator(transport, nonceManager);
     this.live = new LiveDashboards(transport, feedFactory ?? this.feeds.account);
@@ -129,6 +131,7 @@ export class HyperliquidService {
   start() {
     if (this.started || this.stopped) return;
     this.started = true;
+    this.log?.info("Starting Hyperliquid service; refreshing linked accounts every 30s");
     const refresh = () => {
       this.registryTask = this.db.select({ address: hvAgents.tradingAccountAddress }).from(hvAgents)
         .where(isNotNull(hvAgents.tradingAccountAddress)).all()
@@ -137,8 +140,9 @@ export class HyperliquidService {
           const addresses = rows.flatMap((row) => row.address ? [row.address] : []);
           this.journal?.reconcile(addresses);
           await this.live.reconcile(addresses);
+          this.log?.debug({ accounts: addresses.length }, "Reconciled linked Hyperliquid accounts");
         })
-        .catch(() => { console.error("Unable to refresh linked Hyperliquid accounts; retrying"); })
+        .catch((error: unknown) => { this.log?.error(error, "Unable to refresh linked Hyperliquid accounts; retrying"); })
         .finally(() => {
           if (!this.stopped) { this.registryTimer = setTimeout(refresh, 30_000); this.registryTimer.unref(); }
         });

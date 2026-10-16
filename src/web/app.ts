@@ -29,7 +29,12 @@ export async function createApp(config: AppConfig, options: AppOptions = {}) {
   }
 
   const app = Fastify({
-    logger: options.logger ? { redact: ["req.headers.cookie", "req.headers.authorization", "res.headers.set-cookie"] } : false,
+    logger: options.logger ? {
+      level: options.development ? "debug" : "info",
+      redact: ["req.headers.cookie", "req.headers.authorization", "res.headers.set-cookie"],
+      // Colorize only on a real console; journald/piped output stays plain.
+      transport: { target: "pino-pretty", options: { colorize: process.stdout.isTTY === true, singleLine: true, translateTime: "HH:MM:ss.l", ignore: "pid,hostname" } },
+    } : false,
   });
   const logos = new CurrencyLogoCache(config.cacheDir ?? join(tmpdir(), "hypervibes"), options.logoFetcher);
   const origin = new URL(config.authOrigin);
@@ -38,7 +43,7 @@ export async function createApp(config: AppConfig, options: AppOptions = {}) {
     try { host = new URL(`${origin.protocol}//${request.headers.host ?? ""}`).host; } catch { /* Reject malformed hosts below. */ }
     if (host !== origin.host) return reply.code(400).send({ error: "Invalid request host" });
   });
-  const runtime = await createRuntime(config);
+  const runtime = await createRuntime(config, { logger: app.log });
   const streams = new AgentEventStreams(runtime);
   const dashboards = new AgentEventStreams(runtime, "dashboard");
   const charts = new AgentEventStreams(runtime, "chart");

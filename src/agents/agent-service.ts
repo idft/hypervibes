@@ -10,6 +10,7 @@ import { and, desc, eq } from "drizzle-orm";
 import { randomUUID } from "node:crypto";
 import { hvAgents, type AgentRow } from "../db/agent-schema.js";
 import type { ApplicationDatabase, SharedDatabase } from "../db/shared-database.js";
+import type { FastifyBaseLogger } from "fastify";
 
 import { AgentError, agentId, agentName, chatMessage, harnessPrefix, requestId } from "./agent-input.js";
 import { SubagentService } from "./subagent-service.js";
@@ -22,6 +23,8 @@ export interface AgentServiceOptions {
   /** Injected model catalog for isolated tests; never used by the production host. */
   models?: Models;
   model?: ModelRef;
+  /** Shared application logger; services stay silent in isolated tests. */
+  logger?: FastifyBaseLogger;
 }
 interface RunningAgent { harness: Harness; main: Conversation }
 export interface ChatEntry { id: string; role: "user" | "assistant"; text: string; failed: boolean }
@@ -51,7 +54,7 @@ export class AgentService {
   constructor(private readonly db: ApplicationDatabase, private readonly database: SharedDatabase, private readonly providers: ProviderService, private readonly hyperliquid: HyperliquidService, private readonly orders: OrderService, private readonly options: AgentServiceOptions = {}) {
     this.subagents = new SubagentService(db, database, providers, {
       owned: (userId, id) => this.owned(userId, id), models: (userId) => this.models(userId), changed: (id) => this.notify(id),
-    }, Boolean(options.models));
+    }, Boolean(options.models), options.logger?.child({ component: "scheduler" }));
   }
   private notify(id: string) { for (const listener of this.lifecycle.get(id) ?? []) listener(); }
   private models(userId: string) { return this.options.models ? Promise.resolve(this.options.models) : this.providers.models(userId); }
