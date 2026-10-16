@@ -9,6 +9,13 @@ export interface SubagentInput {
   tools: string[]; enabled: boolean; delegatable: boolean; persistent: boolean;
   schedule: string; delaySeconds: number; completion: "save" | "notify" | "wake"; timeoutSeconds: number;
 }
+export interface SubagentSections {
+  enabled: Pick<SubagentInput, "enabled">;
+  instructions: Pick<SubagentInput, "instructions">;
+  model: Pick<SubagentInput, "provider" | "modelId" | "thinkingLevel">;
+  schedule: Pick<SubagentInput, "schedule" | "delaySeconds" | "completion">;
+}
+export type AssignmentSettings = Pick<SubagentInput, "delegatable" | "persistent" | "timeoutSeconds">;
 function bounded(value: unknown, maximum: number, label: string) {
   if (typeof value !== "string" || value.length > maximum) throw new AgentError(`Invalid ${label}.`);
   return value.trim();

@@ -14,6 +14,22 @@ export const saveSubagent = createServerFn({ method: "POST" }).validator((data: 
   const user = await agentUser(context.runtime, getRequestHeaders(), true);
   return agentAction(() => data.id ? context.runtime.agents.subagents.update(user.id, data.agentId, data.id, data.settings) : context.runtime.agents.subagents.create(user.id, data.agentId, data.settings, data.requestId));
 });
+export const saveSubagentSection = createServerFn({ method: "POST" }).validator((data: unknown) => ({ agentId: field(data, "agentId"), id: field(data, "id"), section: field(data, "section"), settings: data && typeof data === "object" ? Reflect.get(data, "settings") as unknown : undefined })).handler(async ({ context, data }) => {
+  const user = await agentUser(context.runtime, getRequestHeaders(), true);
+  return agentAction(() => context.runtime.agents.subagents.updateSection(user.id, data.agentId, data.id, data.section, data.settings));
+});
+export const saveSubagentAssignments = createServerFn({ method: "POST" }).validator((data: unknown) => ({ agentId: field(data, "agentId"), id: field(data, "id"), settings: data && typeof data === "object" ? Reflect.get(data, "settings") as unknown : undefined })).handler(async ({ context, data }) => {
+  const user = await agentUser(context.runtime, getRequestHeaders(), true);
+  return agentAction(() => context.runtime.agents.subagents.updateAssignments(user.id, data.agentId, data.id, data.settings));
+});
+export const saveSubagentIdentity = createServerFn({ method: "POST" }).validator((data: unknown) => ({ agentId: field(data, "agentId"), id: field(data, "id"), name: field(data, "name"), description: field(data, "description") })).handler(async ({ context, data }) => {
+  const user = await agentUser(context.runtime, getRequestHeaders(), true);
+  return agentAction(() => context.runtime.agents.subagents.updateIdentity(user.id, data.agentId, data.id, data.name, data.description));
+});
+export const saveSubagentTools = createServerFn({ method: "POST" }).validator((data: unknown) => ({ agentId: field(data, "agentId"), id: field(data, "id"), tools: data && typeof data === "object" ? Reflect.get(data, "tools") as unknown : undefined })).handler(async ({ context, data }) => {
+  const user = await agentUser(context.runtime, getRequestHeaders(), true);
+  return agentAction(() => context.runtime.agents.subagents.updateTools(user.id, data.agentId, data.id, data.tools));
+});
 export const archiveSubagent = createServerFn({ method: "POST" }).validator((data: unknown) => ({ agentId: field(data, "agentId"), id: field(data, "id") })).handler(async ({ context, data }) => {
   const user = await agentUser(context.runtime, getRequestHeaders(), true);
   return agentAction(() => context.runtime.agents.subagents.archive(user.id, data.agentId, data.id));

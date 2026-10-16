@@ -58,6 +58,108 @@ describe("subagent definitions, execution and scheduling", () => {
     await expect(runtime.agents.subagents.run("other", agent.id, worker.id, "Do work", randomUUID())).rejects.toMatchObject({ status: 404 });
   });
 
+  it("saves tools independently while preserving other settings and schedule state", async () => {
+    const agent = await createAgent(), worker = await createWorker(agent.id, { schedule: "1d", persistent: true });
+    const nextRunAt = Date.now() + 100000000;
+    await runtime.db.update(hvSubagents).set({ nextRunAt }).where(eq(hvSubagents.id, worker.id)).run();
+    const updated = await runtime.agents.subagents.updateTools("owner", agent.id, worker.id, ["get_account"]);
+    expect(updated).toEqual({ ...worker, tools: ["get_account"], nextRunAt, updatedAt: updated.updatedAt });
+    await expect(runtime.agents.subagents.updateTools("other", agent.id, worker.id, [])).rejects.toMatchObject({ status: 404 });
+    await expect(runtime.agents.subagents.updateTools("owner", agent.id, worker.id, ["delegate_subagent"])).rejects.toThrow("supported tools");
+    await expect(runtime.agents.subagents.updateTools("owner", agent.id, worker.id, ["get_account", "get_account"])).rejects.toThrow("supported tools");
+    await runtime.agents.subagents.archive("owner", agent.id, worker.id);
+    await expect(runtime.agents.subagents.updateTools("owner", agent.id, worker.id, [])).rejects.toMatchObject({ status: 409 });
+  });
+
+  it("saves identity independently without changing tools, context or schedule state", async () => {
+    const agent = await createAgent(), worker = await createWorker(agent.id, { schedule: "1d", persistent: true, tools: ["get_account"] });
+    const nextRunAt = Date.now() + 100000000;
+    await runtime.db.update(hvSubagents).set({ nextRunAt }).where(eq(hvSubagents.id, worker.id)).run();
+    const updated = await runtime.agents.subagents.updateIdentity("owner", agent.id, worker.id, " Updated name ", " Updated description ");
+    expect(updated).toEqual({ ...worker, name: "Updated name", description: "Updated description", nextRunAt, updatedAt: updated.updatedAt });
+    await expect(runtime.agents.subagents.updateIdentity("other", agent.id, worker.id, "Name", "")).rejects.toMatchObject({ status: 404 });
+    const other = await createAgent();
+    await expect(runtime.agents.subagents.updateIdentity("owner", other.id, worker.id, "Name", "")).rejects.toMatchObject({ status: 404 });
+    await expect(runtime.agents.subagents.updateIdentity("owner", agent.id, worker.id, " ", "")).rejects.toThrow("Name");
+    await expect(runtime.agents.subagents.updateIdentity("owner", agent.id, worker.id, "Name", "x".repeat(501))).rejects.toThrow("description");
+    await runtime.agents.subagents.archive("owner", agent.id, worker.id);
+    await expect(runtime.agents.subagents.updateIdentity("owner", agent.id, worker.id, "Name", "")).rejects.toMatchObject({ status: 409 });
+  });
+
+  it("updates assignment settings independently and maintains scheduling and context boundaries", async () => {
+    const agent = await createAgent(), worker = await createWorker(agent.id, { schedule: "1d", persistent: true, tools: ["get_account"] });
+    const nextRunAt = Date.now() + 100000000;
+    await runtime.db.update(hvSubagents).set({ nextRunAt, conversationId: 12345 }).where(eq(hvSubagents.id, worker.id)).run();
+    const settings = { delegatable: false, persistent: true, timeoutSeconds: 600 };
+    const updated = await runtime.agents.subagents.updateAssignments("owner", agent.id, worker.id, { ...settings, name: "Do not change", tools: [] });
+    expect(updated).toEqual({ ...worker, ...settings, nextRunAt, conversationId: 12345, updatedAt: updated.updatedAt });
+    const fresh = await runtime.agents.subagents.updateAssignments("owner", agent.id, worker.id, { ...settings, enabled: false, persistent: false });
+    expect(fresh.enabled).toBe(true); expect(fresh.nextRunAt).toBe(nextRunAt); expect(fresh.conversationId).toBeNull();
+    const persistent = await runtime.agents.subagents.updateAssignments("owner", agent.id, worker.id, settings);
+    expect(persistent.nextRunAt).toBe(nextRunAt); expect(persistent.conversationId).toBeNull();
+    await expect(runtime.agents.subagents.updateAssignments("other", agent.id, worker.id, settings)).rejects.toMatchObject({ status: 404 });
+    const other = await createAgent();
+    await expect(runtime.agents.subagents.updateAssignments("owner", other.id, worker.id, settings)).rejects.toMatchObject({ status: 404 });
+    for (const data of [null, {}, { ...settings, delegatable: "true" }, { ...settings, persistent: 1 }, { ...settings, timeoutSeconds: 29 }, { ...settings, timeoutSeconds: 3601 }, { ...settings, timeoutSeconds: 30.5 }]) {
+      await expect(runtime.agents.subagents.updateAssignments("owner", agent.id, worker.id, data)).rejects.toThrow();
+    }
+    const main = (await runtime.agents.subagents.list("owner", agent.id)).find((row) => row.kind === "orchestrator")!;
+    await expect(runtime.agents.subagents.updateAssignments("owner", agent.id, main.id, settings)).rejects.toMatchObject({ status: 409 });
+    await runtime.agents.subagents.archive("owner", agent.id, worker.id);
+    await expect(runtime.agents.subagents.updateAssignments("owner", agent.id, worker.id, settings)).rejects.toMatchObject({ status: 409 });
+  });
+
+  it("toggles enabled status independently, preserving context and recalculating scheduled runs", async () => {
+    const agent = await createAgent(), worker = await createWorker(agent.id, { schedule: "1d", persistent: true, tools: ["get_account"] });
+    const nextRunAt = Date.now() + 100000000;
+    await runtime.db.update(hvSubagents).set({ nextRunAt, conversationId: 12345 }).where(eq(hvSubagents.id, worker.id)).run();
+    const unchanged = await runtime.agents.subagents.updateSection("owner", agent.id, worker.id, "enabled", { enabled: true });
+    expect(unchanged.nextRunAt).toBe(nextRunAt);
+    const paused = await runtime.agents.subagents.updateSection("owner", agent.id, worker.id, "enabled", { enabled: false, instructions: "Ignored", persistent: false });
+    expect(paused).toEqual({ ...worker, enabled: false, nextRunAt: null, conversationId: 12345, updatedAt: paused.updatedAt });
+    expect(await runtime.agents.subagents.delegatable(agent.id)).toEqual([]);
+    const assignmentUpdate = await runtime.agents.subagents.updateAssignments("owner", agent.id, worker.id, { delegatable: true, persistent: true, timeoutSeconds: 600, enabled: true });
+    expect(assignmentUpdate.enabled).toBe(false); expect(assignmentUpdate.nextRunAt).toBeNull();
+    const enabled = await runtime.agents.subagents.updateSection("owner", agent.id, worker.id, "enabled", { enabled: true });
+    expect(enabled.nextRunAt).toBe(nextCandleRun(enabled.updatedAt, worker.schedule, worker.delaySeconds));
+    expect(enabled.conversationId).toBe(12345); expect(enabled.timeoutSeconds).toBe(600);
+    for (const value of ["true", 1, null, undefined]) await expect(runtime.agents.subagents.updateSection("owner", agent.id, worker.id, "enabled", { enabled: value })).rejects.toThrow("enabled");
+    await expect(runtime.agents.subagents.updateSection("other", agent.id, worker.id, "enabled", { enabled: false })).rejects.toMatchObject({ status: 404 });
+    const other = await createAgent();
+    await expect(runtime.agents.subagents.updateSection("owner", other.id, worker.id, "enabled", { enabled: false })).rejects.toMatchObject({ status: 404 });
+    const main = (await runtime.agents.subagents.list("owner", agent.id)).find((row) => row.kind === "orchestrator")!;
+    await expect(runtime.agents.subagents.updateSection("owner", agent.id, main.id, "enabled", { enabled: false })).rejects.toMatchObject({ status: 409 });
+    await runtime.agents.subagents.archive("owner", agent.id, worker.id);
+    await expect(runtime.agents.subagents.updateSection("owner", agent.id, worker.id, "enabled", { enabled: true })).rejects.toMatchObject({ status: 409 });
+  });
+
+  it("saves instructions, model and schedule sections without overwriting other settings", async () => {
+    const agent = await createAgent(), worker = await createWorker(agent.id, { schedule: "1d", persistent: true, tools: ["get_account"] });
+    const nextRunAt = Date.now() + 100000000;
+    await runtime.db.update(hvSubagents).set({ nextRunAt, conversationId: 12345 }).where(eq(hvSubagents.id, worker.id)).run();
+    const instructions = await runtime.agents.subagents.updateSection("owner", agent.id, worker.id, "instructions", { instructions: " New instructions ", name: "Ignored", tools: [] });
+    expect(instructions).toEqual({ ...worker, instructions: "New instructions", nextRunAt, conversationId: 12345, updatedAt: instructions.updatedAt });
+    const model = await runtime.agents.subagents.updateSection("owner", agent.id, worker.id, "model", { provider: worker.provider, modelId: worker.modelId, thinkingLevel: "" });
+    expect(model).toEqual({ ...instructions, updatedAt: model.updatedAt });
+    const scheduled = await runtime.agents.subagents.updateSection("owner", agent.id, worker.id, "schedule", { schedule: "1h", delaySeconds: 10, completion: "notify" });
+    expect(scheduled).toEqual({ ...model, schedule: "1h", delaySeconds: 10, completion: "notify", nextRunAt: nextCandleRun(scheduled.updatedAt, "1h", 10), updatedAt: scheduled.updatedAt });
+    expect((await runtime.agents.subagents.updateSection("owner", agent.id, worker.id, "schedule", { schedule: "", delaySeconds: 10, completion: "save" })).nextRunAt).toBeNull();
+    for (const [section, settings] of [
+      ["unknown", {}], ["instructions", { instructions: " " }], ["instructions", { instructions: "x".repeat(32001) }],
+      ["model", { provider: "missing", modelId: "missing", thinkingLevel: "" }], ["model", { ...worker, thinkingLevel: "invalid" }],
+      ["schedule", { schedule: "1m", delaySeconds: 60, completion: "save" }], ["schedule", { schedule: "bad", delaySeconds: 0, completion: "save" }],
+    ] as const) await expect(runtime.agents.subagents.updateSection("owner", agent.id, worker.id, section, settings)).rejects.toThrow();
+    await expect(runtime.agents.subagents.updateSection("other", agent.id, worker.id, "instructions", { instructions: "Denied" })).rejects.toMatchObject({ status: 404 });
+    const other = await createAgent();
+    await expect(runtime.agents.subagents.updateSection("owner", other.id, worker.id, "instructions", { instructions: "Denied" })).rejects.toMatchObject({ status: 404 });
+    const main = (await runtime.agents.subagents.list("owner", agent.id)).find((row) => row.kind === "orchestrator")!;
+    await expect(runtime.agents.subagents.updateSection("owner", agent.id, main.id, "schedule", { schedule: "", delaySeconds: 0, completion: "save" })).rejects.toMatchObject({ status: 409 });
+    const mainInstructions = await runtime.agents.subagents.updateSection("owner", agent.id, main.id, "instructions", { instructions: "Coordinate carefully" });
+    expect(mainInstructions.instructions).toBe("Coordinate carefully"); expect(mainInstructions.tools).toEqual(main.tools);
+    await runtime.agents.subagents.archive("owner", agent.id, worker.id);
+    await expect(runtime.agents.subagents.updateSection("owner", agent.id, worker.id, "instructions", { instructions: "Denied" })).rejects.toMatchObject({ status: 409 });
+  });
+
   it("runs fresh scoped conversations, saves full results and deduplicates assignment retries", async () => {
     const opened = vi.spyOn(Harness, "open"); const agent = await createAgent(), worker = await createWorker(agent.id, { tools: ["get_account"] });
     const harness = await opened.mock.results[0]!.value as Harness;
@@ -118,6 +220,9 @@ describe("subagent definitions, execution and scheduling", () => {
     await vi.waitFor(() => expect(faux.state.callCount).toBe(1));
     await expect(runtime.agents.subagents.run("owner", agent.id, worker.id, "Other task", randomUUID())).rejects.toMatchObject({ status: 409 });
     await expect(runtime.agents.subagents.update("owner", agent.id, worker.id, worker)).rejects.toMatchObject({ status: 409 });
+    await expect(runtime.agents.subagents.updateAssignments("owner", agent.id, worker.id, { enabled: true, delegatable: true, persistent: false, timeoutSeconds: 600 })).rejects.toMatchObject({ status: 409 });
+    await expect(runtime.agents.subagents.updateSection("owner", agent.id, worker.id, "instructions", { instructions: "Not while running" })).rejects.toMatchObject({ status: 409 });
+    await expect(runtime.agents.subagents.updateSection("owner", agent.id, worker.id, "enabled", { enabled: false })).rejects.toMatchObject({ status: 409 });
     await expect(runtime.agents.subagents.archive("owner", agent.id, worker.id)).rejects.toMatchObject({ status: 409 });
     await runtime.agents.stop("owner", agent.id);
     expect((await detail(agent.id, worker.id)).runs[0]?.status).toBe("running");

@@ -9,7 +9,7 @@ import type { ApplicationDatabase, SharedDatabase } from "../db/shared-database.
 import type { ProviderService } from "../providers/provider-service.js";
 import { AgentError, requestId } from "./agent-input.js";
 import { createSubagentExtension, RunReceipt, type RunnerId, type SubagentExtension } from "./subagent-extension.js";
-import { assignment, defaultMainInstructions, mainToolNames, nextCandleRun, subagentInput } from "./subagent-input.js";
+import { assignment, defaultMainInstructions, mainToolNames, nextCandleRun, subagentInput, type AssignmentSettings } from "./subagent-input.js";
 
 interface Binding extends SubagentExtension { harness: Harness; main: Conversation; hyperliquid: Extension; userId: string }
 export interface SubagentHost { owned(userId: string, id: string): Promise<AgentRow>; models(userId: string): Promise<Models>; changed(id: string): void }
@@ -98,12 +98,40 @@ export class SubagentService {
       return (await this.db.insert(hvSubagents).values({ ...input, id, agentId, kind: "worker", nextRunAt: input.enabled ? nextCandleRun(now, input.schedule, input.delaySeconds) : null, createdAt: now, updatedAt: now }).returning().all())[0]!;
     });
   }
+  async updateTools(userId: string, agentId: string, id: string, tools: unknown) {
+    return this.updateSettings(userId, agentId, id, undefined, { tools });
+  }
+  async updateIdentity(userId: string, agentId: string, id: string, name: unknown, description: unknown) {
+    return this.updateSettings(userId, agentId, id, undefined, { name, description });
+  }
+  async updateAssignments(userId: string, agentId: string, id: string, data: unknown) {
+    if (!data || typeof data !== "object") throw new AgentError("Invalid assignment settings.");
+    return this.updateSettings(userId, agentId, id, undefined, {
+      delegatable: Reflect.get(data, "delegatable") as unknown,
+      persistent: Reflect.get(data, "persistent") as unknown, timeoutSeconds: Reflect.get(data, "timeoutSeconds") as unknown,
+    });
+  }
+  async updateSection(userId: string, agentId: string, id: string, section: string, data: unknown) {
+    if (!data || typeof data !== "object") throw new AgentError("Invalid settings.");
+    const get = (key: string): unknown => Reflect.get(data, key);
+    switch (section) {
+      case "enabled": return this.updateSettings(userId, agentId, id, undefined, { enabled: get("enabled") });
+      case "instructions": return this.updateSettings(userId, agentId, id, undefined, { instructions: get("instructions") });
+      case "model": return this.updateSettings(userId, agentId, id, undefined, { provider: get("provider"), modelId: get("modelId"), thinkingLevel: get("thinkingLevel") });
+      case "schedule": return this.updateSettings(userId, agentId, id, undefined, { schedule: get("schedule"), delaySeconds: get("delaySeconds"), completion: get("completion") });
+      default: throw new AgentError("Unknown settings section.");
+    }
+  }
   async update(userId: string, agentId: string, id: string, data: unknown) {
+    return this.updateSettings(userId, agentId, id, data);
+  }
+  private async updateSettings(userId: string, agentId: string, id: string, data: unknown, patch?: { tools: unknown } | { name: unknown; description: unknown } | { [K in keyof AssignmentSettings]: unknown } | { enabled: unknown } | { instructions: unknown } | { provider: unknown; modelId: unknown; thinkingLevel: unknown } | { schedule: unknown; delaySeconds: unknown; completion: unknown }) {
     await this.host.owned(userId, agentId);
     return this.serial(agentId, async () => {
       const current = await this.definition(agentId, id);
       if (current.archived) throw new AgentError("Archived workers cannot be edited.", 409);
-      const input = subagentInput(data, current.kind === "orchestrator");
+      if (patch && ("enabled" in patch || "delegatable" in patch || "schedule" in patch) && current.kind === "orchestrator") throw new AgentError("The orchestrator cannot be paused or have assignment or schedule settings.", 409);
+      const input = subagentInput(patch ? { ...current, ...patch } : data, current.kind === "orchestrator");
       await this.validateModel(userId, input, input.thinkingLevel);
       const binding = this.binding(agentId);
       if (current.kind === "orchestrator") {
@@ -111,7 +139,20 @@ export class SubagentService {
         if (live?.run || inbox?.items.length) throw new AgentError("Stop or finish queued work before editing the orchestrator.", 409);
       } else if (await this.db.select().from(hvSubagentRuns).where(and(eq(hvSubagentRuns.subagentId, id), inArray(hvSubagentRuns.status, active))).get()) throw new AgentError("Stop or finish the active assignment before editing this worker.", 409);
       const now = Date.now();
-      const row = (await this.db.update(hvSubagents).set({ ...input, nextRunAt: input.enabled && !current.archived ? nextCandleRun(now, input.schedule, input.delaySeconds) : null, conversationId: input.persistent === current.persistent ? current.conversationId : null, updatedAt: now }).where(eq(hvSubagents.id, id)).returning().all())[0]!;
+      const contextSettings = {
+        delegatable: input.delegatable, persistent: input.persistent, timeoutSeconds: input.timeoutSeconds,
+        conversationId: input.persistent === current.persistent ? current.conversationId : null,
+      };
+      const scheduleSettings = { schedule: input.schedule, delaySeconds: input.delaySeconds, completion: input.completion, nextRunAt: input.enabled ? nextCandleRun(now, input.schedule, input.delaySeconds) : null };
+      const changes = !patch ? { ...input, ...contextSettings, ...scheduleSettings }
+        : "tools" in patch ? { tools: input.tools }
+        : "name" in patch ? { name: input.name, description: input.description }
+        : "instructions" in patch ? { instructions: input.instructions }
+        : "provider" in patch ? { provider: input.provider, modelId: input.modelId, thinkingLevel: input.thinkingLevel }
+        : "schedule" in patch ? scheduleSettings
+        : "enabled" in patch ? { enabled: input.enabled, nextRunAt: input.enabled === current.enabled ? current.nextRunAt : input.enabled ? nextCandleRun(now, input.schedule, input.delaySeconds) : null }
+        : contextSettings;
+      const row = (await this.db.update(hvSubagents).set({ ...changes, updatedAt: now }).where(eq(hvSubagents.id, id)).returning().all())[0]!;
       if (current.kind === "orchestrator") {
         await this.applyMain(binding, row);
         if (this.ready) binding.harness.resume();
