@@ -1,4 +1,5 @@
-import { resolve } from "node:path";
+import { join, resolve } from "node:path";
+import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 
 export interface EncryptionKeySetting {
@@ -12,6 +13,8 @@ export interface AppConfig {
   port: number;
   databasePath: string;
   staticDir: string;
+  /** Disposable asset storage; hosts such as Electron may supply their cache directory. */
+  cacheDir?: string;
   buildDir: string;
   authOrigin: string;
   authSecret: string;
@@ -57,6 +60,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
       "APP_STATIC_DIR",
       fileURLToPath(new URL("../static/", import.meta.url)),
     )),
+    cacheDir: resolve(setting(env, "APP_CACHE_DIR", join(tmpdir(), "hypervibes"))),
     encryptionKey,
   };
 }

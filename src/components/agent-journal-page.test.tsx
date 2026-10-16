@@ -48,6 +48,16 @@ describe("Agent journal UI", () => {
     ] });
     expect([...container.querySelectorAll("tbody tr")].map((row) => row.querySelectorAll("td")[2]?.textContent)).toEqual(["Fill · Sell", "Fill · Buy"]);
   });
+  it("shows perpetual funding logos in Activity, leaving spot and ledger assets unchanged", async () => {
+    await render({ ...initial, activity: [
+      { ...initial.activity[0]!, id: "funding", kind: "funding", symbol: "BTC", type: "funding" },
+      { ...initial.activity[0]!, id: "spot", kind: "fill", symbol: "@107", type: "fill B" },
+      initial.activity[0]!,
+    ] });
+    expect([...container.querySelectorAll("tbody img")].map((image) => image.getAttribute("src"))).toEqual(["/currency/BTC.svg"]);
+    expect(container.textContent).toContain("@107");
+    expect(container.textContent).toContain("USDC");
+  });
   it("opens notes, renders authored text safely and saves a scoped note", async () => {
     await render();
     mocks.getJournalNotes.mockResolvedValue({ ok: true, data: [{ id: "n", body: "<script>not HTML</script>", authorId: "owner", createdAt: 1000 }] });
@@ -89,6 +99,7 @@ describe("Agent journal UI", () => {
       parts: [{ eventId: "fill-1", time: 1000, price: "100.123456789", side: "B", segment: "entry", quantity: "2", fee: "0.1", pnl: "0" }],
     }] });
     expect(container.textContent).toContain("BTC · long");
+    expect(container.querySelector("tbody img")?.getAttribute("src")).toBe("/currency/BTC.svg");
     expect(container.textContent).toContain("Incomplete coverage");
     expect([...container.querySelectorAll("th")].map((th) => th.textContent).slice(0, 4)).toEqual(["Trade", "Status", "Notes", "Last activity"]);
     expect(container.querySelectorAll("tbody td")[2]?.querySelector("button")?.getAttribute("aria-label")).toBe("View BTC trade notes");

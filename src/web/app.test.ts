@@ -28,6 +28,7 @@ describe("embedded HTTP host", () => {
       staticDir: join(directory, "static"),
       buildDir: join(directory, "build"),
       encryptionKey: undefined,
+      cacheDir: join(directory, "cache"),
     };
     mkdirSync(join(config.staticDir, "dist"), { recursive: true });
     mkdirSync(join(config.buildDir, "client", "assets"), { recursive: true });
@@ -54,11 +55,24 @@ describe("embedded HTTP host", () => {
       },
     };
     // Inject only the web handler, never Vite or a listening server.
-    app = await createApp(config, { loadWeb: async () => start });
+    app = await createApp(config, { loadWeb: async () => start, logoFetcher: async () => new Response('<svg xmlns="http://www.w3.org/2000/svg"></svg>', { headers: { "Content-Type": "image/svg+xml" } }) });
   });
   afterEach(async () => {
     await app.close();
     rmSync(directory, { recursive: true, force: true });
+  });
+
+  it("serves cached currency SVGs with restrictive headers outside the Start catch-all", async () => {
+    const response = await app.inject("/currency/BTC.svg");
+    expect(response.statusCode).toBe(200);
+    expect(response.headers["content-type"]).toContain("image/svg+xml");
+    expect(response.headers["cache-control"]).toBe("public, max-age=86400");
+    expect(response.headers["x-content-type-options"]).toBe("nosniff");
+    expect(response.headers["content-security-policy"]).toContain("sandbox; default-src 'none'");
+    expect(response.body).toContain("<svg");
+    expect((await app.inject("/currency/BTC.png")).statusCode).toBe(400);
+    expect((await app.inject("/currency/%40107.svg")).statusCode).toBe(400);
+    expect((await app.inject("/currency/a%2Fb.svg")).statusCode).toBe(400);
   });
 
   it("injects one application runtime across Start requests without listening", async () => {

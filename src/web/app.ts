@@ -1,6 +1,9 @@
 import fastifyStatic from "@fastify/static";
 import Fastify from "fastify";
 import { isAbsolute, join, relative, sep } from "node:path";
+import { tmpdir } from "node:os";
+import { CurrencyLogoCache } from "../hyperliquid/logo-cache.js";
+import { isPerpetualLogoSymbol } from "../hyperliquid/currency-logo.js";
 import { NodeRequest, sendNodeResponse } from "srvx/node";
 import type { AppConfig } from "../config.js";
 import { createRuntime } from "../runtime.js";
@@ -13,6 +16,7 @@ interface AppOptions {
   logger?: boolean;
   development?: boolean;
   loadWeb?: typeof loadStart;
+  logoFetcher?: typeof fetch;
 }
 
 /** Constructs a single embedded runtime and web host, without opening a listener. */
@@ -27,6 +31,7 @@ export async function createApp(config: AppConfig, options: AppOptions = {}) {
   const app = Fastify({
     logger: options.logger ? { redact: ["req.headers.cookie", "req.headers.authorization", "res.headers.set-cookie"] } : false,
   });
+  const logos = new CurrencyLogoCache(config.cacheDir ?? join(tmpdir(), "hypervibes"), options.logoFetcher);
   const origin = new URL(config.authOrigin);
   app.addHook("onRequest", async (request, reply) => {
     let host: string | undefined;
@@ -38,7 +43,7 @@ export async function createApp(config: AppConfig, options: AppOptions = {}) {
   const dashboards = new AgentEventStreams(runtime, "dashboard");
   let web: StartApplication | undefined;
   // SSE responses must finish before Fastify waits for active HTTP connections.
-  app.addHook("preClose", async () => { await Promise.all([streams.close(), dashboards.close()]); });
+  app.addHook("preClose", async () => { await Promise.all([streams.close(), dashboards.close(), logos.close()]); });
   app.addHook("onClose", async () => {
     try { await web?.close(); }
     finally { await runtime.close(); }
@@ -70,6 +75,17 @@ export async function createApp(config: AppConfig, options: AppOptions = {}) {
         index: false,
       });
     }
+    app.get<{ Params: { file: string } }>("/currency/:file", async (request, reply) => {
+      const file = request.params.file;
+      const symbol = file.endsWith(".svg") ? file.slice(0, -4) : "";
+      if (!isPerpetualLogoSymbol(symbol)) return reply.code(400).type("text/plain").send("Invalid currency logo filename");
+      return reply.type("image/svg+xml; charset=utf-8")
+        .header("Cache-Control", "public, max-age=86400")
+        .header("X-Content-Type-Options", "nosniff")
+        .header("Content-Security-Policy", "sandbox; default-src 'none'; style-src 'unsafe-inline'; img-src 'none'; base-uri 'none'; form-action 'none'")
+        .send(await logos.get(symbol));
+    });
+
     app.get("/healthz", async () => {
       runtime.status();
       await runtime.database.get("SELECT 1");

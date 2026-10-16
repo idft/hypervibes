@@ -1,4 +1,5 @@
-import { resolve } from "node:path";
+import { join, resolve } from "node:path";
+import { tmpdir } from "node:os";
 import { describe, expect, it } from "vitest";
 import { loadConfig } from "./config.js";
 import { testAuthSecret, testConfig } from "./test-config.js";
@@ -11,6 +12,7 @@ describe("server config", () => {
     expect(config.databasePath).toBe(resolve("data/hypervibes.sqlite"));
     expect(config.staticDir).toBe(resolve("static"));
     expect(config.buildDir).toBe(resolve(".build"));
+    expect(config.cacheDir).toBe(join(tmpdir(), "hypervibes"));
     expect(config.authOrigin).toBe("http://localhost:3003");
   });
 
@@ -21,6 +23,7 @@ describe("server config", () => {
       APP_SQLITE_PATH: "private/test.sqlite",
       APP_STATIC_DIR: "public",
       APP_BUILD_DIR: "output",
+      APP_CACHE_DIR: "private/cache",
     })).toEqual({
       authOrigin: "http://localhost:3103",
       authSecret: testAuthSecret,
@@ -29,6 +32,7 @@ describe("server config", () => {
       databasePath: resolve("private/test.sqlite"),
       staticDir: resolve("public"),
       buildDir: resolve("output"),
+      cacheDir: resolve("private/cache"),
     });
   });
 
@@ -46,7 +50,7 @@ describe("server config", () => {
     expect(() => testConfig({ BETTER_AUTH_SECRET: "short" })).toThrow("BETTER_AUTH_SECRET");
   });
 
-  it.each(["APP_HOST", "APP_SQLITE_PATH", "APP_STATIC_DIR", "APP_BUILD_DIR"])("rejects blank %s", (name) => {
+  it.each(["APP_HOST", "APP_SQLITE_PATH", "APP_STATIC_DIR", "APP_BUILD_DIR", "APP_CACHE_DIR"])("rejects blank %s", (name) => {
     expect(() => testConfig({ [name]: " " })).toThrow(name);
   });
 

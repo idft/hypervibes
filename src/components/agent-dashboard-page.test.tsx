@@ -75,6 +75,14 @@ describe("Agent dashboard", () => {
     expect(container.textContent).toContain("Orders unavailable");
     expect(container.textContent).not.toContain("No open positions");
   });
+  it("renders perpetual logos in positions and orders without resolving spot pairs", async () => {
+    await act(async () => source().send({ ...initial,
+      positions: [{ coin: "BTC", size: "1", entryPrice: "100", unrealizedPnl: "0", liquidationPrice: null, leverage: 1 }],
+      orders: [{ id: 1, coin: "ETH", side: "Buy", size: "1", price: "100", type: "Limit" }, { id: 2, coin: "@107", side: "Buy", size: "1", price: "1", type: "Limit" }],
+    }));
+    expect([...container.querySelectorAll("tbody img")].map((image) => image.getAttribute("src"))).toEqual(["/currency/BTC.svg", "/currency/ETH.svg"]);
+    expect(container.textContent).toContain("@107");
+  });
   it("renders exact, signed unrealized P&L", async () => {
     const position = { coin: "BTC", size: "1", entryPrice: "100", unrealizedPnl: "0.1", liquidationPrice: null, leverage: 1 };
     await act(async () => source().send({ ...initial, positions: [position, { ...position, coin: "ETH", unrealizedPnl: "-0.3" }] }));
