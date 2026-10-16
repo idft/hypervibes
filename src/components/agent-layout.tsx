@@ -1,5 +1,5 @@
 import { Link, Outlet } from "@tanstack/react-router";
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import type { AgentRow } from "../db/agent-schema.js";
 
 const sections = [
@@ -12,14 +12,11 @@ const sections = [
   { label: "Settings", to: "/agents/$agentId/settings", icon: "M4 6h16M4 12h16M4 18h16M8 3v6M16 9v6M10 15v6" },
 ] as const;
 
-export function AgentLayout({ agent }: { agent: AgentRow }) {
-  const [expanded, setExpanded] = useState(false);
-  useEffect(() => {
-    try { setExpanded(localStorage.getItem("agent-navigation-expanded") === "true"); } catch { /* Storage is optional. */ }
-  }, []);
+export function AgentLayout({ agent, initialExpanded }: { agent: AgentRow; initialExpanded: boolean }) {
+  const [expanded, setExpanded] = useState(initialExpanded);
   function toggle() {
     setExpanded((value) => {
-      try { localStorage.setItem("agent-navigation-expanded", String(!value)); } catch { /* Storage is optional. */ }
+      document.cookie = `hv-agent-nav-expanded=${!value}; Max-Age=31536000; Path=/; SameSite=Strict`;
       return !value;
     });
   }

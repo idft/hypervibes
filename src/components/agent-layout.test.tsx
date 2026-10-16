@@ -11,16 +11,17 @@ vi.mock("@tanstack/react-router", () => ({
 import { AgentLayout } from "./agent-layout.js";
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 const agent: AgentRow = { id: "fixture", name: "Research", userId: "owner", state: "ready", conversationId: 1, initialProvider: null, initialModelId: null, error: null, tradingAccountAddress: null, creationRequestId: "fixture", createdAt: 0, updatedAt: 0 };
+const navCookie = () => document.cookie.split(/;\s*/).find((part) => part.startsWith("hv-agent-nav-expanded="));
 
 describe("Agent navigation", () => {
   let root: Root;
   let container: HTMLDivElement;
   beforeEach(async () => {
-    localStorage.clear();
+    document.cookie = "hv-agent-nav-expanded=; Max-Age=0";
     container = document.createElement("div"); document.body.append(container); root = createRoot(container);
-    await act(async () => root.render(<AgentLayout agent={agent} />));
+    await act(async () => root.render(<AgentLayout agent={agent} initialExpanded={false} />));
   });
-  afterEach(async () => { await act(async () => root.unmount()); container.remove(); localStorage.clear(); });
+  afterEach(async () => { await act(async () => root.unmount()); container.remove(); document.cookie = "hv-agent-nav-expanded=; Max-Age=0"; });
   it("links the requested sections, defaults to dashboard and pins Settings below the main links", () => {
     const links = [...container.querySelectorAll("nav a")];
     expect(links.map((link) => link.getAttribute("aria-label"))).toEqual(["Dashboard", "Chart", "Chat", "Transactions", "Memories", "Sub-agents", "Settings"]);
@@ -31,15 +32,15 @@ describe("Agent navigation", () => {
     expect(container.querySelector("h1")).toBeNull();
     expect(container.textContent).not.toContain("Notifications");
   });
-  it("expands labels and restores the preference after remount", async () => {
+  it("expands labels and persists the preference for the next server render", async () => {
     const button = container.querySelector("button")!;
     expect(button.getAttribute("aria-expanded")).toBe("false");
     expect(button.classList.contains("cursor-pointer")).toBe(true);
     await act(async () => button.click());
     expect(button.getAttribute("aria-expanded")).toBe("true");
-    expect(localStorage.getItem("agent-navigation-expanded")).toBe("true");
+    expect(navCookie()).toBe("hv-agent-nav-expanded=true");
     await act(async () => root.unmount()); root = createRoot(container);
-    await act(async () => root.render(<AgentLayout agent={agent} />));
+    await act(async () => root.render(<AgentLayout agent={agent} initialExpanded={true} />));
     expect(container.querySelector("button")!.getAttribute("aria-expanded")).toBe("true");
     expect(container.querySelector('a[aria-label="Dashboard"]')!.textContent).toBe("Dashboard");
   });
