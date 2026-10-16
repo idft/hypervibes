@@ -5,7 +5,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SubagentRow, SubagentRun } from "../db/subagent-schema.js";
 import type { EntryRecord } from "@earendil-works/pi-durable";
-const mocks = vi.hoisted(() => ({ getSubagentRun: vi.fn(), stopSubagentRun: vi.fn() }));
+const mocks = vi.hoisted(() => ({ stopSubagentRun: vi.fn() }));
 vi.mock("../web/subagents.js", () => mocks);
 import { SubagentRunHistory } from "./subagent-run-history.js";
 import { SubagentRunPage } from "./subagent-run-page.js";
@@ -18,10 +18,16 @@ const initial = {
   prior: [entry(1, "pi.user", [{ role: "user", content: "Earlier assignment", timestamp: 1 }])],
   entries: [entry(2, "pi.user", [{ role: "user", content: run.task, timestamp: 1 }]), entry(3, "pi.assistant", [fauxAssistantMessage([{ type: "thinking", thinking: "Reasoning evidence" }, { type: "text", text: "Full assistant response" }, { type: "toolCall", id: "call", name: "get_account", arguments: { coin: "BTC" } }], { stopReason: "toolUse", timestamp: 1 })]), entry(4, "pi.tool", [{ role: "toolResult", toolCallId: "call", toolName: "get_account", content: [{ type: "text", text: "Complete tool output" }], isError: false, timestamp: 1 }])],
 };
+class RunSource extends EventTarget {
+  static instances: RunSource[] = [];
+  onerror: (() => void) | null = null;
+  close = vi.fn();
+  constructor(readonly url: string) { super(); RunSource.instances.push(this); }
+}
 describe("sub-agent run history and details", () => {
   let root: Root, container: HTMLDivElement;
-  beforeEach(() => { vi.resetAllMocks(); container = document.createElement("div"); document.body.append(container); root = createRoot(container); });
-  afterEach(async () => { await act(async () => root.unmount()); container.remove(); vi.restoreAllMocks(); });
+  beforeEach(() => { vi.resetAllMocks(); RunSource.instances = []; vi.stubGlobal("EventSource", RunSource); container = document.createElement("div"); document.body.append(container); root = createRoot(container); });
+  afterEach(async () => { await act(async () => root.unmount()); container.remove(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
   it("renders a table with relative timestamps, accessible status icons, links and isolated Stop actions", async () => {
     const stop = vi.fn();
     await act(async () => root.render(<SubagentRunHistory agentId={run.agentId} runs={[run, { ...run, id: "running-id", status: "running", source: "delegation" }]} pending={false} onStop={stop} />));
@@ -43,24 +49,50 @@ describe("sub-agent run history and details", () => {
     expect(stop).toHaveBeenCalledWith("running-id");
     expect(navigate).toHaveBeenCalledOnce();
   });
-  it("shows snapshotted instructions, full transcript, tools, prior context and result", async () => {
+  it("shows snapshotted instructions, full transcript, tools and prior context without duplicated sections", async () => {
     await act(async () => root.render(<SubagentRunPage initial={initial} />));
-    for (const text of ["Saved worker instructions", run.task, "Earlier assignment", "Reasoning evidence", "Full assistant response", "Tool call · get_account", '"coin": "BTC"', "Complete tool output", run.result]) expect(container.textContent).toContain(text);
+    for (const text of ["Saved worker instructions", run.task, "Earlier assignment", "Reasoning evidence", "Full assistant response", "Tool call · get_account", '"coin": "BTC"', "Complete tool output"]) expect(container.textContent).toContain(text);
+    // The assignment and final result duplicate the transcript's first user
+    // message and last assistant message, so they no longer get their own sections.
+    expect(container.textContent).not.toContain("Complete final result");
+    expect([...container.querySelectorAll("h2")].map((heading) => heading.textContent)).not.toContain("Assignment");
+    expect([...container.querySelectorAll("h2")].map((heading) => heading.textContent)).not.toContain("Final result");
     expect(container.textContent).not.toContain("Changed since execution");
     expect(container.querySelectorAll("details").length).toBeGreaterThan(3);
+    expect(container.querySelectorAll("hr")).toHaveLength(1);
   });
-  it("refreshes after stopping active work without hiding errors", async () => {
+  it("renders a one-line breadcrumb to the sub-agent and live-updates without refresh controls", async () => {
+    await act(async () => root.render(<SubagentRunPage initial={initial} />));
+    const nav = container.querySelector("nav")!;
+    expect(nav.getAttribute("aria-label")).toBe("Run breadcrumb");
+    const links = [...nav.querySelectorAll("a")].map((link) => ({ href: link.getAttribute("href"), text: link.textContent }));
+    expect(links).toEqual([
+      { href: "/agents/agent-fixture/sub-agents", text: "← Sub-agents" },
+      { href: "/agents/agent-fixture/sub-agents/worker%3Afixture", text: "Research" },
+    ]);
+    expect(nav.querySelector("h2")?.textContent).toBe("Run large-hex-id");
+    const source = RunSource.instances.at(-1)!;
+    expect(source.url).toBe("/api/agents/agent-fixture/sub-agents/worker%3Afixture/runs/large-hex-id/events");
+    expect([...container.querySelectorAll("button")].some((button) => button.textContent === "Refresh")).toBe(false);
+    const live = { ...initial, run: { ...run, status: "running" as const, result: "", finishedAt: null } };
+    await act(async () => source.dispatchEvent(new MessageEvent("run", { data: JSON.stringify(live) })));
+    expect(container.textContent).toContain("Stop assignment");
+    await act(async () => source.dispatchEvent(new MessageEvent("unavailable", { data: JSON.stringify({ message: "Reconnecting fixture" }) })));
+    expect(container.querySelector('[role="status"]')?.textContent).toBe("Reconnecting fixture");
+  });
+  it("stops active work through the live stream without manual refreshes", async () => {
     const active = { ...initial, run: { ...run, status: "running" as const, result: "", finishedAt: null } };
     mocks.stopSubagentRun.mockResolvedValue({ ok: true });
-    mocks.getSubagentRun.mockResolvedValue({ ok: true, data: { ...active, run: { ...active.run, status: "cancelled", result: "Stopped by user" } } });
     await act(async () => root.render(<SubagentRunPage initial={active} />));
-    await act(async () => [...container.querySelectorAll("button")].find((button) => button.textContent === "Stop assignment")!.click());
+    const source = RunSource.instances.at(-1)!;
+    await act(async () => container.querySelector("button")!.click());
     expect(mocks.stopSubagentRun).toHaveBeenCalledWith({ data: { agentId: run.agentId, runId: run.id } });
-    expect(container.textContent).toContain("Stopped by user");
+    await act(async () => source.dispatchEvent(new MessageEvent("run", { data: JSON.stringify({ ...active, run: { ...active.run, status: "cancelled", result: "Stopped by user" } }) })));
+    expect(container.querySelector('[role="img"]')?.getAttribute("aria-label")).toBe("cancelled");
     expect(container.textContent).not.toContain("Stop assignment");
-    mocks.getSubagentRun.mockRejectedValue(new Error("Unavailable"));
+    mocks.stopSubagentRun.mockResolvedValue({ ok: false, error: "Unavailable" });
+    await act(async () => source.dispatchEvent(new MessageEvent("run", { data: JSON.stringify(active) })));
     await act(async () => container.querySelector("button")!.click());
     expect(container.querySelector('[role="alert"]')?.textContent).toContain("Unavailable");
-    expect(container.textContent).toContain("Stopped by user");
   });
 });

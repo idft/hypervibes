@@ -14,6 +14,8 @@ import { assignment, defaultMainInstructions, mainToolNames, nextCandleRun, suba
 
 interface Binding extends SubagentExtension { harness: Harness; main: Conversation; hyperliquid: Extension; userId: string }
 export interface SubagentHost { owned(userId: string, id: string): Promise<AgentRow>; models(userId: string): Promise<Models>; changed(id: string): void }
+/** Full run detail: snapshotted configuration plus the complete transcript. */
+export interface RunDetail { definition: SubagentRow; run: SubagentRun; entries: EntryRecord[]; prior: EntryRecord[] }
 const active = ["queued", "running"] as const;
 
 /** Definitions and run intents belong to the app; Durable owns execution and reporting. */
@@ -143,7 +145,7 @@ export class SubagentService {
       this.historyFeeds.delete(finished); finish();
     }
   }
-  async runDetail(userId: string, agentId: string, id: string, runId: string) {
+  async runDetail(userId: string, agentId: string, id: string, runId: string): Promise<RunDetail> {
     await this.host.owned(userId, agentId);
     const definition = await this.definition(agentId, id);
     const run = await this.db.select().from(hvSubagentRuns).where(and(eq(hvSubagentRuns.id, runId), eq(hvSubagentRuns.agentId, agentId), eq(hvSubagentRuns.subagentId, id))).get();
@@ -173,6 +175,62 @@ export class SubagentService {
       }, context);
     }
     return { definition, run, entries, prior };
+  }
+  /** Verifies the viewer owns the Agent, worker and run without reading its transcript. */
+  async ownedRun(userId: string, agentId: string, id: string, runId: string) {
+    await this.host.owned(userId, agentId);
+    await this.definition(agentId, id);
+    const run = await this.internalRun(agentId, runId);
+    if (run.subagentId !== id) throw new AgentError("Assignment not found", 404);
+    return run;
+  }
+  /** One page-scoped subscription; reconnects receive a fresh run-detail snapshot. */
+  async watchRun(userId: string, agentId: string, id: string, runId: string, signal: AbortSignal, publish: (detail: RunDetail) => void): Promise<void> {
+    this.admit();
+    await this.ownedRun(userId, agentId, id, runId);
+    const lifetime = AbortSignal.any([signal, this.historyShutdown.signal]);
+    let finish!: () => void;
+    const finished = new Promise<void>((resolve) => { finish = resolve; });
+    this.historyFeeds.add(finished);
+    let dirty = true;
+    let wake: (() => void) | undefined;
+    const changed = () => { dirty = true; wake?.(); };
+    const listeners = this.historyListeners.get(id) ?? new Set<() => void>();
+    this.historyListeners.set(id, listeners); listeners.add(changed);
+    lifetime.addEventListener("abort", changed);
+    let watch: Awaited<ReturnType<Conversation["watch"]>> | undefined;
+    let watched: number | null = null;
+    try {
+      while (!lifetime.aborted) {
+        if (dirty) {
+          dirty = false;
+          // Status changes announce themselves through the history stream; the
+          // child conversation watch covers transcript entries, which nothing
+          // else observes while a worker executes.
+          const run = await this.internalRun(agentId, runId);
+          if (run.conversationId !== null && run.conversationId !== watched) {
+            await watch?.stop();
+            watch = undefined; watched = null;
+            const child = await this.binding(agentId).harness.conversation(run.conversationId as ConversationId, context);
+            if (child && !lifetime.aborted) {
+              const attached = await child.watch(context);
+              watch = attached; watched = child.id;
+              attached.start(async () => { if (watch === attached) changed(); });
+              void attached.closed.then(() => { if (watch === attached) { watch = undefined; watched = null; changed(); } });
+            }
+          }
+          if (!lifetime.aborted) publish(await this.runDetail(userId, agentId, id, runId));
+        }
+        if (!dirty && !lifetime.aborted) await new Promise<void>((resolve) => { wake = resolve; });
+        wake = undefined;
+      }
+    } finally {
+      lifetime.removeEventListener("abort", changed);
+      listeners.delete(changed);
+      if (!listeners.size) this.historyListeners.delete(id);
+      try { await watch?.stop(); }
+      finally { this.historyFeeds.delete(finished); finish(); }
+    }
   }
   private async definition(agentId: string, id: string) {
     const row = await this.db.select().from(hvSubagents).where(and(eq(hvSubagents.id, id), eq(hvSubagents.agentId, agentId))).get();

@@ -182,6 +182,30 @@ describe("subagent definitions, execution and scheduling", () => {
     expect(publish).toHaveBeenCalledTimes(calls);
   });
 
+  it("streams live run-detail snapshots until the subscription aborts", async () => {
+    const agent = await createAgent(), worker = await createWorker(agent.id);
+    faux.setResponses([fauxAssistantMessage("Live worker answer")]);
+    const run = await runtime.agents.subagents.run("owner", agent.id, worker.id, "Live task", randomUUID());
+    const source = new AbortController(), publish = vi.fn();
+    const watching = runtime.agents.subagents.watchRun("owner", agent.id, worker.id, run.id, source.signal, publish);
+    try {
+      await vi.waitFor(() => expect(publish).toHaveBeenCalled());
+      expect(publish.mock.lastCall?.[0].run.id).toBe(run.id);
+      await completed(agent.id, worker.id);
+      await vi.waitFor(() => expect(publish.mock.lastCall?.[0].run.status).toBe("completed"));
+      expect(publish.mock.lastCall?.[0].run.result).toBe("Live worker answer");
+      expect(JSON.stringify(publish.mock.lastCall?.[0].entries)).toContain("Live task");
+      expect(JSON.stringify(publish.mock.lastCall?.[0].entries)).toContain("Live worker answer");
+    } finally { source.abort(); await watching; }
+    const calls = publish.mock.calls.length;
+    await runtime.agents.subagents.tick();
+    expect(publish).toHaveBeenCalledTimes(calls);
+    const otherWorker = await createWorker(agent.id);
+    await expect(runtime.agents.subagents.watchRun("other", agent.id, worker.id, run.id, source.signal, publish)).rejects.toMatchObject({ status: 404 });
+    await expect(runtime.agents.subagents.watchRun("owner", agent.id, otherWorker.id, run.id, source.signal, publish)).rejects.toMatchObject({ status: 404 });
+    await expect(runtime.agents.subagents.watchRun("owner", agent.id, worker.id, "missing", source.signal, publish)).rejects.toMatchObject({ status: 404 });
+  });
+
   it("paginates history in stable newest-first pages without large result payloads", async () => {
     const agent = await createAgent(), worker = await createWorker(agent.id);
     expect((await runtime.agents.subagents.history("owner", agent.id, worker.id)).pagination).toEqual({ page: 1, pages: 1, pageSize: 50, total: 0 });

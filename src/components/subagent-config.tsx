@@ -22,6 +22,7 @@ export function SubagentIdentity({ value, main, agentId, enabled, onToggleEnable
         </nav>
         {actions && <div className="flex shrink-0 items-center gap-2">{actions}</div>}
     </header>
+    <hr className="border-zinc-800" />
     {open && <IdentityDialog value={value} onCancel={() => setOpen(false)} onApply={async (next) => { await onChange(next); setOpen(false); }} />}
   </section>;
 }

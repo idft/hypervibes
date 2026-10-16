@@ -9,6 +9,7 @@ import { createRuntime, type AppRuntime } from "../runtime.js";
 import { testConfig } from "../test-config.js";
 import { hvSubagentRuns } from "../db/subagent-schema.js";
 import type { RunHistory } from "../agents/subagent-history.js";
+import type { RunDetail } from "../agents/subagent-service.js";
 import { AgentEventStreams } from "./agent-events.js";
 
 const mocks = vi.hoisted(() => ({ session: vi.fn() }));
@@ -199,6 +200,37 @@ describe("Agent chat event stream", () => {
     expect(snapshot.runs[0]).not.toHaveProperty("result");
     await streams.close();
     expect((await readEvent(liveReader, liveBuffer)).event).toBe("shutdown");
+    vi.restoreAllMocks();
+  });
+
+  it("pushes live run-detail snapshots, authorizes its scope and closes its watcher", async () => {
+    await streams.close(); streams = new AgentEventStreams(runtime, "run");
+    const agent = await runtime.agents.create("owner", "Research", randomUUID(), `0x${"12".repeat(20)}`);
+    await runtime.agents.subagents.tick();
+    const worker = await runtime.agents.subagents.create("owner", agent.id, { name: "Research", description: "", instructions: "Find evidence", provider: "faux", modelId: "faux-1", thinkingLevel: "", tools: [], enabled: true, delegatable: true, persistent: false, schedule: "", delaySeconds: 30, completion: "save", timeoutSeconds: 900 }, randomUUID());
+    faux.setResponses([fauxAssistantMessage("Pushed worker answer")]);
+    const run = await runtime.agents.subagents.run("owner", agent.id, worker.id, "New task", randomUUID());
+    const runRequest = (runId: string, signal?: AbortSignal) => new Request(`http://localhost:3003/api/agents/${agent.id}/sub-agents/${worker.id}/runs/${runId}/events`, { headers: { origin: runtime.origin }, signal });
+    expect((await streams.open(runRequest("missing"), agent.id, worker.id, "missing")).status).toBe(404);
+    const otherWorker = await runtime.agents.subagents.create("owner", agent.id, { name: "Other", description: "", instructions: "Find evidence", provider: "faux", modelId: "faux-1", thinkingLevel: "", tools: [], enabled: true, delegatable: true, persistent: false, schedule: "", delaySeconds: 30, completion: "save", timeoutSeconds: 900 }, randomUUID());
+    expect((await streams.open(runRequest(run.id), agent.id, otherWorker.id, run.id)).status).toBe(404);
+    mocks.session.mockResolvedValue({ user: { id: "other" }, expiresAt: expiry() });
+    expect((await streams.open(runRequest(run.id), agent.id, worker.id, run.id)).status).toBe(404);
+    mocks.session.mockResolvedValue({ user: { id: "owner" }, expiresAt: expiry() });
+    const source = new AbortController();
+    const response = await streams.open(runRequest(run.id, source.signal), agent.id, worker.id, run.id);
+    const reader = response.body!.getReader(), buffer = { text: "" };
+    const first = await readEvent<RunDetail>(reader, buffer);
+    expect(first.event).toBe("run");
+    expect(first.data.run.id).toBe(run.id);
+    let snapshot = first.data;
+    for (let i = 0; i < 20 && snapshot.run.status !== "completed"; i++) snapshot = (await readEvent<RunDetail>(reader, buffer)).data;
+    expect(snapshot.run.status).toBe("completed");
+    expect(snapshot.run.result).toBe("Pushed worker answer");
+    expect(JSON.stringify(snapshot.entries)).toContain("New task");
+    expect(JSON.stringify(snapshot.entries)).toContain("Pushed worker answer");
+    source.abort();
+    await streams.close();
     vi.restoreAllMocks();
   });
 
