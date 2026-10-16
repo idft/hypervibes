@@ -1,4 +1,5 @@
 import { HttpTransport } from "@nktkas/hyperliquid";
+import type { JournalService } from "./journal-service.js";
 import { loadAgentDashboard, type AgentDashboard } from "./agent-dashboard.js";
 import { LiveDashboards, type AccountFeedFactory } from "./live-dashboard.js";
 import { agentId } from "../agents/agent-input.js";
@@ -110,6 +111,7 @@ export class HyperliquidService {
     private readonly encryptionKey: EncryptionKeySetting | undefined,
     private readonly transport: HttpTransport = new HttpTransport(),
     feedFactory?: AccountFeedFactory,
+    private readonly journal?: JournalService,
   ) {
     this.creator = new SubaccountCreator(transport);
     this.live = new LiveDashboards(transport, feedFactory);
@@ -121,7 +123,12 @@ export class HyperliquidService {
     const refresh = () => {
       this.registryTask = this.db.select({ address: hvAgents.tradingAccountAddress }).from(hvAgents)
         .where(isNotNull(hvAgents.tradingAccountAddress)).all()
-        .then(async (rows) => { if (!this.stopped) await this.live.reconcile(rows.flatMap((row) => row.address ? [row.address] : [])); })
+        .then(async (rows) => {
+          if (this.stopped) return;
+          const addresses = rows.flatMap((row) => row.address ? [row.address] : []);
+          this.journal?.reconcile(addresses);
+          await this.live.reconcile(addresses);
+        })
         .catch(() => { console.error("Unable to refresh linked Hyperliquid accounts; retrying"); })
         .finally(() => {
           if (!this.stopped) { this.registryTimer = setTimeout(refresh, 30_000); this.registryTimer.unref(); }
@@ -134,7 +141,8 @@ export class HyperliquidService {
     this.stopped = true;
     clearTimeout(this.registryTimer);
     await this.registryTask;
-    await this.live.close();
+    try { await this.live.close(); }
+    finally { await this.journal?.close(); }
   }
 
   private async dashboardAccount(userId: string, id: string) {
@@ -153,6 +161,24 @@ export class HyperliquidService {
     const address = await this.dashboardAccount(userId, id);
     if (!this.started || !address) { publish(await loadAgentDashboard(this.transport, null)); return; }
     await this.live.watch(address, signal, publish);
+  }
+
+  async agentJournal(userId: string, id: string, view: "trades" | "activity", page: number) {
+    const address = await this.dashboardAccount(userId, id);
+    if (!this.journal) throw new HyperliquidError("Journal is unavailable", 503);
+    return this.journal.page(address, view, page);
+  }
+
+  async journalNotes(userId: string, id: string, target: string) {
+    const address = await this.dashboardAccount(userId, id);
+    if (!address || !this.journal) throw new HyperliquidError("Journal entry not found", 404);
+    return this.journal.notes(address, target);
+  }
+
+  async addJournalNote(userId: string, id: string, target: string, body: string) {
+    const address = await this.dashboardAccount(userId, id);
+    if (!address || !this.journal) throw new HyperliquidError("Journal entry not found", 404);
+    await this.journal.addNote(address, target, userId, body);
   }
 
   async settings(userId: string): Promise<HyperliquidSettingsRow | undefined> {

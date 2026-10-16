@@ -1,6 +1,4 @@
-import { drizzle } from "drizzle-orm/node-sqlite";
-import { migrate } from "drizzle-orm/node-sqlite/migrator";
-import { fileURLToPath } from "node:url";
+import { migrateApplication } from "./db/migrations.js";
 import { AgentService, type AgentServiceOptions } from "./agents/agent-service.js";
 import { createAuth } from "./auth.js";
 import type { AppConfig } from "./config.js";
@@ -9,6 +7,8 @@ import { lockProfile } from "./db/profile-lock.js";
 import { applicationDatabase, SharedDatabase } from "./db/shared-database.js";
 import type { AccountFeedFactory } from "./hyperliquid/live-dashboard.js";
 import { HyperliquidService } from "./hyperliquid/service.js";
+import { HttpTransport } from "@nktkas/hyperliquid";
+import { exchangeHistory, JournalService, type HistoryFetcher } from "./hyperliquid/journal-service.js";
 import { ProviderService, type ProviderServiceOptions } from "./providers/provider-service.js";
 
 export interface RuntimeStatus {
@@ -17,7 +17,7 @@ export interface RuntimeStatus {
 }
 
 /** Application-owned resources, constructed once by the host, never by a request. */
-export async function createRuntime(config: AppConfig, options: AgentServiceOptions & ProviderServiceOptions & { accountFeedFactory?: AccountFeedFactory } = {}) {
+export async function createRuntime(config: AppConfig, options: AgentServiceOptions & ProviderServiceOptions & { accountFeedFactory?: AccountFeedFactory; journalHistoryFetcher?: HistoryFetcher } = {}) {
   const connection = openDatabase(config.databasePath);
   const database = new SharedDatabase(connection);
   let release: (() => Promise<void>) | undefined;
@@ -46,10 +46,7 @@ export async function createRuntime(config: AppConfig, options: AgentServiceOpti
       void close().catch(() => { console.error("Failed to close compromised application storage"); });
     });
     // Native migration access is allowed only before the shared queue is used.
-    migrate(drizzle({ client: connection }), {
-      migrationsFolder: fileURLToPath(new URL("./db/migrations/", import.meta.url)),
-      migrationsTable: "hv_schema_migrations",
-    });
+    migrateApplication(connection);
     const db = applicationDatabase(database);
     const auth = createAuth(db, config);
     await auth.$context;
@@ -59,7 +56,9 @@ export async function createRuntime(config: AppConfig, options: AgentServiceOpti
     const agentService = new AgentService(db, database, providerService, options);
     providerService.onChanged = (userId) => agentService.providersChanged(userId);
     agents = agentService;
-    hyperliquid = new HyperliquidService(db, config.encryptionKey, undefined, options.accountFeedFactory);
+    const transport = new HttpTransport();
+    const journal = new JournalService(database, options.journalHistoryFetcher ?? exchangeHistory(transport));
+    hyperliquid = new HyperliquidService(db, config.encryptionKey, transport, options.accountFeedFactory, journal);
     await agentService.recover();
     return {
       db,

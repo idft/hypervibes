@@ -44,7 +44,7 @@ describe("Agent chat event stream", () => {
     const models = createModels();
     faux = fauxProvider();
     models.setProvider(faux.provider);
-    return { models, model: { provider: "faux", modelId: "faux-1" }, accountFeedFactory: (_address: string, events: AccountFeedEvents) => {
+    return { models, model: { provider: "faux", modelId: "faux-1" }, journalHistoryFetcher: async () => [], accountFeedFactory: (_address: string, events: AccountFeedEvents) => {
       feedEvents = events;
       return { close: closeFeed };
     } };

@@ -56,6 +56,5 @@ export function AgentDashboardPage({ id, initial }: { id: string; initial: Agent
       <Panel title="Open orders">{snapshot.orders === null ? <p className="text-sm text-amber-200">Orders unavailable.</p> : snapshot.orders.length === 0 ? <p className="text-sm text-zinc-500">No open orders.</p> : <div className="overflow-x-auto"><table className="w-full text-sm text-zinc-300"><thead className="text-xs text-zinc-500"><tr>{["Market", "Side", "Type", "Size", "Price / trigger limit"].map((label) => <th key={label} className={cell}>{label}</th>)}</tr></thead><tbody className="divide-y divide-zinc-800">{snapshot.orders.map((order) => <tr key={order.id}><td className={cell}>{order.coin}</td><td className={cell}>{order.side}</td><td className={cell}>{order.type}</td><td className={cell}>{order.size}</td><td className={cell}>{order.price}</td></tr>)}</tbody></table></div>}</Panel>
     </>}
     <AgentSectionPage title="Performance" description="Historical balance and P&L charts are not available yet." />
-    <AgentSectionPage title="Trade journal" description="Trade history, activity, and journal notes are not available yet." />
   </div>;
 }
