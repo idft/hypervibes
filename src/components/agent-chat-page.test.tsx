@@ -33,7 +33,7 @@ class FakeEventSource {
 vi.stubGlobal("EventSource", FakeEventSource);
 
 const initial: AgentChat = {
-  agent: { id: "agent-fixture", name: "Research", userId: "owner", state: "ready", conversationId: 1, error: null, creationRequestId: "fixture", createdAt: 0, updatedAt: 0 },
+  agent: { id: "agent-fixture", name: "Research", userId: "owner", state: "ready", conversationId: 1, error: null, tradingAccountAddress: null, creationRequestId: "fixture", createdAt: 0, updatedAt: 0 },
   model: { provider: "opencode-go", modelId: "deepseek-v4.1-flash" }, configured: true, busy: false, queued: 0, messages: [], partial: "",
 };
 describe("Agent chat", () => {

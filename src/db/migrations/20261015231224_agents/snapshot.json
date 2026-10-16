@@ -1,9 +1,9 @@
 {
   "version": "7",
   "dialect": "sqlite",
-  "id": "2bb456b4-c003-4643-a9ed-18d5c188413b",
+  "id": "7208224c-d249-4e51-9d21-d1492da451c9",
   "prevIds": [
-    "71e5633f-a006-4ef8-b380-36605a863b3c"
+    "2bb456b4-c003-4643-a9ed-18d5c188413b"
   ],
   "ddl": [
     {
@@ -28,6 +28,10 @@
     },
     {
       "name": "hv_agents",
+      "entityType": "tables"
+    },
+    {
+      "name": "hv_hyperliquid_settings",
       "entityType": "tables"
     },
     {
@@ -501,6 +505,16 @@
       "table": "hv_agents"
     },
     {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "trading_account_address",
+      "entityType": "columns",
+      "table": "hv_agents"
+    },
+    {
       "type": "integer",
       "notNull": true,
       "autoincrement": false,
@@ -519,6 +533,116 @@
       "name": "updated_at",
       "entityType": "columns",
       "table": "hv_agents"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "user_id",
+      "entityType": "columns",
+      "table": "hv_hyperliquid_settings"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "api_wallet_address",
+      "entityType": "columns",
+      "table": "hv_hyperliquid_settings"
+    },
+    {
+      "type": "blob",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "private_key_ciphertext",
+      "entityType": "columns",
+      "table": "hv_hyperliquid_settings"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "private_key_key_id",
+      "entityType": "columns",
+      "table": "hv_hyperliquid_settings"
+    },
+    {
+      "type": "integer",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "api_wallet_approved_at",
+      "entityType": "columns",
+      "table": "hv_hyperliquid_settings"
+    },
+    {
+      "type": "integer",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "api_wallet_expires_at",
+      "entityType": "columns",
+      "table": "hv_hyperliquid_settings"
+    },
+    {
+      "type": "integer",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "api_wallet_expiry_checked_at",
+      "entityType": "columns",
+      "table": "hv_hyperliquid_settings"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "0",
+      "generated": null,
+      "name": "builder_fee_tenths_of_bp",
+      "entityType": "columns",
+      "table": "hv_hyperliquid_settings"
+    },
+    {
+      "type": "integer",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "builder_fee_approved_at",
+      "entityType": "columns",
+      "table": "hv_hyperliquid_settings"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "created_at",
+      "entityType": "columns",
+      "table": "hv_hyperliquid_settings"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "updated_at",
+      "entityType": "columns",
+      "table": "hv_hyperliquid_settings"
     },
     {
       "columns": [
@@ -582,6 +706,21 @@
     },
     {
       "columns": [
+        "user_id"
+      ],
+      "tableTo": "hv_users",
+      "columnsTo": [
+        "id"
+      ],
+      "onUpdate": "NO ACTION",
+      "onDelete": "RESTRICT",
+      "nameExplicit": false,
+      "name": "fk_hv_hyperliquid_settings_user_id_hv_users_id_fk",
+      "entityType": "fks",
+      "table": "hv_hyperliquid_settings"
+    },
+    {
+      "columns": [
         "id"
       ],
       "nameExplicit": false,
@@ -632,6 +771,15 @@
       "nameExplicit": false,
       "name": "hv_agents_pk",
       "table": "hv_agents",
+      "entityType": "pks"
+    },
+    {
+      "columns": [
+        "user_id"
+      ],
+      "nameExplicit": false,
+      "name": "hv_hyperliquid_settings_pk",
+      "table": "hv_hyperliquid_settings",
       "entityType": "pks"
     },
     {
@@ -724,6 +872,20 @@
     },
     {
       "columns": [
+        {
+          "value": "trading_account_address",
+          "isExpression": false
+        }
+      ],
+      "isUnique": true,
+      "where": null,
+      "origin": "manual",
+      "name": "hv_agents_trading_account_idx",
+      "entityType": "indexes",
+      "table": "hv_agents"
+    },
+    {
+      "columns": [
         "token"
       ],
       "nameExplicit": false,
@@ -751,6 +913,12 @@
       "name": "hv_agents_state_check",
       "entityType": "checks",
       "table": "hv_agents"
+    },
+    {
+      "value": "\"builder_fee_tenths_of_bp\" BETWEEN 0 AND 100",
+      "name": "hv_hyperliquid_settings_builder_fee_check",
+      "entityType": "checks",
+      "table": "hv_hyperliquid_settings"
     }
   ],
   "renames": []

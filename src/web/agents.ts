@@ -2,8 +2,10 @@ import { redirect } from "@tanstack/react-router";
 import { createServerFn } from "@tanstack/react-start";
 import { getRequestHeaders } from "@tanstack/react-start/server";
 import { AgentError } from "../agents/agent-input.js";
+import { HyperliquidError } from "../hyperliquid/errors.js";
 import { currentUser } from "../auth-user.js";
 import type { AppRuntime } from "../runtime.js";
+import type { AuthenticatedWallet } from "../hyperliquid/service.js";
 
 export async function agentUser(runtime: AppRuntime, headers: Headers, mutation = false) {
   runtime.status();
@@ -15,7 +17,7 @@ export async function agentUser(runtime: AppRuntime, headers: Headers, mutation 
 
 function field(data: unknown, key: string): string {
   if (typeof data !== "object" || data === null || !(key in data)) throw new Error("Invalid request");
-  const value: unknown = Reflect.get(data, key);
+  const value = Reflect.get(data, key);
   if (typeof value !== "string") throw new Error("Invalid request");
   return value;
 }
@@ -23,7 +25,7 @@ function field(data: unknown, key: string): string {
 export async function agentAction<T>(action: () => Promise<T>) {
   try { return { ok: true as const, data: await action() }; }
   catch (error) {
-    if (error instanceof AgentError) return { ok: false as const, error: error.message };
+    if (error instanceof AgentError || error instanceof HyperliquidError) return { ok: false as const, error: error.message };
     return { ok: false as const, error: "Agent operation failed. Please try again." };
   }
 }
@@ -33,11 +35,46 @@ export const listAgents = createServerFn({ method: "GET" }).handler(async ({ con
   return context.runtime.agents.list(user.id);
 });
 
+/** Validates the selected trading account against fresh Hyperliquid data. */
+async function selectedTradingAccount(runtime: AppRuntime, user: AuthenticatedWallet, selection: string): Promise<string | null> {
+  if (selection === "none") return null;
+  const choices = await runtime.hyperliquid.tradingAccountChoices(user);
+  if (!choices.accountModeSupported) throw new AgentError("HyperVibes currently supports Unified Accounts only.");
+  if (!choices.apiWalletReady) throw new AgentError("Set up and approve a trading signer first.", 409);
+  if (selection === "main") {
+    if (choices.mainAssignedTo) throw new AgentError("The main account is already assigned to another agent.");
+    return choices.mainAddress;
+  }
+  const subaccount = choices.subaccounts.find((account) => account.address === selection);
+  if (choices.lookupError) throw new AgentError(choices.lookupError);
+  if (subaccount && !subaccount.assignedTo) return subaccount.address;
+  throw new AgentError("Select an available trading account.");
+}
+
 export const createAgent = createServerFn({ method: "POST" })
-  .validator((data: unknown) => ({ name: field(data, "name"), requestId: field(data, "requestId") }))
+  .validator((data: unknown) => ({
+    name: field(data, "name"),
+    requestId: field(data, "requestId"),
+    accountSelection: "accountSelection" in (data as object) ? field(data, "accountSelection") : "none",
+  }))
   .handler(async ({ context, data }) => {
     const user = await agentUser(context.runtime, getRequestHeaders(), true);
-    return agentAction(() => context.runtime.agents.create(user.id, data.name, data.requestId));
+    return agentAction(async () => {
+      const tradingAccount = await selectedTradingAccount(context.runtime, user, data.accountSelection);
+      return context.runtime.agents.create(user.id, data.name, data.requestId, tradingAccount ?? undefined);
+    });
+  });
+
+export const getTradingAccountChoices = createServerFn({ method: "GET" }).handler(async ({ context }) => {
+  const user = await agentUser(context.runtime, getRequestHeaders());
+  return context.runtime.hyperliquid.tradingAccountChoices(user);
+});
+
+export const createAgentSubaccount = createServerFn({ method: "POST" })
+  .validator((data: unknown) => ({ name: field(data, "name") }))
+  .handler(async ({ context, data }) => {
+    const user = await agentUser(context.runtime, getRequestHeaders(), true);
+    return agentAction(() => context.runtime.hyperliquid.createAgentSubaccount(user, data.name));
   });
 
 export const getAgentChat = createServerFn({ method: "GET" })

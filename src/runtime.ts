@@ -7,6 +7,7 @@ import type { AppConfig } from "./config.js";
 import { openDatabase } from "./db/database.js";
 import { lockProfile } from "./db/profile-lock.js";
 import { applicationDatabase, SharedDatabase } from "./db/shared-database.js";
+import { HyperliquidService } from "./hyperliquid/service.js";
 
 export interface RuntimeStatus {
   database: "connected";
@@ -19,6 +20,7 @@ export async function createRuntime(config: AppConfig, options: AgentServiceOpti
   const database = new SharedDatabase(connection);
   let release: (() => Promise<void>) | undefined;
   let agents: AgentService | undefined;
+  let hyperliquid: HyperliquidService | undefined;
   let closing: Promise<void> | undefined;
   let failure: Error | undefined;
   const close = () => closing ??= (async () => {
@@ -44,6 +46,7 @@ export async function createRuntime(config: AppConfig, options: AgentServiceOpti
     await auth.$context;
     const agentService = new AgentService(db, database, options);
     agents = agentService;
+    hyperliquid = new HyperliquidService(db, config.encryptionKey);
     await agentService.recover();
     return {
       db,
@@ -51,6 +54,7 @@ export async function createRuntime(config: AppConfig, options: AgentServiceOpti
       auth,
       origin: config.authOrigin,
       agents: agentService,
+      hyperliquid,
       start() {
         if (closing || failure) throw new Error("Runtime is unavailable");
         agentService.start();

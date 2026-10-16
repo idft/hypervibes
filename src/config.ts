@@ -1,6 +1,12 @@
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
+export interface EncryptionKeySetting {
+  /** Identifier stored alongside ciphertext so keys can be rotated and audited. */
+  id: string;
+  bytes: Uint8Array;
+}
+
 export interface AppConfig {
   host: string;
   port: number;
@@ -9,6 +15,8 @@ export interface AppConfig {
   buildDir: string;
   authOrigin: string;
   authSecret: string;
+  /** Optional server secret for encrypting stored exchange private keys. */
+  encryptionKey: EncryptionKeySetting | undefined;
 }
 
 function setting(env: NodeJS.ProcessEnv, name: string, fallback: string): string {
@@ -35,6 +43,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
   }
   const authSecret = setting(env, "BETTER_AUTH_SECRET", "");
   if (authSecret.length < 32) throw new Error("BETTER_AUTH_SECRET must contain at least 32 random characters");
+  const encryptionKey = encryptionKeySetting(env);
 
   return {
     authOrigin: origin.origin,
@@ -48,5 +57,18 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
       "APP_STATIC_DIR",
       fileURLToPath(new URL("../static/", import.meta.url)),
     )),
+    encryptionKey,
   };
+}
+
+/** Parses the optional AGENTS_ENCRYPTION_KEY secret for exchange private keys. */
+function encryptionKeySetting(env: NodeJS.ProcessEnv): EncryptionKeySetting | undefined {
+  const keyHex = (env.AGENTS_ENCRYPTION_KEY ?? "").trim();
+  if (!keyHex) return undefined;
+  if (!/^(?:[0-9a-fA-F]{2})+$/.test(keyHex)) throw new Error("AGENTS_ENCRYPTION_KEY must be a valid hexadecimal string");
+  const bytes = Buffer.from(keyHex, "hex");
+  if (bytes.length !== 32) throw new Error(`AGENTS_ENCRYPTION_KEY must decode to exactly 32 bytes, got ${bytes.length}`);
+  // Rows record the ID that encrypted them, so a future key-rotation scheme can
+  // distinguish versions. Today there is exactly one version.
+  return { id: "primary", bytes: new Uint8Array(bytes) };
 }

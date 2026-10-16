@@ -10,11 +10,14 @@ export const hvAgents = sqliteTable("hv_agents", {
   state: text("state", { enum: ["provisioning", "ready", "failed"] }).notNull().default("provisioning"),
   conversationId: integer("conversation_id"),
   error: text("error"),
+  /** Linked Hyperliquid main account or sub-account; null for chat-only agents. */
+  tradingAccountAddress: text("trading_account_address"),
   createdAt: integer("created_at").notNull(),
   updatedAt: integer("updated_at").notNull(),
 }, (table) => [
   index("hv_agents_owner_idx").on(table.userId),
   uniqueIndex("hv_agents_creation_request_idx").on(table.userId, table.creationRequestId),
+  uniqueIndex("hv_agents_trading_account_idx").on(table.tradingAccountAddress),
   check("hv_agents_name_check", sql`length(trim(${table.name})) BETWEEN 1 AND 80`),
   check("hv_agents_state_check", sql`${table.state} IN ('provisioning', 'ready', 'failed')`),
 ]);

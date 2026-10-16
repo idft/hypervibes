@@ -26,6 +26,7 @@ describe("embedded HTTP host", () => {
       databasePath: join(directory, "data", "test.sqlite"),
       staticDir: join(directory, "static"),
       buildDir: join(directory, "build"),
+      encryptionKey: undefined,
     };
     mkdirSync(join(config.staticDir, "dist"), { recursive: true });
     mkdirSync(join(config.buildDir, "client", "assets"), { recursive: true });

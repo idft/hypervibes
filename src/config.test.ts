@@ -49,4 +49,14 @@ describe("server config", () => {
   it.each(["APP_HOST", "APP_SQLITE_PATH", "APP_STATIC_DIR", "APP_BUILD_DIR"])("rejects blank %s", (name) => {
     expect(() => testConfig({ [name]: " " })).toThrow(name);
   });
+
+  it("parses the optional exchange encryption key", () => {
+    const bytes = Buffer.alloc(32, 1);
+    const hex = bytes.toString("hex");
+    expect(testConfig({ AGENTS_ENCRYPTION_KEY: hex }).encryptionKey)
+      .toEqual({ id: "primary", bytes: new Uint8Array(bytes) });
+    expect(testConfig().encryptionKey).toBeUndefined();
+    expect(() => testConfig({ AGENTS_ENCRYPTION_KEY: "not-hex" })).toThrow("valid hexadecimal");
+    expect(() => testConfig({ AGENTS_ENCRYPTION_KEY: hex.slice(0, 62) })).toThrow("exactly 32 bytes");
+  });
 });

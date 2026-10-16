@@ -62,15 +62,36 @@ export class AgentService {
     if (!row) throw new AgentError("Agent not found", 404);
     return row;
   }
-  async create(userId: string, name: string, creationRequestId: string) {
+  private static uniqueAccountViolation(error: unknown): boolean {
+    let current: unknown = error;
+    for (let depth = 0; current !== null && typeof current === "object" && depth < 5; depth++) {
+      const message = (current as { message?: unknown }).message;
+      if (typeof message === "string" && message.includes("UNIQUE constraint failed") && message.includes("trading_account_address")) return true;
+      current = (current as { cause?: unknown }).cause;
+    }
+    return false;
+  }
+
+  async create(userId: string, name: string, creationRequestId: string, tradingAccountAddress?: string) {
     this.admit();
     name = agentName(name);
     creationRequestId = requestId(creationRequestId);
+    const account = typeof tradingAccountAddress === "string" && tradingAccountAddress ? tradingAccountAddress : null;
     const now = Date.now();
-    const [row] = await this.db.insert(hvAgents).values({
-      id: randomUUID(), userId, name, creationRequestId, createdAt: now, updatedAt: now,
-    }).onConflictDoNothing({ target: [hvAgents.userId, hvAgents.creationRequestId] }).returning().all();
-    const agent = row ?? await this.db.select().from(hvAgents).where(and(eq(hvAgents.userId, userId), eq(hvAgents.creationRequestId, creationRequestId))).get();
+    let agent: AgentRow | undefined;
+    try {
+      const [row] = await this.db.insert(hvAgents).values({
+        id: randomUUID(), userId, name, creationRequestId, tradingAccountAddress: account, createdAt: now, updatedAt: now,
+      }).onConflictDoNothing({ target: [hvAgents.userId, hvAgents.creationRequestId] }).returning().all();
+      agent = row ?? await this.db.select().from(hvAgents).where(and(eq(hvAgents.userId, userId), eq(hvAgents.creationRequestId, creationRequestId))).get();
+    } catch (error) {
+      // The unique trading-account index is the one domain conflict the caller
+      // can resolve; every other failure must surface as a retryable error.
+      if (AgentService.uniqueAccountViolation(error)) {
+        throw new AgentError("That trading account is already assigned to another agent.", 409);
+      }
+      throw error;
+    }
     if (!agent) throw new AgentError("Unable to create Agent", 503);
     if (agent.name !== name) throw new AgentError("This creation request was already used with a different name", 409);
     try { await this.open(agent); } catch { /* Persisted failure is returned for visible retry. */ }
