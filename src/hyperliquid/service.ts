@@ -1,4 +1,6 @@
 import { HttpTransport } from "@nktkas/hyperliquid";
+import { loadAgentDashboard } from "./agent-dashboard.js";
+import { agentId } from "../agents/agent-input.js";
 import { and, eq, isNotNull, isNull } from "drizzle-orm";
 import { privateKeyToAccount } from "viem/accounts";
 import type { EncryptionKeySetting } from "../config.js";
@@ -103,6 +105,12 @@ export class HyperliquidService {
     private readonly transport: HttpTransport = new HttpTransport(),
   ) {
     this.creator = new SubaccountCreator(transport);
+  }
+
+  async agentDashboard(userId: string, id: string) {
+    const agent = await this.db.select().from(hvAgents).where(and(eq(hvAgents.id, agentId(id)), eq(hvAgents.userId, userId))).get();
+    if (!agent) throw new HyperliquidError("Agent not found", 404);
+    return loadAgentDashboard(this.transport, agent.tradingAccountAddress);
   }
 
   async settings(userId: string): Promise<HyperliquidSettingsRow | undefined> {

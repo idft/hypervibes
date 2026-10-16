@@ -80,6 +80,20 @@ export const createAgentSubaccount = createServerFn({ method: "POST" })
     return agentAction(() => context.runtime.hyperliquid.createAgentSubaccount(user, data.name));
   });
 
+export const getAgent = createServerFn({ method: "GET" })
+  .validator((data: unknown) => ({ id: field(data, "id") }))
+  .handler(async ({ context, data }) => {
+    const user = await agentUser(context.runtime, getRequestHeaders());
+    return agentAction(() => context.runtime.agents.owned(user.id, data.id));
+  });
+
+export const getAgentDashboard = createServerFn({ method: "GET" })
+  .validator((data: unknown) => ({ id: field(data, "id") }))
+  .handler(async ({ context, data }) => {
+    const user = await agentUser(context.runtime, getRequestHeaders());
+    return agentAction(() => context.runtime.hyperliquid.agentDashboard(user.id, data.id));
+  });
+
 export const getAgentChat = createServerFn({ method: "GET" })
   .validator((data: unknown) => ({ id: field(data, "id") }))
   .handler(async ({ context, data }) => {

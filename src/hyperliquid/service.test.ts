@@ -121,6 +121,16 @@ describe("Hyperliquid account service", () => {
     rmSync(directory, { recursive: true, force: true });
   });
 
+  it("authorizes dashboard reads before any exchange lookup and handles unlinked agents", async () => {
+    const agent = await runtime.agents.create(user.id, "Chat only", randomUUID());
+    const fetch = vi.fn();
+    vi.stubGlobal("fetch", fetch);
+    await expect(runtime.hyperliquid.agentDashboard("someone-else", agent.id)).rejects.toMatchObject({ status: 404 });
+    await expect(runtime.hyperliquid.agentDashboard(user.id, randomUUID())).rejects.toMatchObject({ status: 404 });
+    expect(await runtime.hyperliquid.agentDashboard(user.id, agent.id)).toMatchObject({ address: null, positions: null, orders: null });
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
   it("generates, stores and approves a trading signer with main-wallet signatures", async () => {
     vi.stubGlobal("fetch", infoRoutes());
     const address = await runtime.hyperliquid.storeApiWallet(user.id, "generate", "");

@@ -2,8 +2,9 @@ import { Link } from "@tanstack/react-router";
 import { useRef, useState } from "react";
 import { authClient } from "../web/auth-client.js";
 import { Identicon } from "./identicon.js";
+import { AgentSwitcher, type SwitcherAgent } from "./agent-switcher.js";
 
-export function Navbar({ walletAddress }: { walletAddress: string }) {
+export function Navbar({ walletAddress, agents = [], selectedAgentId }: { walletAddress: string; agents?: SwitcherAgent[]; selectedAgentId?: string }) {
   const [pending, setPending] = useState(false);
   const [error, setError] = useState("");
   const inFlight = useRef(false);
@@ -23,10 +24,8 @@ export function Navbar({ walletAddress }: { walletAddress: string }) {
     }
   }
   return (
-    <div className="relative flex h-full items-center px-4">
-      <div className="flex gap-4">
-        <Link to="/agents" className="cursor-pointer text-sm text-zinc-400 hover:text-white">Agents</Link>
-      </div>
+    <div className="relative flex h-full items-center pr-4">
+      <AgentSwitcher agents={agents} selectedAgentId={selectedAgentId} />
       <Link to="/agents" className="absolute left-1/2 hidden h-full -translate-x-1/2 cursor-pointer items-center gap-2 px-4 text-sm font-semibold tracking-wide text-zinc-100 hover:bg-zinc-800 md:flex">
         <img src="/static/android-chrome-512x512.png" alt="" className="h-9 w-9 rounded-md object-cover" />
         <span>HyperVibes</span>

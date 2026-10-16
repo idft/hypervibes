@@ -1,55 +1,19 @@
 import { useEffect, useRef, useState } from "react";
 import type { AgentChat } from "../agents/agent-service.js";
-import { retryAgent, selectAgentModel, sendAgentMessage, stopAgentChat } from "../web/agents.js";
-import type { ModelChoice } from "../providers/provider-service.js";
-import { ModelPicker, modelKey } from "./model-picker.js";
+import { retryAgent, sendAgentMessage, stopAgentChat } from "../web/agents.js";
+import { useAgentChat } from "./use-agent-chat.js";
 
-export function AgentChatPage({ initial, choices = [] }: { initial: AgentChat; choices?: ModelChoice[] }) {
-  const [chat, setChat] = useState(initial);
+export function AgentChatPage({ initial }: { initial: AgentChat }) {
+  const { chat, connectionError } = useAgentChat(initial);
   const [message, setMessage] = useState("");
   const [pending, setPending] = useState(false);
-  const [selection, setSelection] = useState(modelKey(initial.model));
-  const [thinking, setThinking] = useState(initial.thinkingLevel ?? "");
-  const selected = choices.find((choice) => modelKey(choice) === selection);
   const [error, setError] = useState("");
-  const [connectionError, setConnectionError] = useState("");
   const request = useRef<{ message: string; id: string } | null>(null);
   const inFlight = useRef(false);
   const end = useRef<HTMLDivElement>(null);
   const id = initial.agent.id;
-  const disconnected = useRef(false);
-  useEffect(() => {
-    setSelection(modelKey(chat.model));
-    setThinking(chat.thinkingLevel ?? "");
-  }, [chat.model.provider, chat.model.modelId, chat.thinkingLevel]);
-  useEffect(() => {
-    // The server pushes committed snapshots; EventSource reconnects by itself.
-    const source = new EventSource(`/api/agents/${id}/events`);
-    const interrupted = (event: MessageEvent | undefined, fallback: string) => {
-      setConnectionError(event ? (JSON.parse(event.data) as { message?: string }).message ?? fallback : fallback);
-    };
-    source.addEventListener("chat", (event) => {
-      setChat(JSON.parse((event as MessageEvent).data) as AgentChat);
-      setConnectionError("");
-    });
-    source.addEventListener("unauthorized", () => { window.location.assign("/login"); });
-    source.addEventListener("shutdown", () => interrupted(undefined, "Server is restarting. Reconnecting…"));
-    source.addEventListener("unavailable", (event) => interrupted(event as MessageEvent, "Chat stream interrupted. Reconnecting…"));
-    source.addEventListener("stream-error", (event) => interrupted(event as MessageEvent, "Conversation is too large to stream. Reload the page."));
-    source.onerror = () => { if (!disconnected.current) interrupted(undefined, "Connection interrupted. Reconnecting…"); };
-    return () => { disconnected.current = true; source.close(); };
-  }, [id]);
   useEffect(() => { end.current?.scrollIntoView({ block: "nearest" }); }, [chat.messages.length, chat.partial]);
 
-  async function changeModel() {
-    if (inFlight.current || !selected) return;
-    inFlight.current = true; setPending(true); setError("");
-    try {
-      const result = await selectAgentModel({ data: { id, provider: selected.provider, modelId: selected.modelId, thinkingLevel: thinking } });
-      if (!result.ok) setError(result.error);
-    } catch { setError("Unable to change models. Try again."); }
-    finally { inFlight.current = false; setPending(false); }
-  }
   async function action(kind: "send" | "retry" | "stop") {
     if (inFlight.current) return;
     inFlight.current = true;
@@ -65,21 +29,10 @@ export function AgentChatPage({ initial, choices = [] }: { initial: AgentChat; c
     finally { inFlight.current = false; setPending(false); }
   }
   return (
-    <div className="mx-auto flex max-w-4xl flex-col gap-5">
-      <a href="/agents" className="w-fit cursor-pointer text-sm text-violet-300 hover:underline">← Agents</a>
-      <header><h1 className="text-3xl font-semibold text-white">{chat.agent.name}</h1><p className="mt-2 text-sm text-zinc-400">Main conversation · {chat.model.provider}/{chat.model.modelId}</p></header>
+    <div className="flex w-full flex-1 flex-col gap-4 rounded-2xl border border-zinc-800 bg-[#0d0d10] p-6">
+      <header><h2 className="text-lg font-medium text-white">Chat</h2><p className="mt-2 text-sm text-zinc-400">Main conversation · {chat.model.provider}/{chat.model.modelId}</p></header>
       <p className="rounded-xl border border-amber-800/70 bg-amber-950/30 px-4 py-3 text-sm text-amber-200">Trading is not configured. This Agent has no exchange, filesystem, or shell tools.</p>
       {!chat.configured && <p role="status" className="text-sm text-amber-200">Reconnect this Agent’s provider or select an available model. <a href="/providers" className="cursor-pointer underline">Manage providers</a></p>}
-      {choices.length > 0 && <div className="space-y-3 rounded-xl border border-zinc-800 p-4">
-        <ModelPicker choices={choices} value={selected ? selection : ""} onChange={(value) => { setSelection(value); setThinking(""); }} disabled={pending || chat.busy || chat.queued > 0} />
-        {Boolean(selected?.thinkingLevels.length) && <label className="block text-sm text-zinc-300">Thinking level
-          <select aria-label="Thinking level" value={thinking} onChange={(event) => setThinking(event.target.value)} disabled={pending || chat.busy || chat.queued > 0} className="ml-3 cursor-pointer rounded-lg border border-zinc-700 bg-zinc-950 p-2">
-            <option value="">Default</option>{selected?.thinkingLevels.map((level) => <option key={level} value={level}>{level}</option>)}
-          </select>
-        </label>}
-        <button type="button" onClick={() => { void changeModel(); }} disabled={pending || chat.busy || chat.queued > 0 || !selected || chat.agent.state !== "ready"} className="cursor-pointer rounded-lg border border-zinc-700 px-3 py-2 text-sm disabled:cursor-not-allowed disabled:opacity-50">Apply model</button>
-        <p className="text-xs text-zinc-500">Change models while idle. Conversation history is preserved.</p>
-      </div>}
       {chat.agent.state !== "ready" && <div role="status" className="rounded-xl border border-zinc-700 p-4"><p>{chat.agent.error ?? "Initializing Agent…"}</p><button disabled={pending} onClick={() => { void action("retry"); }} className="mt-3 cursor-pointer rounded-lg bg-violet-600 px-4 py-2 text-sm disabled:cursor-wait">Retry initialization</button></div>}
       <section aria-label="Conversation" aria-live="polite" className="max-h-[55vh] min-h-64 space-y-4 overflow-y-auto rounded-xl border border-zinc-800 bg-[#0d0d10] p-5">
         {chat.messages.length === 0 && <p className="py-8 text-center text-sm text-zinc-500">Start a conversation with your Agent.</p>}
