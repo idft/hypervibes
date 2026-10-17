@@ -4,79 +4,121 @@ HyperVibes is a framework for AI agents to trade crypto on Hyperliquid exchange.
 
 ## Current Work: Incremental TypeScript Rewrite
 
-We are building a new TypeScript application from scratch, implementing features
-incrementally rather than converting the entire Rust app. See `pi.md` for existing
-design research; use the root `package.json` for current commands.
+The active application is a TypeScript rewrite built incrementally alongside the
+legacy Rust code. See `pi.md` for design research and history; use the root
+`package.json` for current commands.
 
-* Write new backend TypeScript files directly alongside the existing `.rs` files in `src/`. Use descriptive TypeScript filenames (e.g. `database.ts`, `app.ts`), not Rust module names like `mod.ts`; filenames do not need to match the Rust files.
+* Backend TypeScript files live alongside the existing `.rs` files in `src/`.
+  Use descriptive TypeScript filenames (e.g. `database.ts`, `app.ts`), not Rust
+  module names like `mod.ts`; filenames do not need to match the Rust files.
 * Use the existing root `package.json` and pnpm; do not create a separate backend package.
-* The scaffold uses Fastify and SQLite via Node's built-in `node:sqlite`.
-* Pi Durable integration is deferred. Later, one harness can manage conversations linked to application agent records; starting the scaffold must not start agents or make model calls.
-* Keep the existing UI, templates, and frontend build; modify them incrementally as features are implemented.
-* Keep the Rust/OpenCode/PostgreSQL application intact as a reference. Do not port its entire schema or import its existing data.
-* Domain tables, schema migrations, APIs, workers, and trading functionality are future work, not implied by the scaffold.
+* Keep the Rust/PostgreSQL application intact as a reference. Do not port its
+  entire schema or import its existing data.
+* Do not run or modify the legacy Rust application as part of rewrite work.
 
-## Documentation During the Rewrite
+## Application architecture (current)
 
-* **Do not create or update documentation for TypeScript rewrite work unless the user explicitly requests it.** This includes `docs/`, README files, and `pi.md`.
-* Keep the existing public documentation for the legacy application unchanged while the rewrite is in progress.
-* Maintain `AGENTS.md` when the user requests changes to coding-agent instructions.
+* **Host:** Fastify (`src/web/app.ts`) owns the process, serving the TanStack
+  Start SSR build, static assets, auth, and API routes. Importing modules must
+  not start servers or open databases; `src/main.ts` owns listening/shutdown.
+* **Frontend:** TanStack Start + React, built with Vite (`vite.app.config.ts`,
+  output in `.build/`). Routes live in `src/routes/`; the generated route tree is
+  `src/routeTree.gen.ts` (`pnpm generate:routes`).
+* **Auth:** better-auth with Drizzle adapter (`src/auth-options.ts`,
+  `src/db/auth-schema.ts`).
+* **Database:** single SQLite file via Node's built-in `node:sqlite`, opened by
+  `src/db/database.ts` (WAL, `synchronous = FULL`, foreign keys on). All access
+  is serialized through the `SharedDatabase` queue (`src/db/shared-database.ts`),
+  shared by the application (Drizzle over `sqlite-proxy`) and every Pi Durable
+  harness. Migrations live in `src/db/migrations/` and are applied by the owning
+  runtime at startup (`src/db/migrations.ts`) — never by drizzle-kit directly.
+* **Agent execution:** Pi Durable (`@earendil-works/pi-durable`) is integrated.
+  Each application agent owns a harness using per-agent table prefixes
+  (`pi_<agentid>_…`). Never read or write Pi's private tables directly; use the
+  application services (`src/agents/`, `src/harness/`).
+* **Domain features implemented so far:** per-user provider connections and model
+  catalog (`src/providers/`, `src/model_catalog/`), agent dashboard/chat with
+  history and compaction, configurable sub-agents with schedules and delegation
+  (`src/db/subagent-schema.ts`), Hyperliquid account streaming and order/account
+  tools (`src/hyperliquid/`), and the trade journal with account-history sync.
 
-## Stack
+## Development database
 
-New application:
-* TypeScript/ESM on Node.js 22.23.3 or a newer supported, patched Node release
-* Fastify
-* SQLite (`node:sqlite`)
-* pnpm
-* Pi Durable planned for agent execution
+The dev database is a single SQLite file (no PostgreSQL, no containers):
 
-Existing application (reference, not the current implementation target):
-* Rust, axum, sqlx, PostgreSQL
-* HTMX, SSE for live updates
+* **Location:** `data/hypervibes.sqlite`, set by `APP_SQLITE_PATH` in `.env`
+  (defaults to that path). The schema is created/migrated on server startup.
+* **Read-only inspection with the sqlite3 CLI is fine while the server runs**
+  (the database is in WAL mode, so concurrent readers are safe):
+  ```sh
+  sqlite3 -readonly data/hypervibes.sqlite '.tables'
+  sqlite3 -readonly data/hypervibes.sqlite 'select * from hv_agents;'
+  ```
+* Application tables are prefixed `hv_`; better-auth owns its user/session tables.
+  Agent harness tables use `pi_<agentid>_` prefixes — treat them as opaque and
+  never modify them by hand.
+* Never run write statements against the live dev database from scripts, tests,
+  or ad-hoc commands. Tests must use disposable SQLite files (`src/test-config.ts`).
+* If the server is not running, the file is still readable, but prefer the
+  `-readonly` flag regardless. A stale `data/hypervibes.sqlite.lock` usually means
+  the app is running or did not shut down cleanly.
 
-## Frontend build
+## Legacy Rust application (reference only)
 
-Frontend assets are managed with `pnpm` and built via `esbuild` and Tailwind CSS v4:
+* Rust, axum, sqlx, PostgreSQL, HTMX/SSE, podman-compose.
+* Do not run `cargo` commands, Rust tests, or `just test` for TypeScript work;
+  they can hang waiting for PostgreSQL. Only on explicit user request.
+* Never stop the running podman-compose stack.
 
-- Source files: `assets/app.ts`, `assets/app.css`
-- Built output: `static/dist/app.js`, `static/dist/app.css` (gitignored)
-- `build.rs` runs `pnpm install --frozen-lockfile` and `pnpm build` automatically during `cargo build`/`cargo run` when sources or templates change.
+## Running and building
 
-* Don't manually build the front-end assets.
-* Don't test web UI changes with browser-mcp.  The user will test.
-* Web server defaults to running on port 3003
-* Never start the dev webserver yourself.  The user will run it.
-* Never stop the running podman-compose stack
+* Backend dev server: `pnpm dev:server` (port 3003, loads `.env`).
+  **Never start the dev webserver yourself; the user will run it.**
+* Frontend build: `pnpm build:app` (Vite/TanStack Start). Don't test web UI
+  changes with browser-mcp; the user will test.
+* Buttons should change the cursor on mouseover.
 
 ## Testing
 
-* **Do not run Rust tests (`cargo test`, including workspace variants) while working on the TypeScript rewrite.** They are unrelated to the new app and can hang waiting for PostgreSQL. Only run them if the user explicitly requests it.
-* Do not run `just test`: it includes the legacy Rust suite. Do not run Cargo build, Clippy, or formatting checks by default for TypeScript-only work.
-* Run backend checks from the repo root: `pnpm typecheck:server`, `pnpm lint:server`, and `pnpm test:server`.
-* Backend tests use disposable SQLite files and injected HTTP requests, without opening a listening port or depending on PostgreSQL, containers, or model calls.
-* For frontend changes, use `pnpm typecheck`, `pnpm lint`, and `pnpm test:js` as appropriate.
-* Never point tests at the running application's database or use real exchange credentials.
+* Run backend checks from the repo root: `pnpm typecheck:server`,
+  `pnpm lint:server`, and `pnpm test:server`.
+* Backend tests use disposable SQLite files and injected HTTP requests, without
+  opening a listening port or depending on PostgreSQL, containers, or model calls.
+* For frontend changes, use `pnpm typecheck`, `pnpm lint`, and `pnpm test:js` as
+  appropriate.
+* Never point tests at the running application's database or use real exchange
+  credentials.
 * Use a 240 second timeout for tests.
 
-## UI Rules
-
-* Buttons should change the cursor on mouseover
-
-## Coding agent Rules:
+## Coding agent rules
 
 * Don't guess. Consult the documentation or source code if you are unsure.
-* Never `git push` without permission
-* Do not create database migrations without permission, unless a plan specficailly mentions creating it.
+* Never `git push` without permission.
+* Do not create database migrations without permission, unless a plan
+  specifically mentions creating it.
+
+## Documentation during the rewrite
+
+* **Do not create or update documentation for TypeScript rewrite work unless
+  the user explicitly requests it.** This includes `docs/`, README files, and
+  `pi.md`.
+* Keep the existing public documentation for the legacy application unchanged
+  while the rewrite is in progress.
+* Maintain `AGENTS.md` when the user requests changes to coding-agent instructions.
 
 ## Code Quality & Linting Standards
 
-* Use strict TypeScript types and keep backend Node configuration separate from browser configuration.
-* Keep application construction separate from listening; importing modules must not start servers, open databases, or launch agent work.
+* Use strict TypeScript types and keep backend Node configuration separate from
+  browser configuration.
+* Keep application construction separate from listening; importing modules must
+  not start servers, open databases, or launch agent work.
 * Close owned resources on shutdown and on initialization failure.
-* Remove unreachable, unused, or unreferenced code. Do not add speculative feature scaffolding or suppress diagnostics without a documented reason.
-* Preserve explicit error handling and domain/security boundaries. Do not use floating-point numbers as financial authority.
-* Keep application schema ownership separate from Pi Durable's internal storage; do not write its private tables directly.
+* Remove unreachable, unused, or unreferenced code. Do not add speculative
+  feature scaffolding or suppress diagnostics without a documented reason.
+* Preserve explicit error handling and domain/security boundaries. Do not use
+  floating-point numbers as financial authority.
+* Keep application schema ownership separate from Pi Durable's internal storage;
+  do not write its private tables directly.
 
 ### Run before commits affecting the TypeScript backend
 
