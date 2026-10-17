@@ -6,6 +6,7 @@ import type { ModelChoice } from "../providers/provider-service.js";
 import { defaultMainInstructions, type AssignmentSettings, type SubagentInput, type SubagentSections } from "../agents/subagent-input.js";
 import { archiveSubagent, runSubagent, saveSubagent, saveSubagentAssignments, saveSubagentIdentity, saveSubagentSection, saveSubagentTools, stopSubagentRun } from "../web/subagents.js";
 import { ModelPicker, modelKey } from "./model-picker.js";
+import { ProviderLogo } from "./provider-logo.js";
 import type { RunPagination } from "../agents/subagent-history.js";
 import { useSubagentRuns } from "./use-subagent-runs.js";
 import { SubagentRunHistory } from "./subagent-run-history.js";
@@ -144,7 +145,7 @@ export function SubagentDetailPage({ agentId, initial, choices }: { agentId: str
         </> : undefined} />
         {main && <p className="text-sm text-zinc-400">This is the existing main chat. It cannot be disabled, archived, or deleted.</p>}
         {definition?.archived && <p className="text-sm text-amber-200">Archived — new assignments are disabled. History remains available.</p>}
-        {definition && !selected && <p className="text-sm text-amber-200">Current model: {form.provider}/{form.modelId}. Reconnect its provider or select an available model.</p>}
+        {definition && !selected && <p className="flex items-center gap-1.5 text-sm text-amber-200"><ProviderLogo provider={form.provider} className="h-4 w-4 shrink-0 rounded-sm border border-zinc-800 bg-white p-0.5" /><span>Current model: {form.provider}/{form.modelId}. Reconnect its provider or select an available model.</span></p>}
         <ModelPicker choices={choices} value={selected ? modelKey(form) : ""} thinkingLevel={form.thinkingLevel} onChange={async (value, thinkingLevel) => { const choice = choices.find((entry) => modelKey(entry) === value); if (choice) await saveSection("model", { provider: choice.provider, modelId: choice.modelId, thinkingLevel }); }} disabled={pending} />
         <label className="block text-sm text-zinc-300">Instructions<textarea required rows={7} maxLength={32000} value={form.instructions} onChange={(event) => set("instructions", event.target.value)} className={inputClass} placeholder={main ? defaultMainInstructions : defaults.instructions} /></label>
         {instructionsChanged && <div className="flex justify-end gap-2">

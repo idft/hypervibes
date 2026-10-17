@@ -5,6 +5,7 @@ import { workerInstructions } from "../agents/subagent-input.js";
 import { stopSubagentRun } from "../web/subagents.js";
 import { useSubagentRun } from "./use-subagent-run.js";
 import { RelativeTime, RunStatus } from "./subagent-run-history.js";
+import { ProviderLogo } from "./provider-logo.js";
 
 const panel = "space-y-4 rounded-2xl border border-zinc-800 bg-[#0d0d10] p-6";
 const pre = "whitespace-pre-wrap break-words text-sm text-zinc-300";
@@ -53,7 +54,7 @@ export function SubagentRunPage({ initial }: { initial: RunDetail }) {
       </header>
       <hr className="border-zinc-800" />
       <p className="text-sm text-zinc-400">{run.source} · Created <RelativeTime timestamp={run.createdAt} />{run.finishedAt !== null && <> · Finished <RelativeTime timestamp={run.finishedAt} /></>}</p>
-      <p className="text-xs text-zinc-500">{run.config.provider}/{run.config.modelId}{run.config.thinkingLevel && ` · Thinking: ${run.config.thinkingLevel}`} · {run.config.persistent ? "Persistent context" : "Fresh context"}</p>
+      <p className="flex items-center gap-1.5 text-xs text-zinc-500"><ProviderLogo provider={run.config.provider} className="h-4 w-4 shrink-0 rounded-sm border border-zinc-800 bg-white p-0.5" /><span>{run.config.provider}/{run.config.modelId}</span><span>{run.config.thinkingLevel && ` · Thinking: ${run.config.thinkingLevel}`} · {run.config.persistent ? "Persistent context" : "Fresh context"}</span></p>
       {connectionError && <p role="status" className="text-sm text-amber-200">{connectionError}</p>}
       {error && <p role="alert" className="text-sm text-red-300">{error}</p>}
     </section>

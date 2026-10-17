@@ -4,6 +4,7 @@ import { isAbsolute, join, relative, sep } from "node:path";
 import { tmpdir } from "node:os";
 import { CurrencyLogoCache } from "../hyperliquid/logo-cache.js";
 import { isPerpetualLogoSymbol } from "../hyperliquid/currency-logo.js";
+import { ProviderLogoCache, isProviderSlug } from "../providers/provider-logo.js";
 import { NodeRequest, sendNodeResponse } from "srvx/node";
 import type { AppConfig } from "../config.js";
 import { createRuntime } from "../runtime.js";
@@ -37,6 +38,7 @@ export async function createApp(config: AppConfig, options: AppOptions = {}) {
     } : false,
   });
   const logos = new CurrencyLogoCache(config.cacheDir ?? join(tmpdir(), "hypervibes"), options.logoFetcher);
+  const providerLogos = new ProviderLogoCache(config.cacheDir ?? join(tmpdir(), "hypervibes"), options.logoFetcher);
   const origin = new URL(config.authOrigin);
   app.addHook("onRequest", async (request, reply) => {
     let host: string | undefined;
@@ -51,7 +53,7 @@ export async function createApp(config: AppConfig, options: AppOptions = {}) {
   const runDetails = new AgentEventStreams(runtime, "run");
   let web: StartApplication | undefined;
   // SSE responses must finish before Fastify waits for active HTTP connections.
-  app.addHook("preClose", async () => { await Promise.all([streams.close(), dashboards.close(), charts.close(), runs.close(), runDetails.close(), logos.close()]); });
+  app.addHook("preClose", async () => { await Promise.all([streams.close(), dashboards.close(), charts.close(), runs.close(), runDetails.close(), logos.close(), providerLogos.close()]); });
   app.addHook("onClose", async () => {
     try { await web?.close(); }
     finally { await runtime.close(); }
@@ -92,6 +94,17 @@ export async function createApp(config: AppConfig, options: AppOptions = {}) {
         .header("X-Content-Type-Options", "nosniff")
         .header("Content-Security-Policy", "sandbox; default-src 'none'; style-src 'unsafe-inline'; img-src 'none'; base-uri 'none'; form-action 'none'")
         .send(await logos.get(symbol));
+    });
+
+    app.get<{ Params: { file: string } }>("/model-catalog/logos/:file", async (request, reply) => {
+      const file = request.params.file;
+      const provider = file.endsWith(".svg") ? file.slice(0, -4) : "";
+      if (!isProviderSlug(provider)) return reply.code(400).type("text/plain").send("Invalid provider logo filename");
+      return reply.type("image/svg+xml; charset=utf-8")
+        .header("Cache-Control", "public, max-age=2592000")
+        .header("X-Content-Type-Options", "nosniff")
+        .header("Content-Security-Policy", "sandbox; default-src 'none'; style-src 'unsafe-inline'; img-src 'none'; base-uri 'none'; form-action 'none'")
+        .send(await providerLogos.get(provider));
     });
 
     app.get("/healthz", async () => {

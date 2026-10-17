@@ -1,6 +1,7 @@
 import { Link } from "@tanstack/react-router";
 import { useState } from "react";
 import type { SubagentRow } from "../db/subagent-schema.js";
+import { ProviderLogo } from "./provider-logo.js";
 
 export function SubagentsPage({ agentId, definitions }: { agentId: string; definitions: SubagentRow[] }) {
   const [showArchived, setShowArchived] = useState(false);
@@ -13,7 +14,7 @@ export function SubagentsPage({ agentId, definitions }: { agentId: string; defin
     </div></header>
     <ul className="space-y-3">{visible.map((row) => <li key={row.id}><Link to="/agents/$agentId/sub-agents/$subagentId" params={{ agentId, subagentId: row.id }} className="block cursor-pointer rounded-xl border border-zinc-800 p-4 hover:border-violet-700">
       <div className="flex flex-wrap items-center gap-3"><span className="font-medium text-white">{row.name}</span><span className="text-xs text-zinc-400">{row.kind === "orchestrator" ? "Main conversation · Protected" : row.archived ? "Archived" : row.enabled ? "Enabled" : "Disabled"}</span></div>
-      <p className="mt-2 text-sm text-zinc-400">{row.description}</p><p className="mt-2 break-all text-xs text-zinc-500">{row.provider}/{row.modelId}{row.thinkingLevel ? ` · ${row.thinkingLevel}` : ""} · {row.kind === "orchestrator" ? "Persistent" : row.persistent ? "Persistent context" : "Fresh context per assignment"}{row.schedule ? ` · ${row.schedule} UTC candle close + ${row.delaySeconds}s` : ""}</p>
+      <p className="mt-2 text-sm text-zinc-400">{row.description}</p><p className="mt-2 flex items-center gap-1.5 text-xs text-zinc-500"><ProviderLogo provider={row.provider} className="h-4 w-4 rounded-sm border border-zinc-800 bg-white p-0.5" /><span className="break-all">{row.provider}/{row.modelId}</span>{row.thinkingLevel && <span> · {row.thinkingLevel}</span>}<span> · {row.kind === "orchestrator" ? "Persistent" : row.persistent ? "Persistent context" : "Fresh context per assignment"}{row.schedule ? ` · ${row.schedule} UTC candle close + ${row.delaySeconds}s` : ""}</span></p>
     </Link></li>)}</ul>
   </section>;
 }

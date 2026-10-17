@@ -17,7 +17,7 @@ describe("provider setup creation guard", () => {
     expect(mocks.accounts).not.toHaveBeenCalled();
   });
   it("loads choices when a connected provider has a model", async () => {
-    const models = [{ provider: "test", modelId: "model", name: "Model", thinkingLevels: [] }];
+    const models = [{ provider: "test", modelId: "model", name: "Model", providerName: "Test", thinkingLevels: [], contextWindow: 200_000, inputCost: 3, outputCost: 15, reasoning: true }];
     mocks.models.mockResolvedValue(models); mocks.accounts.mockResolvedValue({ mainAddress: "fixture" });
     expect(await loader()).toEqual({ models, choices: { mainAddress: "fixture" } });
   });

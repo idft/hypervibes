@@ -75,6 +75,18 @@ describe("embedded HTTP host", () => {
     expect((await app.inject("/currency/a%2Fb.svg")).statusCode).toBe(400);
   });
 
+  it("serves cached provider SVGs with restrictive headers outside the Start catch-all", async () => {
+    const response = await app.inject("/model-catalog/logos/anthropic.svg");
+    expect(response.statusCode).toBe(200);
+    expect(response.headers["content-type"]).toContain("image/svg+xml");
+    expect(response.headers["cache-control"]).toBe("public, max-age=2592000");
+    expect(response.headers["x-content-type-options"]).toBe("nosniff");
+    expect(response.headers["content-security-policy"]).toContain("sandbox; default-src 'none'");
+    expect(response.body).toContain("<svg");
+    expect((await app.inject("/model-catalog/logos/anthropic.png")).statusCode).toBe(400);
+    expect((await app.inject("/model-catalog/logos/%2E%2E%2Fanthropic.svg")).statusCode).toBe(400);
+  });
+
   it("injects one application runtime across Start requests without listening", async () => {
     expect(app.server.listening).toBe(false);
     expect((await app.inject("/healthz")).json()).toEqual({ status: "ok" });

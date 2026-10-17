@@ -58,7 +58,7 @@ describe("Providers page", () => {
     expect(mocks.answerProviderLogin).toHaveBeenCalledWith({ data: { id: "login", promptId: "prompt", value: "private-key" } });
     expect(container.textContent).not.toContain("private-key");
     mocks.getProviderLogin.mockResolvedValue({ ok: true, data: { ...attempt, state: "complete", prompt: undefined } });
-    mocks.getProviderSettings.mockResolvedValue({ ...initial, models: [{ provider: "test", modelId: "model", name: "Test model", thinkingLevels: [] }] });
+    mocks.getProviderSettings.mockResolvedValue({ ...initial, models: [{ provider: "test", modelId: "model", name: "Test model", providerName: "Test", thinkingLevels: [], contextWindow: 200_000, inputCost: 3, outputCost: 15, reasoning: true }] });
     await act(async () => { await vi.advanceTimersByTimeAsync(1000); });
     expect(container.textContent).toContain("Provider connected.");
     expect(container.querySelector('a[href="/agents/new"]')).toBeNull();
@@ -73,7 +73,7 @@ describe("Providers page", () => {
         { ...initial.providers[0]!, id: "broken", name: "Needs attention", connected: true },
         { ...initial.providers[0]!, id: "other", name: "Other Provider" },
       ],
-      models: [{ provider: "test", modelId: "model", name: "Model", thinkingLevels: [] }],
+      models: [{ provider: "test", modelId: "model", name: "Model", providerName: "Test", thinkingLevels: [], contextWindow: 200_000, inputCost: 3, outputCost: 15, reasoning: true }],
     }} />);
     const connected = markup.querySelector('[aria-labelledby="connected-providers-heading"]')!;
     const all = markup.querySelector('[aria-labelledby="all-providers-heading"]')!;

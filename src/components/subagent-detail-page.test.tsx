@@ -19,7 +19,8 @@ class HistorySource extends EventTarget {
   close = vi.fn();
   constructor(readonly url: string) { super(); HistorySource.instances.push(this); }
 }
-const choices = [{ provider: "faux", modelId: "faux-1", name: "Faux", thinkingLevels: ["high"] }];
+const choice = (provider: string, modelId: string, name: string, thinkingLevels: string[]) => ({ provider, modelId, name, providerName: provider, thinkingLevels, contextWindow: 200_000, inputCost: 3, outputCost: 15, reasoning: true });
+const choices = [choice("faux", "faux-1", "Faux", ["high"])];
 describe("subagent pages", () => {
   let root: Root, container: HTMLDivElement;
   const initial = (row = definition) => ({ definition: row, runs: [], schedulerError: null });
@@ -167,7 +168,7 @@ describe("subagent pages", () => {
     expect(mocks.saveSubagentSection).toHaveBeenCalledWith({ data: { agentId: definition.agentId, id: definition.id, section: "schedule", settings: { schedule: "1h", delaySeconds: 30, completion: "wake" } } });
   });
   it("searches models by provider, name and ID and only applies confirmed choices", async () => {
-    await act(async () => root.render(<SubagentDetailPage agentId={definition.agentId} initial={initial({ ...definition, thinkingLevel: "high" })} choices={[...choices, { provider: "other", modelId: "second-2", name: "Second", thinkingLevels: [] }]} />));
+    await act(async () => root.render(<SubagentDetailPage agentId={definition.agentId} initial={initial({ ...definition, thinkingLevel: "high" })} choices={[...choices, choice("other", "second-2", "Second", [])]} />));
     await click("Choose model");
     const search = document.querySelector("dialog input[type=search]")!;
     await act(async () => {
@@ -180,6 +181,7 @@ describe("subagent pages", () => {
     await click("Cancel");
     expect(container.textContent).toContain("faux / faux-1");
     await click("Choose model");
+    expect(document.querySelector("dialog")!.textContent).toContain("200K ctx · reasoning · $3/$15");
     await act(async () => { (document.querySelectorAll("dialog input[type=radio]")[1] as HTMLInputElement).click(); });
     await click("Apply");
     expect(container.textContent).toContain("other / second-2");

@@ -9,7 +9,11 @@ import type { ApplicationDatabase } from "../db/shared-database.js";
 import { hvInstallation } from "../db/provider-schema.js";
 import { SqliteCredentials } from "./credential-store.js";
 
-export interface ModelChoice extends ModelRef { name: string; thinkingLevels: string[] }
+export interface ModelChoice extends ModelRef {
+  name: string; providerName: string; thinkingLevels: string[];
+  /** Context window in tokens; USD per million input/output tokens. */
+  contextWindow: number; inputCost: number; outputCost: number; reasoning: boolean;
+}
 export interface ProviderSummary {
   id: string; name: string; connected: boolean; configured: boolean;
   authType?: AuthType; methods: { type: AuthType; label: string }[];
@@ -74,11 +78,14 @@ export class ProviderService {
   async models(userId: string) { return (await this.user(userId)).models; }
   private async available(models: Models, credentials: CredentialStore) {
     const connected = await credentials.list();
+    const names = new Map(models.getProviders().map((provider) => [provider.id, provider.name]));
     const result: ModelChoice[] = [];
     for (const { providerId } of connected) {
       try {
         for (const model of await models.getAvailable(providerId)) result.push({
-          provider: model.provider, modelId: model.id, name: model.name, thinkingLevels: getSupportedThinkingLevels(model),
+          provider: model.provider, modelId: model.id, name: model.name, providerName: names.get(model.provider) ?? model.provider,
+          thinkingLevels: getSupportedThinkingLevels(model), contextWindow: model.contextWindow, reasoning: model.reasoning,
+          inputCost: model.cost.input, outputCost: model.cost.output,
         });
       } catch { /* A broken connection remains visible, but cannot admit work. */ }
     }
