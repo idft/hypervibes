@@ -2,8 +2,10 @@ import type { OrderService } from "../hyperliquid/orders/order-service.js";
 import { createHyperliquidExtension } from "../hyperliquid/durable-extension.js";
 import type { HyperliquidService } from "../hyperliquid/service.js";
 import { BACKGROUND_CONTEXT as context } from "@earendil-works/chord/context";
+import type { JsonRepresentation } from "@earendil-works/chord";
 import type { Models } from "@earendil-works/pi-ai/models";
-import { createRegistry, Harness, InboxDoc, LiveDoc } from "@earendil-works/pi-durable";
+import { estimateContextTokens } from "@earendil-works/pi-ai/utils/estimate";
+import { createRegistry, Harness, InboxDoc, LiveDoc, UsageDoc, type EntryId, type UsageState, type UserInput } from "@earendil-works/pi-durable";
 import type { Conversation, ConversationView, EntryRecord, InboxState, LiveState, ModelRef } from "@earendil-works/pi-durable";
 import { SqliteStorage } from "@earendil-works/pi-durable/storage/sqlite";
 import { and, desc, eq } from "drizzle-orm";
@@ -19,6 +21,30 @@ import type { ProviderService } from "../providers/provider-service.js";
 // Existing scaffold roots retain their original model, never silently switch.
 const legacyModel: ModelRef = { provider: "opencode-go", modelId: "deepseek-v4.1-flash" };
 
+/** The plain text of a queued user input. */
+function userText(content: JsonRepresentation<UserInput>): string {
+  if (typeof content === "string") return content;
+  return Array.isArray(content)
+    ? content.filter((part) => (part as { type?: string } | null)?.type === "text").map((part) => (part as { text: string }).text).join("\n")
+    : "";
+}
+
+/** Aggregate the conversation's durable usage ledger into display totals. */
+function usageTotals(state: Readonly<UsageState> | undefined): ChatUsage {
+  const totals: ChatUsage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 };
+  if (!state) return totals;
+  for (const bucket of [state.models, state.tools]) {
+    for (const usage of Object.values(bucket ?? {})) {
+      totals.input += usage.input;
+      totals.output += usage.output;
+      totals.cacheRead += usage.cacheRead;
+      totals.cacheWrite += usage.cacheWrite;
+      totals.cost += usage.cost.total;
+    }
+  }
+  return totals;
+}
+
 export interface AgentServiceOptions {
   /** Injected model catalog for isolated tests; never used by the production host. */
   models?: Models;
@@ -27,17 +53,30 @@ export interface AgentServiceOptions {
   logger?: FastifyBaseLogger;
 }
 interface RunningAgent { harness: Harness; main: Conversation }
-export interface ChatEntry { id: string; role: "user" | "assistant"; text: string; failed: boolean }
+export interface ChatEntry { id: string; role: "user" | "assistant" | "system"; text: string; failed: boolean; marker?: "reset" | "compaction" }
+/** A submitted message waiting for the running turn's boundary, not yet a transcript entry. */
+export interface ChatQueueItem { id: string; text: string }
+/** Conversation token and cost totals from the durable usage ledger. */
+export interface ChatUsage { input: number; output: number; cacheRead: number; cacheWrite: number; cost: number }
 export interface AgentChat {
   agent: AgentRow;
   model: ModelRef;
   configured: boolean;
   thinkingLevel?: string;
   busy: boolean;
-  queued: number;
+  queuedMessages: ChatQueueItem[];
   messages: ChatEntry[];
   partial: string;
+  usage: ChatUsage;
+  /** Estimated model-context size and the selected model's context window. */
+  context?: { tokens: number; window: number };
+  /** Whether transcript entries exist below the displayed tail and can be scrolled up to. */
+  history: boolean;
+  compacting: boolean;
+  compactionError?: string;
 }
+/** One page of transcript older than the client's current view. */
+export interface AgentChatHistory { messages: ChatEntry[]; before?: number; more: boolean }
 
 /** Owns every Agent harness; no request owns a harness or waits for model work. */
 export class AgentService {
@@ -213,33 +252,60 @@ export class AgentService {
     const current = this.running.get(agent.id);
     if (!current) return this.projectChat(agent, []);
     const { harness, main } = current;
-    const [entries, live, inbox] = await Promise.all([
-      main.entries({ order: "descending" }, 100, undefined, context),
+    // The active context range is the streamed tail: the newest head marker
+    // (reset or compaction) followed by the entries the model still sees.
+    const [live, inbox, usage, view] = await Promise.all([
       harness.snapshot(LiveDoc, main.id, context), harness.snapshot(InboxDoc, main.id, context),
+      harness.snapshot(UsageDoc, main.id, context), main.context(context),
     ]);
-    return this.projectChat(agent, [...entries.items].reverse(), live, inbox);
+    const stats = await this.tailStats(main, view.entries, estimateContextTokens(view.messages).tokens);
+    return this.projectChat(agent, view.entries, live, inbox, usage, stats);
   }
-  private async projectChat(agent: AgentRow, entries: readonly EntryRecord[], live?: Readonly<LiveState>, inbox?: Readonly<InboxState>): Promise<AgentChat> {
+  /** Context size and whether the full history continues below the displayed tail. */
+  private async tailStats(main: Conversation, entries: readonly EntryRecord[], tokens: number): Promise<{ tokens: number; history: boolean }> {
+    const oldest = entries.slice(-100)[0]?.id;
+    const below = oldest === undefined ? undefined : (await main.entries({ order: "descending", maxEntryId: (oldest - 1) as EntryId }, 1, undefined, context)).items.length > 0;
+    return { tokens, history: below === true };
+  }
+  private async projectChat(agent: AgentRow, entries: readonly EntryRecord[], live?: Readonly<LiveState>, inbox?: Readonly<InboxState>, usage?: Readonly<UsageState>, stats?: { tokens: number; history: boolean }): Promise<AgentChat> {
     const current = this.running.get(agent.id);
     const resolved = await current?.main.agent(context);
     const model = resolved?.model ?? (agent.initialProvider && agent.initialModelId ? { provider: agent.initialProvider, modelId: agent.initialModelId } : this.options.model ?? legacyModel);
     const configured = Boolean(this.options.models || await this.providers.configured(agent.userId, model));
-    const result: AgentChat = { agent, model, configured, thinkingLevel: resolved?.thinkingLevel, busy: false, queued: 0, messages: [], partial: "" };
+    const result: AgentChat = { agent, model, configured, thinkingLevel: resolved?.thinkingLevel, busy: false, queuedMessages: [], messages: [], partial: "", usage: usageTotals(usage), history: stats?.history ?? false, compacting: false };
+    if (stats) {
+      const window = (await this.models(agent.userId)).getModel(model.provider, model.modelId)?.contextWindow;
+      if (window) result.context = { tokens: stats.tokens, window };
+    }
     result.busy = Boolean(live?.run);
-    result.queued = inbox?.items.length ?? 0;
+    result.queuedMessages = (inbox?.items ?? []).flatMap((item): ChatQueueItem[] =>
+      "content" in item ? [{ id: `inbox:${item.id}`, text: userText(item.content) }] : []);
+    result.compacting = (live?.compactions?.length ?? 0) > 0;
+    result.compactionError = live?.compactionFailure?.error;
+    result.messages = AgentService.projectEntries(entries);
+    result.partial = live?.generation?.message?.content.filter((part) => part.type === "text").map((part) => part.text).join("") ?? "";
+    return result;
+  }
+  /** Transcript entries as chat messages, including reset and compaction markers. */
+  private static projectEntries(entries: readonly EntryRecord[]): ChatEntry[] {
+    const messages: ChatEntry[] = [];
     for (const entry of entries.slice(-100)) {
       if (entry.kind === "hv.subagent-notification" && entry.data && typeof entry.data === "object" && "text" in entry.data && typeof entry.data.text === "string") {
-        result.messages.push({ id: `notification:${entry.id}`, role: "assistant", text: entry.data.text, failed: false });
+        messages.push({ id: `notification:${entry.id}`, role: "assistant", text: entry.data.text, failed: false });
+      } else if (entry.kind === "pi.reset") {
+        messages.push({ id: `reset:${entry.id}`, role: "system", text: "New conversation", failed: false, marker: "reset" });
+      } else if (entry.kind === "pi.compaction") {
+        messages.push({ id: `compaction:${entry.id}`, role: "system", text: "Earlier messages were compacted into a summary", failed: false, marker: "compaction" });
       }
+      if (entry.kind === "pi.reset" || entry.kind === "pi.compaction") continue; // The wrapped summary stays internal.
       for (const [index, message] of (entry.model ?? []).entries()) {
         if (message.role !== "user" && message.role !== "assistant") continue;
         const failed = message.role === "assistant" && (message.stopReason === "error" || message.stopReason === "aborted");
         const text = failed ? "Response interrupted or failed. You can send another message to retry." : typeof message.content === "string" ? message.content : message.content.filter((part) => part.type === "text").map((part) => part.text).join("");
-        if (text) result.messages.push({ id: `${entry.id}:${index}`, role: message.role, text, failed });
+        if (text) messages.push({ id: `${entry.id}:${index}`, role: message.role, text, failed });
       }
     }
-    result.partial = live?.generation?.message?.content.filter((part) => part.type === "text").map((part) => part.text).join("") ?? "";
-    return result;
+    return messages;
   }
   /** Pushes committed snapshots; no SQL reads are needed for conversation updates. */
   async watchChat(userId: string, id: string, signal: AbortSignal, publish: (chat: AgentChat) => void): Promise<void> {
@@ -255,6 +321,7 @@ export class AgentService {
     let binding: RunningAgent | undefined;
     let watch: Awaited<ReturnType<Conversation["watch"]>> | undefined;
     let view: ConversationView | undefined;
+    let estimated: { tail: number | undefined; stats: { tokens: number; history: boolean } } | undefined;
     const notify = () => { changed = true; wake?.(); };
     const onLifecycle = () => { lifecycleChanged = true; notify(); };
     const listeners = this.lifecycle.get(id) ?? new Set<() => void>();
@@ -272,6 +339,7 @@ export class AgentService {
             await watch?.stop();
             watch = undefined;
             view = undefined;
+            estimated = undefined;
             binding = current;
             if (current && !lifetime.aborted) {
               const attached = await current.main.watch(context);
@@ -287,9 +355,19 @@ export class AgentService {
         if (lifetime.aborted) break;
         if (changed) {
           changed = false;
+          // The context estimate and the history signal need reads beyond the
+          // watched view; recompute only when the transcript tail moved, not on
+          // every streaming tick.
+          const tail = view?.entries.at(-1)?.id;
+          if (view && binding && estimated?.tail !== tail) {
+            const contextView = await binding.main.context(context);
+            estimated = { tail, stats: await this.tailStats(binding.main, view.entries, estimateContextTokens(contextView.messages).tokens) };
+          }
           publish(await this.projectChat(agent, view?.entries ?? [],
             view?.docs["pi.live"] as unknown as LiveState | undefined,
-            view?.docs["pi.inbox"] as unknown as InboxState | undefined));
+            view?.docs["pi.inbox"] as unknown as InboxState | undefined,
+            view?.docs["pi.usage"] as unknown as UsageState | undefined,
+            estimated?.stats));
         }
         if (!changed && !lifecycleChanged) await new Promise<void>((resolve) => { wake = resolve; });
         wake = undefined;
@@ -323,6 +401,50 @@ export class AgentService {
   async stop(userId: string, id: string) {
     const agent = await this.owned(userId, id);
     await this.running.get(agent.id)?.main.abort(context);
+  }
+  /** Starts a fresh model context; the earlier transcript stays durable and browsable through `chatHistory`. */
+  async reset(userId: string, id: string) {
+    const agent = await this.owned(userId, id);
+    const current = this.running.get(agent.id);
+    if (!current) throw new AgentError("Agent is unavailable. Retry initialization.", 503);
+    await current.main.reset(undefined, context);
+  }
+  /** Manually compacts the visible transcript into a summary entry. */
+  async compact(userId: string, id: string): Promise<{ message?: string }> {
+    const agent = await this.owned(userId, id);
+    if (!this.scheduling) throw new AgentError("Agent execution is not ready", 503);
+    const current = this.running.get(agent.id);
+    if (!current) throw new AgentError("Agent is unavailable. Retry initialization.", 503);
+    if (!await this.configured(agent, current)) throw new AgentError("Reconnect this Agent's provider or select an available model on the Providers page.", 409);
+    const taskId = await current.main.compact(undefined, context);
+    // A decline (nothing older than the kept recent window) settles almost
+    // instantly and would otherwise be completely silent; a real summarization
+    // keeps running in the background and reports through the event stream.
+    const settled = await Promise.race([
+      current.harness.waitForTask(taskId, context),
+      new Promise<undefined>((resolve) => { setTimeout(() => resolve(undefined), 2_000); }),
+    ]);
+    if (settled === undefined) return {};
+    const outcome = settled.state.outcome;
+    if (outcome.status === "completed") {
+      const compacted = typeof outcome.result === "object" && outcome.result !== null && ("entryId" in outcome.result || "submissionId" in outcome.result);
+      return compacted ? {} : { message: "Nothing to compact yet — the recent conversation still fits within the context window." };
+    }
+    const failure = outcome.status === "aborted" || outcome.status === "orphaned" ? outcome.reason : outcome.error.message;
+    return { message: failure ?? "Compaction failed." };
+  }
+  /** One page of transcript entries strictly older than `before` (an exclusive entry ID). */
+  async chatHistory(userId: string, id: string, before?: number): Promise<AgentChatHistory> {
+    const agent = await this.owned(userId, id);
+    const current = this.running.get(agent.id);
+    if (!current) return { messages: [], more: false };
+    const maxEntryId = before === undefined ? undefined : (before - 1) as EntryId;
+    const page = await current.main.entries({ order: "descending", ...(maxEntryId === undefined ? {} : { maxEntryId }) }, 100, undefined, context);
+    return {
+      messages: AgentService.projectEntries([...page.items].reverse()),
+      before: page.items.length ? page.items.at(-1)!.id : before,
+      more: page.items.length === 100,
+    };
   }
   close() {
     this.stopping = true;

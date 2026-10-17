@@ -147,11 +147,13 @@ describe("per-Agent durable execution", () => {
     const results = await Promise.allSettled(Array.from({ length: 25 }, (_, index) => runtime.agents.send("owner", agent.id, `Queued ${index}`, randomUUID())));
     expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(20);
     expect(results.filter((result) => result.status === "rejected")).toHaveLength(5);
-    expect((await runtime.agents.chat("owner", agent.id)).queued).toBe(20);
+    const queued = (await runtime.agents.chat("owner", agent.id)).queuedMessages;
+    expect(queued).toHaveLength(20);
+    expect(queued.every((item) => item.text.startsWith("Queued "))).toBe(true);
     await runtime.agents.stop("owner", agent.id);
     const stopped = await runtime.agents.chat("owner", agent.id);
     expect(stopped.busy).toBe(false);
-    expect(stopped.queued).toBe(0);
+    expect(stopped.queuedMessages).toEqual([]);
     expect(faux.state.callCount).toBe(1);
   }, 15_000);
 
@@ -182,6 +184,101 @@ describe("per-Agent durable execution", () => {
     expect(recovered.state).toBe("ready");
     expect(recovered.conversationId).toBe(agent.conversationId);
     expect(faux.state.callCount).toBe(0);
+  });
+
+  it("exposes conversation stats, then starts a fresh context on reset", async () => {
+    const agent = await create();
+    faux.setResponses([fauxAssistantMessage("Hello back")]);
+    await runtime.agents.send("owner", agent.id, "Hello", randomUUID());
+    await vi.waitFor(async () => expect((await runtime.agents.chat("owner", agent.id)).messages.map((entry) => entry.text)).toEqual(["Hello", "Hello back"]));
+    const before = await runtime.agents.chat("owner", agent.id);
+    expect(before.usage.cacheWrite).toBeGreaterThan(0);
+    expect(before.usage.output).toBeGreaterThan(0);
+    expect(before.context).toEqual({ tokens: expect.any(Number), window: 128000 });
+    expect(before.context!.tokens).toBeGreaterThan(0);
+    // The whole conversation is visible; there is nothing earlier to load.
+    expect(before.history).toBe(false);
+    await runtime.agents.reset("owner", agent.id);
+    await vi.waitFor(async () => {
+      // The live tail is the fresh context: only the reset divider.
+      const chat = await runtime.agents.chat("owner", agent.id);
+      expect(chat.messages.map((entry) => entry.text)).toEqual(["New conversation"]);
+      // The usage ledger and the model window remain visible.
+      expect(chat.usage.cacheWrite).toBe(before.usage.cacheWrite);
+      expect(chat.context!.window).toBe(128000);
+    });
+    const history = await runtime.agents.chatHistory("owner", agent.id);
+    expect(history.more).toBe(false);
+    // The full history stays browsable below the divider.
+    expect(history.messages.map((entry) => entry.text)).toEqual(["Hello", "Hello back", "New conversation"]);
+    const chat = await runtime.agents.chat("owner", agent.id);
+    expect(chat.messages.map((entry) => entry.text)).toEqual(["New conversation"]);
+    // The prior session sits below the fresh context and can be scrolled up to.
+    expect(chat.history).toBe(true);
+  });
+
+  it("pages transcript history below a requested entry", async () => {
+    const agent = await create();
+    faux.setResponses([fauxAssistantMessage("First reply"), fauxAssistantMessage("Second reply")]);
+    await runtime.agents.send("owner", agent.id, "One", randomUUID());
+    await vi.waitFor(async () => expect((await runtime.agents.chat("owner", agent.id)).messages.some((entry) => entry.text === "First reply")).toBe(true));
+    await runtime.agents.send("owner", agent.id, "Two", randomUUID());
+    await vi.waitFor(async () => expect((await runtime.agents.chat("owner", agent.id)).messages.some((entry) => entry.text === "Second reply")).toBe(true));
+    const chat = await runtime.agents.chat("owner", agent.id);
+    expect(chat.messages.map((entry) => entry.text)).toEqual(["One", "First reply", "Two", "Second reply"]);
+    const newest = await runtime.agents.chatHistory("owner", agent.id);
+    expect(newest.messages.map((entry) => entry.text)).toEqual(["One", "First reply", "Two", "Second reply"]);
+    expect(newest.more).toBe(false);
+    const oldestEntryId = Number(chat.messages[0]!.id.split(":")[0]);
+    const older = await runtime.agents.chatHistory("owner", agent.id, oldestEntryId);
+    expect(older.messages).toEqual([]);
+    expect(older.more).toBe(false);
+  });
+
+  it("compacts a long conversation on request", async () => {
+    const agent = await create();
+    const filler = "context ".repeat(1900);
+    const answers = Array.from({ length: 8 }, (_, index) => fauxAssistantMessage(`Answer ${index}`));
+    faux.setResponses(answers);
+    for (let index = 0; index < 8; index++) {
+      await runtime.agents.send("owner", agent.id, `${filler} ${index}`, randomUUID());
+      await vi.waitFor(() => expect(faux.state.callCount).toBe(index + 1));
+    }
+    const grown = await runtime.agents.chat("owner", agent.id);
+    expect(grown.messages).toHaveLength(16);
+    expect(grown.compacting).toBe(false);
+    faux.setResponses([fauxAssistantMessage("Summary of the conversation so far")]);
+    const outcome = await runtime.agents.compact("owner", agent.id);
+    // A real summarization reports through the event stream, not the request.
+    expect(outcome.message).toBeUndefined();
+    await vi.waitFor(async () => {
+      const chat = await runtime.agents.chat("owner", agent.id);
+      expect(chat.messages.some((entry) => entry.marker === "compaction")).toBe(true);
+      expect(chat.compacting).toBe(false);
+    }, { timeout: 10_000 });
+    const compacted = await runtime.agents.chat("owner", agent.id);
+    // The compacted context starts at the divider; the newest turns stay verbatim.
+    expect(compacted.messages[0]!.marker).toBe("compaction");
+    expect(compacted.messages.some((entry) => entry.text === "Answer 7")).toBe(true);
+    expect(compacted.compactionError).toBeUndefined();
+    // The summarized turns are no longer part of the context but remain browsable.
+    expect(compacted.messages.some((entry) => entry.text === "Answer 0")).toBe(false);
+    const history = await runtime.agents.chatHistory("owner", agent.id);
+    expect(history.messages.some((entry) => entry.text === "Answer 0")).toBe(true);
+  }, 15_000);
+
+  it("explains a declined compaction on a short conversation", async () => {
+    const agent = await create();
+    faux.setResponses([fauxAssistantMessage("Hello back")]);
+    await runtime.agents.send("owner", agent.id, "Hello", randomUUID());
+    await vi.waitFor(async () => expect((await runtime.agents.chat("owner", agent.id)).messages.map((entry) => entry.text)).toEqual(["Hello", "Hello back"]));
+    const declined = await runtime.agents.compact("owner", agent.id);
+    expect(declined.message).toContain("Nothing to compact yet");
+    // The decline left the transcript untouched.
+    const chat = await runtime.agents.chat("owner", agent.id);
+    expect(chat.compacting).toBe(false);
+    expect(chat.compactionError).toBeUndefined();
+    expect(chat.messages.some((entry) => entry.marker === "compaction")).toBe(false);
   });
 
   it("keeps failed provisioning visible, sanitized and retryable", async () => {

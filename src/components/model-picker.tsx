@@ -31,7 +31,8 @@ export function ModelPicker({ choices, value, onChange, thinkingLevel, disabled 
   </div>;
 }
 
-function ModelDialog({ choices, value, thinkingLevel, onCancel, onApply }: { choices: ModelChoice[]; value: string; thinkingLevel?: string; onCancel: () => void; onApply: (value: string, thinkingLevel: string) => Promise<void> }) {
+/** Reusable model dialog for hosts that render their own trigger. */
+export function ModelDialog({ choices, value, thinkingLevel, onCancel, onApply }: { choices: ModelChoice[]; value: string; thinkingLevel?: string; onCancel: () => void; onApply: (value: string, thinkingLevel: string) => Promise<void> }) {
   const [draft, setDraft] = useState(value);
   const [thinking, setThinking] = useState(thinkingLevel ?? "");
   const [saving, setSaving] = useState(false);

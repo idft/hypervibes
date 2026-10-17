@@ -7,7 +7,8 @@ import { AgentSettingsPage } from "./agent-settings-page.js";
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 const initial: AgentChat = {
   agent: { id: "agent-fixture", name: "Research", userId: "owner", state: "ready", conversationId: 1, initialProvider: null, initialModelId: null, error: null, tradingAccountAddress: null, creationRequestId: "fixture", createdAt: 0, updatedAt: 0 },
-  model: { provider: "current", modelId: "old" }, configured: true, busy: false, queued: 0, messages: [], partial: "",
+  model: { provider: "current", modelId: "old" }, configured: true, busy: false, queuedMessages: [], messages: [], partial: "",
+  usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 }, history: false, compacting: false,
 };
 describe("Agent settings", () => {
   let root: Root; let container: HTMLDivElement;

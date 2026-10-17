@@ -22,6 +22,14 @@ export function field(data: unknown, key: string): string {
   return value;
 }
 
+/** An optional non-negative integer, such as a chat history page token. */
+export function optionalNumber(data: unknown, key: string): number | undefined {
+  if (typeof data !== "object" || data === null || !(key in data)) return undefined;
+  const value = Reflect.get(data, key);
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0) throw new Error("Invalid request");
+  return value;
+}
+
 export async function agentAction<T>(action: () => Promise<T>) {
   try { return { ok: true as const, data: await action() }; }
   catch (error) {
@@ -120,4 +128,25 @@ export const stopAgentChat = createServerFn({ method: "POST" })
   .handler(async ({ context, data }) => {
     const user = await agentUser(context.runtime, getRequestHeaders(), true);
     return agentAction(() => context.runtime.agents.stop(user.id, data.id));
+  });
+
+export const resetAgentChat = createServerFn({ method: "POST" })
+  .validator((data: unknown) => ({ id: field(data, "id") }))
+  .handler(async ({ context, data }) => {
+    const user = await agentUser(context.runtime, getRequestHeaders(), true);
+    return agentAction(() => context.runtime.agents.reset(user.id, data.id));
+  });
+
+export const compactAgentChat = createServerFn({ method: "POST" })
+  .validator((data: unknown) => ({ id: field(data, "id") }))
+  .handler(async ({ context, data }) => {
+    const user = await agentUser(context.runtime, getRequestHeaders(), true);
+    return agentAction(() => context.runtime.agents.compact(user.id, data.id));
+  });
+
+export const getAgentChatHistory = createServerFn({ method: "GET" })
+  .validator((data: unknown) => ({ id: field(data, "id"), before: optionalNumber(data, "before") }))
+  .handler(async ({ context, data }) => {
+    const user = await agentUser(context.runtime, getRequestHeaders());
+    return agentAction(() => context.runtime.agents.chatHistory(user.id, data.id, data.before));
   });
