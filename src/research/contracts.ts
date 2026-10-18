@@ -6,7 +6,7 @@ const nullableMoney = Type.Union([Type.String(), Type.Null()]);
 const metadataFields = {
   id: Type.String(), agentId: Type.String(), title: Type.String(), description: Type.String(), mediaType: Type.String(), size: Type.Integer({ minimum: 1 }),
   tags: Type.Array(Type.String(), { maxItems: 12 }), instrument: Type.String(), interval: Type.String(), createdAt: time, expiresAt: nullableTime,
-  conversationId: nullableTime, taskId: nullableTime,
+  conversationId: nullableTime, taskId: nullableTime, protectedByMemory: Type.Optional(Type.Boolean()),
 };
 export const ArtifactMetaSchema = Type.Object(metadataFields);
 export const ArtifactReadSchema = Type.Object({ ...metadataFields,

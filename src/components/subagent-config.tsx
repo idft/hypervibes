@@ -1,5 +1,6 @@
 import { useId, useRef, useState, type ReactNode } from "react";
-import { candleIntervals, mainToolNames, accountToolNames, researchToolNames, taToolNames, type AssignmentSettings, type SubagentInput } from "../agents/subagent-input.js";
+import { candleIntervals, accountToolNames, researchToolNames, taToolNames, type AssignmentSettings, type SubagentInput } from "../agents/subagent-input.js";
+import { memoryToolNames } from "../memory/memory-contracts.js";
 import { ConfigDialog, configButton, configInput } from "./config-dialog.js";
 
 type Identity = Pick<SubagentInput, "name" | "description">;
@@ -54,7 +55,8 @@ const toolGroups = [
   { name: "Hyperliquid", tools: accountToolNames },
   { name: "Research · Code Mode & Artifacts", tools: researchToolNames },
   { name: "Technical analysis · TA", tools: taToolNames },
-  { name: "HyperVibes · Subagents", tools: mainToolNames.filter((name) => !accountToolNames.some((worker) => worker === name)) },
+  { name: "Memories & Learnings", tools: memoryToolNames },
+  { name: "HyperVibes · Subagents", tools: ["list_subagents", "delegate_subagent", "get_subagent_run"] },
 ];
 
 export function ToolPicker({ tools, main, onChange }: { tools: string[]; main: boolean; onChange: (tools: string[]) => Promise<void> }) {

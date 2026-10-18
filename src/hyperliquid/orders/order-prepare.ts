@@ -85,7 +85,7 @@ export function assertStringAmounts(value: unknown): void {
   if (Array.isArray(value)) { for (const item of value) assertStringAmounts(item); return; }
   if (!value || typeof value !== "object") return;
   for (const [key, item] of Object.entries(value)) {
-    if (["size", "price", "trigger_price", "limit_price", "oid"].includes(key) && typeof item !== "string") throw new HyperliquidError(`${key} must be an exact decimal string, not a JSON number.`);
+    if (["size", "price", "trigger_price", "limit_price", "take_profit_price", "stop_loss_price", "oid"].includes(key) && typeof item !== "string") throw new HyperliquidError(`${key} must be an exact decimal string, not a JSON number.`);
     assertStringAmounts(item);
   }
 }

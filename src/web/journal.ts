@@ -1,3 +1,4 @@
+import { journalDecisionAudit } from "../memory/decision-audit.js";
 import { createServerFn } from "@tanstack/react-start";
 import { getRequestHeaders } from "@tanstack/react-start/server";
 import { agentAction, agentUser, field } from "./agents.js";
@@ -13,6 +14,10 @@ export const getAgentJournal = createServerFn({ method: "GET" })
     const user = await agentUser(context.runtime, getRequestHeaders());
     return agentAction(() => context.runtime.hyperliquid.agentJournal(user.id, data.id, data.view, data.page));
   });
+export const getJournalAudit = createServerFn({ method: "GET" }).validator((data: unknown) => ({ id: field(data, "id"), target: field(data, "target") })).handler(async ({ context, data }) => {
+  const user = await agentUser(context.runtime, getRequestHeaders());
+  return agentAction(async () => { await context.runtime.agents.owned(user.id, data.id); return journalDecisionAudit(context.runtime.database, data.id, data.target); });
+});
 export const getJournalNotes = createServerFn({ method: "GET" })
   .validator((data: unknown) => ({ id: field(data, "id"), target: field(data, "target") }))
   .handler(async ({ context, data }) => {

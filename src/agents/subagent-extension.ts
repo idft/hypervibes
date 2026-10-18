@@ -1,6 +1,7 @@
 import { Type } from "@earendil-works/pi-ai";
-import { configure, defineDocFamily, defineExtension, defineTask, defineTool, section, type AgentChange, type ConversationId, type Extension, type TaskId } from "@earendil-works/pi-durable";
-import { workerInstructions } from "./subagent-input.js";
+import { configure, defineDocFamily, defineExtension, defineTask, defineTool, section, type AgentChange, type ConversationId, type ContextEdit, type Extension, type TaskId } from "@earendil-works/pi-durable";
+import type { ExecutionContextService } from "./execution-context.js";
+import type { ExecutionOrigin } from "./execution-context-contracts.js";
 import type { SubagentRow, SubagentRun } from "../db/subagent-schema.js";
 
 interface ExecutionService {
@@ -11,7 +12,7 @@ interface ExecutionService {
   thinking(level: string): AgentChange["thinkingLevel"];
   reportWhenReady(agentId: string, deliver: () => Promise<unknown>, signal: AbortSignal): Promise<boolean>;
   delegatable(agentId: string): Promise<Pick<SubagentRow, "id" | "name" | "description" | "tools">[]>;
-  delegate(agentId: string, id: string, task: string, submissionId: string): Promise<SubagentRun>;
+  delegate(agentId: string, id: string, task: string, submissionId: string, origin?: ExecutionOrigin, expiresAt?: number, signal?: AbortSignal): Promise<SubagentRun>;
 }
 
 /** One receipt per application run: dispatch can retry across either store's commit. */
@@ -20,7 +21,7 @@ export const RunReceipt = defineDocFamily<{ taskId: number | null }, null>({
 });
 type State = { phase: "start" } | { phase: "execute"; child: number } | { phase: "report" };
 
-export function createSubagentExtension(service: ExecutionService, agentId: string, hyperliquid: Extension, capabilities: readonly Extension[]) {
+export function createSubagentExtension(service: ExecutionService, agentId: string, hyperliquid: Extension, capabilities: readonly Extension[], execution: ExecutionContextService) {
   const runner = defineTask<{ runId: string; reportOnly?: boolean }, State, null>({
     name: "hv.subagent-runner", version: 1, initial: (input) => ({ phase: input.reportOnly ? "report" : "start" }),
     phases: {
@@ -33,15 +34,26 @@ export function createSubagentExtension(service: ExecutionService, agentId: stri
           await service.finish(run.id, "failed", "Assignment expired before execution.");
           await runtime.commit(() => ({ status: "running", checkpoint: { phase: "report" } }), context); return;
         }
+        const savedContext = await execution.runContext(agentId, run);
+        const previousContext = run.config.persistent && run.config.conversationId !== null ? await runtime.context(run.config.conversationId as ConversationId, context) : null;
+        // Durable's positional system entries preserve old sections in history.
+        // Public context edits strip ONLY prior assignment instructions from
+        // active context, preserving other sections/tools and immutable audit.
+        const edits: ContextEdit[] = previousContext?.entries.flatMap((entry, index) => {
+          const contribution = previousContext.contributions[index] ?? [];
+          if (!contribution.some((message) => message.role === "system" && message.sections?.instructions !== undefined)) return [];
+          return [{ target: entry.id, action: "replace" as const, messages: contribution.map((message) => message.role === "system" && message.sections?.instructions !== undefined ? { ...message, sections: Object.fromEntries(Object.entries(message.sections).filter(([key]) => key !== "instructions")) } : message) }];
+        }) ?? [];
         await runtime.commit(async (tx) => {
           const child = run.config.persistent && run.config.conversationId !== null ? run.config.conversationId :
             (await tx.createConversation({ ownership: { kind: "task", taskId: task.id } })).id;
+          if (edits.length) await tx.appendEntry(child as ConversationId, { kind: "hv.assignment-instructions-retired", data: { runId: run.id }, edits });
           await configure(tx, child as ConversationId, {
             model: { provider: run.config.provider, modelId: run.config.modelId },
             thinkingLevel: service.thinking(run.config.thinkingLevel),
-            extensions: [hyperliquid, ...capabilities.filter((extension) => extension.tools?.some((tool) => run.config.tools.includes(tool.name)))], tools: [...(hyperliquid.tools ?? []), ...capabilities.flatMap((extension) => extension.tools ?? [])].filter((tool) => run.config.tools.includes(tool.name)),
+            extensions: [hyperliquid, ...capabilities.filter((extension) => extension.name === "execution-context" || extension.tools?.some((tool) => run.config.tools.includes(tool.name)))], tools: [...(hyperliquid.tools ?? []), ...capabilities.flatMap((extension) => extension.tools ?? [])].filter((tool) => run.config.tools.includes(tool.name)),
             modelTools: null, cwd: null,
-            instructions: workerInstructions(run.config),
+            instructions: savedContext.instructions,
           });
           return { status: "running", checkpoint: { phase: "execute", child } };
         }, context);
@@ -113,7 +125,8 @@ export function createSubagentExtension(service: ExecutionService, agentId: stri
     defineTool({ name: "list_subagents", description: "List enabled workers available for delegation, their IDs, descriptions and tools. Does not start work.", parameters: Type.Object({}, { additionalProperties: false }), replay: "safe", execute: async () => ({ output: [{ type: "text" as const, text: JSON.stringify(await service.delegatable(agentId)) }] }) }),
     defineTool({ name: "delegate_subagent", description: "Assign a focused task to a configured worker in the background. Returns a run ID immediately. Its outcome will arrive as a follow-up. No recursive delegation; one active assignment per worker.", parameters: Type.Object({ subagent_id: Type.String(), task: Type.String() }, { additionalProperties: false }), replay: "safe", execute: async (args, api, context) => {
       // Stable tool-task identity prevents replay from starting a second assignment.
-      const run = await service.delegate(agentId, args.subagent_id, args.task, `delegate:${api.taskId}`);
+      const resolved = await execution.resolve(agentId, api, context);
+      const run = await service.delegate(agentId, args.subagent_id, args.task, `delegate:${api.taskId}`, resolved.frame.origin, resolved.frame.expiresAt, context.abortSignal);
       await api.details({ runId: run.id }, context);
       return { output: [{ type: "text" as const, text: `Assignment ${run.id}: ${run.status}. Its outcome will be reported to this conversation.` }] };
     } }),

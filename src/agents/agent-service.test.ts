@@ -79,7 +79,7 @@ describe("per-Agent durable execution", () => {
     const agent = await create();
     const harness = await opened.mock.results[0]!.value as Harness;
     const root = await harness.root(context);
-    const toolNames = ["get_account", "submit_orders", "cancel_orders", "cancel_all_orders", "list_orders", "get_order", "get_order_request", "list_subagents", "delegate_subagent", "get_subagent_run"];
+    const toolNames = ["get_account", "prepare_protected_entry", "prepare_position_protection", "get_protection_status", "submit_orders", "cancel_orders", "cancel_all_orders", "list_orders", "get_order", "get_order_request", "list_subagents", "delegate_subagent", "get_subagent_run", "record_trade_decision", "list_memories", "get_memory", "get_trading_context", "get_learnings"];
     expect((await root.agent(context)).tools.map((tool) => tool.name)).toEqual(toolNames);
     await root.configure({ extensions: [], tools: [], instructions: "Trading and live exchange data are not configured." }, context);
     await runtime.close();
@@ -87,7 +87,7 @@ describe("per-Agent durable execution", () => {
     const restored = await (await opened.mock.results[1]!.value as Harness).root(context);
     const resolved = await restored.agent(context);
     expect(restored.id).toBe(agent.conversationId);
-    expect(resolved.extensions.map((extension) => extension.name)).toEqual(["hyperliquid", "subagents"]);
+    expect(resolved.extensions.map((extension) => extension.name)).toEqual(["hyperliquid", "subagents", "execution-context", "memory"]);
     expect(resolved.tools.map((tool) => tool.name)).toEqual(toolNames);
     expect(resolved.instructions).not.toContain("not configured");
     expect(resolved.model).toEqual(options().model);
@@ -335,7 +335,7 @@ describe("per-Agent durable execution", () => {
       faux.setResponses([fauxAssistantMessage('This response must not finish before the process is killed.')]);
       const models = createModels();
       models.setProvider(faux.provider);
-      const runtime = await createRuntime(${JSON.stringify(config())}, { models, model: { provider: 'faux', modelId: 'faux-1' } });
+      const runtime = await createRuntime(${JSON.stringify(config())}, { models, model: { provider: 'faux', modelId: 'faux-1' }, accountFeedFactory: () => ({ close: async () => {} }), journalFeedFactory: () => ({ close: async () => {} }), journalHistoryFetcher: async () => [] });
       runtime.start();
       await runtime.agents.send('owner', '${agent.id}', 'Survive a crash', '${randomUUID()}');
       while (faux.state.callCount === 0) await new Promise(resolve => setTimeout(resolve, 5));
@@ -353,7 +353,7 @@ describe("per-Agent durable execution", () => {
     runtime.start();
     await vi.waitFor(async () => expect((await runtime.agents.chat("owner", agent.id)).messages.some((entry) => entry.text === "Recovered after process kill")).toBe(true));
     expect((await runtime.agents.owned("owner", agent.id)).conversationId).toBe(agent.conversationId);
-  });
+  }, 20000); // Child startup/recovery must outlive its bounded 15s subprocess deadline.
 
   it("preserves existing agents without credentials but refuses creation and new model calls", async () => {
     const agent = await create();

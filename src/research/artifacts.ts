@@ -11,14 +11,16 @@ export interface ArtifactInput {
 export interface ArtifactMeta {
   id: string; agentId: string; title: string; description: string; mediaType: string; size: number;
   tags: string[]; instrument: string; interval: string; createdAt: number; expiresAt: number | null;
-  conversationId: number | null; taskId: number | null;
+  conversationId: number | null; taskId: number | null; protectedByMemory?: boolean;
 }
-interface Row extends Omit<ArtifactMeta, "tags"> { tags: string }
-const columns = `id,agent_id AS agentId,title,description,media_type AS mediaType,size,tags,instrument,interval,created_at AS createdAt,expires_at AS expiresAt,conversation_id AS conversationId,task_id AS taskId`;
+interface Row extends Omit<ArtifactMeta, "tags" | "protectedByMemory"> { tags: string; protectedByMemory: number }
+const columns = `id,agent_id AS agentId,title,description,media_type AS mediaType,size,tags,instrument,interval,created_at AS createdAt,expires_at AS expiresAt,conversation_id AS conversationId,task_id AS taskId,EXISTS(SELECT 1 FROM hv_memory_artifacts m WHERE m.agent_id=a.agent_id AND (m.artifact_id=a.id OR m.artifact_id IN(SELECT parent FROM hv_artifact_links WHERE child=a.id))) AS protectedByMemory`;
 // Only a one-level report -> attachment graph is allowed. An unexpired report
 // protects its children even when their own temporary retention has elapsed.
-const visible = `(a.expires_at IS NULL OR a.expires_at>? OR EXISTS(SELECT 1 FROM hv_artifact_links l JOIN hv_artifacts p ON p.id=l.parent WHERE l.child=a.id AND (p.expires_at IS NULL OR p.expires_at>?)))`;
-const meta = (row: Row): ArtifactMeta => ({ ...row, tags: JSON.parse(row.tags) as string[] });
+export const artifactVisibleSql = `(a.expires_at IS NULL OR a.expires_at>? OR EXISTS(SELECT 1 FROM hv_memory_artifacts m WHERE m.agent_id=a.agent_id AND m.artifact_id=a.id) OR EXISTS(SELECT 1 FROM hv_artifact_links l JOIN hv_artifacts p ON p.id=l.parent WHERE l.child=a.id AND (p.expires_at IS NULL OR p.expires_at>? OR EXISTS(SELECT 1 FROM hv_memory_artifacts m WHERE m.agent_id=p.agent_id AND m.artifact_id=p.id))))`;
+const visible = artifactVisibleSql;
+const memoryProtected = `SELECT 1 FROM hv_memory_artifacts m WHERE m.agent_id=? AND (m.artifact_id=? OR m.artifact_id IN (SELECT parent FROM hv_artifact_links WHERE child=?)) LIMIT 1`;
+const meta = (row: Row): ArtifactMeta => ({ ...row, tags: JSON.parse(row.tags) as string[], protectedByMemory: Boolean(row.protectedByMemory) });
 const maxBytes = 5 * 1024 * 1024;
 function text(value: string, max: number, label: string) { if (typeof value !== "string" || value.length > max) throw new AgentError(`Invalid ${label}`); return value.trim(); }
 
@@ -117,13 +119,15 @@ export class ArtifactService {
   async retention(agentId: string, id: string, retained: boolean) {
     await this.db.transaction(async (tx) => {
       await this.metadata(tx, agentId, id);
+      if (!retained && await tx.get(memoryProtected, agentId, id, id)) throw new AgentError("Artifact is evidence referenced by a memory; retention cannot be removed.", 409);
       await tx.run("UPDATE hv_artifacts SET expires_at=? WHERE agent_id=? AND id=?", retained ? null : Date.now() + 7 * 86400_000, agentId, id);
     });
   }
   async remove(agentId: string, id: string) {
     await this.db.transaction(async (tx) => {
       await this.metadata(tx, agentId, id);
-      const ref = await tx.get("SELECT l.parent FROM hv_artifact_links l JOIN hv_artifacts p ON p.id=l.parent WHERE l.child=? AND (p.expires_at IS NULL OR p.expires_at>?) LIMIT 1", id, Date.now());
+      if (await tx.get(memoryProtected, agentId, id, id)) throw new AgentError("Artifact is evidence referenced by a memory and cannot be deleted.", 409);
+      const ref = await tx.get("SELECT l.parent FROM hv_artifact_links l JOIN hv_artifacts p ON p.id=l.parent WHERE l.child=? AND (p.expires_at IS NULL OR p.expires_at>? OR EXISTS(SELECT 1 FROM hv_memory_artifacts m WHERE m.agent_id=p.agent_id AND m.artifact_id=p.id)) LIMIT 1", id, Date.now());
       if (ref) throw new AgentError("Artifact is attached to a report. Delete the report first.", 409);
       await tx.run("DELETE FROM hv_artifacts WHERE agent_id=? AND id=?", agentId, id);
     });

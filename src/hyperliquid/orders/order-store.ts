@@ -15,12 +15,9 @@ export type RequestRow = typeof hvOrderRequests.$inferSelect;
 export type ActionRow = typeof hvOrderActions.$inferSelect;
 export type ItemRow = typeof hvOrderItems.$inferSelect;
 
-/** Stable object-key ordering for request identity, independent of model JSON order. */
-export function canonical(value: unknown): string {
-  if (Array.isArray(value)) return `[${value.map(canonical).join(",")}]`;
-  if (value && typeof value === "object") return `{${Object.entries(value).filter(([, v]) => v !== undefined).sort(([a], [b]) => a.localeCompare(b)).map(([k, v]) => `${JSON.stringify(k)}:${canonical(v)}`).join(",")}}`;
-  return JSON.stringify(value);
-}
+import type { SqliteExecutor } from "@earendil-works/pi-durable/storage/sqlite";
+import { canonical } from "../../canonical.js";
+export { canonical } from "../../canonical.js";
 export function active(view: OrderView): boolean {
   return view.commandStatus === "unknown" || ["open", "waitingForFill", "waitingForTrigger", "triggered"].includes(view.orderStatus);
 }
@@ -31,8 +28,8 @@ export class OrderStore {
   actions(id: string) { return this.db.select().from(hvOrderActions).where(eq(hvOrderActions.requestId, id)).orderBy(asc(hvOrderActions.ordinal)).all(); }
   items(actionId: string) { return this.db.select().from(hvOrderItems).where(eq(hvOrderItems.actionId, actionId)).orderBy(asc(hvOrderItems.ordinal)).all(); }
   async allItems(requestId: string) { return (await Promise.all((await this.actions(requestId)).map((action) => this.items(action.id)))).flat(); }
-  async prepare(agentId: string, account: string, key: string, kind: string, input: unknown, actions: PreparedAction[]) {
-    return this.database.appTransaction(async (db) => {
+  async prepare(agentId: string, account: string, key: string, kind: string, input: unknown, actions: PreparedAction[], audit?: (tx: SqliteExecutor, row: RequestRow) => Promise<void>) {
+    return this.database.appTransaction(async (db, tx) => {
       const existing = await db.select().from(hvOrderRequests).where(and(eq(hvOrderRequests.agentId, agentId), eq(hvOrderRequests.requestKey, key))).get();
       if (existing) {
         this.matches(existing, account, kind, input);
@@ -49,9 +46,12 @@ export class OrderStore {
           await db.insert(hvOrderEvents).values({ itemId: view.id, source: "intent", time: now, data: JSON.stringify(view) }).run();
         }
       }
+      await audit?.(tx, row);
       return row;
     });
   }
+  audit(id: string) { return this.database.get<{ decision_number: number | null; origin: string }>("SELECT decision_number,origin FROM hv_order_execution_contexts WHERE request_id=?", id); }
+  audits(agentId: string, account: string) { return this.database.all<{ request_key: string; decision_number: number | null; origin: string | null }>("SELECT r.request_key,c.decision_number,c.origin FROM hv_order_requests r LEFT JOIN hv_order_execution_contexts c ON c.request_id=r.id AND c.agent_id=r.agent_id WHERE r.agent_id=? AND r.account=? AND r.kind='submit' ORDER BY r.created_at DESC LIMIT 500", agentId, account); }
   matches(row: RequestRow, account: string, kind: string, input: unknown) {
     if (row.account !== account || row.kind !== kind || row.input !== canonical(input)) throw new HyperliquidError("This request_id was already used with different arguments or an account assignment.", 409);
   }

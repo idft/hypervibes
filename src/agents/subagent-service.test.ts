@@ -86,7 +86,7 @@ describe("subagent definitions, execution and scheduling", () => {
     const run = await completed(agent.id, worker.id);
     const child = await harness.conversation(run.conversationId! as ConversationId, context);
     const resolved = await child!.agent(context);
-    expect(resolved.extensions.map((extension) => extension.name)).toEqual(["hyperliquid", "ta"]);
+    expect(resolved.extensions.map((extension) => extension.name)).toEqual(["hyperliquid", "execution-context", "ta"]);
     expect(resolved.tools.map((tool) => tool.name)).toEqual(["ta_macd"]);
     const transcript = await runtime.agents.subagents.runDetail("owner", agent.id, worker.id, run.id);
     expect(transcript.tools).toContainEqual(expect.objectContaining({ name: "ta_macd", status: "done" }));
@@ -98,7 +98,7 @@ describe("subagent definitions, execution and scheduling", () => {
     const definition = (await runtime.agents.subagents.list("owner", agent.id)).find((row) => row.kind === "orchestrator")!;
     await runtime.agents.subagents.updateTools("owner", agent.id, definition.id, ["ta_rsi"]);
     const rootAgent = await main.agent(context);
-    expect(rootAgent.extensions.map((extension) => extension.name)).toEqual(["hyperliquid", "subagents", "ta"]);
+    expect(rootAgent.extensions.map((extension) => extension.name)).toEqual(["hyperliquid", "subagents", "execution-context", "ta"]);
     expect(rootAgent.tools.map((tool) => tool.name)).toEqual(["ta_rsi"]);
   });
 
@@ -287,7 +287,7 @@ describe("subagent definitions, execution and scheduling", () => {
     expect(one.id).toBe(again.id);
     const first = await completed(agent.id, worker.id); expect(first.result).toBe("Research evidence");
     const child = await harness.conversation(first.conversationId! as never, context); const resolved = await child!.agent(context);
-    expect(resolved.tools.map((tool) => tool.name)).toEqual(["get_account"]); expect(resolved.extensions.map((extension) => extension.name)).toEqual(["hyperliquid"]);
+    expect(resolved.tools.map((tool) => tool.name)).toEqual(["get_account"]); expect(resolved.extensions.map((extension) => extension.name)).toEqual(["hyperliquid", "execution-context"]);
     await runtime.agents.subagents.run("owner", agent.id, worker.id, "Second task", randomUUID());
     const second = await completed(agent.id, worker.id); expect(second.result).toBe("Second assignment"); expect(second.conversationId).not.toBe(first.conversationId);
     expect((await runtime.agents.chat("owner", agent.id)).messages).toEqual([]);
@@ -426,11 +426,16 @@ describe("subagent definitions, execution and scheduling", () => {
     await expect(runtime.agents.subagents.run("owner", agent.id, worker.id, "Recover intent", id)).rejects.toThrow();
     fail.mockRestore();
     await vi.waitFor(async () => expect((await runtime.agents.owned("owner", agent.id)).state).toBe("failed"));
+    const admitted = (await detail(agent.id, worker.id)).runs[0]!;
+    const frozen = await runtime.agents.execution.runContext(agent.id, admitted);
+    await runtime.agents.execution.learnings.append(runtime.agents.execution.operator(agent.id, "owner"), "ui:after-intent", { scope: { kind: "agent" }, content: "NEW guidance after admission", reason: "Review completed while dispatch was interrupted", evidenceRefs: [] });
     faux.setResponses([fauxAssistantMessage("Recovered intent")]);
     await runtime.agents.retry("owner", agent.id);
     await runtime.agents.subagents.tick();
     const run = await completed(agent.id, worker.id); expect(run.result).toBe("Recovered intent");
     expect((await detail(agent.id, worker.id)).runs).toHaveLength(1);
+    expect(await runtime.agents.execution.runContext(agent.id, run)).toEqual(frozen);
+    expect(JSON.stringify((await runtime.agents.subagents.runDetail("owner", agent.id, worker.id, run.id)).entries)).not.toContain("NEW guidance after admission");
   });
 
   it("records and reports task failures rather than leaving workers permanently active", async () => {
@@ -464,8 +469,12 @@ describe("subagent definitions, execution and scheduling", () => {
     const run = await runtime.agents.subagents.run("owner", agent.id, worker.id, "Survive restart", randomUUID());
     await vi.waitFor(() => expect(faux.state.callCount).toBe(1));
     await runtime.close(AbortSignal.abort()); runtime = await createRuntime(config(), options());
-    expect(faux.state.callCount).toBe(1); runtime.start();
+    expect(faux.state.callCount).toBe(1);
+    await runtime.agents.execution.learnings.append(runtime.agents.execution.operator(agent.id, "owner"), "ui:while-paused", { scope: { kind: "agent" }, content: "Do not inject this into the recovered assignment", reason: "New revision while a run was suspended", evidenceRefs: [] });
+    runtime.start();
     await vi.waitFor(async () => expect((await detail(agent.id, worker.id)).runs[0]?.result).toBe("Recovered evidence"), { timeout: 10000 });
     expect((await detail(agent.id, worker.id)).runs.map((entry) => entry.id)).toEqual([run.id]);
+    expect((await runtime.agents.execution.runContext(agent.id, run)).learnings!.agent.version).toBe(0);
+    expect(JSON.stringify((await runtime.agents.subagents.runDetail("owner", agent.id, worker.id, run.id)).entries)).not.toContain("Do not inject this into the recovered assignment");
   }, 15000);
 });

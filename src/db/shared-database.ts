@@ -85,9 +85,9 @@ export class SharedDatabase implements SqliteDatabase {
       } finally { transaction.active = false; }
     });
   }
-  appTransaction<T>(callback: (db: ApplicationDatabase) => Promise<T>) {
+  appTransaction<T>(callback: (db: ApplicationDatabase, executor: SqliteExecutor) => Promise<T>) {
     return this.transaction((transaction) => callback(drizzle((sql, params, method) =>
-      (transaction as Executor).query(sql, params, method))));
+      (transaction as Executor).query(sql, params, method)), transaction));
   }
   /** Each harness borrows the facade; only the application owns the connection. */
   borrow(): SqliteDatabase {

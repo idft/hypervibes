@@ -11,13 +11,20 @@ import type { ProviderService } from "../providers/provider-service.js";
 import { runHistoryPageSize, runPagination, type RunHistory } from "./subagent-history.js";
 import { AgentError, requestId } from "./agent-input.js";
 import { createSubagentExtension, RunReceipt, type RunnerId, type SubagentExtension } from "./subagent-extension.js";
+import { executionWarnings, type ExecutionWarning } from "./execution-warnings.js";
 import { toolActivity, type ToolActivity } from "../research/tool-activity.js";
+import type { ExecutionContextService } from "./execution-context.js";
+import { automaticOrigin, type ExecutionOrigin, type RunContext } from "./execution-context-contracts.js";
+import { canonical } from "../canonical.js";
+import { bodyHash } from "./execution-context.js";
+import { subagentTemplate } from "./subagent-templates.js";
+import { workerWorkflow } from "./worker-workflow.js";
 import { assignment, defaultMainInstructions, mainToolNames, nextCandleRun, subagentInput, type AssignmentSettings } from "./subagent-input.js";
 
 interface Binding extends SubagentExtension { harness: Harness; main: Conversation; hyperliquid: Extension; capabilities: readonly Extension[]; userId: string }
-export interface SubagentHost { owned(userId: string, id: string): Promise<AgentRow>; models(userId: string): Promise<Models>; changed(id: string): void }
+export interface SubagentHost { owned(userId: string, id: string): Promise<AgentRow>; models(userId: string): Promise<Models>; instruments(): Promise<string[]>; changed(id: string): void }
 /** Full run detail: snapshotted configuration plus the complete transcript. */
-export interface RunDetail { definition: SubagentRow; run: SubagentRun; entries: EntryRecord[]; prior: EntryRecord[]; tools?: ToolActivity[] }
+export interface RunDetail { definition: SubagentRow; run: SubagentRun; entries: EntryRecord[]; prior: EntryRecord[]; tools?: ToolActivity[]; context?: RunContext; warnings?: ExecutionWarning[]; publications?: { ref: string; kind: string; summary: string }[] }
 const active = ["queued", "running"] as const;
 
 /** Definitions and run intents belong to the app; Durable owns execution and reporting. */
@@ -40,8 +47,8 @@ export class SubagentService {
     for (const listeners of this.historyListeners.values()) for (const listener of listeners) listener();
   }
   private historyChanged(id: string) { for (const listener of this.historyListeners.get(id) ?? []) listener(); }
-  constructor(private readonly db: ApplicationDatabase, private readonly database: SharedDatabase, private readonly providers: ProviderService, private readonly host: SubagentHost, private readonly injectedModels = false, private readonly log?: FastifyBaseLogger) {}
-  extension(agentId: string, hyperliquid: Extension, capabilities: readonly Extension[]) { return createSubagentExtension(this, agentId, hyperliquid, capabilities); }
+  constructor(private readonly db: ApplicationDatabase, private readonly database: SharedDatabase, private readonly providers: ProviderService, private readonly host: SubagentHost, private readonly execution: ExecutionContextService, private readonly injectedModels = false, private readonly log?: FastifyBaseLogger) {}
+  extension(agentId: string, hyperliquid: Extension, capabilities: readonly Extension[]) { return createSubagentExtension(this, agentId, hyperliquid, capabilities, this.execution); }
   async bind(agent: AgentRow, harness: Harness, main: Conversation, hyperliquid: Extension, execution: SubagentExtension, capabilities: readonly Extension[]) {
     const resolved = await main.agent(context);
     const now = Date.now();
@@ -86,7 +93,7 @@ export class SubagentService {
   }
   private async applyMain(binding: Binding, row: SubagentRow) {
     const available = [...(binding.hyperliquid.tools ?? []), ...(binding.extension.tools ?? []), ...binding.capabilities.flatMap((extension) => extension.tools ?? [])];
-    await binding.main.configure({ model: { provider: row.provider, modelId: row.modelId }, thinkingLevel: this.thinking(row.thinkingLevel), extensions: [binding.hyperliquid, binding.extension, ...binding.capabilities.filter((extension) => extension.tools?.some((tool) => row.tools.includes(tool.name)))], tools: available.filter((tool) => row.tools.includes(tool.name)), modelTools: null, instructions: row.instructions }, context);
+    await binding.main.configure({ model: { provider: row.provider, modelId: row.modelId }, thinkingLevel: this.thinking(row.thinkingLevel), extensions: [binding.hyperliquid, binding.extension, ...binding.capabilities.filter((extension) => extension.name === "execution-context" || extension.tools?.some((tool) => row.tools.includes(tool.name)))], tools: available.filter((tool) => row.tools.includes(tool.name)), modelTools: null, instructions: row.instructions }, context);
   }
   async list(userId: string, agentId: string) {
     await this.host.owned(userId, agentId);
@@ -177,7 +184,8 @@ export class SubagentService {
       }, context);
     }
     const live = run.conversationId !== null && (run.status === "running" || run.status === "queued") ? await this.binding(agentId).harness.snapshot(LiveDoc, run.conversationId as ConversationId, context) : undefined;
-    return { definition, run, entries, prior, tools: toolActivity(entries, live) };
+    const publications = await this.database.all<{ ref: string; kind: string; summary: string }>("SELECT 'm'||number AS ref,kind,summary FROM hv_memories WHERE agent_id=? AND source_run_id=? ORDER BY number DESC LIMIT 50", agentId, run.id);
+    return { definition, run, entries, prior, tools: toolActivity(entries, live), warnings: executionWarnings(entries), context: await this.execution.runContext(agentId, run), publications };
   }
   /** Verifies the viewer owns the Agent, worker and run without reading its transcript. */
   async ownedRun(userId: string, agentId: string, id: string, runId: string) {
@@ -239,15 +247,18 @@ export class SubagentService {
     const row = await this.db.select().from(hvSubagents).where(and(eq(hvSubagents.id, id), eq(hvSubagents.agentId, agentId))).get();
     if (!row) throw new AgentError("Subagent not found", 404); return row;
   }
-  async create(userId: string, agentId: string, data: unknown, creationId: string) {
+  async create(userId: string, agentId: string, data: unknown, creationId: string, templateId = "") {
     await this.host.owned(userId, agentId); requestId(creationId);
     return this.serial(agentId, async () => {
-      const input = subagentInput(data); await this.validateModel(userId, input, input.thinkingLevel);
+      const input = subagentInput(data); await this.validateWorkflow(agentId, input.workflow); await this.validateModel(userId, input, input.thinkingLevel);
+      const template = templateId ? subagentTemplate(templateId) : null;
+      const templateOrigin = template ? { id: template.id, version: template.version, hash: bodyHash(canonical(template)) } : null;
+      if (template && (input.workflow?.purpose !== template.purpose || input.enabled || (input.workflow.purpose === "trading" && input.workflow.automaticEntriesEnabled))) throw new AgentError("Template creation requires its configured workflow, paused and automatic entries OFF. Enable explicitly after reviewing the saved copy.");
       const id = `worker:${creationId}`;
       const existing = await this.db.select().from(hvSubagents).where(eq(hvSubagents.id, id)).get();
-      if (existing) { if (existing.agentId !== agentId || Object.entries(input).some(([key, value]) => JSON.stringify(Reflect.get(existing, key)) !== JSON.stringify(value))) throw new AgentError("Creation request was already used with different settings.", 409); return existing; }
+      if (existing) { if (existing.agentId !== agentId || canonical(existing.templateOrigin) !== canonical(templateOrigin) || Object.entries(input).some(([key, value]) => JSON.stringify(Reflect.get(existing, key)) !== JSON.stringify(value))) throw new AgentError("Creation request was already used with different settings.", 409); return existing; }
       const now = Date.now();
-      return (await this.db.insert(hvSubagents).values({ ...input, id, agentId, kind: "worker", nextRunAt: input.enabled ? nextCandleRun(now, input.schedule, input.delaySeconds) : null, createdAt: now, updatedAt: now }).returning().all())[0]!;
+      return (await this.db.insert(hvSubagents).values({ ...input, templateOrigin, id, agentId, kind: "worker", nextRunAt: input.enabled ? nextCandleRun(now, input.schedule, input.delaySeconds) : null, createdAt: now, updatedAt: now }).returning().all())[0]!;
     });
   }
   async updateTools(userId: string, agentId: string, id: string, tools: unknown) {
@@ -269,6 +280,7 @@ export class SubagentService {
     switch (section) {
       case "enabled": return this.updateSettings(userId, agentId, id, undefined, { enabled: get("enabled") });
       case "instructions": return this.updateSettings(userId, agentId, id, undefined, { instructions: get("instructions") });
+      case "workflow": return this.updateSettings(userId, agentId, id, undefined, { workflow: get("workflow") });
       case "model": return this.updateSettings(userId, agentId, id, undefined, { provider: get("provider"), modelId: get("modelId"), thinkingLevel: get("thinkingLevel") });
       case "schedule": return this.updateSettings(userId, agentId, id, undefined, { schedule: get("schedule"), delaySeconds: get("delaySeconds"), completion: get("completion") });
       default: throw new AgentError("Unknown settings section.");
@@ -277,7 +289,7 @@ export class SubagentService {
   async update(userId: string, agentId: string, id: string, data: unknown) {
     return this.updateSettings(userId, agentId, id, data);
   }
-  private async updateSettings(userId: string, agentId: string, id: string, data: unknown, patch?: { tools: unknown } | { name: unknown; description: unknown } | { [K in keyof AssignmentSettings]: unknown } | { enabled: unknown } | { instructions: unknown } | { provider: unknown; modelId: unknown; thinkingLevel: unknown } | { schedule: unknown; delaySeconds: unknown; completion: unknown }) {
+  private async updateSettings(userId: string, agentId: string, id: string, data: unknown, patch?: { workflow: unknown } | { tools: unknown } | { name: unknown; description: unknown } | { [K in keyof AssignmentSettings]: unknown } | { enabled: unknown } | { instructions: unknown } | { provider: unknown; modelId: unknown; thinkingLevel: unknown } | { schedule: unknown; delaySeconds: unknown; completion: unknown }) {
     await this.host.owned(userId, agentId);
     return this.serial(agentId, async () => {
       const current = await this.definition(agentId, id);
@@ -285,6 +297,7 @@ export class SubagentService {
       if (patch && ("enabled" in patch || "delegatable" in patch || "schedule" in patch) && current.kind === "orchestrator") throw new AgentError("The orchestrator cannot be paused or have assignment or schedule settings.", 409);
       const input = subagentInput(patch ? { ...current, ...patch } : data, current.kind === "orchestrator");
       await this.validateModel(userId, input, input.thinkingLevel);
+      await this.validateWorkflow(agentId, input.workflow);
       const binding = this.binding(agentId);
       if (current.kind === "orchestrator") {
         const live = await binding.harness.snapshot(LiveDoc, binding.main.id, context), inbox = await binding.harness.snapshot(InboxDoc, binding.main.id, context);
@@ -297,6 +310,7 @@ export class SubagentService {
       };
       const scheduleSettings = { schedule: input.schedule, delaySeconds: input.delaySeconds, completion: input.completion, nextRunAt: input.enabled ? nextCandleRun(now, input.schedule, input.delaySeconds) : null };
       const changes = !patch ? { ...input, ...contextSettings, ...scheduleSettings }
+        : "workflow" in patch ? { workflow: input.workflow }
         : "tools" in patch ? { tools: input.tools }
         : "name" in patch ? { name: input.name, description: input.description }
         : "instructions" in patch ? { instructions: input.instructions }
@@ -344,25 +358,36 @@ export class SubagentService {
   }
   async run(userId: string, agentId: string, id: string, task: string, submissionId: string) {
     await this.host.owned(userId, agentId); requestId(submissionId);
-    return this.admitRun(agentId, id, task, `manual:${submissionId}`, "manual");
+    task = assignment(task);
+    const expiresAt = await this.execution.admitInput(agentId, userId, `run:${submissionId}`, task);
+    return this.admitRun(agentId, id, task, `manual:${submissionId}`, "manual", { mode: "user_directed", userId, userInputRequestIds: [`run:${submissionId}`], expiresAt }, expiresAt);
   }
-  delegate(agentId: string, id: string, task: string, submissionId: string) { return this.admitRun(agentId, id, task, submissionId, "delegation"); }
-  private admitRun(agentId: string, id: string, task: string, submissionId: string, source: SubagentRun["source"]) {
+  delegate(agentId: string, id: string, task: string, submissionId: string, origin: ExecutionOrigin = automaticOrigin, expiresAt = Number.MAX_SAFE_INTEGER, signal?: AbortSignal) { return this.admitRun(agentId, id, task, submissionId, "delegation", origin, expiresAt, signal); }
+  private admitRun(agentId: string, id: string, task: string, submissionId: string, source: SubagentRun["source"], origin: ExecutionOrigin, expiresAt: number, signal?: AbortSignal) {
     return this.serial(agentId, async () => {
       if (!this.ready) throw new AgentError("Agent execution is not ready", 503);
       task = assignment(task); const binding = this.binding(agentId);
       const previous = await this.db.select().from(hvSubagentRuns).where(and(eq(hvSubagentRuns.agentId, agentId), eq(hvSubagentRuns.requestId, submissionId))).get();
       if (previous) { if (previous.subagentId !== id || previous.task !== task) throw new AgentError("Assignment request was already used.", 409); return previous; }
+      if (Date.now() >= expiresAt) throw new AgentError("Assignment authorization expired; request a new assignment", 409);
       const definition = await this.definition(agentId, id);
+      subagentInput(definition);
       if (definition.kind !== "worker" || !definition.enabled || definition.archived || (source === "delegation" && !definition.delegatable)) throw new AgentError("This worker is not available for this assignment.", 409);
       await this.validateModel(binding.userId, definition, definition.thinkingLevel);
       const runs = await this.db.select().from(hvSubagentRuns).where(and(eq(hvSubagentRuns.agentId, agentId), inArray(hvSubagentRuns.status, active))).all();
       if (runs.some((run) => run.subagentId === id)) throw new AgentError("This worker already has an active assignment.", 409);
       if (runs.length >= 4) throw new AgentError("This Agent already has four active workers.", 429);
-      const run = (await this.db.insert(hvSubagentRuns).values({ id: randomUUID(), agentId, subagentId: id, requestId: submissionId, source, task, config: definition, createdAt: Date.now() }).returning().all())[0]!;
+      const run = await this.database.appTransaction(async (db, tx) => {
+        signal?.throwIfAborted();
+        if (Date.now() >= expiresAt) throw new AgentError("Assignment authorization expired; request a new assignment", 409);
+        const admitted = (await db.insert(hvSubagentRuns).values({ id: randomUUID(), agentId, subagentId: id, requestId: submissionId, source, task, config: definition, createdAt: Date.now() }).returning().all())[0]!;
+        await this.execution.snapshotRunTx(tx, admitted, origin);
+        signal?.throwIfAborted();
+        return admitted;
+      });
       this.historyChanged(id);
       await this.dispatch(binding, run); return run;
-    });
+    }, signal);
   }
   private async dispatch(binding: Binding, run: SubagentRun, reportOnly = false) {
     const taskId = await binding.main.commit(async (tx) => {
@@ -461,19 +486,41 @@ export class SubagentService {
         try { await this.validateModel(binding.userId, row, row.thinkingLevel); }
         catch (error) { if (!(error instanceof AgentError)) throw error; reason = error.message; }
       }
-      const run = await this.database.appTransaction(async (db) => {
+      if (!reason) subagentInput(row);
+      const run = await this.database.appTransaction(async (db, tx) => {
         const running = await db.select().from(hvSubagentRuns).where(and(eq(hvSubagentRuns.agentId, row.agentId), inArray(hvSubagentRuns.status, active))).all();
         if (running.some((run) => run.subagentId === row.id)) reason = "Worker already has an active assignment.";
         else if (running.length >= 4) reason = "Agent already has four active workers.";
         // Advance the candle cursor and persist its intent atomically. Dispatch
         // is separately idempotent, so a crash cannot lose or duplicate the run.
         await db.update(hvSubagents).set({ nextRunAt: nextCandleRun(now, row.schedule, row.delaySeconds) }).where(eq(hvSubagents.id, row.id)).run();
-        return (await db.insert(hvSubagentRuns).values({ id: randomUUID(), agentId: row.agentId, subagentId: row.id, requestId: `schedule:${row.id}:${row.nextRunAt}`, source: "schedule", task: `Scheduled ${row.schedule} assignment. UTC candle close: ${new Date(row.nextRunAt! - row.delaySeconds * 1000).toISOString()}.\n\nCarry out your responsibilities according to your instructions.`, config: row, status: reason ? "skipped" : "queued", result: reason, createdAt: now, finishedAt: reason ? now : null, reportedAt: reason ? now : null }).returning().all())[0]!;
+        const admitted = (await db.insert(hvSubagentRuns).values({ id: randomUUID(), agentId: row.agentId, subagentId: row.id, requestId: `schedule:${row.id}:${row.nextRunAt}`, source: "schedule", task: `Scheduled ${row.schedule} assignment. UTC candle close: ${new Date(row.nextRunAt! - row.delaySeconds * 1000).toISOString()}.\n\nCarry out your responsibilities according to your instructions.`, config: row, status: reason ? "skipped" : "queued", result: reason, createdAt: now, finishedAt: reason ? now : null, reportedAt: reason ? now : null }).returning().all())[0]!;
+        if (!reason) await this.execution.snapshotRunTx(tx, admitted, { mode: "automatic", reason: "schedule" }, row.nextRunAt! - row.delaySeconds * 1000);
+        return admitted;
       });
       this.historyChanged(row.id);
       this.log?.info({ agentId: run.agentId, runId: run.id, subagentId: run.subagentId, status: run.status, reason: reason || undefined }, reason ? "Scheduled sub-agent run skipped" : "Scheduled sub-agent run");
       if (run.status === "queued" && binding) await this.dispatch(binding, run);
     });
+  }
+  private async validateWorkflow(agentId: string, value: unknown) {
+    if (value == null) return;
+    const workflow = workerWorkflow(value);
+    if ("instruments" in workflow) {
+      const supported = await this.host.instruments();
+      if (workflow.instruments.some((coin) => !supported.includes(coin))) throw new AgentError("Select currently supported main-DEX perpetual instruments");
+    }
+    const targets = workflow.purpose === "trading" ? workflow.requiredResearch.map((item) => item.subagentId) : workflow.purpose === "review" ? workflow.learningTargetSubagentIds : [];
+    for (const id of targets) {
+      const target = await this.definition(agentId, id);
+      if (target.kind !== "worker") throw new AgentError("Workflow targets must be workers in this Agent");
+      if (workflow.purpose === "trading") {
+        if (target.workflow?.purpose !== "analysis") throw new AgentError("Required research must name a configured analysis worker");
+        const analysis = target.workflow;
+        const requirements = workflow.requiredResearch.filter((item) => item.subagentId === id);
+        if (requirements.some((item) => item.topic !== analysis.topic || item.interval !== analysis.interval) || workflow.instruments.some((coin) => !analysis.instruments.includes(coin))) throw new AgentError("Research requirements must match the analyst's configured stream and instruments");
+      }
+    }
   }
   async close() { this.stopping = true; this.ready = false; this.historyShutdown.abort(); if (this.timer) clearInterval(this.timer); await this.ticking; await Promise.all(this.pending.values()); await Promise.all(this.historyFeeds); }
 }

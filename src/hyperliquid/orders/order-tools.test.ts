@@ -17,7 +17,7 @@ describe("Durable order tool contracts for nested/code-mode calls", () => {
   it("returns schema-validated structured outputs and reuses a keyed nested call", async () => {
     const submit = vi.fn(async () => outcome);
     const list = vi.fn(async () => ({ items: [], source: "open", observedAt: 1, nextOffset: null, coverage: "current snapshot" }));
-    const service = { submit, list } as unknown as OrderService;
+    const service = { submit, list, executionHandle: async () => undefined } as unknown as OrderService;
     const registry = createRegistry();
     registry.install(createHyperliquidExtension({ agentAccountStatus: async () => loadAccountStatus(new HttpTransport(), null) }, "owner", "agent", service));
     const results: NestedToolExecutionResult[] = [];
@@ -47,15 +47,15 @@ describe("Durable order tool contracts for nested/code-mode calls", () => {
       expect(results[3]!.isError).toBe(true);
       expect(results[4]).toMatchObject({ isError: false, structuredOutput: { address: null, spotUsdc: null, sections: { spot: { fresh: false } } } });
       expect(submit).toHaveBeenCalledOnce();
-      expect(submit).toHaveBeenCalledWith("owner", "agent", expect.objectContaining({ request_id: "logical-request" }), expect.any(AbortSignal));
+      expect(submit).toHaveBeenCalledWith("owner", "agent", expect.objectContaining({ request_id: "logical-request" }), expect.any(AbortSignal), undefined);
       expect(list).toHaveBeenCalledWith("owner", "agent", {}, expect.any(AbortSignal));
     } finally { await harness.close(context); }
   });
 
   it("documents venue minimum notional without silently upsizing orders", () => {
     const tools = createOrderTools({} as OrderService, "owner", "agent");
-    expect(tools[0]!.description).toContain("$10 minimum order notional");
-    expect(tools[0]!.description).toContain("Do not silently increase size");
+    expect(tools.find((tool) => tool.name === "submit_orders")!.description).toContain("$10 minimum order notional");
+    expect(tools.find((tool) => tool.name === "submit_orders")!.description).toContain("Do not silently increase size");
     for (const tool of tools) {
       expect(tool.structuredOutputSchema).toBeDefined();
       expect(tool.callers).not.toEqual(["model"]);

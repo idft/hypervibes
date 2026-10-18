@@ -4,11 +4,11 @@ export class AgentError extends Error {
   constructor(message: string, readonly status = 400) { super(message); }
 }
 export function agentId(value: string) {
-  if (!uuid.test(value)) throw new AgentError("Agent not found", 404);
+  if (!uuid.test(value) || value.trim() !== value) throw new AgentError("Agent not found", 404);
   return value.toLowerCase();
 }
 export function requestId(value: string) {
-  if (!uuid.test(value)) throw new AgentError("A valid request ID is required");
+  if (!uuid.test(value) || value.trim() !== value) throw new AgentError("A valid request ID is required");
   return value.toLowerCase();
 }
 export function agentName(value: string) {

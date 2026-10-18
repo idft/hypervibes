@@ -4,7 +4,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { JournalPage } from "../hyperliquid/journal-service.js";
 
-const mocks = vi.hoisted(() => ({ getAgentJournal: vi.fn(), getJournalNotes: vi.fn(), addJournalNote: vi.fn() }));
+const mocks = vi.hoisted(() => ({ getAgentJournal: vi.fn(), getJournalAudit: vi.fn(), getJournalNotes: vi.fn(), addJournalNote: vi.fn() }));
 vi.mock("../web/journal.js", () => mocks);
 import { AgentJournalPage } from "./agent-journal-page.js";
 
@@ -22,6 +22,7 @@ describe("Agent journal UI", () => {
     Object.defineProperty(HTMLDialogElement.prototype, "showModal", { configurable: true, value: function (this: HTMLDialogElement) { this.open = true; } });
     container = document.createElement("div"); document.body.append(container); root = createRoot(container);
     mocks.getAgentJournal.mockResolvedValue({ ok: true, data: initial });
+    mocks.getJournalAudit.mockResolvedValue({ ok: true, data: { items: [], truncated: false, coverage: "External/legacy fills remain unattributed" } });
     mocks.getJournalNotes.mockResolvedValue({ ok: true, data: [] });
     mocks.addJournalNote.mockResolvedValue({ ok: true });
   });

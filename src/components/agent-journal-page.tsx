@@ -3,10 +3,11 @@ import type { JournalTrade } from "../hyperliquid/journal-model.js";
 import type { JournalNote, JournalPage } from "../hyperliquid/journal-service.js";
 import { amount } from "../hyperliquid/journal-decimal.js";
 import { compareDecimals, formatMoneyText } from "../hyperliquid/decimal.js";
-import { addJournalNote, getAgentJournal, getJournalNotes } from "../web/journal.js";
+import { addJournalNote, getAgentJournal, getJournalAudit, getJournalNotes } from "../web/journal.js";
 
 import { InstrumentLabel } from "./instrument-label.js";
 
+import type { FillAttribution } from "../memory/memory-contracts.js";
 interface NoteTarget { id: string; label: string; trade?: JournalTrade }
 const button = "cursor-pointer rounded-full border border-zinc-800 px-4 py-1.5 text-sm text-zinc-300 hover:border-zinc-600 hover:text-white disabled:cursor-not-allowed disabled:opacity-40";
 const cell = "whitespace-nowrap px-3 py-3";
@@ -65,6 +66,8 @@ export function AgentJournalPage({ id, initial, onNavigate }: { id: string; init
 function NotesModal({ id, target, onClose }: { id: string; target: NoteTarget; onClose: () => void }) {
   const dialog = useRef<HTMLDialogElement>(null);
   const [notes, setNotes] = useState<JournalNote[]>([]);
+  const [audit, setAudit] = useState<{ items: FillAttribution[]; truncated: boolean; coverage: string } | null>(null);
+  const [auditError, setAuditError] = useState("");
   const [loading, setLoading] = useState(true);
   const [body, setBody] = useState("");
   const [error, setError] = useState("");
@@ -76,6 +79,7 @@ function NotesModal({ id, target, onClose }: { id: string; target: NoteTarget; o
       if (cancelled) return;
       if (result.ok) setNotes(result.data); else setError(result.error);
     }).catch(() => { if (!cancelled) setError("Unable to load notes."); }).finally(() => { if (!cancelled) setLoading(false); });
+    void getJournalAudit({ data: { id, target: target.id } }).then((result) => { if (!cancelled) { if (result.ok) setAudit(result.data); else setAuditError(result.error); } }).catch(() => { if (!cancelled) setAuditError("Decision attribution is unavailable; do not infer that these fills had no rationale."); });
     return () => { cancelled = true; };
   }, [id, target.id]);
   const submit = async () => {
@@ -92,6 +96,7 @@ function NotesModal({ id, target, onClose }: { id: string; target: NoteTarget; o
   return <dialog ref={dialog} aria-labelledby="journal-notes-title" onCancel={onClose} className="m-auto max-h-[85vh] w-[calc(100vw-2rem)] max-w-3xl overflow-auto rounded-2xl border border-zinc-800 bg-[#0d0d10] p-6 text-zinc-200 backdrop:bg-black/70">
     <div className="flex items-center justify-between"><h3 id="journal-notes-title" className="text-lg font-medium">{target.label} notes</h3><button className={button} aria-label="Close notes" onClick={onClose}>Close</button></div>
     {target.trade && <details className="mt-4 rounded-xl border border-zinc-800 p-4"><summary className="cursor-pointer text-sm">Trade fills</summary><div className="mt-3 space-y-2 text-xs text-zinc-400">{target.trade.parts.map((part) => <p key={`${part.eventId}-${part.segment}`}><Time value={part.time} /> · {part.side} · {part.segment} {part.quantity} @ {formatMoneyText(part.price)} · fee {part.fee ?? "unknown"} · realized <Money value={part.pnl} color /></p>)}</div></details>}
+    <section className="mt-4 space-y-2 rounded-xl border border-zinc-800 p-4" aria-label="Decision attribution"><h4 className="text-sm">Decision & order attribution</h4>{auditError && <p role="status" className="text-xs text-amber-200">{auditError}</p>}{audit ? <><p className="text-xs text-zinc-400">{audit.coverage}{audit.truncated ? " First 50 fills only; inspect the bounded reviewer audit for more." : ""}</p>{!audit.items.length && <p className="text-xs text-zinc-400">No applicable fill attribution for this entry.</p>}{audit.items.map((item) => <p key={item.fillId} className="text-xs text-zinc-300">OID {item.exchangeOid ?? "unknown"} · {item.origin} · {item.requestId ? `request ${item.requestId}` : "external/unmatched"} · {item.decisionRef ? <a className="cursor-pointer text-violet-300" href={`/agents/${encodeURIComponent(id)}/memories?memory=${item.decisionRef}`}>{item.decisionRef}</a> : item.origin === "legacy/unattributed" ? "legacy/unattributed" : "No decision link (management may omit)"}</p>)}</> : !auditError && <p className="text-xs">Loading attribution…</p>}</section>
     <div className="my-4 space-y-3">{loading ? <p role="status">Loading notes…</p> : notes.length === 0 ? <p className="text-sm text-zinc-500">No notes yet.</p> : notes.map((note) => <article key={note.id} className="rounded-xl border border-zinc-800 p-4"><p className="whitespace-pre-wrap break-words text-sm">{note.body}</p><p className="mt-2 text-xs text-zinc-500">human · {note.authorId} · <Time value={note.createdAt} /></p></article>)}</div>
     {error && <p role="alert" className="my-3 text-sm text-red-300">{error}</p>}
     <form onSubmit={(event) => { event.preventDefault(); void submit(); }}><label htmlFor="journal-note" className="mb-2 block text-sm">Add a note</label><textarea id="journal-note" value={body} onChange={(event) => setBody(event.target.value)} rows={3} maxLength={4000} required className="w-full rounded-lg border border-zinc-700 bg-zinc-950 p-3 text-sm" /><div className="mt-3 flex justify-end"><button className={button} disabled={busy || !body.trim()}>{busy ? "Saving…" : "Add note"}</button></div></form>

@@ -18,6 +18,8 @@ import { ResearchService } from "../research/research-service.js";
 
 import { AgentError, agentId, agentName, chatMessage, harnessPrefix, requestId } from "./agent-input.js";
 import { SubagentService } from "./subagent-service.js";
+import { createMemoryExtension } from "../memory/durable-extension.js";
+import { ExecutionContextService } from "./execution-context.js";
 import type { ProviderService } from "../providers/provider-service.js";
 
 // Existing scaffold roots retain their original model, never silently switch.
@@ -99,11 +101,14 @@ export class AgentService {
   private resuming: Promise<void> = Promise.resolve();
   readonly subagents: SubagentService;
   readonly research: ResearchService;
+  readonly execution: ExecutionContextService;
   constructor(private readonly db: ApplicationDatabase, private readonly database: SharedDatabase, private readonly providers: ProviderService, private readonly hyperliquid: HyperliquidService, private readonly orders: OrderService, private readonly options: AgentServiceOptions = {}) {
+    this.execution = new ExecutionContextService(database);
+    this.orders.installAdmission(this.execution);
     this.research = new ResearchService(database, hyperliquid, (error) => options.logger?.error(error, "Artifact maintenance failed"));
     this.subagents = new SubagentService(db, database, providers, {
-      owned: (userId, id) => this.owned(userId, id), models: (userId) => this.models(userId), changed: (id) => this.notify(id),
-    }, Boolean(options.models), options.logger?.child({ component: "scheduler" }));
+      instruments: () => this.hyperliquid.charts.instruments(), owned: (userId, id) => this.owned(userId, id), models: (userId) => this.models(userId), changed: (id) => this.notify(id),
+    }, this.execution, Boolean(options.models), options.logger?.child({ component: "scheduler" }));
   }
   private notify(id: string) { for (const listener of this.lifecycle.get(id) ?? []) listener(); }
   private models(userId: string) { return this.options.models ? Promise.resolve(this.options.models) : this.providers.models(userId); }
@@ -190,7 +195,7 @@ export class AgentService {
       const registry = createRegistry();
       const hyperliquid = createHyperliquidExtension(this.hyperliquid, agent.userId, agent.id, this.orders);
       registry.install(hyperliquid);
-      const capabilities = this.research.extensions(agent.id);
+      const capabilities = [this.execution.extension(agent.id), createMemoryExtension(agent.id, this.execution, this.database), ...this.research.extensions(agent.id)];
       for (const extension of capabilities) registry.install(extension);
       const execution = this.subagents.extension(agent.id, hyperliquid, capabilities);
       registry.install(execution.extension);
@@ -208,6 +213,7 @@ export class AgentService {
       } });
       if (agent.conversationId !== null && agent.conversationId !== main.id) throw new Error("Agent root identity changed");
       // Seed once from the existing root; later startups preserve editable settings.
+      this.execution.bind(agent.id, harness, main.id);
       await this.subagents.bind(agent, harness, main, hyperliquid, execution, capabilities);
       this.admit();
       await this.db.update(hvAgents).set({ state: "ready", conversationId: main.id, error: null, updatedAt: Date.now() }).where(eq(hvAgents.id, agent.id)).run();
@@ -218,6 +224,7 @@ export class AgentService {
         if (this.running.get(agent.id) !== current) return;
         this.running.delete(agent.id);
         this.subagents.unbind(agent.id);
+        this.execution.unbind(agent.id);
         if (end.reason === "failed" && !this.stopping) {
           await this.db.update(hvAgents).set({ state: "failed", error: "Agent execution stopped. Retry initialization.", updatedAt: Date.now() }).where(eq(hvAgents.id, agent.id)).run();
           this.notify(agent.id);
@@ -227,6 +234,7 @@ export class AgentService {
       return current;
     } catch (error) {
       this.subagents.unbind(agent.id);
+      this.execution.unbind(agent.id);
       await harness?.close(context);
       if (!this.stopping) {
         await this.db.update(hvAgents).set({ state: "failed", error: "Unable to initialize Agent. Retry initialization.", updatedAt: Date.now() }).where(eq(hvAgents.id, agent.id)).run();
@@ -411,6 +419,7 @@ export class AgentService {
       if (!await this.configured(agent, current)) throw new AgentError("Reconnect this Agent's provider or select an available model on the Providers page.", 409);
       const inbox = await current.harness.snapshot(InboxDoc, current.main.id, context);
       if ((inbox?.items.length ?? 0) >= 20) throw new AgentError("Agent message queue is full. Wait for a response.", 429);
+      await this.execution.admitInput(agent.id, userId, submissionRequestId, message);
       const submission = await current.main.submit({ type: "input", content: message, requestId: submissionRequestId }, context);
       return { submissionId: submission.id };
     });
@@ -473,6 +482,7 @@ export class AgentService {
       await Promise.allSettled(this.opening.values());
       await this.drainInFlight(force);
       const results = await Promise.allSettled([...this.running.values()].map(({ harness }) => harness.close(context)));
+      for (const id of this.running.keys()) { this.execution.unbind(id); this.subagents.unbind(id); }
       this.running.clear();
       const errors = results.filter((result) => result.status === "rejected").map((result) => result.reason as unknown);
       if (errors.length) throw new AggregateError(errors, "Unable to close Agent execution");

@@ -29,7 +29,7 @@ describe("generated SQLite auth migrations", () => {
     migrate(db, config);
     connection.exec("INSERT INTO hv_users (id, name, email) VALUES ('fixture', 'Wallet', 'fixture@example.test')");
     migrate(db, config);
-    expect(connection.prepare("SELECT count(*) AS count FROM hv_schema_migrations").get()?.count).toBe(7);
+    expect(connection.prepare("SELECT count(*) AS count FROM hv_schema_migrations").get()?.count).toBe(9);
     expect(connection.prepare("SELECT name FROM hv_users").get()?.name).toBe("Wallet");
     expect(connection.prepare("SELECT value FROM pi_test").get()?.value).toBe("untouched");
     expect(() => connection.exec("INSERT INTO hv_wallet_addresses (id, user_id, address, chain_id, created_at) VALUES ('wallet', 'missing', '0x0', 1, 0)")).toThrow();
@@ -43,6 +43,8 @@ describe("generated SQLite auth migrations", () => {
     rmSync(join(previous, "20261016080320_order_execution"), { recursive: true });
     rmSync(join(previous, "20261016181110_subagents"), { recursive: true });
     rmSync(join(previous, "20261017222959_research_artifacts"), { recursive: true });
+    rmSync(join(previous, "20261018061531_memories_and_learnings"), { recursive: true });
+    rmSync(join(previous, "20261018063018_execution_contexts"), { recursive: true });
     const db = drizzle({ client: connection });
     migrate(db, { migrationsFolder: previous, migrationsTable: "hv_schema_migrations" });
     connection.exec("INSERT INTO hv_users (id, name, email) VALUES ('owner', 'Wallet', 'owner@example.test')");
@@ -51,6 +53,38 @@ describe("generated SQLite auth migrations", () => {
     expect(connection.prepare("SELECT name, initial_provider, initial_model_id FROM hv_agents WHERE id = 'legacy'").get()).toMatchObject({
       name: "Existing agent", initial_provider: null, initial_model_id: null,
     });
+  });
+
+  it("upgrades the seven-migration schema additively and enforces same-Agent audit references", () => {
+    const previous = join(directory, "seven-migrations");
+    cpSync(source, previous, { recursive: true });
+    rmSync(join(previous, "20261018061531_memories_and_learnings"), { recursive: true });
+    rmSync(join(previous, "20261018063018_execution_contexts"), { recursive: true });
+    const db = drizzle({ client: connection });
+    migrate(db, { migrationsFolder: previous, migrationsTable: "hv_schema_migrations" });
+    expect(connection.prepare("SELECT count(*) AS count FROM hv_schema_migrations").get()?.count).toBe(7);
+    connection.exec(`INSERT INTO hv_users(id,name,email) VALUES ('owner','Owner','owner@example.test');
+      INSERT INTO hv_agents(id,user_id,name,creation_request_id,created_at,updated_at) VALUES ('a','owner','A','a',1,1),('b','owner','B','b',1,1);
+      INSERT INTO hv_subagents(id,agent_id,kind,name,instructions,provider,model_id,tools,created_at,updated_at) VALUES ('worker-b','b','worker','B','saved instructions','faux','faux','[]',1,1);
+      INSERT INTO hv_subagent_runs(id,agent_id,subagent_id,request_id,source,task,config,created_at) VALUES ('run-b','b','worker-b','run-b','schedule','saved task','{}',1);
+      INSERT INTO hv_artifacts(id,agent_id,title,description,media_type,payload,size,tags,instrument,interval,created_at) VALUES ('evidence-b','b','Evidence','','text/plain',X'41',1,'[]','','',1);
+      CREATE TABLE pi_opaque_fixture (value TEXT); INSERT INTO pi_opaque_fixture VALUES ('unchanged');`);
+    migrate(db, { migrationsFolder: source, migrationsTable: "hv_schema_migrations" });
+    migrate(db, { migrationsFolder: source, migrationsTable: "hv_schema_migrations" });
+    expect(connection.prepare("SELECT task,config FROM hv_subagent_runs").get()).toMatchObject({ task: "saved task", config: "{}" });
+    expect(connection.prepare("SELECT instructions,enabled,schedule FROM hv_subagents").get()).toMatchObject({ instructions: "saved instructions", enabled: 1, schedule: "" });
+    expect(connection.prepare("SELECT value FROM pi_opaque_fixture").get()?.value).toBe("unchanged");
+    expect(connection.prepare("SELECT count(*) AS count FROM hv_learning_revisions").get()?.count).toBe(0);
+    const publish = connection.prepare("INSERT INTO hv_memories(agent_id,number,kind,topic,summary,content,payload,created_at,execution_origin,producer_subagent_id,source_run_id) VALUES (?,?,'decision','test','Summary','Content','{}',1,'automatic',?,?)");
+    expect(() => publish.run("a", 1, "worker-b", "run-b")).toThrow();
+    publish.run("a", 3, null, null);
+    publish.run("b", 2, "worker-b", "run-b");
+    expect(() => connection.exec("INSERT INTO hv_memory_links VALUES ('a',3,2,'based_on')")).toThrow();
+    expect(() => connection.exec("INSERT INTO hv_memory_artifacts VALUES ('a',3,'evidence-b')")).toThrow();
+    expect(() => connection.exec("INSERT INTO hv_learning_sets VALUES ('wrong','a','worker','worker-b',0,1)")).toThrow();
+    connection.exec("INSERT INTO hv_learning_sets VALUES ('general','a','agent',NULL,0,1)");
+    expect(() => connection.exec("INSERT INTO hv_learning_sets VALUES ('duplicate','a','agent',NULL,0,1)")).toThrow();
+    expect(connection.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
   });
 
   it("rolls back a failed upgrade without marking it applied or damaging existing data", () => {
@@ -63,7 +97,7 @@ describe("generated SQLite auth migrations", () => {
     mkdirSync(failing);
     writeFileSync(join(failing, "migration.sql"), "CREATE TABLE temporary_upgrade (id TEXT);\n--> statement-breakpoint\nINSERT INTO nonexistent_table VALUES (1)");
     expect(() => migrate(db, config)).toThrow();
-    expect(connection.prepare("SELECT count(*) AS count FROM hv_schema_migrations").get()?.count).toBe(7);
+    expect(connection.prepare("SELECT count(*) AS count FROM hv_schema_migrations").get()?.count).toBe(9);
     expect(connection.prepare("SELECT name FROM sqlite_schema WHERE name = 'temporary_upgrade'").get()).toBeUndefined();
     expect(connection.prepare("SELECT name FROM sqlite_schema WHERE name = 'hv_users'").get()?.name).toBe("hv_users");
   });

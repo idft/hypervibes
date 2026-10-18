@@ -8,7 +8,7 @@ export const hvArtifacts = sqliteTable("hv_artifacts", {
   tags: text("tags").notNull(), instrument: text("instrument").notNull(), interval: text("interval").notNull(),
   conversationId: integer("conversation_id"), taskId: integer("task_id"), createdAt: integer("created_at").notNull(),
   expiresAt: integer("expires_at"),
-}, (table) => [index("hv_artifacts_agent_idx").on(table.agentId, table.createdAt)]);
+}, (table) => [index("hv_artifacts_agent_idx").on(table.agentId, table.createdAt), uniqueIndex("hv_artifacts_identity_idx").on(table.agentId, table.id)]);
 // Small replay receipts survive payload expiry/deletion. They deliberately hold
 // no report content, preventing a delayed retry from resurrecting deleted data.
 export const hvArtifactReceipts = sqliteTable("hv_artifact_receipts", {
