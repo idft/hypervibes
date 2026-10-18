@@ -6,13 +6,29 @@ import { ProviderLogo } from "./provider-logo.js";
 
 export const modelKey = (model: ModelRef) => JSON.stringify([model.provider, model.modelId]);
 
-const usd = (value: number) => `$${`${Number(value.toFixed(4))}`.replace(/\.0+$/, "")}`;
+/** Cost as a bare number string, e.g. "3" or "0.0015". */
+export const costLabel = (value: number) => `${`${Number(value.toFixed(4))}`.replace(/\.0+$/, "")}`;
+/** Currency-style amount with at least two decimals and no symbol, e.g. "3.00". */
+export const costCurrency = (value: number) => {
+  const bare = costLabel(value);
+  const [whole, decimals = ""] = bare.split(".");
+  return decimals.length >= 2 ? bare : `${whole}.${(decimals + "00").slice(0, 2)}`;
+};
+export const usd = (value: number) => `$${costLabel(value)}`;
 
-function choiceMetadata(choice: ModelChoice): string {
-  const parts: string[] = [];
-  if (choice.contextWindow >= 1_000_000) parts.push(`${choice.contextWindow / 1_000_000}M ctx`);
-  else if (choice.contextWindow >= 1_000) parts.push(`${Math.round(choice.contextWindow / 1_000)}K ctx`);
-  else parts.push(`${choice.contextWindow} ctx`);
+/** Context window as a compact "200K" / "1M" token count. */
+export function choiceContextTokens(choice: ModelChoice): string {
+  if (choice.contextWindow >= 1_000_000) return `${choice.contextWindow / 1_000_000}M`;
+  if (choice.contextWindow >= 1_000) return `${Math.round(choice.contextWindow / 1_000)}K`;
+  return `${choice.contextWindow}`;
+}
+
+function choiceContext(choice: ModelChoice): string {
+  return `${choiceContextTokens(choice)} ctx`;
+}
+
+export function choiceMetadata(choice: ModelChoice): string {
+  const parts: string[] = [choiceContext(choice)];
   if (choice.reasoning) parts.push("reasoning");
   parts.push(`${usd(choice.inputCost)}/${usd(choice.outputCost)}`);
   return parts.join(" · ");

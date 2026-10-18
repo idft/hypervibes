@@ -7,6 +7,8 @@ export function isProviderSlug(provider: string): boolean {
 const logoSlugAliases: Readonly<Record<string, string>> = {
   // models.dev has no Codex logo; the OpenAI knot is the closest match.
   "openai-codex": "openai",
+  // models.dev catalogs Ollama under its own slug.
+  "ollama-cloud": "ollama",
 };
 
 export function providerLogoSlug(provider: string): string | null {

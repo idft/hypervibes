@@ -8,6 +8,7 @@ import type { EncryptionKeySetting } from "../config.js";
 import type { ApplicationDatabase } from "../db/shared-database.js";
 import { hvInstallation } from "../db/provider-schema.js";
 import { SqliteCredentials } from "./credential-store.js";
+import { ollamaCloudProvider } from "./ollama-cloud.js";
 
 export interface ModelChoice extends ModelRef {
   name: string; providerName: string; thinkingLevels: string[];
@@ -31,6 +32,9 @@ interface LoginAttempt {
 }
 interface UserModels { models: Models; credentials: SqliteCredentials }
 export interface ProviderServiceOptions { providers?: () => Provider[] }
+
+/** Every provider a user can connect, with their own live-refreshed catalog. */
+const defaultProviders = (): Provider[] => [...builtinProviders(), ollamaCloudProvider()];
 
 /** App-owned credentials/catalogs. No ambient server credentials or files are
  * inherited by a user's collection. A provider connection belongs to that user. */
@@ -56,7 +60,7 @@ export class ProviderService {
         const models = createModels({ credentials, modelsStore: credentials.catalogStore(), authContext: {
           env: async () => undefined, fileExists: async () => false,
         } });
-        for (let provider of (this.options.providers ?? builtinProviders)()) {
+        for (let provider of (this.options.providers ?? defaultProviders)()) {
           // A web user must never select a server AWS profile/credential chain
           // or a local Google service-account file. These built-ins still work
           // with user-supplied bearer/API keys, using their native wire APIs.
