@@ -107,12 +107,12 @@ export interface TradingAccountChoices {
 export class HyperliquidService {
   private readonly creator: SubaccountCreator;
   private readonly live: LiveDashboards;
-  private readonly feeds = new SharedHyperliquidFeeds();
+  private readonly feeds: SharedHyperliquidFeeds;
   readonly charts: MarketCharts;
   private started = false;
   private stopped = false;
-  private registryTimer?: ReturnType<typeof setTimeout>;
-  private registryTask?: Promise<void>;
+  private reconcileChain: Promise<void> = Promise.resolve();
+  private reconcileTimer?: ReturnType<typeof setTimeout>;
 
   constructor(
     private readonly db: ApplicationDatabase,
@@ -122,40 +122,51 @@ export class HyperliquidService {
     private readonly journal?: JournalService,
     nonceManager?: (signer: string) => Promise<number>,
     private readonly log?: FastifyBaseLogger,
+    feeds: SharedHyperliquidFeeds = new SharedHyperliquidFeeds(),
   ) {
+    this.feeds = feeds;
     this.creator = new SubaccountCreator(transport, nonceManager);
-    this.live = new LiveDashboards(transport, feedFactory ?? this.feeds.account);
-    this.charts = new MarketCharts(transport, this.feeds.candle);
+    this.live = new LiveDashboards(transport, feedFactory ?? feeds.account);
+    this.charts = new MarketCharts(transport, feeds.candle);
   }
 
   start() {
     if (this.started || this.stopped) return;
     this.started = true;
-    this.log?.info("Starting Hyperliquid service; refreshing linked accounts every 30s");
-    const refresh = () => {
-      this.registryTask = this.db.select({ address: hvAgents.tradingAccountAddress }).from(hvAgents)
-        .where(isNotNull(hvAgents.tradingAccountAddress)).all()
-        .then(async (rows) => {
-          if (this.stopped) return;
-          const addresses = rows.flatMap((row) => row.address ? [row.address] : []);
-          this.journal?.reconcile(addresses);
-          await this.live.reconcile(addresses);
-          this.log?.debug({ accounts: addresses.length }, "Reconciled linked Hyperliquid accounts");
-        })
-        .catch((error: unknown) => { this.log?.error(error, "Unable to refresh linked Hyperliquid accounts; retrying"); })
-        .finally(() => {
-          if (!this.stopped) { this.registryTimer = setTimeout(refresh, 30_000); this.registryTimer.unref(); }
-        });
-    };
-    refresh();
+    this.log?.info("Starting Hyperliquid service");
+    void this.reconcileLinkedAccounts();
+  }
+
+  /** Reconciles journal and live feeds with the linked trading accounts.
+   * Called once at start and on every account-linking event; failures retry. */
+  reconcileLinkedAccounts(): Promise<void> {
+    this.reconcileChain = this.reconcileChain.then(async () => {
+      if (this.stopped) return;
+      try {
+        const rows = await this.db.select({ address: hvAgents.tradingAccountAddress }).from(hvAgents)
+          .where(isNotNull(hvAgents.tradingAccountAddress)).all();
+        if (this.stopped) return;
+        const addresses = rows.flatMap((row) => row.address ? [row.address] : []);
+        this.journal?.reconcile(addresses);
+        await this.live.reconcile(addresses);
+        this.log?.debug({ accounts: addresses.length }, "Reconciled linked Hyperliquid accounts");
+      } catch (error: unknown) {
+        this.log?.error(error, "Unable to refresh linked Hyperliquid accounts; retrying");
+        if (!this.stopped) {
+          this.reconcileTimer = setTimeout(() => { void this.reconcileLinkedAccounts(); }, 30_000);
+          this.reconcileTimer.unref();
+        }
+      }
+    });
+    return this.reconcileChain;
   }
 
   async close() {
     this.stopped = true;
-    clearTimeout(this.registryTimer);
-    await this.registryTask;
+    clearTimeout(this.reconcileTimer);
+    await this.reconcileChain;
     try { await Promise.all([this.live.close(), this.charts.close()]); }
-    finally { this.feeds.close(); await this.journal?.close(); }
+    finally { await this.journal?.close(); this.feeds.close(); }
   }
 
   private async dashboardAccount(userId: string, id: string) {

@@ -120,6 +120,7 @@ describe("Hyperliquid account service", () => {
     }), {
       models, model: { provider: "faux", modelId: "faux-1" },
       accountFeedFactory: (address, events) => { feedEvents.set(address, events); return { close: async () => {} }; },
+      journalFeedFactory: () => ({ close: async () => {} }),
       journalHistoryFetcher: async () => [],
     });
     await runtime.db.insert(hvUsers).values({ id: user.id, name: "Owner", email: "owner@example.test" }).run();

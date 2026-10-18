@@ -20,7 +20,7 @@ describe("subagent definitions, execution and scheduling", () => {
   let directory: string, runtime: AppRuntime, faux: ReturnType<typeof fauxProvider>;
   let models: ReturnType<typeof createModels>;
   const config = () => testConfig({ APP_SQLITE_PATH: join(directory, "app.sqlite") });
-  const options = () => ({ models, model: { provider: "faux", modelId: "faux-1" }, accountFeedFactory: () => ({ close: async () => {} }), journalHistoryFetcher: async () => [] });
+  const options = () => ({ models, model: { provider: "faux", modelId: "faux-1" }, accountFeedFactory: () => ({ close: async () => {} }), journalFeedFactory: () => ({ close: async () => {} }), journalHistoryFetcher: async () => [] });
   const createAgent = () => runtime.agents.create("owner", "Trading desk", randomUUID(), `0x${randomUUID().replaceAll("-", "")}12345678`);
   const createWorker = (agentId: string, patch: Partial<SubagentInput> = {}) => runtime.agents.subagents.create("owner", agentId, settings(patch), randomUUID());
   const detail = (agentId: string, id: string) => runtime.agents.subagents.detail("owner", agentId, id);

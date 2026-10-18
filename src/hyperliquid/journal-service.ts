@@ -1,12 +1,70 @@
-import { InfoClient, type HttpTransport } from "@nktkas/hyperliquid";
+import { InfoClient, SubscriptionClient, WebSocketTransport, type HttpTransport } from "@nktkas/hyperliquid";
 import { randomUUID } from "node:crypto";
 import type { SharedDatabase } from "../db/shared-database.js";
 import type { FastifyBaseLogger } from "fastify";
 import { HyperliquidError } from "./errors.js";
 import { amount } from "./journal-decimal.js";
-import { buildTrades, fillEvent, fundingEvent, ledgerEvent, type JournalEvent, type JournalStream, type JournalTrade } from "./journal-model.js";
+import { buildTrades, fillEvent, fundingEvent, ledgerEvent, wsFundingEvent, type JournalEvent, type JournalStream, type JournalTrade } from "./journal-model.js";
 
 export type HistoryFetcher = (account: string, stream: JournalStream, start: number, end: number, signal: AbortSignal) => Promise<JournalEvent[]>;
+
+export interface JournalFeedEvents {
+  connected(): void;
+  disconnected(): void;
+  failed(): void;
+  push(stream: JournalStream, events: JournalEvent[]): void;
+}
+export type JournalFeedFactory = (address: string, events: JournalFeedEvents) => { close(): Promise<void> };
+
+/** Subscribes one account to exchange push events on the shared read-only socket. */
+export const openJournalFeed = (address: string, events: JournalFeedEvents, sharedTransport?: WebSocketTransport): ReturnType<JournalFeedFactory> => {
+  const transport = sharedTransport ?? new WebSocketTransport();
+  const client = new SubscriptionClient({ transport });
+  const abort = new AbortController();
+  const connected = () => events.connected();
+  const disconnected = () => events.disconnected();
+  transport.socket.addEventListener("open", connected);
+  transport.socket.addEventListener("close", disconnected);
+  if (transport.socket.readyState === 1) queueMicrotask(() => { if (!abort.signal.aborted) connected(); });
+  const user = address as `0x${string}`;
+  const options = { signal: abort.signal, onError: () => events.failed() };
+  // A malformed push invalidates the whole batch; HTTP catch-up re-verifies it.
+  const emit = <T>(stream: JournalStream, map: (row: T) => JournalEvent, rows: T[]) => {
+    if (rows.length === 0) return;
+    try { events.push(stream, rows.map(map)); } catch { events.failed(); }
+  };
+  const tasks = [
+    client.userFills({ user, aggregateByTime: false }, (event) => {
+      if (event.user.toLowerCase() === address) emit("fill", fillEvent, event.fills);
+    }, options),
+    client.userFundings({ user }, (event) => {
+      if (event.user.toLowerCase() === address) emit("funding", wsFundingEvent, event.fundings);
+    }, options),
+    client.userNonFundingLedgerUpdates({ user }, (event) => {
+      if (event.user.toLowerCase() === address) emit("ledger", (row) => ledgerEvent(address, row), event.nonFundingLedgerUpdates);
+    }, options),
+  ];
+  for (const task of tasks) void task.catch(() => { if (!abort.signal.aborted) events.failed(); });
+  return { async close() {
+    transport.socket.removeEventListener("open", connected);
+    transport.socket.removeEventListener("close", disconnected);
+    abort.abort();
+    if (!sharedTransport) transport.close();
+    const subscriptions = await Promise.allSettled(tasks);
+    await Promise.allSettled(subscriptions.flatMap((result) => result.status === "fulfilled" ? [result.value.unsubscribe()] : []));
+  } };
+};
+
+const FULL_SCAN_MS = 86_400_000;
+const SYNC_RETRY_MS = 30_000;
+const FEED_RETRY_MS = 5_000;
+
+const sleep = (ms: number, signal: AbortSignal) => new Promise<void>((resolve) => {
+  const finish = () => { clearTimeout(timer); signal.removeEventListener("abort", finish); resolve(); };
+  const timer = setTimeout(finish, ms);
+  timer.unref();
+  signal.addEventListener("abort", finish, { once: true });
+});
 export interface JournalNote { id: string; body: string; authorId: string; createdAt: number }
 export interface JournalPage {
   linked: boolean; view: "trades" | "activity"; page: number; pages: number; total: number;
@@ -31,41 +89,118 @@ export function exchangeHistory(transport: HttpTransport): HistoryFetcher {
 
 /** Backend-owned, single-flight account ingestion. No exchange I/O in SQLite transactions. */
 export class JournalService {
-  private readonly workers = new Map<string, { controller: AbortController; task?: Promise<void>; timer?: ReturnType<typeof setTimeout> }>();
+  private readonly workers = new Map<string, Worker>();
   private stopped = false;
-  constructor(private readonly db: SharedDatabase, private readonly fetchHistory: HistoryFetcher, private readonly log?: FastifyBaseLogger) {}
+  constructor(private readonly db: SharedDatabase, private readonly fetchHistory: HistoryFetcher, private readonly log?: FastifyBaseLogger, private readonly feedFactory?: JournalFeedFactory) {}
 
   reconcile(addresses: string[]) {
     if (this.stopped) return;
     const desired = new Set(addresses.map((a) => a.toLowerCase()));
-    if (desired.size > 0 && this.workers.size === 0 && !this.stopped) this.log?.info({ accounts: desired.size }, "Synchronizing trade journals");
+    if (desired.size > 0 && this.workers.size === 0) this.log?.info({ accounts: desired.size }, "Synchronizing trade journals");
     for (const [account, worker] of this.workers) if (!desired.has(account)) {
-      worker.controller.abort(); clearTimeout(worker.timer);
+      worker.controller.abort();
+      clearTimeout(worker.feedTimer);
+      clearTimeout(worker.dailyTimer);
+      const feed = worker.feed;
+      worker.feed = undefined;
+      void feed?.close();
       void worker.task?.finally(() => { if (this.workers.get(account) === worker) this.workers.delete(account); });
     }
     for (const account of desired) {
       if (this.workers.has(account)) continue;
-      const worker: { controller: AbortController; task?: Promise<void>; timer?: ReturnType<typeof setTimeout> } = { controller: new AbortController() };
-      this.workers.set(account, worker);
-      let lastFullScan = 0;
-      const refresh = () => {
-        const now = Date.now();
-        const fullScan = now - lastFullScan >= 86_400_000;
-        if (fullScan) lastFullScan = now;
-        worker.task = this.syncAccount(account, worker.controller.signal, now, fullScan)
-          .catch((error: unknown) => { if (!worker.controller.signal.aborted) this.log?.error({ err: error, account }, "Unable to synchronize trade journal; retrying"); })
-          .finally(() => {
-            if (worker.controller.signal.aborted) { this.workers.delete(account); return; }
-            worker.timer = setTimeout(refresh, 15_000); worker.timer.unref();
-          });
-      };
-      refresh();
+      this.workers.set(account, this.createWorker(account));
     }
   }
+
+  /** One worker per account: an initial and daily full repair scan, exchange
+   * push ingestion, and a catch-up scan on every feed (re)connection. */
+  private createWorker(account: string): Worker {
+    const controller = new AbortController();
+    const signal = controller.signal;
+    const worker: Worker = { controller, chain: Promise.resolve() };
+    const healthy = async (fullScan: boolean): Promise<boolean> => {
+      try {
+        await this.syncAccount(account, signal, Date.now(), fullScan);
+        const rows = await this.db.all<{ error: string | null }>("SELECT error FROM hv_journal_sync WHERE account=?", account);
+        return rows.length === 3 && rows.every((row) => row.error === null);
+      } catch (error: unknown) {
+        if (!signal.aborted) this.log?.error({ err: error, account }, "Unable to synchronize trade journal; retrying");
+        return false;
+      }
+    };
+    const sync = (fullScan: boolean) => {
+      worker.chain = worker.chain.then(async () => {
+        let ok = await healthy(fullScan);
+        while (!ok && !signal.aborted) {
+          await sleep(SYNC_RETRY_MS, signal);
+          if (signal.aborted) return;
+          ok = await healthy(false);
+        }
+      });
+      return worker.chain;
+    };
+    const ingestPush = async (stream: JournalStream, events: JournalEvent[]) => {
+      if (signal.aborted || events.length === 0) return;
+      try {
+        if (await this.ingest(account, stream, events)) {
+          await this.project(account);
+          this.log?.debug({ account, stream, count: events.length }, "Ingested pushed trade journal events");
+        }
+      } catch (error: unknown) {
+        if (!signal.aborted) this.log?.error({ err: error, account }, "Unable to ingest pushed trade journal events");
+      }
+    };
+    const openFeed = () => {
+      if (signal.aborted || worker.feed || !this.feedFactory) return;
+      try {
+        worker.feed = this.feedFactory(account, {
+          connected: () => { if (!signal.aborted) void sync(false); },
+          disconnected: () => {},
+          failed: reopen,
+          push: (stream, events) => { void ingestPush(stream, events); },
+        });
+      } catch { reopen(); }
+    };
+    const reopen = () => {
+      if (signal.aborted || !this.feedFactory) return;
+      clearTimeout(worker.feedTimer);
+      const feed = worker.feed;
+      worker.feed = undefined;
+      void feed?.close();
+      worker.feedTimer = setTimeout(() => { worker.feedTimer = undefined; openFeed(); }, FEED_RETRY_MS);
+      worker.feedTimer.unref();
+    };
+    const scheduleDaily = () => {
+      if (signal.aborted) return;
+      worker.dailyTimer = setTimeout(() => {
+        worker.dailyTimer = undefined;
+        void sync(true).then(scheduleDaily);
+      }, FULL_SCAN_MS);
+      worker.dailyTimer.unref();
+    };
+    worker.task = sync(true).then(() => {
+      if (signal.aborted) return;
+      openFeed();
+      scheduleDaily();
+    });
+    return worker;
+  }
+
   async close() {
     this.stopped = true;
-    for (const worker of this.workers.values()) { worker.controller.abort(); clearTimeout(worker.timer); }
-    await Promise.all([...this.workers.values()].map((w) => w.task)); this.workers.clear();
+    const workers = [...this.workers.values()];
+    for (const worker of workers) {
+      worker.controller.abort();
+      clearTimeout(worker.feedTimer);
+      clearTimeout(worker.dailyTimer);
+    }
+    await Promise.all(workers.map(async (worker) => {
+      await Promise.allSettled([worker.task, worker.chain]);
+      const feed = worker.feed;
+      worker.feed = undefined;
+      if (feed) await feed.close().catch(() => {});
+    }));
+    this.workers.clear();
   }
 
   async syncAccount(account: string, signal: AbortSignal, now = Date.now(), fullScan = false) {
@@ -121,8 +256,9 @@ export class JournalService {
     await this.ingest(account, stream, rows, end);
   }
 
-  async ingest(account: string, stream: JournalStream, events: JournalEvent[], cursor: number) {
-    await this.db.transaction(async (tx) => {
+  async ingest(account: string, stream: JournalStream, events: JournalEvent[], cursor?: number): Promise<boolean> {
+    account = account.toLowerCase();
+    return this.db.transaction(async (tx) => {
       await tx.run("INSERT INTO hv_journal_accounts(account) VALUES (?) ON CONFLICT DO NOTHING", account);
       let changed = false;
       for (const event of events) {
@@ -134,8 +270,10 @@ export class JournalService {
           ON CONFLICT(account,id) DO UPDATE SET data=excluded.data,time=excluded.time`, account, event.id, event.kind, event.time, data);
       }
       if (changed) await tx.run("UPDATE hv_journal_accounts SET revision=revision+1 WHERE account=?", account);
-      await tx.run(`INSERT INTO hv_journal_sync(account,stream,cursor) VALUES (?,?,?)
+      // Pushed events never advance cursors; only fetched windows checkpoint progress.
+      if (cursor !== undefined) await tx.run(`INSERT INTO hv_journal_sync(account,stream,cursor) VALUES (?,?,?)
         ON CONFLICT(account,stream) DO UPDATE SET cursor=max(cursor,excluded.cursor)`, account, stream, cursor);
+      return changed;
     });
   }
 
@@ -211,3 +349,12 @@ export class JournalService {
   }
 }
 class HistoryCoverageError extends Error {}
+interface Worker {
+  controller: AbortController;
+  /** Serialized HTTP sync attempts; also drains retry backoff while unhealthy. */
+  chain: Promise<void>;
+  feed?: { close(): Promise<void> };
+  feedTimer?: ReturnType<typeof setTimeout>;
+  dailyTimer?: ReturnType<typeof setTimeout>;
+  task?: Promise<void>;
+}

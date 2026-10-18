@@ -24,7 +24,7 @@ describe("per-Agent durable execution", () => {
   let faux: ReturnType<typeof fauxProvider>;
   let models: ReturnType<typeof createModels>;
   const config = () => testConfig({ APP_SQLITE_PATH: join(directory, "app.sqlite") });
-  const options = () => ({ models, model: { provider: faux.getModel().provider, modelId: faux.getModel().id }, accountFeedFactory: () => ({ close: async () => {} }), journalHistoryFetcher: async () => [] });
+  const options = () => ({ models, model: { provider: faux.getModel().provider, modelId: faux.getModel().id }, accountFeedFactory: () => ({ close: async () => {} }), journalFeedFactory: () => ({ close: async () => {} }), journalHistoryFetcher: async () => [] });
   const create = (name = "BTC Momentum", id = randomUUID(), user = "owner") => runtime.agents.create(user, name, id, `0x${createHash("sha256").update(`${user}/${id}`).digest("hex").slice(0, 40)}`);
   beforeEach(async () => {
     directory = mkdtempSync(join(tmpdir(), "hv-agents-"));

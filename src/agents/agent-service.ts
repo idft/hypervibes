@@ -163,6 +163,8 @@ export class AgentService {
       throw new AgentError("This creation request was already used with different settings", 409);
     }
     try { await this.open(agent); } catch { /* Persisted failure is returned for visible retry. */ }
+    // Linked accounts only change at creation; push the event instead of polling.
+    await this.hyperliquid.reconcileLinkedAccounts();
     return this.owned(userId, agent.id);
   }
   private open(agent: AgentRow): Promise<RunningAgent> {

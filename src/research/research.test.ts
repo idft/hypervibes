@@ -25,7 +25,7 @@ describe("Code Mode research and artifacts", () => {
   beforeEach(async () => {
     directory = mkdtempSync(join(tmpdir(), "hv-research-"));
     faux = fauxProvider(); models = createModels(); models.setProvider(faux.provider);
-    runtime = await createRuntime(testConfig({ APP_SQLITE_PATH: join(directory, "app.sqlite") }), { models, model: { provider: faux.getModel().provider, modelId: faux.getModel().id }, journalHistoryFetcher: async () => [], accountFeedFactory: () => ({ close: async () => {} }) });
+    runtime = await createRuntime(testConfig({ APP_SQLITE_PATH: join(directory, "app.sqlite") }), { models, model: { provider: faux.getModel().provider, modelId: faux.getModel().id }, journalHistoryFetcher: async () => [], journalFeedFactory: () => ({ close: async () => {} }), accountFeedFactory: () => ({ close: async () => {} }) });
     await runtime.database.run("INSERT INTO hv_users(id,name,email) VALUES ('owner','Owner','owner@example.test')");
     agentId = (await runtime.agents.create("owner", "Research", randomUUID(), `0x${"1".repeat(40)}`)).id;
     otherAgentId = (await runtime.agents.create("owner", "Other", randomUUID(), `0x${"2".repeat(40)}`)).id;
@@ -367,12 +367,21 @@ describe("Code Mode research and artifacts", () => {
   });
   it("journal summaries preserve decimal arithmetic and incomplete coverage, and isolate accounts", async () => {
     const account = `0x${"1".repeat(40)}`;
-    await runtime.database.run("INSERT INTO hv_journal_accounts(account,projected_revision) VALUES (?,0)", account);
+    // Account creation immediately starts a journal worker; let its initial
+    // sync and projection settle before installing fixture rows.
+    await vi.waitFor(async () => {
+      const state = await runtime.database.get<{ revision: number; projected_revision: number }>("SELECT revision,projected_revision FROM hv_journal_accounts WHERE account=?", account);
+      expect(state).toMatchObject({ revision: 0, projected_revision: 0 });
+      const sync = await runtime.database.all<{ updated_at: number | null; error: string | null }>("SELECT updated_at,error FROM hv_journal_sync WHERE account=?", account);
+      expect(sync).toHaveLength(3);
+      expect(sync.every((row) => row.updated_at !== null && row.error === null)).toBe(true);
+    });
+    await runtime.database.run("INSERT INTO hv_journal_accounts(account,projected_revision) VALUES (?,0) ON CONFLICT DO NOTHING", account);
     for (const [id, time, net] of [["a", 100, "0.1"], ["b", 101, "0.2"]] as const) {
       const trade = { id, status: "closed", symbol: "BTC", net, grossPnl: net, fees: "0", parts: ["oversized internals"] };
       await runtime.database.run("INSERT INTO hv_journal_entries(account,id,kind,time,data) VALUES (?,?,'trade',?,?)", account, id, time, JSON.stringify(trade));
     }
-    for (const stream of ["fill", "funding", "ledger"]) await runtime.database.run("INSERT INTO hv_journal_sync(account,stream,cursor,updated_at) VALUES (?,?,1000,1)", account, stream);
+    for (const stream of ["fill", "funding", "ledger"]) await runtime.database.run("INSERT INTO hv_journal_sync(account,stream,cursor,updated_at) VALUES (?,?,1000,1) ON CONFLICT DO NOTHING", account, stream);
     const result = await researchJournal(runtime.database, agentId, 0, 1000, 100);
     expect(result.performance.knownNetSum).toBe("0.3"); expect(result.coverage.complete).toBe(true);
     expect(JSON.stringify(result)).not.toContain("oversized internals");

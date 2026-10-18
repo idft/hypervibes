@@ -47,7 +47,7 @@ describe("Agent chat event stream", () => {
     const models = createModels();
     faux = fauxProvider();
     models.setProvider(faux.provider);
-    return { models, model: { provider: "faux", modelId: "faux-1" }, journalHistoryFetcher: async () => [], accountFeedFactory: (_address: string, events: AccountFeedEvents) => {
+    return { models, model: { provider: "faux", modelId: "faux-1" }, journalHistoryFetcher: async () => [], journalFeedFactory: () => ({ close: async () => {} }), accountFeedFactory: (_address: string, events: AccountFeedEvents) => {
       feedEvents = events;
       return { close: closeFeed };
     } };
@@ -117,6 +117,7 @@ describe("Agent chat event stream", () => {
     const agent = await runtime.agents.create("owner", "Trading", randomUUID(), `0x${"34".repeat(20)}`);
     await streams.close();
     await runtime.close();
+    feedEvents = undefined;
     runtime = await createRuntime(config(), options());
     streams = new AgentEventStreams(runtime, "dashboard");
     expect(feedEvents).toBeUndefined();
@@ -130,11 +131,13 @@ describe("Agent chat event stream", () => {
     await streams.close();
     streams = new AgentEventStreams(runtime, "dashboard");
     const agent = await runtime.agents.create("owner", "Trading", randomUUID(), `0x${"12".repeat(20)}`);
+    const createdFeed = feedEvents;
     const crossSite = new Request(`http://localhost:3003/api/agents/${agent.id}/dashboard/events`, { headers: { origin: "https://evil.example" } });
     expect((await streams.open(crossSite, agent.id)).status).toBe(403);
     mocks.session.mockResolvedValue({ user: { id: "other" }, expiresAt: expiry() });
     expect((await streams.open(request(agent.id), agent.id)).status).toBe(404);
-    expect(feedEvents).toBeUndefined();
+    // Rejected subscriptions must not open any additional account feed.
+    expect(feedEvents).toBe(createdFeed);
     mocks.session.mockResolvedValue(null);
     expect((await streams.open(request(agent.id), agent.id)).status).toBe(401);
     mocks.session.mockResolvedValue({ user: { id: "owner" }, expiresAt: expiry() });

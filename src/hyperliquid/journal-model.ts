@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import type { UserFillsByTimeResponse, UserFundingResponse, UserNonFundingLedgerUpdatesResponse } from "@nktkas/hyperliquid";
+import type { UserFundingsEvent } from "@nktkas/hyperliquid/api/subscription";
 import { amount } from "./journal-decimal.js";
 
 export type JournalStream = "fill" | "funding" | "ledger";
@@ -32,6 +33,11 @@ export function fillEvent(row: UserFillsByTimeResponse[number]): JournalEvent {
 export function fundingEvent(row: UserFundingResponse[number]): JournalEvent {
   return { id: stableId("funding", row.delta.coin, String(row.time)), kind: "funding", time: row.time, symbol: row.delta.coin,
     type: "funding", fee: null, pnl: null, delta: amount(row.delta.usdc).toString(), fill: null, raw: row };
+}
+/** WebSocket funding pushes carry a flat shape but must share HTTP event identities. */
+export function wsFundingEvent(row: UserFundingsEvent["fundings"][number]): JournalEvent {
+  return { id: stableId("funding", row.coin, String(row.time)), kind: "funding", time: row.time, symbol: row.coin,
+    type: "funding", fee: null, pnl: null, delta: amount(row.usdc).toString(), fill: null, raw: row };
 }
 export function ledgerEvent(account: string, row: UserNonFundingLedgerUpdatesResponse[number]): JournalEvent {
   const d = row.delta;

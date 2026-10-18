@@ -8,7 +8,7 @@ import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { openDatabase } from "../db/database.js";
 import { applicationDatabase, SharedDatabase } from "../db/shared-database.js";
-import { JournalService, type HistoryFetcher } from "./journal-service.js";
+import { JournalService, type HistoryFetcher, type JournalFeedEvents } from "./journal-service.js";
 import { fillEvent, type JournalEvent } from "./journal-model.js";
 import { HyperliquidService } from "./service.js";
 
@@ -157,5 +157,64 @@ describe("durable account journal", () => {
     journal.reconcile([]);
     await journal.close();
     expect(fetcher.mock.calls.every((c) => c[4].aborted)).toBe(true);
+  });
+  it("ingests pushed events and catch-up scans without any idle polling", async () => {
+    rows = [deposit(1)];
+    const feeds = new Map<string, JournalFeedEvents>();
+    journal = new JournalService(db, fetcher, undefined, (address, events) => {
+      feeds.set(address, events);
+      return { close: async () => { feeds.delete(address); } };
+    });
+    journal.reconcile([account]);
+    await vi.waitFor(async () => expect((await journal.page(account, "activity", 1)).total).toBe(1));
+    await vi.waitFor(() => expect(feeds.size).toBe(1));
+    const events = feeds.get(account)!;
+    // Pushed events are ingested and projected without any HTTP fetch.
+    const calls = fetcher.mock.calls.length;
+    events.push("ledger", [deposit(2), deposit(3)]);
+    await vi.waitFor(async () => expect((await journal.page(account, "activity", 1)).total).toBe(3));
+    expect(fetcher.mock.calls.length).toBe(calls);
+    // A reconnect runs one incremental catch-up per stream, then stays idle.
+    events.connected();
+    await vi.waitFor(() => expect(fetcher.mock.calls.length).toBeGreaterThanOrEqual(calls + 3));
+    const afterCatchUp = fetcher.mock.calls.length;
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    expect(fetcher.mock.calls.length).toBe(afterCatchUp);
+  });
+  it("never resynchronizes while idle; only the daily repair scan refetches", async () => {
+    vi.useFakeTimers();
+    try {
+      rows = [deposit(1)];
+      journal.reconcile([account]);
+      await vi.waitFor(async () => expect((await journal.page(account, "activity", 1)).total).toBe(1));
+      const calls = fetcher.mock.calls.length;
+      await vi.advanceTimersByTimeAsync(3600_000);
+      expect(fetcher.mock.calls.length).toBe(calls);
+      await vi.advanceTimersByTimeAsync(24 * 3600_000);
+      expect(fetcher.mock.calls.length).toBeGreaterThan(calls);
+    } finally { vi.useRealTimers(); }
+  });
+  it("retries a failing initial backfill until it succeeds, then subscribes", async () => {
+    vi.useFakeTimers();
+    try {
+      rows = [deposit(1)];
+      const feeds = new Map<string, JournalFeedEvents>();
+      journal = new JournalService(db, fetcher, undefined, (address, events) => {
+        feeds.set(address, events);
+        return { close: async () => { feeds.delete(address); } };
+      });
+      let offline = true;
+      fetcher.mockImplementation(async (_a, stream) => {
+        if (offline && stream === "ledger") throw new Error("offline");
+        return rows.filter((e) => e.kind === stream);
+      });
+      journal.reconcile([account]);
+      await vi.waitFor(async () => expect((await journal.page(account, "activity", 1)).sync.find((s) => s.stream === "ledger")?.error).toContain("failed"));
+      expect(feeds.size).toBe(0); // No subscription until the backfill is healthy.
+      offline = false;
+      await vi.advanceTimersByTimeAsync(30_000);
+      await vi.waitFor(async () => expect((await journal.page(account, "activity", 1)).total).toBe(1));
+      await vi.waitFor(() => expect(feeds.size).toBe(1));
+    } finally { vi.useRealTimers(); }
   });
 });

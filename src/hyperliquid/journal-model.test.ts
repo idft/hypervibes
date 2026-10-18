@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
+import type { UserFundingResponse } from "@nktkas/hyperliquid";
 import { amount } from "./journal-decimal.js";
-import { buildTrades, fillEvent, ledgerEvent, type JournalEvent } from "./journal-model.js";
+import { buildTrades, fillEvent, fundingEvent, ledgerEvent, wsFundingEvent, type JournalEvent } from "./journal-model.js";
 
 export function fill(id: number, side: string, size: string, start: string | null, fee = "0.1", pnl: string | null = "0", time = id): JournalEvent {
   return { id: String(id), kind: "fill", time, symbol: "BTC", type: `fill ${side}`, fee, pnl,
@@ -9,6 +10,14 @@ export function fill(id: number, side: string, size: string, start: string | nul
 }
 
 describe("journal exact accounting and legacy trade-cycle fixtures", () => {
+  it("derives identical identities for HTTP and websocket funding events", () => {
+    const http = fundingEvent({ time: 1234, hash: `0x${"ab".repeat(32)}`,
+      delta: { type: "funding", coin: "BTC", usdc: "-0.25", szi: "1", fundingRate: "0.01", nSamples: 1 } } as UserFundingResponse[number]);
+    const ws = wsFundingEvent({ time: 1234, coin: "BTC", usdc: "-0.25", szi: "1", fundingRate: "0.01", nSamples: 1 });
+    expect(ws.id).toBe(http.id);
+    expect(ws).toMatchObject({ kind: "funding", time: 1234, symbol: "BTC", type: "funding", delta: "-0.25", fee: null, pnl: null, fill: null });
+  });
+
   it("keeps large amounts, products and tiny deltas exact; rounds division half-even", () => {
     expect(amount("9007199254740993.000000000000000001").add(amount("0.000000000000000001")).toString()).toBe("9007199254740993.000000000000000002");
     expect(amount("0.0000000001").mul(amount("0.0000000001")).toString()).toBe("0.00000000000000000001");

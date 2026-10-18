@@ -1,6 +1,7 @@
 import { SubscriptionClient, WebSocketTransport } from "@nktkas/hyperliquid";
 import type { CandleEvent } from "@nktkas/hyperliquid/api/subscription";
 import { openAccountFeed, type AccountFeedFactory } from "./live-dashboard.js";
+import { openJournalFeed, type JournalFeedFactory } from "./journal-service.js";
 import type { ChartSelection } from "./chart-contracts.js";
 
 export interface CandleFeedEvents {
@@ -20,6 +21,7 @@ export class SharedHyperliquidFeeds {
     return this.transport ??= new WebSocketTransport();
   }
   readonly account: AccountFeedFactory = (address, events) => openAccountFeed(address, events, this.socket());
+  readonly journal: JournalFeedFactory = (address, events) => openJournalFeed(address, events, this.socket());
   readonly candle: CandleFeedFactory = (selection, events) => {
     const transport = this.socket();
     const abort = new AbortController();
