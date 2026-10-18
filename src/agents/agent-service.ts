@@ -13,6 +13,8 @@ import { randomUUID } from "node:crypto";
 import { hvAgents, type AgentRow } from "../db/agent-schema.js";
 import type { ApplicationDatabase, SharedDatabase } from "../db/shared-database.js";
 import type { FastifyBaseLogger } from "fastify";
+import { toolActivity, type ToolActivity } from "../research/tool-activity.js";
+import { ResearchService } from "../research/research-service.js";
 
 import { AgentError, agentId, agentName, chatMessage, harnessPrefix, requestId } from "./agent-input.js";
 import { SubagentService } from "./subagent-service.js";
@@ -67,6 +69,7 @@ export interface AgentChat {
   queuedMessages: ChatQueueItem[];
   messages: ChatEntry[];
   partial: string;
+  tools?: ToolActivity[];
   usage: ChatUsage;
   /** Estimated model-context size and the selected model's context window. */
   context?: { tokens: number; window: number };
@@ -90,7 +93,9 @@ export class AgentService {
   private closing?: Promise<void>;
   private resuming: Promise<void> = Promise.resolve();
   readonly subagents: SubagentService;
+  readonly research: ResearchService;
   constructor(private readonly db: ApplicationDatabase, private readonly database: SharedDatabase, private readonly providers: ProviderService, private readonly hyperliquid: HyperliquidService, private readonly orders: OrderService, private readonly options: AgentServiceOptions = {}) {
+    this.research = new ResearchService(database, hyperliquid, (error) => options.logger?.error(error, "Artifact maintenance failed"));
     this.subagents = new SubagentService(db, database, providers, {
       owned: (userId, id) => this.owned(userId, id), models: (userId) => this.models(userId), changed: (id) => this.notify(id),
     }, Boolean(options.models), options.logger?.child({ component: "scheduler" }));
@@ -178,7 +183,9 @@ export class AgentService {
       const registry = createRegistry();
       const hyperliquid = createHyperliquidExtension(this.hyperliquid, agent.userId, agent.id, this.orders);
       registry.install(hyperliquid);
-      const execution = this.subagents.extension(agent.id, hyperliquid);
+      const capabilities = this.research.extensions(agent.id);
+      for (const extension of capabilities) registry.install(extension);
+      const execution = this.subagents.extension(agent.id, hyperliquid, capabilities);
       registry.install(execution.extension);
       const storage = await SqliteStorage.open(this.database.borrow(), { prefix: harnessPrefix(agent.id) });
       try {
@@ -194,7 +201,7 @@ export class AgentService {
       } });
       if (agent.conversationId !== null && agent.conversationId !== main.id) throw new Error("Agent root identity changed");
       // Seed once from the existing root; later startups preserve editable settings.
-      await this.subagents.bind(agent, harness, main, hyperliquid, execution);
+      await this.subagents.bind(agent, harness, main, hyperliquid, execution, capabilities);
       this.admit();
       await this.db.update(hvAgents).set({ state: "ready", conversationId: main.id, error: null, updatedAt: Date.now() }).where(eq(hvAgents.id, agent.id)).run();
       const current = { harness, main };
@@ -224,6 +231,7 @@ export class AgentService {
   start() {
     this.admit();
     this.scheduling = true;
+    this.research.start();
     this.resuming = this.subagents.start().catch(() => { this.subagents.schedulerError = "Unable to initialize subagent scheduling. Restart the backend to retry."; });
     if (this.options.models) for (const { harness } of this.running.values()) harness.resume();
     else this.resuming = Promise.all([this.resuming, this.resumeConfigured()]).then(() => {}).catch(() => { /* Storage health reports failures; admission also checks configuration. */ });
@@ -237,6 +245,7 @@ export class AgentService {
     }
   }
   async recover() {
+    await this.research.initialize();
     const agents = await this.db.select().from(hvAgents).all();
     for (const agent of agents) {
       try { await this.open(agent); } catch { /* One failed Agent must not hide other Agents. */ }
@@ -282,6 +291,7 @@ export class AgentService {
       "content" in item ? [{ id: `inbox:${item.id}`, text: userText(item.content) }] : []);
     result.compacting = (live?.compactions?.length ?? 0) > 0;
     result.compactionError = live?.compactionFailure?.error;
+    result.tools = toolActivity(entries, live);
     result.messages = AgentService.projectEntries(entries);
     result.partial = live?.generation?.message?.content.filter((part) => part.type === "text").map((part) => part.text).join("") ?? "";
     return result;
@@ -458,6 +468,6 @@ export class AgentService {
       this.running.clear();
       const errors = results.filter((result) => result.status === "rejected").map((result) => result.reason as unknown);
       if (errors.length) throw new AggregateError(errors, "Unable to close Agent execution");
-    })();
+    })().finally(() => this.research.close());
   }
 }

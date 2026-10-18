@@ -4,7 +4,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SubagentRow } from "../db/subagent-schema.js";
-import { mainToolNames } from "../agents/subagent-input.js";
+import { mainToolNames, taToolNames } from "../agents/subagent-input.js";
 const mocks = vi.hoisted(() => ({ invalidate: vi.fn(), navigate: vi.fn(), success: vi.fn(), saveSubagent: vi.fn(), saveSubagentSection: vi.fn(), saveSubagentAssignments: vi.fn(), saveSubagentIdentity: vi.fn(), saveSubagentTools: vi.fn(), getSubagent: vi.fn(), runSubagent: vi.fn(), archiveSubagent: vi.fn(), stopSubagentRun: vi.fn() }));
 vi.mock("../web/subagents.js", () => mocks);
 vi.mock("sonner", () => ({ toast: { success: mocks.success } }));
@@ -230,6 +230,17 @@ describe("subagent pages", () => {
     await act(async () => { document.querySelector("dialog")!.dispatchEvent(new Event("cancel", { cancelable: true })); });
     expect(document.querySelector("dialog")).toBeNull();
   });
+  it("selects the separate TA group without enabling Code Mode, account or delegation tools", async () => {
+    await render(); await click("Edit tools");
+    expect(document.querySelector("dialog")!.textContent).toContain("Technical analysis · TA");
+    expect(document.querySelector("dialog")!.textContent).not.toContain("research_ta");
+    await click("All tools in Technical analysis · TA");
+    expect(document.querySelectorAll("dialog input[type=checkbox]:checked")).toHaveLength(7);
+    await click("Apply");
+    expect(mocks.saveSubagentTools.mock.calls[0]![0].data.tools).toEqual([...taToolNames]);
+    expect(container.textContent).toContain("Technical analysis · TA:");
+    expect(container.textContent).not.toContain("Hyperliquid: get_account");
+  });
   it("selects and clears all tools per extension even while searching", async () => {
     await render({ ...definition, kind: "orchestrator" });
     await click("Edit tools");
@@ -446,6 +457,7 @@ describe("subagent pages", () => {
     expect(mocks.runSubagent).toHaveBeenCalledTimes(2); expect(mocks.runSubagent.mock.calls[0]![0]).toEqual(mocks.runSubagent.mock.calls[1]![0]);
     expect(document.querySelector("dialog [role=alert]")?.textContent).toContain("active assignment");
     expect(mocks.success).not.toHaveBeenCalled();
+    expect(mocks.navigate).not.toHaveBeenCalled();
   });
   it("places run and archive actions in the title row and opens the assignment modal", async () => {
     await render();
@@ -466,7 +478,7 @@ describe("subagent pages", () => {
     expect(document.querySelector("dialog")).toBeNull();
     expect(mocks.runSubagent).not.toHaveBeenCalled();
   });
-  it("starts an assignment from the modal and relies on live history without saving settings", async () => {
+  it("redirects an accepted manual assignment to its run detail without saving settings", async () => {
     await render(); await editInstructions("Unsaved instructions");
     await click("Run now");
     const task = document.querySelector("dialog textarea")!;
@@ -474,10 +486,11 @@ describe("subagent pages", () => {
       Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(task, "Research current conditions");
       task.dispatchEvent(new Event("input", { bubbles: true }));
     });
-    mocks.runSubagent.mockResolvedValue({ ok: true });
+    mocks.runSubagent.mockResolvedValue({ ok: true, data: { id: "new-run-id" } });
     await click("Run assignment");
     expect(document.querySelector("dialog")).toBeNull();
     expect(mocks.runSubagent).toHaveBeenCalledWith({ data: { agentId: definition.agentId, id: definition.id, task: "Research current conditions", requestId: expect.any(String) } });
+    expect(mocks.navigate).toHaveBeenCalledWith({ to: "/agents/$agentId/sub-agents/$subagentId/runs/$runId", params: { agentId: definition.agentId, subagentId: definition.id, runId: "new-run-id" } });
     expect(mocks.getSubagent).not.toHaveBeenCalled();
     expect(mocks.saveSubagent).not.toHaveBeenCalled();
     expect(container.querySelector("textarea")!.value).toBe("Unsaved instructions");
@@ -498,10 +511,11 @@ describe("subagent pages", () => {
     await click("Starting…"); await click("Cancel");
     expect(document.querySelector("dialog")).not.toBeNull();
     expect(mocks.runSubagent).toHaveBeenCalledOnce();
-    await act(async () => { HistorySource.instances.at(-1)!.onerror?.(); resolve({ ok: true }); });
+    await act(async () => { HistorySource.instances.at(-1)!.onerror?.(); resolve({ ok: true, data: { id: "accepted-run-id" } }); });
     expect(document.querySelector("dialog")).toBeNull();
     expect(container.querySelector("[role=status]")?.textContent).toContain("Live updates interrupted");
     expect(mocks.runSubagent).toHaveBeenCalledOnce();
+    expect(mocks.navigate).toHaveBeenCalledWith({ to: "/agents/$agentId/sub-agents/$subagentId/runs/$runId", params: { agentId: definition.agentId, subagentId: definition.id, runId: "accepted-run-id" } });
   });
   it("hides worker actions on the orchestrator and disables unavailable workers", async () => {
     await render({ ...definition, kind: "orchestrator" });

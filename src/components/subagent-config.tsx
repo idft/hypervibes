@@ -1,5 +1,5 @@
 import { useId, useRef, useState, type ReactNode } from "react";
-import { candleIntervals, mainToolNames, workerToolNames, type AssignmentSettings, type SubagentInput } from "../agents/subagent-input.js";
+import { candleIntervals, mainToolNames, accountToolNames, researchToolNames, taToolNames, type AssignmentSettings, type SubagentInput } from "../agents/subagent-input.js";
 import { ConfigDialog, configButton, configInput } from "./config-dialog.js";
 
 type Identity = Pick<SubagentInput, "name" | "description">;
@@ -51,8 +51,10 @@ function IdentityDialog({ value, onCancel, onApply }: { value: Identity; onCance
 }
 
 const toolGroups = [
-  { name: "Hyperliquid", tools: workerToolNames },
-  { name: "HyperVibes · Subagents", tools: mainToolNames.filter((name) => !workerToolNames.some((worker) => worker === name)) },
+  { name: "Hyperliquid", tools: accountToolNames },
+  { name: "Research · Code Mode & Artifacts", tools: researchToolNames },
+  { name: "Technical analysis · TA", tools: taToolNames },
+  { name: "HyperVibes · Subagents", tools: mainToolNames.filter((name) => !accountToolNames.some((worker) => worker === name)) },
 ];
 
 export function ToolPicker({ tools, main, onChange }: { tools: string[]; main: boolean; onChange: (tools: string[]) => Promise<void> }) {
@@ -83,10 +85,10 @@ function ToolDialog({ tools, main, onCancel, onApply }: { tools: string[]; main:
     catch (cause) { setError(cause instanceof Error ? cause.message : "Unable to save tools. Please retry."); }
     finally { inFlight.current = false; setSaving(false); }
   }
-  const groups = toolGroups.filter((group) => main || group.name === "Hyperliquid").map((group) => ({ ...group, visibleTools: group.tools.filter((name) => `${group.name} ${name}`.toLowerCase().includes(search.trim().toLowerCase())) })).filter((group) => group.visibleTools.length);
+  const groups = toolGroups.filter((group) => main || group.name !== "HyperVibes · Subagents").map((group) => ({ ...group, visibleTools: group.tools.filter((name) => `${group.name} ${name}`.toLowerCase().includes(search.trim().toLowerCase())) })).filter((group) => group.visibleTools.length);
   return <ConfigDialog title="Allowed tools" onCancel={() => { if (!inFlight.current) onCancel(); }} onApply={() => { void apply(); }} applyDisabled={saving}>
     <fieldset disabled={saving} className="space-y-4 disabled:opacity-60">
-    <p className="text-sm text-zinc-400">Only selected tools are available to this {main ? "orchestrator" : "worker"}.</p>
+    <p className="text-sm text-zinc-400">Only selected tools are available to this {main ? "orchestrator" : "worker"}. Code Mode is opt-in and can call only the other tools selected here. It provides no shell or filesystem. Select research tools without order tools for read-only researchers.</p>
     <label className="block space-y-2 text-sm">Search extensions and tools<input autoFocus type="search" value={search} onChange={(event) => setSearch(event.target.value)} className={configInput} /></label>
     <div className="max-h-80 space-y-4 overflow-y-auto">
       {groups.map((group) => <fieldset key={group.name} className="space-y-3 rounded-xl border border-zinc-800 p-4"><legend className="px-2 text-sm font-medium text-white"><span className="inline-flex flex-wrap items-center gap-3">

@@ -1,7 +1,7 @@
 import { BACKGROUND_CONTEXT as context } from "@earendil-works/chord/context";
 import { createModels } from "@earendil-works/pi-ai/models";
 import { fauxAssistantMessage, fauxProvider, fauxToolCall } from "@earendil-works/pi-ai/providers/faux";
-import { Harness } from "@earendil-works/pi-durable";
+import { Harness, type ConversationId } from "@earendil-works/pi-durable";
 import { SqliteStorage } from "@earendil-works/pi-durable/storage/sqlite";
 import { eq } from "drizzle-orm";
 import { mkdtempSync, rmSync } from "node:fs";
@@ -50,11 +50,63 @@ describe("subagent definitions, execution and scheduling", () => {
     expect((await detail(agent.id, worker.id)).runs).toEqual([]); expect(faux.state.callCount).toBe(0);
   });
 
+  it("enables Code Mode only when selected and shares artifacts across sibling workers", async () => {
+    const agent = await createAgent();
+    const main = (await runtime.agents.subagents.list("owner", agent.id)).find((row) => row.kind === "orchestrator")!;
+    expect(main.tools).not.toContain("codemode");
+    const writer = await createWorker(agent.id, { tools: ["codemode", "artifact_create"] });
+    faux.setResponses([fauxAssistantMessage(fauxToolCall("codemode", { code: "text(await tools.artifact_create({title:'Shared report',mediaType:'text/markdown',content:'# Research'}));" }), { stopReason: "toolUse" }), fauxAssistantMessage("Saved report")]);
+    await runtime.agents.subagents.run("owner", agent.id, writer.id, "Save a report", randomUUID());
+    const written = await completed(agent.id, writer.id);
+    const artifact = (await runtime.agents.research.artifacts.list(agent.id)).items[0]!;
+    expect(artifact.title).toBe("Shared report"); expect(artifact.conversationId).toBe(written.conversationId);
+    const detail = await runtime.agents.subagents.runDetail("owner", agent.id, writer.id, written.id);
+    expect(detail.tools).toContainEqual(expect.objectContaining({ name: "↳ artifact_create", status: "ok" }));
+    const reader = await createWorker(agent.id, { tools: ["codemode", "artifact_read"] });
+    faux.setResponses([fauxAssistantMessage(fauxToolCall("codemode", { code: `text((await tools.artifact_read({id:${JSON.stringify(artifact.id)}})).content);` }), { stopReason: "toolUse" }), fauxAssistantMessage("Read sibling report")]);
+    await runtime.agents.subagents.run("owner", agent.id, reader.id, "Read the report", randomUUID());
+    const read = await completed(agent.id, reader.id);
+    const transcript = await runtime.agents.subagents.runDetail("owner", agent.id, reader.id, read.id);
+    expect(JSON.stringify(transcript.entries)).toContain("# Research");
+    expect(transcript.tools).toContainEqual(expect.objectContaining({ name: "↳ artifact_read", status: "ok" }));
+  });
+
+  it("selects the ta extension independently of research and Code Mode", async () => {
+    const opened = vi.spyOn(Harness, "open");
+    const agent = await createAgent();
+    const harness = await opened.mock.results[0]!.value as Harness;
+    const main = await harness.root(context);
+    expect((await main.agent(context)).extensions.map((extension) => extension.name)).not.toContain("ta");
+    expect((await main.agent(context)).tools.some((tool) => tool.name === "codemode")).toBe(false);
+    const candles = Array.from({ length: 80 }, (_, i) => ({ time: i * 3600, open: i + 10, high: i + 12, low: i + 9, close: i + 11, volume: 20 }));
+    vi.spyOn(runtime.hyperliquid.charts, "researchHistory").mockResolvedValue({ coin: "BTC", interval: "1h", start: 0, end: 80 * 3600000, pageEnd: 80 * 3600000, candles, nextStart: null, coverage: { complete: true, returned: 80, expected: 80, closedOnly: true, sourceLimit: "fixture" } });
+    const worker = await createWorker(agent.id, { tools: ["ta_macd"] });
+    faux.setResponses([fauxAssistantMessage(fauxToolCall("ta_macd", { coin: "BTC", interval: "1h", start: 0, end: 288000000, fastPeriod: 8, slowPeriod: 21, signalPeriod: 5 }), { stopReason: "toolUse" }), fauxAssistantMessage("MACD complete")]);
+    await runtime.agents.subagents.run("owner", agent.id, worker.id, "Calculate MACD 8/21/5", randomUUID());
+    const run = await completed(agent.id, worker.id);
+    const child = await harness.conversation(run.conversationId! as ConversationId, context);
+    const resolved = await child!.agent(context);
+    expect(resolved.extensions.map((extension) => extension.name)).toEqual(["hyperliquid", "ta"]);
+    expect(resolved.tools.map((tool) => tool.name)).toEqual(["ta_macd"]);
+    const transcript = await runtime.agents.subagents.runDetail("owner", agent.id, worker.id, run.id);
+    expect(transcript.tools).toContainEqual(expect.objectContaining({ name: "ta_macd", status: "done" }));
+    const system = JSON.stringify(transcript.entries.filter((entry) => entry.kind === "pi.system"));
+    expect(system).toContain("Code Mode is not selected");
+    expect(system).toContain("at least 5 times the longest configured indicator period");
+    expect(system).toContain("5000-input cap");
+    expect(system).not.toContain("function scalar(result");
+    const definition = (await runtime.agents.subagents.list("owner", agent.id)).find((row) => row.kind === "orchestrator")!;
+    await runtime.agents.subagents.updateTools("owner", agent.id, definition.id, ["ta_rsi"]);
+    const rootAgent = await main.agent(context);
+    expect(rootAgent.extensions.map((extension) => extension.name)).toEqual(["hyperliquid", "subagents", "ta"]);
+    expect(rootAgent.tools.map((tool) => tool.name)).toEqual(["ta_rsi"]);
+  });
+
   it("rejects cross-user and cross-Agent access, unknown tools, recursive delegation and malformed schedules", async () => {
     const agent = await createAgent(), other = await createAgent(), worker = await createWorker(agent.id);
     await expect(runtime.agents.subagents.detail("other", agent.id, worker.id)).rejects.toMatchObject({ status: 404 });
     await expect(detail(other.id, worker.id)).rejects.toMatchObject({ status: 404 });
-    for (const input of [settings({ tools: ["bash"] }), settings({ tools: ["delegate_subagent"] }), settings({ schedule: "bad" }), settings({ timeoutSeconds: 0 }), { ...settings(), enabled: "true" }]) expect(() => subagentInput(input)).toThrow();
+    for (const input of [settings({ tools: ["bash"] }), settings({ tools: ["research_ta"] }), settings({ tools: ["delegate_subagent"] }), settings({ schedule: "bad" }), settings({ timeoutSeconds: 0 }), { ...settings(), enabled: "true" }]) expect(() => subagentInput(input)).toThrow();
     await expect(runtime.agents.subagents.run("other", agent.id, worker.id, "Do work", randomUUID())).rejects.toMatchObject({ status: 404 });
   });
 

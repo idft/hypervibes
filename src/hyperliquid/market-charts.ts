@@ -28,6 +28,20 @@ function normalize(raw: CandleEvent[], selection: ChartSelection): ChartCandle[]
   return mergeChartCandles([], candles);
 }
 
+/** Cancelling a consumer must not cancel a shared public-market-data request. */
+function waitForSignal<T>(task: Promise<T>, signal?: AbortSignal): Promise<T> {
+  if (!signal) return task;
+  if (signal.aborted) {
+    void task.catch(() => {}); // The abandoned caller must still observe rejection.
+    return Promise.reject(signal.reason);
+  }
+  return new Promise<T>((resolve, reject) => {
+    const abort = () => { signal.removeEventListener("abort", abort); reject(signal.reason); };
+    signal.addEventListener("abort", abort, { once: true });
+    void task.then((value) => { signal.removeEventListener("abort", abort); resolve(value); }, (error: unknown) => { signal.removeEventListener("abort", abort); reject(error); });
+  });
+}
+
 /** Bounded ephemeral market data; history is shared across viewers, never persisted. */
 export class MarketCharts {
   private readonly info: InfoClient;
@@ -35,6 +49,7 @@ export class MarketCharts {
   private readonly feeds = new Map<string, Feed>();
   private readonly tasks = new Set<Promise<unknown>>();
   private readonly cache = new Map<string, { expires: number; task: Promise<ChartHistory> }>();
+  private readonly researchCache = new Map<string, { expires: number; task: Promise<ChartCandle[]> }>();
   private universe?: { expires: number; task: Promise<string[]> };
   constructor(transport: HttpTransport, private readonly factory: CandleFeedFactory) { this.info = new InfoClient({ transport }); }
   private admit() { if (this.abort.signal.aborted) throw new HyperliquidError("Market data service is closed", 503); }
@@ -76,6 +91,33 @@ export class MarketCharts {
     this.cache.set(key, { expires: Date.now() + (before === undefined ? 2_000 : 60_000), task });
     void task.catch(() => { if (this.cache.get(key)?.task === task) this.cache.delete(key); });
     return task;
+  }
+  /** Research pages have a fixed exclusive end and never include forming candles.
+   * Hyperliquid retains only the most recent ~5,000 candles per instrument/interval.
+   */
+  async researchHistory(coin: string, interval: string, start: number, end: number, limit: number, cancellation?: AbortSignal) {
+    cancellation?.throwIfAborted();
+    const selection = await waitForSignal(this.selection(coin, interval), cancellation);
+    const width = intervalMillis[selection.interval];
+    if (![start, end, limit].every(Number.isSafeInteger) || start < 0 || end <= start || end > Date.now() || limit < 1 || limit > 5000) throw new HyperliquidError("Invalid research candle range");
+    const boundary = Math.min(Math.floor(end / width) * width, Math.floor(Date.now() / width) * width);
+    const pageStart = Math.ceil(start / width) * width;
+    const pageEnd = Math.min(boundary, pageStart + limit * width);
+    const key = JSON.stringify([selection.coin, selection.interval, pageStart, pageEnd]);
+    let cached = this.researchCache.get(key);
+    if (!cached || cached.expires <= Date.now()) {
+      if (this.tasks.size >= 12) throw new HyperliquidError("Market data is busy", 429);
+      const task = pageEnd <= pageStart ? Promise.resolve([]) : this.track(this.info.candleSnapshot({ ...selection, startTime: pageStart, endTime: pageEnd - 1 }, AbortSignal.any([this.abort.signal, AbortSignal.timeout(15_000)]))
+        .then((raw) => normalize(raw, selection).filter((row) => row.time * 1000 >= pageStart && row.time * 1000 + width <= pageEnd)));
+      if (this.researchCache.size >= 16) this.researchCache.delete(this.researchCache.keys().next().value!);
+      cached = { expires: Date.now() + 60_000, task };
+      this.researchCache.set(key, cached);
+      void task.catch(() => { if (this.researchCache.get(key)?.task === task) this.researchCache.delete(key); });
+    }
+    const items = (await waitForSignal(cached.task, cancellation)).slice(0, limit).map((candle) => ({ ...candle }));
+    const expected = Math.max(0, (pageEnd - pageStart) / width);
+    return { coin, interval, start, end: boundary, pageEnd, candles: items, nextStart: pageEnd < boundary ? pageEnd : null,
+      coverage: { complete: items.length === expected, returned: items.length, expected, sourceLimit: "Hyperliquid retains approximately the latest 5,000 candles; empty/gapped data is not proof of no trading.", closedOnly: true } };
   }
   watch(selection: ChartSelection, signal: AbortSignal, publish: (snapshot: ChartSnapshot) => void): Promise<void> {
     this.admit();
@@ -164,5 +206,6 @@ export class MarketCharts {
     for (const feed of feeds) void this.stop(feed);
     await Promise.allSettled(this.tasks);
     this.cache.clear();
+    this.researchCache.clear();
   }
 }

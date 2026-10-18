@@ -5,6 +5,8 @@ import { compactAgentChat, resetAgentChat, retryAgent, sendAgentMessage, stopAge
 import { saveSubagentSection } from "../web/subagents.js";
 import { ModelDialog, modelKey } from "./model-picker.js";
 import { ProviderLogo } from "./provider-logo.js";
+import { ToolActivity } from "./tool-activity.js";
+import { ArtifactContent } from "./artifact-content.js";
 import { useAgentChat } from "./use-agent-chat.js";
 
 const compactNumber = new Intl.NumberFormat("en", { notation: "compact", maximumFractionDigits: 1 });
@@ -13,13 +15,13 @@ function money(value: number): string {
   return value > 0 && value < 0.01 ? `$${value.toFixed(4)}` : `$${value.toFixed(2)}`;
 }
 
-function ChatMessage({ entry }: { entry: ChatEntry }) {
+function ChatMessage({ entry, agentId }: { entry: ChatEntry; agentId: string }) {
   if (entry.role === "system") {
     return <div role="presentation" className="flex items-center gap-3 py-1"><span className="h-px flex-1 bg-zinc-800" /><span className="text-xs text-zinc-500">{entry.text}</span><span className="h-px flex-1 bg-zinc-800" /></div>;
   }
   return <article className={`rounded-xl p-4 ${entry.role === "user" ? "ml-8 bg-violet-950/40" : "mr-8 bg-zinc-900"}`}>
     <h2 className="mb-2 text-xs font-semibold uppercase tracking-wide text-zinc-400">{entry.role === "user" ? "You" : "Assistant"}</h2>
-    <p className={`whitespace-pre-wrap break-words text-sm ${entry.failed ? "text-red-300" : "text-zinc-100"}`}>{entry.text}</p>
+    {entry.failed ? <p className="whitespace-pre-wrap break-words text-sm text-red-300">{entry.text}</p> : <ArtifactContent agentId={agentId} content={entry.text} />}
   </article>;
 }
 
@@ -167,7 +169,8 @@ export function AgentChatPage({ initial, choices }: { initial: AgentChat; choice
       <div ref={scroll} onScroll={onScroll} aria-label="Conversation" aria-live="polite" className="min-h-0 flex-1 space-y-3 overflow-y-auto px-4 py-4 sm:px-6">
         {!historyDone && chat.history && <p className="py-1 text-center text-xs text-zinc-600">{historyLoading ? "Loading earlier messages…" : "Scroll up to load earlier messages"}</p>}
         {messages.length === 0 && <p className="py-8 text-center text-sm text-zinc-500">Start a conversation with your Agent.</p>}
-        {messages.map((entry) => <ChatMessage key={entry.id} entry={entry} />)}
+        {messages.map((entry) => <ChatMessage key={entry.id} entry={entry} agentId={chat.agent.id} />)}
+        <ToolActivity tools={chat.tools} agentId={chat.agent.id} />
         {busy && <article className="mr-8 whitespace-pre-wrap break-words rounded-xl bg-zinc-900 p-4 text-sm text-zinc-300">{chat.partial || "Thinking…"}</article>}
         {chat.queuedMessages.map((item) => (
           <article key={item.id} className="ml-8 rounded-xl bg-violet-950/40 p-4">

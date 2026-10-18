@@ -5,6 +5,7 @@ import { workerInstructions } from "../agents/subagent-input.js";
 import { stopSubagentRun } from "../web/subagents.js";
 import { useSubagentRun } from "./use-subagent-run.js";
 import { RelativeTime, RunStatus } from "./subagent-run-history.js";
+import { ToolActivity } from "./tool-activity.js";
 import { ProviderLogo } from "./provider-logo.js";
 
 const panel = "space-y-4 rounded-2xl border border-zinc-800 bg-[#0d0d10] p-6";
@@ -60,6 +61,7 @@ export function SubagentRunPage({ initial }: { initial: RunDetail }) {
     </section>
     <section className={panel}><h2 className="font-medium text-white">Instructions at execution</h2><pre className={pre}>{workerInstructions(run.config)}</pre><p className="text-xs text-zinc-500">Allowed tools: {run.config.tools.join(", ") || "None"}</p><details><summary className="cursor-pointer text-sm text-zinc-400">Saved configuration</summary><pre className={`mt-3 ${pre}`}>{JSON.stringify(run.config, null, 2)}</pre></details></section>
     {detail.prior.length > 0 && <section className={panel}><details><summary className="cursor-pointer font-medium text-white">Earlier conversation context · {detail.prior.length} entries</summary><p className="my-4 text-sm text-zinc-400">History preceding this assignment in the persistent conversation. Later assignments are not shown.</p><Transcript entries={detail.prior} /></details></section>}
+    <ToolActivity tools={detail.tools} agentId={run.agentId} />
     <section className={panel}><h2 className="font-medium text-white">Conversation transcript</h2>{detail.entries.length ? <Transcript entries={detail.entries} /> : <p className="text-sm text-zinc-500">No transcript entries yet.</p>}</section>
   </div>;
 }

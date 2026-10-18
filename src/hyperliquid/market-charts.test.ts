@@ -62,6 +62,58 @@ describe("Shared candle market data", () => {
     expect(await charts.history(selection)).toEqual({ candles: [], hasMore: false });
     expect(fetcher).toHaveBeenCalledTimes(2);
   });
+  it("research pages use fixed end boundaries, exclude forming candles, and expose gaps", async () => {
+    const first = await charts.researchHistory("BTC", "1h", 9995 * width, Date.now(), 2);
+    expect(first.candles.map((row) => row.time * 1000)).toEqual([9995 * width, 9996 * width]);
+    expect(first.nextStart).toBe(9997 * width); expect(first.coverage.complete).toBe(true);
+    const second = await charts.researchHistory("BTC", "1h", first.nextStart!, first.end, 10);
+    expect(second.candles.at(-1)!.time * 1000).toBe(9999 * width);
+    expect(second.nextStart).toBeNull();
+    fetcher.mockResolvedValueOnce(Response.json([raw(9995 * width), raw(9997 * width)]));
+    const gap = await charts.researchHistory("BTC", "1h", 9995 * width, 9998 * width, 10);
+    expect(gap.coverage).toMatchObject({ complete: false, returned: 2, expected: 3, closedOnly: true });
+    await expect(charts.researchHistory("BTC", "1h", 0, Date.now() + width, 10)).rejects.toThrow("range");
+    await expect(charts.researchHistory("BTC", "1h", 0, Date.now(), 5001)).rejects.toThrow("range");
+  });
+  it("shares research fetches across indicators, isolates returned objects and refreshes expired snapshots", async () => {
+    const start = 9990 * width, end = 10000 * width;
+    const [one, two] = await Promise.all([charts.researchHistory("BTC", "1h", start, end, 5000), charts.researchHistory("BTC", "1h", start, end, 2000)]);
+    expect(fetcher).toHaveBeenCalledTimes(2); // one meta + one identical closed window
+    one.candles[0]!.close = 999;
+    expect(two.candles[0]!.close).toBe(11);
+    expect((await charts.researchHistory("BTC", "1h", start, end, 5000)).candles[0]!.close).toBe(11);
+    expect(fetcher).toHaveBeenCalledTimes(2);
+    await vi.advanceTimersByTimeAsync(60_001);
+    await charts.researchHistory("BTC", "1h", start, end, 5000);
+    const snapshots = fetcher.mock.calls.filter((call) => JSON.parse(String(call[1].body)).type === "candleSnapshot");
+    expect(snapshots).toHaveLength(2);
+  });
+  it("cancels a research waiter without aborting another consumer's shared fetch", async () => {
+    await charts.selection("BTC", "1h");
+    let finish!: (response: Response) => void;
+    fetcher.mockImplementationOnce(async () => new Promise<Response>((resolve) => { finish = resolve; }));
+    const abort = new AbortController();
+    const first = charts.researchHistory("BTC", "1h", 9990 * width, 9992 * width, 5000, abort.signal);
+    const second = charts.researchHistory("BTC", "1h", 9990 * width, 9992 * width, 5000);
+    await vi.waitFor(() => expect(fetcher).toHaveBeenCalledTimes(2));
+    abort.abort(new Error("Stop this waiter"));
+    await expect(first).rejects.toThrow("Stop this waiter");
+    expect(fetcher.mock.calls[1]![1].signal?.aborted).toBe(false);
+    finish(Response.json([raw(9990 * width), raw(9991 * width)]));
+    expect((await second).coverage.complete).toBe(true);
+    expect((await charts.researchHistory("BTC", "1h", 9990 * width, 9992 * width, 5000)).candles).toHaveLength(2);
+    expect(fetcher).toHaveBeenCalledTimes(2);
+  });
+  it("evicts failed and excess research cache entries", async () => {
+    await charts.selection("BTC", "1h");
+    fetcher.mockRejectedValueOnce(new Error("offline"));
+    await expect(charts.researchHistory("BTC", "1h", 9000 * width, 9001 * width, 1)).rejects.toThrow();
+    expect((await charts.researchHistory("BTC", "1h", 9000 * width, 9001 * width, 1)).coverage.complete).toBe(true);
+    for (let i = 1; i <= 16; i++) await charts.researchHistory("BTC", "1h", (9000 + i) * width, (9001 + i) * width, 1);
+    const calls = fetcher.mock.calls.length;
+    await charts.researchHistory("BTC", "1h", 9000 * width, 9001 * width, 1);
+    expect(fetcher.mock.calls.length).toBe(calls + 1);
+  });
   it("shares one subscription per pair, publishes isolated snapshots, and releases only after the final viewer", async () => {
     const first: ChartSnapshot[] = [];
     const second: ChartSnapshot[] = [];

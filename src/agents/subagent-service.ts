@@ -11,12 +11,13 @@ import type { ProviderService } from "../providers/provider-service.js";
 import { runHistoryPageSize, runPagination, type RunHistory } from "./subagent-history.js";
 import { AgentError, requestId } from "./agent-input.js";
 import { createSubagentExtension, RunReceipt, type RunnerId, type SubagentExtension } from "./subagent-extension.js";
+import { toolActivity, type ToolActivity } from "../research/tool-activity.js";
 import { assignment, defaultMainInstructions, mainToolNames, nextCandleRun, subagentInput, type AssignmentSettings } from "./subagent-input.js";
 
-interface Binding extends SubagentExtension { harness: Harness; main: Conversation; hyperliquid: Extension; userId: string }
+interface Binding extends SubagentExtension { harness: Harness; main: Conversation; hyperliquid: Extension; capabilities: readonly Extension[]; userId: string }
 export interface SubagentHost { owned(userId: string, id: string): Promise<AgentRow>; models(userId: string): Promise<Models>; changed(id: string): void }
 /** Full run detail: snapshotted configuration plus the complete transcript. */
-export interface RunDetail { definition: SubagentRow; run: SubagentRun; entries: EntryRecord[]; prior: EntryRecord[] }
+export interface RunDetail { definition: SubagentRow; run: SubagentRun; entries: EntryRecord[]; prior: EntryRecord[]; tools?: ToolActivity[] }
 const active = ["queued", "running"] as const;
 
 /** Definitions and run intents belong to the app; Durable owns execution and reporting. */
@@ -40,15 +41,15 @@ export class SubagentService {
   }
   private historyChanged(id: string) { for (const listener of this.historyListeners.get(id) ?? []) listener(); }
   constructor(private readonly db: ApplicationDatabase, private readonly database: SharedDatabase, private readonly providers: ProviderService, private readonly host: SubagentHost, private readonly injectedModels = false, private readonly log?: FastifyBaseLogger) {}
-  extension(agentId: string, hyperliquid: Extension) { return createSubagentExtension(this, agentId, hyperliquid); }
-  async bind(agent: AgentRow, harness: Harness, main: Conversation, hyperliquid: Extension, execution: SubagentExtension) {
+  extension(agentId: string, hyperliquid: Extension, capabilities: readonly Extension[]) { return createSubagentExtension(this, agentId, hyperliquid, capabilities); }
+  async bind(agent: AgentRow, harness: Harness, main: Conversation, hyperliquid: Extension, execution: SubagentExtension, capabilities: readonly Extension[]) {
     const resolved = await main.agent(context);
     const now = Date.now();
     await this.db.insert(hvSubagents).values({
       id: `main:${agent.id}`, agentId: agent.id, kind: "orchestrator", name: "Orchestrator", description: "Main conversation", instructions: defaultMainInstructions,
       provider: resolved.model!.provider, modelId: resolved.model!.modelId, thinkingLevel: resolved.thinkingLevel ?? "", tools: mainToolNames, conversationId: main.id, createdAt: now, updatedAt: now,
     }).onConflictDoNothing().run();
-    const binding = { harness, main, hyperliquid, ...execution, userId: agent.userId };
+    const binding = { harness, main, hyperliquid, capabilities, ...execution, userId: agent.userId };
     await this.applyMain(binding, (await this.db.select().from(hvSubagents).where(and(eq(hvSubagents.agentId, agent.id), eq(hvSubagents.kind, "orchestrator"))).get())!);
     // Mark expired children's pending generations/tools before *any* scheduler
     // resumes. abortTask only marks while paused; unlike conversation.abort it
@@ -84,8 +85,8 @@ export class SubagentService {
     return model;
   }
   private async applyMain(binding: Binding, row: SubagentRow) {
-    const available = [...(binding.hyperliquid.tools ?? []), ...(binding.extension.tools ?? [])];
-    await binding.main.configure({ model: { provider: row.provider, modelId: row.modelId }, thinkingLevel: this.thinking(row.thinkingLevel), extensions: [binding.hyperliquid, binding.extension], tools: available.filter((tool) => row.tools.includes(tool.name)), modelTools: null, instructions: row.instructions }, context);
+    const available = [...(binding.hyperliquid.tools ?? []), ...(binding.extension.tools ?? []), ...binding.capabilities.flatMap((extension) => extension.tools ?? [])];
+    await binding.main.configure({ model: { provider: row.provider, modelId: row.modelId }, thinkingLevel: this.thinking(row.thinkingLevel), extensions: [binding.hyperliquid, binding.extension, ...binding.capabilities.filter((extension) => extension.tools?.some((tool) => row.tools.includes(tool.name)))], tools: available.filter((tool) => row.tools.includes(tool.name)), modelTools: null, instructions: row.instructions }, context);
   }
   async list(userId: string, agentId: string) {
     await this.host.owned(userId, agentId);
@@ -175,7 +176,8 @@ export class SubagentService {
         } while (cursor && !ended);
       }, context);
     }
-    return { definition, run, entries, prior };
+    const live = run.conversationId !== null && (run.status === "running" || run.status === "queued") ? await this.binding(agentId).harness.snapshot(LiveDoc, run.conversationId as ConversationId, context) : undefined;
+    return { definition, run, entries, prior, tools: toolActivity(entries, live) };
   }
   /** Verifies the viewer owns the Agent, worker and run without reading its transcript. */
   async ownedRun(userId: string, agentId: string, id: string, runId: string) {

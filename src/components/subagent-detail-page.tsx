@@ -104,7 +104,8 @@ export function SubagentDetailPage({ agentId, initial, choices }: { agentId: str
       catch { throw new Error("Unable to confirm the assignment. Retry with the same task to reuse its request ID."); }
       if (!result.ok) throw new Error(result.error);
       assignmentId.current = null; setRunOpen(false); setTask("");
-      toast.success("Assignment started", { description: "Run history updates automatically." });
+      toast.success("Assignment started");
+      await router.navigate({ to: "/agents/$agentId/sub-agents/$subagentId/runs/$runId", params: { agentId, subagentId: definition.id, runId: result.data.id } });
     } finally { inFlight.current = false; setPending(false); }
   }
   async function perform(action: "create" | "archive" | "stop", runId = "") {

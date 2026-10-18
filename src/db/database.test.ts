@@ -26,6 +26,7 @@ describe("SQLite lifecycle", () => {
 
   it("creates a file with WAL, FULL durability and connection-local safety settings", () => {
     const database = open();
+    expect(database.prepare("PRAGMA auto_vacuum").get()?.auto_vacuum).toBe(2);
     expect(database.prepare("PRAGMA journal_mode").get()?.journal_mode).toBe("wal");
     expect(database.prepare("PRAGMA synchronous").get()?.synchronous).toBe(2);
     expect(database.prepare("PRAGMA foreign_keys").get()?.foreign_keys).toBe(1);
@@ -45,6 +46,15 @@ describe("SQLite lifecycle", () => {
     first.close();
     second.close();
     expect(open().prepare("SELECT value FROM test_records").get()?.value).toBe("persisted");
+  });
+
+  it("does not rebuild an existing NONE profile on startup", () => {
+    const first = open();
+    first.exec("PRAGMA auto_vacuum=NONE; VACUUM; CREATE TABLE existing_data (value TEXT); INSERT INTO existing_data VALUES ('keep')");
+    first.close();
+    const restored = open();
+    expect(restored.prepare("PRAGMA auto_vacuum").get()?.auto_vacuum).toBe(0);
+    expect(restored.prepare("SELECT value FROM existing_data").get()?.value).toBe("keep");
   });
 
   it("enforces foreign keys and supports rollback", () => {

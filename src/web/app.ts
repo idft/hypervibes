@@ -9,6 +9,7 @@ import { NodeRequest, sendNodeResponse } from "srvx/node";
 import type { AppConfig } from "../config.js";
 import { createRuntime } from "../runtime.js";
 import { AgentEventStreams } from "./agent-events.js";
+import { artifactDownloads } from "./artifact-downloads.js";
 import { runMiddleware } from "./middleware.js";
 import { loadStart } from "./start.js";
 import type { StartApplication } from "./start.js";
@@ -106,6 +107,8 @@ export async function createApp(config: AppConfig, options: AppOptions = {}) {
         .header("Content-Security-Policy", "sandbox; default-src 'none'; style-src 'unsafe-inline'; img-src 'none'; base-uri 'none'; form-action 'none'")
         .send(await providerLogos.get(provider));
     });
+
+    artifactDownloads(app, runtime);
 
     app.get("/healthz", async () => {
       runtime.status();

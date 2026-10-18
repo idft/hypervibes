@@ -20,7 +20,7 @@ export const RunReceipt = defineDocFamily<{ taskId: number | null }, null>({
 });
 type State = { phase: "start" } | { phase: "execute"; child: number } | { phase: "report" };
 
-export function createSubagentExtension(service: ExecutionService, agentId: string, hyperliquid: Extension) {
+export function createSubagentExtension(service: ExecutionService, agentId: string, hyperliquid: Extension, capabilities: readonly Extension[]) {
   const runner = defineTask<{ runId: string; reportOnly?: boolean }, State, null>({
     name: "hv.subagent-runner", version: 1, initial: (input) => ({ phase: input.reportOnly ? "report" : "start" }),
     phases: {
@@ -39,7 +39,7 @@ export function createSubagentExtension(service: ExecutionService, agentId: stri
           await configure(tx, child as ConversationId, {
             model: { provider: run.config.provider, modelId: run.config.modelId },
             thinkingLevel: service.thinking(run.config.thinkingLevel),
-            extensions: [hyperliquid], tools: (hyperliquid.tools ?? []).filter((tool) => run.config.tools.includes(tool.name)),
+            extensions: [hyperliquid, ...capabilities.filter((extension) => extension.tools?.some((tool) => run.config.tools.includes(tool.name)))], tools: [...(hyperliquid.tools ?? []), ...capabilities.flatMap((extension) => extension.tools ?? [])].filter((tool) => run.config.tools.includes(tool.name)),
             modelTools: null, cwd: null,
             instructions: workerInstructions(run.config),
           });

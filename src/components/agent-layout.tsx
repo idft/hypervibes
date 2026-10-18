@@ -7,6 +7,7 @@ const sections = [
   { label: "Chart", to: "/agents/$agentId/chart", icon: "M3 3v18h18M6 15l5-6 4 3 5-7" },
   { label: "Chat", to: "/agents/$agentId/chat", icon: "M4 4h16v12H9l-5 4z" },
   { label: "Transactions", to: "/agents/$agentId/transactions", icon: "M3 7h17m-4-4 4 4-4 4M21 17H4m4-4-4 4 4 4" },
+  { label: "Artifacts", to: "/agents/$agentId/artifacts", icon: "M4 3h10l6 6v12H4zM14 3v6h6M8 13h8M8 17h5" },
   { label: "Memories", to: "/agents/$agentId/memories", icon: "M4 4h16v16H4zM8 8h8M8 12h8M8 16h5" },
   { label: "Sub-agents", to: "/agents/$agentId/sub-agents", icon: "M9 3h6v6H9zM3 16h6v6H3zM15 16h6v6h-6zM12 9v4M6 16v-3h12v3" },
   { label: "Settings", to: "/agents/$agentId/settings", icon: "M4 6h16M4 12h16M4 18h16M8 3v6M16 9v6M10 15v6" },
@@ -31,7 +32,7 @@ export function AgentLayout({ agent, initialExpanded }: { agent: AgentRow; initi
       <div className="flex flex-col gap-1">{sections.slice(0, -1).map(link)}</div>
       <div className="mt-auto space-y-2">
         <button type="button" onClick={toggle} aria-expanded={expanded} aria-label={expanded ? "Collapse agent navigation" : "Expand agent navigation"} title={expanded ? "Collapse agent navigation" : "Expand agent navigation"} className="flex h-10 w-full cursor-pointer items-center gap-3 rounded-lg px-3 text-zinc-400 hover:bg-zinc-800 hover:text-white"><span aria-hidden="true">{expanded ? "«" : "»"}</span>{expanded && <span className="text-sm">Collapse</span>}</button>
-        <div className="border-t border-zinc-800 pt-2">{link(sections[6])}</div>
+        <div className="border-t border-zinc-800 pt-2">{link(sections[sections.length - 1]!)}</div>
       </div>
     </nav>
     <div className="flex min-h-[calc(100dvh-5rem)] w-full min-w-0 flex-col">
