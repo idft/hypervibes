@@ -5,7 +5,7 @@ const mocks = vi.hoisted(() => ({
   app: {
     listen: vi.fn(),
     close: vi.fn(),
-    log: { error: vi.fn() },
+    log: { error: vi.fn(), info: vi.fn() },
   },
 }));
 
@@ -41,7 +41,7 @@ describe("server entry point", () => {
 
   it("listens using config, then closes only once on repeated shutdown signals", async () => {
     await main(["--dev"]);
-    expect(mocks.createApp).toHaveBeenCalledWith({ host: "127.0.0.1", port: 3003 }, { logger: true, development: true });
+    expect(mocks.createApp).toHaveBeenCalledWith({ host: "127.0.0.1", port: 3003 }, { logger: true, development: true, forceShutdown: expect.any(AbortSignal) });
     expect(mocks.app.listen).toHaveBeenCalledWith({ host: "127.0.0.1", port: 3003 });
     const stop = process.listeners("SIGTERM").find((listener) =>
       !originalListeners.get("SIGTERM")?.includes(listener));
@@ -53,6 +53,22 @@ describe("server entry point", () => {
       expect(process.listeners("SIGTERM")).toEqual(originalListeners.get("SIGTERM"));
       expect(process.listeners("SIGINT")).toEqual(originalListeners.get("SIGINT"));
     });
+  });
+
+  it("logs the graceful wait and forces shutdown on a second signal", async () => {
+    await main();
+    const force = (mocks.createApp.mock.calls[0]![1] as { forceShutdown: AbortSignal }).forceShutdown;
+    expect(force.aborted).toBe(false);
+    mocks.app.close.mockReturnValue(new Promise<void>(() => {}));
+    const stop = process.listeners("SIGINT").find((listener) =>
+      !originalListeners.get("SIGINT")?.includes(listener));
+    stop?.("SIGINT");
+    await vi.waitFor(() => expect(mocks.app.close).toHaveBeenCalledTimes(1));
+    expect(mocks.app.log.info).toHaveBeenCalledWith("Shutdown signal received; waiting for in-flight agent jobs to complete");
+    stop?.("SIGINT");
+    expect(force.aborted).toBe(true);
+    expect(mocks.app.log.info).toHaveBeenCalledWith("Second shutdown signal received; forcing shutdown");
+    expect(mocks.app.close).toHaveBeenCalledTimes(1);
   });
 
   it("closes resources and removes signal handlers when listening fails", async () => {

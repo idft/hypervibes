@@ -31,8 +31,8 @@ export async function createRuntime(config: AppConfig, options: AgentServiceOpti
   let orders: OrderService | undefined;
   let closing: Promise<void> | undefined;
   let failure: Error | undefined;
-  const close = () => closing ??= (async () => {
-    try { await agents?.close(); }
+  const close = (force?: AbortSignal) => closing ??= (async () => {
+    try { await agents?.close(force); }
     finally {
       try {
         try { await orders?.close(); }

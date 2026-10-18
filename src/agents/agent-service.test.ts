@@ -1,5 +1,5 @@
 import { createModels } from "@earendil-works/pi-ai/models";
-import { fauxAssistantMessage, fauxProvider, fauxToolCall } from "@earendil-works/pi-ai/providers/faux";
+import { fauxAssistantMessage, fauxProvider, fauxToolCall, type FauxResponseStep } from "@earendil-works/pi-ai/providers/faux";
 import { BACKGROUND_CONTEXT as context } from "@earendil-works/chord/context";
 import { Harness } from "@earendil-works/pi-durable";
 import { SqliteStorage } from "@earendil-works/pi-durable/storage/sqlite";
@@ -17,6 +17,13 @@ import { hvUsers } from "../db/auth-schema.js";
 import { createRuntime, type AppRuntime } from "../runtime.js";
 import { testConfig } from "../test-config.js";
 import { agentId, agentName, chatMessage, harnessPrefix, requestId } from "./agent-input.js";
+
+/** A faux model response that stays pending until `hold` settles or the request is aborted. */
+const heldResponse = (text: string, hold: Promise<void>): FauxResponseStep =>
+  async (_context, options) => {
+    await Promise.race([hold, new Promise((resolve) => options?.signal?.addEventListener("abort", resolve, { once: true }))]);
+    return fauxAssistantMessage(text);
+  };
 
 describe("per-Agent durable execution", () => {
   let directory: string;
@@ -309,7 +316,7 @@ describe("per-Agent durable execution", () => {
     faux.setResponses([fauxAssistantMessage("A long response that will still be streaming when the application closes."), fauxAssistantMessage("Recovered response")]);
     await runtime.agents.send("owner", agent.id, "Please answer", randomUUID());
     await vi.waitFor(() => expect(faux.state.callCount).toBe(1));
-    await runtime.close();
+    await runtime.close(AbortSignal.abort());
     runtime = await createRuntime(config(), options());
     expect(faux.state.callCount).toBe(1);
     runtime.start();
@@ -369,5 +376,54 @@ describe("per-Agent durable execution", () => {
     const closing = runtime.close();
     await expect(create()).rejects.toMatchObject({ status: 503 });
     await closing;
+  });
+
+  it("waits for in-flight agent jobs to complete instead of interrupting them", async () => {
+    const agent = await create();
+    let release!: () => void;
+    const hold = new Promise<void>((resolve) => { release = resolve; });
+    faux.setResponses([heldResponse("Delayed done", hold)]);
+    await runtime.agents.send("owner", agent.id, "Hold this", randomUUID());
+    await vi.waitFor(() => expect(faux.state.callCount).toBe(1));
+    let closed = false;
+    const closing = runtime.close().then(() => { closed = true; });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(closed).toBe(false); // close is waiting for the in-flight generation
+    release();
+    await closing;
+    expect(closed).toBe(true);
+    runtime = await createRuntime(config(), options());
+    const chat = await runtime.agents.chat("owner", agent.id);
+    expect(chat.messages.some((entry) => entry.text === "Delayed done" && !entry.failed)).toBe(true);
+  });
+
+  it("aborts remaining in-flight agent jobs when shutdown is forced by a signal", async () => {
+    const agent = await create();
+    faux.setResponses([heldResponse("Never finished", new Promise<void>(() => {}))]);
+    await runtime.agents.send("owner", agent.id, "Hold this", randomUUID());
+    await vi.waitFor(() => expect(faux.state.callCount).toBe(1));
+    const force = new AbortController();
+    const closing = runtime.close(force.signal);
+    force.abort();
+    await closing; // resolves once the forced wait aborts the generation
+    runtime = await createRuntime(config(), options());
+    const chat = await runtime.agents.chat("owner", agent.id);
+    expect(chat.messages.some((entry) => entry.text === "Never finished")).toBe(false);
+    expect(chat.messages.some((entry) => entry.text === "Hold this")).toBe(true);
+  });
+
+  it("aborts in-flight agent jobs when the shutdown grace period elapses", async () => {
+    const agent = await create();
+    await runtime.close();
+    runtime = await createRuntime(config(), { ...options(), shutdownGraceMs: 25 });
+    runtime.start();
+    faux.setResponses([heldResponse("Grace elapsed", new Promise<void>(() => {}))]);
+    await runtime.agents.send("owner", agent.id, "Hold this", randomUUID());
+    await vi.waitFor(() => expect(faux.state.callCount).toBe(1));
+    await runtime.close(); // resolves once the 25ms grace abandons the wait
+    runtime = await createRuntime(config(), options());
+    const chat = await runtime.agents.chat("owner", agent.id);
+    expect(chat.messages.some((entry) => entry.text === "Grace elapsed")).toBe(false);
+    expect(chat.messages.some((entry) => entry.text === "Hold this")).toBe(true);
   });
 });

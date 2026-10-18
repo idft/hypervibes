@@ -5,7 +5,7 @@ import { BACKGROUND_CONTEXT as context } from "@earendil-works/chord/context";
 import type { JsonRepresentation } from "@earendil-works/chord";
 import type { Models } from "@earendil-works/pi-ai/models";
 import { estimateContextTokens } from "@earendil-works/pi-ai/utils/estimate";
-import { createRegistry, Harness, InboxDoc, LiveDoc, UsageDoc, type EntryId, type UsageState, type UserInput } from "@earendil-works/pi-durable";
+import { createRegistry, Harness, InboxDoc, LiveDoc, UsageDoc, type EntryId, type TaskId, type UsageState, type UserInput } from "@earendil-works/pi-durable";
 import type { Conversation, ConversationView, EntryRecord, InboxState, LiveState, ModelRef } from "@earendil-works/pi-durable";
 import { SqliteStorage } from "@earendil-works/pi-durable/storage/sqlite";
 import { and, desc, eq } from "drizzle-orm";
@@ -22,6 +22,9 @@ import type { ProviderService } from "../providers/provider-service.js";
 
 // Existing scaffold roots retain their original model, never silently switch.
 const legacyModel: ModelRef = { provider: "opencode-go", modelId: "deepseek-v4.1-flash" };
+
+/** How long shutdown waits for in-flight agent jobs to complete before aborting the rest. */
+const SHUTDOWN_IN_FLIGHT_GRACE_MS = 120_000;
 
 /** The plain text of a queued user input. */
 function userText(content: JsonRepresentation<UserInput>): string {
@@ -51,6 +54,8 @@ export interface AgentServiceOptions {
   /** Injected model catalog for isolated tests; never used by the production host. */
   models?: Models;
   model?: ModelRef;
+  /** Injected grace period of the shutdown in-flight wait, for isolated tests only. */
+  shutdownGraceMs?: number;
   /** Shared application logger; services stay silent in isolated tests. */
   logger?: FastifyBaseLogger;
 }
@@ -458,7 +463,7 @@ export class AgentService {
       more: page.items.length === 100,
     };
   }
-  close() {
+  close(force?: AbortSignal) {
     this.stopping = true;
     this.feedShutdown.abort();
     return this.closing ??= (async () => {
@@ -466,10 +471,45 @@ export class AgentService {
       await this.subagents.close();
       await Promise.all(this.feeds);
       await Promise.allSettled(this.opening.values());
+      await this.drainInFlight(force);
       const results = await Promise.allSettled([...this.running.values()].map(({ harness }) => harness.close(context)));
       this.running.clear();
       const errors = results.filter((result) => result.status === "rejected").map((result) => result.reason as unknown);
       if (errors.length) throw new AggregateError(errors, "Unable to close Agent execution");
     })().finally(() => this.research.close());
+  }
+  /**
+   * Waits for the agent jobs already executing when shutdown began, so closing never interrupts them. A forced
+   * signal (a second Ctrl-C) or the grace period abandons the wait; `harness.close()` then aborts what remains.
+   */
+  private async drainInFlight(force?: AbortSignal) {
+    const inFlight: { harness: Harness; id: TaskId }[] = [];
+    let agents = 0;
+    for (const { harness } of this.running.values()) {
+      try {
+        const tasks = (await harness.inspect(context)).tasks;
+        if (tasks.length === 0) continue;
+        agents++;
+        for (const task of tasks) inFlight.push({ harness, id: task.record.id as TaskId });
+      } catch { /* A failed harness reports its own error at close; nothing waits for its work. */ }
+    }
+    if (inFlight.length === 0) return;
+    const logger = this.options.logger;
+    logger?.info({ inFlight: inFlight.length, agents }, "Shutdown: waiting for in-flight agent jobs to complete");
+    const grace = AbortSignal.timeout(this.options.shutdownGraceMs ?? SHUTDOWN_IN_FLIGHT_GRACE_MS);
+    const signal = force === undefined ? grace : AbortSignal.any([force, grace]);
+    const interrupted = new Promise<never>((_, reject) => {
+      if (signal.aborted) reject(signal.reason);
+      else signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+    });
+    try {
+      await Promise.race([Promise.allSettled(inFlight.map(({ harness, id }) => harness.waitForTask(id, context))), interrupted]);
+      logger?.info("Shutdown: in-flight agent jobs completed");
+    } catch {
+      const forced = force?.aborted === true;
+      logger?.warn({ inFlight: inFlight.length, forced }, forced
+        ? "Shutdown: forced by a second signal, aborting remaining in-flight agent jobs"
+        : "Shutdown: in-flight grace period elapsed, aborting remaining agent jobs");
+    }
   }
 }

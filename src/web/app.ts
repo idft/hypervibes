@@ -19,6 +19,8 @@ interface AppOptions {
   development?: boolean;
   loadWeb?: typeof loadStart;
   logoFetcher?: typeof fetch;
+  /** Aborting this signal during shutdown abandons the in-flight drain, aborting remaining agent jobs. */
+  forceShutdown?: AbortSignal;
 }
 
 /** Constructs a single embedded runtime and web host, without opening a listener. */
@@ -57,7 +59,7 @@ export async function createApp(config: AppConfig, options: AppOptions = {}) {
   app.addHook("preClose", async () => { await Promise.all([streams.close(), dashboards.close(), charts.close(), runs.close(), runDetails.close(), logos.close(), providerLogos.close()]); });
   app.addHook("onClose", async () => {
     try { await web?.close(); }
-    finally { await runtime.close(); }
+    finally { await runtime.close(options.forceShutdown); }
   });
 
   try {

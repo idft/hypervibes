@@ -4,11 +4,18 @@ import { createApp } from "./web/app.js";
 
 export async function main(args: string[] = process.argv.slice(2)): Promise<void> {
   const config = loadConfig();
-  const app = await createApp(config, { logger: true, development: args.includes("--dev") });
+  const force = new AbortController();
+  const app = await createApp(config, { logger: true, development: args.includes("--dev"), forceShutdown: force.signal });
   let closing = false;
   const shutdown = () => {
-    if (closing) return;
+    if (closing) {
+      // A second signal forces shutdown past the wait for in-flight agent jobs.
+      app.log.info("Second shutdown signal received; forcing shutdown");
+      force.abort();
+      return;
+    }
     closing = true;
+    app.log.info("Shutdown signal received; waiting for in-flight agent jobs to complete");
     void app.close().catch((error: unknown) => {
       app.log.error(error, "Shutdown failed");
       process.exitCode = 1;

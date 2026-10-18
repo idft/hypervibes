@@ -451,7 +451,7 @@ describe("subagent definitions, execution and scheduling", () => {
     const run = await runtime.agents.subagents.run("owner", agent.id, worker.id, "Expire during downtime", randomUUID());
     await vi.waitFor(() => expect(faux.state.callCount).toBe(1));
     await runtime.db.update(hvSubagentRuns).set({ createdAt: Date.now() - 31000 }).where(eq(hvSubagentRuns.id, run.id)).run();
-    await runtime.close(); runtime = await createRuntime(config(), options());
+    await runtime.close(AbortSignal.abort()); runtime = await createRuntime(config(), options());
     expect(faux.state.callCount).toBe(1); runtime.start();
     await vi.waitFor(async () => expect((await detail(agent.id, worker.id)).runs[0]?.status).toBe("failed"));
     expect((await detail(agent.id, worker.id)).runs[0]?.result).toContain("expired"); expect(faux.state.callCount).toBe(1);
@@ -463,7 +463,7 @@ describe("subagent definitions, execution and scheduling", () => {
     faux.setResponses([fauxAssistantMessage("An interrupted research response that must be resumed after reopening."), fauxAssistantMessage("Recovered evidence")]);
     const run = await runtime.agents.subagents.run("owner", agent.id, worker.id, "Survive restart", randomUUID());
     await vi.waitFor(() => expect(faux.state.callCount).toBe(1));
-    await runtime.close(); runtime = await createRuntime(config(), options());
+    await runtime.close(AbortSignal.abort()); runtime = await createRuntime(config(), options());
     expect(faux.state.callCount).toBe(1); runtime.start();
     await vi.waitFor(async () => expect((await detail(agent.id, worker.id)).runs[0]?.result).toBe("Recovered evidence"), { timeout: 10000 });
     expect((await detail(agent.id, worker.id)).runs.map((entry) => entry.id)).toEqual([run.id]);
