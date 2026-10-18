@@ -147,6 +147,12 @@ branding:
 
     magick "${source}" \
         -background none \
+        -resize 512x512 \
+        -strip \
+        "${static_dir}/logo.png"
+
+    magick "${source}" \
+        -background none \
         -define icon:auto-resize=16,32,48 \
         -strip \
         "${static_dir}/favicon.ico"

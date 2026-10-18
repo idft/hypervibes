@@ -27,7 +27,7 @@ export function Navbar({ walletAddress, agents = [], selectedAgentId }: { wallet
     <div className="relative flex h-full items-center pr-4">
       <AgentSwitcher agents={agents} selectedAgentId={selectedAgentId} />
       <Link to="/agents" className="absolute left-1/2 hidden h-full -translate-x-1/2 cursor-pointer items-center gap-2 px-4 text-sm font-semibold tracking-wide text-zinc-100 hover:bg-zinc-800 md:flex">
-        <img src="/static/android-chrome-512x512.png" alt="" className="h-9 w-9 rounded-md object-cover" />
+        <img src="/static/logo.png" alt="" className="h-9 w-auto rounded-md object-contain" />
         <span>HyperVibes</span>
       </Link>
       <div className="ml-auto flex items-center gap-2 sm:gap-3">
@@ -38,10 +38,14 @@ export function Navbar({ walletAddress, agents = [], selectedAgentId }: { wallet
         </Link>
         <Link to="/account" title={walletAddress} className="flex cursor-pointer items-center gap-2 rounded-lg px-2 py-1 hover:bg-zinc-800">
           <Identicon address={walletAddress} className="h-5 w-5 rounded-full" />
-          <span className="hidden text-xs text-zinc-400 sm:inline">{walletAddress.slice(0, 6)}…{walletAddress.slice(-4)}</span>
+          <span className="hidden font-mono text-sm text-zinc-200 sm:inline">{walletAddress.slice(0, 6)}…{walletAddress.slice(-4)}</span>
         </Link>
-        <button type="button" disabled={pending} onClick={() => { void logout(); }} className="cursor-pointer rounded-lg px-3 py-2 text-sm text-zinc-400 hover:bg-zinc-800 hover:text-white disabled:cursor-wait disabled:opacity-60">{pending ? "Logging out…" : "Logout"}</button>
-        {error && <span role="alert" className="text-xs text-red-300">{error}</span>}
+        <button type="button" title="Logout" aria-label="Logout" disabled={pending} onClick={() => { void logout(); }} className="inline-flex h-9 w-9 cursor-pointer items-center justify-center rounded-lg text-zinc-400 hover:bg-zinc-800 hover:text-white disabled:cursor-wait disabled:opacity-60">
+          <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="size-6" aria-hidden="true">
+            <path strokeLinecap="round" strokeLinejoin="round" d="M15.75 9V5.25A2.25 2.25 0 0 0 13.5 3h-6a2.25 2.25 0 0 0-2.25 2.25v13.5A2.25 2.25 0 0 0 7.5 21h6a2.25 2.25 0 0 0 2.25-2.25V15m3 0 3-3m0 0-3-3m3 3H9" />
+          </svg>
+        </button>
+        {pending && error && <span role="alert" className="text-xs text-red-300">{error}</span>}
         <a href="https://github.com/idft/hypervibes" target="_blank" rel="noopener noreferrer" aria-label="HyperVibes on GitHub" className="hidden h-9 w-9 cursor-pointer items-center justify-center rounded-lg text-zinc-400 hover:bg-zinc-800 hover:text-white sm:inline-flex">
           <span className="github-icon h-5 w-5" aria-hidden="true" />
         </a>

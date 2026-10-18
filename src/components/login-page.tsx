@@ -43,7 +43,7 @@ export function LoginPage() {
     <main className="grid min-h-dvh place-items-center overflow-y-auto p-6">
       <section className="w-full max-w-md rounded-2xl border border-zinc-800 bg-[#0d0d10] p-8" aria-labelledby="login-heading">
         <h1 id="login-heading" className="flex items-center justify-center gap-3 text-2xl font-semibold tracking-wide">
-          <img src="/static/android-chrome-512x512.png" alt="" className="h-14 w-14 rounded-md object-cover" />
+          <img src="/static/logo.png" alt="" className="h-14 w-auto rounded-md object-contain" />
           <span>HyperVibes</span>
         </h1>
         <button type="button" disabled={pending} onClick={() => { void login(); }} className="mt-6 w-full cursor-pointer rounded-full bg-white px-4 py-2 text-sm font-medium text-black disabled:cursor-wait disabled:opacity-60">

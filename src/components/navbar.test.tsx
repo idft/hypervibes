@@ -23,4 +23,17 @@ describe("Navbar", () => {
     expect(link.querySelector('svg[aria-hidden="true"]')).not.toBeNull();
     expect(link.classList.contains("cursor-pointer")).toBe(true);
   });
+
+  it("replaces the Logout text with an icon-only button that keeps the pending state", () => {
+    const container = document.createElement("div");
+    container.innerHTML = renderToStaticMarkup(<Navbar walletAddress={`0x${"11".repeat(20)}`} />);
+    const buttons = [...container.querySelectorAll("button")];
+    const logout = buttons.find((button) => button.getAttribute("aria-label") === "Logout");
+    expect(logout).toBeDefined();
+    expect(logout?.textContent).toBe("");
+    expect(logout?.getAttribute("title")).toBe("Logout");
+    expect(logout?.querySelector('svg[aria-hidden="true"]')).not.toBeNull();
+    expect(logout?.classList.contains("cursor-pointer")).toBe(true);
+    expect(logout?.hasAttribute("disabled")).toBe(false);
+  });
 });
