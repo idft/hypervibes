@@ -20,6 +20,7 @@ import { AgentError, agentId, agentName, chatMessage, harnessPrefix, requestId }
 import { SubagentService } from "./subagent-service.js";
 import { createMemoryExtension } from "../memory/durable-extension.js";
 import { ExecutionContextService } from "./execution-context.js";
+import { RiskSettingsService } from "../hyperliquid/orders/risk-settings.js";
 import type { ProviderService } from "../providers/provider-service.js";
 
 // Existing scaffold roots retain their original model, never silently switch.
@@ -102,12 +103,14 @@ export class AgentService {
   readonly subagents: SubagentService;
   readonly research: ResearchService;
   readonly execution: ExecutionContextService;
+  readonly risk: RiskSettingsService;
   constructor(private readonly db: ApplicationDatabase, private readonly database: SharedDatabase, private readonly providers: ProviderService, private readonly hyperliquid: HyperliquidService, private readonly orders: OrderService, private readonly options: AgentServiceOptions = {}) {
     this.execution = new ExecutionContextService(database);
     this.orders.installAdmission(this.execution);
+    this.risk = new RiskSettingsService(database);
     this.research = new ResearchService(database, hyperliquid, (error) => options.logger?.error(error, "Artifact maintenance failed"));
     this.subagents = new SubagentService(db, database, providers, {
-      instruments: () => this.hyperliquid.charts.instruments(), owned: (userId, id) => this.owned(userId, id), models: (userId) => this.models(userId), changed: (id) => this.notify(id),
+      owned: (userId, id) => this.owned(userId, id), models: (userId) => this.models(userId), changed: (id) => this.notify(id),
     }, this.execution, Boolean(options.models), options.logger?.child({ component: "scheduler" }));
   }
   private notify(id: string) { for (const listener of this.lifecycle.get(id) ?? []) listener(); }
@@ -195,7 +198,7 @@ export class AgentService {
       const registry = createRegistry();
       const hyperliquid = createHyperliquidExtension(this.hyperliquid, agent.userId, agent.id, this.orders);
       registry.install(hyperliquid);
-      const capabilities = [this.execution.extension(agent.id), createMemoryExtension(agent.id, this.execution, this.database), ...this.research.extensions(agent.id)];
+      const capabilities = [createMemoryExtension(agent.id, this.execution, this.database), ...this.research.extensions(agent.id)];
       for (const extension of capabilities) registry.install(extension);
       const execution = this.subagents.extension(agent.id, hyperliquid, capabilities);
       registry.install(execution.extension);
@@ -419,7 +422,6 @@ export class AgentService {
       if (!await this.configured(agent, current)) throw new AgentError("Reconnect this Agent's provider or select an available model on the Providers page.", 409);
       const inbox = await current.harness.snapshot(InboxDoc, current.main.id, context);
       if ((inbox?.items.length ?? 0) >= 20) throw new AgentError("Agent message queue is full. Wait for a response.", 429);
-      await this.execution.admitInput(agent.id, userId, submissionRequestId, message);
       const submission = await current.main.submit({ type: "input", content: message, requestId: submissionRequestId }, context);
       return { submissionId: submission.id };
     });

@@ -1,10 +1,8 @@
 import type { LearningSnapshot } from "../memory/learning-contracts.js";
-export type ExecutionOrigin =
-  | { mode: "user_directed"; userId: string; userInputRequestIds: string[]; expiresAt: number }
-  | { mode: "automatic"; reason: "schedule" | "worker_report" | "unverified" | "mixed_inputs" };
+
+/** Immutable per-run snapshot: exact injected instructions plus frozen learnings. */
 export interface RunContext {
-  version: 1; origin: ExecutionOrigin; instructions: string; scheduledBoundary: number | null;
+  version: 2; instructions: string;
   learnings: { agent: LearningSnapshot; worker: LearningSnapshot } | null;
   learningStatus: "snapshot" | "legacy/none" | "not_admitted";
 }
-export const automaticOrigin: ExecutionOrigin = { mode: "automatic", reason: "unverified" };

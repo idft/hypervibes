@@ -17,7 +17,7 @@ export const hvLearningSets = sqliteTable("hv_learning_sets", {
 ]);
 export const hvLearningRevisions = sqliteTable("hv_learning_revisions", {
   agentId: text("agent_id").notNull(), setId: text("set_id").notNull(), version: integer("version").notNull(), content: text("content").notNull(), operation: text("operation", { enum: ["append", "replace"] }).notNull(), reason: text("reason").notNull(), createdAt: integer("created_at").notNull(),
-  actorUserId: text("actor_user_id"), producerSubagentId: text("producer_subagent_id"), sourceRunId: text("source_run_id"), generationTaskId: integer("generation_task_id"), inputScopeKey: text("input_scope_key"), conversationId: integer("conversation_id"), toolTaskId: integer("tool_task_id"),
+  actorUserId: text("actor_user_id"), producerSubagentId: text("producer_subagent_id"), sourceRunId: text("source_run_id"), conversationId: integer("conversation_id"), toolTaskId: integer("tool_task_id"),
 }, (t) => [
   primaryKey({ columns: [t.setId, t.version] }), uniqueIndex("hv_learning_revision_identity_idx").on(t.agentId, t.setId, t.version),
   foreignKey({ columns: [t.agentId, t.setId], foreignColumns: [hvLearningSets.agentId, hvLearningSets.id] }),
@@ -26,7 +26,7 @@ export const hvLearningRevisions = sqliteTable("hv_learning_revisions", {
   check("hv_learning_revision_version", sql`${t.version} BETWEEN 1 AND 9007199254740990`),
   check("hv_learning_content_bound", sql`length(${t.content}) <= 8000`),
   check("hv_learning_operation", sql`${t.operation} IN ('append','replace')`),
-  check("hv_learning_revision_actor", sql`(${t.actorUserId} IS NOT NULL AND ${t.sourceRunId} IS NULL) OR (${t.actorUserId} IS NULL AND ${t.sourceRunId} IS NOT NULL AND ${t.producerSubagentId} IS NOT NULL)`),
+  check("hv_learning_revision_actor", sql`(${t.actorUserId} IS NOT NULL AND ${t.sourceRunId} IS NULL) OR (${t.actorUserId} IS NULL AND ${t.producerSubagentId} IS NOT NULL)`),
 ]);
 export const hvLearningRevisionMemories = sqliteTable("hv_learning_revision_memories", {
   agentId: text("agent_id").notNull(), setId: text("set_id").notNull(), version: integer("version").notNull(), memoryNumber: integer("memory_number").notNull(),

@@ -14,8 +14,8 @@ export const hvMemories = sqliteTable("hv_memories", {
   kind: text("kind", { enum: ["research", "decision", "review"] }).notNull(), topic: text("topic").notNull(), instrument: text("instrument"), interval: text("interval"),
   summary: text("summary").notNull(), content: text("content").notNull(), payload: text("payload", { mode: "json" }).$type<PublicationInput["payload"]>().notNull(),
   createdAt: integer("created_at").notNull(), evidenceAsOf: integer("evidence_as_of"), validUntil: integer("valid_until"),
-  producerSubagentId: text("producer_subagent_id"), sourceRunId: text("source_run_id"), sourceGenerationTaskId: integer("source_generation_task_id"), sourceInputScopeKey: text("source_input_scope_key"),
-  conversationId: integer("conversation_id"), toolTaskId: integer("tool_task_id"), executionOrigin: text("execution_origin", { enum: ["automatic", "user_directed"] }).notNull(),
+  producerSubagentId: text("producer_subagent_id"), sourceRunId: text("source_run_id"),
+  conversationId: integer("conversation_id"), toolTaskId: integer("tool_task_id"),
   retractedAt: integer("retracted_at"), retractionReason: text("retraction_reason"),
 }, (t) => [
   primaryKey({ columns: [t.agentId, t.number] }),

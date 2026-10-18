@@ -87,7 +87,7 @@ describe("per-Agent durable execution", () => {
     const restored = await (await opened.mock.results[1]!.value as Harness).root(context);
     const resolved = await restored.agent(context);
     expect(restored.id).toBe(agent.conversationId);
-    expect(resolved.extensions.map((extension) => extension.name)).toEqual(["hyperliquid", "subagents", "execution-context", "memory"]);
+    expect(resolved.extensions.map((extension) => extension.name)).toEqual(["hyperliquid", "subagents", "memory"]);
     expect(resolved.tools.map((tool) => tool.name)).toEqual(toolNames);
     expect(resolved.instructions).not.toContain("not configured");
     expect(resolved.model).toEqual(options().model);

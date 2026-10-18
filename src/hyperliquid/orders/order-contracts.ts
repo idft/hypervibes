@@ -14,7 +14,7 @@ export const OrderInputSchema = Type.Object({
   take_profits: Type.Optional(Type.Array(Trigger, { maxItems: 1, description: "At most one attached native OCO take-profit. Use a standalone reduce-only trigger for position-level protection." })),
   stop_losses: Type.Optional(Type.Array(Trigger, { maxItems: 1 })),
 }, object);
-export const SubmitSchema = Type.Object({ request_id: RequestId, decision_ref: Type.Optional(Type.String({ pattern: "^m[1-9][0-9]*$", maxLength: 17 })), orders: Type.Array(OrderInputSchema, { minItems: 1, maxItems: 20 }) }, object);
+export const SubmitSchema = Type.Object({ request_id: RequestId, decision_ref: Type.Optional(Type.String({ pattern: "^m[1-9][0-9]*$", maxLength: 17, description: "Optional decision memory reference for audit, not trading authority." })), orders: Type.Array(OrderInputSchema, { minItems: 1, maxItems: 20 }) }, object);
 export const CancelInputSchema = Type.Object({ symbol: SymbolName, oid: Type.String({ pattern: "^[1-9][0-9]*$", maxLength: 16, description: "Exchange order ID as a decimal string." }) }, object);
 export const CancelSchema = Type.Object({ request_id: RequestId, orders: Type.Array(CancelInputSchema, { minItems: 1, maxItems: 100 }) }, object);
 export const CancelAllSchema = Type.Object({ request_id: RequestId, symbol: Type.Optional(SymbolName) }, object);
@@ -35,15 +35,12 @@ export const OrderViewSchema = Type.Object({
   cloid: NullableString, exchangeOid: NullableString,
   commandStatus: Type.Union([Type.Literal("not_sent"), Type.Literal("accepted"), Type.Literal("rejected"), Type.Literal("unknown"), Type.Literal("reconciled")]),
   orderStatus: Type.String(), filledSize: NullableString, averageFillPrice: NullableString,
-  decisionRef: Type.Optional(NullableString), executionOrigin: Type.Optional(Type.String()),
   updatedAt: Type.Number(), venueTimestamp: Type.Union([Type.Number(), Type.Null()]), source: Type.String(), error: NullableString,
 }, object);
 export type OrderView = Static<typeof OrderViewSchema>;
 export const OperationSchema = Type.Object({
   operationId: Type.String(), requestId: Type.String(), kind: Type.String(),
   results: Type.Array(OrderViewSchema), uncertain: Type.Boolean(), warnings: Type.Array(Type.String()),
-  execution: Type.Optional(Type.Object({ origin: Type.String(), decisionRef: NullableString, coverage: Type.String() })),
-
 }, object);
 export type OperationResult = Static<typeof OperationSchema>;
 export const EventSchema = Type.Object({ id: Type.Number(), source: Type.String(), time: Type.Number(), data: Type.String() }, object);

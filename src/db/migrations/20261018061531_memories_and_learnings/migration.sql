@@ -13,11 +13,8 @@ CREATE TABLE `hv_memories` (
 	`valid_until` integer,
 	`producer_subagent_id` text,
 	`source_run_id` text,
-	`source_generation_task_id` integer,
-	`source_input_scope_key` text,
 	`conversation_id` integer,
 	`tool_task_id` integer,
-	`execution_origin` text NOT NULL,
 	`retracted_at` integer,
 	`retraction_reason` text,
 	CONSTRAINT `hv_memories_pk` PRIMARY KEY(`agent_id`, `number`),
@@ -92,8 +89,6 @@ CREATE TABLE `hv_learning_revisions` (
 	`actor_user_id` text,
 	`producer_subagent_id` text,
 	`source_run_id` text,
-	`generation_task_id` integer,
-	`input_scope_key` text,
 	`conversation_id` integer,
 	`tool_task_id` integer,
 	CONSTRAINT `hv_learning_revisions_pk` PRIMARY KEY(`set_id`, `version`),
@@ -103,7 +98,7 @@ CREATE TABLE `hv_learning_revisions` (
 	CONSTRAINT "hv_learning_revision_version" CHECK("version" BETWEEN 1 AND 9007199254740990),
 	CONSTRAINT "hv_learning_content_bound" CHECK(length("content") <= 8000),
 	CONSTRAINT "hv_learning_operation" CHECK("operation" IN ('append','replace')),
-	CONSTRAINT "hv_learning_revision_actor" CHECK(("actor_user_id" IS NOT NULL AND "source_run_id" IS NULL) OR ("actor_user_id" IS NULL AND "source_run_id" IS NOT NULL AND "producer_subagent_id" IS NOT NULL))
+	CONSTRAINT "hv_learning_revision_actor" CHECK(("actor_user_id" IS NOT NULL AND "source_run_id" IS NULL) OR ("actor_user_id" IS NULL AND "producer_subagent_id" IS NOT NULL))
 );
 --> statement-breakpoint
 CREATE TABLE `hv_learning_sets` (
@@ -119,7 +114,29 @@ CREATE TABLE `hv_learning_sets` (
 	CONSTRAINT "hv_learning_head" CHECK("current_version" BETWEEN 0 AND 9007199254740990)
 );
 --> statement-breakpoint
+CREATE TABLE `hv_subagent_run_contexts` (
+	`agent_id` text NOT NULL,
+	`run_id` text PRIMARY KEY,
+	`context` text NOT NULL,
+	CONSTRAINT `fk_hv_subagent_run_contexts_agent_id_run_id_hv_subagent_runs_agent_id_id_fk` FOREIGN KEY (`agent_id`,`run_id`) REFERENCES `hv_subagent_runs`(`agent_id`,`id`),
+	CONSTRAINT "hv_run_context_bound" CHECK(length("context") <= 120000)
+);
+--> statement-breakpoint
+CREATE TABLE `hv_risk_settings` (
+	`agent_id` text PRIMARY KEY,
+	`trading_enabled` integer DEFAULT false NOT NULL,
+	`allowed_instruments` text,
+	`max_order_notional` text,
+	`max_total_notional` text,
+	`updated_at` integer NOT NULL,
+	CONSTRAINT `fk_hv_risk_settings_agent_id_hv_agents_id_fk` FOREIGN KEY (`agent_id`) REFERENCES `hv_agents`(`id`) ON DELETE CASCADE,
+	CONSTRAINT "hv_risk_instruments_bound" CHECK(length(coalesce("allowed_instruments", '[]')) <= 4000 AND json_valid(coalesce("allowed_instruments", '[]')))
+);
+--> statement-breakpoint
+ALTER TABLE `hv_subagents` ADD `template_origin` text;--> statement-breakpoint
+CREATE UNIQUE INDEX `hv_order_request_identity` ON `hv_order_requests` (`agent_id`,`id`);--> statement-breakpoint
 CREATE UNIQUE INDEX `hv_subagent_runs_producer_idx` ON `hv_subagent_runs` (`agent_id`,`id`,`subagent_id`);--> statement-breakpoint
+CREATE UNIQUE INDEX `hv_subagent_runs_identity_idx` ON `hv_subagent_runs` (`agent_id`,`id`);--> statement-breakpoint
 CREATE UNIQUE INDEX `hv_subagents_identity_idx` ON `hv_subagents` (`agent_id`,`id`);--> statement-breakpoint
 CREATE UNIQUE INDEX `hv_artifacts_identity_idx` ON `hv_artifacts` (`agent_id`,`id`);--> statement-breakpoint
 CREATE INDEX `hv_memories_history_idx` ON `hv_memories` (`agent_id`,`created_at`,`number`);--> statement-breakpoint

@@ -1,7 +1,6 @@
 import { Type } from "@earendil-works/pi-ai";
 import { configure, defineDocFamily, defineExtension, defineTask, defineTool, section, type AgentChange, type ConversationId, type ContextEdit, type Extension, type TaskId } from "@earendil-works/pi-durable";
 import type { ExecutionContextService } from "./execution-context.js";
-import type { ExecutionOrigin } from "./execution-context-contracts.js";
 import type { SubagentRow, SubagentRun } from "../db/subagent-schema.js";
 
 interface ExecutionService {
@@ -12,7 +11,7 @@ interface ExecutionService {
   thinking(level: string): AgentChange["thinkingLevel"];
   reportWhenReady(agentId: string, deliver: () => Promise<unknown>, signal: AbortSignal): Promise<boolean>;
   delegatable(agentId: string): Promise<Pick<SubagentRow, "id" | "name" | "description" | "tools">[]>;
-  delegate(agentId: string, id: string, task: string, submissionId: string, origin?: ExecutionOrigin, expiresAt?: number, signal?: AbortSignal): Promise<SubagentRun>;
+  delegate(agentId: string, id: string, task: string, submissionId: string, signal?: AbortSignal): Promise<SubagentRun>;
 }
 
 /** One receipt per application run: dispatch can retry across either store's commit. */
@@ -51,7 +50,7 @@ export function createSubagentExtension(service: ExecutionService, agentId: stri
           await configure(tx, child as ConversationId, {
             model: { provider: run.config.provider, modelId: run.config.modelId },
             thinkingLevel: service.thinking(run.config.thinkingLevel),
-            extensions: [hyperliquid, ...capabilities.filter((extension) => extension.name === "execution-context" || extension.tools?.some((tool) => run.config.tools.includes(tool.name)))], tools: [...(hyperliquid.tools ?? []), ...capabilities.flatMap((extension) => extension.tools ?? [])].filter((tool) => run.config.tools.includes(tool.name)),
+            extensions: [hyperliquid, ...capabilities.filter((extension) => extension.tools?.some((tool) => run.config.tools.includes(tool.name)))], tools: [...(hyperliquid.tools ?? []), ...capabilities.flatMap((extension) => extension.tools ?? [])].filter((tool) => run.config.tools.includes(tool.name)),
             modelTools: null, cwd: null,
             instructions: savedContext.instructions,
           });
@@ -125,8 +124,7 @@ export function createSubagentExtension(service: ExecutionService, agentId: stri
     defineTool({ name: "list_subagents", description: "List enabled workers available for delegation, their IDs, descriptions and tools. Does not start work.", parameters: Type.Object({}, { additionalProperties: false }), replay: "safe", execute: async () => ({ output: [{ type: "text" as const, text: JSON.stringify(await service.delegatable(agentId)) }] }) }),
     defineTool({ name: "delegate_subagent", description: "Assign a focused task to a configured worker in the background. Returns a run ID immediately. Its outcome will arrive as a follow-up. No recursive delegation; one active assignment per worker.", parameters: Type.Object({ subagent_id: Type.String(), task: Type.String() }, { additionalProperties: false }), replay: "safe", execute: async (args, api, context) => {
       // Stable tool-task identity prevents replay from starting a second assignment.
-      const resolved = await execution.resolve(agentId, api, context);
-      const run = await service.delegate(agentId, args.subagent_id, args.task, `delegate:${api.taskId}`, resolved.frame.origin, resolved.frame.expiresAt, context.abortSignal);
+      const run = await service.delegate(agentId, args.subagent_id, args.task, `delegate:${api.taskId}`, context.abortSignal);
       await api.details({ runId: run.id }, context);
       return { output: [{ type: "text" as const, text: `Assignment ${run.id}: ${run.status}. Its outcome will be reported to this conversation.` }] };
     } }),

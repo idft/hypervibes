@@ -41,6 +41,18 @@ export function notionalAtLeast(qty: string, px: string, minimum: string): boole
   const a = decimal(qty), b = decimal(px), c = decimal(minimum);
   return a.units * b.units * 10n ** BigInt(c.scale) >= c.units * 10n ** BigInt(a.scale + b.scale);
 }
+/** Exact product, with no rounding below a risk cap. */
+export function notional(qty: string, px: string): string {
+  const a = decimal(qty), b = decimal(px);
+  return format(a.units * b.units, a.scale + b.scale);
+}
+/** Exact sum of plain decimal strings. */
+export function sumDecimals(values: string[]): string {
+  const parsed = values.map(decimal);
+  const scale = Math.max(0, ...parsed.map((value) => value.scale));
+  const total = parsed.reduce((sum, value) => sum + value.units * 10n ** BigInt(scale - value.scale), 0n);
+  return format(total, scale);
+}
 /** Exact position size/sign; exchange positions may contain zero or a minus sign. */
 export function positionSize(value: string): { side: "long" | "short" | "flat"; size: string } {
   if (typeof value !== "string" || value.trim() !== value || !/^-?(0|[1-9][0-9]*)(\.[0-9]+)?$/.test(value)) throw new HyperliquidError("Invalid exchange position size");

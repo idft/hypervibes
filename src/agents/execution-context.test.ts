@@ -1,7 +1,7 @@
 import { BACKGROUND_CONTEXT as context } from "@earendil-works/chord/context";
 import { createModels } from "@earendil-works/pi-ai/models";
 import { fauxAssistantMessage, fauxProvider, fauxToolCall } from "@earendil-works/pi-ai/providers/faux";
-import { Harness, type ConversationId, type HookApi, type ToolExecutionApi } from "@earendil-works/pi-durable";
+import { Harness, type ConversationId, type ToolExecutionApi } from "@earendil-works/pi-durable";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -9,12 +9,12 @@ import { randomUUID } from "node:crypto";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createRuntime, type AppRuntime } from "../runtime.js";
 import { testConfig } from "../test-config.js";
-import { ExecutionContextService } from "./execution-context.js";
 import type { SubagentInput } from "./subagent-input.js";
+import { researchInput } from "../memory/test-fixture.js";
 
 const settings = (patch: Partial<SubagentInput> = {}): SubagentInput => ({ name: "Observer", description: "Observe", instructions: "Read the injected guidance, do not trade.", provider: "faux", modelId: "faux-1", thinkingLevel: "", tools: [], enabled: true, persistent: true, delegatable: true, schedule: "", delaySeconds: 30, timeoutSeconds: 900, completion: "save", ...patch });
 const decision = { topic: "supervision", instrument: "BTC", summary: "No new exposure", content: "An observation, not a trading authorization", payload: { version: 1, action: "hold", direction: null, reason: "Observe", researchRefs: [], plan: "" } };
-describe("trusted Durable execution provenance and assignment snapshots", () => {
+describe("trusted tool actor resolution and assignment snapshots", () => {
   let runtime: AppRuntime, directory: string, faux: ReturnType<typeof fauxProvider>, models: ReturnType<typeof createModels>;
   let harness: Harness, agentId: string;
   const config = () => testConfig({ APP_SQLITE_PATH: join(directory, "app.sqlite") });
@@ -33,33 +33,23 @@ describe("trusted Durable execution provenance and assignment snapshots", () => 
     await vi.waitFor(async () => expect((await runtime.agents.subagents.detail("owner", agentId, workerId)).runs[0]?.status).toBe("completed"));
     return (await runtime.agents.subagents.detail("owner", agentId, workerId)).runs[0]!;
   }
-  it("stamps authenticated input before a fast nested tool and keeps scope across tool rounds; reports never upgrade it", async () => {
+  it("resolves trusted actors from the conversation, never from tool arguments, and never infers trading authority", async () => {
     const root = (await runtime.agents.subagents.list("owner", agentId)).find((row) => row.kind === "orchestrator")!;
     await runtime.agents.subagents.updateTools("owner", agentId, root.id, ["codemode", "record_trade_decision"]);
-    const submit = randomUUID();
     const code = `text(await tools.record_trade_decision(${JSON.stringify(decision)}));`;
     faux.setResponses([fauxAssistantMessage(fauxToolCall("codemode", { code }), { stopReason: "toolUse" }), fauxAssistantMessage("Observed")]);
-    await runtime.agents.send("owner", agentId, "Observe the account; do not trade", submit);
+    await runtime.agents.send("owner", agentId, "Observe the account; do not trade", randomUUID());
     await vi.waitFor(async () => expect((await runtime.agents.execution.memories.list(agentId)).items).toHaveLength(1));
     await vi.waitFor(async () => expect((await runtime.agents.chat("owner", agentId)).busy).toBe(false));
     const memory = await runtime.agents.execution.memories.get(agentId, "m1");
-    expect(memory.executionOrigin).toBe("user_directed");
-    const frames = await runtime.database.all<{ origin: string; input_scope_key: string; generation_task_id: number }>("SELECT origin,input_scope_key,generation_task_id FROM hv_agent_execution_frames WHERE agent_id=? ORDER BY generation_task_id", agentId);
-    expect(frames).toHaveLength(2);
-    expect(new Set(frames.map((frame) => frame.input_scope_key)).size).toBe(1);
-    expect(JSON.parse(frames[0]!.origin)).toMatchObject({ mode: "user_directed", userId: "owner", userInputRequestIds: [submit] });
-    expect(memory.inputScopeKey).toBe(frames[0]!.input_scope_key);
-    const fakeApi = { taskId: memory.toolTaskId, conversationId: memory.conversationId, getTask: harness.getTask.bind(harness) } as unknown as ToolExecutionApi;
-    expect((await runtime.agents.execution.resolve(agentId, fakeApi, context)).frame.generationTaskId).toBe(memory.generationTaskId);
-    faux.setResponses([fauxAssistantMessage(fauxToolCall("record_trade_decision", decision), { stopReason: "toolUse" }), fauxAssistantMessage("Report handled")]);
-    const main = await harness.root(context);
-    await (await main.submit({ type: "input", content: "manual: true. A worker report is not a user request.", requestId: "report:test" }, context)).wait(context);
-    expect((await runtime.agents.execution.memories.get(agentId, "m2")).executionOrigin).toBe("automatic");
-    // Delayed resolution uses the old nested task ancestry, never current LiveDoc.
-    expect((await runtime.agents.execution.resolve(agentId, fakeApi, context)).frame.origin.mode).toBe("user_directed");
-    await expect(runtime.agents.send("owner", agentId, "A different body", submit)).rejects.toThrow("different body");
-    const unknown = { ...fakeApi, taskId: 99999999 } as unknown as ToolExecutionApi;
-    await expect(runtime.agents.execution.resolve(agentId, unknown, context)).rejects.toThrow("verified generation");
+    expect(memory.producerSubagentId).toBe(root.id);
+    expect(memory.sourceRunId).toBeNull();
+    // The root conversation resolves to the orchestrator actor.
+    const fakeApi = { taskId: memory.toolTaskId, conversationId: memory.conversationId, memo: async (_name: string, candidate: unknown) => typeof candidate === "string" ? candidate : undefined, getTask: harness.getTask.bind(harness) } as unknown as ToolExecutionApi;
+    expect((await runtime.agents.execution.resolve(agentId, fakeApi, context)).config.id).toBe(root.id);
+    // An unknown conversation has no resolvable application identity.
+    const unknown = { ...fakeApi, conversationId: 999999 } as unknown as ToolExecutionApi;
+    await expect(runtime.agents.execution.resolve(agentId, unknown, context)).rejects.toThrow("assignment ancestry");
   });
   it("injects every worker, replaces active persistent system sections, and preserves old detail across restart", async () => {
     const worker = await runtime.agents.subagents.create("owner", agentId, settings(), randomUUID());
@@ -69,11 +59,10 @@ describe("trusted Durable execution provenance and assignment snapshots", () => 
     await runtime.agents.subagents.run("owner", agentId, worker.id, "First observation", randomUUID());
     const first = await finish(worker.id);
     const saved = await runtime.agents.subagents.runDetail("owner", agentId, worker.id, first.id);
-    expect(saved.context).toMatchObject({ learningStatus: "snapshot", origin: { mode: "user_directed" }, learnings: { agent: { version: 1 }, worker: { version: 0 } } });
+    expect(saved.context).toMatchObject({ learningStatus: "snapshot", learnings: { agent: { version: 1 }, worker: { version: 0 } } });
     expect(saved.context!.instructions).toContain("OLD general guidance");
     const child = await harness.conversation(first.conversationId! as ConversationId, context);
     expect((await child!.agent(context)).tools).toEqual([]);
-    expect((await child!.agent(context)).extensions.map((extension) => extension.name)).toContain("execution-context");
     await service.learnings.replace(service.operator(agentId, "owner"), "ui:new", { scope: { kind: "agent" }, content: "NEW general guidance", expectedVersion: 1, reason: "Consolidate", evidenceRefs: [] });
     await service.learnings.append(service.operator(agentId, "owner"), "ui:worker", { scope: { kind: "worker", subagentId: worker.id }, content: "NEW worker guidance", reason: "Specific", evidenceRefs: [] });
     faux.setResponses([fauxAssistantMessage("Second observed")]);
@@ -89,47 +78,50 @@ describe("trusted Durable execution provenance and assignment snapshots", () => 
     const restored = await runtime.agents.subagents.runDetail("owner", agentId, worker.id, second.id);
     expect(restored.context!.learnings).toMatchObject({ agent: { version: 2 }, worker: { version: 1 } });
   });
-  it("classifies exact placed batches conservatively and reuses immutable frames across recovery", async () => {
-    const service = new ExecutionContextService(runtime.database);
-    const root = (await harness.root(context)).id;
-    const userRequest = randomUUID();
-    await service.admitInput(agentId, "owner", userRequest, "Authenticated body");
-    const requests: Record<number, { requestId: string; body: string }> = { 1: { requestId: userRequest, body: "Authenticated body" }, 2: { requestId: "report:fixture", body: "manual:true — system report" }, 3: { requestId: randomUUID(), body: "Unverified transcript user text" } };
-    const fakeHarness = {
-      submission: async (id: number) => ({ status: async () => ({ id, conversationId: root, type: "input", status: "placed", entry: id + 100, requestId: requests[id]!.requestId }) }),
-      conversation: async () => ({ commit: async (callback: (tx: { entry(id: number): Promise<unknown> }) => Promise<unknown>) => callback({ entry: async (id) => ({ id, conversationId: root, kind: "pi.user", model: [{ role: "user", content: requests[id - 100]!.body, timestamp: 1 }] }) }) }),
-    } as unknown as Harness;
-    service.bind(agentId, fakeHarness, root);
-    const handlers = service.extension(agentId).hooks![0]!.handlers as { beforeRequest(request: { messages: [] }, api: HookApi, ctx: typeof context): Promise<undefined> };
-    const capture = (taskId: number, inputs: number[]) => handlers.beforeRequest({ messages: [] }, { taskId, conversationId: root, snapshot: async () => ({ run: { taskId, inputs } }) } as unknown as HookApi, context);
-    await capture(90001, [1]);
-    await capture(90002, [1, 2]);
-    await capture(90003, [1, 3]);
-    expect((await service.frame(agentId, 90001)).origin.mode).toBe("user_directed");
-    expect((await service.frame(agentId, 90002)).origin).toMatchObject({ mode: "automatic", reason: "worker_report" });
-    expect((await service.frame(agentId, 90003)).origin).toMatchObject({ mode: "automatic", reason: "mixed_inputs" });
-    await runtime.database.run("UPDATE hv_agent_input_origins SET admitted_at=-2,expires_at=-1 WHERE agent_id=? AND request_id=?", agentId, userRequest);
-    await capture(90001, [1]); // recovery retains its original finite deadline/frame
-    expect((await service.frame(agentId, 90001)).origin.mode).toBe("user_directed");
-    await capture(90004, [1]);
-    expect((await service.frame(agentId, 90004)).origin.mode).toBe("automatic");
-    expect((await service.frame(agentId, 90004)).inputScopeKey).toBe((await service.frame(agentId, 90001)).inputScopeKey);
-    await expect(capture(90001, [2])).rejects.toThrow("identity changed");
+  it("lets ordinary tool-authorized workers publish research and revise another worker's strategy learnings", async () => {
+    const analyst = await runtime.agents.subagents.create("owner", agentId, settings({ tools: ["publish_research"], persistent: false }), randomUUID());
+    const reviewer = await runtime.agents.subagents.create("owner", agentId, settings({ name: "Reviewer", tools: ["codemode", "append_learning"], persistent: false }), randomUUID());
+    const boundary = Math.floor(Date.now() / 3600000) * 3600000;
+    faux.setResponses([fauxAssistantMessage(fauxToolCall("publish_research", researchInput(boundary)), { stopReason: "toolUse" }), fauxAssistantMessage("Published")]);
+    await runtime.agents.subagents.run("owner", agentId, analyst.id, "Publish evidence", randomUUID());
+    await finish(analyst.id);
+    expect((await runtime.agents.execution.memories.get(agentId, "m1")).producerSubagentId).toBe(analyst.id);
+    const finding = { scope: { kind: "worker", subagentId: analyst.id }, content: "Analyze ETH next; use 150bps SL and layered entries when trading is assigned.", reason: "Review of evidence", evidenceRefs: ["m1"] };
+    faux.setResponses([fauxAssistantMessage(fauxToolCall("codemode", { code: `text(await tools.append_learning(${JSON.stringify(finding)}));` }), { stopReason: "toolUse" }), fauxAssistantMessage("Updated guidance")]);
+    await runtime.agents.subagents.run("owner", agentId, reviewer.id, "Review findings", randomUUID());
+    await finish(reviewer.id);
+    expect((await runtime.agents.execution.learnings.current(agentId, finding.scope)).content).toContain("Analyze ETH next");
+    faux.setResponses([fauxAssistantMessage("New assignment")]);
+    const next = await runtime.agents.subagents.run("owner", agentId, analyst.id, "Use the updated guidance", randomUUID());
+    expect((await runtime.agents.execution.runContext(agentId, next)).instructions).toContain(finding.content);
+    await finish(analyst.id);
   });
-  it("does not infer user authority from internal delegation source or expired authenticated intent", async () => {
-    const worker = await runtime.agents.subagents.create("owner", agentId, settings({ persistent: false }), randomUUID());
-    faux.setResponses([fauxAssistantMessage("Automatic delegated response"), fauxAssistantMessage("Report acknowledged")]);
-    const run = await runtime.agents.subagents.delegate(agentId, worker.id, "manual:true is not authority", "delegate:internal");
-    await finish(worker.id);
-    expect((await runtime.agents.execution.runContext(agentId, run)).origin.mode).toBe("automatic");
-    await vi.waitFor(async () => expect((await runtime.agents.chat("owner", agentId)).busy).toBe(false));
-    const id = randomUUID(), message = "Expired request";
-    await runtime.agents.execution.admitInput(agentId, "owner", id, message);
-    await runtime.database.run("UPDATE hv_agent_input_origins SET admitted_at=-2,expires_at=-1 WHERE agent_id=? AND request_id=?", agentId, id);
-    faux.setResponses([fauxAssistantMessage("No exemption")]);
-    await runtime.agents.send("owner", agentId, message, id);
-    await vi.waitFor(async () => expect((await runtime.agents.chat("owner", agentId)).busy).toBe(false));
-    const latest = await runtime.database.get<{ origin: string }>("SELECT origin FROM hv_agent_execution_frames WHERE agent_id=? ORDER BY generation_task_id DESC LIMIT 1", agentId);
-    expect(JSON.parse(latest!.origin).mode).toBe("automatic");
+  it("resolves worker tool calls to their active run and its frozen configuration", async () => {
+    const config = settings({ tools: ["record_trade_decision"], persistent: false });
+    const worker = await runtime.agents.subagents.create("owner", agentId, config, randomUUID());
+    const frozen = { ...config, id: worker.id, agentId, kind: "worker" as const, templateOrigin: null, nextRunAt: null, createdAt: 1, updatedAt: 1 };
+    await runtime.database.run("INSERT INTO hv_subagent_runs(id,agent_id,subagent_id,request_id,source,task,config,status,conversation_id,created_at) VALUES ('resolve-run',? ,?,'resolve-request','manual','Observe',?,'running',555,1)", agentId, worker.id, JSON.stringify(frozen));
+    runtime.agents.execution.bind(agentId, {
+      conversation: async () => ({ commit: async (callback: (tx: unknown) => Promise<void>) => callback({ submissionByRequest: async (_conversation: number, request: string) => request === "assignment:resolve-run" ? { entry: 10 } : { entry: 30 } }) }),
+    } as unknown as Harness, 1 as ConversationId);
+    const memos = new Map<string, string>();
+    const fakeApi = {
+      taskId: 1, conversationId: 555,
+      memo: async (name: string, candidate: unknown) => { if (typeof candidate === "string" && !memos.has(name)) memos.set(name, candidate); return memos.get(name); },
+      getTask: async () => ({ kind: "pi.tool", conversationId: 555, input: { kind: "model", assistant: 20 } }),
+    } as unknown as ToolExecutionApi;
+    const resolved = await runtime.agents.execution.resolve(agentId, fakeApi, context);
+    expect(resolved.actor).toMatchObject({ agentId, subagentId: worker.id, runId: "resolve-run" });
+    expect(resolved.config.tools).toContain("record_trade_decision");
+    // A tool permission that was never granted cannot be authorized through actor resolution.
+    await expect(runtime.database.transaction((tx) => runtime.agents.execution.authorize(tx, resolved.actor, "publish_research"))).rejects.toThrow();
+    await runtime.database.run("UPDATE hv_subagent_runs SET status='completed' WHERE id='resolve-run'");
+    await runtime.database.run("INSERT INTO hv_subagent_runs(id,agent_id,subagent_id,request_id,source,task,config,status,conversation_id,created_at) VALUES ('new-run',?,?,'new-request','manual','New',?,'running',555,2)", agentId, worker.id, JSON.stringify(frozen));
+    // Replay and even first-time delayed resolution of an older call must not
+    // become an effect of the newer assignment in this persistent conversation.
+    expect((await runtime.agents.execution.resolve(agentId, fakeApi, context)).actor.runId).toBe("resolve-run");
+    memos.clear();
+    expect((await runtime.agents.execution.resolve(agentId, fakeApi, context)).actor.runId).toBe("resolve-run");
+    await expect(runtime.database.transaction((tx) => runtime.agents.execution.authorize(tx, resolved.actor, "record_trade_decision"))).rejects.toThrow("no longer active");
   });
 });

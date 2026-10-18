@@ -1,7 +1,7 @@
 {
   "version": "7",
   "dialect": "sqlite",
-  "id": "6af3dc79-1aae-48e8-853a-bd8b6bf13890",
+  "id": "eaadcafc-b182-441f-b38e-16ab13370274",
   "prevIds": [
     "6b7806a9-e732-4b04-9877-accc0264f504"
   ],
@@ -128,6 +128,14 @@
     },
     {
       "name": "hv_learning_sets",
+      "entityType": "tables"
+    },
+    {
+      "name": "hv_subagent_run_contexts",
+      "entityType": "tables"
+    },
+    {
+      "name": "hv_risk_settings",
       "entityType": "tables"
     },
     {
@@ -1621,6 +1629,16 @@
       "table": "hv_subagents"
     },
     {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "template_origin",
+      "entityType": "columns",
+      "table": "hv_subagents"
+    },
+    {
       "type": "integer",
       "notNull": true,
       "autoincrement": false,
@@ -2086,26 +2104,6 @@
       "autoincrement": false,
       "default": null,
       "generated": null,
-      "name": "source_generation_task_id",
-      "entityType": "columns",
-      "table": "hv_memories"
-    },
-    {
-      "type": "text",
-      "notNull": false,
-      "autoincrement": false,
-      "default": null,
-      "generated": null,
-      "name": "source_input_scope_key",
-      "entityType": "columns",
-      "table": "hv_memories"
-    },
-    {
-      "type": "integer",
-      "notNull": false,
-      "autoincrement": false,
-      "default": null,
-      "generated": null,
       "name": "conversation_id",
       "entityType": "columns",
       "table": "hv_memories"
@@ -2117,16 +2115,6 @@
       "default": null,
       "generated": null,
       "name": "tool_task_id",
-      "entityType": "columns",
-      "table": "hv_memories"
-    },
-    {
-      "type": "text",
-      "notNull": true,
-      "autoincrement": false,
-      "default": null,
-      "generated": null,
-      "name": "execution_origin",
       "entityType": "columns",
       "table": "hv_memories"
     },
@@ -2446,26 +2434,6 @@
       "autoincrement": false,
       "default": null,
       "generated": null,
-      "name": "generation_task_id",
-      "entityType": "columns",
-      "table": "hv_learning_revisions"
-    },
-    {
-      "type": "text",
-      "notNull": false,
-      "autoincrement": false,
-      "default": null,
-      "generated": null,
-      "name": "input_scope_key",
-      "entityType": "columns",
-      "table": "hv_learning_revisions"
-    },
-    {
-      "type": "integer",
-      "notNull": false,
-      "autoincrement": false,
-      "default": null,
-      "generated": null,
       "name": "conversation_id",
       "entityType": "columns",
       "table": "hv_learning_revisions"
@@ -2539,6 +2507,96 @@
       "name": "updated_at",
       "entityType": "columns",
       "table": "hv_learning_sets"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "agent_id",
+      "entityType": "columns",
+      "table": "hv_subagent_run_contexts"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "run_id",
+      "entityType": "columns",
+      "table": "hv_subagent_run_contexts"
+    },
+    {
+      "type": "text",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "context",
+      "entityType": "columns",
+      "table": "hv_subagent_run_contexts"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "agent_id",
+      "entityType": "columns",
+      "table": "hv_risk_settings"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": "false",
+      "generated": null,
+      "name": "trading_enabled",
+      "entityType": "columns",
+      "table": "hv_risk_settings"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "allowed_instruments",
+      "entityType": "columns",
+      "table": "hv_risk_settings"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "max_order_notional",
+      "entityType": "columns",
+      "table": "hv_risk_settings"
+    },
+    {
+      "type": "text",
+      "notNull": false,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "max_total_notional",
+      "entityType": "columns",
+      "table": "hv_risk_settings"
+    },
+    {
+      "type": "integer",
+      "notNull": true,
+      "autoincrement": false,
+      "default": null,
+      "generated": null,
+      "name": "updated_at",
+      "entityType": "columns",
+      "table": "hv_risk_settings"
     },
     {
       "columns": [
@@ -3129,6 +3187,38 @@
     },
     {
       "columns": [
+        "agent_id",
+        "run_id"
+      ],
+      "tableTo": "hv_subagent_runs",
+      "columnsTo": [
+        "agent_id",
+        "id"
+      ],
+      "onUpdate": "NO ACTION",
+      "onDelete": "NO ACTION",
+      "nameExplicit": false,
+      "name": "fk_hv_subagent_run_contexts_agent_id_run_id_hv_subagent_runs_agent_id_id_fk",
+      "entityType": "fks",
+      "table": "hv_subagent_run_contexts"
+    },
+    {
+      "columns": [
+        "agent_id"
+      ],
+      "tableTo": "hv_agents",
+      "columnsTo": [
+        "id"
+      ],
+      "onUpdate": "NO ACTION",
+      "onDelete": "CASCADE",
+      "nameExplicit": false,
+      "name": "fk_hv_risk_settings_agent_id_hv_agents_id_fk",
+      "entityType": "fks",
+      "table": "hv_risk_settings"
+    },
+    {
+      "columns": [
         "user_id",
         "provider_id"
       ],
@@ -3400,6 +3490,24 @@
       "nameExplicit": false,
       "name": "hv_learning_sets_pk",
       "table": "hv_learning_sets",
+      "entityType": "pks"
+    },
+    {
+      "columns": [
+        "run_id"
+      ],
+      "nameExplicit": false,
+      "name": "hv_subagent_run_contexts_pk",
+      "table": "hv_subagent_run_contexts",
+      "entityType": "pks"
+    },
+    {
+      "columns": [
+        "agent_id"
+      ],
+      "nameExplicit": false,
+      "name": "hv_risk_settings_pk",
+      "table": "hv_risk_settings",
       "entityType": "pks"
     },
     {
@@ -3707,6 +3815,24 @@
           "isExpression": false
         },
         {
+          "value": "id",
+          "isExpression": false
+        }
+      ],
+      "isUnique": true,
+      "where": null,
+      "origin": "manual",
+      "name": "hv_order_request_identity",
+      "entityType": "indexes",
+      "table": "hv_order_requests"
+    },
+    {
+      "columns": [
+        {
+          "value": "agent_id",
+          "isExpression": false
+        },
+        {
           "value": "request_key",
           "isExpression": false
         }
@@ -3773,6 +3899,24 @@
       "where": null,
       "origin": "manual",
       "name": "hv_subagent_runs_producer_idx",
+      "entityType": "indexes",
+      "table": "hv_subagent_runs"
+    },
+    {
+      "columns": [
+        {
+          "value": "agent_id",
+          "isExpression": false
+        },
+        {
+          "value": "id",
+          "isExpression": false
+        }
+      ],
+      "isUnique": true,
+      "where": null,
+      "origin": "manual",
+      "name": "hv_subagent_runs_identity_idx",
       "entityType": "indexes",
       "table": "hv_subagent_runs"
     },
@@ -4287,6 +4431,18 @@
       "name": "hv_learning_head",
       "entityType": "checks",
       "table": "hv_learning_sets"
+    },
+    {
+      "value": "length(\"context\") <= 120000",
+      "name": "hv_run_context_bound",
+      "entityType": "checks",
+      "table": "hv_subagent_run_contexts"
+    },
+    {
+      "value": "length(coalesce(\"allowed_instruments\", '[]')) <= 4000 AND json_valid(coalesce(\"allowed_instruments\", '[]'))",
+      "name": "hv_risk_instruments_bound",
+      "entityType": "checks",
+      "table": "hv_risk_settings"
     }
   ],
   "renames": []

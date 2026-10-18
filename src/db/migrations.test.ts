@@ -29,7 +29,7 @@ describe("generated SQLite auth migrations", () => {
     migrate(db, config);
     connection.exec("INSERT INTO hv_users (id, name, email) VALUES ('fixture', 'Wallet', 'fixture@example.test')");
     migrate(db, config);
-    expect(connection.prepare("SELECT count(*) AS count FROM hv_schema_migrations").get()?.count).toBe(9);
+    expect(connection.prepare("SELECT count(*) AS count FROM hv_schema_migrations").get()?.count).toBe(8);
     expect(connection.prepare("SELECT name FROM hv_users").get()?.name).toBe("Wallet");
     expect(connection.prepare("SELECT value FROM pi_test").get()?.value).toBe("untouched");
     expect(() => connection.exec("INSERT INTO hv_wallet_addresses (id, user_id, address, chain_id, created_at) VALUES ('wallet', 'missing', '0x0', 1, 0)")).toThrow();
@@ -44,7 +44,6 @@ describe("generated SQLite auth migrations", () => {
     rmSync(join(previous, "20261016181110_subagents"), { recursive: true });
     rmSync(join(previous, "20261017222959_research_artifacts"), { recursive: true });
     rmSync(join(previous, "20261018061531_memories_and_learnings"), { recursive: true });
-    rmSync(join(previous, "20261018063018_execution_contexts"), { recursive: true });
     const db = drizzle({ client: connection });
     migrate(db, { migrationsFolder: previous, migrationsTable: "hv_schema_migrations" });
     connection.exec("INSERT INTO hv_users (id, name, email) VALUES ('owner', 'Wallet', 'owner@example.test')");
@@ -59,7 +58,6 @@ describe("generated SQLite auth migrations", () => {
     const previous = join(directory, "seven-migrations");
     cpSync(source, previous, { recursive: true });
     rmSync(join(previous, "20261018061531_memories_and_learnings"), { recursive: true });
-    rmSync(join(previous, "20261018063018_execution_contexts"), { recursive: true });
     const db = drizzle({ client: connection });
     migrate(db, { migrationsFolder: previous, migrationsTable: "hv_schema_migrations" });
     expect(connection.prepare("SELECT count(*) AS count FROM hv_schema_migrations").get()?.count).toBe(7);
@@ -75,7 +73,7 @@ describe("generated SQLite auth migrations", () => {
     expect(connection.prepare("SELECT instructions,enabled,schedule FROM hv_subagents").get()).toMatchObject({ instructions: "saved instructions", enabled: 1, schedule: "" });
     expect(connection.prepare("SELECT value FROM pi_opaque_fixture").get()?.value).toBe("unchanged");
     expect(connection.prepare("SELECT count(*) AS count FROM hv_learning_revisions").get()?.count).toBe(0);
-    const publish = connection.prepare("INSERT INTO hv_memories(agent_id,number,kind,topic,summary,content,payload,created_at,execution_origin,producer_subagent_id,source_run_id) VALUES (?,?,'decision','test','Summary','Content','{}',1,'automatic',?,?)");
+    const publish = connection.prepare("INSERT INTO hv_memories(agent_id,number,kind,topic,summary,content,payload,created_at,producer_subagent_id,source_run_id) VALUES (?,?,'decision','test','Summary','Content','{}',1,?,?)");
     expect(() => publish.run("a", 1, "worker-b", "run-b")).toThrow();
     publish.run("a", 3, null, null);
     publish.run("b", 2, "worker-b", "run-b");
@@ -97,7 +95,7 @@ describe("generated SQLite auth migrations", () => {
     mkdirSync(failing);
     writeFileSync(join(failing, "migration.sql"), "CREATE TABLE temporary_upgrade (id TEXT);\n--> statement-breakpoint\nINSERT INTO nonexistent_table VALUES (1)");
     expect(() => migrate(db, config)).toThrow();
-    expect(connection.prepare("SELECT count(*) AS count FROM hv_schema_migrations").get()?.count).toBe(9);
+    expect(connection.prepare("SELECT count(*) AS count FROM hv_schema_migrations").get()?.count).toBe(8);
     expect(connection.prepare("SELECT name FROM sqlite_schema WHERE name = 'temporary_upgrade'").get()).toBeUndefined();
     expect(connection.prepare("SELECT name FROM sqlite_schema WHERE name = 'hv_users'").get()?.name).toBe("hv_users");
   });

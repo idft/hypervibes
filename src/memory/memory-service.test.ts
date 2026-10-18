@@ -49,27 +49,24 @@ describe("immutable Agent-scoped memories", () => {
     await f.db.run("UPDATE hv_subagent_runs SET status='completed' WHERE id='run-analyst'");
     expect(await memory.publishResearch(f.analyst, "done", input)).toEqual(original);
     await expect(memory.publishResearch(f.analyst, "late", input)).rejects.toThrow("active");
-    f.now = f.analyst.expiresAt;
-    expect(await memory.publishResearch(f.analyst, "done", input)).toEqual(original);
-    await expect(memory.publishResearch(f.analyst, "expired", input)).rejects.toThrow("expired");
   });
   it("selects newest before status, never falls back, and keeps instrument streams separate", async () => {
     const { memory } = f.services();
     await memory.publishResearch(f.analyst, "initial", researchInput(f.now));
-    expect(await memory.tradingContext("agent", "BTC", researchRequirement)).toMatchObject({ eligibleForAutomaticEntry: true, requirements: [{ ref: "m1", status: "fresh" }] });
+    expect(await memory.tradingContext("agent", "BTC", researchRequirement)).toMatchObject({ allReady: true, requirements: [{ ref: "m1", status: "fresh" }] });
     await memory.publishResearch(f.analyst, "older-evidence", researchInput(f.now - 7200_000));
-    expect(await memory.tradingContext("agent", "BTC", researchRequirement)).toMatchObject({ eligibleForAutomaticEntry: false, requirements: [{ ref: "m2", status: "stale", payload: null }] });
-    expect(await memory.tradingContext("agent", "ETH", researchRequirement)).toMatchObject({ eligibleForAutomaticEntry: false, requirements: [{ ref: null, status: "missing" }] });
+    expect(await memory.tradingContext("agent", "BTC", researchRequirement)).toMatchObject({ allReady: false, requirements: [{ ref: "m2", status: "stale", payload: null }] });
+    expect(await memory.tradingContext("agent", "ETH", researchRequirement)).toMatchObject({ allReady: false, requirements: [{ ref: null, status: "missing" }] });
     await memory.publishResearch(f.analyst, "withdrawn", researchInput(f.now, { payload: { ...researchInput(f.now).payload, setup: "withdrawn" } }));
     expect(await memory.tradingContext("agent", "BTC", researchRequirement)).toMatchObject({ requirements: [{ ref: "m3", status: "withdrawn" }] });
     await memory.publishResearch(f.analyst, "unknown-coverage", researchInput(f.now, { payload: { ...researchInput(f.now).payload, coverage: "unknown" } }));
     expect(await memory.tradingContext("agent", "BTC", researchRequirement)).toMatchObject({ requirements: [{ ref: "m4", status: "incomplete" }] });
     await memory.publishResearch(f.analyst, "watch", researchInput(f.now, { payload: { ...researchInput(f.now).payload, setup: "watch" } }));
-    expect(await memory.tradingContext("agent", "BTC", researchRequirement)).toMatchObject({ eligibleForAutomaticEntry: false, requirements: [{ ref: "m5", status: "fresh" }] });
+    expect(await memory.tradingContext("agent", "BTC", researchRequirement)).toMatchObject({ allReady: false, requirements: [{ ref: "m5", status: "fresh" }] });
     await f.db.run("UPDATE hv_subagents SET enabled=0 WHERE id='analyst'");
     expect(await memory.tradingContext("agent", "BTC", researchRequirement)).toMatchObject({ requirements: [{ status: "disabled" }] });
     expect((await memory.get("agent", "m1")).content).toContain("Facts");
-    expect((await memory.tradingContext("agent", "BTC", [])).eligibleForAutomaticEntry).toBe(false);
+    expect((await memory.tradingContext("agent", "BTC", [])).allReady).toBe(false);
     await expect(memory.tradingContext("agent", "BTC", Array(21).fill(researchRequirement[0]))).rejects.toThrow("20");
   });
   it("caps validity by evidence and stricter requirements; validates complete replacement corrections", async () => {
@@ -95,17 +92,17 @@ describe("immutable Agent-scoped memories", () => {
     }
     const result = await memory.tradingContext("agent", "BTC", requirements);
     expect(result.overBudget).toBe(true);
-    expect(result.eligibleForAutomaticEntry).toBe(false);
+    expect(result.allReady).toBe(false);
     expect(result.requirements).toHaveLength(10);
-    expect(result.requirements.every((item) => item.status === "fresh" && item.payload === null && !item.eligibleForAutomaticEntry)).toBe(true);
+    expect(result.requirements.every((item) => item.status === "fresh" && item.payload === null && !item.eligible)).toBe(true);
   });
   it("records decision/review relationships with host provenance and refuses fabricated authority", async () => {
     const { memory } = f.services();
     await memory.publishResearch(f.analyst, "research", researchInput(f.now));
     const decision = { topic: "entry", instrument: "BTC", summary: "User-directed decision", content: "A complete explicit plan", payload: { version: 1, action: "enter", direction: "long", reason: "Requested", researchRefs: ["m1"], plan: "Full-size TP/SL; no claim of fills" } };
     await memory.recordDecision(f.analyst, "decision", decision);
-    expect(await memory.get("agent", "m2")).toMatchObject({ sourceRunId: "run-analyst", executionOrigin: "automatic", links: [{ ref: "m1", relation: "based_on" }] });
-    await expect(memory.recordDecision(f.analyst, "forged", { ...decision, payload: { ...decision.payload, executionOrigin: "user_directed" } })).rejects.toThrow("host-owned");
+    expect(await memory.get("agent", "m2")).toMatchObject({ sourceRunId: "run-analyst", links: [{ ref: "m1", relation: "based_on" }] });
+    await expect(memory.recordDecision(f.analyst, "forged", { ...decision, payload: { ...decision.payload, origin: "user_directed" } })).rejects.toThrow("host-owned");
     await expect(memory.recordDecision(f.analyst, "non-research", { ...decision, payload: { ...decision.payload, researchRefs: ["m2"] } })).rejects.toThrow("research publications");
     await memory.publishReview(f.reviewer, "review", { topic: "daily", summary: "Sparse sample", content: "No causal claims", payload: { version: 1, start: f.now - 86400_000, end: f.now, coverage: "incomplete", limitations: ["Small sample"], findings: ["One entry decision"], recommendations: ["Continue observing"], memoryRefs: ["m1", "m2"] } });
     expect(await memory.get("agent", "m3")).toMatchObject({ sourceRunId: "run-reviewer", links: [{ ref: "m1", relation: "reviews" }, { ref: "m2", relation: "reviews" }] });

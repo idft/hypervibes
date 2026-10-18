@@ -3,7 +3,7 @@ import { subagentInput, workerToolNames } from "./subagent-input.js";
 import analysisManifest from "./templates/basic-analysis.json" with { type: "json" };
 import tradingManifest from "./templates/basic-trading.json" with { type: "json" };
 import { parseTemplateCatalog, parseTemplateManifest } from "./template-manifest.js";
-import { workflowDraft, subagentTemplates, templateDraft } from "./subagent-templates.js";
+import { subagentTemplates, templateDraft } from "./subagent-templates.js";
 import { createMemoryExtension } from "../memory/durable-extension.js";
 import { createHyperliquidExtension } from "../hyperliquid/durable-extension.js";
 import { createTaExtension } from "../research/ta-extension.js";
@@ -26,26 +26,22 @@ describe("bundled editable worker manifests", () => {
     { ...analysisManifest, tools: ["delegate_subagent"] },
     { ...analysisManifest, tools: ["invented_remote_tool"] },
     { ...analysisManifest, defaults: { ...analysisManifest.defaults, enabled: true } },
-    { ...analysisManifest, purpose: "trading" },
-    { ...analysisManifest, workflow: { ...analysisManifest.workflow, strategy: "" } },
-    { ...tradingManifest, workflow: { ...tradingManifest.workflow, automaticEntriesEnabled: true } },
+    { ...analysisManifest, unknownExtraField: true },
+    { ...tradingManifest, defaults: { ...tradingManifest.defaults, persistent: true } },
   ])("rejects unsupported/unsafe manifests %#", (manifest) => {
     expect(() => parseTemplateManifest(manifest)).toThrow();
   });
-  it("creates independent drafts without mutating the catalog or sharing nested workflow state", () => {
+  it("creates independent drafts without mutating the catalog or sharing nested state", () => {
     const model = { provider: "operator-selected", modelId: "operator-model", thinkingLevel: "" };
     const first = templateDraft("basic-trading", model);
-    if (first.workflow?.purpose !== "trading") throw new Error("Missing trading draft");
-    first.workflow.instruments.push("BTC");
-    first.workflow.baseSizeByInstrument.BTC = "0.1";
     first.tools.length = 0;
+    first.instructions = "Mutated copy";
     const second = templateDraft("basic-trading", model);
     expect(second.tools.length).toBeGreaterThan(0);
-    expect(second.workflow).toMatchObject({ instruments: [], baseSizeByInstrument: {} });
-    expect(workflowDraft("trading")).toEqual(second.workflow);
-    expect(() => subagentInput(second)).toThrow("instrument");
+    expect(second.instructions).not.toBe("Mutated copy");
+    expect(subagentInput(second).tools).toEqual(second.tools);
   });
-  it("has only real permitted tools, no recursive delegation, no credentials or funded/automatic defaults", () => {
+  it("has only real permitted tools, no recursive delegation, no credentials or enabled/funded defaults", () => {
     const tools = [...createMemoryExtension("agent", {} as ExecutionContextService, {} as SharedDatabase).tools!, ...createHyperliquidExtension({} as HyperliquidService, "owner", "agent", {} as OrderService).tools!, ...createTaExtension({} as HyperliquidService["charts"], (() => { throw new Error("No execution in manifest test"); }) as ResearchResponder).tools!].map((tool) => tool.name);
     // These two are defined by the existing research extension, validated by
     // its integration tests; no remote catalog or import-time host is needed.
@@ -57,21 +53,19 @@ describe("bundled editable worker manifests", () => {
       expect(template.tools).not.toContain("delegate_subagent"); expect(template.tools).not.toContain("cancel_all_orders");
       expect(template.instructions).not.toMatch(/\{\{|\$\{/);
       expect(template.instructions).toContain("not a publication or order receipt");
-      if (draft.workflow?.purpose === "trading") { expect(draft.workflow.automaticEntriesEnabled).toBe(false); expect(draft.workflow.baseSizeByInstrument).toEqual({}); expect(draft.workflow.maxEntryNotional).toBe(""); }
-      const workflow = draft.workflow;
-      if (!workflow) throw new Error("Missing workflow");
-      const configured = workflow.purpose === "analysis" ? { ...workflow, instruments: ["BTC"] } : workflow.purpose === "trading" ? { ...workflow, instruments: ["BTC"], baseSizeByInstrument: { BTC: "0.001" }, maxEntryNotional: "100" } : workflow;
-      expect(subagentInput({ ...draft, workflow: configured }).tools).toEqual(template.tools);
+      expect(subagentInput(draft).tools).toEqual(template.tools);
     }
-    expect(subagentTemplates.find((template) => template.purpose === "analysis")!.tools).not.toContain("submit_orders");
-    expect(subagentTemplates.find((template) => template.purpose === "trading")!.tools).not.toContain("append_learning");
-    expect(subagentTemplates.find((template) => template.purpose === "review")!.tools).not.toContain("submit_orders");
+    expect(subagentTemplates.find((template) => template.id === "basic-analysis")!.tools).not.toContain("submit_orders");
+    expect(subagentTemplates.find((template) => template.id === "basic-trading")!.tools).not.toContain("append_learning");
+    expect(subagentTemplates.find((template) => template.id === "basic-review")!.tools).not.toContain("submit_orders");
   });
-  it("requires operator configuration instead of silently inventing instruments or funded sizing", () => {
+  it("rejects unknown templates and starts every draft paused", () => {
     const model = { provider: "operator-selected", modelId: "operator-model", thinkingLevel: "" };
-    expect(() => subagentInput(templateDraft("basic-trading", model))).toThrow();
-    expect(() => subagentInput(templateDraft("basic-analysis", model))).toThrow();
     expect(() => templateDraft("remote-catalog:arbitrary", model)).toThrow("Unknown bundled");
-    expect(templateDraft("basic-review", model).workflow).toMatchObject({ lookbackHours: 24, learningTargetSubagentIds: [] });
+    for (const template of subagentTemplates) {
+      const draft = templateDraft(template.id, model);
+      expect(draft.enabled).toBe(false);
+      expect(draft.name).toBe(template.name);
+    }
   });
 });

@@ -3,8 +3,7 @@ import { getSupportedThinkingLevels, type Models } from "@earendil-works/pi-ai/m
 import { InboxDoc, LiveDoc, type AgentChange, type Conversation, type ConversationId, type Cursor, type EntryRecord, type Extension, type Harness, type ModelRef } from "@earendil-works/pi-durable";
 import { and, asc, count, desc, eq, inArray, isNull, lte, or, sql } from "drizzle-orm";
 import { randomUUID } from "node:crypto";
-import type { AgentRow } from "../db/agent-schema.js";
-import { hvSubagents, hvSubagentRuns, type SubagentRow, type SubagentRun } from "../db/subagent-schema.js";
+import type { AgentRow } from "../db/agent-schema.js";import { hvSubagents, hvSubagentRuns, type SubagentRow, type SubagentRun } from "../db/subagent-schema.js";
 import type { ApplicationDatabase, SharedDatabase } from "../db/shared-database.js";
 import type { FastifyBaseLogger } from "fastify";
 import type { ProviderService } from "../providers/provider-service.js";
@@ -14,15 +13,13 @@ import { createSubagentExtension, RunReceipt, type RunnerId, type SubagentExtens
 import { executionWarnings, type ExecutionWarning } from "./execution-warnings.js";
 import { toolActivity, type ToolActivity } from "../research/tool-activity.js";
 import type { ExecutionContextService } from "./execution-context.js";
-import { automaticOrigin, type ExecutionOrigin, type RunContext } from "./execution-context-contracts.js";
-import { canonical } from "../canonical.js";
-import { bodyHash } from "./execution-context.js";
+import type { RunContext } from "./execution-context-contracts.js";
+import { bodyHash, canonical } from "../canonical.js";
 import { subagentTemplate } from "./subagent-templates.js";
-import { workerWorkflow } from "./worker-workflow.js";
 import { assignment, defaultMainInstructions, mainToolNames, nextCandleRun, subagentInput, type AssignmentSettings } from "./subagent-input.js";
 
 interface Binding extends SubagentExtension { harness: Harness; main: Conversation; hyperliquid: Extension; capabilities: readonly Extension[]; userId: string }
-export interface SubagentHost { owned(userId: string, id: string): Promise<AgentRow>; models(userId: string): Promise<Models>; instruments(): Promise<string[]>; changed(id: string): void }
+export interface SubagentHost { owned(userId: string, id: string): Promise<AgentRow>; models(userId: string): Promise<Models>; changed(id: string): void }
 /** Full run detail: snapshotted configuration plus the complete transcript. */
 export interface RunDetail { definition: SubagentRow; run: SubagentRun; entries: EntryRecord[]; prior: EntryRecord[]; tools?: ToolActivity[]; context?: RunContext; warnings?: ExecutionWarning[]; publications?: { ref: string; kind: string; summary: string }[] }
 const active = ["queued", "running"] as const;
@@ -93,7 +90,7 @@ export class SubagentService {
   }
   private async applyMain(binding: Binding, row: SubagentRow) {
     const available = [...(binding.hyperliquid.tools ?? []), ...(binding.extension.tools ?? []), ...binding.capabilities.flatMap((extension) => extension.tools ?? [])];
-    await binding.main.configure({ model: { provider: row.provider, modelId: row.modelId }, thinkingLevel: this.thinking(row.thinkingLevel), extensions: [binding.hyperliquid, binding.extension, ...binding.capabilities.filter((extension) => extension.name === "execution-context" || extension.tools?.some((tool) => row.tools.includes(tool.name)))], tools: available.filter((tool) => row.tools.includes(tool.name)), modelTools: null, instructions: row.instructions }, context);
+    await binding.main.configure({ model: { provider: row.provider, modelId: row.modelId }, thinkingLevel: this.thinking(row.thinkingLevel), extensions: [binding.hyperliquid, binding.extension, ...binding.capabilities.filter((extension) => extension.tools?.some((tool) => row.tools.includes(tool.name)))], tools: available.filter((tool) => row.tools.includes(tool.name)), modelTools: null, instructions: row.instructions }, context);
   }
   async list(userId: string, agentId: string) {
     await this.host.owned(userId, agentId);
@@ -250,10 +247,10 @@ export class SubagentService {
   async create(userId: string, agentId: string, data: unknown, creationId: string, templateId = "") {
     await this.host.owned(userId, agentId); requestId(creationId);
     return this.serial(agentId, async () => {
-      const input = subagentInput(data); await this.validateWorkflow(agentId, input.workflow); await this.validateModel(userId, input, input.thinkingLevel);
+      const input = subagentInput(data); await this.validateModel(userId, input, input.thinkingLevel);
       const template = templateId ? subagentTemplate(templateId) : null;
       const templateOrigin = template ? { id: template.id, version: template.version, hash: bodyHash(canonical(template)) } : null;
-      if (template && (input.workflow?.purpose !== template.purpose || input.enabled || (input.workflow.purpose === "trading" && input.workflow.automaticEntriesEnabled))) throw new AgentError("Template creation requires its configured workflow, paused and automatic entries OFF. Enable explicitly after reviewing the saved copy.");
+      if (template && input.enabled) throw new AgentError("Template creation is paused by default; enable it explicitly after reviewing the saved copy.");
       const id = `worker:${creationId}`;
       const existing = await this.db.select().from(hvSubagents).where(eq(hvSubagents.id, id)).get();
       if (existing) { if (existing.agentId !== agentId || canonical(existing.templateOrigin) !== canonical(templateOrigin) || Object.entries(input).some(([key, value]) => JSON.stringify(Reflect.get(existing, key)) !== JSON.stringify(value))) throw new AgentError("Creation request was already used with different settings.", 409); return existing; }
@@ -280,7 +277,6 @@ export class SubagentService {
     switch (section) {
       case "enabled": return this.updateSettings(userId, agentId, id, undefined, { enabled: get("enabled") });
       case "instructions": return this.updateSettings(userId, agentId, id, undefined, { instructions: get("instructions") });
-      case "workflow": return this.updateSettings(userId, agentId, id, undefined, { workflow: get("workflow") });
       case "model": return this.updateSettings(userId, agentId, id, undefined, { provider: get("provider"), modelId: get("modelId"), thinkingLevel: get("thinkingLevel") });
       case "schedule": return this.updateSettings(userId, agentId, id, undefined, { schedule: get("schedule"), delaySeconds: get("delaySeconds"), completion: get("completion") });
       default: throw new AgentError("Unknown settings section.");
@@ -289,7 +285,7 @@ export class SubagentService {
   async update(userId: string, agentId: string, id: string, data: unknown) {
     return this.updateSettings(userId, agentId, id, data);
   }
-  private async updateSettings(userId: string, agentId: string, id: string, data: unknown, patch?: { workflow: unknown } | { tools: unknown } | { name: unknown; description: unknown } | { [K in keyof AssignmentSettings]: unknown } | { enabled: unknown } | { instructions: unknown } | { provider: unknown; modelId: unknown; thinkingLevel: unknown } | { schedule: unknown; delaySeconds: unknown; completion: unknown }) {
+  private async updateSettings(userId: string, agentId: string, id: string, data: unknown, patch?: { tools: unknown } | { name: unknown; description: unknown } | { [K in keyof AssignmentSettings]: unknown } | { enabled: unknown } | { instructions: unknown } | { provider: unknown; modelId: unknown; thinkingLevel: unknown } | { schedule: unknown; delaySeconds: unknown; completion: unknown }) {
     await this.host.owned(userId, agentId);
     return this.serial(agentId, async () => {
       const current = await this.definition(agentId, id);
@@ -297,7 +293,6 @@ export class SubagentService {
       if (patch && ("enabled" in patch || "delegatable" in patch || "schedule" in patch) && current.kind === "orchestrator") throw new AgentError("The orchestrator cannot be paused or have assignment or schedule settings.", 409);
       const input = subagentInput(patch ? { ...current, ...patch } : data, current.kind === "orchestrator");
       await this.validateModel(userId, input, input.thinkingLevel);
-      await this.validateWorkflow(agentId, input.workflow);
       const binding = this.binding(agentId);
       if (current.kind === "orchestrator") {
         const live = await binding.harness.snapshot(LiveDoc, binding.main.id, context), inbox = await binding.harness.snapshot(InboxDoc, binding.main.id, context);
@@ -310,7 +305,6 @@ export class SubagentService {
       };
       const scheduleSettings = { schedule: input.schedule, delaySeconds: input.delaySeconds, completion: input.completion, nextRunAt: input.enabled ? nextCandleRun(now, input.schedule, input.delaySeconds) : null };
       const changes = !patch ? { ...input, ...contextSettings, ...scheduleSettings }
-        : "workflow" in patch ? { workflow: input.workflow }
         : "tools" in patch ? { tools: input.tools }
         : "name" in patch ? { name: input.name, description: input.description }
         : "instructions" in patch ? { instructions: input.instructions }
@@ -359,17 +353,15 @@ export class SubagentService {
   async run(userId: string, agentId: string, id: string, task: string, submissionId: string) {
     await this.host.owned(userId, agentId); requestId(submissionId);
     task = assignment(task);
-    const expiresAt = await this.execution.admitInput(agentId, userId, `run:${submissionId}`, task);
-    return this.admitRun(agentId, id, task, `manual:${submissionId}`, "manual", { mode: "user_directed", userId, userInputRequestIds: [`run:${submissionId}`], expiresAt }, expiresAt);
+    return this.admitRun(agentId, id, task, `manual:${submissionId}`, "manual");
   }
-  delegate(agentId: string, id: string, task: string, submissionId: string, origin: ExecutionOrigin = automaticOrigin, expiresAt = Number.MAX_SAFE_INTEGER, signal?: AbortSignal) { return this.admitRun(agentId, id, task, submissionId, "delegation", origin, expiresAt, signal); }
-  private admitRun(agentId: string, id: string, task: string, submissionId: string, source: SubagentRun["source"], origin: ExecutionOrigin, expiresAt: number, signal?: AbortSignal) {
+  delegate(agentId: string, id: string, task: string, submissionId: string, signal?: AbortSignal) { return this.admitRun(agentId, id, task, submissionId, "delegation", signal); }
+  private admitRun(agentId: string, id: string, task: string, submissionId: string, source: SubagentRun["source"], signal?: AbortSignal) {
     return this.serial(agentId, async () => {
       if (!this.ready) throw new AgentError("Agent execution is not ready", 503);
       task = assignment(task); const binding = this.binding(agentId);
       const previous = await this.db.select().from(hvSubagentRuns).where(and(eq(hvSubagentRuns.agentId, agentId), eq(hvSubagentRuns.requestId, submissionId))).get();
       if (previous) { if (previous.subagentId !== id || previous.task !== task) throw new AgentError("Assignment request was already used.", 409); return previous; }
-      if (Date.now() >= expiresAt) throw new AgentError("Assignment authorization expired; request a new assignment", 409);
       const definition = await this.definition(agentId, id);
       subagentInput(definition);
       if (definition.kind !== "worker" || !definition.enabled || definition.archived || (source === "delegation" && !definition.delegatable)) throw new AgentError("This worker is not available for this assignment.", 409);
@@ -379,9 +371,8 @@ export class SubagentService {
       if (runs.length >= 4) throw new AgentError("This Agent already has four active workers.", 429);
       const run = await this.database.appTransaction(async (db, tx) => {
         signal?.throwIfAborted();
-        if (Date.now() >= expiresAt) throw new AgentError("Assignment authorization expired; request a new assignment", 409);
         const admitted = (await db.insert(hvSubagentRuns).values({ id: randomUUID(), agentId, subagentId: id, requestId: submissionId, source, task, config: definition, createdAt: Date.now() }).returning().all())[0]!;
-        await this.execution.snapshotRunTx(tx, admitted, origin);
+        await this.execution.snapshotRunTx(tx, admitted);
         signal?.throwIfAborted();
         return admitted;
       });
@@ -495,32 +486,13 @@ export class SubagentService {
         // is separately idempotent, so a crash cannot lose or duplicate the run.
         await db.update(hvSubagents).set({ nextRunAt: nextCandleRun(now, row.schedule, row.delaySeconds) }).where(eq(hvSubagents.id, row.id)).run();
         const admitted = (await db.insert(hvSubagentRuns).values({ id: randomUUID(), agentId: row.agentId, subagentId: row.id, requestId: `schedule:${row.id}:${row.nextRunAt}`, source: "schedule", task: `Scheduled ${row.schedule} assignment. UTC candle close: ${new Date(row.nextRunAt! - row.delaySeconds * 1000).toISOString()}.\n\nCarry out your responsibilities according to your instructions.`, config: row, status: reason ? "skipped" : "queued", result: reason, createdAt: now, finishedAt: reason ? now : null, reportedAt: reason ? now : null }).returning().all())[0]!;
-        if (!reason) await this.execution.snapshotRunTx(tx, admitted, { mode: "automatic", reason: "schedule" }, row.nextRunAt! - row.delaySeconds * 1000);
+        if (!reason) await this.execution.snapshotRunTx(tx, admitted);
         return admitted;
       });
       this.historyChanged(row.id);
       this.log?.info({ agentId: run.agentId, runId: run.id, subagentId: run.subagentId, status: run.status, reason: reason || undefined }, reason ? "Scheduled sub-agent run skipped" : "Scheduled sub-agent run");
       if (run.status === "queued" && binding) await this.dispatch(binding, run);
     });
-  }
-  private async validateWorkflow(agentId: string, value: unknown) {
-    if (value == null) return;
-    const workflow = workerWorkflow(value);
-    if ("instruments" in workflow) {
-      const supported = await this.host.instruments();
-      if (workflow.instruments.some((coin) => !supported.includes(coin))) throw new AgentError("Select currently supported main-DEX perpetual instruments");
-    }
-    const targets = workflow.purpose === "trading" ? workflow.requiredResearch.map((item) => item.subagentId) : workflow.purpose === "review" ? workflow.learningTargetSubagentIds : [];
-    for (const id of targets) {
-      const target = await this.definition(agentId, id);
-      if (target.kind !== "worker") throw new AgentError("Workflow targets must be workers in this Agent");
-      if (workflow.purpose === "trading") {
-        if (target.workflow?.purpose !== "analysis") throw new AgentError("Required research must name a configured analysis worker");
-        const analysis = target.workflow;
-        const requirements = workflow.requiredResearch.filter((item) => item.subagentId === id);
-        if (requirements.some((item) => item.topic !== analysis.topic || item.interval !== analysis.interval) || workflow.instruments.some((coin) => !analysis.instruments.includes(coin))) throw new AgentError("Research requirements must match the analyst's configured stream and instruments");
-      }
-    }
   }
   async close() { this.stopping = true; this.ready = false; this.historyShutdown.abort(); if (this.timer) clearInterval(this.timer); await this.ticking; await Promise.all(this.pending.values()); await Promise.all(this.historyFeeds); }
 }

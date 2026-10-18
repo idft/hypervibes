@@ -1,5 +1,5 @@
-import { join, resolve } from "node:path";
-import { tmpdir } from "node:os";
+import { isAbsolute, join, resolve, win32 } from "node:path";
+import { homedir, tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 
 export interface EncryptionKeySetting {
@@ -20,6 +20,17 @@ export interface AppConfig {
   authSecret: string;
   /** Optional server secret for encrypting exchange and provider credentials. */
   encryptionKey: EncryptionKeySetting | undefined;
+}
+
+/** OS-appropriate per-user data directory, so packaged hosts reuse one profile. */
+export function defaultDatabasePath(env: NodeJS.ProcessEnv, platform = process.platform, home = homedir()): string {
+  if (platform === "win32") {
+    const appData = env.APPDATA?.trim();
+    return win32.join(appData && win32.isAbsolute(appData) ? appData : win32.join(home, "AppData", "Roaming"), "HyperVibes", "hypervibes.sqlite");
+  }
+  if (platform === "darwin") return join(home, "Library", "Application Support", "HyperVibes", "hypervibes.sqlite");
+  const dataHome = env.XDG_DATA_HOME?.trim();
+  return join(dataHome && isAbsolute(dataHome) ? dataHome : join(home, ".local", "share"), "hypervibes", "hypervibes.sqlite");
 }
 
 function setting(env: NodeJS.ProcessEnv, name: string, fallback: string): string {
@@ -53,7 +64,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     authSecret,
     host: setting(env, "APP_HOST", "127.0.0.1"),
     port: Number(port),
-    databasePath: resolve(setting(env, "APP_SQLITE_PATH", "data/hypervibes.sqlite")),
+    databasePath: resolve(setting(env, "APP_SQLITE_PATH", defaultDatabasePath(env))),
     buildDir: resolve(setting(env, "APP_BUILD_DIR", fileURLToPath(new URL("../.build/", import.meta.url)))),
     staticDir: resolve(setting(
       env,

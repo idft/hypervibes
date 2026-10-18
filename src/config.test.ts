@@ -1,19 +1,34 @@
 import { join, resolve } from "node:path";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { describe, expect, it } from "vitest";
-import { loadConfig } from "./config.js";
+import { defaultDatabasePath, loadConfig } from "./config.js";
 import { testAuthSecret, testConfig } from "./test-config.js";
 
 describe("server config", () => {
-  it("defaults to loopback and a fresh SQLite file, ignoring legacy database config", () => {
+  it("defaults to loopback and an OS-appropriate per-user SQLite file, ignoring legacy database config", () => {
     const config = testConfig({ DATABASE_URL: "postgres://unused", APP_BIND_ADDR: "0.0.0.0:9999" });
     expect(config.host).toBe("127.0.0.1");
     expect(config.port).toBe(3003);
-    expect(config.databasePath).toBe(resolve("data/hypervibes.sqlite"));
+    const expectedDefault = process.platform === "win32"
+      ? join(join(homedir(), "AppData", "Roaming"), "HyperVibes", "hypervibes.sqlite")
+      : process.platform === "darwin"
+        ? join(homedir(), "Library", "Application Support", "HyperVibes", "hypervibes.sqlite")
+        : join(join(homedir(), ".local", "share"), "hypervibes", "hypervibes.sqlite");
+    expect(config.databasePath).toBe(resolve(expectedDefault));
     expect(config.staticDir).toBe(resolve("static"));
     expect(config.buildDir).toBe(resolve(".build"));
     expect(config.cacheDir).toBe(join(tmpdir(), "hypervibes"));
     expect(config.authOrigin).toBe("http://localhost:3003");
+  });
+
+  it("uses each platform's per-user directory and absolute environment overrides", () => {
+    expect(defaultDatabasePath({}, "linux", "/home/test")).toBe("/home/test/.local/share/hypervibes/hypervibes.sqlite");
+    expect(defaultDatabasePath({ XDG_DATA_HOME: "/custom/data" }, "linux", "/home/test")).toBe("/custom/data/hypervibes/hypervibes.sqlite");
+    expect(defaultDatabasePath({ XDG_DATA_HOME: "relative" }, "linux", "/home/test")).toBe("/home/test/.local/share/hypervibes/hypervibes.sqlite");
+    expect(defaultDatabasePath({}, "darwin", "/Users/test")).toBe("/Users/test/Library/Application Support/HyperVibes/hypervibes.sqlite");
+    expect(defaultDatabasePath({}, "win32", "C:\\Users\\test")).toBe("C:\\Users\\test\\AppData\\Roaming\\HyperVibes\\hypervibes.sqlite");
+    expect(defaultDatabasePath({ APPDATA: "D:\\Profile" }, "win32", "C:\\Users\\test")).toBe("D:\\Profile\\HyperVibes\\hypervibes.sqlite");
+    if (process.platform === "linux") expect(testConfig({ XDG_DATA_HOME: "/custom/data" }).databasePath).toBe("/custom/data/hypervibes/hypervibes.sqlite");
   });
 
   it("accepts explicit paths and bind settings", () => {

@@ -7,7 +7,7 @@ export const memoryKinds = ["research", "decision", "review"] as const;
 export type MemoryKind = typeof memoryKinds[number];
 export const relations = ["based_on", "corrects", "supersedes", "reviews"] as const;
 export type MemoryRelation = typeof relations[number];
-export interface FillAttribution { fillId: string; time: number; exchangeOid: string | null; requestId: string | null; decisionRef: string | null; origin: string }
+export interface FillAttribution { fillId: string; time: number; exchangeOid: string | null; requestId: string | null; decisionRef: string | null }
 export interface MemoryLink { ref: string; relation: MemoryRelation }
 export interface ResearchPayload {
   version: 1; bias: "long" | "short" | "neutral"; setup: "ready" | "watch" | "none" | "withdrawn";
@@ -99,6 +99,15 @@ export function publicationInput(kind: MemoryKind, value: unknown): PublicationI
   return result;
 }
 export interface ResearchRequirement { subagentId: string; topic: string; interval: string; maxAgeSeconds: number }
+/** Model-supplied advisory requirements; callers never gain trading authority from them. */
+export function researchRequirements(value: unknown): ResearchRequirement[] {
+  const result = array(value, 20, (item) => {
+    const row = fields(item, ["subagentId", "topic", "interval", "maxAgeSeconds"]);
+    return { subagentId: text(row.subagentId, 100, "worker ID"), topic: topic(row.topic), interval: interval(row.interval), maxAgeSeconds: integer(row.maxAgeSeconds, 1, 7 * 86400, "research maximum age") };
+  });
+  unique(result.map((requirement) => `${requirement.subagentId}:${requirement.topic}:${requirement.interval}`));
+  return result;
+}
 export interface MemoryMetadata {
   ref: string; status: string; kind: MemoryKind; topic: string; instrument: string | null; interval: string | null; summary: string;
   createdAt: number; evidenceAsOf: number | null; validUntil: number | null; producerSubagentId: string | null; sourceRunId: string | null;
@@ -106,7 +115,6 @@ export interface MemoryMetadata {
 }
 export interface MemoryDetail extends MemoryMetadata {
   content: string; payload: ResearchPayload | DecisionPayload | ReviewPayload; links: MemoryLink[]; artifactIds: string[];
-  generationTaskId: number | null; inputScopeKey: string | null; conversationId: number | null; toolTaskId: number | null;
-  executionOrigin: "automatic" | "user_directed";
+  conversationId: number | null; toolTaskId: number | null;
 }
 export type ResearchStatus = "missing" | "fresh" | "stale" | "disabled" | "retracted" | "withdrawn" | "incomplete" | "invalid_evidence";

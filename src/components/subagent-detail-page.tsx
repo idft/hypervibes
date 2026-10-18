@@ -6,7 +6,6 @@ import type { ModelChoice } from "../providers/provider-service.js";
 import { defaultMainInstructions, type AssignmentSettings, type SubagentInput, type SubagentSections } from "../agents/subagent-input.js";
 import { archiveSubagent, runSubagent, saveSubagent, saveSubagentAssignments, saveSubagentIdentity, saveSubagentSection, saveSubagentTools, stopSubagentRun } from "../web/subagents.js";
 import { subagentTemplates, templateDraft } from "../agents/subagent-templates.js";
-import { WorkerWorkflowConfig } from "./worker-workflow-config.js";
 import { ModelPicker, modelKey } from "./model-picker.js";
 import { ProviderLogo } from "./provider-logo.js";
 import type { RunPagination } from "../agents/subagent-history.js";
@@ -20,7 +19,7 @@ const panel = "space-y-4 rounded-2xl border border-zinc-800 bg-[#0d0d10] p-6";
 const inputClass = "mt-2 block w-full rounded-lg border border-zinc-700 bg-zinc-950 p-3 text-sm text-white";
 const button = "cursor-pointer rounded-full bg-violet-600 px-4 py-2 text-sm text-white hover:bg-violet-500 disabled:cursor-not-allowed disabled:opacity-50";
 const defaults: SubagentInput = { name: "", description: "", instructions: "Complete the assigned task using available tools. Cite evidence and timestamps, distinguish facts from assumptions, and report missing or stale data. Do not invent access to unavailable tools.", provider: "", modelId: "", thinkingLevel: "", tools: [], enabled: true, delegatable: true, persistent: false, schedule: "", delaySeconds: 30, completion: "wake", timeoutSeconds: 900 };
-export function SubagentDetailPage({ agentId, initial, choices, workers = [] }: { workers?: SubagentRow[]; agentId: string; initial?: { definition: SubagentRow; runs: SubagentRun[]; pagination?: RunPagination; schedulerError: string | null }; choices: ModelChoice[] }) {
+export function SubagentDetailPage({ agentId, initial, choices }: { agentId: string; initial?: { definition: SubagentRow; runs: SubagentRun[]; pagination?: RunPagination; schedulerError: string | null }; choices: ModelChoice[] }) {
   const router = useRouter();
   const [definition, setDefinition] = useState(initial?.definition);
   const [templateId, setTemplateId] = useState("");
@@ -43,11 +42,11 @@ export function SubagentDetailPage({ agentId, initial, choices, workers = [] }: 
       const result = await saveSubagentSection({ data: { agentId, id: definition.id, section, settings } });
       if (!result.ok) throw new Error(result.error);
       const row = result.data;
-      const saved = section === "workflow" ? { workflow: row.workflow } : section === "enabled" ? { enabled: row.enabled } : section === "instructions" ? { instructions: row.instructions }
+      const saved = section === "enabled" ? { enabled: row.enabled } : section === "instructions" ? { instructions: row.instructions }
         : section === "model" ? { provider: row.provider, modelId: row.modelId, thinkingLevel: row.thinkingLevel }
         : { schedule: row.schedule, delaySeconds: row.delaySeconds, completion: row.completion };
       setDefinition(row); setForm((current) => ({ ...current, ...saved }));
-      toast.success(section === "workflow" ? "Workflow settings updated" : section === "enabled" ? row.enabled ? "Sub-agent enabled" : "Sub-agent paused" : section === "instructions" ? "Instructions updated" : section === "model" ? "Model updated" : "Schedule updated");
+      toast.success(section === "enabled" ? row.enabled ? "Sub-agent enabled" : "Sub-agent paused" : section === "instructions" ? "Instructions updated" : section === "model" ? "Model updated" : "Schedule updated");
     } finally { inFlight.current = false; setPending(false); }
   }
   async function toggleEnabled() {
@@ -139,8 +138,8 @@ export function SubagentDetailPage({ agentId, initial, choices, workers = [] }: 
     finally { inFlight.current = false; setPending(false); }
   }
   return <div className="w-full space-y-3">
-    {!definition && <section className={panel}><h2 className="font-medium text-white">Start from a bundled template</h2><p className="text-sm text-zinc-400">Editable local copies, never auto-upgraded. All templates create paused, fresh-context workers with automatic entries OFF. Select your own provider/model and configure the workflow before creating.</p><label className="block text-sm">Template<select aria-label="Worker template" className={`${inputClass} cursor-pointer`} value={templateId} onChange={(event) => {
-      if ((form.name || form.instructions !== defaults.instructions || form.tools.length || form.workflow) && !window.confirm("Applying a template replaces this unsaved draft, including instructions, tools and workflow. Continue?")) return;
+    {!definition && <section className={panel}><h2 className="font-medium text-white">Start from a bundled template</h2><p className="text-sm text-zinc-400">Editable local copies, never auto-upgraded. All templates create paused, fresh-context workers. Select your own provider/model and review the instructions before creating.</p><label className="block text-sm">Template<select aria-label="Worker template" className={`${inputClass} cursor-pointer`} value={templateId} onChange={(event) => {
+      if ((form.name || form.instructions !== defaults.instructions || form.tools.length) && !window.confirm("Applying a template replaces this unsaved draft, including instructions and tools. Continue?")) return;
       const id = event.target.value; setTemplateId(id);
       setForm(id ? templateDraft(id, { provider: form.provider, modelId: form.modelId, thinkingLevel: form.thinkingLevel }) : { ...defaults, provider: form.provider, modelId: form.modelId, thinkingLevel: form.thinkingLevel });
     }}><option value="">Blank worker</option>{subagentTemplates.map((template) => <option key={template.id} value={template.id}>{template.name} · v{template.version}</option>)}</select></label>{templateId && <div className="space-y-2 text-sm text-zinc-300"><p>{subagentTemplates.find((template) => template.id === templateId)?.description}</p><p>Suggested schedule: {form.schedule} + {form.delaySeconds}s · completion {form.completion}</p><p>Requested tools: {form.tools.join(", ")}</p><details><summary className="cursor-pointer">Preview responsibilities</summary><pre className="mt-3 whitespace-pre-wrap text-xs">{form.instructions}</pre></details></div>}</section>}
@@ -163,10 +162,8 @@ export function SubagentDetailPage({ agentId, initial, choices, workers = [] }: 
           <button type="button" disabled={!form.instructions.trim()} onClick={() => { void saveInstructions(); }} className={button}>Save instructions</button>
         </div>}
         <ToolPicker tools={form.tools} main={main} onChange={saveTools} />
-        {form.tools.includes("submit_orders") && !form.tools.includes("record_trade_decision") && <p role="status" className="text-sm text-amber-200">Opening-order readiness: record_trade_decision is not selected. Existing permissions were not widened; select it explicitly for new exposure. Protection/reduction remains available.</p>}
-        {form.workflow?.purpose === "trading" && ["get_trading_context", "record_trade_decision", "prepare_protected_entry", "get_protection_status", "submit_orders"].filter((tool) => !form.tools.includes(tool)).map((tool) => <p key={tool} role="status" className="text-xs text-amber-200">Trading workflow readiness: missing selected tool {tool}.</p>)}
+        {form.tools.includes("submit_orders") && !form.tools.includes("record_trade_decision") && <p role="status" className="text-sm text-amber-200">Trading readiness: record_trade_decision is not selected. Existing permissions were not widened; select it explicitly for attributable trade rationale.</p>}
         {!main && <>
-          <WorkerWorkflowConfig key={JSON.stringify(form.workflow ?? null)} value={form.workflow} workers={workers} disabled={pending || definition?.archived} onSave={(workflow) => saveSection("workflow", { workflow })} />
           <AssignmentConfig value={form} onChange={saveAssignments} />
           <ScheduleConfig value={form} onChange={(schedule) => saveSection("schedule", schedule)} />
         </>}

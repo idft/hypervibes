@@ -48,11 +48,10 @@ describe("versioned accumulated learnings", () => {
     await learning.append(f.operator, "newer", input("Later finding"));
     await f.db.run("UPDATE hv_subagent_runs SET status='completed' WHERE id='run-reviewer'");
     ({ learning } = await f.reopen());
-    f.now = f.reviewer.expiresAt;
     expect(await learning.replace(f.reviewer, "original", firstInput)).toEqual(original);
     expect((await learning.current("agent", scope)).version).toBe(2);
     await expect(learning.replace(f.reviewer, "original", { ...firstInput, content: "Changed" })).rejects.toThrow("different");
-    await expect(learning.append(f.reviewer, "late", input("Late"))).rejects.toThrow("expired");
+    await expect(learning.append(f.reviewer, "late", input("Late"))).rejects.toThrow("active");
   });
   it("rejects overflows and missing evidence atomically, without successful receipts or empty sets", async () => {
     const { learning } = f.services();

@@ -1,7 +1,6 @@
 import { sql } from "drizzle-orm";
 import { check, index, integer, sqliteTable, text, uniqueIndex } from "drizzle-orm/sqlite-core";
 import { hvAgents } from "./agent-schema.js";
-import type { WorkerWorkflow } from "../agents/worker-workflow.js";
 
 export const hvSubagents = sqliteTable("hv_subagents", {
   id: text("id").primaryKey(),
@@ -14,7 +13,6 @@ export const hvSubagents = sqliteTable("hv_subagents", {
   modelId: text("model_id").notNull(),
   thinkingLevel: text("thinking_level").notNull().default(""),
   tools: text("tools", { mode: "json" }).$type<string[]>().notNull(),
-  workflow: text("workflow", { mode: "json" }).$type<WorkerWorkflow>(),
   templateOrigin: text("template_origin", { mode: "json" }).$type<{ id: string; version: number; hash: string }>(),
   enabled: integer("enabled", { mode: "boolean" }).notNull().default(true),
   archived: integer("archived", { mode: "boolean" }).notNull().default(false),

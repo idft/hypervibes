@@ -86,7 +86,7 @@ describe("subagent definitions, execution and scheduling", () => {
     const run = await completed(agent.id, worker.id);
     const child = await harness.conversation(run.conversationId! as ConversationId, context);
     const resolved = await child!.agent(context);
-    expect(resolved.extensions.map((extension) => extension.name)).toEqual(["hyperliquid", "execution-context", "ta"]);
+    expect(resolved.extensions.map((extension) => extension.name)).toEqual(["hyperliquid", "ta"]);
     expect(resolved.tools.map((tool) => tool.name)).toEqual(["ta_macd"]);
     const transcript = await runtime.agents.subagents.runDetail("owner", agent.id, worker.id, run.id);
     expect(transcript.tools).toContainEqual(expect.objectContaining({ name: "ta_macd", status: "done" }));
@@ -98,7 +98,7 @@ describe("subagent definitions, execution and scheduling", () => {
     const definition = (await runtime.agents.subagents.list("owner", agent.id)).find((row) => row.kind === "orchestrator")!;
     await runtime.agents.subagents.updateTools("owner", agent.id, definition.id, ["ta_rsi"]);
     const rootAgent = await main.agent(context);
-    expect(rootAgent.extensions.map((extension) => extension.name)).toEqual(["hyperliquid", "subagents", "execution-context", "ta"]);
+    expect(rootAgent.extensions.map((extension) => extension.name)).toEqual(["hyperliquid", "subagents", "ta"]);
     expect(rootAgent.tools.map((tool) => tool.name)).toEqual(["ta_rsi"]);
   });
 
@@ -287,7 +287,7 @@ describe("subagent definitions, execution and scheduling", () => {
     expect(one.id).toBe(again.id);
     const first = await completed(agent.id, worker.id); expect(first.result).toBe("Research evidence");
     const child = await harness.conversation(first.conversationId! as never, context); const resolved = await child!.agent(context);
-    expect(resolved.tools.map((tool) => tool.name)).toEqual(["get_account"]); expect(resolved.extensions.map((extension) => extension.name)).toEqual(["hyperliquid", "execution-context"]);
+    expect(resolved.tools.map((tool) => tool.name)).toEqual(["get_account"]); expect(resolved.extensions.map((extension) => extension.name)).toEqual(["hyperliquid"]);
     await runtime.agents.subagents.run("owner", agent.id, worker.id, "Second task", randomUUID());
     const second = await completed(agent.id, worker.id); expect(second.result).toBe("Second assignment"); expect(second.conversationId).not.toBe(first.conversationId);
     expect((await runtime.agents.chat("owner", agent.id)).messages).toEqual([]);

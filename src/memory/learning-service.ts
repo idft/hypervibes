@@ -51,12 +51,9 @@ export class LearningService {
       const replay = await operationReplay<{ scope: LearningScope; version: number }>(tx, actor, key, kind, hash);
       if (replay) return replay;
       const now = timestamp(this.clock());
-      await assertActiveActor(tx, actor, now);
+      await assertActiveActor(tx, actor);
       await this.authorize(tx, actor, kind, input.scope.kind === "worker" ? input.scope.subagentId : null);
       await this.checkScope(tx, actor.agentId, input.scope);
-      // Learning writes are operator edits or verified reviewer run effects,
-      // not a root-model permission implicit in installing the extension.
-      if (!actor.userId && !actor.runId) throw new AgentError("Learning mutations require an operator or authorized reviewer run", 403);
       let set = await this.set(tx, actor.agentId, input.scope);
       if (!set) {
         set = { id: randomUUID(), current_version: 0 };
@@ -75,7 +72,7 @@ export class LearningService {
       if (content.length > 8000) throw new AgentError("Learning document exceeds 8,000 characters; reread and consolidate using replace", 409);
       for (const ref of refs) if (!await tx.get("SELECT number FROM hv_memories WHERE agent_id=? AND number=?", actor.agentId, ref)) throw new AgentError("Evidence memory not found in this Agent", 404);
       const version = integer(set.current_version + 1, 1, Number.MAX_SAFE_INTEGER - 1, "learning version");
-      await tx.run("INSERT INTO hv_learning_revisions(agent_id,set_id,version,content,operation,reason,created_at,actor_user_id,producer_subagent_id,source_run_id,generation_task_id,input_scope_key,conversation_id,tool_task_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)", actor.agentId, set.id, version, content, operation, input.reason, now, actor.userId, actor.subagentId, actor.runId, actor.generationTaskId, actor.inputScopeKey, actor.conversationId, actor.toolTaskId);
+      await tx.run("INSERT INTO hv_learning_revisions(agent_id,set_id,version,content,operation,reason,created_at,actor_user_id,producer_subagent_id,source_run_id,conversation_id,tool_task_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)", actor.agentId, set.id, version, content, operation, input.reason, now, actor.userId, actor.subagentId, actor.runId, actor.conversationId, actor.toolTaskId);
       for (const ref of refs) await tx.run("INSERT INTO hv_learning_revision_memories(agent_id,set_id,version,memory_number) VALUES (?,?,?,?)", actor.agentId, set.id, version, ref);
       await tx.run("UPDATE hv_learning_sets SET current_version=?,updated_at=? WHERE agent_id=? AND id=?", version, now, actor.agentId, set.id);
       return saveOperation(tx, actor, key, kind, hash, { scope: input.scope, version }, now);

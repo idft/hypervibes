@@ -1,22 +1,21 @@
 import type { SqliteExecutor } from "@earendil-works/pi-durable/storage/sqlite";
 import { AgentError } from "../agents/agent-input.js";
 import { candleIntervals } from "../agents/candle-intervals.js";
-import { researchRequirements } from "../agents/worker-workflow.js";
 import type { SharedDatabase } from "../db/shared-database.js";
 import { artifactVisibleSql } from "../research/artifacts.js";
 import { assertActiveActor, operationReplay, requestHash, saveOperation, type MemoryActor, type MemoryAuthorization } from "./operations.js";
-import { instrument, interval, memoryKinds, memoryRef, parseMemoryRef, publicationInput, timestamp, topic, type MemoryDetail, type MemoryKind, type MemoryMetadata, type PublicationInput, type ResearchPayload, type ResearchStatus } from "./memory-contracts.js";
+import { instrument, interval, memoryKinds, memoryRef, parseMemoryRef, publicationInput, researchRequirements, timestamp, topic, type MemoryDetail, type MemoryKind, type MemoryMetadata, type ResearchPayload, type ResearchStatus } from "./memory-contracts.js";
 import { choice, fields, integer, text } from "./validation.js";
 
 interface Row {
   number: number; status: string; kind: MemoryKind; topic: string; instrument: string | null; interval: string | null; summary: string; content: string; payload: string;
   created_at: number; evidence_as_of: number | null; valid_until: number | null; producer_subagent_id: string | null; source_run_id: string | null;
-  source_generation_task_id: number | null; source_input_scope_key: string | null; conversation_id: number | null; tool_task_id: number | null;
-  execution_origin: "automatic" | "user_directed"; retracted_at: number | null; retraction_reason: string | null;
+  conversation_id: number | null; tool_task_id: number | null;
+  retracted_at: number | null; retraction_reason: string | null;
 }
-export interface ResearchPublicationPolicy { maxAgeSeconds: number; evidenceBoundary?: number }
-export type ResearchPolicyResolver = (tx: SqliteExecutor, actor: MemoryActor, input: Extract<PublicationInput, { kind: "research" }>) => Promise<ResearchPublicationPolicy>;
 export interface PublicationResult { ref: string; kind: MemoryKind; createdAt: number; validUntil: number | null }
+/** Host validity cap: research cannot claim validity longer than this past its evidence. */
+export const maxResearchAgeSeconds = 7 * 86400;
 const columns = "number,kind,topic,instrument,interval,summary,created_at,evidence_as_of,valid_until,producer_subagent_id,source_run_id,retracted_at,retraction_reason";
 function statusSql(now: number) {
   timestamp(now);
@@ -26,7 +25,7 @@ function metadata(row: Row): MemoryMetadata {
   return { status: row.status, ref: memoryRef(row.number), kind: row.kind, topic: row.topic, instrument: row.instrument, interval: row.interval, summary: row.summary, createdAt: row.created_at, evidenceAsOf: row.evidence_as_of, validUntil: row.valid_until, producerSubagentId: row.producer_subagent_id, sourceRunId: row.source_run_id, retractedAt: row.retracted_at, retractionReason: row.retraction_reason };
 }
 export class MemoryService {
-  constructor(private readonly db: SharedDatabase, private readonly authorize: MemoryAuthorization, private readonly researchPolicy: ResearchPolicyResolver, private readonly clock: () => number = Date.now) {}
+  constructor(private readonly db: SharedDatabase, private readonly authorize: MemoryAuthorization, private readonly clock: () => number = Date.now) {}
   publishResearch(actor: MemoryActor, key: string, input: unknown) { return this.publish(actor, key, "research", input); }
   recordDecision(actor: MemoryActor, key: string, input: unknown) { return this.publish(actor, key, "decision", input); }
   publishReview(actor: MemoryActor, key: string, input: unknown) { return this.publish(actor, key, "review", input); }
@@ -38,15 +37,14 @@ export class MemoryService {
       const replay = await operationReplay<PublicationResult>(tx, actor, key, operation, hash);
       if (replay) return replay;
       const now = timestamp(this.clock());
-      await assertActiveActor(tx, actor, now);
+      await assertActiveActor(tx, actor);
       await this.authorize(tx, actor, operation);
       let deadline: number | null = null;
       if (input.kind === "research") {
-        const policy = await this.researchPolicy(tx, actor, input);
-        integer(policy.maxAgeSeconds, 1, 7 * 86400, "research policy age");
         const width = candleIntervals[interval(input.interval)] * 1000;
-        if (input.evidenceAsOf > now || input.evidenceAsOf % width !== 0 || (policy.evidenceBoundary !== undefined && input.evidenceAsOf !== policy.evidenceBoundary)) throw new AgentError("Evidence must match the admitted closed-candle boundary in milliseconds");
-        deadline = timestamp(input.evidenceAsOf + policy.maxAgeSeconds * 1000);
+        if (input.evidenceAsOf > now || input.evidenceAsOf % width !== 0) throw new AgentError("Evidence must be an aligned closed-candle end boundary in UTC milliseconds, not in the future");
+        // Host policy, not model prose, bounds how long research stays actionable.
+        deadline = timestamp(input.evidenceAsOf + maxResearchAgeSeconds * 1000);
         if (input.requestedValidUntil !== null) deadline = Math.min(deadline, input.requestedValidUntil);
         if (deadline <= input.evidenceAsOf) throw new AgentError("Research validity must follow its evidence boundary");
       }
@@ -76,7 +74,7 @@ export class MemoryService {
       const counter = (await tx.get<{ next_number: number }>("SELECT next_number FROM hv_memory_counters WHERE agent_id=?", actor.agentId))!;
       const number = integer(counter.next_number, 1, Number.MAX_SAFE_INTEGER - 1, "next memory number");
       await tx.run("UPDATE hv_memory_counters SET next_number=? WHERE agent_id=?", number + 1, actor.agentId);
-      await tx.run(`INSERT INTO hv_memories(agent_id,number,kind,topic,instrument,interval,summary,content,payload,created_at,evidence_as_of,valid_until,producer_subagent_id,source_run_id,source_generation_task_id,source_input_scope_key,conversation_id,tool_task_id,execution_origin) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, actor.agentId, number, kind, input.topic, input.instrument, input.interval, input.summary, input.content, JSON.stringify(input.payload), now, input.kind === "research" ? input.evidenceAsOf : null, deadline, actor.subagentId, actor.runId, actor.generationTaskId, actor.inputScopeKey, actor.conversationId, actor.toolTaskId, actor.origin);
+      await tx.run("INSERT INTO hv_memories(agent_id,number,kind,topic,instrument,interval,summary,content,payload,created_at,evidence_as_of,valid_until,producer_subagent_id,source_run_id,conversation_id,tool_task_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", actor.agentId, number, kind, input.topic, input.instrument, input.interval, input.summary, input.content, JSON.stringify(input.payload), now, input.kind === "research" ? input.evidenceAsOf : null, deadline, actor.subagentId, actor.runId, actor.conversationId, actor.toolTaskId);
       for (const link of links) await tx.run("INSERT INTO hv_memory_links(agent_id,source_number,target_number,relation) VALUES (?,?,?,?)", actor.agentId, number, parseMemoryRef(link.ref), link.relation);
       for (const id of input.artifactIds) await tx.run("INSERT INTO hv_memory_artifacts(agent_id,memory_number,artifact_id) VALUES (?,?,?)", actor.agentId, number, id);
       return saveOperation(tx, actor, key, operation, hash, { ref: memoryRef(number), kind, createdAt: now, validUntil: deadline }, now);
@@ -93,7 +91,7 @@ export class MemoryService {
       const row = await this.row(tx, agentId, number);
       const links = await tx.all<{ target_number: number; relation: MemoryDetail["links"][number]["relation"] }>("SELECT target_number,relation FROM hv_memory_links WHERE agent_id=? AND source_number=? ORDER BY target_number,relation", agentId, number);
       const artifacts = await tx.all<{ artifact_id: string }>("SELECT artifact_id FROM hv_memory_artifacts WHERE agent_id=? AND memory_number=? ORDER BY artifact_id", agentId, number);
-      return { ...metadata(row), content: row.content, payload: JSON.parse(row.payload) as MemoryDetail["payload"], links: links.map((link) => ({ ref: memoryRef(link.target_number), relation: link.relation })), artifactIds: artifacts.map((item) => item.artifact_id), generationTaskId: row.source_generation_task_id, inputScopeKey: row.source_input_scope_key, conversationId: row.conversation_id, toolTaskId: row.tool_task_id, executionOrigin: row.execution_origin };
+      return { ...metadata(row), content: row.content, payload: JSON.parse(row.payload) as MemoryDetail["payload"], links: links.map((link) => ({ ref: memoryRef(link.target_number), relation: link.relation })), artifactIds: artifacts.map((item) => item.artifact_id), conversationId: row.conversation_id, toolTaskId: row.tool_task_id };
     });
   }
   async list(agentId: string, value: unknown = {}) {
@@ -116,37 +114,37 @@ export class MemoryService {
     const items = rows.slice(0, limit).map(metadata), last = items.at(-1);
     return { items, nextCursor: rows.length > limit && last ? { createdAt: last.createdAt, ref: last.ref } : null };
   }
-  /** Requirements must come from the saved trusted trading workflow at the call site. */
+  /** Advisory current-research retrieval for caller-supplied stream requirements. */
   tradingContext(agentId: string, coin: string, value: unknown) {
     return this.db.transaction((tx) => this.tradingContextTx(tx, agentId, coin, value));
   }
   async tradingContextTx(tx: SqliteExecutor, agentId: string, coin: string, value: unknown) {
     instrument(coin);
     const requirements = researchRequirements(value);
-      const now = timestamp(this.clock());
-      const items = [];
-      for (const requirement of requirements) {
-        const producer = await tx.get<{ enabled: number; archived: number }>("SELECT enabled,archived FROM hv_subagents WHERE agent_id=? AND id=? AND kind='worker'", agentId, requirement.subagentId);
-        // Select the latest BEFORE evaluating status: no resurrection of old setups.
-        const row = await tx.get<Row>("SELECT * FROM hv_memories WHERE agent_id=? AND kind='research' AND instrument=? AND topic=? AND interval=? AND producer_subagent_id=? ORDER BY number DESC LIMIT 1", agentId, coin, requirement.topic, requirement.interval, requirement.subagentId);
-        const payload = row ? JSON.parse(row.payload) as ResearchPayload : null;
-        const deadline = row ? Math.min(row.valid_until!, row.evidence_as_of! + requirement.maxAgeSeconds * 1000) : null;
-        let status: ResearchStatus = "fresh";
-        if (!producer || !producer.enabled || producer.archived) status = "disabled";
-        else if (!row) status = "missing";
-        else if (row.retracted_at !== null) status = "retracted";
-        else if (row.evidence_as_of! > now || row.evidence_as_of! % (candleIntervals[interval(requirement.interval)] * 1000) !== 0) status = "invalid_evidence";
-        else if (payload!.setup === "withdrawn") status = "withdrawn";
-        else if (payload!.coverage !== "complete") status = "incomplete";
-        else if (now >= deadline!) status = "stale";
-        const eligible = status === "fresh" && payload?.setup === "ready" && payload.bias === "long";
-        items.push({ producerSubagentId: requirement.subagentId, topic: requirement.topic, interval: requirement.interval, ref: row ? memoryRef(row.number) : null, status, evidenceAsOf: row?.evidence_as_of ?? null, validUntil: deadline, summary: status === "fresh" ? row!.summary : null, payload: status === "fresh" ? payload : null, eligibleForAutomaticEntry: eligible });
-      }
-      // Character counts are not token budgets. Never silently omit required
-      // evidence and then report a successful entry gate.
-      const overBudget = new TextEncoder().encode(JSON.stringify(items)).length > 64 * 1024;
-      const bounded = overBudget ? items.map((item) => ({ ...item, summary: null, payload: null, eligibleForAutomaticEntry: false })) : items;
-      // Empty evidence is never an authorization success.
-      return { observedAt: now, instrument: coin, overBudget, eligibleForAutomaticEntry: !overBudget && bounded.length > 0 && bounded.every((item) => item.eligibleForAutomaticEntry), requirements: bounded };
+    const now = timestamp(this.clock());
+    const items = [];
+    for (const requirement of requirements) {
+      const producer = await tx.get<{ enabled: number; archived: number }>("SELECT enabled,archived FROM hv_subagents WHERE agent_id=? AND id=? AND kind='worker'", agentId, requirement.subagentId);
+      // Select the latest BEFORE evaluating status: no resurrection of old setups.
+      const row = await tx.get<Row>("SELECT * FROM hv_memories WHERE agent_id=? AND kind='research' AND instrument=? AND topic=? AND interval=? AND producer_subagent_id=? ORDER BY number DESC LIMIT 1", agentId, coin, requirement.topic, requirement.interval, requirement.subagentId);
+      const payload = row ? JSON.parse(row.payload) as ResearchPayload : null;
+      const deadline = row ? Math.min(row.valid_until!, row.evidence_as_of! + requirement.maxAgeSeconds * 1000) : null;
+      let status: ResearchStatus = "fresh";
+      if (!producer || !producer.enabled || producer.archived) status = "disabled";
+      else if (!row) status = "missing";
+      else if (row.retracted_at !== null) status = "retracted";
+      else if (row.evidence_as_of! > now || row.evidence_as_of! % (candleIntervals[interval(requirement.interval)] * 1000) !== 0) status = "invalid_evidence";
+      else if (payload!.setup === "withdrawn") status = "withdrawn";
+      else if (payload!.coverage !== "complete") status = "incomplete";
+      else if (now >= deadline!) status = "stale";
+      const eligible = status === "fresh" && payload?.setup === "ready";
+      items.push({ producerSubagentId: requirement.subagentId, topic: requirement.topic, interval: requirement.interval, ref: row ? memoryRef(row.number) : null, status, evidenceAsOf: row?.evidence_as_of ?? null, validUntil: deadline, summary: status === "fresh" ? row!.summary : null, payload: status === "fresh" ? payload : null, eligible });
+    }
+    // Character counts are not token budgets. Never silently omit requested
+    // evidence and then report a successful freshness picture.
+    const overBudget = new TextEncoder().encode(JSON.stringify(items)).length > 64 * 1024;
+    const bounded = overBudget ? items.map((item) => ({ ...item, summary: null, payload: null, eligible: false })) : items;
+    const allReady = !overBudget && bounded.length > 0 && bounded.every((item) => item.eligible);
+    return { observedAt: now, instrument: coin, overBudget, allReady, requirements: bounded };
   }
 }

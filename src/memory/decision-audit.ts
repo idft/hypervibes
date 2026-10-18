@@ -15,12 +15,12 @@ async function attribute(tx: SqliteExecutor, agentId: string, owner: string, row
   for (const row of rows) {
     const cloid = row.cloid && /^0x[0-9a-fA-F]{32}$/.test(row.cloid) ? row.cloid : null;
     const oid = row.oid && /^[1-9][0-9]{0,15}$/.test(row.oid) && Number.isSafeInteger(Number(row.oid)) ? row.oid : null;
-    const local = (cloid || oid) ? await tx.get<{ request_key: string; decision_number: number | null; origin: string | null }>("SELECT r.request_key,c.decision_number,c.origin FROM hv_order_items i JOIN hv_order_actions a ON a.id=i.action_id JOIN hv_order_requests r ON r.id=a.request_id LEFT JOIN hv_order_execution_contexts c ON c.request_id=r.id AND c.agent_id=r.agent_id WHERE r.agent_id=? AND r.account=? AND ((? IS NOT NULL AND i.cloid=?) OR (? IS NULL AND i.oid=?)) LIMIT 1", agentId, owner, cloid, cloid, cloid, oid) : null;
-    results.push({ fillId: row.id, time: row.time, exchangeOid: oid, requestId: local?.request_key ?? null, decisionRef: local?.decision_number == null ? null : `m${local.decision_number}`, origin: local?.origin ? (JSON.parse(local.origin) as { mode: string }).mode : "legacy/unattributed" });
+    const local = (cloid || oid) ? await tx.get<{ request_key: string; decision_ref: string | null }>("SELECT r.request_key, CASE WHEN m.number IS NOT NULL THEN 'm'||m.number ELSE NULL END AS decision_ref FROM hv_order_items i JOIN hv_order_actions a ON a.id=i.action_id JOIN hv_order_requests r ON r.id=a.request_id LEFT JOIN hv_memories m ON m.agent_id=r.agent_id AND 'm'||m.number=json_extract(r.input,'$.decision_ref') AND m.kind='decision' WHERE r.agent_id=? AND r.account=? AND ((? IS NOT NULL AND i.cloid=?) OR (? IS NULL AND i.oid=?)) LIMIT 1", agentId, owner, cloid, cloid, cloid, oid) : null;
+    results.push({ fillId: row.id, time: row.time, exchangeOid: oid, requestId: local?.request_key ?? null, decisionRef: local?.decision_ref ?? null });
   }
   return results;
 }
-const coverage = "Local order matches only, Agent/account-scoped. External/unmatched fills and older orders without a decision link remain legacy/unattributed, not evidence of no rationale. No causal performance claim.";
+const coverage = "Local order matches only, Agent/account-scoped. Decision refs are optional model-authored audit links, not verified approval. External/unmatched fills remain unattributed, not evidence of absent rationale.";
 export async function windowFillAudit(db: SharedDatabase, agentId: string, start: number, end: number, limit = 25, before?: { time: number; id: string }) {
   timestamp(start); timestamp(end); integer(limit, 1, 50, "fill audit page size");
   if (end <= start || end - start > 90 * 86400_000 || (before && (!Number.isSafeInteger(before.time) || before.id.length > 128))) throw new AgentError("Invalid bounded fill audit window/cursor");

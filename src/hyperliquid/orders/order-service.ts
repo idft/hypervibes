@@ -21,9 +21,6 @@ export type OrderBindings = {
   authority(userId: string, agentId: string, signal: AbortSignal, needsBuilder: boolean): Promise<TradingAuthority>;
 };
 
-function attributed(view: OrderView, audit?: { decision_number: number | null; origin: string | null }): OrderView {
-  return { ...view, decisionRef: audit?.decision_number == null ? null : `m${audit.decision_number}`, executionOrigin: audit?.origin ? (JSON.parse(audit.origin) as { mode: string }).mode : "legacy/unattributed" };
-}
 /** Application-owned intent/outcome gateway. Reconciliation NEVER submits orders. */
 export class OrderService {
   readonly store: OrderStore;
@@ -38,22 +35,22 @@ export class OrderService {
   constructor(private readonly database: SharedDatabase, private readonly transport: HttpTransport, private readonly bindings: OrderBindings, private readonly log?: FastifyBaseLogger) {
     this.store = new OrderStore(database); this.info = new InfoClient({ transport });
   }
-  installAdmission(execution: ExecutionContextService) { this.admission = new TradeAdmissionService(this.database, execution, this.transport); }
+  installAdmission(execution: ExecutionContextService) { this.admission = new TradeAdmissionService(this.database, execution); }
   executionHandle(agentId: string, api: ToolExecutionApi, context: Context) {
-    if (!this.admission) throw new HyperliquidError("Execution provenance is not initialized; model opening orders are unavailable", 503);
+    if (!this.admission) throw new HyperliquidError("Execution identity is not initialized; model orders are unavailable", 503);
     return this.admission.handle(agentId, api, context);
   }
   async plan(userId: string, agentId: string, input: ProtectedEntryInput, handle: OrderExecutionHandle | undefined, cancellation?: AbortSignal) {
     await this.account(userId, agentId);
     if (!this.admission) throw new HyperliquidError("Trade planning is not initialized", 503);
-    const frame = this.admission.planning(agentId, handle), workflow = frame.config.workflow;
-    return prepareProtectedEntry(this.info, input, workflow?.purpose === "trading" ? workflow : null, frame.origin.mode === "user_directed", this.signal(cancellation));
+    this.admission.planning(agentId, handle);
+    return prepareProtectedEntry(this.info, input, this.signal(cancellation));
   }
   async planProtection(userId: string, agentId: string, input: PositionProtectionInput, handle: OrderExecutionHandle | undefined, cancellation?: AbortSignal) {
     const account = await this.account(userId, agentId);
     if (!this.admission) throw new HyperliquidError("Trade planning is not initialized", 503);
-    const frame = this.admission.planning(agentId, handle), workflow = frame.config.workflow;
-    return preparePositionProtection(this.info, input, workflow?.purpose === "trading" ? workflow : null, frame.origin.mode === "user_directed", account, this.signal(cancellation));
+    this.admission.planning(agentId, handle);
+    return preparePositionProtection(this.info, input, account, this.signal(cancellation));
   }
   async protection(userId: string, agentId: string, cancellation?: AbortSignal) {
     const account = await this.account(userId, agentId), signal = this.signal(cancellation);
@@ -159,8 +156,8 @@ export class OrderService {
         authority = await this.bindings.authority(userId, agentId, signal, kind === "submit");
         if (authority.account !== account) throw new HyperliquidError("Account assignment changed", 409);
         const prepared = await prepare(authority, signal);
-        const admission = kind === "submit" && this.admission ? await this.admission.validate(agentId, input as SubmitInput, this.info, account, signal, prepared, execution) : null;
-        request = await this.store.prepare(agentId, account, key, kind, input, prepared, this.admission && kind === "submit" ? (tx, row) => this.admission!.persist(tx, row, input as SubmitInput, admission) : undefined);
+        if (kind === "submit" && this.admission) await this.admission.validate(agentId, this.info, account, signal, prepared, execution);
+        request = await this.store.prepare(agentId, account, key, kind, input, prepared);
       }
       // The same request lock is also used by background reconciliation.
       const captured = request;
@@ -177,7 +174,10 @@ export class OrderService {
           }
           authority ??= await this.bindings.authority(userId, agentId, signal, kind === "submit");
           if (authority.account !== captured.account) throw new HyperliquidError("Account assignment changed", 409);
-          if (kind === "submit" && this.admission) await this.admission.validate(agentId, input as SubmitInput, this.info, account, signal, [{ payload: JSON.parse(action.payload) as PreparedPayload, items: views }], execution, captured.id);
+          if (kind === "submit" && this.admission) {
+            if (views.some((view) => !view.reduceOnly) && await this.store.hasUncertain(account)) throw new HyperliquidError("An earlier command has an unknown outcome on this account. Reconcile it before adding exposure.", 409);
+            await this.admission.validate(agentId, this.info, account, signal, [{ payload: JSON.parse(action.payload) as PreparedPayload, items: views }], execution);
+          }
           if (!(await this.store.begin(action))) continue;
           const payload = JSON.parse(action.payload) as PreparedPayload;
           let response: unknown;
@@ -208,9 +208,7 @@ export class OrderService {
     if (results.some((view) => view.kind === "take_profit" || view.kind === "stop_loss")) warnings.push("TP/SL uses fixed-size reduce-only triggers. Native attached TP/SL activates on full parent fill; manually canceling a partially filled parent also cancels its attached protection. Inspect every leg; a rejected leg can leave exposure unprotected.");
     if (results.some((view) => view.filledSize && view.size && compare(view.filledSize, view.size) < 0)) warnings.push("Only part of the requested size was filled. filledSize is the executed quantity; a filled receipt does not imply the whole requested size traded. IOC remainders do not rest.");
     if (results.some((view) => view.commandStatus === "unknown")) warnings.push("Unknown is not failure. Reconcile using get_order_request/get_order; never retry with a new request_id.");
-    const audit = await this.store.audit(request.id);
-    const execution = audit ? { origin: (JSON.parse(audit.origin) as { mode: string }).mode, decisionRef: audit.decision_number === null ? null : `m${audit.decision_number}`, coverage: audit.decision_number === null ? "Immutable execution frame; protective/reducing management may omit a decision" : "Locally attributed decision and immutable execution frame" } : { origin: "legacy/unattributed", decisionRef: null, coverage: "No local decision link; not evidence of no rationale" };
-    return { operationId: request.id, requestId: request.requestKey, kind: request.kind, results: results.map((view) => attributed(view, audit)), uncertain: results.some((view) => view.commandStatus === "unknown"), warnings, execution };
+    return { operationId: request.id, requestId: request.requestKey, kind: request.kind, results, uncertain: results.some((view) => view.commandStatus === "unknown"), warnings };
   }
   private async reconcile(request: RequestRow, signal: AbortSignal) {
     for (const action of await this.store.actions(request.id)) {
@@ -248,8 +246,7 @@ export class OrderService {
       if (!Number.isInteger(limit) || limit < 1 || limit > 100 || !Number.isInteger(offset) || offset < 0 || offset > 100000) throw new HyperliquidError("Invalid pagination.");
       let items: OrderView[];
       if (source === "local") {
-        const audits = new Map((await this.store.audits(agentId, account)).map((audit) => [audit.request_key, audit]));
-        items = (await this.store.local(agentId, account)).map(({ view }) => { const parsed = JSON.parse(view) as OrderView; return attributed(parsed, parsed.requestId ? audits.get(parsed.requestId) : undefined); });
+        items = (await this.store.local(agentId, account)).map(({ view }) => JSON.parse(view) as OrderView);
       }
       else if (source === "open") items = (await this.info.frontendOpenOrders({ user: account as `0x${string}`, dex: "" }, this.signal(cancellation))).filter((order) => isPerpetual(order.coin)).map((order) => liveView(order));
       else throw new HyperliquidError("Invalid order source.");
@@ -268,8 +265,7 @@ export class OrderService {
         return this.lock(found.request.id, async () => {
           await this.reconcile(found.request, this.signal(cancellation));
           const updated = await this.store.find(agentId, account, found.item.id);
-          const audit = await this.store.audit(found.request.id);
-          return { order: updated ? attributed(JSON.parse(updated.item.view) as OrderView, audit) : null, events: includeEvents ? await this.store.events(found.item.id) : [], error: null, observedAt: Date.now() };
+          return { order: updated ? JSON.parse(updated.item.view) as OrderView : null, events: includeEvents ? await this.store.events(found.item.id) : [], error: null, observedAt: Date.now() };
         });
       }
       const oid = /^0x[0-9a-fA-F]{32}$/.test(id) ? id as `0x${string}` : exchangeOid(id);

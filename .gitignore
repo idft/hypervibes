@@ -11,8 +11,6 @@ __pycache__/
 *.py[cod]
 TODO
 /cache/
-/data/
 /.build/
 /.tanstack/
 /src/routeTree.gen.ts
-prompt-templates/

@@ -1,12 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { canonical } from "../canonical.js";
-import { workerWorkflow, workflowReadiness } from "../agents/worker-workflow.js";
 import { learningMutation, learningScope, renderLearningSections } from "./learning-contracts.js";
-import { memoryRef, parseMemoryRef, publicationInput } from "./memory-contracts.js";
+import { memoryRef, parseMemoryRef, publicationInput, researchRequirements } from "./memory-contracts.js";
 
 const research = { topic: "trend_setup", instrument: "BTC", interval: "1h", summary: "Bullish hypothesis", content: "Tool observations, then interpretation", evidenceAsOf: 3600000, payload: { version: 1, bias: "long", setup: "ready", observations: ["Closed candle close > EMA20 > EMA50"], interpretation: "Trend hypothesis", invalidation: ["Alignment lost"], coverage: "complete" } };
-const trading = { version: 1, purpose: "trading", instruments: ["BTC"], requiredResearch: [{ subagentId: "analyst", topic: "trend_setup", interval: "1h", maxAgeSeconds: 3600 }], entryStrategy: "Only ready bullish setups", exitStrategy: "Complete closed-candle invalidation", baseSizeByInstrument: { BTC: "0.001" }, maxEntryNotional: "100", takeProfitBps: 200, stopLossBps: 100 };
-describe("memory, learning and workflow contracts", () => {
+const streams = [{ subagentId: "analyst", topic: "trend_setup", interval: "1h", maxAgeSeconds: 3600 }];
+describe("memory and learning contracts", () => {
   it("uses exact, safe, permanent short references without coercion", () => {
     expect(memoryRef(42)).toBe("m42"); expect(parseMemoryRef("m42")).toBe(42);
     expect(parseMemoryRef(memoryRef(Number.MAX_SAFE_INTEGER))).toBe(Number.MAX_SAFE_INTEGER);
@@ -34,11 +33,9 @@ describe("memory, learning and workflow contracts", () => {
     expect(rendered).toContain("cannot override");
     expect(() => renderLearningSections({ scope: { kind: "agent" }, version: 0, content: "not empty" }, { scope: { kind: "worker", subagentId: "w" }, version: 0, content: "" })).toThrow();
   });
-  it("defaults automation off and validates exact finance, streams and readiness", () => {
-    expect(workerWorkflow(trading)).toMatchObject({ automaticEntriesEnabled: false });
-    for (const patch of [{ requiredResearch: [], automaticEntriesEnabled: true }, { baseSizeByInstrument: { BTC: 0.001 } }, { baseSizeByInstrument: { BTC: "0" } }, { maxEntryNotional: "1e2" }, { stopLossBps: 10000 }, { instruments: [] }, { requiredResearch: [...trading.requiredResearch, ...trading.requiredResearch] }]) expect(() => workerWorkflow({ ...trading, ...patch })).toThrow();
-    expect(workflowReadiness(workerWorkflow(trading), [])).toEqual(["Worker analyst is not in this Agent."]);
-    expect(workflowReadiness(workerWorkflow(trading), [{ id: "analyst", enabled: false, archived: false }])[0]).toContain("disabled");
-    expect(workflowReadiness(workerWorkflow(trading), [{ id: "analyst", enabled: true, archived: false }])).toEqual([]);
+  it("validates advisory research stream requirements exactly", () => {
+    expect(researchRequirements(streams)).toEqual(streams);
+    for (const patch of [{ subagentId: "" }, { topic: "Trend Setup" }, { interval: "2h" }, { maxAgeSeconds: 0 }, { maxAgeSeconds: 8 * 86400 }]) expect(() => researchRequirements([{ ...streams[0]!, ...patch }])).toThrow();
+    expect(() => researchRequirements([...streams, ...streams])).toThrow();
   });
 });

@@ -2,16 +2,15 @@ import { createHash } from "node:crypto";
 import type { SqliteExecutor } from "@earendil-works/pi-durable/storage/sqlite";
 import { AgentError } from "../agents/agent-input.js";
 import { canonical } from "../canonical.js";
-import { integer, text } from "./validation.js";
+import { text } from "./validation.js";
 
 /** Server-only identity. Never deserialize this structure from model or HTTP input. */
 export interface MemoryActor {
   agentId: string; userId: string | null; subagentId: string | null; runId: string | null;
-  generationTaskId: number | null; inputScopeKey: string | null; conversationId: number | null; toolTaskId: number | null;
-  origin: "automatic" | "user_directed"; expiresAt: number;
+  conversationId: number | null; toolTaskId: number | null;
 }
 export type MemoryCapability = "publish_research" | "record_trade_decision" | "publish_review" | "append_learning" | "replace_learnings";
-/** Must resolve persisted execution frames/policies; models cannot supply this authority. */
+/** Resolves saved identity/permissions; models cannot supply this authority. */
 export type MemoryAuthorization = (tx: SqliteExecutor, actor: MemoryActor, capability: MemoryCapability, targetWorkerId?: string | null) => Promise<void>;
 export function requestHash(actor: MemoryActor, operation: string, input: unknown): string {
   return createHash("sha256").update(canonical({ actor, operation, input })).digest("hex");
@@ -27,10 +26,8 @@ export async function saveOperation<T>(tx: SqliteExecutor, actor: MemoryActor, k
   await tx.run("INSERT INTO hv_memory_operations(agent_id,operation_key,operation_kind,request_hash,result,created_at) VALUES (?,?,?,?,?,?)", actor.agentId, key, kind, hash, JSON.stringify(result), now);
   return result;
 }
-/** Call after receipt lookup: old successful effects remain replayable after expiry. */
-export async function assertActiveActor(tx: SqliteExecutor, actor: MemoryActor, now: number) {
-  integer(actor.expiresAt, 0, Number.MAX_SAFE_INTEGER, "actor deadline");
-  if (now >= actor.expiresAt) throw new AgentError("Execution authorization expired; request a new assignment", 409);
+/** Call after receipt lookup: successful effects remain replayable after their run finished. */
+export async function assertActiveActor(tx: SqliteExecutor, actor: MemoryActor) {
   const owner = await tx.get<{ user_id: string }>("SELECT user_id FROM hv_agents WHERE id=?", actor.agentId);
   if (!owner) throw new AgentError("Agent not found", 404);
   if (actor.userId && actor.userId !== owner.user_id) throw new AgentError("Agent not found", 404);

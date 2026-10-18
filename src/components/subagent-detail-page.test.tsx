@@ -12,7 +12,7 @@ vi.mock("@tanstack/react-router", () => ({ useRouter: () => ({ invalidate: mocks
 import { SubagentDetailPage } from "./subagent-detail-page.js";
 import { SubagentsPage } from "./subagents-page.js";
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-const definition: SubagentRow = { id: "worker:fixture", agentId: "agent-fixture", kind: "worker", name: "Research", description: "Find evidence", instructions: "Research carefully", provider: "faux", modelId: "faux-1", thinkingLevel: "", tools: [], workflow: null, templateOrigin: null, enabled: true, archived: false, delegatable: true, persistent: false, conversationId: null, schedule: "", delaySeconds: 30, nextRunAt: null, completion: "wake", timeoutSeconds: 900, createdAt: 1, updatedAt: 1 };
+const definition: SubagentRow = { id: "worker:fixture", agentId: "agent-fixture", kind: "worker", name: "Research", description: "Find evidence", instructions: "Research carefully", provider: "faux", modelId: "faux-1", thinkingLevel: "", tools: [], templateOrigin: null, enabled: true, archived: false, delegatable: true, persistent: false, conversationId: null, schedule: "", delaySeconds: 30, nextRunAt: null, completion: "wake", timeoutSeconds: 900, createdAt: 1, updatedAt: 1 };
 class HistorySource extends EventTarget {
   static instances: HistorySource[] = [];
   onerror: (() => void) | null = null;
@@ -54,24 +54,12 @@ describe("subagent pages", () => {
     expect(container.textContent).toContain("Paused");
     expect(container.textContent).toContain("Requested tools:");
     expect(container.textContent).toContain("5m + 45s");
-    expect(container.querySelector<HTMLInputElement>('input[type="checkbox"]')!.checked).toBe(false);
     await editInstructions("Customized unsaved strategy instructions");
     vi.spyOn(window, "confirm").mockReturnValue(false);
     await act(async () => { template.value = "basic-analysis"; template.dispatchEvent(new Event("change", { bubbles: true })); });
     expect(window.confirm).toHaveBeenCalled();
     expect(container.querySelector("textarea")!.value).toBe("Customized unsaved strategy instructions");
     expect(mocks.saveSubagent).not.toHaveBeenCalled();
-  });
-  it("saves workflow independently without overwriting instruction drafts", async () => {
-    const workflow = { version: 1 as const, purpose: "analysis" as const, instruments: ["BTC"], interval: "1h", topic: "trend_setup", maxResearchAgeSeconds: 3600, strategy: "Closed candle hypothesis" };
-    await render({ ...definition, workflow });
-    await editInstructions("Keep this unsaved instruction draft");
-    const coins = container.querySelector<HTMLInputElement>('[aria-label="Workflow instruments"]')!;
-    await act(async () => { Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(coins, "ETH"); coins.dispatchEvent(new Event("input", { bubbles: true })); });
-    await click("Save workflow settings");
-    expect(mocks.saveSubagentSection).toHaveBeenCalledWith({ data: { agentId: definition.agentId, id: definition.id, section: "workflow", settings: { workflow: { ...workflow, instruments: ["ETH"] } } } });
-    expect(container.querySelector("textarea")!.value).toBe("Keep this unsaved instruction draft");
-    expect(mocks.success).toHaveBeenCalledWith("Workflow settings updated");
   });
   it("paginates live history without refresh controls, ignores old streams and cleans up on navigation", async () => {
     await render();
@@ -181,7 +169,7 @@ describe("subagent pages", () => {
   it("offers candle-close scheduling, lifetime and completion choices without recursive worker tools", async () => {
     await render(); expect(container.textContent).toContain("Orchestrator delegation allowed"); expect(container.textContent).toContain("Fresh context per assignment"); expect(container.textContent).not.toContain("delegate_subagent");
     expect(container.textContent).toContain("No schedule");
-    expect(container.querySelectorAll("select")).toHaveLength(1); // Workflow purpose is independently editable.
+    expect(container.querySelectorAll("select")).toHaveLength(0); // No workflow/purpose selects; tools and model choices only.
     await click("Edit schedule");
     const schedule = [...document.querySelectorAll<HTMLSelectElement>("dialog select")].find((select) => [...select.options].some((option) => option.value === "1h"))!;
     await act(async () => { schedule.value = "1h"; schedule.dispatchEvent(new Event("change", { bubbles: true })); });
