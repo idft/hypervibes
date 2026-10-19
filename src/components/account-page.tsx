@@ -4,6 +4,7 @@ import type { AccountView } from "../hyperliquid/service.js";
 import { BUILDER_RECIPIENT } from "../hyperliquid/constants.js";
 import { formatMoneyText, moneyParts } from "../hyperliquid/decimal.js";
 import { Identicon } from "./identicon.js";
+import { SetupChecklist } from "./setup-checklist.js";
 import {
   actionBase,
   approveAgentTypes,
@@ -50,7 +51,7 @@ function Balance({ balance }: { balance: string | null }) {
   );
 }
 
-export function AccountPage({ view, actions }: { view: AccountView; actions: AccountActions }) {
+export function AccountPage({ view, actions, setup }: { view: AccountView; actions: AccountActions; setup: { agentCount: number; providerConnected: boolean } }) {
   const router = useRouter();
   const [signerStatus, setSignerStatus] = useState("");
   const [signerPending, setSignerPending] = useState(false);
@@ -124,6 +125,7 @@ export function AccountPage({ view, actions }: { view: AccountView; actions: Acc
         </h1>
       </header>
 
+      <SetupChecklist agentCount={setup.agentCount} state={{ providerConnected: setup.providerConnected, apiKeyApproved: view.apiWallet?.state === "approved", builderFeeApproved: view.builderFee.approved }} />
       {view.accountModeMessage && (
         <p role="status" className={`rounded-2xl border px-4 py-3 text-sm ${view.accountMode === "unregistered" ? "border-violet-900/70 bg-violet-950/20 text-zinc-300" : "border-amber-800/70 bg-amber-950/30 text-amber-200"}`}>{view.accountModeMessage}</p>
       )}

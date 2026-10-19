@@ -5,6 +5,7 @@ import type { LoginView, ProviderSettings } from "../providers/provider-service.
 import { answerProviderLogin, beginProviderLogin, cancelProviderLogin, disconnectProvider, getProviderLogin, getProviderSettings, refreshProviderModels } from "../web/providers.js";
 import { choiceContextTokens, costCurrency, modelKey } from "./model-picker.js";
 import { ProviderLogo } from "./provider-logo.js";
+import { SetupChecklist, type SetupState } from "./setup-checklist.js";
 
 const button = "cursor-pointer rounded-lg border border-zinc-700 px-3 py-2 text-sm hover:bg-zinc-800 disabled:cursor-not-allowed disabled:opacity-50";
 const primaryButton = "cursor-pointer rounded-lg bg-violet-600 px-3 py-2 text-sm text-white hover:bg-violet-500 disabled:cursor-not-allowed disabled:opacity-50";
@@ -19,7 +20,7 @@ function connectLabel(method: { type: AuthType }): string {
   return method.type === "oauth" ? "OAuth" : "API key";
 }
 
-export function ProvidersPage({ initial }: { initial: ProviderSettings }) {
+export function ProvidersPage({ initial, agentCount, setup }: { initial: ProviderSettings; agentCount: number; setup: SetupState }) {
   const [settings, setSettings] = useState(initial);
   const [login, setLogin] = useState<LoginView | undefined>(initial.activeLogin);
   const [disconnecting, setDisconnecting] = useState<ProviderSummary | undefined>();
@@ -158,7 +159,7 @@ export function ProvidersPage({ initial }: { initial: ProviderSettings }) {
     <div className="mx-auto flex h-[calc(100dvh-6.5rem)] max-w-4xl flex-col gap-6 overflow-hidden">
       <header className="shrink-0"><h1 className="text-3xl font-semibold text-white">Providers</h1><p className="mt-2 text-sm text-zinc-400">Connect your AI accounts. Credentials are encrypted and private to your user.</p></header>
       {!settings.storageReady && <p role="status" className="shrink-0 text-sm text-amber-200">Provider setup requires AGENTS_ENCRYPTION_KEY on the server.</p>}
-      {!settings.models.length && <p className="shrink-0 rounded-xl border border-amber-800 p-4 text-sm text-amber-200">Connect at least one provider with an available chat model before creating an agent. Account settings and existing conversations remain accessible.</p>}
+      <SetupChecklist state={{ ...setup, providerConnected: connected.length > 0 }} agentCount={agentCount} />
       {error && <p role="alert" className="shrink-0 text-sm text-red-300">{error}</p>}
       {connected.length > 0 && <section aria-labelledby="connected-providers-heading" className="shrink-0 space-y-3">
         <h2 id="connected-providers-heading" className="text-lg font-semibold text-white">Connected Providers</h2>

@@ -1,12 +1,17 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { AgentsPage } from "../components/agents-page.js";
 import { listAgents } from "../web/agents.js";
+import { getSetupState } from "../web/setup.js";
 
 export const Route = createFileRoute("/_authenticated/agents/")({
-  loader: () => listAgents(),
+  loader: async () => {
+    const [agents, setup] = await Promise.all([listAgents(), getSetupState()]);
+    return { agents, setup };
+  },
   component: AgentsRoute,
 });
 
 function AgentsRoute() {
-  return <AgentsPage agents={Route.useLoaderData()} />;
+  const { agents, setup } = Route.useLoaderData();
+  return <AgentsPage agents={agents} setup={setup} />;
 }

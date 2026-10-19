@@ -10,7 +10,11 @@ const mocks = vi.hoisted(() => ({
   getProviderLogin: vi.fn(), getProviderSettings: vi.fn(), refreshProviderModels: vi.fn(),
 }));
 vi.mock("../web/providers.js", () => mocks);
-import { ProvidersPage } from "./providers-page.js";
+import { ProvidersPage as ProvidersPageComponent } from "./providers-page.js";
+
+function ProvidersPage({ initial, agentCount = 0 }: { initial: ProviderSettings; agentCount?: number }) {
+  return <ProvidersPageComponent initial={initial} agentCount={agentCount} setup={{ providerConnected: false, apiKeyApproved: false, builderFeeApproved: false }} />;
+}
 
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 const initial: ProviderSettings = {
@@ -48,8 +52,8 @@ describe("Providers page", () => {
   const dialog = () => container.querySelector<HTMLDialogElement>("dialog")!;
 
   it("shows onboarding without blocking access to existing account/history and disables storage without a key", () => {
-    expect(container.textContent).toContain("before creating an agent");
-    expect(container.textContent).toContain("Account settings and existing conversations remain accessible");
+    expect(container.textContent).toContain("Connect at least 1 AI provider");
+    expect(container.querySelector('[aria-current="step"]')?.textContent).toContain("Connect at least 1 AI provider");
     expect(button("API key").className).toContain("cursor-pointer");
     expect(container.querySelector('[aria-labelledby="connected-providers-heading"]')).toBeNull();
     expect(container.textContent).not.toContain("Configured means");
@@ -57,6 +61,18 @@ describe("Providers page", () => {
     const markup = renderToStaticMarkup(<ProvidersPage initial={{ ...initial, storageReady: false }} />);
     expect(markup).toContain("AGENTS_ENCRYPTION_KEY");
     expect(markup).toContain('disabled=""');
+  });
+
+  it("links new users with a connected provider to Hyperliquid setup", () => {
+    const settings = { ...initial, providers: [{ ...initial.providers[0]!, connected: true, configured: true }] };
+    const markup = document.createElement("div");
+    markup.innerHTML = renderToStaticMarkup(<ProvidersPage initial={settings} />);
+    const link = markup.querySelector('a[href="/account"]');
+    expect(link?.textContent).toBe("Connect to Hyperliquid");
+    expect(markup.querySelector('[aria-label="Initial setup"]')?.className).toContain("border-violet-800");
+    expect(link?.parentElement?.getAttribute("aria-current")).toBe("step");
+    expect(markup.textContent).toContain("Completed: Connect at least 1 AI provider");
+    expect(renderToStaticMarkup(<ProvidersPage initial={settings} agentCount={1} />)).not.toContain("Connect to Hyperliquid");
   });
 
   it("keeps the page itself fixed and scrolls only the full provider list", () => {
@@ -85,7 +101,7 @@ describe("Providers page", () => {
     mocks.getProviderSettings.mockResolvedValue({ ...initial, models: [{ provider: "test", modelId: "model", name: "Test model", providerName: "Test", thinkingLevels: [], contextWindow: 200_000, inputCost: 3, outputCost: 15, reasoning: true }] });
     await act(async () => { await vi.advanceTimersByTimeAsync(1000); });
     expect(container.querySelector("dialog")).toBeNull();
-    expect(container.querySelector('a[href="/agents/new"]')).toBeNull();
+    expect(container.querySelector('a[href="/agents/new"]')?.closest('[aria-label="Initial setup"]')).not.toBeNull();
     expect(container.textContent).toContain("1 chat models");
   });
 
@@ -124,7 +140,7 @@ describe("Providers page", () => {
     expect(all.querySelectorAll("h3")).toHaveLength(1);
     expect(all.textContent).toContain("Other Provider");
     expect(all.textContent).not.toContain("Needs attention");
-    expect(markup.querySelector('a[href="/agents/new"]')).toBeNull();
+    expect(markup.querySelector('a[href="/agents/new"]')?.closest('[aria-label="Initial setup"]')).not.toBeNull();
   });
 
   it("labels reconnect and disconnect actions without repeating the provider name", () => {
