@@ -13,6 +13,7 @@ import { HttpTransport } from "@nktkas/hyperliquid";
 import { exchangeHistory, JournalService, type HistoryFetcher, type JournalFeedFactory } from "./hyperliquid/journal-service.js";
 import { ProviderService, type ProviderServiceOptions } from "./providers/provider-service.js";
 import type { FastifyBaseLogger } from "fastify";
+import { resolve } from "node:path";
 
 export interface RuntimeStatus {
   database: "connected";
@@ -22,6 +23,8 @@ export interface RuntimeStatus {
 /** Application-owned resources, constructed once by the host, never by a request. */
 export async function createRuntime(config: AppConfig, options: AgentServiceOptions & ProviderServiceOptions & { accountFeedFactory?: AccountFeedFactory; journalFeedFactory?: JournalFeedFactory; journalHistoryFetcher?: HistoryFetcher; logger?: FastifyBaseLogger } = {}) {
   const logger = options.logger;
+  const databasePath = resolve(config.databasePath);
+  logger?.info({ databasePath }, "Opening SQLite database");
   const connection = openDatabase(config.databasePath);
   const database = new SharedDatabase(connection);
   let release: (() => Promise<void>) | undefined;
@@ -56,7 +59,9 @@ export async function createRuntime(config: AppConfig, options: AgentServiceOpti
       });
     });
     // Native migration access is allowed only before the shared queue is used.
-    migrateApplication(connection);
+    logger?.info({ databasePath, journalMode: "wal", synchronous: "FULL", foreignKeys: true }, "SQLite database connected and profile locked");
+    const migrations = migrateApplication(connection);
+    logger?.info(migrations, migrations.applied > 0 ? "Database migrations applied" : "Database schema is up to date; no migrations needed");
     const db = applicationDatabase(database);
     const auth = createAuth(db, config);
     await auth.$context;

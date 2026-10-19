@@ -7,6 +7,7 @@ import type { DatabaseSync } from "node:sqlite";
 import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { openDatabase } from "./database.js";
+import { migrateApplication } from "./migrations.js";
 
 const source = fileURLToPath(new URL("./migrations/", import.meta.url));
 
@@ -20,6 +21,11 @@ describe("generated SQLite auth migrations", () => {
   afterEach(() => {
     connection.close();
     rmSync(directory, { recursive: true, force: true });
+  });
+
+  it("reports applied migrations for a fresh database and none on subsequent startups", () => {
+    expect(migrateApplication(connection)).toEqual({ applied: 8, total: 8 });
+    expect(migrateApplication(connection)).toEqual({ applied: 0, total: 8 });
   });
 
   it("applies generated SQL once, preserves records and leaves unrelated tables alone", () => {
@@ -48,7 +54,7 @@ describe("generated SQLite auth migrations", () => {
     migrate(db, { migrationsFolder: previous, migrationsTable: "hv_schema_migrations" });
     connection.exec("INSERT INTO hv_users (id, name, email) VALUES ('owner', 'Wallet', 'owner@example.test')");
     connection.exec("INSERT INTO hv_agents (id, user_id, name, creation_request_id, created_at, updated_at) VALUES ('legacy', 'owner', 'Existing agent', 'request', 1, 1)");
-    migrate(db, { migrationsFolder: source, migrationsTable: "hv_schema_migrations" });
+    expect(migrateApplication(connection)).toEqual({ applied: 6, total: 8 });
     expect(connection.prepare("SELECT name, initial_provider, initial_model_id FROM hv_agents WHERE id = 'legacy'").get()).toMatchObject({
       name: "Existing agent", initial_provider: null, initial_model_id: null,
     });
