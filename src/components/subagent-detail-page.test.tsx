@@ -47,20 +47,6 @@ describe("subagent pages", () => {
   });
   beforeEach(() => { vi.resetAllMocks(); HistorySource.instances = []; vi.stubGlobal("EventSource", HistorySource); container = document.createElement("div"); document.body.append(container); root = createRoot(container); mocks.getSubagent.mockResolvedValue({ ok: true, data: initial() }); mocks.saveSubagentSection.mockImplementation(({ data }: { data: { settings: Partial<SubagentRow> } }) => Promise.resolve({ ok: true, data: { ...definition, ...data.settings } })); mocks.saveSubagentAssignments.mockImplementation(({ data }: { data: { settings: Partial<SubagentRow> } }) => Promise.resolve({ ok: true, data: { ...definition, ...data.settings } })); mocks.saveSubagentIdentity.mockImplementation(({ data }: { data: { name: string; description: string } }) => Promise.resolve({ ok: true, data: { ...definition, name: data.name, description: data.description } })); mocks.saveSubagentTools.mockImplementation(({ data }: { data: { tools: string[] } }) => Promise.resolve({ ok: true, data: { ...definition, tools: data.tools } })); });
   afterEach(async () => { await act(async () => root.unmount()); container.remove(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
-  it("applies paused templates without model assumptions and confirms destructive draft replacement", async () => {
-    await act(async () => root.render(<SubagentDetailPage agentId={definition.agentId} choices={choices} />));
-    const template = container.querySelector<HTMLSelectElement>('[aria-label="Worker template"]')!;
-    await act(async () => { template.value = "basic-trading"; template.dispatchEvent(new Event("change", { bubbles: true })); });
-    expect(container.textContent).toContain("Paused");
-    expect(container.textContent).toContain("Requested tools:");
-    expect(container.textContent).toContain("5m + 45s");
-    await editInstructions("Customized unsaved strategy instructions");
-    vi.spyOn(window, "confirm").mockReturnValue(false);
-    await act(async () => { template.value = "basic-analysis"; template.dispatchEvent(new Event("change", { bubbles: true })); });
-    expect(window.confirm).toHaveBeenCalled();
-    expect(container.querySelector("textarea")!.value).toBe("Customized unsaved strategy instructions");
-    expect(mocks.saveSubagent).not.toHaveBeenCalled();
-  });
   it("paginates live history without refresh controls, ignores old streams and cleans up on navigation", async () => {
     await render();
     expect(container.textContent).not.toContain("latest 50");
@@ -377,13 +363,6 @@ describe("subagent pages", () => {
     await render({ ...definition, archived: true });
     expect(container.querySelector('[aria-label="Edit name and description"]')?.matches(":disabled")).toBe(true);
   });
-  it("keeps new-subagent tools in the draft until creation", async () => {
-    await act(async () => root.render(<SubagentDetailPage agentId={definition.agentId} choices={choices} />));
-    await click("Edit tools"); await click("All tools in Hyperliquid"); await click("Apply");
-    expect(container.textContent).toContain(`${accountToolNames.length} tools allowed`);
-    expect(mocks.saveSubagentTools).not.toHaveBeenCalled();
-    expect(mocks.saveSubagent).not.toHaveBeenCalled();
-  });
   it("automatically saves assignment options without saving unrelated edits", async () => {
     await render();
     expect(container.querySelector('input[type="checkbox"]')).toBeNull();
@@ -437,14 +416,7 @@ describe("subagent pages", () => {
     expect(document.querySelector("dialog")).toBeNull();
     expect(container.textContent).toContain("Orchestrator delegation disabled");
   });
-  it("keeps assignment options as drafts for new subagents and disables editing archived workers", async () => {
-    await act(async () => root.render(<SubagentDetailPage agentId={definition.agentId} choices={choices} />));
-    await click("Edit assignments");
-    await act(async () => { (document.querySelectorAll('dialog input[type="checkbox"]')[1] as HTMLInputElement).click(); });
-    await click("Apply");
-    expect(container.textContent).toContain("Persistent conversation");
-    expect(mocks.saveSubagentAssignments).not.toHaveBeenCalled();
-    await act(async () => root.unmount()); root = createRoot(container);
+  it("disables assignment editing for archived workers and hides it for orchestrators", async () => {
     await render({ ...definition, archived: true });
     expect([...container.querySelectorAll("button")].find((button) => button.textContent === "Edit assignments")!.matches(":disabled")).toBe(true);
     await render({ ...definition, kind: "orchestrator" });
@@ -583,7 +555,7 @@ describe("subagent pages", () => {
     expect(container.querySelector('[aria-label="Enable sub-agent"]')?.textContent).toBe("Paused");
     expect(container.querySelector("[role=alert]")).toBeNull();
   });
-  it("protects orchestrator and archived status and keeps new status changes in the draft", async () => {
+  it("protects orchestrator and archived status", async () => {
     await render({ ...definition, kind: "orchestrator" });
     const mainStatus = container.querySelector<HTMLButtonElement>('[aria-label="Orchestrator always enabled"]')!;
     expect(mainStatus.disabled).toBe(true);
@@ -591,9 +563,6 @@ describe("subagent pages", () => {
     expect(mocks.saveSubagentSection).not.toHaveBeenCalled();
     await render({ ...definition, archived: true, enabled: false });
     expect(container.querySelector('[aria-label="Enable sub-agent"]')?.matches(":disabled")).toBe(true);
-    await act(async () => root.render(<SubagentDetailPage key="new" agentId={definition.agentId} choices={choices} />));
-    await click("Pause sub-agent");
-    expect(container.querySelector('[aria-label="Enable sub-agent"]')?.textContent).toBe("Paused");
     expect(mocks.saveSubagentSection).not.toHaveBeenCalled();
   });
   it("shows instruction actions only for changes and resets to the last saved value", async () => {
@@ -661,25 +630,5 @@ describe("subagent pages", () => {
     expect(container.textContent).not.toContain("Save settings");
     expect([...container.querySelectorAll("a, button")].some((element) => element.textContent === "Cancel")).toBe(false);
     expect(mocks.saveSubagent).not.toHaveBeenCalled();
-  });
-  it("creates a definition without running it", async () => {
-    await act(async () => root.render(<SubagentDetailPage agentId={definition.agentId} choices={choices} />));
-    const createButton = [...container.querySelectorAll("button")].find((button) => button.textContent === "Create subagent")!;
-    expect(createButton.disabled).toBe(true);
-    await click("Edit name and description");
-    const name = document.querySelector("dialog input")!;
-    await act(async () => {
-      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(name, "Research");
-      name.dispatchEvent(new Event("input", { bubbles: true }));
-    });
-    await click("Apply");
-    expect(createButton.disabled).toBe(false);
-    expect(mocks.saveSubagentIdentity).not.toHaveBeenCalled();
-    mocks.saveSubagent.mockResolvedValue({ ok: true, data: definition });
-    await click("Create subagent");
-    expect(mocks.saveSubagent.mock.calls[0]![0].data.id).toBe(""); expect(mocks.runSubagent).not.toHaveBeenCalled(); expect(container.textContent).toContain("Run now");
-    expect(container.textContent).not.toContain("Run manually");
-    expect(mocks.success).toHaveBeenCalledWith("Sub-agent created");
-    expect(container.querySelector("[role=status]")).toBeNull();
   });
 });

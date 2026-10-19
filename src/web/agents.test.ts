@@ -36,6 +36,13 @@ describe("Agent server-function boundary", () => {
     expect(choices).not.toHaveBeenCalled();
     await expect(selectedTradingAccount(app, user, "main")).rejects.toThrow("Exchange unavailable");
   });
+  it("recognizes domain errors from a separately loaded runtime module without exposing unbranded errors", async () => {
+    vi.resetModules();
+    const { AgentError: RuntimeAgentError } = await import("../agents/agent-input.js");
+    expect(RuntimeAgentError).not.toBe(AgentError);
+    expect(await agentAction(async () => { throw new RuntimeAgentError("Select a supported thinking level."); })).toEqual({ ok: false, error: "Select a supported thinking level." });
+    expect(await agentAction(async () => { throw Object.assign(new Error("secret SQL"), { name: "AgentError", status: 400 }); })).toEqual({ ok: false, error: "Agent operation failed. Please try again." });
+  });
   it("returns public errors without disclosing unexpected provider/storage errors", async () => {
     expect(await agentAction(async () => { throw new AgentError("Agent not found", 404); })).toEqual({ ok: false, error: "Agent not found" });
     const result = await agentAction(async () => { throw new Error("secret-key-fixture sql stack"); });

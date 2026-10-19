@@ -256,6 +256,9 @@ export class SubagentService {
       if (existing) { if (existing.agentId !== agentId || canonical(existing.templateOrigin) !== canonical(templateOrigin) || Object.entries(input).some(([key, value]) => JSON.stringify(Reflect.get(existing, key)) !== JSON.stringify(value))) throw new AgentError("Creation request was already used with different settings.", 409); return existing; }
       const now = Date.now();
       return (await this.db.insert(hvSubagents).values({ ...input, templateOrigin, id, agentId, kind: "worker", nextRunAt: input.enabled ? nextCandleRun(now, input.schedule, input.delaySeconds) : null, createdAt: now, updatedAt: now }).returning().all())[0]!;
+    }).catch((error: unknown) => {
+      if (!(error instanceof AgentError)) this.log?.error({ err: error, agentId, templateId, requestId: creationId }, "Sub-agent creation failed");
+      throw error;
     });
   }
   async updateTools(userId: string, agentId: string, id: string, tools: unknown) {

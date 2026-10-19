@@ -1,7 +1,7 @@
 import { redirect } from "@tanstack/react-router";
 import { createServerFn } from "@tanstack/react-start";
 import { getRequestHeaders } from "@tanstack/react-start/server";
-import { AgentError } from "../agents/agent-input.js";
+import { AgentError, isAgentError } from "../agents/agent-input.js";
 import { HyperliquidError } from "../hyperliquid/errors.js";
 import { currentUser } from "../auth-user.js";
 import type { AppRuntime } from "../runtime.js";
@@ -33,7 +33,7 @@ export function optionalNumber(data: unknown, key: string): number | undefined {
 export async function agentAction<T>(action: () => Promise<T>) {
   try { return { ok: true as const, data: await action() }; }
   catch (error) {
-    if (error instanceof AgentError || error instanceof HyperliquidError) return { ok: false as const, error: error.message };
+    if (isAgentError(error) || error instanceof HyperliquidError) return { ok: false as const, error: error.message };
     return { ok: false as const, error: "Agent operation failed. Please try again." };
   }
 }

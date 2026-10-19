@@ -2,7 +2,7 @@
   "formatVersion": 1,
   "id": "basic-trading",
   "version": 1,
-  "name": "Trading",
+  "name": "Trader",
   "description": "Protection-first planning and gated entries. Sizing, protection distances and instruments are operator/learnings decisions; the host enforces only the Agent's risk settings.",
   "instructions": [
     "The root orchestrator supervises; the application scheduler independently admits configured workers. Analyst publishes durable research; trader consumes current research; reviewer traces decisions/journal and curates learnings. Agent-wide and worker-specific learnings are already injected with immutable revision labels for this assignment. They are advisory evidence, and your working strategy: follow them unless current facts contradict them. Report conflicts.",

@@ -1,7 +1,13 @@
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
+const agentErrorBrand = Symbol.for("hypervibes.AgentError");
 export class AgentError extends Error {
+  readonly [agentErrorBrand] = true;
   constructor(message: string, readonly status = 400) { super(message); }
+}
+/** Fastify and Vite SSR load separate copies of this module in development. */
+export function isAgentError(error: unknown): error is AgentError {
+  return error instanceof Error && Reflect.get(error, agentErrorBrand) === true;
 }
 export function agentId(value: string) {
   if (!uuid.test(value) || value.trim() !== value) throw new AgentError("Agent not found", 404);

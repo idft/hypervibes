@@ -14,6 +14,7 @@ import { hvSubagents, hvSubagentRuns } from "../db/subagent-schema.js";
 import { createRuntime, type AppRuntime } from "../runtime.js";
 import { testConfig } from "../test-config.js";
 import { nextCandleRun, subagentInput, type SubagentInput } from "./subagent-input.js";
+import { subagentTemplates, templateDraft } from "./subagent-templates.js";
 
 const settings = (patch: Partial<SubagentInput> = {}): SubagentInput => ({ name: "Research", description: "Focused evidence", instructions: "Research the assignment using only available evidence.", provider: "faux", modelId: "faux-1", thinkingLevel: "", tools: [], enabled: true, delegatable: true, persistent: false, schedule: "", delaySeconds: 30, completion: "save", timeoutSeconds: 900, ...patch });
 describe("subagent definitions, execution and scheduling", () => {
@@ -35,6 +36,19 @@ describe("subagent definitions, execution and scheduling", () => {
     runtime.start(); await runtime.agents.subagents.tick();
   });
   afterEach(async () => { vi.restoreAllMocks(); await runtime.close(); rmSync(directory, { recursive: true, force: true }); });
+
+  it("creates paused workers from every bundled template with persisted origin and safe retries", async () => {
+    const agent = await createAgent();
+    for (const template of subagentTemplates) {
+      const draft = templateDraft(template.id, { provider: "faux", modelId: "faux-1", thinkingLevel: "" });
+      const requestId = randomUUID();
+      const worker = await runtime.agents.subagents.create("owner", agent.id, draft, requestId, template.id);
+      expect(worker.enabled).toBe(false);
+      expect(worker.templateOrigin).toMatchObject({ id: template.id, version: template.version, hash: expect.any(String) });
+      expect((await detail(agent.id, worker.id)).definition).toEqual(worker);
+      await expect(runtime.agents.subagents.create("owner", agent.id, draft, requestId, template.id)).resolves.toEqual(worker);
+    }
+  });
 
   it("seeds the existing protected root first without model calls; persists editable instructions/tools/model", async () => {
     const agent = await createAgent(); const worker = await createWorker(agent.id);

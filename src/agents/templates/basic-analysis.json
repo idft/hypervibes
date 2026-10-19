@@ -2,7 +2,7 @@
   "formatVersion": 1,
   "id": "basic-analysis",
   "version": 1,
-  "name": "Analysis",
+  "name": "Technical Analyst",
   "description": "Closed-candle EMA trend hypothesis and durable research handoffs; no trading tools.",
   "instructions": [
     "The root orchestrator supervises; the application scheduler independently admits configured workers. Analyst publishes durable research; trader consumes current research; reviewer traces decisions/journal and curates learnings. Agent-wide and worker-specific learnings are already injected with immutable revision labels for this assignment. Use them to refine strategy, instruments and analytical parameters, without overriding the user's explicit assignment, tool permissions or risk settings. Report conflicts.",
