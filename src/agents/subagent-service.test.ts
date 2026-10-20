@@ -58,6 +58,36 @@ describe("subagent definitions, execution and scheduling", () => {
     await expect(runtime.agents.subagents.dashboard("other", agent.id)).rejects.toMatchObject({ status: 404 });
   });
 
+  it("unarchives workers paused, preserves history and settings, and safely retries", async () => {
+    const agent = await createAgent();
+    const worker = await createWorker(agent.id, { schedule: "15m", persistent: true });
+    faux.setResponses([fauxAssistantMessage("Preserved result")]);
+    await runtime.agents.subagents.run("owner", agent.id, worker.id, "Research once", randomUUID());
+    await completed(agent.id, worker.id);
+    const before = await detail(agent.id, worker.id);
+    await runtime.agents.subagents.archive("owner", agent.id, worker.id);
+    const restored = await runtime.agents.subagents.unarchive("owner", agent.id, worker.id);
+    expect(restored).toEqual({ ...before.definition, archived: false, enabled: false, nextRunAt: null, updatedAt: expect.any(Number) });
+    expect((await detail(agent.id, worker.id)).runs).toEqual(before.runs);
+    expect(await runtime.agents.subagents.delegatable(agent.id)).toEqual([]);
+    await runtime.agents.subagents.tick();
+    expect((await detail(agent.id, worker.id)).runs).toEqual(before.runs);
+    expect(await runtime.agents.subagents.unarchive("owner", agent.id, worker.id)).toEqual(restored);
+    const enabled = await runtime.agents.subagents.updateSection("owner", agent.id, worker.id, "enabled", { enabled: true });
+    expect(enabled.nextRunAt).not.toBeNull();
+    expect(await runtime.agents.subagents.unarchive("owner", agent.id, worker.id)).toEqual(enabled);
+  });
+  it("restricts unarchiving to owned workers", async () => {
+    const agent = await createAgent();
+    const worker = await createWorker(agent.id);
+    await runtime.agents.subagents.archive("owner", agent.id, worker.id);
+    await expect(runtime.agents.subagents.unarchive("other", agent.id, worker.id)).rejects.toMatchObject({ status: 404 });
+    const otherAgent = await createAgent();
+    await expect(runtime.agents.subagents.unarchive("owner", otherAgent.id, worker.id)).rejects.toMatchObject({ status: 404 });
+    const main = (await runtime.agents.subagents.list("owner", agent.id)).find((row) => row.kind === "orchestrator")!;
+    await expect(runtime.agents.subagents.unarchive("owner", agent.id, main.id)).rejects.toMatchObject({ status: 409 });
+    expect((await detail(agent.id, worker.id)).definition.archived).toBe(true);
+  });
   it("creates paused workers from every bundled template with persisted origin and safe retries", async () => {
     const agent = await createAgent();
     for (const template of subagentTemplates) {

@@ -42,6 +42,10 @@ export const archiveSubagent = createServerFn({ method: "POST" }).validator((dat
   const user = await agentUser(context.runtime, getRequestHeaders(), true);
   return agentAction(() => context.runtime.agents.subagents.archive(user.id, data.agentId, data.id));
 });
+export const unarchiveSubagent = createServerFn({ method: "POST" }).validator((data: unknown) => ({ agentId: field(data, "agentId"), id: field(data, "id") })).handler(async ({ context, data }) => {
+  const user = await agentUser(context.runtime, getRequestHeaders(), true);
+  return agentAction(() => context.runtime.agents.subagents.unarchive(user.id, data.agentId, data.id));
+});
 export const runSubagent = createServerFn({ method: "POST" }).validator((data: unknown) => ({ agentId: field(data, "agentId"), id: field(data, "id"), task: field(data, "task"), requestId: field(data, "requestId") })).handler(async ({ context, data }) => {
   const user = await agentUser(context.runtime, getRequestHeaders(), true);
   return agentAction(() => context.runtime.agents.subagents.run(user.id, data.agentId, data.id, data.task, data.requestId));

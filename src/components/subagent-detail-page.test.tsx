@@ -5,7 +5,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SubagentRow } from "../db/subagent-schema.js";
 import { hyperliquidToolNames, mainToolNames, taToolNames } from "../agents/subagent-input.js";
-const mocks = vi.hoisted(() => ({ invalidate: vi.fn(), navigate: vi.fn(), success: vi.fn(), saveSubagent: vi.fn(), saveSubagentSection: vi.fn(), saveSubagentAssignments: vi.fn(), saveSubagentIdentity: vi.fn(), saveSubagentTools: vi.fn(), getSubagent: vi.fn(), runSubagent: vi.fn(), archiveSubagent: vi.fn(), stopSubagentRun: vi.fn() }));
+const mocks = vi.hoisted(() => ({ invalidate: vi.fn(), navigate: vi.fn(), success: vi.fn(), saveSubagent: vi.fn(), saveSubagentSection: vi.fn(), saveSubagentAssignments: vi.fn(), saveSubagentIdentity: vi.fn(), saveSubagentTools: vi.fn(), getSubagent: vi.fn(), runSubagent: vi.fn(), archiveSubagent: vi.fn(), unarchiveSubagent: vi.fn(), stopSubagentRun: vi.fn() }));
 vi.mock("../web/subagents.js", () => mocks);
 vi.mock("sonner", () => ({ toast: { success: mocks.success } }));
 vi.mock("@tanstack/react-router", () => ({ useRouter: () => ({ invalidate: mocks.invalidate, navigate: mocks.navigate }), Link: ({ to, params, children, ...props }: { to: string; params: Record<string, string>; children: React.ReactNode }) => <a {...props} href={to.replace(/\$(\w+)/g, (_match, key: string) => encodeURIComponent(params[key]!))}>{children}</a> }));
@@ -100,6 +100,10 @@ describe("subagent pages", () => {
     expect(container.querySelector("button")?.getAttribute("aria-pressed")).toBe("false");
     await click("Show archived (1)");
     expect(container.textContent).toContain("Old research");
+    const badge = [...container.querySelectorAll("span")].find((span) => span.textContent === "Archived")!;
+    expect(badge.className).toContain("text-amber-200");
+    expect(badge.className).toContain("font-semibold");
+    expect(badge.className).toContain("border-amber-500/60");
     expect(container.querySelector("button")?.getAttribute("aria-pressed")).toBe("true");
     await click("Hide archived");
     expect(container.textContent).not.toContain("Old research");
@@ -126,6 +130,31 @@ describe("subagent pages", () => {
     await click("Pause sub-agent");
     expect(container.querySelector('[role="alert"]')?.textContent).toBe("Unable to save");
     expect(container.querySelector('[aria-label="Pause sub-agent"]')?.getAttribute("aria-pressed")).toBe("true");
+    expect(mocks.invalidate).not.toHaveBeenCalled();
+  });
+  it("unarchives a worker outside the disabled settings and leaves it paused", async () => {
+    const restored = { ...definition, enabled: false, nextRunAt: null, updatedAt: 2 };
+    mocks.unarchiveSubagent.mockResolvedValue({ ok: true, data: restored });
+    await render({ ...definition, archived: true, enabled: false });
+    const restore = [...container.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent === "Unarchive")!;
+    expect(restore.closest("fieldset")).toBeNull();
+    expect(restore.disabled).toBe(false);
+    await click("Unarchive");
+    expect(mocks.unarchiveSubagent).toHaveBeenCalledWith({ data: { agentId: definition.agentId, id: definition.id } });
+    expect(container.querySelector("fieldset")?.disabled).toBe(false);
+    expect(container.querySelector('[aria-label="Enable sub-agent"]')).not.toBeNull();
+    expect(container.textContent).not.toContain("Unarchive");
+    expect(mocks.success).toHaveBeenCalledWith("Sub-agent unarchived", { description: "Restored paused. Enable it when ready." });
+    expect(mocks.invalidate).toHaveBeenCalledOnce();
+    expect(mocks.navigate).not.toHaveBeenCalled();
+  });
+  it("keeps archived settings disabled if unarchiving fails", async () => {
+    mocks.unarchiveSubagent.mockResolvedValue({ ok: false, error: "Unable to restore" });
+    await render({ ...definition, archived: true, enabled: false });
+    await click("Unarchive");
+    expect(container.querySelector('[role="alert"]')?.textContent).toBe("Unable to restore");
+    expect(container.querySelector("fieldset")?.disabled).toBe(true);
+    expect(container.textContent).toContain("Unarchive");
     expect(mocks.invalidate).not.toHaveBeenCalled();
   });
   it("redirects to the refreshed index after archiving", async () => {

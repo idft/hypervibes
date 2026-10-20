@@ -383,6 +383,17 @@ export class SubagentService {
       this.dashboardChanged(agentId);
     });
   }
+  async unarchive(userId: string, agentId: string, id: string) {
+    await this.host.owned(userId, agentId);
+    return this.serial(agentId, async () => {
+      const current = await this.definition(agentId, id);
+      if (current.kind === "orchestrator") throw new AgentError("The main orchestrator cannot be unarchived.", 409);
+      if (!current.archived) return current;
+      const row = (await this.db.update(hvSubagents).set({ archived: false, enabled: false, nextRunAt: null, updatedAt: Date.now() }).where(eq(hvSubagents.id, id)).returning().all())[0]!;
+      this.host.changed(agentId); this.dashboardChanged(agentId);
+      return row;
+    });
+  }
   async delegatable(agentId: string) {
     return (await this.db.select().from(hvSubagents).where(and(eq(hvSubagents.agentId, agentId), eq(hvSubagents.kind, "worker"), eq(hvSubagents.enabled, true), eq(hvSubagents.archived, false), eq(hvSubagents.delegatable, true))).all()).map(({ id, name, description, tools }) => ({ id, name, description, tools }));
   }

@@ -4,7 +4,7 @@ import { toast } from "sonner";
 import type { SubagentRow, SubagentRun } from "../db/subagent-schema.js";
 import type { ModelChoice } from "../providers/provider-service.js";
 import { defaultMainInstructions, type AssignmentSettings, type SubagentInput, type SubagentSections } from "../agents/subagent-input.js";
-import { archiveSubagent, runSubagent, saveSubagentAssignments, saveSubagentIdentity, saveSubagentSection, saveSubagentTools, stopSubagentRun } from "../web/subagents.js";
+import { archiveSubagent, runSubagent, saveSubagentAssignments, saveSubagentIdentity, saveSubagentSection, saveSubagentTools, stopSubagentRun, unarchiveSubagent } from "../web/subagents.js";
 import { ModelPicker, modelKey } from "./model-picker.js";
 import { ProviderLogo } from "./provider-logo.js";
 import type { RunPagination } from "../agents/subagent-history.js";
@@ -104,7 +104,7 @@ export function SubagentDetailPage({ agentId, initial, choices }: { agentId: str
       await router.navigate({ to: "/agents/$agentId/sub-agents/$subagentId/runs/$runId", params: { agentId, subagentId: definition.id, runId: result.data.id } });
     } finally { inFlight.current = false; setPending(false); }
   }
-  async function perform(action: "archive" | "stop", runId = "") {
+  async function perform(action: "archive" | "unarchive" | "stop", runId = "") {
     if (inFlight.current) return;
     inFlight.current = true; setPending(true); setError("");
     try {
@@ -112,6 +112,12 @@ export function SubagentDetailPage({ agentId, initial, choices }: { agentId: str
         const result = await stopSubagentRun({ data: { agentId, runId } });
         if (!result.ok) { setError(result.error); return; }
         toast.success("Assignment stopped", { description: "Existing exchange orders were not cancelled." });
+      } else if (action === "unarchive") {
+        const result = await unarchiveSubagent({ data: { agentId, id: definition.id } });
+        if (!result.ok) { setError(result.error); return; }
+        setDefinition(result.data); setForm(result.data);
+        toast.success("Sub-agent unarchived", { description: "Restored paused. Enable it when ready." });
+        await router.invalidate();
       } else {
         const result = await archiveSubagent({ data: { agentId, id: definition.id } });
         if (!result.ok) { setError(result.error); return; }
@@ -124,6 +130,10 @@ export function SubagentDetailPage({ agentId, initial, choices }: { agentId: str
     finally { inFlight.current = false; setPending(false); }
   }
   return <div className="w-full space-y-3">
+    {definition.archived && !main && <section className={`${panel} flex flex-wrap items-center justify-between gap-3`}>
+      <p className="text-sm text-amber-200">Archived — history is preserved. Unarchive to edit or run this sub-agent; it will remain paused.</p>
+      <button type="button" disabled={pending} onClick={() => { void perform("unarchive"); }} className={button}>Unarchive</button>
+    </section>}
     <form onSubmit={(event) => { event.preventDefault(); }} className={panel}>
       <fieldset disabled={pending || definition.archived} className="space-y-4 disabled:opacity-60">
         <SubagentIdentity value={form} main={main} agentId={agentId} enabled={form.enabled} onToggleEnabled={() => { void toggleEnabled(); }} onChange={saveIdentity} actions={!main ? <>
