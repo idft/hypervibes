@@ -8,6 +8,7 @@ import type { RunDetail } from "../agents/subagent-service.js";
 import type { AgentChat } from "../agents/agent-service.js";
 import { currentUserSession } from "../auth-user.js";
 import type { AppRuntime } from "../runtime.js";
+import type { LoginView } from "../providers/provider-service.js";
 
 const encoder = new TextEncoder();
 const heartbeatMs = 15_000;
@@ -21,7 +22,7 @@ export class AgentEventStreams {
   private readonly connections = new Set<() => void>();
   private readonly tasks = new Set<Promise<void>>();
   private readonly users = new Map<string, number>();
-  constructor(private readonly runtime: AppRuntime, private readonly kind: "chat" | "dashboard" | "chart" | "runs" | "run" | "subagents" = "chat") {}
+  constructor(private readonly runtime: AppRuntime, private readonly kind: "chat" | "dashboard" | "chart" | "runs" | "run" | "subagents" | "provider-login" = "chat") {}
 
   async open(request: Request, id: string, subagentId?: string, runId?: string): Promise<Response> {
     try {
@@ -33,7 +34,8 @@ export class AgentEventStreams {
       id = agentId(id);
       const session = await currentUserSession(this.runtime, request.headers);
       if (!session) throw new AgentError("Sign in to view this agent", 401);
-      await this.runtime.agents.owned(session.user.id, id);
+      if (this.kind === "provider-login") this.runtime.providers.status(session.user.id, id);
+      else await this.runtime.agents.owned(session.user.id, id);
       const params = new URL(request.url).searchParams;
       const selection = this.kind === "chart" ? await this.runtime.hyperliquid.charts.selection(params.get("coin") ?? "", params.get("interval") ?? "") : undefined;
       const history = this.kind === "runs" ? { subagentId: subagentId ?? "", page: Number(params.get("page") ?? "1") } : undefined;
@@ -104,14 +106,15 @@ export class AgentEventStreams {
         const session = await currentUserSession(this.runtime, request.headers);
         if (closed) return;
         if (!session || session.user.id !== userId) { finish("unauthorized", "Session ended. Please sign in again."); return; }
-        await this.runtime.agents.owned(userId, id);
+        if (this.kind === "provider-login") this.runtime.providers.status(userId, id);
+        else await this.runtime.agents.owned(userId, id);
         if (closed) return;
         expiry = session.expiresAt.getTime();
         scheduleExpiry();
       } catch { finish("unavailable", "Unable to verify this session. Reconnecting…"); }
       finally { checking = false; }
     };
-    const publish = (snapshot: AgentChat | AgentDashboard | ChartSnapshot | RunHistory | RunDetail | DashboardSubagent[]) => {
+    const publish = (snapshot: AgentChat | AgentDashboard | ChartSnapshot | RunHistory | RunDetail | DashboardSubagent[] | LoginView) => {
       if (closed) return;
       if (Date.now() >= expiry) { finish("unauthorized", "Session expired. Please sign in again."); return; }
       const value = frame(this.kind, snapshot);
@@ -138,7 +141,9 @@ export class AgentEventStreams {
         if (++ticks % 4 === 0) void revalidate();
       }, heartbeatMs);
       heartbeat.unref();
-      const watching = Promise.resolve().then(() => this.kind === "chat"
+      const watching = Promise.resolve().then(() => this.kind === "provider-login"
+        ? this.runtime.providers.watchLogin(userId, id, abort.signal, publish)
+        : this.kind === "chat"
         ? this.runtime.agents.watchChat(userId, id, abort.signal, publish)
         : this.kind === "subagents" ? this.runtime.agents.subagents.watchDashboard(userId, id, abort.signal, publish)
         : run ? this.runtime.agents.subagents.watchRun(userId, id, run.subagentId, run.runId, abort.signal, publish)

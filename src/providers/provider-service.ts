@@ -28,6 +28,7 @@ export interface LoginView {
 }
 interface LoginAttempt {
   userId: string; type: AuthType; view: LoginView; controller: AbortController;
+  listeners: Set<(view: LoginView) => void>;
   answer?: (value: string) => void; timer: ReturnType<typeof setTimeout>; done: Promise<void>;
 }
 interface UserModels { models: Models; credentials: SqliteCredentials }
@@ -172,7 +173,7 @@ export class ProviderService {
     const id = randomUUID();
     const controller = new AbortController();
     const attempt: LoginAttempt = {
-      userId, type, controller, view: { id, providerId, state: "pending", events: [] }, done: Promise.resolve(),
+      userId, type, controller, listeners: new Set(), view: { id, providerId, state: "pending", events: [] }, done: Promise.resolve(),
       timer: setTimeout(() => { this.cancelAttempt(attempt); this.attempts.delete(id); }, 10 * 60_000),
     };
     attempt.timer.unref();
@@ -182,6 +183,7 @@ export class ProviderService {
       notify: (event) => {
         if (attempt.view.state !== "pending") return;
         attempt.view.events = [...attempt.view.events.slice(-19), event];
+        this.publish(attempt);
       },
       prompt: (input) => new Promise<string>((resolve, reject) => {
         const signal = AbortSignal.any([controller.signal, ...(input.signal ? [input.signal] : [])]);
@@ -190,11 +192,12 @@ export class ProviderService {
         delete browserInput.signal;
         const cleanup = () => {
           signal.removeEventListener("abort", abort);
-          if (attempt.view.prompt?.id === promptId) { delete attempt.view.prompt; delete attempt.answer; }
+          if (attempt.view.prompt?.id === promptId) { delete attempt.view.prompt; delete attempt.answer; this.publish(attempt); }
         };
         const abort = () => { cleanup(); reject(new Error("Login prompt cancelled")); };
         attempt.view.prompt = { id: promptId, input: browserInput };
         attempt.answer = (value) => { cleanup(); resolve(value); };
+        this.publish(attempt);
         signal.addEventListener("abort", abort, { once: true });
         if (signal.aborted) abort();
       }),
@@ -203,6 +206,7 @@ export class ProviderService {
       await models.refresh({ providers: [providerId], signal: AbortSignal.any([controller.signal, AbortSignal.timeout(20_000)]) });
       attempt.view.state = "complete";
       delete attempt.view.prompt;
+      this.publish(attempt);
       await this.onChanged(userId);
     }).catch(() => {
       if (attempt.view.state === "pending") {
@@ -211,6 +215,7 @@ export class ProviderService {
       }
       delete attempt.view.prompt;
       delete attempt.answer;
+      this.publish(attempt);
     });
     return this.view(attempt);
   }
@@ -222,6 +227,23 @@ export class ProviderService {
   }
   private view(attempt: LoginAttempt): LoginView { return structuredClone(attempt.view); }
   status(userId: string, id: string) { return this.view(this.owned(userId, id)); }
+  private publish(attempt: LoginAttempt) {
+    for (const listener of attempt.listeners) listener(this.view(attempt));
+  }
+  watchLogin(userId: string, id: string, signal: AbortSignal, publish: (view: LoginView) => void): Promise<void> {
+    const attempt = this.owned(userId, id);
+    if (signal.aborted) return Promise.resolve();
+    return new Promise<void>((resolve) => {
+      const stop = () => {
+        attempt.listeners.delete(publish);
+        signal.removeEventListener("abort", stop);
+        resolve();
+      };
+      attempt.listeners.add(publish);
+      signal.addEventListener("abort", stop, { once: true });
+      publish(this.view(attempt));
+    });
+  }
   answer(userId: string, id: string, promptId: string, value: string) {
     const attempt = this.owned(userId, id);
     if (attempt.view.state !== "pending" || attempt.view.prompt?.id !== promptId || !attempt.answer) throw new AgentError("This sign-in prompt has expired.", 409);
@@ -244,6 +266,7 @@ export class ProviderService {
       attempt.controller.abort();
       delete attempt.view.prompt;
       delete attempt.answer;
+      this.publish(attempt);
     }
   }
   async cancel(userId: string, id: string) {

@@ -7,7 +7,7 @@ import type { LoginView, ProviderSettings } from "../providers/provider-service.
 
 const mocks = vi.hoisted(() => ({
   answerProviderLogin: vi.fn(), beginProviderLogin: vi.fn(), cancelProviderLogin: vi.fn(), disconnectProvider: vi.fn(),
-  getProviderLogin: vi.fn(), getProviderSettings: vi.fn(), refreshProviderModels: vi.fn(),
+  getProviderSettings: vi.fn(), refreshProviderModels: vi.fn(),
 }));
 vi.mock("../web/providers.js", () => mocks);
 import { ProvidersPage as ProvidersPageComponent } from "./providers-page.js";
@@ -20,6 +20,15 @@ function ProvidersPage({ initial, agentCount = 0 }: { initial: ProviderSettings;
 const initial: ProviderSettings = {
   storageReady: true, models: [], providers: [{ id: "test", name: "Test Provider", connected: false, configured: false, methods: [{ type: "api_key", label: "API key" }, { type: "oauth", label: "Subscription" }] }],
 };
+class MockEventSource extends EventTarget {
+  static instances: MockEventSource[] = [];
+  static CLOSED = 2;
+  readyState = 1;
+  close = vi.fn();
+  onerror: (() => void) | null = null;
+  constructor(readonly url: string) { super(); MockEventSource.instances.push(this); }
+  snapshot(view: LoginView) { this.dispatchEvent(new MessageEvent("provider-login", { data: JSON.stringify(view) })); }
+}
 const attempt: LoginView = { id: "login", providerId: "test", state: "pending", events: [], prompt: { id: "prompt", input: { type: "secret", message: "Enter key" } } };
 
 describe("Providers page", () => {
@@ -42,6 +51,8 @@ describe("Providers page", () => {
   beforeEach(async () => {
     vi.resetAllMocks();
     vi.useFakeTimers();
+    MockEventSource.instances = [];
+    vi.stubGlobal("EventSource", MockEventSource);
     container = document.createElement("div"); document.body.append(container); root = createRoot(container);
     await act(async () => root.render(<ProvidersPage initial={initial} />));
   });
@@ -97,20 +108,44 @@ describe("Providers page", () => {
     await act(async () => dialog().querySelector("form")!.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })));
     expect(mocks.answerProviderLogin).toHaveBeenCalledWith({ data: { id: "login", promptId: "prompt", value: "private-key" } });
     expect(container.textContent).not.toContain("private-key");
-    mocks.getProviderLogin.mockResolvedValue({ ok: true, data: { ...attempt, state: "complete", prompt: undefined } });
     mocks.getProviderSettings.mockResolvedValue({ ...initial, models: [{ provider: "test", modelId: "model", name: "Test model", providerName: "Test", thinkingLevels: [], contextWindow: 200_000, inputCost: 3, outputCost: 15, reasoning: true }] });
-    await act(async () => { await vi.advanceTimersByTimeAsync(1000); });
+    const source = MockEventSource.instances[0]!;
+    expect(source.url).toBe("/api/providers/logins/login/events");
+    await act(async () => { await vi.advanceTimersByTimeAsync(10_000); });
+    expect(mocks.getProviderSettings).not.toHaveBeenCalled();
+    await act(async () => source.snapshot({ ...attempt, state: "complete", prompt: undefined }));
+    expect(source.close).toHaveBeenCalled();
     expect(container.querySelector("dialog")).toBeNull();
     expect(container.querySelector('a[href="/agents/new"]')?.closest('[aria-label="Initial setup"]')).not.toBeNull();
     expect(container.textContent).toContain("1 chat models");
   });
 
+  it("receives prompt updates and closes the stream on cancel or unmount", async () => {
+    mocks.beginProviderLogin.mockResolvedValue({ ok: true, data: { ...attempt, prompt: undefined } });
+    await act(async () => button("OAuth").click());
+    const source = MockEventSource.instances[0]!;
+    await act(async () => source.snapshot(attempt));
+    expect(dialog().querySelector<HTMLInputElement>("#provider-answer")?.type).toBe("password");
+    await act(async () => source.onerror?.());
+    expect(container.textContent).toContain("Reconnecting");
+    await act(async () => source.snapshot(attempt));
+    expect(container.textContent).not.toContain("Reconnecting");
+    expect(MockEventSource.instances).toHaveLength(1);
+    mocks.cancelProviderLogin.mockResolvedValue({ ok: true });
+    mocks.getProviderSettings.mockResolvedValue(initial);
+    await act(async () => [...dialog().querySelectorAll("button")].find((b) => b.textContent === "Cancel sign-in")!.click());
+    expect(source.close).toHaveBeenCalled();
+    await act(async () => button("API key").click());
+    const reopened = MockEventSource.instances[1]!;
+    await act(async () => root.render(<div />));
+    expect(reopened.close).toHaveBeenCalled();
+  });
+
   it("keeps a failed sign-in open in the modal with its error", async () => {
     mocks.beginProviderLogin.mockResolvedValue({ ok: true, data: attempt });
-    mocks.getProviderLogin.mockResolvedValue({ ok: true, data: { ...attempt, state: "failed", prompt: undefined, error: "Invalid key" } });
     mocks.getProviderSettings.mockResolvedValue(initial);
     await act(async () => button("API key").click());
-    await act(async () => { await vi.advanceTimersByTimeAsync(1000); });
+    await act(async () => MockEventSource.instances[0]!.snapshot({ ...attempt, state: "failed", prompt: undefined, error: "Invalid key" }));
     expect(dialog().textContent).toContain("Invalid key");
     await act(async () => [...dialog().querySelectorAll("button")].find((b) => b.textContent === "Close")!.click());
     expect(container.querySelector("dialog")).toBeNull();

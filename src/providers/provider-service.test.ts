@@ -11,6 +11,10 @@ import { createRuntime, type AppRuntime } from "../runtime.js";
 import { testConfig } from "../test-config.js";
 import { SqliteCredentials } from "./credential-store.js";
 import type { LoginView } from "./provider-service.js";
+import { AgentEventStreams } from "../web/agent-events.js";
+
+const auth = vi.hoisted(() => ({ session: vi.fn() }));
+vi.mock("../auth-user.js", () => ({ currentUserSession: auth.session }));
 
 const secretKey = "19".repeat(32);
 const ref = { provider: "test-provider", modelId: "small" };
@@ -83,6 +87,73 @@ describe("per-user providers", () => {
     vi.unstubAllEnvs();
     await runtime.close();
     rmSync(directory, { recursive: true, force: true });
+  });
+
+  it("streams owned login snapshots, reconnects, and cleans up without polling", async () => {
+    const streams = new AgentEventStreams(runtime, "provider-login");
+    const started = await runtime.providers.begin("owner", ref.provider, "oauth");
+    const input = await prompt(started.id);
+    const request = (origin = runtime.origin) => new Request(`${runtime.origin}/api/providers/logins/${started.id}/events`, { headers: { origin } });
+    auth.session.mockResolvedValue(null);
+    expect((await streams.open(request(), started.id)).status).toBe(401);
+    auth.session.mockResolvedValue({ user: { id: "other" }, expiresAt: new Date(Date.now() + 60_000) });
+    expect((await streams.open(request(), started.id)).status).toBe(404);
+    auth.session.mockResolvedValue({ user: { id: "owner" }, expiresAt: new Date(Date.now() + 60_000) });
+    expect((await streams.open(request("https://evil.example"), started.id)).status).toBe(403);
+    const response = await streams.open(request(), started.id);
+    expect(response.headers.get("content-type")).toContain("text/event-stream");
+    const reader = response.body!.getReader();
+    const next = async () => {
+      for (;;) {
+        const part = await reader.read();
+        if (part.done) throw new Error("Stream ended before snapshot");
+        const text = new TextDecoder().decode(part.value);
+        const data = /^data: (.+)$/m.exec(text)?.[1];
+        if (data) return JSON.parse(data) as LoginView;
+      }
+    };
+    try {
+      expect(await next()).toMatchObject({ id: started.id, state: "pending", prompt: { id: input.id } });
+      const status = vi.spyOn(runtime.providers, "status");
+      runtime.providers.answer("owner", started.id, input.id, "valid-callback");
+      let snapshot = await next();
+      while (snapshot.state === "pending") snapshot = await next();
+      expect(snapshot.state).toBe("complete");
+      expect(JSON.stringify(snapshot)).not.toContain("valid-callback");
+      expect(status).not.toHaveBeenCalled();
+      await reader.cancel();
+      const reconnect = await streams.open(request(), started.id);
+      const resumed = reconnect.body!.getReader();
+      await resumed.read(); // Retry hint.
+      const latest = await resumed.read();
+      expect(new TextDecoder().decode(latest.value)).toContain('"state":"complete"');
+      await resumed.cancel();
+      const watching = await streams.open(request(), started.id);
+      await streams.close();
+      expect(await watching.text()).toContain("event: shutdown");
+    } finally { await reader.cancel(); await streams.close(); }
+  });
+
+  it("pushes API-key prompts and cancellation and detaches aborted watchers", async () => {
+    const started = await runtime.providers.begin("owner", ref.provider, "api_key");
+    const abort = new AbortController();
+    const snapshots: LoginView[] = [];
+    let prompted!: () => void;
+    const ready = new Promise<void>((resolve) => { prompted = resolve; });
+    const watching = runtime.providers.watchLogin("owner", started.id, abort.signal, (view) => {
+      snapshots.push(view);
+      if (view.prompt) prompted();
+    });
+    await ready;
+    expect(snapshots.at(-1)?.prompt?.input.type).toBe("secret");
+    await runtime.providers.cancel("owner", started.id);
+    expect(snapshots.at(-1)?.state).toBe("cancelled");
+    expect(snapshots.at(-1)?.prompt).toBeUndefined();
+    abort.abort();
+    await watching;
+    const publish = vi.fn();
+    await runtime.providers.watchLogin("owner", started.id, abort.signal, publish);
+    expect(publish).not.toHaveBeenCalled();
   });
 
   it("registers all built-ins including Codex OAuth, with key-only cloud account setup", async () => {

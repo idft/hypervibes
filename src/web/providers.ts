@@ -24,12 +24,6 @@ export const beginProviderLogin = createServerFn({ method: "POST" })
       return context.runtime.providers.begin(user.id, data.providerId, data.type);
     });
   });
-export const getProviderLogin = createServerFn({ method: "GET" })
-  .validator((data: unknown) => ({ id: field(data, "id") }))
-  .handler(async ({ context, data }) => {
-    const user = await agentUser(context.runtime, getRequestHeaders());
-    return agentAction(async () => context.runtime.providers.status(user.id, data.id));
-  });
 export const answerProviderLogin = createServerFn({ method: "POST" })
   .validator((data: unknown) => ({ id: field(data, "id"), promptId: field(data, "promptId"), value: field(data, "value") }))
   .handler(async ({ context, data }) => {

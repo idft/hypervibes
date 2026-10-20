@@ -2,7 +2,7 @@ import { useEffect, useId, useRef, useState } from "react";
 import { toast } from "sonner";
 import type { AuthEvent, AuthType } from "@earendil-works/pi-ai";
 import type { LoginView, ProviderSettings } from "../providers/provider-service.js";
-import { answerProviderLogin, beginProviderLogin, cancelProviderLogin, disconnectProvider, getProviderLogin, getProviderSettings, refreshProviderModels } from "../web/providers.js";
+import { answerProviderLogin, beginProviderLogin, cancelProviderLogin, disconnectProvider, getProviderSettings, refreshProviderModels } from "../web/providers.js";
 import { choiceContextTokens, costCurrency, modelKey } from "./model-picker.js";
 import { ProviderLogo } from "./provider-logo.js";
 import { SetupChecklist, type SetupState } from "./setup-checklist.js";
@@ -36,32 +36,38 @@ export function ProvidersPage({ initial, agentCount, setup }: { initial: Provide
   useEffect(() => {
     if (!login || login.state !== "pending") return;
     let disposed = false;
-    let timer: ReturnType<typeof setTimeout>;
-    const poll = async () => {
-      try {
-        const result = await getProviderLogin({ data: { id: login.id } });
+    const source = new EventSource(`/api/providers/logins/${encodeURIComponent(login.id)}/events`);
+    source.addEventListener("provider-login", (event) => {
+      if (disposed) return;
+      const snapshot = JSON.parse((event as MessageEvent<string>).data) as LoginView;
+      setError("");
+      if (snapshot.state === "pending") { setLogin(snapshot); return; }
+      source.close();
+      void getProviderSettings().then((updated) => {
         if (disposed) return;
-        if (!result.ok) { setError(result.error); setLogin(undefined); return; }
-        if (result.data.state === "pending") {
-          setLogin(result.data);
-          timer = setTimeout(() => { void poll(); }, 750);
-        } else {
-          const updated = await getProviderSettings();
-          if (disposed) return;
-          setSettings(updated);
-          setError("");
-          if (result.data.state === "complete") { setLogin(undefined); toast.success("Provider connected."); }
-          else setLogin(result.data.state === "failed" ? result.data : undefined);
-        }
-      } catch {
-        if (!disposed) {
-          setError("Sign-in status unavailable. Retrying…");
-          timer = setTimeout(() => { void poll(); }, 2000);
-        }
-      }
+        setSettings(updated);
+        if (snapshot.state === "complete") { setLogin(undefined); toast.success("Provider connected."); }
+        else setLogin(snapshot.state === "failed" ? snapshot : undefined);
+      }).catch(() => {
+        if (!disposed) { setLogin(snapshot); setError("Unable to refresh providers. Reload the page."); }
+      });
+    });
+    source.onerror = () => {
+      if (disposed) return;
+      if (source.readyState === EventSource.CLOSED) {
+        setLogin(undefined);
+        setError("Sign-in status unavailable. Reload the page to reconnect.");
+      } else setError("Sign-in status unavailable. Reconnecting…");
     };
-    timer = setTimeout(() => { void poll(); }, 200);
-    return () => { disposed = true; clearTimeout(timer); };
+    source.addEventListener("stream-error", () => {
+      source.close();
+      if (!disposed) { setLogin(undefined); setError("Sign-in status unavailable. Reload the page."); }
+    });
+    source.addEventListener("unauthorized", () => {
+      source.close();
+      if (!disposed) { setLogin(undefined); setError("Session ended. Please sign in again."); }
+    });
+    return () => { disposed = true; source.close(); };
   }, [login?.id, login?.state]);
 
   async function action(operation: () => Promise<void>) {
@@ -87,7 +93,7 @@ export function ProvidersPage({ initial, agentCount, setup }: { initial: Provide
     void action(async () => {
       const result = await answerProviderLogin({ data: { id: login.id, promptId: prompt.id, value } });
       if (!result.ok) throw new Error(result.error);
-      setValue(""); setLogin(result.data);
+      setValue("");
     });
   }
   function cancelLogin() {

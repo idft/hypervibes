@@ -50,6 +50,7 @@ export async function createApp(config: AppConfig, options: AppOptions = {}) {
   });
   const runtime = await createRuntime(config, { logger: app.log });
   const streams = new AgentEventStreams(runtime);
+  const providerLogins = new AgentEventStreams(runtime, "provider-login");
   const dashboards = new AgentEventStreams(runtime, "dashboard");
   const charts = new AgentEventStreams(runtime, "chart");
   const runs = new AgentEventStreams(runtime, "runs");
@@ -57,7 +58,7 @@ export async function createApp(config: AppConfig, options: AppOptions = {}) {
   const subagents = new AgentEventStreams(runtime, "subagents");
   let web: StartApplication | undefined;
   // SSE responses must finish before Fastify waits for active HTTP connections.
-  app.addHook("preClose", async () => { await Promise.all([streams.close(), dashboards.close(), charts.close(), runs.close(), runDetails.close(), subagents.close(), logos.close(), providerLogos.close()]); });
+  app.addHook("preClose", async () => { await Promise.all([streams.close(), providerLogins.close(), dashboards.close(), charts.close(), runs.close(), runDetails.close(), subagents.close(), logos.close(), providerLogos.close()]); });
   app.addHook("onClose", async () => {
     try { await web?.close(); }
     finally { await runtime.close(options.forceShutdown); }
@@ -119,6 +120,14 @@ export async function createApp(config: AppConfig, options: AppOptions = {}) {
       return { status: "ok" };
     });
 
+    // Provider sign-in prompts, progress and completion are pushed, with no polling.
+    app.get<{ Params: { id: string } }>("/api/providers/logins/:id/events", async (request, reply) => {
+      reply.hijack();
+      const webRequest = new NodeRequest({ req: request.raw, res: reply.raw, maxRequestBodySize: 1024 * 1024 });
+      webRequest.headers.set("x-hv-client-ip", request.ip);
+      const response = await providerLogins.open(webRequest, request.params.id);
+      await sendNodeResponse(reply.raw, response);
+    });
     // One Server-Sent Events subscription per open chat view: committed Durable
     // snapshots are pushed, with no conversation polling.
     app.get("/api/agents/:id/events", async (request, reply) => {

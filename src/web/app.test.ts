@@ -169,13 +169,13 @@ describe("embedded HTTP host", () => {
     expect(runtimes).toHaveLength(0);
   });
 
-  it("closes chat, dashboard, chart, run history, run detail and sub-agent activity streams before HTTP draining and releases the profile lock", async () => {
+  it("closes chat, dashboard, chart, run history, run detail, sub-agent activity and provider login streams before HTTP draining and releases the profile lock", async () => {
     await app.inject("/");
     const runtime = runtimes[0]!;
     const closeStreams = vi.spyOn(AgentEventStreams.prototype, "close");
     const closeServer = app.server.close.bind(app.server);
     const drain = vi.spyOn(app.server, "close").mockImplementation((callback) => {
-      expect(closeStreams).toHaveBeenCalledTimes(6);
+      expect(closeStreams).toHaveBeenCalledTimes(7);
       expect(runtime.status().database).toBe("connected");
       expect(start.close).not.toHaveBeenCalled();
       return closeServer(callback);
