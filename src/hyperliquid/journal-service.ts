@@ -4,6 +4,7 @@ import type { SharedDatabase } from "../db/shared-database.js";
 import type { FastifyBaseLogger } from "fastify";
 import { HyperliquidError } from "./errors.js";
 import { amount } from "./journal-decimal.js";
+import type { BalanceHistory, BalancePoint } from "./agent-dashboard.js";
 import { buildTrades, fillEvent, fundingEvent, ledgerEvent, wsFundingEvent, type JournalEvent, type JournalStream, type JournalTrade } from "./journal-model.js";
 
 export type HistoryFetcher = (account: string, stream: JournalStream, start: number, end: number, signal: AbortSignal) => Promise<JournalEvent[]>;
@@ -299,6 +300,32 @@ export class JournalService {
         ON CONFLICT(account,id) DO UPDATE SET time=excluded.time,data=excluded.data,active=1`, account, trade.id, trade.lastActivityAt, JSON.stringify(trade));
       for (const row of balances) await tx.run("UPDATE hv_journal_entries SET balance=? WHERE account=? AND id=?", row.balance, account, row.id);
       await tx.run("UPDATE hv_journal_accounts SET projected_revision=? WHERE account=?", snapshot.revision, account);
+    });
+  }
+
+  /** Realized USDC balance, including transfers, fees and funding; not equity.
+   * Carry the preceding balance into each window and sample hourly/daily closes. */
+  async balanceHistory(account: string, now = Date.now()): Promise<BalanceHistory | null> {
+    account = account.toLowerCase();
+    return this.db.transaction(async (tx) => {
+      const state = await tx.get<AccountRow>("SELECT revision,projected_revision,history_limited FROM hv_journal_accounts WHERE account=?", account);
+      const sync = await tx.all<{ updated_at: number | null; error: string | null }>("SELECT updated_at,error FROM hv_journal_sync WHERE account=?", account);
+      if (!state || state.revision !== state.projected_revision || state.history_limited || sync.length !== 3 || sync.some((s) => s.updated_at === null || s.error)) return null;
+      const start = now - 30 * 86_400_000;
+      const previous = await tx.get<{ balance: string | null }>("SELECT balance FROM hv_journal_entries WHERE account=? AND kind<>'trade' AND time<=? ORDER BY time DESC,id DESC LIMIT 1", account, start);
+      const rows = await tx.all<{ time: number; balance: string | null }>("SELECT time,balance FROM hv_journal_entries WHERE account=? AND kind<>'trade' AND time>? AND time<=? ORDER BY time,id", account, start, now);
+      if (previous?.balance === null || rows.some((row) => row.balance === null)) return null;
+      const sample = (duration: number, bucket: number): BalancePoint[] => {
+        let balance = previous?.balance ?? "0";
+        let index = 0;
+        const points: BalancePoint[] = [];
+        for (let time = now - duration; time <= now; time += bucket) {
+          while (index < rows.length && rows[index]!.time <= time) balance = rows[index++]!.balance!;
+          points.push({ time, balance });
+        }
+        return points;
+      };
+      return { day: sample(86_400_000, 3_600_000), month: sample(30 * 86_400_000, 86_400_000) };
     });
   }
 

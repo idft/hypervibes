@@ -40,6 +40,40 @@ describe("durable account journal", () => {
   });
   afterEach(async () => { await journal.close(); await db.close(); rmSync(directory, { recursive: true, force: true }); });
 
+  it("samples rolling balance windows with a carried baseline, exact changes and quiet periods", async () => {
+    const day = 86_400_000;
+    const now = 40 * day;
+    rows = [deposit(1, "1000.00000001"), deposit(now - 2 * day, "-10"), deposit(now - 3_600_000, "0.00000002")];
+    await journal.syncAccount(account, signal(), now);
+    const history = (await journal.balanceHistory(account.toUpperCase(), now))!;
+    expect(history.day).toHaveLength(25);
+    expect(history.month).toHaveLength(31);
+    expect(history.month[0]).toEqual({ time: now - 30 * day, balance: "1000.00000001" });
+    expect(history.day[0]?.balance).toBe("990.00000001");
+    expect(history.day.at(-1)).toEqual({ time: now, balance: "990.00000003" });
+    expect(history.day.at(-2)?.balance).toBe("990.00000003");
+    expect(history.month.at(-1)?.balance).toBe("990.00000003");
+    expect(await journal.balanceHistory(otherAccount, now)).toBeNull();
+  });
+  it("charts complete empty history as flat and withholds incomplete or unknown balances", async () => {
+    expect(await journal.balanceHistory(account, 100)).toBeNull();
+    await journal.syncAccount(account, signal(), 100);
+    expect((await journal.balanceHistory(account, 100))?.day.every((p) => p.balance === "0")).toBe(true);
+    await journal.ingest(account, "ledger", [deposit(1)]);
+    expect(await journal.balanceHistory(account, 100)).toBeNull();
+    await journal.project(account);
+    expect(await journal.balanceHistory(account, 100)).not.toBeNull();
+    await db.run("UPDATE hv_journal_accounts SET history_limited=1 WHERE account=?", account);
+    expect(await journal.balanceHistory(account, 100)).toBeNull();
+    await db.run("UPDATE hv_journal_accounts SET history_limited=0 WHERE account=?", account);
+    await journal.ingest(account, "ledger", [{ ...deposit(2), delta: null }]);
+    await journal.project(account);
+    expect(await journal.balanceHistory(account, 100)).toBeNull();
+    fetcher.mockRejectedValue(new Error("offline"));
+    await journal.syncAccount(otherAccount, signal(), 100);
+    expect(await journal.balanceHistory(otherAccount, 100)).toBeNull();
+  });
+
   it("backfills every page, checkpoints empty streams and deduplicates overlapping imports", async () => {
     rows = Array.from({ length: 1100 }, (_, n) => deposit(n + 1));
     await journal.syncAccount(account, signal(), 1200);

@@ -109,7 +109,7 @@ export class SubagentService {
       const summaries = [];
       for (const definition of definitions) {
         const { id, status, createdAt, result } = hvSubagentRuns;
-        const runs = await db.select({ id, status, createdAt, result: sql<string>`substr(${result}, 1, 240)` }).from(hvSubagentRuns).where(and(eq(hvSubagentRuns.agentId, agentId), eq(hvSubagentRuns.subagentId, definition.id))).orderBy(desc(createdAt), desc(id)).limit(5).all();
+        const runs = await db.select({ id, status, createdAt, result: sql<string>`substr(${result}, 1, 240)` }).from(hvSubagentRuns).where(and(eq(hvSubagentRuns.agentId, agentId), eq(hvSubagentRuns.subagentId, definition.id))).orderBy(desc(createdAt), desc(id)).limit(1).all();
         summaries.push({ ...definition, runs });
       }
       return summaries;

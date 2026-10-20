@@ -37,7 +37,7 @@ describe("subagent definitions, execution and scheduling", () => {
   });
   afterEach(async () => { vi.restoreAllMocks(); await runtime.close(); rmSync(directory, { recursive: true, force: true }); });
 
-  it("summarizes only active workers and their five newest bounded results for the dashboard", async () => {
+  it("summarizes only active workers and their latest bounded result for the dashboard", async () => {
     const agent = await createAgent();
     expect(await runtime.agents.subagents.dashboard("owner", agent.id)).toEqual([]);
     const worker = await createWorker(agent.id, { enabled: false });
@@ -52,7 +52,7 @@ describe("subagent definitions, execution and scheduling", () => {
     const summaries = await runtime.agents.subagents.dashboard("owner", agent.id);
     expect(summaries.map((row) => row.id)).toEqual([worker.id, unused.id]);
     expect(summaries[0]?.enabled).toBe(false);
-    expect(summaries[0]?.runs.map((run) => run.id)).toEqual([6, 5, 4, 3, 2].map((index) => `dashboard-run-${index}`));
+    expect(summaries[0]?.runs.map((run) => run.id)).toEqual(["dashboard-run-6"]);
     expect(summaries[0]?.runs.every((run) => run.result.length === 240 && !("config" in run) && !("task" in run))).toBe(true);
     expect(summaries[1]?.runs).toEqual([]);
     await expect(runtime.agents.subagents.dashboard("other", agent.id)).rejects.toMatchObject({ status: 404 });

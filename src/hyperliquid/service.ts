@@ -214,14 +214,38 @@ export class HyperliquidService {
 
   async agentDashboard(userId: string, id: string) {
     const address = await this.dashboardAccount(userId, id);
-    if (this.started && address) return this.live.snapshot(address);
-    return loadAgentDashboard(this.transport, address);
+    const [snapshot, balanceHistory] = await Promise.all([
+      this.started && address ? this.live.snapshot(address) : loadAgentDashboard(this.transport, address),
+      address && this.journal ? this.journal.balanceHistory(address) : null,
+    ]);
+    return { ...snapshot, balanceHistory };
   }
 
   async watchDashboard(userId: string, id: string, signal: AbortSignal, publish: (snapshot: AgentDashboard) => void) {
     const address = await this.dashboardAccount(userId, id);
     if (!this.started || !address) { publish(await loadAgentDashboard(this.transport, null)); return; }
-    await this.live.watch(address, signal, publish);
+    let balanceHistory = this.journal ? await this.journal.balanceHistory(address) : null;
+    let latest = this.live.snapshot(address);
+    let refreshing = false;
+    // Journal projections can change without an account-feed message. Refresh
+    // rolling windows independently, with at most one database read in flight.
+    const timer = setInterval(() => {
+      if (refreshing || signal.aborted) return;
+      refreshing = true;
+      void (async () => {
+        try { balanceHistory = this.journal ? await this.journal.balanceHistory(address) : null; }
+        catch { balanceHistory = null; }
+        finally { refreshing = false; }
+        if (!signal.aborted) publish({ ...latest, balanceHistory });
+      })();
+    }, 5_000);
+    timer.unref();
+    try {
+      await this.live.watch(address, signal, (snapshot) => {
+        latest = snapshot;
+        publish({ ...snapshot, balanceHistory });
+      });
+    } finally { clearInterval(timer); }
   }
 
   async agentJournal(userId: string, id: string, view: "trades" | "activity", page: number) {

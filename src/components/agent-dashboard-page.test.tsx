@@ -3,7 +3,8 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AgentDashboard } from "../hyperliquid/agent-dashboard.js";
-const mocks = vi.hoisted(() => ({ runSubagent: vi.fn(), navigate: vi.fn(), saveSubagentSection: vi.fn(), invalidate: vi.fn().mockResolvedValue(undefined) }));
+const mocks = vi.hoisted(() => ({ sendAgentMessage: vi.fn(), runSubagent: vi.fn(), navigate: vi.fn(), saveSubagentSection: vi.fn(), invalidate: vi.fn().mockResolvedValue(undefined) }));
+vi.mock("../web/agents.js", () => ({ sendAgentMessage: mocks.sendAgentMessage }));
 vi.mock("../web/subagents.js", () => ({ runSubagent: mocks.runSubagent, saveSubagentSection: mocks.saveSubagentSection }));
 vi.mock("@tanstack/react-router", () => ({ useRouter: () => ({ navigate: mocks.navigate, invalidate: mocks.invalidate }) }));
 import { AgentDashboardPage } from "./agent-dashboard-page.js";
@@ -29,6 +30,35 @@ describe("Agent dashboard", () => {
     await act(async () => root.render(<AgentDashboardPage id="fixture" initial={initial} />));
   });
   afterEach(async () => { await act(async () => root.unmount()); container.remove(); vi.unstubAllGlobals(); });
+  it("sends dashboard chat to the orchestrator, prevents duplicates and navigates only after acceptance", async () => {
+    const section = container.querySelector('[aria-label="Chat"]')!;
+    expect(section.previousElementSibling?.getAttribute("aria-label")).toBe("Sub-agents");
+    const input = section.querySelector("textarea")!;
+    const submit = () => section.querySelector("form")!.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(input, "Review my positions");
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    mocks.sendAgentMessage.mockClear(); mocks.navigate.mockClear();
+    let reject!: (error: Error) => void;
+    mocks.sendAgentMessage.mockImplementationOnce(() => new Promise((_resolve, fail) => { reject = fail; }));
+    await act(async () => { submit(); submit(); });
+    expect(mocks.sendAgentMessage).toHaveBeenCalledOnce();
+    expect(mocks.navigate).not.toHaveBeenCalled();
+    const first = mocks.sendAgentMessage.mock.calls[0]![0];
+    expect(first.data).toMatchObject({ id: "fixture", message: "Review my positions" });
+    await act(async () => reject(new Error("offline")));
+    expect(section.querySelector('[role="alert"]')?.textContent).toContain("Retry with the same message");
+    expect(input.value).toBe("Review my positions");
+    mocks.sendAgentMessage.mockResolvedValueOnce({ ok: false, error: "Agent unavailable" });
+    await act(async () => { submit(); });
+    expect(section.textContent).toContain("Agent unavailable");
+    expect(mocks.navigate).not.toHaveBeenCalled();
+    mocks.sendAgentMessage.mockResolvedValueOnce({ ok: true, data: { submissionId: 1 } });
+    await act(async () => { submit(); });
+    expect(mocks.sendAgentMessage.mock.calls[2]![0]).toEqual(first);
+    expect(mocks.navigate).toHaveBeenCalledWith({ to: "/agents/$agentId/chat", params: { agentId: "fixture" } });
+  });
   it("shows a sub-agent empty state and creation link without the Performance section", () => {
     expect(container.textContent).toContain("No sub-agents yet.");
     expect(container.querySelector('a[href="/agents/fixture/sub-agents/new"]')?.textContent).toContain("Create a new sub-agent");
@@ -36,7 +66,7 @@ describe("Agent dashboard", () => {
   });
   it("links worker headers and run results to their detail pages with relative timestamps", async () => {
     await act(async () => root.render(<AgentDashboardPage id="fixture" initial={initial} subagents={[
-      { id: "worker:one", name: "Research", enabled: true, schedule: "", nextRunAt: null, runs: [{ id: "run:one", status: "completed", createdAt: Date.now() - 120000, result: "Market conditions look favorable." }] },
+      { id: "worker:one", name: "Research", enabled: true, schedule: "", nextRunAt: null, runs: [{ id: "run:one", status: "completed", createdAt: Date.now() - 120000, result: "Market conditions look favorable." }, { id: "older", status: "failed", createdAt: 1, result: "Old result hidden" }] },
       { id: "worker:two", name: "Risk", enabled: false, schedule: "", nextRunAt: null, runs: [] },
     ]} />));
     const section = container.querySelector('[aria-label="Sub-agents"]')!;
@@ -46,6 +76,8 @@ describe("Agent dashboard", () => {
     expect(run.querySelector(".truncate")).not.toBeNull();
     expect(run.querySelector("time")?.textContent).toContain("ago");
     expect(run.querySelector('[aria-label="completed"]')).not.toBeNull();
+    expect(section.textContent).not.toContain("Old result hidden");
+    expect(section.querySelectorAll('a[href*="/runs/"]')).toHaveLength(1);
     expect(section.textContent).toContain("No runs yet.");
     expect(section.textContent).toContain("Paused");
   });

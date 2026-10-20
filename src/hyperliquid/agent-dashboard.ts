@@ -8,7 +8,13 @@ export interface DashboardPosition {
 export interface DashboardOrder {
   id: number; coin: string; side: string; size: string; price: string; type: string;
 }
+export interface BalancePoint { time: number; balance: string }
+export interface BalanceHistory {
+  day: BalancePoint[];
+  month: BalancePoint[];
+}
 export interface AgentDashboard {
+  balanceHistory?: BalanceHistory | null;
   address: string | null;
   fetchedAt: number;
   perpEquity: string | null;
