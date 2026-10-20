@@ -154,7 +154,7 @@ describe("subagent definitions, execution and scheduling", () => {
     const definition = (await runtime.agents.subagents.list("owner", agent.id)).find((row) => row.kind === "orchestrator")!;
     await runtime.agents.subagents.updateTools("owner", agent.id, definition.id, ["ta_rsi"]);
     const rootAgent = await main.agent(context);
-    expect(rootAgent.extensions.map((extension) => extension.name)).toEqual(["hyperliquid", "subagents", "ta"]);
+    expect(rootAgent.extensions.map((extension) => extension.name)).toEqual(["hyperliquid", "subagents", "ta", "orchestrator-insights"]);
     expect(rootAgent.tools.map((tool) => tool.name)).toEqual(["ta_rsi"]);
   });
 

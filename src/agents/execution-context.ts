@@ -1,5 +1,5 @@
 import type { Context } from "@earendil-works/chord";
-import { ToolTask, type ConversationId, type EntryId, type Harness, type ToolExecutionApi } from "@earendil-works/pi-durable";
+import { LiveDoc, ToolTask, type ContextEdit, type ConversationId, type EntryId, type Harness, type ToolExecutionApi } from "@earendil-works/pi-durable";
 import type { SqliteExecutor } from "@earendil-works/pi-durable/storage/sqlite";
 import type { SharedDatabase } from "../db/shared-database.js";
 import type { SubagentRow, SubagentRun } from "../db/subagent-schema.js";
@@ -10,6 +10,7 @@ import type { MemoryActor, MemoryAuthorization } from "../memory/operations.js";
 import { AgentError } from "./agent-input.js";
 import type { RunContext } from "./execution-context-contracts.js";
 import { workerInstructions } from "./subagent-input.js";
+import { OrchestratorInsightsDoc, orchestratorInsightsSection } from "./orchestrator-insights.js";
 
 /**
  * Resolves tool calls to trusted application identity and freezes per-run
@@ -21,7 +22,7 @@ export class ExecutionContextService {
   private readonly bindings = new Map<string, { harness: Harness; root: ConversationId }>();
   readonly insights: InsightService;
   readonly memories: MemoryService;
-  constructor(private readonly db: SharedDatabase) {
+  constructor(private readonly db: SharedDatabase, private readonly reportInsightError?: (error: unknown) => void) {
     this.insights = new InsightService(db, this.authorize);
     this.memories = new MemoryService(db, this.authorize);
   }
@@ -47,6 +48,47 @@ export class ExecutionContextService {
   async runContext(agentId: string, run: SubagentRun): Promise<RunContext> {
     return await this.db.transaction((tx) => this.runContextTx(tx, agentId, run.id))
       ?? { version: 2, instructions: run.status === "skipped" ? "No instructions were injected: this assignment was skipped before admission." : workerInstructions(run.config), insights: null, insightStatus: run.status === "skipped" ? "not_admitted" : "legacy/none" };
+  }
+
+  /** A root response gets Agent-wide guidance once, independent of its input
+   * source and tools. Persist before request preparation can send it to a model. */
+  async orchestratorInsights(agentId: string, conversationId: ConversationId, context: Context): Promise<string> {
+    const binding = this.bindings.get(agentId);
+    if (!binding || binding.root !== conversationId) throw new AgentError("Orchestrator insight binding unavailable", 503);
+    const { harness, root } = binding;
+    const input = (await harness.snapshot(LiveDoc, root, context))?.run?.inputs[0];
+    if (input === undefined) throw new AgentError("Orchestrator insights require an active response", 503);
+    const previous = await harness.snapshot(OrchestratorInsightsDoc, root, context);
+    if (previous?.input === input) return previous.instructions;
+
+    // Never nest application SQL and Durable commits. An unavailable advisory
+    // document is explicit and fixed for this response, not stale/empty guidance.
+    let instructions: string;
+    try { instructions = renderInsightSections(await this.insights.current(agentId, { kind: "agent" })); }
+    catch (error) {
+      this.reportInsightError?.(error);
+      instructions = "Agent-wide insights are unavailable for this response. Do not infer that the document is empty or rely on an older insights block. Follow the user's assignment, configured instructions, tool permissions and enforced risk settings.";
+    }
+    const main = await harness.conversation(root, context);
+    if (!main) throw new AgentError("Orchestrator conversation unavailable", 503);
+    const view = previous?.instructions === instructions ? undefined : await main.context(context);
+    // Positional system patches otherwise leave old guidance in active history.
+    // Retire only our section, preserving static instructions/tools and the audit.
+    const edits: ContextEdit[] = view?.entries.flatMap((entry, index) => {
+      const messages = view.contributions[index] ?? [];
+      if (!messages.some((message) => message.role === "system" && message.sections?.[orchestratorInsightsSection] !== undefined)) return [];
+      return [{ target: entry.id, action: "replace" as const, messages: messages.map((message) => message.role === "system" && message.sections?.[orchestratorInsightsSection] !== undefined ? { ...message, sections: Object.fromEntries(Object.entries(message.sections).filter(([key]) => key !== orchestratorInsightsSection)) } : message) }];
+    }) ?? [];
+    return main.commit(async (tx) => {
+      if ((await tx.doc(LiveDoc, root)).run?.inputs[0] !== input) throw new AgentError("Orchestrator response changed during insight capture", 409);
+      const saved = await tx.doc(OrchestratorInsightsDoc, root);
+      if (saved.input !== input) {
+        if (edits.length) await tx.appendEntry(root, { kind: "hv.orchestrator-insights-retired", data: { input }, edits });
+        saved.input = input;
+        saved.instructions = instructions;
+      }
+      return saved.instructions;
+    }, context);
   }
 
   /** Task-local identity survives replay; assignment entry boundaries prevent an

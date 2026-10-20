@@ -1,7 +1,7 @@
 {
   "formatVersion": 1,
   "id": "basic-analysis",
-  "version": 4,
+  "version": 5,
   "name": "Technical Analyst",
   "description": "Closed-candle technical analysis, supporting artifacts and durable research handoffs; no trading tools.",
   "instructions": [
@@ -29,8 +29,7 @@
     "artifact_delete",
     "publish_research",
     "list_memories",
-    "get_memory",
-    "get_insights"
+    "get_memory"
   ],
   "defaults": {
     "persistent": false,

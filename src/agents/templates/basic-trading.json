@@ -1,7 +1,7 @@
 {
   "formatVersion": 1,
   "id": "basic-trading",
-  "version": 1,
+  "version": 2,
   "name": "Trader",
   "description": "Protection-first planning and gated entries. Sizing, protection distances and instruments are operator/insights decisions; the host enforces only the Agent's risk settings.",
   "instructions": [
@@ -27,8 +27,7 @@
     "get_trading_context",
     "record_trade_decision",
     "get_memory",
-    "list_memories",
-    "get_insights"
+    "list_memories"
   ],
   "defaults": {
     "persistent": false,

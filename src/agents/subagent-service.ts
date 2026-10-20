@@ -18,7 +18,7 @@ import { bodyHash, canonical } from "../canonical.js";
 import { subagentTemplate } from "./subagent-templates.js";
 import { assignment, defaultMainInstructions, mainToolNames, nextCandleRun, subagentInput, type AssignmentSettings } from "./subagent-input.js";
 
-interface Binding extends SubagentExtension { harness: Harness; main: Conversation; hyperliquid: Extension; capabilities: readonly Extension[]; userId: string }
+interface Binding extends SubagentExtension { harness: Harness; main: Conversation; hyperliquid: Extension; capabilities: readonly Extension[]; orchestratorInsights: Extension; userId: string }
 export interface SubagentHost { owned(userId: string, id: string): Promise<AgentRow>; models(userId: string): Promise<Models>; changed(id: string): void }
 /** Full run detail: snapshotted configuration plus the complete transcript. */
 export interface RunDetail { definition: SubagentRow; run: SubagentRun; entries: EntryRecord[]; prior: EntryRecord[]; tools?: ToolActivity[]; context?: RunContext; warnings?: ExecutionWarning[]; publications?: { ref: string; kind: string; summary: string }[] }
@@ -46,14 +46,14 @@ export class SubagentService {
   private historyChanged(id: string) { for (const listener of this.historyListeners.get(id) ?? []) listener(); }
   constructor(private readonly db: ApplicationDatabase, private readonly database: SharedDatabase, private readonly providers: ProviderService, private readonly host: SubagentHost, private readonly execution: ExecutionContextService, private readonly injectedModels = false, private readonly log?: FastifyBaseLogger) {}
   extension(agentId: string, hyperliquid: Extension, capabilities: readonly Extension[]) { return createSubagentExtension(this, agentId, hyperliquid, capabilities, this.execution); }
-  async bind(agent: AgentRow, harness: Harness, main: Conversation, hyperliquid: Extension, execution: SubagentExtension, capabilities: readonly Extension[]) {
+  async bind(agent: AgentRow, harness: Harness, main: Conversation, hyperliquid: Extension, execution: SubagentExtension, capabilities: readonly Extension[], orchestratorInsights: Extension) {
     const resolved = await main.agent(context);
     const now = Date.now();
     await this.db.insert(hvSubagents).values({
       id: `main:${agent.id}`, agentId: agent.id, kind: "orchestrator", name: "Orchestrator", description: "Main conversation", instructions: defaultMainInstructions,
       provider: resolved.model!.provider, modelId: resolved.model!.modelId, thinkingLevel: resolved.thinkingLevel ?? "", tools: mainToolNames, conversationId: main.id, createdAt: now, updatedAt: now,
     }).onConflictDoNothing().run();
-    const binding = { harness, main, hyperliquid, capabilities, ...execution, userId: agent.userId };
+    const binding = { harness, main, hyperliquid, capabilities, orchestratorInsights, ...execution, userId: agent.userId };
     await this.applyMain(binding, (await this.db.select().from(hvSubagents).where(and(eq(hvSubagents.agentId, agent.id), eq(hvSubagents.kind, "orchestrator"))).get())!);
     // Mark expired children's pending generations/tools before *any* scheduler
     // resumes. abortTask only marks while paused; unlike conversation.abort it
@@ -90,7 +90,7 @@ export class SubagentService {
   }
   private async applyMain(binding: Binding, row: SubagentRow) {
     const available = [...(binding.hyperliquid.tools ?? []), ...(binding.extension.tools ?? []), ...binding.capabilities.flatMap((extension) => extension.tools ?? [])];
-    await binding.main.configure({ model: { provider: row.provider, modelId: row.modelId }, thinkingLevel: this.thinking(row.thinkingLevel), extensions: [binding.hyperliquid, binding.extension, ...binding.capabilities.filter((extension) => extension.tools?.some((tool) => row.tools.includes(tool.name)))], tools: available.filter((tool) => row.tools.includes(tool.name)), modelTools: null, instructions: row.instructions }, context);
+    await binding.main.configure({ model: { provider: row.provider, modelId: row.modelId }, thinkingLevel: this.thinking(row.thinkingLevel), extensions: [binding.hyperliquid, binding.extension, ...binding.capabilities.filter((extension) => extension.tools?.some((tool) => row.tools.includes(tool.name))), binding.orchestratorInsights], tools: available.filter((tool) => row.tools.includes(tool.name)), modelTools: null, instructions: row.instructions }, context);
   }
   async list(userId: string, agentId: string) {
     await this.host.owned(userId, agentId);

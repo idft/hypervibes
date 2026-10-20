@@ -20,6 +20,7 @@ import { AgentError, agentId, agentName, chatMessage, harnessPrefix, requestId }
 import { SubagentService } from "./subagent-service.js";
 import { createMemoryExtension } from "../memory/durable-extension.js";
 import { ExecutionContextService } from "./execution-context.js";
+import { createOrchestratorInsightsExtension } from "./orchestrator-insights.js";
 import { RiskSettingsService } from "../hyperliquid/orders/risk-settings.js";
 import type { ProviderService } from "../providers/provider-service.js";
 
@@ -105,7 +106,7 @@ export class AgentService {
   readonly execution: ExecutionContextService;
   readonly risk: RiskSettingsService;
   constructor(private readonly db: ApplicationDatabase, private readonly database: SharedDatabase, private readonly providers: ProviderService, private readonly hyperliquid: HyperliquidService, private readonly orders: OrderService, private readonly options: AgentServiceOptions = {}) {
-    this.execution = new ExecutionContextService(database);
+    this.execution = new ExecutionContextService(database, (error) => options.logger?.error(error, "Orchestrator insights snapshot failed"));
     this.orders.installAdmission(this.execution);
     this.risk = new RiskSettingsService(database);
     this.research = new ResearchService(database, hyperliquid, (error) => options.logger?.error(error, "Artifact maintenance failed"));
@@ -202,6 +203,8 @@ export class AgentService {
       for (const extension of capabilities) registry.install(extension);
       const execution = this.subagents.extension(agent.id, hyperliquid, capabilities);
       registry.install(execution.extension);
+      const orchestratorInsights = createOrchestratorInsightsExtension(agent.id, this.execution);
+      registry.install(orchestratorInsights);
       const storage = await SqliteStorage.open(this.database.borrow(), { prefix: harnessPrefix(agent.id) });
       try {
         harness = await Harness.open(storage, {
@@ -217,7 +220,7 @@ export class AgentService {
       if (agent.conversationId !== null && agent.conversationId !== main.id) throw new Error("Agent root identity changed");
       // Seed once from the existing root; later startups preserve editable settings.
       this.execution.bind(agent.id, harness, main.id);
-      await this.subagents.bind(agent, harness, main, hyperliquid, execution, capabilities);
+      await this.subagents.bind(agent, harness, main, hyperliquid, execution, capabilities, orchestratorInsights);
       this.admit();
       await this.db.update(hvAgents).set({ state: "ready", conversationId: main.id, error: null, updatedAt: Date.now() }).where(eq(hvAgents.id, agent.id)).run();
       const current = { harness, main };

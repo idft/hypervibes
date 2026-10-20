@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { accountToolNames, researchToolNames, subagentInput, taToolNames, workerToolNames } from "./subagent-input.js";
+import { accountToolNames, mainToolNames, researchToolNames, subagentInput, taToolNames, workerToolNames } from "./subagent-input.js";
 import analysisManifest from "./templates/basic-analysis.json" with { type: "json" };
 import tradingManifest from "./templates/basic-trading.json" with { type: "json" };
 import { parseTemplateCatalog, parseTemplateManifest } from "./template-manifest.js";
@@ -70,6 +70,14 @@ describe("bundled editable worker manifests", () => {
     expect(draft.instructions).toContain("evidenceAsOf");
     expect(draft.instructions).toContain("closed candles");
     expect(draft.instructions).toContain("not trading authority");
+  });
+  it("enables insight tools only for the reviewer by default", () => {
+    const insightTools = ["get_insights", "append_insight", "replace_insights"];
+    for (const template of subagentTemplates) {
+      const draft = templateDraft(template.id, { provider: "operator-selected", modelId: "operator-model", thinkingLevel: "" });
+      expect(draft.tools.filter((tool) => insightTools.includes(tool))).toEqual(template.id === "basic-review" ? insightTools : []);
+    }
+    expect(mainToolNames.filter((tool) => insightTools.includes(tool))).toEqual([]);
   });
   it("has only real permitted tools, no recursive delegation, no credentials or enabled/funded defaults", () => {
     const tools = [...createMemoryExtension("agent", {} as ExecutionContextService, {} as SharedDatabase).tools!, ...createHyperliquidExtension({} as HyperliquidService, "owner", "agent", {} as OrderService).tools!, ...createTaExtension({} as HyperliquidService["charts"], (() => { throw new Error("No execution in manifest test"); }) as ResearchResponder).tools!].map((tool) => tool.name);
