@@ -31,7 +31,7 @@ export function SubagentRunHistory({ agentId, runs, pending, onStop, pagination,
     <thead className="border-b border-zinc-800 text-xs text-zinc-500"><tr><th className="w-36 px-3 py-3">Created</th><th className="w-28 px-3 py-3">Source</th><th className="px-3 py-3">Instruction</th><th className="w-16 px-3 py-3">Status</th><th className="w-16 px-3 py-3"><span className="sr-only">Actions</span></th></tr></thead>
     <tbody>{runs.map((run) => <tr key={run.id} className="cursor-pointer border-b border-zinc-800/60 hover:bg-zinc-900 focus-within:bg-zinc-900" onClick={(event) => { if (!(event.target as HTMLElement).closest("a, button")) event.currentTarget.querySelector("a")?.click(); }}>
       <td className="px-3 py-3 text-xs text-zinc-400"><RelativeTime timestamp={run.createdAt} /></td>
-      <td className="px-3 py-3">{run.source === "schedule" ? "Scheduled" : run.source === "delegation" ? "Delegated" : "Manual"}</td>
+      <td className="px-3 py-3">{run.source === "schedule" ? "Scheduled" : run.source === "delegation" ? "Delegated" : run.source === "event" ? "Event" : "Manual"}</td>
       <td className="px-3 py-3"><a href={runUrl(agentId, run.subagentId, run.id)} className="block truncate text-zinc-200 hover:text-violet-300 focus-visible:outline-violet-400" title={run.task}>{run.task}</a></td>
       <td className="px-3 py-3"><RunStatus status={run.status} /></td>
       <td className="px-3 py-3">{(run.status === "queued" || run.status === "running") && <button disabled={pending} aria-label="Stop assignment" onClick={() => onStop(run.id)} className="cursor-pointer text-xs text-red-300 hover:underline disabled:cursor-wait disabled:opacity-50">Stop</button>}</td>

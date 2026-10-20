@@ -2,7 +2,9 @@
 import { act } from "react";
 import { fauxAssistantMessage } from "@earendil-works/pi-ai/providers/faux";
 import { createRoot, type Root } from "react-dom/client";
+import { renderToString } from "react-dom/server";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { RunDetail } from "../agents/subagent-service.js";
 import type { SubagentRow, SubagentRun } from "../db/subagent-schema.js";
 import type { EntryRecord } from "@earendil-works/pi-durable";
 const mocks = vi.hoisted(() => ({ stopSubagentRun: vi.fn() }));
@@ -10,7 +12,7 @@ vi.mock("../web/subagents.js", () => mocks);
 import { SubagentRunHistory } from "./subagent-run-history.js";
 import { SubagentRunPage } from "./subagent-run-page.js";
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-const definition: SubagentRow = { id: "worker:fixture", agentId: "agent-fixture", kind: "worker", name: "Research", description: "", instructions: "Saved worker instructions", provider: "faux", modelId: "faux-1", thinkingLevel: "", tools: [], templateOrigin: null, enabled: true, archived: false, delegatable: true, persistent: true, conversationId: null, schedule: "", delaySeconds: 30, nextRunAt: null, completion: "save", timeoutSeconds: 900, createdAt: 1, updatedAt: 1 };
+const definition: SubagentRow = { id: "worker:fixture", agentId: "agent-fixture", kind: "worker", name: "Research", description: "", instructions: "Saved worker instructions", provider: "faux", modelId: "faux-1", thinkingLevel: "", tools: [], triggers: { inboxEnabled: false, workerDelegates: [], researchSources: [], fills: false, orderChanges: false }, templateOrigin: null, enabled: true, archived: false, delegatable: true, persistent: true, conversationId: null, schedule: "", delaySeconds: 30, nextRunAt: null, completion: "save", timeoutSeconds: 900, createdAt: 1, updatedAt: 1 };
 const run: SubagentRun = { id: "large-hex-id", agentId: definition.agentId, subagentId: definition.id, requestId: "request", source: "manual", task: "Full assignment prompt", config: definition, status: "completed", taskId: null, conversationId: null, result: "Complete final result", createdAt: Date.now() - 300000, finishedAt: Date.now(), reportedAt: null };
 const entry = (id: number, kind: string, model: EntryRecord["model"]) => ({ id, kind, conversationId: 1, model }) as EntryRecord;
 const initial = {
@@ -26,8 +28,12 @@ class RunSource extends EventTarget {
 }
 describe("sub-agent run history and details", () => {
   let root: Root, container: HTMLDivElement;
-  beforeEach(() => { vi.resetAllMocks(); RunSource.instances = []; vi.stubGlobal("EventSource", RunSource); container = document.createElement("div"); document.body.append(container); root = createRoot(container); });
-  afterEach(async () => { await act(async () => root.unmount()); container.remove(); vi.restoreAllMocks(); vi.unstubAllGlobals(); });
+  const dialogMethods = Object.fromEntries(["showModal", "close"].map((key) => [key, Object.getOwnPropertyDescriptor(HTMLDialogElement.prototype, key)]));
+  beforeEach(() => { vi.resetAllMocks(); Object.defineProperties(HTMLDialogElement.prototype, {
+    showModal: { configurable: true, value(this: HTMLDialogElement) { this.open = true; } },
+    close: { configurable: true, value(this: HTMLDialogElement) { this.open = false; } },
+  }); RunSource.instances = []; vi.stubGlobal("EventSource", RunSource); container = document.createElement("div"); container.className = "app-shell"; Element.prototype.scrollIntoView = vi.fn(); document.body.append(container); root = createRoot(container); });
+  afterEach(async () => { await act(async () => root.unmount()); container.remove(); vi.restoreAllMocks(); vi.unstubAllGlobals(); for (const [key, descriptor] of Object.entries(dialogMethods)) { if (descriptor) Object.defineProperty(HTMLDialogElement.prototype, key, descriptor); else Reflect.deleteProperty(HTMLDialogElement.prototype, key); } });
   it("renders a table with relative timestamps, accessible status icons, links and isolated Stop actions", async () => {
     const stop = vi.fn();
     await act(async () => root.render(<SubagentRunHistory agentId={run.agentId} runs={[run, { ...run, id: "running-id", status: "running", source: "delegation" }]} pending={false} onStop={stop} />));
@@ -51,7 +57,17 @@ describe("sub-agent run history and details", () => {
   });
   it("shows snapshotted instructions, full transcript, tools and prior context without duplicated sections", async () => {
     await act(async () => root.render(<SubagentRunPage initial={initial} />));
-    for (const text of ["Saved worker instructions", run.task, "Earlier assignment", "Reasoning evidence", "Full assistant response", "get_account", '"coin":"BTC"', "Complete tool output"]) expect(container.textContent).toContain(text);
+    expect(document.querySelector("dialog")).toBeNull();
+    const instructionsButton = [...container.querySelectorAll("button")].find((button) => button.textContent === "Instructions at execution")!;
+    await act(async () => instructionsButton.click());
+    const dialog = document.querySelector("dialog")!;
+    expect(dialog.open).toBe(true);
+    expect(dialog.textContent).toContain("Saved worker instructions");
+    expect(dialog.textContent).not.toContain("Changed since execution");
+    expect(dialog.querySelector("pre")?.className).toContain("min-h-0 overflow-y-auto");
+    expect(dialog.querySelector("header")?.className).toContain("shrink-0");
+    expect(dialog.querySelector("footer")?.className).toContain("shrink-0");
+    for (const text of [run.task, "Earlier assignment", "Reasoning evidence", "Full assistant response", "get_account", '"coin":"BTC"', "Complete tool output"]) expect(container.textContent).toContain(text);
     // The assignment and final result duplicate the transcript's first user
     // message and last assistant message, so they no longer get their own sections.
     expect(container.textContent).not.toContain("Complete final result");
@@ -61,13 +77,28 @@ describe("sub-agent run history and details", () => {
     expect(container.textContent).not.toContain("Assignment completion is not a filled-trade or protection guarantee.");
     expect(container.textContent).not.toContain("Saved configuration");
     expect(container.textContent).not.toContain("Raw transcript entry");
-    const instructions = [...container.querySelectorAll("details")].find((details) => details.querySelector("summary")?.textContent === "Instructions at execution")!;
-    expect(instructions.open).toBe(false);
-    expect(instructions.textContent).toContain("Saved worker instructions");
-    await act(async () => instructions.querySelector("summary")!.click());
-    expect(instructions.open).toBe(true);
+    await act(async () => dialog.dispatchEvent(new Event("cancel", { cancelable: true })));
+    expect(document.querySelector("dialog")).toBeNull();
+    await act(async () => instructionsButton.click());
+    await act(async () => document.querySelector("dialog button")!.dispatchEvent(new MouseEvent("click", { bubbles: true })));
+    expect(document.querySelector("dialog")).toBeNull();
     expect([...container.querySelectorAll("article")].every((article) => article.textContent?.trim())).toBe(true);
     expect(container.querySelectorAll("hr")).toHaveLength(1);
+  });
+  it("pins the header with an Instructions button and scrolls current and earlier transcript together", async () => {
+    await act(async () => root.render(<SubagentRunPage initial={initial} />));
+    const page = container.firstElementChild!;
+    const header = container.querySelector('[aria-label="Run header"]')!;
+    const transcript = container.querySelector('[aria-label="Conversation transcript"]')!;
+    expect(page.className).toContain("h-[calc(100dvh-4.5rem)]");
+    expect(page.className).toContain("overflow-hidden");
+    expect(header.className).toContain("shrink-0");
+    expect(header.textContent).toContain("Instructions at execution");
+    expect(transcript.className).toContain("min-h-0 flex-1 overflow-y-auto");
+    expect(transcript.textContent).toContain("Earlier assignment");
+    expect(transcript.textContent).toContain("Full assistant response");
+    expect(transcript.textContent).not.toContain("Instructions at execution");
+    expect(page.children).toHaveLength(2);
   });
   it("merges consecutive assistant messages across tool results without crossing user or system messages", async () => {
     const reply = (id: number, text: string) => entry(id, "pi.assistant", [fauxAssistantMessage([{ type: "text", text }], { timestamp: 1 })]);
@@ -124,6 +155,34 @@ describe("sub-agent run history and details", () => {
     expect(tool.textContent).not.toContain("Bounded summary");
     expect(tool.textContent).not.toContain("Open artifacts");
   });
+  it("groups live codemode calls and preserves them when script results arrive", async () => {
+    const entries = [entry(20, "pi.assistant", [fauxAssistantMessage([{ type: "toolCall", id: "script", name: "codemode", arguments: { code: "await tools.get_account({})" } }], { timestamp: 1 })])];
+    const active: RunDetail = { ...initial, prior: [], entries, run: { ...run, status: "running" }, tools: [{ id: "script", name: "codemode", status: "running" }, { id: "script/c1", name: "↳ get_account", status: "running" }] };
+    await act(async () => root.render(<SubagentRunPage initial={active} />));
+    const panel = container.querySelector('[aria-label="Code execution"]')!;
+    expect(panel.textContent).toContain("Running script…");
+    const nested = [...panel.querySelectorAll("details")].find((item) => item.textContent?.includes("get_account") && item.querySelector("summary")?.textContent?.includes("get_account"))!;
+    expect(nested).toBeDefined();
+    await act(async () => { nested.open = true; });
+    const completed: RunDetail = { ...active, tools: undefined, entries: [...entries, entry(21, "pi.tool", [{ role: "toolResult", toolCallId: "script", toolName: "codemode", content: [{ type: "text", text: "Analysis complete" }], isError: false, details: { calls: [{ id: 1, name: "get_account", status: "ok", args: "{}" }] }, timestamp: 2 }]), entry(22, "pi.assistant", [fauxAssistantMessage([{ type: "thinking", thinking: "Considering the analysis" }], { timestamp: 3 })])] };
+    await act(async () => RunSource.instances.at(-1)!.dispatchEvent(new MessageEvent("run", { data: JSON.stringify(completed) })));
+    expect(panel.textContent).toContain("Script completed");
+    expect(panel.textContent).toContain("Analysis complete");
+    expect(nested.isConnected).toBe(true);
+    expect(nested.open).toBe(true);
+    expect(nested.querySelector("summary")?.textContent).toContain("ok");
+    expect(container.querySelectorAll('[aria-label="Code execution"]')).toHaveLength(1);
+    expect([...container.querySelectorAll("summary")].filter((item) => item.textContent?.includes("get_account"))).toHaveLength(1);
+    expect(container.textContent).toContain("Considering the analysis");
+    expect(panel.textContent).not.toContain("Considering the analysis");
+    expect(container.textContent).toContain("Stop assignment");
+  });
+  it("labels failed scripts explicitly", async () => {
+    await act(async () => root.render(<SubagentRunPage initial={{ ...initial, prior: [], entries: [entry(30, "pi.tool", [{ role: "toolResult", toolCallId: "failed", toolName: "codemode", content: [{ type: "text", text: "Script timed out" }], isError: true, timestamp: 1 }])] }} />));
+    const panel = container.querySelector('[aria-label="Code execution"]')!;
+    expect(panel.textContent).toContain("Script failed");
+    expect(panel.textContent).toContain("Script timed out");
+  });
   it("renders a one-line breadcrumb to the sub-agent and live-updates without refresh controls", async () => {
     await act(async () => root.render(<SubagentRunPage initial={initial} />));
     const nav = container.querySelector("nav")!;
@@ -142,6 +201,47 @@ describe("sub-agent run history and details", () => {
     expect(container.textContent).toContain("Stop assignment");
     await act(async () => source.dispatchEvent(new MessageEvent("unavailable", { data: JSON.stringify({ message: "Reconnecting fixture" }) })));
     expect(container.querySelector('[role="status"]')?.textContent).toBe("Reconnecting fixture");
+  });
+  it("follows live snapshots, pauses when reading above, resumes at the bottom and follows completion", async () => {
+    const active = { ...initial, run: { ...run, status: "running" as const, finishedAt: null } };
+    await act(async () => root.render(<SubagentRunPage initial={active} />));
+    const transcript = container.querySelector('[aria-label="Conversation transcript"]')!;
+    Object.defineProperties(transcript, { scrollHeight: { value: 2000, configurable: true }, clientHeight: { value: 600 } });
+    const scroll = vi.mocked(Element.prototype.scrollIntoView);
+    expect(scroll).toHaveBeenCalledOnce();
+    const source = RunSource.instances.at(-1)!;
+    const snapshot = async (detail: RunDetail = active) => {
+      await act(async () => source.dispatchEvent(new MessageEvent("run", { data: JSON.stringify(detail) })));
+    };
+    await snapshot();
+    expect(scroll).toHaveBeenCalledTimes(2);
+    transcript.scrollTop = 400;
+    await act(async () => transcript.dispatchEvent(new Event("scroll")));
+    await snapshot();
+    expect(scroll).toHaveBeenCalledTimes(2);
+    transcript.scrollTop = 1400;
+    await act(async () => transcript.dispatchEvent(new Event("scroll")));
+    await snapshot();
+    expect(scroll).toHaveBeenCalledTimes(3);
+    await act(async () => source.dispatchEvent(new MessageEvent("run", { data: JSON.stringify(initial) })));
+    expect(scroll).toHaveBeenCalledTimes(4);
+    await snapshot(initial);
+    expect(scroll).toHaveBeenCalledTimes(4);
+  });
+  it("keeps the server-rendered transcript hidden until positioned before paint", async () => {
+    const markup = document.createElement("div");
+    markup.innerHTML = renderToString(<SubagentRunPage initial={initial} />);
+    expect(markup.querySelector('[aria-label="Conversation transcript"]')?.classList.contains("invisible")).toBe(true);
+    expect(Element.prototype.scrollIntoView).not.toHaveBeenCalled();
+    await act(async () => root.render(<SubagentRunPage initial={initial} />));
+    expect(Element.prototype.scrollIntoView).toHaveBeenCalledOnce();
+    expect(container.querySelector('[aria-label="Conversation transcript"]')?.classList.contains("invisible")).toBe(false);
+  });
+  it("starts historical runs at the bottom without following subsequent snapshots", async () => {
+    await act(async () => root.render(<SubagentRunPage initial={initial} />));
+    expect(Element.prototype.scrollIntoView).toHaveBeenCalledOnce();
+    await act(async () => RunSource.instances.at(-1)!.dispatchEvent(new MessageEvent("run", { data: JSON.stringify(initial) })));
+    expect(Element.prototype.scrollIntoView).toHaveBeenCalledOnce();
   });
   it("stops active work through the live stream without manual refreshes", async () => {
     const active = { ...initial, run: { ...run, status: "running" as const, result: "", finishedAt: null } };

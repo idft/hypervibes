@@ -74,7 +74,7 @@ describe("subagent definitions, execution and scheduling", () => {
     const other = await createAgent();
     await createWorker(other.id);
     expect(await runtime.agents.subagents.listWorkers(agent.id)).toEqual(
-      [enabled, paused, unavailable].map(({ id, name, description, tools, enabled, delegatable }) => ({ id, name, description, tools, enabled, delegatable })),
+      [enabled, paused, unavailable].sort((a, b) => a.createdAt - b.createdAt || a.id.localeCompare(b.id)).map(({ id, name, description, tools, enabled, delegatable }) => ({ id, name, description, tools, enabled, delegatable })),
     );
     for (const worker of [paused, unavailable, archived]) {
       await expect(runtime.agents.subagents.delegate(agent.id, worker.id, "Not available", randomUUID())).rejects.toMatchObject({ status: 409 });
@@ -237,7 +237,7 @@ describe("subagent definitions, execution and scheduling", () => {
     const agent = await createAgent(), other = await createAgent(), worker = await createWorker(agent.id);
     await expect(runtime.agents.subagents.detail("other", agent.id, worker.id)).rejects.toMatchObject({ status: 404 });
     await expect(detail(other.id, worker.id)).rejects.toMatchObject({ status: 404 });
-    for (const input of [settings({ tools: ["bash"] }), settings({ tools: ["research_ta"] }), settings({ tools: ["delegate_subagent"] }), settings({ schedule: "bad" }), settings({ timeoutSeconds: 0 }), { ...settings(), enabled: "true" }]) expect(() => subagentInput(input)).toThrow();
+    for (const input of [settings({ tools: ["bash"] }), settings({ tools: ["research_ta"] }), settings({ tools: ["get_subagent_run"] }), settings({ schedule: "bad" }), settings({ timeoutSeconds: 0 }), { ...settings(), enabled: "true" }]) expect(() => subagentInput(input)).toThrow();
     await expect(runtime.agents.subagents.run("other", agent.id, worker.id, "Do work", randomUUID())).rejects.toMatchObject({ status: 404 });
   });
 
@@ -248,7 +248,7 @@ describe("subagent definitions, execution and scheduling", () => {
     const updated = await runtime.agents.subagents.updateTools("owner", agent.id, worker.id, ["get_account"]);
     expect(updated).toEqual({ ...worker, tools: ["get_account"], nextRunAt, updatedAt: updated.updatedAt });
     await expect(runtime.agents.subagents.updateTools("other", agent.id, worker.id, [])).rejects.toMatchObject({ status: 404 });
-    await expect(runtime.agents.subagents.updateTools("owner", agent.id, worker.id, ["delegate_subagent"])).rejects.toThrow("supported tools");
+    expect((await runtime.agents.subagents.updateTools("owner", agent.id, worker.id, ["list_subagents", "delegate_subagent"])).tools).toEqual(["list_subagents", "delegate_subagent"]);
     await expect(runtime.agents.subagents.updateTools("owner", agent.id, worker.id, ["get_account", "get_account"])).rejects.toThrow("supported tools");
     await runtime.agents.subagents.archive("owner", agent.id, worker.id);
     await expect(runtime.agents.subagents.updateTools("owner", agent.id, worker.id, [])).rejects.toMatchObject({ status: 409 });
@@ -505,7 +505,7 @@ describe("subagent definitions, execution and scheduling", () => {
     await expect(runtime.agents.subagents.update("owner", agent.id, worker.id, worker)).rejects.toMatchObject({ status: 409 });
     await expect(runtime.agents.subagents.updateAssignments("owner", agent.id, worker.id, { enabled: true, delegatable: true, persistent: false, timeoutSeconds: 600 })).rejects.toMatchObject({ status: 409 });
     await expect(runtime.agents.subagents.updateSection("owner", agent.id, worker.id, "instructions", { instructions: "Not while running" })).rejects.toMatchObject({ status: 409 });
-    await expect(runtime.agents.subagents.updateSection("owner", agent.id, worker.id, "enabled", { enabled: false })).rejects.toMatchObject({ status: 409 });
+    await expect(runtime.agents.subagents.updateSection("owner", agent.id, worker.id, "enabled", { enabled: false })).resolves.toMatchObject({ enabled: false });
     await expect(runtime.agents.subagents.archive("owner", agent.id, worker.id)).rejects.toMatchObject({ status: 409 });
     await runtime.agents.stop("owner", agent.id);
     expect((await detail(agent.id, worker.id)).runs[0]?.status).toBe("running");
@@ -527,6 +527,7 @@ describe("subagent definitions, execution and scheduling", () => {
     const scheduled = await completed(agent.id, worker.id);
     expect(scheduled.task).toContain("Carry out your responsibilities according to your instructions.");
     expect(scheduled.task).toContain(new Date(due - worker.delaySeconds * 1000).toISOString());
+    expect(scheduled.task).toContain(`endMs: ${due - worker.delaySeconds * 1000} (UTC milliseconds, exclusive closed-candle end)`);
     expect(scheduled.config.instructions).toBe(worker.instructions);
     expect((await detail(agent.id, worker.id)).runs).toHaveLength(1);
     const nextRunAt = (await detail(agent.id, worker.id)).definition.nextRunAt;

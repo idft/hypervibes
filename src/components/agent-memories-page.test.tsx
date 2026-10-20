@@ -12,7 +12,7 @@ vi.mock("../web/artifacts.js", () => ({ readArtifact: mocks.readArtifact, change
 import { AgentMemoriesPage } from "./agent-memories-page.js";
 import { AgentMemoryDetailPage } from "./agent-memory-detail-page.js";
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-const metadata = { ref: "m1", status: "stale", kind: "research", topic: "trend_setup", instrument: "BTC", interval: "1h", summary: "<img src=x onerror=alert(1)>", createdAt: 1000, evidenceAsOf: 0, validUntil: 1000, producerSubagentId: null, sourceRunId: null, retractedAt: null, retractionReason: null };
+const metadata = { correctedBy: null, supersededBy: null, ref: "m1", status: "stale", kind: "research", topic: "trend_setup", instrument: "BTC", interval: "1h", summary: "<img src=x onerror=alert(1)>", createdAt: 1000, evidenceAsOf: 0, validUntil: 1000, producerSubagentId: null, sourceRunId: null, retractedAt: null, retractionReason: null };
 const current = { scope: { kind: "agent" }, version: 1, content: "Current guidance" };
 const head = { ...current, operation: "replace", reason: "Initial review", createdAt: 1000, userId: null, producerSubagentId: "reviewer", sourceRunId: "run-1", evidenceRefs: ["m1"] };
 const data = { current, head, revision: null, history: { items: [{ ...head, content: undefined, evidenceRefs: undefined }], nextBeforeVersion: null } };
@@ -123,6 +123,29 @@ describe("Agent memory and insight UI", () => {
     const related = [...container.querySelectorAll("dt")].find((label) => label.textContent === "Related memories")!.nextElementSibling!;
     expect([...related.querySelectorAll("a")].map((anchor) => anchor.textContent)).toEqual(["Based on: m2", "Corrects: m3", "Supersedes: m4", "Reviews: m5"]);
   });
+  it("shows incoming replacements beside fresh age status without substituting the original contents", async () => {
+    detail = { ...detail, status: "fresh", correctedBy: "m2", supersededBy: "m3" };
+    await renderDetail();
+    const replacements = container.querySelector('[aria-label="Memory replacements"]')!;
+    expect([...replacements.querySelectorAll("a")].map((anchor) => [anchor.textContent, anchor.getAttribute("href")])).toEqual([
+      ["Corrected by: m2", "/agents/agent/memories/m2"],
+      ["Superseded by: m3", "/agents/agent/memories/m3"],
+    ]);
+    expect(replacements.closest("header")).not.toBeNull();
+    expect(container.querySelector("h1")?.textContent).toBe("Memory m1");
+    expect(container.querySelector('[aria-label="Memory contents"]')?.textContent).toContain(detail.content);
+    expect(container.querySelector('nav[aria-label="Memory breadcrumb"]')?.textContent).toContain("fresh");
+    expect([...replacements.querySelectorAll("a")].every((anchor) => anchor.className.includes("cursor-pointer"))).toBe(true);
+    await act(async () => root.render(<AgentMemoriesPage agentId="agent" workers={[]} initialMemories={{ items: [detail], nextCursor: null }} />));
+    const statusCell = container.querySelectorAll("tbody td")[4]!;
+    expect(statusCell.textContent).toContain("fresh");
+    expect(statusCell.textContent).toContain("Corrected by: m2");
+    expect(statusCell.textContent).toContain("Superseded by: m3");
+  });
+  it("does not show a replacement notice for an unreplaced publication", async () => {
+    await renderDetail();
+    expect(container.querySelector('[aria-label="Memory replacements"]')).toBeNull();
+  });
   it("renders preloaded memories immediately, without an empty flash or duplicate fetch", async () => {
     const initialMemories = { items: [{ ...detail }], nextCursor: { createdAt: 1000, ref: "m1" } };
     const page = <AgentMemoriesPage agentId="agent" workers={[]} initialMemories={initialMemories} />;
@@ -195,7 +218,7 @@ describe("Agent memory and insight UI", () => {
     expect(toggle.getAttribute("aria-label")).toBe("Show UTC creation timestamp");
   });
   it("excludes archived sub-agents from producer and insight scope options while preserving publication names", async () => {
-    const worker: SubagentRow = { id: "active", agentId: "agent", kind: "worker", name: "Active analyst", description: "", instructions: "", provider: "test", modelId: "test", thinkingLevel: "", tools: [], templateOrigin: null, enabled: true, archived: false, delegatable: true, persistent: false, conversationId: null, schedule: "", delaySeconds: 1, nextRunAt: null, completion: "save", timeoutSeconds: 900, createdAt: 0, updatedAt: 0 };
+    const worker: SubagentRow = { id: "active", agentId: "agent", kind: "worker", name: "Active analyst", description: "", instructions: "", provider: "test", modelId: "test", thinkingLevel: "", tools: [], triggers: { inboxEnabled: false, workerDelegates: [], researchSources: [], fills: false, orderChanges: false }, templateOrigin: null, enabled: true, archived: false, delegatable: true, persistent: false, conversationId: null, schedule: "", delaySeconds: 1, nextRunAt: null, completion: "save", timeoutSeconds: 900, createdAt: 0, updatedAt: 0 };
     const archived = { ...worker, id: "archived", name: "Archived analyst", archived: true };
     mocks.listMemories.mockResolvedValue({ ok: true, data: { items: [{ ...metadata, producerSubagentId: archived.id }], nextCursor: null } });
     await act(async () => root.render(<AgentMemoriesPage agentId="agent" workers={[worker, archived]} />));

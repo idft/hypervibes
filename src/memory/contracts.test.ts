@@ -28,6 +28,13 @@ describe("memory and insight contracts", () => {
       expect(() => validateToolArguments(tool, { type: "toolCall", id: "publish", name: tool.name, arguments: input })).not.toThrow();
     }
   });
+  it("describes research validity as an absolute deadline, not a duration", () => {
+    const description = JSON.stringify(ResearchInputSchema.properties.requestedValidUntil);
+    expect(description).toContain("absolute Unix timestamp in UTC milliseconds, NOT a duration");
+    expect(description).toContain("must be greater than evidenceAsOf");
+    expect(description).toContain("evidenceAsOf + 6 * 60 * 60 * 1000");
+    expect(description).toContain("never pass 21600000 alone");
+  });
   it("keeps topic formats consistent across tool schemas and backend validation", () => {
     const accepted = ["a", "trend_setup", "trade_decision", "btc_15m", "a0_", "a".repeat(64)];
     const rejected = ["", "Trend_setup", "trend setup", "trend-setup", "1trend", "_trend", " trend_setup", "trend_setup ", "trend_setup\n", "trend_setup\r\n", "trend_setup\t", "trénd_setup", "a".repeat(65)];

@@ -118,7 +118,9 @@ export function researchRequirements(value: unknown): ResearchRequirement[] {
   unique(result.map((requirement) => `${requirement.subagentId}:${requirement.topic}:${requirement.interval}`));
   return result;
 }
-export interface MemoryMetadata {
+/** Latest direct replacements; following a ref exposes any subsequent replacement in the chain. */
+export interface MemoryReplacements { correctedBy: string | null; supersededBy: string | null }
+export interface MemoryMetadata extends MemoryReplacements {
   ref: string; status: string; kind: MemoryKind; topic: string; instrument: string | null; interval: string | null; summary: string;
   createdAt: number; evidenceAsOf: number | null; validUntil: number | null; producerSubagentId: string | null; sourceRunId: string | null;
   retractedAt: number | null; retractionReason: string | null;

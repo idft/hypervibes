@@ -1,11 +1,12 @@
-import { useRef, useState } from "react";
+import { useEffect, useId, useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 import type { EntryRecord } from "@earendil-works/pi-durable";
 import type { RunDetail } from "../agents/subagent-service.js";
 import { workerInstructions } from "../agents/subagent-input.js";
 import { stopSubagentRun } from "../web/subagents.js";
 import { useSubagentRun } from "./use-subagent-run.js";
 import { RelativeTime, RunStatus } from "./subagent-run-history.js";
-import { ToolCall } from "./tool-activity.js";
+import { CodeExecution, ToolCall } from "./tool-activity.js";
 import { toolActivity, type ToolActivity } from "../research/tool-activity.js";
 import { ProviderLogo } from "./provider-logo.js";
 import { ChatBubble } from "./chat-bubble.js";
@@ -26,8 +27,14 @@ function Transcript({ entries, agentId, tools = [] }: { entries: EntryRecord[]; 
     }
   }
   const callIds = new Set(entries.flatMap((entry) => (entry.model ?? []).flatMap((message) => message.role === "assistant" ? message.content.flatMap((part) => part.type === "toolCall" ? [part.id] : []) : [])));
+  function isChild(callId: string, parentId: string) {
+    return callId.startsWith(`${parentId}/`) || callId.startsWith(`${parentId}:`);
+  }
   function renderTool(id: string) {
-    return [...activity.values()].filter((tool) => tool.id === id || tool.id.startsWith(`${id}:`)).map((tool) => <ToolCall key={tool.id} tool={tool} />);
+    const tool = activity.get(id);
+    const calls = [...activity.values()].filter((call) => isChild(call.id, id));
+    if (tool?.name === "codemode") return <CodeExecution key={id} tool={tool} calls={calls} />;
+    return [tool, ...calls].filter((call): call is ToolActivity => call !== undefined).map((call) => <ToolCall key={call.id} tool={call} />);
   }
   const resultIds = new Set(entries.flatMap((entry) => (entry.model ?? []).flatMap((message) => message.role === "toolResult" ? [message.toolCallId] : [])));
   type TranscriptMessage = { id: string; message: NonNullable<EntryRecord["model"]>[number] };
@@ -55,13 +62,55 @@ function Transcript({ entries, agentId, tools = [] }: { entries: EntryRecord[]; 
       </div>)}
       {message.role === "assistant" && message.errorMessage && <p className="text-sm text-red-300">{message.errorMessage}</p>}
     </div>)}
-  </ChatBubble>)}{[...activity.values()].filter((tool) => ![...callIds, ...resultIds].some((id) => tool.id === id || tool.id.startsWith(`${id}:`))).map((tool) => <ToolCall key={tool.id} tool={tool} />)}</div>;
+  </ChatBubble>)}{[...activity.values()].filter((tool) => ![...callIds, ...resultIds].some((id) => tool.id === id || isChild(tool.id, id))).map((tool) => <ToolCall key={tool.id} tool={tool} />)}</div>;
+}
+function InstructionsDialog({ instructions, children, onClose }: { instructions: string; children: ReactNode; onClose: () => void }) {
+  const dialog = useRef<HTMLDialogElement>(null);
+  const titleId = useId();
+  useEffect(() => {
+    const element = dialog.current!;
+    element.showModal();
+    return () => element.close();
+  }, []);
+  return createPortal(<dialog ref={dialog} aria-labelledby={titleId} onCancel={(event) => { event.preventDefault(); onClose(); }} className="m-auto flex max-h-[calc(100dvh-2rem)] w-[calc(100%_-_2rem)] max-w-3xl flex-col overflow-hidden rounded-2xl border border-zinc-800 bg-[#0d0d10] p-6 text-zinc-200 shadow-2xl backdrop:bg-black/70 backdrop:backdrop-blur-sm">
+    <header className="mb-4 flex shrink-0 items-center justify-between gap-3"><h3 id={titleId} className="text-lg font-semibold text-white">Instructions at execution</h3><button type="button" onClick={onClose} className={button}>Close</button></header>
+    <pre className={`${pre} min-h-0 overflow-y-auto overscroll-contain`}>{instructions}</pre>
+    <footer className="mt-4 shrink-0 space-y-2 border-t border-zinc-800 pt-4">{children}</footer>
+  </dialog>, document.body);
 }
 export function SubagentRunPage({ initial }: { initial: RunDetail }) {
   const [pending, setPending] = useState(false), [error, setError] = useState("");
+  const [instructionsOpen, setInstructionsOpen] = useState(false);
   const inFlight = useRef(false);
   const { detail, connectionError } = useSubagentRun(initial.run.agentId, initial.run.subagentId, initial.run.id, initial);
   const { run } = detail;
+  const transcriptEnd = useRef<HTMLDivElement>(null);
+  const transcriptScroll = useRef<HTMLElement>(null);
+  const following = useRef(true);
+  const wasLive = useRef(false);
+  const initializedScroll = useRef(false);
+  const [transcriptReady, setTranscriptReady] = useState(false);
+  useEffect(() => {
+    const scroller = transcriptScroll.current;
+    if (!scroller) return;
+    const onScroll = () => {
+      following.current = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 80;
+    };
+    scroller.addEventListener("scroll", onScroll, { passive: true });
+    return () => scroller.removeEventListener("scroll", onScroll);
+  }, []);
+  useLayoutEffect(() => {
+    const live = run.status === "queued" || run.status === "running";
+    // Start every run at the latest activity, and include the final live snapshot.
+    if (following.current && (!initializedScroll.current || live || wasLive.current)) {
+      transcriptEnd.current?.scrollIntoView({ block: "end", behavior: "instant" });
+    }
+    if (!initializedScroll.current) {
+      initializedScroll.current = true;
+      setTranscriptReady(true);
+    }
+    wasLive.current = live;
+  }, [detail.entries, detail.tools, run.status]);
   const subagentUrl = `/agents/${encodeURIComponent(run.agentId)}/sub-agents/${encodeURIComponent(run.subagentId)}`;
   async function stop() {
     if (inFlight.current) return;
@@ -73,8 +122,8 @@ export function SubagentRunPage({ initial }: { initial: RunDetail }) {
     } catch (cause) { setError(cause instanceof Error ? cause.message : "Unable to stop the assignment. Please retry."); }
     finally { inFlight.current = false; setPending(false); }
   }
-  return <div className="w-full min-w-0 space-y-3">
-    <section className={panel}>
+  return <div className="flex h-[calc(100dvh-4.5rem)] min-h-0 w-full min-w-0 flex-col gap-3 overflow-hidden sm:h-[calc(100dvh-5rem)]">
+    <section aria-label="Run header" className={`${panel} shrink-0`}>
       <header className="flex flex-wrap items-center justify-between gap-3">
         <nav aria-label="Run breadcrumb" className="flex min-w-0 flex-1 flex-wrap items-center gap-2">
           <a href={`/agents/${encodeURIComponent(run.agentId)}/sub-agents`} className={breadcrumbLink}><span aria-hidden="true">← </span>Sub-agents</a>
@@ -92,9 +141,12 @@ export function SubagentRunPage({ initial }: { initial: RunDetail }) {
       {connectionError && <p role="status" className="text-sm text-amber-200">{connectionError}</p>}
       {error && <p role="alert" className="text-sm text-red-300">{error}</p>}
       {detail.warnings?.map((warning, index) => <p key={`${warning.code}:${index}`} role="status" className="text-sm text-amber-200">{warning.code.replaceAll("_", " ")}: {warning.message}</p>)}
+      <button type="button" onClick={() => setInstructionsOpen(true)} className={button}>Instructions at execution</button>
+      {instructionsOpen && <InstructionsDialog instructions={detail.context?.instructions ?? workerInstructions(run.config)} onClose={() => setInstructionsOpen(false)}><p className="text-xs text-zinc-400">Insights snapshot: {detail.context?.insightStatus ?? "legacy/none"}. Stopping does not cancel exchange orders.</p>{detail.context?.insights && <div className="flex flex-wrap gap-4 text-sm">{([detail.context.insights.agent, detail.context.insights.worker]).map((snapshot) => <a className="cursor-pointer text-violet-300" key={snapshot.scope.kind} href={`/agents/${run.agentId}/memories?scope=${snapshot.scope.kind === "worker" ? encodeURIComponent(snapshot.scope.subagentId) : ""}${snapshot.version ? `&version=${snapshot.version}` : ""}`}>{snapshot.scope.kind === "agent" ? "Agent-wide" : "Worker-specific"} insights v{snapshot.version}</a>)}</div>}{detail.publications?.length ? <div className="space-y-2">{detail.publications.map((publication) => <a key={publication.ref} className="block cursor-pointer text-sm text-violet-300" href={`/agents/${encodeURIComponent(run.agentId)}/memories/${encodeURIComponent(publication.ref)}`}>{publication.ref} · {publication.kind} · {publication.summary}</a>)}</div> : null}<p className="text-xs text-zinc-500">Allowed tools: {run.config.tools.join(", ") || "None"}</p></InstructionsDialog>}
     </section>
-    <section className={panel}><details><summary className="cursor-pointer font-medium text-white">Instructions at execution</summary><div className="mt-4 space-y-4"><pre className={pre}>{detail.context?.instructions ?? workerInstructions(run.config)}</pre><p className="text-xs text-zinc-400">Insights snapshot: {detail.context?.insightStatus ?? "legacy/none"}. Stopping does not cancel exchange orders.</p>{detail.context?.insights && <div className="flex flex-wrap gap-4 text-sm">{([detail.context.insights.agent, detail.context.insights.worker]).map((snapshot) => <a className="cursor-pointer text-violet-300" key={snapshot.scope.kind} href={`/agents/${run.agentId}/memories?scope=${snapshot.scope.kind === "worker" ? encodeURIComponent(snapshot.scope.subagentId) : ""}${snapshot.version ? `&version=${snapshot.version}` : ""}`}>{snapshot.scope.kind === "agent" ? "Agent-wide" : "Worker-specific"} insights v{snapshot.version}</a>)}</div>}{detail.publications?.length ? <div className="space-y-2">{detail.publications.map((publication) => <a key={publication.ref} className="block cursor-pointer text-sm text-violet-300" href={`/agents/${encodeURIComponent(run.agentId)}/memories/${encodeURIComponent(publication.ref)}`}>{publication.ref} · {publication.kind} · {publication.summary}</a>)}</div> : null}<p className="text-xs text-zinc-500">Allowed tools: {run.config.tools.join(", ") || "None"}</p></div></details></section>
-    {detail.prior.length > 0 && <section className={panel}><details><summary className="cursor-pointer font-medium text-white">Earlier conversation context · {detail.prior.length} entries</summary><p className="my-4 text-sm text-zinc-400">History preceding this assignment in the persistent conversation. Later assignments are not shown.</p><Transcript entries={detail.prior} agentId={run.agentId} /></details></section>}
-    <section className={panel}><h2 className="font-medium text-white">Conversation transcript</h2>{detail.entries.length ? <Transcript entries={detail.entries} agentId={run.agentId} tools={detail.tools} /> : <p className="text-sm text-zinc-500">No transcript entries yet.</p>}</section>
+    <section ref={transcriptScroll} aria-label="Conversation transcript" className={`${panel} min-h-0 flex-1 overflow-y-auto overscroll-contain${transcriptReady ? "" : " invisible"}`}>
+    <h2 className="font-medium text-white">Conversation transcript</h2>
+    {detail.prior.length > 0 && <div><details><summary className="cursor-pointer font-medium text-white">Earlier conversation context · {detail.prior.length} entries</summary><p className="my-4 text-sm text-zinc-400">History preceding this assignment in the persistent conversation. Later assignments are not shown.</p><Transcript entries={detail.prior} agentId={run.agentId} /></details></div>}
+    {detail.entries.length ? <Transcript entries={detail.entries} agentId={run.agentId} tools={detail.tools} /> : <p className="text-sm text-zinc-500">No transcript entries yet.</p>}<div ref={transcriptEnd} /></section>
   </div>;
 }

@@ -31,11 +31,10 @@ export function DashboardSubagents({ agentId, subagents, error }: { agentId: str
   }, [agentId]);
   const base = `/agents/${encodeURIComponent(agentId)}/sub-agents`;
   return <section aria-label="Sub-agents" className="rounded-2xl border border-zinc-800 bg-[#0d0d10] p-6">
-    <header className="mb-4 flex flex-wrap items-center justify-between gap-3">
+    <header className="mb-4">
       <h3 className="text-lg font-medium text-white">Sub-agents</h3>
-      <a href={`${base}/new`} className="cursor-pointer text-sm text-violet-400 hover:text-violet-300 hover:underline">Create a new sub-agent</a>
     </header>
-    {loadError ? <p role="alert" className="text-sm text-amber-200">Sub-agents unavailable: {loadError}</p> : !workers.length ? <p className="text-sm text-zinc-500">No sub-agents yet. Create a new sub-agent to get started.</p> : <ul className="space-y-4">
+    {loadError ? <p role="alert" className="text-sm text-amber-200">Sub-agents unavailable: {loadError}</p> : !workers.length ? <p className="text-sm text-zinc-500">No sub-agents yet. <a href={`${base}/new`} className="cursor-pointer text-violet-400 hover:text-violet-300 hover:underline">Create a new sub-agent</a> to get started.</p> : <ul className="space-y-4">
       {workers.map((subagent) => <li key={subagent.id} className="overflow-hidden rounded-xl border border-zinc-800">
         <div className="flex flex-wrap items-center gap-2 bg-zinc-900/50 px-4 py-3">
           <h4 className="min-w-0"><a href={`${base}/${encodeURIComponent(subagent.id)}`} className="cursor-pointer font-medium text-zinc-100 hover:text-violet-300">{subagent.name}</a></h4>
@@ -84,10 +83,12 @@ function DashboardWorkerControls({ agentId, definition }: { agentId: string; def
       setError(cause instanceof Error ? cause.message : "Unable to change enabled status. Please retry.");
     } finally { inFlight.current = false; setPending(false); }
   }
-  return <div className="flex flex-wrap items-center gap-2">
-    <SubagentEnabledToggle enabled={settings.enabled} disabled={pending} onClick={() => { void toggle(); }} />
+  return <div className="flex flex-1 flex-wrap items-center gap-2">
     {settings.enabled && settings.schedule && settings.nextRunAt !== null && <NextRun timestamp={settings.nextRunAt} />}
-    {error && <p role="alert" className="text-xs text-red-300">{error}</p>}
+    <div className="ml-auto flex items-center gap-2">
+      <SubagentEnabledToggle enabled={settings.enabled} disabled={pending} onClick={() => { void toggle(); }} />
+      {error && <p role="alert" className="text-xs text-red-300">{error}</p>}
+    </div>
   </div>;
 }
 

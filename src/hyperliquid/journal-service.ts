@@ -1,4 +1,6 @@
+import { enqueueAccountEvent } from "../agents/worker-events.js";
 import { InfoClient, SubscriptionClient, WebSocketTransport, type HttpTransport } from "@nktkas/hyperliquid";
+import type { OrderUpdatesEvent } from "@nktkas/hyperliquid/api/subscription";
 import { randomUUID } from "node:crypto";
 import type { SharedDatabase } from "../db/shared-database.js";
 import type { FastifyBaseLogger } from "fastify";
@@ -14,6 +16,7 @@ export interface JournalFeedEvents {
   disconnected(): void;
   failed(): void;
   push(stream: JournalStream, events: JournalEvent[]): void;
+  orders?(events: OrderUpdatesEvent): void;
 }
 export type JournalFeedFactory = (address: string, events: JournalFeedEvents) => { close(): Promise<void> };
 
@@ -35,6 +38,7 @@ export const openJournalFeed = (address: string, events: JournalFeedEvents, shar
     try { events.push(stream, rows.map(map)); } catch { events.failed(); }
   };
   const tasks = [
+    client.orderUpdates({ user }, (updates) => { if (!abort.signal.aborted) events.orders?.(updates); }, options),
     client.userFills({ user, aggregateByTime: false }, (event) => {
       if (event.user.toLowerCase() === address) emit("fill", fillEvent, event.fills);
     }, options),
@@ -92,6 +96,7 @@ export function exchangeHistory(transport: HttpTransport): HistoryFetcher {
 export class JournalService {
   private readonly workers = new Map<string, Worker>();
   private stopped = false;
+  private readonly eventTasks = new Set<Promise<void>>();
   constructor(private readonly db: SharedDatabase, private readonly fetchHistory: HistoryFetcher, private readonly log?: FastifyBaseLogger, private readonly feedFactory?: JournalFeedFactory) {}
 
   reconcile(addresses: string[]) {
@@ -158,7 +163,8 @@ export class JournalService {
           connected: () => { if (!signal.aborted) void sync(false); },
           disconnected: () => {},
           failed: reopen,
-          push: (stream, events) => { void ingestPush(stream, events); },
+          push: (stream, events) => { this.trackEvent(ingestPush(stream, events)); },
+          orders: (updates) => { if (!signal.aborted) this.trackEvent(this.ingestOrderUpdates(account, updates)); },
         });
       } catch { reopen(); }
     };
@@ -187,6 +193,21 @@ export class JournalService {
     return worker;
   }
 
+  private trackEvent(task: Promise<unknown>) {
+    const tracked = task.then(() => {}, (error: unknown) => { this.log?.error(error, "Unable to persist exchange event"); }).finally(() => this.eventTasks.delete(tracked));
+    this.eventTasks.add(tracked);
+  }
+
+  async ingestOrderUpdates(account: string, updates: OrderUpdatesEvent) {
+    await this.db.transaction(async (tx) => {
+      for (const update of updates) {
+        // Fills have their own deduplicated journal trigger; routine acknowledgments do not wake a model.
+        if (["open", "filled", "triggered"].includes(update.status)) continue;
+        await enqueueAccountEvent(tx, account, `order:${update.order.oid}:${update.status}:${update.statusTimestamp}`, "order_status", `Order status change: ${JSON.stringify(update)}. Inspect current account/orders and decide whether action is needed. Do not blindly replace canceled or rejected orders.`, update.statusTimestamp);
+      }
+    });
+  }
+
   async close() {
     this.stopped = true;
     const workers = [...this.workers.values()];
@@ -202,6 +223,7 @@ export class JournalService {
       if (feed) await feed.close().catch(() => {});
     }));
     this.workers.clear();
+    await Promise.all(this.eventTasks);
   }
 
   async syncAccount(account: string, signal: AbortSignal, now = Date.now(), fullScan = false) {
@@ -269,6 +291,7 @@ export class JournalService {
         changed = true;
         await tx.run(`INSERT INTO hv_journal_entries(account,id,kind,time,data) VALUES (?,?,?,?,?)
           ON CONFLICT(account,id) DO UPDATE SET data=excluded.data,time=excluded.time`, account, event.id, event.kind, event.time, data);
+        if (!previous && event.kind === "fill") await enqueueAccountEvent(tx, account, `fill:${event.id}`, "fill", `Exchange fill ${event.id}: ${JSON.stringify({ instrument: event.symbol, time: event.time, fill: event.fill })}. Refresh account and orders, inspect actual position size and TP/SL coverage. A fill is evidence, not a new-entry instruction.`, event.time);
       }
       if (changed) await tx.run("UPDATE hv_journal_accounts SET revision=revision+1 WHERE account=?", account);
       // Pushed events never advance cursors; only fetched windows checkpoint progress.

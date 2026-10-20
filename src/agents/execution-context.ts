@@ -14,9 +14,9 @@ import { OrchestratorInsightsDoc, orchestratorInsightsSection } from "./orchestr
 
 /**
  * Resolves tool calls to trusted application identity and freezes per-run
- * insight snapshots. There is no user/automatic origin classification: risk
- * settings are the only enforced trading policy, and tool selection is the
- * permission system.
+ * insight snapshots. Inbox assignment intents distinguish operator requests
+ * from automated evidence; risk settings remain the enforced trading policy
+ * and tool selection is the permission system.
  */
 export class ExecutionContextService {
   private readonly bindings = new Map<string, { harness: Harness; root: ConversationId }>();
@@ -150,7 +150,7 @@ export class ExecutionContextService {
     const result: Record<string, unknown> = {};
     for (const [key, value] of Object.entries(row)) result[key.replace(/_([a-z])/g, (_, letter: string) => letter.toUpperCase())] = value;
     for (const key of ["enabled", "archived", "delegatable", "persistent"]) result[key] = Boolean(result[key]);
-    for (const key of ["tools", "templateOrigin"]) if (typeof result[key] === "string") result[key] = JSON.parse(result[key]);
+    for (const key of ["tools", "templateOrigin", "triggers"]) if (typeof result[key] === "string") result[key] = JSON.parse(result[key]);
     return result as unknown as SubagentRow;
   }
   /** Operator actor for authenticated UI memory/insight edits. */

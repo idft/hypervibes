@@ -37,8 +37,8 @@ export function createOrderTools(service: OrderService, userId: string, agentId:
       parameters: GetSchema, structuredOutputSchema: GetResultSchema, replay: "safe",
       execute: async (args, _api, context) => toolResult(await service.get(userId, agentId, args.order_id, args.include_events, context.abortSignal)),
     }),
-    defineTool({ name: "get_order_request", description: "Read and reconcile an existing submit/cancel request_id, including all per-leg outcomes and uncertainty. Never sends/retries exchange actions. Use after timeouts/restarts instead of issuing a new request_id.",
-      parameters: Type.Object({ request_id: RequestId }, { additionalProperties: false }), structuredOutputSchema: OperationSchema, replay: "safe",
+    defineTool({ name: "get_order_request", description: "Read and reconcile one existing exchange submit/cancel request, including per-leg outcomes and uncertainty. Supply the original request_id used with submit_orders, cancel_orders or cancel_all_orders (returned as requestId in their results or local list_orders items). Worker inbox request IDs, assignment/run IDs and exchange order OIDs are NOT order request IDs. To discover local submissions, use list_orders with source=local; do not guess an ID or query this tool just because an assignment contains a request ID. Never sends/retries exchange actions. Use after timeouts/restarts instead of issuing a new request_id. Not-found does not prove rejection, cancellation or absence of exchange orders.",
+      parameters: Type.Object({ request_id: { ...RequestId, description: "Original request_id of a submit_orders, cancel_orders or cancel_all_orders call; returned as requestId. Never a worker inbox request ID, assignment/run ID or exchange order OID." } }, { additionalProperties: false }), structuredOutputSchema: OperationSchema, replay: "safe",
       execute: async (args, _api, context) => toolResult(await service.request(userId, agentId, args.request_id, context.abortSignal)),
     }),
   ];

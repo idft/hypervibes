@@ -13,7 +13,7 @@ import { SubagentDetailPage } from "./subagent-detail-page.js";
 import { SubagentsPage } from "./subagents-page.js";
 import { ScheduleConfig } from "./subagent-config.js";
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-const definition: SubagentRow = { id: "worker:fixture", agentId: "agent-fixture", kind: "worker", name: "Research", description: "Find evidence", instructions: "Research carefully", provider: "faux", modelId: "faux-1", thinkingLevel: "", tools: [], templateOrigin: null, enabled: true, archived: false, delegatable: true, persistent: false, conversationId: null, schedule: "", delaySeconds: 30, nextRunAt: null, completion: "wake", timeoutSeconds: 900, createdAt: 1, updatedAt: 1 };
+const definition: SubagentRow = { id: "worker:fixture", agentId: "agent-fixture", kind: "worker", name: "Research", description: "Find evidence", instructions: "Research carefully", provider: "faux", modelId: "faux-1", thinkingLevel: "", tools: [], triggers: { inboxEnabled: false, workerDelegates: [], researchSources: [], fills: false, orderChanges: false }, templateOrigin: null, enabled: true, archived: false, delegatable: true, persistent: false, conversationId: null, schedule: "", delaySeconds: 30, nextRunAt: null, completion: "wake", timeoutSeconds: 900, createdAt: 1, updatedAt: 1 };
 class HistorySource extends EventTarget {
   static instances: HistorySource[] = [];
   onerror: (() => void) | null = null;
@@ -188,6 +188,64 @@ describe("subagent pages", () => {
     expect(container.querySelector("dialog")).toBeNull();
     expect(mocks.archiveSubagent).not.toHaveBeenCalled(); expect(mocks.navigate).not.toHaveBeenCalled();
   });
+  it("configures event triggers separately from scheduling and preserves selected sources", async () => {
+    await act(async () => root.render(<SubagentDetailPage agentId={definition.agentId} initial={{ ...initial(), workers: [{ id: definition.id, name: definition.name }, { id: "worker:analyst", name: "Analyst" }] }} choices={choices} />));
+    await click("Edit triggers");
+    const toggle = async (label: string) => act(async () => { const input = [...document.querySelectorAll("dialog label")].find((entry) => entry.textContent === label)!.querySelector("input")!; input.click(); });
+    await toggle("Enable event triggers");
+    const analystInputs = [...document.querySelectorAll<HTMLLabelElement>("dialog label")].filter((label) => label.textContent === "Analyst").map((label) => label.querySelector("input")!);
+    expect(analystInputs).toHaveLength(2);
+    await act(async () => { analystInputs[0]!.click(); analystInputs[1]!.click(); });
+    await toggle("Order fills — partial or complete");
+    await toggle("Order status changes — canceled, rejected, expired");
+    await click("Apply");
+    expect(mocks.saveSubagentSection).toHaveBeenCalledWith({ data: { agentId: definition.agentId, id: definition.id, section: "triggers", settings: { triggers: { inboxEnabled: true, workerDelegates: ["worker:analyst"], researchSources: ["worker:analyst"], fills: true, orderChanges: true } } } });
+    expect(container.textContent).toContain("Event-driven inbox enabled");
+    expect(container.textContent).toContain("No schedule");
+  });
+  it.each([
+    { tools: [], warns: true },
+    { tools: ["list_subagents"], warns: true },
+    { tools: ["delegate_subagent"], warns: false },
+    { tools: ["request_trader_evaluation"], warns: false },
+  ])("warns only for approved callers missing delegation tools: $tools", async ({ tools, warns }) => {
+    const triggers = { ...definition.triggers, inboxEnabled: true, researchSources: ["worker:analyst"] };
+    await act(async () => root.render(<SubagentDetailPage agentId={definition.agentId} initial={{ ...initial(), definition: { ...definition, triggers }, workers: [{ id: "worker:analyst", name: "Analyst", tools }] }} choices={choices} />));
+    await click("Edit triggers");
+    const dialog = document.querySelector("dialog")!;
+    expect(dialog.textContent).not.toContain("Multiple workers may subscribe");
+    expect(dialog.textContent).not.toContain("Tasks can stand alone");
+    expect(dialog.querySelector('[role="status"]')).toBeNull(); // Research subscriptions do not require delegation.
+    const caller = [...dialog.querySelectorAll("fieldset")].find((fieldset) => fieldset.querySelector("legend")?.textContent === "Allow research delegation from")!.querySelector("input")!;
+    await act(async () => caller.click());
+    expect(dialog.querySelector('[role="status"]')?.textContent ?? null).toBe(warns ? "Analyst cannot delegate: enable delegate_subagent in its Tools." : null);
+    expect([...dialog.querySelectorAll("button")].find((button) => button.textContent === "Apply")!.disabled).toBe(false);
+    await act(async () => caller.click());
+    expect(dialog.querySelector('[role="status"]')).toBeNull();
+  });
+  it("shows archived selected trigger sources and lets the operator remove them", async () => {
+    const triggers = { ...definition.triggers, inboxEnabled: true, researchSources: ["worker:archived"] };
+    await act(async () => root.render(<SubagentDetailPage agentId={definition.agentId} initial={{ ...initial(), definition: { ...definition, triggers }, workers: [{ id: "worker:archived", name: "Old analyst", archived: true }] }} choices={choices} />));
+    await click("Edit triggers");
+    const labels = [...document.querySelectorAll("dialog label")].filter((entry) => entry.textContent === "Old analyst (archived)");
+    expect(labels).toHaveLength(2);
+    const selected = labels[0]!.querySelector("input")!;
+    expect(selected.checked).toBe(true);
+    expect(selected.disabled).toBe(false);
+    expect(labels[1]!.querySelector("input")!.disabled).toBe(true);
+    await act(async () => selected.click());
+    await click("Apply");
+    expect(mocks.saveSubagentSection).toHaveBeenCalledWith({ data: { agentId: definition.agentId, id: definition.id, section: "triggers", settings: { triggers: { ...triggers, researchSources: [] } } } });
+  });
+  it("shows queued event provenance and allows discarding a pending request", async () => {
+    await render();
+    await act(async () => HistorySource.instances.at(-1)!.dispatchEvent(new MessageEvent("runs", { data: JSON.stringify({ runs: [], pagination: { page: 1, pages: 1, total: 0, pageSize: 50 }, schedulerError: null, inbox: [{ id: "request-1", intent: "account_event", reason: "fill", preview: "Partial BTC fill", createdAt: 1, discardedReason: null }] }) })));
+    expect(container.textContent).toContain("Partial BTC fill");
+    expect(container.textContent).toContain("account_event");
+    mocks.stopSubagentRun.mockResolvedValue({ ok: true });
+    await click("Discard request");
+    expect(mocks.stopSubagentRun).toHaveBeenCalledWith({ data: { agentId: definition.agentId, runId: "request-1" } });
+  });
   it("edits the orchestrator model, thinking and tools without offering deletion or schedules", async () => {
     const main = { ...definition, id: "main:fixture", name: "Orchestrator", kind: "orchestrator" as const, tools: mainToolNames };
     await render(main); mocks.saveSubagentSection.mockResolvedValue({ ok: true, data: { ...main, thinkingLevel: "high" } });
@@ -216,7 +274,8 @@ describe("subagent pages", () => {
     expect(grid.children).toHaveLength(2);
     expect(grid.children[0]!.contains(tools)).toBe(true);
     expect(grid.children[1]!.children[0]).toBe(assignments);
-    expect(grid.children[1]!.children[1]).toBe(schedule);
+    expect(grid.children[1]!.children[1]!.querySelector("h3")!.textContent).toBe("Event triggers");
+    expect(grid.children[1]!.children[2]).toBe(schedule);
     const instructions = container.querySelector("textarea")!.closest("label")!;
     expect(grid.nextElementSibling).toBe(instructions);
   });
@@ -276,11 +335,13 @@ describe("subagent pages", () => {
     await click("Apply");
     expect(mocks.saveSubagentSection.mock.calls[0]![0].data.settings.thinkingLevel).toBe("high");
   });
-  it("groups and searches allowed tools without granting workers delegation", async () => {
+  it("groups and searches delegation tools for both workers and the orchestrator", async () => {
     await render();
     await click("Edit tools");
     expect(document.querySelector("dialog")!.textContent).toContain("Hyperliquid");
-    expect(document.querySelector("dialog")!.textContent).not.toContain("delegate_subagent");
+    expect(document.querySelector("dialog")!.textContent).toContain("delegate_subagent");
+    expect(document.querySelector("dialog")!.textContent).toContain("list_subagents");
+    expect(document.querySelector("dialog")!.textContent).not.toContain("get_subagent_run");
     await act(async () => { (document.querySelector("dialog input[type=checkbox]") as HTMLInputElement).click(); });
     await click("Cancel");
     expect(container.textContent).toContain("No tools allowed");

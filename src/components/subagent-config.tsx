@@ -87,7 +87,7 @@ function ToolDialog({ tools, main, onCancel, onApply }: { tools: string[]; main:
     catch (cause) { setError(cause instanceof Error ? cause.message : "Unable to save tools. Please retry."); }
     finally { inFlight.current = false; setSaving(false); }
   }
-  const groups = toolGroups.filter((group) => main || group.name !== "HyperVibes · Subagents").map((group) => ({ ...group, visibleTools: group.tools.filter((name) => `${group.name} ${name}`.toLowerCase().includes(search.trim().toLowerCase())) })).filter((group) => group.visibleTools.length);
+  const groups = toolGroups.map((group) => ({ ...group, tools: group.tools.filter((name) => main || name !== "get_subagent_run") })).map((group) => ({ ...group, visibleTools: group.tools.filter((name) => `${group.name} ${name}`.toLowerCase().includes(search.trim().toLowerCase())) })).filter((group) => group.visibleTools.length);
   return <ConfigDialog title="Allowed tools" onCancel={() => { if (!inFlight.current) onCancel(); }} onApply={() => { void apply(); }} applyDisabled={saving}>
     <fieldset disabled={saving} className="space-y-4 disabled:opacity-60">
     <label className="block space-y-2 text-sm">Search extensions and tools<input autoFocus type="search" value={search} onChange={(event) => setSearch(event.target.value)} className={configInput} /></label>
@@ -161,9 +161,9 @@ export function ScheduleConfig({ value, nextRunAt, onChange }: { value: Schedule
   const [open, setOpen] = useState(false);
   return <section className="space-y-2">
     <header className="flex items-center justify-between gap-4"><h3 className="font-medium text-white">Schedule</h3><button type="button" aria-haspopup="dialog" onClick={() => setOpen(true)} className={configButton}>Edit schedule</button></header>
-    <p className="text-sm text-zinc-400">{value.schedule ? `Every ${value.schedule} candle close (UTC) · ${value.delaySeconds}s delay` : "No schedule · manual or delegated assignments only"}</p>
+    <p className="text-sm text-zinc-400">{value.schedule ? `Every ${value.schedule} candle close (UTC) · ${value.delaySeconds}s delay` : "No schedule · manual, delegated or configured event assignments"}</p>
     {value.schedule && nextRunAt != null && <NextScheduledRun timestamp={nextRunAt} />}
-    <p className="text-xs text-zinc-500">Scheduled / manual completion: {completionLabels[value.completion]}</p>
+    <p className="text-xs text-zinc-500">Scheduled / manual / event completion: {completionLabels[value.completion]}</p>
     {open && <ScheduleDialog value={value} onCancel={() => setOpen(false)} onApply={async (next) => { await onChange(next); setOpen(false); }} />}
   </section>;
 }

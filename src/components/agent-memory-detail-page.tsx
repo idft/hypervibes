@@ -4,6 +4,7 @@ import { InstrumentLabel } from "./instrument-label.js";
 import type { MemoryDetail, MemoryRelation } from "../memory/memory-contracts.js";
 import { ArtifactPreviewDialog } from "./artifact-preview-dialog.js";
 import { MemoryStatus } from "./memory-status.js";
+import { MemoryReplacements } from "./memory-replacements.js";
 import { MemoryBadge } from "./memory-badge.js";
 import { ToggleTimestamp } from "./toggle-timestamp.js";
 
@@ -28,6 +29,7 @@ export function AgentMemoryDetailPage({ agentId, memory }: { agentId: string; me
         </button>
         <MemoryStatus status={memory.status} />
       </nav>
+      <MemoryReplacements agentId={agentId} memory={memory} />
     </header>
     {error && <p role="alert" className="text-sm text-red-300">{error}</p>}
     <dl aria-label="Memory stats" className="grid grid-cols-1 gap-x-6 gap-y-5 border-t border-zinc-800 pt-5 sm:grid-cols-2 xl:grid-cols-4">

@@ -164,11 +164,25 @@ describe("Code Mode research and artifacts", () => {
     expect(code.description).toContain(".map(t => t.name)");
     expect(code.description).toContain("If you know a name");
     expect(code.description).toContain("not full candle arrays");
+    expect(code.description).toContain("Never manually calculate or guess Unix timestamps");
+    expect(code.description).toContain("Reuse authoritative assignment endMs");
+    expect(code.description).toContain("Date.parse()");
+    expect(code.description).toContain("request start/end are milliseconds, candle time is seconds");
+    expect(code.description).toContain("Check that a candle exists before accessing its fields");
+    expect(code.description).toContain("TA tool results are objects, not arrays");
+    expect(code.description).toContain("result.values.at(-1)?.value");
+    expect(code.description).toContain("store/load preserve the JSON shape");
+    expect(code.description).toContain("Array.isArray(result.values)");
+    expect(code.description).toContain("artifact export rather than an inline values array");
     const entries = await execute("text('ready');");
     const system = JSON.stringify(entries.filter((entry) => entry.kind === "pi.system"));
     expect(system).toContain("Discovery helpers are GLOBAL functions");
     expect(system).toContain("queues additional calls FIFO");
     expect(system).toContain("Never print the whole searchTools result");
+    expect(system).toContain("Never manually calculate or guess Unix timestamps");
+    expect(system).toContain("report missing data rather than assuming a match");
+    expect(system).toContain("TA tool results are objects, not arrays");
+    expect(system).toContain("load('ind').atr.values");
   });
   it("keeps targeted discovery compact while returning the full chosen schema", async () => {
     const entries = await execute(`text((await searchTools('candles',{limit:1})).map(t=>t.name)); text(await describeTool('research_candles'));`, ["codemode", "research_candles", ...taToolNames]);

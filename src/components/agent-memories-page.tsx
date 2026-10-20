@@ -6,6 +6,7 @@ import type { InsightScope } from "../memory/insight-contracts.js";
 import { getInsights, listMemories } from "../web/memories.js";
 import { InstrumentLabel } from "./instrument-label.js";
 import { MemoryStatus } from "./memory-status.js";
+import { MemoryReplacements } from "./memory-replacements.js";
 import { MemoryBadge } from "./memory-badge.js";
 import { ToggleTimestamp } from "./toggle-timestamp.js";
 
@@ -67,7 +68,7 @@ export function AgentMemoriesPage({ agentId, workers, initialMemories, scopeId =
               <td className="min-w-64 px-4 py-3"><Link to="/agents/$agentId/memories/$memoryRef" params={{ agentId, memoryRef: item.ref }} className="block w-full cursor-pointer space-y-1 text-left hover:text-violet-300"><span className="block font-medium text-violet-300">{item.ref}</span><span className="block break-words">{item.summary}</span></Link></td>
               <td className="px-4 py-3 align-top"><MemoryBadge value={item.kind} /></td><td className="whitespace-nowrap px-4 py-3 align-top">{item.instrument ? <InstrumentLabel symbol={item.instrument} iconOnly /> : "Agent-wide"}</td>
               <td className="px-4 py-3 align-top"><MemoryBadge value={item.topic} /><span className="mt-1 block text-xs text-zinc-500">{item.interval ?? "—"}</span></td>
-              <td className="px-4 py-3 align-top"><MemoryStatus status={item.status} /></td>
+              <td className="px-4 py-3 align-top"><MemoryStatus status={item.status} /><MemoryReplacements agentId={agentId} memory={item} /></td>
               <td className="px-4 py-3 align-top">{workers.find((worker) => worker.id === item.producerSubagentId)?.name ?? "Root"}</td>
               <td className="whitespace-nowrap px-4 py-3 align-top text-xs text-zinc-400"><ToggleTimestamp timestamp={item.createdAt} /></td>
             </tr>)}{!items.length && <tr><td colSpan={7} className="px-4 py-8 text-center text-zinc-400">No memories found. Try different filters, or configure an analysis/review worker and its memory tools.</td></tr>}</tbody>

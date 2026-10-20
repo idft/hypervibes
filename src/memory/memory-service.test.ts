@@ -55,7 +55,7 @@ describe("immutable Agent-scoped memories", () => {
     await memory.publishResearch(f.analyst, "initial", researchInput(f.now));
     expect(await memory.tradingContext("agent", "BTC", researchRequirement)).toMatchObject({ requirements: [{ ref: "m1", status: "fresh", summary: "Mixed momentum near support" }] });
     await memory.publishResearch(f.analyst, "older-evidence", researchInput(f.now - 7200_000));
-    expect(await memory.tradingContext("agent", "BTC", researchRequirement)).toMatchObject({ requirements: [{ ref: "m2", status: "stale", summary: null }] });
+    expect(await memory.tradingContext("agent", "BTC", researchRequirement)).toMatchObject({ requirements: [{ ref: "m2", status: "stale", consumerStatus: "stale", summary: null }] });
     expect(await memory.tradingContext("agent", "ETH", researchRequirement)).toMatchObject({ requirements: [{ ref: null, status: "missing" }] });
     await memory.publishResearch(f.analyst, "new-report", researchInput(f.now));
     await f.db.run("UPDATE hv_memories SET retracted_at=?,retraction_reason='Withdrawn evidence' WHERE agent_id='agent' AND number=3", f.now);
@@ -84,7 +84,7 @@ describe("immutable Agent-scoped memories", () => {
     f.now = boundary - 1;
     await expectStatus("invalid_evidence");
     f.now = boundary + 60_000;
-    expect(await memory.tradingContext("agent", "BTC", [{ ...researchRequirement[0], maxAgeSeconds: 60 }])).toMatchObject({ requirements: [{ ref: "m1", status: "stale", summary: null }] });
+    expect(await memory.tradingContext("agent", "BTC", [{ ...researchRequirement[0], maxAgeSeconds: 60 }])).toMatchObject({ requirements: [{ ref: "m1", status: "fresh", consumerStatus: "stale", validUntil: boundary + 600_000, consumerValidUntil: boundary + 60_000, maxAgeSeconds: 60, summary: null }] });
     await expectStatus("fresh");
     f.now = boundary + 600_000;
     await expectStatus("stale");
@@ -120,7 +120,7 @@ describe("immutable Agent-scoped memories", () => {
     expect((await memory.get("agent", "m2")).links).toEqual([{ ref: "m1", relation: "corrects" }]);
     await expect(memory.publishResearch(f.analyst, "wrong-stream", researchInput(f.now, { instrument: "ETH", links: [{ ref: "m1", relation: "supersedes" }] }))).rejects.toThrow("same research");
     f.now += 60_000;
-    expect(await memory.tradingContext("agent", "BTC", [{ ...researchRequirement[0], maxAgeSeconds: 60 }])).toMatchObject({ requirements: [{ status: "stale" }] });
+    expect(await memory.tradingContext("agent", "BTC", [{ ...researchRequirement[0], maxAgeSeconds: 60 }])).toMatchObject({ requirements: [{ status: "fresh", consumerStatus: "stale" }] });
   });
   it("returns bounded discovery summaries, leaving large reports and custom data for get_memory", async () => {
     const { memory } = f.services();

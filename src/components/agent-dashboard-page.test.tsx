@@ -61,7 +61,9 @@ describe("Agent dashboard", () => {
   });
   it("shows a sub-agent empty state and creation link without the Performance section", () => {
     expect(container.textContent).toContain("No sub-agents yet.");
-    expect(container.querySelector('a[href="/agents/fixture/sub-agents/new"]')?.textContent).toContain("Create a new sub-agent");
+    const creationLink = container.querySelector('a[href="/agents/fixture/sub-agents/new"]');
+    expect(creationLink?.textContent).toContain("Create a new sub-agent");
+    expect(creationLink?.closest("p")?.textContent).toContain("No sub-agents yet.");
     expect([...container.querySelectorAll("h3")].some((heading) => heading.textContent === "Performance")).toBe(false);
   });
   it("links worker headers and run results to their detail pages with relative timestamps", async () => {
@@ -70,6 +72,7 @@ describe("Agent dashboard", () => {
       { id: "worker:two", name: "Risk", enabled: false, schedule: "", nextRunAt: null, runs: [] },
     ]} />));
     const section = container.querySelector('[aria-label="Sub-agents"]')!;
+    expect(section.querySelector('a[href="/agents/fixture/sub-agents/new"]')).toBeNull();
     expect(section.querySelector('h4 a')?.getAttribute("href")).toBe("/agents/fixture/sub-agents/worker%3Aone");
     const run = section.querySelector('a[href$="/runs/run%3Aone"]')!;
     expect(run.textContent).toContain("Market conditions look favorable.");

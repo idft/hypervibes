@@ -52,6 +52,15 @@ describe("Durable order tool contracts for nested/code-mode calls", () => {
     } finally { await harness.close(context); }
   });
 
+  it("distinguishes exchange request IDs from worker inbox and assignment IDs", () => {
+    const tool = createOrderTools({} as OrderService, "owner", "agent").find((tool) => tool.name === "get_order_request")!;
+    expect(tool.description).toContain("original request_id used with submit_orders, cancel_orders or cancel_all_orders");
+    expect(tool.description).toContain("Worker inbox request IDs, assignment/run IDs and exchange order OIDs are NOT order request IDs");
+    expect(tool.description).toContain("list_orders with source=local");
+    expect(tool.description).toContain("Not-found does not prove rejection, cancellation or absence of exchange orders");
+    expect(tool.parameters).toMatchObject({ properties: { request_id: { description: expect.stringContaining("Never a worker inbox request ID") } } });
+  });
+
   it("documents venue minimum notional without silently upsizing orders", () => {
     const tools = createOrderTools({} as OrderService, "owner", "agent");
     expect(tools.find((tool) => tool.name === "submit_orders")!.description).toContain("$10 minimum order notional");

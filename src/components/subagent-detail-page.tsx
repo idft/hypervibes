@@ -7,7 +7,8 @@ import { defaultMainInstructions, type AssignmentSettings, type SubagentInput, t
 import { archiveSubagent, runSubagent, saveSubagentAssignments, saveSubagentIdentity, saveSubagentSection, saveSubagentTools, stopSubagentRun, unarchiveSubagent } from "../web/subagents.js";
 import { ModelPicker, modelKey } from "./model-picker.js";
 import { ProviderLogo } from "./provider-logo.js";
-import type { RunPagination } from "../agents/subagent-history.js";
+import { WorkerTriggerConfig } from "./worker-trigger-config.js";
+import type { InboxRequestSummary, RunPagination } from "../agents/subagent-history.js";
 import { useSubagentRuns } from "./use-subagent-runs.js";
 import { SubagentRunHistory } from "./subagent-run-history.js";
 import { RunSubagentDialog } from "./run-subagent-dialog.js";
@@ -17,7 +18,7 @@ import { AssignmentConfig, ScheduleConfig, SubagentIdentity, ToolPicker } from "
 const panel = "space-y-4 rounded-2xl border border-zinc-800 bg-[#0d0d10] p-6";
 const inputClass = "mt-2 block w-full rounded-lg border border-zinc-700 bg-zinc-950 p-3 text-sm text-white";
 const button = "cursor-pointer rounded-full bg-violet-600 px-4 py-2 text-sm text-white hover:bg-violet-500 disabled:cursor-not-allowed disabled:opacity-50";
-export function SubagentDetailPage({ agentId, initial, choices }: { agentId: string; initial: { definition: SubagentRow; runs: SubagentRun[]; pagination?: RunPagination; schedulerError: string | null }; choices: ModelChoice[] }) {
+export function SubagentDetailPage({ agentId, initial, choices }: { agentId: string; initial: { definition: SubagentRow; runs: SubagentRun[]; pagination?: RunPagination; schedulerError: string | null; workers?: { id: string; name: string; archived?: boolean; tools?: string[] }[]; inbox?: InboxRequestSummary[] }; choices: ModelChoice[] }) {
   const router = useRouter();
   const [definition, setDefinition] = useState(initial.definition);
   const [form, setForm] = useState<SubagentInput>(initial.definition);
@@ -27,7 +28,7 @@ export function SubagentDetailPage({ agentId, initial, choices }: { agentId: str
   const [runOpen, setRunOpen] = useState(false);
   const inFlight = useRef(false), assignmentId = useRef<{ task: string; id: string } | null>(null);
   const main = definition.kind === "orchestrator";
-  const { history: { runs, pagination, schedulerError, schedule }, loading, connectionError, setPage } = useSubagentRuns(agentId, main ? undefined : definition.id, initial);
+  const { history: { runs, pagination, schedulerError, schedule, inbox }, loading, connectionError, setPage } = useSubagentRuns(agentId, main ? undefined : definition.id, initial);
   const nextRunAt = schedule && schedule.updatedAt >= definition.updatedAt ? schedule.nextRunAt : definition.nextRunAt;
   const selected = choices.find((choice) => modelKey(choice) === modelKey(form));
   const set = <K extends keyof SubagentInput>(key: K, value: SubagentInput[K]) => setForm((current) => ({ ...current, [key]: value }));
@@ -41,7 +42,7 @@ export function SubagentDetailPage({ agentId, initial, choices }: { agentId: str
       const row = result.data;
       const saved = section === "enabled" ? { enabled: row.enabled } : section === "instructions" ? { instructions: row.instructions }
         : section === "model" ? { provider: row.provider, modelId: row.modelId, thinkingLevel: row.thinkingLevel }
-        : { schedule: row.schedule, delaySeconds: row.delaySeconds, completion: row.completion };
+        : section === "triggers" ? { triggers: row.triggers } : { schedule: row.schedule, delaySeconds: row.delaySeconds, completion: row.completion };
       setDefinition(row); setForm((current) => ({ ...current, ...saved }));
       toast.success(section === "enabled" ? row.enabled ? "Sub-agent enabled" : "Sub-agent paused" : section === "instructions" ? "Instructions updated" : section === "model" ? "Model updated" : "Schedule updated");
     } finally { inFlight.current = false; setPending(false); }
@@ -152,6 +153,7 @@ export function SubagentDetailPage({ agentId, initial, choices }: { agentId: str
           </div>
           {!main && <div className="min-w-0 space-y-6">
             <AssignmentConfig value={form} onChange={saveAssignments} />
+            <WorkerTriggerConfig value={form.triggers} workers={(initial.workers ?? []).filter((worker) => worker.id !== definition.id)} onChange={(triggers) => saveSection("triggers", { triggers })} />
             <ScheduleConfig value={form} nextRunAt={definition.enabled && !definition.archived ? nextRunAt : null} onChange={(schedule) => saveSection("schedule", schedule)} />
           </div>}
         </div>
@@ -163,6 +165,7 @@ export function SubagentDetailPage({ agentId, initial, choices }: { agentId: str
       </fieldset>
     </form>
     {runOpen && !main && <RunSubagentDialog task={task} onTaskChange={setTask} onCancel={() => setRunOpen(false)} onRun={startRun} />}
+    {!main && !!inbox?.length && <section className={panel}><h3 className="font-medium text-white">Worker inbox</h3><p className="text-xs text-zinc-400">Pending and recently discarded requests (up to 25). Paused workers retain requests until resumed or discarded; expired requests will not execute.</p>{inbox.map((request) => <div key={request.id} className="space-y-1 border-t border-zinc-800 pt-3 text-sm"><p className="text-zinc-300">{request.intent} · {request.reason}</p><p className="break-words text-xs text-zinc-400">{request.preview}</p>{request.discardedReason ? <p className="text-xs text-amber-200">{request.discardedReason}</p> : <button type="button" disabled={pending} onClick={() => { void perform("stop", request.id); }} className="cursor-pointer text-xs text-red-300 hover:underline disabled:cursor-wait">Discard request</button>}</div>)}</section>}
     {!main && <section className={panel}><header className="flex items-center justify-between"><h3 className="font-medium text-white">Run history</h3></header>{schedulerError && <p role="alert" className="text-sm text-red-300">{schedulerError}</p>}{connectionError && <p role="status" className="text-sm text-amber-200">{connectionError}</p>}<SubagentRunHistory agentId={agentId} runs={runs} pending={pending} onStop={(id) => { void perform("stop", id); }} pagination={pagination} loading={loading} onPage={setPage} /></section>}
     {archiveOpen && !main && <ArchiveSubagentDialog name={definition.name} onCancel={() => setArchiveOpen(false)} onConfirm={() => { setArchiveOpen(false); void perform("archive"); }} />}
     {error && <p role="alert" className="text-sm text-red-300">{error}</p>}

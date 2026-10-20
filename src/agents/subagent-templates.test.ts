@@ -23,7 +23,7 @@ describe("bundled editable worker manifests", () => {
     { ...analysisManifest, formatVersion: 2 },
     { ...analysisManifest, provider: "template-authored-provider" },
     { ...analysisManifest, instructions: "Executable module rather than paragraphs" },
-    { ...analysisManifest, tools: ["delegate_subagent"] },
+    { ...analysisManifest, tools: ["get_subagent_run"] },
     { ...analysisManifest, tools: ["invented_remote_tool"] },
     { ...analysisManifest, defaults: { ...analysisManifest.defaults, enabled: true } },
     { ...analysisManifest, defaults: { ...analysisManifest.defaults, completion: "wake" } },
@@ -98,12 +98,35 @@ describe("bundled editable worker manifests", () => {
     expect(trader.instructions).toContain("use get_memory to read the full reports");
     expect(trader.instructions).toContain("fresh only describes evidence age");
   });
+  it("teaches timeframe defaults, explicit analyst deadlines and separate correction/supersession semantics", () => {
+    const model = { provider: "operator-selected", modelId: "operator-model", thinkingLevel: "" };
+    const analyst = templateDraft("basic-analysis", model), trader = templateDraft("basic-trading", model);
+    expect(analyst.instructions).toContain("primary decision timeframe, not the worker schedule");
+    expect(analyst.instructions).toContain("two candle intervals (15m research: 30 minutes; 1d research: two days)");
+    expect(analyst.instructions).toContain("Explicitly request a shorter or longer deadline");
+    expect(analyst.instructions).toContain("up to seven days from evidence");
+    expect(analyst.instructions).toContain("Use corrects only for complete replacement reports with the same evidence boundary");
+    expect(analyst.instructions).toContain("Use supersedes for a complete replacement assessment based on strictly newer evidence");
+    expect(analyst.instructions).toContain("even if the previous report expired");
+    expect(trader.instructions).toContain("consumerStatus/consumerValidUntil");
+    expect(trader.instructions).toContain("Check correctedBy and supersededBy even on fresh reports");
+    expect(trader.instructions).toContain("never treat a replaced report as current merely because it is recent");
+  });
   it("enables instrument discovery for every worker template and new orchestrators", () => {
     const model = { provider: "operator-selected", modelId: "operator-model", thinkingLevel: "" };
     expect(mainToolNames).toContain("list_instruments");
     for (const template of subagentTemplates) {
       expect(templateDraft(template.id, model).tools).toContain("list_instruments");
     }
+  });
+  it("gives the trader live market snapshots without treating them as candle confirmation", () => {
+    const draft = templateDraft("basic-trading", { provider: "operator-selected", modelId: "operator-model", thinkingLevel: "" });
+    expect(draft.tools).toContain("get_market_snapshot");
+    expect(draft.instructions).toContain("refresh current prices and market context before evaluating a new entry or price-dependent position management");
+    expect(draft.instructions).toContain("Distinguish its mid, mark and oracle prices from executable quotes");
+    expect(draft.instructions).toContain("A snapshot cannot confirm a closed-candle breakout or volume condition");
+    expect(draft.instructions).toContain("report that uncertainty rather than claiming it occurred");
+    expect(draft.instructions).toContain("Do not poll or wait for a price trigger");
   });
   it("enables insight tools only for the reviewer by default", () => {
     const insightTools = ["get_insights", "append_insight", "replace_insights"];
