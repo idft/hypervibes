@@ -71,6 +71,24 @@ describe("bundled editable worker manifests", () => {
     expect(draft.instructions).toContain("closed candles");
     expect(draft.instructions).toContain("not trading authority");
   });
+  it("publishes analyst reports as memories without redundant artifacts by default", () => {
+    const draft = templateDraft("basic-analysis", { provider: "operator-selected", modelId: "operator-model", thinkingLevel: "" });
+    expect(draft.instructions).toContain("Publish the analysis directly in the research memory by default; no artifact is required");
+    expect(draft.instructions).toContain("Do not create an artifact that duplicates the memory report");
+    expect(draft.instructions).toContain("Create artifacts only for distinct supporting material");
+    expect(draft.instructions).toContain("Keep the memory understandable without opening attachments");
+    expect(draft.instructions).toContain("Include artifactIds only when you created or used distinct supporting artifacts; otherwise omit them");
+    expect(draft.instructions).not.toContain("Save useful supporting reports or datasets as artifacts");
+  });
+  it("teaches prose handoffs and trader interpretation rather than fixed signal labels", () => {
+    const model = { provider: "operator-selected", modelId: "operator-model", thinkingLevel: "" };
+    const analyst = templateDraft("basic-analysis", model), trader = templateDraft("basic-trading", model);
+    expect(analyst.instructions).toContain("brief summary (maximum 500 characters)");
+    expect(analyst.instructions).toContain("standalone content report");
+    expect(analyst.instructions).toContain("no fixed headings, bias, setup labels or structured payload are required");
+    expect(trader.instructions).toContain("use get_memory to read the full reports");
+    expect(trader.instructions).toContain("fresh only describes evidence age");
+  });
   it("enables insight tools only for the reviewer by default", () => {
     const insightTools = ["get_insights", "append_insight", "replace_insights"];
     for (const template of subagentTemplates) {

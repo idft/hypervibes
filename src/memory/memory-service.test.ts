@@ -50,24 +50,40 @@ describe("immutable Agent-scoped memories", () => {
     expect(await memory.publishResearch(f.analyst, "done", input)).toEqual(original);
     await expect(memory.publishResearch(f.analyst, "late", input)).rejects.toThrow("active");
   });
-  it("selects newest before status, never falls back, and keeps instrument streams separate", async () => {
+  it("selects newest before freshness, never falls back, and keeps instrument streams separate", async () => {
     const { memory } = f.services();
     await memory.publishResearch(f.analyst, "initial", researchInput(f.now));
-    expect(await memory.tradingContext("agent", "BTC", researchRequirement)).toMatchObject({ allReady: true, requirements: [{ ref: "m1", status: "fresh" }] });
+    expect(await memory.tradingContext("agent", "BTC", researchRequirement)).toMatchObject({ requirements: [{ ref: "m1", status: "fresh", summary: "Mixed momentum near support" }] });
     await memory.publishResearch(f.analyst, "older-evidence", researchInput(f.now - 7200_000));
-    expect(await memory.tradingContext("agent", "BTC", researchRequirement)).toMatchObject({ allReady: false, requirements: [{ ref: "m2", status: "stale", payload: null }] });
-    expect(await memory.tradingContext("agent", "ETH", researchRequirement)).toMatchObject({ allReady: false, requirements: [{ ref: null, status: "missing" }] });
-    await memory.publishResearch(f.analyst, "withdrawn", researchInput(f.now, { payload: { ...researchInput(f.now).payload, setup: "withdrawn" } }));
-    expect(await memory.tradingContext("agent", "BTC", researchRequirement)).toMatchObject({ requirements: [{ ref: "m3", status: "withdrawn" }] });
-    await memory.publishResearch(f.analyst, "unknown-coverage", researchInput(f.now, { payload: { ...researchInput(f.now).payload, coverage: "unknown" } }));
-    expect(await memory.tradingContext("agent", "BTC", researchRequirement)).toMatchObject({ requirements: [{ ref: "m4", status: "incomplete" }] });
-    await memory.publishResearch(f.analyst, "watch", researchInput(f.now, { payload: { ...researchInput(f.now).payload, setup: "watch" } }));
-    expect(await memory.tradingContext("agent", "BTC", researchRequirement)).toMatchObject({ allReady: false, requirements: [{ ref: "m5", status: "fresh" }] });
+    expect(await memory.tradingContext("agent", "BTC", researchRequirement)).toMatchObject({ requirements: [{ ref: "m2", status: "stale", summary: null }] });
+    expect(await memory.tradingContext("agent", "ETH", researchRequirement)).toMatchObject({ requirements: [{ ref: null, status: "missing" }] });
+    await memory.publishResearch(f.analyst, "new-report", researchInput(f.now));
+    await f.db.run("UPDATE hv_memories SET retracted_at=?,retraction_reason='Withdrawn evidence' WHERE agent_id='agent' AND number=3", f.now);
+    expect(await memory.tradingContext("agent", "BTC", researchRequirement)).toMatchObject({ requirements: [{ ref: "m3", status: "retracted", summary: null }] });
+    expect((await memory.list("agent", { status: "retracted" })).items.map((item) => item.ref)).toEqual(["m3"]);
     await f.db.run("UPDATE hv_subagents SET enabled=0 WHERE id='analyst'");
     expect(await memory.tradingContext("agent", "BTC", researchRequirement)).toMatchObject({ requirements: [{ status: "disabled" }] });
     expect((await memory.get("agent", "m1")).content).toContain("Facts");
-    expect((await memory.tradingContext("agent", "BTC", [])).allReady).toBe(false);
+    expect((await memory.tradingContext("agent", "BTC", [])).requirements).toEqual([]);
     await expect(memory.tradingContext("agent", "BTC", Array(21).fill(researchRequirement[0]))).rejects.toThrow("20");
+  });
+  it("preserves optional and legacy research data without interpreting labels as trade readiness", async () => {
+    let { memory } = f.services();
+    const payloads = [{}, { bias: "bearish-neutral", uncertainty: ["Support may hold", "Hourly trend mixed"] }, { version: 1, bias: "long", setup: "withdrawn", observations: ["Old report"], interpretation: "No longer valid", invalidation: [], coverage: "unknown" }];
+    for (const [index, payload] of payloads.entries()) {
+      const input = researchInput(f.now, { payload });
+      await memory.publishResearch(f.analyst, `data:${index}`, input);
+      ({ memory } = await f.reopen());
+      const ref = `m${index + 1}`;
+      expect((await memory.get("agent", ref)).payload).toEqual(payload);
+      expect(await memory.publishResearch(f.analyst, `data:${index}`, input)).toMatchObject({ ref });
+      expect((await memory.list("agent", { status: "fresh" })).items[0]).toMatchObject({ ref, status: "fresh" });
+      const context = await memory.tradingContext("agent", "BTC", researchRequirement);
+      expect(context.requirements[0]).toMatchObject({ ref, status: "fresh" });
+      expect(context).not.toHaveProperty("allReady");
+      expect(context.requirements[0]).not.toHaveProperty("eligible");
+      expect(context.requirements[0]).not.toHaveProperty("payload");
+    }
   });
   it("caps validity by evidence and stricter requirements; validates complete replacement corrections", async () => {
     const { memory } = f.services();
@@ -82,19 +98,24 @@ describe("immutable Agent-scoped memories", () => {
     f.now += 60_000;
     expect(await memory.tradingContext("agent", "BTC", [{ ...researchRequirement[0], maxAgeSeconds: 60 }])).toMatchObject({ requirements: [{ status: "stale" }] });
   });
-  it("bounds required context without silently treating omitted evidence as usable", async () => {
+  it("returns bounded discovery summaries, leaving large reports and custom data for get_memory", async () => {
     const { memory } = f.services();
-    const requirements = [];
-    for (let n = 0; n < 10; n++) {
+    const requirements = [], summary = "😀".repeat(250), content = "x".repeat(16000), payload = { measurements: "x".repeat(16000) };
+    for (let n = 0; n < 20; n++) {
       const topic = `stream_${n}`;
-      await memory.publishResearch(f.analyst, `large:${n}`, researchInput(f.now, { topic, payload: { ...researchInput(f.now).payload, interpretation: "x".repeat(4000), observations: Array(6).fill("x".repeat(1000)) } }));
+      await memory.publishResearch(f.analyst, `large:${n}`, researchInput(f.now, { topic, summary, content, payload }));
       requirements.push({ ...researchRequirement[0], subagentId: "analyst", topic, interval: "1h", maxAgeSeconds: 3600 });
     }
     const result = await memory.tradingContext("agent", "BTC", requirements);
-    expect(result.overBudget).toBe(true);
-    expect(result.allReady).toBe(false);
-    expect(result.requirements).toHaveLength(10);
-    expect(result.requirements.every((item) => item.status === "fresh" && item.payload === null && !item.eligible)).toBe(true);
+    expect(result.requirements).toHaveLength(20);
+    expect(result.requirements.every((item) => item.status === "fresh" && item.summary === summary)).toBe(true);
+    expect(new TextEncoder().encode(JSON.stringify(result)).length).toBeLessThan(64 * 1024);
+    for (const item of result.requirements) {
+      expect(item).not.toHaveProperty("content");
+      expect(item).not.toHaveProperty("payload");
+    }
+    expect(await memory.get("agent", "m1")).toMatchObject({ summary, content, payload });
+    expect((await memory.list("agent", { query: "😀".repeat(10) })).items).toHaveLength(20);
   });
   it("records decision/review relationships with host provenance and refuses fabricated authority", async () => {
     const { memory } = f.services();

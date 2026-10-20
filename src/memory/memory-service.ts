@@ -4,7 +4,7 @@ import { candleIntervals } from "../agents/candle-intervals.js";
 import type { SharedDatabase } from "../db/shared-database.js";
 import { artifactVisibleSql } from "../research/artifacts.js";
 import { assertActiveActor, operationReplay, requestHash, saveOperation, type MemoryActor, type MemoryAuthorization } from "./operations.js";
-import { instrument, interval, memoryKinds, memoryRef, parseMemoryRef, publicationInput, researchRequirements, timestamp, topic, type MemoryDetail, type MemoryKind, type MemoryMetadata, type ResearchPayload, type ResearchStatus } from "./memory-contracts.js";
+import { instrument, interval, memoryKinds, memoryRef, parseMemoryRef, publicationInput, researchRequirements, timestamp, topic, type MemoryDetail, type MemoryKind, type MemoryMetadata, type ResearchStatus } from "./memory-contracts.js";
 import { choice, fields, integer, text } from "./validation.js";
 
 interface Row {
@@ -19,7 +19,7 @@ export const maxResearchAgeSeconds = 7 * 86400;
 const columns = "number,kind,topic,instrument,interval,summary,created_at,evidence_as_of,valid_until,producer_subagent_id,source_run_id,retracted_at,retraction_reason";
 function statusSql(now: number) {
   timestamp(now);
-  return `CASE WHEN kind!='research' THEN 'durable' WHEN producer_subagent_id IS NOT NULL AND NOT EXISTS(SELECT 1 FROM hv_subagents p WHERE p.agent_id=hv_memories.agent_id AND p.id=hv_memories.producer_subagent_id AND p.enabled=1 AND p.archived=0) THEN 'disabled' WHEN retracted_at IS NOT NULL THEN 'retracted' WHEN evidence_as_of>${now} THEN 'invalid_evidence' WHEN json_extract(payload,'$.setup')='withdrawn' THEN 'withdrawn' WHEN json_extract(payload,'$.coverage')!='complete' THEN 'incomplete' WHEN valid_until<=${now} THEN 'stale' ELSE 'fresh' END`;
+  return `CASE WHEN kind!='research' THEN 'durable' WHEN producer_subagent_id IS NOT NULL AND NOT EXISTS(SELECT 1 FROM hv_subagents p WHERE p.agent_id=hv_memories.agent_id AND p.id=hv_memories.producer_subagent_id AND p.enabled=1 AND p.archived=0) THEN 'disabled' WHEN retracted_at IS NOT NULL THEN 'retracted' WHEN evidence_as_of>${now} THEN 'invalid_evidence' WHEN valid_until<=${now} THEN 'stale' ELSE 'fresh' END`;
 }
 function metadata(row: Row): MemoryMetadata {
   return { status: row.status, ref: memoryRef(row.number), kind: row.kind, topic: row.topic, instrument: row.instrument, interval: row.interval, summary: row.summary, createdAt: row.created_at, evidenceAsOf: row.evidence_as_of, validUntil: row.valid_until, producerSubagentId: row.producer_subagent_id, sourceRunId: row.source_run_id, retractedAt: row.retracted_at, retractionReason: row.retraction_reason };
@@ -103,7 +103,7 @@ export class MemoryService {
     const producer = filter.producerSubagentId === undefined ? "" : text(filter.producerSubagentId, 100, "producer ID");
     const run = filter.sourceRunId === undefined ? "" : text(filter.sourceRunId, 100, "run ID");
     const query = filter.query === undefined ? "" : text(filter.query, 200, "search", true);
-    const status = filter.status === undefined ? "" : choice(filter.status, ["durable", "missing", "fresh", "stale", "disabled", "retracted", "withdrawn", "incomplete", "invalid_evidence"]);
+    const status = filter.status === undefined ? "" : choice(filter.status, ["durable", "missing", "fresh", "stale", "disabled", "retracted", "invalid_evidence"]);
     const start = filter.start === undefined ? 0 : timestamp(filter.start), end = filter.end === undefined ? Number.MAX_SAFE_INTEGER : timestamp(filter.end);
     if (end <= start) throw new AgentError("Invalid memory time window");
     const limit = filter.limit === undefined ? 25 : integer(filter.limit, 1, 50, "page size");
@@ -125,26 +125,19 @@ export class MemoryService {
     const items = [];
     for (const requirement of requirements) {
       const producer = await tx.get<{ enabled: number; archived: number }>("SELECT enabled,archived FROM hv_subagents WHERE agent_id=? AND id=? AND kind='worker'", agentId, requirement.subagentId);
-      // Select the latest BEFORE evaluating status: no resurrection of old setups.
-      const row = await tx.get<Row>("SELECT * FROM hv_memories WHERE agent_id=? AND kind='research' AND instrument=? AND topic=? AND interval=? AND producer_subagent_id=? ORDER BY number DESC LIMIT 1", agentId, coin, requirement.topic, requirement.interval, requirement.subagentId);
-      const payload = row ? JSON.parse(row.payload) as ResearchPayload : null;
+      // Select the latest BEFORE evaluating freshness: never resurrect older reports.
+      const row = await tx.get<Pick<Row, "number" | "summary" | "evidence_as_of" | "valid_until" | "retracted_at">>("SELECT number,summary,evidence_as_of,valid_until,retracted_at FROM hv_memories WHERE agent_id=? AND kind='research' AND instrument=? AND topic=? AND interval=? AND producer_subagent_id=? ORDER BY number DESC LIMIT 1", agentId, coin, requirement.topic, requirement.interval, requirement.subagentId);
       const deadline = row ? Math.min(row.valid_until!, row.evidence_as_of! + requirement.maxAgeSeconds * 1000) : null;
       let status: ResearchStatus = "fresh";
       if (!producer || !producer.enabled || producer.archived) status = "disabled";
       else if (!row) status = "missing";
       else if (row.retracted_at !== null) status = "retracted";
       else if (row.evidence_as_of! > now || row.evidence_as_of! % (candleIntervals[interval(requirement.interval)] * 1000) !== 0) status = "invalid_evidence";
-      else if (payload!.setup === "withdrawn") status = "withdrawn";
-      else if (payload!.coverage !== "complete") status = "incomplete";
       else if (now >= deadline!) status = "stale";
-      const eligible = status === "fresh" && payload?.setup === "ready";
-      items.push({ producerSubagentId: requirement.subagentId, topic: requirement.topic, interval: requirement.interval, ref: row ? memoryRef(row.number) : null, status, evidenceAsOf: row?.evidence_as_of ?? null, validUntil: deadline, summary: status === "fresh" ? row!.summary : null, payload: status === "fresh" ? payload : null, eligible });
+      items.push({ producerSubagentId: requirement.subagentId, topic: requirement.topic, interval: requirement.interval, ref: row ? memoryRef(row.number) : null, status, evidenceAsOf: row?.evidence_as_of ?? null, validUntil: deadline, summary: status === "fresh" ? row!.summary : null });
     }
-    // Character counts are not token budgets. Never silently omit requested
-    // evidence and then report a successful freshness picture.
-    const overBudget = new TextEncoder().encode(JSON.stringify(items)).length > 64 * 1024;
-    const bounded = overBudget ? items.map((item) => ({ ...item, summary: null, payload: null, eligible: false })) : items;
-    const allReady = !overBudget && bounded.length > 0 && bounded.every((item) => item.eligible);
-    return { observedAt: now, instrument: coin, overBudget, allReady, requirements: bounded };
+    // At most 20 bounded summaries; agents retrieve full reports with get_memory.
+    // Freshness says nothing about analytical quality or suitability for a trade.
+    return { observedAt: now, instrument: coin, requirements: items };
   }
 }

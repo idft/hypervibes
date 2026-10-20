@@ -1,9 +1,11 @@
 import { describe, expect, it } from "vitest";
+import { validateToolArguments } from "@earendil-works/pi-ai";
+import { ResearchInputSchema } from "./tool-schemas.js";
 import { canonical } from "../canonical.js";
 import { insightMutation, insightScope, renderInsightSections } from "./insight-contracts.js";
-import { memoryRef, parseMemoryRef, publicationInput, researchRequirements } from "./memory-contracts.js";
+import { memoryRef, parseMemoryRef, publicationInput, researchRequirements, type ResearchPayload } from "./memory-contracts.js";
 
-const research = { topic: "trend_setup", instrument: "BTC", interval: "1h", summary: "Bullish hypothesis", content: "Tool observations, then interpretation", evidenceAsOf: 3600000, payload: { version: 1, bias: "long", setup: "ready", observations: ["Closed candle close > EMA20 > EMA50"], interpretation: "Trend hypothesis", invalidation: ["Alignment lost"], coverage: "complete" } };
+const research = { topic: "trend_setup", instrument: "BTC", interval: "1h", summary: "Mixed momentum", content: "Tool observations, uncertainty and interpretation in the analyst's own format", evidenceAsOf: 3600000 };
 const streams = [{ subagentId: "analyst", topic: "trend_setup", interval: "1h", maxAgeSeconds: 3600 }];
 describe("memory and insight contracts", () => {
   it("uses exact, safe, permanent short references without coercion", () => {
@@ -16,9 +18,21 @@ describe("memory and insight contracts", () => {
     expect(canonical({ b: { z: 2, a: 1 }, a: [2, 1], missing: undefined })).toBe(canonical({ a: [2, 1], b: { a: 1, z: 2 } }));
     expect(canonical({ a: [1, 2] })).not.toBe(canonical({ a: [2, 1] }));
   });
-  it("validates payload versions, arrays, bytes, bounds, and host-only fields", () => {
-    expect(publicationInput("research", research)).toMatchObject({ kind: "research", artifactIds: [], links: [] });
-    for (const patch of [{ summary: "x".repeat(501) }, { instrument: " BTC" }, { instrument: "xyz:BTC" }, { topic: "Trend Setup" }, { interval: "2h" }, { evidenceAsOf: 1.5 }, { actor: "reviewer" }, { manual: true }, { payload: { ...research.payload, version: 2 } }, { payload: { ...research.payload, observations: Array(21).fill("fact") } }, { payload: { ...research.payload, observations: Array(10).fill("😀".repeat(500)) } }]) expect(() => publicationInput("research", { ...research, ...patch })).toThrow();
+  it("publishes prose without analytical fields and accepts arbitrary optional research data", () => {
+    expect(publicationInput("research", research)).toMatchObject({ kind: "research", payload: {}, artifactIds: [], links: [] });
+    const tool = { name: "publish_research", description: "Publish research", parameters: ResearchInputSchema };
+    const payloads: (ResearchPayload | undefined)[] = [undefined, {}, { bias: "bearish-neutral", setup: "not a signal", coverage: "patchy" }, { version: 9, custom: { values: [1, true, null, "mixed"] }, observations: Array<string>(25).fill("fact") }];
+    for (const payload of payloads) {
+      const input = payload === undefined ? research : { ...research, payload };
+      expect(publicationInput("research", input).payload).toEqual(payload ?? {});
+      expect(() => validateToolArguments(tool, { type: "toolCall", id: "publish", name: tool.name, arguments: input })).not.toThrow();
+    }
+  });
+  it("validates research JSON, bytes, text bounds, and host-only fields", () => {
+    const cyclic: Record<string, unknown> = {}; cyclic.self = cyclic;
+    const deep = Array.from({ length: 35 }).reduce<unknown>((nested) => ({ nested }), 1);
+    for (const payload of [null, [], "data", new Date(), { bad: undefined }, { bad: NaN }, { bad: Infinity }, { bad: 1n }, { bad: () => 1 }, cyclic, { deep }, { data: "😀".repeat(4096) }]) expect(() => publicationInput("research", { ...research, payload })).toThrow();
+    for (const patch of [{ summary: "" }, { summary: "  " }, { summary: "x".repeat(501) }, { content: "" }, { content: "  " }, { content: "x".repeat(16001) }, { instrument: " BTC" }, { instrument: "xyz:BTC" }, { topic: "Trend Setup" }, { interval: "2h" }, { evidenceAsOf: 1.5 }, { actor: "reviewer" }, { manual: true }]) expect(() => publicationInput("research", { ...research, ...patch })).toThrow();
     expect(() => publicationInput("decision", { ...research, payload: { version: 1, action: "enter", direction: "long", reason: "reason", researchRefs: [], plan: "TP/SL" } })).toThrow("Unknown field");
     expect(() => publicationInput("review", { topic: "daily", summary: "Review", content: "No causal claim", payload: { version: 1, start: 10, end: 9, coverage: "unknown", limitations: [], findings: [], recommendations: [], memoryRefs: [] } })).toThrow("window");
   });

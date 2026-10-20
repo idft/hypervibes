@@ -44,6 +44,6 @@ export async function memoryFixture() {
   };
 }
 export function researchInput(boundary: number, patch: Record<string, unknown> = {}) {
-  return { topic: "trend_setup", instrument: "BTC", interval: "1h", summary: "Ready bullish hypothesis", content: "Facts: close > EMA20 > EMA50. Interpretation: trend hypothesis.", evidenceAsOf: boundary, payload: { version: 1, bias: "long", setup: "ready", observations: ["Fixture facts"], interpretation: "Hypothesis", invalidation: ["Closed-candle alignment lost"], coverage: "complete" }, ...patch };
+  return { topic: "trend_setup", instrument: "BTC", interval: "1h", summary: "Mixed momentum near support", content: "Facts: close > EMA20 > EMA50. Interpretation: a trend hypothesis with conflicting momentum; assess the evidence before acting.", evidenceAsOf: boundary, ...patch };
 }
 export const researchRequirement = [{ subagentId: "analyst", topic: "trend_setup", interval: "1h", maxAgeSeconds: 3600 }];

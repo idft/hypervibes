@@ -85,7 +85,7 @@ describe("trusted tool actor resolution and assignment snapshots", () => {
     faux.setResponses([fauxAssistantMessage(fauxToolCall("publish_research", researchInput(boundary)), { stopReason: "toolUse" }), fauxAssistantMessage("Published")]);
     await runtime.agents.subagents.run("owner", agentId, analyst.id, "Publish evidence", randomUUID());
     await finish(analyst.id);
-    expect((await runtime.agents.execution.memories.get(agentId, "m1")).producerSubagentId).toBe(analyst.id);
+    expect(await runtime.agents.execution.memories.get(agentId, "m1")).toMatchObject({ producerSubagentId: analyst.id, payload: {} });
     const finding = { scope: { kind: "worker", subagentId: analyst.id }, content: "Analyze ETH next; use 150bps SL and layered entries when trading is assigned.", reason: "Review of evidence", evidenceRefs: ["m1"] };
     faux.setResponses([fauxAssistantMessage(fauxToolCall("codemode", { code: `text(await tools.append_insight(${JSON.stringify(finding)}));` }), { stopReason: "toolUse" }), fauxAssistantMessage("Updated guidance")]);
     await runtime.agents.subagents.run("owner", agentId, reviewer.id, "Review findings", randomUUID());
@@ -95,6 +95,28 @@ describe("trusted tool actor resolution and assignment snapshots", () => {
     const next = await runtime.agents.subagents.run("owner", agentId, analyst.id, "Use the updated guidance", randomUUID());
     expect((await runtime.agents.execution.runContext(agentId, next)).instructions).toContain(finding.content);
     await finish(analyst.id);
+  });
+  it("hands arbitrary research data from a Code Mode analyst to a trader through public memory tools", async () => {
+    const analyst = await runtime.agents.subagents.create("owner", agentId, settings({ tools: ["codemode", "publish_research"], persistent: false }), randomUUID());
+    const trader = await runtime.agents.subagents.create("owner", agentId, settings({ tools: ["get_memory", "get_trading_context"], persistent: false }), randomUUID());
+    const boundary = Math.floor(Date.now() / 3600000) * 3600000;
+    const payload = { bias: "bearish-neutral", confidence: "uncertain near support", custom: { horizons: ["15m weakening", "1h mixed"] } };
+    const input = researchInput(boundary, { payload });
+    faux.setResponses([fauxAssistantMessage(fauxToolCall("codemode", { code: `text(await tools.publish_research(${JSON.stringify(input)}));` }), { stopReason: "toolUse" }), fauxAssistantMessage("Published research")]);
+    await runtime.agents.subagents.run("owner", agentId, analyst.id, "Publish the evidence", randomUUID());
+    const published = await finish(analyst.id);
+    expect((await runtime.agents.subagents.runDetail("owner", agentId, analyst.id, published.id)).tools).toContainEqual(expect.objectContaining({ name: "↳ publish_research", status: "ok" }));
+    faux.setResponses([
+      fauxAssistantMessage(fauxToolCall("get_trading_context", { instrument: "BTC", streams: [{ subagentId: analyst.id, topic: "trend_setup", interval: "1h", maxAgeSeconds: 3600 }] }), { stopReason: "toolUse" }),
+      fauxAssistantMessage(fauxToolCall("get_memory", { ref: "m1" }), { stopReason: "toolUse" }),
+      fauxAssistantMessage("Read the report; no trade requested"),
+    ]);
+    await runtime.agents.subagents.run("owner", agentId, trader.id, "Read and interpret the research", randomUUID());
+    const consumed = await finish(trader.id);
+    const detail = await runtime.agents.subagents.runDetail("owner", agentId, trader.id, consumed.id);
+    expect(detail.tools).toContainEqual(expect.objectContaining({ name: "get_trading_context", status: "done" }));
+    expect(detail.tools).toContainEqual(expect.objectContaining({ name: "get_memory", status: "done", output: expect.stringContaining("bearish-neutral") }));
+    expect(await runtime.agents.execution.memories.get(agentId, "m1")).toMatchObject({ content: input.content, payload, sourceRunId: published.id });
   });
   it("resolves worker tool calls to their active run and its frozen configuration", async () => {
     const config = settings({ tools: ["record_trade_decision"], persistent: false });

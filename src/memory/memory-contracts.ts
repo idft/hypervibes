@@ -1,6 +1,7 @@
+import type { JsonValue } from "@earendil-works/chord";
 import { AgentError } from "../agents/agent-input.js";
 import { candleIntervals } from "../agents/candle-intervals.js";
-import { array, choice, fields, integer, text, unique } from "./validation.js";
+import { array, choice, fields, integer, object, text, unique } from "./validation.js";
 
 export const memoryToolNames = ["publish_research", "record_trade_decision", "publish_review", "list_memories", "get_memory", "get_trading_context", "get_insights", "append_insight", "replace_insights", "research_decisions"] as const;
 export const memoryKinds = ["research", "decision", "review"] as const;
@@ -9,10 +10,8 @@ export const relations = ["based_on", "corrects", "supersedes", "reviews"] as co
 export type MemoryRelation = typeof relations[number];
 export interface FillAttribution { fillId: string; time: number; exchangeOid: string | null; requestId: string | null; decisionRef: string | null }
 export interface MemoryLink { ref: string; relation: MemoryRelation }
-export interface ResearchPayload {
-  version: 1; bias: "long" | "short" | "neutral"; setup: "ready" | "watch" | "none" | "withdrawn";
-  observations: string[]; interpretation: string; invalidation: string[]; coverage: "complete" | "incomplete" | "unknown";
-}
+/** Optional analyst-authored data; no keys or analytical vocabulary are prescribed. */
+export type ResearchPayload = Record<string, JsonValue>;
 export interface DecisionPayload {
   version: 1; action: "enter" | "hold" | "skip" | "reduce" | "close" | "protect";
   direction: "long" | "short" | null; reason: string; researchRefs: string[]; plan: string;
@@ -58,6 +57,19 @@ export function interval(value: unknown): keyof typeof candleIntervals {
 export const timestamp = (value: unknown) => integer(value, 0, Number.MAX_SAFE_INTEGER, "UTC epoch milliseconds");
 const strings = (value: unknown) => array(value, 20, (item) => text(item, 1000, "payload text"));
 const refs = (value: unknown) => unique(array(value, 20, reference)).sort();
+function researchData(value: unknown, depth = 0): JsonValue {
+  if (depth > 32) throw new AgentError("Research data exceeds 32 nesting levels");
+  if (value === null || typeof value === "string" || typeof value === "boolean") return value;
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (Array.isArray(value)) return Array.from(value, (item: unknown) => researchData(item, depth + 1));
+  if (typeof value === "object" && value !== null) return researchObject(value, depth);
+  throw new AgentError("Research data must contain only JSON values");
+}
+function researchObject(value: unknown, depth = 0): ResearchPayload {
+  const row = object(value);
+  if ((Object.getPrototypeOf(row) !== Object.prototype && Object.getPrototypeOf(row) !== null) || Object.getOwnPropertySymbols(row).length !== 0) throw new AgentError("Research data must be a plain JSON object");
+  return Object.fromEntries(Object.entries(row).map(([key, item]) => [key, researchData(item, depth + 1)]));
+}
 export function publicationInput(kind: MemoryKind, value: unknown): PublicationInput {
   const row = fields(value, ["topic", "instrument", "interval", "summary", "content", "artifactIds", "links", "payload", ...(kind === "research" ? ["evidenceAsOf", "requestedValidUntil"] : [])]);
   const base: PublicationBase = {
@@ -74,13 +86,9 @@ export function publicationInput(kind: MemoryKind, value: unknown): PublicationI
   const p = row.payload;
   let result: PublicationInput;
   if (kind === "research") {
-    const payload = fields(p, ["version", "bias", "setup", "observations", "interpretation", "invalidation", "coverage"]);
-    integer(payload.version, 1, 1, "payload version");
+    const payload = researchObject(p === undefined ? {} : p);
     if (!base.instrument || !base.interval) throw new AgentError("Research requires an instrument and interval");
-    result = { ...base, kind, evidenceAsOf: timestamp(row.evidenceAsOf), requestedValidUntil: row.requestedValidUntil == null ? null : timestamp(row.requestedValidUntil), payload: {
-      version: 1, bias: choice(payload.bias, ["long", "short", "neutral"]), setup: choice(payload.setup, ["ready", "watch", "none", "withdrawn"]),
-      observations: strings(payload.observations), interpretation: text(payload.interpretation, 4000, "interpretation"), invalidation: strings(payload.invalidation), coverage: choice(payload.coverage, ["complete", "incomplete", "unknown"]),
-    } };
+    result = { ...base, kind, evidenceAsOf: timestamp(row.evidenceAsOf), requestedValidUntil: row.requestedValidUntil == null ? null : timestamp(row.requestedValidUntil), payload };
   } else if (kind === "decision") {
     const payload = fields(p, ["version", "action", "direction", "reason", "researchRefs", "plan"]);
     integer(payload.version, 1, 1, "payload version");
@@ -117,4 +125,4 @@ export interface MemoryDetail extends MemoryMetadata {
   content: string; payload: ResearchPayload | DecisionPayload | ReviewPayload; links: MemoryLink[]; artifactIds: string[];
   conversationId: number | null; toolTaskId: number | null;
 }
-export type ResearchStatus = "missing" | "fresh" | "stale" | "disabled" | "retracted" | "withdrawn" | "incomplete" | "invalid_evidence";
+export type ResearchStatus = "missing" | "fresh" | "stale" | "disabled" | "retracted" | "invalid_evidence";
