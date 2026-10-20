@@ -9,7 +9,7 @@ export interface PositionProtectionInput { instrument: string; take_profit_price
 
 /**
  * Read-only protected-entry planner. Strategy, sizing and protection levels
- * are model/worker decisions from instructions and learnings; this only
+ * are model/worker decisions from instructions and insights; this only
  * enforces exact venue arithmetic and side sanity, never policy.
  */
 export async function prepareProtectedEntry(info: InfoClient, input: ProtectedEntryInput, signal: AbortSignal) {

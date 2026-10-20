@@ -1,8 +1,9 @@
 import { useEffect, useState, type ReactNode } from "react";
 import type { AgentDashboard } from "../hyperliquid/agent-dashboard.js";
 import { addDecimals, compareDecimals, formatMoneyText } from "../hyperliquid/decimal.js";
-import { AgentSectionPage } from "./agent-section-page.js";
 import { InstrumentLabel } from "./instrument-label.js";
+import type { DashboardSubagent } from "../agents/subagent-dashboard.js";
+import { DashboardSubagents } from "./dashboard-subagents.js";
 
 function Panel({ title, children }: { title: string; children: ReactNode }) {
   return <section className="rounded-2xl border border-zinc-800 bg-[#0d0d10] p-6"><h3 className="mb-4 text-lg font-medium text-white">{title}</h3>{children}</section>;
@@ -14,7 +15,7 @@ function Statistic({ label, value, pnl = false }: { label: string; value: string
 }
 const cell = "whitespace-nowrap px-3 py-3 text-left";
 
-export function AgentDashboardPage({ id, initial }: { id: string; initial: AgentDashboard }) {
+export function AgentDashboardPage({ id, initial, subagents = [], subagentsError }: { id: string; initial: AgentDashboard; subagents?: DashboardSubagent[]; subagentsError?: string }) {
   const [snapshot, setSnapshot] = useState(initial);
   const [error, setError] = useState("");
   useEffect(() => {
@@ -56,6 +57,6 @@ export function AgentDashboardPage({ id, initial }: { id: string; initial: Agent
       <Panel title="Positions">{snapshot.positions === null ? <p className="text-sm text-amber-200">Positions unavailable.</p> : snapshot.positions.length === 0 ? <p className="text-sm text-zinc-500">No open positions.</p> : <div className="overflow-x-auto"><table className="w-full text-sm text-zinc-300"><thead className="text-xs text-zinc-500"><tr>{["Market", "Size (signed)", "Leverage", "Entry price", "Unrealized P&L", "Liquidation price"].map((label) => <th key={label} className={cell}>{label}</th>)}</tr></thead><tbody className="divide-y divide-zinc-800">{snapshot.positions.map((position) => <tr key={position.coin}><td className={cell}><InstrumentLabel symbol={position.coin} /></td><td className={cell}>{position.size}</td><td className={cell}>{position.leverage}×</td><td className={cell}>{position.entryPrice}</td><td className={cell}>{formatMoneyText(position.unrealizedPnl)}</td><td className={cell}>{position.liquidationPrice ?? "-"}</td></tr>)}</tbody></table></div>}</Panel>
       <Panel title="Open orders">{snapshot.orders === null ? <p className="text-sm text-amber-200">Orders unavailable.</p> : snapshot.orders.length === 0 ? <p className="text-sm text-zinc-500">No open orders.</p> : <div className="overflow-x-auto"><table className="w-full text-sm text-zinc-300"><thead className="text-xs text-zinc-500"><tr>{["Market", "Side", "Type", "Size", "Price / trigger limit"].map((label) => <th key={label} className={cell}>{label}</th>)}</tr></thead><tbody className="divide-y divide-zinc-800">{snapshot.orders.map((order) => <tr key={order.id}><td className={cell}><InstrumentLabel symbol={order.coin} /></td><td className={cell}>{order.side}</td><td className={cell}>{order.type}</td><td className={cell}>{order.size}</td><td className={cell}>{order.price}</td></tr>)}</tbody></table></div>}</Panel>
     </>}
-    <AgentSectionPage title="Performance" description="Historical balance and P&L charts are not available yet." />
+    <DashboardSubagents agentId={id} subagents={subagents} error={subagentsError} />
   </div>;
 }

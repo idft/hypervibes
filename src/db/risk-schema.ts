@@ -5,7 +5,7 @@ import { hvAgents } from "./agent-schema.js";
 /**
  * Per-agent risk management settings. These are the only application-enforced
  * trading rules: every other trading behavior lives in worker instructions and
- * learnings. A missing row means trading is disabled (fail closed) with no
+ * insights. A missing row means trading is disabled (fail closed) with no
  * instrument or notional limits configured yet.
  */
 export const hvRiskSettings = sqliteTable("hv_risk_settings", {

@@ -12,7 +12,7 @@ vi.mock("@tanstack/react-router", () => ({
 }));
 import { AgentSwitcher } from "./agent-switcher.js";
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
-const agents = [{ id: "one", name: "Research" }, { id: "two", name: "Momentum" }];
+const agents = [{ id: "one", name: "Research", tradingEnabled: true }, { id: "two", name: "Momentum", tradingEnabled: false }];
 
 describe("Agent switcher", () => {
   let root: Root;
@@ -29,6 +29,14 @@ describe("Agent switcher", () => {
     expect(container.querySelector("summary .bg-emerald-400")).not.toBeNull();
     expect([...container.querySelectorAll("a")].map((link) => link.getAttribute("href"))).toEqual(["/agents/one", "/agents/two", "/agents/new"]);
     expect(container.querySelector('[aria-current="page"]')!.textContent).toBe("Research");
+  });
+  it("uses amber for disabled trading in the menu and updates the selected dot when settings change", async () => {
+    expect(container.querySelector('a[href="/agents/one"] [aria-label="Trading enabled"]')?.classList.contains("bg-emerald-400")).toBe(true);
+    expect(container.querySelector('a[href="/agents/two"] [aria-label="Trading disabled"]')?.classList.contains("bg-amber-400")).toBe(true);
+    await act(async () => root.render(<AgentSwitcher agents={agents} selectedAgentId="two" />));
+    expect(container.querySelector('summary [aria-label="Trading disabled"]')?.classList.contains("bg-amber-400")).toBe(true);
+    await act(async () => root.render(<AgentSwitcher agents={agents.map((agent) => ({ ...agent, tradingEnabled: true }))} selectedAgentId="two" />));
+    expect(container.querySelector('summary [aria-label="Trading enabled"]')?.classList.contains("bg-emerald-400")).toBe(true);
   });
   it("switches to the chosen Agent dashboard and closes the menu", async () => {
     details().open = true;

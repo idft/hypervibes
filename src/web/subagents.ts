@@ -6,6 +6,10 @@ export const listSubagents = createServerFn({ method: "GET" }).validator((data: 
   const user = await agentUser(context.runtime, getRequestHeaders());
   return agentAction(() => context.runtime.agents.subagents.list(user.id, data.agentId));
 });
+export const getDashboardSubagents = createServerFn({ method: "GET" }).validator((data: unknown) => ({ agentId: field(data, "agentId") })).handler(async ({ context, data }) => {
+  const user = await agentUser(context.runtime, getRequestHeaders());
+  return agentAction(() => context.runtime.agents.subagents.dashboard(user.id, data.agentId));
+});
 export const getSubagent = createServerFn({ method: "GET" }).validator((data: unknown) => ({ agentId: field(data, "agentId"), id: field(data, "id") })).handler(async ({ context, data }) => {
   const user = await agentUser(context.runtime, getRequestHeaders());
   return agentAction(() => context.runtime.agents.subagents.detail(user.id, data.agentId, data.id));

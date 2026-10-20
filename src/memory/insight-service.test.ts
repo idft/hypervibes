@@ -1,0 +1,75 @@
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { InsightConflict } from "./insight-service.js";
+import { memoryFixture, researchInput } from "./test-fixture.js";
+const scope = { kind: "agent" } as const;
+const input = (content: string, extra = {}) => ({ scope, content, reason: "Reusable finding", evidenceRefs: [], ...extra });
+describe("versioned insights", () => {
+  let f: Awaited<ReturnType<typeof memoryFixture>>;
+  beforeEach(async () => { f = await memoryFixture(); });
+  afterEach(async () => { await f.close(); });
+  it("keeps independent scopes, permits authorized reviewer writes, and preserves evidence through appends", async () => {
+    const { memory, insight } = f.services();
+    expect(await insight.current("agent", scope)).toEqual({ scope, version: 0, content: "" });
+    await memory.publishResearch(f.analyst, "evidence", researchInput(f.now));
+    expect(await insight.append(f.reviewer, "reviewer-finding", input("General guidance", { evidenceRefs: ["m1"] }))).toEqual({ scope, version: 1 });
+    await Promise.all([insight.append(f.reviewer, "append-a", input("Finding A")), insight.append(f.reviewer, "append-b", input("Finding B"))]);
+    expect(await insight.current("agent", scope)).toMatchObject({ version: 3, content: "General guidance\n\n---\n\nFinding A\n\n---\n\nFinding B" });
+    expect(await insight.revision("agent", scope, 3)).toMatchObject({ evidenceRefs: ["m1"], sourceRunId: "run-reviewer", producerSubagentId: "reviewer", userId: null });
+    const worker = { kind: "worker", subagentId: "analyst" };
+    await insight.append(f.reviewer, "worker-finding", input("Specific guidance", { scope: worker }));
+    expect(await insight.current("agent", worker)).toMatchObject({ version: 1, content: "Specific guidance" });
+    expect(await insight.current("other", scope)).toMatchObject({ version: 0, content: "" });
+    await expect(insight.append(f.analyst, "no-write-tools", input("Unauthorized"))).rejects.toThrow("permitted");
+    await expect(insight.current("agent", { kind: "worker", subagentId: "foreign" })).rejects.toThrow("not found");
+    await expect(insight.append(f.reviewer, "foreign-write", input("Unauthorized", { scope: { kind: "worker", subagentId: "foreign" } }))).rejects.toThrow();
+    await f.db.run("UPDATE hv_subagents SET archived=1,enabled=0 WHERE id='analyst'");
+    expect((await insight.revision("agent", worker, 1)).content).toBe("Specific guidance");
+  });
+  it("CAS replacement has one winner, audited clears, immutable history, and draft-friendly conflicts", async () => {
+    const { insight } = f.services();
+    const results = await Promise.allSettled([insight.replace(f.operator, "replace-a", input("First", { expectedVersion: 0 })), insight.replace(f.operator, "replace-b", input("Second", { expectedVersion: 0 }))]);
+    expect(results.filter((r) => r.status === "fulfilled")).toHaveLength(1);
+    const failed = results.find((r) => r.status === "rejected");
+    expect(failed?.status === "rejected" && failed.reason).toBeInstanceOf(InsightConflict);
+    await insight.replace(f.operator, "clear", input("", { expectedVersion: 1 }));
+    expect(await insight.current("agent", scope)).toMatchObject({ version: 2, content: "" });
+    expect((await insight.revision("agent", scope, 1)).content).toBe("First");
+    await insight.replace(f.operator, "restore-copy", input("First", { expectedVersion: 2 }));
+    expect((await insight.current("agent", scope)).version).toBe(3);
+    const page = await insight.history("agent", scope, { limit: 2 });
+    expect(page.items.map((r) => r.version)).toEqual([3, 2]);
+    expect(page.items[0]).not.toHaveProperty("content");
+    expect((await insight.history("agent", scope, { beforeVersion: page.nextBeforeVersion })).items.map((r) => r.version)).toEqual([1]);
+  });
+  it("replays an earlier committed result after later edits, terminal runs, expiry and reopen", async () => {
+    let { insight } = f.services();
+    const firstInput = input("Original", { expectedVersion: 0 });
+    const original = await insight.replace(f.reviewer, "original", firstInput);
+    await insight.append(f.operator, "newer", input("Later finding"));
+    await f.db.run("UPDATE hv_subagent_runs SET status='completed' WHERE id='run-reviewer'");
+    ({ insight } = await f.reopen());
+    expect(await insight.replace(f.reviewer, "original", firstInput)).toEqual(original);
+    expect((await insight.current("agent", scope)).version).toBe(2);
+    await expect(insight.replace(f.reviewer, "original", { ...firstInput, content: "Changed" })).rejects.toThrow("different");
+    await expect(insight.append(f.reviewer, "late", input("Late"))).rejects.toThrow("active");
+  });
+  it("rejects overflows and missing evidence atomically, without successful receipts or empty sets", async () => {
+    const { insight } = f.services();
+    await expect(insight.append(f.operator, "missing", input("Finding", { evidenceRefs: ["m9"] }))).rejects.toThrow("not found");
+    expect(await f.db.get("SELECT count(*) AS total FROM hv_insight_sets")).toMatchObject({ total: 0 });
+    await insight.replace(f.operator, "full", input("x".repeat(8000), { expectedVersion: 0 }));
+    await expect(insight.append(f.operator, "overflow", input("One more"))).rejects.toThrow("consolidate");
+    expect(await f.db.get("SELECT count(*) AS total FROM hv_insight_revisions")).toMatchObject({ total: 1 });
+    expect(await f.db.get("SELECT count(*) AS total FROM hv_memory_operations")).toMatchObject({ total: 1 });
+    await expect(insight.replace(f.operator, "stale", input("Draft", { expectedVersion: 0 }))).rejects.toMatchObject({ currentVersion: 1, status: 409 });
+    await expect(insight.append(f.operator, "large-append", input("x".repeat(2001)))).rejects.toThrow("2000");
+  });
+  it("snapshots both heads in a caller-owned transaction and retains copied contents after edits", async () => {
+    const { insight } = f.services();
+    await insight.append(f.operator, "general", input("General"));
+    const snapshots = await f.db.transaction(async (tx) => ({ general: await insight.snapshotTx(tx, "agent", scope), worker: await insight.snapshotTx(tx, "agent", { kind: "worker", subagentId: "analyst" }) }));
+    await insight.append(f.operator, "later", input("Later"));
+    expect(snapshots.general).toEqual({ scope, version: 1, content: "General" });
+    expect(snapshots.worker).toMatchObject({ version: 0, content: "" });
+  });
+});

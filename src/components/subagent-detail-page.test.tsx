@@ -11,6 +11,7 @@ vi.mock("sonner", () => ({ toast: { success: mocks.success } }));
 vi.mock("@tanstack/react-router", () => ({ useRouter: () => ({ invalidate: mocks.invalidate, navigate: mocks.navigate }), Link: ({ to, params, children, ...props }: { to: string; params: Record<string, string>; children: React.ReactNode }) => <a {...props} href={to.replace(/\$(\w+)/g, (_match, key: string) => encodeURIComponent(params[key]!))}>{children}</a> }));
 import { SubagentDetailPage } from "./subagent-detail-page.js";
 import { SubagentsPage } from "./subagents-page.js";
+import { ScheduleConfig } from "./subagent-config.js";
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 const definition: SubagentRow = { id: "worker:fixture", agentId: "agent-fixture", kind: "worker", name: "Research", description: "Find evidence", instructions: "Research carefully", provider: "faux", modelId: "faux-1", thinkingLevel: "", tools: [], templateOrigin: null, enabled: true, archived: false, delegatable: true, persistent: false, conversationId: null, schedule: "", delaySeconds: 30, nextRunAt: null, completion: "wake", timeoutSeconds: 900, createdAt: 1, updatedAt: 1 };
 class HistorySource extends EventTarget {
@@ -138,7 +139,7 @@ describe("subagent pages", () => {
   it("edits the orchestrator model, thinking and tools without offering deletion or schedules", async () => {
     const main = { ...definition, id: "main:fixture", name: "Orchestrator", kind: "orchestrator" as const, tools: mainToolNames };
     await render(main); mocks.saveSubagentSection.mockResolvedValue({ ok: true, data: { ...main, thinkingLevel: "high" } });
-    expect(container.textContent).toContain("cannot be disabled, archived, or deleted"); expect(container.textContent).not.toContain("Archive worker"); expect(container.textContent).not.toContain("UTC candle close");
+    expect(container.textContent).not.toContain("cannot be disabled, archived, or deleted"); expect(container.textContent).not.toContain("Archive worker"); expect(container.textContent).not.toContain("UTC candle close");
     expect(container.textContent).not.toContain("Manage providers");
     expect(container.querySelector("select")).toBeNull();
     expect(container.querySelector('[aria-label="Choose model"]')?.textContent).toContain("Thinking: Default");
@@ -152,6 +153,21 @@ describe("subagent pages", () => {
     expect(mocks.success).toHaveBeenCalledWith("Model updated");
     expect(container.textContent).not.toContain("Settings saved");
   });
+  it("places tools beside stacked assignment and schedule settings above instructions", async () => {
+    await render();
+    const sections = [...container.querySelectorAll("section")];
+    const tools = sections.find((section) => section.querySelector("h3")?.textContent === "Tools")!;
+    const assignments = sections.find((section) => section.querySelector("h3")?.textContent === "Assignments & context")!;
+    const schedule = sections.find((section) => section.querySelector("h3")?.textContent === "Schedule")!;
+    const grid = tools.parentElement!.parentElement!;
+    expect(grid.classList.contains("md:grid-cols-2")).toBe(true);
+    expect(grid.children).toHaveLength(2);
+    expect(grid.children[0]!.contains(tools)).toBe(true);
+    expect(grid.children[1]!.children[0]).toBe(assignments);
+    expect(grid.children[1]!.children[1]).toBe(schedule);
+    const instructions = container.querySelector("textarea")!.closest("label")!;
+    expect(grid.nextElementSibling).toBe(instructions);
+  });
   it("offers candle-close scheduling, lifetime and completion choices without recursive worker tools", async () => {
     await render(); expect(container.textContent).toContain("Orchestrator delegation allowed"); expect(container.textContent).toContain("Fresh context per assignment"); expect(container.textContent).not.toContain("delegate_subagent");
     expect(container.textContent).toContain("No schedule");
@@ -159,7 +175,7 @@ describe("subagent pages", () => {
     await click("Edit schedule");
     const schedule = [...document.querySelectorAll<HTMLSelectElement>("dialog select")].find((select) => [...select.options].some((option) => option.value === "1h"))!;
     await act(async () => { schedule.value = "1h"; schedule.dispatchEvent(new Event("change", { bubbles: true })); });
-    expect(document.querySelector("dialog")!.textContent).toContain("Delay after close");
+    expect(document.querySelector("dialog")!.textContent).toContain("Delay after candle close");
     expect(document.querySelector("dialog")!.textContent).toContain("Save only");
     expect(document.querySelector("dialog")!.textContent).toContain("without a model call");
     await click("Apply");
@@ -422,6 +438,45 @@ describe("subagent pages", () => {
     await render({ ...definition, kind: "orchestrator" });
     expect(container.textContent).not.toContain("Edit assignments");
   });
+  it("shows a live countdown in the schedule and cleans up its timer", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date("2026-01-01T00:00:00Z"));
+      const nextRunAt = Date.now() + 14 * 60_000;
+      await render({ ...definition, schedule: "15m", nextRunAt });
+      expect(container.textContent).toContain("Next run in 14 minutes");
+      const time = container.querySelector("time")!;
+      expect(time.dateTime).toBe("2026-01-01T00:14:00.000Z");
+      expect(time.title).toBe(time.dateTime);
+      await act(async () => { vi.advanceTimersByTime(60_000); });
+      expect(container.textContent).toContain("Next run in 13 minutes");
+      await act(async () => { vi.advanceTimersByTime(13 * 60_000); });
+      expect(container.textContent).toContain("Next run due now");
+      await act(async () => {
+        HistorySource.instances.at(-1)!.dispatchEvent(new MessageEvent("runs", { data: JSON.stringify({ runs: [], pagination: { page: 1, pages: 1, total: 0, pageSize: 50 }, schedulerError: null, schedule: { nextRunAt: Date.now() + 15 * 60_000, updatedAt: definition.updatedAt } }) }));
+      });
+      expect(container.textContent).toContain("Next run in 15 minutes");
+      await act(async () => root.render(<div />));
+      expect(vi.getTimerCount()).toBe(0);
+    } finally { vi.useRealTimers(); }
+  });
+  it("hides the next run when paused, archived, unscheduled or missing a timestamp", () => {
+    for (const row of [
+      { ...definition, schedule: "15m", nextRunAt: Date.now() + 60_000, enabled: false },
+      { ...definition, schedule: "15m", nextRunAt: Date.now() + 60_000, archived: true },
+      { ...definition, nextRunAt: Date.now() + 60_000 },
+      { ...definition, schedule: "15m" },
+    ]) {
+      expect(renderToStaticMarkup(<SubagentDetailPage agentId={row.agentId} initial={initial(row)} choices={choices} />)).not.toContain("Next run");
+    }
+  });
+  it("updates the countdown when the saved next run changes", async () => {
+    const onChange = vi.fn();
+    await act(async () => root.render(<ScheduleConfig value={{ ...definition, schedule: "15m" }} nextRunAt={Date.now() + 14 * 60_000 + 1000} onChange={onChange} />));
+    expect(container.textContent).toContain("Next run in 14 minutes");
+    await act(async () => root.render(<ScheduleConfig value={{ ...definition, schedule: "15m" }} nextRunAt={Date.now() + 5 * 60_000 + 1000} onChange={onChange} />));
+    expect(container.textContent).toContain("Next run in 5 minutes");
+  });
   it("discards schedule edits on Escape", async () => {
     await render(); await click("Edit schedule");
     const schedule = document.querySelector("dialog select") as HTMLSelectElement;
@@ -503,12 +558,22 @@ describe("subagent pages", () => {
     expect(mocks.runSubagent).toHaveBeenCalledOnce();
     expect(mocks.navigate).toHaveBeenCalledWith({ to: "/agents/$agentId/sub-agents/$subagentId/runs/$runId", params: { agentId: definition.agentId, subagentId: definition.id, runId: "accepted-run-id" } });
   });
-  it("hides worker actions on the orchestrator and disables unavailable workers", async () => {
+  it("hides worker actions on the orchestrator, allows paused runs and disables archived workers", async () => {
     await render({ ...definition, kind: "orchestrator" });
     expect(container.querySelector('[aria-label="Archive worker"]')).toBeNull();
     expect(container.textContent).not.toContain("Run now");
     await render({ ...definition, enabled: false });
-    expect([...container.querySelectorAll("button")].find((button) => button.textContent === "Run now")!.disabled).toBe(true);
+    expect([...container.querySelectorAll("button")].find((button) => button.textContent === "Run now")!.disabled).toBe(false);
+    await click("Run now");
+    expect(document.querySelector("dialog")).not.toBeNull();
+    const task = document.querySelector("dialog textarea")!;
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(task, "Run paused worker once");
+      task.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    mocks.runSubagent.mockResolvedValueOnce({ ok: true, data: { id: "paused-run" } });
+    await click("Run assignment");
+    expect(mocks.runSubagent).toHaveBeenCalledWith({ data: { agentId: definition.agentId, id: definition.id, task: "Run paused worker once", requestId: expect.any(String) } });
     expect((container.querySelector('[aria-label="Archive worker"]') as HTMLButtonElement).matches(":disabled")).toBe(false);
     await act(async () => root.render(<SubagentDetailPage key="archived" agentId={definition.agentId} initial={initial({ ...definition, archived: true })} choices={choices} />));
     expect(container.querySelector('[aria-label="Archive worker"]')?.matches(":disabled")).toBe(true);
@@ -557,9 +622,10 @@ describe("subagent pages", () => {
   });
   it("protects orchestrator and archived status", async () => {
     await render({ ...definition, kind: "orchestrator" });
-    const mainStatus = container.querySelector<HTMLButtonElement>('[aria-label="Orchestrator always enabled"]')!;
-    expect(mainStatus.disabled).toBe(true);
-    await act(async () => { mainStatus.click(); });
+    expect(container.querySelector('[aria-label="Orchestrator always enabled"]')).toBeNull();
+    expect(container.querySelector('[aria-label="Pause sub-agent"]')).toBeNull();
+    expect(container.querySelector('[aria-label="Enable sub-agent"]')).toBeNull();
+    expect(container.textContent).not.toContain("This is the existing main chat");
     expect(mocks.saveSubagentSection).not.toHaveBeenCalled();
     await render({ ...definition, archived: true, enabled: false });
     expect(container.querySelector('[aria-label="Enable sub-agent"]')?.matches(":disabled")).toBe(true);

@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { randomUUID } from "node:crypto";
 import type { AppRuntime } from "../runtime.js";
 import { AgentError } from "../agents/agent-input.js";
-import { LearningConflict } from "../memory/learning-service.js";
+import { InsightConflict } from "../memory/insight-service.js";
 const mocks = vi.hoisted(() => ({ currentUser: vi.fn(), headers: vi.fn() }));
 vi.mock("../auth-user.js", () => ({ currentUser: mocks.currentUser }));
 vi.mock("@tanstack/react-start/server", () => ({ getRequestHeaders: mocks.headers }));
@@ -14,7 +14,7 @@ vi.mock("@tanstack/react-start", () => {
   });
   return { createServerFn: () => builder() };
 });
-import { getLearnings, getMemory, listMemories, replaceLearnings } from "./memories.js";
+import { getInsights, getMemory, listMemories, replaceInsights } from "./memories.js";
 async function invoke(fn: unknown, runtime: AppRuntime, input: unknown): Promise<unknown> { return (fn as { invoke(runtime: AppRuntime, input: unknown): Promise<unknown> }).invoke(runtime, input); }
 describe("authenticated Agent-owned memory server functions", () => {
   let runtime: AppRuntime;
@@ -25,29 +25,29 @@ describe("authenticated Agent-owned memory server functions", () => {
     list.mockResolvedValue({ items: [], nextCursor: null }); get.mockResolvedValue({ ref: "m1" });
     current.mockResolvedValue({ scope: { kind: "agent" }, version: 0, content: "" }); history.mockResolvedValue({ items: [], nextBeforeVersion: null });
     operator.mockReturnValue({ agentId: "agent", userId: "owner" });
-    runtime = { origin: "http://localhost:3003", status: vi.fn(), agents: { owned, execution: { memories: { list, get }, learnings: { current, revision, history, replace }, operator } } } as unknown as AppRuntime;
+    runtime = { origin: "http://localhost:3003", status: vi.fn(), agents: { owned, execution: { memories: { list, get }, insights: { current, revision, history, replace }, operator } } } as unknown as AppRuntime;
   });
   it("checks ownership before every read and forwards bounded query contracts to the service", async () => {
     expect(await invoke(listMemories, runtime, { agentId: "agent", filters: { kind: "research", limit: 25 } })).toEqual({ ok: true, data: { items: [], nextCursor: null } });
     expect(list).toHaveBeenCalledWith("agent", { kind: "research", limit: 25 });
     expect(await invoke(getMemory, runtime, { agentId: "foreign", ref: "m1" })).toMatchObject({ ok: false, error: "Agent not found" }); expect(get).not.toHaveBeenCalled();
-    await invoke(getLearnings, runtime, { agentId: "agent", scope: { kind: "agent" }, history: true });
+    await invoke(getInsights, runtime, { agentId: "agent", scope: { kind: "agent" }, history: true });
     expect(current).toHaveBeenCalledWith("agent", { kind: "agent" }); expect(history).toHaveBeenCalledWith("agent", { kind: "agent" }, {});
     await expect(invoke(listMemories, runtime, { agentId: "agent", unknownGlobalScope: true })).rejects.toThrow();
-    await expect(invoke(getLearnings, runtime, { agentId: "agent", scope: { kind: "agent" }, history: "true" })).rejects.toThrow("history flag");
+    await expect(invoke(getInsights, runtime, { agentId: "agent", scope: { kind: "agent" }, history: "true" })).rejects.toThrow("history flag");
   });
   it("requires fresh authentication and same-origin mutation, with no effects on denial", async () => {
     mocks.headers.mockReturnValue(new Headers({ origin: "https://evil.example" }));
-    await expect(invoke(replaceLearnings, runtime, { agentId: "agent", requestId: randomUUID(), input: {} })).rejects.toMatchObject({ status: 403 });
+    await expect(invoke(replaceInsights, runtime, { agentId: "agent", requestId: randomUUID(), input: {} })).rejects.toMatchObject({ status: 403 });
     expect(mocks.currentUser).not.toHaveBeenCalled(); expect(replace).not.toHaveBeenCalled();
     mocks.headers.mockReturnValue(new Headers({ origin: runtime.origin })); mocks.currentUser.mockResolvedValue(null);
     await expect(invoke(getMemory, runtime, { agentId: "agent", ref: "m1" })).rejects.toBeDefined(); expect(get).not.toHaveBeenCalled();
   });
   it("uses authenticated operator provenance and stable UI receipt keys, preserving visible CAS conflicts", async () => {
     const id = randomUUID(), input = { scope: { kind: "agent" }, expectedVersion: 1, content: "Draft", reason: "Consolidate", evidenceRefs: [] };
-    replace.mockRejectedValue(new LearningConflict(2));
-    expect(await invoke(replaceLearnings, runtime, { agentId: "agent", requestId: id, input })).toMatchObject({ ok: false, error: expect.stringContaining("v2") });
+    replace.mockRejectedValue(new InsightConflict(2));
+    expect(await invoke(replaceInsights, runtime, { agentId: "agent", requestId: id, input })).toMatchObject({ ok: false, error: expect.stringContaining("v2") });
     expect(operator).toHaveBeenCalledWith("agent", "owner"); expect(replace).toHaveBeenCalledWith({ agentId: "agent", userId: "owner" }, `ui:${id}`, input);
-    await expect(invoke(replaceLearnings, runtime, { agentId: "agent", requestId: "model-supplied-task", input })).rejects.toThrow("request ID");
+    await expect(invoke(replaceInsights, runtime, { agentId: "agent", requestId: "model-supplied-task", input })).rejects.toThrow("request ID");
   });
 });

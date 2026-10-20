@@ -25,6 +25,31 @@ describe("Agent dashboard", () => {
     await act(async () => root.render(<AgentDashboardPage id="fixture" initial={initial} />));
   });
   afterEach(async () => { await act(async () => root.unmount()); container.remove(); vi.unstubAllGlobals(); });
+  it("shows a sub-agent empty state and creation link without the Performance section", () => {
+    expect(container.textContent).toContain("No sub-agents yet.");
+    expect(container.querySelector('a[href="/agents/fixture/sub-agents/new"]')?.textContent).toContain("Create a new sub-agent");
+    expect([...container.querySelectorAll("h3")].some((heading) => heading.textContent === "Performance")).toBe(false);
+  });
+  it("links worker headers and run results to their detail pages with relative timestamps", async () => {
+    await act(async () => root.render(<AgentDashboardPage id="fixture" initial={initial} subagents={[
+      { id: "worker:one", name: "Research", enabled: true, runs: [{ id: "run:one", status: "completed", createdAt: Date.now() - 120000, result: "Market conditions look favorable." }] },
+      { id: "worker:two", name: "Risk", enabled: false, runs: [] },
+    ]} />));
+    const section = container.querySelector('[aria-label="Sub-agents"]')!;
+    expect(section.querySelector('h4 a')?.getAttribute("href")).toBe("/agents/fixture/sub-agents/worker%3Aone");
+    const run = section.querySelector('a[href$="/runs/run%3Aone"]')!;
+    expect(run.textContent).toContain("Market conditions look favorable.");
+    expect(run.querySelector(".truncate")).not.toBeNull();
+    expect(run.querySelector("time")?.textContent).toContain("ago");
+    expect(run.querySelector('[aria-label="completed"]')).not.toBeNull();
+    expect(section.textContent).toContain("No runs yet.");
+    expect(section.textContent).toContain("Disabled");
+  });
+  it("shows a load failure rather than an incorrect empty state", async () => {
+    await act(async () => root.render(<AgentDashboardPage id="fixture" initial={initial} subagentsError="Please retry." />));
+    expect(container.querySelector('[aria-label="Sub-agents"] [role="alert"]')?.textContent).toContain("Please retry.");
+    expect(container.textContent).not.toContain("No sub-agents yet.");
+  });
   it("subscribes to backend snapshots and closes only the browser stream on unmount", async () => {
     const connection = source();
     expect(connection.url).toBe("/api/agents/fixture/dashboard/events");

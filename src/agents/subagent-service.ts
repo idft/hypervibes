@@ -96,6 +96,19 @@ export class SubagentService {
     await this.host.owned(userId, agentId);
     return this.db.select().from(hvSubagents).where(eq(hvSubagents.agentId, agentId)).orderBy(asc(hvSubagents.kind), asc(hvSubagents.createdAt), asc(hvSubagents.id)).all();
   }
+  async dashboard(userId: string, agentId: string) {
+    await this.host.owned(userId, agentId);
+    return this.database.appTransaction(async (db) => {
+      const definitions = await db.select({ id: hvSubagents.id, name: hvSubagents.name, enabled: hvSubagents.enabled }).from(hvSubagents).where(and(eq(hvSubagents.agentId, agentId), eq(hvSubagents.kind, "worker"), eq(hvSubagents.archived, false))).orderBy(asc(hvSubagents.createdAt), asc(hvSubagents.id)).all();
+      const summaries = [];
+      for (const definition of definitions) {
+        const { id, status, createdAt, result } = hvSubagentRuns;
+        const runs = await db.select({ id, status, createdAt, result: sql<string>`substr(${result}, 1, 240)` }).from(hvSubagentRuns).where(and(eq(hvSubagentRuns.agentId, agentId), eq(hvSubagentRuns.subagentId, definition.id))).orderBy(desc(createdAt), desc(id)).limit(5).all();
+        summaries.push({ ...definition, runs });
+      }
+      return summaries;
+    });
+  }
   async detail(userId: string, agentId: string, id: string) {
     await this.host.owned(userId, agentId);
     const definition = await this.definition(agentId, id);
@@ -110,7 +123,7 @@ export class SubagentService {
   async history(userId: string, agentId: string, id: string, page = 1): Promise<RunHistory> {
     if (!Number.isSafeInteger(page) || page < 1) throw new AgentError("Invalid history page");
     await this.host.owned(userId, agentId);
-    await this.definition(agentId, id);
+    const definition = await this.definition(agentId, id);
     const filter = and(eq(hvSubagentRuns.agentId, agentId), eq(hvSubagentRuns.subagentId, id));
     return this.database.appTransaction(async (db) => {
       const total = (await db.select({ total: count() }).from(hvSubagentRuns).where(filter).get())!.total;
@@ -119,7 +132,7 @@ export class SubagentService {
       // belong on run details. Keep 50 valid, large assignments below the SSE cap.
       const { id: runId, subagentId, source, task, status, createdAt } = hvSubagentRuns;
       const runs = await db.select({ id: runId, subagentId, source, task: sql<string>`substr(${task}, 1, 512)`, status, createdAt }).from(hvSubagentRuns).where(filter).orderBy(desc(createdAt), desc(runId)).limit(runHistoryPageSize).offset((pagination.page - 1) * runHistoryPageSize).all();
-      return { runs, pagination, schedulerError: this.schedulerError };
+      return { runs, pagination, schedulerError: this.schedulerError, schedule: { nextRunAt: definition.enabled && !definition.archived ? definition.nextRunAt : null, updatedAt: definition.updatedAt } };
     });
   }
   async watchHistory(userId: string, agentId: string, id: string, page: number, signal: AbortSignal, publish: (history: RunHistory) => void): Promise<void> {
@@ -367,7 +380,7 @@ export class SubagentService {
       if (previous) { if (previous.subagentId !== id || previous.task !== task) throw new AgentError("Assignment request was already used.", 409); return previous; }
       const definition = await this.definition(agentId, id);
       subagentInput(definition);
-      if (definition.kind !== "worker" || !definition.enabled || definition.archived || (source === "delegation" && !definition.delegatable)) throw new AgentError("This worker is not available for this assignment.", 409);
+      if (definition.kind !== "worker" || (source !== "manual" && !definition.enabled) || definition.archived || (source === "delegation" && !definition.delegatable)) throw new AgentError("This worker is not available for this assignment.", 409);
       await this.validateModel(binding.userId, definition, definition.thinkingLevel);
       const runs = await this.db.select().from(hvSubagentRuns).where(and(eq(hvSubagentRuns.agentId, agentId), inArray(hvSubagentRuns.status, active))).all();
       if (runs.some((run) => run.subagentId === id)) throw new AgentError("This worker already has an active assignment.", 409);

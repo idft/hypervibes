@@ -12,15 +12,32 @@ vi.mock("@tanstack/react-start", () => {
   return { createServerFn: () => builder() };
 });
 import { getRiskSettings, saveRiskSettings } from "./risk.js";
+import { listAgents } from "./agents.js";
 function invoke(fn: unknown, runtime: AppRuntime, input: unknown) { return (fn as { invoke(runtime: AppRuntime, input: unknown): Promise<unknown> }).invoke(runtime, input); }
 describe("authenticated risk management settings", () => {
-  const owned = vi.fn(), get = vi.fn(), save = vi.fn();
+  const owned = vi.fn(), get = vi.fn(), save = vi.fn(), list = vi.fn();
   let runtime: AppRuntime;
   beforeEach(() => {
     vi.resetAllMocks(); mocks.currentUser.mockResolvedValue({ id: "owner" }); mocks.headers.mockReturnValue(new Headers({ origin: "http://localhost:3003" }));
     owned.mockImplementation(async (_user: string, id: string) => { if (id !== "agent") throw new AgentError("Agent not found", 404); });
     get.mockResolvedValue({ tradingEnabled: false }); save.mockResolvedValue({ tradingEnabled: true });
-    runtime = { origin: "http://localhost:3003", status: vi.fn(), agents: { owned, risk: { get, save } } } as unknown as AppRuntime;
+    runtime = { origin: "http://localhost:3003", status: vi.fn(), agents: { owned, list, risk: { get, save } } } as unknown as AppRuntime;
+  });
+  it("includes persisted trading enablement for only the authenticated owner's listed Agents", async () => {
+    list.mockResolvedValue([{ id: "agent", name: "Research" }, { id: "enabled", name: "Trader" }]);
+    get.mockImplementation(async (id: string) => ({ tradingEnabled: id === "enabled" }));
+    expect(await invoke(listAgents, runtime, undefined)).toEqual([
+      { id: "agent", name: "Research", tradingEnabled: false },
+      { id: "enabled", name: "Trader", tradingEnabled: true },
+    ]);
+    expect(list).toHaveBeenCalledWith("owner");
+    expect(get.mock.calls).toEqual([["agent"], ["enabled"]]);
+  });
+  it("does not list Agents or read their trading settings without authentication", async () => {
+    mocks.currentUser.mockResolvedValue(null);
+    await expect(invoke(listAgents, runtime, undefined)).rejects.toBeDefined();
+    expect(list).not.toHaveBeenCalled();
+    expect(get).not.toHaveBeenCalled();
   });
   it("checks Agent ownership before reads or writes", async () => {
     expect(await invoke(getRiskSettings, runtime, { agentId: "agent" })).toEqual({ ok: true, data: { tradingEnabled: false } });

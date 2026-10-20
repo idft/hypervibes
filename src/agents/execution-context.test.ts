@@ -54,17 +54,17 @@ describe("trusted tool actor resolution and assignment snapshots", () => {
   it("injects every worker, replaces active persistent system sections, and preserves old detail across restart", async () => {
     const worker = await runtime.agents.subagents.create("owner", agentId, settings(), randomUUID());
     const service = runtime.agents.execution;
-    await service.learnings.replace(service.operator(agentId, "owner"), "ui:old", { scope: { kind: "agent" }, content: "OLD general guidance", expectedVersion: 0, reason: "Initial", evidenceRefs: [] });
+    await service.insights.replace(service.operator(agentId, "owner"), "ui:old", { scope: { kind: "agent" }, content: "OLD general guidance", expectedVersion: 0, reason: "Initial", evidenceRefs: [] });
     faux.setResponses([fauxAssistantMessage("First observed")]);
     await runtime.agents.subagents.run("owner", agentId, worker.id, "First observation", randomUUID());
     const first = await finish(worker.id);
     const saved = await runtime.agents.subagents.runDetail("owner", agentId, worker.id, first.id);
-    expect(saved.context).toMatchObject({ learningStatus: "snapshot", learnings: { agent: { version: 1 }, worker: { version: 0 } } });
+    expect(saved.context).toMatchObject({ insightStatus: "snapshot", insights: { agent: { version: 1 }, worker: { version: 0 } } });
     expect(saved.context!.instructions).toContain("OLD general guidance");
     const child = await harness.conversation(first.conversationId! as ConversationId, context);
     expect((await child!.agent(context)).tools).toEqual([]);
-    await service.learnings.replace(service.operator(agentId, "owner"), "ui:new", { scope: { kind: "agent" }, content: "NEW general guidance", expectedVersion: 1, reason: "Consolidate", evidenceRefs: [] });
-    await service.learnings.append(service.operator(agentId, "owner"), "ui:worker", { scope: { kind: "worker", subagentId: worker.id }, content: "NEW worker guidance", reason: "Specific", evidenceRefs: [] });
+    await service.insights.replace(service.operator(agentId, "owner"), "ui:new", { scope: { kind: "agent" }, content: "NEW general guidance", expectedVersion: 1, reason: "Consolidate", evidenceRefs: [] });
+    await service.insights.append(service.operator(agentId, "owner"), "ui:worker", { scope: { kind: "worker", subagentId: worker.id }, content: "NEW worker guidance", reason: "Specific", evidenceRefs: [] });
     faux.setResponses([fauxAssistantMessage("Second observed")]);
     await runtime.agents.subagents.run("owner", agentId, worker.id, "Second observation", randomUUID());
     const second = await finish(worker.id);
@@ -76,21 +76,21 @@ describe("trusted tool actor resolution and assignment snapshots", () => {
     await runtime.close(); runtime = await createRuntime(config(), options()); runtime.start();
     expect((await runtime.agents.subagents.runDetail("owner", agentId, worker.id, first.id)).context).toEqual(saved.context);
     const restored = await runtime.agents.subagents.runDetail("owner", agentId, worker.id, second.id);
-    expect(restored.context!.learnings).toMatchObject({ agent: { version: 2 }, worker: { version: 1 } });
+    expect(restored.context!.insights).toMatchObject({ agent: { version: 2 }, worker: { version: 1 } });
   });
-  it("lets ordinary tool-authorized workers publish research and revise another worker's strategy learnings", async () => {
+  it("lets ordinary tool-authorized workers publish research and revise another worker's strategy insights", async () => {
     const analyst = await runtime.agents.subagents.create("owner", agentId, settings({ tools: ["publish_research"], persistent: false }), randomUUID());
-    const reviewer = await runtime.agents.subagents.create("owner", agentId, settings({ name: "Reviewer", tools: ["codemode", "append_learning"], persistent: false }), randomUUID());
+    const reviewer = await runtime.agents.subagents.create("owner", agentId, settings({ name: "Reviewer", tools: ["codemode", "append_insight"], persistent: false }), randomUUID());
     const boundary = Math.floor(Date.now() / 3600000) * 3600000;
     faux.setResponses([fauxAssistantMessage(fauxToolCall("publish_research", researchInput(boundary)), { stopReason: "toolUse" }), fauxAssistantMessage("Published")]);
     await runtime.agents.subagents.run("owner", agentId, analyst.id, "Publish evidence", randomUUID());
     await finish(analyst.id);
     expect((await runtime.agents.execution.memories.get(agentId, "m1")).producerSubagentId).toBe(analyst.id);
     const finding = { scope: { kind: "worker", subagentId: analyst.id }, content: "Analyze ETH next; use 150bps SL and layered entries when trading is assigned.", reason: "Review of evidence", evidenceRefs: ["m1"] };
-    faux.setResponses([fauxAssistantMessage(fauxToolCall("codemode", { code: `text(await tools.append_learning(${JSON.stringify(finding)}));` }), { stopReason: "toolUse" }), fauxAssistantMessage("Updated guidance")]);
+    faux.setResponses([fauxAssistantMessage(fauxToolCall("codemode", { code: `text(await tools.append_insight(${JSON.stringify(finding)}));` }), { stopReason: "toolUse" }), fauxAssistantMessage("Updated guidance")]);
     await runtime.agents.subagents.run("owner", agentId, reviewer.id, "Review findings", randomUUID());
     await finish(reviewer.id);
-    expect((await runtime.agents.execution.learnings.current(agentId, finding.scope)).content).toContain("Analyze ETH next");
+    expect((await runtime.agents.execution.insights.current(agentId, finding.scope)).content).toContain("Analyze ETH next");
     faux.setResponses([fauxAssistantMessage("New assignment")]);
     const next = await runtime.agents.subagents.run("owner", agentId, analyst.id, "Use the updated guidance", randomUUID());
     expect((await runtime.agents.execution.runContext(agentId, next)).instructions).toContain(finding.content);

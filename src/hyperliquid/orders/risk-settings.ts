@@ -6,7 +6,7 @@ import { array, fields, object, positiveDecimal, unique } from "../../memory/val
 /**
  * Per-agent risk management: the ONLY application-enforced trading rules.
  * All other trading behavior (strategy, sizing guidance, TP/SL levels, layering)
- * lives in worker instructions and learnings. Missing settings = trading disabled.
+ * lives in worker instructions and insights. Missing settings = trading disabled.
  */
 export interface RiskSettings {
   tradingEnabled: boolean;

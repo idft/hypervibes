@@ -4,12 +4,30 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 
 vi.mock("@tanstack/react-router", () => ({
-  Link: ({ to, ...props }: ComponentProps<"a"> & { to: string }) => <a href={to} {...props} />,
+  Link: ({ to, params, hash, ...props }: ComponentProps<"a"> & { to: string; params?: { agentId: string }; hash?: string }) => <a href={`${to.replace("$agentId", params?.agentId ?? "")}${hash ? `#${hash}` : ""}`} {...props} />,
 }));
 vi.mock("../web/auth-client.js", () => ({ authClient: { signOut: vi.fn() } }));
 import { Navbar } from "./navbar.js";
 
 describe("Navbar", () => {
+  it("links the amber trading-disabled warning beside the picker to the selected Agent's risk settings", () => {
+    const container = document.createElement("div");
+    container.innerHTML = renderToStaticMarkup(<Navbar walletAddress="0xfixture" agents={[{ id: "one", name: "Research", tradingEnabled: false }]} selectedAgentId="one" />);
+    const picker = container.querySelector("[data-agent-selector]")!;
+    const warning = picker.nextElementSibling!;
+    expect(warning.textContent).toBe("Trading disabled");
+    expect(warning.getAttribute("href")).toBe("/agents/one/settings#risk-management");
+    expect(warning.classList.contains("text-amber-300")).toBe(true);
+    expect(warning.classList.contains("cursor-pointer")).toBe(true);
+    expect(warning.getAttribute("title")).toContain("Reduce-only orders and cancellation remain available");
+  });
+
+  it.each(["one", undefined, "unknown"])("omits the warning for enabled trading or no selected Agent (%s)", (selectedAgentId) => {
+    const markup = renderToStaticMarkup(<Navbar walletAddress="0xfixture" agents={[{ id: "one", name: "Research", tradingEnabled: true }, { id: "two", name: "Paused", tradingEnabled: false }]} selectedAgentId={selectedAgentId} />);
+    expect(markup).not.toContain('href="/agents/one/settings#risk-management"');
+    expect(markup).not.toContain('href="/agents/two/settings#risk-management"');
+  });
+
   it("places an accessible, icon-only Providers link in the right-side controls", () => {
     const container = document.createElement("div");
     container.innerHTML = renderToStaticMarkup(<Navbar walletAddress={`0x${"11".repeat(20)}`} />);

@@ -119,15 +119,15 @@
       "entityType": "tables"
     },
     {
-      "name": "hv_learning_revision_memories",
+      "name": "hv_insight_revision_memories",
       "entityType": "tables"
     },
     {
-      "name": "hv_learning_revisions",
+      "name": "hv_insight_revisions",
       "entityType": "tables"
     },
     {
-      "name": "hv_learning_sets",
+      "name": "hv_insight_sets",
       "entityType": "tables"
     },
     {
@@ -2296,7 +2296,7 @@
       "generated": null,
       "name": "agent_id",
       "entityType": "columns",
-      "table": "hv_learning_revision_memories"
+      "table": "hv_insight_revision_memories"
     },
     {
       "type": "text",
@@ -2306,7 +2306,7 @@
       "generated": null,
       "name": "set_id",
       "entityType": "columns",
-      "table": "hv_learning_revision_memories"
+      "table": "hv_insight_revision_memories"
     },
     {
       "type": "integer",
@@ -2316,7 +2316,7 @@
       "generated": null,
       "name": "version",
       "entityType": "columns",
-      "table": "hv_learning_revision_memories"
+      "table": "hv_insight_revision_memories"
     },
     {
       "type": "integer",
@@ -2326,7 +2326,7 @@
       "generated": null,
       "name": "memory_number",
       "entityType": "columns",
-      "table": "hv_learning_revision_memories"
+      "table": "hv_insight_revision_memories"
     },
     {
       "type": "text",
@@ -2336,7 +2336,7 @@
       "generated": null,
       "name": "agent_id",
       "entityType": "columns",
-      "table": "hv_learning_revisions"
+      "table": "hv_insight_revisions"
     },
     {
       "type": "text",
@@ -2346,7 +2346,7 @@
       "generated": null,
       "name": "set_id",
       "entityType": "columns",
-      "table": "hv_learning_revisions"
+      "table": "hv_insight_revisions"
     },
     {
       "type": "integer",
@@ -2356,7 +2356,7 @@
       "generated": null,
       "name": "version",
       "entityType": "columns",
-      "table": "hv_learning_revisions"
+      "table": "hv_insight_revisions"
     },
     {
       "type": "text",
@@ -2366,7 +2366,7 @@
       "generated": null,
       "name": "content",
       "entityType": "columns",
-      "table": "hv_learning_revisions"
+      "table": "hv_insight_revisions"
     },
     {
       "type": "text",
@@ -2376,7 +2376,7 @@
       "generated": null,
       "name": "operation",
       "entityType": "columns",
-      "table": "hv_learning_revisions"
+      "table": "hv_insight_revisions"
     },
     {
       "type": "text",
@@ -2386,7 +2386,7 @@
       "generated": null,
       "name": "reason",
       "entityType": "columns",
-      "table": "hv_learning_revisions"
+      "table": "hv_insight_revisions"
     },
     {
       "type": "integer",
@@ -2396,7 +2396,7 @@
       "generated": null,
       "name": "created_at",
       "entityType": "columns",
-      "table": "hv_learning_revisions"
+      "table": "hv_insight_revisions"
     },
     {
       "type": "text",
@@ -2406,7 +2406,7 @@
       "generated": null,
       "name": "actor_user_id",
       "entityType": "columns",
-      "table": "hv_learning_revisions"
+      "table": "hv_insight_revisions"
     },
     {
       "type": "text",
@@ -2416,7 +2416,7 @@
       "generated": null,
       "name": "producer_subagent_id",
       "entityType": "columns",
-      "table": "hv_learning_revisions"
+      "table": "hv_insight_revisions"
     },
     {
       "type": "text",
@@ -2426,7 +2426,7 @@
       "generated": null,
       "name": "source_run_id",
       "entityType": "columns",
-      "table": "hv_learning_revisions"
+      "table": "hv_insight_revisions"
     },
     {
       "type": "integer",
@@ -2436,7 +2436,7 @@
       "generated": null,
       "name": "conversation_id",
       "entityType": "columns",
-      "table": "hv_learning_revisions"
+      "table": "hv_insight_revisions"
     },
     {
       "type": "integer",
@@ -2446,7 +2446,7 @@
       "generated": null,
       "name": "tool_task_id",
       "entityType": "columns",
-      "table": "hv_learning_revisions"
+      "table": "hv_insight_revisions"
     },
     {
       "type": "text",
@@ -2456,7 +2456,7 @@
       "generated": null,
       "name": "id",
       "entityType": "columns",
-      "table": "hv_learning_sets"
+      "table": "hv_insight_sets"
     },
     {
       "type": "text",
@@ -2466,7 +2466,7 @@
       "generated": null,
       "name": "agent_id",
       "entityType": "columns",
-      "table": "hv_learning_sets"
+      "table": "hv_insight_sets"
     },
     {
       "type": "text",
@@ -2476,7 +2476,7 @@
       "generated": null,
       "name": "scope_kind",
       "entityType": "columns",
-      "table": "hv_learning_sets"
+      "table": "hv_insight_sets"
     },
     {
       "type": "text",
@@ -2486,7 +2486,7 @@
       "generated": null,
       "name": "subagent_id",
       "entityType": "columns",
-      "table": "hv_learning_sets"
+      "table": "hv_insight_sets"
     },
     {
       "type": "integer",
@@ -2496,7 +2496,7 @@
       "generated": null,
       "name": "current_version",
       "entityType": "columns",
-      "table": "hv_learning_sets"
+      "table": "hv_insight_sets"
     },
     {
       "type": "integer",
@@ -2506,7 +2506,7 @@
       "generated": null,
       "name": "updated_at",
       "entityType": "columns",
-      "table": "hv_learning_sets"
+      "table": "hv_insight_sets"
     },
     {
       "type": "text",
@@ -3070,7 +3070,7 @@
         "set_id",
         "version"
       ],
-      "tableTo": "hv_learning_revisions",
+      "tableTo": "hv_insight_revisions",
       "columnsTo": [
         "agent_id",
         "set_id",
@@ -3079,9 +3079,9 @@
       "onUpdate": "NO ACTION",
       "onDelete": "NO ACTION",
       "nameExplicit": false,
-      "name": "fk_hv_learning_revision_memories_agent_id_set_id_version_hv_learning_revisions_agent_id_set_id_version_fk",
+      "name": "fk_hv_insight_revision_memories_agent_id_set_id_version_hv_insight_revisions_agent_id_set_id_version_fk",
       "entityType": "fks",
-      "table": "hv_learning_revision_memories"
+      "table": "hv_insight_revision_memories"
     },
     {
       "columns": [
@@ -3096,16 +3096,16 @@
       "onUpdate": "NO ACTION",
       "onDelete": "NO ACTION",
       "nameExplicit": false,
-      "name": "fk_hv_learning_revision_memories_agent_id_memory_number_hv_memories_agent_id_number_fk",
+      "name": "fk_hv_insight_revision_memories_agent_id_memory_number_hv_memories_agent_id_number_fk",
       "entityType": "fks",
-      "table": "hv_learning_revision_memories"
+      "table": "hv_insight_revision_memories"
     },
     {
       "columns": [
         "agent_id",
         "set_id"
       ],
-      "tableTo": "hv_learning_sets",
+      "tableTo": "hv_insight_sets",
       "columnsTo": [
         "agent_id",
         "id"
@@ -3113,9 +3113,9 @@
       "onUpdate": "NO ACTION",
       "onDelete": "NO ACTION",
       "nameExplicit": false,
-      "name": "fk_hv_learning_revisions_agent_id_set_id_hv_learning_sets_agent_id_id_fk",
+      "name": "fk_hv_insight_revisions_agent_id_set_id_hv_insight_sets_agent_id_id_fk",
       "entityType": "fks",
-      "table": "hv_learning_revisions"
+      "table": "hv_insight_revisions"
     },
     {
       "columns": [
@@ -3130,9 +3130,9 @@
       "onUpdate": "NO ACTION",
       "onDelete": "NO ACTION",
       "nameExplicit": false,
-      "name": "fk_hv_learning_revisions_agent_id_producer_subagent_id_hv_subagents_agent_id_id_fk",
+      "name": "fk_hv_insight_revisions_agent_id_producer_subagent_id_hv_subagents_agent_id_id_fk",
       "entityType": "fks",
-      "table": "hv_learning_revisions"
+      "table": "hv_insight_revisions"
     },
     {
       "columns": [
@@ -3149,9 +3149,9 @@
       "onUpdate": "NO ACTION",
       "onDelete": "NO ACTION",
       "nameExplicit": false,
-      "name": "fk_hv_learning_revisions_agent_id_source_run_id_producer_subagent_id_hv_subagent_runs_agent_id_id_subagent_id_fk",
+      "name": "fk_hv_insight_revisions_agent_id_source_run_id_producer_subagent_id_hv_subagent_runs_agent_id_id_subagent_id_fk",
       "entityType": "fks",
-      "table": "hv_learning_revisions"
+      "table": "hv_insight_revisions"
     },
     {
       "columns": [
@@ -3164,9 +3164,9 @@
       "onUpdate": "NO ACTION",
       "onDelete": "NO ACTION",
       "nameExplicit": false,
-      "name": "fk_hv_learning_sets_agent_id_hv_agents_id_fk",
+      "name": "fk_hv_insight_sets_agent_id_hv_agents_id_fk",
       "entityType": "fks",
-      "table": "hv_learning_sets"
+      "table": "hv_insight_sets"
     },
     {
       "columns": [
@@ -3181,9 +3181,9 @@
       "onUpdate": "NO ACTION",
       "onDelete": "NO ACTION",
       "nameExplicit": false,
-      "name": "fk_hv_learning_sets_agent_id_subagent_id_hv_subagents_agent_id_id_fk",
+      "name": "fk_hv_insight_sets_agent_id_subagent_id_hv_subagents_agent_id_id_fk",
       "entityType": "fks",
-      "table": "hv_learning_sets"
+      "table": "hv_insight_sets"
     },
     {
       "columns": [
@@ -3298,9 +3298,9 @@
         "memory_number"
       ],
       "nameExplicit": false,
-      "name": "hv_learning_revision_memories_pk",
+      "name": "hv_insight_revision_memories_pk",
       "entityType": "pks",
-      "table": "hv_learning_revision_memories"
+      "table": "hv_insight_revision_memories"
     },
     {
       "columns": [
@@ -3308,9 +3308,9 @@
         "version"
       ],
       "nameExplicit": false,
-      "name": "hv_learning_revisions_pk",
+      "name": "hv_insight_revisions_pk",
       "entityType": "pks",
-      "table": "hv_learning_revisions"
+      "table": "hv_insight_revisions"
     },
     {
       "columns": [
@@ -3488,8 +3488,8 @@
         "id"
       ],
       "nameExplicit": false,
-      "name": "hv_learning_sets_pk",
-      "table": "hv_learning_sets",
+      "name": "hv_insight_sets_pk",
+      "table": "hv_insight_sets",
       "entityType": "pks"
     },
     {
@@ -4198,9 +4198,9 @@
       "isUnique": true,
       "where": null,
       "origin": "manual",
-      "name": "hv_learning_revision_identity_idx",
+      "name": "hv_insight_revision_identity_idx",
       "entityType": "indexes",
-      "table": "hv_learning_revisions"
+      "table": "hv_insight_revisions"
     },
     {
       "columns": [
@@ -4216,9 +4216,9 @@
       "isUnique": true,
       "where": null,
       "origin": "manual",
-      "name": "hv_learning_sets_identity_idx",
+      "name": "hv_insight_sets_identity_idx",
       "entityType": "indexes",
-      "table": "hv_learning_sets"
+      "table": "hv_insight_sets"
     },
     {
       "columns": [
@@ -4228,11 +4228,11 @@
         }
       ],
       "isUnique": true,
-      "where": "\"hv_learning_sets\".\"scope_kind\" = 'agent'",
+      "where": "\"hv_insight_sets\".\"scope_kind\" = 'agent'",
       "origin": "manual",
-      "name": "hv_learning_sets_agent_idx",
+      "name": "hv_insight_sets_agent_idx",
       "entityType": "indexes",
-      "table": "hv_learning_sets"
+      "table": "hv_insight_sets"
     },
     {
       "columns": [
@@ -4246,11 +4246,11 @@
         }
       ],
       "isUnique": true,
-      "where": "\"hv_learning_sets\".\"scope_kind\" = 'worker'",
+      "where": "\"hv_insight_sets\".\"scope_kind\" = 'worker'",
       "origin": "manual",
-      "name": "hv_learning_sets_worker_idx",
+      "name": "hv_insight_sets_worker_idx",
       "entityType": "indexes",
-      "table": "hv_learning_sets"
+      "table": "hv_insight_sets"
     },
     {
       "columns": [
@@ -4398,39 +4398,39 @@
     },
     {
       "value": "\"version\" BETWEEN 1 AND 9007199254740990",
-      "name": "hv_learning_revision_version",
+      "name": "hv_insight_revision_version",
       "entityType": "checks",
-      "table": "hv_learning_revisions"
+      "table": "hv_insight_revisions"
     },
     {
       "value": "length(\"content\") <= 8000",
-      "name": "hv_learning_content_bound",
+      "name": "hv_insight_content_bound",
       "entityType": "checks",
-      "table": "hv_learning_revisions"
+      "table": "hv_insight_revisions"
     },
     {
       "value": "\"operation\" IN ('append','replace')",
-      "name": "hv_learning_operation",
+      "name": "hv_insight_operation",
       "entityType": "checks",
-      "table": "hv_learning_revisions"
+      "table": "hv_insight_revisions"
     },
     {
       "value": "(\"actor_user_id\" IS NOT NULL AND \"source_run_id\" IS NULL) OR (\"actor_user_id\" IS NULL AND \"source_run_id\" IS NOT NULL AND \"producer_subagent_id\" IS NOT NULL)",
-      "name": "hv_learning_revision_actor",
+      "name": "hv_insight_revision_actor",
       "entityType": "checks",
-      "table": "hv_learning_revisions"
+      "table": "hv_insight_revisions"
     },
     {
       "value": "(\"scope_kind\" = 'agent' AND \"subagent_id\" IS NULL) OR (\"scope_kind\" = 'worker' AND \"subagent_id\" IS NOT NULL)",
-      "name": "hv_learning_scope",
+      "name": "hv_insight_scope",
       "entityType": "checks",
-      "table": "hv_learning_sets"
+      "table": "hv_insight_sets"
     },
     {
       "value": "\"current_version\" BETWEEN 0 AND 9007199254740990",
-      "name": "hv_learning_head",
+      "name": "hv_insight_head",
       "entityType": "checks",
-      "table": "hv_learning_sets"
+      "table": "hv_insight_sets"
     },
     {
       "value": "length(\"context\") <= 120000",

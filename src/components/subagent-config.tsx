@@ -1,4 +1,5 @@
-import { useId, useRef, useState, type ReactNode } from "react";
+import { useEffect, useId, useRef, useState, type ReactNode } from "react";
+import { format } from "timeago.js";
 import { candleIntervals, accountToolNames, researchToolNames, taToolNames, type AssignmentSettings, type SubagentInput } from "../agents/subagent-input.js";
 import { memoryToolNames } from "../memory/memory-contracts.js";
 import { ConfigDialog, configButton, configInput } from "./config-dialog.js";
@@ -12,10 +13,10 @@ export function SubagentIdentity({ value, main, agentId, enabled, onToggleEnable
           <a href={`/agents/${agentId}/sub-agents`} className="cursor-pointer text-sm text-zinc-400 hover:text-white"><span aria-hidden="true">← </span>Sub-agents</a>
           <span aria-hidden="true" className="text-zinc-600">/</span>
           <h2 aria-current="page" className="break-words text-lg font-medium text-white">{value.name || "Create subagent"}{main && " · Main conversation"}</h2>
-          <button type="button" disabled={main} aria-label={main ? "Orchestrator always enabled" : enabled ? "Pause sub-agent" : "Enable sub-agent"} aria-pressed={enabled} title={main ? "The orchestrator cannot be paused" : enabled ? "Pause new assignments" : "Enable new assignments"} onClick={onToggleEnabled} className={`inline-flex cursor-pointer items-center gap-1.5 rounded-full px-2 py-1 text-xs font-medium disabled:cursor-not-allowed ${enabled ? "text-emerald-300 hover:bg-emerald-950" : "text-amber-300 hover:bg-amber-950"}`}>
+          {!main && <button type="button" aria-label={enabled ? "Pause sub-agent" : "Enable sub-agent"} aria-pressed={enabled} title={enabled ? "Pause new assignments" : "Enable new assignments"} onClick={onToggleEnabled} className={`inline-flex cursor-pointer items-center gap-1.5 rounded-full px-2 py-1 text-xs font-medium ${enabled ? "text-emerald-300 hover:bg-emerald-950" : "text-amber-300 hover:bg-amber-950"}`}>
             <svg aria-hidden="true" viewBox="0 0 16 16" className="size-3.5" fill="currentColor">{enabled ? <path d="M4 2.5v11L13 8z" /> : <path d="M3 2h4v12H3zm6 0h4v12H9z" />}</svg>
             {enabled ? "Enabled" : "Paused"}
-          </button>
+          </button>}
           <span className="min-w-0 break-words text-sm text-zinc-400">{value.description || "No description"}</span>
           <button type="button" aria-label="Edit name and description" title="Edit name and description" aria-haspopup="dialog" onClick={() => setOpen(true)} className="inline-flex shrink-0 cursor-pointer items-center justify-center rounded-md p-1 text-zinc-400 hover:bg-zinc-800 hover:text-white">
             <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round" className="size-4"><path d="m16 4 4 4M4 20l4-1L21 6a2.8 2.8 0 0 0-4-4L4 15z" /></svg>
@@ -55,7 +56,7 @@ const toolGroups = [
   { name: "Hyperliquid", tools: accountToolNames },
   { name: "Research · Code Mode & Artifacts", tools: researchToolNames },
   { name: "Technical analysis · TA", tools: taToolNames },
-  { name: "Memories & Learnings", tools: memoryToolNames },
+  { name: "Memories & Insights", tools: memoryToolNames },
   { name: "HyperVibes · Subagents", tools: ["list_subagents", "delegate_subagent", "get_subagent_run"] },
 ];
 
@@ -90,7 +91,6 @@ function ToolDialog({ tools, main, onCancel, onApply }: { tools: string[]; main:
   const groups = toolGroups.filter((group) => main || group.name !== "HyperVibes · Subagents").map((group) => ({ ...group, visibleTools: group.tools.filter((name) => `${group.name} ${name}`.toLowerCase().includes(search.trim().toLowerCase())) })).filter((group) => group.visibleTools.length);
   return <ConfigDialog title="Allowed tools" onCancel={() => { if (!inFlight.current) onCancel(); }} onApply={() => { void apply(); }} applyDisabled={saving}>
     <fieldset disabled={saving} className="space-y-4 disabled:opacity-60">
-    <p className="text-sm text-zinc-400">Only selected tools are available to this {main ? "orchestrator" : "worker"}. Code Mode is opt-in and can call only the other tools selected here. It provides no shell or filesystem. Select research tools without order tools for read-only researchers.</p>
     <label className="block space-y-2 text-sm">Search extensions and tools<input autoFocus type="search" value={search} onChange={(event) => setSearch(event.target.value)} className={configInput} /></label>
     <div className="max-h-80 space-y-4 overflow-y-auto">
       {groups.map((group) => <fieldset key={group.name} className="space-y-3 rounded-xl border border-zinc-800 p-4"><legend className="px-2 text-sm font-medium text-white"><span className="inline-flex flex-wrap items-center gap-3">
@@ -148,11 +148,22 @@ function AssignmentDialog({ value, onCancel, onApply }: { value: AssignmentSetti
 
 type Schedule = Pick<SubagentInput, "schedule" | "delaySeconds" | "completion">;
 const completionLabels = { save: "Save only", notify: "Notify orchestrator without a model call", wake: "Notify and wake orchestrator" } as const;
-export function ScheduleConfig({ value, onChange }: { value: Schedule; onChange: (value: Schedule) => Promise<void> }) {
+function NextScheduledRun({ timestamp }: { timestamp: number }) {
+  const [, tick] = useState(0);
+  useEffect(() => {
+    const timer = setInterval(() => tick((value) => value + 1), 1000);
+    return () => clearInterval(timer);
+  }, []);
+  const exact = new Date(timestamp).toISOString();
+  return <p className="text-sm text-violet-300">Next run <time dateTime={exact} title={exact} suppressHydrationWarning>{timestamp > Date.now() ? format(timestamp) : "due now"}</time></p>;
+}
+
+export function ScheduleConfig({ value, nextRunAt, onChange }: { value: Schedule; nextRunAt?: number | null; onChange: (value: Schedule) => Promise<void> }) {
   const [open, setOpen] = useState(false);
   return <section className="space-y-2">
     <header className="flex items-center justify-between gap-4"><h3 className="font-medium text-white">Schedule</h3><button type="button" aria-haspopup="dialog" onClick={() => setOpen(true)} className={configButton}>Edit schedule</button></header>
     <p className="text-sm text-zinc-400">{value.schedule ? `Every ${value.schedule} candle close (UTC) · ${value.delaySeconds}s delay` : "No schedule · manual or delegated assignments only"}</p>
+    {value.schedule && nextRunAt != null && <NextScheduledRun timestamp={nextRunAt} />}
     <p className="text-xs text-zinc-500">Scheduled / manual completion: {completionLabels[value.completion]}</p>
     {open && <ScheduleDialog value={value} onCancel={() => setOpen(false)} onApply={async (next) => { await onChange(next); setOpen(false); }} />}
   </section>;
@@ -176,7 +187,7 @@ function ScheduleDialog({ value, onCancel, onApply }: { value: Schedule; onCance
     <fieldset disabled={saving} className="space-y-5 disabled:opacity-60">
     <p className="text-sm text-zinc-400">Run after a UTC candle closes.</p>
     <label className="block space-y-2 text-sm">UTC candle close<select value={draft.schedule} onChange={(event) => setDraft((current) => ({ ...current, schedule: event.target.value }))} className={`${configInput} cursor-pointer`}><option value="">No schedule</option>{Object.keys(candleIntervals).map((interval) => <option key={interval} value={interval}>{interval === "1d" ? "1d / every 24 hours" : interval}</option>)}</select></label>
-    {draft.schedule && <label className="block space-y-2 text-sm">Delay after close (seconds)<input required type="number" min={0} max={Math.min(300, interval - 1)} step={1} value={draft.delaySeconds} onChange={(event) => setDraft((current) => ({ ...current, delaySeconds: Number(event.target.value) }))} className={configInput} /></label>}
+    {draft.schedule && <label className="block space-y-2 text-sm">Delay after candle close (seconds)<input required type="number" min={0} max={Math.min(300, interval - 1)} step={1} value={draft.delaySeconds} onChange={(event) => setDraft((current) => ({ ...current, delaySeconds: Number(event.target.value) }))} className={configInput} /></label>}
     <label className="block space-y-2 text-sm">Scheduled / manual completion<select value={draft.completion} onChange={(event) => setDraft((current) => ({ ...current, completion: event.target.value as Schedule["completion"] }))} className={`${configInput} cursor-pointer`}>{Object.entries(completionLabels).map(([key, label]) => <option key={key} value={key}>{label}</option>)}</select></label>
     </fieldset>
     {saving && <p role="status" className="text-sm text-zinc-400">Saving…</p>}

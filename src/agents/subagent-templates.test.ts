@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { subagentInput, workerToolNames } from "./subagent-input.js";
+import { accountToolNames, researchToolNames, subagentInput, taToolNames, workerToolNames } from "./subagent-input.js";
 import analysisManifest from "./templates/basic-analysis.json" with { type: "json" };
 import tradingManifest from "./templates/basic-trading.json" with { type: "json" };
 import { parseTemplateCatalog, parseTemplateManifest } from "./template-manifest.js";
@@ -26,10 +26,27 @@ describe("bundled editable worker manifests", () => {
     { ...analysisManifest, tools: ["delegate_subagent"] },
     { ...analysisManifest, tools: ["invented_remote_tool"] },
     { ...analysisManifest, defaults: { ...analysisManifest.defaults, enabled: true } },
+    { ...analysisManifest, defaults: { ...analysisManifest.defaults, completion: "wake" } },
+    { ...analysisManifest, defaults: { ...analysisManifest.defaults, completion: "unknown" } },
     { ...analysisManifest, unknownExtraField: true },
     { ...tradingManifest, defaults: { ...tradingManifest.defaults, persistent: true } },
   ])("rejects unsupported/unsafe manifests %#", (manifest) => {
     expect(() => parseTemplateManifest(manifest)).toThrow();
+  });
+  it("formats analyst instructions with Markdown headings and blank lines between sections", () => {
+    const template = parseTemplateManifest(analysisManifest);
+    expect(template.instructions).toBe(analysisManifest.instructions.join("\n\n"));
+    expect(template.instructions.startsWith("## Role\n\n")).toBe(true);
+    expect(template.instructions).toContain("\n\n## Example strategy\n\n");
+    expect(template.instructions.match(/^## /gm)).toHaveLength(6);
+  });
+  it.each(["save", "notify"])("preserves %s completion without waking the orchestrator", (completion) => {
+    expect(parseTemplateManifest({ ...analysisManifest, defaults: { ...analysisManifest.defaults, completion } }).defaults.completion).toBe(completion);
+  });
+  it("defaults the analyst to a paused 15m schedule with a one-second delay and save-only completion", () => {
+    const draft = templateDraft("basic-analysis", { provider: "operator-selected", modelId: "operator-model", thinkingLevel: "" });
+    expect(draft).toMatchObject({ enabled: false, schedule: "15m", delaySeconds: 1, completion: "save" });
+    expect(draft.instructions).toContain("use 15m candles");
   });
   it("creates independent drafts without mutating the catalog or sharing nested state", () => {
     const model = { provider: "operator-selected", modelId: "operator-model", thinkingLevel: "" };
@@ -41,14 +58,22 @@ describe("bundled editable worker manifests", () => {
     expect(second.instructions).not.toBe("Mutated copy");
     expect(subagentInput(second).tools).toEqual(second.tools);
   });
+  it("gives the analyst Code Mode, all TA and artifact tools without trading permissions", () => {
+    const draft = templateDraft("basic-analysis", { provider: "operator-selected", modelId: "operator-model", thinkingLevel: "" });
+    expect(draft.tools).toEqual(expect.arrayContaining(["codemode", "research_candles", ...taToolNames, ...researchToolNames.filter((name) => name.startsWith("artifact_")), "publish_research"]));
+    expect(draft.tools.some((name) => (accountToolNames as readonly string[]).includes(name))).toBe(false);
+    expect(draft.instructions).toContain("evidenceAsOf");
+    expect(draft.instructions).toContain("closed candles");
+    expect(draft.instructions).toContain("not trading authority");
+  });
   it("has only real permitted tools, no recursive delegation, no credentials or enabled/funded defaults", () => {
     const tools = [...createMemoryExtension("agent", {} as ExecutionContextService, {} as SharedDatabase).tools!, ...createHyperliquidExtension({} as HyperliquidService, "owner", "agent", {} as OrderService).tools!, ...createTaExtension({} as HyperliquidService["charts"], (() => { throw new Error("No execution in manifest test"); }) as ResearchResponder).tools!].map((tool) => tool.name);
-    // These two are defined by the existing research extension, validated by
+    // Research tools are defined by the existing research extension, validated by
     // its integration tests; no remote catalog or import-time host is needed.
-    tools.push("research_candles", "research_journal");
+    tools.push(...researchToolNames);
     for (const template of subagentTemplates) {
       const draft = templateDraft(template.id, { provider: "operator-selected", modelId: "operator-model", thinkingLevel: "" });
-      expect(draft).toMatchObject({ enabled: false, persistent: false, completion: "notify", provider: "operator-selected", modelId: "operator-model" });
+      expect(draft).toMatchObject({ enabled: false, persistent: false, completion: template.defaults.completion, provider: "operator-selected", modelId: "operator-model" });
       expect(template.tools.every((tool) => (workerToolNames as readonly string[]).includes(tool) && tools.includes(tool))).toBe(true);
       expect(template.tools).not.toContain("delegate_subagent"); expect(template.tools).not.toContain("cancel_all_orders");
       expect(template.instructions).not.toMatch(/\{\{|\$\{/);
@@ -56,7 +81,7 @@ describe("bundled editable worker manifests", () => {
       expect(subagentInput(draft).tools).toEqual(template.tools);
     }
     expect(subagentTemplates.find((template) => template.id === "basic-analysis")!.tools).not.toContain("submit_orders");
-    expect(subagentTemplates.find((template) => template.id === "basic-trading")!.tools).not.toContain("append_learning");
+    expect(subagentTemplates.find((template) => template.id === "basic-trading")!.tools).not.toContain("append_insight");
     expect(subagentTemplates.find((template) => template.id === "basic-review")!.tools).not.toContain("submit_orders");
   });
   it("rejects unknown templates and starts every draft paused", () => {

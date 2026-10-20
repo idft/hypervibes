@@ -43,6 +43,7 @@ describe("new sub-agent", () => {
   });
   afterEach(async () => { await act(async () => root.unmount()); container.remove(); });
   it("lists templates on the left and fills editable identity fields on selection, clearing them for Custom", async () => {
+    expect([...container.querySelectorAll('[aria-label="Sub-agent templates"] button')].map((button) => button.textContent)).toEqual(["Custom", ...subagentTemplates.map((template) => template.name)]);
     expect(container.querySelectorAll("input, textarea, select")).toHaveLength(2);
     expect(container.textContent).not.toContain("Edit tools");
     expect([...container.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.textContent === "Create sub-agent")!.disabled).toBe(true);
@@ -64,7 +65,8 @@ describe("new sub-agent", () => {
     const data = mocks.saveSubagent.mock.calls[0]![0].data;
     expect(data).toMatchObject({ agentId: "agent-1", id: "", requestId: expect.any(String), templateId, settings: { ...model, name: "My worker", enabled: false } });
     if (templateId) expect(data.settings).toEqual({ ...templateDraft(templateId, model), name: "My worker", enabled: false });
-    else expect(data.settings).toMatchObject({ tools: [], schedule: "", persistent: false });
+    else expect(data.settings).toMatchObject({ tools: [], schedule: "", persistent: false, delaySeconds: 1, completion: "save" });
+    if (templateId === "basic-analysis") expect(data.settings).toMatchObject({ schedule: "15m", delaySeconds: 1, completion: "save" });
     expect(mocks.navigate).toHaveBeenCalledWith({ to: "/agents/$agentId/sub-agents/$subagentId", params: { agentId: "agent-1", subagentId: "worker:new" } });
     expect(mocks.success).toHaveBeenCalledWith("Sub-agent created paused", { description: "Review the configuration, then enable when ready." });
   });

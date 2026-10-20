@@ -2,7 +2,7 @@ import { AgentError } from "../agents/agent-input.js";
 import { candleIntervals } from "../agents/candle-intervals.js";
 import { array, choice, fields, integer, text, unique } from "./validation.js";
 
-export const memoryToolNames = ["publish_research", "record_trade_decision", "publish_review", "list_memories", "get_memory", "get_trading_context", "get_learnings", "append_learning", "replace_learnings", "research_decisions"] as const;
+export const memoryToolNames = ["publish_research", "record_trade_decision", "publish_review", "list_memories", "get_memory", "get_trading_context", "get_insights", "append_insight", "replace_insights", "research_decisions"] as const;
 export const memoryKinds = ["research", "decision", "review"] as const;
 export type MemoryKind = typeof memoryKinds[number];
 export const relations = ["based_on", "corrects", "supersedes", "reviews"] as const;

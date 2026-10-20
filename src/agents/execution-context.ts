@@ -3,9 +3,9 @@ import { ToolTask, type ConversationId, type EntryId, type Harness, type ToolExe
 import type { SqliteExecutor } from "@earendil-works/pi-durable/storage/sqlite";
 import type { SharedDatabase } from "../db/shared-database.js";
 import type { SubagentRow, SubagentRun } from "../db/subagent-schema.js";
-import { LearningService } from "../memory/learning-service.js";
+import { InsightService } from "../memory/insight-service.js";
 import { MemoryService } from "../memory/memory-service.js";
-import { renderLearningSections } from "../memory/learning-contracts.js";
+import { renderInsightSections } from "../memory/insight-contracts.js";
 import type { MemoryActor, MemoryAuthorization } from "../memory/operations.js";
 import { AgentError } from "./agent-input.js";
 import type { RunContext } from "./execution-context-contracts.js";
@@ -13,30 +13,30 @@ import { workerInstructions } from "./subagent-input.js";
 
 /**
  * Resolves tool calls to trusted application identity and freezes per-run
- * learning snapshots. There is no user/automatic origin classification: risk
+ * insight snapshots. There is no user/automatic origin classification: risk
  * settings are the only enforced trading policy, and tool selection is the
  * permission system.
  */
 export class ExecutionContextService {
   private readonly bindings = new Map<string, { harness: Harness; root: ConversationId }>();
-  readonly learnings: LearningService;
+  readonly insights: InsightService;
   readonly memories: MemoryService;
   constructor(private readonly db: SharedDatabase) {
-    this.learnings = new LearningService(db, this.authorize);
+    this.insights = new InsightService(db, this.authorize);
     this.memories = new MemoryService(db, this.authorize);
   }
   bind(agentId: string, harness: Harness, root: ConversationId) { this.bindings.set(agentId, { harness, root }); }
   unbind(agentId: string) { this.bindings.delete(agentId); }
 
-  /** Snapshots current learnings and renders the exact run instructions. */
+  /** Snapshots current insights and renders the exact run instructions. */
   async snapshotRunTx(tx: SqliteExecutor, run: SubagentRun) {
-    const agent = await this.learnings.snapshotTx(tx, run.agentId, { kind: "agent" });
-    const worker = await this.learnings.snapshotTx(tx, run.agentId, { kind: "worker", subagentId: run.subagentId });
-    const instructions = `${workerInstructions(run.config)}\n\n${renderLearningSections(agent, worker)}`;
+    const agent = await this.insights.snapshotTx(tx, run.agentId, { kind: "agent" });
+    const worker = await this.insights.snapshotTx(tx, run.agentId, { kind: "worker", subagentId: run.subagentId });
+    const instructions = `${workerInstructions(run.config)}\n\n${renderInsightSections(agent, worker)}`;
     if (instructions.length > 100000) throw new AgentError("Assignment instructions exceed the context limit; consolidate configuration");
-    const context: RunContext = { version: 2, instructions, learnings: { agent, worker }, learningStatus: "snapshot" };
+    const context: RunContext = { version: 2, instructions, insights: { agent, worker }, insightStatus: "snapshot" };
     const serialized = JSON.stringify(context);
-    if (serialized.length > 120000) throw new AgentError("Assignment context exceeds its storage bound; consolidate instructions/learnings");
+    if (serialized.length > 120000) throw new AgentError("Assignment context exceeds its storage bound; consolidate instructions/insights");
     await tx.run("INSERT INTO hv_subagent_run_contexts(agent_id,run_id,context) VALUES (?,?,?)", run.agentId, run.id, serialized);
     return context;
   }
@@ -46,7 +46,7 @@ export class ExecutionContextService {
   }
   async runContext(agentId: string, run: SubagentRun): Promise<RunContext> {
     return await this.db.transaction((tx) => this.runContextTx(tx, agentId, run.id))
-      ?? { version: 2, instructions: run.status === "skipped" ? "No instructions were injected: this assignment was skipped before admission." : workerInstructions(run.config), learnings: null, learningStatus: run.status === "skipped" ? "not_admitted" : "legacy/none" };
+      ?? { version: 2, instructions: run.status === "skipped" ? "No instructions were injected: this assignment was skipped before admission." : workerInstructions(run.config), insights: null, insightStatus: run.status === "skipped" ? "not_admitted" : "legacy/none" };
   }
 
   /** Task-local identity survives replay; assignment entry boundaries prevent an
@@ -111,7 +111,7 @@ export class ExecutionContextService {
     for (const key of ["tools", "templateOrigin"]) if (typeof result[key] === "string") result[key] = JSON.parse(result[key]);
     return result as unknown as SubagentRow;
   }
-  /** Operator actor for authenticated UI memory/learning edits. */
+  /** Operator actor for authenticated UI memory/insight edits. */
   operator(agentId: string, userId: string): MemoryActor {
     return { agentId, userId, subagentId: null, runId: null, conversationId: null, toolTaskId: null };
   }
@@ -122,7 +122,7 @@ export class ExecutionContextService {
     if (!tools.includes(capability)) throw new AgentError("Tool permission not selected for this assignment", 403);
     if (targetWorkerId) {
       const target = await tx.get<{ kind: string }>("SELECT kind FROM hv_subagents WHERE agent_id=? AND id=?", actor.agentId, targetWorkerId);
-      if (!target || target.kind !== "worker") throw new AgentError("Learning target is not a worker in this Agent", 403);
+      if (!target || target.kind !== "worker") throw new AgentError("Insight target is not a worker in this Agent", 403);
     }
   };
   /** Revalidates saved identity and returns the effective tool selection. */

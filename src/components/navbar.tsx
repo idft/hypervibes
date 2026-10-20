@@ -5,6 +5,7 @@ import { Identicon } from "./identicon.js";
 import { AgentSwitcher, type SwitcherAgent } from "./agent-switcher.js";
 
 export function Navbar({ walletAddress, agents = [], selectedAgentId }: { walletAddress: string; agents?: SwitcherAgent[]; selectedAgentId?: string }) {
+  const selected = agents.find((agent) => agent.id === selectedAgentId);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState("");
   const inFlight = useRef(false);
@@ -26,7 +27,8 @@ export function Navbar({ walletAddress, agents = [], selectedAgentId }: { wallet
   return (
     <div className="relative flex h-full items-center pr-4">
       <AgentSwitcher agents={agents} selectedAgentId={selectedAgentId} />
-      <Link to="/agents" className="absolute left-1/2 hidden h-full -translate-x-1/2 cursor-pointer items-center gap-2 px-4 text-sm font-semibold tracking-wide text-zinc-100 hover:bg-zinc-800 md:flex">
+      {selected && !selected.tradingEnabled && <Link to="/agents/$agentId/settings" params={{ agentId: selected.id }} hash="risk-management" title="New exposure is disabled. Reduce-only orders and cancellation remain available. Open risk management settings." className="shrink-0 cursor-pointer whitespace-nowrap rounded-lg px-2 py-1 text-xs text-amber-300 hover:bg-amber-950/50 hover:text-amber-200 sm:text-sm">Trading disabled</Link>}
+      <Link to="/agents" className="absolute left-1/2 hidden h-full -translate-x-1/2 cursor-pointer items-center gap-2 px-4 text-sm font-semibold tracking-wide text-zinc-100 hover:bg-zinc-800 lg:flex">
         <img src="/static/logo.png" alt="" className="h-9 w-auto rounded-md object-contain" />
         <span>HyperVibes</span>
       </Link>

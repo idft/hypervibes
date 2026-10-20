@@ -8,7 +8,7 @@ import { openDatabase } from "../db/database.js";
 import { SharedDatabase } from "../db/shared-database.js";
 import { AgentError } from "../agents/agent-input.js";
 import { MemoryService } from "./memory-service.js";
-import { LearningService } from "./learning-service.js";
+import { InsightService } from "./insight-service.js";
 import type { MemoryActor, MemoryAuthorization } from "./operations.js";
 
 export async function memoryFixture() {
@@ -32,11 +32,11 @@ export async function memoryFixture() {
   const authorize: MemoryAuthorization = async (_tx, who, capability, target) => {
     if (who.userId === "owner") return;
     if (capability === "publish_research" && who.subagentId === "analyst") return;
-    if (["publish_review", "append_learning", "replace_learnings"].includes(capability) && who.subagentId === "reviewer" && (target === undefined || target === null || target === "analyst")) return;
+    if (["publish_review", "append_insight", "replace_insights"].includes(capability) && who.subagentId === "reviewer" && (target === undefined || target === null || target === "analyst")) return;
     if (capability === "record_trade_decision" && who.subagentId === "analyst") return;
     throw new AgentError("Capability or target not permitted", 403);
   };
-  const services = () => ({ memory: new MemoryService(db, authorize, () => now), learning: new LearningService(db, authorize, () => now) });
+  const services = () => ({ memory: new MemoryService(db, authorize, () => now), insight: new InsightService(db, authorize, () => now) });
   return {
     get db() { return db; }, get now() { return now; }, set now(value: number) { now = value; }, operator, analyst: actor("analyst"), reviewer: actor("reviewer"), services,
     async reopen() { await db.close(); db = new SharedDatabase(openDatabase(path)); return services(); },

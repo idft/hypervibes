@@ -40,7 +40,11 @@ export async function agentAction<T>(action: () => Promise<T>) {
 
 export const listAgents = createServerFn({ method: "GET" }).handler(async ({ context }) => {
   const user = await agentUser(context.runtime, getRequestHeaders());
-  return context.runtime.agents.list(user.id);
+  const agents = await context.runtime.agents.list(user.id);
+  return Promise.all(agents.map(async (agent) => ({
+    ...agent,
+    tradingEnabled: (await context.runtime.agents.risk.get(agent.id)).tradingEnabled,
+  })));
 });
 
 /** Validates the selected trading account against fresh Hyperliquid data. */

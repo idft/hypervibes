@@ -8,7 +8,7 @@ import type { ModelChoice } from "../providers/provider-service.js";
 import { ModelPicker, modelKey } from "./model-picker.js";
 
 const inputClass = "mt-2 block w-full rounded-lg border border-zinc-700 bg-zinc-950 p-3 text-sm text-white";
-const blank: Omit<SubagentInput, "provider" | "modelId" | "thinkingLevel"> = { name: "", description: "", instructions: "Complete the assigned task using available tools. Cite evidence and timestamps, distinguish facts from assumptions, and report missing or stale data. Do not invent access to unavailable tools.", tools: [], enabled: false, delegatable: true, persistent: false, schedule: "", delaySeconds: 30, completion: "wake", timeoutSeconds: 900 };
+const blank: Omit<SubagentInput, "provider" | "modelId" | "thinkingLevel"> = { name: "", description: "", instructions: "Complete the assigned task using available tools. Cite evidence and timestamps, distinguish facts from assumptions, and report missing or stale data. Do not invent access to unavailable tools.", tools: [], enabled: false, delegatable: true, persistent: false, schedule: "", delaySeconds: 1, completion: "save", timeoutSeconds: 900 };
 type Model = Pick<SubagentInput, "provider" | "modelId" | "thinkingLevel">;
 
 export function NewSubagentPage({ agentId, model, choices }: { agentId: string; model: Model; choices: ModelChoice[] }) {
@@ -51,9 +51,9 @@ export function NewSubagentPage({ agentId, model, choices }: { agentId: string; 
         <fieldset disabled={pending || requestId.current !== null} className="min-w-0 space-y-3 disabled:opacity-60">
           <legend className="mb-3 text-sm font-medium text-zinc-300">Templates</legend>
           <div role="group" aria-label="Sub-agent templates" className="space-y-2">
+            <button type="button" aria-pressed={templateId === ""} onClick={() => changeTemplate("")} className="block w-full cursor-pointer rounded-xl border border-zinc-800 p-4 text-left text-sm text-zinc-300 hover:bg-zinc-900 aria-pressed:border-violet-500 aria-pressed:bg-violet-950/40 aria-pressed:text-white disabled:cursor-not-allowed">Custom</button>
             {subagentTemplates.map((entry) => <button key={entry.id} type="button" aria-pressed={templateId === entry.id} onClick={() => changeTemplate(entry.id)} className="block w-full cursor-pointer rounded-xl border border-zinc-800 p-4 text-left text-sm text-zinc-300 hover:bg-zinc-900 aria-pressed:border-violet-500 aria-pressed:bg-violet-950/40 aria-pressed:text-white disabled:cursor-not-allowed">{entry.name}</button>)}
           </div>
-          <div className="border-t border-zinc-800 pt-3"><button type="button" aria-pressed={templateId === ""} onClick={() => changeTemplate("")} className="block w-full cursor-pointer rounded-xl border border-zinc-800 p-4 text-left text-sm text-zinc-300 hover:bg-zinc-900 aria-pressed:border-violet-500 aria-pressed:bg-violet-950/40 aria-pressed:text-white disabled:cursor-not-allowed">Custom</button></div>
         </fieldset>
         <div className="min-w-0 space-y-4 md:border-l md:border-zinc-800 md:pl-6">
           <fieldset disabled={pending || requestId.current !== null} className="space-y-4 disabled:opacity-60">

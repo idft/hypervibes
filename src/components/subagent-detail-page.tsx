@@ -27,7 +27,8 @@ export function SubagentDetailPage({ agentId, initial, choices }: { agentId: str
   const [runOpen, setRunOpen] = useState(false);
   const inFlight = useRef(false), assignmentId = useRef<{ task: string; id: string } | null>(null);
   const main = definition.kind === "orchestrator";
-  const { history: { runs, pagination, schedulerError }, loading, connectionError, setPage } = useSubagentRuns(agentId, main ? undefined : definition.id, initial);
+  const { history: { runs, pagination, schedulerError, schedule }, loading, connectionError, setPage } = useSubagentRuns(agentId, main ? undefined : definition.id, initial);
+  const nextRunAt = schedule && schedule.updatedAt >= definition.updatedAt ? schedule.nextRunAt : definition.nextRunAt;
   const selected = choices.find((choice) => modelKey(choice) === modelKey(form));
   const set = <K extends keyof SubagentInput>(key: K, value: SubagentInput[K]) => setForm((current) => ({ ...current, [key]: value }));
   const instructionsChanged = form.instructions !== definition.instructions;
@@ -90,7 +91,7 @@ export function SubagentDetailPage({ agentId, initial, choices }: { agentId: str
     } finally { inFlight.current = false; setPending(false); }
   }
   async function startRun() {
-    if (inFlight.current || !definition.enabled || definition.archived) throw new Error("This worker is unavailable for new assignments.");
+    if (inFlight.current || definition.archived) throw new Error("This worker is unavailable for new assignments.");
     inFlight.current = true; setPending(true); setError("");
     try {
       if (assignmentId.current?.task !== task) assignmentId.current = { task, id: crypto.randomUUID() };
@@ -123,30 +124,32 @@ export function SubagentDetailPage({ agentId, initial, choices }: { agentId: str
     finally { inFlight.current = false; setPending(false); }
   }
   return <div className="w-full space-y-3">
-    {definition.templateOrigin && <p className="text-xs text-zinc-400">Origin: {definition.templateOrigin.id} v{definition.templateOrigin.version} · editable copy; saved settings, not the catalog, are authoritative.</p>}
     <form onSubmit={(event) => { event.preventDefault(); }} className={panel}>
       <fieldset disabled={pending || definition.archived} className="space-y-4 disabled:opacity-60">
         <SubagentIdentity value={form} main={main} agentId={agentId} enabled={form.enabled} onToggleEnabled={() => { void toggleEnabled(); }} onChange={saveIdentity} actions={!main ? <>
-          <button type="button" disabled={pending || !definition.enabled || definition.archived} aria-haspopup="dialog" onClick={() => setRunOpen(true)} className="inline-flex cursor-pointer items-center gap-2 rounded-full border border-violet-500 px-4 py-2 text-sm text-violet-300 hover:bg-violet-950 disabled:cursor-not-allowed disabled:opacity-50"><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round" className="size-4"><path d="m13 2-9 12h7l-1 8 10-12h-7z" /></svg>Run now</button>
+          <button type="button" disabled={pending || definition.archived} aria-haspopup="dialog" onClick={() => setRunOpen(true)} className="inline-flex cursor-pointer items-center gap-2 rounded-full border border-violet-500 px-4 py-2 text-sm text-violet-300 hover:bg-violet-950 disabled:cursor-not-allowed disabled:opacity-50"><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round" className="size-4"><path d="m13 2-9 12h7l-1 8 10-12h-7z" /></svg>Run now</button>
           <button type="button" disabled={pending || definition.archived} aria-label="Archive worker" title="Archive worker" aria-haspopup="dialog" onClick={() => setArchiveOpen(true)} className="inline-flex cursor-pointer items-center justify-center rounded-full p-2 text-red-300 hover:bg-red-950 hover:text-red-200 disabled:cursor-not-allowed disabled:opacity-50">
             <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round" className="size-5"><path d="M3 6h18M9 6V3h6v3M5 6l1 15h12l1-15M10 10v7m4-7v7" /></svg>
           </button>
         </> : undefined} />
-        {main && <p className="text-sm text-zinc-400">This is the existing main chat. It cannot be disabled, archived, or deleted.</p>}
         {definition.archived && <p className="text-sm text-amber-200">Archived — new assignments are disabled. History remains available.</p>}
         {!selected && <p className="flex items-center gap-1.5 text-sm text-amber-200"><ProviderLogo provider={form.provider} className="h-4 w-4 shrink-0 rounded-sm border border-zinc-800 bg-white p-0.5" /><span>Current model: {form.provider}/{form.modelId}. Reconnect its provider or select an available model.</span></p>}
         <ModelPicker choices={choices} value={selected ? modelKey(form) : ""} thinkingLevel={form.thinkingLevel} onChange={async (value, thinkingLevel) => { const choice = choices.find((entry) => modelKey(entry) === value); if (choice) await saveSection("model", { provider: choice.provider, modelId: choice.modelId, thinkingLevel }); }} disabled={pending} />
+        <div className={main ? "space-y-4" : "grid gap-6 md:grid-cols-2"}>
+          <div className="min-w-0 space-y-4">
+            <ToolPicker tools={form.tools} main={main} onChange={saveTools} />
+            {form.tools.includes("submit_orders") && !form.tools.includes("record_trade_decision") && <p role="status" className="text-sm text-amber-200">Trading readiness: record_trade_decision is not selected. Existing permissions were not widened; select it explicitly for attributable trade rationale.</p>}
+          </div>
+          {!main && <div className="min-w-0 space-y-6">
+            <AssignmentConfig value={form} onChange={saveAssignments} />
+            <ScheduleConfig value={form} nextRunAt={definition.enabled && !definition.archived ? nextRunAt : null} onChange={(schedule) => saveSection("schedule", schedule)} />
+          </div>}
+        </div>
         <label className="block text-sm text-zinc-300">Instructions<textarea required rows={7} maxLength={32000} value={form.instructions} onChange={(event) => set("instructions", event.target.value)} className={inputClass} placeholder={main ? defaultMainInstructions : undefined} /></label>
         {instructionsChanged && <div className="flex justify-end gap-2">
           <button type="button" onClick={() => { set("instructions", definition.instructions); setError(""); }} className="cursor-pointer rounded-full border border-zinc-700 px-4 py-2 text-sm text-zinc-300 hover:bg-zinc-800">Reset</button>
           <button type="button" disabled={!form.instructions.trim()} onClick={() => { void saveInstructions(); }} className={button}>Save instructions</button>
         </div>}
-        <ToolPicker tools={form.tools} main={main} onChange={saveTools} />
-        {form.tools.includes("submit_orders") && !form.tools.includes("record_trade_decision") && <p role="status" className="text-sm text-amber-200">Trading readiness: record_trade_decision is not selected. Existing permissions were not widened; select it explicitly for attributable trade rationale.</p>}
-        {!main && <>
-          <AssignmentConfig value={form} onChange={saveAssignments} />
-          <ScheduleConfig value={form} onChange={(schedule) => saveSection("schedule", schedule)} />
-        </>}
       </fieldset>
     </form>
     {runOpen && !main && <RunSubagentDialog task={task} onTaskChange={setTask} onCancel={() => setRunOpen(false)} onRun={startRun} />}

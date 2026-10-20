@@ -1,9 +1,12 @@
 // @vitest-environment jsdom
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AgentChat } from "../agents/agent-service.js";
-const mocks = vi.hoisted(() => ({ save: vi.fn(), success: vi.fn() }));
+import type { RiskSettings } from "../hyperliquid/orders/risk-settings.js";
+const mocks = vi.hoisted(() => ({ save: vi.fn(), success: vi.fn(), invalidate: vi.fn(), instruments: vi.fn() }));
+vi.mock("../web/charts.js", () => ({ getChartInstruments: mocks.instruments }));
+vi.mock("@tanstack/react-router", () => ({ useRouter: () => ({ invalidate: mocks.invalidate }) }));
 vi.mock("../web/risk.js", () => ({ saveRiskSettings: mocks.save }));
 vi.mock("sonner", () => ({ toast: { success: mocks.success } }));
 import { AgentSettingsPage } from "./agent-settings-page.js";
@@ -16,9 +19,23 @@ const initial: AgentChat = {
 describe("Agent settings", () => {
   let root: Root; let container: HTMLDivElement;
   const eventSource = vi.fn();
+  const dialogMethods = Object.fromEntries(["showModal", "close"].map((key) => [key, Object.getOwnPropertyDescriptor(HTMLDialogElement.prototype, key)]));
+  beforeAll(() => {
+    Object.defineProperties(HTMLDialogElement.prototype, {
+      showModal: { configurable: true, value(this: HTMLDialogElement) { this.open = true; } },
+      close: { configurable: true, value(this: HTMLDialogElement) { this.open = false; } },
+    });
+  });
+  afterAll(() => {
+    for (const [key, descriptor] of Object.entries(dialogMethods)) {
+      if (descriptor) Object.defineProperty(HTMLDialogElement.prototype, key, descriptor);
+      else Reflect.deleteProperty(HTMLDialogElement.prototype, key);
+    }
+  });
   beforeEach(async () => {
     vi.resetAllMocks();
-    mocks.save.mockResolvedValue({ ok: true, data: {} });
+    mocks.instruments.mockResolvedValue({ ok: true, data: ["BTC", "ETH", "SOL"] });
+    mocks.save.mockImplementation(async ({ data }: { data: { settings: RiskSettings } }) => ({ ok: true, data: data.settings }));
     vi.stubGlobal("EventSource", eventSource);
     container = document.createElement("div"); document.body.append(container); root = createRoot(container);
     await act(async () => root.render(<AgentSettingsPage initial={initial} />));
@@ -31,30 +48,166 @@ describe("Agent settings", () => {
       element.dispatchEvent(new Event("input", { bubbles: true }));
     });
   }
-  async function save() { await act(async () => { [...container.querySelectorAll("button")].find((button) => button.textContent === "Save risk settings")!.click(); }); }
+  async function selectInstruments(symbols: string[] | null) {
+    await act(async () => { [...container.querySelectorAll("button")].find((button) => button.textContent === "Select instruments")!.click(); });
+    const click = async (text: string) => act(async () => { [...document.querySelectorAll<HTMLButtonElement>("dialog button")].find((button) => button.textContent === text)!.click(); });
+    const dialog = document.querySelector("dialog")!;
+    await act(async () => dialog.querySelectorAll<HTMLInputElement>('input[type="radio"]')[symbols === null ? 0 : 1]!.click());
+    if (symbols !== null) {
+      await click("Select none");
+      for (const symbol of symbols) await act(async () => dialog.querySelector<HTMLInputElement>(`input[aria-label="${symbol}"]`)!.click());
+    }
+    await click("Apply");
+  }
+  const amount = (label: string) => container.querySelector<HTMLInputElement>(`[aria-label="${label}"]`)!;
+  const mode = (label: string, limited: boolean) => amount(label).closest("fieldset")!.querySelector<HTMLInputElement>(`input[type="radio"][value="${limited ? "limited" : "unlimited"}"]`)!;
+  async function selectMode(label: string, limited: boolean) { await act(async () => mode(label, limited).click()); }
+  const saveButton = () => [...container.querySelectorAll("button")].find((button) => button.textContent === "Save risk settings" || button.textContent === "Saving…");
+  async function save() { await act(async () => { saveButton()!.click(); }); }
+  it("only shows Save for changes, hides it on revert, and resets the baseline after saving", async () => {
+    expect(saveButton()).toBeUndefined();
+    const toggleTrading = async () => { await act(async () => container.querySelector<HTMLInputElement>('input[type="checkbox"]')!.click()); };
+    await toggleTrading();
+    expect(saveButton()).toBeDefined();
+    await toggleTrading();
+    expect(saveButton()).toBeUndefined();
+    await selectInstruments(["BTC"]);
+    expect(saveButton()).toBeDefined();
+    await selectInstruments(null);
+    expect(saveButton()).toBeUndefined();
+    await selectInstruments(["BTC", "ETH"]);
+    await save();
+    expect(saveButton()).toBeUndefined();
+    await selectInstruments(["ETH", "BTC"]);
+    expect(saveButton()).toBeUndefined();
+    await selectInstruments(["BTC"]);
+    expect(saveButton()).toBeDefined();
+    await selectInstruments(["BTC", "ETH"]);
+    expect(saveButton()).toBeUndefined();
+    expect(mocks.save).toHaveBeenCalledTimes(1);
+  });
+  it.each(["Max order notional", "Max total notional"])("shows Save for limit changes and hides it when the saved amount or mode is restored (%s)", async (label) => {
+    await selectMode(label, true);
+    expect(saveButton()).toBeDefined();
+    await change(label, "100");
+    await save();
+    expect(saveButton()).toBeUndefined();
+    await change(label, "200");
+    expect(saveButton()).toBeDefined();
+    await change(label, "100");
+    expect(saveButton()).toBeUndefined();
+    await selectMode(label, false);
+    expect(saveButton()).toBeDefined();
+    await selectMode(label, true);
+    expect(saveButton()).toBeUndefined();
+  });
   it("saves risk settings on the Settings page with explicit all-allowed and uncapped values", async () => {
+    expect(container.querySelector('#risk-management')?.getAttribute("aria-label")).toBe("Risk management");
     expect(container.querySelector<HTMLInputElement>('input[type="checkbox"]')!.checked).toBe(false);
-    await change("Allowed instruments", "BTC, ETH");
+    await selectInstruments(["BTC", "ETH"]);
+    expect(mocks.save).not.toHaveBeenCalled();
+    expect(container.querySelector('[aria-label="Allowed instruments"]')?.textContent).toContain("BTC");
+    await selectMode("Max order notional", true);
+    await selectMode("Max total notional", true);
     await change("Max order notional", "100.01");
     await change("Max total notional", "500");
     await act(async () => container.querySelector<HTMLInputElement>('input[type="checkbox"]')!.click());
     await save();
     expect(mocks.save).toHaveBeenLastCalledWith({ data: { agentId: initial.agent.id, settings: { tradingEnabled: true, allowedInstruments: ["BTC", "ETH"], maxOrderNotional: "100.01", maxTotalNotional: "500" } } });
-    await change("Allowed instruments", ""); await change("Max order notional", ""); await change("Max total notional", "");
+    await selectInstruments(null);
+    await selectMode("Max order notional", false);
+    await selectMode("Max total notional", false);
     await save();
     expect(mocks.save).toHaveBeenLastCalledWith({ data: { agentId: initial.agent.id, settings: { tradingEnabled: true, allowedInstruments: null, maxOrderNotional: null, maxTotalNotional: null } } });
+    expect(mocks.invalidate).toHaveBeenCalledTimes(2);
+  });
+  it("defaults both limits to No limit with disabled amount inputs and USDC suffixes", async () => {
+    for (const label of ["Max order notional", "Max total notional"]) {
+      expect(mode(label, false).checked).toBe(true);
+      expect(mode(label, true).checked).toBe(false);
+      expect(amount(label).disabled).toBe(true);
+      expect(amount(label).inputMode).toBe("decimal");
+      expect(document.getElementById(amount(label).getAttribute("aria-describedby")!)?.textContent).toBe("USDC");
+      expect(mode(label, true).name).toBe(mode(label, false).name);
+    }
+    expect(mode("Max order notional", true).name).not.toBe(mode("Max total notional", true).name);
+    expect(saveButton()).toBeUndefined();
+    expect(mocks.save).not.toHaveBeenCalled();
+  });
+  it("loads saved limits as selected Limit options without changing decimal precision", async () => {
+    await act(async () => root.render(<AgentSettingsPage key="saved-limits" initial={initial} risk={{ tradingEnabled: true, allowedInstruments: null, maxOrderNotional: "100.00000001", maxTotalNotional: "500.25" }} />));
+    expect(mode("Max order notional", true).checked).toBe(true);
+    expect(mode("Max total notional", true).checked).toBe(true);
+    expect(amount("Max order notional").disabled).toBe(false);
+    expect(amount("Max total notional").disabled).toBe(false);
+    expect(amount("Max order notional").value).toBe("100.00000001");
+    expect(amount("Max total notional").value).toBe("500.25");
+    expect(saveButton()).toBeUndefined();
+  });
+  it("keeps the options independent and preserves a limit draft when switching to No limit and back", async () => {
+    await selectMode("Max order notional", true);
+    await change("Max order notional", "100.01");
+    expect(mode("Max total notional", false).checked).toBe(true);
+    await selectMode("Max order notional", false);
+    expect(amount("Max order notional").disabled).toBe(true);
+    expect(amount("Max order notional").value).toBe("100.01");
+    expect(saveButton()).toBeUndefined();
+    expect(mocks.save).not.toHaveBeenCalled();
+    await selectMode("Max order notional", true);
+    expect(amount("Max order notional").value).toBe("100.01");
+    await save();
+    expect(mocks.save.mock.calls[0]![0].data.settings).toMatchObject({ maxOrderNotional: "100.01", maxTotalNotional: null });
+  });
+  it.each(["Max order notional", "Max total notional"])("rejects an empty selected limit instead of silently removing it (%s)", async (label) => {
+    await selectMode(label, true);
+    await change(label, "  ");
+    await save();
+    expect(mocks.save).not.toHaveBeenCalled();
+    expect(container.querySelector('[role="alert"]')!.textContent).toContain("limit or select No limit");
+    expect(mode(label, true).checked).toBe(true);
+    expect(amount(label).value).toBe("  ");
+  });
+  it("disables both limit selectors and amounts while saving", async () => {
+    let resolve!: (value: unknown) => void;
+    mocks.save.mockImplementation(() => new Promise((done) => { resolve = done; }));
+    await selectMode("Max order notional", true);
+    await change("Max order notional", "100");
+    await save();
+    for (const label of ["Max order notional", "Max total notional"]) {
+      expect(mode(label, false).matches(":disabled")).toBe(true);
+      expect(mode(label, true).matches(":disabled")).toBe(true);
+      expect(amount(label).matches(":disabled")).toBe(true);
+    }
+    expect(saveButton()?.disabled).toBe(true);
+    expect([...container.querySelectorAll("button")].find((button) => button.textContent === "Select instruments")?.disabled).toBe(true);
+    await act(async () => resolve({ ok: true, data: { tradingEnabled: false, allowedInstruments: null, maxOrderNotional: "100", maxTotalNotional: null } }));
+    expect(saveButton()).toBeUndefined();
+    expect(mode("Max order notional", false).matches(":disabled")).toBe(false);
+  });
+  it("styles the trading checkbox for the dark theme while retaining a native labeled input", () => {
+    const checkbox = container.querySelector<HTMLInputElement>('input[type="checkbox"]')!;
+    expect(checkbox.labels?.[0]?.textContent?.trim()).toBe("Enable Trading");
+    expect(checkbox.classList.contains("appearance-none")).toBe(true);
+    expect(checkbox.classList.contains("checked:bg-violet-600")).toBe(true);
+    expect(checkbox.classList.contains("focus-visible:ring-2")).toBe(true);
+    expect(checkbox.parentElement?.querySelector('svg[aria-hidden="true"]')?.classList.contains("peer-checked:opacity-100")).toBe(true);
   });
   it("preserves the draft when saving fails", async () => {
     mocks.save.mockResolvedValue({ ok: false, error: "Unable to save" });
+    await selectMode("Max total notional", true);
     await change("Max total notional", "123.45");
     await save();
     expect(container.querySelector('[role="alert"]')!.textContent).toContain("Unable to save");
+    expect(saveButton()).toBeDefined();
+    expect(saveButton()?.disabled).toBe(false);
+    expect(mocks.invalidate).not.toHaveBeenCalled();
     expect(container.querySelector<HTMLInputElement>('[aria-label="Max total notional"]')!.value).toBe("123.45");
   });
-  it("keeps application settings and links to the protected orchestrator instead of selecting models here", () => {
-    expect(container.textContent).toContain("Execution backend"); expect(container.textContent).toContain("Telegram");
+  it("keeps application settings without orchestrator editing controls", () => {
+    expect(container.textContent).not.toContain("Execution backend"); expect(container.textContent).toContain("Telegram");
     expect(container.querySelector("select")).toBeNull();
-    expect(container.querySelector("a")?.getAttribute("href")).toBe("/agents/agent-fixture/sub-agents/main%3Aagent-fixture");
+    expect(container.textContent).not.toContain("Edit orchestrator model");
+    expect(container.querySelector("a")).toBeNull();
     expect(eventSource).not.toHaveBeenCalled();
   });
 });

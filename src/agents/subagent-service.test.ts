@@ -37,6 +37,27 @@ describe("subagent definitions, execution and scheduling", () => {
   });
   afterEach(async () => { vi.restoreAllMocks(); await runtime.close(); rmSync(directory, { recursive: true, force: true }); });
 
+  it("summarizes only active workers and their five newest bounded results for the dashboard", async () => {
+    const agent = await createAgent();
+    expect(await runtime.agents.subagents.dashboard("owner", agent.id)).toEqual([]);
+    const worker = await createWorker(agent.id, { enabled: false });
+    const unused = await createWorker(agent.id, { name: "Unused" });
+    const archived = await createWorker(agent.id, { name: "Archived" });
+    await runtime.agents.subagents.archive("owner", agent.id, archived.id);
+    await runtime.db.insert(hvSubagentRuns).values(Array.from({ length: 7 }, (_, index) => ({
+      id: `dashboard-run-${index}`, agentId: agent.id, subagentId: worker.id, requestId: randomUUID(),
+      source: "manual" as const, task: "Private task", config: worker, status: "completed" as const,
+      result: `${index}${"x".repeat(500)}`, createdAt: index,
+    }))).run();
+    const summaries = await runtime.agents.subagents.dashboard("owner", agent.id);
+    expect(summaries.map((row) => row.id)).toEqual([worker.id, unused.id]);
+    expect(summaries[0]?.enabled).toBe(false);
+    expect(summaries[0]?.runs.map((run) => run.id)).toEqual([6, 5, 4, 3, 2].map((index) => `dashboard-run-${index}`));
+    expect(summaries[0]?.runs.every((run) => run.result.length === 240 && !("config" in run) && !("task" in run))).toBe(true);
+    expect(summaries[1]?.runs).toEqual([]);
+    await expect(runtime.agents.subagents.dashboard("other", agent.id)).rejects.toMatchObject({ status: 404 });
+  });
+
   it("creates paused workers from every bundled template with persisted origin and safe retries", async () => {
     const agent = await createAgent();
     for (const template of subagentTemplates) {
@@ -48,6 +69,27 @@ describe("subagent definitions, execution and scheduling", () => {
       expect((await detail(agent.id, worker.id)).definition).toEqual(worker);
       await expect(runtime.agents.subagents.create("owner", agent.id, draft, requestId, template.id)).resolves.toEqual(worker);
     }
+  });
+
+  it("allows one manual run while paused without enabling scheduling or delegation", async () => {
+    const agent = await createAgent();
+    const worker = await createWorker(agent.id, { enabled: false, schedule: "15m" });
+    await runtime.agents.subagents.tick();
+    expect((await detail(agent.id, worker.id)).runs).toEqual([]);
+    expect(await runtime.agents.subagents.delegatable(agent.id)).toEqual([]);
+    await expect(runtime.agents.subagents.delegate(agent.id, worker.id, "Automatic assignment", randomUUID())).rejects.toMatchObject({ status: 409 });
+
+    faux.setResponses([fauxAssistantMessage("Manual assignment complete")]);
+    await runtime.agents.subagents.run("owner", agent.id, worker.id, "Run once", randomUUID());
+    const run = await completed(agent.id, worker.id);
+    expect(run.source).toBe("manual");
+    expect(run.result).toContain("Manual assignment complete");
+    expect((await detail(agent.id, worker.id)).definition).toMatchObject({ enabled: false, nextRunAt: null });
+    await runtime.agents.subagents.tick();
+    expect((await detail(agent.id, worker.id)).runs).toHaveLength(1);
+
+    await runtime.agents.subagents.archive("owner", agent.id, worker.id);
+    await expect(runtime.agents.subagents.run("owner", agent.id, worker.id, "Run archived worker", randomUUID())).rejects.toMatchObject({ status: 409 });
   });
 
   it("seeds the existing protected root first without model calls; persists editable instructions/tools/model", async () => {
@@ -412,7 +454,9 @@ describe("subagent definitions, execution and scheduling", () => {
     expect(scheduled.task).toContain(new Date(due - worker.delaySeconds * 1000).toISOString());
     expect(scheduled.config.instructions).toBe(worker.instructions);
     expect((await detail(agent.id, worker.id)).runs).toHaveLength(1);
-    expect((await detail(agent.id, worker.id)).definition.nextRunAt).toBeGreaterThan(due);
+    const nextRunAt = (await detail(agent.id, worker.id)).definition.nextRunAt;
+    expect(nextRunAt).toBeGreaterThan(due);
+    expect((await runtime.agents.subagents.history("owner", agent.id, worker.id)).schedule).toEqual({ nextRunAt, updatedAt: worker.updatedAt });
     await runtime.db.update(hvSubagents).set({ nextRunAt: due - 3 * 3600000 }).where(eq(hvSubagents.id, worker.id)).run();
     await runtime.close(); runtime = await createRuntime(config(), options()); runtime.start(); await runtime.agents.subagents.tick();
     expect((await detail(agent.id, worker.id)).definition.nextRunAt).toBeGreaterThan(due);
@@ -442,7 +486,7 @@ describe("subagent definitions, execution and scheduling", () => {
     await vi.waitFor(async () => expect((await runtime.agents.owned("owner", agent.id)).state).toBe("failed"));
     const admitted = (await detail(agent.id, worker.id)).runs[0]!;
     const frozen = await runtime.agents.execution.runContext(agent.id, admitted);
-    await runtime.agents.execution.learnings.append(runtime.agents.execution.operator(agent.id, "owner"), "ui:after-intent", { scope: { kind: "agent" }, content: "NEW guidance after admission", reason: "Review completed while dispatch was interrupted", evidenceRefs: [] });
+    await runtime.agents.execution.insights.append(runtime.agents.execution.operator(agent.id, "owner"), "ui:after-intent", { scope: { kind: "agent" }, content: "NEW guidance after admission", reason: "Review completed while dispatch was interrupted", evidenceRefs: [] });
     faux.setResponses([fauxAssistantMessage("Recovered intent")]);
     await runtime.agents.retry("owner", agent.id);
     await runtime.agents.subagents.tick();
@@ -484,11 +528,11 @@ describe("subagent definitions, execution and scheduling", () => {
     await vi.waitFor(() => expect(faux.state.callCount).toBe(1));
     await runtime.close(AbortSignal.abort()); runtime = await createRuntime(config(), options());
     expect(faux.state.callCount).toBe(1);
-    await runtime.agents.execution.learnings.append(runtime.agents.execution.operator(agent.id, "owner"), "ui:while-paused", { scope: { kind: "agent" }, content: "Do not inject this into the recovered assignment", reason: "New revision while a run was suspended", evidenceRefs: [] });
+    await runtime.agents.execution.insights.append(runtime.agents.execution.operator(agent.id, "owner"), "ui:while-paused", { scope: { kind: "agent" }, content: "Do not inject this into the recovered assignment", reason: "New revision while a run was suspended", evidenceRefs: [] });
     runtime.start();
     await vi.waitFor(async () => expect((await detail(agent.id, worker.id)).runs[0]?.result).toBe("Recovered evidence"), { timeout: 10000 });
     expect((await detail(agent.id, worker.id)).runs.map((entry) => entry.id)).toEqual([run.id]);
-    expect((await runtime.agents.execution.runContext(agent.id, run)).learnings!.agent.version).toBe(0);
+    expect((await runtime.agents.execution.runContext(agent.id, run)).insights!.agent.version).toBe(0);
     expect(JSON.stringify((await runtime.agents.subagents.runDetail("owner", agent.id, worker.id, run.id)).entries)).not.toContain("Do not inject this into the recovered assignment");
   }, 15000);
 });
