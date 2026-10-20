@@ -25,7 +25,7 @@ describe("browser wallet login", () => {
     await walletLogin({ provider: { request } as Pick<EIP1193Provider, "request">, origin: "http://localhost:3003", nonce: async () => "a1234567890abcdef", verify, onStatus: status });
     expect(verify).toHaveBeenCalledOnce();
     expect(request.mock.calls.map(([args]) => args.method)).toEqual(["eth_requestAccounts", "personal_sign"]);
-    expect(status.mock.calls.map(([value]) => value)).toEqual(["Connecting wallet…", "Preparing sign-in…", "Confirm the sign-in message in your wallet…", "Verifying sign-in…"]);
+    expect(status.mock.calls.map(([value]) => value)).toEqual(["Connecting wallet…", "Preparing sign-in…", "Sign message in your wallet…", "Verifying sign-in…"]);
   });
 
   it("reports a missing provider without making an auth request", async () => {

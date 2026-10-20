@@ -32,7 +32,7 @@ export async function walletLogin({ provider, origin, nonce, verify, onStatus }:
     expirationTime: new Date(issuedAt.getTime() + 300_000),
     statement: "Sign in to HyperVibes. This does not authorize trading.",
   });
-  onStatus("Confirm the sign-in message in your wallet…");
+  onStatus("Sign message in your wallet…");
   const signature = await wallet.signMessage({ account: address, message });
   onStatus("Verifying sign-in…");
   await verify(message, signature);

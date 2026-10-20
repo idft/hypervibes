@@ -33,6 +33,8 @@ describe("login page", () => {
     expect(container.querySelector("h1")?.textContent).toBe("HyperVibes");
     expect(container.querySelector("button")?.textContent).toBe("Login");
     expect(container.querySelector("button")?.className).toContain("cursor-pointer");
+    expect(container.querySelector("button")?.className).toContain("border-violet-500");
+    expect(container.querySelector("button")?.className).not.toContain("bg-violet-600");
     expect(container.querySelector("nav")).toBeNull();
     expect(container.querySelector("[role=alert]")?.textContent).toBe("");
   });
@@ -57,12 +59,13 @@ describe("login page", () => {
     });
     expect(mocks.login).toHaveBeenCalledOnce();
     expect(button.disabled).toBe(true);
-    await act(async () => mocks.login.mock.calls[0]![0].onStatus("Confirm in wallet"));
-    expect(container.querySelector("[role=status]")?.textContent).toBe("Confirm in wallet");
+    await act(async () => mocks.login.mock.calls[0]![0].onStatus("Sign message in your wallet…"));
+    expect(button.textContent).toBe("Sign message in your wallet…");
+    expect(button.querySelector("[role=status]")?.textContent).toBe("Sign message in your wallet…");
     await act(async () => reject({ code: 4001 }));
     expect(button.disabled).toBe(false);
     expect(container.querySelector("[role=alert]")?.textContent).toContain("Sign-in cancelled");
-    expect(container.querySelector("[role=status]")?.textContent).toBe("");
+    expect(button.textContent).toBe("Login");
     await act(async () => button.click());
     expect(mocks.login).toHaveBeenCalledTimes(2);
     expect(container.querySelector("[role=alert]")?.textContent).toBe("");

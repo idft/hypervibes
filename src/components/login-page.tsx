@@ -46,10 +46,9 @@ export function LoginPage() {
           <img src="/static/logo.png" alt="" className="h-14 w-auto rounded-md object-contain" />
           <span>HyperVibes</span>
         </h1>
-        <button type="button" disabled={pending} onClick={() => { void login(); }} className="mt-6 w-full cursor-pointer rounded-full bg-white px-4 py-2 text-sm font-medium text-black disabled:cursor-wait disabled:opacity-60">
-          {pending ? "Signing in…" : "Login"}
+        <button type="button" disabled={pending} onClick={() => { void login(); }} className="mt-6 w-full cursor-pointer rounded-full border border-violet-500 px-4 py-2 text-sm font-medium text-violet-300 hover:bg-violet-950 disabled:cursor-wait disabled:opacity-60">
+          <span role="status">{pending ? status || "Signing in…" : "Login"}</span>
         </button>
-        <p role="status" className="mt-4 text-sm text-zinc-400">{status}</p>
         <p role="alert" className="mt-2 text-sm text-red-300">{error}</p>
       </section>
     </main>
