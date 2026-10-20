@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 import { ArtifactContent, artifactContentUrl } from "./artifact-content.js";
-import { ToolActivity } from "./tool-activity.js";
+import { ToolActivity, ToolCall } from "./tool-activity.js";
 const id = "00000000-0000-0000-0000-000000000001";
 describe("safe artifact rendering", () => {
   it("escapes active content and embeds only resolved image attachments", () => {
@@ -16,9 +16,15 @@ describe("safe artifact rendering", () => {
     expect(html).not.toContain("<img"); expect(html).toContain(`/agents/root/artifacts?artifact=${id}`);
     expect(artifactContentUrl("root/other", id)).toContain("root%2Fother");
   });
-  it("shows queued calls and retained queue wait timings", () => {
+  it("shows queued calls and execution timings without queue wait timings", () => {
     const html = renderToStaticMarkup(<ToolActivity agentId="root" tools={[{ id: "waiting", name: "↳ ta_rsi", status: "queued" }, { id: "completed", name: "↳ ta_ema", status: "ok", durationMs: 2, queuedMs: 35 }]} />);
-    expect(html).toContain("ta_rsi · queued"); expect(html).toContain("queued 35ms"); expect(html).toContain("open=\"\"");
+    expect(html).toContain("ta_rsi · queued"); expect(html).toContain("ta_ema · ok · 2ms"); expect(html).not.toContain("35ms"); expect(html).toContain("open=\"\"");
+  });
+  it("shows only execution time for inline tool calls", () => {
+    const html = renderToStaticMarkup(<ToolCall tool={{ id: "call", name: "research_candles", status: "ok", durationMs: 202, queuedMs: 403 }} />);
+    expect(html).toContain("202ms");
+    expect(html).not.toContain("403ms");
+    expect(html).not.toContain("queued");
   });
   it("shows nested failure summaries and artifact navigation", () => {
     const html = renderToStaticMarkup(<ToolActivity agentId="root" tools={[{ id: "call", name: "↳ ta_macd", status: "error", error: "Missing candles", arguments: '{"coin":"BTC"}', durationMs: 10 }]} />);

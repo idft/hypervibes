@@ -24,6 +24,17 @@ describe("instrument labels", () => {
     await act(async () => root.render(<InstrumentLabel symbol="ETH" />));
     expect(container.querySelector("img")?.getAttribute("src")).toBe("/currency/ETH.svg");
   });
+  it("shows an icon with an accessible symbol and tooltip in icon-only mode", async () => {
+    await act(async () => root.render(<InstrumentLabel symbol="BTC" iconOnly />));
+    expect(container.querySelector("img")?.getAttribute("src")).toBe("/currency/BTC.svg");
+    expect(container.querySelector('[title="BTC"]')).not.toBeNull();
+    expect(container.querySelector(".sr-only")?.textContent).toBe("BTC");
+    await act(async () => container.querySelector("img")!.dispatchEvent(new Event("error")));
+    expect(container.querySelector('[aria-hidden="true"]')?.textContent).toBe("BTC");
+    await act(async () => root.render(<InstrumentLabel symbol="@107" iconOnly />));
+    expect(container.querySelector(".sr-only")).toBeNull();
+    expect(container.textContent).toBe("@107");
+  });
   it.each(["@107", "BTC/USDC", "<script>"])("leaves unsupported identifiers as plain text: %s", async (symbol) => {
     await act(async () => root.render(<InstrumentLabel symbol={symbol} />));
     expect(container.querySelector("img")).toBeNull();

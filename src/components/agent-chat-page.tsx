@@ -7,6 +7,7 @@ import { ModelDialog, modelKey } from "./model-picker.js";
 import { ProviderLogo } from "./provider-logo.js";
 import { ToolCall } from "./tool-activity.js";
 import { ArtifactContent } from "./artifact-content.js";
+import { ChatBubble } from "./chat-bubble.js";
 import { useAgentChat } from "./use-agent-chat.js";
 
 const compactNumber = new Intl.NumberFormat("en", { notation: "compact", maximumFractionDigits: 1 });
@@ -16,14 +17,14 @@ function money(value: number): string {
 }
 
 function ChatMessage({ entry, agentId }: { entry: ChatEntry; agentId: string }) {
-  if (entry.role === "tool") return entry.tool ? <ToolCall tool={entry.tool} agentId={agentId} /> : null;
+  if (entry.role === "tool") return entry.tool ? <ToolCall tool={entry.tool} /> : null;
   if (entry.role === "system") {
     return <div role="presentation" className="flex items-center gap-3 py-1"><span className="h-px flex-1 bg-zinc-800" /><span className="text-xs text-zinc-500">{entry.text}</span><span className="h-px flex-1 bg-zinc-800" /></div>;
   }
-  return <article className={`rounded-xl p-4 ${entry.role === "user" ? "ml-8 bg-violet-950/40" : "mr-8 bg-zinc-900"}`}>
+  return <ChatBubble role={entry.role}>
     <h2 className="mb-2 text-xs font-semibold uppercase tracking-wide text-zinc-400">{entry.role === "user" ? "You" : "Assistant"}</h2>
     {entry.failed ? <p className="whitespace-pre-wrap break-words text-sm text-red-300">{entry.text}</p> : <ArtifactContent agentId={agentId} content={entry.text} />}
-  </article>;
+  </ChatBubble>;
 }
 
 function ResetContextDialog({ onCancel, onConfirm, disabled }: { onCancel: () => void; onConfirm: () => void; disabled: boolean }) {

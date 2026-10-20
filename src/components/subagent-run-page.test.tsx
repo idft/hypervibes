@@ -51,15 +51,78 @@ describe("sub-agent run history and details", () => {
   });
   it("shows snapshotted instructions, full transcript, tools and prior context without duplicated sections", async () => {
     await act(async () => root.render(<SubagentRunPage initial={initial} />));
-    for (const text of ["Saved worker instructions", run.task, "Earlier assignment", "Reasoning evidence", "Full assistant response", "Tool call · get_account", '"coin": "BTC"', "Complete tool output"]) expect(container.textContent).toContain(text);
+    for (const text of ["Saved worker instructions", run.task, "Earlier assignment", "Reasoning evidence", "Full assistant response", "get_account", '"coin":"BTC"', "Complete tool output"]) expect(container.textContent).toContain(text);
     // The assignment and final result duplicate the transcript's first user
     // message and last assistant message, so they no longer get their own sections.
     expect(container.textContent).not.toContain("Complete final result");
     expect([...container.querySelectorAll("h2")].map((heading) => heading.textContent)).not.toContain("Assignment");
     expect([...container.querySelectorAll("h2")].map((heading) => heading.textContent)).not.toContain("Final result");
     expect(container.textContent).not.toContain("Changed since execution");
-    expect(container.querySelectorAll("details").length).toBeGreaterThan(3);
+    expect(container.textContent).not.toContain("Assignment completion is not a filled-trade or protection guarantee.");
+    expect(container.textContent).not.toContain("Saved configuration");
+    expect(container.textContent).not.toContain("Raw transcript entry");
+    const instructions = [...container.querySelectorAll("details")].find((details) => details.querySelector("summary")?.textContent === "Instructions at execution")!;
+    expect(instructions.open).toBe(false);
+    expect(instructions.textContent).toContain("Saved worker instructions");
+    await act(async () => instructions.querySelector("summary")!.click());
+    expect(instructions.open).toBe(true);
+    expect([...container.querySelectorAll("article")].every((article) => article.textContent?.trim())).toBe(true);
     expect(container.querySelectorAll("hr")).toHaveLength(1);
+  });
+  it("merges consecutive assistant messages across tool results without crossing user or system messages", async () => {
+    const reply = (id: number, text: string) => entry(id, "pi.assistant", [fauxAssistantMessage([{ type: "text", text }], { timestamp: 1 })]);
+    const entries = [...initial.entries, reply(5, "After tool response"), reply(6, "Final response"), entry(7, "pi.user", [{ role: "user", content: "Follow-up", timestamp: 1 }]), reply(8, "New turn"), entry(9, "pi.system", [{ role: "system", content: "Updated prompt", timestamp: 1 }]), reply(10, "After system update")];
+    await act(async () => root.render(<SubagentRunPage initial={{ ...initial, prior: [], entries }} />));
+    const blocks = [...container.querySelectorAll("article")].filter((article) => article.querySelector("h3")?.textContent === "assistant");
+    expect(blocks).toHaveLength(3);
+    expect(blocks[0]!.querySelectorAll("h3")).toHaveLength(1);
+    expect(blocks[0]!.className).toContain("bg-zinc-900");
+    expect(blocks[0]!.className).toContain("mr-8");
+    const userBubble = [...container.querySelectorAll("article")].find((article) => article.querySelector("h3")?.textContent === "user")!;
+    expect(userBubble.className).toContain("bg-violet-950/40");
+    expect(userBubble.className).toContain("ml-8");
+    const content = blocks[0]!.textContent!;
+    for (const text of ["Reasoning evidence", "Full assistant response", "get_account", "Complete tool output", "After tool response", "Final response"]) expect(content).toContain(text);
+    expect(content.indexOf("get_account")).toBeLessThan(content.indexOf("After tool response"));
+    expect(content.indexOf("After tool response")).toBeLessThan(content.indexOf("Final response"));
+    expect(blocks[1]!.textContent).toContain("New turn");
+    expect(blocks[2]!.textContent).toContain("After system update");
+  });
+  it("expands system prompts with named sections in current and earlier context", async () => {
+    const system = (id: number, content: string | { type: "text"; text: string }[]) => entry(id, "pi.system", [{ role: "system", content, sections: { instructions: "System section instructions", obsolete: null }, toolsRemoved: [{ name: "old_tool" }], timestamp: 1 }]);
+    await act(async () => root.render(<SubagentRunPage initial={{ ...initial, prior: [system(10, "Earlier base prompt")], entries: [system(11, [{ type: "text", text: "Current base prompt" }]), system(12, "")] }} />));
+    const systems = [...container.querySelectorAll("details")].filter((details) => details.querySelector(":scope > summary")?.textContent === "System");
+    expect(systems).toHaveLength(3);
+    for (const details of systems) {
+      expect(details.open).toBe(false);
+      await act(async () => details.querySelector("summary")!.click());
+      expect(details.open).toBe(true);
+      expect(details.textContent).toContain("System section instructions");
+      expect(details.textContent).toContain("Section removed");
+      expect(details.textContent).toContain("Tools removed: old_tool");
+    }
+    expect(systems[0]!.textContent).toContain("Earlier base prompt");
+    expect(systems[1]!.textContent).toContain("Current base prompt");
+  });
+  it("renders collapsed tools inline and preserves expansion during live updates", async () => {
+    const pending = { ...initial, entries: initial.entries.slice(0, 2) };
+    await act(async () => root.render(<SubagentRunPage initial={pending} />));
+    const transcript = [...container.querySelectorAll("section")].find((section) => section.querySelector("h2")?.textContent === "Conversation transcript")!;
+    const tool = [...transcript.querySelectorAll("details")].find((details) => details.querySelector("summary")?.textContent?.includes("get_account"))!;
+    expect(tool.open).toBe(false);
+    expect(tool.querySelector("summary")?.textContent).toContain("pending");
+    expect(transcript.textContent!.indexOf("Full assistant response")).toBeLessThan(transcript.textContent!.indexOf("get_account"));
+    await act(async () => { tool.open = true; });
+    const completed = { ...initial, tools: [{ id: "call", name: "get_account", status: "done", output: "Bounded result" }] };
+    await act(async () => RunSource.instances.at(-1)!.dispatchEvent(new MessageEvent("run", { data: JSON.stringify(completed) })));
+    expect(tool.open).toBe(true);
+    expect(tool.querySelector("summary")?.textContent).toContain("done");
+    expect(tool.textContent).toContain("Bounded result");
+    expect(tool.textContent).toContain('"coin":"BTC"');
+    expect([...transcript.querySelectorAll("summary")].filter((summary) => summary.textContent?.includes("get_account"))).toHaveLength(1);
+    expect(container.textContent).not.toContain("Tool activity");
+    expect(tool.textContent).not.toContain("Bounded summary");
+    expect(tool.textContent).not.toContain("Open artifacts");
   });
   it("renders a one-line breadcrumb to the sub-agent and live-updates without refresh controls", async () => {
     await act(async () => root.render(<SubagentRunPage initial={initial} />));
