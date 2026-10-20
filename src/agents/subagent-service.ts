@@ -7,6 +7,7 @@ import type { AgentRow } from "../db/agent-schema.js";import { hvSubagents, hvSu
 import type { ApplicationDatabase, SharedDatabase } from "../db/shared-database.js";
 import type { FastifyBaseLogger } from "fastify";
 import type { ProviderService } from "../providers/provider-service.js";
+import type { DashboardSubagent } from "./subagent-dashboard.js";
 import { runHistoryPageSize, runPagination, type RunHistory } from "./subagent-history.js";
 import { AgentError, requestId } from "./agent-input.js";
 import { createSubagentExtension, RunReceipt, type RunnerId, type SubagentExtension } from "./subagent-extension.js";
@@ -33,6 +34,7 @@ export class SubagentService {
   private tickActive = false;
   private ready = false;
   private stopping = false;
+  private readonly dashboardListeners = new Map<string, Set<() => void>>();
   private readonly historyListeners = new Map<string, Set<() => void>>();
   private readonly historyShutdown = new AbortController();
   private readonly historyFeeds = new Set<Promise<void>>();
@@ -43,7 +45,11 @@ export class SubagentService {
     this.schedulerFailure = value;
     for (const listeners of this.historyListeners.values()) for (const listener of listeners) listener();
   }
-  private historyChanged(id: string) { for (const listener of this.historyListeners.get(id) ?? []) listener(); }
+  private dashboardChanged(agentId: string) { for (const listener of this.dashboardListeners.get(agentId) ?? []) listener(); }
+  private historyChanged(agentId: string, id: string) {
+    for (const listener of this.historyListeners.get(id) ?? []) listener();
+    this.dashboardChanged(agentId);
+  }
   constructor(private readonly db: ApplicationDatabase, private readonly database: SharedDatabase, private readonly providers: ProviderService, private readonly host: SubagentHost, private readonly execution: ExecutionContextService, private readonly injectedModels = false, private readonly log?: FastifyBaseLogger) {}
   extension(agentId: string, hyperliquid: Extension, capabilities: readonly Extension[]) { return createSubagentExtension(this, agentId, hyperliquid, capabilities, this.execution); }
   async bind(agent: AgentRow, harness: Harness, main: Conversation, hyperliquid: Extension, execution: SubagentExtension, capabilities: readonly Extension[], orchestratorInsights: Extension) {
@@ -99,7 +105,7 @@ export class SubagentService {
   async dashboard(userId: string, agentId: string) {
     await this.host.owned(userId, agentId);
     return this.database.appTransaction(async (db) => {
-      const definitions = await db.select({ id: hvSubagents.id, name: hvSubagents.name, enabled: hvSubagents.enabled }).from(hvSubagents).where(and(eq(hvSubagents.agentId, agentId), eq(hvSubagents.kind, "worker"), eq(hvSubagents.archived, false))).orderBy(asc(hvSubagents.createdAt), asc(hvSubagents.id)).all();
+      const definitions = await db.select({ id: hvSubagents.id, name: hvSubagents.name, enabled: hvSubagents.enabled, schedule: hvSubagents.schedule, nextRunAt: hvSubagents.nextRunAt }).from(hvSubagents).where(and(eq(hvSubagents.agentId, agentId), eq(hvSubagents.kind, "worker"), eq(hvSubagents.archived, false))).orderBy(asc(hvSubagents.createdAt), asc(hvSubagents.id)).all();
       const summaries = [];
       for (const definition of definitions) {
         const { id, status, createdAt, result } = hvSubagentRuns;
@@ -134,6 +140,35 @@ export class SubagentService {
       const runs = await db.select({ id: runId, subagentId, source, task: sql<string>`substr(${task}, 1, 512)`, status, createdAt }).from(hvSubagentRuns).where(filter).orderBy(desc(createdAt), desc(runId)).limit(runHistoryPageSize).offset((pagination.page - 1) * runHistoryPageSize).all();
       return { runs, pagination, schedulerError: this.schedulerError, schedule: { nextRunAt: definition.enabled && !definition.archived ? definition.nextRunAt : null, updatedAt: definition.updatedAt } };
     });
+  }
+  async watchDashboard(userId: string, agentId: string, signal: AbortSignal, publish: (snapshot: DashboardSubagent[]) => void): Promise<void> {
+    this.admit();
+    const lifetime = AbortSignal.any([signal, this.historyShutdown.signal]);
+    let finish!: () => void;
+    const finished = new Promise<void>((resolve) => { finish = resolve; });
+    this.historyFeeds.add(finished);
+    let dirty = true;
+    let wake: (() => void) | undefined;
+    const changed = () => { dirty = true; wake?.(); };
+    const listeners = this.dashboardListeners.get(agentId) ?? new Set<() => void>();
+    this.dashboardListeners.set(agentId, listeners); listeners.add(changed);
+    lifetime.addEventListener("abort", changed);
+    try {
+      while (!lifetime.aborted) {
+        if (dirty) {
+          dirty = false;
+          const snapshot = await this.dashboard(userId, agentId);
+          if (!lifetime.aborted) publish(snapshot);
+        }
+        if (!dirty && !lifetime.aborted) await new Promise<void>((resolve) => { wake = resolve; });
+        wake = undefined;
+      }
+    } finally {
+      lifetime.removeEventListener("abort", changed);
+      listeners.delete(changed);
+      if (!listeners.size) this.dashboardListeners.delete(agentId);
+      this.historyFeeds.delete(finished); finish();
+    }
   }
   async watchHistory(userId: string, agentId: string, id: string, page: number, signal: AbortSignal, publish: (history: RunHistory) => void): Promise<void> {
     this.admit();
@@ -268,7 +303,9 @@ export class SubagentService {
       const existing = await this.db.select().from(hvSubagents).where(eq(hvSubagents.id, id)).get();
       if (existing) { if (existing.agentId !== agentId || canonical(existing.templateOrigin) !== canonical(templateOrigin) || Object.entries(input).some(([key, value]) => JSON.stringify(Reflect.get(existing, key)) !== JSON.stringify(value))) throw new AgentError("Creation request was already used with different settings.", 409); return existing; }
       const now = Date.now();
-      return (await this.db.insert(hvSubagents).values({ ...input, templateOrigin, id, agentId, kind: "worker", nextRunAt: input.enabled ? nextCandleRun(now, input.schedule, input.delaySeconds) : null, createdAt: now, updatedAt: now }).returning().all())[0]!;
+      const row = (await this.db.insert(hvSubagents).values({ ...input, templateOrigin, id, agentId, kind: "worker", nextRunAt: input.enabled ? nextCandleRun(now, input.schedule, input.delaySeconds) : null, createdAt: now, updatedAt: now }).returning().all())[0]!;
+      this.dashboardChanged(agentId);
+      return row;
     }).catch((error: unknown) => {
       if (!(error instanceof AgentError)) this.log?.error({ err: error, agentId, templateId, requestId: creationId }, "Sub-agent creation failed");
       throw error;
@@ -333,7 +370,7 @@ export class SubagentService {
         await this.applyMain(binding, row);
         if (this.ready) binding.harness.resume();
       }
-      this.host.changed(agentId); return row;
+      this.host.changed(agentId); this.dashboardChanged(agentId); return row;
     });
   }
   async archive(userId: string, agentId: string, id: string) {
@@ -343,6 +380,7 @@ export class SubagentService {
       if (row.kind === "orchestrator") throw new AgentError("The main orchestrator cannot be archived or deleted.", 409);
       if (await this.db.select().from(hvSubagentRuns).where(and(eq(hvSubagentRuns.subagentId, id), inArray(hvSubagentRuns.status, active))).get()) throw new AgentError("Stop or finish the active assignment before archiving.", 409);
       await this.db.update(hvSubagents).set({ archived: true, enabled: false, nextRunAt: null, updatedAt: Date.now() }).where(eq(hvSubagents.id, id)).run();
+      this.dashboardChanged(agentId);
     });
   }
   async delegatable(agentId: string) {
@@ -392,7 +430,7 @@ export class SubagentService {
         signal?.throwIfAborted();
         return admitted;
       });
-      this.historyChanged(id);
+      this.historyChanged(agentId, id);
       await this.dispatch(binding, run); return run;
     }, signal);
   }
@@ -410,11 +448,11 @@ export class SubagentService {
       await db.update(hvSubagentRuns).set({ conversationId, status: "running" }).where(and(eq(hvSubagentRuns.id, run.id), inArray(hvSubagentRuns.status, active))).run();
       if (run.config.persistent) await db.update(hvSubagents).set({ conversationId }).where(eq(hvSubagents.id, run.subagentId)).run();
     });
-    this.historyChanged(run.subagentId);
+    this.historyChanged(run.agentId, run.subagentId);
   }
   async finish(id: string, status: "completed" | "failed" | "cancelled" | "skipped", result: string) {
-    const run = await this.db.update(hvSubagentRuns).set({ status, result, finishedAt: Date.now() }).where(and(eq(hvSubagentRuns.id, id), inArray(hvSubagentRuns.status, active))).returning({ subagentId: hvSubagentRuns.subagentId }).get();
-    if (run) this.historyChanged(run.subagentId);
+    const run = await this.db.update(hvSubagentRuns).set({ status, result, finishedAt: Date.now() }).where(and(eq(hvSubagentRuns.id, id), inArray(hvSubagentRuns.status, active))).returning({ agentId: hvSubagentRuns.agentId, subagentId: hvSubagentRuns.subagentId }).get();
+    if (run) this.historyChanged(run.agentId, run.subagentId);
   }
   async reported(id: string) { await this.db.update(hvSubagentRuns).set({ reportedAt: Date.now() }).where(eq(hvSubagentRuns.id, id)).run(); }
   async stop(userId: string, agentId: string, runId: string) {
@@ -505,7 +543,7 @@ export class SubagentService {
         if (!reason) await this.execution.snapshotRunTx(tx, admitted);
         return admitted;
       });
-      this.historyChanged(row.id);
+      this.historyChanged(row.agentId, row.id);
       this.log?.info({ agentId: run.agentId, runId: run.id, subagentId: run.subagentId, status: run.status, reason: reason || undefined }, reason ? "Scheduled sub-agent run skipped" : "Scheduled sub-agent run");
       if (run.status === "queued" && binding) await this.dispatch(binding, run);
     });

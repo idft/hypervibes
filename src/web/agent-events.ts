@@ -2,6 +2,7 @@ import { HyperliquidError } from "../hyperliquid/errors.js";
 import type { ChartSelection, ChartSnapshot } from "../hyperliquid/chart-contracts.js";
 import { AgentError, agentId } from "../agents/agent-input.js";
 import type { AgentDashboard } from "../hyperliquid/agent-dashboard.js";
+import type { DashboardSubagent } from "../agents/subagent-dashboard.js";
 import type { RunHistory } from "../agents/subagent-history.js";
 import type { RunDetail } from "../agents/subagent-service.js";
 import type { AgentChat } from "../agents/agent-service.js";
@@ -20,7 +21,7 @@ export class AgentEventStreams {
   private readonly connections = new Set<() => void>();
   private readonly tasks = new Set<Promise<void>>();
   private readonly users = new Map<string, number>();
-  constructor(private readonly runtime: AppRuntime, private readonly kind: "chat" | "dashboard" | "chart" | "runs" | "run" = "chat") {}
+  constructor(private readonly runtime: AppRuntime, private readonly kind: "chat" | "dashboard" | "chart" | "runs" | "run" | "subagents" = "chat") {}
 
   async open(request: Request, id: string, subagentId?: string, runId?: string): Promise<Response> {
     try {
@@ -110,7 +111,7 @@ export class AgentEventStreams {
       } catch { finish("unavailable", "Unable to verify this session. Reconnecting…"); }
       finally { checking = false; }
     };
-    const publish = (snapshot: AgentChat | AgentDashboard | ChartSnapshot | RunHistory | RunDetail) => {
+    const publish = (snapshot: AgentChat | AgentDashboard | ChartSnapshot | RunHistory | RunDetail | DashboardSubagent[]) => {
       if (closed) return;
       if (Date.now() >= expiry) { finish("unauthorized", "Session expired. Please sign in again."); return; }
       const value = frame(this.kind, snapshot);
@@ -139,6 +140,7 @@ export class AgentEventStreams {
       heartbeat.unref();
       const watching = Promise.resolve().then(() => this.kind === "chat"
         ? this.runtime.agents.watchChat(userId, id, abort.signal, publish)
+        : this.kind === "subagents" ? this.runtime.agents.subagents.watchDashboard(userId, id, abort.signal, publish)
         : run ? this.runtime.agents.subagents.watchRun(userId, id, run.subagentId, run.runId, abort.signal, publish)
           : history ? this.runtime.agents.subagents.watchHistory(userId, id, history.subagentId, history.page, abort.signal, publish)
           : selection ? this.runtime.hyperliquid.charts.watch(selection, abort.signal, publish)

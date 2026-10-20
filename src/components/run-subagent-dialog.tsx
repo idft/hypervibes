@@ -13,7 +13,12 @@ export function RunSubagentDialog({ task, onTaskChange, onCancel, onRun }: { tas
     finally { inFlight.current = false; setSaving(false); }
   }
   return <ConfigDialog title="Run manually" onCancel={() => { if (!inFlight.current) onCancel(); }} onApply={() => { void run(); }} applyDisabled={saving || !task.trim()} applyLabel={saving ? "Starting…" : "Run assignment"}>
-    <label className="block space-y-2 text-sm">Assignment<textarea autoFocus required disabled={saving} rows={5} maxLength={16000} value={task} onChange={(event) => onTaskChange(event.target.value)} className={configInput} /></label>
+    <label className="block space-y-2 text-sm">Assignment<textarea autoFocus required disabled={saving} rows={5} maxLength={16000} value={task} onChange={(event) => onTaskChange(event.target.value)} onKeyDown={(event) => {
+      if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
+        event.preventDefault();
+        void run();
+      }
+    }} className={configInput} /></label>
     {error && <p role="alert" className="text-sm text-red-300">{error}</p>}
   </ConfigDialog>;
 }

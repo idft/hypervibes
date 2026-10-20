@@ -4,6 +4,8 @@ import { candleIntervals, accountToolNames, researchToolNames, taToolNames, type
 import { memoryToolNames } from "../memory/memory-contracts.js";
 import { ConfigDialog, configButton, configInput } from "./config-dialog.js";
 
+import { SubagentEnabledToggle } from "./subagent-enabled-toggle.js";
+
 type Identity = Pick<SubagentInput, "name" | "description">;
 export function SubagentIdentity({ value, main, agentId, enabled, onToggleEnabled, onChange, actions }: { actions?: ReactNode; value: Identity; main: boolean; agentId: string; enabled: boolean; onToggleEnabled: () => void; onChange: (value: Identity) => Promise<void> }) {
   const [open, setOpen] = useState(false);
@@ -13,10 +15,7 @@ export function SubagentIdentity({ value, main, agentId, enabled, onToggleEnable
           <a href={`/agents/${agentId}/sub-agents`} className="cursor-pointer text-sm text-zinc-400 hover:text-white"><span aria-hidden="true">← </span>Sub-agents</a>
           <span aria-hidden="true" className="text-zinc-600">/</span>
           <h2 aria-current="page" className="break-words text-lg font-medium text-white">{value.name || "Create subagent"}{main && " · Main conversation"}</h2>
-          {!main && <button type="button" aria-label={enabled ? "Pause sub-agent" : "Enable sub-agent"} aria-pressed={enabled} title={enabled ? "Pause new assignments" : "Enable new assignments"} onClick={onToggleEnabled} className={`inline-flex cursor-pointer items-center gap-1.5 rounded-full px-2 py-1 text-xs font-medium ${enabled ? "text-emerald-300 hover:bg-emerald-950" : "text-amber-300 hover:bg-amber-950"}`}>
-            <svg aria-hidden="true" viewBox="0 0 16 16" className="size-3.5" fill="currentColor">{enabled ? <path d="M4 2.5v11L13 8z" /> : <path d="M3 2h4v12H3zm6 0h4v12H9z" />}</svg>
-            {enabled ? "Enabled" : "Paused"}
-          </button>}
+          {!main && <SubagentEnabledToggle enabled={enabled} onClick={onToggleEnabled} />}
           <span className="min-w-0 break-words text-sm text-zinc-400">{value.description || "No description"}</span>
           <button type="button" aria-label="Edit name and description" title="Edit name and description" aria-haspopup="dialog" onClick={() => setOpen(true)} className="inline-flex shrink-0 cursor-pointer items-center justify-center rounded-md p-1 text-zinc-400 hover:bg-zinc-800 hover:text-white">
             <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round" className="size-4"><path d="m16 4 4 4M4 20l4-1L21 6a2.8 2.8 0 0 0-4-4L4 15z" /></svg>

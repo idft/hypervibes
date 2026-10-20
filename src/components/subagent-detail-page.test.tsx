@@ -89,7 +89,7 @@ describe("subagent pages", () => {
 
   it("lists the protected orchestrator and links workers to detail pages", () => {
     const html = renderToStaticMarkup(<SubagentsPage agentId={definition.agentId} definitions={[{ ...definition, id: "main:fixture", kind: "orchestrator", name: "Orchestrator" }, definition]} />);
-    expect(html).toContain("Main conversation · Protected"); expect(html).toContain("Create subagent");
+    expect(html).toContain("Main conversation"); expect(html).not.toContain("Protected"); expect(html).toContain("Create subagent");
     expect(html).toContain("/agents/agent-fixture/sub-agents/worker%3Afixture"); expect(html).toContain("Fresh context per assignment");
   });
   it("hides archived workers by default and lets users show or hide them", async () => {
@@ -104,6 +104,29 @@ describe("subagent pages", () => {
     await click("Hide archived");
     expect(container.textContent).not.toContain("Old research");
     expect(container.textContent).toContain("Research");
+  });
+  it("toggles workers on the index without nesting controls in links", async () => {
+    await act(async () => root.render(<SubagentsPage agentId={definition.agentId} definitions={[definition]} />));
+    const toggle = container.querySelector<HTMLButtonElement>('[aria-label="Pause sub-agent"]')!;
+    expect(toggle.closest("a")).toBeNull();
+    await click("Pause sub-agent");
+    expect(mocks.saveSubagentSection).toHaveBeenCalledWith({ data: { agentId: definition.agentId, id: definition.id, section: "enabled", settings: { enabled: false } } });
+    expect(container.querySelector('[aria-label="Enable sub-agent"]')?.textContent).toBe("Paused");
+    expect(mocks.success).toHaveBeenCalledWith("Sub-agent paused");
+    await click("Enable sub-agent");
+    expect(container.querySelector('[aria-label="Pause sub-agent"]')?.getAttribute("aria-pressed")).toBe("true");
+    expect(mocks.invalidate).toHaveBeenCalledTimes(2);
+    expect(mocks.navigate).not.toHaveBeenCalled();
+  });
+  it("keeps index toggle state on failure and excludes protected or archived agents", async () => {
+    mocks.saveSubagentSection.mockResolvedValue({ ok: false, error: "Unable to save" });
+    await act(async () => root.render(<SubagentsPage agentId={definition.agentId} definitions={[definition, { ...definition, id: "main", kind: "orchestrator" }, { ...definition, id: "old", archived: true }]} />));
+    await click("Show archived (1)");
+    expect(container.querySelectorAll('[aria-label="Pause sub-agent"]')).toHaveLength(1);
+    await click("Pause sub-agent");
+    expect(container.querySelector('[role="alert"]')?.textContent).toBe("Unable to save");
+    expect(container.querySelector('[aria-label="Pause sub-agent"]')?.getAttribute("aria-pressed")).toBe("true");
+    expect(mocks.invalidate).not.toHaveBeenCalled();
   });
   it("redirects to the refreshed index after archiving", async () => {
     await render(); const browserConfirm = vi.spyOn(window, "confirm");
@@ -525,6 +548,29 @@ describe("subagent pages", () => {
     await act(async () => { document.querySelector("dialog")!.dispatchEvent(new Event("cancel", { cancelable: true })); });
     expect(document.querySelector("dialog")).toBeNull();
     expect(mocks.runSubagent).not.toHaveBeenCalled();
+  });
+  it("submits manual assignments with Enter but leaves Shift+Enter and composition alone", async () => {
+    await render(); await click("Run now");
+    const task = document.querySelector<HTMLTextAreaElement>("dialog textarea")!;
+    const keydown = async (options: KeyboardEventInit = {}) => {
+      const event = new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true, ...options });
+      await act(async () => { task.dispatchEvent(event); });
+      return event;
+    };
+    await keydown();
+    expect(mocks.runSubagent).not.toHaveBeenCalled();
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(task, "Research conditions");
+      task.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    expect((await keydown({ shiftKey: true })).defaultPrevented).toBe(false);
+    expect((await keydown({ isComposing: true })).defaultPrevented).toBe(false);
+    expect(mocks.runSubagent).not.toHaveBeenCalled();
+    mocks.runSubagent.mockResolvedValue({ ok: true, data: { id: "keyboard-run" } });
+    expect((await keydown()).defaultPrevented).toBe(true);
+    expect(mocks.runSubagent).toHaveBeenCalledOnce();
+    expect(mocks.runSubagent).toHaveBeenCalledWith({ data: { agentId: definition.agentId, id: definition.id, task: "Research conditions", requestId: expect.any(String) } });
+    expect(document.querySelector("dialog")).toBeNull();
   });
   it("redirects an accepted manual assignment to its run detail without saving settings", async () => {
     await render(); await editInstructions("Unsaved instructions");

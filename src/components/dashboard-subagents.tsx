@@ -1,18 +1,47 @@
+import { useEffect, useRef, useState } from "react";
+import { useRouter } from "@tanstack/react-router";
+import { toast } from "sonner";
+import { format } from "timeago.js";
+import { SubagentEnabledToggle } from "./subagent-enabled-toggle.js";
+import { runSubagent, saveSubagentSection } from "../web/subagents.js";
+import { RunSubagentDialog } from "./run-subagent-dialog.js";
 import type { DashboardSubagent } from "../agents/subagent-dashboard.js";
 import { RelativeTime, RunStatus, runUrl } from "./subagent-run-history.js";
 
 export function DashboardSubagents({ agentId, subagents, error }: { agentId: string; subagents: DashboardSubagent[]; error?: string }) {
+  const [runTarget, setRunTarget] = useState<string | null>(null);
+  const [workers, setWorkers] = useState(subagents);
+  const [refreshError, setRefreshError] = useState("");
+  const [loadError, setLoadError] = useState(error);
+  useEffect(() => { setWorkers(subagents); setLoadError(error); }, [subagents, error]);
+  useEffect(() => {
+    setRefreshError("");
+    const source = new EventSource(`/api/agents/${encodeURIComponent(agentId)}/sub-agents/events`);
+    source.addEventListener("subagents", (event) => {
+      setWorkers(JSON.parse((event as MessageEvent).data) as DashboardSubagent[]);
+      setRefreshError(""); setLoadError(undefined);
+    });
+    const interrupted = () => setRefreshError("Live sub-agent updates interrupted. Reconnecting… Activity may be out of date.");
+    source.onerror = interrupted;
+    source.addEventListener("unavailable", interrupted);
+    source.addEventListener("shutdown", interrupted);
+    source.addEventListener("unauthorized", () => { source.close(); window.location.assign("/login"); });
+    source.addEventListener("stream-error", () => { source.close(); setRefreshError("Sub-agent activity is too large to stream. Reload the page."); });
+    return () => source.close();
+  }, [agentId]);
   const base = `/agents/${encodeURIComponent(agentId)}/sub-agents`;
   return <section aria-label="Sub-agents" className="rounded-2xl border border-zinc-800 bg-[#0d0d10] p-6">
     <header className="mb-4 flex flex-wrap items-center justify-between gap-3">
       <h3 className="text-lg font-medium text-white">Sub-agents</h3>
       <a href={`${base}/new`} className="cursor-pointer text-sm text-violet-400 hover:text-violet-300 hover:underline">Create a new sub-agent</a>
     </header>
-    {error ? <p role="alert" className="text-sm text-amber-200">Sub-agents unavailable: {error}</p> : !subagents.length ? <p className="text-sm text-zinc-500">No sub-agents yet. Create a new sub-agent to get started.</p> : <ul className="space-y-4">
-      {subagents.map((subagent) => <li key={subagent.id} className="overflow-hidden rounded-xl border border-zinc-800">
-        <h4><a href={`${base}/${encodeURIComponent(subagent.id)}`} className="flex cursor-pointer items-center justify-between gap-3 bg-zinc-900/50 px-4 py-3 font-medium text-zinc-100 hover:bg-zinc-800/60 hover:text-violet-300">
-          {subagent.name}{!subagent.enabled && <span className="text-xs font-normal text-zinc-500">Disabled</span>}
-        </a></h4>
+    {loadError ? <p role="alert" className="text-sm text-amber-200">Sub-agents unavailable: {loadError}</p> : !workers.length ? <p className="text-sm text-zinc-500">No sub-agents yet. Create a new sub-agent to get started.</p> : <ul className="space-y-4">
+      {workers.map((subagent) => <li key={subagent.id} className="overflow-hidden rounded-xl border border-zinc-800">
+        <div className="flex flex-wrap items-center gap-2 bg-zinc-900/50 px-4 py-3">
+          <h4 className="min-w-0"><a href={`${base}/${encodeURIComponent(subagent.id)}`} className="cursor-pointer font-medium text-zinc-100 hover:text-violet-300">{subagent.name}</a></h4>
+          <button type="button" aria-label={`Run now: ${subagent.name}`} title="Run now" aria-haspopup="dialog" onClick={() => setRunTarget(subagent.id)} className="inline-flex shrink-0 cursor-pointer items-center justify-center rounded-full p-1.5 text-violet-300 hover:bg-violet-950"><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round" className="size-4"><path d="m13 2-9 12h7l-1 8 10-12h-7z" /></svg></button>
+          <DashboardWorkerControls agentId={agentId} definition={subagent} />
+        </div>
         {!subagent.runs.length ? <p className="px-4 py-3 text-sm text-zinc-500">No runs yet.</p> : <ul className="divide-y divide-zinc-800/60">{subagent.runs.map((run) => <li key={run.id}>
           <a href={runUrl(agentId, subagent.id, run.id)} className="flex cursor-pointer items-center gap-3 px-4 py-3 text-sm hover:bg-zinc-900 focus-visible:outline-violet-400">
             <RunStatus status={run.status} />
@@ -22,5 +51,59 @@ export function DashboardSubagents({ agentId, subagents, error }: { agentId: str
         </li>)}</ul>}
       </li>)}
     </ul>}
+    {refreshError && <p role="alert" className="mt-3 text-sm text-amber-200">{refreshError}</p>}
+    {runTarget && <DashboardRunDialog key={`${agentId}:${runTarget}`} agentId={agentId} subagentId={runTarget} onClose={() => setRunTarget(null)} />}
   </section>;
+}
+
+function NextRun({ timestamp }: { timestamp: number }) {
+  const [, tick] = useState(0);
+  useEffect(() => {
+    const timer = setInterval(() => tick((value) => value + 1), 1000);
+    return () => clearInterval(timer);
+  }, []);
+  const exact = new Date(timestamp).toISOString();
+  return <span className="text-xs text-zinc-400">Next run: <time dateTime={exact} title={exact} suppressHydrationWarning>{timestamp > Date.now() ? format(timestamp) : "due now"}</time></span>;
+}
+
+function DashboardWorkerControls({ agentId, definition }: { agentId: string; definition: DashboardSubagent }) {
+  const [settings, setSettings] = useState(definition);
+  const [pending, setPending] = useState(false);
+  const [error, setError] = useState("");
+  const inFlight = useRef(false);
+  useEffect(() => { setSettings(definition); }, [definition]);
+  async function toggle() {
+    if (inFlight.current) return;
+    inFlight.current = true; setPending(true); setError("");
+    try {
+      const result = await saveSubagentSection({ data: { agentId, id: definition.id, section: "enabled", settings: { enabled: !settings.enabled } } });
+      if (!result.ok) throw new Error(result.error);
+      setSettings((current) => ({ ...current, enabled: result.data.enabled, schedule: result.data.schedule, nextRunAt: result.data.nextRunAt }));
+      toast.success(result.data.enabled ? "Sub-agent enabled" : "Sub-agent paused");
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Unable to change enabled status. Please retry.");
+    } finally { inFlight.current = false; setPending(false); }
+  }
+  return <div className="flex flex-wrap items-center gap-2">
+    <SubagentEnabledToggle enabled={settings.enabled} disabled={pending} onClick={() => { void toggle(); }} />
+    {settings.enabled && settings.schedule && settings.nextRunAt !== null && <NextRun timestamp={settings.nextRunAt} />}
+    {error && <p role="alert" className="text-xs text-red-300">{error}</p>}
+  </div>;
+}
+
+function DashboardRunDialog({ agentId, subagentId, onClose }: { agentId: string; subagentId: string; onClose: () => void }) {
+  const router = useRouter();
+  const [task, setTask] = useState("");
+  const assignmentId = useRef<{ task: string; id: string } | null>(null);
+  async function startRun() {
+    if (assignmentId.current?.task !== task) assignmentId.current = { task, id: crypto.randomUUID() };
+    let result;
+    try { result = await runSubagent({ data: { agentId, id: subagentId, task, requestId: assignmentId.current!.id } }); }
+    catch { throw new Error("Unable to confirm the assignment. Retry with the same task to reuse its request ID."); }
+    if (!result.ok) throw new Error(result.error);
+    toast.success("Assignment started");
+    await router.navigate({ to: "/agents/$agentId/sub-agents/$subagentId/runs/$runId", params: { agentId, subagentId, runId: result.data.id } });
+    onClose();
+  }
+  return <RunSubagentDialog task={task} onTaskChange={setTask} onCancel={onClose} onRun={startRun} />;
 }

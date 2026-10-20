@@ -3,10 +3,14 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AgentDashboard } from "../hyperliquid/agent-dashboard.js";
+const mocks = vi.hoisted(() => ({ runSubagent: vi.fn(), navigate: vi.fn(), saveSubagentSection: vi.fn(), invalidate: vi.fn().mockResolvedValue(undefined) }));
+vi.mock("../web/subagents.js", () => ({ runSubagent: mocks.runSubagent, saveSubagentSection: mocks.saveSubagentSection }));
+vi.mock("@tanstack/react-router", () => ({ useRouter: () => ({ navigate: mocks.navigate, invalidate: mocks.invalidate }) }));
 import { AgentDashboardPage } from "./agent-dashboard-page.js";
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 const initial: AgentDashboard = { address: `0x${"12".repeat(20)}`, fetchedAt: 0, perpEquity: "12.5", spotUsdc: "3", positions: [], orders: [], errors: [] };
-const source = () => FakeEventSource.instances[0]!;
+const source = () => FakeEventSource.instances.find((source) => source.url.endsWith("/dashboard/events"))!;
+const workerSource = () => FakeEventSource.instances.find((source) => source.url.endsWith("/sub-agents/events"))!;
 class FakeEventSource extends EventTarget {
   static instances: FakeEventSource[] = [];
   close = vi.fn();
@@ -32,8 +36,8 @@ describe("Agent dashboard", () => {
   });
   it("links worker headers and run results to their detail pages with relative timestamps", async () => {
     await act(async () => root.render(<AgentDashboardPage id="fixture" initial={initial} subagents={[
-      { id: "worker:one", name: "Research", enabled: true, runs: [{ id: "run:one", status: "completed", createdAt: Date.now() - 120000, result: "Market conditions look favorable." }] },
-      { id: "worker:two", name: "Risk", enabled: false, runs: [] },
+      { id: "worker:one", name: "Research", enabled: true, schedule: "", nextRunAt: null, runs: [{ id: "run:one", status: "completed", createdAt: Date.now() - 120000, result: "Market conditions look favorable." }] },
+      { id: "worker:two", name: "Risk", enabled: false, schedule: "", nextRunAt: null, runs: [] },
     ]} />));
     const section = container.querySelector('[aria-label="Sub-agents"]')!;
     expect(section.querySelector('h4 a')?.getAttribute("href")).toBe("/agents/fixture/sub-agents/worker%3Aone");
@@ -43,7 +47,89 @@ describe("Agent dashboard", () => {
     expect(run.querySelector("time")?.textContent).toContain("ago");
     expect(run.querySelector('[aria-label="completed"]')).not.toBeNull();
     expect(section.textContent).toContain("No runs yet.");
-    expect(section.textContent).toContain("Disabled");
+    expect(section.textContent).toContain("Paused");
+  });
+  it("opens the manual assignment dialog from an icon-only button and retries with the same request ID", async () => {
+    const methods = Object.fromEntries(["showModal", "close"].map((key) => [key, Object.getOwnPropertyDescriptor(HTMLDialogElement.prototype, key)]));
+    Object.defineProperties(HTMLDialogElement.prototype, {
+      showModal: { configurable: true, value(this: HTMLDialogElement) { this.open = true; } },
+      close: { configurable: true, value(this: HTMLDialogElement) { this.open = false; } },
+    });
+    try {
+      await act(async () => root.render(<AgentDashboardPage id="fixture" initial={initial} subagents={[{ id: "worker", name: "Research", enabled: false, schedule: "", nextRunAt: null, runs: [] }]} />));
+      const button = container.querySelector<HTMLButtonElement>('[aria-label="Run now: Research"]')!;
+      expect(button.textContent).toBe("");
+      expect(button.querySelector("svg")).not.toBeNull();
+      await act(async () => button.click());
+      expect(document.querySelector("dialog")?.textContent).toContain("Run manually");
+      const textarea = document.querySelector("dialog textarea")!;
+      await act(async () => {
+        Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(textarea, "Review BTC");
+        textarea.dispatchEvent(new Event("input", { bubbles: true }));
+      });
+      const submit = async () => act(async () => { document.querySelector("dialog form")!.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })); });
+      mocks.runSubagent.mockRejectedValueOnce(new Error("Network failure"));
+      await submit();
+      expect(document.querySelector("dialog [role=alert]")?.textContent).toContain("Retry with the same task");
+      mocks.runSubagent.mockResolvedValueOnce({ ok: true, data: { id: "run" } });
+      await submit();
+      expect(mocks.runSubagent.mock.calls[0]![0].data).toMatchObject({ agentId: "fixture", id: "worker", task: "Review BTC" });
+      expect(mocks.runSubagent.mock.calls[0]![0].data.requestId).toBe(mocks.runSubagent.mock.calls[1]![0].data.requestId);
+      expect(mocks.navigate).toHaveBeenCalledWith({ to: "/agents/$agentId/sub-agents/$subagentId/runs/$runId", params: { agentId: "fixture", subagentId: "worker", runId: "run" } });
+      expect(document.querySelector("dialog")).toBeNull();
+    } finally {
+      for (const [key, descriptor] of Object.entries(methods)) {
+        if (descriptor) Object.defineProperty(HTMLDialogElement.prototype, key, descriptor);
+        else Reflect.deleteProperty(HTMLDialogElement.prototype, key);
+      }
+    }
+  });
+  it("toggles enabled status and shows a live countdown only for enabled schedules", async () => {
+    vi.useFakeTimers();
+    const now = new Date("2026-01-01T00:00:00Z").getTime();
+    vi.setSystemTime(now);
+    try {
+      await act(async () => root.render(<AgentDashboardPage id="fixture" initial={initial} subagents={[
+        { id: "worker", name: "Research", enabled: true, schedule: "1h", nextRunAt: now + 14 * 60000, runs: [] },
+        { id: "manual", name: "Manual", enabled: true, schedule: "", nextRunAt: null, runs: [] },
+      ]} />));
+      const section = container.querySelector('[aria-label="Sub-agents"]')!;
+      expect(section.textContent).toContain("Next run: in 14 minutes");
+      expect(section.querySelectorAll("time")).toHaveLength(1);
+      await act(async () => vi.advanceTimersByTime(60000));
+      expect(section.textContent).toContain("Next run: in 13 minutes");
+      expect(mocks.invalidate).not.toHaveBeenCalled();
+      mocks.saveSubagentSection.mockResolvedValueOnce({ ok: true, data: { enabled: false, schedule: "1h", nextRunAt: null } });
+      await act(async () => section.querySelector<HTMLButtonElement>('[aria-label="Pause sub-agent"]')!.click());
+      expect(mocks.saveSubagentSection).toHaveBeenLastCalledWith({ data: { agentId: "fixture", id: "worker", section: "enabled", settings: { enabled: false } } });
+      expect(section.textContent).not.toContain("Next run:");
+      mocks.saveSubagentSection.mockResolvedValueOnce({ ok: false, error: "Unable to enable" });
+      await act(async () => section.querySelector<HTMLButtonElement>('[aria-label="Enable sub-agent"]')!.click());
+      expect(section.querySelector('[role="alert"]')?.textContent).toBe("Unable to enable");
+      mocks.saveSubagentSection.mockResolvedValueOnce({ ok: true, data: { enabled: true, schedule: "1h", nextRunAt: now + 61 * 60000 } });
+      await act(async () => section.querySelector<HTMLButtonElement>('[aria-label="Enable sub-agent"]')!.click());
+      expect(section.textContent).toContain("Next run: in 1 hour");
+    } finally { vi.useRealTimers(); }
+  });
+  it("subscribes to live activity for manual workers, recovers after disconnect, and closes on unmount", async () => {
+    const connection = workerSource();
+    expect(connection.url).toBe("/api/agents/fixture/sub-agents/events");
+    const send = (runs: unknown[]) => act(async () => connection.dispatchEvent(new MessageEvent("subagents", { data: JSON.stringify([
+      { id: "worker", name: "Manual worker", enabled: false, schedule: "", nextRunAt: null, runs },
+    ]) })));
+    await send([{ id: "run", status: "running", createdAt: Date.now(), result: "" }]);
+    const section = container.querySelector('[aria-label="Sub-agents"]')!;
+    expect(section.textContent).toContain("Manual worker");
+    expect(section.querySelector('[aria-label="running"]')).not.toBeNull();
+    await act(async () => connection.onerror?.());
+    expect(section.querySelector('[role="alert"]')?.textContent).toContain("Reconnecting");
+    await send([{ id: "run", status: "completed", createdAt: Date.now(), result: "Research finished" }]);
+    expect(section.querySelector('[role="alert"]')).toBeNull();
+    expect(section.textContent).toContain("Research finished");
+    expect(section.querySelector('[aria-label="completed"]')).not.toBeNull();
+    expect(FakeEventSource.instances).toHaveLength(2);
+    await act(async () => root.unmount()); root = createRoot(container);
+    expect(connection.close).toHaveBeenCalledOnce();
   });
   it("shows a load failure rather than an incorrect empty state", async () => {
     await act(async () => root.render(<AgentDashboardPage id="fixture" initial={initial} subagentsError="Please retry." />));
@@ -116,7 +202,7 @@ describe("Agent dashboard", () => {
   });
   it("handles an invalid development agent without opening an account feed", async () => {
     await act(async () => root.render(<AgentDashboardPage id="unlinked" initial={{ ...initial, address: null }} />));
-    expect(FakeEventSource.instances).toHaveLength(1);
+    expect(FakeEventSource.instances.filter((source) => source.url.endsWith("/dashboard/events"))).toHaveLength(1);
     expect(source().close).toHaveBeenCalledOnce();
     expect(container.textContent).toContain("missing its required Hyperliquid account");
   });

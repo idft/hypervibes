@@ -8,6 +8,7 @@ import { randomUUID } from "node:crypto";import { hvUsers } from "../db/auth-sch
 import { createRuntime, type AppRuntime } from "../runtime.js";
 import { testConfig } from "../test-config.js";
 import { hvSubagentRuns } from "../db/subagent-schema.js";
+import type { DashboardSubagent } from "../agents/subagent-dashboard.js";
 import type { RunHistory } from "../agents/subagent-history.js";
 import type { RunDetail } from "../agents/subagent-service.js";
 import { AgentEventStreams } from "./agent-events.js";
@@ -162,6 +163,47 @@ describe("Agent chat event stream", () => {
     await streams.close();
     await runtime.close();
     expect(closeFeed).toHaveBeenCalledOnce();
+  });
+
+  it("pushes dashboard workers, settings and run outcomes without polling, with ownership and cleanup", { timeout: 30_000 }, async () => {
+    await streams.close(); streams = new AgentEventStreams(runtime, "subagents");
+    const agent = await runtime.agents.create("owner", "Research", randomUUID(), `0x${"12".repeat(20)}`);
+    await runtime.agents.subagents.tick();
+    const streamRequest = (signal?: AbortSignal) => new Request(`http://localhost:3003/api/agents/${agent.id}/sub-agents/events`, { headers: { origin: runtime.origin }, signal });
+    mocks.session.mockResolvedValueOnce({ user: { id: "other" }, expiresAt: expiry() });
+    expect((await streams.open(streamRequest(), agent.id)).status).toBe(404);
+    const abort = new AbortController();
+    const response = await streams.open(streamRequest(abort.signal), agent.id);
+    const reader = response.body!.getReader(), buffer = { text: "" };
+    const next = async () => (await readEvent<DashboardSubagent[]>(reader, buffer)).data;
+    expect(await next()).toEqual([]);
+    const dashboard = vi.spyOn(runtime.agents.subagents, "dashboard");
+    try {
+      await runtime.agents.subagents.tick();
+      expect(dashboard).not.toHaveBeenCalled();
+      const worker = await runtime.agents.subagents.create("owner", agent.id, { name: "Research", description: "", instructions: "Find evidence", provider: "faux", modelId: "faux-1", thinkingLevel: "", tools: [], enabled: false, delegatable: true, persistent: false, schedule: "1h", delaySeconds: 30, completion: "save", timeoutSeconds: 900 }, randomUUID());
+      expect((await next())[0]).toMatchObject({ id: worker.id, enabled: false, nextRunAt: null, runs: [] });
+      const enabled = await runtime.agents.subagents.updateSection("owner", agent.id, worker.id, "enabled", { enabled: true });
+      expect((await next())[0]).toMatchObject({ enabled: true, schedule: "1h", nextRunAt: enabled.nextRunAt });
+      faux.setResponses([fauxAssistantMessage("Live dashboard answer")]);
+      const run = await runtime.agents.subagents.run("owner", agent.id, worker.id, "New task", randomUUID());
+      let snapshot = await next();
+      expect(snapshot[0]?.runs.some((item) => item.id === run.id)).toBe(true);
+      for (let i = 0; i < 10 && snapshot[0]?.runs[0]?.status !== "completed"; i++) snapshot = await next();
+      expect(snapshot[0]?.runs[0]).toMatchObject({ id: run.id, status: "completed", result: "Live dashboard answer" });
+      await runtime.agents.subagents.archive("owner", agent.id, worker.id);
+      expect(await next()).toEqual([]);
+      abort.abort();
+      await streams.close();
+      const reads = dashboard.mock.calls.length;
+      await runtime.agents.subagents.create("owner", agent.id, { ...worker, name: "Another", enabled: false }, randomUUID());
+      expect(dashboard.mock.calls.length).toBe(reads);
+      streams = new AgentEventStreams(runtime, "subagents");
+      const reconnect = await streams.open(streamRequest(), agent.id);
+      const reconnected = await readEvent<DashboardSubagent[]>(reconnect.body!.getReader(), { text: "" });
+      expect(reconnected.event).toBe("subagents");
+      expect(reconnected.data[0]?.name).toBe("Another");
+    } finally { dashboard.mockRestore(); }
   });
 
   it("pushes paginated run history on creation/completion, authorizes its scope and closes its watcher", async () => {

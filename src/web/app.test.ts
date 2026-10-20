@@ -102,7 +102,7 @@ describe("embedded HTTP host", () => {
     expect((await app.inject("/api/v1/agents")).statusCode).toBe(404);
   });
 
-  it.each(["events", "sub-agents/worker%3Afixture/runs/events?page=2", "sub-agents/worker%3Afixture/runs/run-fixture/events"])("serves Agent event streams through the embedded host: %s", async (path) => {
+  it.each(["events", "sub-agents/events", "sub-agents/worker%3Afixture/runs/events?page=2", "sub-agents/worker%3Afixture/runs/run-fixture/events"])("serves Agent event streams through the embedded host: %s", async (path) => {
     // The stream route is registered before the Start catch-all; anonymous
     // browsers receive a finite JSON error, never an open stream.
     const denied = await app.inject(`/api/agents/4527ece2-5a90-4d5e-b73a-351368ad71f3/${path}`);
@@ -169,13 +169,13 @@ describe("embedded HTTP host", () => {
     expect(runtimes).toHaveLength(0);
   });
 
-  it("closes chat, dashboard, chart, run history and run detail streams before HTTP draining and releases the profile lock", async () => {
+  it("closes chat, dashboard, chart, run history, run detail and sub-agent activity streams before HTTP draining and releases the profile lock", async () => {
     await app.inject("/");
     const runtime = runtimes[0]!;
     const closeStreams = vi.spyOn(AgentEventStreams.prototype, "close");
     const closeServer = app.server.close.bind(app.server);
     const drain = vi.spyOn(app.server, "close").mockImplementation((callback) => {
-      expect(closeStreams).toHaveBeenCalledTimes(5);
+      expect(closeStreams).toHaveBeenCalledTimes(6);
       expect(runtime.status().database).toBe("connected");
       expect(start.close).not.toHaveBeenCalled();
       return closeServer(callback);

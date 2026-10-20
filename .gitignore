@@ -14,3 +14,4 @@ TODO
 /.build/
 /.tanstack/
 /src/routeTree.gen.ts
+.pi
