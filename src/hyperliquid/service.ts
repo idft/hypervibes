@@ -1,5 +1,6 @@
 import { SharedHyperliquidFeeds } from "./shared-feeds.js";
 import { MarketCharts } from "./market-charts.js";
+import { loadMarketSnapshot } from "./market-snapshot.js";
 import type { TradingAuthority } from "./orders/order-service.js";
 import { hvWalletAddresses } from "../db/auth-schema.js";
 import { HttpTransport, InfoClient } from "@nktkas/hyperliquid";
@@ -203,6 +204,11 @@ export class HyperliquidService {
     const remoteFee = needsBuilder ? await maxBuilderFee(this.transport, owner, BUILDER_RECIPIENT, signal) : 0;
     if (needsBuilder && (!row?.builderFeeApprovedAt || !Number.isInteger(fee) || fee < 1 || fee > MAX_BUILDER_FEE_TENTHS_OF_BP || !Number.isSafeInteger(remoteFee) || remoteFee < fee)) throw new HyperliquidError("Builder fee approval is missing or insufficient.", 409);
     return { account, privateKey, ...(account === owner ? {} : { vaultAddress: account as `0x${string}` }), builder: { b: BUILDER_RECIPIENT, f: needsBuilder ? fee : 0 } };
+  }
+
+  async marketSnapshot(instrument: string, signal?: AbortSignal) {
+    if (this.stopped) throw new HyperliquidError("Hyperliquid service is closed", 503);
+    return loadMarketSnapshot(this.transport, instrument, signal);
   }
 
   async agentAccountStatus(userId: string, id: string, signal?: AbortSignal) {

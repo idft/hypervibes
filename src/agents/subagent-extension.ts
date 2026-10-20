@@ -10,7 +10,7 @@ interface ExecutionService {
   reported(id: string): Promise<void>;
   thinking(level: string): AgentChange["thinkingLevel"];
   reportWhenReady(agentId: string, deliver: () => Promise<unknown>, signal: AbortSignal): Promise<boolean>;
-  delegatable(agentId: string): Promise<Pick<SubagentRow, "id" | "name" | "description" | "tools">[]>;
+  listWorkers(agentId: string): Promise<Pick<SubagentRow, "id" | "name" | "description" | "tools" | "enabled" | "delegatable">[]>;
   delegate(agentId: string, id: string, task: string, submissionId: string, signal?: AbortSignal): Promise<SubagentRun>;
 }
 
@@ -121,7 +121,7 @@ export function createSubagentExtension(service: ExecutionService, agentId: stri
     },
   });
   const tools = [
-    defineTool({ name: "list_subagents", description: "List enabled workers available for delegation, their IDs, descriptions and tools. Does not start work.", parameters: Type.Object({}, { additionalProperties: false }), replay: "safe", execute: async () => ({ output: [{ type: "text" as const, text: JSON.stringify(await service.delegatable(agentId)) }] }) }),
+    defineTool({ name: "list_subagents", description: "List all non-archived workers, including paused workers, with IDs, descriptions, tools, enabled and delegatable status. Delegation requires both enabled and delegatable to be true. Does not start work or change settings.", parameters: Type.Object({}, { additionalProperties: false }), replay: "safe", execute: async () => ({ output: [{ type: "text" as const, text: JSON.stringify(await service.listWorkers(agentId)) }] }) }),
     defineTool({ name: "delegate_subagent", description: "Assign a focused task to a configured worker in the background. Returns a run ID immediately. Its outcome will arrive as a follow-up. No recursive delegation; one active assignment per worker.", parameters: Type.Object({ subagent_id: Type.String(), task: Type.String() }, { additionalProperties: false }), replay: "safe", execute: async (args, api, context) => {
       // Stable tool-task identity prevents replay from starting a second assignment.
       const run = await service.delegate(agentId, args.subagent_id, args.task, `delegate:${api.taskId}`, context.abortSignal);
@@ -133,7 +133,7 @@ export function createSubagentExtension(service: ExecutionService, agentId: stri
       return { output: [{ type: "text" as const, text: JSON.stringify({ id: run.id, subagentId: run.subagentId, status: run.status, task: run.task, result: run.result, createdAt: run.createdAt, finishedAt: run.finishedAt }) }] };
     } }),
   ];
-  const extension = defineExtension({ name: "subagents", tasks: [runner], tools, sections: [section("subagents", () => "Use list_subagents before delegation. delegate_subagent starts a background assignment; do not poll repeatedly. Results arrive as follow-ups. Assignment completion does not imply exchange orders filled. Notification-only reports in the UI are not model inputs; use get_subagent_run to inspect a referenced run.")] });
+  const extension = defineExtension({ name: "subagents", tasks: [runner], tools, sections: [section("subagents", () => "Use list_subagents before delegation; it includes paused and non-delegatable workers. Only delegate to workers with both enabled and delegatable set to true. delegate_subagent starts a background assignment; do not poll repeatedly. Results arrive as follow-ups. Assignment completion does not imply exchange orders filled. Notification-only reports in the UI are not model inputs; use get_subagent_run to inspect a referenced run.")] });
   return { extension, runner };
 }
 export type SubagentExtension = ReturnType<typeof createSubagentExtension>;

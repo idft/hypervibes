@@ -31,7 +31,7 @@ export function BalanceSparkline({ label, points }: { label: string; points?: Ba
     <dd className="mt-2" title="Realized USDC balance, including transfers, fees and funding. Excludes unrealized P&L.">
       {polyline ? <>
         <span className={`font-mono text-sm tabular-nums ${color}`}>{change!.sign > 0 ? "+" : ""}{formatMoneyText(change!.toString())} USDC</span>
-        <svg role="img" aria-label={`${label} realized account balance`} viewBox="0 0 240 48" className={`mt-2 h-12 w-full ${color}`} preserveAspectRatio="none"><title>{label} realized account balance (USDC)</title><polyline points={polyline} fill="none" stroke="currentColor" strokeWidth="2" vectorEffect="non-scaling-stroke" /></svg>
+        <svg role="img" aria-label={`${label} realized account balance`} viewBox="0 0 240 48" className={`mt-2 h-12 w-full ${color}`} preserveAspectRatio="none"><title>{`${label} realized account balance (USDC)`}</title><polyline points={polyline} fill="none" stroke="currentColor" strokeWidth="2" vectorEffect="non-scaling-stroke" /></svg>
       </> : <span className="text-sm text-zinc-500">Balance history unavailable</span>}
     </dd>
   </div>;

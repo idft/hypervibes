@@ -1,6 +1,6 @@
 import { BACKGROUND_CONTEXT as context } from "@earendil-works/chord/context";
 import { getSupportedThinkingLevels, type Models } from "@earendil-works/pi-ai/models";
-import { InboxDoc, LiveDoc, type AgentChange, type Conversation, type ConversationId, type Cursor, type EntryRecord, type Extension, type Harness, type ModelRef } from "@earendil-works/pi-durable";
+import { defineDoc, InboxDoc, LiveDoc, type AgentChange, type Conversation, type ConversationId, type Cursor, type EntryRecord, type Extension, type Harness, type ModelRef } from "@earendil-works/pi-durable";
 import { and, asc, count, desc, eq, inArray, isNull, lte, or, sql } from "drizzle-orm";
 import { randomUUID } from "node:crypto";
 import type { AgentRow } from "../db/agent-schema.js";import { hvSubagents, hvSubagentRuns, type SubagentRow, type SubagentRun } from "../db/subagent-schema.js";
@@ -24,6 +24,13 @@ export interface SubagentHost { owned(userId: string, id: string): Promise<Agent
 /** Full run detail: snapshotted configuration plus the complete transcript. */
 export interface RunDetail { definition: SubagentRow; run: SubagentRun; entries: EntryRecord[]; prior: EntryRecord[]; tools?: ToolActivity[]; context?: RunContext; warnings?: ExecutionWarning[]; publications?: { ref: string; kind: string; summary: string }[] }
 const active = ["queued", "running"] as const;
+
+// Public Durable document: an idempotent, schema-free upgrade marker. Once
+// applied, an explicit later tool deselection survives subsequent restarts.
+export const MarketSnapshotUpgradeDoc = defineDoc<{ applied: boolean }>({
+  kind: "hv.market-snapshot-upgrade", version: 1, scope: "conversation", history: "latest", fork: "initial",
+  initial: () => ({ applied: false }),
+});
 
 /** Definitions and run intents belong to the app; Durable owns execution and reporting. */
 export class SubagentService {
@@ -60,7 +67,18 @@ export class SubagentService {
       provider: resolved.model!.provider, modelId: resolved.model!.modelId, thinkingLevel: resolved.thinkingLevel ?? "", tools: mainToolNames, conversationId: main.id, createdAt: now, updatedAt: now,
     }).onConflictDoNothing().run();
     const binding = { harness, main, hyperliquid, capabilities, orchestratorInsights, ...execution, userId: agent.userId };
-    await this.applyMain(binding, (await this.db.select().from(hvSubagents).where(and(eq(hvSubagents.agentId, agent.id), eq(hvSubagents.kind, "orchestrator"))).get())!);
+    const row = (await this.db.select().from(hvSubagents).where(and(eq(hvSubagents.agentId, agent.id), eq(hvSubagents.kind, "orchestrator"))).get())!;
+    const upgraded = await main.commit(async (tx) => (await tx.doc(MarketSnapshotUpgradeDoc, main.id)).applied, context);
+    if (!upgraded) {
+      if (!row.tools.includes("get_market_snapshot")) {
+        row.tools = [...row.tools, "get_market_snapshot"];
+        await this.db.update(hvSubagents).set({ tools: row.tools, updatedAt: now }).where(eq(hvSubagents.id, row.id)).run();
+      }
+      // Separate commits avoid nesting the shared database queue. A crash before
+      // the marker simply retries the idempotent append on the next startup.
+      await main.commit(async (tx) => { (await tx.doc(MarketSnapshotUpgradeDoc, main.id)).applied = true; }, context);
+    }
+    await this.applyMain(binding, row);
     // Mark expired children's pending generations/tools before *any* scheduler
     // resumes. abortTask only marks while paused; unlike conversation.abort it
     // does not enable scheduling. The runner then records/reports the timeout.
@@ -394,8 +412,8 @@ export class SubagentService {
       return row;
     });
   }
-  async delegatable(agentId: string) {
-    return (await this.db.select().from(hvSubagents).where(and(eq(hvSubagents.agentId, agentId), eq(hvSubagents.kind, "worker"), eq(hvSubagents.enabled, true), eq(hvSubagents.archived, false), eq(hvSubagents.delegatable, true))).all()).map(({ id, name, description, tools }) => ({ id, name, description, tools }));
+  async listWorkers(agentId: string) {
+    return (await this.db.select().from(hvSubagents).where(and(eq(hvSubagents.agentId, agentId), eq(hvSubagents.kind, "worker"), eq(hvSubagents.archived, false))).orderBy(asc(hvSubagents.createdAt), asc(hvSubagents.id)).all()).map(({ id, name, description, tools, enabled, delegatable }) => ({ id, name, description, tools, enabled, delegatable }));
   }
   async internalRun(agentId: string, id: string): Promise<SubagentRun> {
     const run = await this.db.select().from(hvSubagentRuns).where(and(eq(hvSubagentRuns.agentId, agentId), eq(hvSubagentRuns.id, id))).get();

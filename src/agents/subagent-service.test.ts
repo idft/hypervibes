@@ -15,6 +15,7 @@ import { createRuntime, type AppRuntime } from "../runtime.js";
 import { testConfig } from "../test-config.js";
 import { nextCandleRun, subagentInput, type SubagentInput } from "./subagent-input.js";
 import { subagentTemplates, templateDraft } from "./subagent-templates.js";
+import { MarketSnapshotUpgradeDoc } from "./subagent-service.js";
 
 const settings = (patch: Partial<SubagentInput> = {}): SubagentInput => ({ name: "Research", description: "Focused evidence", instructions: "Research the assignment using only available evidence.", provider: "faux", modelId: "faux-1", thinkingLevel: "", tools: [], enabled: true, delegatable: true, persistent: false, schedule: "", delaySeconds: 30, completion: "save", timeoutSeconds: 900, ...patch });
 describe("subagent definitions, execution and scheduling", () => {
@@ -36,6 +37,50 @@ describe("subagent definitions, execution and scheduling", () => {
     runtime.start(); await runtime.agents.subagents.tick();
   });
   afterEach(async () => { vi.restoreAllMocks(); await runtime.close(); rmSync(directory, { recursive: true, force: true }); });
+
+  it("upgrades existing orchestrators once without replacing saved selections or instructions", async () => {
+    const opened = vi.spyOn(Harness, "open");
+    const agent = await createAgent();
+    const harness = await opened.mock.results[0]!.value as Harness;
+    const root = await harness.root(context);
+    const main = (await runtime.agents.subagents.list("owner", agent.id)).find((row) => row.kind === "orchestrator")!;
+    expect(main.tools).toContain("get_market_snapshot");
+    // Simulate a pre-upgrade root, with customized tools/instructions.
+    await runtime.db.update(hvSubagents).set({ tools: ["list_memories"], instructions: "Preserve my custom instructions." }).where(eq(hvSubagents.id, main.id)).run();
+    await root.commit(async (tx) => { (await tx.doc(MarketSnapshotUpgradeDoc, root.id)).applied = false; }, context);
+    await runtime.close();
+    runtime = await createRuntime(config(), options());
+    const upgraded = (await runtime.agents.subagents.list("owner", agent.id)).find((row) => row.id === main.id)!;
+    expect(upgraded.tools).toEqual(["list_memories", "get_market_snapshot"]);
+    expect(upgraded.instructions).toBe("Preserve my custom instructions.");
+    expect(upgraded.modelId).toBe(main.modelId);
+    const restored = await (await opened.mock.results[1]!.value as Harness).root(context);
+    expect((await restored.agent(context)).tools.map((tool) => tool.name)).toEqual(expect.arrayContaining(upgraded.tools));
+    expect(faux.state.callCount).toBe(0);
+    // A later deliberate deselection must survive another startup.
+    await runtime.db.update(hvSubagents).set({ tools: ["list_memories"] }).where(eq(hvSubagents.id, main.id)).run();
+    await runtime.close();
+    runtime = await createRuntime(config(), options());
+    expect((await runtime.agents.subagents.list("owner", agent.id)).find((row) => row.id === main.id)!.tools).toEqual(["list_memories"]);
+  });
+
+  it("lists enabled, paused and non-delegatable workers without exposing archived workers or other agents", async () => {
+    const agent = await createAgent();
+    const enabled = await createWorker(agent.id);
+    const paused = await createWorker(agent.id, { enabled: false });
+    const unavailable = await createWorker(agent.id, { delegatable: false });
+    const archived = await createWorker(agent.id);
+    await runtime.agents.subagents.archive("owner", agent.id, archived.id);
+    const other = await createAgent();
+    await createWorker(other.id);
+    expect(await runtime.agents.subagents.listWorkers(agent.id)).toEqual(
+      [enabled, paused, unavailable].map(({ id, name, description, tools, enabled, delegatable }) => ({ id, name, description, tools, enabled, delegatable })),
+    );
+    for (const worker of [paused, unavailable, archived]) {
+      await expect(runtime.agents.subagents.delegate(agent.id, worker.id, "Not available", randomUUID())).rejects.toMatchObject({ status: 409 });
+    }
+    expect(faux.state.callCount).toBe(0);
+  });
 
   it("summarizes only active workers and their latest bounded result for the dashboard", async () => {
     const agent = await createAgent();
@@ -69,7 +114,7 @@ describe("subagent definitions, execution and scheduling", () => {
     const restored = await runtime.agents.subagents.unarchive("owner", agent.id, worker.id);
     expect(restored).toEqual({ ...before.definition, archived: false, enabled: false, nextRunAt: null, updatedAt: expect.any(Number) });
     expect((await detail(agent.id, worker.id)).runs).toEqual(before.runs);
-    expect(await runtime.agents.subagents.delegatable(agent.id)).toEqual([]);
+    expect(await runtime.agents.subagents.listWorkers(agent.id)).toEqual([expect.objectContaining({ id: worker.id, enabled: false, delegatable: true })]);
     await runtime.agents.subagents.tick();
     expect((await detail(agent.id, worker.id)).runs).toEqual(before.runs);
     expect(await runtime.agents.subagents.unarchive("owner", agent.id, worker.id)).toEqual(restored);
@@ -106,7 +151,7 @@ describe("subagent definitions, execution and scheduling", () => {
     const worker = await createWorker(agent.id, { enabled: false, schedule: "15m" });
     await runtime.agents.subagents.tick();
     expect((await detail(agent.id, worker.id)).runs).toEqual([]);
-    expect(await runtime.agents.subagents.delegatable(agent.id)).toEqual([]);
+    expect(await runtime.agents.subagents.listWorkers(agent.id)).toEqual([expect.objectContaining({ id: worker.id, enabled: false, delegatable: true })]);
     await expect(runtime.agents.subagents.delegate(agent.id, worker.id, "Automatic assignment", randomUUID())).rejects.toMatchObject({ status: 409 });
 
     faux.setResponses([fauxAssistantMessage("Manual assignment complete")]);
@@ -255,7 +300,7 @@ describe("subagent definitions, execution and scheduling", () => {
     expect(unchanged.nextRunAt).toBe(nextRunAt);
     const paused = await runtime.agents.subagents.updateSection("owner", agent.id, worker.id, "enabled", { enabled: false, instructions: "Ignored", persistent: false });
     expect(paused).toEqual({ ...worker, enabled: false, nextRunAt: null, conversationId: 12345, updatedAt: paused.updatedAt });
-    expect(await runtime.agents.subagents.delegatable(agent.id)).toEqual([]);
+    expect(await runtime.agents.subagents.listWorkers(agent.id)).toEqual([expect.objectContaining({ id: worker.id, enabled: false, delegatable: true })]);
     const assignmentUpdate = await runtime.agents.subagents.updateAssignments("owner", agent.id, worker.id, { delegatable: true, persistent: true, timeoutSeconds: 600, enabled: true });
     expect(assignmentUpdate.enabled).toBe(false); expect(assignmentUpdate.nextRunAt).toBeNull();
     const enabled = await runtime.agents.subagents.updateSection("owner", agent.id, worker.id, "enabled", { enabled: true });
@@ -446,7 +491,7 @@ describe("subagent definitions, execution and scheduling", () => {
     expect((await detail(agent.id, worker.id)).runs).toHaveLength(1);
     expect((await detail(agent.id, worker.id)).runs[0]).toMatchObject({ source: "delegation", status: "completed", result: "Delegated research result" });
     const disabled = await runtime.agents.subagents.update("owner", agent.id, worker.id, { ...worker, delegatable: false });
-    expect(await runtime.agents.subagents.delegatable(agent.id)).toEqual([]);
+    expect(await runtime.agents.subagents.listWorkers(agent.id)).toEqual([expect.objectContaining({ id: worker.id, enabled: true, delegatable: false })]);
     await expect(runtime.agents.subagents.delegate(agent.id, disabled.id, "No", "delegate:99999")).rejects.toMatchObject({ status: 409 });
   });
 

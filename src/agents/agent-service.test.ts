@@ -79,7 +79,7 @@ describe("per-Agent durable execution", () => {
     const agent = await create();
     const harness = await opened.mock.results[0]!.value as Harness;
     const root = await harness.root(context);
-    const toolNames = ["get_account", "prepare_protected_entry", "prepare_position_protection", "get_protection_status", "submit_orders", "cancel_orders", "cancel_all_orders", "list_orders", "get_order", "get_order_request", "list_subagents", "delegate_subagent", "get_subagent_run", "record_trade_decision", "list_memories", "get_memory", "get_trading_context", "list_instruments"];
+    const toolNames = ["get_account", "get_market_snapshot", "prepare_protected_entry", "prepare_position_protection", "get_protection_status", "submit_orders", "cancel_orders", "cancel_all_orders", "list_orders", "get_order", "get_order_request", "list_subagents", "delegate_subagent", "get_subagent_run", "record_trade_decision", "list_memories", "get_memory", "get_trading_context", "list_instruments"];
     expect((await root.agent(context)).tools.map((tool) => tool.name)).toEqual(toolNames);
     await root.configure({ extensions: [], tools: [], instructions: "Trading and live exchange data are not configured." }, context);
     await runtime.close();
@@ -133,6 +133,11 @@ describe("per-Agent durable execution", () => {
       ]);
       await runtime.agents.send(owner, agent.id, "Check my account", randomUUID());
       await vi.waitFor(async () => expect((await runtime.agents.chat(owner, agent.id)).messages.some((entry) => entry.text === "Account checked")).toBe(true));
+      const chat = await runtime.agents.chat(owner, agent.id);
+      expect(chat.messages.map((entry) => entry.role)).toEqual(["user", "tool", "assistant"]);
+      expect(chat.messages[1]).toMatchObject({ tool: { name: "get_account", status: "done", arguments: "{}", output: expect.any(String) } });
+      const history = await runtime.agents.chatHistory(owner, agent.id);
+      expect(history.messages).toEqual(chat.messages);
       expect(status).toHaveBeenLastCalledWith(owner, agent.id, expect.any(AbortSignal));
     }
     expect(status).toHaveBeenCalledTimes(2);
@@ -231,17 +236,18 @@ describe("per-Agent durable execution", () => {
     await vi.waitFor(async () => {
       // The live tail is the fresh context: only the reset divider.
       const chat = await runtime.agents.chat("owner", agent.id);
-      expect(chat.messages.map((entry) => entry.text)).toEqual(["New conversation"]);
+      expect(chat.messages.map((entry) => entry.text)).toEqual(["Context reset"]);
       // The usage ledger and the model window remain visible.
       expect(chat.usage.cacheWrite).toBe(before.usage.cacheWrite);
       expect(chat.context!.window).toBe(128000);
     });
     const history = await runtime.agents.chatHistory("owner", agent.id);
     expect(history.more).toBe(false);
-    // The full history stays browsable below the divider.
-    expect(history.messages.map((entry) => entry.text)).toEqual(["Hello", "Hello back", "New conversation"]);
+    // The full history stays browsable before the divider.
+    expect(history.messages.map((entry) => entry.text)).toEqual(["Hello", "Hello back", "Context reset"]);
     const chat = await runtime.agents.chat("owner", agent.id);
-    expect(chat.messages.map((entry) => entry.text)).toEqual(["New conversation"]);
+    expect(chat.messages.map((entry) => entry.text)).toEqual(["Context reset"]);
+    expect(chat.agent.conversationId).toBe(before.agent.conversationId);
     // The prior session sits below the fresh context and can be scrolled up to.
     expect(chat.history).toBe(true);
   });

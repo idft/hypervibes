@@ -5,11 +5,21 @@ import type { AppRuntime } from "../runtime.js";
 
 const mocks = vi.hoisted(() => ({ currentUser: vi.fn() }));
 vi.mock("../auth-user.js", () => ({ currentUser: mocks.currentUser }));
-import { agentAction, agentUser, selectedTradingAccount } from "./agents.js";
+import { agentAction, agentUser, optionalNumber, selectedTradingAccount } from "./agents.js";
 
 const runtime = { origin: "http://localhost:3003", status: vi.fn() } as unknown as AppRuntime;
 describe("Agent server-function boundary", () => {
   beforeEach(() => vi.resetAllMocks());
+  it("accepts the first chat history request with an explicitly undefined cursor", () => {
+    expect(optionalNumber({ id: "agent-fixture", before: undefined }, "before")).toBeUndefined();
+    expect(optionalNumber({ id: "agent-fixture" }, "before")).toBeUndefined();
+  });
+  it.each([0, 1, 100, Number.MAX_SAFE_INTEGER])("accepts a valid history cursor: %s", (before) => {
+    expect(optionalNumber({ before }, "before")).toBe(before);
+  });
+  it.each([null, "1", -1, 1.5, NaN, Infinity, Number.MAX_SAFE_INTEGER + 1])("rejects an invalid history cursor: %s", (before) => {
+    expect(() => optionalNumber({ before }, "before")).toThrow("Invalid request");
+  });
   it("requires a fresh authenticated identity for every operation", async () => {
     const headers = new Headers();
     mocks.currentUser.mockResolvedValue({ id: "owner", walletAddress: "0xfixture" });

@@ -16,11 +16,10 @@ export function useAgentChat(initial: AgentChat) {
   const olderRef = useRef(older);
   const loadingRef = useRef(false);
   const doneRef = useRef(false);
+  const lastReset = useRef(initial.messages.find((entry) => entry.marker === "reset")?.id);
+  const historyVersion = useRef(0);
   const id = initial.agent.id;
   useEffect(() => { chatRef.current = chat; }, [chat]);
-  useEffect(() => { olderRef.current = older; }, [older]);
-  useEffect(() => { loadingRef.current = historyLoading; }, [historyLoading]);
-  useEffect(() => { doneRef.current = historyDone; }, [historyDone]);
   useEffect(() => {
     const source = new EventSource(`/api/agents/${id}/events`);
     const interrupted = (event: MessageEvent | undefined, fallback: string) => {
@@ -28,10 +27,16 @@ export function useAgentChat(initial: AgentChat) {
     };
     source.addEventListener("chat", (event) => {
       const next = JSON.parse((event as MessageEvent).data) as AgentChat;
-      // A new context starts a clean history; pages loaded from the previous
-      // context are no longer part of the visible transcript.
-      if (next.messages.some((entry) => entry.marker === "reset")) {
+      // Only a new reset boundary clears history, not every snapshot that
+      // still contains the same marker. Invalidate pending old-context pages.
+      const reset = next.messages.find((entry) => entry.marker === "reset")?.id;
+      if (reset && reset !== lastReset.current) {
+        lastReset.current = reset;
+        historyVersion.current++;
         before.current = undefined;
+        olderRef.current = [];
+        loadingRef.current = false;
+        doneRef.current = false;
         setOlder([]);
         setHistoryDone(false);
         setHistoryLoading(false);
@@ -45,29 +50,41 @@ export function useAgentChat(initial: AgentChat) {
     source.addEventListener("unavailable", (event) => interrupted(event as MessageEvent, "Chat stream interrupted. Reconnecting…"));
     source.addEventListener("stream-error", (event) => interrupted(event as MessageEvent, "Conversation is too large to stream. Reload the page."));
     source.onerror = () => interrupted(undefined, "Connection interrupted. Reconnecting…");
-    return () => { source.close(); };
+    return () => { historyVersion.current++; source.close(); };
   }, [id]);
   /** Prepends one page of transcript older than everything currently shown; returns whether a page was fetched. */
   async function loadOlder(): Promise<boolean> {
     if (loadingRef.current || doneRef.current) return false;
     loadingRef.current = true;
     setHistoryLoading(true);
-    const result = await getAgentChatHistory({ data: { id, before: before.current } });
-    if (!result.ok) {
-      loadingRef.current = false;
-      setHistoryLoading(false);
-      setConnectionError(result.error);
+    const version = historyVersion.current;
+    try {
+      const result = await getAgentChatHistory({ data: { id, before: before.current } });
+      if (version !== historyVersion.current) return false;
+      if (!result.ok) {
+        setConnectionError(result.error);
+        return false;
+      }
+      const known = new Set([...chatRef.current.messages, ...olderRef.current].map((entry) => entry.id));
+      const fresh = result.data.messages.filter((entry) => !known.has(entry.id));
+      if (fresh.length) {
+        olderRef.current = [...fresh, ...olderRef.current];
+        setOlder(olderRef.current);
+      }
+      before.current = result.data.before;
+      doneRef.current = !result.data.more;
+      setHistoryDone(!result.data.more);
+      setConnectionError("");
+      return true;
+    } catch {
+      if (version === historyVersion.current) setConnectionError("Unable to load earlier messages. Please try again.");
       return false;
+    } finally {
+      if (version === historyVersion.current) {
+        loadingRef.current = false;
+        setHistoryLoading(false);
+      }
     }
-    const known = new Set([...chatRef.current.messages, ...olderRef.current].map((entry) => entry.id));
-    const fresh = result.data.messages.filter((entry) => !known.has(entry.id));
-    if (fresh.length) setOlder((current) => [...fresh, ...current]);
-    before.current = result.data.before;
-    doneRef.current = !result.data.more;
-    setHistoryDone(!result.data.more);
-    loadingRef.current = false;
-    setHistoryLoading(false);
-    return true;
   }
   return { chat, messages: [...older, ...chat.messages], connectionError, historyLoading, historyDone, loadOlder };
 }

@@ -1,11 +1,11 @@
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useEffect, useEffectEvent, useId, useLayoutEffect, useRef, useState } from "react";
 import type { AgentChat, ChatEntry } from "../agents/agent-service.js";
 import type { ModelChoice } from "../providers/provider-service.js";
 import { compactAgentChat, resetAgentChat, retryAgent, sendAgentMessage, stopAgentChat } from "../web/agents.js";
 import { saveSubagentSection } from "../web/subagents.js";
 import { ModelDialog, modelKey } from "./model-picker.js";
 import { ProviderLogo } from "./provider-logo.js";
-import { ToolActivity } from "./tool-activity.js";
+import { ToolCall } from "./tool-activity.js";
 import { ArtifactContent } from "./artifact-content.js";
 import { useAgentChat } from "./use-agent-chat.js";
 
@@ -16,6 +16,7 @@ function money(value: number): string {
 }
 
 function ChatMessage({ entry, agentId }: { entry: ChatEntry; agentId: string }) {
+  if (entry.role === "tool") return entry.tool ? <ToolCall tool={entry.tool} agentId={agentId} /> : null;
   if (entry.role === "system") {
     return <div role="presentation" className="flex items-center gap-3 py-1"><span className="h-px flex-1 bg-zinc-800" /><span className="text-xs text-zinc-500">{entry.text}</span><span className="h-px flex-1 bg-zinc-800" /></div>;
   }
@@ -25,6 +26,24 @@ function ChatMessage({ entry, agentId }: { entry: ChatEntry; agentId: string }) 
   </article>;
 }
 
+function ResetContextDialog({ onCancel, onConfirm, disabled }: { onCancel: () => void; onConfirm: () => void; disabled: boolean }) {
+  const dialog = useRef<HTMLDialogElement>(null);
+  const titleId = useId();
+  useEffect(() => {
+    const element = dialog.current!;
+    element.showModal();
+    return () => element.close();
+  }, []);
+  return <dialog ref={dialog} aria-labelledby={titleId} aria-describedby={`${titleId}-description`} onCancel={(event) => { event.preventDefault(); onCancel(); }} className="m-auto w-[calc(100%_-_2rem)] max-w-md rounded-2xl border border-zinc-800 bg-[#0d0d10] p-6 text-zinc-100 shadow-2xl backdrop:bg-black/70 backdrop:backdrop-blur-sm">
+    <h3 id={titleId} className="text-lg font-semibold text-white">Reset context?</h3>
+    <p id={`${titleId}-description`} className="mt-2 text-sm leading-6 text-zinc-400">The model will start fresh. Earlier messages remain available. Accounts, orders, and agent configuration are unchanged.</p>
+    <div className="mt-6 flex flex-col-reverse gap-3 sm:flex-row sm:justify-end">
+      <button type="button" autoFocus onClick={onCancel} className="cursor-pointer rounded-full border border-zinc-800 px-4 py-2 text-sm font-medium text-zinc-300 hover:border-zinc-700 hover:text-white">Cancel</button>
+      <button type="button" disabled={disabled} onClick={onConfirm} className="cursor-pointer rounded-full bg-violet-600 px-4 py-2 text-sm font-medium text-white hover:bg-violet-500 disabled:cursor-not-allowed disabled:opacity-50">Reset context</button>
+    </div>
+  </dialog>;
+}
+
 export function AgentChatPage({ initial, choices }: { initial: AgentChat; choices: ModelChoice[] }) {
   const { chat, messages, connectionError, historyLoading, historyDone, loadOlder } = useAgentChat(initial);
   const [message, setMessage] = useState("");
@@ -32,7 +51,7 @@ export function AgentChatPage({ initial, choices }: { initial: AgentChat; choice
   const [error, setError] = useState("");
   /** Transient outcome of a background action, such as a declined compaction. */
   const [notice, setNotice] = useState("");
-  const [armed, setArmed] = useState(false);
+  const [resetOpen, setResetOpen] = useState(false);
   const [jump, setJump] = useState(false);
   const [modelOpen, setModelOpen] = useState(false);
   const request = useRef<{ message: string; id: string } | null>(null);
@@ -52,7 +71,7 @@ export function AgentChatPage({ initial, choices }: { initial: AgentChat; choice
     } else if (stick.current) {
       element.scrollTop = element.scrollHeight;
     }
-  }, [messages.length, chat.partial]);
+  }, [messages.length, chat.messages, chat.partial]);
   useEffect(() => {
     const element = scroll.current;
     if (element) element.scrollTop = element.scrollHeight;
@@ -95,6 +114,15 @@ export function AgentChatPage({ initial, choices }: { initial: AgentChat; choice
     });
     if (kind === "send" || kind === "retry" || kind === "reset") composer.current?.focus();
   }
+  const onEscape = useEffectEvent((event: KeyboardEvent) => {
+    if (event.key !== "Escape" || event.repeat || event.isComposing || event.defaultPrevented || !chat.busy || pending || document.querySelector("dialog[open]")) return;
+    event.preventDefault();
+    void action("stop");
+  });
+  useEffect(() => {
+    document.addEventListener("keydown", onEscape);
+    return () => document.removeEventListener("keydown", onEscape);
+  }, []);
   function send() {
     void action("send");
   }
@@ -155,22 +183,22 @@ export function AgentChatPage({ initial, choices }: { initial: AgentChat; choice
             <span className="h-1.5 w-20 overflow-hidden rounded-full bg-zinc-800"><span className={`block h-full rounded-full ${percentage! >= 80 ? "bg-amber-400" : "bg-violet-500"}`} style={{ width: `${percentage}%` }} /></span>
             {compactNumber.format(chat.context.tokens)} / {compactNumber.format(chat.context.window)} tokens
           </span>}
-          <span title="Total conversation tokens and cost">{compactNumber.format(chat.usage.input)} in · {compactNumber.format(chat.usage.output)} out{chat.usage.cost > 0 ? ` · ${money(chat.usage.cost)}` : ""}</span>
+          <span title="Lifetime conversation usage, including before context resets">Total usage: {compactNumber.format(chat.usage.input)} in · {compactNumber.format(chat.usage.output)} out{chat.usage.cost > 0 ? ` · ${money(chat.usage.cost)}` : ""}</span>
         </div>
         <div className="flex items-center gap-2">
           <button type="button" disabled={disabled || chat.compacting} onClick={() => { void action("compact"); }} className="cursor-pointer rounded-lg border border-zinc-700 px-3 py-1.5 text-xs text-zinc-300 hover:bg-zinc-800 hover:text-white disabled:cursor-not-allowed disabled:opacity-50">{chat.compacting ? "Compacting…" : "Compact"}</button>
-          <button type="button" disabled={disabled} onClick={() => { if (armed) { setArmed(false); void action("reset"); } else setArmed(true); }} onBlur={() => setArmed(false)} className="cursor-pointer rounded-lg border border-zinc-700 px-3 py-1.5 text-xs text-zinc-300 hover:bg-zinc-800 hover:text-white disabled:cursor-not-allowed disabled:opacity-50">{armed ? "Confirm new chat?" : "New chat"}</button>
+          <button type="button" disabled={disabled} onClick={() => setResetOpen(true)} aria-haspopup="dialog" className="cursor-pointer rounded-lg border border-zinc-700 px-3 py-1.5 text-xs text-zinc-300 hover:bg-zinc-800 hover:text-white disabled:cursor-not-allowed disabled:opacity-50">Reset context</button>
         </div>
       </header>
+      {resetOpen && <ResetContextDialog disabled={disabled} onCancel={() => setResetOpen(false)} onConfirm={() => { setResetOpen(false); void action("reset"); }} />}
       {modelOpen && <ModelDialog choices={choices} value={modelKey(chat.model)} thinkingLevel={chat.thinkingLevel} onCancel={() => setModelOpen(false)} onApply={changeModel} />}
       {!chat.configured && <p role="status" className="border-b border-zinc-800 px-4 py-2 text-sm text-amber-200 sm:px-6">Reconnect this Agent’s provider or select an available model. <a href="/providers" className="cursor-pointer underline">Manage providers</a></p>}
       {chat.agent.state !== "ready" && <div role="status" className="border-b border-zinc-800 px-4 py-3 sm:px-6"><p>{chat.agent.error ?? "Initializing Agent…"}</p><button disabled={pending} onClick={() => { void action("retry"); }} className="mt-2 cursor-pointer rounded-lg bg-violet-600 px-4 py-2 text-sm disabled:cursor-wait">Retry initialization</button></div>}
       {chat.compactionError && <p role="status" className="border-b border-zinc-800 px-4 py-2 text-xs text-amber-200 sm:px-6">Compaction failed: {chat.compactionError}</p>}
       <div ref={scroll} onScroll={onScroll} aria-label="Conversation" aria-live="polite" className="min-h-0 flex-1 space-y-3 overflow-y-auto px-4 py-4 sm:px-6">
-        {!historyDone && chat.history && <p className="py-1 text-center text-xs text-zinc-600">{historyLoading ? "Loading earlier messages…" : "Scroll up to load earlier messages"}</p>}
+        {!historyDone && chat.history && <div className="py-1 text-center"><button type="button" disabled={historyLoading} onClick={() => { void onLoadOlder(); }} className="cursor-pointer rounded-lg px-3 py-1 text-xs text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200 disabled:cursor-wait disabled:opacity-50">{historyLoading ? "Loading earlier messages…" : messages[0]?.marker === "reset" ? "View messages before reset" : "Load earlier messages"}</button></div>}
         {messages.length === 0 && <p className="py-8 text-center text-sm text-zinc-500">Start a conversation with your Agent.</p>}
         {messages.map((entry) => <ChatMessage key={entry.id} entry={entry} agentId={chat.agent.id} />)}
-        <ToolActivity tools={chat.tools} agentId={chat.agent.id} />
         {busy && <article className="mr-8 whitespace-pre-wrap break-words rounded-xl bg-zinc-900 p-4 text-sm text-zinc-300">{chat.partial || "Thinking…"}</article>}
         {chat.queuedMessages.map((item) => (
           <article key={item.id} className="ml-8 rounded-xl bg-violet-950/40 p-4">
@@ -183,7 +211,7 @@ export function AgentChatPage({ initial, choices }: { initial: AgentChat; choice
       <div role="status" className="flex items-center gap-3 border-t border-zinc-800 px-4 py-2 text-xs text-zinc-400 sm:px-6">
         <span>{busy ? "Working" : "Idle"}{chat.queuedMessages.length > 0 ? ` · ${chat.queuedMessages.length} queued` : ""}</span>
         {notice && <span className="text-amber-200">{notice}</span>}
-        {busy && <button disabled={pending} onClick={() => { void action("stop"); }} className="cursor-pointer text-red-300 hover:underline disabled:cursor-wait">Stop response</button>}
+        {busy && <button disabled={pending} onClick={() => { void action("stop"); }} title="Stop response (Esc)" aria-keyshortcuts="Escape" className="cursor-pointer text-zinc-300 hover:text-white hover:underline disabled:cursor-wait">Stop response</button>}
         {jump && <button type="button" onClick={jumpToLatest} className="ml-auto cursor-pointer text-sky-300 hover:underline">Jump to latest</button>}
       </div>
       <form onSubmit={(event) => { event.preventDefault(); if (!disabled && message.trim()) send(); }} className="border-t border-zinc-800 px-4 py-3 sm:px-6">
@@ -192,7 +220,7 @@ export function AgentChatPage({ initial, choices }: { initial: AgentChat; choice
           <textarea id="agent-message" ref={composer} autoFocus value={message} onChange={(event) => setMessage(event.target.value)} onKeyDown={onComposerKey} required maxLength={16000} rows={1} disabled={!chat.configured || chat.agent.state !== "ready"} placeholder="Message this agent" className="field-sizing-content max-h-48 min-h-11 flex-1 resize-none rounded-2xl border border-zinc-800 bg-zinc-950 px-4 py-3 text-sm text-zinc-100 placeholder-zinc-600 focus:border-zinc-600 focus:outline-none disabled:cursor-not-allowed disabled:opacity-50" />
           <button type="submit" disabled={disabled || !message.trim()} className="shrink-0 cursor-pointer rounded-full bg-violet-600 px-5 py-2.5 text-sm font-medium hover:bg-violet-500 disabled:cursor-not-allowed disabled:opacity-50">{pending ? "Please wait…" : busy ? "Queue message" : "Send message"}</button>
         </div>
-        <p className="mt-2 text-xs text-zinc-500">{busy ? "The agent is responding · Enter queues your message · Shift+Enter for a new line" : "Enter to send · Shift+Enter for a new line"} · Up to 16,000 characters</p>
+        <p className="mt-2 text-xs text-zinc-500">{busy ? "The agent is responding · Esc to stop · Enter queues your message · Shift+Enter for a new line" : "Enter to send · Shift+Enter for a new line"} · Up to 16,000 characters</p>
       </form>
       {(error || connectionError) && <p role="alert" className="border-t border-zinc-800 px-4 py-2 text-sm text-red-300 sm:px-6">{error || connectionError}</p>}
     </section>

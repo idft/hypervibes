@@ -64,7 +64,7 @@ export interface AgentServiceOptions {
   logger?: FastifyBaseLogger;
 }
 interface RunningAgent { harness: Harness; main: Conversation }
-export interface ChatEntry { id: string; role: "user" | "assistant" | "system"; text: string; failed: boolean; marker?: "reset" | "compaction" }
+export interface ChatEntry { id: string; role: "user" | "assistant" | "system" | "tool"; text: string; failed: boolean; tool?: ToolActivity; marker?: "reset" | "compaction" }
 /** A submitted message waiting for the running turn's boundary, not yet a transcript entry. */
 export interface ChatQueueItem { id: string; text: string }
 /** Conversation token and cost totals from the durable usage ledger. */
@@ -314,22 +314,33 @@ export class AgentService {
     result.compactionError = live?.compactionFailure?.error;
     result.tools = toolActivity(entries, live);
     result.messages = AgentService.projectEntries(entries);
+    const committedTools = new Set(result.messages.flatMap((entry) => entry.tool ? [entry.tool.id] : []));
+    for (const tool of toolActivity([], live)) {
+      if (!committedTools.has(tool.id)) result.messages.push({ id: `tool:${tool.id}`, role: "tool", text: tool.name, failed: false, tool });
+    }
     result.partial = live?.generation?.message?.content.filter((part) => part.type === "text").map((part) => part.text).join("") ?? "";
     return result;
   }
   /** Transcript entries as chat messages, including reset and compaction markers. */
   private static projectEntries(entries: readonly EntryRecord[]): ChatEntry[] {
     const messages: ChatEntry[] = [];
+    const tools = toolActivity(entries);
     for (const entry of entries.slice(-100)) {
       if (entry.kind === "hv.subagent-notification" && entry.data && typeof entry.data === "object" && "text" in entry.data && typeof entry.data.text === "string") {
         messages.push({ id: `notification:${entry.id}`, role: "assistant", text: entry.data.text, failed: false });
       } else if (entry.kind === "pi.reset") {
-        messages.push({ id: `reset:${entry.id}`, role: "system", text: "New conversation", failed: false, marker: "reset" });
+        messages.push({ id: `reset:${entry.id}`, role: "system", text: "Context reset", failed: false, marker: "reset" });
       } else if (entry.kind === "pi.compaction") {
         messages.push({ id: `compaction:${entry.id}`, role: "system", text: "Earlier messages were compacted into a summary", failed: false, marker: "compaction" });
       }
       if (entry.kind === "pi.reset" || entry.kind === "pi.compaction") continue; // The wrapped summary stays internal.
       for (const [index, message] of (entry.model ?? []).entries()) {
+        if (message.role === "toolResult") {
+          for (const tool of tools.filter((tool) => tool.id === message.toolCallId || tool.id.startsWith(`${message.toolCallId}:`))) {
+            messages.push({ id: `tool:${tool.id}`, role: "tool", text: tool.name, failed: false, tool });
+          }
+          continue;
+        }
         if (message.role !== "user" && message.role !== "assistant") continue;
         const failed = message.role === "assistant" && (message.stopReason === "error" || message.stopReason === "aborted");
         const text = failed ? "Response interrupted or failed. You can send another message to retry." : typeof message.content === "string" ? message.content : message.content.filter((part) => part.type === "text").map((part) => part.text).join("");

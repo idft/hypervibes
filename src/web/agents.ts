@@ -26,6 +26,7 @@ export function field(data: unknown, key: string): string {
 export function optionalNumber(data: unknown, key: string): number | undefined {
   if (typeof data !== "object" || data === null || !(key in data)) return undefined;
   const value = Reflect.get(data, key);
+  if (value === undefined) return undefined;
   if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0) throw new Error("Invalid request");
   return value;
 }

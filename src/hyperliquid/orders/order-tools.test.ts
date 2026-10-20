@@ -19,7 +19,7 @@ describe("Durable order tool contracts for nested/code-mode calls", () => {
     const list = vi.fn(async () => ({ items: [], source: "open", observedAt: 1, nextOffset: null, coverage: "current snapshot" }));
     const service = { submit, list, executionHandle: async () => undefined } as unknown as OrderService;
     const registry = createRegistry();
-    registry.install(createHyperliquidExtension({ agentAccountStatus: async () => loadAccountStatus(new HttpTransport(), null) }, "owner", "agent", service));
+    registry.install(createHyperliquidExtension({ agentAccountStatus: async () => loadAccountStatus(new HttpTransport(), null), marketSnapshot: async () => { throw new Error("Not used in order tests"); } }, "owner", "agent", service));
     const results: NestedToolExecutionResult[] = [];
     registry.install(defineExtension({ name: "program", tools: [defineTool({
       name: "program", parameters: Type.Object({}), description: "Programmatic tool caller, like code mode", replay: "safe",

@@ -3,9 +3,14 @@ export interface ToolActivity { id: string; name: string; status: string; argume
 /** Bounded UI projection; never stream raw candle datasets or artifact bodies. */
 export function toolActivity(entries: readonly EntryRecord[], live?: Readonly<LiveState>): ToolActivity[] {
   const items: ToolActivity[] = [];
+  const argumentsById = new Map<string, string>();
+  for (const entry of entries) for (const message of entry.model ?? []) {
+    if (message.role !== "assistant") continue;
+    for (const part of message.content) if (part.type === "toolCall") argumentsById.set(part.id, JSON.stringify(part.arguments).slice(0, 500));
+  }
   for (const entry of entries.slice(-100)) for (const message of entry.model ?? []) {
     if (message.role !== "toolResult") continue;
-    items.push({ id: message.toolCallId, name: message.toolName, status: message.isError ? "error" : "done", durationMs: message.durationMs,
+    items.push({ id: message.toolCallId, name: message.toolName, status: message.isError ? "error" : "done", durationMs: message.durationMs, arguments: argumentsById.get(message.toolCallId),
       output: message.content.filter((part) => part.type === "text").map((part) => part.text).join("\n").slice(0, 1000) });
     const details = message.details;
     if (!details || typeof details !== "object" || !("calls" in details) || !Array.isArray(details.calls)) continue;
@@ -18,7 +23,7 @@ export function toolActivity(entries: readonly EntryRecord[], live?: Readonly<Li
     }
   }
   for (const slot of live?.tools ?? []) if (slot.status !== "done") {
-    items.push({ id: slot.callId, name: slot.name, status: slot.status });
+    items.push({ id: slot.callId, name: slot.name, status: slot.status, arguments: argumentsById.get(slot.callId) });
     const details = slot.details;
     if (!details || typeof details !== "object" || !("calls" in details) || !Array.isArray(details.calls)) continue;
     // Waiting calls have no Durable nested task yet. Running calls are already
