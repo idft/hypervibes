@@ -13,7 +13,7 @@ export function ArtifactContent({ agentId, content, attachments = [] }: { agentI
     const before = content.slice(previous, match.index); previous = match.index + match[0].length;
     const id = match[2] ?? match[3]!;
     const attachment = attachments.find((item) => item.id === id);
-    return <Fragment key={index}>{before}{match[2] && attachment?.mediaType.startsWith("image/") ? <img loading="lazy" className="my-3 max-h-[36rem] max-w-full rounded-lg object-contain" src={artifactContentUrl(agentId, id, true)} alt={match[1] || attachment.title} /> : <a className="cursor-pointer text-violet-300 underline" href={`/agents/${encodeURIComponent(agentId)}/artifacts?artifact=${encodeURIComponent(id)}`}>{attachment?.title ?? `Artifact ${id}`}</a>}</Fragment>;
+    return <Fragment key={index}>{before}{match[2] && attachment?.mediaType.startsWith("image/") ? <img loading="lazy" className="my-3 max-h-[36rem] max-w-full rounded-lg object-contain" src={artifactContentUrl(agentId, id, true)} alt={match[1] || attachment.title} /> : <a className="cursor-pointer text-violet-300 underline" href={artifactContentUrl(agentId, id)} download>{attachment?.title ?? `Artifact ${id}`}</a>}</Fragment>;
   });
   return <div className="whitespace-pre-wrap break-words text-sm text-zinc-300">{parts}{content.slice(previous)}</div>;
 }

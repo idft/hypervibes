@@ -35,7 +35,7 @@ describe("Agent navigation", () => {
     expect(container.querySelector("h1")).toBeNull();
     expect(container.textContent).not.toContain("Notifications");
   });
-  it("links Memories to the Memories page and expands its Insights and Artifacts sub-items", async () => {
+  it("links Memories to the Memories page and expands its Insights sub-item without Artifacts", async () => {
     const button = container.querySelector<HTMLAnchorElement>('a[aria-label="Memories"]')!;
     expect(button.getAttribute("href")).toBe("/agents/fixture/memories");
     expect(button.getAttribute("aria-expanded")).toBe("false");
@@ -44,11 +44,12 @@ describe("Agent navigation", () => {
     await act(async () => button.click());
     expect(button.getAttribute("aria-expanded")).toBe("true");
     const children = [...container.querySelectorAll('#agent-memory-sections a')];
-    expect(children.map((link) => link.getAttribute("aria-label"))).toEqual(["Insights", "Artifacts"]);
-    expect(children.map((link) => link.getAttribute("href"))).toEqual(["/agents/fixture/memories", "/agents/fixture/artifacts"]);
+    expect(children.map((link) => link.getAttribute("aria-label"))).toEqual(["Insights"]);
+    expect(container.querySelector('a[aria-label="Artifacts"]')).toBeNull();
+    expect(children.map((link) => link.getAttribute("href"))).toEqual(["/agents/fixture/memories"]);
     await act(async () => button.click());
     expect(button.getAttribute("aria-expanded")).toBe("true");
-    expect(container.querySelectorAll('#agent-memory-sections a')).toHaveLength(2);
+    expect(container.querySelectorAll('#agent-memory-sections a')).toHaveLength(1);
   });
   it("expands labels and persists the preference for the next server render", async () => {
     const button = container.querySelector<HTMLButtonElement>('button[aria-label="Expand agent navigation"]')!;

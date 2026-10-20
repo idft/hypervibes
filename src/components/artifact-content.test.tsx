@@ -11,13 +11,14 @@ describe("safe artifact rendering", () => {
     expect(html).not.toContain('src="https://example.test');
     expect(html).toContain('alt="Chart"');
   });
-  it("renders unresolved references as artifact links, never external images or recursive HTML", () => {
+  it("renders unresolved references as downloads, never removed page links or external images", () => {
     const html = renderToStaticMarkup(<ArtifactContent agentId="root" content={`![Missing](artifact:${id})`} />);
-    expect(html).not.toContain("<img"); expect(html).toContain(`/agents/root/artifacts?artifact=${id}`);
+    expect(html).not.toContain("<img"); expect(html).toContain(`/api/agents/root/artifacts/${id}/content`);
+    expect(html).toContain('download=""'); expect(html).not.toContain(`/agents/root/artifacts?`);
     expect(artifactContentUrl("root/other", id)).toContain("root%2Fother");
   });
   it("shows queued calls and execution timings without queue wait timings", () => {
-    const html = renderToStaticMarkup(<ToolActivity agentId="root" tools={[{ id: "waiting", name: "↳ ta_rsi", status: "queued" }, { id: "completed", name: "↳ ta_ema", status: "ok", durationMs: 2, queuedMs: 35 }]} />);
+    const html = renderToStaticMarkup(<ToolActivity tools={[{ id: "waiting", name: "↳ ta_rsi", status: "queued" }, { id: "completed", name: "↳ ta_ema", status: "ok", durationMs: 2, queuedMs: 35 }]} />);
     expect(html).toContain("ta_rsi · queued"); expect(html).toContain("ta_ema · ok · 2ms"); expect(html).not.toContain("35ms"); expect(html).toContain("open=\"\"");
   });
   it("shows only execution time for inline tool calls", () => {
@@ -26,8 +27,8 @@ describe("safe artifact rendering", () => {
     expect(html).not.toContain("403ms");
     expect(html).not.toContain("queued");
   });
-  it("shows nested failure summaries and artifact navigation", () => {
-    const html = renderToStaticMarkup(<ToolActivity agentId="root" tools={[{ id: "call", name: "↳ ta_macd", status: "error", error: "Missing candles", arguments: '{"coin":"BTC"}', durationMs: 10 }]} />);
-    expect(html).toContain("Missing candles"); expect(html).toContain("ta_macd"); expect(html).toContain("10ms"); expect(html).toContain("/agents/root/artifacts");
+  it("shows nested failure summaries without artifact navigation", () => {
+    const html = renderToStaticMarkup(<ToolActivity tools={[{ id: "call", name: "↳ ta_macd", status: "error", error: "Missing candles", arguments: '{"coin":"BTC"}', durationMs: 10 }]} />);
+    expect(html).toContain("Missing candles"); expect(html).toContain("ta_macd"); expect(html).toContain("10ms"); expect(html).not.toContain("Open artifacts"); expect(html).not.toContain("/agents/root/artifacts");
   });
 });

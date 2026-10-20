@@ -13,7 +13,6 @@ const sections = [
 
 const memorySections = [
   { label: "Insights", to: "/agents/$agentId/memories", search: { scope: "" }, icon: "M4 4h16v16H4zM8 8h8M8 12h8M8 16h5" },
-  { label: "Artifacts", to: "/agents/$agentId/artifacts", icon: "M4 3h10l6 6v12H4zM14 3v6h6M8 13h8M8 17h5" },
 ] as const;
 
 export function AgentLayout({ agent, initialExpanded }: { agent: AgentRow; initialExpanded: boolean }) {

@@ -2,10 +2,6 @@ import { createServerFn } from "@tanstack/react-start";
 import { getRequestHeaders } from "@tanstack/react-start/server";
 import { agentAction, agentUser, field, optionalNumber } from "./agents.js";
 
-export const listArtifacts = createServerFn({ method: "GET" }).validator((data: unknown) => ({ agentId: field(data, "agentId"), offset: optionalNumber(data, "offset"), query: field(data, "query") })).handler(async ({ context, data }) => {
-  const user = await agentUser(context.runtime, getRequestHeaders());
-  return agentAction(async () => { await context.runtime.agents.owned(user.id, data.agentId); return context.runtime.agents.research.artifacts.list(data.agentId, { offset: data.offset, query: data.query.slice(0, 160) }); });
-});
 export const readArtifact = createServerFn({ method: "GET" }).validator((data: unknown) => ({ agentId: field(data, "agentId"), id: field(data, "id"), offset: optionalNumber(data, "offset") })).handler(async ({ context, data }) => {
   const user = await agentUser(context.runtime, getRequestHeaders());
   return agentAction(async () => { await context.runtime.agents.owned(user.id, data.agentId); return context.runtime.agents.research.artifacts.read(data.agentId, data.id, data.offset); });
