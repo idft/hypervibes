@@ -109,7 +109,7 @@ export class AgentService {
     this.execution = new ExecutionContextService(database, (error) => options.logger?.error(error, "Orchestrator insights snapshot failed"));
     this.orders.installAdmission(this.execution);
     this.risk = new RiskSettingsService(database);
-    this.research = new ResearchService(database, hyperliquid, (error) => options.logger?.error(error, "Artifact maintenance failed"));
+    this.research = new ResearchService(database, hyperliquid, this.risk, (error) => options.logger?.error(error, "Artifact maintenance failed"));
     this.subagents = new SubagentService(db, database, providers, {
       owned: (userId, id) => this.owned(userId, id), models: (userId) => this.models(userId), changed: (id) => this.notify(id),
     }, this.execution, Boolean(options.models), options.logger?.child({ component: "scheduler" }));

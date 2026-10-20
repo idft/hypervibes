@@ -38,6 +38,7 @@ describe("Agent memory and insight UI", () => {
   }
   it("renders safe text, exact deep links and relationship lookups with exclusive metadata pagination", async () => {
     await act(async () => root.render(<AgentMemoriesPage agentId="agent" workers={[]} memory="m1" />));
+    expect(container.querySelector('nav[aria-label="Memory sections"]')).toBeNull();
     expect(mocks.getMemory).toHaveBeenCalledWith({ data: { agentId: "agent", ref: "m1" } });
     expect(container.textContent).toContain("<img src=x onerror=alert(1)>"); expect(container.textContent).toContain("<script>bad()</script>");
     expect(container.querySelector("img")).toBeNull(); expect(container.querySelector("script")).toBeNull();
@@ -122,7 +123,7 @@ describe("Agent memory and insight UI", () => {
     expect(container.textContent).toContain("Mixed evidence near support; evaluate before acting.");
     expect(container.querySelector('[aria-label="Additional memory data"]')).toBeNull();
     const status = [...container.querySelectorAll("select")].find((select) => select.parentElement?.textContent?.startsWith("Status"))!;
-    expect([...status.options].map((option) => option.value)).toEqual(["", "fresh", "stale", "disabled", "retracted", "invalid_evidence", "durable"]);
+    expect([...status.options].map((option) => option.value)).toEqual(["", "fresh", "stale", "retracted", "invalid_evidence", "durable"]);
   });
   it("displays arbitrary research data safely without enforcing signal labels", async () => {
     mocks.getMemory.mockResolvedValue({ ok: true, data: { ...metadata, content: "Report", payload: { bias: "bearish-neutral", custom: { note: "<script>untrusted</script>" } }, links: [], artifactIds: [] } });
@@ -133,8 +134,8 @@ describe("Agent memory and insight UI", () => {
     expect(container.querySelector("script")).toBeNull();
   });
   it("preserves conflicted drafts and operation UUIDs, and copies historical evidence into a new revision without rewinding", async () => {
-    await act(async () => root.render(<AgentMemoriesPage agentId="agent" workers={[]} />));
-    await click("Insights");
+    await act(async () => root.render(<AgentMemoriesPage agentId="agent" workers={[]} initialTab="insights" />));
+    expect(container.querySelector('nav[aria-label="Memory sections"]')).toBeNull();
     expect(container.textContent).toContain("Current v1"); expect(container.textContent).toContain("Initial review");
     const draft = container.querySelector<HTMLTextAreaElement>('[aria-label="Insights document draft"]')!;
     await edit(draft, "Unsubmitted curated draft");

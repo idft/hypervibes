@@ -5,6 +5,7 @@ import { createCodemodeExtension } from "@earendil-works/pi-durable/codemode";
 import { defineExtension, defineTool, section } from "@earendil-works/pi-durable";
 import type { SharedDatabase } from "../db/shared-database.js";
 import type { HyperliquidService } from "../hyperliquid/service.js";
+import type { RiskSettingsService } from "../hyperliquid/orders/risk-settings.js";
 import { CallQueue } from "./call-queue.js";
 import { describeDataset } from "./evidence.js";
 import { ArtifactService, artifactTypes } from "./artifacts.js";
@@ -35,7 +36,7 @@ export class ResearchService {
   private readonly sandbox: BoundedSandbox;
   private timer?: ReturnType<typeof setInterval>;
   private maintenance: Promise<void> = Promise.resolve();
-  constructor(private readonly db: SharedDatabase, private readonly hyperliquid: HyperliquidService, private readonly reportError: (error: unknown) => void) {
+  constructor(private readonly db: SharedDatabase, private readonly hyperliquid: HyperliquidService, private readonly risk: Pick<RiskSettingsService, "get">, private readonly reportError: (error: unknown) => void) {
     this.artifacts = new ArtifactService(db);
     this.sandbox = new BoundedSandbox({ memoryLimitBytes: 64 * 1024 * 1024,
       acquireWorker: () => { if (this.workers >= 4) throw new Error("Research workers are busy; retry later"); this.workers++; return () => { this.workers--; }; },
@@ -56,6 +57,17 @@ export class ResearchService {
   private researchExtension(agentId: string, respond: ResearchResponder) {
     const artifacts = this.artifacts;
     const tools = [
+      defineTool({
+        name: "list_instruments",
+        description: "List active Hyperliquid main-DEX perpetual symbols. allowedForTrading reflects only this Agent's instrument allowlist (unrestricted means all listed symbols are allowed), not trading enablement, collateral, notional limits or guaranteed order acceptance. Instruments outside the trading allowlist may still be researched. This catalog does not designate an analysis assignment.",
+        parameters: Type.Object({}, object), replay: "safe",
+        structuredOutputSchema: Type.Object({ instruments: Type.Array(Type.Object({ symbol: Type.String(), allowedForTrading: Type.Boolean() }, object)) }, object),
+        execute: async () => {
+          const [symbols, settings] = await Promise.all([this.hyperliquid.charts.instruments(), this.risk.get(agentId)]);
+          const allowed = settings.allowedInstruments === null ? null : new Set(settings.allowedInstruments);
+          return jsonResult({ instruments: symbols.map((symbol) => ({ symbol, allowedForTrading: allowed === null || allowed.has(symbol) })) });
+        },
+      }),
       defineTool({ name: "research_candles", description: "Closed Hyperliquid perpetual candles, ascending UTC time in seconds; request start/end in milliseconds, end exclusive. Paginate using nextStart with the SAME end. Latest ~5,000 candles only; inspect coverage. Analytical numeric OHLCV, not monetary authority.", parameters: Type.Object({ ...selection, limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 2000 })), saveAs: Type.Optional(str(160)) }, object), replay: "safe", structuredOutputSchema: CandleResultSchema, execute: async (args, api, ctx) => respond(args.saveAs, api, ctx, async () => { const history = await this.hyperliquid.charts.researchHistory(args.coin, args.interval, args.start, args.end, args.limit ?? 500, ctx.abortSignal); return { ...history, dataset: describeDataset(history.candles) }; }, { instrument: args.coin, interval: args.interval }) }),
       defineTool({ name: "research_journal", description: "Bounded root-Agent trade history and exact-decimal performance for returned closed trades only, NOT account returns. Time bounds (ms) filter last activity. Cursor next is exclusive; keep the same range. Inspect pending/limited coverage. Raw fills/parts are omitted. Monetary values remain decimal strings.", parameters: Type.Object({ ...range, limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 1000 })), before: Type.Optional(Type.Object({ time: Type.Integer({ minimum: 0 }), id }, object)), summaryOnly: Type.Optional(Type.Boolean()), saveAs: Type.Optional(str(160)) }, object), replay: "safe", structuredOutputSchema: JournalResultSchema, execute: async (args, api, ctx) => respond(args.saveAs, api, ctx, async () => {
         const result = await researchJournal(this.db, agentId, args.start, args.end, args.limit ?? 100, args.before);

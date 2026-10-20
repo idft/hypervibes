@@ -96,8 +96,8 @@ describe("trusted tool actor resolution and assignment snapshots", () => {
     expect((await runtime.agents.execution.runContext(agentId, next)).instructions).toContain(finding.content);
     await finish(analyst.id);
   });
-  it("hands arbitrary research data from a Code Mode analyst to a trader through public memory tools", async () => {
-    const analyst = await runtime.agents.subagents.create("owner", agentId, settings({ tools: ["codemode", "publish_research"], persistent: false }), randomUUID());
+  it.each([true, false])("hands manually published research from an enabled=%s analyst to a trader through public memory tools", async (enabled) => {
+    const analyst = await runtime.agents.subagents.create("owner", agentId, settings({ tools: ["codemode", "publish_research"], persistent: false, enabled }), randomUUID());
     const trader = await runtime.agents.subagents.create("owner", agentId, settings({ tools: ["get_memory", "get_trading_context"], persistent: false }), randomUUID());
     const boundary = Math.floor(Date.now() / 3600000) * 3600000;
     const payload = { bias: "bearish-neutral", confidence: "uncertain near support", custom: { horizons: ["15m weakening", "1h mixed"] } };
@@ -114,9 +114,12 @@ describe("trusted tool actor resolution and assignment snapshots", () => {
     await runtime.agents.subagents.run("owner", agentId, trader.id, "Read and interpret the research", randomUUID());
     const consumed = await finish(trader.id);
     const detail = await runtime.agents.subagents.runDetail("owner", agentId, trader.id, consumed.id);
+    const tradingContext = detail.entries.flatMap((entry) => entry.model ?? []).find((message) => message.role === "toolResult" && message.toolName === "get_trading_context");
+    expect(tradingContext?.content).toContainEqual(expect.objectContaining({ type: "text", text: expect.stringContaining('"status":"fresh"') }));
     expect(detail.tools).toContainEqual(expect.objectContaining({ name: "get_trading_context", status: "done" }));
     expect(detail.tools).toContainEqual(expect.objectContaining({ name: "get_memory", status: "done", output: expect.stringContaining("bearish-neutral") }));
-    expect(await runtime.agents.execution.memories.get(agentId, "m1")).toMatchObject({ content: input.content, payload, sourceRunId: published.id });
+    expect(await runtime.agents.execution.memories.get(agentId, "m1")).toMatchObject({ status: "fresh", content: input.content, payload, sourceRunId: published.id });
+    expect((await runtime.agents.execution.memories.list(agentId, { status: "fresh" })).items.map((item) => item.ref)).toEqual(["m1"]);
   });
   it("resolves worker tool calls to their active run and its frozen configuration", async () => {
     const config = settings({ tools: ["record_trade_decision"], persistent: false });

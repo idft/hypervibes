@@ -85,16 +85,66 @@ describe("Code Mode research and artifacts", () => {
     expect(() => technicalAnalysis(candles, { type: "rsi", period: 0 })).toThrow("period");
   });
 
-  async function execute(code: string, names: string[] = ["codemode", "artifact_create", "artifact_list", "artifact_read"]) {
+  async function executeCall(name: string, args: Parameters<typeof fauxToolCall>[1], names: string[]) {
     const extensions = runtime.agents.research.extensions(agentId), registry = createRegistry();
     for (const extension of extensions) registry.install(extension);
     harness = await Harness.open(new MemoryStorage(), { models, registry }, context);
     const root = await harness.root(context, { agent: { model: { provider: faux.getModel().provider, modelId: faux.getModel().id }, tools: extensions.flatMap((extension) => extension.tools ?? []).filter((tool) => names.includes(tool.name)) } });
-    faux.setResponses([fauxAssistantMessage(fauxToolCall("codemode", { code }), { stopReason: "toolUse" }), fauxAssistantMessage("Research complete")]);
+    faux.setResponses([fauxAssistantMessage(fauxToolCall(name, args), { stopReason: "toolUse" }), fauxAssistantMessage("Research complete")]);
     const settled = await (await root.submit({ type: "input", content: "Research" }, context)).wait(context);
     expect(settled.status).toBe("done");
     return (await root.entries({ order: "ascending" }, 100, undefined, context)).items;
   }
+  function execute(code: string, names: string[] = ["codemode", "artifact_create", "artifact_list", "artifact_read"]) {
+    return executeCall("codemode", { code }, names);
+  }
+  it.each([
+    { tradingEnabled: false, allowedInstruments: null },
+    { tradingEnabled: true, allowedInstruments: null },
+    { tradingEnabled: false, allowedInstruments: ["BTC"] },
+    { tradingEnabled: true, allowedInstruments: ["BTC"] },
+  ])("lists instruments using only the bound Agent's allowlist: %j", async (settings) => {
+    vi.spyOn(runtime.hyperliquid.charts, "instruments").mockResolvedValue(["BTC", "ETH"]);
+    const account = vi.spyOn(runtime.hyperliquid, "agentAccountStatus");
+    await runtime.agents.risk.save(agentId, { ...settings, maxOrderNotional: "1", maxTotalNotional: "1" });
+    await runtime.agents.risk.save(otherAgentId, { ...settings, allowedInstruments: ["ETH"] });
+    const entries = await executeCall("list_instruments", {}, ["list_instruments"]);
+    const result = entries.flatMap((entry) => entry.model ?? []).find((message) => message.role === "toolResult");
+    expect(result).toMatchObject({ toolName: "list_instruments", isError: false, content: [{ type: "text", text: JSON.stringify({ instruments: [
+      { symbol: "BTC", allowedForTrading: true }, { symbol: "ETH", allowedForTrading: settings.allowedInstruments === null },
+    ] }) }] });
+    expect(account).not.toHaveBeenCalled();
+    expect((await runtime.agents.research.artifacts.list(agentId)).items).toEqual([]);
+  });
+  it("defaults to unrestricted instruments without saved risk settings and supports Code Mode", async () => {
+    vi.spyOn(runtime.hyperliquid.charts, "instruments").mockResolvedValue(["BTC", "ETH"]);
+    const entries = await execute(`text(await tools.list_instruments({}));`, ["codemode", "list_instruments"]);
+    const result = entries.flatMap((entry) => entry.model ?? []).find((message) => message.role === "toolResult");
+    expect(result).toMatchObject({ isError: false });
+    expect(JSON.stringify(result)).toContain('\\"allowedForTrading\\":true');
+    expect(JSON.stringify(result)).not.toContain("tradingEnabled");
+    expect(toolActivity(entries)).toContainEqual(expect.objectContaining({ name: "↳ list_instruments", status: "ok" }));
+  });
+  it("rejects model-supplied Agent IDs before looking up the catalog", async () => {
+    const catalog = vi.spyOn(runtime.hyperliquid.charts, "instruments").mockResolvedValue(["BTC"]);
+    const entries = await executeCall("list_instruments", { agentId: otherAgentId }, ["list_instruments"]);
+    const result = entries.flatMap((entry) => entry.model ?? []).find((message) => message.role === "toolResult");
+    expect(result).toMatchObject({ isError: true });
+    expect(catalog).not.toHaveBeenCalled();
+  });
+  it("returns an empty catalog without inventing instruments", async () => {
+    vi.spyOn(runtime.hyperliquid.charts, "instruments").mockResolvedValue([]);
+    const entries = await executeCall("list_instruments", {}, ["list_instruments"]);
+    const result = entries.flatMap((entry) => entry.model ?? []).find((message) => message.role === "toolResult");
+    expect(result).toMatchObject({ isError: false, content: [{ type: "text", text: '{"instruments":[]}' }] });
+  });
+  it("reports catalog failures instead of treating them as an empty list", async () => {
+    vi.spyOn(runtime.hyperliquid.charts, "instruments").mockRejectedValue(new Error("Market catalog unavailable"));
+    const entries = await executeCall("list_instruments", {}, ["list_instruments"]);
+    const result = entries.flatMap((entry) => entry.model ?? []).find((message) => message.role === "toolResult");
+    expect(result).toMatchObject({ isError: true });
+    expect(JSON.stringify(result)).toContain("Market catalog unavailable");
+  });
   it("runs real QuickJS, shares root-Agent artifacts, and retains nested-call summaries without an env", async () => {
     const entries = await execute(`const report = await tools.artifact_create({title:'Worker report',mediaType:'text/markdown',content:'# BTC',retained:true}); text(report.id); text((await tools.artifact_read({id:report.id})).content);`);
     const result = entries.flatMap((entry) => entry.model ?? []).find((message) => message.role === "toolResult");

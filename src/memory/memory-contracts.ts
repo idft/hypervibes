@@ -41,8 +41,10 @@ export function reference(value: unknown): string {
   if (typeof value !== "string") throw new AgentError("Use an exact memory reference such as m42");
   parseMemoryRef(value); return value;
 }
+// Unlike $, the final lookahead cannot match before a trailing newline.
+export const topicPattern = /^[a-z][a-z0-9_]{0,63}(?![\s\S])/;
 export function topic(value: unknown): string {
-  if (typeof value !== "string" || !/^[a-z][a-z0-9_]{0,63}$/.test(value) || value.trim() !== value) throw new AgentError("Use a lowercase topic such as trend_setup");
+  if (typeof value !== "string" || !topicPattern.test(value) || value.trim() !== value) throw new AgentError("Use a lowercase topic such as trend_setup");
   return value;
 }
 /** Syntax only; the host must also check the current main-DEX instrument catalog. */
@@ -125,4 +127,4 @@ export interface MemoryDetail extends MemoryMetadata {
   content: string; payload: ResearchPayload | DecisionPayload | ReviewPayload; links: MemoryLink[]; artifactIds: string[];
   conversationId: number | null; toolTaskId: number | null;
 }
-export type ResearchStatus = "missing" | "fresh" | "stale" | "disabled" | "retracted" | "invalid_evidence";
+export type ResearchStatus = "missing" | "fresh" | "stale" | "retracted" | "invalid_evidence";

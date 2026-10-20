@@ -4,7 +4,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SubagentRow } from "../db/subagent-schema.js";
-import { accountToolNames, mainToolNames, taToolNames } from "../agents/subagent-input.js";
+import { hyperliquidToolNames, mainToolNames, taToolNames } from "../agents/subagent-input.js";
 const mocks = vi.hoisted(() => ({ invalidate: vi.fn(), navigate: vi.fn(), success: vi.fn(), saveSubagent: vi.fn(), saveSubagentSection: vi.fn(), saveSubagentAssignments: vi.fn(), saveSubagentIdentity: vi.fn(), saveSubagentTools: vi.fn(), getSubagent: vi.fn(), runSubagent: vi.fn(), archiveSubagent: vi.fn(), stopSubagentRun: vi.fn() }));
 vi.mock("../web/subagents.js", () => mocks);
 vi.mock("sonner", () => ({ toast: { success: mocks.success } }));
@@ -276,6 +276,23 @@ describe("subagent pages", () => {
     await act(async () => { document.querySelector("dialog")!.dispatchEvent(new Event("cancel", { cancelable: true })); });
     expect(document.querySelector("dialog")).toBeNull();
   });
+  it("groups instrument discovery under Hyperliquid without duplicating it in Research", async () => {
+    await render({ ...definition, tools: ["list_instruments"] });
+    expect(container.textContent).toContain("Hyperliquid: list_instruments");
+    expect(container.textContent).not.toContain("Research · Code Mode & Artifacts:");
+    await click("Edit tools");
+    const groups = [...document.querySelectorAll("dialog fieldset")];
+    const hyperliquid = groups.find((group) => group.querySelector(":scope > legend")?.textContent?.startsWith("Hyperliquid"))!;
+    const research = groups.find((group) => group.querySelector(":scope > legend")?.textContent?.startsWith("Research"))!;
+    expect(hyperliquid.textContent).toContain("list_instruments");
+    expect(research.textContent).not.toContain("list_instruments");
+    expect([...document.querySelectorAll("dialog label")].filter((label) => label.textContent === "list_instruments")).toHaveLength(1);
+    await click("No tools in Hyperliquid");
+    expect(document.querySelectorAll("dialog input[type=checkbox]:checked")).toHaveLength(0);
+    await click("All tools in Research · Code Mode & Artifacts");
+    const discovery = [...hyperliquid.querySelectorAll("label")].find((label) => label.textContent === "list_instruments")!;
+    expect(discovery.querySelector("input")!.checked).toBe(false);
+  });
   it("selects the separate TA group without enabling Code Mode, account or delegation tools", async () => {
     await render(); await click("Edit tools");
     expect(document.querySelector("dialog")!.textContent).toContain("Technical analysis · TA");
@@ -293,7 +310,7 @@ describe("subagent pages", () => {
     await click("All tools in Hyperliquid");
     await click("All tools in Hyperliquid");
     await click("All tools in HyperVibes · Subagents");
-    expect(document.querySelectorAll("dialog input[type=checkbox]:checked")).toHaveLength(accountToolNames.length + 3);
+    expect(document.querySelectorAll("dialog input[type=checkbox]:checked")).toHaveLength(hyperliquidToolNames.length + 3);
     const search = document.querySelector("dialog input[type=search]")!;
     await act(async () => {
       Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(search, "get_account");
@@ -304,7 +321,7 @@ describe("subagent pages", () => {
     expect(document.querySelectorAll("dialog input[type=checkbox]:checked")).toHaveLength(0);
     expect(document.querySelector("dialog")!.textContent).toContain("3 selected");
     await click("All tools in Hyperliquid");
-    expect(document.querySelector("dialog")!.textContent).toContain(`${accountToolNames.length + 3} selected`);
+    expect(document.querySelector("dialog")!.textContent).toContain(`${hyperliquidToolNames.length + 3} selected`);
     await click("No tools in Hyperliquid");
     await click("Apply");
     expect(mocks.saveSubagent).not.toHaveBeenCalled();
@@ -316,10 +333,10 @@ describe("subagent pages", () => {
     await click("Edit tools"); await click("All tools in Hyperliquid"); await click("Apply");
     expect(document.querySelector("dialog [role=alert]")?.textContent).toContain("Stop the active assignment");
     expect(container.textContent).toContain("No tools allowed");
-    expect(document.querySelectorAll("dialog input:checked")).toHaveLength(accountToolNames.length);
+    expect(document.querySelectorAll("dialog input:checked")).toHaveLength(hyperliquidToolNames.length);
     await click("Apply");
     expect(document.querySelector("dialog")).toBeNull();
-    expect(container.textContent).toContain(`${accountToolNames.length} tools allowed`);
+    expect(container.textContent).toContain(`${hyperliquidToolNames.length} tools allowed`);
   });
   it("saves tools without saving or discarding other unfinished form edits", async () => {
     await render();
@@ -330,11 +347,11 @@ describe("subagent pages", () => {
     });
     await click("Edit tools"); await click("All tools in Hyperliquid"); await click("Apply");
     expect(instructions.value).toBe("Unsaved instructions");
-    expect(mocks.saveSubagentTools.mock.calls[0]![0].data).toEqual({ agentId: definition.agentId, id: definition.id, tools: [...accountToolNames] });
+    expect(mocks.saveSubagentTools.mock.calls[0]![0].data).toEqual({ agentId: definition.agentId, id: definition.id, tools: [...hyperliquidToolNames] });
     expect(mocks.saveSubagent).not.toHaveBeenCalled();
     await click("Save instructions");
     expect(mocks.saveSubagentSection.mock.calls[0]![0].data).toMatchObject({ section: "instructions", settings: { instructions: "Unsaved instructions" } });
-    expect(container.textContent).toContain(`${accountToolNames.length} tools allowed`);
+    expect(container.textContent).toContain(`${hyperliquidToolNames.length} tools allowed`);
   });
   it("saves name and description immediately without saving unrelated edits", async () => {
     await render();

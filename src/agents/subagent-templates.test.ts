@@ -65,11 +65,20 @@ describe("bundled editable worker manifests", () => {
   });
   it("gives the analyst Code Mode, all TA and artifact tools without trading permissions", () => {
     const draft = templateDraft("basic-analysis", { provider: "operator-selected", modelId: "operator-model", thinkingLevel: "" });
-    expect(draft.tools).toEqual(expect.arrayContaining(["codemode", "research_candles", ...taToolNames, ...researchToolNames.filter((name) => name.startsWith("artifact_")), "publish_research"]));
+    expect(draft.tools).toEqual(expect.arrayContaining(["list_instruments", "codemode", "research_candles", ...taToolNames, ...researchToolNames.filter((name) => name.startsWith("artifact_")), "publish_research"]));
     expect(draft.tools.some((name) => (accountToolNames as readonly string[]).includes(name))).toBe(false);
     expect(draft.instructions).toContain("evidenceAsOf");
     expect(draft.instructions).toContain("closed candles");
     expect(draft.instructions).toContain("not trading authority");
+  });
+  it("requires the analyst to verify quantitative and temporal claims before publishing", () => {
+    const draft = templateDraft("basic-analysis", { provider: "operator-selected", modelId: "operator-model", thinkingLevel: "" });
+    expect(draft.instructions).toContain("verify quantitative and temporal claims in Code Mode using returned data, not manually recopied values");
+    expect(draft.instructions).toContain("Compute derived values over explicitly identified windows");
+    expect(draft.instructions).toContain("rising lows, contracting bands or weaker volume need matching comparisons");
+    expect(draft.instructions).toContain("a predicted indicator crossover needs its update calculation, not a comparison of the current gap with ATR");
+    expect(draft.instructions).toContain("Distinguish computed observations from interpretations");
+    expect(draft.instructions).toContain("If a claim cannot be verified, qualify or omit it");
   });
   it("publishes analyst reports as memories without redundant artifacts by default", () => {
     const draft = templateDraft("basic-analysis", { provider: "operator-selected", modelId: "operator-model", thinkingLevel: "" });
@@ -89,6 +98,13 @@ describe("bundled editable worker manifests", () => {
     expect(trader.instructions).toContain("use get_memory to read the full reports");
     expect(trader.instructions).toContain("fresh only describes evidence age");
   });
+  it("enables instrument discovery for every worker template and new orchestrators", () => {
+    const model = { provider: "operator-selected", modelId: "operator-model", thinkingLevel: "" };
+    expect(mainToolNames).toContain("list_instruments");
+    for (const template of subagentTemplates) {
+      expect(templateDraft(template.id, model).tools).toContain("list_instruments");
+    }
+  });
   it("enables insight tools only for the reviewer by default", () => {
     const insightTools = ["get_insights", "append_insight", "replace_insights"];
     for (const template of subagentTemplates) {
@@ -101,7 +117,7 @@ describe("bundled editable worker manifests", () => {
     const tools = [...createMemoryExtension("agent", {} as ExecutionContextService, {} as SharedDatabase).tools!, ...createHyperliquidExtension({} as HyperliquidService, "owner", "agent", {} as OrderService).tools!, ...createTaExtension({} as HyperliquidService["charts"], (() => { throw new Error("No execution in manifest test"); }) as ResearchResponder).tools!].map((tool) => tool.name);
     // Research tools are defined by the existing research extension, validated by
     // its integration tests; no remote catalog or import-time host is needed.
-    tools.push(...researchToolNames);
+    tools.push("list_instruments", ...researchToolNames);
     for (const template of subagentTemplates) {
       const draft = templateDraft(template.id, { provider: "operator-selected", modelId: "operator-model", thinkingLevel: "" });
       expect(draft).toMatchObject({ enabled: false, persistent: false, completion: template.defaults.completion, provider: "operator-selected", modelId: "operator-model" });

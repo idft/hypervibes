@@ -11,7 +11,7 @@ const panel = "space-y-4 rounded-2xl border border-zinc-800 bg-[#0d0d10] p-5";
 type Cursor = { createdAt: number; ref: string };
 type InsightData = Extract<Awaited<ReturnType<typeof getInsights>>, { ok: true }>["data"];
 export function AgentMemoriesPage({ agentId, workers, memory, scopeId = "", version, initialTab }: { initialTab?: "insights" | "memories"; agentId: string; workers: SubagentRow[]; memory?: string; scopeId?: string; version?: number }) {
-  const [tab, setTab] = useState(initialTab ?? (scopeId || version ? "insights" : "memories"));
+  const tab = initialTab ?? (scopeId || version ? "insights" : "memories");
   const [items, setItems] = useState<MemoryMetadata[]>([]), [next, setNext] = useState<Cursor | null>(null), [selected, setSelected] = useState<MemoryDetail | null>(null);
   const [kind, setKind] = useState(""), [coin, setCoin] = useState(""), [topic, setTopic] = useState(""), [producer, setProducer] = useState(""), [status, setStatus] = useState(""), [query, setQuery] = useState(""), [start, setStart] = useState(""), [end, setEnd] = useState("");
   const [scope, setScope] = useState(scopeId), [insight, setInsight] = useState<InsightData | null>(null), [draft, setDraft] = useState(""), [base, setBase] = useState(0), [reason, setReason] = useState(""), [refs, setRefs] = useState("");
@@ -59,14 +59,13 @@ export function AgentMemoriesPage({ agentId, workers, memory, scopeId = "", vers
   }
   return <div className="space-y-4 text-zinc-200">
     <header><h1 className="text-xl font-medium text-white">Memories & Insights</h1></header>
-    <nav aria-label="Memory sections" className="flex gap-2"><button className={button} disabled={busy} aria-pressed={tab === "memories"} onClick={() => setTab("memories")}>Publications</button><button className={button} disabled={busy} aria-pressed={tab === "insights"} onClick={() => { setTab("insights"); if (!insight) void perform(() => loadInsight()); }}>Insights</button></nav>
     {error && <p role="alert" className="text-sm text-red-300">{error}</p>}
     {tab === "memories" ? <>
       <form className={`${panel} flex flex-wrap items-end gap-3`} onSubmit={(event) => { event.preventDefault(); void perform(() => load()); }}>
         <label>Kind<select aria-label="Memory kind" className={`${input} ml-2 cursor-pointer`} value={kind} onChange={(event) => setKind(event.target.value)}><option value="">All</option>{["research", "decision", "review"].map((value) => <option key={value}>{value}</option>)}</select></label>
         <label>Instrument<input className={`${input} ml-2 w-24`} maxLength={32} value={coin} onChange={(event) => setCoin(event.target.value)} /></label><label>Topic<input className={`${input} ml-2 w-40`} maxLength={64} value={topic} onChange={(event) => setTopic(event.target.value)} /></label>
         <label>Producer<select className={`${input} ml-2 cursor-pointer`} value={producer} onChange={(event) => setProducer(event.target.value)}><option value="">All</option>{workers.map((worker) => <option key={worker.id} value={worker.id}>{worker.name}{worker.archived ? " (archived)" : ""}</option>)}</select></label>
-        <label>Status<select className={`${input} ml-2 cursor-pointer`} value={status} onChange={(event) => setStatus(event.target.value)}><option value="">All</option>{["fresh", "stale", "disabled", "retracted", "invalid_evidence", "durable"].map((value) => <option key={value}>{value}</option>)}</select></label>
+        <label>Status<select className={`${input} ml-2 cursor-pointer`} value={status} onChange={(event) => setStatus(event.target.value)}><option value="">All</option>{["fresh", "stale", "retracted", "invalid_evidence", "durable"].map((value) => <option key={value}>{value}</option>)}</select></label>
         <label>From (UTC)<input type="date" className={`${input} ml-2`} value={start} onChange={(event) => setStart(event.target.value)} /></label><label>Until exclusive (UTC)<input type="date" className={`${input} ml-2`} value={end} onChange={(event) => setEnd(event.target.value)} /></label>
         <input aria-label="Search memory summaries" placeholder="Search summaries" className={input} maxLength={200} value={query} onChange={(event) => setQuery(event.target.value)} /><button className={button} disabled={busy}>Search / newest</button>
       </form>

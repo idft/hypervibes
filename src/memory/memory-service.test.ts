@@ -61,11 +61,35 @@ describe("immutable Agent-scoped memories", () => {
     await f.db.run("UPDATE hv_memories SET retracted_at=?,retraction_reason='Withdrawn evidence' WHERE agent_id='agent' AND number=3", f.now);
     expect(await memory.tradingContext("agent", "BTC", researchRequirement)).toMatchObject({ requirements: [{ ref: "m3", status: "retracted", summary: null }] });
     expect((await memory.list("agent", { status: "retracted" })).items.map((item) => item.ref)).toEqual(["m3"]);
-    await f.db.run("UPDATE hv_subagents SET enabled=0 WHERE id='analyst'");
-    expect(await memory.tradingContext("agent", "BTC", researchRequirement)).toMatchObject({ requirements: [{ status: "disabled" }] });
     expect((await memory.get("agent", "m1")).content).toContain("Facts");
     expect((await memory.tradingContext("agent", "BTC", [])).requirements).toEqual([]);
     await expect(memory.tradingContext("agent", "BTC", Array(21).fill(researchRequirement[0]))).rejects.toThrow("20");
+  });
+  it.each([
+    { name: "enabled", enabled: 1, archived: 0 },
+    { name: "disabled", enabled: 0, archived: 0 },
+    { name: "archived", enabled: 0, archived: 1 },
+  ])("evaluates published research independently of an $name producer", async ({ enabled, archived }) => {
+    const { memory } = f.services(), boundary = f.now;
+    await memory.publishResearch(f.analyst, "initial", researchInput(boundary, { requestedValidUntil: boundary + 600_000 }));
+    await f.db.run("UPDATE hv_subagents SET enabled=?,archived=? WHERE id='analyst'", enabled, archived);
+    const expectStatus = async (status: string) => {
+      expect(await memory.get("agent", "m1")).toMatchObject({ status });
+      expect((await memory.list("agent", { status })).items.map((item) => item.ref)).toEqual(["m1"]);
+      expect(await memory.tradingContext("agent", "BTC", researchRequirement)).toMatchObject({ requirements: [{ ref: "m1", status, summary: status === "fresh" ? "Mixed momentum near support" : null }] });
+    };
+    await expectStatus("fresh");
+    expect(await memory.tradingContext("agent", "ETH", researchRequirement)).toMatchObject({ requirements: [{ ref: null, status: "missing", summary: null }] });
+    expect(await memory.tradingContext("agent", "BTC", [{ ...researchRequirement[0], subagentId: "unknown" }])).toMatchObject({ requirements: [{ ref: null, status: "missing", summary: null }] });
+    f.now = boundary - 1;
+    await expectStatus("invalid_evidence");
+    f.now = boundary + 60_000;
+    expect(await memory.tradingContext("agent", "BTC", [{ ...researchRequirement[0], maxAgeSeconds: 60 }])).toMatchObject({ requirements: [{ ref: "m1", status: "stale", summary: null }] });
+    await expectStatus("fresh");
+    f.now = boundary + 600_000;
+    await expectStatus("stale");
+    await f.db.run("UPDATE hv_memories SET retracted_at=?,retraction_reason='Withdrawn evidence' WHERE agent_id='agent' AND number=1", f.now);
+    await expectStatus("retracted");
   });
   it("preserves optional and legacy research data without interpreting labels as trade readiness", async () => {
     let { memory } = f.services();

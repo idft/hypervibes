@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { validateToolArguments } from "@earendil-works/pi-ai";
-import { ResearchInputSchema } from "./tool-schemas.js";
+import { validateToolArguments, type JsonObject, type TSchema } from "@earendil-works/pi-ai";
+import { DecisionInputSchema, MemoryListInputSchema, ResearchInputSchema, ReviewInputSchema, TradingContextInputSchema } from "./tool-schemas.js";
 import { canonical } from "../canonical.js";
 import { insightMutation, insightScope, renderInsightSections } from "./insight-contracts.js";
-import { memoryRef, parseMemoryRef, publicationInput, researchRequirements, type ResearchPayload } from "./memory-contracts.js";
+import { memoryRef, parseMemoryRef, publicationInput, researchRequirements, topic, type ResearchPayload } from "./memory-contracts.js";
 
 const research = { topic: "trend_setup", instrument: "BTC", interval: "1h", summary: "Mixed momentum", content: "Tool observations, uncertainty and interpretation in the analyst's own format", evidenceAsOf: 3600000 };
 const streams = [{ subagentId: "analyst", topic: "trend_setup", interval: "1h", maxAgeSeconds: 3600 }];
@@ -26,6 +26,38 @@ describe("memory and insight contracts", () => {
       const input = payload === undefined ? research : { ...research, payload };
       expect(publicationInput("research", input).payload).toEqual(payload ?? {});
       expect(() => validateToolArguments(tool, { type: "toolCall", id: "publish", name: tool.name, arguments: input })).not.toThrow();
+    }
+  });
+  it("keeps topic formats consistent across tool schemas and backend validation", () => {
+    const accepted = ["a", "trend_setup", "trade_decision", "btc_15m", "a0_", "a".repeat(64)];
+    const rejected = ["", "Trend_setup", "trend setup", "trend-setup", "1trend", "_trend", " trend_setup", "trend_setup ", "trend_setup\n", "trend_setup\r\n", "trend_setup\t", "trénd_setup", "a".repeat(65)];
+    for (const [valid, candidates] of [[true, accepted], [false, rejected]] as const) {
+      for (const candidate of candidates) {
+        const base = { topic: candidate, summary: "Decision summary", content: "Rationale and evidence" };
+        const decision = { ...base, payload: { version: 1, action: "skip", direction: null, reason: "No setup", researchRefs: [], plan: "Watch" } };
+        const review = { ...base, payload: { version: 1, start: 0, end: 3600000, coverage: "unknown", limitations: [], findings: [], recommendations: [], memoryRefs: [] } };
+        const requirements = [{ ...streams[0]!, topic: candidate }];
+        const tools: { name: string; parameters: TSchema; input: JsonObject }[] = [
+          { name: "publish_research", parameters: ResearchInputSchema, input: { ...research, topic: candidate } },
+          { name: "record_trade_decision", parameters: DecisionInputSchema, input: decision },
+          { name: "publish_review", parameters: ReviewInputSchema, input: review },
+          { name: "list_memories", parameters: MemoryListInputSchema, input: { topic: candidate } },
+          { name: "get_trading_context", parameters: TradingContextInputSchema, input: { instrument: "BTC", streams: requirements } },
+        ];
+        const checks = [
+          () => topic(candidate),
+          () => publicationInput("research", { ...research, topic: candidate }),
+          () => publicationInput("decision", decision),
+          () => publicationInput("review", review),
+          () => researchRequirements(requirements),
+          ...tools.map((tool) => () => validateToolArguments({ ...tool, description: "Validate topic format" }, { type: "toolCall", id: "topic-test", name: tool.name, arguments: tool.input })),
+        ];
+        for (const [index, check] of checks.entries()) {
+          const label = `topic ${JSON.stringify(candidate)}, ${index < 5 ? `backend check ${index}` : tools[index - 5]!.name}`;
+          if (valid) expect(check, label).not.toThrow();
+          else expect(check, label).toThrow();
+        }
+      }
     }
   });
   it("validates research JSON, bytes, text bounds, and host-only fields", () => {

@@ -79,7 +79,7 @@ describe("per-Agent durable execution", () => {
     const agent = await create();
     const harness = await opened.mock.results[0]!.value as Harness;
     const root = await harness.root(context);
-    const toolNames = ["get_account", "prepare_protected_entry", "prepare_position_protection", "get_protection_status", "submit_orders", "cancel_orders", "cancel_all_orders", "list_orders", "get_order", "get_order_request", "list_subagents", "delegate_subagent", "get_subagent_run", "record_trade_decision", "list_memories", "get_memory", "get_trading_context"];
+    const toolNames = ["get_account", "prepare_protected_entry", "prepare_position_protection", "get_protection_status", "submit_orders", "cancel_orders", "cancel_all_orders", "list_orders", "get_order", "get_order_request", "list_subagents", "delegate_subagent", "get_subagent_run", "record_trade_decision", "list_memories", "get_memory", "get_trading_context", "list_instruments"];
     expect((await root.agent(context)).tools.map((tool) => tool.name)).toEqual(toolNames);
     await root.configure({ extensions: [], tools: [], instructions: "Trading and live exchange data are not configured." }, context);
     await runtime.close();
@@ -87,11 +87,33 @@ describe("per-Agent durable execution", () => {
     const restored = await (await opened.mock.results[1]!.value as Harness).root(context);
     const resolved = await restored.agent(context);
     expect(restored.id).toBe(agent.conversationId);
-    expect(resolved.extensions.map((extension) => extension.name)).toEqual(["hyperliquid", "subagents", "memory", "orchestrator-insights"]);
+    expect(resolved.extensions.map((extension) => extension.name)).toEqual(["hyperliquid", "subagents", "memory", "research", "orchestrator-insights"]);
     expect(resolved.tools.map((tool) => tool.name)).toEqual(toolNames);
     expect(resolved.instructions).not.toContain("not configured");
     expect(resolved.model).toEqual(options().model);
     expect(faux.state.callCount).toBe(0);
+  });
+
+  it("binds instrument discovery to each Agent and reads updated allowlists on subsequent calls", async () => {
+    const one = await create(), two = await create("Second", randomUUID(), "other");
+    const catalog = vi.spyOn(runtime.hyperliquid.charts, "instruments").mockResolvedValue(["BTC", "ETH"]);
+    for (const [index, [agent, owner, allowed]] of ([[one, "owner", "BTC"], [two, "other", "ETH"], [one, "owner", "ETH"]] as const).entries()) {
+      await runtime.agents.risk.save(agent.id, { tradingEnabled: false, allowedInstruments: [allowed], maxOrderNotional: null, maxTotalNotional: null });
+      const answer = `Catalog checked ${index}`;
+      faux.setResponses([
+        fauxAssistantMessage(fauxToolCall("list_instruments", {}), { stopReason: "toolUse" }),
+        (transcript) => {
+          const result = transcript.messages.filter((message) => message.role === "toolResult").at(-1);
+          expect(result).toMatchObject({ toolName: "list_instruments", isError: false, content: [{ type: "text", text: JSON.stringify({ instruments: [
+            { symbol: "BTC", allowedForTrading: allowed === "BTC" }, { symbol: "ETH", allowedForTrading: allowed === "ETH" },
+          ] }) }] });
+          return fauxAssistantMessage(answer);
+        },
+      ]);
+      await runtime.agents.send(owner, agent.id, "List instruments", randomUUID());
+      await vi.waitFor(async () => expect((await runtime.agents.chat(owner, agent.id)).messages.some((entry) => entry.text === answer)).toBe(true));
+    }
+    expect(catalog).toHaveBeenCalledTimes(3);
   });
 
   it("executes get_account through Durable with a trusted per-Agent binding", async () => {

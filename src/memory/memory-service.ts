@@ -19,7 +19,8 @@ export const maxResearchAgeSeconds = 7 * 86400;
 const columns = "number,kind,topic,instrument,interval,summary,created_at,evidence_as_of,valid_until,producer_subagent_id,source_run_id,retracted_at,retraction_reason";
 function statusSql(now: number) {
   timestamp(now);
-  return `CASE WHEN kind!='research' THEN 'durable' WHEN producer_subagent_id IS NOT NULL AND NOT EXISTS(SELECT 1 FROM hv_subagents p WHERE p.agent_id=hv_memories.agent_id AND p.id=hv_memories.producer_subagent_id AND p.enabled=1 AND p.archived=0) THEN 'disabled' WHEN retracted_at IS NOT NULL THEN 'retracted' WHEN evidence_as_of>${now} THEN 'invalid_evidence' WHEN valid_until<=${now} THEN 'stale' ELSE 'fresh' END`;
+  // Worker lifecycle controls future execution, not published evidence validity.
+  return `CASE WHEN kind!='research' THEN 'durable' WHEN retracted_at IS NOT NULL THEN 'retracted' WHEN evidence_as_of>${now} THEN 'invalid_evidence' WHEN valid_until<=${now} THEN 'stale' ELSE 'fresh' END`;
 }
 function metadata(row: Row): MemoryMetadata {
   return { status: row.status, ref: memoryRef(row.number), kind: row.kind, topic: row.topic, instrument: row.instrument, interval: row.interval, summary: row.summary, createdAt: row.created_at, evidenceAsOf: row.evidence_as_of, validUntil: row.valid_until, producerSubagentId: row.producer_subagent_id, sourceRunId: row.source_run_id, retractedAt: row.retracted_at, retractionReason: row.retraction_reason };
@@ -103,7 +104,7 @@ export class MemoryService {
     const producer = filter.producerSubagentId === undefined ? "" : text(filter.producerSubagentId, 100, "producer ID");
     const run = filter.sourceRunId === undefined ? "" : text(filter.sourceRunId, 100, "run ID");
     const query = filter.query === undefined ? "" : text(filter.query, 200, "search", true);
-    const status = filter.status === undefined ? "" : choice(filter.status, ["durable", "missing", "fresh", "stale", "disabled", "retracted", "invalid_evidence"]);
+    const status = filter.status === undefined ? "" : choice(filter.status, ["durable", "missing", "fresh", "stale", "retracted", "invalid_evidence"]);
     const start = filter.start === undefined ? 0 : timestamp(filter.start), end = filter.end === undefined ? Number.MAX_SAFE_INTEGER : timestamp(filter.end);
     if (end <= start) throw new AgentError("Invalid memory time window");
     const limit = filter.limit === undefined ? 25 : integer(filter.limit, 1, 50, "page size");
@@ -124,13 +125,11 @@ export class MemoryService {
     const now = timestamp(this.clock());
     const items = [];
     for (const requirement of requirements) {
-      const producer = await tx.get<{ enabled: number; archived: number }>("SELECT enabled,archived FROM hv_subagents WHERE agent_id=? AND id=? AND kind='worker'", agentId, requirement.subagentId);
       // Select the latest BEFORE evaluating freshness: never resurrect older reports.
       const row = await tx.get<Pick<Row, "number" | "summary" | "evidence_as_of" | "valid_until" | "retracted_at">>("SELECT number,summary,evidence_as_of,valid_until,retracted_at FROM hv_memories WHERE agent_id=? AND kind='research' AND instrument=? AND topic=? AND interval=? AND producer_subagent_id=? ORDER BY number DESC LIMIT 1", agentId, coin, requirement.topic, requirement.interval, requirement.subagentId);
       const deadline = row ? Math.min(row.valid_until!, row.evidence_as_of! + requirement.maxAgeSeconds * 1000) : null;
       let status: ResearchStatus = "fresh";
-      if (!producer || !producer.enabled || producer.archived) status = "disabled";
-      else if (!row) status = "missing";
+      if (!row) status = "missing";
       else if (row.retracted_at !== null) status = "retracted";
       else if (row.evidence_as_of! > now || row.evidence_as_of! % (candleIntervals[interval(requirement.interval)] * 1000) !== 0) status = "invalid_evidence";
       else if (now >= deadline!) status = "stale";

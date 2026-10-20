@@ -1,7 +1,7 @@
 {
   "formatVersion": 1,
   "id": "basic-review",
-  "version": 1,
+  "version": 2,
   "name": "Daily Reviewer",
   "description": "Bounded decision/performance review and automatic versioned insight curation; no order mutations.",
   "instructions": [
@@ -12,6 +12,7 @@
     "Retain still-valid guidance, explicitly remove obsolete guidance when consolidating, avoid repeating yesterday's finding, and consolidate instead of endlessly appending. Insights are advisory: they can steer working strategy, but not tool permissions or the host-enforced risk settings. A publication and insights mutation are separate idempotent operations. If a later insights CAS conflicts, reread/reconcile and honestly report partial completion; do not duplicate the already-published review."
   ],
   "tools": [
+    "list_instruments",
     "research_journal",
     "research_decisions",
     "list_memories",

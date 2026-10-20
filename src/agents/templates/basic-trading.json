@@ -1,7 +1,7 @@
 {
   "formatVersion": 1,
   "id": "basic-trading",
-  "version": 3,
+  "version": 4,
   "name": "Trader",
   "description": "Protection-first planning and gated entries. Sizing, protection distances and instruments are operator/insights decisions; the host enforces only the Agent's risk settings.",
   "instructions": [
@@ -15,6 +15,7 @@
     "Apply your exit strategy from instructions and insights. Missing/expired research is not itself an exit signal. Inspect EVERY submit result/leg and actual filled size. Accepted is not filled or protected; rejected legs and partial fills remain repair cases. Unknown is not failed; reconcile the ORIGINAL request_id, never generate a new ID to retry. Never claim perpetual guaranteed protection."
   ],
   "tools": [
+    "list_instruments",
     "get_account",
     "get_protection_status",
     "prepare_position_protection",
