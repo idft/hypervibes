@@ -170,7 +170,7 @@ export function ScheduleConfig({ value, nextRunAt, onChange }: { value: Schedule
 }
 
 function ScheduleDialog({ value, onCancel, onApply }: { value: Schedule; onCancel: () => void; onApply: (value: Schedule) => Promise<void> }) {
-  const [draft, setDraft] = useState(value);
+  const [draft, setDraft] = useState(() => value.schedule ? value : { ...value, delaySeconds: 1 });
   const interval = candleIntervals[draft.schedule as keyof typeof candleIntervals];
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");

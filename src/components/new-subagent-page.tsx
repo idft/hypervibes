@@ -17,7 +17,7 @@ export function NewSubagentPage({ agentId, model, choices }: { agentId: string; 
   const [templateId, setTemplateId] = useState("");
   const [selectedModel, setSelectedModel] = useState<Model>(() => {
     const choice = choices.find((entry) => modelKey(entry) === modelKey(model));
-    return { ...model, thinkingLevel: choice?.thinkingLevels.includes(model.thinkingLevel) ? model.thinkingLevel : "" };
+    return { provider: model.provider, modelId: model.modelId, thinkingLevel: choice?.thinkingLevels.includes(model.thinkingLevel) ? model.thinkingLevel : "" };
   });
   const selected = choices.find((choice) => modelKey(choice) === modelKey(selectedModel));
   const [pending, setPending] = useState(false), [error, setError] = useState("");

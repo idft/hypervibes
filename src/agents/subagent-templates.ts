@@ -16,5 +16,5 @@ export function subagentTemplate(id: string) {
 }
 export function templateDraft(id: string, model: Pick<SubagentInput, "provider" | "modelId" | "thinkingLevel">): SubagentInput {
   const template = subagentTemplate(id);
-  return { ...template.defaults, ...model, name: template.name, description: template.description, instructions: template.instructions, tools: [...template.tools] };
+  return { ...template.defaults, provider: model.provider, modelId: model.modelId, thinkingLevel: model.thinkingLevel, name: template.name, description: template.description, instructions: template.instructions, tools: [...template.tools] };
 }

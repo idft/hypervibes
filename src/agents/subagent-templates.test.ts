@@ -48,6 +48,11 @@ describe("bundled editable worker manifests", () => {
     expect(draft).toMatchObject({ enabled: false, schedule: "15m", delaySeconds: 1, completion: "save" });
     expect(draft.instructions).toContain("use 15m candles");
   });
+  it.each(subagentTemplates)("inherits only model fields from a full parent record for $id", (template) => {
+    const model = { provider: "parent-provider", modelId: "parent-model", thinkingLevel: "high" };
+    const parent = { ...templateDraft(template.id, model), id: "main:parent", schedule: "", delaySeconds: 30, completion: "wake", enabled: true, tools: ["delegate_subagent"] };
+    expect(templateDraft(template.id, parent)).toEqual(templateDraft(template.id, model));
+  });
   it("creates independent drafts without mutating the catalog or sharing nested state", () => {
     const model = { provider: "operator-selected", modelId: "operator-model", thinkingLevel: "" };
     const first = templateDraft("basic-trading", model);

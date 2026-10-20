@@ -70,6 +70,15 @@ describe("new sub-agent", () => {
     expect(mocks.navigate).toHaveBeenCalledWith({ to: "/agents/$agentId/sub-agents/$subagentId", params: { agentId: "agent-1", subagentId: "worker:new" } });
     expect(mocks.success).toHaveBeenCalledWith("Sub-agent created paused", { description: "Review the configuration, then enable when ready." });
   });
+  it.each(["", "basic-analysis", "basic-trading", "basic-review"])("does not copy parent settings over %s creation defaults", async (templateId) => {
+    const parent = { ...model, id: "main:agent-1", name: "Orchestrator", enabled: true, schedule: "", delaySeconds: 30, completion: "wake", persistent: true, tools: ["delegate_subagent"] };
+    await act(async () => root.render(<NewSubagentPage key="full-parent" agentId="agent-1" model={parent} choices={choices} />));
+    await select(templateId); await input(name(), "My worker"); await submit();
+    const settings = mocks.saveSubagent.mock.calls[0]![0].data.settings;
+    if (templateId) expect(settings).toEqual({ ...templateDraft(templateId, model), name: "My worker", enabled: false });
+    else expect(settings).toMatchObject({ ...model, tools: [], schedule: "", delaySeconds: 1, completion: "save", persistent: false });
+    expect(settings).not.toHaveProperty("id");
+  });
   it("defaults to the root model and applies a different model before creation without template changes resetting it", async () => {
     expect(container.querySelector('[aria-label="Choose model"]')?.textContent).toContain("parent-provider / parent-model");
     expect(container.querySelector('[aria-label="Choose model"]')?.textContent).toContain("Thinking: high");

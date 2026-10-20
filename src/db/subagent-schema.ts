@@ -20,7 +20,7 @@ export const hvSubagents = sqliteTable("hv_subagents", {
   persistent: integer("persistent", { mode: "boolean" }).notNull().default(false),
   conversationId: integer("conversation_id"),
   schedule: text("schedule").notNull().default(""),
-  delaySeconds: integer("delay_seconds").notNull().default(30),
+  delaySeconds: integer("delay_seconds").notNull().default(1),
   nextRunAt: integer("next_run_at"),
   completion: text("completion", { enum: ["save", "notify", "wake"] }).notNull().default("wake"),
   timeoutSeconds: integer("timeout_seconds").notNull().default(900),

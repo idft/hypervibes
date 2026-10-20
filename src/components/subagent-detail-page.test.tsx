@@ -180,8 +180,15 @@ describe("subagent pages", () => {
     expect(document.querySelector("dialog")!.textContent).toContain("without a model call");
     await click("Apply");
     expect(document.querySelector("dialog")).toBeNull();
-    expect(container.textContent).toContain("Every 1h candle close (UTC) · 30s delay");
-    expect(mocks.saveSubagentSection).toHaveBeenCalledWith({ data: { agentId: definition.agentId, id: definition.id, section: "schedule", settings: { schedule: "1h", delaySeconds: 30, completion: "wake" } } });
+    expect(container.textContent).toContain("Every 1h candle close (UTC) · 1s delay");
+    expect(mocks.saveSubagentSection).toHaveBeenCalledWith({ data: { agentId: definition.agentId, id: definition.id, section: "schedule", settings: { schedule: "1h", delaySeconds: 1, completion: "wake" } } });
+  });
+  it("preserves an existing schedule's configured delay", async () => {
+    await render({ ...definition, schedule: "15m", delaySeconds: 45 });
+    await click("Edit schedule");
+    expect(document.querySelector<HTMLInputElement>('dialog input[type="number"]')!.value).toBe("45");
+    await click("Apply");
+    expect(mocks.saveSubagentSection).toHaveBeenCalledWith({ data: { agentId: definition.agentId, id: definition.id, section: "schedule", settings: { schedule: "15m", delaySeconds: 45, completion: "wake" } } });
   });
   it("searches models by provider, name and ID and only applies confirmed choices", async () => {
     await act(async () => root.render(<SubagentDetailPage agentId={definition.agentId} initial={initial({ ...definition, thinkingLevel: "high" })} choices={[...choices, choice("other", "second-2", "Second", [])]} />));
