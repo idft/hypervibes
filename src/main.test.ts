@@ -50,6 +50,7 @@ describe("server entry point", () => {
     stop?.("SIGTERM");
     await vi.waitFor(() => {
       expect(mocks.app.close).toHaveBeenCalledTimes(1);
+      expect(mocks.app.log.info).toHaveBeenLastCalledWith("Shutdown complete");
       expect(process.listeners("SIGTERM")).toEqual(originalListeners.get("SIGTERM"));
       expect(process.listeners("SIGINT")).toEqual(originalListeners.get("SIGINT"));
     });
@@ -59,7 +60,8 @@ describe("server entry point", () => {
     await main();
     const force = (mocks.createApp.mock.calls[0]![1] as { forceShutdown: AbortSignal }).forceShutdown;
     expect(force.aborted).toBe(false);
-    mocks.app.close.mockReturnValue(new Promise<void>(() => {}));
+    let finishClose!: () => void;
+    mocks.app.close.mockReturnValue(new Promise<void>((resolve) => { finishClose = resolve; }));
     const stop = process.listeners("SIGINT").find((listener) =>
       !originalListeners.get("SIGINT")?.includes(listener));
     stop?.("SIGINT");
@@ -69,6 +71,9 @@ describe("server entry point", () => {
     expect(force.aborted).toBe(true);
     expect(mocks.app.log.info).toHaveBeenCalledWith("Second shutdown signal received; forcing shutdown");
     expect(mocks.app.close).toHaveBeenCalledTimes(1);
+    expect(mocks.app.log.info).not.toHaveBeenCalledWith("Shutdown complete");
+    finishClose();
+    await vi.waitFor(() => expect(mocks.app.log.info).toHaveBeenLastCalledWith("Shutdown complete"));
   });
 
   it("closes resources and removes signal handlers when listening fails", async () => {
@@ -100,6 +105,7 @@ describe("server entry point", () => {
     stop?.("SIGINT");
     await vi.waitFor(() => {
       expect(mocks.app.log.error).toHaveBeenCalledWith(failure, "Shutdown failed");
+      expect(mocks.app.log.info).not.toHaveBeenCalledWith("Shutdown complete");
       expect(process.exitCode).toBe(1);
       expect(process.listeners("SIGINT")).toEqual(originalListeners.get("SIGINT"));
     });

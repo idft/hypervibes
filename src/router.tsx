@@ -1,9 +1,10 @@
 import { createRouter } from "@tanstack/react-router";
 import type { AppRuntime } from "./runtime.js";
+import { RouteErrorPage } from "./components/route-status-page.js";
 import { routeTree } from "./routeTree.gen.js";
 
 export function getRouter() {
-  return createRouter({ routeTree, scrollRestoration: true });
+  return createRouter({ routeTree, scrollRestoration: true, defaultErrorComponent: RouteErrorPage });
 }
 
 declare module "@tanstack/react-router" {

@@ -1,6 +1,7 @@
 import { createRootRoute, HeadContent, Outlet, Scripts } from "@tanstack/react-router";
 import type { ReactNode } from "react";
 import { AppToaster } from "../components/app-toaster.js";
+import { NotFoundPage, RouteErrorPage } from "../components/route-status-page.js";
 import stylesheet from "../web/app.css?url";
 
 export const Route = createRootRoute({
@@ -18,8 +19,8 @@ export const Route = createRootRoute({
   }),
   component: Layout,
   shellComponent: Document,
-  notFoundComponent: () => <p className="text-zinc-400">Page not found.</p>,
-  errorComponent: () => <p role="alert" className="text-red-300">Unable to load this page. Please try again.</p>,
+  notFoundComponent: NotFoundPage,
+  errorComponent: RouteErrorPage,
 });
 
 function Layout() {
