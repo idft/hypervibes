@@ -1,4 +1,4 @@
-import { notFound, redirect } from "@tanstack/react-router";
+import { isNotFound, isRedirect, notFound, redirect } from "@tanstack/react-router";
 import { createServerFn } from "@tanstack/react-start";
 import { getRequestHeaders } from "@tanstack/react-start/server";
 import { AgentError, isAgentError, requestId } from "../agents/agent-input.js";
@@ -41,6 +41,18 @@ export async function agentAction<T>(action: () => Promise<T>) {
   catch (error) {
     if (isAgentError(error) || error instanceof HyperliquidError) return { ok: false as const, error: error.message };
     return { ok: false as const, error: "Agent operation failed. Please try again." };
+  }
+}
+
+/** The throwing successor to agentAction: same sanitizing boundary, but domain
+ * errors rethrow so server functions answer with data or an exception, which
+ * TanStack Start serializes and the client rethrows. Router protocol (redirect,
+ * not found) passes through untouched. Migrated modules use this instead. */
+export async function agentOperation<T>(action: () => Promise<T>): Promise<T> {
+  try { return await action(); }
+  catch (error) {
+    if (isAgentError(error) || error instanceof HyperliquidError || isRedirect(error) || isNotFound(error)) throw error;
+    throw new AgentError("Agent operation failed. Please try again.", 500);
   }
 }
 

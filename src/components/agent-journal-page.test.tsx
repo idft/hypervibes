@@ -1,8 +1,13 @@
 // @vitest-environment jsdom
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
+import { QueryClient, QueryClientProvider, notifyManager } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { JournalPage } from "../hyperliquid/journal-service.js";
+
+// Query batches store notifications onto a setTimeout(0) macrotask by default;
+// flush them as microtasks so awaited act() callbacks observe settled queries.
+notifyManager.setScheduler((callback) => { queueMicrotask(callback); return () => {}; });
 
 const mocks = vi.hoisted(() => ({ getAgentJournal: vi.fn(), getJournalAudit: vi.fn(), getJournalNotes: vi.fn(), addJournalNote: vi.fn() }));
 vi.mock("../web/journal.js", () => mocks);
@@ -16,18 +21,24 @@ const initial: JournalPage = {
 };
 describe("Agent journal UI", () => {
   let root: Root; let container: HTMLDivElement;
+  let queryClient: QueryClient;
   const navigate = vi.fn();
   beforeEach(() => {
     vi.resetAllMocks();
     Object.defineProperty(HTMLDialogElement.prototype, "showModal", { configurable: true, value: function (this: HTMLDialogElement) { this.open = true; } });
     container = document.createElement("div"); document.body.append(container); root = createRoot(container);
-    mocks.getAgentJournal.mockResolvedValue({ ok: true, data: initial });
-    mocks.getJournalAudit.mockResolvedValue({ ok: true, data: { items: [], truncated: false, coverage: "External/legacy fills remain unattributed" } });
-    mocks.getJournalNotes.mockResolvedValue({ ok: true, data: [] });
-    mocks.addJournalNote.mockResolvedValue({ ok: true });
+    mocks.getAgentJournal.mockResolvedValue(initial);
+    mocks.getJournalAudit.mockResolvedValue({ items: [], truncated: false, coverage: "External/legacy fills remain unattributed" });
+    mocks.getJournalNotes.mockResolvedValue([]);
+    mocks.addJournalNote.mockResolvedValue(undefined);
   });
-  afterEach(async () => { await act(async () => root.unmount()); container.remove(); vi.restoreAllMocks(); vi.useRealTimers(); });
-  const render = async (data = initial) => { await act(async () => root.render(<AgentJournalPage id="agent" initial={data} onNavigate={navigate} />)); };
+  afterEach(async () => { await act(async () => root.unmount()); container.remove(); queryClient.clear(); vi.restoreAllMocks(); vi.useRealTimers(); });
+  /** The route loader seeds the cache server-side; tests mirror that. */
+  const render = async (data = initial) => {
+    queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: Infinity, refetchIntervalInBackground: false } } });
+    queryClient.setQueryData(["journal", "agent", data.view, data.page], data);
+    await act(async () => root.render(<QueryClientProvider client={queryClient}><AgentJournalPage id="agent" view={data.view} page={data.page} onNavigate={navigate} /></QueryClientProvider>));
+  };
   const click = async (text: string) => { await act(async () => [...container.querySelectorAll("button")].find((b) => b.textContent === text)!.click()); };
 
   it("matches the legacy tabs, activity columns and pagination with exact formatted amounts", async () => {
@@ -61,7 +72,7 @@ describe("Agent journal UI", () => {
   });
   it("opens notes, renders authored text safely and saves a scoped note", async () => {
     await render();
-    mocks.getJournalNotes.mockResolvedValue({ ok: true, data: [{ id: "n", body: "<script>not HTML</script>", authorId: "owner", createdAt: 1000 }] });
+    mocks.getJournalNotes.mockResolvedValue([{ id: "n", body: "<script>not HTML</script>", authorId: "owner", createdAt: 1000 }]);
     await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="Add transaction notes"]')!.click());
     expect(container.querySelector("dialog")?.open).toBe(true);
     expect(container.querySelector("script")).toBeNull();
@@ -82,7 +93,7 @@ describe("Agent journal UI", () => {
     expect(container.textContent).toContain("Incomplete");
     expect(container.querySelector('[role="alert"]')?.textContent).toContain("failed");
     await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="Add transaction notes"]')!.click());
-    mocks.addJournalNote.mockResolvedValue({ ok: false, error: "Not authorized" });
+    mocks.addJournalNote.mockRejectedValue(new Error("Not authorized"));
     const textarea = container.querySelector("textarea")!;
     await act(async () => {
       Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(textarea, "Keep my draft");
@@ -124,5 +135,12 @@ describe("Agent journal UI", () => {
     await act(async () => root.render(null));
     await act(async () => vi.advanceTimersByTimeAsync(10_000));
     expect(mocks.getAgentJournal).toHaveBeenCalledOnce();
+  });
+  it("keeps the last journal snapshot visible when a refresh fails", async () => {
+    vi.useFakeTimers(); await render();
+    mocks.getAgentJournal.mockRejectedValue(new Error("Account history is unavailable"));
+    await act(async () => vi.advanceTimersByTimeAsync(5_000));
+    expect(container.textContent).toContain("123.4567");
+    expect(container.querySelector('[role="alert"]')?.textContent).toContain("Account history is unavailable");
   });
 });

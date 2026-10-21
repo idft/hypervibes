@@ -1,10 +1,11 @@
-import { createRootRoute, HeadContent, Outlet, Scripts } from "@tanstack/react-router";
+import { createRootRouteWithContext, HeadContent, Outlet, Scripts } from "@tanstack/react-router";
+import type { QueryClient } from "@tanstack/react-query";
 import type { ReactNode } from "react";
 import { AppToaster } from "../components/app-toaster.js";
 import { NotFoundPage, RouteErrorPage } from "../components/route-status-page.js";
 import stylesheet from "../web/app.css?url";
 
-export const Route = createRootRoute({
+export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()({
   head: () => ({
     meta: [
       { charSet: "utf-8" },
